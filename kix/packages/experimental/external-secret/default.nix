@@ -74,8 +74,6 @@
 let
   inherit (lib) types mkOption;
 
-  who = "external-secret ${scope.namespaceName}/${scope.instanceName}";
-
   remoteRef = types.submodule {
     options = {
       key = mkOption {
@@ -184,7 +182,11 @@ in
     {
       externalSecret =
         if !(operatorOut ? mkExternalSecret) then
-          throw "${who}: the externalSecrets dependency has no out.mkExternalSecret, so it is not an external-secrets instance. Wire packages.experimental.external-secrets as externalSecrets."
+          scope.fail {
+            package = "external-secret";
+            message = "the externalSecrets dependency has no out.mkExternalSecret, so it is not an external-secrets instance.";
+            fix = "Wire packages.experimental.external-secrets as externalSecrets.";
+          }
         else
           operatorOut.mkExternalSecret scope {
             name = scope.instanceName;

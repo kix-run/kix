@@ -433,13 +433,23 @@ in
         # The configMap part throws, so a partsOverlays entry that replaces
         # it also clears the refusal.
         checkedConfig =
-          if refusals == [ ] then collectorConfig else throw "${who}: ${lib.concatStringsSep " " refusals}";
+          if refusals == [ ] then
+            collectorConfig
+          else
+            scope.fail {
+              package = "otel-collector";
+              message = "${lib.concatStringsSep " " refusals}";
+            };
 
         # The collector opens the otlp receiver only when a pipeline lists it.
         otlpServed = builtins.any (p: builtins.elem "otlp" (p.receivers or [ ])) (
           builtins.attrValues pipelines
         );
-        notServed = throw "${who}: no pipeline lists the otlp receiver, so nothing answers on its OTLP addresses. Add a pipeline that receives from otlp (deps.otlp adds one), or send to another endpoint.";
+        notServed = scope.fail {
+          package = "otel-collector";
+          message = "no pipeline lists the otlp receiver, so nothing answers on its OTLP addresses.";
+          fix = "Add a pipeline that receives from otlp (deps.otlp adds one), or send to another endpoint.";
+        };
 
         userExtensions = merged.service.extensions or [ ];
         collectorConfig =
@@ -448,7 +458,11 @@ in
               service.extensions = lib.unique ([ "health_check" ] ++ userExtensions);
             }
           else
-            throw "${who}: settings.service.extensions must be a list of extension names; got ${builtins.typeOf userExtensions}.";
+            scope.fail {
+              package = "otel-collector";
+              option = "config.settings.service.extensions";
+              message = "settings.service.extensions must be a list of extension names; got ${builtins.typeOf userExtensions}.";
+            };
 
         pipelines = collectorConfig.service.pipelines or { };
 
@@ -542,9 +556,17 @@ in
           ;
       in
       if !builtins.isAttrs pipelines then
-        throw "${who}: settings.service.pipelines must be an attribute set of pipelines; got ${builtins.typeOf pipelines}."
+        scope.fail {
+          package = "otel-collector";
+          option = "config.settings.service.pipelines";
+          message = "settings.service.pipelines must be an attribute set of pipelines; got ${builtins.typeOf pipelines}.";
+        }
       else if pipelines == { } then
-        throw "${who}: the collector has no pipeline and would refuse to start. Wire an OTLP endpoint with deps.otlp, set events.enabled, or define service.pipelines in settings."
+        scope.fail {
+          package = "otel-collector";
+          message = "the collector has no pipeline and would refuse to start.";
+          fix = "Wire an OTLP endpoint with deps.otlp, set events.enabled, or define service.pipelines in settings.";
+        }
       else
         {
           configMap = scope.mkResource {

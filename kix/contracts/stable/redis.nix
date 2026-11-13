@@ -13,6 +13,7 @@
   ...
 }:
 let
+  inherit (import ../../lib/core/error.nix { inherit lib; }) fail;
 
   isString = builtins.isString;
   isPort = v: isString v && builtins.match "[0-9]+" v != null;
@@ -71,7 +72,10 @@ mkContract {
     requirePlaintext =
       who: dep:
       if dep.out.tls or false then
-        throw "${who}: the redis dependency serves TLS, which this package cannot connect to. Wire a server without TLS, or one that also listens without it."
+        fail {
+          message = "${who}: the redis dependency serves TLS, which this package cannot connect to.";
+          fix = "Wire a server without TLS, or one that also listens without it.";
+        }
       else
         dep;
   };

@@ -1,5 +1,8 @@
 # Build the sets that hold stable and experimental packages and contracts.
 { lib }:
+let
+  inherit (import ./error.nix { inherit lib; }) fail;
+in
 rec {
   names = [
     "stable"
@@ -41,7 +44,11 @@ rec {
     let
       reserved = lib.filter (name: stable ? ${name} || experimental ? ${name}) names;
       graduated = lib.mapAttrs (
-        name: _: throw "`${prefix}.experimental.${name}` is stable now. Write `${prefix}.${name}`."
+        name: _:
+        fail {
+          message = "`${prefix}.experimental.${name}` is stable now.";
+          fix = "Write `${prefix}.${name}`.";
+        }
       ) (removeAttrs stable (builtins.attrNames experimental));
       unknownDemoted = lib.filter (name: !(experimental ? ${name}) || stable ? ${name}) demotedNames;
       wasStable = lib.genAttrs demotedNames (

@@ -16,6 +16,7 @@
   ...
 }:
 let
+  inherit (import ../../lib/core/error.nix { inherit lib; }) fail;
 
   tlsModes = [
     "starttls"
@@ -105,7 +106,10 @@ let
         if found == null then
           null
         else if sender == null then
-          throw "${who}: deps.smtp has no sender address. Set out.from on the SMTP instance, or mail.from on this instance."
+          fail {
+            message = "${who}: deps.smtp has no sender address.";
+            fix = "Set out.from on the SMTP instance, or mail.from on this instance.";
+          }
         else
           found // { from = sender; };
 
@@ -174,7 +178,10 @@ let
         external = out.external or true;
       in
       if out.tls == "none" && external then
-        throw "${who}: deps.smtp is a server outside the cluster with tls = \"none\", so the password and the mail would cross the internet in clear text. Set tls to \"starttls\" (usually port 587) or \"implicit\" (usually port 465) on its out. A server inside the cluster sets external = false."
+        fail {
+          message = "${who}: deps.smtp is a server outside the cluster with tls = \"none\", so the password and the mail would cross the internet in clear text.";
+          fix = "Set tls to \"starttls\" (usually port 587) or \"implicit\" (usually port 465) on its out. A server inside the cluster sets external = false.";
+        }
       else
         {
           inherit (out) host tls;

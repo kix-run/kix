@@ -45,6 +45,7 @@ assert lib.assertOneOf "helmRoute" helmRoute [
 ];
 
 let
+  inherit (import ./core/error.nix { inherit lib; }) fail;
   k8s = import ./core { inherit lib; };
   helmDag = import ./helm-dag.nix { inherit lib; };
 
@@ -62,12 +63,17 @@ let
   # Return the exact Helm release Kix renders with for the major `helmVersion`.
   helmRelease =
     helmVersion:
-    helmReleases.${toString helmVersion}
-    or (throw "Helm ${toString helmVersion} is not supported. Set `helmVersion` to ${lib.concatStringsSep " or " helmMajors}.");
+    helmReleases.${toString helmVersion} or (fail {
+      message = "Helm ${toString helmVersion} is not supported.";
+      fix = "Set `helmVersion` to ${lib.concatStringsSep " or " helmMajors}.";
+    });
 
   nixPkgs =
     if pkgs == null then
-      throw "kix/lib/helm.nix: the nix Helm route needs `pkgs`. Pass the nixpkgs package set as `pkgs` when you import the Kix library with helmRoute = \"nix\"."
+      fail {
+        message = "The nix Helm route needs `pkgs`.";
+        fix = "Pass the nixpkgs package set as `pkgs` when you import the Kix library with helmRoute = \"nix\".";
+      }
     else
       pkgs;
 
@@ -88,13 +94,15 @@ let
       release = builtins.seq (helmRelease helmVersion) helmVersions.${toString helmVersion};
       system = nixPkgs.stdenv.hostPlatform.system;
       platform =
-        helmPlatforms.${system}
-          or (throw "Helm is supported on ${lib.concatStringsSep ", " (builtins.attrNames helmPlatforms)}, not ${system}. Build this project on one of those systems.");
+        helmPlatforms.${system} or (fail {
+          message = "Helm is supported on ${lib.concatStringsSep ", " (builtins.attrNames helmPlatforms)}, not ${system}.";
+          fix = "Build this project on one of those systems.";
+        });
       tarball = nixPkgs.fetchurl {
         url = "https://get.helm.sh/helm-v${release.version}-${platform}.tar.gz";
         sha256 =
           release.sha256.${system}
-            or (throw "kix/lib/helm-versions.json has no hash for Helm ${release.version} on ${system}.");
+            or (fail "kix/lib/helm-versions.json has no hash for Helm ${release.version} on ${system}.");
       };
     in
     nixPkgs.runCommand "helm-${release.version}" { } ''
@@ -426,10 +434,10 @@ rec {
   wrapHelmResource =
     { scope, resource }:
     let
-      kind = resource.kind or (throw "helm resource missing 'kind'");
-      apiVersion = resource.apiVersion or (throw "helm resource missing 'apiVersion'");
+      kind = resource.kind or (fail "helm resource missing 'kind'");
+      apiVersion = resource.apiVersion or (fail "helm resource missing 'apiVersion'");
       meta = resource.metadata or { };
-      name = meta.name or (throw "helm resource missing 'metadata.name'");
+      name = meta.name or (fail "helm resource missing 'metadata.name'");
       resourceNs = meta.namespace or null;
 
       rawAnnotations =
@@ -551,10 +559,10 @@ rec {
           requires ? [ ],
         }:
         let
-          kind = resource.kind or (throw "helm resource missing 'kind'");
-          apiVersion = resource.apiVersion or (throw "helm resource missing 'apiVersion'");
+          kind = resource.kind or (fail "helm resource missing 'kind'");
+          apiVersion = resource.apiVersion or (fail "helm resource missing 'apiVersion'");
           meta = resource.metadata or { };
-          name = meta.name or (throw "helm resource missing 'metadata.name'");
+          name = meta.name or (fail "helm resource missing 'metadata.name'");
           resourceNs = meta.namespace or null;
 
           rawAnnotations =
@@ -681,10 +689,10 @@ rec {
         in
         assert
           rawByKindName ? ${fromId}
-          || throw "importChart: extraEdges: no resource ${fromId} in chart ${releaseName}";
+          || fail "importChart: extraEdges: no resource ${fromId} in chart ${releaseName}";
         assert
           rawByKindName ? ${toId}
-          || throw "importChart: extraEdges: no resource ${toId} in chart ${releaseName}";
+          || fail "importChart: extraEdges: no resource ${toId} in chart ${releaseName}";
         {
           from = rawByKindName.${fromId};
           to = rawByKindName.${toId};
@@ -819,14 +827,14 @@ rec {
         rec {
           all = effectiveResources;
 
-          # Return the resource matching kind and name, or throw if not found.
+          # Return the resource matching kind and name, or fail if not found.
           get =
             kind: name:
             let
               matches = builtins.filter (r: r.kind == kind && r.name == name) effectiveResources;
             in
             if matches == [ ] then
-              throw "importChart: no resource found with kind=${kind} name=${name} in chart ${releaseName}"
+              fail "importChart: no resource found with kind=${kind} name=${name} in chart ${releaseName}"
             else
               builtins.head matches;
 
@@ -875,7 +883,7 @@ rec {
               key = "${kind}/${name}";
             in
             if !(builtins.any (r: r.kind == kind && r.name == name) wrappedResources) then
-              throw "importChart: replaceResource: no resource ${key} in chart ${releaseName}"
+              fail "importChart: replaceResource: no resource ${key} in chart ${releaseName}"
             else
               mkResourceCollection (replacements // { ${key} = newResource; });
 

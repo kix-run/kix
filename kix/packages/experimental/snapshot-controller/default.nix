@@ -83,12 +83,12 @@ let
       tag = builtins.unsafeDiscardStringContext image.tag;
     in
     if minorOf tag != releaseMinor then
-      throw (
-        "${who}: image.tag \"${tag}\" is not a ${lib.concatStringsSep "." releaseMinor} release, "
-        + "and the CRDs under kix/packages/experimental/snapshot-controller/crds are vendored from v${release}. "
-        + "To move to another release, change release in kix/packages/experimental/snapshot-controller/default.nix "
-        + "and run uv run scripts/vendor-crds.py snapshot-controller."
-      )
+      scope.fail {
+        package = "snapshot-controller";
+        option = "image.tag";
+        message = "image.tag \"${tag}\" is not a ${lib.concatStringsSep "." releaseMinor} release, and the CRDs under kix/packages/experimental/snapshot-controller/crds are vendored from v${release}.";
+        fix = "To move to another release, change release in kix/packages/experimental/snapshot-controller/default.nix and run uv run scripts/vendor-crds.py snapshot-controller.";
+      }
     else
       kix.image.ref image;
 in

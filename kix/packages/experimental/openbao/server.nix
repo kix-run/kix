@@ -46,14 +46,22 @@ let
   metricsOn = config.metrics.enabled && prometheus != null;
 
   certCrds =
-    certManager.out.crds
-      or (throw "${who}: the certManager dependency has no out.crds, as with an import. Wire a managed cert-manager instance with deps.certManager = ref.<namespace>.<instance>.");
+    certManager.out.crds or (scope.fail {
+      package = "openbao";
+      message = "the certManager dependency has no out.crds, as with an import.";
+      fix = "Wire a managed cert-manager instance with deps.certManager = ref.<namespace>.<instance>.";
+    });
 
   unseal =
     if !selfInit then
       null
     else if unsealKey == null then
-      throw "${who}: seal.type is \"static\" and there is no unsealKey dependency. Add a secret aliased unsealKey with key \"key\", a 32-byte key (`openssl rand -hex 32 | tr -d '\\n'`), or set seal.type = \"shamir\" to initialize and unseal OpenBao by hand."
+      scope.fail {
+        package = "openbao";
+        option = "config.seal.type";
+        message = "seal.type is \"static\" and there is no unsealKey dependency.";
+        fix = "Add a secret aliased unsealKey with key \"key\", a 32-byte key (`openssl rand -hex 32 | tr -d '\\n'`), or set seal.type = \"shamir\" to initialize and unseal OpenBao by hand.";
+      }
     else
       kix.contracts.secret.helpers.use {
         inherit who;
@@ -103,9 +111,14 @@ let
       ownedSettings.${k};
   serverConfig =
     if settingsOwned != [ ] then
-      throw "${who}: settings sets ${lib.concatStringsSep ", " settingsOwned}, which the package sets from ${
-        lib.concatMapStringsSep "; " ownedReason settingsOwned
-      }. Remove ${if builtins.length settingsOwned == 1 then "it" else "them"} from settings."
+      scope.fail {
+        package = "openbao";
+        option = "config.settings";
+        message = "settings sets ${lib.concatStringsSep ", " settingsOwned}, which the package sets from ${
+          lib.concatMapStringsSep "; " ownedReason settingsOwned
+        }.";
+        fix = "Remove ${if builtins.length settingsOwned == 1 then "it" else "them"} from settings.";
+      }
     else
       lib.recursiveUpdate baseConfig config.settings;
 

@@ -13,6 +13,7 @@
 }:
 
 let
+  inherit (import ../../core/error.nix { inherit lib; }) fail;
   avail = import ../../core/availability.nix { inherit lib; };
   caps = config.cluster.capabilities;
 
@@ -310,17 +311,20 @@ in
           let
             m = r.rawManifest;
           in
-          "[${ctx.namespaceName}/${ctx.instanceName}] ${m.kind} '${m.metadata.name}' runs "
-          + "${toString m.spec.replicas} replicas, but ${ceilingSource.${(ceilingOf r).from}} is \"none\", "
-          + "so it supports one pod at a time. Set its replica count to 1. If you maintain the package "
-          + "and the program can coordinate several replicas (leader election, an HA mode, a shared "
-          + "work queue), remove or raise the ceiling, or compute it from config on the builder call, "
-          + "and map the count with kix.availability.pick.";
+          {
+            instance = "${ctx.namespaceName}/${ctx.instanceName}";
+            message =
+              "${m.kind} '${m.metadata.name}' runs "
+              + "${toString m.spec.replicas} replicas, but ${ceilingSource.${(ceilingOf r).from}} is \"none\", "
+              + "so it supports one pod at a time.";
+            fix =
+              "Set its replica count to 1. If you maintain the package "
+              + "and the program can coordinate several replicas (leader election, an HA mode, a shared "
+              + "work queue), remove or raise the ceiling, or compute it from config on the builder call, "
+              + "and map the count with kix.availability.pick.";
+          };
         replicaGuard =
-          if overReplicated == [ ] then
-            null
-          else
-            throw (lib.concatMapStringsSep "\n" overReplicatedMessage overReplicated);
+          if overReplicated == [ ] then null else fail (map overReplicatedMessage overReplicated);
       in
       {
         # The instance always forces `resources`, so the replica guard runs

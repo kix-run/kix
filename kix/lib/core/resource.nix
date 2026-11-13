@@ -220,11 +220,14 @@ rec {
       cede = ownership.cede or [ ];
       _ownershipCheck =
         if builtins.attrNames ownership != (if ownership == { } then [ ] else [ "cede" ]) then
-          throw "k8s-resource '${kind}/${name}': ownership takes only `cede`, got ${builtins.toJSON (builtins.attrNames ownership)}"
+          fail "k8s-resource '${kind}/${name}': ownership takes only `cede`, got ${builtins.toJSON (builtins.attrNames ownership)}"
         else if !(builtins.isList cede) || !(builtins.all builtins.isString cede) then
-          throw "k8s-resource '${kind}/${name}': ownership.cede must be a list of field paths, e.g. [ \"spec.versions\" ]"
+          fail "k8s-resource '${kind}/${name}': ownership.cede must be a list of field paths, e.g. [ \"spec.versions\" ]"
         else if holdsData != null && !(facts.isForeignGroup apiVersion) then
-          throw "k8s-resource '${kind}/${name}': ${_crd.declaredBy} declares holdsData for ${apiVersion}, a group whose kinds Kix treats as built-in. Kix decides whether those hold data from their shape. Remove holdsData from that declaration"
+          fail {
+            message = "k8s-resource '${kind}/${name}': ${_crd.declaredBy} declares holdsData for ${apiVersion}, a group whose kinds Kix treats as built-in. Kix decides whether those hold data from their shape.";
+            fix = "Remove holdsData from that declaration.";
+          }
         else
           null;
       cedeAnnotations = lib.optionalAttrs (cede != [ ]) {
@@ -348,7 +351,10 @@ rec {
           selfCreated = builtins.filter markers.isSelfCreated untrackedMarkers;
         in
         if selfCreated != [ ] && markers.isPassiveKind { inherit apiVersion kind; } then
-          throw "kix.untrackedRef (${(markers.readMarker (builtins.head selfCreated)).name}): `by = \"self\"` is used in ${kind} '${name}', a built-in kind that creates no object a manifest refers to by name. Name the resource that creates it with `by`, or use the string form"
+          fail {
+            message = "kix.untrackedRef (${(markers.readMarker (builtins.head selfCreated)).name}): `by = \"self\"` is used in ${kind} '${name}', a built-in kind that creates no object a manifest refers to by name.";
+            fix = "Name the resource that creates it with `by`, or use the string form.";
+          }
         else
           null;
 
@@ -407,7 +413,10 @@ rec {
         if !(builtins.elem kind (workloadKinds.${apiVersion} or [ ])) || selfRequired == [ ] then
           null
         else
-          throw "kix.untrackedRef (${builtins.head selfRequired}): `by = \"self\"` is used in ${kind} '${name}' where the pod requires the object, and the pod cannot start to create it. Set `optional = true` on the reference if this ${kind} creates it; otherwise name the resource that creates it with `by`";
+          fail {
+            message = "kix.untrackedRef (${builtins.head selfRequired}): `by = \"self\"` is used in ${kind} '${name}' where the pod requires the object, and the pod cannot start to create it.";
+            fix = "Set `optional = true` on the reference if this ${kind} creates it; otherwise name the resource that creates it with `by`.";
+          };
 
       # External objects declared via `kix.untrackedRef` with a `kind`, which
       # deploy waits for before applying this resource.
@@ -658,7 +667,7 @@ rec {
         keyRef =
           key:
           if !(builtins.elem key keys) then
-            throw "secret \"${name}\" does not declare key \"${key}\"\n  declared keys: ${builtins.concatStringsSep ", " keys}"
+            fail "secret \"${name}\" does not declare key \"${key}\"\n  declared keys: ${builtins.concatStringsSep ", " keys}"
           else
             {
               valueFrom.secretKeyRef = {
@@ -874,7 +883,7 @@ rec {
     if readiness == null then
       null
     else if !(isPathForm || isPathNotForm || isConditionForm) then
-      throw ''
+      fail ''
         ${context}: readiness declaration for ${groupKind} must be one of
           { path = "/status/..."; equals = "<value>"; }
           { path = "/status/..."; notEquals = "<value>"; }
@@ -885,7 +894,7 @@ rec {
         no other keys except an optional `failed` list)
       ''
     else if !failedOk then
-      throw ''
+      fail ''
         ${context}: readiness.failed for ${groupKind} must be a list whose entries are
           { condition = { type = "<Type>"; status = "False"; reason = "<Reason>"; }; }
           { path = "/status/..."; equals = "<value>"; rejected = <bool>; hint = "<text>"; message = "/status/..."; }
@@ -947,9 +956,15 @@ rec {
         if holdsData == null then
           null
         else if !builtins.isBool holdsData then
-          throw "${declaredBy}: holdsData for ${group}/${kind} is ${builtins.toJSON holdsData}; set it to true when a ${kind} keeps data that deleting it loses, such as a database or a storage pool, and false otherwise."
+          fail {
+            message = "${declaredBy}: holdsData for ${group}/${kind} is ${builtins.toJSON holdsData}.";
+            fix = "Set it to true when a ${kind} keeps data that deleting it loses, such as a database or a storage pool, and to false otherwise.";
+          }
         else if !(facts.isForeignGroup "${group}/${version}") then
-          throw "${declaredBy}: holdsData is not accepted for ${group}/${kind}. Kix treats the kinds of ${group} as built-in and decides whether they hold data from their shape. Remove holdsData."
+          fail {
+            message = "${declaredBy}: holdsData is not accepted for ${group}/${kind}. Kix treats the kinds of ${group} as built-in and decides whether they hold data from their shape.";
+            fix = "Remove holdsData.";
+          }
         else
           holdsData;
 
@@ -961,14 +976,18 @@ rec {
         if builtins.elem v servedVersions then
           v
         else
-          throw (
-            "${crKind} ${builtins.toJSON (args.name or null)}"
-            + lib.optionalString (consumer != null) " in ${consumer}"
-            + ": version \"${v}\" is not one that ${declaredBy} lists as served for ${group}/${crKind} ("
-            + builtins.concatStringsSep ", " servedVersions
-            + "). Set version on the custom resource to one of these, or leave it unset for ${version}."
-            + lib.optionalString (unservedFix != null) " ${unservedFix}"
-          );
+          fail {
+            instance = consumer;
+            message =
+              "${crKind} ${
+                builtins.toJSON (args.name or null)
+              }: version \"${v}\" is not one that ${declaredBy} lists as served for ${group}/${crKind} ("
+              + builtins.concatStringsSep ", " servedVersions
+              + ").";
+            fix =
+              "Set version on the custom resource to one of these, or leave it unset for ${version}."
+              + lib.optionalString (unservedFix != null) " ${unservedFix}";
+          };
 
       crFor =
         consumer: args:
@@ -1081,9 +1100,12 @@ rec {
       isApiVersion = v: builtins.isString v && builtins.match "[a-z]([-a-z0-9]*[a-z0-9])?" v != null;
       _validatedVersion =
         if version == null then
-          throw "${who}: set version to the API version the CustomResourceDefinition serves for this kind (for example \"v1\" or \"v1beta1\"). Kix does not install this CRD, so it cannot read the version, and a wrong one fails every apply of this kind."
+          fail {
+            message = "${who}: version is not set. Kix does not install this CRD, so it cannot read the version, and a wrong one fails every apply of this kind.";
+            fix = "Set version to the API version the CustomResourceDefinition serves for this kind (for example \"v1\" or \"v1beta1\").";
+          }
         else if !(isApiVersion version) then
-          throw "${who}: version ${builtins.toJSON version} is not an API version. Kubernetes API versions are lowercase RFC 1035 labels, such as \"v1\" or \"v1beta1\"."
+          fail "${who}: version ${builtins.toJSON version} is not an API version. Kubernetes API versions are lowercase RFC 1035 labels, such as \"v1\" or \"v1beta1\"."
         else
           version;
       _validatedServed =
@@ -1092,18 +1114,27 @@ rec {
           invalid = builtins.filter (v: !(isApiVersion v)) listed;
         in
         if !(builtins.isList listed) then
-          throw "${who}: servedVersions is a list of API versions, such as [ \"v1\" \"v1beta1\" ]; got ${builtins.typeOf listed}."
+          fail {
+            message = "${who}: servedVersions is a ${builtins.typeOf listed}.";
+            fix = "Set servedVersions to a list of API versions, such as [ \"v1\" \"v1beta1\" ].";
+          }
         else if invalid != [ ] then
-          throw "${who}: servedVersions entries ${builtins.toJSON invalid} are not API versions. Kubernetes API versions are lowercase RFC 1035 labels, such as \"v1\" or \"v1beta1\"."
+          fail "${who}: servedVersions entries ${builtins.toJSON invalid} are not API versions. Kubernetes API versions are lowercase RFC 1035 labels, such as \"v1\" or \"v1beta1\"."
         else if !(builtins.elem _validatedVersion listed) then
-          throw "${who}: servedVersions ${builtins.toJSON listed} does not include version \"${_validatedVersion}\". Add it, or set version to one of the listed versions."
+          fail {
+            message = "${who}: servedVersions ${builtins.toJSON listed} does not include version \"${_validatedVersion}\".";
+            fix = "Add it, or set version to one of the listed versions.";
+          }
         else
           lib.unique listed;
       _validatedScope =
         if crdScope == "Namespaced" || crdScope == "Cluster" then
           crdScope
         else
-          throw "${who}: crdScope is ${builtins.toJSON crdScope}; use \"Namespaced\" or \"Cluster\", as the CustomResourceDefinition's spec.scope says.";
+          fail {
+            message = "${who}: crdScope is ${builtins.toJSON crdScope}.";
+            fix = "Use \"Namespaced\" or \"Cluster\", as the CustomResourceDefinition's spec.scope says.";
+          };
       _validatedReadiness = validateReadiness declaration "${group}/${kind}" readiness;
       _validatedBehavior =
         if factBehavior != null then

@@ -1,5 +1,8 @@
 { lib }:
 
+let
+  inherit (import ../core/error.nix { inherit lib; }) fail;
+in
 rec {
   # The built-in kinds Kubernetes serves cluster-scoped. helm.nix renders
   # these without a namespace, and validate.nix resolves references to them
@@ -34,7 +37,7 @@ rec {
     if collisions == { } then
       a // b
     else
-      throw "${context}: key collision on ${builtins.concatStringsSep ", " (builtins.attrNames collisions)}";
+      fail "${context}: key collision on ${builtins.concatStringsSep ", " (builtins.attrNames collisions)}";
 
   collectTypedAttrs =
     {

@@ -134,7 +134,11 @@ let
     );
   coreSettings =
     if settingsProblems != [ ] then
-      throw "${who}: ${lib.concatStringsSep " " settingsProblems}"
+      scope.fail {
+        package = "harbor";
+        option = "core.settings";
+        message = lib.concatStringsSep " " settingsProblems;
+      }
     else
       # Kubernetes expands `$(VAR)` and turns `$$` into `$` across the
       # whole env value, so every `$` except the client references is

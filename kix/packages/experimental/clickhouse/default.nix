@@ -393,7 +393,12 @@ in
         };
       in
       if memoryLimit == null then
-        throw "clickhouse (${name}): resources.limits.memory is unset. ClickHouse sizes its memory cap from the container limit and falls back to the node's RAM without one. Set config.resources.limits.memory."
+        scope.fail {
+          package = "clickhouse";
+          option = "config.resources.limits.memory";
+          message = "resources.limits.memory is unset. ClickHouse sizes its memory cap from the container limit and falls back to the node's RAM without one.";
+          fix = "Set config.resources.limits.memory.";
+        }
       else
         {
           serverConfigMap = scope.mkResource {

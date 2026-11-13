@@ -138,7 +138,10 @@ rec {
     if scope == null || builtins.elem scope scopeValues then
       scope
     else
-      throw "kix: meta.scope of ${context} is ${builtins.toJSON scope}. Set it to \"cluster\" or \"namespace\", or leave it unset.";
+      errors.fail {
+        message = "meta.scope of ${context} is ${builtins.toJSON scope}.";
+        fix = "Set it to \"cluster\" or \"namespace\", or leave it unset.";
+      };
 
   # Return whether a package serves every namespace. Dependency resolution
   # binds an instance of such a package from any namespace, and

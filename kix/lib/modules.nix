@@ -144,7 +144,10 @@ in
                   if isMoved package then
                     errors.fail (movedMessage package)
                   else if builtins.isPath package then
-                    throw "An instance's `package` is set to the path ${toString package} without `import`. Write `package = import ${toString package};`."
+                    errors.fail {
+                      message = "An instance's `package` is set to the path ${toString package} without `import`.";
+                      fix = "Write `package = import ${toString package};`.";
+                    }
                   else
                     package;
                 description = ''
@@ -947,7 +950,7 @@ in
 
     # Each hook is a function `ctx -> result` or `{ priority ? 1000; fn; }`,
     # executed by ascending priority and then by name. Hook return values are
-    # shape-checked and unknown keys throw at the call site.
+    # shape-checked and unknown keys fail at the call site.
     hooks = {
       workloadInterceptors = lib.mkOption {
         type = lib.types.attrsOf lib.types.raw;

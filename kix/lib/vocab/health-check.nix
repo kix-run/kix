@@ -98,7 +98,10 @@ in
     if !(when ctx) then
       { }
     else if deadline < retry + roundBudget then
-      throw "kix.healthCheck (${name}): activeDeadlineSeconds ${toString deadline} leaves no room for a round of checks after the ${toString retry}s retry window; it must be at least ${toString (retry + roundBudget)}"
+      scope.fail {
+        message = "kix.healthCheck (${name}): activeDeadlineSeconds ${toString deadline} leaves no room for a round of checks after the ${toString retry}s retry window.";
+        fix = "Set activeDeadlineSeconds to at least ${toString (retry + roundBudget)}.";
+      }
     else
       {
         ${scriptPart} = scope.mkResource {

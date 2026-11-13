@@ -17,7 +17,6 @@ let
   inherit (c)
     name
     ns
-    who
     metricsPort
     componentLabels
     checkCloudCredentials
@@ -42,17 +41,20 @@ let
     if objectStorage == null then
       bsl.config
     else if bsl.config ? s3Url then
-      throw (
-        "${who}: backupStorageLocation.config.s3Url is set to \"${bsl.config.s3Url}\", and the "
-        + "objectStorage dependency supplies the store's URL. Velero would dial the address in "
-        + "s3Url, and no network policy would open it. Remove s3Url to use the dependency's "
-        + "Service, or stop wiring an objectStorage dependency to use a store outside the cluster."
-      )
+      scope.fail {
+        package = "velero";
+        option = "config.backupStorageLocation.config.s3Url";
+        message = "backupStorageLocation.config.s3Url is set to \"${bsl.config.s3Url}\", and the objectStorage dependency supplies the store's URL. Velero would dial the address in s3Url, and no network policy would open it.";
+        fix = "Remove s3Url to use the dependency's Service, or stop wiring an objectStorage dependency to use a store outside the cluster.";
+      }
     else
       {
         s3Url =
-          (objectStorage.out.url
-            or (throw "${who}: deps.objectStorage has no out.url. Wire an instance whose root is its S3 Service.")
+          (objectStorage.out.url or (scope.fail {
+            package = "velero";
+            message = "deps.objectStorage has no out.url.";
+            fix = "Wire an instance whose root is its S3 Service.";
+          })
           )
             { };
         s3ForcePathStyle = "true";
@@ -70,7 +72,12 @@ let
     else if derived != null then
       derived
     else
-      throw "${who}: schedules.${scheduleName}.schedule \"${schedule.schedule}\" does not show how often it runs, so VeleroBackupMissing has no threshold for it. Set metrics.maxBackupAge.${scheduleName} to twice the longest gap between two runs plus the time a backup takes, such as \"64d\" for a monthly schedule.";
+      scope.fail {
+        package = "velero";
+        option = "config.metrics.maxBackupAge.${scheduleName}";
+        message = "schedules.${scheduleName}.schedule \"${schedule.schedule}\" does not show how often it runs, so VeleroBackupMissing has no threshold for it.";
+        fix = "Set metrics.maxBackupAge.${scheduleName} to twice the longest gap between two runs plus the time a backup takes, such as \"64d\" for a monthly schedule.";
+      };
   ages = lib.mapAttrs ageOf config.schedules;
   # The counter form reads a sample `age` ago, so the age must fit
   # inside the prometheus package's default retention of 7d.

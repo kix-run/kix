@@ -23,6 +23,7 @@
 { lib }:
 
 let
+  inherit (import ../core/error.nix { inherit lib; }) fail;
   quantity = import ./quantity.nix { inherit lib; };
 
   listOr = v: if v == null then [ ] else v;
@@ -102,7 +103,7 @@ let
           parsed = parse key v;
         in
         if parsed == null then
-          throw "kix: usage ${key} = ${builtins.toJSON v} is not a Kubernetes quantity"
+          fail "kix: usage ${key} = ${builtins.toJSON v} is not a Kubernetes quantity"
         else
           parsed
     ) (lib.filterAttrs (_: v: v != null) use);

@@ -3,6 +3,7 @@
 { lib }:
 
 let
+  inherit (import ../core/error.nix { inherit lib; }) fail;
   resourceNamespace =
     resource:
     let
@@ -176,7 +177,10 @@ let
         else if sameVolume existing v then
           acc
         else
-          throw ''${fn}: ${workload} declares the volume '${v.name}' twice with different contents: ${describeConflict existing v}. Give one of them another name with name = "..." in kix.mount.*. The same volume mounted into several containers is allowed and needs no rename.'';
+          fail {
+            message = "${fn}: ${workload} declares the volume '${v.name}' twice with different contents: ${describeConflict existing v}.";
+            fix = "Give one of them another name with name = \"...\" in kix.mount.*. The same volume mounted into several containers is allowed and needs no rename.";
+          };
       mergedVolumes = lib.foldl' addVolume (podSpec.volumes or [ ]) volumes;
 
       volumeMounts = map (
@@ -204,22 +208,31 @@ let
           else if containers == [ ] then
             [ ]
           else
-            throw ''kix.withMounts: ${workload} has ${toString (builtins.length containers)} containers (${builtins.concatStringsSep ", " containerNames}), so Kix cannot tell which one to mount into. Name the container: kix.withMountsOn "${builtins.head containerNames}" [ ... ], or several: kix.withMountsOn [ ${
-              builtins.concatStringsSep " " (map (n: ''"${n}"'') containerNames)
-            } ] [ ... ].''
+            fail {
+              message = "kix.withMounts: ${workload} has ${toString (builtins.length containers)} containers (${builtins.concatStringsSep ", " containerNames}), so Kix cannot tell which one to mount into.";
+              fix = "Name the container: kix.withMountsOn \"${builtins.head containerNames}\" [ ... ], or several: kix.withMountsOn [ ${
+                builtins.concatStringsSep " " (map (n: ''"${n}"'') containerNames)
+              } ] [ ... ].";
+            }
         else if names == [ ] then
-          throw "kix.withMountsOn: ${workload}: the list of container names is empty, so nothing would be mounted. Name at least one container."
+          fail {
+            message = "kix.withMountsOn: ${workload}: the list of container names is empty, so nothing would be mounted.";
+            fix = "Name at least one container.";
+          }
         else if unknown != [ ] then
-          throw "kix.withMountsOn: ${workload} has no container named ${
-            builtins.concatStringsSep " or " (map (n: "'${n}'") unknown)
-          }, so nothing would be mounted. Its ${
-            if builtins.length containerNames == 1 then "container is" else "containers are"
-          } ${joinNames containerNames}${
-            lib.optionalString (initContainerNames != [ ])
-              "; its ${
-                if builtins.length initContainerNames == 1 then "init container is" else "init containers are"
-              } ${joinNames initContainerNames}"
-          }. Fix the name in kix.withMountsOn."
+          fail {
+            message = "kix.withMountsOn: ${workload} has no container named ${
+              builtins.concatStringsSep " or " (map (n: "'${n}'") unknown)
+            }, so nothing would be mounted. Its ${
+              if builtins.length containerNames == 1 then "container is" else "containers are"
+            } ${joinNames containerNames}${
+              lib.optionalString (initContainerNames != [ ])
+                "; its ${
+                  if builtins.length initContainerNames == 1 then "init container is" else "init containers are"
+                } ${joinNames initContainerNames}"
+            }.";
+            fix = "Fix the name in kix.withMountsOn.";
+          }
         else
           names;
 

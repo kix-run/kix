@@ -1,6 +1,8 @@
 { lib }:
 
 let
+  inherit (import ../../core/error.nix { inherit lib; }) fail;
+
   requiredAttrs = {
     policyKinds = "[kind]. the policy kinds this enforcer emits; the hasNetworkPolicy rule accepts them as a namespace's policy";
 
@@ -48,12 +50,12 @@ let
     if missing == [ ] then
       null
     else
-      throw (
-        "kix: network-policy enforcer '${enforcerName}' is missing required "
-        + "`out.netpol` attributes:\n"
-        + builtins.concatStringsSep "\n" descriptions
-        + "\n\nSee kix/lib/plugins/netpol/interface.nix for the full contract."
-      );
+      fail {
+        message =
+          "network-policy enforcer '${enforcerName}' is missing required `out.netpol` attributes:\n"
+          + builtins.concatStringsSep "\n" descriptions;
+        fix = "Add them to the enforcer's `out.netpol`. See kix/lib/plugins/netpol/interface.nix for the full contract.";
+      };
 
 in
 {

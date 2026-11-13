@@ -221,8 +221,10 @@ rec {
           dep:
           let
             depNs =
-              dep._meta.namespaceName
-                or (throw "scope.forService: the dependency does not declare its namespace (_meta.namespaceName is missing). Use scope.forNamespace with the namespace name instead");
+              dep._meta.namespaceName or (errors.fail {
+                message = "scope.forService: the dependency does not declare its namespace (_meta.namespaceName is missing).";
+                fix = "Use scope.forNamespace with the namespace name instead.";
+              });
           in
           scopeObj.forNamespace depNs;
 
@@ -231,7 +233,7 @@ rec {
           let
             nsRes =
               namespaces.${nsName}
-                or (throw "scope.forNamespace: namespace '${nsName}' does not exist in the cluster");
+                or (errors.fail "scope.forNamespace: namespace '${nsName}' does not exist in the cluster");
           in
           mkScope {
             inherit

@@ -368,13 +368,20 @@ in
         );
         serviceSpec =
           if serviceSpecOwnedHits != [ ] then
-            throw (
-              lib.concatMapStringsSep "\n" (
-                k: "${who}: service.spec.${k} is set by the package, which ${serviceSpecOwned.${k}}"
-              ) serviceSpecOwnedHits
+            scope.fail (
+              map (k: {
+                package = "traefik";
+                option = "service.spec.${k}";
+                message = "service.spec.${k} is set by the package, which ${serviceSpecOwned.${k}}";
+              }) serviceSpecOwnedHits
             )
           else if serviceType == "ClusterIP" && config.service.spec.externalTrafficPolicy != null then
-            throw "${who}: service.spec.externalTrafficPolicy applies to NodePort and LoadBalancer Services, and the API server rejects it on ClusterIP. Change service.spec.type or remove it."
+            scope.fail {
+              package = "traefik";
+              option = "service.spec.externalTrafficPolicy";
+              message = "service.spec.externalTrafficPolicy applies to NodePort and LoadBalancer Services, and the API server rejects it on ClusterIP.";
+              fix = "Change service.spec.type or remove it.";
+            }
           else
             kix.mergeGuarded
               {
@@ -469,7 +476,11 @@ in
           let
             reason = reasonFor arg;
           in
-          lib.optional (reason != null) "${who}: extraArgs sets \"${arg}\", ${reason}"
+          lib.optional (reason != null) {
+            package = "traefik";
+            option = "extraArgs";
+            message = "extraArgs sets \"${arg}\", ${reason}";
+          }
         ) config.extraArgs;
 
         args = [
@@ -494,7 +505,12 @@ in
         traefikEnv = builtins.filter (lib.hasPrefix "TRAEFIK_") (builtins.attrNames config.env);
         env =
           if traefikEnv != [ ] then
-            throw "${who}: env sets ${lib.concatStringsSep ", " traefikEnv}, which Traefik ignores because it reads its configuration from flags. Pass the setting in extraArgs."
+            scope.fail {
+              package = "traefik";
+              option = "env";
+              message = "env sets ${lib.concatStringsSep ", " traefikEnv}, which Traefik ignores because it reads its configuration from flags.";
+              fix = "Pass the setting in extraArgs.";
+            }
           else
             kix.mkEnvVars (kix.mergeEnv { inherit who; } config.env);
 
@@ -554,9 +570,14 @@ in
           );
       in
       if listenerProblems != [ ] then
-        throw (lib.concatMapStringsSep "\n" (p: "${who}: ${p}") listenerProblems)
+        scope.fail (
+          map (p: {
+            package = "traefik";
+            message = p;
+          }) listenerProblems
+        )
       else if argProblems != [ ] then
-        throw (lib.concatStringsSep "\n" argProblems)
+        scope.fail argProblems
       else
         {
           # Routes, grants, policies, and the class run no pods; a Gateway

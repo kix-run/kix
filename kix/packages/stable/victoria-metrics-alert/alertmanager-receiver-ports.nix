@@ -9,13 +9,13 @@
 # Other keys ending in `_url` (Slack's `icon_url`, PagerDuty's `client_url`,
 # Pushover's `url`) are links placed in the message and are not read.
 #
-# Throws, naming the receiver, on an integration this table does not know,
+# Fails, naming the receiver, on an integration this table does not know,
 # on a dialled URL whose port it cannot read, and on a receiver that
 # Alertmanager refuses for want of an address or a smarthost.
 #
-#   import ./alertmanager-receiver-ports.nix { inherit lib who; } settings
+#   import ./alertmanager-receiver-ports.nix { inherit lib fail; } settings
 
-{ lib, who }:
+{ lib, fail }:
 settings:
 let
   global = settings.global or { };
@@ -133,7 +133,11 @@ let
       port = builtins.match ".*:([0-9]+)" authority;
     in
     if !(builtins.isString url) || m == null || lib.hasInfix "{{" authority then
-      throw "${who}: ${where} is ${builtins.toJSON url}, and Kix cannot read the port Alertmanager dials from it. Write the scheme, host, and port literally (https://host[:port]/path), or use the key's `_file` form where the integration has one, for which the egress policy opens port 443."
+      fail {
+        package = "victoria-metrics-alert";
+        message = "${where} is ${builtins.toJSON url}, and Kix cannot read the port Alertmanager dials from it.";
+        fix = "Write the scheme, host, and port literally (https://host[:port]/path), or use the key's `_file` form where the integration has one, for which the egress policy opens port 443.";
+      }
     else if port != null then
       lib.toInt (builtins.head port)
     else if scheme == "http" then
@@ -147,7 +151,11 @@ let
       m = builtins.match ".*:([0-9]+)" smarthost;
     in
     if m == null then
-      throw "${who}: ${where} is \"${smarthost}\", which has no port. Write it as host:port."
+      fail {
+        package = "victoria-metrics-alert";
+        message = "${where} is \"${smarthost}\", which has no port.";
+        fix = "Write it as host:port.";
+      }
     else
       lib.toInt (builtins.head m);
 
@@ -169,12 +177,15 @@ let
     let
       where = "settings.receivers \"${receiver.name or "?"}\" ${type}[${toString i}]";
       integration =
-        integrations.${type}
-          or (throw "${who}: ${where}: Alertmanager has no integration `${type}`, so it refuses the configuration. The integrations are ${
+        integrations.${type} or (fail {
+          package = "victoria-metrics-alert";
+          message = "${where}: Alertmanager has no integration `${type}`, so it refuses the configuration.";
+          fix = "The integrations are ${
             lib.concatStringsSep ", " (
               lib.sort builtins.lessThan (builtins.attrNames integrations ++ [ "email_configs" ])
             )
-          }.");
+          }.";
+        });
       globalKeys = integration.global or [ ];
       fromEntry = firstPort (k: "${where}.${k}") entry integration.keys;
       fromGlobal = firstPort (k: "settings.global.${k}") global globalKeys;
@@ -188,7 +199,11 @@ let
         smarthost = entry.smarthost or global.smtp_smarthost or null;
       in
       if smarthost == null then
-        throw "${who}: ${where} has no smarthost and settings.global.smtp_smarthost is unset, so Alertmanager refuses the configuration. Set one of them to host:port."
+        fail {
+          package = "victoria-metrics-alert";
+          message = "${where} has no smarthost and settings.global.smtp_smarthost is unset, so Alertmanager refuses the configuration.";
+          fix = "Set one of them to host:port.";
+        }
       else
         [ (portOfSmarthost "${where}.smarthost" smarthost) ]
     else if fromEntry != null then
@@ -198,7 +213,11 @@ let
     else if fallback != null then
       [ fallback ]
     else
-      throw "${who}: ${where} sets none of ${sources}, so Alertmanager refuses the configuration. Set one of them.";
+      fail {
+        package = "victoria-metrics-alert";
+        message = "${where} sets none of ${sources}, so Alertmanager refuses the configuration.";
+        fix = "Set one of them.";
+      };
 
   receiverConfigPorts =
     receiver:

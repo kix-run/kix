@@ -1,6 +1,7 @@
 { lib }:
 
 let
+  inherit (import ./core/error.nix { inherit lib; }) fail;
   severityLevels = {
     "info" = 0;
     "warning" = 1;
@@ -35,9 +36,12 @@ let
       level = rule.level or null;
     in
     if level == null then
-      throw "scorecard rule '${ruleName}' declares no level. It must be one of: ${lib.concatStringsSep ", " validLevels}."
+      fail {
+        message = "scorecard rule '${ruleName}' declares no level.";
+        fix = "Set the level to one of: ${lib.concatStringsSep ", " validLevels}.";
+      }
     else if !(isValidLevel level) then
-      throw "scorecard rule '${ruleName}' has level '${toString level}', which is not one of: ${lib.concatStringsSep ", " validLevels}. A rule at an unknown level is never evaluated."
+      fail "scorecard rule '${ruleName}' has level '${toString level}', which is not one of: ${lib.concatStringsSep ", " validLevels}. A rule at an unknown level is never evaluated."
     else
       null;
 
@@ -46,7 +50,7 @@ let
     if severity == null || isValidSeverity severity then
       null
     else
-      throw "scorecard rule '${ruleName}' has severity '${toString severity}'${source}, which is not one of: ${lib.concatStringsSep ", " (builtins.attrNames severityLevels)}.";
+      fail "scorecard rule '${ruleName}' has severity '${toString severity}'${source}, which is not one of: ${lib.concatStringsSep ", " (builtins.attrNames severityLevels)}.";
 
   flattenRules =
     rules:

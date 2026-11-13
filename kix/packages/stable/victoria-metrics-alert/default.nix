@@ -84,8 +84,14 @@ let
     ;
 
   defaultAlertmanagerSettings = import ./alertmanager-default-settings.nix;
-  refuseInlineSecrets = import ./alertmanager-inline-secrets.nix { inherit lib who; };
-  receiverPorts = import ./alertmanager-receiver-ports.nix { inherit lib who; };
+  refuseInlineSecrets = import ./alertmanager-inline-secrets.nix {
+    inherit lib;
+    fail = scope.fail;
+  };
+  receiverPorts = import ./alertmanager-receiver-ports.nix {
+    inherit lib;
+    fail = scope.fail;
+  };
 in
 {
   meta = {
@@ -248,7 +254,11 @@ in
           ++ lib.optional (alertmanagerConfig != null) "the alertmanagerConfig dependency";
         configDep =
           if builtins.length configRoutes > 1 then
-            throw "${who}: ${lib.concatStringsSep " and " configRoutes} are set, and each supplies the whole Alertmanager configuration. Keep one."
+            scope.fail {
+              package = "victoria-metrics-alert";
+              message = "${lib.concatStringsSep " and " configRoutes} are set, and each supplies the whole Alertmanager configuration.";
+              fix = "Keep one.";
+            }
           else
             kix.contracts.secret.helpers.use {
               inherit who;
@@ -291,7 +301,7 @@ in
 
         alertmanagerBaseSpec = {
           replicaCount = config.alertmanager.replicaCount;
-          image = crImageVersionTag "alertmanager.image" config.alertmanager.image;
+          image = crImageVersionTag scope.fail "alertmanager.image" config.alertmanager.image;
           retention = config.alertmanager.retention;
           podDisruptionBudget = {
             maxUnavailable = 1;

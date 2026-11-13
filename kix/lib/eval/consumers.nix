@@ -357,7 +357,10 @@ in
       ) consumers;
     in
     if refusals != [ ] then
-      throw "cluster '${name}' (platform): invalid consumer grant(s) in `consumers`:\n  ${builtins.concatStringsSep "\n  " refusals}"
+      fail {
+        option = "consumers";
+        message = "cluster '${name}' (platform): invalid consumer grant(s) in `consumers`:\n  ${builtins.concatStringsSep "\n  " refusals}";
+      }
     else
       {
         resources = ingressPolicies;
@@ -392,7 +395,10 @@ in
         else if exact != [ ] then
           builtins.head exact
         else
-          throw "kix.interface: ${where} gives the consumer namespace patterns only (${builtins.concatStringsSep ", " (builtins.attrNames data.namespaces)}), with no concrete namespace for imported services. Pass `importNamespace`: kix.interface { file = ./${baseNameOf (toString file)}; importNamespace = \"<namespace>\"; }.";
+          fail {
+            message = "kix.interface: ${where} gives the consumer namespace patterns only (${builtins.concatStringsSep ", " (builtins.attrNames data.namespaces)}), with no concrete namespace for imported services.";
+            fix = "Pass `importNamespace`: kix.interface { file = ./${baseNameOf (toString file)}; importNamespace = \"<namespace>\"; }.";
+          };
       imports = lib.mapAttrsToList (key: svc: {
         inherit key;
         inherit (svc) instance;
@@ -403,13 +409,18 @@ in
       repeated = builtins.filter (i: lib.count (j: j.instance == i.instance) imports > 1) imports;
     in
     if (data.version or null) != version then
-      throw "kix.interface: ${where} has format version ${
-        builtins.toJSON (data.version or null)
-      }; Kix reads version ${toString version}. Use a version of Kix that reads it, or ask the platform for an interface of version ${toString version}."
+      fail {
+        message = "kix.interface: ${where} has format version ${
+          builtins.toJSON (data.version or null)
+        }; Kix reads version ${toString version}.";
+        fix = "Use a version of Kix that reads it, or ask the platform for an interface of version ${toString version}.";
+      }
     else if repeated != [ ] then
-      throw "kix.interface: ${where} grants services ${
-        builtins.concatStringsSep " and " (map (i: i.key) repeated)
-      }, which share the instance name '${(builtins.head repeated).instance}'. Each becomes an import of that name in namespace '${home}', so only one can."
+      fail {
+        message = "kix.interface: ${where} grants services ${
+          builtins.concatStringsSep " and " (map (i: i.key) repeated)
+        }, which share the instance name '${(builtins.head repeated).instance}'. Each becomes an import of that name in namespace '${home}', so only one can.";
+      }
     else
       {
         clusterDomain = lib.mkDefault facts.clusterDomain;

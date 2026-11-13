@@ -36,10 +36,12 @@ rec {
       m = builtins.match "(https?)://(\\[[^]]*]|[^]/:?#[]*)(:([0-9]+))?([/?#].*)?" url;
     in
     if m == null then
-      throw (
-        "${who}: backupStorageLocation.config.s3Url \"${url}\" is not an http or https URL, so the "
-        + "package cannot tell which port the store listens on. Write it as https://<host>[:<port>]."
-      )
+      scope.fail {
+        package = "velero";
+        option = "backupStorageLocation.config.s3Url";
+        message = "s3Url \"${url}\" is not an http or https URL, so the package cannot tell which port the store listens on.";
+        fix = "Write it as https://<host>[:<port>].";
+      }
     else if builtins.elemAt m 3 != null then
       lib.toInt (builtins.elemAt m 3)
     else if builtins.elemAt m 0 == "https" then
@@ -56,12 +58,12 @@ rec {
       tag = builtins.unsafeDiscardStringContext image.tag;
     in
     if builtins.match "v([0-9]+)\\.([0-9]+)\\..*" tag != releaseMinor then
-      throw (
-        "${who}: image.tag \"${tag}\" is not a ${lib.concatStringsSep "." releaseMinor} release, "
-        + "and the CRDs under kix/packages/experimental/velero/crds are vendored from ${release}. To move to "
-        + "another release, change release in kix/packages/experimental/velero/default.nix and run "
-        + "uv run scripts/vendor-crds.py velero."
-      )
+      scope.fail {
+        package = "velero";
+        option = "image.tag";
+        message = "image.tag \"${tag}\" is not a ${lib.concatStringsSep "." releaseMinor} release, and the CRDs under kix/packages/experimental/velero/crds are vendored from ${release}.";
+        fix = "To move to another release, change release in kix/packages/experimental/velero/default.nix and run uv run scripts/vendor-crds.py velero.";
+      }
     else
       kix.image.ref image;
 
@@ -235,11 +237,11 @@ rec {
       isFile = builtins.elem "cloud" declared;
     in
     if isFile && builtins.any (k: builtins.elem k declared) awsKeyPair then
-      throw (
-        "${who}: deps.cloudCredentials resolved to secret \"${dep.out.name}\", which declares both `cloud` "
-        + "and ${lib.concatStringsSep ", " awsKeyPair}. Velero would read the key pair and ignore the file. "
-        + "Keep one form."
-      )
+      scope.fail {
+        package = "velero";
+        message = "deps.cloudCredentials resolved to secret \"${dep.out.name}\", which declares both `cloud` and ${lib.concatStringsSep ", " awsKeyPair}. Velero would read the key pair and ignore the file.";
+        fix = "Keep one form.";
+      }
     else
       {
         inherit dep;

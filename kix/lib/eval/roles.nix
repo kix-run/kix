@@ -10,6 +10,9 @@
 
 { lib }:
 
+let
+  inherit (import ../core/error.nix { inherit lib; }) fail;
+in
 rec {
   registry = {
     "network-policy-enforcer" = {
@@ -63,10 +66,10 @@ rec {
     if registry ? ${role} then
       role
     else
-      throw (
-        "kix: unknown role '${role}' (${context}). ${knownRolesHint}. "
-        + "Choose a supported role from this list. For dependency aliases, use meta.defaultAliases."
-      );
+      fail {
+        message = "unknown role '${role}' (${context}). ${knownRolesHint}.";
+        fix = "Choose a supported role from this list. For dependency aliases, use meta.defaultAliases.";
+      };
 
   # Verify that `out` contains all attributes required by `role` and return `out`.
   checkOutContract =
@@ -80,10 +83,10 @@ rec {
       missing = if out == null then required else builtins.filter (attr: !(out ? ${attr})) required;
     in
     if required != [ ] && missing != [ ] then
-      throw (
-        "kix: '${providerLabel}' declares role '${role}' but its out is missing required fields. Add these fields to the provider package: "
-        + "${builtins.concatStringsSep ", " missing}"
-      )
+      fail {
+        message = "'${providerLabel}' declares role '${role}' but its out is missing required fields.";
+        fix = "Add these fields to the provider package: ${builtins.concatStringsSep ", " missing}.";
+      }
     else
       out;
 }

@@ -438,7 +438,11 @@ in
           if rabbitmqOperator.out ? operandSelectors then
             rabbitmqOperator.out
           else
-            throw "${who}: the rabbitmqOperator dependency has no out.operandSelectors, as with an import. This package reads the operator's CRD handle and pod labels from it. Wire a managed rabbitmq-operator instance with deps.rabbitmqOperator = ref.<namespace>.<instance>.";
+            scope.fail {
+              package = "rabbitmq-cluster";
+              message = "the rabbitmqOperator dependency has no out.operandSelectors, as with an import. This package reads the operator's CRD handle and pod labels from it.";
+              fix = "Wire a managed rabbitmq-operator instance with deps.rabbitmqOperator = ref.<namespace>.<instance>.";
+            };
 
         operandSelector = operator.operandSelectors.cluster name;
 

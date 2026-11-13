@@ -2,6 +2,7 @@
 { lib }:
 
 let
+  inherit (import ../core/error.nix { inherit lib; }) fail;
   quantity = import ./quantity.nix { inherit lib; };
 
   # Return true when `name` is a valid Kubernetes ResourceRequirements key.
@@ -29,9 +30,12 @@ let
           bad = builtins.filter (n: !(isResourceName n)) (builtins.attrNames kept);
         in
         if bad != [ ] then
-          throw "kix.options.resources: ${
-            lib.concatMapStringsSep ", " (n: "${sideName}.${n}") bad
-          } is not a resource name. Use cpu, memory or ephemeral-storage, hugepages-<size>, or an extended resource whose name contains \"/\" (nvidia.com/gpu)."
+          fail {
+            message = "kix.options.resources: ${
+              lib.concatMapStringsSep ", " (n: "${sideName}.${n}") bad
+            } is not a resource name.";
+            fix = "Use cpu, memory, or ephemeral-storage, hugepages-<size>, or an extended resource whose name contains \"/\" (nvidia.com/gpu).";
+          }
         else
           kept;
       requests = side "requests";
@@ -206,7 +210,7 @@ in
       };
     in
     if badDefaults != [ ] then
-      throw "kix.options.resources: defaults may set cpu, memory and ephemeral-storage; ${lib.concatStringsSep ", " badDefaults} is not one of them."
+      fail "kix.options.resources: defaults may set cpu, memory, and ephemeral-storage; ${lib.concatStringsSep ", " badDefaults} is not one of them."
     else
       lib.mkOption {
         inherit description;

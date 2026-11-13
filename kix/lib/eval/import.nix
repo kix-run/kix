@@ -156,12 +156,14 @@ rec {
             else
               spec.template.metadata or { };
           selector =
-            spec.selector.matchLabels or templateMeta.labels
-              or (throw "Import instance '${instanceName}': ${kind} '${args.name or "?"}' has no spec.selector.matchLabels and no pod template labels. Use scope.selectorLabels.");
+            spec.selector.matchLabels or templateMeta.labels or (fail {
+              message = "Import instance '${instanceName}': ${kind} '${args.name or "?"}' has no spec.selector.matchLabels and no pod template labels.";
+              fix = "Use scope.selectorLabels.";
+            });
           ref = mkRes namespaceResource (
             {
               inherit apiVersion kind spec;
-              name = args.name or (throw "Import instance '${instanceName}': ${kind} needs a name");
+              name = args.name or (fail "Import instance '${instanceName}': ${kind} needs a name");
               labels = args.labels or { };
             }
             // lib.optionalAttrs (args ? annotations) { inherit (args) annotations; }
@@ -222,7 +224,7 @@ rec {
             refText = "ref.${entry.namespace}.${entry.instanceName}";
           in
           if entry.namespace == nsName && entry.instanceName == instName then
-            throw "${who} names ${refText}, the import itself. An import's marker cannot depend on itself."
+            fail "${who} names ${refText}, the import itself. An import's marker cannot depend on itself."
           else if !((mergedInstances.${entry.namespace} or { }) ? ${entry.instanceName}) then
             fail {
               message = "${who} lists ${refText}, which is not a declared instance. '${entry.instanceName}' is in availablePackages, and a ref pointer in extraDeps does not create it automatically.";
@@ -235,7 +237,7 @@ rec {
         else if builtins.isAttrs entry && (entry._type or "") == "k8s-resource" then
           null
         else
-          throw "${who}: each entry is a resource or a ref.<namespace>.<instance> pointer; got ${describe entry}.";
+          fail "${who}: each entry is a resource or a ref.<namespace>.<instance> pointer; got ${describe entry}.";
 
       checkInstance =
         nsName: instName: instCfg:
@@ -366,14 +368,14 @@ rec {
             );
 
             rawRoot =
-              parts.root or (throw "Import instance '${instanceName}': package build must define 'root'");
+              parts.root or (fail "Import instance '${instanceName}': package build must define 'root'");
             rootRes =
               if rawRoot ? resource then
                 rawRoot.resource
               else if rawRoot ? _type then
                 rawRoot
               else
-                throw "Import instance '${instanceName}': root must be a resource or { resource, requires }";
+                fail "Import instance '${instanceName}': root must be a resource or { resource, requires }";
           in
           {
             out = (rootRes.out or { }) // importDef.out;
@@ -427,11 +429,17 @@ rec {
           ];
         in
         if !builtins.isAttrs entry then
-          throw "${who}: each mkImport crds entry is an attribute set of scope.mkCRDRef arguments; got ${builtins.typeOf entry}."
+          fail "${who}: each mkImport crds entry is an attribute set of scope.mkCRDRef arguments; got ${builtins.typeOf entry}."
         else if missing != [ ] then
-          throw "${who}: a mkImport crds entry is missing ${builtins.concatStringsSep ", " missing}. Give group, kind, plural and version as the CustomResourceDefinition declares them."
+          fail {
+            message = "${who}: a mkImport crds entry is missing ${builtins.concatStringsSep ", " missing}.";
+            fix = "Give group, kind, plural, and version as the CustomResourceDefinition declares them.";
+          }
         else if unknown != [ ] then
-          throw "${who}: mkImport crds entry ${entry.group}/${entry.kind} has unknown keys ${builtins.concatStringsSep ", " unknown}. Accepted keys: ${builtins.concatStringsSep ", " crdHandleArgs}. The environment installs an import's CRDs, so installedBy does not apply."
+          fail {
+            message = "${who}: mkImport crds entry ${entry.group}/${entry.kind} has unknown keys ${builtins.concatStringsSep ", " unknown}. The environment installs an import's CRDs, so installedBy does not apply.";
+            fix = "Use only these keys: ${builtins.concatStringsSep ", " crdHandleArgs}.";
+          }
         else
           entry;
       mkCrdHandle = k8s.mkCRDRefHandle {
@@ -457,14 +465,17 @@ rec {
             if builtins.isList importDef.crds then
               map checkCrdEntry importDef.crds
             else
-              throw "${who}: mkImport crds is a list of scope.mkCRDRef argument sets; got ${builtins.typeOf importDef.crds}.";
+              fail "${who}: mkImport crds is a list of scope.mkCRDRef argument sets; got ${builtins.typeOf importDef.crds}.";
           kinds = map (e: e.kind) entries;
           repeated = lib.unique (builtins.filter (k: lib.count (x: x == k) kinds > 1) kinds);
         in
         if repeated == [ ] then
           entries
         else
-          throw "${who}: mkImport crds declares ${builtins.concatStringsSep ", " repeated} more than once. out.crds holds one handle per kind; keep one entry for each.";
+          fail {
+            message = "${who}: mkImport crds declares ${builtins.concatStringsSep ", " repeated} more than once. out.crds holds one handle per kind.";
+            fix = "Keep one entry for each kind.";
+          };
       crdHandleList = map (entry: {
         inherit (entry) kind;
         handle = mkCrdHandle entry;
@@ -490,11 +501,17 @@ rec {
           refText = "ref.${entry.namespace}.${entry.instanceName}";
         in
         if entry.namespace == namespaceName && entry.instanceName == instanceName then
-          throw "${who}: out.${path} names ${refText}, the import itself. Point out.${path} at another instance, or remove it."
+          fail {
+            message = "${who}: out.${path} names ${refText}, the import itself.";
+            fix = "Point out.${path} at another instance, or remove it.";
+          }
         else if isInstanceActive entry.namespace entry.instanceName then
           allInstances.${entry.namespace}.${entry.instanceName}
         else
-          throw "${who}: out.${path} names ${refText}, which is not an active instance. A ref in out does not activate an optional instance. Declare it under instances.${entry.namespace}.${entry.instanceName}, or set optional = false on it.";
+          fail {
+            message = "${who}: out.${path} names ${refText}, which is not an active instance. A ref in out does not activate an optional instance.";
+            fix = "Declare it under instances.${entry.namespace}.${entry.instanceName}, or set optional = false on it.";
+          };
 
       # Replace each ref in `out`, at any depth of plain attribute sets.
       resolveOutRefs =
@@ -586,7 +603,10 @@ rec {
           if isInstanceActive entry.namespace entry.instanceName then
             allInstances.${entry.namespace}.${entry.instanceName}.root
           else
-            throw "${who}: extraDeps names ref.${entry.namespace}.${entry.instanceName}, an optional instance that is not active. Kix renders no marker for it, so the import's marker would wait for a resource that is never deployed. An extraDeps ref does not activate its target. Set optional = false on instances.${entry.namespace}.${entry.instanceName}, or remove the entry."
+            fail {
+              message = "${who}: extraDeps names ref.${entry.namespace}.${entry.instanceName}, an optional instance that is not active. Kix renders no marker for it, so the import's marker would wait for a resource that is never deployed. An extraDeps ref does not activate its target.";
+              fix = "Set optional = false on instances.${entry.namespace}.${entry.instanceName}, or remove the entry.";
+            }
         else
           entry;
 

@@ -29,6 +29,7 @@
 
 let
   lib = inputs.nixpkgs.lib;
+  inherit (import ./core/error.nix { inherit lib; }) fail;
 
   # The project's settings from `kix.toml` beside its flake.nix. Nix sees the
   # file only once git tracks it, and Kix checks that its own
@@ -52,7 +53,11 @@ let
     if builtins.elem value builders then
       value
     else
-      throw "kix.toml sets builder = ${builtins.toJSON value}, which is not a known builder (the Kix library supports: ${lib.concatStringsSep ", " builders}). Check the spelling, or run `kix lib update` if the project needs a newer Kix library.";
+      fail {
+        message = "kix.toml sets builder = ${builtins.toJSON value}, which is not a known builder (the Kix library supports: ${lib.concatStringsSep ", " builders}).";
+        fix = "Check the spelling, or run `kix lib update` if the project needs a newer Kix library.";
+        option = "builder";
+      };
 
   catalogPackages = import ../packages { inherit lib; };
   packagesByLevel = import ../packages/by-level.nix { inherit lib; };
@@ -126,7 +131,10 @@ let
               # Evaluated only when the cluster function requires `pins`.
               pins =
                 if pins == null then
-                  throw "mkFlake: cluster '${name}' takes a `pins` argument, but this flake declares no pin file. Add `pins = ./pins.json;` beside `clusters` in flake.nix, or read one directly with `kix.pins ./pins.json`."
+                  fail {
+                    message = "mkFlake: cluster '${name}' takes a `pins` argument, but this flake declares no pin file.";
+                    fix = "Add `pins = ./pins.json;` beside `clusters` in flake.nix, or read one directly with `kix.pins ./pins.json`.";
+                  }
                 else
                   kix.kixlib.pins pins;
             };

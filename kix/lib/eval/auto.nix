@@ -43,7 +43,7 @@ rec {
         }
       else
         {
-          package = value.package or (throw "availablePackages.${name}: missing 'package'");
+          package = value.package or (fail "availablePackages.${name}: missing 'package'");
           namespace = value.namespace or null;
           aliases = value.aliases or [ ];
         }
@@ -554,18 +554,15 @@ rec {
           namespaces = lib.unique (map (p: p.ns) ps);
           reason = onePerClusterReason name;
         in
-        lib.optional (builtins.length namespaces > 1 && reason != null) (
-          builtins.concatStringsSep "\n" (
+        lib.optional (builtins.length namespaces > 1 && reason != null) ({
+          message = builtins.concatStringsSep "\n" (
             [
               "kix: ${name} runs once per cluster (${reason}), but auto-instantiation would place it in ${toString (builtins.length namespaces)} namespaces:"
             ]
             ++ map (p: "  ${p.ns}/${name}, for dependency '${p.depName}' of ${labelRequester p.requester}") ps
-            ++ [
-              "Declare it once, and every consumer resolves to it:"
-              "  instances.<namespace>.${name}.package = ${packageSpelling name};"
-            ]
-          )
-        )
+          );
+          fix = "Declare it once, and every consumer resolves to it:\n  instances.<namespace>.${name}.package = ${packageSpelling name};";
+        })
       ) (builtins.attrNames placementsByName);
 
       # Refuse a package that runs once per cluster and would land beside
@@ -620,7 +617,7 @@ rec {
         );
     in
     if spreadRefusals != [ ] then
-      throw (builtins.concatStringsSep "\n" spreadRefusals)
+      fail spreadRefusals
     else
       (if traceMsg != "" then builtins.trace "[kix] ${traceMsg}" else lib.id) {
         inherit autoInstances activatedOptionals besideConsumerRefusals;

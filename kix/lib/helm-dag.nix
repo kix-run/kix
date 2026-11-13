@@ -5,6 +5,7 @@
 { lib }:
 
 let
+  inherit (import ./core/error.nix { inherit lib; }) fail;
   workloadKinds = [
     "Deployment"
     "StatefulSet"
@@ -432,7 +433,7 @@ rec {
   dependedOnIds = edges: lib.unique (map (e: resourceId e.to) edges);
 
   # Return the chart's only Service, or its only Deployment, StatefulSet, or
-  # DaemonSet when it has no Service. Throw when the choice is ambiguous,
+  # DaemonSet when it has no Service. Fail when the choice is ambiguous,
   # because consumers read the root's `out.selector` and `out.fqdn`.
   pickRoot =
     releaseName: resources:
@@ -445,7 +446,7 @@ rec {
         "DaemonSet"
       ];
       names = rs: builtins.concatStringsSep ", " (map (r: "${r.kind}/${r.name}") rs);
-      fix =
+      rootHint =
         kind: name:
         ''Name it: resources.mkParts { root = resources.get "${kind}" "${name}"; }, or kix.helmChart { root = { kind = "${kind}"; name = "${name}"; }; ... }.'';
       first = rs: builtins.head rs;
@@ -453,11 +454,20 @@ rec {
     if builtins.length services == 1 then
       first services
     else if services != [ ] then
-      throw "importChart (${releaseName}): autoRoot cannot choose a root: the chart renders ${toString (builtins.length services)} Services (${names services}). Consumers read the root's out.selector and out.fqdn, so the root must be the resource they connect to. ${fix "Service" (first services).name}"
+      fail {
+        message = "importChart (${releaseName}): autoRoot cannot choose a root: the chart renders ${toString (builtins.length services)} Services (${names services}). Consumers read the root's out.selector and out.fqdn, so the root must be the resource they connect to.";
+        fix = rootHint "Service" (first services).name;
+      }
     else if builtins.length workloads == 1 then
       first workloads
     else if workloads != [ ] then
-      throw "importChart (${releaseName}): autoRoot cannot choose a root: the chart renders no Service and ${toString (builtins.length workloads)} workloads (${names workloads}). Consumers read the root's out.selector, so the root must be the workload they connect to. ${fix (first workloads).kind (first workloads).name}"
+      fail {
+        message = "importChart (${releaseName}): autoRoot cannot choose a root: the chart renders no Service and ${toString (builtins.length workloads)} workloads (${names workloads}). Consumers read the root's out.selector, so the root must be the workload they connect to.";
+        fix = rootHint (first workloads).kind (first workloads).name;
+      }
     else
-      throw "importChart (${releaseName}): autoRoot cannot choose a root: the chart renders no Service, Deployment, StatefulSet or DaemonSet. Name the root resource: resources.mkParts { root = resources.get \"<kind>\" \"<name>\"; }, or kix.helmChart { root = { kind = \"<kind>\"; name = \"<name>\"; }; ... }.";
+      fail {
+        message = "importChart (${releaseName}): autoRoot cannot choose a root: the chart renders no Service, Deployment, StatefulSet, or DaemonSet.";
+        fix = "Name the root resource: resources.mkParts { root = resources.get \"<kind>\" \"<name>\"; }, or kix.helmChart { root = { kind = \"<kind>\"; name = \"<name>\"; }; ... }.";
+      };
 }

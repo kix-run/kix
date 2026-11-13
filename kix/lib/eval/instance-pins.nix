@@ -9,6 +9,7 @@
 { lib, packageDefaultPriority }:
 
 let
+  inherit (import ../core/error.nix { inherit lib; }) fail;
   # Strip `/nix/store/<hash>-source/` from store paths for error messages.
   relativeFile =
     file:
@@ -152,14 +153,20 @@ in
           opt = lib.attrByPath (lib.splitString "." option) null packageOptions;
         in
         if opt == null || !(lib.isOption opt) then
-          throw "kix.pins: ${where} pins option '${option}' of ${instanceText}, and its package has no such option. Its image options are: ${
-            let
-              paths = imageOptionPaths [ ] packageOptions;
-            in
-            if paths == [ ] then "none" else showPaths paths
-          }."
+          fail {
+            message = "kix.pins: ${where} pins option '${option}' of ${instanceText}, and its package has no such option.";
+            fix = "Pin one of its image options: ${
+              let
+                paths = imageOptionPaths [ ] packageOptions;
+              in
+              if paths == [ ] then "none" else showPaths paths
+            }.";
+          }
         else if !(isImageOption opt) then
-          throw "kix.pins: ${where} pins option '${option}' of ${instanceText}, which is not an image option. A pin sets an option declared with kix.options.image."
+          fail {
+            message = "kix.pins: ${where} pins option '${option}' of ${instanceText}, which is not an image option.";
+            fix = "Pin an option declared with kix.options.image.";
+          }
         else
           null
       ) null pinned;
@@ -182,9 +189,12 @@ in
           others = builtins.filter (d: d.file != instancePins.file && !(weaker d)) defs;
         in
         if others != [ ] then
-          throw "kix.pins: ${where} pins option '${option}' of ${instanceText}, and ${
-            lib.concatMapStringsSep " and " describePlace others
-          } sets it too. Keep one of them: remove the other value, or delete the entry from the pin file."
+          fail {
+            message = "kix.pins: ${where} pins option '${option}' of ${instanceText}, and ${
+              lib.concatMapStringsSep " and " describePlace others
+            } sets it too.";
+            fix = "Keep one of them: remove the other value, or delete the entry from the pin file.";
+          }
         else
           null
       ) null pinned;

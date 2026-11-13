@@ -22,6 +22,7 @@
 { lib }:
 
 let
+  inherit (import ./error.nix { inherit lib; }) fail;
   kixAnnotations = import ./annotations.nix;
   markers = import ./markers.nix { inherit lib; };
 in
@@ -71,7 +72,7 @@ rec {
     let
       endpoint =
         entry.endpoint
-          or (throw "kix: factBehavior for '${kindKey}' (${source}) must set `endpoint` to \"terminate\" or \"conduct\"");
+          or (fail "factBehavior for '${kindKey}' (${source}) must set `endpoint` to \"terminate\" or \"conduct\"");
       _enum =
         if
           !(builtins.elem endpoint [
@@ -79,7 +80,7 @@ rec {
             "conduct"
           ])
         then
-          throw "kix: factBehavior for '${kindKey}' (${source}): endpoint must be \"terminate\" or \"conduct\", got '${toString endpoint}'"
+          fail "factBehavior for '${kindKey}' (${source}): endpoint must be \"terminate\" or \"conduct\", got '${toString endpoint}'"
         else
           null;
       _sel =
@@ -89,12 +90,13 @@ rec {
             builtins.isFunction (entry.podSelector or null) || builtins.isAttrs (entry.podSelector or null)
           )
         then
-          throw (
-            "kix: factBehavior for '${kindKey}' (${source}) declares endpoint = \"terminate\" "
-            + "but has no valid `podSelector`. Kix needs the labels of the pods created by the controller "
-            + "to generate their network policies. Set podSelector to a function `cr: { ... }` of the "
-            + "manifest, or to an attribute set of pod labels."
-          )
+          fail {
+            message =
+              "factBehavior for '${kindKey}' (${source}) declares endpoint = \"terminate\" "
+              + "but has no valid `podSelector`. Kix needs the labels of the pods created by the controller "
+              + "to generate their network policies.";
+            fix = "Set podSelector to a function `cr: { ... }` of the manifest, or to an attribute set of pod labels.";
+          }
         else
           null;
       # The operand pods may run outside the custom resource's namespace,
@@ -104,12 +106,12 @@ rec {
           entry ? podNamespace
           && !(builtins.isString entry.podNamespace || builtins.isFunction entry.podNamespace)
         then
-          throw "kix: factBehavior for '${kindKey}' (${source}): podNamespace must be a namespace name or a function `cr: \"<namespace>\"` of the manifest"
+          fail "factBehavior for '${kindKey}' (${source}): podNamespace must be a namespace name or a function `cr: \"<namespace>\"` of the manifest"
         else
           null;
       _scrapes =
         if entry ? selfScrapes && !builtins.isFunction entry.selfScrapes then
-          throw "kix: factBehavior for '${kindKey}' (${source}): selfScrapes must be a function `cr: [ { kind; name; labels; podSelector; ports; } ]` of the manifest"
+          fail "factBehavior for '${kindKey}' (${source}): selfScrapes must be a function `cr: [ { kind; name; labels; podSelector; ports; } ]` of the manifest"
         else
           null;
     in
@@ -142,12 +144,14 @@ rec {
     kind: payload:
     let
       spec =
-        kinds.${kind}
-          or (throw "mkFact: unknown fact kind '${kind}'. Supported kinds: ${builtins.concatStringsSep ", " (builtins.attrNames kinds)}");
+        kinds.${kind} or (fail {
+          message = "mkFact: unknown fact kind '${kind}'.";
+          fix = "Use one of the supported kinds: ${builtins.concatStringsSep ", " (builtins.attrNames kinds)}.";
+        });
       missing = builtins.filter (f: !(payload ? ${f})) spec.requiredFields;
       checked =
         if missing != [ ] then
-          throw "mkFact ${kind}: missing payload field(s): ${builtins.concatStringsSep ", " missing}"
+          fail "mkFact ${kind}: missing payload field(s): ${builtins.concatStringsSep ", " missing}"
         else
           payload;
       # Remove context recursively so payload values derived from resources

@@ -1,6 +1,8 @@
 # Parse Prometheus durations and cron schedules to compute alert thresholds.
 { lib }:
 let
+  inherit (import ../core/error.nix { inherit lib; }) fail;
+
   # Prometheus also accepts `ms`, which `toSeconds` rounds down to whole seconds.
   units = {
     s = 1;
@@ -25,7 +27,7 @@ let
         if u == "ms" then n / 1000 else n * units.${u};
     in
     if builtins.match "([0-9]+(ms|s|m|h|d|w|y))+" d == null then
-      throw "kix.durations.toSeconds: \"${d}\" is not a Prometheus duration such as \"90s\", \"5m\" or \"1h30m\"."
+      fail "kix.durations.toSeconds: \"${d}\" is not a Prometheus duration such as \"90s\", \"5m\", or \"1h30m\"."
     else
       lib.foldl' (acc: p: acc + partSeconds p) 0 parts;
 

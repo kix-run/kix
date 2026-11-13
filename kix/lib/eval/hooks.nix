@@ -63,22 +63,22 @@ rec {
           let
             _shape =
               if !(lib.hasInfix "." domain) || lib.hasInfix "/" domain then
-                throw (
-                  "kix: meta.annotationDomains of instance ${entry.ns}/${entry.inst} contains "
-                  + "'${domain}', which is not a valid annotation domain "
-                  + "(expected e.g. \"reflector.v1.k8s.emberstack.com\")"
-                )
+                fail {
+                  instance = "${entry.ns}/${entry.inst}";
+                  option = "meta.annotationDomains";
+                  message = "meta.annotationDomains contains '${domain}', which is not a valid annotation domain.";
+                  fix = "Use a domain such as \"reflector.v1.k8s.emberstack.com\".";
+                }
               else
                 null;
             existing = acc'.${domain} or null;
           in
           builtins.seq _shape (
             if existing != null then
-              throw (
-                "kix: annotation domain '${domain}' is declared by two instances: "
-                + "${existing.ns}/${existing.inst} and ${entry.ns}/${entry.inst}. "
-                + "Exactly one package owns an annotation domain."
-              )
+              fail {
+                message = "annotation domain '${domain}' is declared by two instances: ${existing.ns}/${existing.inst} and ${entry.ns}/${entry.inst}.";
+                fix = "Exactly one package may own an annotation domain.";
+              }
             else
               acc'
               // {
@@ -231,7 +231,7 @@ rec {
   collectHooks =
     config: channel:
     let
-      allowedKeys = channelResultKeys.${channel} or (throw "kix: unknown hook channel '${channel}'");
+      allowedKeys = channelResultKeys.${channel} or (fail "unknown hook channel '${channel}'.");
 
       normalize =
         name: v:
@@ -248,28 +248,21 @@ rec {
             fn = v.fn;
           }
         else
-          throw (
-            "kix: hooks.${channel}.${name} must be a function `ctx -> result` "
-            + "or `{ priority ? ${toString defaultPriority}; fn; }` (got ${builtins.typeOf v})"
-          );
+          fail "hooks.${channel}.${name} must be a function `ctx -> result` or `{ priority ? ${toString defaultPriority}; fn; }` (got ${builtins.typeOf v}).";
 
       checkResult =
         name: result:
         if !(builtins.isAttrs result) then
-          throw (
-            "kix: hooks.${channel}.${name} returned ${builtins.typeOf result}; "
-            + "expected an attribute set with keys: ${builtins.concatStringsSep ", " allowedKeys}"
-          )
+          fail "hooks.${channel}.${name} returned ${builtins.typeOf result}, and it must return an attribute set with keys: ${builtins.concatStringsSep ", " allowedKeys}."
         else
           let
             unknown = builtins.filter (k: !(builtins.elem k allowedKeys)) (builtins.attrNames result);
           in
           if unknown != [ ] then
-            throw (
-              "kix: hooks.${channel}.${name} returned unknown result keys: "
-              + builtins.concatStringsSep ", " unknown
-              + ". Allowed keys for this channel: ${builtins.concatStringsSep ", " allowedKeys}"
-            )
+            fail {
+              message = "hooks.${channel}.${name} returned unknown result keys: ${builtins.concatStringsSep ", " unknown}.";
+              fix = "Return only these keys for this channel: ${builtins.concatStringsSep ", " allowedKeys}.";
+            }
           else
             result;
 

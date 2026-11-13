@@ -217,17 +217,28 @@ in
         if cnpgOperator.out ? podSelector then
           cnpgOperator.out
         else
-          throw "${who}: the cnpgOperator dependency has no out.podSelector, as with an import. The package opens the operator's traffic to the plugin from it. Wire a managed cnpg-operator instance with deps.cnpgOperator = ref.${ns}.<instance>.";
+          scope.fail {
+            package = "cnpg-barman-cloud";
+            message = "the cnpgOperator dependency has no out.podSelector, as with an import. The package opens the operator's traffic to the plugin from it.";
+            fix = "Wire a managed cnpg-operator instance with deps.cnpgOperator = ref.${ns}.<instance>.";
+          };
       operatorNamespace = (scope.forService cnpgOperator).namespaceName;
       _sameNamespace =
         if operatorNamespace != ns then
-          throw "${who}: the cnpgOperator dependency runs in namespace ${operatorNamespace}, and CloudNativePG finds plugins only by Services in its own namespace. Move this instance to ${operatorNamespace}."
+          scope.fail {
+            package = "cnpg-barman-cloud";
+            message = "the cnpgOperator dependency runs in namespace ${operatorNamespace}, and CloudNativePG finds plugins only by Services in its own namespace.";
+            fix = "Move this instance to ${operatorNamespace}.";
+          }
         else
           null;
 
       certCrds =
-        certManager.out.crds
-          or (throw "${who}: the certManager dependency has no out.crds, as with an import. Wire a managed cert-manager instance with deps.certManager = ref.<namespace>.<instance>.");
+        certManager.out.crds or (scope.fail {
+          package = "cnpg-barman-cloud";
+          message = "the certManager dependency has no out.crds, as with an import.";
+          fix = "Wire a managed cert-manager instance with deps.certManager = ref.<namespace>.<instance>.";
+        });
 
       sidecarImage = kix.image.ref config.sidecar.image;
 
@@ -294,7 +305,11 @@ in
           first = builtins.head literal;
         in
         if literal != [ ] then
-          throw "${who}: ${what} names Secret \"${first.name}\" at ${first.path} by a literal string, so Kix neither orders the store after the Secret nor checks that it holds key \"${first.key}\". Use (<secret dependency>.out.keyRef \"${first.key}\").valueFrom.secretKeyRef, or, for a Secret created outside Kix, name = kix.untrackedRef { name = \"${first.name}\"; kind = \"Secret\"; }."
+          scope.fail {
+            package = "cnpg-barman-cloud";
+            message = "${what} names Secret \"${first.name}\" at ${first.path} by a literal string, so Kix neither orders the store after the Secret nor checks that it holds key \"${first.key}\".";
+            fix = "Use (<secret dependency>.out.keyRef \"${first.key}\").valueFrom.secretKeyRef, or, for a Secret created outside Kix, name = kix.untrackedRef { name = \"${first.name}\"; kind = \"Secret\"; }.";
+          }
         else
           consumerScope.mkCR self.crds.objectStores args;
     in

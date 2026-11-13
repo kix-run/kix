@@ -6,6 +6,9 @@
 
 { lib }:
 
+let
+  inherit (import ./core/error.nix { inherit lib; }) fail;
+in
 rec {
   registry = {
     "raw-pvc" = {
@@ -72,14 +75,15 @@ rec {
 
   knownGrantsHint = "Known unsafe grants: ${builtins.concatStringsSep ", " grantNames}";
 
-  # Return `grant` if it is in `registry`, or throw an error naming `context`.
+  # Return `grant` if it is in `registry`, or fail with an error naming `context`.
   assertKnownGrant =
     context: grant:
     if registry ? ${grant} then
       grant
     else
-      throw (
-        "kix: unknown unsafe grant '${grant}' (${context}). ${knownGrantsHint}. "
-        + "Use a supported grant from this list, or remove the entry from meta.unsafe."
-      );
+      fail {
+        option = "meta.unsafe";
+        message = "unknown unsafe grant '${grant}' (${context}). ${knownGrantsHint}.";
+        fix = "Use a supported grant from this list, or remove the entry from meta.unsafe.";
+      };
 }

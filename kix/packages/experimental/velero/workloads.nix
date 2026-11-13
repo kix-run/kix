@@ -46,20 +46,21 @@ let
     in
     if repositoryPassword == null then
       if config.nodeAgent.enabled then
-        throw (
-          "${who}: node-agent is on and no repositoryPassword dependency resolved, so Velero would "
-          + "encrypt the kopia repositories with the key compiled into every Velero binary. Add a "
-          + "secret or secret-ref instance named ${repoSecretName} in ${ns} with key "
-          + "repository-password and alias repositoryPassword, or set nodeAgent.enabled = false."
-        )
+        scope.fail {
+          package = "velero";
+          option = "deps.repositoryPassword";
+          message = "node-agent is on and no repositoryPassword dependency resolved, so Velero would encrypt the kopia repositories with the key compiled into every Velero binary.";
+          fix = "Add a secret or secret-ref instance named ${repoSecretName} in ${ns} with key repository-password and alias repositoryPassword, or set nodeAgent.enabled = false.";
+        }
       else
         null
     else if checked.out.name != repoSecretName then
-      throw (
-        "${who}: deps.repositoryPassword resolved to secret \"${checked.out.name}\", but Velero "
-        + "reads the repository key only from a Secret named ${repoSecretName} in ${ns}. "
-        + "Rename that instance."
-      )
+      scope.fail {
+        package = "velero";
+        option = "deps.repositoryPassword";
+        message = "deps.repositoryPassword resolved to secret \"${checked.out.name}\", but Velero reads the repository key only from a Secret named ${repoSecretName} in ${ns}.";
+        fix = "Rename that instance.";
+      }
     else
       checked;
 

@@ -70,19 +70,36 @@ let
       named = config.etcd.storage.storageClassName;
     in
     if selfByRef || (selfByAlias && depRef == null) then
-      throw "${who}: this instance answers deps.storageClasses itself, so etcd cannot take its class from that dependency. ${onOwnVolume} Wire deps.storageClasses to a local provider, for example deps.storageClasses = ref.<ns>.<zfs-localpv instance>, or to an import of the class etcd should use (kix.mkImport { out.storageClassName = \"local-path\"; })."
+      scope.fail {
+        package = "mayastor";
+        message = "this instance answers deps.storageClasses itself, so etcd cannot take its class from that dependency. ${onOwnVolume}";
+        fix = "Wire deps.storageClasses to a local provider, for example deps.storageClasses = ref.<ns>.<zfs-localpv instance>, or to an import of the class etcd should use (kix.mkImport { out.storageClassName = \"local-path\"; }).";
+      }
     else if named != null then
       if builtins.elem named ownClasses then
-        throw "${who}: config.etcd.storage.storageClassName is \"${named}\", one of this instance's own StorageClasses. ${onOwnVolume} ${storageFix}"
+        scope.fail {
+          package = "mayastor";
+          option = "config.etcd.storage.storageClassName";
+          message = "config.etcd.storage.storageClassName is \"${named}\", one of this instance's own StorageClasses. ${onOwnVolume}";
+          fix = storageFix;
+        }
       else
         named
     else if storageClasses == null then
-      throw "${who}: etcd needs a StorageClass that is not Mayastor's, and nothing provides the storageClasses dependency. ${storageFix}"
+      scope.fail {
+        package = "mayastor";
+        message = "etcd needs a StorageClass that is not Mayastor's, and nothing provides the storageClasses dependency.";
+        fix = storageFix;
+      }
     else if
       builtins.elem storageClasses.out.storageClassName ownClasses
       || (storageClasses.out.provisioner or null) == self.csiDriver.out.name
     then
-      throw "${who}: the storageClasses dependency gives etcd the class \"${storageClasses.out.storageClassName}\", which Mayastor provisions. ${onOwnVolume} ${storageFix}"
+      scope.fail {
+        package = "mayastor";
+        message = "the storageClasses dependency gives etcd the class \"${storageClasses.out.storageClassName}\", which Mayastor provisions. ${onOwnVolume}";
+        fix = storageFix;
+      }
     else
       storageClasses.out.storageClassName;
 

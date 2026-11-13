@@ -27,7 +27,12 @@ let
 
   args =
     if endpointSliceArgs != [ ] then
-      throw "${who}: extraArgs sets \"${builtins.head endpointSliceArgs}\", which makes the operator write EndpointSlices for the kubelet Service, and the package's ClusterRole (the upstream role in rbac/) does not grant access to EndpointSlices. Remove it; the operator keeps the kubelet targets in Endpoints (--kubelet-endpoints, on by default)."
+      scope.fail {
+        package = "prometheus-operator";
+        option = "extraArgs";
+        message = "extraArgs sets \"${builtins.head endpointSliceArgs}\", which makes the operator write EndpointSlices for the kubelet Service, and the package's ClusterRole (the upstream role in rbac/) does not grant access to EndpointSlices.";
+        fix = "Remove it; the operator keeps the kubelet targets in Endpoints (--kubelet-endpoints, on by default).";
+      }
     else
       baseArgs;
 

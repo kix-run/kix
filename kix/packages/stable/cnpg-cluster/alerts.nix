@@ -10,7 +10,6 @@
 let
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "cnpg-cluster ${ns}/${name}";
   sel = ''namespace="${ns}",job="${ns}/${name}"'';
   cluster = "PostgreSQL cluster ${ns}/${name}";
   status = "kubectl cnpg status ${name} -n ${ns}";
@@ -39,7 +38,12 @@ let
       if derived != null then
         derived
       else
-        throw "${who}: backup.schedule \"${config.backup.schedule}\" does not show how often base backups run, so CNPGBackupMissing has no threshold. Set metrics.maxBackupAge to twice the longest gap between two runs plus the time a backup takes, such as \"15d\" for a weekly schedule.";
+        scope.fail {
+          package = "cnpg-cluster";
+          option = "metrics.maxBackupAge";
+          message = "backup.schedule \"${config.backup.schedule}\" does not show how often base backups run, so CNPGBackupMissing has no threshold.";
+          fix = "Set metrics.maxBackupAge to twice the longest gap between two runs plus the time a backup takes, such as \"15d\" for a weekly schedule.";
+        };
   firstBackupWindow =
     if kix.durations.toSeconds backupAge < kix.durations.toSeconds "24h" then backupAge else "24h";
   backupTs = "barman_cloud_cloudnative_pg_io_last_available_backup_timestamp{${sel}}";

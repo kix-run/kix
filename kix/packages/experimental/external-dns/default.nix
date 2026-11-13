@@ -518,7 +518,12 @@ in
           if lib.versions.majorMinor (lib.removePrefix "v" imageTag) == lib.versions.majorMinor release then
             kix.image.ref config.image
           else
-            throw "${who}: image.tag \"${imageTag}\" is not a ${lib.versions.majorMinor release} release, and the ClusterRole rules (sources.nix) and the provider list (providers.nix) follow external-dns v${release}. To move to another release, change `release` in kix/packages/experimental/external-dns/default.nix and update both files from that release's chart clusterrole.yaml and pkg/apis/externaldns/types.go.";
+            scope.fail {
+              package = "external-dns";
+              option = "image.tag";
+              message = "image.tag \"${imageTag}\" is not a ${lib.versions.majorMinor release} release, and the ClusterRole rules (sources.nix) and the provider list (providers.nix) follow external-dns v${release}.";
+              fix = "To move to another release, change `release` in kix/packages/experimental/external-dns/default.nix and update both files from that release's chart clusterrole.yaml and pkg/apis/externaldns/types.go.";
+            };
 
         probe = {
           httpGet = {

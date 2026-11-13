@@ -150,7 +150,12 @@ in
           arg = "filebrowserUsers";
           dep =
             if userNames != [ ] && filebrowserUsers == null then
-              throw "${who}: `users` lists ${lib.concatStringsSep ", " userNames}, and their passwords come from deps.filebrowserUsers, which is not wired. Add a secret instance with alias filebrowserUsers and one key per user."
+              scope.fail {
+                package = "filebrowser";
+                option = "config.users";
+                message = "`users` lists ${lib.concatStringsSep ", " userNames}, and their passwords come from deps.filebrowserUsers, which is not wired.";
+                fix = "Add a secret instance with alias filebrowserUsers and one key per user.";
+              }
             else
               filebrowserUsers;
           keys = userNames;

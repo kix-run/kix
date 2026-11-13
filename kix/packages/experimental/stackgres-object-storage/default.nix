@@ -243,7 +243,12 @@ in
       inCluster = endpointService != null;
       _inClusterType =
         if inCluster && config.type != "s3Compatible" then
-          throw "${who}: deps.endpointService is wired, and type is \"${config.type}\". Only s3Compatible takes an endpoint; set type = \"s3Compatible\", or remove the dependency."
+          scope.fail {
+            package = "stackgres-object-storage";
+            option = "deps.endpointService";
+            message = "deps.endpointService is wired, and type is \"${config.type}\". Only s3Compatible takes an endpoint.";
+            fix = "Set type = \"s3Compatible\", or remove the dependency.";
+          }
         else
           null;
       keys = selectorKeys config;
@@ -265,8 +270,12 @@ in
         }
         // lib.optionalAttrs inCluster {
           endpoint =
-            (endpointService.out.url
-              or (throw "${who}: deps.endpointService has no out.url. Wire an instance whose root is its S3 Service.")
+            (endpointService.out.url or (scope.fail {
+              package = "stackgres-object-storage";
+              option = "deps.endpointService";
+              message = "deps.endpointService has no out.url.";
+              fix = "Wire an instance whose root is its S3 Service.";
+            })
             )
               { };
           enablePathStyleAddressing = true;
@@ -302,7 +311,11 @@ in
         else if endpoint == null then
           443
         else if endpointParts == null then
-          throw "${who}: extraSpec.${config.type}.endpoint \"${endpoint}\" is not a URL such as https://s3.example.com."
+          scope.fail {
+            package = "stackgres-object-storage";
+            option = "extraSpec.${config.type}.endpoint";
+            message = "extraSpec.${config.type}.endpoint \"${endpoint}\" is not a URL such as https://s3.example.com.";
+          }
         else if builtins.elemAt endpointParts 2 != null then
           lib.toInt (builtins.elemAt endpointParts 2)
         else if lib.toLower (builtins.head endpointParts) == "http" then
@@ -313,8 +326,11 @@ in
     builtins.seq _inClusterType {
       objectStorage =
         scope.mkCR
-          (stackgresOperator.out.crds.SGObjectStorage
-            or (throw "${who}: the stackgresOperator dependency has no out.crds.SGObjectStorage. Wire a stackgres-operator instance, or an import that declares the SGObjectStorage CRD in its crds.")
+          (stackgresOperator.out.crds.SGObjectStorage or (scope.fail {
+            package = "stackgres-object-storage";
+            message = "the stackgresOperator dependency has no out.crds.SGObjectStorage.";
+            fix = "Wire a stackgres-operator instance, or an import that declares the SGObjectStorage CRD in its crds.";
+          })
           )
           {
             inherit name spec;

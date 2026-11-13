@@ -48,6 +48,7 @@
 }:
 
 let
+  inherit (import ../../lib/core/error.nix { inherit lib; }) fail;
   cfg = config.monitoring;
   ns = cfg.namespace;
   # The module's `kix` argument carries only `mkImport`, so the quantity
@@ -303,7 +304,11 @@ in
               if cfg.loki.enabled then
                 ref.${ns}.loki
               else
-                throw "monitoring.lokiLogs.enabled is true but monitoring.loki.enabled is false, so there is no Loki to ship to. Enable monitoring.loki, or turn lokiLogs off and declare a loki-logs instance with deps.loki pointing at your Loki.";
+                fail {
+                  option = "monitoring.lokiLogs.enabled";
+                  message = "monitoring.lokiLogs.enabled is true but monitoring.loki.enabled is false, so there is no Loki to ship to.";
+                  fix = "Enable monitoring.loki, or turn lokiLogs off and declare a loki-logs instance with deps.loki pointing at your Loki.";
+                };
             deps.priorityClass = ref.${ns}.${logShipperPriorityClass};
           };
         };

@@ -9,6 +9,8 @@
 { lib }:
 
 let
+  failWith = (import ../../../lib/core/error.nix { inherit lib; }).fail;
+
   rules = rec {
     # The kinds this enforcer emits. Rules that look for a policy in a
     # namespace accept these alongside the Kubernetes NetworkPolicy.
@@ -260,7 +262,11 @@ let
         translateEgressRule =
           rule:
           let
-            target = rule.to or (throw "kix: egress intent rule must have 'to' field");
+            target =
+              rule.to or (failWith {
+                package = "cilium";
+                message = "An egress intent rule must have a `to` field.";
+              });
             baseRule =
               if target == "apiserver" then
                 apiServerEgressRule
@@ -271,7 +277,10 @@ let
               else if target == "all-pods" then
                 { toEntities = [ "cluster" ]; }
               else
-                throw "kix: unknown egress intent target '${toString target}'; the targets are apiserver, world, dns, and all-pods.";
+                failWith {
+                  package = "cilium";
+                  message = "Unknown egress intent target '${toString target}'. The targets are apiserver, world, dns, and all-pods.";
+                };
           in
           if target == "dns" then
             baseRule # DNS rule already includes ports
@@ -288,7 +297,11 @@ let
         translateIngressRule =
           rule:
           let
-            source = rule.from or (throw "kix: ingress intent rule must have 'from' field");
+            source =
+              rule.from or (failWith {
+                package = "cilium";
+                message = "An ingress intent rule must have a `from` field.";
+              });
             baseRule =
               if source == "all-pods" then
                 { fromEntities = [ "cluster" ]; }
@@ -300,7 +313,10 @@ let
               else if source == "apiserver" then
                 { fromEntities = apiServerEgressRule.toEntities; }
               else
-                throw "kix: unknown ingress intent source '${toString source}'; the sources are all-pods, world, and apiserver.";
+                failWith {
+                  package = "cilium";
+                  message = "Unknown ingress intent source '${toString source}'. The sources are all-pods, world, and apiserver.";
+                };
           in
           baseRule
           // lib.optionalAttrs (rule ? ports) {

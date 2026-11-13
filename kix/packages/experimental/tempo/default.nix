@@ -317,17 +317,32 @@ in
         );
         settings =
           if backslashes != [ ] then
-            throw "${who}: ${lib.concatStringsSep ", " backslashes} holds a backslash. Tempo expands environment variables in its config file and reads a backslash as an escape, which breaks the file. Remove the backslash from the value."
+            scope.fail {
+              package = "tempo";
+              option = "settings";
+              message = "${lib.concatStringsSep ", " backslashes} holds a backslash. Tempo expands environment variables in its config file and reads a backslash as an escape, which breaks the file.";
+              fix = "Remove the backslash from the value.";
+            }
           else if generatorSettings != [ ] then
-            throw "${who}: settings sets ${
-              lib.concatMapStringsSep ", " (lib.concatStringsSep ".") generatorSettings
-            }, which configures the metrics generator while metricsGenerator.enabled is false. Remove it, or set metricsGenerator.enabled = true, which runs the generator and writes to the prometheusServer dependency."
+            scope.fail {
+              package = "tempo";
+              option = "settings";
+              message = "settings sets ${
+                lib.concatMapStringsSep ", " (lib.concatStringsSep ".") generatorSettings
+              }, which configures the metrics generator while metricsGenerator.enabled is false.";
+              fix = "Remove it, or set metricsGenerator.enabled = true, which runs the generator and writes to the prometheusServer dependency.";
+            }
           else if inlineCredentials != [ ] then
-            throw "${who}: settings sets ${
-              lib.concatMapStringsSep ", " (
-                path: lib.concatStringsSep "." ([ "storage.trace.s3" ] ++ path)
-              ) inlineCredentials
-            }, a credential that would land in the ConfigMap. Remove it. The package reads the S3 access keys from the storageCredentials dependency (a secret or secret-ref instance); it has no way to pass an SSE-C key from a Secret."
+            scope.fail {
+              package = "tempo";
+              option = "settings";
+              message = "settings sets ${
+                lib.concatMapStringsSep ", " (
+                  path: lib.concatStringsSep "." ([ "storage.trace.s3" ] ++ path)
+                ) inlineCredentials
+              }, a credential that would land in the ConfigMap.";
+              fix = "Remove it. The package reads the S3 access keys from the storageCredentials dependency (a secret or secret-ref instance); it has no way to pass an SSE-C key from a Secret.";
+            }
           else
             config.settings;
 
@@ -343,7 +358,12 @@ in
           arg = "storageCredentials";
           dep =
             if storageCredentials == null then
-              throw "${who}: objectStorage is set and no storageCredentials dependency resolved in namespace ${scope.namespaceName}. Add a secret or secret-ref instance there with the keys ${lib.concatStringsSep " and " (builtins.attrValues credentialKeys)} and the alias storageCredentials, or set objectStorage = null."
+              scope.fail {
+                package = "tempo";
+                option = "objectStorage";
+                message = "objectStorage is set and no storageCredentials dependency resolved in namespace ${scope.namespaceName}.";
+                fix = "Add a secret or secret-ref instance there with the keys ${lib.concatStringsSep " and " (builtins.attrValues credentialKeys)} and the alias storageCredentials, or set objectStorage = null.";
+              }
             else
               storageCredentials;
           keys = builtins.attrValues credentialKeys;
@@ -353,22 +373,34 @@ in
         store =
           if !objectStorageOn then
             if endpointService != null then
-              throw "${who}: deps.endpointService is wired and objectStorage is null, so Tempo keeps its blocks on the claim and never reads the store. Set objectStorage.bucket, or remove deps.endpointService."
+              scope.fail {
+                package = "tempo";
+                message = "deps.endpointService is wired and objectStorage is null, so Tempo keeps its blocks on the claim and never reads the store.";
+                fix = "Set objectStorage.bucket, or remove deps.endpointService.";
+              }
             else
               null
           else if inClusterStore then
             {
               inherit (os) bucket;
               endpoint = lib.removePrefix "${endpointScheme}://" (
-                (endpointService.out.url
-                  or (throw "${who}: deps.endpointService has no out.url. Wire an instance whose root is its S3 Service.")
+                (endpointService.out.url or (scope.fail {
+                  package = "tempo";
+                  message = "deps.endpointService has no out.url.";
+                  fix = "Wire an instance whose root is its S3 Service.";
+                })
                 )
                   { scheme = endpointScheme; }
               );
               insecure = endpointScheme == "http";
             }
           else if os.endpointScheme != null then
-            throw "${who}: objectStorage.endpointScheme is set and no endpointService dependency resolved, so nothing reads it. Wire the in-cluster store with deps.endpointService = ref.<namespace>.<instance>, or remove objectStorage.endpointScheme and set settings.storage.trace.s3.insecure for a store outside the cluster."
+            scope.fail {
+              package = "tempo";
+              option = "objectStorage.endpointScheme";
+              message = "objectStorage.endpointScheme is set and no endpointService dependency resolved, so nothing reads it.";
+              fix = "Wire the in-cluster store with deps.endpointService = ref.<namespace>.<instance>, or remove objectStorage.endpointScheme and set settings.storage.trace.s3.insecure for a store outside the cluster.";
+            }
           else
             { inherit (os) bucket; };
 
@@ -376,10 +408,19 @@ in
           if !config.metricsGenerator.enabled then
             null
           else if prometheusServer == null then
-            throw "${who}: metricsGenerator.enabled is true and no prometheusServer dependency resolved. Wire an instance that takes Prometheus remote write, such as a victoria-metrics-cluster, with deps.prometheusServer = ref.<namespace>.<instance>, or set metricsGenerator.enabled = false."
+            scope.fail {
+              package = "tempo";
+              option = "metricsGenerator.enabled";
+              message = "metricsGenerator.enabled is true and no prometheusServer dependency resolved.";
+              fix = "Wire an instance that takes Prometheus remote write, such as a victoria-metrics-cluster, with deps.prometheusServer = ref.<namespace>.<instance>, or set metricsGenerator.enabled = false.";
+            }
           else
-            prometheusServer.out.remoteWriteUrl
-              or (throw "${who}: deps.prometheusServer resolved to an instance without out.remoteWriteUrl, so the metrics generator has nowhere to write. The prometheus package does not take remote write. Wire a victoria-metrics-cluster instance with deps.prometheusServer = ref.<namespace>.<instance>, or set out.remoteWriteUrl in the kix.mkImport that answers prometheusServer.");
+            prometheusServer.out.remoteWriteUrl or (scope.fail {
+              package = "tempo";
+              option = "deps.prometheusServer";
+              message = "deps.prometheusServer resolved to an instance without out.remoteWriteUrl, so the metrics generator has nowhere to write. The prometheus package does not take remote write.";
+              fix = "Wire a victoria-metrics-cluster instance with deps.prometheusServer = ref.<namespace>.<instance>, or set out.remoteWriteUrl in the kix.mkImport that answers prometheusServer.";
+            });
 
         mergedConfig = lib.filterAttrsRecursive (_: v: v != null) (
           kix.mergeGuarded
@@ -406,23 +447,42 @@ in
             let
               s3 = mergedConfig.storage.trace.s3;
               endpoint =
-                s3.endpoint
-                  or (throw "${who}: objectStorage is set with no endpointService dependency and no settings.storage.trace.s3.endpoint, and Tempo's S3 client has no default endpoint. Set settings.storage.trace.s3.endpoint to the store's host[:port] (s3.<region>.amazonaws.com for AWS S3), or wire a store in the cluster with deps.endpointService = ref.<namespace>.<instance>.");
+                s3.endpoint or (scope.fail {
+                  package = "tempo";
+                  option = "settings.storage.trace.s3.endpoint";
+                  message = "objectStorage is set with no endpointService dependency and no settings.storage.trace.s3.endpoint, and Tempo's S3 client has no default endpoint.";
+                  fix = "Set settings.storage.trace.s3.endpoint to the store's host[:port] (s3.<region>.amazonaws.com for AWS S3), or wire a store in the cluster with deps.endpointService = ref.<namespace>.<instance>.";
+                });
               m = if builtins.isString endpoint then matchEndpoint endpoint else null;
               insecure = s3.insecure or false;
               host = lib.toLower (lib.removeSuffix "." (builtins.elemAt m 0));
               domain = lib.toLower clusterConfig.clusterDomain;
             in
             if m == null then
-              throw "${who}: settings.storage.trace.s3.endpoint ${builtins.toJSON endpoint} is not host[:port]. Tempo's S3 client reads the address without a scheme and takes TLS from storage.trace.s3.insecure; write it as s3.example.com or s3.example.com:9000."
+              scope.fail {
+                package = "tempo";
+                option = "settings.storage.trace.s3.endpoint";
+                message = "settings.storage.trace.s3.endpoint ${builtins.toJSON endpoint} is not host[:port].";
+                fix = "Tempo's S3 client reads the address without a scheme and takes TLS from storage.trace.s3.insecure; write it as s3.example.com or s3.example.com:9000.";
+              }
             else if !builtins.isBool insecure then
-              throw "${who}: settings.storage.trace.s3.insecure is ${builtins.toJSON insecure}, and Tempo reads a boolean. Set it to true for a store that serves plain HTTP, or remove it."
+              scope.fail {
+                package = "tempo";
+                option = "settings.storage.trace.s3.insecure";
+                message = "settings.storage.trace.s3.insecure is ${builtins.toJSON insecure}, and Tempo reads a boolean.";
+                fix = "Set it to true for a store that serves plain HTTP, or remove it.";
+              }
             else if
               lib.hasSuffix ".svc" host
               || lib.hasSuffix ".svc.${domain}" host
               || (!lib.hasInfix "." host && !lib.hasPrefix "[" host)
             then
-              throw "${who}: settings.storage.trace.s3.endpoint \"${endpoint}\" names a Service in the cluster, and the pod gets network policy only to stores outside it. Wire the store with deps.endpointService = ref.<namespace>.<instance> and remove the endpoint; set objectStorage.endpointScheme = \"https\" if it serves TLS."
+              scope.fail {
+                package = "tempo";
+                option = "settings.storage.trace.s3.endpoint";
+                message = "settings.storage.trace.s3.endpoint \"${endpoint}\" names a Service in the cluster, and the pod gets network policy only to stores outside it.";
+                fix = "Wire the store with deps.endpointService = ref.<namespace>.<instance> and remove the endpoint; set objectStorage.endpointScheme = \"https\" if it serves TLS.";
+              }
             else if builtins.elemAt m 2 != null then
               lib.toInt (builtins.elemAt m 2)
             else if insecure then

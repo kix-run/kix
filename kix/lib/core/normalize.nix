@@ -14,6 +14,9 @@
 # normalizes lists immediately.
 { lib }:
 
+let
+  inherit (import ./error.nix { inherit lib; }) fail;
+in
 rec {
   keepMarker = "_kixKeep";
 
@@ -84,5 +87,5 @@ rec {
         if n == null then [ ] else n
       )
     else
-      throw "kix.keep: expected an attribute set or list, got ${builtins.typeOf v}";
+      fail "kix.keep: expected an attribute set or list, got ${builtins.typeOf v}.";
 }

@@ -204,7 +204,11 @@ in
                 };
                 ${if config.initChownData then "initContainers" else null} = lib.singleton (
                   if nonRootFailsBuild clusterConfig then
-                    throw "${name}: ${chownOverrideHint}"
+                    scope.fail {
+                      package = "vaultwarden";
+                      option = "config.initChownData";
+                      message = chownOverrideHint;
+                    }
                   else
                     {
                       name = "init-chown-data";

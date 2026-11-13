@@ -137,7 +137,11 @@ let
   moverSelector =
     dir: crName:
     if builtins.stringLength crName > maxNameLength then
-      throw "${who}: the VolSync resource \"${crName}\" has a name longer than ${toString maxNameLength} characters, so VolSync hashes its mover Job's name and Kix cannot select the mover pods for network policy. Shorten the name."
+      scope.fail {
+        package = "volsync";
+        message = "the VolSync resource \"${crName}\" has a name longer than ${toString maxNameLength} characters, so VolSync hashes its mover Job's name and Kix cannot select the mover pods for network policy.";
+        fix = "Shorten the name.";
+      }
     else
       {
         "app.kubernetes.io/created-by" = "volsync";
@@ -254,8 +258,11 @@ in
         ];
 
         snapshotCrd =
-          snapshotController.out.crds.VolumeSnapshot
-            or (throw "${who}: the snapshotController dependency has no out.crds.VolumeSnapshot. Wire a snapshot-controller instance, or an import that claims the snapshotController role with its crds.");
+          snapshotController.out.crds.VolumeSnapshot or (scope.fail {
+            package = "volsync";
+            message = "the snapshotController dependency has no out.crds.VolumeSnapshot.";
+            fix = "Wire a snapshot-controller instance, or an import that claims the snapshotController role with its crds.";
+          });
 
         args = [
           "--leader-elect"
@@ -298,7 +305,12 @@ in
           }:
           let
             what = "ReplicationSource ${consumerScope.namespaceName}/${name}";
-            fail = msg: throw "${who}: ${what}: ${msg}";
+            fail =
+              msg:
+              scope.fail {
+                package = "volsync";
+                message = "${what}: ${msg}";
+              };
 
             problem = sourceChecks.replicationSourceProblem {
               inherit

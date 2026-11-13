@@ -294,7 +294,7 @@ in
     let
       portsOf = import ../../../packages/stable/victoria-metrics-alert/alertmanager-receiver-ports.nix {
         inherit lib;
-        who = "alertmanager test/test";
+        inherit (import ../../core/error.nix { inherit lib; }) fail;
       };
       fails = settings: !(builtins.tryEval (builtins.deepSeq (portsOf settings) true)).success;
       only = name: configs: {

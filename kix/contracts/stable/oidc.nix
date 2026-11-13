@@ -18,6 +18,7 @@
   ...
 }:
 let
+  inherit (import ../../lib/core/error.nix { inherit lib; }) fail;
 
   isUrl = v: builtins.isString v && builtins.match "https?://[^/]+(/.*)?" v != null;
 
@@ -71,7 +72,7 @@ let
           options,
         }:
         if (options.enabled or null) != null || (options.realm or null) != null then
-          throw (removedOptionsMessage who)
+          removedOptionsError who
         else if oidc == null then
           null
         else
@@ -81,8 +82,10 @@ let
           {
             inherit (out) issuerUrl credentials;
             endpoints =
-              out.endpoints
-                or (throw "${who}: deps.oidc publishes no out.endpoints, the authorization, token, and userinfo URLs this application needs. Set out.endpoints on that instance (an oidc-client on keycloak sets them, and a kix.mkImport sets them in `out`).");
+              out.endpoints or (fail {
+                message = "${who}: deps.oidc publishes no out.endpoints, the authorization, token, and userinfo URLs this application needs.";
+                fix = "Set out.endpoints on that instance (an oidc-client on keycloak sets them, and a kix.mkImport sets them in `out`).";
+              });
           };
     };
 
@@ -125,8 +128,11 @@ let
       };
   };
 
-  removedOptionsMessage =
+  removedOptionsError =
     who:
-    "${who}: oidc.enabled and oidc.realm were removed. Single sign-on is on when this instance has an `oidc` dependency. In this namespace, add an oidc-client instance with config.realm set to the realm, deps.oidcProvider naming the provider, and the client secret (keys clientId and clientSecret) as its oidcClient dependency. For a provider outside the cluster, a kix.mkImport whose out sets issuerUrl and credentials = ref.<namespace>.<secret> also works. Then remove oidc.enabled and oidc.realm.";
+    fail {
+      message = "${who}: oidc.enabled and oidc.realm were removed. Single sign-on is on when this instance has an `oidc` dependency.";
+      fix = "In this namespace, add an oidc-client instance with config.realm set to the realm, deps.oidcProvider naming the provider, and the client secret (keys clientId and clientSecret) as its oidcClient dependency. For a provider outside the cluster, a kix.mkImport whose out sets issuerUrl and credentials = ref.<namespace>.<secret> also works. Then remove oidc.enabled and oidc.realm.";
+    };
 in
 contract

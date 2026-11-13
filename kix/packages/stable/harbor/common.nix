@@ -164,9 +164,14 @@ rec {
         if builtins.elem "username" declared && builtins.elem "password" declared then
           creds
         else
-          throw "${who}: the database dependency's credentials Secret \"${creds.out.name}\" declares ${
-            if declared == [ ] then "no keys" else lib.concatStringsSep ", " declared
-          }; this package reads its `username` and `password` keys. Wire a database whose out.credentials declares both.";
+          scope.fail {
+            package = "harbor";
+            option = "deps.database";
+            message = "the database dependency's credentials Secret \"${creds.out.name}\" declares ${
+              if declared == [ ] then "no keys" else lib.concatStringsSep ", " declared
+            }; this package reads its `username` and `password` keys.";
+            fix = "Wire a database whose out.credentials declares both.";
+          };
       redisServer = kix.contracts.redis.helpers.requirePlaintext who redis;
       valkeySecret = redisServer.out.credentials or null;
 
@@ -196,7 +201,12 @@ rec {
         else if dbTls == false then
           "disable"
         else
-          throw "${who}: the database dependency does not say whether it serves TLS (it publishes no out.tls). Set database.sslmode to \"require\" for a server with TLS, or \"disable\" for one without.";
+          scope.fail {
+            package = "harbor";
+            option = "database.sslmode";
+            message = "the database dependency does not say whether it serves TLS (it publishes no out.tls).";
+            fix = "Set database.sslmode to \"require\" for a server with TLS, or \"disable\" for one without.";
+          };
       dbLoginEnv =
         userVar: passwordVar:
         dbCredentials.out.mkEnv {

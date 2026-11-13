@@ -251,7 +251,11 @@ in
           if stackgresOperator.out ? resolvePostgres then
             stackgresOperator.out
           else
-            throw "${who}: the stackgresOperator dependency has no out.resolvePostgres, as with an import. This package reads the operator's release, operand images, and pod labels from it. Wire a managed stackgres-operator instance with deps.stackgresOperator = ref.<namespace>.<instance>.";
+            scope.fail {
+              package = "stackgres-cluster";
+              message = "the stackgresOperator dependency has no out.resolvePostgres, as with an import. This package reads the operator's release, operand images, and pod labels from it.";
+              fix = "Wire a managed stackgres-operator instance with deps.stackgresOperator = ref.<namespace>.<instance>.";
+            };
         pg = operator.resolvePostgres {
           inherit who;
           inherit (config.postgres) version;
@@ -264,12 +268,21 @@ in
 
         _flavor =
           if (config.extraSpec.postgres or { }) ? flavor then
-            throw "${who}: postgres.flavor is not supported: the version check and the operand images assume vanilla PostgreSQL."
+            scope.fail {
+              package = "stackgres-cluster";
+              option = "config.extraSpec";
+              message = "postgres.flavor is not supported: the version check and the operand images assume vanilla PostgreSQL.";
+            }
           else
             null;
         _storage =
           if backupsOn && sgObjectStorage == null then
-            throw "${who}: backups is set but no sgObjectStorage dependency resolved in namespace ${ns}. Add a stackgres-object-storage instance there, or set backups = null."
+            scope.fail {
+              package = "stackgres-cluster";
+              option = "config.backups";
+              message = "backups is set but no sgObjectStorage dependency resolved in namespace ${ns}.";
+              fix = "Add a stackgres-object-storage instance there, or set backups = null.";
+            }
           else
             null;
 
@@ -342,9 +355,14 @@ in
         antiAffinityOff = if antiAffinityFlag != null then antiAffinityFlag else profile != "production";
         _antiAffinity =
           if kix.availability.atLeast "node" availability && config.instances > 1 && antiAffinityOff then
-            throw "${who}: extraSpec turns off StackGres's one-pod-per-node anti-affinity (profile \"${profile}\", nonProductionOptions.disableClusterPodAntiAffinity ${
-              if antiAffinityFlag == null then "unset" else "= true"
-            }) with ${toString config.instances} instances at availability ${availability}, which needs the instances on different nodes. Use the production profile or set nonProductionOptions.disableClusterPodAntiAffinity = false, or lower the instance's availability."
+            scope.fail {
+              package = "stackgres-cluster";
+              option = "config.extraSpec";
+              message = "extraSpec turns off StackGres's one-pod-per-node anti-affinity (profile \"${profile}\", nonProductionOptions.disableClusterPodAntiAffinity ${
+                if antiAffinityFlag == null then "unset" else "= true"
+              }) with ${toString config.instances} instances at availability ${availability}, which needs the instances on different nodes.";
+              fix = "Use the production profile or set nonProductionOptions.disableClusterPodAntiAffinity = false, or lower the instance's availability.";
+            }
           else
             null;
 

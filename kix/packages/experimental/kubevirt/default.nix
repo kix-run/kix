@@ -336,10 +336,19 @@ in
           consumer = "${consumerScope.namespaceName or "?"}/${consumerScope.instanceName or "?"}";
           what = "VirtualMachine \"${vmName}\" in ${consumer}";
           spec =
-            args.spec
-              or (throw "${who}: out.mkVirtualMachine: ${what} has no spec. Pass spec with runStrategy and template.");
+            args.spec or (scope.fail {
+              package = "kubevirt";
+              message = "out.mkVirtualMachine: ${what} has no spec.";
+              fix = "Pass spec with runStrategy and template.";
+            });
           accepted = "out.mkVirtualMachine accepts runStrategy \"Always\" or \"Halted\", or running = true or false, and waits for the VM to reach Running or Stopped";
-          refusal = reason: throw "${who}: ${what} ${reason}. ${accepted}.";
+          refusal =
+            reason:
+            scope.fail {
+              package = "kubevirt";
+              message = "${what} ${reason}.";
+              fix = "${accepted}.";
+            };
           printableStatus =
             if (spec ? runStrategy) && (spec ? running) then
               refusal "sets both runStrategy and running, which KubeVirt rejects"
@@ -362,7 +371,11 @@ in
             if (spec.dataVolumeTemplates or [ ]) == [ ] then
               [ ]
             else if cdi == null then
-              throw "${who}: ${what} has dataVolumeTemplates, and the cluster has no cdi instance to import them. Add a cdi instance (instances.cdi.cdi.package = packages.experimental.cdi)."
+              scope.fail {
+                package = "kubevirt";
+                message = "${what} has dataVolumeTemplates, and the cluster has no cdi instance to import them.";
+                fix = "Add a cdi instance (instances.cdi.cdi.package = packages.experimental.cdi).";
+              }
             else
               [ cdi.out.crds.DataVolume ];
         in

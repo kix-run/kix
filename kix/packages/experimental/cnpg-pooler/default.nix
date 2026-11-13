@@ -216,17 +216,29 @@ in
         if postgres.out ? clusterName && postgres.out ? selector then
           postgres.out
         else
-          throw "${who}: the postgres dependency publishes no out.clusterName, as with an import or a stackgres-cluster. A Pooler fronts a cnpg-cluster; wire one with deps.postgres = ref.${ns}.<instance>.";
+          scope.fail {
+            package = "cnpg-pooler";
+            message = "the postgres dependency publishes no out.clusterName, as with an import or a stackgres-cluster. A Pooler fronts a cnpg-cluster.";
+            fix = "Wire one with deps.postgres = ref.${ns}.<instance>.";
+          };
       operator =
         if cnpgOperator.out ? crds then
           cnpgOperator.out
         else
-          throw "${who}: the cnpgOperator dependency publishes no out.crds, as with an import. Wire a managed cnpg-operator instance with deps.cnpgOperator = ref.<namespace>.<instance>.";
+          scope.fail {
+            package = "cnpg-pooler";
+            message = "the cnpgOperator dependency publishes no out.crds, as with an import.";
+            fix = "Wire a managed cnpg-operator instance with deps.cnpgOperator = ref.<namespace>.<instance>.";
+          };
 
       clusterNamespace = (scope.forService postgres).namespaceName;
       _sameNamespace =
         if clusterNamespace != ns then
-          throw "${who}: the postgres dependency runs in namespace ${clusterNamespace}, and CloudNativePG reads a Pooler's Cluster from the Pooler's own namespace. Move this instance to ${clusterNamespace}."
+          scope.fail {
+            package = "cnpg-pooler";
+            message = "the postgres dependency runs in namespace ${clusterNamespace}, and CloudNativePG reads a Pooler's Cluster from the Pooler's own namespace.";
+            fix = "Move this instance to ${clusterNamespace}.";
+          }
         else
           null;
 
