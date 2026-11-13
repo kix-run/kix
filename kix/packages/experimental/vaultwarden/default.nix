@@ -208,7 +208,7 @@ in
                   if nonRootFailsBuild clusterConfig then
                     scope.fail {
                       package = "vaultwarden";
-                      option = "config.initChownData";
+                      option = "initChownData";
                       message = chownOverrideHint;
                     }
                   else

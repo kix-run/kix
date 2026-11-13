@@ -259,7 +259,7 @@ in
           else
             scope.fail {
               package = "cnpg-cluster";
-              option = "deps.cnpgOperator";
+              dependency = "cnpgOperator";
               message = "the cnpgOperator dependency has no out.operandSelectors, as with an import.";
               fix = "This package reads the operator's CRD handle and pod labels from it. Wire a managed cnpg-operator instance with deps.cnpgOperator = ref.<namespace>.<instance>.";
             };
@@ -316,7 +316,7 @@ in
           else if !(barmanCloud.out ? mkObjectStore) then
             scope.fail {
               package = "cnpg-cluster";
-              option = "deps.barmanCloud";
+              dependency = "barmanCloud";
               message = "the barmanCloud dependency has no out.mkObjectStore, as with an import.";
               fix = "Wire a cnpg-barman-cloud instance with deps.barmanCloud = ref.<namespace>.<instance>.";
             }
@@ -335,7 +335,7 @@ in
             if storageCredentials == null then
               scope.fail {
                 package = "cnpg-cluster";
-                option = "deps.storageCredentials";
+                dependency = "storageCredentials";
                 message = "backup is set and no storageCredentials dependency resolved in namespace ${ns}.";
                 fix = "Add a secret or secret-ref instance there with the keys ${lib.concatStringsSep " and " (builtins.attrValues credentialKeys)} and the alias storageCredentials, or set backup = null.";
               }
@@ -375,7 +375,7 @@ in
             endpointURL =
               (endpointService.out.url or (scope.fail {
                 package = "cnpg-cluster";
-                option = "deps.endpointService";
+                dependency = "endpointService";
                 message = "deps.endpointService has no out.url.";
                 fix = "Wire an instance whose root is its S3 Service.";
               })
@@ -424,14 +424,14 @@ in
           if importSource == null then
             scope.fail {
               package = "cnpg-cluster";
-              option = "deps.importSource";
+              dependency = "importSource";
               message = "import is set and no importSource dependency resolved.";
               fix = "Wire the server to copy from with deps.importSource = ref.<namespace>.<instance>. For a server Kix does not manage, add a service-ref instance for its Service.";
             }
           else if !(importSource.out ? fqdn && importSource.out ? port) then
             scope.fail {
               package = "cnpg-cluster";
-              option = "deps.importSource";
+              dependency = "importSource";
               message = "the importSource dependency has no out.fqdn and out.port, so the package cannot tell where the source listens.";
               fix = "Wire a cnpg-cluster, a stackgres-cluster, or a service-ref instance.";
             }
@@ -456,7 +456,7 @@ in
             if importPassword == null then
               scope.fail {
                 package = "cnpg-cluster";
-                option = "deps.importPassword";
+                dependency = "importPassword";
                 message = "import is set and no importPassword dependency resolved in namespace ${ns}.";
                 fix = "Add a secret or secret-ref instance there with the key ${im.passwordKey} and wire it with deps.importPassword = ref.${ns}.<instance>.";
               }
@@ -473,7 +473,7 @@ in
             if verifiesSource then
               scope.fail {
                 package = "cnpg-cluster";
-                option = "deps.importCa";
+                dependency = "importCa";
                 message = "import.sslMode is ${im.sslMode}, which checks the source's certificate, and no importCa dependency resolved.";
                 fix = "Wire a secret with ca.crt, the CA that signed the source's certificate, with deps.importCa = ref.${ns}.<instance>, or set import.sslMode = \"require\" to encrypt without checking.";
               }

@@ -101,7 +101,7 @@ in
         assertion = config.replicaCount == null;
         id = "K6965";
         package = "caddy";
-        option = "config.replicaCount";
+        option = "replicaCount";
         message = "replicaCount was removed.";
         fix = "Set config.replicas instead.";
       }
@@ -109,7 +109,7 @@ in
         assertion = config.configSecretName == null;
         id = "K2263";
         package = "caddy";
-        option = "config.configSecretName";
+        option = "configSecretName";
         message = "configSecretName was removed.";
         fix = "Give the Caddyfile through the caddyfile dependency, a secret with the key Caddyfile, such as a packages.secret instance with aliases = [ \"caddyfile\" ].";
       }

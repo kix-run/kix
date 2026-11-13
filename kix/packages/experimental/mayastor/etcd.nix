@@ -79,7 +79,7 @@ let
       if builtins.elem named ownClasses then
         scope.fail {
           package = "mayastor";
-          option = "config.etcd.storage.storageClassName";
+          option = "etcd.storage.storageClassName";
           message = "config.etcd.storage.storageClassName is \"${named}\", one of this instance's own StorageClasses. ${onOwnVolume}";
           fix = storageFix;
         }

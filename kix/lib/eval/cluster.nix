@@ -45,7 +45,7 @@ in
       name ? fail {
         message = "kix.buildCluster needs a name. Kix stores it in the cluster's deploy records, so it must stay the same for the life of the cluster.";
         fix = "Set name = \"...\"; or list the cluster in kix.lib.mkFlake, which names it after its key.";
-        option = "name";
+        clusterOption = "name";
       },
       # Set by `mkFlake` when it supplies `name` from the cluster's
       # `clusters` key. The index records it so that `kix deploy` and
@@ -185,7 +185,6 @@ in
         if i == null then
           fail {
             instance = "${nsName}/${instName}";
-            option = "meta.podSecurity";
             message = "meta.podSecurity = \"${toString level}\" is not one of ${lib.concatStringsSep ", " podSecurityLevels}.";
           }
         else
@@ -225,8 +224,10 @@ in
           declared
         else if declaredRank != null && declaredRank > mostPermissive.rank then
           fail {
-            message = "${nsName}/${mostPermissive.instName}: package sets meta.podSecurity = \"${mostPermissive.level}\", which is more permissive than namespaces.${nsName}.podSecurity = \"${declared}\". Kubernetes would refuse its pods in namespace '${nsName}'.";
-            fix = "set `namespaces.${nsName}.podSecurity = \"${mostPermissive.level}\";` in your cluster definition, or move '${mostPermissive.instName}' to a namespace that allows \"${mostPermissive.level}\".";
+            instance = "${nsName}/${mostPermissive.instName}";
+            clusterOption = "namespaces.${nsName}.podSecurity";
+            message = "package sets meta.podSecurity = \"${mostPermissive.level}\", which is more permissive than namespaces.${nsName}.podSecurity = \"${declared}\". Kubernetes would refuse its pods in namespace '${nsName}'.";
+            fix = "Set `namespaces.${nsName}.podSecurity = \"${mostPermissive.level}\";` in your cluster definition, or move '${mostPermissive.instName}' to a namespace that allows \"${mostPermissive.level}\".";
           }
         else
           mostPermissive.level;
@@ -344,7 +345,7 @@ in
           _shape =
             if !(lib.hasInfix "/" key) then
               fail {
-                option = "cluster.factBehavior";
+                clusterOption = "cluster.factBehavior";
                 message = "cluster.factBehavior key '${key}' must be \"group/Kind\", because bare kinds collide across API groups.";
                 fix = "Write the key as, for example, \"stackgres.io/SGCluster\".";
               }

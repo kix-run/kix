@@ -218,18 +218,26 @@ rec {
           builtins.typeOf v;
 
       checkEntry =
-        who: nsName: instName: entry:
+        nsName: instName: entry:
+        let
+          instance = "${nsName}/${instName}";
+        in
         if builtins.isAttrs entry && (entry._type or "") == "kix-ref" then
           let
             refText = "ref.${entry.namespace}.${entry.instanceName}";
           in
           if entry.namespace == nsName && entry.instanceName == instName then
-            fail "${who} names ${refText}, the import itself. An import's marker cannot depend on itself."
+            fail {
+              inherit instance;
+              message = "extraDeps names ${refText}, the import itself. An import cannot depend on itself.";
+              fix = "Remove ${refText} from instances.${nsName}.${instName}.extraDeps.";
+            }
           else if !((mergedInstances.${entry.namespace} or { }) ? ${entry.instanceName}) then
             fail {
-              message = "${who} lists ${refText}, which is not a declared instance. '${entry.instanceName}' is in availablePackages, and a ref pointer in extraDeps does not create it automatically.";
+              inherit instance;
+              message = "extraDeps lists ${refText}, which is not a declared instance. '${entry.instanceName}' is in availablePackages, and a ref pointer in extraDeps does not create it automatically.";
               fix =
-                "declare the instance in your cluster definition:"
+                "Declare the instance in your cluster definition:"
                 + "\n  instances.${entry.namespace}.${entry.instanceName}.package = packages.<package>;";
             }
           else
@@ -237,23 +245,27 @@ rec {
         else if builtins.isAttrs entry && (entry._type or "") == "k8s-resource" then
           null
         else
-          fail "${who}: each entry is a resource or a ref.<namespace>.<instance> pointer; got ${describe entry}.";
+          fail {
+            inherit instance;
+            message = "extraDeps contains ${describe entry}, which is neither a resource nor a ref.<namespace>.<instance> pointer.";
+            fix = "Pass only resources or ref.<namespace>.<instance> pointers in instances.${nsName}.${instName}.extraDeps.";
+          };
 
       checkInstance =
         nsName: instName: instCfg:
         let
           entries = instCfg.extraDeps or [ ];
-          who = "${nsName}/${instName}: instances.${nsName}.${instName}.extraDeps";
         in
         if entries == [ ] then
           null
         else if (instCfg.package._type or "") != "kix-import" then
           fail {
-            message = "${who} is set, and this instance is not a kix.mkImport. Instance-level extraDeps orders only kix.mkImport instances.";
-            fix = "remove instances.${nsName}.${instName}.extraDeps, and set `requires` or `extraDeps` on the `scope.mk*` resource builder call in the package instead.";
+            instance = "${nsName}/${instName}";
+            message = "extraDeps is set, and this instance is not a kix.mkImport. Instance-level extraDeps orders only kix.mkImport instances.";
+            fix = "Remove instances.${nsName}.${instName}.extraDeps, and set `requires` or `extraDeps` on the `scope.mk*` resource builder call in the package instead.";
           }
         else
-          builtins.foldl' (acc: e: builtins.seq (checkEntry who nsName instName e) acc) null entries;
+          builtins.foldl' (acc: e: builtins.seq (checkEntry nsName instName e) acc) null entries;
     in
     lib.foldlAttrs (
       acc: nsName: nsInsts:
@@ -299,9 +311,10 @@ rec {
             mkDepProxy =
               depName:
               fail {
-                message = "${namespaceName}/${instanceName}: kix.mkImport { from = ...; } tried to read dependency '${depName}' while deriving 'out' from the package. Imports represent external services and do not resolve package dependencies.";
+                instance = "${namespaceName}/${instanceName}";
+                message = "kix.mkImport { from = ...; } tried to read dependency '${depName}' while deriving 'out' from the package. Imports represent external services and do not resolve package dependencies.";
                 fix =
-                  "set the output fields that depend on '${depName}' directly in instances.${namespaceName}.${instanceName}.package:"
+                  "Set the output fields that depend on '${depName}' directly in instances.${namespaceName}.${instanceName}.package:"
                   + "\n  kix.mkImport { from = ...; out = { <field> = \"...\"; }; }"
                   + "\nIf you know all output fields, omit 'from' and write `kix.mkImport { out = { ... }; }`.";
               };

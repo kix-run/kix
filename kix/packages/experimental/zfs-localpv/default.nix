@@ -62,7 +62,7 @@ let
     if minorOf tag != releaseMinor then
       scope.fail {
         package = "zfs-localpv";
-        option = "config.image.tag";
+        option = "image.tag";
         message = "image.tag \"${tag}\" is not a ${lib.concatStringsSep "." releaseMinor} release, and the CRDs under kix/packages/experimental/zfs-localpv/crds are vendored from ${release}.";
         fix = "To move to another release, change release in kix/packages/experimental/zfs-localpv/default.nix and run uv run scripts/vendor-crds.py zfs-localpv.";
       }

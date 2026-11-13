@@ -78,7 +78,7 @@ in
           cap,
           message,
           fix ? null,
-          option ? "cluster.capabilities.${cap}",
+          clusterOption ? "cluster.capabilities.${cap}",
         }:
         let
           value = capabilities.${cap} or null;
@@ -86,11 +86,11 @@ in
         if capabilities == { } then
           null
         else if value == false then
-          failHere { inherit message fix option; }
+          failHere { inherit message fix clusterOption; }
         else if value == null then
           builtins.trace (
             "warning: instance '${instanceName}': requires cluster.capabilities.${cap} = true, which is not set in the cluster definition, so Kix skipped verifying this requirement."
-            + "\nFix: set `cluster.capabilities.${cap} = true;` (or `false;`) in the cluster definition to match your cluster."
+            + "\nFix: Set `cluster.capabilities.${cap} = true;` (or `false;`) in the cluster definition to match your cluster."
           ) null
         else
           null;
@@ -110,7 +110,7 @@ in
               desc
               + " nothing in this cluster provides it (cluster.roles.metricsApi.binding = \"absent\" and no metrics-server instance is declared).";
             fix =
-              "add a metrics-server instance to your cluster definition:"
+              "Add a metrics-server instance to your cluster definition:"
               + "\n  instances.kube-system.metrics-server.package = packages.experimental.metrics-server;"
               + "\nIf your cluster environment already runs metrics-server, set `cluster.roles.metricsApi.binding = \"exclusive\";` in your cluster definition instead.";
           }
@@ -119,7 +119,7 @@ in
             "warning: "
             + desc
             + " cluster.roles.metricsApi.binding is unset, so Kix skipped checking for a provider."
-            + "\nFix: set `cluster.roles.metricsApi.binding = \"exclusive\";` (or `\"absent\";`) in your cluster definition, or add a metrics-server instance."
+            + "\nFix: Set `cluster.roles.metricsApi.binding = \"exclusive\";` (or `\"absent\";`) in your cluster definition, or add a metrics-server instance."
           ) null
         else
           null;
@@ -291,7 +291,7 @@ in
                 serviceDesc
                 + " this cluster has no load balancer configured (cluster.roles.loadBalancer.binding = \"absent\").";
               fix =
-                "if your cluster environment provides a load balancer (such as a cloud controller or MetalLB), add this line to your cluster definition:"
+                "If your cluster environment provides a load balancer (such as a cloud controller or MetalLB), add this line to your cluster definition:"
                 + "\n  cluster.roles.loadBalancer.binding = \"shadowable\";"
                 + "\nIf this cluster has no load balancer, change the Service to `type = \"ClusterIP\";` (or `\"NodePort\"`).";
             }
@@ -300,7 +300,7 @@ in
               "warning: "
               + serviceDesc
               + " cluster.roles.loadBalancer.binding is unset, so Kix skipped checking for a load balancer."
-              + "\nFix: set `cluster.roles.loadBalancer.binding = \"shadowable\";` (or `\"absent\";`) in your cluster definition."
+              + "\nFix: Set `cluster.roles.loadBalancer.binding = \"shadowable\";` (or `\"absent\";`) in your cluster definition."
             ) null
           else
             null
@@ -413,7 +413,7 @@ in
         else if multiNode == false then
           failHere {
             inherit message fix;
-            option = "cluster.capabilities.multiNode";
+            clusterOption = "cluster.capabilities.multiNode";
           }
         else if multiNode == null then
           builtins.trace "[kix] warning: [${instanceName}] ${message} ${fix}" null
@@ -437,14 +437,14 @@ in
               fail {
                 message = "instance '${instanceName}': ${fieldDesc} uses a plain string \"${plainName}\" for a ${kind} name, so Kix cannot order the workload after the ${kind} or verify that it exists.";
                 fix =
-                  "reference the ${kind} resource's .out.name (or use kix.mount.${kind} / .out.keyRef)."
+                  "Reference the ${kind} resource's .out.name (or use kix.mount.${kind} / .out.keyRef)."
                   + "\nIf \"${plainName}\" is created outside Kix, wrap it in kix.untrackedRef \"${plainName}\".";
               }
             else if refNs != null && refNs != namespaceName && !refReflected then
               fail {
                 message = "instance '${instanceName}': ${fieldDesc} references ${kind} \"${plainName}\" in namespace \"${refNs}\", while this workload is in namespace \"${namespaceName}\". Kubernetes requires a mounted or referenced ${kind} to be in the workload's own namespace.";
                 fix =
-                  "create the ${kind} in namespace \"${namespaceName}\" (or in a dependency instance in \"${namespaceName}\")."
+                  "Create the ${kind} in namespace \"${namespaceName}\" (or in a dependency instance in \"${namespaceName}\")."
                   + "\nIf this is a Secret replicated across namespaces by a controller such as Reflector, set reflect = true on its scope.mkSecretRef call.";
               }
             else
@@ -511,7 +511,7 @@ in
                   (fail {
                     message = "instance '${instanceName}': spec.template.spec.serviceAccountName uses a plain string \"${plainName}\", so Kix cannot order the workload after the ServiceAccount or verify its namespace.";
                     fix =
-                      "pass the ServiceAccount resource as serviceAccount = self.<part>; in spec.template.spec (or set serviceAccountName = self.<part>.out.name;)."
+                      "Pass the ServiceAccount resource as serviceAccount = self.<part>; in spec.template.spec (or set serviceAccountName = self.<part>.out.name;)."
                       + "\nIf \"${plainName}\" is created outside Kix, set serviceAccountName = kix.untrackedRef \"${plainName}\";.";
                   })
                 ]
@@ -519,7 +519,7 @@ in
                 [
                   (fail {
                     message = "instance '${instanceName}': spec.template.spec.serviceAccount references ServiceAccount \"${plainName}\" in namespace \"${saNs}\", while this workload is in namespace \"${namespaceName}\". Kubernetes requires a pod's ServiceAccount to be in the pod's own namespace.";
-                    fix = "define a ServiceAccount part in this package with `serviceAccount = scope.mkResource { apiVersion = \"v1\"; kind = \"ServiceAccount\"; ... };` and set `serviceAccount = self.serviceAccount;` in spec.template.spec.";
+                    fix = "Define a ServiceAccount part in this package with `serviceAccount = scope.mkResource { apiVersion = \"v1\"; kind = \"ServiceAccount\"; ... };` and set `serviceAccount = self.serviceAccount;` in spec.template.spec.";
                   })
                 ]
               else

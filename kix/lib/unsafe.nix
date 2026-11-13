@@ -82,7 +82,6 @@ rec {
       grant
     else
       fail {
-        option = "meta.unsafe";
         message = "unknown unsafe grant '${grant}' (${context}). ${knownGrantsHint}.";
         fix = "Use a supported grant from this list, or remove the entry from meta.unsafe.";
       };

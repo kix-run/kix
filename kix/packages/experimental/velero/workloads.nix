@@ -48,7 +48,7 @@ let
       if config.nodeAgent.enabled then
         scope.fail {
           package = "velero";
-          option = "deps.repositoryPassword";
+          dependency = "repositoryPassword";
           message = "node-agent is on and no repositoryPassword dependency resolved, so Velero would encrypt the kopia repositories with the key compiled into every Velero binary.";
           fix = "Add a secret or secret-ref instance named ${repoSecretName} in ${ns} with key repository-password and alias repositoryPassword, or set nodeAgent.enabled = false.";
         }
@@ -57,7 +57,7 @@ let
     else if checked.out.name != repoSecretName then
       scope.fail {
         package = "velero";
-        option = "deps.repositoryPassword";
+        dependency = "repositoryPassword";
         message = "deps.repositoryPassword resolved to secret \"${checked.out.name}\", but Velero reads the repository key only from a Secret named ${repoSecretName} in ${ns}.";
         fix = "Rename that instance.";
       }

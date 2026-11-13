@@ -29,7 +29,7 @@ let
     id = "K0001";
     instance = "shop/db";
     package = "cnpg-database";
-    option = "instances.shop.db.password";
+    option = "password";
     message = "the \"password\" option was removed.\nIt kept the password in plain text.";
     fix = "Set this line:\n  deps.password = ref.shop.db-login;";
   };
@@ -84,7 +84,7 @@ in
     lib.take 6 lines == [
       "[K0001] shop/db (cnpg-database): the \"password\" option was removed."
       "It kept the password in plain text."
-      "Option: instances.shop.db.password"
+      "Option: password"
       "Fix: Set this line:"
       "  deps.password = ref.shop.db-login;"
       (lib.elemAt lines 5)
@@ -195,6 +195,46 @@ in
         ];
       }
     );
+
+  # A dependency and a cluster option each have a line of their own.
+  lib-errors-dependency-and-cluster-option =
+    let
+      text = errors.text {
+        errors = [
+          {
+            instance = "kube-system/cilium";
+            dependency = "platform-cilium";
+            clusterOption = "cluster.roles.cni.binding";
+            message = "m";
+          }
+        ];
+      };
+    in
+    lib.take 3 (lib.splitString "\n" text) == [
+      "kube-system/cilium: m"
+      "Dependency: platform-cilium"
+      "Cluster option: cluster.roles.cni.binding"
+    ]
+    || throw "dependency and cluster option: ${text}";
+
+  # kix.fail refuses a setting written in another form: an option with the
+  # `config.` prefix, a dependency or a package's meta as an option, a path
+  # with spaces, a dependency path, and a cluster option inside an instance.
+  lib-errors-setting-form =
+    let
+      refused = e: fails (errors.text { errors = [ ({ message = "m"; } // e) ]; });
+    in
+    refused { option = "config.tls.secretName"; }
+    && refused { option = "deps.database"; }
+    && refused { option = "meta.podSecurity"; }
+    && refused { option = "the extraSpec"; }
+    && refused { dependency = "deps.database"; }
+    && refused { clusterOption = "instances.shop.db.config.password"; }
+    && !refused {
+      option = "tls.secretName";
+      dependency = "database";
+      clusterOption = "cluster.domain";
+    };
 
   # scope.fail stops the build of the instance that calls it.
   lib-errors-scope-fail = evalFails (mkCluster [ { instances.app.bad.package = failingPackage; } ]);

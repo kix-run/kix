@@ -36,7 +36,7 @@ let
       builtins.head primaries
     else
       fail {
-        option = "cluster.flavor.rke2.cni";
+        clusterOption = "cluster.flavor.rke2.cni";
         message = "cluster.flavor.rke2.cni = ${builtins.toJSON cni} is not a valid RKE2 cni list.";
         fix = "Give one primary CNI (canal, calico, cilium, flannel), optionally preceded by multus, or [ \"none\" ].";
       };

@@ -166,7 +166,7 @@ let
         else
           scope.fail {
             package = "n8n";
-            option = "config.env.${var}";
+            option = "env.${var}";
             message = "env.${var} is \"${v}\". n8n reads it as a whole number of MiB (for example \"64\").";
           };
     in

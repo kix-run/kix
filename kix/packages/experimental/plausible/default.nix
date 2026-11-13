@@ -310,7 +310,7 @@ in
           if smtpPassword != null then
             scope.fail {
               package = "plausible";
-              option = "deps.smtpPassword";
+              dependency = "smtpPassword";
               message = "deps.smtpPassword was replaced by deps.smtp.";
               fix = "Declare the mail server as a kix.mkImport in this namespace whose out sets host, port, tls, from, and credentials = ref.<ns>.<secret>, a secret with keys `username` and `password`. Remove the SMTP_* variables from env.";
             }
@@ -327,7 +327,7 @@ in
           if relay != null && relay.credentials != null && relay.tls == "starttls" then
             scope.fail {
               package = "plausible";
-              option = "deps.smtp";
+              dependency = "smtp";
               message = "deps.smtp uses tls = \"starttls\" with credentials. Plausible's mailer (Bamboo.Mua) sends the password without TLS when the server does not offer STARTTLS, so it would leak to anyone who can strip STARTTLS on the way.";
               fix = "Use the server's implicit TLS port: tls = \"implicit\" and port = \"465\" on the SMTP instance.";
             }

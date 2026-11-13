@@ -57,7 +57,7 @@ let
         inherit (import ../packages/was-stable.nix) id;
         message = "These ${toString (builtins.length names)} packages are experimental now, so they may change in any release.";
         fix = lib.concatStringsSep "\n" (
-          [ "write the new names:" ]
+          [ "Write the new names:" ]
           ++ map (n: "  ${n.spelled} -> packages.experimental.${n.name}") (
             lib.sort (a: b: a.spelled < b.spelled) names
           )

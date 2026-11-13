@@ -78,35 +78,35 @@ let
     if r == null then
       scope.fail {
         package = "openbao";
-        option = "config.kubernetesAuth.roles";
+        option = "kubernetesAuth.roles";
         message = "${what} names role \"${role}\", which kubernetesAuth.roles does not declare (declared: ${lib.concatStringsSep ", " (builtins.attrNames config.kubernetesAuth.roles)}).";
         fix = "Declare role \"${role}\" on the openbao instance.";
       }
     else if !(binds "bound_service_account_names" plainSa) then
       scope.fail {
         package = "openbao";
-        option = "config.kubernetesAuth.roles.${role}.bound_service_account_names";
+        option = "kubernetesAuth.roles.${role}.bound_service_account_names";
         message = "${what}: role \"${role}\" binds the ServiceAccounts ${builtins.toJSON r.bound_service_account_names}, not ${plainSa}, so OpenBao would refuse the login.";
         fix = "Add ${plainSa} to kubernetesAuth.roles.${role}.bound_service_account_names.";
       }
     else if !(binds "bound_service_account_namespaces" consumerNs) then
       scope.fail {
         package = "openbao";
-        option = "config.kubernetesAuth.roles.${role}.bound_service_account_namespaces";
+        option = "kubernetesAuth.roles.${role}.bound_service_account_namespaces";
         message = "${what}: role \"${role}\" binds the namespaces ${builtins.toJSON r.bound_service_account_namespaces}, not ${consumerNs}, so OpenBao would refuse the login.";
         fix = "Add ${consumerNs} to kubernetesAuth.roles.${role}.bound_service_account_namespaces.";
       }
     else if engine == null then
       scope.fail {
         package = "openbao";
-        option = "config.secretsEngines";
+        option = "secretsEngines";
         message = "${what} names mount \"${mount}\", which secretsEngines does not declare.";
         fix = "Declare secretsEngines.${mount} = { type = \"kv\"; options.version = \"2\"; } on the openbao instance.";
       }
     else if engine.type != "kv" then
       scope.fail {
         package = "openbao";
-        option = "config.secretsEngines";
+        option = "secretsEngines";
         message = "${what} names mount \"${mount}\", a ${engine.type} engine; external-secrets' vault provider reads kv engines.";
         fix = "Name a kv engine from secretsEngines.";
       }

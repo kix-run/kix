@@ -340,8 +340,9 @@ in
 
         rawRoot =
           parts.root or (fail {
-            message = "${namespaceName}/${instanceName}: package build returned no 'root' attribute. Every package must set 'root' to the primary resource that other instances depend on.";
-            fix = "add `root = self.<part>;` to the attribute set returned by `build` in the package.";
+            instance = "${namespaceName}/${instanceName}";
+            message = "package build returned no 'root' attribute. Every package must set 'root' to the primary resource that other instances depend on.";
+            fix = "Add `root = self.<part>;` to the attribute set returned by `build` in the package.";
           });
 
         rootRes =
@@ -351,8 +352,9 @@ in
             rawRoot
           else
             fail {
-              message = "${namespaceName}/${instanceName}: package 'root' must be a resource (from scope.mk*) or `{ resource, requires?, postHooks?, out? }`.";
-              fix = "set `root = self.<part>;` or `root = { resource = self.<part>; requires = [ ... ]; };` in the package's `build`.";
+              instance = "${namespaceName}/${instanceName}";
+              message = "package 'root' must be a resource (from scope.mk*) or `{ resource, requires?, postHooks?, out? }`.";
+              fix = "Set `root = self.<part>;` or `root = { resource = self.<part>; requires = [ ... ]; };` in the package's `build`.";
             };
 
         # Monitor and rule objects reference nothing else in the instance,
@@ -406,9 +408,10 @@ in
             null
           else
             fail {
-              message = "${namespaceName}/${instanceName}: package 'root' points to ${rootRes.kind or "a resource"} '${rootRes.name or "?"}', which is not one of this package's named parts (for example, it was built inline on 'root' or taken from a dependency). Kix renders only named parts of the package, so a resource built inline on 'root' would be left out of the build.";
+              instance = "${namespaceName}/${instanceName}";
+              message = "package 'root' points to ${rootRes.kind or "a resource"} '${rootRes.name or "?"}', which is not one of this package's named parts (for example, it was built inline on 'root' or taken from a dependency). Kix renders only named parts of the package, so a resource built inline on 'root' would be left out of the build.";
               fix =
-                "define the resource as a named part of this package and point 'root' to it:"
+                "Define the resource as a named part of this package and point 'root' to it:"
                 + "\n  main = scope.mkResource { ... };"
                 + "\n  root = self.main;";
             };

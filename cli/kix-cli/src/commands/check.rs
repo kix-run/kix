@@ -19,7 +19,11 @@ pub(crate) struct CheckResult {
     /// The scorecard's findings on the scorecard row. On the eval row, the
     /// Kix library's errors when the evaluation failed, which its details
     /// already show as text, or its warnings when it passed. A warning has
-    /// `severity` and `message`.
+    /// `severity` and `message`. An error has `message`, and may have `id`,
+    /// `instance`, `package`, and `fix`. It names what to change in one of
+    /// three fields: `option` is a path in the instance's `config`,
+    /// `dependency` is the name of one of the instance's `deps`, and
+    /// `clusterOption` is a path in the cluster definition.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     findings: Vec<serde_json::Value>,
 }

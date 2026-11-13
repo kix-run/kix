@@ -289,7 +289,7 @@ in
           scope.fail {
             id = "K9503";
             package = "clickhouse-database";
-            option = "config.password";
+            option = "password";
             message = "password was removed, because it put the password in plain text in Kix's local store and in the built Secrets.";
             fix = passwordAdvice;
           }
@@ -297,7 +297,7 @@ in
           scope.fail {
             id = "K6023";
             package = "clickhouse-database";
-            option = "config.passwordSource";
+            option = "passwordSource";
             message = "passwordSource and passwordHash were removed.";
             fix = "${passwordAdvice} Use the same file.";
           }

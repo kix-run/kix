@@ -175,7 +175,7 @@ rec {
             lib.concatMapStringsSep " or " (n: "`${n}`") names
           } for it, but that package is experimental now, and `packages` offers only stable packages.";
           fix =
-            "add it by name:"
+            "Add it by name:"
             + "\n  availablePackages = packages // { inherit (packages.experimental) ${builtins.head names}; };"
             + "\nOr declare the instance under `instances` with `packages.experimental.${builtins.head names}`.";
         };
@@ -355,7 +355,7 @@ rec {
               lib.optionalString (sameNs != [ ]) " in namespace '${item.requesterNs}'"
             }: ${builtins.concatStringsSep ", " (map (o: "${o.ns}/${o.instName}") tier)}.";
             fix =
-              "wire the one ${item.requester} should use in instances.${
+              "Wire the one ${item.requester} should use in instances.${
                 builtins.replaceStrings [ "/" ] [ "." ] item.requester
               }:"
               + "\n  deps.${item.depName} = ref.${(builtins.head tier).ns}.${(builtins.head tier).instName};"
@@ -394,7 +394,7 @@ rec {
             );
             fix = builtins.concatStringsSep "\n" (
               [
-                "declare the package this cluster should use as an optional instance (created only when something depends on it):"
+                "Declare the package this cluster should use as an optional instance (created only when something depends on it):"
                 "  instances.<namespace>.${item.depName} = { package = packages.<one of the above>; optional = true; };"
                 "If the other matching packages are not used in this cluster, remove them from availablePackages."
               ]
@@ -590,7 +590,7 @@ rec {
             ]
           );
           fix =
-            "declare ${name} once, in a namespace of its own:"
+            "Declare ${name} once, in a namespace of its own:"
             + "\n  instances.<namespace>.${name}.package = ${packageSpelling name};"
             + "\nOr set autoNamespace to place every package Kix adds there.";
         }

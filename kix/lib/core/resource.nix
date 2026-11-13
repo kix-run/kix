@@ -38,7 +38,7 @@ rec {
             if unknown != [ ] then
               fail {
                 message = "resource manifest contains an internal `_kix` attribute with unknown key(s): ${builtins.concatStringsSep ", " unknown} (expected only: ${builtins.concatStringsSep ", " validKixKeys}).";
-                fix = "remove `_kix` from your manifest data, or if you are constructing a reference helper fragment, use only the keys above.";
+                fix = "Remove `_kix` from your manifest data, or if you are constructing a reference helper fragment, use only the keys above.";
               }
             else
               null
@@ -321,7 +321,7 @@ rec {
             message = "${kind} '${name}': extra sets ${
               builtins.concatStringsSep ", " (map (p: "extra.${builtins.concatStringsSep "." p}") _shadowedPaths)
             }, which conflicts with the top-level ${topArgs} argument on this builder call.";
-            fix = "move those fields into the top-level ${topArgs} argument (for example, `spec = { ... };` instead of `extra.spec = { ... };`), and use `extra` only for top-level manifest fields that have no dedicated builder argument.";
+            fix = "Move those fields into the top-level ${topArgs} argument (for example, `spec = { ... };` instead of `extra.spec = { ... };`), and use `extra` only for top-level manifest fields that have no dedicated builder argument.";
           }
         else
           null;

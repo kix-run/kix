@@ -58,7 +58,7 @@ let
     else if unsealKey == null then
       scope.fail {
         package = "openbao";
-        option = "config.seal.type";
+        option = "seal.type";
         message = "seal.type is \"static\" and there is no unsealKey dependency.";
         fix = "Add a secret aliased unsealKey with key \"key\", a 32-byte key (`openssl rand -hex 32 | tr -d '\\n'`), or set seal.type = \"shamir\" to initialize and unseal OpenBao by hand.";
       }
@@ -113,7 +113,7 @@ let
     if settingsOwned != [ ] then
       scope.fail {
         package = "openbao";
-        option = "config.settings";
+        option = "settings";
         message = "settings sets ${lib.concatStringsSep ", " settingsOwned}, which the package sets from ${
           lib.concatMapStringsSep "; " ownedReason settingsOwned
         }.";

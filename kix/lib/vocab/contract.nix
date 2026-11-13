@@ -87,7 +87,7 @@ in
       # dependency `dep` breaks the contract.
       consumerError = who: dep: found: {
         message = "${who}: deps.${alias} resolved to ${providerOf dep}, whose out does not honour the ${name} contract (${here}): ${lib.concatStringsSep "; " found}.";
-        fix = "set them on that instance's out (a kix.mkImport sets them in `out`), or wire another ${remedyNoun} with deps.${alias} = ref.<ns>.<instance>.";
+        fix = "Set them on that instance's out (a kix.mkImport sets them in `out`), or wire another ${remedyNoun} with deps.${alias} = ref.<ns>.<instance>.";
       };
     in
     {
