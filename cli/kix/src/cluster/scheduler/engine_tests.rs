@@ -39,7 +39,8 @@ fn m(kind: &str, name: &str, deps: &[&str]) -> Value {
     if kind != "CustomResourceDefinition" {
         metadata["namespace"] = json!("default");
     }
-    json!({ "apiVersion": "v1", "kind": kind, "metadata": metadata })
+    let api_version = if kind == "Job" { "batch/v1" } else { "v1" };
+    json!({ "apiVersion": api_version, "kind": kind, "metadata": metadata })
 }
 
 /// Build a manifest carrying the `kix.run/rerun` annotation.
@@ -1400,7 +1401,7 @@ async fn read_last_runs_reruns_failed_rerun_jobs_and_names_the_others() {
     ];
     let mut plan = plan_with_skips(&manifests, &["bootstrap", "probe", "done", "cm"]);
     let failed = plan.read_last_runs(&client, &discovery).await;
-    assert_eq!(failed, vec![rid("Job", "bootstrap")]);
+    assert_eq!(failed, Some(vec![rid("Job", "bootstrap")]));
     let reruns: Vec<(&NodeId, &'static str)> = plan
         .nodes()
         .iter()
@@ -1422,6 +1423,31 @@ async fn read_last_runs_reruns_failed_rerun_jobs_and_names_the_others() {
             ),
         ]
     );
+}
+
+/// A Job Kix cannot read leaves the answer unknown, so the plan does not
+/// say that nothing failed. A refused read and a Job of a group the cluster
+/// does not serve both count, and a Job read through another group's API
+/// never counts as failed.
+#[tokio::test]
+async fn read_last_runs_does_not_answer_for_a_job_it_cannot_read() {
+    let api = crate::cluster::fake_api::FakeApi::new([live_job_named("done", false)]);
+    api.fail_next("/apis/batch/v1/namespaces/default/jobs/done", 1, 403);
+    let client = api.client();
+    let discovery = crate::cluster::discovery::discover_resources(&client)
+        .await
+        .unwrap();
+    let manifests = vec![m("Job", "done", &[])];
+    let mut plan = plan_with_skips(&manifests, &["done"]);
+    assert_eq!(plan.read_last_runs(&client, &discovery).await, None);
+    assert_eq!(plan.read_last_runs(&client, &discovery).await, Some(vec![]));
+
+    let api = crate::cluster::fake_api::FakeApi::new([live_job_named("other", true)]);
+    let client = api.client();
+    let mut other = m("Job", "other", &[]);
+    other["apiVersion"] = json!("batch.volcano.sh/v1alpha1");
+    let mut plan = plan_with_skips(&[other], &["other"]);
+    assert_eq!(plan.read_last_runs(&client, &discovery).await, None);
 }
 
 /// Under dry run a changed rerun Job with a live object still takes the

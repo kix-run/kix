@@ -30,6 +30,9 @@ pub struct PlanNodeEntry {
     /// `Skip` tag, and an unchanged one still runs a task that reports a
     /// failed last run.
     pub rerun: Option<Value>,
+    /// The manifest's `apiVersion`. With the kind it finds the object's API
+    /// in discovery, because [`ResourceId`] carries no group.
+    pub api_version: String,
 }
 
 /// The planner's output, consumed by `run_deploy`. Constructed
@@ -95,6 +98,7 @@ impl DeployPlan {
                         )),
                     },
                     rerun: None,
+                    api_version: api_version(&node.manifest),
                 });
                 continue;
             }
@@ -127,6 +131,7 @@ impl DeployPlan {
                 action,
                 meta,
                 rerun,
+                api_version: api_version(&node.manifest),
             });
         }
 
@@ -155,19 +160,25 @@ impl DeployPlan {
     /// Read the live object of every Job whose last run decides what the
     /// plan does with it, and apply [`DeployPlan::rerun_failed`] to the Jobs
     /// whose last run failed. Return the unchanged Jobs that failed and do
-    /// not run again. A Job Kix cannot read is left as the plan has it, and
-    /// the run reads it again (see `skip_reads_live`).
+    /// not run again, or `None` when Kix could not read one of the Jobs. The
+    /// run reads that Job again, because the scheduler runs a task for every
+    /// rerun Job and reads every unchanged Job (see `skip_reads_live`).
     pub(crate) async fn read_last_runs(
         &mut self,
         client: &kube::Client,
         discovery: &[(kube::discovery::ApiResource, kube::discovery::Scope)],
-    ) -> Vec<ResourceId> {
+    ) -> Option<Vec<ResourceId>> {
         let mut failed = HashSet::new();
+        let mut all_read = true;
         for entry in self.nodes.iter().filter(|e| reads_last_run(e)) {
             let NodeId::Resource(rid) = &entry.id else {
                 continue;
             };
-            let Some((ar, scope)) = discovery.iter().find(|(ar, _)| ar.kind == rid.kind) else {
+            let Some((ar, scope)) =
+                super::super::discovery::find(discovery, &entry.api_version, &rid.kind)
+            else {
+                tracing::debug!(resource = %rid, api_version = %entry.api_version, "no API serves a Job's kind");
+                all_read = false;
                 continue;
             };
             let api = super::super::discovery::api_for(client, ar, scope, rid);
@@ -180,10 +191,12 @@ impl DeployPlan {
                 Ok(_) => {}
                 Err(e) => {
                     tracing::debug!(resource = %rid, error = %e, "could not read a Job's live object");
+                    all_read = false;
                 }
             }
         }
-        self.rerun_failed(&failed)
+        let reported = self.rerun_failed(&failed);
+        all_read.then_some(reported)
     }
 
     /// Recreate every Job under `kix.run/rerun` in `failed`, the Jobs whose
@@ -409,6 +422,14 @@ impl SchedulerState {
         }
         cancelled
     }
+}
+
+fn api_version(manifest: &Value) -> String {
+    manifest
+        .get("apiVersion")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string()
 }
 
 /// Return whether the plan reads the live object of `entry` to learn whether

@@ -227,6 +227,20 @@ pub(crate) fn merge_discovery(
     merged
 }
 
+/// Return the discovered API that serves `kind` in the group of
+/// `api_version`. Two groups can serve one kind, such as `Job` in `batch`
+/// and in `batch.volcano.sh`, so the kind alone does not name the API.
+pub(crate) fn find<'a>(
+    discovery: &'a [(ApiResource, Scope)],
+    api_version: &str,
+    kind: &str,
+) -> Option<&'a (ApiResource, Scope)> {
+    let group = api_version.split_once('/').map_or("", |(g, _)| g);
+    discovery
+        .iter()
+        .find(|(ar, _)| ar.group == group && ar.kind == kind)
+}
+
 /// Build a dynamic [`Api`] handle for `rid`. Namespaced kinds keyed with
 /// [`CLUSTER_SCOPED`] target the `default` namespace so pruning can read and
 /// delete legacy objects that omitted a namespace.
@@ -254,6 +268,22 @@ mod tests {
     use super::*;
 
     const RBAC_V1: &str = "/apis/rbac.authorization.k8s.io/v1";
+
+    /// Two groups that serve one kind are told apart by the manifest's
+    /// `apiVersion`, whichever the cluster lists first.
+    #[test]
+    fn find_matches_the_group_as_well_as_the_kind() {
+        let job = |group: &str, version: &str| {
+            let gvk = kube::api::GroupVersionKind::gvk(group, version, "Job");
+            (ApiResource::from_gvk(&gvk), Scope::Namespaced)
+        };
+        let discovery = vec![job("batch.volcano.sh", "v1alpha1"), job("batch", "v1")];
+        let found =
+            |api_version| find(&discovery, api_version, "Job").map(|(ar, _)| ar.group.as_str());
+        assert_eq!(found("batch/v1"), Some("batch"));
+        assert_eq!(found("batch.volcano.sh/v1alpha1"), Some("batch.volcano.sh"));
+        assert_eq!(found("v1"), None);
+    }
 
     fn gets(api: &crate::cluster::fake_api::FakeApi, path: &str) -> usize {
         let line = format!("GET {path}");

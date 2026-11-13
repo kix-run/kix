@@ -156,7 +156,8 @@ pub struct CheckedPlan {
     target_checks: TargetChecks,
     /// The Jobs the plan leaves unchanged whose last run failed, which the
     /// run reports as failed. `None` until the plan reads them from the
-    /// cluster ([`CheckedPlan::read_last_runs`]).
+    /// cluster ([`CheckedPlan::read_last_runs`]), and when it could not read
+    /// one of them.
     failed_jobs: Option<Vec<ResourceId>>,
 }
 
@@ -278,7 +279,7 @@ impl CheckedPlan {
     }
 
     /// Return the Jobs the plan leaves unchanged whose last run failed, or
-    /// `None` when the plan has not read them from the cluster. A Job under
+    /// `None` when the plan has not read them all from the cluster. A Job under
     /// `kix.run/rerun` whose last run failed is not among them, because the
     /// plan runs it again.
     pub fn failed_jobs(&self) -> Option<&[ResourceId]> {
@@ -286,8 +287,8 @@ impl CheckedPlan {
     }
 
     /// Return whether a run of the plan would change nothing and report no
-    /// failure: it writes nothing, prunes nothing, and every Job whose last
-    /// run matters is known not to have failed.
+    /// failure. It writes nothing, prunes nothing, and every Job whose last
+    /// run matters was read and has not failed.
     pub fn nothing_to_do(&self) -> bool {
         let jobs_known_good = match &self.failed_jobs {
             Some(failed) => failed.is_empty(),
@@ -308,16 +309,21 @@ impl CheckedPlan {
     /// plan made with a client has read them already; one made without
     /// (`--offline`) reads them here once the run connects.
     pub async fn read_last_runs(&mut self, client: &Client) -> Result<(), PlanError> {
-        let failed = if self.plan.reads_last_runs() {
+        self.failed_jobs = if self.plan.reads_last_runs() {
             let discovery = discovery::discover_resources(client)
                 .await
                 .map_err(|e| PlanError::Discovery(Box::new(e)))?;
             self.plan.read_last_runs(client, &discovery).await
         } else {
-            Vec::new()
+            Some(Vec::new())
         };
-        self.failed_jobs = Some(failed);
         Ok(())
+    }
+
+    /// Return the failed Activation records whose leftovers the plan folded
+    /// in. A run that finalizes supersedes them.
+    pub fn consumed_failed(&self) -> &[String] {
+        &self.consumed_failed
     }
 
     /// Remove orphans that another Kix cluster still deploys ([`keep_shared`])

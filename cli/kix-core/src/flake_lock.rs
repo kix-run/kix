@@ -216,8 +216,16 @@ pub fn project_kix(dir: &Path, overrides: &[(String, String)]) -> Result<Project
     let kix = locked_kix(dir);
     // When the lock names no release, this Kix judges the project, and it
     // reads kix.toml before flake.lock. A project on a release hands over to
-    // that release, which judges kix.toml itself.
-    if kix.is_err() {
+    // that release, which judges kix.toml itself. A moved tag names releases,
+    // so its own advice comes first.
+    let no_release = matches!(
+        kix,
+        Err(LockError::Missing
+            | LockError::Unreadable { .. }
+            | LockError::Input(_)
+            | LockError::NoVersion)
+    );
+    if no_release {
         crate::project::kix_setting(dir).map_err(|e| LockError::Setting(e.to_string()))?;
     }
     kix
@@ -613,5 +621,15 @@ mod tests {
             project_kix(dir.path(), &[]),
             Ok(ProjectKix::Release(v("0.9.2")))
         );
+        // A tag moved in flake.nix names a release, so its advice comes first.
+        std::fs::write(
+            dir.path().join("flake.nix"),
+            "{ inputs.kix.url = \"github:kix-run/kix/v0.10.0\"; }",
+        )
+        .unwrap();
+        assert!(matches!(
+            project_kix(dir.path(), &[]),
+            Err(LockError::TagMoved { .. })
+        ));
     }
 }
