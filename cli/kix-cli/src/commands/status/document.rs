@@ -5,7 +5,7 @@
 //! [`SCHEMA_VERSION`] to the day's date when a change is not backward
 //! compatible.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use kix::cluster::drift::{DriftVerdict, ForeignOwner, UnrecordedScale};
 use kix::cluster::observe::{
@@ -199,7 +199,8 @@ pub struct Scale {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct Summary {
     pub resources: usize,
-    /// Objects with no problem, including those not checked.
+    /// Objects that every selected check passed. An object that a check
+    /// could not run on counts under `not_checked` instead.
     pub ok: usize,
     pub missing: usize,
     pub changed: usize,
@@ -210,7 +211,7 @@ pub struct Summary {
 impl Summary {
     fn add(&mut self, r: &ResourceStatus) {
         self.resources += 1;
-        if r.problems.is_empty() {
+        if r.problems.is_empty() && !r.not_checked {
             self.ok += 1;
         }
         for p in &r.problems {
@@ -292,6 +293,11 @@ pub fn build(
         .map(|view| cluster_status(view, notes.get(&view.cluster), checks))
         .collect();
     if let Some(wanted) = package {
+        let known: BTreeSet<String> = clusters
+            .iter()
+            .flat_map(|c| &c.packages)
+            .filter_map(|p| p.name.clone())
+            .collect();
         let matches = |name: &Option<String>| {
             name.as_deref().is_some_and(|n| {
                 n == wanted
@@ -307,16 +313,7 @@ pub fn build(
             }
         }
         if clusters.iter().all(|c| c.packages.is_empty()) {
-            let known: Vec<&str> = clusters
-                .iter()
-                .flat_map(|c| &c.packages)
-                .filter_map(|p| p.name.as_deref())
-                .collect();
-            let mut message = format!("no package '{wanted}' in the current deploy");
-            if !known.is_empty() {
-                message.push_str(&format!(". Packages: {}", known.join(", ")));
-            }
-            return Err(message);
+            return Err(no_such_package(wanted, &known));
         }
     }
     let mut summary = Summary::default();
@@ -331,6 +328,40 @@ pub fn build(
         clusters,
         summary,
     })
+}
+
+/// The most package names the `--package` error lists in full. Past it, the
+/// error lists the [`CLOSEST`] names.
+const LISTED: usize = 10;
+/// How many of the closest package names the `--package` error lists.
+const CLOSEST: usize = 5;
+
+/// Return the error for a `--package` that names no package in `known`.
+fn no_such_package(wanted: &str, known: &BTreeSet<String>) -> String {
+    let mut message = format!("No package '{wanted}' in the current deploy.");
+    if known.is_empty() {
+        return message;
+    }
+    if known.len() <= LISTED {
+        let names: Vec<&str> = known.iter().map(String::as_str).collect();
+        message.push_str(&format!(" Packages: {}.", names.join(", ")));
+        return message;
+    }
+    // Score each name by the closer of its full name and its instance name,
+    // since `--package` takes either.
+    let score = |name: &str| {
+        let instance = name.split_once('/').map_or(name, |(_, i)| i);
+        strsim::jaro_winkler(wanted, name).max(strsim::jaro_winkler(wanted, instance))
+    };
+    let mut ranked: Vec<(f64, &str)> = known.iter().map(|n| (score(n), n.as_str())).collect();
+    ranked.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(b.1)));
+    let closest: Vec<&str> = ranked.iter().take(CLOSEST).map(|(_, n)| *n).collect();
+    message.push_str(&format!(
+        " It has {} packages. The closest names: {}.",
+        known.len(),
+        closest.join(", ")
+    ));
+    message
 }
 
 fn cluster_status(

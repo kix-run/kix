@@ -1,9 +1,9 @@
 //! The `clap::Command` for `kix`, with each global flag hidden from the
 //! help of the commands that do not read it.
 
-use clap::CommandFactory;
+use clap::{CommandFactory, ValueEnum};
 
-use super::Cli;
+use super::{Cli, OutputFormat};
 
 /// Global flags that apply only to specific subcommands, paired with the
 /// command paths that read them. A command path covers its subcommands, and a
@@ -200,15 +200,61 @@ fn hide_unread_globals(cmd: clap::Command, parent: &str, globals: &[clap::Arg]) 
         let reads = readers.iter().any(|r| {
             *r == path || r.starts_with(&format!("{path} ")) || path.starts_with(&format!("{r} "))
         });
+        let arg = globals
+            .iter()
+            .find(|a| a.get_id() == *id)
+            .unwrap_or_else(|| panic!("no global flag {id}"));
         if !reads {
-            let arg = globals
-                .iter()
-                .find(|a| a.get_id() == *id)
-                .unwrap_or_else(|| panic!("no global flag {id}"));
             cmd = cmd.arg(arg.clone().hide(true));
+        } else if *id == "output"
+            && let Some((formats, default)) = crate::cli::Command::help_formats(&path)
+        {
+            let long_help = match default {
+                Some(f) => format!("Output format. The default is {}.", f.name()),
+                None => "Output format".to_string(),
+            };
+            cmd = cmd.arg(
+                arg.clone()
+                    .value_parser(FormatParser(formats))
+                    .help("Output format")
+                    .long_help(long_help),
+            );
         }
     }
     cmd.mut_subcommands(|sc| hide_unread_globals(sc, &path, globals))
+}
+
+/// Parse `-o` like the global flag, and list only the formats a command
+/// prints in its help and shell completions.
+///
+/// The other formats still parse, so that `main` refuses them with a message
+/// that names the formats the command prints.
+#[derive(Clone)]
+struct FormatParser(Vec<OutputFormat>);
+
+impl clap::builder::TypedValueParser for FormatParser {
+    type Value = OutputFormat;
+
+    fn parse_ref(
+        &self,
+        cmd: &clap::Command,
+        arg: Option<&clap::Arg>,
+        value: &std::ffi::OsStr,
+    ) -> Result<OutputFormat, clap::Error> {
+        clap::builder::EnumValueParser::<OutputFormat>::new().parse_ref(cmd, arg, value)
+    }
+
+    fn possible_values(
+        &self,
+    ) -> Option<Box<dyn Iterator<Item = clap::builder::PossibleValue> + '_>> {
+        let shown = self.0.iter();
+        let hidden = OutputFormat::value_variants()
+            .iter()
+            .filter(|f| !self.0.contains(f));
+        Some(Box::new(shown.filter_map(|f| f.to_possible_value()).chain(
+            hidden.filter_map(|f| f.to_possible_value().map(|v| v.hide(true))),
+        )))
+    }
 }
 
 #[cfg(test)]

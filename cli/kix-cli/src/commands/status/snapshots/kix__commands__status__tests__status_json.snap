@@ -34,7 +34,7 @@ expression: "serde_json::to_string_pretty(&doc).unwrap()"
           "name": "vault/vaultwarden",
           "summary": {
             "resources": 4,
-            "ok": 2,
+            "ok": 0,
             "missing": 1,
             "changed": 0,
             "not_ready": 1,
@@ -116,7 +116,7 @@ expression: "serde_json::to_string_pretty(&doc).unwrap()"
       ],
       "summary": {
         "resources": 4,
-        "ok": 2,
+        "ok": 0,
         "missing": 1,
         "changed": 0,
         "not_ready": 1,
@@ -126,7 +126,7 @@ expression: "serde_json::to_string_pretty(&doc).unwrap()"
   ],
   "summary": {
     "resources": 4,
-    "ok": 2,
+    "ok": 0,
     "missing": 1,
     "changed": 0,
     "not_ready": 1,

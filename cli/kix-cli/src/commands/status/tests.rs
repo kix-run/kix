@@ -292,7 +292,7 @@ fn every_check_runs_and_a_problem_exits_2() {
     let s = doc.summary;
     assert_eq!(
         (s.resources, s.ok, s.missing, s.changed, s.not_ready),
-        (8, 5, 1, 1, 1)
+        (8, 3, 1, 1, 1)
     );
     assert_eq!(s.not_checked, 2);
     assert_eq!(doc.exit(), Exit::StatusFoundProblem);
@@ -378,7 +378,77 @@ fn package_narrows_to_one_package() {
         Some("redis"),
     )
     .unwrap_err();
-    assert!(err.contains("no package 'redis'"), "{err}");
+    assert_eq!(
+        err,
+        "No package 'redis' in the current deploy. Packages: db/postgres, \
+         ingress/ingress-nginx, vault/vaultwarden."
+    );
+}
+
+/// With many packages, a `--package` that matches none names the closest.
+#[test]
+fn an_unknown_package_names_the_closest_of_many() {
+    let mut seen = shop();
+    let template = seen.clusters[0].objects[0].clone();
+    for (i, name) in ["redis", "redis-cache", "rabbitmq", "minio", "loki", "tempo"]
+        .iter()
+        .chain(&["mimir", "grafana", "alloy", "cilium", "kyverno"])
+        .enumerate()
+    {
+        let mut o = template.clone();
+        o.identity_hash = format!("{i:032}");
+        o.rid.name = name.to_string();
+        o.package = Some(format!("apps/{name}"));
+        seen.clusters[0].objects.push(o);
+    }
+    let err = build(
+        &seen,
+        kubernetes(),
+        &BTreeMap::new(),
+        &selected(&[]),
+        Some("rediss"),
+    )
+    .unwrap_err();
+    assert!(
+        err.starts_with(
+            "No package 'rediss' in the current deploy. It has 14 packages. \
+             The closest names: apps/redis, apps/redis-cache,"
+        ),
+        "{err}"
+    );
+}
+
+/// The next step adds `--force-conflicts` only when another manager owns
+/// fields of a changed object, because a deploy stops on those fields.
+#[test]
+fn the_next_step_forces_conflicts_only_for_another_manager() {
+    let text = |seen: &Observation| {
+        let doc = build(seen, kubernetes(), &BTreeMap::new(), &selected(&[]), None).unwrap();
+        text::render(&doc, text::Detail::Packages, &two_days_ago)
+    };
+    let changed = text(&shop());
+    assert!(
+        changed.contains(
+            "Next: run `kix deploy shop --reconcile --force-conflicts` to put back what is \
+             missing or changed and take back the fields that kubectl-edit owns."
+        ),
+        "{changed}"
+    );
+
+    let mut scaled = shop();
+    for o in &mut scaled.clusters[0].objects {
+        if o.rid.name == "pg-config" {
+            o.content = Some(DriftVerdict::Drifted {
+                foreign: vec![],
+                unrecorded_scale: None,
+            });
+        }
+    }
+    let scaled = text(&scaled);
+    assert!(
+        scaled.contains("Next: run `kix deploy shop --reconcile` to put back"),
+        "{scaled}"
+    );
 }
 
 /// A record that lists no objects, with its own object gone, cannot be

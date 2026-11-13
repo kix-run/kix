@@ -10,6 +10,9 @@ pub struct StatusArgs {
 
     /// Run only this check. Repeat it to run more than one. Without it, all
     /// three run.
+    ///
+    /// Every check reports a missing object, because no check can run on an
+    /// object that is gone.
     #[arg(long = "check", value_name = "CHECK")]
     pub checks: Vec<StatusCheck>,
 

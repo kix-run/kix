@@ -488,7 +488,7 @@
           "type": "integer"
         },
         "ok": {
-          "description": "Objects with no problem, including those not checked.",
+          "description": "Objects that every selected check passed. An object that a check\ncould not run on counts under `not_checked` instead.",
           "format": "uint",
           "minimum": 0,
           "type": "integer"

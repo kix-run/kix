@@ -150,11 +150,7 @@ fn hash_preview(hash: Option<&str>) -> String {
 impl CommandResponse for HistoryResponse {
     fn text(&self) -> String {
         let cluster = &self.cluster;
-        let mut out = format!(
-            "{} deployment history for '{}'\n\n",
-            output::bold("Rollback:"),
-            cluster,
-        );
+        let mut out = format!("Deployment history for '{}'\n\n", output::bold(cluster));
 
         if let Some(c) = &self.current {
             let _ = writeln!(
