@@ -33,7 +33,7 @@ The kind test of 0.10's stage 2 found the cost. A project with `kix = "0.10.0-rc
 1. **A Kix project has a `flake.lock`.** Without one, Kix stops: "This project has no flake.lock. Run `kix upgrade --to <version>` to pin the Kix library and create it."
 2. **The library is a direct input of the project's flake, named `kix`.** Kix looks for no other name and no nested input. `library-input` goes, along with the errors about `kixpkgs`.
 3. **The input pins a release tag, `v<version>`.** That covers `github:kix-run/kix/v0.10.3`, `git+ssh://...?ref=refs/tags/v0.10.3`, or any other URL whose lock records that tag. That tag is the project's Kix version, exactly. An input with no tag stops with "flake.nix uses the Kix library without a version. Run `kix upgrade --to <version>` to pin one."
-4. **Development mode.** When the `kix` input is a local path or a branch, or the library is part of the project's own flake (as in this repository, where `clusters/` use `./kix`), the project has no release version. Kix runs the installed Kix, says once that it is using a development library, and compares nothing.
+4. **Development mode.** When the `kix` input is a local path or a branch, or the project's `kix.toml` sets `library = "self"` to say its own flake provides the library (as this repository does), the project has no release version. `library` takes two values: `"input"`, the default, which means the library is the input named `kix` and its tag in the lock is the version, and `"self"`. Any other value is an error that names both. Kix runs the installed Kix, says once that it is using a development library, and compares nothing.
 5. **Exact versions only.** A lock pins one tag, so ranges such as `"0.10"` and the newest-patch choice go away.
 6. **`kix =` in `kix.toml` is refused** with an error id that says the version now comes from `flake.lock`. The refusal stays for one minor release, as `CLAUDE.md` requires. `kix.toml` keeps `builder`, `min-age`, and the other settings.
 
@@ -49,7 +49,7 @@ There are no network calls and no Nix evaluation. A plain commit, with no tag, i
 
 ### One check stays
 
-A lock can fall behind `flake.nix`. Someone edits the tag, and Nix re-locks on the next evaluation, but the launcher chose its program from the old lock. The library already reports its version when Kix evaluates it. The chosen Kix compares that with its own version, and on a mismatch stops with "flake.lock pins Kix X, but flake.nix now asks for Y. Run `kix upgrade --to Y`." Keeping this comparison is a safety check on one edge case. It is not a compatibility rule, and it never repairs anything.
+A lock can fall behind `flake.nix` when someone edits the tag by hand. Before Nix evaluates anything, Kix compares the release tag in the url of the `kix` input in `flake.nix` with the tag in `flake.lock`, finding the url the way `kix upgrade` does when it pins. On a mismatch it stops with "flake.nix asks for Kix Y, but flake.lock pins Kix X. Run `kix upgrade --to Y`.", so Nix never rewrites the lock. `kix upgrade` then sets `flake.nix` back to X and runs its usual flow from X to Y. When Kix cannot find the url (an attribute-set input, a changed repository, or a second url still on X), the library's own version is compared with the running Kix after evaluation, with "flake.lock pins Kix X, but flake.nix now asks for Y." Neither comparison is a compatibility rule, and neither repairs anything.
 
 ### Upgrading
 
