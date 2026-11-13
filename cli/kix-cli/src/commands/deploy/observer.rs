@@ -461,7 +461,17 @@ pub(super) fn closing(r: &DeployResult, c: &Closing<'_>) -> String {
         );
         return out;
     }
+    // A run that applies the build the Active record already holds, such as
+    // a reconcile of an unchanged build, reuses that record and leaves it
+    // Active.
+    let reused = matches!(
+        (c.record, &c.previous),
+        (Some(record), Previous::Active(previous)) if record == previous
+    );
     let record_line = match (c.record, &c.previous) {
+        (Some(record), Previous::Active(_)) if reused => Some(format!(
+            "Deployment record {record} remains the Active deployment record, because this run applied the build it already holds."
+        )),
         (Some(record), Previous::Active(previous)) => Some(format!(
             "Deployment record {record} is marked Failed, and {previous} remains the Active deployment record."
         )),
@@ -501,10 +511,11 @@ pub(super) fn closing(r: &DeployResult, c: &Closing<'_>) -> String {
             if let Some(line) = record_line {
                 let _ = writeln!(out, "    - {line}");
             }
-            if c.record.is_some() {
+            if let Some(record) = c.record {
                 let _ = writeln!(
                     out,
-                    "    - The next `kix deploy {cluster}` on a machine with this build will compare against what this run applied."
+                    "    - {}",
+                    next_compare(cluster, record, reused, "this run")
                 );
             }
             let _ = writeln!(out);
@@ -531,10 +542,11 @@ pub(super) fn closing(r: &DeployResult, c: &Closing<'_>) -> String {
             if let Some(line) = record_line {
                 let _ = writeln!(out, "    - {line}");
             }
-            if c.record.is_some() {
+            if let Some(record) = c.record {
                 let _ = writeln!(
                     out,
-                    "    - The next `kix deploy {cluster}` on a machine with this build will compare against what this failed run applied."
+                    "    - {}",
+                    next_compare(cluster, record, reused, "this failed run")
                 );
             }
             let _ = writeln!(out);
@@ -546,6 +558,20 @@ pub(super) fn closing(r: &DeployResult, c: &Closing<'_>) -> String {
         }
     }
     out
+}
+
+/// Say what the next deploy compares the build against after a run that did
+/// not finish.
+fn next_compare(cluster: &str, record: &str, reused: bool, run: &str) -> String {
+    if reused {
+        format!(
+            "The next `kix deploy {cluster}` on a machine with this build will compare against deployment record {record}, which holds the build {run} applied."
+        )
+    } else {
+        format!(
+            "The next `kix deploy {cluster}` on a machine with this build will compare against what {run} applied."
+        )
+    }
 }
 
 pub(super) fn print_warnings(lines: &[String]) {

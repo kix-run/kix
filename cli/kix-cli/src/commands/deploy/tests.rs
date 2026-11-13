@@ -455,6 +455,35 @@ mod run_end_tests {
         );
         assert!(stopped.contains("4 object(s) did not finish"), "{stopped}");
     }
+
+    /// A reconcile of an unchanged build reuses the Active record, which a
+    /// failure leaves Active.
+    #[test]
+    fn a_failed_run_that_reused_the_active_record_says_it_stays_active() {
+        let counts = DeployResult {
+            configured: 1,
+            failed: 1,
+            ..DeployResult::default()
+        };
+        let closing = Closing {
+            cluster: "prod",
+            record: Some("prod-4be1c09a"),
+            previous: Previous::Active("prod-4be1c09a".into()),
+            interrupted: None,
+            current: false,
+            on_error_continue: false,
+        };
+        let text = super::observer::closing(&counts, &closing);
+        assert!(!text.contains("marked Failed"), "{text}");
+        assert!(
+            text.contains("Deployment record prod-4be1c09a remains the Active deployment record, because this run applied the build it already holds."),
+            "{text}"
+        );
+        assert!(
+            text.contains("will compare against deployment record prod-4be1c09a, which holds the build this failed run applied."),
+            "{text}"
+        );
+    }
 }
 
 mod operator_tests {
