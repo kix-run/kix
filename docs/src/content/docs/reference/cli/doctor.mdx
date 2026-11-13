@@ -17,7 +17,7 @@ This page is hand-maintained from `cli/kix-cli/src/cli.rs`, `cli/kix-cli/src/com
 kix doctor [--flake <FLAKE>]
 ```
 
-`kix doctor` takes no command-specific flags, reads [`--flake`](/docs/reference/cli/global-flags/) (default `.`) to find [`kix.toml`](/docs/reference/kix-toml/), and ignores `-o` / `--output`.
+`kix doctor` takes no command-specific flags, reads [`--flake`](/docs/reference/cli/global-flags/) (default `.`) to find [`kix.toml`](/docs/reference/kix-toml/), and prints only text: any `-o` value other than `text` is [refused](/docs/reference/cli/output-formats/).
 
 ## How Kix locates its runtime
 

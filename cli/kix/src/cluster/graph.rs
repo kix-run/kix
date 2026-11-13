@@ -304,7 +304,7 @@ impl ResourceGraph {
         visited.pop();
     }
 
-    /// Serialize the graph to the JSON format emitted by `kix graph --format json`.
+    /// Serialize the graph to the JSON format emitted by `kix graph -o json`.
     pub fn to_json(&self) -> serde_json::Value {
         serde_json::to_value(self.listing()).expect("a GraphListing serializes")
     }
@@ -341,7 +341,7 @@ impl ResourceGraph {
     }
 }
 
-/// The dependency graph as data: what `kix graph --format json` prints and
+/// The dependency graph as data: what `kix graph -o json` prints and
 /// a plan file carries.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

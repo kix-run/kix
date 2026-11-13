@@ -18,7 +18,7 @@ use serde_json::Value;
 
 use kix::eval::store_graph::StoreGraph;
 
-use crate::cli::{ComplianceAttestArgs, OutputFormat};
+use crate::cli::ComplianceAttestArgs;
 use crate::output;
 
 use super::receipt;
@@ -45,12 +45,9 @@ pub fn run(args: &ComplianceAttestArgs, ctx: &mut CommandContext) -> Result<()> 
         )
     };
 
-    let text = match output::format() {
-        OutputFormat::Yaml => kix::yaml::to_string(&statement).into_diagnostic()?,
-        _ => serde_json::to_string_pretty(&statement).into_diagnostic()?,
-    };
-    println!("{text}");
-    Ok(())
+    output::result(&output::Standard(
+        serde_json::to_value(&statement).into_diagnostic()?,
+    ))
 }
 
 /// Build a statement from a fresh evaluation, by way of the receipt that a

@@ -19,15 +19,13 @@ in doubt.
 ## Synopsis
 
 ```text
-kix graph <CLUSTER> [--format tree|dot|json] [-o text|json|yaml]
-          [--flake <FLAKE>] [--no-cache]
+kix graph <CLUSTER> [-o tree|dot|json|yaml] [--flake <FLAKE>] [--no-cache]
 ```
 
 | Argument or flag | Default | Meaning |
 | --- | --- | --- |
 | `<CLUSTER>` | | Cluster name to evaluate. |
-| `--format <FORMAT>` | Unset | `tree`, `dot`, or `json`. Takes priority over `-o`. `dot` is only available here. |
-| `-o`, `--output` | `text` | Used when `--format` is unset. `text` and `markdown` print the tree, `json` the JSON document, `yaml` the same document as YAML. |
+| `-o`, `--output` | `tree` | `tree`, `dot`, `json`, or `yaml`, described below. `yaml` prints the JSON document as YAML. |
 | `--flake <FLAKE>` | `.` | Flake to evaluate. |
 | `--no-cache` | Off | Evaluate from Nix instead of reading the [eval cache](/docs/reference/cli/eval-cache-behavior/). |
 
@@ -52,8 +50,8 @@ JSON.
 
 <Command commands={[
   "kix graph demo",
-  "kix graph demo --format dot | dot -Tsvg > graph.svg",
-  "kix graph demo --format json",
+  "kix graph demo -o dot | dot -Tsvg > graph.svg",
+  "kix graph demo -o json",
 ]} />
 
 ## Exit status

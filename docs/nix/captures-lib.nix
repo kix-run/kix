@@ -39,7 +39,7 @@ let
 
   # `LC_ALL=C sort -u` pins to byte-order sort (host locale doesn't
   # leak into drift comparisons) and collapses duplicate lines. The
-  # dedupe is load-bearing for `kix graph --format tree`, where the
+  # dedupe is load-bearing for `kix graph -o tree`, where the
   # same resource gets rendered N times (once per parent edge in the
   # underlying DAG) and N moves around with traversal order. For
   # captures whose output is unique line-by-line (YAML manifests,

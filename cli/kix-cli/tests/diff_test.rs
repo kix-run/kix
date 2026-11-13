@@ -202,13 +202,7 @@ fn diff_save_writes_the_document_and_the_graph() {
     assert_eq!(serde_json::to_value(&header.plan).unwrap(), printed);
 
     let graph = kix()
-        .args([
-            "graph",
-            "kix-enterprise-test",
-            "--format",
-            "json",
-            "--bundle",
-        ])
+        .args(["graph", "kix-enterprise-test", "-o", "json", "--bundle"])
         .arg(&bundle)
         .output()
         .unwrap();

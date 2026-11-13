@@ -8,15 +8,55 @@ use kix::manifest::types::{CLUSTER_SCOPED, ResourceId};
 
 use super::CommandContext;
 
-struct InspectResponse {
+/// A cluster's rendered resources by namespace and kind.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct InspectResponse {
+    #[serde(rename = "cluster")]
     cluster_name: String,
     total_resources: usize,
+    /// The namespaces in name order. `_cluster` holds cluster-scoped
+    /// resources.
+    #[serde(rename = "namespaces", serialize_with = "namespaces")]
+    #[schemars(with = "Vec<InspectNamespace>")]
     by_namespace: BTreeMap<String, Vec<ResourceId>>,
+    /// The number of resources of each kind.
     kind_counts: BTreeMap<String, usize>,
 }
 
+/// One namespace of [`InspectResponse`], as JSON shows it.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+struct InspectNamespace {
+    name: String,
+    resources: Vec<InspectResource>,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+struct InspectResource {
+    kind: String,
+    name: String,
+}
+
+fn namespaces<S: serde::Serializer>(
+    by_namespace: &BTreeMap<String, Vec<ResourceId>>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.collect_seq(by_namespace.iter().map(|(ns, resources)| {
+        InspectNamespace {
+            name: ns.clone(),
+            resources: resources
+                .iter()
+                .map(|r| InspectResource {
+                    kind: r.kind.clone(),
+                    name: r.name.clone(),
+                })
+                .collect(),
+        }
+    }))
+}
+
 impl CommandResponse for InspectResponse {
-    fn format_text(&self) -> String {
+    fn text(&self) -> String {
         let mut out = String::new();
         out.push_str(&format!("Cluster: {}\n", self.cluster_name));
         out.push_str(&format!("Total resources: {}\n\n", self.total_resources));
@@ -64,25 +104,6 @@ impl CommandResponse for InspectResponse {
         }
 
         out.trim_end().to_string()
-    }
-
-    fn as_json(&self) -> serde_json::Value {
-        serde_json::json!({
-            "cluster": self.cluster_name,
-            "totalResources": self.total_resources,
-            "namespaces": self.by_namespace.iter().map(|(ns, resources)| {
-                serde_json::json!({
-                    "name": ns,
-                    "resources": resources.iter().map(|r| {
-                        serde_json::json!({
-                            "kind": r.kind,
-                            "name": r.name,
-                        })
-                    }).collect::<Vec<_>>(),
-                })
-            }).collect::<Vec<_>>(),
-            "kindCounts": self.kind_counts,
-        })
     }
 }
 

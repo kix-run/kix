@@ -292,30 +292,117 @@ fn with_yes(args: impl Iterator<Item = String>) -> String {
     words.join(" ")
 }
 
-/// All command outputs must implement this trait.
-/// Ensures every command supports both human-readable and structured output.
-pub trait CommandResponse {
-    /// Render human-readable text output.
-    fn format_text(&self) -> String;
-    /// Serialize the response as a JSON value.
-    fn as_json(&self) -> serde_json::Value;
+/// A command's answer, printed by [`result`] in the format `-o` picks.
+///
+/// JSON and YAML come from `Serialize`, so the JSON Schema that `JsonSchema`
+/// generates describes both. `kix-cli/schema/` keeps one schema per
+/// response, and `schemas.rs` checks it against the type. Which formats a
+/// command accepts is declared in `Command::formats`, and `main` refuses the
+/// others before the command runs.
+pub trait CommandResponse: serde::Serialize + schemars::JsonSchema {
+    /// Return the response as text for a person.
+    fn text(&self) -> String;
+
+    /// Return the response in `format`. Override this to print a format
+    /// other than text, JSON, and YAML, or to print one of those another
+    /// way, and pass the remaining formats to [`render`].
+    fn render(&self, format: OutputFormat) -> miette::Result<String>
+    where
+        Self: Sized,
+    {
+        render(self, format)
+    }
+
+    /// Return whether `-q` hides the text form. This holds when the text
+    /// reports what the command did rather than answer a question.
+    fn text_is_progress(&self) -> bool {
+        false
+    }
+}
+
+/// A document whose shape a published standard defines, such as a CycloneDX
+/// SBOM or an in-toto statement. Kix keeps no schema of its own for it.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+#[serde(transparent)]
+pub struct Standard(pub serde_json::Value);
+
+impl CommandResponse for Standard {
+    fn text(&self) -> String {
+        serde_json::to_string_pretty(&self.0).unwrap_or_default()
+    }
+}
+
+/// Return `response` as text, JSON, or YAML.
+pub fn render<R: CommandResponse>(response: &R, format: OutputFormat) -> miette::Result<String> {
+    match format {
+        OutputFormat::Text => Ok(response.text()),
+        OutputFormat::Json => serde_json::to_string_pretty(response).into_diagnostic(),
+        OutputFormat::Yaml => kix::yaml::to_string(response).into_diagnostic(),
+        other => Err(miette::miette!(
+            "this command has no {} output, but its list of formats includes it. \
+             This is a bug in Kix.",
+            other.name()
+        )),
+    }
 }
 
 /// Print a command's answer to stdout in the output [`format()`].
-///
-/// `Markdown` is not a generic `CommandResponse` format. Only specific commands
-/// (`kix plan`, `kix diff`) implement it. For other commands we fall back to
-/// `Text` so the flag remains a no-op rather than an error.
-pub fn result(response: &dyn CommandResponse) -> miette::Result<()> {
-    let rendered = match format() {
-        OutputFormat::Text | OutputFormat::Markdown => response.format_text(),
-        OutputFormat::Json => {
-            serde_json::to_string_pretty(&response.as_json()).into_diagnostic()?
-        }
-        OutputFormat::Yaml => kix::yaml::to_string(&response.as_json()).into_diagnostic()?,
-    };
-    println!("{rendered}");
+pub fn result<R: CommandResponse>(response: &R) -> miette::Result<()> {
+    let format = format();
+    if format == OutputFormat::Text && quiet() && response.text_is_progress() {
+        return Ok(());
+    }
+    let rendered = response.render(format)?;
+    if rendered.is_empty() {
+        return Ok(());
+    }
+    if rendered.ends_with('\n') {
+        print!("{rendered}");
+    } else {
+        println!("{rendered}");
+    }
     Ok(())
+}
+
+/// The id of the change record that made an unsupported `-o` value an error.
+const UNSUPPORTED_FORMAT_ID: &str = "K2184";
+
+/// Return the error for a `-o` value that `command` (such as
+/// `kix list clusters`) does not print. `from_env` says the value came from
+/// `KIX_OUTPUT`, and `hint` adds a command's own advice.
+pub fn unsupported_format(
+    command: &str,
+    asked: OutputFormat,
+    supported: &[OutputFormat],
+    from_env: bool,
+    hint: Option<&str>,
+) -> miette::Report {
+    let names: Vec<String> = supported
+        .iter()
+        .map(|f| format!("-o {}", f.name()))
+        .collect();
+    let choices = match names.as_slice() {
+        [one] => one.clone(),
+        [first, second] => format!("{first} or {second}"),
+        [rest @ .., last] => format!("{}, or {last}", rest.join(", ")),
+        [] => String::new(),
+    };
+    let mut help = format!("Use {choices}.");
+    if from_env {
+        help.push_str(&format!(
+            " The format came from KIX_OUTPUT={}.",
+            asked.name()
+        ));
+    }
+    if let Some(hint) = hint {
+        help.push(' ');
+        help.push_str(hint);
+    }
+    miette::miette!(
+        help = help,
+        "[{UNSUPPORTED_FORMAT_ID}] `{command}` cannot print {} output.",
+        asked.name()
+    )
 }
 
 #[cfg(test)]
@@ -324,6 +411,19 @@ mod tests {
 
     /// The suggested command keeps the user's arguments and quotes the ones
     /// a shell would split.
+    #[test]
+    fn a_refused_format_lists_the_formats_the_command_prints() {
+        let report = unsupported_format(
+            "kix list clusters",
+            OutputFormat::Sarif,
+            &[OutputFormat::Text, OutputFormat::Json, OutputFormat::Yaml],
+            true,
+            None,
+        );
+        let help = report.help().expect("help").to_string();
+        insta::assert_snapshot!(format!("{report}\n{help}"));
+    }
+
     #[test]
     fn the_suggested_command_repeats_the_arguments_with_yes() {
         let args = ["deploy", "prod", "--context", "my ctx"].map(String::from);

@@ -42,15 +42,8 @@ use super::CommandContext;
 use crate::exit::Exit;
 
 pub fn run(args: &PlanArgs, save: Option<&Path>, ctx: &mut CommandContext) -> Result<Exit> {
+    // `Command::formats` allows only text and Markdown.
     let format = output::format();
-    if matches!(format, OutputFormat::Json | OutputFormat::Yaml) {
-        return Err(miette!(
-            "kix plan prints text or Markdown. To keep the plan as data, write it with \
-             --save FILE.{}: `kix deploy --plan` reads that file, and `zstd -dc FILE | jq -s '.[0]'` \
-             prints its header",
-            kix::plan::file::EXTENSION
-        ));
-    }
     let Some(mut p) = prepare(args, flags_of(args), ctx)? else {
         // A plan file needs a plan, and a caller that asked for one must
         // not find exit 0 and no file.
@@ -76,9 +69,8 @@ pub fn run(args: &PlanArgs, save: Option<&Path>, ctx: &mut CommandContext) -> Re
     }
 
     match format {
-        OutputFormat::Json | OutputFormat::Yaml => unreachable!("refused above"),
         OutputFormat::Markdown => print!("{}", markdown(&p, &doc)),
-        OutputFormat::Text => {
+        _ => {
             if !output::quiet() {
                 print_migrations(&doc, p.checked.flags().accept_migrations);
                 // A plan exists to be read, so it always shows each change.

@@ -1,0 +1,111 @@
+{
+  "$defs": {
+    "CurrentDeploy": {
+      "properties": {
+        "built_via": {
+          "description": "The store path of the build.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "identity_hash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "The name of the deploy record.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "identity_hash",
+        "built_via"
+      ],
+      "type": "object"
+    },
+    "EarlierDeploy": {
+      "properties": {
+        "available_locally": {
+          "description": "Whether this machine has the build, which `kix rollback` needs.",
+          "type": "boolean"
+        },
+        "built_via": {
+          "description": "The store path of the build.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "deployed_at": {
+          "description": "When the deploy finished, in RFC 3339.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "identity_hash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "The name of the deploy record.",
+          "type": "string"
+        },
+        "previous_activation": {
+          "description": "The deploy record this one replaced.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "identity_hash",
+        "deployed_at",
+        "built_via",
+        "previous_activation",
+        "available_locally"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The deploys of a cluster that `kix rollback` can go back to.",
+  "properties": {
+    "cluster": {
+      "type": "string"
+    },
+    "current": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CurrentDeploy"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The deploy live on the cluster, or null when there is none."
+    },
+    "superseded": {
+      "description": "Earlier deploys that ran to completion, most recent first.",
+      "items": {
+        "$ref": "#/$defs/EarlierDeploy"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "cluster",
+    "current",
+    "superseded"
+  ],
+  "title": "HistoryResponse",
+  "type": "object"
+}

@@ -1,0 +1,47 @@
+{
+  "$defs": {
+    "PackageRow": {
+      "description": "One package of `kix list packages`.",
+      "properties": {
+        "isImport": {
+          "description": "With a cluster: whether the instance is an import. Absent without a\ncluster.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "owner": {
+          "description": "The package's owner, or `-`.",
+          "type": "string"
+        },
+        "status": {
+          "description": "With a cluster: `installed [<namespace>]`, `installed (auto)\n[<namespace>]`, `import [<namespace>]`, or `available`. Absent\nwithout a cluster.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "version": {
+          "description": "The package's version, or `-`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "owner"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The packages of the project or of one cluster. JSON and YAML print the\nbare list.",
+  "items": {
+    "$ref": "#/$defs/PackageRow"
+  },
+  "title": "PackagesResponse",
+  "type": "array"
+}

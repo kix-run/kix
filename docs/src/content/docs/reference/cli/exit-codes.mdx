@@ -3,20 +3,23 @@ title: "Exit codes"
 description: "What each `kix` command's exit status means, so CI jobs and scripts can branch on the result."
 ---
 
-Every `kix` command exits `0` on success and `1` on an error it reports, such
-as an evaluation failure, a build failure, or an unreachable cluster. Some
+Every `kix` command exits `0` on success and `1` when it cannot do what it
+was asked: an error it reports, such as an evaluation failure, a build
+failure, or an unreachable cluster, and a command line it cannot use. Some
 commands also use a non-zero status to report a result, listed below.
 
-This page is hand-maintained. Check the `std::process::exit` calls in
-`cli/kix-cli/src/commands/` when in doubt.
+This page lists every variant of `Exit` in `cli/kix-cli/src/exit.rs`, which
+holds every code Kix ends with.
 
 ## Common codes
 
 | Code | Meaning |
 | --- | --- |
 | `0` | Success. Also printed help (`-h`, `--help`) and version (`-V`). |
-| `1` | An error, printed on stderr. |
-| `2` | The command line could not be parsed: an unknown flag, a missing argument, or an invalid value. `kix diff` and `kix plan` also use `2`, see below. |
+| `1` | An error, printed on stderr. This includes a command line Kix cannot use: an unknown flag, a missing argument, an invalid value, a command or flag that a release removed, and an [`-o` format](/docs/reference/cli/output-formats/) the command does not print. |
+| `2` | The command finished and found something to look at: changes from `kix diff` and `kix plan`. `kix upgrade` is the one exception, see below. |
+| `3` | A person must act before a deploy can go ahead. |
+| `4` | The saved plan no longer matches what the deploy would do. |
 
 ## Per command
 
@@ -25,7 +28,7 @@ This page is hand-maintained. Check the `std::process::exit` calls in
 | `kix diff` | `2` when there is at least one difference or a stateful migration was detected. `0` means no differences. |
 | `kix plan`, `kix deploy --dry-run` | `2` when the deploy would change something or the prune would delete something. `3` when it would stop: a refused write, a refused prune delete, or a stateful migration without `--accept-migrations`. `0` means the deploy would change and delete nothing. |
 | `kix deploy --plan` | `4` when the reviewed plan no longer matches the plan made now; nothing is applied. With `--dry-run`, `3` when it matches but the deploy would stop (a refused write, or a migration not accepted), and `0` when it matches and would not. See [Deploy a reviewed plan](/docs/reference/cli/deploy-apply/#deploy-a-reviewed-plan). |
-| `kix check` | `1` when any step reports `fail`: cluster evaluation, which includes error-level scorecard findings, or the scorecard report. Applies with `--sarif` too. |
+| `kix check` | `1` when any step reports `fail`: cluster evaluation, which includes error-level scorecard findings, or the scorecard report. Applies with `-o sarif` too. |
 | `kix deploy` | `1` when a resource operation fails (under `--on-error continue` too, and including a prune delete) or the run is stopped or cancelled, when the plan shows a refused write under `--on-error stop`, when stateful migrations are detected without `--accept-migrations`, or when confirmation is needed on a non-interactive terminal without `--yes`. With `--operator`, a `Degraded`, `Failed`, or unexpectedly `Superseded` Activation and a 10-minute wait timeout also exit `1`. |
 | `kix rollback` | `1` when the rollback fails, including a failed prune delete or, with `--operator`, a `Degraded` Activation, or when confirmation is needed on a non-interactive terminal without `--yes`. |
 | `kix gc` | `1` when any deletion fails, or when confirmation is needed on a non-interactive terminal without `--yes`. |
@@ -35,7 +38,7 @@ This page is hand-maintained. Check the `std::process::exit` calls in
 | `kix pin check` | `1` when a pin fails or, with `--source-rev`, records a different source revision. Warnings do not fail. |
 | `kix doctor` | `1` when the runtime directory cannot be found, `manifest.json` does not match the compiled-in program versions, any file fails its SHA-256 check, `kix.toml` is invalid or sets an unsupported builder, or (when `builder = "nix"`) `nix` on `PATH` is missing, older than `2.24`, or Lix. Warnings and `info` lines do not fail. |
 | `kix lib update` | `1` when the flake has no `kixpkgs` input, when `flake.nix` pins a ref, fork, or `path:` input that `kix lib update` cannot update on its own, or when Kix cannot fetch the target release tag. |
-| `kix upgrade` | `2` when a cluster does not build, with the version the project used or with a release the upgrade tried. `3` when the project builds with the target and a person should read what changed: an object that changed in any cluster, a sensitive object change, a behavior or data change, or a release that every cluster must deploy first. See [`kix upgrade`](/docs/reference/cli/upgrade/#exit-status). |
+| `kix upgrade` | `2` when a cluster does not build (the one `2` that is not a finding), with the version the project used or with a release the upgrade tried. `3` when the project builds with the target and a person should read what changed: an object that changed in any cluster, a sensitive object change, a behavior or data change, or a release that every cluster must deploy first. See [`kix upgrade`](/docs/reference/cli/upgrade/#exit-status). |
 | `kix deploy` (before it starts) | `1` when `kix-upgrade.json` lists a change to stored data that no one has acknowledged with `kix upgrade --ack`. |
 | `kix logs`, `kix pf` | kubectl's exit status. Kix replaces itself with `kubectl` once the workload is found. |
 
@@ -49,11 +52,7 @@ or `KIX_AUTO_INSTALL=0` is set, Kix exits `1` before it runs the command.
 `kix --version` is the exception: it never installs, and exits `0` after it
 prints the running version and says the project's version is not installed.
 
-A `kix diff` or `kix plan` in CI cannot tell a difference from a usage error
-by the code alone. Check that the command line is valid in a step that does
-not branch on `2`, or read the JSON output.
-
 :::tip[Use it in a task]
-See [Run `kix check --sarif` in CI](/docs/how-to/policy-ci-and-compliance/run-kix-check-sarif-in-ci/)
+See [Run `kix check -o sarif` in CI](/docs/how-to/policy-ci-and-compliance/run-kix-check-sarif-in-ci/)
 for a job that branches on the check result.
 :::

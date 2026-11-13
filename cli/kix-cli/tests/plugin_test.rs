@@ -124,7 +124,7 @@ fn an_unknown_command_is_still_an_error() {
     kix(dir.path())
         .arg("deplyo")
         .assert()
-        .code(2)
+        .code(1)
         .stderr(predicate::str::contains("unrecognized subcommand 'deplyo'"))
         .stderr(predicate::str::contains("deploy"));
 }

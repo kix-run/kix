@@ -164,7 +164,7 @@ let
     '';
 
     # Strip leading tree-drawing characters and whitespace. Used for
-    # drift comparison of `kix graph --format tree`: the same DAG node
+    # drift comparison of `kix graph -o tree`: the same DAG node
     # gets rendered at different indents depending on which parent the
     # traversal picks for it, and that choice isn't stable across runs.
     # After this pass `│ │ └── Foo` and `└── Foo` both become `Foo`,

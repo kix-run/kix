@@ -99,7 +99,7 @@ When `scorecard.enable = true` and no error-severity finding aborts evaluation, 
 | `message` | `string` | Diagnostic message from `check` (defaults to `"check failed"` if omitted). |
 | `tags` | `array of string` | Tags copied from the rule definition. |
 
-When a finding resolves to `"error"` (which requires `scorecard.maxSeverity = "error"`), Kix converts it into a failed cluster assertion and stops the build. `kix check --sarif` exports the scorecard report (or the evaluation failure) in SARIF 2.1.0 format.
+When a finding resolves to `"error"` (which requires `scorecard.maxSeverity = "error"`), Kix converts it into a failed cluster assertion and stops the build. `kix check -o sarif` exports the scorecard report (or the evaluation failure) in SARIF 2.1.0 format.
 
 ## Severity override schema
 

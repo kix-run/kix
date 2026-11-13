@@ -33,7 +33,7 @@ If you upgrade Kix (or update `flake.lock`) and the two sides disagree on a Helm
 | `--dry-run` | `false` | Resolve `github:kix-run/kix/v<version>` and print the lockfile change that would occur without writing `flake.lock`. |
 | `--flake <FLAKE>` | `.` | Path to the flake directory containing `flake.nix` and `flake.lock` (also read from `KIX_FLAKE`). |
 
-Global flags `-v` / `--verbose`, `-q` / `--quiet`, and `--no-color` also apply. `-o` / `--output` is ignored.
+Global flags `-v` / `--verbose`, `-q` / `--quiet`, and `--no-color` also apply. `-o` / `--output` accepts only `text`.
 
 ## How `kix lib update` updates `flake.lock`
 

@@ -578,7 +578,7 @@ fn min_age_in_kix_toml_skips_new_releases() {
     assert!(out.starts_with("Kix 9.1.0 -> 9.2.0 (preview"), "{out}");
     // The flag is gone: the delay is a project setting.
     let (code, out) = s.upgrade(&["--preview", "--min-age", "0d"]);
-    assert_eq!(code, 2, "{out}");
+    assert_eq!(code, 1, "{out}");
     // A malformed value is refused.
     s.write(
         "kix.toml",

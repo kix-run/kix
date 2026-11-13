@@ -1,16 +1,20 @@
 use miette::Result;
 
-use crate::cli::CheckArgs;
+use crate::cli::{CheckArgs, OutputFormat};
 use crate::exit::Exit;
 use crate::output::{self, CommandResponse};
 
 use super::CommandContext;
 use kix::manifest::keys;
 
-#[derive(serde::Serialize)]
-struct CheckResult {
+/// One row of `kix check`.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub(crate) struct CheckResult {
+    /// What ran: `eval` or `scorecard`.
     tool: String,
+    /// `pass`, `fail`, or `skip`.
     result: String,
+    /// One line, or the evaluation error.
     details: String,
     /// The scorecard's findings on the scorecard row, and the Kix library's
     /// errors on the eval row, which its details already show as text.
@@ -18,9 +22,14 @@ struct CheckResult {
     findings: Vec<serde_json::Value>,
 }
 
-struct CheckResponse {
+/// The rows of `kix check`. JSON and YAML print the bare list.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+#[serde(transparent)]
+pub(crate) struct CheckResponse {
     results: Vec<CheckResult>,
     /// Whether to list `info` findings too.
+    #[serde(skip)]
+    #[schemars(skip)]
     verbose: bool,
 }
 
@@ -29,7 +38,7 @@ struct CheckResponse {
 const MAX_CELL_CHARS: usize = 80;
 
 impl CommandResponse for CheckResponse {
-    fn format_text(&self) -> String {
+    fn text(&self) -> String {
         let mut table = comfy_table::Table::new();
         table.load_preset(comfy_table::presets::NOTHING);
         table.set_header(["TOOL", "RESULT", "DETAILS"]);
@@ -59,8 +68,34 @@ impl CommandResponse for CheckResponse {
         text
     }
 
-    fn as_json(&self) -> serde_json::Value {
-        serde_json::to_value(&self.results).unwrap_or_default()
+    fn render(&self, format: OutputFormat) -> Result<String> {
+        match format {
+            OutputFormat::Sarif => {
+                serde_json::to_string_pretty(&self.sarif()).map_err(|e| miette::miette!("{e}"))
+            }
+            other => output::render(self, other),
+        }
+    }
+}
+
+impl CheckResponse {
+    /// Return the findings as SARIF. A failed evaluation becomes one finding,
+    /// attributed to the scorecard rule when the message names one.
+    fn sarif(&self) -> serde_json::Value {
+        if let Some(failed) = self
+            .results
+            .iter()
+            .find(|r| r.tool == "eval" && r.result == "fail")
+        {
+            return to_sarif(&eval_failure_sarif(&failed.details));
+        }
+        let findings = self
+            .results
+            .iter()
+            .find(|r| r.tool == "scorecard")
+            .map(|r| r.findings.clone())
+            .unwrap_or_default();
+        to_sarif(&serde_json::json!({ "findings": findings }))
     }
 }
 
@@ -331,34 +366,6 @@ pub fn run(args: &CheckArgs, ctx: &mut CommandContext) -> Result<Exit> {
     }
 
     let has_failure = results.iter().any(|r| r.result == "fail");
-
-    if args.sarif {
-        let sarif = if let Some(output) = &cluster_output {
-            if let Some(report) = &output.scorecard_report {
-                to_sarif(report)
-            } else {
-                // Evaluation succeeded with the scorecard disabled. Emit an
-                // empty run because no findings were produced.
-                to_sarif(&serde_json::json!({"findings": []}))
-            }
-        } else {
-            // Evaluation failed before producing a report. Emit the failure
-            // itself, attributed to the scorecard rule when the message names one.
-            let detail = results
-                .iter()
-                .find(|r| r.tool == "eval" && r.result == "fail")
-                .map(|r| r.details.clone())
-                .unwrap_or_else(|| "cluster evaluation failed".to_string());
-            to_sarif(&eval_failure_sarif(&detail))
-        };
-
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&sarif).expect("SARIF serialization should not fail")
-        );
-
-        return Ok(Exit::failure_if(has_failure));
-    }
 
     let response = CheckResponse {
         results,

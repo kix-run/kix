@@ -235,5 +235,8 @@ fn deploy_dry_run_refuses_json_in_its_own_name() {
         ])
         .assert()
         .code(1)
-        .stderr(predicate::str::contains("kix deploy --dry-run prints text"));
+        .stderr(predicate::str::contains(
+            "`kix deploy --dry-run` cannot print json output",
+        ))
+        .stderr(predicate::str::contains("--save FILE.kixplan"));
 }

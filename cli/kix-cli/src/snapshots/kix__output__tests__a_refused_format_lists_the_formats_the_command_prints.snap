@@ -1,0 +1,6 @@
+---
+source: kix-cli/src/output.rs
+expression: "format!(\"{report}\\n{help}\")"
+---
+[K2184] `kix list clusters` cannot print sarif output.
+Use -o text, -o json, or -o yaml. The format came from KIX_OUTPUT=sarif.

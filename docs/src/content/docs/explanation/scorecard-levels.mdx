@@ -43,7 +43,7 @@ When adopting a policy tool on an existing cluster, turning on all 30 built-in r
 2. `scorecard.maxSeverity` then caps the effective severity across the cluster. Because `maxSeverity` defaults to `"warning"`, even rules that declare `severity = "error"` report as warnings on a new cluster rather than failing the build.
 3. When your team is ready to enforce policy in CI, setting `scorecard.maxSeverity = "error"` turns those error-severity findings into hard build failures without changing a single rule definition.
 
-Capping a rule is different from disabling it (`scorecard.ruleOverrides.byRule."<rule>".enabled = false`). A capped rule still runs and appears in `kix check` (and `kix check --sarif`) output so you can track cleanup progress; a disabled rule is skipped entirely.
+Capping a rule is different from disabling it (`scorecard.ruleOverrides.byRule."<rule>".enabled = false`). A capped rule still runs and appears in `kix check` (and `kix check -o sarif`) output so you can track cleanup progress; a disabled rule is skipped entirely.
 
 ## Cross-resource validation at cluster evaluation time
 

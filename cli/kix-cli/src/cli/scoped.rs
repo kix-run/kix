@@ -122,14 +122,23 @@ const SCOPED_GLOBALS: &[(&str, &[&str])] = &[
 /// pass `--flake` or `--context` unconditionally, and shell completions still
 /// include them.
 pub fn command() -> clap::Command {
+    crate::removed::register(
+        live_command(),
+        crate::removed::COMMANDS,
+        crate::removed::FLAGS,
+    )
+}
+
+/// Build the clap `Command` for `kix` without the stubs of removed commands
+/// and flags.
+pub(crate) fn live_command() -> clap::Command {
     let cmd = Cli::command();
     let globals: Vec<clap::Arg> = cmd
         .get_arguments()
         .filter(|a| a.is_global_set())
         .cloned()
         .collect();
-    let cmd = cmd.mut_subcommands(|sc| hide_unread_globals(sc, "", &globals));
-    crate::removed::register(cmd, crate::removed::COMMANDS, crate::removed::FLAGS)
+    cmd.mut_subcommands(|sc| hide_unread_globals(sc, "", &globals))
 }
 
 /// Hide each scoped global flag that `cmd` does not read.

@@ -14,8 +14,8 @@
 //!
 //! - `plan` is the [`Plan`] at `--detail fields`: field changes listed,
 //!   no manifests.
-//! - `graph` is the new build's dependency graph, as `kix graph --format
-//!   json` prints it.
+//! - `graph` is the new build's dependency graph, as `kix graph -o json`
+//!   prints it.
 //! - `shown` has an entry for each object `--detail manifests` shows
 //!   (modified, added, and removed; kept left out), keyed by its id. It
 //!   names the package that lists the object, the object's old and new
@@ -330,7 +330,7 @@ fn rollout(id: &str, changes: Option<&[FieldChange]>, new: Option<&Value>) -> Op
     })
 }
 
-/// Build the dependency graph of `build` as `kix graph --format json --bundle`
+/// Build the dependency graph of `build` as `kix graph -o json --bundle`
 /// prints it, with manifests sorted by `apiVersion`, `kind`, `namespace`, and
 /// `name`.
 pub fn graph_of(build: &StoreGraph) -> Result<GraphListing, GraphError> {
@@ -847,7 +847,7 @@ mod tests {
         assert_eq!(file.header().shown[SECRET].rollout, None);
     }
 
-    /// The graph is what `kix graph --format json` prints.
+    /// The graph is what `kix graph -o json` prints.
     #[test]
     fn the_graph_is_kix_graphs_json() {
         let (graph, _) = stamp(&kix_enterprise_test());

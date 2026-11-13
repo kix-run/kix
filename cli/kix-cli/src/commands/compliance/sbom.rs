@@ -12,14 +12,13 @@
 //! All inputs are available at build time without invoking a scanner.
 
 use std::collections::BTreeMap;
-use std::io::IsTerminal;
 
-use miette::{IntoDiagnostic, Result};
+use miette::Result;
 use serde_json::{Value, json};
 
 use kix::eval::store_graph::{PackageNode, StoreGraph};
 
-use crate::cli::{ComplianceSbomArgs, OutputFormat};
+use crate::cli::ComplianceSbomArgs;
 use crate::output;
 
 use super::shared;
@@ -30,22 +29,7 @@ pub fn run(args: &ComplianceSbomArgs, ctx: &mut CommandContext) -> Result<()> {
     let graph = shared::build_and_load(ctx, &args.cluster)?;
     let sbom = build_sbom(&graph, &ctx.global.flake);
 
-    let text = match output::format() {
-        OutputFormat::Yaml => kix::yaml::to_string(&sbom).into_diagnostic()?,
-        _ => serde_json::to_string_pretty(&sbom).into_diagnostic()?,
-    };
-
-    // SBOM goes to stdout; status/progress already went to stderr.
-    if std::io::stdout().is_terminal() {
-        println!("{text}");
-    } else {
-        use std::io::Write;
-        let mut out = std::io::stdout().lock();
-        out.write_all(text.as_bytes()).into_diagnostic()?;
-        out.write_all(b"\n").into_diagnostic()?;
-    }
-
-    Ok(())
+    output::result(&output::Standard(sbom))
 }
 
 pub fn build_sbom(graph: &StoreGraph, flake_ref: &str) -> Value {

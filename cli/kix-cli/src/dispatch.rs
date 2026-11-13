@@ -1,13 +1,14 @@
 //! Run the parsed command.
 //!
-//! Each command declares what it needs in [`Command::needs`], and [`run`]
-//! sets that up before one `match` calls the command. Both are exhaustive
-//! matches, so a new command does not compile until it says what it needs and
+//! Each command declares what it needs in [`Command::needs`] and the formats
+//! it prints in [`Command::formats`], and [`run`] sets that up before one
+//! `match` calls the command. All three are exhaustive matches, so a new
+//! command does not compile until it says what it needs, what it prints, and
 //! how it runs.
 
 use miette::Result;
 
-use crate::cli::{Cli, Command, MigrateCommand};
+use crate::cli::{Cli, Command, ComplianceCommand, MigrateCommand, OutputFormat};
 use crate::commands::{self, CommandContext};
 use crate::exit::Exit;
 
@@ -67,6 +68,93 @@ impl Command {
             | Command::Images(_)
             | Command::Snapshot(_)
             | Command::Compliance(_) => Needs::Project,
+        }
+    }
+}
+
+use OutputFormat::{Dot, Json, Markdown, Sarif, Text, Tree, Yaml};
+
+/// Formats of a command that prints only text for a person.
+const TEXT: &[OutputFormat] = &[Text];
+/// Formats of a command whose answer is data.
+const DATA: &[OutputFormat] = &[Text, Json, Yaml];
+
+impl Command {
+    /// Return the `-o` formats the command prints, the default first, or
+    /// `None` when Kix does not decide.
+    ///
+    /// `main` refuses any other format before the command runs. A plugin
+    /// reads `KIX_OUTPUT` itself, so Kix passes any format on.
+    pub fn formats(&self) -> Option<&'static [OutputFormat]> {
+        Some(match self {
+            Command::Plugin(_) => return None,
+            Command::Build(_) => &[Yaml, Json],
+            Command::Check(_) => &[Text, Json, Yaml, Sarif],
+            Command::Graph(_) => &[Tree, Dot, Json, Yaml],
+            Command::Diff(_) => &[Text, Json, Yaml, Markdown],
+            // A plan is data only as a saved plan file (`--save`).
+            Command::Plan(_) => &[Text, Markdown],
+            Command::Deploy(args) if args.dry_run && args.saved_plan.is_some() => DATA,
+            Command::Deploy(args) if args.dry_run => &[Text, Markdown],
+            Command::Deploy(_) => TEXT,
+            Command::Rollback(args) if args.list => DATA,
+            Command::Rollback(_) => TEXT,
+            Command::Drift(_) => &[Text, Json],
+            Command::Compliance(args) => match args.command {
+                ComplianceCommand::Sbom(_) | ComplianceCommand::Attest(_) => &[Json, Yaml],
+                ComplianceCommand::Audit(_) => TEXT,
+            },
+            Command::Status(_)
+            | Command::List(_)
+            | Command::Inspect(_)
+            | Command::Images(_)
+            | Command::Pin(_) => DATA,
+            Command::Completions(_)
+            | Command::SelfCmd(_)
+            | Command::Doctor
+            | Command::Upgrade(_)
+            | Command::Secret(_)
+            | Command::Lib(_)
+            | Command::Bundle(_)
+            | Command::Gc(_)
+            | Command::Migrate(_)
+            | Command::Export(_)
+            | Command::Logs(_)
+            | Command::Pf(_)
+            | Command::Health(_)
+            | Command::Snapshot(_) => TEXT,
+        })
+    }
+
+    /// Return the flags that changed [`Command::formats`], as a user types
+    /// them, so that a refusal names the command the user ran.
+    pub fn format_flags(&self) -> &'static str {
+        match self {
+            Command::Deploy(args) if args.dry_run && args.saved_plan.is_some() => {
+                " --plan FILE --dry-run"
+            }
+            Command::Deploy(args) if args.dry_run => " --dry-run",
+            Command::Rollback(args) if args.list => " --list",
+            _ => "",
+        }
+    }
+
+    /// Return advice to add when the command refuses a format.
+    pub fn format_hint(&self) -> Option<String> {
+        let plan = || {
+            format!(
+                "To keep the plan as data, write it with `--save FILE.{}`. \
+                 `kix deploy --plan FILE --dry-run -o json` compares a saved plan with the cluster.",
+                kix::plan::file::EXTENSION
+            )
+        };
+        match self {
+            Command::Plan(_) => Some(plan()),
+            Command::Deploy(args) if args.dry_run && args.saved_plan.is_none() => Some(plan()),
+            Command::Deploy(args) if !args.dry_run => {
+                Some("`--log-format json` prints the deploy as JSON lines.".to_string())
+            }
+            _ => None,
         }
     }
 }
@@ -205,6 +293,32 @@ mod tests {
         ] {
             assert_eq!(needs(args), Needs::Project, "{args:?}");
         }
+    }
+
+    fn formats(args: &[&str]) -> Option<&'static [OutputFormat]> {
+        let matches = crate::cli::command()
+            .try_get_matches_from(args)
+            .expect("arguments parse");
+        Cli::from_arg_matches(&matches)
+            .expect("arguments convert")
+            .command
+            .formats()
+    }
+
+    #[test]
+    fn each_command_lists_its_formats_default_first() {
+        assert_eq!(formats(&["kix", "build", "c"]), Some(&[Yaml, Json][..]));
+        assert_eq!(formats(&["kix", "graph", "c"]).unwrap()[0], Tree);
+        assert!(formats(&["kix", "check", "c"]).unwrap().contains(&Sarif));
+        assert_eq!(formats(&["kix", "list", "clusters"]), Some(DATA));
+        assert_eq!(formats(&["kix", "gc", "c"]), Some(TEXT));
+        assert_eq!(formats(&["kix", "rollback", "c", "--list"]), Some(DATA));
+        assert_eq!(formats(&["kix", "deploy", "c"]), Some(TEXT));
+        assert_eq!(
+            formats(&["kix", "deploy", "c", "--dry-run", "--plan", "p.kixplan"]),
+            Some(DATA)
+        );
+        assert_eq!(formats(&["kix", "some-plugin"]), None);
     }
 
     #[test]

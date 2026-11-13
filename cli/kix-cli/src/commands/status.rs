@@ -18,7 +18,7 @@ use kix::manifest::types::{CLUSTER_SCOPED, ResourceId};
 use super::CommandContext;
 use kix::manifest::keys;
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, schemars::JsonSchema)]
 struct ResourceStatus {
     name: String,
     namespace: String,
@@ -28,13 +28,17 @@ struct ResourceStatus {
     age: String,
 }
 
+#[derive(serde::Serialize, schemars::JsonSchema)]
+#[serde(transparent)]
 struct StatusResponse {
+    #[serde(skip)]
+    #[schemars(skip)]
     kubernetes: KubernetesId,
     statuses: Vec<ResourceStatus>,
 }
 
 impl CommandResponse for StatusResponse {
-    fn format_text(&self) -> String {
+    fn text(&self) -> String {
         let mut table = comfy_table::Table::new();
         table.load_preset(comfy_table::presets::NOTHING);
         table.set_header(["NAME", "NAMESPACE", "KIND", "READY", "STATUS", "AGE"]);
@@ -43,15 +47,9 @@ impl CommandResponse for StatusResponse {
         }
         format!("{}\n\n{table}", self.kubernetes.header())
     }
-
-    // The JSON output is the bare array of resources; the Kubernetes ID
-    // appears only in the text header.
-    fn as_json(&self) -> serde_json::Value {
-        serde_json::to_value(&self.statuses).unwrap_or_default()
-    }
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, schemars::JsonSchema)]
 struct PackageStatus {
     name: String,
     namespace: String,
@@ -61,7 +59,7 @@ struct PackageStatus {
     resources: Vec<PackageResourceStatus>,
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, schemars::JsonSchema)]
 struct PackageResourceStatus {
     name: String,
     kind: String,
@@ -72,7 +70,7 @@ struct PackageResourceStatus {
     age: String,
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, schemars::JsonSchema)]
 struct ActivationStatus {
     name: String,
     phase: String,
@@ -80,7 +78,7 @@ struct ActivationStatus {
     age: String,
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, schemars::JsonSchema)]
 struct OperatorStatusResponse {
     cluster: String,
     #[serde(flatten)]
@@ -91,7 +89,7 @@ struct OperatorStatusResponse {
 }
 
 impl CommandResponse for OperatorStatusResponse {
-    fn format_text(&self) -> String {
+    fn text(&self) -> String {
         let mut out = String::new();
 
         out.push_str(&format!("Cluster: {}\n", output::bold(&self.cluster)));
@@ -206,10 +204,6 @@ impl CommandResponse for OperatorStatusResponse {
         }
 
         out
-    }
-
-    fn as_json(&self) -> serde_json::Value {
-        serde_json::to_value(self).unwrap_or_default()
     }
 }
 
@@ -612,7 +606,7 @@ async fn run_flat_async(cluster: &str, global: &crate::cli::GlobalArgs) -> Resul
 /// value when it could be read (the `kubernetes_uid` and
 /// `kubernetes_version` fields of the operator view's JSON output, `null`
 /// otherwise), and why not when it could not (text output only).
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, schemars::JsonSchema)]
 struct KubernetesId {
     #[serde(rename = "kubernetes_uid")]
     uid: Option<String>,

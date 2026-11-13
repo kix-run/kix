@@ -14,31 +14,30 @@ use std::fmt;
 
 /// How `kix` ends. [`Exit::code`] gives the number the process exits with.
 ///
-/// Several variants share a number because commands gave the same number
-/// different meanings. Each variant names one meaning.
+/// Code 2 always means that the command finished and found something to look
+/// at, except for [`Exit::UpgradeBuildFailed`]. Several variants share a
+/// number, and each variant names one meaning.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Exit {
     /// The command did what it was asked, and found nothing to report. Code 0.
     Success,
     /// The command failed, refused to go on, or found a problem. Code 1.
     ///
-    /// This covers every error report, a deploy, rollback, or garbage
-    /// collection that did not finish cleanly, a confirmation that a
-    /// non-interactive run could not give, a failed `kix check`, `kix health`,
-    /// `kix drift`, or `kix pin check`, and an upgrade that Kix refused to
-    /// start.
+    /// This covers every error report, a command line that clap could not
+    /// parse, a command or flag that a release removed ([`crate::removed`]),
+    /// an `-o` format the command does not print, a deploy, rollback, or
+    /// garbage collection that did not finish cleanly, a confirmation that a
+    /// non-interactive run could not give, a failed `kix check`,
+    /// `kix health`, `kix drift`, or `kix pin check`, and an upgrade that Kix
+    /// refused to start.
     Failure,
-    /// The command line could not be parsed. Code 2.
-    ///
-    /// clap uses this code for its own errors, and [`crate::removed`] for a
-    /// command or flag that a release removed.
-    Usage,
     /// `kix plan` found changes the deploy would make. Code 2.
     PlanHasChanges,
     /// `kix diff` found differences. Code 2.
     DiffHasDifferences,
     /// `kix upgrade` stopped because a build failed, with the current Kix or
-    /// at a step, or the library could not be locked at the new tag. Code 2.
+    /// at a step, or the library could not be locked at the new tag. Code 2,
+    /// the one code 2 that is not a finding. The upgrade page documents it.
     UpgradeBuildFailed,
     /// `kix plan`, or `kix deploy --plan FILE --dry-run`, found that the
     /// deploy would stop: a write the cluster would refuse, or a stateful
@@ -58,10 +57,7 @@ impl Exit {
         match self {
             Exit::Success => 0,
             Exit::Failure => 1,
-            Exit::Usage
-            | Exit::PlanHasChanges
-            | Exit::DiffHasDifferences
-            | Exit::UpgradeBuildFailed => 2,
+            Exit::PlanHasChanges | Exit::DiffHasDifferences | Exit::UpgradeBuildFailed => 2,
             Exit::PlanWouldStop | Exit::UpgradeNeedsPerson => 3,
             Exit::StalePlan => 4,
         }
@@ -101,7 +97,7 @@ pub fn clap_error(e: &clap::Error) -> Exit {
     // A closed pipe is not worth reporting.
     let _ = e.print();
     if e.use_stderr() {
-        Exit::Usage
+        Exit::Failure
     } else {
         Exit::Success
     }
@@ -123,7 +119,6 @@ mod tests {
         let codes = [
             (Exit::Success, 0),
             (Exit::Failure, 1),
-            (Exit::Usage, 2),
             (Exit::PlanHasChanges, 2),
             (Exit::DiffHasDifferences, 2),
             (Exit::UpgradeBuildFailed, 2),

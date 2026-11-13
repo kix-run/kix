@@ -10,6 +10,9 @@
 //! flake, so broken or missing pins can be repaired even when Nix evaluation
 //! fails.
 
+use std::collections::BTreeMap;
+use std::fmt::Write;
+
 use miette::{IntoDiagnostic, Result, miette};
 
 use kix::pins::{Pin, PinFile, PinKey};
@@ -19,7 +22,7 @@ use crate::cli::{
     GlobalArgs, OutputFormat, PinCheckArgs, PinCommand, PinListArgs, PinRmArgs, PinSetArgs,
 };
 use crate::exit::Exit;
-use crate::output;
+use crate::output::{self, CommandResponse};
 
 use super::CommandContext;
 
@@ -45,7 +48,7 @@ fn set(args: &PinSetArgs, ctx: &CommandContext) -> Result<()> {
         locate::locate(args.pins_file.as_deref(), &global.flake)?
     };
     let pins_file = located.path.as_path();
-    if output::format() != OutputFormat::Json
+    if output::format() == OutputFormat::Text
         && let Some(note) = located.note()
     {
         crate::say!("{}", output::dim(&note));
@@ -169,57 +172,96 @@ fn set(args: &PinSetArgs, ctx: &CommandContext) -> Result<()> {
         file.write(args.force).into_diagnostic()?;
     }
 
-    if output::format() == OutputFormat::Json {
-        let doc = serde_json::json!({
-            "pinsFile": pins_file.display().to_string(),
-            "key": args.key,
-            "option": option_of(&key),
-            "pin": pin,
-            "changed": changed,
-            "droppedNote": dropped_note,
-        });
-        println!("{}", serde_json::to_string_pretty(&doc).into_diagnostic()?);
-        return Ok(());
+    output::result(&PinSetResponse {
+        pins_file: pins_file.display().to_string(),
+        key: args.key.clone(),
+        option: option_of(&key).map(str::to_string),
+        pin,
+        changed,
+        dropped_note,
+        previous: existing,
+        shown_key: key.to_string(),
+    })
+}
+
+/// What `kix pin set` wrote.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PinSetResponse {
+    /// The pin file, as a path.
+    pins_file: String,
+    /// The image pin name or instance name, as given.
+    key: String,
+    /// The option path of an instance pin, or null for an image pin.
+    option: Option<String>,
+    /// The pin as the file now holds it.
+    pin: Pin,
+    /// Whether the file was rewritten.
+    changed: bool,
+    /// The note Kix dropped because it described the old image.
+    dropped_note: Option<String>,
+    #[serde(skip)]
+    #[schemars(skip)]
+    previous: Option<Pin>,
+    #[serde(skip)]
+    #[schemars(skip)]
+    shown_key: String,
+}
+
+impl CommandResponse for PinSetResponse {
+    fn text(&self) -> String {
+        let mut out = String::new();
+        let verb = match (&self.previous, self.changed) {
+            (None, _) => "added",
+            (Some(_), true) => "updated",
+            (Some(_), false) => "kept",
+        };
+        let _ = writeln!(
+            out,
+            "{} {} in {}",
+            output::green(verb),
+            self.shown_key,
+            self.pins_file
+        );
+        let _ = writeln!(out, "  {}:{}", self.pin.repository, self.pin.tag);
+        match &self.pin.digest {
+            Some(d) => _ = writeln!(out, "  {d}"),
+            None => _ = writeln!(out, "  {}", output::yellow("no digest")),
+        }
+        if let Some(prev) = &self.previous
+            && prev.digest != self.pin.digest
+            && let Some(prev_digest) = &prev.digest
+        {
+            let _ = writeln!(out, "  was {prev_digest}");
+        }
+        if let Some(dropped) = &self.dropped_note {
+            let _ = writeln!(
+                out,
+                "  {}",
+                output::yellow(&format!(
+                    "dropped the note, which described the old image: {dropped}"
+                ))
+            );
+        }
+        if !self.changed {
+            let _ = writeln!(
+                out,
+                "  {}",
+                output::dim("unchanged, so the file was not rewritten")
+            );
+        }
+        out
     }
 
-    let verb = match (&existing, changed) {
-        (None, _) => "added",
-        (Some(_), true) => "updated",
-        (Some(_), false) => "kept",
-    };
-    crate::say!("{} {} in {}", output::green(verb), key, pins_file.display());
-    crate::say!("  {}:{}", pin.repository, pin.tag);
-    match &pin.digest {
-        Some(d) => crate::say!("  {d}"),
-        None => crate::say!("  {}", output::yellow("no digest")),
+    fn text_is_progress(&self) -> bool {
+        true
     }
-    if let Some(prev) = &existing
-        && prev.digest != pin.digest
-        && let Some(prev_digest) = &prev.digest
-    {
-        crate::say!("  was {prev_digest}");
-    }
-    if let Some(dropped) = &dropped_note {
-        crate::say!(
-            "  {}",
-            output::yellow(&format!(
-                "dropped the note, which described the old image: {dropped}"
-            ))
-        );
-    }
-    if !changed {
-        crate::say!(
-            "  {}",
-            output::dim("unchanged, so the file was not rewritten")
-        );
-    }
-    Ok(())
 }
 
 fn rm(args: &PinRmArgs, global: &GlobalArgs) -> Result<()> {
     let located = locate::locate(args.pins_file.as_deref(), &global.flake)?;
     let pins_file = located.path.as_path();
-    if output::format() != OutputFormat::Json
+    if output::format() == OutputFormat::Text
         && let Some(note) = located.note()
     {
         crate::say!("{}", output::dim(&note));
@@ -244,28 +286,51 @@ fn rm(args: &PinRmArgs, global: &GlobalArgs) -> Result<()> {
 
     file.write(args.force).into_diagnostic()?;
 
-    if output::format() == OutputFormat::Json {
-        let doc = serde_json::json!({
-            "pinsFile": pins_file.display().to_string(),
-            "key": args.key,
-            "option": option_of(&key),
-            "pin": removed,
-        });
-        println!("{}", serde_json::to_string_pretty(&doc).into_diagnostic()?);
-        return Ok(());
+    output::result(&PinRmResponse {
+        pins_file: pins_file.display().to_string(),
+        key: args.key.clone(),
+        option: option_of(&key).map(str::to_string),
+        pin: removed,
+        shown_key: key.to_string(),
+    })
+}
+
+/// What `kix pin rm` removed.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PinRmResponse {
+    /// The pin file, as a path.
+    pins_file: String,
+    /// The image pin name or instance name, as given.
+    key: String,
+    /// The option path of an instance pin, or null for an image pin.
+    option: Option<String>,
+    /// The pin the file held.
+    pin: Pin,
+    #[serde(skip)]
+    #[schemars(skip)]
+    shown_key: String,
+}
+
+impl CommandResponse for PinRmResponse {
+    fn text(&self) -> String {
+        let mut out = format!(
+            "{} {} from {}\n  was {}:{}\n",
+            output::green("removed"),
+            self.shown_key,
+            self.pins_file,
+            self.pin.repository,
+            self.pin.tag
+        );
+        if let Some(d) = &self.pin.digest {
+            let _ = writeln!(out, "  {d}");
+        }
+        out
     }
 
-    crate::say!(
-        "{} {} from {}",
-        output::green("removed"),
-        key,
-        pins_file.display()
-    );
-    crate::say!("  was {}:{}", removed.repository, removed.tag);
-    if let Some(d) = &removed.digest {
-        crate::say!("  {d}");
+    fn text_is_progress(&self) -> bool {
+        true
     }
-    Ok(())
 }
 
 /// Verification outcome for a single pin. `Ok` and `Warn` pass; `Fail` does not.
@@ -358,28 +423,24 @@ fn check(args: &PinCheckArgs, ctx: &CommandContext) -> Result<Exit> {
 
     let failed = results.iter().any(|(_, v)| v.failed()) || !stale.is_empty();
 
-    if output::format() == OutputFormat::Json {
-        let doc = serde_json::json!({
-            "pinsFile": pins_file.display().to_string(),
-            "pins": results.iter().map(|(k, v)| serde_json::json!({
-                "key": key_of(k),
-                "option": option_of(k),
-                "result": v.label(),
-                "message": v.message(),
-            })).collect::<Vec<_>>(),
-            "stale": stale,
-            "ok": !failed,
-        });
-        println!("{}", serde_json::to_string_pretty(&doc).into_diagnostic()?);
-    } else {
-        print_check_text(
-            &located
-                .note()
-                .unwrap_or_else(|| pins_file.display().to_string()),
-            &results,
-            &stale,
-        );
-    }
+    output::result(&PinCheckResponse {
+        pins_file: pins_file.display().to_string(),
+        pins: results
+            .iter()
+            .map(|(k, v)| CheckedPin {
+                key: key_of(k).to_string(),
+                option: option_of(k).map(str::to_string),
+                result: v.label().to_string(),
+                message: v.message().to_string(),
+                shown_key: k.to_string(),
+            })
+            .collect(),
+        stale,
+        ok: !failed,
+        heading: located
+            .note()
+            .unwrap_or_else(|| pins_file.display().to_string()),
+    })?;
 
     Ok(Exit::failure_if(failed))
 }
@@ -446,7 +507,7 @@ fn judge(
 }
 
 /// A pin that records a source revision other than the one being checked for.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
 struct Stale {
     key: String,
     #[serde(rename = "builtFrom")]
@@ -454,47 +515,85 @@ struct Stale {
     expected: String,
 }
 
-fn print_check_text(path: &str, results: &[(PinKey, Verdict)], stale: &[Stale]) {
-    crate::say!("{path}");
-    crate::say!();
-    for (key, verdict) in results {
-        let mark = match verdict {
-            Verdict::Ok(_) => output::green("ok  "),
-            Verdict::Warn(_) => output::yellow("warn"),
-            Verdict::Fail(_) => output::red("fail"),
-        };
-        println!("  {mark}  {key}  {}", verdict.message());
-    }
+/// One pin that `kix pin check` checked.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+struct CheckedPin {
+    /// The image pin name or instance name.
+    key: String,
+    /// The option path of an instance pin, or null for an image pin.
+    option: Option<String>,
+    /// `ok`, `warning`, or `failed`.
+    result: String,
+    message: String,
+    #[serde(skip)]
+    #[schemars(skip)]
+    shown_key: String,
+}
 
-    if !stale.is_empty() {
-        println!();
-        println!("  Not current:");
-        for s in stale {
-            println!(
-                "  {}  {} was built from {}, and this check expects {}.",
-                output::red("fail"),
-                s.key,
-                s.built_from,
-                s.expected
+/// What `kix pin check` found.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PinCheckResponse {
+    /// The pin file, as a path.
+    pins_file: String,
+    pins: Vec<CheckedPin>,
+    /// Pins built from a source revision other than `--source-rev`.
+    stale: Vec<Stale>,
+    /// Whether every pin passed and none is stale.
+    ok: bool,
+    #[serde(skip)]
+    #[schemars(skip)]
+    heading: String,
+}
+
+impl CommandResponse for PinCheckResponse {
+    fn text(&self) -> String {
+        // The heading and the counts are progress, which `-q` hides.
+        let quiet = output::quiet();
+        let mut out = String::new();
+        if !quiet {
+            let _ = writeln!(out, "{}\n", self.heading);
+        }
+        for p in &self.pins {
+            let mark = match p.result.as_str() {
+                "ok" => output::green("ok  "),
+                "warning" => output::yellow("warn"),
+                _ => output::red("fail"),
+            };
+            let _ = writeln!(out, "  {mark}  {}  {}", p.shown_key, p.message);
+        }
+
+        if !self.stale.is_empty() {
+            let _ = writeln!(out, "\n  Not current:");
+            for s in &self.stale {
+                let _ = writeln!(
+                    out,
+                    "  {}  {} was built from {}, and this check expects {}.",
+                    output::red("fail"),
+                    s.key,
+                    s.built_from,
+                    s.expected
+                );
+            }
+            out.push_str(
+                "\n  The promotion step did not run for this revision, so the cluster would deploy\n  \
+                 older images than the source it is built from.\n",
             );
         }
-        println!();
-        println!("  The promotion step did not run for this revision, so the cluster would deploy");
-        println!("  older images than the source it is built from.");
-    }
 
-    let failed = results.iter().filter(|(_, v)| v.failed()).count();
-    let warned = results
-        .iter()
-        .filter(|(_, v)| matches!(v, Verdict::Warn(_)))
-        .count();
-    crate::say!();
-    crate::say!(
-        "{} pins checked, {failed} failed, {warned} warned",
-        results.len()
-    );
-    if !stale.is_empty() {
-        crate::say!("{} not current", stale.len());
+        if !quiet {
+            let failed = self.pins.iter().filter(|p| p.result == "failed").count();
+            let warned = self.pins.iter().filter(|p| p.result == "warning").count();
+            let _ = writeln!(
+                out,
+                "\n{} pins checked, {failed} failed, {warned} warned",
+                self.pins.len()
+            );
+            if !self.stale.is_empty() {
+                let _ = writeln!(out, "{} not current", self.stale.len());
+            }
+        }
+        out
     }
 }
 
@@ -502,45 +601,68 @@ fn list(args: &PinListArgs, global: &GlobalArgs) -> Result<()> {
     let located = locate::locate(args.pins_file.as_deref(), &global.flake)?;
     let pins_file = located.path.as_path();
     let file = PinFile::read(pins_file).into_diagnostic()?;
-    if output::format() != OutputFormat::Json
+    if output::format() == OutputFormat::Text
         && let Some(note) = located.note()
     {
         crate::say!("{}", output::dim(&note));
     }
 
-    if output::format() == OutputFormat::Json {
-        let doc = serde_json::json!({
-            "images": file.pins,
-            "instances": file.instances,
-        });
-        println!("{}", serde_json::to_string_pretty(&doc).into_diagnostic()?);
-        return Ok(());
-    }
+    output::result(&PinListResponse {
+        entries: file
+            .entries()
+            .map(|(k, p)| (k.to_string(), p.clone()))
+            .collect(),
+        images: file.pins,
+        instances: file.instances,
+        pins_file: pins_file.display().to_string(),
+    })
+}
 
-    if file.is_empty() {
-        println!("{} holds no pins", pins_file.display());
-        return Ok(());
-    }
+/// The pins in a pin file, as the file holds them.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub(crate) struct PinListResponse {
+    /// Image pins, by pin name.
+    images: BTreeMap<String, Pin>,
+    /// Instance pins, by `<namespace>/<instance>`, then option path.
+    instances: BTreeMap<String, BTreeMap<String, Pin>>,
+    #[serde(skip)]
+    #[schemars(skip)]
+    entries: Vec<(String, Pin)>,
+    #[serde(skip)]
+    #[schemars(skip)]
+    pins_file: String,
+}
 
-    for (key, pin) in file.entries() {
-        println!("{}", output::bold(&key.to_string()));
-        println!("  {}:{}", pin.repository, pin.tag);
-        match &pin.digest {
-            Some(d) => println!("  {d}"),
-            None => println!("  {}", output::yellow("no digest")),
+impl CommandResponse for PinListResponse {
+    fn text(&self) -> String {
+        if self.entries.is_empty() {
+            return format!("{} holds no pins", self.pins_file);
         }
-        if let Some(rev) = &pin.source_rev {
-            println!("  built from {rev}");
+        let mut out = String::new();
+        for (key, pin) in &self.entries {
+            let _ = writeln!(out, "{}", output::bold(key));
+            let _ = writeln!(out, "  {}:{}", pin.repository, pin.tag);
+            match &pin.digest {
+                Some(d) => _ = writeln!(out, "  {d}"),
+                None => _ = writeln!(out, "  {}", output::yellow("no digest")),
+            }
+            if let Some(rev) = &pin.source_rev {
+                let _ = writeln!(out, "  built from {rev}");
+            }
+            if let Some(by) = &pin.promoted_by {
+                let when = pin.resolved_at.as_deref().unwrap_or("at an unknown time");
+                let _ = writeln!(
+                    out,
+                    "  {}",
+                    output::dim(&format!("promoted by {by}, {when}"))
+                );
+            }
+            if let Some(note) = &pin.note {
+                let _ = writeln!(out, "  {note}");
+            }
         }
-        if let Some(by) = &pin.promoted_by {
-            let when = pin.resolved_at.as_deref().unwrap_or("at an unknown time");
-            println!("  {}", output::dim(&format!("promoted by {by}, {when}")));
-        }
-        if let Some(note) = &pin.note {
-            println!("  {note}");
-        }
+        out
     }
-    Ok(())
 }
 
 /// Return the image pin name or instance name for JSON output.

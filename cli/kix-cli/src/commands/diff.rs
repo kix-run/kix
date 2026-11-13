@@ -1,4 +1,5 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::fmt::Write;
 use std::path::Path;
 
 use miette::{IntoDiagnostic, Result, miette};
@@ -21,7 +22,7 @@ use kix::manifest::serialize::load_manifests_from_dir;
 use kix::manifest::types::{ResourceId, to_manifest_value};
 
 use crate::cli::{Detail as DetailArg, DiffArgs, OutputFormat};
-use crate::output;
+use crate::output::{self, CommandResponse};
 use crate::plan::{self, render};
 use kix::plan::document::{Build, Checked, DeployedBuild, Detail, MadeBy, NotCheckedReason, Plan};
 use kix::plan::origin::{self, Sides};
@@ -31,12 +32,31 @@ use kube::api::DynamicObject;
 use super::CommandContext;
 use crate::exit::Exit;
 
-struct DiffResult {
+/// The result of `kix diff`. JSON and YAML print the plan document.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+#[serde(transparent)]
+pub(crate) struct DiffResult {
+    #[serde(skip)]
+    #[schemars(skip)]
     packages: PackageDiff,
     /// Stateful migration pairs detected between the old and new manifests.
+    #[serde(skip)]
+    #[schemars(skip)]
     migration_pairs: Vec<MigrationPair>,
-    /// Plan document rendered by `-o json` and `-o yaml`.
     doc: Plan,
+}
+
+impl CommandResponse for DiffResult {
+    fn text(&self) -> String {
+        text_output(self)
+    }
+
+    fn render(&self, format: OutputFormat) -> Result<String> {
+        match format {
+            OutputFormat::Markdown => Ok(markdown_output(self)),
+            other => output::render(self, other),
+        }
+    }
 }
 
 impl DiffResult {
@@ -155,12 +175,7 @@ pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<Exit> {
         }
     }
 
-    match output::format() {
-        OutputFormat::Json => println!("{}", result.doc.to_json()),
-        OutputFormat::Yaml => print!("{}", result.doc.to_yaml().into_diagnostic()?),
-        OutputFormat::Markdown => print_markdown_output(&result),
-        OutputFormat::Text => print_text_output(&result),
-    }
+    output::result(&result)?;
     if let OldSide::Live(live) = &side {
         for rid in &live.namespaceless {
             eprintln!(
@@ -468,12 +483,15 @@ fn clear_spinner(spinner: &Option<indicatif::ProgressBar>) {
     }
 }
 
-fn print_text_output(result: &DiffResult) {
+fn text_output(result: &DiffResult) -> String {
     let pkg = &result.packages;
+    let mut out = String::new();
 
     let total_pkgs = pkg.added.len() + pkg.removed.len() + pkg.changed.len() + pkg.unchanged;
-    if total_pkgs > 0 {
-        crate::say!(
+    // The count is progress, which `-q` hides.
+    if total_pkgs > 0 && !output::quiet() {
+        let _ = writeln!(
+            out,
             "{} packages: {} unchanged, {} changed, {} added, {} removed",
             total_pkgs,
             pkg.unchanged,
@@ -484,12 +502,12 @@ fn print_text_output(result: &DiffResult) {
     }
 
     // Always render resource-level detail in `kix diff`.
-    print!("{}", plan::render_package_plan(pkg, true));
+    out.push_str(&plan::render_package_plan(pkg, true));
 
     if let Some(a) = &pkg.activation {
-        println!();
-        println!(
-            "  {} {} -> {}",
+        let _ = writeln!(
+            out,
+            "\n  {} {} -> {}",
             output::bold("Activation:"),
             output::dim(a.old.as_deref().unwrap_or("(none)")),
             output::green(a.new.as_deref().unwrap_or("(none)")),
@@ -497,37 +515,32 @@ fn print_text_output(result: &DiffResult) {
     }
 
     if pkg.has_changes() {
-        println!();
+        out.push('\n');
     }
-
-    print_migration_pairs(&result.migration_pairs);
-
-    if result.has_diff() {
-        print!("{}", render::render_text(&result.doc));
-    } else {
-        println!("{}", output::green("No differences found."));
-        print!("{}", render::render_drift_text(&result.doc));
-    }
-}
-
-/// Print detected stateful migration pairs without executing them.
-fn print_migration_pairs(pairs: &[MigrationPair]) {
-    if pairs.is_empty() {
-        return;
-    }
-    print!(
-        "{}",
-        crate::plan::migrations::diff(&crate::plan::migrations::of_pairs(pairs))
-    );
-    println!();
-}
-
-fn print_markdown_output(result: &DiffResult) {
-    // Share the package-level Markdown renderer with the deploy modal and CI PR comments.
-    print!("{}", plan::render_package_diff_markdown(&result.packages));
 
     if !result.migration_pairs.is_empty() {
-        println!(
+        out.push_str(&crate::plan::migrations::diff(
+            &crate::plan::migrations::of_pairs(&result.migration_pairs),
+        ));
+        out.push('\n');
+    }
+
+    if result.has_diff() {
+        out.push_str(&render::render_text(&result.doc));
+    } else {
+        let _ = writeln!(out, "{}", output::green("No differences found."));
+        out.push_str(&render::render_drift_text(&result.doc));
+    }
+    out
+}
+
+fn markdown_output(result: &DiffResult) -> String {
+    // Share the package-level Markdown renderer with the deploy modal and CI PR comments.
+    let mut out = plan::render_package_diff_markdown(&result.packages);
+
+    if !result.migration_pairs.is_empty() {
+        let _ = writeln!(
+            out,
             "{}",
             crate::plan::migrations::diff_markdown(&crate::plan::migrations::of_pairs(
                 &result.migration_pairs
@@ -536,15 +549,16 @@ fn print_markdown_output(result: &DiffResult) {
     }
 
     if result.has_diff() {
-        print!("{}", render::render_markdown(&result.doc));
+        out.push_str(&render::render_markdown(&result.doc));
     } else {
-        println!("No differences found.");
+        out.push_str("No differences found.\n");
         let drift = render::render_drift_markdown(&result.doc);
         if !drift.is_empty() {
-            println!();
-            print!("{drift}");
+            out.push('\n');
+            out.push_str(&drift);
         }
     }
+    out
 }
 
 #[cfg(test)]

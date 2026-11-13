@@ -1,10 +1,10 @@
 //! Load and verify saved plans for `kix deploy --plan`.
 
-use miette::{IntoDiagnostic, Result, miette};
+use miette::{Result, miette};
 
 use crate::cli::PlanArgs;
 use crate::exit::Exit;
-use crate::output;
+use crate::output::{self, CommandResponse};
 use crate::plan;
 use kix::plan::document::PlanFlags;
 
@@ -69,6 +69,28 @@ pub(super) fn load_saved_plan(
     })
 }
 
+/// How a fresh plan compares with a saved one, for
+/// `kix deploy --plan FILE --dry-run`. JSON and YAML print the comparison.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+#[serde(transparent)]
+pub(crate) struct ComparisonResponse<'a> {
+    comparison: kix::plan::saved::Comparison,
+    #[serde(skip)]
+    #[schemars(skip)]
+    saved: &'a SavedPlan,
+}
+
+impl CommandResponse for ComparisonResponse<'_> {
+    fn text(&self) -> String {
+        plan::render::render_comparison(
+            &self.comparison,
+            &self.saved.reviewed,
+            &self.saved.path,
+            &self.saved.cluster,
+        )
+    }
+}
+
 /// Recompute the plan for `kix deploy --plan <file> --dry-run`, compare it
 /// against `saved`, and exit 0 on a match or [`Exit::StalePlan`] on a mismatch.
 pub(super) fn check_saved_plan(
@@ -87,25 +109,9 @@ pub(super) fn check_saved_plan(
     let doc = document(&mut p, report.as_ref(), false);
     let mut comparison = kix::plan::saved::compare(&saved.reviewed, &doc);
     comparison.plan_sha256 = Some(saved.sha256.clone());
-    match format {
-        crate::cli::OutputFormat::Json => println!(
-            "{}",
-            serde_json::to_string_pretty(&comparison).into_diagnostic()?
-        ),
-        crate::cli::OutputFormat::Yaml => {
-            print!("{}", kix::yaml::to_string(&comparison).into_diagnostic()?)
-        }
-        _ => print!(
-            "{}",
-            plan::render::render_comparison(
-                &comparison,
-                &saved.reviewed,
-                &saved.path,
-                &saved.cluster
-            )
-        ),
-    }
-    if !comparison.matches {
+    let matches = comparison.matches;
+    output::result(&ComparisonResponse { comparison, saved })?;
+    if !matches {
         return Ok(Exit::StalePlan);
     }
     // Exit with `Exit::PlanWouldStop` when a matching plan still has rejected

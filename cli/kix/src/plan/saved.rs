@@ -11,7 +11,7 @@ use serde::Serialize;
 use super::document::{Checked, MadeBy, Plan, PlanFlags, PruneFate};
 
 /// One comparison rule between a reviewed plan and a fresh plan.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Rule {
     Cluster,
@@ -42,7 +42,7 @@ impl Rule {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub struct Mismatch {
     pub rule: Rule,
     /// What differs, one line each.
@@ -50,7 +50,7 @@ pub struct Mismatch {
 }
 
 /// The result of comparing a fresh plan with a reviewed one.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub struct Comparison {
     /// `sha256:<hex>` of the reviewed plan file, so an approval system can
     /// check the deploy used the file it approved. Set by the caller.

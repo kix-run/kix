@@ -1,0 +1,95 @@
+{
+  "$defs": {
+    "Comparison": {
+      "description": "The result of comparing a fresh plan with a reviewed one.",
+      "properties": {
+        "kix_differs": {
+          "description": "The two Kix binaries, reviewed then fresh, when they differ. Reported\nand not refused: the objects digest already holds the deploy to the\nobjects and build files that were reviewed, and the binary is chosen\nby whoever runs the deploy.",
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "matches": {
+          "type": "boolean"
+        },
+        "mismatches": {
+          "items": {
+            "$ref": "#/$defs/Mismatch"
+          },
+          "type": "array"
+        },
+        "plan_sha256": {
+          "description": "`sha256:<hex>` of the reviewed plan file, so an approval system can\ncheck the deploy used the file it approved. Set by the caller.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "skipped": {
+          "description": "Rules the reviewed plan could not be held to, because it did not\nmake that check (a `kix diff` plan checks no refusals or prune).",
+          "items": {
+            "$ref": "#/$defs/Rule"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "plan_sha256",
+        "matches",
+        "mismatches",
+        "skipped",
+        "kix_differs"
+      ],
+      "type": "object"
+    },
+    "Mismatch": {
+      "properties": {
+        "items": {
+          "description": "What differs, one line each.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "rule": {
+          "$ref": "#/$defs/Rule"
+        }
+      },
+      "required": [
+        "rule",
+        "items"
+      ],
+      "type": "object"
+    },
+    "Rule": {
+      "description": "One comparison rule between a reviewed plan and a fresh plan.",
+      "enum": [
+        "cluster",
+        "new_build",
+        "objects",
+        "deployed_build",
+        "flags",
+        "new_refusal",
+        "new_reverted_drift",
+        "new_prune_delete",
+        "newly_unchecked"
+      ],
+      "type": "string"
+    }
+  },
+  "$ref": "#/$defs/Comparison",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "How a fresh plan compares with a saved one, for\n`kix deploy --plan FILE --dry-run`. JSON and YAML print the comparison.",
+  "title": "ComparisonResponse"
+}

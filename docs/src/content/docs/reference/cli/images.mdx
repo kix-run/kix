@@ -23,7 +23,7 @@ kix images <CLUSTER> [--sources] [-o text|json|yaml]
 | --- | --- | --- |
 | `<CLUSTER>` | | Cluster name to evaluate. |
 | `--sources` | Off | In text output, list under each image the resources that reference it, as `Kind namespace/name (container: <name>)`. |
-| `-o`, `--output` | `text` | `text` and `markdown` print one image reference per line. `json` and `yaml` print an array of `{ image, sources }`, whatever `--sources` says. |
+| `-o`, `--output` | `text` | `text` prints one image reference per line. `json` and `yaml` print an array of `{ image, sources }`, whatever `--sources` says. |
 | `--flake <FLAKE>` | `.` | Flake to evaluate. |
 | `--no-cache` | Off | Evaluate from Nix instead of reading the [eval cache](/docs/reference/cli/eval-cache-behavior/). |
 

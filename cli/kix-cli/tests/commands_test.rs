@@ -30,6 +30,48 @@ fn list_clusters() {
         .stdout(predicate::str::contains("example"));
 }
 
+/// A format the command does not print stops it before it evaluates
+/// anything, whether `-o` or `KIX_OUTPUT` asked for it.
+#[test]
+fn an_unsupported_format_is_refused() {
+    kix()
+        .args(["list", "clusters", "-o", "sarif"])
+        .assert()
+        .code(1)
+        .stdout("")
+        .stderr(predicate::str::contains("[K2184]"))
+        .stderr(predicate::str::contains("-o yaml"));
+    kix()
+        .args(["gc", "example"])
+        .env("KIX_OUTPUT", "json")
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("KIX_OUTPUT=json"));
+}
+
+/// A command line clap cannot parse, and a removed flag, exit 1.
+#[test]
+fn a_bad_command_line_exits_1() {
+    kix().args(["list", "clusters", "--bogus"]).assert().code(1);
+    kix()
+        .args(["check", "example", "--sarif"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("[K0719]"))
+        .stderr(predicate::str::contains("kix check -o sarif"));
+}
+
+#[test]
+fn check_prints_sarif() {
+    let out = kix()
+        .args(["check", "example", "-o", "sarif"])
+        .output()
+        .unwrap();
+    let sarif: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(sarif["version"], "2.1.0");
+    assert!(sarif["runs"][0]["results"].is_array());
+}
+
 #[test]
 fn build_yaml() {
     kix()

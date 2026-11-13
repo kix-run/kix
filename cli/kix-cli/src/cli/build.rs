@@ -14,27 +14,12 @@ pub struct BuildArgs {
 pub struct CheckArgs {
     /// Cluster to validate
     pub cluster: String,
-
-    /// Output SARIF 2.1.0 JSON (for GitHub Code Scanning integration)
-    #[arg(long)]
-    pub sarif: bool,
-}
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
-pub enum GraphFormat {
-    Tree,
-    Dot,
-    Json,
 }
 
 #[derive(clap::Args)]
 pub struct GraphArgs {
     /// Cluster name
     pub cluster: String,
-
-    /// Graph output format (tree, dot, json)
-    #[arg(long)]
-    pub format: Option<GraphFormat>,
 
     /// Read the target build from a `.kixbundle` file instead of evaluating
     #[arg(long, value_name = "FILE")]
