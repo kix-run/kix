@@ -561,7 +561,7 @@ rec {
             ]
             ++ map (p: "  ${p.ns}/${name}, for dependency '${p.depName}' of ${labelRequester p.requester}") ps
           );
-          fix = "declare it once, and every consumer resolves to it:\n  instances.<namespace>.${name}.package = ${packageSpelling name};";
+          fix = "Declare it once, and every consumer resolves to it:\n  instances.<namespace>.${name}.package = ${packageSpelling name};";
         })
       ) (builtins.attrNames placementsByName);
 

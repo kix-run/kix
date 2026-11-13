@@ -144,7 +144,7 @@ in
         if reserved != [ ] then
           fail {
             option = "${optionPath}.${builtins.head reserved}";
-            message = "${who}: ${optionPath}.${builtins.head reserved}: kix drops parts named root or meta, so this StorageClass would not be rendered.";
+            message = "${who}: ${optionPath}.${builtins.head reserved}: Kix drops parts named root or meta, so this StorageClass would not be rendered.";
             fix = "Rename it.";
           }
         else if shadowable && annotated != [ ] then
@@ -154,7 +154,7 @@ in
           fail {
             option = "${optionPath}.${k}";
             message = "${who}: ${optionPath}.${k} is annotated ${defaultAnnotation}=\"true\", but cluster.roles.storageClasses.binding is \"shadowable\": the environment already has a default StorageClass, so the cluster would have two.";
-            fix = "Remove the annotation; a kix consumer that needs this class names it, for example persistent-volume-claim config.storageClassName = \"${k}\". If the environment's class is no longer annotated default, set cluster.roles.storageClasses.binding = \"absent\".";
+            fix = "Remove the annotation; a Kix consumer that needs this class names it, for example persistent-volume-claim config.storageClassName = \"${k}\". If the environment's class is no longer annotated default, set cluster.roles.storageClasses.binding = \"absent\".";
           }
         else
           null;

@@ -61,7 +61,7 @@ in
         if v != null && builtins.isAttrs v && v ? _type then
           fail {
             instance = "${namespaceName}/${instanceName}";
-            message = "'${folderName}' must be an attribute set of resources, not a resource directly.";
+            message = "'${folderName}' is a resource directly instead of an attribute set of resources.";
             fix = "Use '${folderName}.someName = ...' instead.";
           }
         else

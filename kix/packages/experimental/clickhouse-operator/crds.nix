@@ -189,7 +189,7 @@ let
     else
       scope.fail {
         package = "clickhouse-operator";
-        message = "kinds.nix and schemas/${def.plural}.json disagree on ${def.kind} (group, kind, plural, short names or version).";
+        message = "kinds.nix and schemas/${def.plural}.json disagree on ${def.kind} (group, kind, plural, short names, or version).";
         fix = "Fix kinds.nix to match the vendored upstream document.";
       };
 

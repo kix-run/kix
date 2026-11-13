@@ -467,7 +467,7 @@ rec {
       }
     else
       fail {
-        message = "importChart (${releaseName}): autoRoot cannot choose a root: the chart renders no Service, Deployment, StatefulSet or DaemonSet.";
+        message = "importChart (${releaseName}): autoRoot cannot choose a root: the chart renders no Service, Deployment, StatefulSet, or DaemonSet.";
         fix = "Name the root resource: resources.mkParts { root = resources.get \"<kind>\" \"<name>\"; }, or kix.helmChart { root = { kind = \"<kind>\"; name = \"<name>\"; }; ... }.";
       };
 }

@@ -1115,7 +1115,7 @@ rec {
         in
         if !(builtins.isList listed) then
           fail {
-            message = "${who}: servedVersions is a ${builtins.typeOf listed}, not a list.";
+            message = "${who}: servedVersions is a ${builtins.typeOf listed}.";
             fix = "Set servedVersions to a list of API versions, such as [ \"v1\" \"v1beta1\" ].";
           }
         else if invalid != [ ] then

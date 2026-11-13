@@ -34,7 +34,7 @@ let
             message = "kix.options.resources: ${
               lib.concatMapStringsSep ", " (n: "${sideName}.${n}") bad
             } is not a resource name.";
-            fix = "Use cpu, memory or ephemeral-storage, hugepages-<size>, or an extended resource whose name contains \"/\" (nvidia.com/gpu).";
+            fix = "Use cpu, memory, or ephemeral-storage, hugepages-<size>, or an extended resource whose name contains \"/\" (nvidia.com/gpu).";
           }
         else
           kept;
@@ -210,7 +210,7 @@ in
       };
     in
     if badDefaults != [ ] then
-      fail "kix.options.resources: defaults may set cpu, memory and ephemeral-storage; ${lib.concatStringsSep ", " badDefaults} is not one of them."
+      fail "kix.options.resources: defaults may set cpu, memory, and ephemeral-storage; ${lib.concatStringsSep ", " badDefaults} is not one of them."
     else
       lib.mkOption {
         inherit description;

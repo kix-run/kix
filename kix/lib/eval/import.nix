@@ -433,7 +433,7 @@ rec {
         else if missing != [ ] then
           fail {
             message = "${who}: a mkImport crds entry is missing ${builtins.concatStringsSep ", " missing}.";
-            fix = "Give group, kind, plural and version as the CustomResourceDefinition declares them.";
+            fix = "Give group, kind, plural, and version as the CustomResourceDefinition declares them.";
           }
         else if unknown != [ ] then
           fail {

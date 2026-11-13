@@ -144,7 +144,7 @@ let
     else if !tagOk then
       fail {
         message = "kix.pins: ${label} in ${where} has a tag that is not an image tag: '${toString pin.tag}'.";
-        fix = "Use a tag of up to 128 letters, digits, `_`, `.` and `-` that does not start with `.` or `-`.";
+        fix = "Use a tag of up to 128 letters, digits, `_`, `.`, and `-` that does not start with `.` or `-`.";
       }
     else if !digestOk then
       fail {

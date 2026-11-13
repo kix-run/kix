@@ -111,7 +111,7 @@ rec {
         if !(builtins.isString name) then
           fail "kix.untrackedRef: name must be a string."
         else if unknown != [ ] then
-          fail "kix.untrackedRef (${name}): unknown attribute(s) ${builtins.concatStringsSep ", " unknown}. It takes name, kind, apiVersion and by."
+          fail "kix.untrackedRef (${name}): unknown attribute(s) ${builtins.concatStringsSep ", " unknown}. It takes name, kind, apiVersion, and by."
         else if kind != null && !(builtins.isString kind) then
           fail "kix.untrackedRef (${name}): kind must be a string, such as \"Secret\"."
         else if bySelf && (spec ? kind || spec ? apiVersion) then
@@ -128,7 +128,7 @@ rec {
         then
           fail {
             message = "kix.untrackedRef (${name}): `by` is ${by.kind} '${by.name or ""}', a built-in kind that creates no object a manifest refers to by name.";
-            fix = "Name the Job, workload or operator custom resource that creates '${name}'.";
+            fix = "Name the Job, workload, or operator custom resource that creates '${name}'.";
           }
         else
           null;

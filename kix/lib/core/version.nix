@@ -64,7 +64,7 @@ let
     else
       fail {
         message = "${describe v} is not a version Kix can compare.";
-        fix = "Use numbers separated by dots, optionally with a leading \"v\", a \"-suffix\" and a \"+build\" suffix (for example \"1.19.6\", \"v2.12.2\", \"1.31.2+rke2r1\", \"1.31.2-gke.1209000\").";
+        fix = "Use numbers separated by dots, optionally with a leading \"v\", a \"-suffix\", and a \"+build\" suffix (for example \"1.19.6\", \"v2.12.2\", \"1.31.2+rke2r1\", \"1.31.2-gke.1209000\").";
       };
 
   cmp =

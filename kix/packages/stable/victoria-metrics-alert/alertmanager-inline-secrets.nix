@@ -88,6 +88,6 @@ else
     option = "settings";
     message = "${lib.concatStringsSep ", " found} ${
       if builtins.length found == 1 then "holds a credential" else "hold credentials"
-    } inline. settings lands in a Secret that Kix renders, so the value would sit in the Nix store and the rendered manifests.";
+    } inline. settings lands in a Secret that Kix renders, so the value would sit in Kix's local store and the rendered manifests.";
     fix = "Put the value in a Secret, mount it through extraSpec.secrets = [ \"<name>\" ] (at /etc/alertmanager/secrets/<name>/<key>), and name that path in the `_file` key.";
   }
