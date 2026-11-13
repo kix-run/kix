@@ -31,10 +31,6 @@ pub const OLD_NAME: &str = "kixpkgs";
 /// The id of the change record that renamed the library input.
 pub const OLD_NAME_ID: &str = "K9179";
 
-/// The file whose presence marks a project directory that holds the Kix
-/// library itself, such as the Kix repository.
-const OWN_LIBRARY: &str = "kix/lib/mkFlake.nix";
-
 /// Which Kix a project uses.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProjectKix {
@@ -52,7 +48,8 @@ pub enum Development {
     Folder(String),
     /// The `kix` input follows a branch, or a tag that names no release.
     Branch(String),
-    /// The project directory holds the Kix library itself.
+    /// `library = "self"` in `kix.toml`: the project's flake provides the
+    /// Kix library itself, as the Kix repository does.
     OwnLibrary,
     /// `--override-input kix` replaces the input for this command.
     Override(String),
@@ -63,7 +60,7 @@ impl fmt::Display for Development {
         match self {
             Development::Folder(path) => write!(f, "the input kix is the local folder {path}"),
             Development::Branch(branch) => write!(f, "the input kix follows the branch {branch}"),
-            Development::OwnLibrary => f.write_str("this project holds the Kix library itself"),
+            Development::OwnLibrary => f.write_str("kix.toml sets library = \"self\""),
             Development::Override(url) => write!(f, "--override-input kix {url}"),
         }
     }
@@ -86,6 +83,13 @@ pub enum LockError {
     /// The `kix` input names no release tag: it has no ref, or it pins a
     /// commit.
     NoVersion,
+    /// A person moved the tag in `flake.nix` after `flake.lock` was written.
+    TagMoved {
+        locked: Box<Version>,
+        asked: Box<Version>,
+    },
+    /// `kix.toml` sets `library` to a value Kix does not know.
+    Setting(String),
 }
 
 impl fmt::Display for LockError {
@@ -118,6 +122,15 @@ impl fmt::Display for LockError {
                 f,
                 "flake.nix uses the Kix library without a version. Run `kix upgrade --to {v}` to pin one."
             ),
+            LockError::TagMoved { locked, asked } => {
+                let asked = asked.release();
+                write!(
+                    f,
+                    "flake.nix asks for Kix {asked}, but flake.lock pins Kix {}. Run `kix upgrade --to {asked}`.",
+                    locked.release()
+                )
+            }
+            LockError::Setting(message) => f.write_str(message),
         }
     }
 }
@@ -125,40 +138,57 @@ impl fmt::Display for LockError {
 impl std::error::Error for LockError {}
 
 /// Return which Kix the project in `dir` uses. `overrides` are the
-/// `--override-input` pairs of the command. An override of `kix` makes the
-/// project use a development library for that command.
+/// `--override-input` pairs of the command. An override of `kix`, or
+/// `library = "self"` in `kix.toml`, makes the project use a development
+/// library. For a project on a release, a `flake.nix` that now asks for
+/// another tag than the lock pins is [`LockError::TagMoved`], found before
+/// Nix evaluates and rewrites the lock.
 pub fn project_kix(dir: &Path, overrides: &[(String, String)]) -> Result<ProjectKix, LockError> {
     if let Some((_, url)) = overrides.iter().rev().find(|(name, _)| name == INPUT) {
         return Ok(ProjectKix::Development(Development::Override(url.clone())));
     }
-    let own_library = dir.join(OWN_LIBRARY).is_file();
+    if crate::project::library_is_self(dir).map_err(|e| LockError::Setting(e.to_string()))? {
+        return Ok(ProjectKix::Development(Development::OwnLibrary));
+    }
     let path = dir.join(FILE);
+    let unreadable = |message: String| LockError::Unreadable {
+        path: path.clone(),
+        message,
+    };
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound && own_library => {
-            return Ok(ProjectKix::Development(Development::OwnLibrary));
-        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(LockError::Missing),
-        Err(e) => {
-            return Err(LockError::Unreadable {
-                path,
-                message: e.to_string(),
-            });
-        }
+        Err(e) => return Err(unreadable(e.to_string())),
     };
-    let lock: Value = serde_json::from_str(&text).map_err(|e| LockError::Unreadable {
-        path: path.clone(),
-        message: e.to_string(),
-    })?;
-    from_lock(&lock, own_library).map_err(|e| match e {
-        LockError::Unreadable { message, .. } => LockError::Unreadable { path, message },
+    let lock: Value = serde_json::from_str(&text).map_err(|e| unreadable(e.to_string()))?;
+    let kix = from_lock(&lock).map_err(|e| match e {
+        LockError::Unreadable { message, .. } => unreadable(message),
         e => e,
-    })
+    })?;
+    if let ProjectKix::Release(locked) = &kix
+        && let Some(original) = input_original(&lock)
+        && let Ok(flake) = std::fs::read_to_string(dir.join("flake.nix"))
+        && let Some(asked) = crate::pin_library::declared_tag(&flake, original)
+        && &asked != locked
+    {
+        return Err(LockError::TagMoved {
+            locked: Box::new(locked.clone()),
+            asked: Box::new(asked),
+        });
+    }
+    Ok(kix)
 }
 
-/// Return which Kix the lock `lock` pins. `own_library` says whether the
-/// project directory holds the Kix library itself.
-fn from_lock(lock: &Value, own_library: bool) -> Result<ProjectKix, LockError> {
+/// Return the `original` of the root's `kix` input in `lock`: the input as
+/// `flake.nix` gave it when Nix wrote the lock.
+pub fn input_original(lock: &Value) -> Option<&Value> {
+    let root = lock["root"].as_str().unwrap_or("root");
+    let key = lock["nodes"][root]["inputs"][INPUT].as_str()?;
+    Some(&lock["nodes"][key]["original"])
+}
+
+/// Return which Kix the lock `lock` pins.
+fn from_lock(lock: &Value) -> Result<ProjectKix, LockError> {
     let root = lock["root"].as_str().unwrap_or("root");
     let node = &lock["nodes"][root];
     if !node.is_object() {
@@ -169,7 +199,7 @@ fn from_lock(lock: &Value, own_library: bool) -> Result<ProjectKix, LockError> {
     }
     let inputs = node["inputs"].as_object();
     let key = match inputs.and_then(|i| i.get(INPUT)) {
-        None => return no_input(lock, inputs, own_library),
+        None => return no_input(lock, inputs),
         Some(Value::String(key)) => key,
         Some(Value::Array(path)) => {
             let path: Vec<&str> = path.iter().filter_map(Value::as_str).collect();
@@ -189,11 +219,10 @@ fn from_lock(lock: &Value, own_library: bool) -> Result<ProjectKix, LockError> {
     }
 }
 
-/// Return the result for a lock whose root has no `kix` input.
+/// Return the error for a lock whose root has no `kix` input.
 fn no_input(
     lock: &Value,
     inputs: Option<&serde_json::Map<String, Value>>,
-    own_library: bool,
 ) -> Result<ProjectKix, LockError> {
     if let Some(Value::String(key)) = inputs.and_then(|i| i.get(OLD_NAME)) {
         let version = match pinned(&lock["nodes"][key]["original"]) {
@@ -201,9 +230,6 @@ fn no_input(
             _ => None,
         };
         return Err(LockError::OldName { version });
-    }
-    if own_library {
-        return Ok(ProjectKix::Development(Development::OwnLibrary));
     }
     Err(LockError::NoInput)
 }
@@ -283,14 +309,14 @@ mod tests {
             json!({ "type": "gitlab", "owner": "org", "repo": "kix", "ref": "v0.10.3" }),
         ] {
             assert_eq!(
-                from_lock(&with_kix(original), false),
+                from_lock(&with_kix(original)),
                 Ok(ProjectKix::Release(v("0.10.3")))
             );
         }
         let rc =
             json!({ "type": "github", "owner": "kix-run", "repo": "kix", "ref": "v0.11.0-rc.1" });
         assert_eq!(
-            from_lock(&with_kix(rc), false),
+            from_lock(&with_kix(rc)),
             Ok(ProjectKix::Release(v("0.11.0-rc.1")))
         );
     }
@@ -317,7 +343,7 @@ mod tests {
         ];
         for (original, development) in cases {
             assert_eq!(
-                from_lock(&with_kix(original), false),
+                from_lock(&with_kix(original)),
                 Ok(ProjectKix::Development(development))
             );
         }
@@ -331,27 +357,20 @@ mod tests {
             json!({ "type": "git", "url": "file:///src/kix", "rev": "0123456789abcdef" }),
             json!({ "type": "tarball", "url": "https://example.com/kix.tar.gz" }),
         ] {
-            assert_eq!(
-                from_lock(&with_kix(original), false),
-                Err(LockError::NoVersion)
-            );
+            assert_eq!(from_lock(&with_kix(original)), Err(LockError::NoVersion));
         }
     }
 
     #[test]
     fn the_input_must_be_a_direct_input_named_kix() {
         let none = lock(json!({ "nixpkgs": "nixpkgs" }), json!({}));
-        assert_eq!(from_lock(&none, false), Err(LockError::NoInput));
-        assert_eq!(
-            from_lock(&none, true),
-            Ok(ProjectKix::Development(Development::OwnLibrary))
-        );
+        assert_eq!(from_lock(&none), Err(LockError::NoInput));
         let no_inputs = json!({ "root": "root", "nodes": { "root": {} }, "version": 7 });
-        assert_eq!(from_lock(&no_inputs, false), Err(LockError::NoInput));
+        assert_eq!(from_lock(&no_inputs), Err(LockError::NoInput));
 
         let follows = lock(json!({ "kix": ["platform", "kix"] }), json!({}));
         assert_eq!(
-            from_lock(&follows, false),
+            from_lock(&follows),
             Err(LockError::Follows("platform/kix".into()))
         );
 
@@ -360,7 +379,7 @@ mod tests {
             json!({ "kixpkgs": { "original": { "type": "github", "owner": "kix-run", "repo": "kix", "ref": "v0.9.2" } } }),
         );
         assert_eq!(
-            from_lock(&old, true),
+            from_lock(&old),
             Err(LockError::OldName {
                 version: Some(v("0.9.2"))
             })
@@ -378,6 +397,57 @@ mod tests {
             )))
         );
         assert_eq!(project_kix(dir.path(), &[]), Err(LockError::Missing));
+    }
+
+    #[test]
+    fn library_self_in_kix_toml_is_development() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("kix.toml"), "library = \"self\"\n").unwrap();
+        assert_eq!(
+            project_kix(dir.path(), &[]),
+            Ok(ProjectKix::Development(Development::OwnLibrary))
+        );
+        std::fs::write(dir.path().join("kix.toml"), "library = \"kix\"\n").unwrap();
+        assert!(matches!(
+            project_kix(dir.path(), &[]),
+            Err(LockError::Setting(_))
+        ));
+    }
+
+    #[test]
+    fn a_tag_moved_in_flake_nix_is_found_before_nix_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let original =
+            json!({ "type": "github", "owner": "kix-run", "repo": "kix", "ref": "v0.10.0" });
+        std::fs::write(dir.path().join(FILE), with_kix(original).to_string()).unwrap();
+        let flake = |tag: &str| {
+            std::fs::write(
+                dir.path().join("flake.nix"),
+                format!("{{ inputs.kix.url = \"github:kix-run/kix/{tag}\"; }}"),
+            )
+            .unwrap()
+        };
+        flake("v0.10.0");
+        assert_eq!(
+            project_kix(dir.path(), &[]),
+            Ok(ProjectKix::Release(v("0.10.0")))
+        );
+        flake("v0.10.2");
+        let err = project_kix(dir.path(), &[]).unwrap_err();
+        assert_eq!(
+            err,
+            LockError::TagMoved {
+                locked: Box::new(v("0.10.0")),
+                asked: Box::new(v("0.10.2"))
+            }
+        );
+        assert_eq!(
+            err.to_string(),
+            "flake.nix asks for Kix 0.10.2, but flake.lock pins Kix 0.10.0. Run `kix upgrade --to 0.10.2`."
+        );
+        // A branch is no release, so it is left to the check after evaluation.
+        flake("main");
+        assert!(project_kix(dir.path(), &[]).is_ok());
     }
 
     #[test]

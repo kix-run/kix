@@ -455,6 +455,11 @@ fn check_library(
     // anything but a release here is a development library or a run that
     // skipped the choice.
     let pinned = crate::flake_lock::project_kix(flake_path, input_overrides);
+    // A run that skipped the choice, such as one `kix upgrade` started,
+    // still stops before Nix rewrites the lock.
+    if let Err(e @ crate::flake_lock::LockError::TagMoved { .. }) = pinned {
+        return Err(KixEvalError::TagMoved(e));
+    }
     let facts = library_facts(flake_path, input_overrides)?;
     crate::project::check_agreement(runtime::builder(), &origin, facts.builder.as_deref())?;
     if let Ok(crate::flake_lock::ProjectKix::Release(pinned)) = pinned

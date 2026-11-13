@@ -1272,6 +1272,36 @@ fn the_version_the_project_is_on_needs_no_release_index() {
 }
 
 #[test]
+fn a_tag_moved_by_hand_upgrades_from_the_locked_version() {
+    let s = Setup::new();
+    s.releases(vec![]);
+    explained_change(&s);
+    let lock = s.read("flake.lock");
+    let moved = s.read("flake.nix").replace("v9.1.0", "v9.3.0");
+    s.write("flake.nix", &moved);
+
+    // A dry run changes nothing.
+    let (code, out) = s.upgrade(&["--dry-run"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.starts_with("Kix 9.1.0 -> 9.3.0 (dry run"), "{out}");
+    assert_eq!(s.read("flake.nix"), moved);
+    assert_eq!(s.read("flake.lock"), lock);
+
+    let (code, out) = s.upgrade(&["--to", "9.3.0"]);
+    assert_eq!(code, 3, "{out}");
+    assert!(
+        out.starts_with("flake.nix asked for Kix 9.3.0, but flake.lock pins Kix 9.1.0. Kix set flake.nix back to 9.1.0 to upgrade from there.\nUpgrading Kix 9.1.0 -> 9.3.0\n"),
+        "{out}"
+    );
+    let calls = s.calls();
+    assert!(calls.contains("9.1.0 export east"), "{calls}");
+    assert!(calls.contains("9.3.0 export east"), "{calls}");
+    assert!(out.contains("~ Deployment/web@shop (web)"), "{out}");
+    assert_eq!(s.pinned(), "9.3.0");
+    assert_eq!(s.read("flake.nix"), moved);
+}
+
+#[test]
 fn a_project_that_pins_no_version_is_pinned_without_builds() {
     let s = Setup::new();
     // A local repository with no ref follows its checkout.

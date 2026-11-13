@@ -29,7 +29,7 @@ pub const FILE: &str = "kix.toml";
 pub const TEST_BUILDER_VAR: &str = "KIX_TEST_BUILDER";
 
 /// The keys this version of Kix reads from `kix.toml`.
-const KNOWN_KEYS: &[&str] = &["builder", "upgrade"];
+const KNOWN_KEYS: &[&str] = &["builder", "library", "upgrade"];
 
 /// The id of the change record that moved the project's version of Kix from
 /// `kix` in `kix.toml` to `flake.lock`.
@@ -102,6 +102,9 @@ pub struct ProjectConfig {
     pub builder_source: BuilderSource,
     /// `min-age` in the `[upgrade]` table, in days.
     pub upgrade_min_age: Option<u32>,
+    /// `library = "self"`: the project's flake provides the Kix library
+    /// itself, so the project uses a development library.
+    pub library_self: bool,
 }
 
 impl Default for ProjectConfig {
@@ -110,6 +113,7 @@ impl Default for ProjectConfig {
             builder: BuilderKind::Kix,
             builder_source: BuilderSource::Default,
             upgrade_min_age: None,
+            library_self: false,
         }
     }
 }
@@ -166,6 +170,12 @@ pub enum ProjectError {
         path.display()
     )]
     KixSettingRemoved { path: PathBuf, value: String },
+
+    #[error(
+        "{} sets library = {value}. The one value is library = \"self\", for a flake that provides the Kix library itself. Remove the line otherwise.",
+        path.display()
+    )]
+    BadLibrary { path: PathBuf, value: String },
 
     #[error(
         "{} has a bad [upgrade] table: {problem}. Kix {} reads only min-age. Set min-age to a number of days in quotes, such as min-age = \"7d\", or remove [upgrade]",
@@ -279,9 +289,11 @@ impl ProjectConfig {
             });
         }
         let upgrade_min_age = parse_upgrade(path, table.get("upgrade"))?;
+        let library_self = parse_library(path, table.get("library"))?;
         let Some(value) = table.get("builder") else {
             return Ok(Self {
                 upgrade_min_age,
+                library_self,
                 ..Self::default()
             });
         };
@@ -306,6 +318,7 @@ impl ProjectConfig {
             builder,
             builder_source: origin,
             upgrade_min_age,
+            library_self,
         })
     }
 
@@ -317,6 +330,35 @@ impl ProjectConfig {
             BuilderKind::Remote => Err(ProjectError::RemoteUnsupported { origin }),
         }
     }
+}
+
+/// Read `library` from a `kix.toml`: `true` for `library = "self"`.
+fn parse_library(path: &Path, value: Option<&toml::Value>) -> Result<bool, ProjectError> {
+    match value {
+        None => Ok(false),
+        Some(toml::Value::String(s)) if s == "self" => Ok(true),
+        Some(value) => Err(ProjectError::BadLibrary {
+            path: path.to_path_buf(),
+            value: toml_text(value),
+        }),
+    }
+}
+
+/// Return whether the `kix.toml` in `flake_dir` sets `library = "self"`.
+///
+/// Kix reads this before it knows which version runs the command, so a
+/// missing or unreadable file and invalid TOML count as no setting and are
+/// left to [`ProjectConfig::read`]. A `library` value other than `"self"` is
+/// an error.
+pub fn library_is_self(flake_dir: &Path) -> Result<bool, ProjectError> {
+    let path = flake_dir.join(FILE);
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return Ok(false);
+    };
+    let Ok(table) = toml::from_str::<toml::Table>(&text) else {
+        return Ok(false);
+    };
+    parse_library(&path, table.get("library"))
 }
 
 /// Why the builder Kix read from `kix.toml` and the one the project's Kix
@@ -486,7 +528,7 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("`buidler`"), "{err}");
-        assert!(err.contains("supports: builder, upgrade"), "{err}");
+        assert!(err.contains("supports: builder, library, upgrade"), "{err}");
         assert!(err.contains("upgrade Kix"), "{err}");
 
         let err = read(Some("[remote]\nurl = \"x\"\n"))
@@ -583,6 +625,23 @@ mod tests {
 
         check_agreement(BuilderKind::Nix, &BuilderSource::TestOverride, Some("kix")).unwrap();
         check_agreement(BuilderKind::Nix, &BuilderSource::TestOverride, None).unwrap();
+    }
+
+    #[test]
+    fn library_takes_only_self() {
+        assert!(read(Some("library = \"self\"\n")).unwrap().library_self);
+        assert!(!read(Some("")).unwrap().library_self);
+        let dir = project(Some("library = \"kix\"\n"));
+        let expected = format!(
+            "{} sets library = \"kix\". The one value is library = \"self\", for a flake that provides the Kix library itself. Remove the line otherwise.",
+            dir.path().join(FILE).display()
+        );
+        let err = ProjectConfig::read(Some(dir.path()), None).unwrap_err();
+        assert_eq!(err.to_string(), expected);
+        assert_eq!(
+            library_is_self(dir.path()).unwrap_err().to_string(),
+            expected
+        );
     }
 
     #[test]

@@ -84,6 +84,10 @@ pub enum KixEvalError {
     #[error(transparent)]
     Project(#[from] crate::project::ProjectMismatch),
 
+    /// `flake.nix` names another tag of the Kix library than `flake.lock`.
+    #[error("{0}")]
+    TagMoved(crate::flake_lock::LockError),
+
     /// The project's Kix library is not the running Kix.
     #[error(transparent)]
     LibraryMismatch(Box<crate::version::policy::LibraryMismatch>),

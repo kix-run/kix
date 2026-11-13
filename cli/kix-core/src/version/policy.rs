@@ -4,9 +4,11 @@
 //! This is the only place that compares the version of Kix with the version
 //! of a Kix library. A project names its Kix by the release tag its
 //! `flake.lock` pins (`crate::flake_lock`), and Kix runs exactly that
-//! version, so the library and Kix match by construction. The one check
-//! left catches a `flake.nix` whose tag moved after Kix chose its version
-//! from the lock ([`check_library`]).
+//! version, so the library and Kix match by construction. A tag moved by
+//! hand in `flake.nix` stops before evaluation (`LockError::TagMoved`). The
+//! check after evaluation ([`check_library`]) catches the moves that check
+//! cannot find, such as an input written as an attribute set or pointed at
+//! another repository.
 
 use std::fmt;
 use std::str::FromStr;

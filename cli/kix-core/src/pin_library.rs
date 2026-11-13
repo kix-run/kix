@@ -344,20 +344,33 @@ fn bare_ref(r: &str) -> String {
         .to_string()
 }
 
-/// Return `literal`, a url in `flake.nix`, moved to the tag `tag`, when it
-/// names the repository of `original` and pins what `original` pins.
-fn retarget(literal: &str, original: &Value, tag: &str) -> Option<String> {
+/// A url in `flake.nix` that names the repository of the library input.
+struct RepoUrl {
+    /// What the url pins: a ref without `refs/tags/` or `refs/heads/`, a
+    /// commit, or `None`.
+    pin: Option<String>,
+    /// The url without a ref, ready for a new one.
+    forge_base: Option<String>,
+}
+
+/// Return what `literal`, a url in `flake.nix`, pins when it names the
+/// repository of `original`.
+fn repo_url_of(literal: &str, original: &Value) -> Option<RepoUrl> {
     if !literal
         .to_ascii_lowercase()
         .contains(&repo_needle(original))
     {
         return None;
     }
-    let want = pin_of_original(original);
     let url = Url::parse(literal);
     let forge = ["github:", "gitlab:", "sourcehut:"]
         .iter()
         .any(|p| url.base.starts_with(p));
+    let param_pin = || {
+        url.param("ref")
+            .map(bare_ref)
+            .or_else(|| url.param("rev").map(str::to_string))
+    };
     if forge {
         let (scheme, path) = url.base.split_once(':')?;
         let parts: Vec<&str> = path.split('/').collect();
@@ -369,25 +382,111 @@ fn retarget(literal: &str, original: &Value, tag: &str) -> Option<String> {
         if owner_repo.to_ascii_lowercase() != repo_needle(original) {
             return None;
         }
-        let pin = pin
-            .or_else(|| url.param("ref").map(bare_ref))
-            .or_else(|| url.param("rev").map(str::to_string));
-        if pin != want {
-            return None;
-        }
-        return Some(url.join(&format!("{scheme}:{owner_repo}/{tag}"), None));
+        return Some(RepoUrl {
+            pin: pin.or_else(param_pin),
+            forge_base: Some(format!("{scheme}:{owner_repo}")),
+        });
     }
     if !url.base.starts_with("git+") {
         return None;
     }
-    let pin = url
-        .param("ref")
-        .map(bare_ref)
-        .or_else(|| url.param("rev").map(str::to_string));
-    if pin != want {
+    Some(RepoUrl {
+        pin: param_pin(),
+        forge_base: None,
+    })
+}
+
+/// Return `literal`, a url in `flake.nix`, moved to the tag `tag`, when it
+/// names the repository of `original` and pins what `original` pins.
+fn retarget(literal: &str, original: &Value, tag: &str) -> Option<String> {
+    let found = repo_url_of(literal, original)?;
+    if found.pin != pin_of_original(original) {
         return None;
     }
-    Some(url.join(url.base, Some(("ref", &format!("refs/tags/{tag}")))))
+    let url = Url::parse(literal);
+    Some(match found.forge_base {
+        Some(base) => url.join(&format!("{base}/{tag}"), None),
+        None => url.join(url.base, Some(("ref", &format!("refs/tags/{tag}")))),
+    })
+}
+
+/// Return each string literal of `flake` outside a comment, with where it
+/// starts and ends.
+fn literals(flake: &str) -> Vec<(usize, usize, &str)> {
+    let mut found = Vec::new();
+    let mut at = 0;
+    while let Some(open) = flake[at..].find('"').map(|i| at + i) {
+        let Some(close) = flake[open + 1..].find('"').map(|i| open + 1 + i) else {
+            break;
+        };
+        if !in_comment(flake, open) {
+            found.push((open + 1, close, &flake[open + 1..close]));
+        }
+        at = close + 1;
+    }
+    found
+}
+
+/// Return the release that `flake`, a `flake.nix`, now asks for, when it
+/// differs from what the lock's `original` of the library input pins.
+///
+/// Kix finds the input's url as [`retag_flake`] does. It returns `None`
+/// when a url still pins what the lock pins, or when the urls of the
+/// repository do not agree on one release tag, and leaves those cases to
+/// the check after evaluation.
+pub fn declared_tag(flake: &str, original: &Value) -> Option<Version> {
+    let pins: Vec<Option<String>> = literals(flake)
+        .into_iter()
+        .filter_map(|(_, _, l)| repo_url_of(l, original))
+        .map(|u| u.pin)
+        .collect();
+    let locked = pin_of_original(original);
+    if pins.is_empty() || pins.contains(&locked) {
+        return None;
+    }
+    let mut tags = pins
+        .iter()
+        .map(|p| p.as_deref().and_then(crate::flake_lock::release_tag));
+    let first = tags.next()??;
+    tags.all(|t| t.as_ref() == Some(&first)).then_some(first)
+}
+
+/// Set the library input's url in the `flake.nix` of `dir` back to the tag
+/// its `flake.lock` pins, after a person moved it by hand. Return the
+/// version flake.nix asked for, or `None` when it already matches.
+pub fn reset_moved_tag(dir: &Path) -> Result<Option<Version>, PinLibraryError> {
+    let read = |path: PathBuf| {
+        std::fs::read_to_string(&path).map_err(|source| PinLibraryError::Io {
+            action: "read",
+            path,
+            source,
+        })
+    };
+    let lock: Value = serde_json::from_str(&read(dir.join(crate::flake_lock::FILE))?)
+        .map_err(|e| PinLibraryError::Check(format!("Kix could not read flake.lock: {e}")))?;
+    let Some(original) = crate::flake_lock::input_original(&lock) else {
+        return Ok(None);
+    };
+    let flake_path = dir.join("flake.nix");
+    let flake = read(flake_path.clone())?;
+    let Some(asked) = declared_tag(&flake, original) else {
+        return Ok(None);
+    };
+    let Some(locked) = pin_of_original(original) else {
+        return Ok(None);
+    };
+    // Find the url that now pins the moved tag, and move it back.
+    let mut moved = original.clone();
+    moved["ref"] = Value::String(format!("v{}", asked.release()));
+    let text = retag_flake(&flake, &moved, &locked).map_err(|_| PinLibraryError::UrlNotFound {
+        to_url: tagged_url(original, &locked),
+    })?;
+    std::fs::write(&flake_path, text).map_err(|source| PinLibraryError::Io {
+        action: "write",
+        path: flake_path,
+        source,
+    })?;
+    Ok(Some(asked))
 }
 
 /// Return `flake`, a `flake.nix`, with the url of the library input moved to
@@ -398,20 +497,10 @@ fn retarget(literal: &str, original: &Value, tag: &str) -> Option<String> {
 /// project can pin a second input to the same url, such as the Kix it builds
 /// into an image, and that input must stay. Comment lines are skipped.
 fn retag_flake(flake: &str, original: &Value, tag: &str) -> Result<String, Retag> {
-    let mut found = Vec::new();
-    let mut at = 0;
-    while let Some(open) = flake[at..].find('"').map(|i| at + i) {
-        let Some(close) = flake[open + 1..].find('"').map(|i| open + 1 + i) else {
-            break;
-        };
-        let literal = &flake[open + 1..close];
-        if !in_comment(flake, open)
-            && let Some(new) = retarget(literal, original, tag)
-        {
-            found.push((open + 1, close, new));
-        }
-        at = close + 1;
-    }
+    let found: Vec<(usize, usize, String)> = literals(flake)
+        .into_iter()
+        .filter_map(|(start, end, l)| Some((start, end, retarget(l, original, tag)?)))
+        .collect();
     match found.as_slice() {
         [] => Err(Retag::NotFound),
         [(start, end, new)] => Ok(format!("{}{new}{}", &flake[..*start], &flake[*end..])),
@@ -716,6 +805,34 @@ mod tests {
                 "{other}"
             );
         }
+    }
+
+    #[test]
+    fn the_declared_tag_is_found_only_when_no_url_still_pins_the_lock() {
+        let locked = github(Some("v0.9.1"));
+        let one = |url: &str| format!("inputs.kix.url = \"{url}\";");
+        assert_eq!(
+            declared_tag(&one("github:kix-run/kix/v0.10.0"), &locked),
+            Some(v("0.10.0"))
+        );
+        assert_eq!(
+            declared_tag(&one("github:kix-run/kix/v0.9.1"), &locked),
+            None
+        );
+        // A second input still on the locked tag, a branch, another
+        // repository, and an attribute set are left to the later check.
+        let two = format!(
+            "{}\n{}",
+            one("github:kix-run/kix/v0.10.0"),
+            one("github:kix-run/kix/v0.9.1")
+        );
+        assert_eq!(declared_tag(&two, &locked), None);
+        assert_eq!(declared_tag(&one("github:kix-run/kix/main"), &locked), None);
+        assert_eq!(declared_tag(&one("github:fork/kix/v0.10.0"), &locked), None);
+        assert_eq!(
+            declared_tag("inputs.kix = { ref = \"v0.10.0\"; };", &locked),
+            None
+        );
     }
 
     #[test]

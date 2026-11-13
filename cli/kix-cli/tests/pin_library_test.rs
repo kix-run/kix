@@ -247,6 +247,7 @@ fn a_tag_moved_after_the_lock_is_caught() {
     // A person moves the tag in flake.nix, and the lock still pins this Kix.
     let flake = read(&proj.join("flake.nix")).replace(&format!("v{VERSION}"), "v0.0.1");
     std::fs::write(proj.join("flake.nix"), flake).unwrap();
+    let lock = read(&proj.join("flake.lock"));
 
     Command::cargo_bin("kix")
         .unwrap()
@@ -260,6 +261,8 @@ fn a_tag_moved_after_the_lock_is_caught() {
         .assert()
         .failure()
         .stderr(predicate::str::contains(format!(
-            "flake.lock pins Kix {VERSION}, but flake.nix now asks for 0.0.1. Run `kix upgrade --to 0.0.1`."
+            "flake.nix asks for Kix 0.0.1, but flake.lock pins Kix {VERSION}. Run `kix upgrade --to 0.0.1`."
         )));
+    // Kix stopped before Nix ran, so the lock is as it was.
+    assert_eq!(read(&proj.join("flake.lock")), lock);
 }

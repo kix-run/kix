@@ -1,0 +1,3 @@
+# This flake provides the Kix library itself, so Kix runs this project with
+# the library in this checkout and compares no versions.
+library = "self"

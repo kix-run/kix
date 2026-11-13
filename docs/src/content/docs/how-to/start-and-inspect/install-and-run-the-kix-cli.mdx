@@ -57,6 +57,10 @@ everyone who works on the project, and every CI job, runs Kix 0.10.0 for it.
 [`kix upgrade --to <version>`](/docs/reference/cli/upgrade/) sets the tag and
 writes `flake.lock`. Commit both files.
 
+When Kix cannot find the tag in `flake.nix`, for example because the input is
+written as an attribute set, it still checks after evaluation that the library
+has the same version as the running Kix.
+
 Before Kix parses its arguments, it reads `flake.lock`. When the `kix` input
 pins the running version, the command runs. Otherwise Kix runs the project's
 version from `~/.local/share/kix/<version>` in its place, with the same
@@ -104,16 +108,22 @@ install script made to it, when the install script installed the running Kix.
 
 ## When the Kix library does not match Kix
 
-After Kix evaluates a project, it checks that the Kix library has the same
-version as the running Kix. They match unless `flake.nix` changed after
-`flake.lock` was written, for example when someone edited the tag by hand:
+The Kix library and the running Kix match unless `flake.nix` changed after
+`flake.lock` was written, for example when someone edited the tag by hand.
+Kix then stops:
 
 ```text
-flake.lock pins Kix 0.10.0, but flake.nix now asks for 0.10.1. Run `kix upgrade --to 0.10.1`.
+flake.nix asks for Kix 0.10.1, but flake.lock pins Kix 0.10.0. Run `kix upgrade --to 0.10.1`.
 ```
 
-Run [`kix upgrade --to 0.10.1`](/docs/reference/cli/upgrade/) to write the new
-version into `flake.lock`, then commit both files. Installing a version with
+Kix compares the two tags before it evaluates anything, so `flake.lock` stays
+as it was. Run [`kix upgrade --to 0.10.1`](/docs/reference/cli/upgrade/): it
+sets `flake.nix` back to 0.10.0, builds every cluster with it, then moves the
+project to 0.10.1 with the usual builds and release notes. Commit both files.
+
+When Kix cannot find the tag in `flake.nix`, for example because the input is
+written as an attribute set, it still checks after evaluation that the library
+has the same version as the running Kix. Installing a version with
 `kix self install` alone does not change which Kix runs, because Kix takes a
 project's version only from `flake.lock`.
 
@@ -122,8 +132,9 @@ project's version only from `flake.lock`.
 A project uses a development Kix library when its `kix` input is a local
 folder (`path:...`, or a local `git+file://` repository with no ref), a branch,
 or an input you replace with
-[`--override-input kix <url>`](/docs/reference/cli/global-flags/). The Kix
-repository itself is one too. A development Kix library has no release
+[`--override-input kix <url>`](/docs/reference/cli/global-flags/), and when
+`kix.toml` sets [`library = "self"`](/docs/reference/kix-toml/#the-library-setting),
+as the Kix repository does because its own flake provides the library. A development Kix library has no release
 version, so Kix runs the Kix you started and compares no versions. It prints
 one line on stderr:
 

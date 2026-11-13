@@ -62,7 +62,7 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
                 .parse()
                 .map_err(|_| miette!("{} names no version in `from`", state::FILE))?,
         ),
-        None => project_version(&dir)?,
+        None => project_version(&dir, !args.dry_run)?,
     };
     let to = match args.to.as_deref() {
         None | Some("latest") => None,
@@ -201,7 +201,7 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
         work: work_dir(&dir),
         installed_here: Vec::new(),
         from: from.clone(),
-        pinned: match project_version(&dir) {
+        pinned: match project_version(&dir, false) {
             Ok(Some(v)) => v,
             _ => from.clone(),
         },
@@ -224,6 +224,9 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
                 saved_in_use(s),
                 Known::of(s.packages_in_use.is_some(), None),
             ),
+            // Kix X would evaluate the tag flake.nix now names, and Nix
+            // would rewrite the lock, so a dry run does not ask it.
+            (None, Some(_)) if tag_moved(&dir) => (None, Known::Nothing),
             (None, Some(kix)) => {
                 let in_use = packages_in_use(kix, &from, &dir);
                 let count = clusters(kix, &dir).ok().map(|c| c.len());
@@ -560,24 +563,52 @@ fn exit(code: Exit) -> Result<()> {
 }
 
 /// Return the version of Kix the project in `dir` uses, from the release
-/// tag its `flake.lock` pins, or `None` when it pins none.
-fn project_version(dir: &Path) -> Result<Option<Version>> {
+/// tag its `flake.lock` pins, or `None` when it pins none. When a person
+/// moved the tag in `flake.nix` by hand, the lock's version is the one the
+/// project is on. With `reset`, Kix also sets `flake.nix` back to that tag,
+/// so the upgrade builds the baseline with it and then moves the project.
+fn project_version(dir: &Path, reset: bool) -> Result<Option<Version>> {
     use kix::flake_lock::{Development, LockError, ProjectKix};
     match kix::flake_lock::project_kix(dir, &[]) {
         Ok(ProjectKix::Release(v)) => Ok(Some(v)),
         Ok(ProjectKix::Development(Development::OwnLibrary)) => {
             refuse(
-                "This project holds the Kix library itself, so it has no version of Kix to upgrade.",
+                "This project's kix.toml sets library = \"self\", so its flake provides the Kix library and it has no version of Kix to upgrade.",
             )?;
             unreachable!("refuse exits")
         }
         Ok(ProjectKix::Development(_)) => Ok(None),
-        Err(e @ LockError::Unreadable { .. }) => {
+        Err(LockError::TagMoved { locked, asked }) => {
+            if reset {
+                if let Err(e) = kix::pin_library::reset_moved_tag(dir) {
+                    refuse(&format!(
+                        "{e}\nNext: make that change, then run `kix upgrade` again."
+                    ))?;
+                }
+                println!(
+                    "flake.nix asked for Kix {}, but flake.lock pins Kix {}. Kix set flake.nix back to {} to upgrade from there.",
+                    asked.release(),
+                    locked.release(),
+                    locked.release()
+                );
+            }
+            Ok(Some(*locked))
+        }
+        Err(e @ (LockError::Unreadable { .. } | LockError::Setting(_))) => {
             refuse(&format!("{e}\nNo project files were modified."))?;
             unreachable!("refuse exits")
         }
         Err(_) => Ok(None),
     }
+}
+
+/// Return whether a person moved the tag in the `flake.nix` of `dir` after
+/// `flake.lock` was written.
+fn tag_moved(dir: &Path) -> bool {
+    matches!(
+        kix::flake_lock::project_kix(dir, &[]),
+        Err(kix::flake_lock::LockError::TagMoved { .. })
+    )
 }
 
 /// Pin the project in `dir`, whose `flake.lock` pins no version of Kix, to
@@ -1479,7 +1510,7 @@ mod tests {
     #[test]
     fn the_version_the_project_is_on_comes_from_flake_lock() {
         let dir = tempfile::tempdir().unwrap();
-        assert_eq!(project_version(dir.path()).unwrap(), None);
+        assert_eq!(project_version(dir.path(), false).unwrap(), None);
         std::fs::write(
             dir.path().join("flake.lock"),
             r#"{"root": "root", "version": 7, "nodes": {
@@ -1488,7 +1519,7 @@ mod tests {
             }}"#,
         )
         .unwrap();
-        let v = project_version(dir.path()).unwrap().unwrap();
+        let v = project_version(dir.path(), false).unwrap().unwrap();
         assert_eq!(v.release(), "0.8.0-rc.1");
         assert!(v < "0.8.0".parse().unwrap());
     }

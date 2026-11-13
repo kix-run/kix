@@ -279,8 +279,14 @@ pins.
   has a `v<version>` tag in its `original` (`ref`, with or without
   `refs/tags/`), or `ProjectKix::Development` for a `path` input, a local
   `git+file` repository with no ref, a ref that is not a release tag (a
-  branch), an `--override-input kix`, or a project directory that holds the
-  library itself (`kix/lib/mkFlake.nix`, as in this repository). Otherwise it
+  branch), an `--override-input kix`, or `library = "self"` in `kix.toml`
+  (`project::library_is_self`, set in this repository's root `kix.toml`,
+  since its own flake provides the library). For a release it also reads
+  `flake.nix`: when the url of the `kix` input now names another release tag
+  (`pin_library::declared_tag`, which finds the url as pinning does), it
+  returns `TagMoved`, `flake.nix asks for Kix Y, but flake.lock pins Kix X.
+  Run \`kix upgrade --to Y\`.`, before Nix evaluates and rewrites the lock.
+  Otherwise it
   returns a `LockError` whose message names one fix, always
   `kix upgrade --to <running version>`: `Missing` (no lock), `NoInput`,
   `OldName` (the input is still `kixpkgs`, `[K9179]`, which suggests the
@@ -295,7 +301,9 @@ pins.
   check between Kix and a project's library: the library a project evaluated
   must be the running Kix. `LibraryMismatch` says
   `flake.lock pins Kix X, but flake.nix now asks for Y. Run \`kix upgrade --to Y\`.`
-  when `flake.nix` moved the tag after selection read the lock, and names
+  when `flake.nix` moved the tag in a way `declared_tag` cannot see (an
+  attribute-set input, another repository, or a second url of the same
+  repository still on the old tag), and names
   `KIX_SELECTED_BY` when the running Kix is not the one the lock pins.
 - **Library check** (`check_library` in `kix-core/src/eval/nix.rs`): once per run,
   it reads the project's version from `flake.lock` (before Nix evaluates,
@@ -478,7 +486,11 @@ writes. Versions before 0.10.0-rc.4 take the older spellings `list packages
   (no lock, no tag, a commit, a branch, or a folder) has nothing to build
   and compare against, so `pin_only` pins the target (an exact `--to`
   without the index, else the chosen release) and builds nothing; a project
-  that holds the library itself is refused. A dry run's `Next:` line
+  with `library = "self"` is refused. When a person moved the tag in
+  `flake.nix` by hand (`TagMoved`), `project_version` sets it back to the
+  lock's tag (`pin_library::reset_moved_tag`) and the upgrade runs from the
+  lock's version; a dry run changes nothing and does not ask the installed
+  Kix which packages are in use. A dry run's `Next:` line
   repeats `--to` as typed. An exact prerelease in `--to` is a target, found in the full
   index, and its own change records count.
   Exit 2 on a failed build or lock, 3 when a person should read the result
@@ -1117,7 +1129,7 @@ a record line need regenerating.
 
 #### project (`kix-core/src/project.rs`)
 
-- `project.rs`: reads `kix.toml` beside `flake.nix` in the `--flake` directory (`ProjectConfig::load`). Its keys are `builder` and the `[upgrade]` table (`min-age = "7d"`, `upgrade_min_age` in days, read only by `kix upgrade`). A `kix` key is refused with `[K4476]` (`KixSettingRemoved`), since the project's version comes from `flake.lock` (`flake_lock.rs`). `builder` is `kix` (the default when the file or key is missing), `nix`, or `remote` (`BuilderKind`); `builder_source` records where the choice came from (`BuilderSource`). Unknown keys, unknown values, and invalid TOML are errors that name the file. `ProjectConfig::check_supported` is the one place that refuses `remote`. `check_agreement` compares the builder with `legacyPackages.<system>.kixConfig.builder`, which the library reads from the same file through Nix and so misses while git does not track `kix.toml`; `eval::nix::eval_activation_index` runs it once per run before it evaluates a cluster (skipped for `KIX_TEST_BUILDER`), and its `ProjectMismatch` names the fix (`git add kix.toml`, `kix upgrade --to <kix>` or merging `mkFlake` for a flake without `kixConfig`, or both values). `KIX_TEST_BUILDER` overrides the file, for Kix's own tests only. A remote flake reference gets the default.
+- `project.rs`: reads `kix.toml` beside `flake.nix` in the `--flake` directory (`ProjectConfig::load`). Its keys are `builder`, `library` (only `"self"`, `library_self`, for a flake that provides the Kix library itself; `library_is_self` reads it leniently for selection), and the `[upgrade]` table (`min-age = "7d"`, `upgrade_min_age` in days, read only by `kix upgrade`). A `kix` key is refused with `[K4476]` (`KixSettingRemoved`), since the project's version comes from `flake.lock` (`flake_lock.rs`). `builder` is `kix` (the default when the file or key is missing), `nix`, or `remote` (`BuilderKind`); `builder_source` records where the choice came from (`BuilderSource`). Unknown keys, unknown values, and invalid TOML are errors that name the file. `ProjectConfig::check_supported` is the one place that refuses `remote`. `check_agreement` compares the builder with `legacyPackages.<system>.kixConfig.builder`, which the library reads from the same file through Nix and so misses while git does not track `kix.toml`; `eval::nix::eval_activation_index` runs it once per run before it evaluates a cluster (skipped for `KIX_TEST_BUILDER`), and its `ProjectMismatch` names the fix (`git add kix.toml`, `kix upgrade --to <kix>` or merging `mkFlake` for a flake without `kixConfig`, or both values). `KIX_TEST_BUILDER` overrides the file, for Kix's own tests only. A remote flake reference gets the default.
 - `flake_lock.rs`: `project_kix` reads the version of Kix a project uses from the release tag of its `kix` input in `flake.lock`; see "Versions, selection, and installs".
 
 #### system_nix (`kix-core/src/system_nix.rs`)
