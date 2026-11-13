@@ -561,7 +561,7 @@ fn tui_height() -> Option<u16> {
         Ok(rows) if rows > 0 => Some(rows),
         _ => {
             eprintln!(
-                "{} KIX_TUI_HEIGHT is {value:?}, which is not a number of rows. Kix uses the default height.",
+                "{} KIX_TUI_HEIGHT is {value:?}, which is not a positive number of rows. Kix uses the default height. Set KIX_TUI_HEIGHT to a positive number of rows, or unset it.",
                 output::yellow("warning:"),
             );
             None
