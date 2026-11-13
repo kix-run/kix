@@ -11,14 +11,16 @@ use std::io::Write;
 use std::sync::Arc;
 
 use miette::{IntoDiagnostic, Result, miette};
+use serde_json::Value;
 
 use crate::client;
 use kix::build_source::SopsSources;
 use kix::cluster::activation::{Record, Records};
 use kix::cluster::apply::ChangeAction;
 use kix::cluster::binding;
+use kix::cluster::classify::{DeployScope, Verdict as DryRunVerdict, classify};
 use kix::cluster::discovery;
-use kix::cluster::preview::{DryRunOutcome, Refusal};
+use kix::cluster::preview::Refusal;
 use kix::cluster::readiness;
 use kix::cluster::scheduler::{self, OnErrorPolicy, SchedulerConfig};
 use kix::cluster::stream::{DeployObserver, DeployResult, NullObserver};
@@ -359,10 +361,11 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
     }
     let RollbackPlan {
         target_result_dir,
+        build,
         checked,
     } = planned;
 
-    let refused = refused_writes(&client, &checked).await?;
+    let refused = refused_writes(&client, cluster, &build, &checked).await?;
     if !refused.is_empty() {
         print_refused(&refused);
         let next = if args.force_conflicts {
@@ -698,6 +701,8 @@ fn print_current(current: &Record) {
 /// path.
 struct RollbackPlan {
     target_result_dir: std::path::PathBuf,
+    /// Every manifest of the target build.
+    build: Vec<Value>,
     checked: CheckedPlan,
 }
 
@@ -813,22 +818,34 @@ async fn plan_rollback(
         .map_err(|e| miette!("{e}"))?;
     Ok(RollbackPlan {
         target_result_dir,
+        build: target_graph
+            .resources
+            .values()
+            .map(|r| r.manifest.clone())
+            .collect(),
         checked,
     })
 }
 
 /// Send the rollback's writes to the apiserver as a dry run, and return each
 /// write it refuses with the reason. A rollback that stops halfway leaves the
-/// cluster between two builds, so a refusal stops it before any write. A
-/// write whose admission webhook could not reach a Service that the rollback
-/// writes is not a refusal, because the rollback creates that Service.
+/// cluster between two builds, so a refusal stops it before any write. The
+/// answers are sorted by [`classify`], as `kix plan` sorts them, so a write
+/// that is not checked does not stop the rollback.
 async fn refused_writes(
     client: &kube::Client,
+    cluster: &str,
+    build: &[Value],
     checked: &CheckedPlan,
 ) -> Result<Vec<(ResourceId, String)>> {
     let target = Target::connect(client.clone(), SopsSources::Local)
         .await
         .map_err(|e| miette!("{e}"))?;
+    let served_kinds: HashSet<String> = target
+        .discovery()
+        .iter()
+        .map(|(ar, _)| ar.kind.clone())
+        .collect();
     let config = SchedulerConfig {
         timeout: readiness::DEFAULT_TIMEOUT,
         on_error: OnErrorPolicy::Continue,
@@ -849,29 +866,22 @@ async fn refused_writes(
             "the rollback's dry run stopped: {e}. Nothing was applied to the cluster."
         ));
     }
-    let written: HashSet<ResourceId> = checked
-        .plan()
-        .nodes()
-        .iter()
-        .filter_map(|n| match &n.action {
-            ChangeAction::Apply(manifest) => Some(ResourceId::from_value(manifest)),
-            ChangeAction::Skip(_) | ChangeAction::Orphan(_) => None,
-        })
-        .collect();
+    let scope = DeployScope {
+        cluster,
+        build,
+        plan: checked.plan(),
+        served_kinds: &served_kinds,
+    };
     let mut refused = Vec::new();
-    for a in answers {
-        let DryRunOutcome::Refused(r) = a.outcome else {
-            continue;
-        };
-        match r.unreachable_service_written(|rid| written.contains(rid)) {
-            Some(service) if !output::quiet() => eprintln!(
-                "  {} {}: not checked, because its admission webhook could not reach {}, which this rollback writes",
-                output::dim("?"),
-                a.rid,
-                service.display_id()
-            ),
-            Some(_) => {}
-            None => refused.push((a.rid, describe_refusal(&r))),
+    for (rid, verdict) in classify(&answers, &scope) {
+        match verdict {
+            DryRunVerdict::Accepted => {}
+            DryRunVerdict::NotChecked { detail, .. } => {
+                if !output::quiet() {
+                    eprintln!("  {} {rid}: not checked, {detail}", output::dim("?"));
+                }
+            }
+            DryRunVerdict::Refused(r) => refused.push((rid, describe_refusal(&r))),
         }
     }
     Ok(refused)

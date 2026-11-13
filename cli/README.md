@@ -729,22 +729,24 @@ over that plan through `ops::DryRun`, so every SSA and DELETE goes with
   `DryRunOutcome::Recreated`, and `plan::server::not_kept` collects them
   into the plan's `not_kept` for every create, update, and recreate the dry
   run answered, leaving out custom resources whose CRD this deploy changes
-  (`changed_crds`), which were checked against the old schema. The text and
+  (`ChangedCrds`), which were checked against the old schema. The text and
   Markdown print them as a warning after the stops; they neither stop the
   deploy nor count as a change.
-- **Not checked.** `plan::document` files an unknown kind whose CRD the
-  build brings (a CRD manifest of that group and kind, or a `crd-ref-*`
-  import marker for a CRD in its API group), an unknown-kind, invalid, or
-  other refusal of an object whose CRD the dry run would change
-  (`changed_crds`: the object was checked against the CRD now served), a
-  missing namespace the build creates, a webhook without dry-run support, a
-  webhook that could not reach a Service the build writes
-  (`Refusal::unreachable_service_written`; `kix rollback`'s dry run skips
-  these too, against the Services its plan applies), and a node the engine
-  never tried under `not_checked`, not as refusals. A
-  first deploy is mostly this. An immutable-field refusal followed by a
-  `Recreated` answer for the same object is dropped, since the deploy
-  recreates it. A recreated object stays in `packages` as changed, with the
+- **Not checked.** `cluster::classify::classify` sorts the answers into
+  `Verdict::Accepted`, `Refused`, and `NotChecked { reason, because }`.
+  `kix plan`, the deploy gate, saved plans, and `kix rollback` all call it.
+  Not checked: an unknown kind whose CRD the build brings (a CRD manifest of
+  that group and kind, or a `crd-ref-*` import marker for a CRD in its API
+  group), an unknown-kind, invalid, or other refusal of an object whose CRD
+  the dry run would change (`ChangedCrds`: the object was checked against
+  the CRD now served), a missing namespace the build creates, a webhook
+  without dry-run support, and a webhook that could not reach a Service
+  when the plan applies that Service or another object of the package that
+  owns it (`kix.run/package`). An unreachable webhook the plan does not
+  repair is a refusal whose message names `--reconcile`. `plan::document`
+  adds a node the engine never tried. A first deploy is mostly this. An
+  immutable-field refusal followed by a `Recreated` answer for the same
+  object is accepted, since the deploy recreates it. A recreated object stays in `packages` as changed, with the
   build comparison's field changes when the create could not be dry-run.
 - **Deploy stops first.** When the plan has a conflict, a refused write, or a
   refused prune delete and `--on-error stop` (the default), `kix deploy`

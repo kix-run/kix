@@ -1025,6 +1025,7 @@ mod tests {
             .push(crate::plan::document::UncheckedObject {
                 resource: SECRET.into(),
                 reason: crate::plan::document::UncheckedReason::WebhookNoDryRun,
+                because: None,
                 detail: huge,
             });
         let err = write(plan, graph, io::sink()).unwrap_err();

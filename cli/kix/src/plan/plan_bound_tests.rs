@@ -308,6 +308,33 @@ fn reconcile_reapplies_the_deployed_build() {
     );
 }
 
+/// A deploy of an unchanged build skips every Service, so it does not
+/// recreate one somebody deleted. `--reconcile` puts each Service in the
+/// apply set, which is what the dry run's advice for an unreachable webhook
+/// relies on.
+#[test]
+fn reconcile_applies_a_service_the_build_did_not_change() {
+    use crate::cluster::apply::ChangeAction;
+    let build = build();
+    let applied_services = |extra: &[&str]| {
+        let checked = plan(&deployed(Some(&build)), &build, flags(extra)).unwrap();
+        checked
+            .plan()
+            .nodes()
+            .iter()
+            .filter(|n| matches!(&n.action, ChangeAction::Apply(m) if m["kind"] == "Service"))
+            .count()
+    };
+    let services = build
+        .resources
+        .values()
+        .filter(|r| r.manifest["kind"] == "Service")
+        .count();
+    assert!(services > 0, "the fixture build has no Service");
+    assert_eq!(applied_services(&[]), 0);
+    assert_eq!(applied_services(&["--reconcile"]), services);
+}
+
 /// A PackageInstance that changed while its resources did not is
 /// applied, so the plan shows its package as changed.
 #[test]

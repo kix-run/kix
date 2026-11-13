@@ -152,7 +152,7 @@ Its JSON Schema is `cli/kix-cli/schema/plan.schema.json`.
 | `drift` | Checked section of `{ resource, path, live, deployed, managers, reverted }`. A plan lists the drift on the objects the deploy applies, so `reverted` is always true; `kix diff` also lists drift the deploy leaves alone, with `reverted` false. |
 | `prune` | Checked section of `{ resource, fate, detail }`. See [Prune fates](#prune-fates). |
 | `readiness` | Always `{ "status": "not_checked", "reason": "not_previewable" }`. |
-| `not_checked` | Array of `{ resource, reason, detail }`. Empty unless `made_by` is `dry_run`. |
+| `not_checked` | Array of `{ resource, reason, because, detail }`. `because` names the Namespace, CustomResourceDefinition, or Service that this deploy changes and that the answer depends on, when Kix knows which. Empty unless `made_by` is `dry_run`. |
 
 Each checked section is one of:
 
@@ -205,7 +205,7 @@ plan reports it as an ownership conflict naming the manager. With
 | `namespace_missing` | The namespace does not exist and the build does not create it. |
 | `unknown_kind` | The apiserver does not serve the kind and the build has no CRD for it. |
 | `decryption` | A SOPS Secret could not be decrypted. |
-| `other` | The deploy refuses the object before sending it, or the apiserver gave another error. |
+| `other` | The deploy refuses the object before sending it, or the apiserver gave another error. When `webhook` is set, an admission webhook could not reach its Service and this deploy does not repair it. See [Objects not checked](#objects-not-checked). |
 
 ## Prune fates
 
@@ -226,13 +226,21 @@ deploy creates cannot be checked. These objects are listed under
 `not_checked`, not as refusals, and their entries in `packages` come from
 comparing builds. Most of a cluster's first deploy is in this list.
 
+An admission webhook that cannot reach its Service is not checked only when
+this deploy writes that Service or another object of its package. Otherwise
+nothing in the deploy repairs the webhook, so the deploy would fail at the
+first object the webhook checks. The plan lists the object as a refusal with
+reason `other`, and the deploy stops before it writes anything. Get the
+webhook's backend running again, or, if someone deleted the Service, run
+`kix deploy <cluster> --reconcile` to create it again.
+
 | `reason` | Meaning |
 | --- | --- |
 | `crd_created_by_this_deploy` | Its kind comes from a CRD this deploy creates. |
 | `crd_changed_by_this_deploy` | Its kind's CRD is changed by this deploy, and the cluster refused the object when checking it against the CRD it has now. The deploy applies the CRD first, so the refusal may not happen. |
 | `namespace_created_by_this_deploy` | Its namespace is created by this deploy. |
 | `webhook_no_dry_run` | An admission webhook that would be called does not support dry run. |
-| `webhook_service_written_by_this_deploy` | An admission webhook that would be called could not reach its Service, because the Service does not exist or has no ready pods, and this deploy writes that Service. `detail` names the webhook and the Service. A webhook that answers and denies the write is still a refusal. |
+| `webhook_backend_written_by_this_deploy` | An admission webhook that would be called could not reach its Service, because the Service does not exist or has no ready pods. This deploy writes that Service, or another object of the package that owns it, such as the operator's Deployment. `because` names the Service. A webhook that answers and denies the write is still a refusal. |
 | `dependency_not_checked` | The engine did not try the object, for example because the dry run was cancelled. `detail` names the object it waited on when there is one. |
 
 ## Offline plans

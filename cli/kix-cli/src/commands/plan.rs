@@ -16,6 +16,7 @@ use miette::{Result, miette};
 use serde_json::Value;
 
 use kix::build_source::InstallableBuild;
+use kix::cluster::classify::{ChangedCrds, DeployScope, Verdict as DryRunVerdict, classify};
 use kix::cluster::preview::{DryRunAnswer, DryRunOutcome, PruneAnswer, Refusal};
 use kix::cluster::readiness;
 use kix::cluster::scheduler::{self, OnErrorPolicy, PrunePolicy, SchedulerConfig};
@@ -433,40 +434,39 @@ pub(crate) fn document(p: &mut Planned, report: Option<&DryRunReport>, manifests
     let mut conflicts = Vec::new();
     let mut admission = Vec::new();
     let mut not_checked = Vec::new();
-    let mut prune_answers: HashMap<ResourceId, PruneAnswer> = HashMap::new();
-    let crds = BuildCrds::of(p.new_manifests());
-    let manifests: HashMap<ResourceId, &Value> = p
-        .new_manifests()
+    let prune_answers: HashMap<ResourceId, PruneAnswer> = answers
         .iter()
-        .map(|m| (ResourceId::from_value(m), m))
+        .filter_map(|a| match &a.outcome {
+            DryRunOutcome::Pruned(answer) => Some((a.rid.clone(), answer.clone())),
+            _ => None,
+        })
         .collect();
-    let built_namespaces: HashSet<String> = p
-        .new_manifests()
-        .iter()
-        .map(ResourceId::from_value)
-        .filter(|rid| rid.kind == "Namespace")
-        .map(|rid| rid.name)
-        .collect();
-    let served = report.map(|r| &r.served_kinds);
-    let changed_crds = changed_crds(answers);
-    // An immutable-field refusal is followed by a recreate when the engine
-    // may delete the object; the deploy recreates it rather than stopping.
-    let recreated: HashSet<&ResourceId> = answers
-        .iter()
-        .filter(|a| matches!(a.outcome, DryRunOutcome::Recreated { .. }))
-        .map(|a| &a.rid)
-        .collect();
+    let no_kinds = HashSet::new();
+    let scope = DeployScope {
+        cluster: &p.build.graph().cluster_name,
+        build: p.new_manifests(),
+        plan: p.checked.plan(),
+        served_kinds: report.map_or(&no_kinds, |r| &r.served_kinds),
+    };
 
-    for answer in answers {
-        let resource = answer.rid.display_id();
-        let refusal = match &answer.outcome {
-            DryRunOutcome::Refused(_) if recreated.contains(&answer.rid) => continue,
-            DryRunOutcome::Refused(r) => r,
-            DryRunOutcome::Pruned(a) => {
-                prune_answers.insert(answer.rid.clone(), a.clone());
+    for (rid, verdict) in classify(answers, &scope) {
+        let resource = rid.display_id();
+        let refusal = match verdict {
+            DryRunVerdict::Accepted => continue,
+            DryRunVerdict::NotChecked {
+                reason,
+                because,
+                detail,
+            } => {
+                not_checked.push(UncheckedObject {
+                    resource,
+                    reason,
+                    because: because.map(|b| b.display_id()),
+                    detail,
+                });
                 continue;
             }
-            DryRunOutcome::Applied(_) | DryRunOutcome::Recreated { .. } => continue,
+            DryRunVerdict::Refused(refusal) => refusal,
         };
         let refused = |reason, webhook: Option<String>, message: String| AdmissionRefusal {
             resource: resource.clone(),
@@ -479,118 +479,56 @@ pub(crate) fn document(p: &mut Planned, report: Option<&DryRunReport>, manifests
             Refusal::Conflict { owners, message } => conflicts.push(Conflict {
                 resource: resource.clone(),
                 owners: owners
-                    .iter()
+                    .into_iter()
                     .map(|o| ConflictOwner {
-                        manager: o.manager.clone(),
-                        fields: o.fields.clone(),
+                        manager: o.manager,
+                        fields: o.fields,
                     })
                     .collect(),
-                message: message.clone(),
-            }),
-            Refusal::WebhookNoDryRun { message, .. } => not_checked.push(UncheckedObject {
-                resource: resource.clone(),
-                reason: UncheckedReason::WebhookNoDryRun,
-                detail: message.clone(),
+                message,
             }),
             Refusal::WebhookUnreachable {
-                webhook,
-                service,
-                message,
-            } => {
-                if refusal
-                    .unreachable_service_written(|rid| manifests.contains_key(rid))
-                    .is_some()
-                {
-                    not_checked.push(UncheckedObject {
-                        resource: resource.clone(),
-                        reason: UncheckedReason::WebhookServiceWrittenByThisDeploy,
-                        detail: format!(
-                            "admission webhook {} could not reach {}, which this deploy writes",
-                            webhook.as_deref().unwrap_or("?"),
-                            service.display_id()
-                        ),
-                    })
-                } else {
-                    admission.push(refused(
-                        RefusalReason::Other,
-                        webhook.clone(),
-                        message.clone(),
-                    ))
-                }
+                webhook, message, ..
             }
-            Refusal::UnknownKind { .. } | Refusal::Invalid { .. } | Refusal::Other { .. }
-                if manifests
-                    .get(&answer.rid)
-                    .and_then(|m| crd_key(m))
-                    .is_some_and(|k| changed_crds.contains(&k)) =>
-            {
-                not_checked.push(UncheckedObject {
-                    resource: resource.clone(),
-                    reason: UncheckedReason::CrdChangedByThisDeploy,
-                    detail: "checked against the CRD now on the cluster, which this deploy \
-                             changes"
-                        .into(),
-                })
+            | Refusal::WebhookNoDryRun { webhook, message } => {
+                admission.push(refused(RefusalReason::Other, webhook, message))
             }
-            Refusal::UnknownKind { kind }
-                if !served.is_some_and(|s| s.contains(kind))
-                    && crds.brings(manifests.get(&answer.rid).copied()) =>
-            {
-                not_checked.push(UncheckedObject {
-                    resource: resource.clone(),
-                    reason: UncheckedReason::CrdCreatedByThisDeploy,
-                    detail: format!("kind {kind} is served once this deploy installs its CRD"),
-                })
+            Refusal::WebhookDenied { webhook, message } => {
+                admission.push(refused(RefusalReason::WebhookDenied, webhook, message))
             }
-            Refusal::NamespaceMissing { namespace, .. } if built_namespaces.contains(namespace) => {
-                not_checked.push(UncheckedObject {
-                    resource: resource.clone(),
-                    reason: UncheckedReason::NamespaceCreatedByThisDeploy,
-                    detail: format!("namespace {namespace} is created by this deploy"),
-                })
+            Refusal::PolicyDenied { policy, message } => {
+                admission.push(refused(RefusalReason::PolicyDenied, policy, message))
             }
-            Refusal::WebhookDenied { webhook, message } => admission.push(refused(
-                RefusalReason::WebhookDenied,
-                webhook.clone(),
-                message.clone(),
-            )),
-            Refusal::PolicyDenied { policy, message } => admission.push(refused(
-                RefusalReason::PolicyDenied,
-                policy.clone(),
-                message.clone(),
-            )),
             Refusal::Invalid { immutable, message } => admission.push(refused(
-                if *immutable {
+                if immutable {
                     RefusalReason::ImmutableField
                 } else {
                     RefusalReason::Invalid
                 },
                 None,
-                message.clone(),
+                message,
             )),
             Refusal::Forbidden { message } => {
-                admission.push(refused(RefusalReason::Forbidden, None, message.clone()))
+                admission.push(refused(RefusalReason::Forbidden, None, message))
             }
-            Refusal::NamespaceMissing { message, .. } => admission.push(refused(
-                RefusalReason::NamespaceMissing,
-                None,
-                message.clone(),
-            )),
+            Refusal::NamespaceMissing { message, .. } => {
+                admission.push(refused(RefusalReason::NamespaceMissing, None, message))
+            }
             Refusal::UnknownKind { .. } => {
                 admission.push(refused(RefusalReason::UnknownKind, None, refusal.message()))
             }
             Refusal::Hydration { message } => {
-                admission.push(refused(RefusalReason::Decryption, None, message.clone()))
+                admission.push(refused(RefusalReason::Decryption, None, message))
             }
             Refusal::HashMismatch {
                 sops_source,
                 message,
             } => admission.push(AdmissionRefusal {
-                sops_source: Some(sops_source.clone()),
-                ..refused(RefusalReason::HashMismatch, None, message.clone())
+                sops_source: Some(sops_source),
+                ..refused(RefusalReason::HashMismatch, None, message)
             }),
             Refusal::Other { message } => {
-                admission.push(refused(RefusalReason::Other, None, message.clone()))
+                admission.push(refused(RefusalReason::Other, None, message))
             }
         }
     }
@@ -608,6 +546,7 @@ pub(crate) fn document(p: &mut Planned, report: Option<&DryRunReport>, manifests
             not_checked.push(UncheckedObject {
                 resource: rid.display_id(),
                 reason: UncheckedReason::DependencyNotChecked,
+                because: None,
                 detail: match by {
                     Some(pred) => format!("depends on {pred}"),
                     None => "the dry run was cancelled".into(),
@@ -629,84 +568,18 @@ pub(crate) fn document(p: &mut Planned, report: Option<&DryRunReport>, manifests
     doc.prune = Checked::found(prune_entries(p, &prune_answers));
     // A custom resource whose CRD this deploy changes was checked against the
     // CRD on the cluster now, which prunes the fields the new CRD adds.
+    let changed_crds = ChangedCrds::of(answers);
+    let manifests: HashMap<ResourceId, &Value> = p
+        .new_manifests()
+        .iter()
+        .map(|m| (ResourceId::from_value(m), m))
+        .collect();
     doc.not_kept = kix::plan::server::not_kept(answers, |rid| {
         manifests
             .get(rid)
-            .and_then(|m| crd_key(m))
-            .is_some_and(|k| changed_crds.contains(&k))
+            .is_some_and(|m| changed_crds.crd_of(m).is_some())
     });
     doc
-}
-
-/// Return the `(group, kind)` pair for `manifest`.
-fn crd_key(manifest: &Value) -> Option<(String, String)> {
-    let kind = manifest.get("kind").and_then(Value::as_str)?;
-    let api_version = manifest.get("apiVersion").and_then(Value::as_str)?;
-    let group = api_version.split_once('/').map_or("", |(g, _)| g);
-    Some((group.to_string(), kind.to_string()))
-}
-
-/// Return the `(group, kind)` pair defined by a CRD manifest.
-fn defined_by(crd: &Value) -> Option<(String, String)> {
-    let group = crd.pointer("/spec/group").and_then(Value::as_str)?;
-    let kind = crd.pointer("/spec/names/kind").and_then(Value::as_str)?;
-    Some((group.to_string(), kind.to_string()))
-}
-
-/// Return the `(group, kind)` pairs whose CRDs are created or modified in
-/// `answers`.
-///
-/// Custom resources of these kinds were dry-run validated against the older CRD
-/// currently on the cluster, so validation refusals on them are reported as
-/// `CrdChangedByThisDeploy` rather than hard admission failures.
-fn changed_crds(answers: &[DryRunAnswer]) -> HashSet<(String, String)> {
-    answers
-        .iter()
-        .filter(|a| a.rid.kind == "CustomResourceDefinition")
-        .filter_map(|a| match &a.outcome {
-            DryRunOutcome::Applied(p) => {
-                let unchanged = p
-                    .live
-                    .as_ref()
-                    .is_some_and(|live| comparable(live) == comparable(&p.result));
-                (!unchanged).then(|| defined_by(&p.result)).flatten()
-            }
-            _ => None,
-        })
-        .collect()
-}
-
-/// Custom resource kinds and API groups introduced by the build, either
-/// directly as `CustomResourceDefinition` manifests or via operator import
-/// markers.
-struct BuildCrds {
-    kinds: HashSet<(String, String)>,
-    groups: HashSet<String>,
-}
-
-impl BuildCrds {
-    fn of(manifests: &[Value]) -> Self {
-        let kinds = manifests
-            .iter()
-            .filter(|m| m.get("kind").and_then(Value::as_str) == Some("CustomResourceDefinition"))
-            .filter_map(defined_by)
-            .collect();
-        let groups = manifests
-            .iter()
-            .filter_map(|m| readiness::import_target_from_manifest(m).ok().flatten())
-            .filter(|t| t.kind == "CustomResourceDefinition")
-            .filter_map(|t| t.name.split_once('.').map(|(_, group)| group.to_string()))
-            .collect();
-        BuildCrds { kinds, groups }
-    }
-
-    /// Return `true` if `manifest` belongs to a CRD kind or API group
-    /// introduced by this build.
-    fn brings(&self, manifest: Option<&Value>) -> bool {
-        manifest
-            .and_then(crd_key)
-            .is_some_and(|key| self.groups.contains(&key.0) || self.kinds.contains(&key))
-    }
 }
 
 /// Build the list of [`PruneEntry`] records for orphaned resources.
@@ -868,54 +741,4 @@ fn markdown(p: &Planned, doc: &Plan) -> String {
     }
     out.push_str(&render::render_markdown(doc));
     out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use kix::cluster::apply::ApplyPreview;
-    use serde_json::json;
-
-    fn crd(group: &str, kind: &str, version: &str) -> Value {
-        json!({
-            "apiVersion": "apiextensions.k8s.io/v1",
-            "kind": "CustomResourceDefinition",
-            "metadata": {"name": format!("{}s.{group}", kind.to_lowercase())},
-            "spec": {"group": group, "names": {"kind": kind}, "versions": [{"name": version}]},
-        })
-    }
-
-    fn applied(manifest: &Value, live: Option<Value>) -> DryRunAnswer {
-        DryRunAnswer {
-            rid: ResourceId::from_value(manifest),
-            outcome: DryRunOutcome::Applied(Box::new(ApplyPreview {
-                live,
-                result: manifest.clone(),
-                not_kept: Vec::new(),
-            })),
-        }
-    }
-
-    /// Verify that [`changed_crds`] includes only CRDs modified by the dry run.
-    #[test]
-    fn a_crd_the_deploy_changes_marks_its_kind() {
-        let new = crd("example.com", "Widget", "v2");
-        let same = crd("example.com", "Gadget", "v1");
-        let answers = vec![
-            applied(&new, Some(crd("example.com", "Widget", "v1"))),
-            applied(&same, Some(same.clone())),
-        ];
-        let changed = changed_crds(&answers);
-        assert!(changed.contains(&("example.com".into(), "Widget".into())));
-        assert!(!changed.contains(&("example.com".into(), "Gadget".into())));
-    }
-
-    /// Verify that [`BuildCrds::brings`] matches both API group and kind.
-    #[test]
-    fn build_crds_match_group_and_kind() {
-        let crds = BuildCrds::of(&[crd("example.com", "Widget", "v1")]);
-        let widget = |api: &str| json!({"apiVersion": api, "kind": "Widget"});
-        assert!(crds.brings(Some(&widget("example.com/v1"))));
-        assert!(!crds.brings(Some(&widget("other.io/v1"))));
-    }
 }

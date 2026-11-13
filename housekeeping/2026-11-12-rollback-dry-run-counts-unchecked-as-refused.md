@@ -1,3 +1,0 @@
-# 2026-11-12 · `cli/kix-cli/src/commands/rollback.rs` · `kix rollback` stops on dry-run answers that `kix plan` lists as not checked.
-
-`refused_writes` treats every `DryRunOutcome::Refused` as a refusal, except a webhook whose Service the rollback writes. `kix plan` instead lists a webhook without dry-run support, a namespace the build creates, and a kind whose CRD the build brings under "Not checked" and does not stop. A rollback to a build that brings a namespace or a CRD the cluster lost is therefore refused where a deploy of the same build would go ahead. The two commands should share one classification of dry-run answers.
