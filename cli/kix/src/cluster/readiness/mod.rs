@@ -50,7 +50,10 @@ use declared::{
 #[cfg(test)]
 use imports::{check_secret_keys, expectations, split_api_version};
 #[cfg(test)]
-use terminal::{TERMINATION_OUTPUT_LINES, workload_label_selector};
+use terminal::{
+    TERMINATION_OUTPUT_LINES, current_daemonset_revision_hash, current_replicaset,
+    rollout_observed, workload_label_selector,
+};
 
 use declared::{FailureWatch, declared_failure, is_wait_for_first_consumer, readiness_message};
 use terminal::{progress_fingerprint, scan_terminal};
@@ -234,7 +237,7 @@ pub(crate) async fn wait_for_ready(
         // Check terminal failures before readiness so partial success does not
         // hide a Failed condition.
         let ns_for_pods = obj.metadata.namespace.as_deref().unwrap_or_default();
-        let scan = scan_terminal(client, &obj.data, kind, ns_for_pods).await;
+        let scan = scan_terminal(client, &obj, kind, ns_for_pods).await;
         if let Some((reason, detail)) = scan.terminal {
             return Ok(ReadinessResult::Failed {
                 message: format!("{}: {detail}", reason.as_str()),

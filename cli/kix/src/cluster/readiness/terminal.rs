@@ -312,80 +312,187 @@ pub(super) fn workload_label_selector(obj: &Value) -> Option<String> {
     Some(parts.join(","))
 }
 
-/// Return a label selector fragment that restricts pod queries to the
-/// workload's current controller revision, or `None` if the kind has no
-/// revision selector or the controller has not published one yet.
+/// Return true when the controller of a rollout workload has acted on the
+/// current spec, that is when `status.observedGeneration` has reached
+/// `metadata.generation`.
+///
+/// Until then the workload's status, its revision fields, and its pods all
+/// describe the previous template. A deploy that restores an earlier template
+/// would otherwise be judged by the pods of the template it is replacing.
+/// Kinds without a rollout controller always count as observed.
+pub(super) fn rollout_observed(obj: &DynamicObject, kind: &str) -> bool {
+    if !matches!(kind, "Deployment" | "StatefulSet" | "DaemonSet") {
+        return true;
+    }
+    let Some(generation) = obj.metadata.generation else {
+        return true;
+    };
+    obj.data
+        .pointer("/status/observedGeneration")
+        .and_then(Value::as_i64)
+        .is_some_and(|observed| observed >= generation)
+}
+
+/// Which pods of a workload belong to its current revision.
+enum RevisionPods {
+    /// Pods whose labels also match this selector fragment.
+    Matching(String),
+    /// The kind has no revision label, so every selected pod counts.
+    All,
+    /// The controller has not created the current revision yet, so no pod
+    /// can be judged.
+    NotCreated,
+}
+
+fn owned_by(obj: &Value, uid: &str) -> bool {
+    obj.pointer("/metadata/ownerReferences")
+        .and_then(Value::as_array)
+        .is_some_and(|refs| {
+            refs.iter()
+                .any(|r| r.get("uid").and_then(Value::as_str) == Some(uid))
+        })
+}
+
+/// Return the ReplicaSet that runs a Deployment's current pod template.
+///
+/// The Deployment controller labels each ReplicaSet's template with
+/// `pod-template-hash` and otherwise copies the Deployment's template. The
+/// ReplicaSet whose template equals the Deployment's once that label is
+/// removed is the current one. The highest `deployment.kubernetes.io/revision`
+/// is not enough: when an earlier template comes back, the controller reuses
+/// its old ReplicaSet and raises that revision only later.
+pub(super) fn current_replicaset<'a>(
+    deployment: &DynamicObject,
+    replicasets: &'a [Value],
+) -> Option<&'a Value> {
+    let uid = deployment.metadata.uid.as_deref()?;
+    let template = deployment.data.pointer("/spec/template")?;
+    replicasets
+        .iter()
+        .filter(|rs| owned_by(rs, uid))
+        .filter(|rs| {
+            let Some(mut rs_template) = rs.pointer("/spec/template").cloned() else {
+                return false;
+            };
+            if let Some(labels) = rs_template
+                .pointer_mut("/metadata/labels")
+                .and_then(Value::as_object_mut)
+            {
+                labels.remove("pod-template-hash");
+            }
+            &rs_template == template
+        })
+        .max_by_key(|rs| {
+            rs.pointer("/metadata/annotations/deployment.kubernetes.io~1revision")
+                .and_then(Value::as_str)
+                .and_then(|r| r.parse::<i64>().ok())
+                .unwrap_or(0)
+        })
+}
+
+/// Return the `controller-revision-hash` of a DaemonSet's current
+/// ControllerRevision, the owned one with the highest `revision`.
+///
+/// The DaemonSet controller raises a reused revision before it records
+/// `observedGeneration`, so the highest revision is current once
+/// [`rollout_observed`] holds.
+pub(super) fn current_daemonset_revision_hash(
+    daemonset: &DynamicObject,
+    revisions: &[Value],
+) -> Option<String> {
+    let uid = daemonset.metadata.uid.as_deref()?;
+    revisions
+        .iter()
+        .filter(|rev| owned_by(rev, uid))
+        .max_by_key(|rev| rev.get("revision").and_then(Value::as_i64).unwrap_or(0))?
+        .pointer("/metadata/labels/controller-revision-hash")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+/// List the objects of one `apps/v1` kind that match `selector`, with their
+/// metadata. Returns `None` on API errors.
+async fn list_apps_objects(
+    client: &Client,
+    namespace: &str,
+    kind: &str,
+    plural: &str,
+    selector: &str,
+) -> Option<Vec<Value>> {
+    let ar = ApiResource {
+        group: "apps".into(),
+        version: "v1".into(),
+        api_version: "apps/v1".into(),
+        kind: kind.into(),
+        plural: plural.into(),
+    };
+    let api: Api<DynamicObject> = Api::namespaced_with(client.clone(), namespace, &ar);
+    let lp = kube::api::ListParams::default().labels(selector);
+    let list = api.list(&lp).await.ok()?;
+    Some(
+        list.items
+            .into_iter()
+            .filter_map(|o| serde_json::to_value(o).ok())
+            .collect(),
+    )
+}
+
+/// Find which of a workload's pods belong to its current revision.
 ///
 /// A workload's `spec.selector.matchLabels` matches pods from all revisions,
 /// including pods from a previous revision that a rollout is replacing.
-/// Filtering to the current revision ensures terminal failure classification
-/// evaluates only the active rollout rather than pods being terminated.
-async fn current_revision_selector(
+/// Restricting to the current revision means terminal failures come only from
+/// the rollout in progress. Call this only once [`rollout_observed`] holds.
+async fn current_revision_pods(
     client: &Client,
-    obj: &Value,
+    obj: &DynamicObject,
     kind: &str,
     namespace: &str,
     selector: &str,
-) -> Option<String> {
+) -> RevisionPods {
     match kind {
-        // StatefulSet controllers publish the target revision in
-        // `status.updateRevision` and stamp it on each pod.
-        "StatefulSet" => {
-            let rev = obj
-                .pointer("/status/updateRevision")
-                .and_then(Value::as_str)?;
-            Some(format!("controller-revision-hash={rev}"))
-        }
-        // Deployments manage one ReplicaSet per revision without recording the
-        // newest ReplicaSet in `Deployment.status`. Find the owned ReplicaSet
-        // with the highest `deployment.kubernetes.io/revision` annotation and
-        // read its `pod-template-hash`.
+        // The StatefulSet controller publishes the current revision in
+        // `status.updateRevision` and stamps it on each pod.
+        "StatefulSet" => match obj
+            .data
+            .pointer("/status/updateRevision")
+            .and_then(Value::as_str)
+        {
+            Some(rev) => RevisionPods::Matching(format!("controller-revision-hash={rev}")),
+            None => RevisionPods::NotCreated,
+        },
         "Deployment" => {
-            let uid = obj.pointer("/metadata/uid").and_then(Value::as_str)?;
-            let rs_ar = ApiResource {
-                group: "apps".into(),
-                version: "v1".into(),
-                api_version: "apps/v1".into(),
-                kind: "ReplicaSet".into(),
-                plural: "replicasets".into(),
+            let Some(replicasets) =
+                list_apps_objects(client, namespace, "ReplicaSet", "replicasets", selector).await
+            else {
+                return RevisionPods::All;
             };
-            let api: Api<DynamicObject> = Api::namespaced_with(client.clone(), namespace, &rs_ar);
-            let lp = kube::api::ListParams::default().labels(selector);
-            let list = api.list(&lp).await.ok()?;
-            let newest = list
-                .items
-                .iter()
-                .filter(|rs| {
-                    rs.data
-                        .pointer("/metadata/ownerReferences")
-                        .and_then(Value::as_array)
-                        .is_some_and(|refs| {
-                            refs.iter()
-                                .any(|r| r.get("uid").and_then(Value::as_str) == Some(uid))
-                        })
-                })
-                .max_by_key(|rs| {
-                    let revision = rs
-                        .data
-                        .pointer("/metadata/annotations/deployment.kubernetes.io~1revision")
-                        .and_then(Value::as_str)
-                        .and_then(|r| r.parse::<i64>().ok())
-                        .unwrap_or(0);
-                    let created = rs
-                        .data
-                        .pointer("/metadata/creationTimestamp")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string();
-                    (revision, created)
-                })?;
-            let hash = newest
-                .data
-                .pointer("/spec/selector/matchLabels/pod-template-hash")
-                .and_then(Value::as_str)?;
-            Some(format!("pod-template-hash={hash}"))
+            match current_replicaset(obj, &replicasets)
+                .and_then(|rs| rs.pointer("/spec/selector/matchLabels/pod-template-hash"))
+                .and_then(Value::as_str)
+            {
+                Some(hash) => RevisionPods::Matching(format!("pod-template-hash={hash}")),
+                None => RevisionPods::NotCreated,
+            }
         }
-        _ => None,
+        "DaemonSet" => {
+            let Some(revisions) = list_apps_objects(
+                client,
+                namespace,
+                "ControllerRevision",
+                "controllerrevisions",
+                selector,
+            )
+            .await
+            else {
+                return RevisionPods::All;
+            };
+            match current_daemonset_revision_hash(obj, &revisions) {
+                Some(hash) => RevisionPods::Matching(format!("controller-revision-hash={hash}")),
+                None => RevisionPods::NotCreated,
+            }
+        }
+        _ => RevisionPods::All,
     }
 }
 
@@ -510,14 +617,25 @@ pub(crate) const TERMINATION_OUTPUT_LINES: usize = 20;
 /// `terminal`, while retaining the fetched pods so the caller can reuse them
 /// for progress fingerprinting. On a Job-level hit, list the Job's pods once
 /// more so the failure includes container output.
+///
+/// A rollout workload whose controller has not yet acted on the current spec
+/// is not judged at all, because every signal it has describes the old spec.
 pub(super) async fn scan_terminal(
     client: &Client,
-    obj: &Value,
+    obj: &DynamicObject,
     kind: &str,
     namespace: &str,
 ) -> ScanResult {
-    if let Some(hit) = classify_workload_terminal(obj, kind) {
-        let pods = match (kind, workload_label_selector(obj)) {
+    let nothing = || ScanResult {
+        terminal: None,
+        pods: Vec::new(),
+        pull_retrying: None,
+    };
+    if !rollout_observed(obj, kind) {
+        return nothing();
+    }
+    if let Some(hit) = classify_workload_terminal(&obj.data, kind) {
+        let pods = match (kind, workload_label_selector(&obj.data)) {
             ("Job", Some(selector)) => list_pods_for_workload(client, namespace, &selector).await,
             _ => Vec::new(),
         };
@@ -528,23 +646,15 @@ pub(super) async fn scan_terminal(
         };
     }
     if !has_pods(kind) {
-        return ScanResult {
-            terminal: None,
-            pods: Vec::new(),
-            pull_retrying: None,
-        };
+        return nothing();
     }
-    let Some(selector) = workload_label_selector(obj) else {
-        return ScanResult {
-            terminal: None,
-            pods: Vec::new(),
-            pull_retrying: None,
-        };
+    let Some(selector) = workload_label_selector(&obj.data) else {
+        return nothing();
     };
-    // Filter to the current rollout revision so previous-revision pods are ignored.
-    let selector = match current_revision_selector(client, obj, kind, namespace, &selector).await {
-        Some(revision) => format!("{selector},{revision}"),
-        None => selector,
+    let selector = match current_revision_pods(client, obj, kind, namespace, &selector).await {
+        RevisionPods::Matching(revision) => format!("{selector},{revision}"),
+        RevisionPods::All => selector,
+        RevisionPods::NotCreated => return nothing(),
     };
     let pods = list_pods_for_workload(client, namespace, &selector).await;
     let terminal = pods.iter().find_map(classify_pod_terminal);

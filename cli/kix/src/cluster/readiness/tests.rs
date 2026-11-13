@@ -1312,6 +1312,115 @@ fn workload_label_selector_missing_returns_none() {
     assert!(workload_label_selector(&obj).is_none());
 }
 
+/// Build a live rollout workload with a uid, a generation, and the
+/// generation its controller last observed.
+fn rollout_workload(generation: i64, observed: Option<i64>, image: &str) -> DynamicObject {
+    let mut status = json!({});
+    if let Some(observed) = observed {
+        status["observedGeneration"] = json!(observed);
+    }
+    DynamicObject {
+        metadata: ObjectMeta {
+            name: Some("web".into()),
+            uid: Some("deploy-uid".into()),
+            generation: Some(generation),
+            ..Default::default()
+        },
+        types: None,
+        data: json!({
+            "spec": {
+                "selector": {"matchLabels": {"app": "web"}},
+                "template": {
+                    "metadata": {"labels": {"app": "web"}},
+                    "spec": {"containers": [{"name": "web", "image": image}]}
+                }
+            },
+            "status": status
+        }),
+    }
+}
+
+fn replicaset(owner: &str, hash: &str, revision: i64, image: &str) -> Value {
+    json!({
+        "metadata": {
+            "name": format!("web-{hash}"),
+            "annotations": {"deployment.kubernetes.io/revision": revision.to_string()},
+            "ownerReferences": [{"kind": "Deployment", "name": "web", "uid": owner}]
+        },
+        "spec": {
+            "selector": {"matchLabels": {"app": "web", "pod-template-hash": hash}},
+            "template": {
+                "metadata": {"labels": {"app": "web", "pod-template-hash": hash}},
+                "spec": {"containers": [{"name": "web", "image": image}]}
+            }
+        }
+    })
+}
+
+#[test]
+fn rollout_is_not_judged_before_the_controller_observes_it() {
+    let behind = rollout_workload(3, Some(2), "web:1");
+    let caught_up = rollout_workload(3, Some(3), "web:1");
+    let never_seen = rollout_workload(1, None, "web:1");
+    for kind in ["Deployment", "StatefulSet", "DaemonSet"] {
+        assert!(!rollout_observed(&behind, kind), "{kind}");
+        assert!(rollout_observed(&caught_up, kind), "{kind}");
+        assert!(!rollout_observed(&never_seen, kind), "{kind}");
+    }
+    assert!(rollout_observed(&behind, "Job"));
+}
+
+#[test]
+fn restored_template_selects_its_reused_replicaset() {
+    // `kubectl set image` to a missing image made revision 2. A deploy then
+    // restored web:1, and the controller has caught up with the generation
+    // but has not yet raised the reused ReplicaSet's revision.
+    let deployment = rollout_workload(3, Some(3), "web:1");
+    let replicasets = vec![
+        replicaset("deploy-uid", "good", 1, "web:1"),
+        replicaset("deploy-uid", "bad", 2, "web:missing"),
+    ];
+    let current = current_replicaset(&deployment, &replicasets).expect("current ReplicaSet");
+    assert_eq!(current["metadata"]["name"], "web-good");
+}
+
+#[test]
+fn replicaset_of_another_owner_is_never_current() {
+    let deployment = rollout_workload(1, Some(1), "web:1");
+    let replicasets = vec![replicaset("other-uid", "good", 1, "web:1")];
+    assert!(current_replicaset(&deployment, &replicasets).is_none());
+}
+
+#[test]
+fn no_replicaset_is_current_before_the_controller_creates_one() {
+    let deployment = rollout_workload(2, Some(2), "web:2");
+    let replicasets = vec![replicaset("deploy-uid", "old", 1, "web:1")];
+    assert!(current_replicaset(&deployment, &replicasets).is_none());
+}
+
+#[test]
+fn daemonset_current_revision_is_the_highest_owned_one() {
+    let daemonset = rollout_workload(4, Some(4), "agent:1");
+    let revision = |owner: &str, hash: &str, revision: i64| {
+        json!({
+            "metadata": {
+                "labels": {"controller-revision-hash": hash},
+                "ownerReferences": [{"kind": "DaemonSet", "uid": owner}]
+            },
+            "revision": revision
+        })
+    };
+    let revisions = vec![
+        revision("deploy-uid", "old", 2),
+        revision("deploy-uid", "new", 3),
+        revision("other-uid", "foreign", 9),
+    ];
+    assert_eq!(
+        current_daemonset_revision_hash(&daemonset, &revisions).as_deref(),
+        Some("new")
+    );
+}
+
 fn pod_with_message(container: &str, message: &str) -> Value {
     json!({
         "status": {
