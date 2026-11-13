@@ -40,7 +40,7 @@ Resource kinds:
 
 Resources:
   (cluster-scoped):
-    Activation/example-f62ig4wcf8b1
+    Activation/example-4yvk0nr01qcl
     ClusterRole/cert-manager-cainjector
     ClusterRole/cert-manager-cluster-view
     ClusterRole/cert-manager-controller-approve:cert-manager-io
@@ -113,7 +113,7 @@ Resources:
     ConfigMap/valkey-config
     Deployment/immich-server
     Deployment/machine-learning
-    Job/immich-db-immich-bootstrap-9d4afd7bad
+    Job/immich-db-immich-bootstrap
     PackageInstance/immich
     PackageInstance/immich-db
     PackageInstance/immich-db-password

@@ -1,7 +1,3 @@
 # 2026-11-13 · `kix/packages/experimental/stackgres-database`, `clickhouse-database` · A changed password from a secret-ref does not run the bootstrap Job again.
 
-The bootstrap Job's name carries a hash of its inputs, and the password's part
-of that hash is `out.sops.digest`. A password from `packages.secret-ref` has no
-digest, so the input is `null` and stays the same when the site changes the
-Secret. The Job does not run again, and the database keeps the old password
-while the app reads the new one.
+The bootstrap Job carries `kix.run/rerun: on-change`, so it runs again when its identity hash changes. A password from a SOPS file changes that hash, because the Job references the Secret built from the file. A password from `packages.secret-ref` lives only in the cluster, so the build does not change when the site changes the Secret. The Job does not run again, and the database keeps the old password while the app reads the new one. Fixing it needs the deploy to read the live Secret, which no rerun rule does today.

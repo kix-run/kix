@@ -30,12 +30,10 @@
 #      administrator from `clickhouse.out.credentials`. It creates the
 #      database and the user, sets the password, grants the privileges, and
 #      then runs the schema files in name order. Every statement is
-#      idempotent. The Job's name carries a hash of its inputs, so a change
-#      is a new Job and the old one is reaped by its TTL. It deliberately
-#      does not carry the rerun-on-change annotation: that would run the
-#      consumer's schema again whenever anything upstream of the server
-#      moved, and only the package's own statements are known to be safe
-#      to repeat.
+#      idempotent. The Job carries `kix.run/rerun: on-change`, so the deploy
+#      runs it again when anything it references changes: the password's
+#      SOPS file, the options, the schema files, or the server itself.
+#      That is why each schema file must be safe to run again.
 #
 # Two users on one database (a writer and a reader, say) are two instances
 # with the same `database` and different `user` and `privileges`.
@@ -123,8 +121,8 @@
 #
 # Limits: Kix copies only a value it decrypts itself, so a password from any
 # other source has to be delivered to both namespaces. With such a source a
-# changed password runs no new Job, because the build cannot see the value;
-# delete the last Job, or change another input, to set the new password.
+# changed password does not run the Job again, because the build cannot see
+# the value. Delete the Job and deploy again to set the new password.
 
 {
   scope,
@@ -359,24 +357,6 @@ in
       serverSideName = "${name}-${scope.namespaceName}";
       hasSchema = config.schema != { };
 
-      bootstrapHash = builtins.substring 0 10 (
-        builtins.hashString "sha256" (
-          builtins.toJSON {
-            inherit (config)
-              database
-              user
-              privileges
-              grants
-              schema
-              ;
-            image = kix.image.ref config.image;
-            script = bootstrapScript;
-            sql = bootstrapSql;
-            passwordFingerprint = if fromSops then sops.digest else null;
-          }
-        )
-      );
-
       labels = {
         "app.kubernetes.io/name" = "clickhouse-database";
         "app.kubernetes.io/instance" = name;
@@ -525,8 +505,9 @@ in
 
         bootstrapJob =
           {
-            name = "${serverSideName}-bootstrap-${bootstrapHash}";
+            name = "${serverSideName}-bootstrap";
             inherit labels;
+            annotations.${kix.keys.rerun} = kix.keyValues.rerunOnChange;
             spec = {
               backoffLimit = 10;
               template = {

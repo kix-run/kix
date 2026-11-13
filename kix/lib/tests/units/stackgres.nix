@@ -496,8 +496,8 @@ in
       secrets = inData "Secret";
     in
     (
-      builtins.any (lib.hasPrefix "app-db-team-a-bootstrap-") jobs
-      && builtins.any (lib.hasPrefix "app-db-team-b-bootstrap-") jobs
+      builtins.elem "app-db-team-a-bootstrap" jobs
+      && builtins.elem "app-db-team-b-bootstrap" jobs
       && builtins.elem "app-db-team-a-bootstrap-password" secrets
       && builtins.elem "app-db-team-b-bootstrap-password" secrets
     )
@@ -568,6 +568,55 @@ in
     )
     || throw "stackgres-database password: ${builtins.toJSON (secretIn "app-db-credentials")}";
 
+  # The bootstrap Job keeps one name and carries the rerun annotation. A
+  # new SOPS file for the password changes the Job's identity hash, so the
+  # deploy runs it again without renaming it. A rename would be reported as
+  # a stateful replacement.
+  stackgres-database-bootstrap-reruns-on-new-password =
+    let
+      withSource =
+        source:
+        sgCluster {
+          extra =
+            { ref, ... }:
+            {
+              instances.apps = {
+                app-db = {
+                  package = databasePackage;
+                  deps.postgres = ref.data.postgres;
+                  deps.password = ref.apps.app-db-password;
+                };
+                app-db-password = {
+                  package = secretPackage;
+                  config = {
+                    inherit source;
+                    keys = [ "password" ];
+                  };
+                };
+              };
+            };
+        };
+      jobOf = cluster: byName "app-db-apps-bootstrap" (ofKind "Job" (manifests cluster));
+      hashOf =
+        cluster:
+        builtins.unsafeDiscardStringContext cluster.instances.apps.app-db.raw.bootstrapJob.out.identityHash;
+      before = withSource ./stackgres.nix;
+      after = withSource ./clickhouse.nix;
+      job = jobOf before;
+    in
+    (
+      job != null
+      && jobOf after != null
+      && job.metadata.annotations.${kixKeys.rerun} or null == kixlib.keyValues.rerunOnChange
+      && hashOf before != hashOf after
+    )
+    || throw "stackgres-database bootstrap rerun: ${
+      builtins.toJSON {
+        name = job.metadata.name or null;
+        annotations = job.metadata.annotations or null;
+      }
+    }";
+
   # A password from a secret-ref holding `username` and `password` is the
   # credentials Secret. The package renders no Secret of its own, and the
   # Job reads the password from `<instance>-<namespace>-bootstrap-password`
@@ -607,9 +656,7 @@ in
           ofKind "PackageInstance" ms
         )
       );
-      job = builtins.head (
-        builtins.filter (m: lib.hasPrefix "app-db-apps-bootstrap-" m.metadata.name) (ofKind "Job" ms)
-      );
+      job = byName "app-db-apps-bootstrap" (ofKind "Job" ms);
       newPassword =
         (lib.findFirst (e: e.name == "NEW_PASSWORD") null
           (builtins.head job.spec.template.spec.containers).env
