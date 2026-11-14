@@ -41,6 +41,10 @@ fi
 
 say() { printf '%-6s %s\n' "$1" "$2"; }
 
+# Paths that keep old versions and digests as a record: release history,
+# problem logs, design notes, and recorded test fixtures.
+history=(':!changes' ':!CHANGELOG.md' ':!housekeeping' ':!v2_discussions' ':!*/tests/fixtures/*')
+
 # Run one check with its output in a log file, and print its last lines
 # when it fails.
 run() {
@@ -77,7 +81,7 @@ new_digests=$(git grep -hoE 'sha256:[0-9a-f]{64}' HEAD -- "$pkgdir" | sort -u)
 stale=0
 for digest in $old_digests; do
   grep -qxF "$digest" <<<"$new_digests" && continue
-  hits=$(git grep -lF "$digest" HEAD -- . | sed 's/^HEAD://')
+  hits=$(git grep -lF "$digest" HEAD -- . "${history[@]}" | sed 's/^HEAD://')
   if [ -n "$hits" ]; then
     stale=1
     say FAIL "old image digest ${digest:0:19}... is still in:"
@@ -118,10 +122,9 @@ else
 fi
 
 # List the places that still name the old version. Each needs a decision,
-# so the list does not fail the check. Release history, logs, and design
-# notes are left out because they keep old versions.
-left=$(git grep -nF "$old" HEAD -- . \
-  ':!changes' ':!CHANGELOG.md' ':!housekeeping' ':!v2_discussions' \
+# so the list does not fail the check. Lock files and vendored CRDs name
+# versions of other software, and the snapshot tests cover the snapshots.
+left=$(git grep -nF "$old" HEAD -- . "${history[@]}" \
   ':!*.lock' ':!*/crds/*' ':!*.snap' | sed 's/^HEAD://' | cut -c1-160)
 if [ -n "$left" ]; then
   say review "'$old' still appears in $(wc -l <<<"$left") place(s). Update each one, or say why it stays:"
