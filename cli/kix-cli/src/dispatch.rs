@@ -210,16 +210,17 @@ impl FormatMode {
     pub fn hint(self) -> Option<String> {
         let plan = || {
             format!(
-                "To keep the plan as data, write it with `--out FILE.{}`. \
-                 `kix plan --read-only -o json` prints a read-only plan as JSON, and \
-                 `kix deploy --plan FILE --dry-run -o json` compares a saved plan with the cluster.",
+                "To save the plan to a file, run `kix plan --out FILE.{}`. \
+                 For JSON output, run `kix plan --read-only -o json` for a read-only plan, \
+                 or `kix deploy --plan FILE --dry-run -o json` to check a saved plan \
+                 against the cluster.",
                 kix::plan::file::EXTENSION
             )
         };
         match self {
             FormatMode::Plan | FormatMode::PlanReadOnly | FormatMode::DeployDryRun => Some(plan()),
             FormatMode::Deploy => {
-                Some("`--log-format json` prints the deploy as JSON lines.".to_string())
+                Some("Pass `--log-format json` to print one JSON event per line.".to_string())
             }
             _ => None,
         }
