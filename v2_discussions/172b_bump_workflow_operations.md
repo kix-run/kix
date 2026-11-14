@@ -79,7 +79,26 @@ packages held at a version, each with a reason and an end date. A hold is
 a decision about this repository's schedule. It changes often and says
 nothing about the software, so it stays out of the package.
 
-### 2.2 Rules
+### 2.2 The script
+
+The script is Python, run with `uv`, like `scripts/vendor-crds.py`. It
+reads and orders versions with the `packaging` library and does not parse
+them itself. Tried on the tag forms in the current package set, the
+library:
+
+- reads `8.1.11`, `v2.19.1`, `18.1`, `0.52.3.1`, and the date form
+  `2026.10.1`;
+- marks `9.0.0-rc1` as a prerelease and orders it before `9.0.0`;
+- orders `13.1.8+security-01` after `13.1.8`;
+- refuses `1.2.3-alpine`, which the script then skips.
+
+It reads `1.2.3-1` as a later release of `1.2.3`. That is right for a
+rebuilt image and should be checked when an upstream uses the form. The
+library follows Python's version rules, and Kix compares versions in Nix
+and Rust with its own. A test runs the three on one list of versions so
+that they cannot drift apart.
+
+### 2.3 Rules
 
 For each package the script lists the upstream's tags and picks a target.
 Every rule is a comparison a program can make:
@@ -89,18 +108,21 @@ Every rule is a comparison a program can make:
 2. **The newest version.** The target is the highest stable version. The
    step from the pinned version is patch, minor, or major. A minor below
    1.0 counts as major, as in doc 172.
-3. **A waiting period.** Three days must pass after the script first sees
-   a tag. A tag list carries no dates, so the queue issue records the
-   first sighting (§3). In the experiment, one release was replaced a day
-   later because its images were broken.
-4. **The image exists.** The script looks the target's tag up in the
-   registry and records the digest. A tag with no image is not a target.
-   Upstream can push a tag before it publishes anything, and this rule
-   and the waiting period cover that.
-5. **Holds.** A held package is not a target. A hold whose end date has
+3. **The image exists.** The script looks the target's tag up in the
+   registry and records the digest. A tag with no image is not a target
+   yet. Upstream can push a tag before it publishes anything, and this
+   rule covers that.
+4. **Holds.** A held package is not a target. A hold whose end date has
    passed fails the script, so that holds get removed.
 
-### 2.3 Output
+There is no waiting period. A bump is queued as soon as the tag and its
+image exist. A user who wants to stay some days behind chooses when to
+upgrade Kix. Upstream sometimes replaces a release within a day, and the
+experiment met one such case. The reconcile step handles it (§3): when the
+target's tag is gone upstream, or a newer version replaces it before the
+pull request is merged, the bump is redone for the newer version.
+
+### 2.4 Output
 
 A list of pending bumps as JSON:
 
@@ -114,7 +136,7 @@ When the script cannot decide for a package (a tag it cannot read, a
 registry that does not answer), it reports that package as broken and
 carries on with the others. A broken package starts no agent.
 
-### 2.4 Cost of a run
+### 2.5 Cost of a run
 
 One run lists the tags of about 61 repositories over git and makes one
 registry lookup for each new target. No forge API is involved, so no API
@@ -132,10 +154,10 @@ pull requests that exist. It is safe to run any number of times:
 
 | Detection says | Exists | Reconcile does |
 |---|---|---|
-| bump pending | nothing | opens an issue, labelled `bump:waiting` |
-| bump pending | an issue opened three days ago or more, labelled `bump:waiting` | changes the label to `bump:queued` |
+| bump pending | nothing | opens an issue, labelled `bump:queued` |
 | bump pending | an issue for an older target, no pull request | updates the issue to the new target |
 | bump pending | an open pull request for the package | nothing (see below) |
+| the target's tag is gone upstream | an issue or an open pull request for it | closes both with a comment, and the next run queues the newer version |
 | package current | an open issue | closes it |
 | package broken | nothing | opens or updates one `bump:detection` issue |
 
@@ -145,7 +167,7 @@ merges or closes, the next detection run finds whatever gap is left. This
 keeps a package that releases three patches in a week from costing three
 agent runs. An urgent item is the exception (§6).
 
-**Labels hold the state:** `bump:waiting`, `bump:queued`, `bump:running`, `bump:failed-1`,
+**Labels hold the state:** `bump:queued`, `bump:running`, `bump:failed-1`,
 `bump:failed-2`, `bump:needs-person`, and `bump:hold`. The runner takes
 only `bump:queued`. A person stops a bump by adding `bump:hold`, and
 restarts one by setting `bump:queued`.
@@ -245,7 +267,7 @@ a bump is wanted. Each item carries a `source` field, and another tool can
 add items of its own.
 
 An item can be marked urgent with the label `bump:urgent`. An urgent item
-skips the waiting period, goes to the front of the queue, and may replace
+goes to the front of the queue, and may replace
 an open pull request for the same package. A security fix is the main
 case. This workflow does not decide that a release is a security fix: a
 version number does not say so. The mark comes from the item's source, or
