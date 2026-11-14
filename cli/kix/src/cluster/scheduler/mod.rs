@@ -73,11 +73,10 @@ pub enum OnErrorPolicy {
 }
 
 /// Policy for handling orphaned resources after all plan nodes terminate.
-/// A saved plan records it as `flags.prune`.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
-)]
-#[serde(rename_all = "snake_case")]
+///
+/// The plan document maps it to its own type for `flags.prune`, so this
+/// type does not set the JSON of a plan or a saved plan file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrunePolicy {
     /// Do not look for orphans at all (`--skip-orphan-check`).
     Skip,

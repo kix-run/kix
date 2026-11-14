@@ -1,10 +1,10 @@
 //! Run the parsed command.
 //!
-//! Each command declares what it needs in [`Command::needs`] and the formats
-//! it prints in [`FORMATS`], and [`run`] sets that up before one `match`
-//! calls the command. `needs`, `run`, and the command path that `FORMATS` is
-//! read by are exhaustive matches, so a new command does not compile until it
-//! says what it needs, where its formats are, and how it runs.
+//! Each command declares what it needs in [`Command::needs`] and how it
+//! prints in [`Command::format_mode`], and [`run`] sets that up before one
+//! `match` calls the command. `needs`, `format_mode`, [`FormatMode::formats`],
+//! and `run` are exhaustive matches, so a new command does not compile until
+//! it says what it needs, what it prints, and how it runs.
 
 use miette::Result;
 
@@ -73,44 +73,159 @@ const TEXT: &[OutputFormat] = &[Text];
 /// Formats of a command whose answer is data.
 const DATA: &[OutputFormat] = &[Text, Json, Yaml];
 
-/// The `-o` formats of every command, the default first. Each row is a
-/// command path, the flags that change the formats as a user types them (as
-/// [`Command::format_flags`] returns them), and the formats.
-///
-/// This is the one list of formats. [`Command::formats`] reads the row of
-/// the command a user ran, and [`Command::help_formats`] gives the help every
-/// row of a command.
-const FORMATS: &[(&str, &str, &[OutputFormat])] = &[
-    ("build", "", &[Yaml, Json]),
-    ("check", "", &[Text, Json, Yaml, Sarif]),
-    ("graph", "", &[Tree, Dot, Json, Yaml]),
-    ("diff", "", &[Text, Json, Yaml, Markdown]),
-    // A plan is data only as a saved plan file (`--out`).
-    ("plan", "", &[Text, Markdown]),
-    ("plan", " --read-only", &[Text, Json, Yaml, Markdown]),
-    ("deploy", "", TEXT),
-    ("deploy", " --dry-run", &[Text, Markdown]),
-    ("deploy", " --plan FILE --dry-run", DATA),
-    ("rollback", "", TEXT),
-    ("history", "", DATA),
-    ("status", "", DATA),
-    ("list", "", DATA),
-    ("pin", "", DATA),
-    ("compliance sbom", "", &[Json, Yaml]),
-    ("compliance attest", "", &[Json, Yaml]),
-    ("compliance audit", "", TEXT),
-    ("completions", "", TEXT),
-    ("self", "", TEXT),
-    ("doctor", "", TEXT),
-    ("upgrade", "", TEXT),
-    ("bundle", "", TEXT),
-    ("gc", "", TEXT),
-    ("migrate", "", TEXT),
-    ("export", "", TEXT),
-    ("logs", "", TEXT),
-    ("port-forward", "", TEXT),
-    ("snapshot", "", TEXT),
-];
+/// Declare [`FormatMode`] and [`FormatMode::ALL`] from one list of variants,
+/// so `ALL` cannot leave one out.
+macro_rules! format_modes {
+    ($($(#[$doc:meta])* $mode:ident,)*) => {
+        /// One way a command prints, as its command line selects it.
+        ///
+        /// [`Command::format_mode`] picks the mode of a parsed command, and
+        /// [`FormatMode::formats`] lists its formats. Both are exhaustive
+        /// matches, so a new command or mode does not compile until it says
+        /// what it prints.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum FormatMode {
+            $($(#[$doc])* $mode,)*
+        }
+
+        impl FormatMode {
+            /// Every mode, for the help of each command.
+            pub const ALL: &[FormatMode] = &[$(FormatMode::$mode,)*];
+        }
+    };
+}
+
+format_modes! {
+    Build,
+    Check,
+    Graph,
+    Diff,
+    Plan,
+    /// `kix plan --read-only`.
+    PlanReadOnly,
+    Deploy,
+    /// `kix deploy --dry-run`.
+    DeployDryRun,
+    /// `kix deploy --plan FILE --dry-run`.
+    DeploySavedPlanDryRun,
+    Rollback,
+    History,
+    Status,
+    List,
+    Pin,
+    ComplianceSbom,
+    ComplianceAttest,
+    ComplianceAudit,
+    Completions,
+    SelfCmd,
+    Doctor,
+    Upgrade,
+    Bundle,
+    Gc,
+    Migrate,
+    Export,
+    Logs,
+    PortForward,
+    Snapshot,
+}
+
+impl FormatMode {
+    /// Return the `-o` formats the mode prints, the default first.
+    pub fn formats(self) -> &'static [OutputFormat] {
+        use FormatMode as M;
+        match self {
+            M::Build => &[Yaml, Json],
+            M::Check => &[Text, Json, Yaml, Sarif],
+            M::Graph => &[Tree, Dot, Json, Yaml],
+            M::Diff => &[Text, Json, Yaml, Markdown],
+            // A plan is data only as a saved plan file (`--out`).
+            M::Plan => &[Text, Markdown],
+            M::PlanReadOnly => &[Text, Json, Yaml, Markdown],
+            M::Deploy => TEXT,
+            M::DeployDryRun => &[Text, Markdown],
+            M::DeploySavedPlanDryRun => DATA,
+            M::History | M::Status | M::List | M::Pin => DATA,
+            M::ComplianceSbom | M::ComplianceAttest => &[Json, Yaml],
+            M::Rollback
+            | M::ComplianceAudit
+            | M::Completions
+            | M::SelfCmd
+            | M::Doctor
+            | M::Upgrade
+            | M::Bundle
+            | M::Gc
+            | M::Migrate
+            | M::Export
+            | M::Logs
+            | M::PortForward
+            | M::Snapshot => TEXT,
+        }
+    }
+
+    /// Return the command path of the mode as a user types it, such as
+    /// `compliance sbom`. The mode covers every subcommand of the path.
+    pub fn path(self) -> &'static str {
+        use FormatMode as M;
+        match self {
+            M::Build => "build",
+            M::Check => "check",
+            M::Graph => "graph",
+            M::Diff => "diff",
+            M::Plan | M::PlanReadOnly => "plan",
+            M::Deploy | M::DeployDryRun | M::DeploySavedPlanDryRun => "deploy",
+            M::Rollback => "rollback",
+            M::History => "history",
+            M::Status => "status",
+            M::List => "list",
+            M::Pin => "pin",
+            M::ComplianceSbom => "compliance sbom",
+            M::ComplianceAttest => "compliance attest",
+            M::ComplianceAudit => "compliance audit",
+            M::Completions => "completions",
+            M::SelfCmd => "self",
+            M::Doctor => "doctor",
+            M::Upgrade => "upgrade",
+            M::Bundle => "bundle",
+            M::Gc => "gc",
+            M::Migrate => "migrate",
+            M::Export => "export",
+            M::Logs => "logs",
+            M::PortForward => "port-forward",
+            M::Snapshot => "snapshot",
+        }
+    }
+
+    /// Return the flags that select the mode as a user types them, such as
+    /// `--dry-run`, or `None` when the command needs none.
+    pub fn flags(self) -> Option<&'static str> {
+        match self {
+            FormatMode::PlanReadOnly => Some("--read-only"),
+            FormatMode::DeployDryRun => Some("--dry-run"),
+            FormatMode::DeploySavedPlanDryRun => Some("--plan FILE --dry-run"),
+            _ => None,
+        }
+    }
+
+    /// Return advice to add when the mode refuses a format.
+    pub fn hint(self) -> Option<String> {
+        let plan = || {
+            format!(
+                "To save the plan to a file, run `kix plan --out FILE.{}`. \
+                 For JSON output, run `kix plan --read-only -o json` for a read-only plan, \
+                 or `kix deploy --plan FILE --dry-run -o json` to check a saved plan \
+                 against the cluster.",
+                kix::plan::file::EXTENSION
+            )
+        };
+        match self {
+            FormatMode::Plan | FormatMode::PlanReadOnly | FormatMode::DeployDryRun => Some(plan()),
+            FormatMode::Deploy => {
+                Some("Pass `--log-format json` to print one JSON event per line.".to_string())
+            }
+            _ => None,
+        }
+    }
+}
 
 /// A format that the help of a command lists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -121,66 +236,79 @@ pub struct HelpFormat {
     pub needs: Option<&'static str>,
 }
 
-/// Return whether `path` is `row` or one of its subcommands, such as
+/// Return whether `path` is `parent` or one of its subcommands, such as
 /// `list clusters` for `list`.
-fn under(path: &str, row: &str) -> bool {
-    path == row
+fn under(path: &str, parent: &str) -> bool {
+    path == parent
         || path
-            .strip_prefix(row)
+            .strip_prefix(parent)
             .is_some_and(|rest| rest.starts_with(' '))
 }
 
+/// Return the modes that the help of the command at `path` covers: the
+/// modes of the command and of its subcommands.
+fn modes_at(path: &str) -> impl Iterator<Item = FormatMode> + '_ {
+    FormatMode::ALL
+        .iter()
+        .copied()
+        .filter(move |m| under(path, m.path()) || under(m.path(), path))
+}
+
+/// Return whether the command at `path` shows `-o` in its help: whether it,
+/// or one of its subcommands, prints something other than text.
+pub fn reads_output(path: &str) -> bool {
+    modes_at(path).any(|m| m.formats() != TEXT)
+}
+
 impl Command {
+    /// Return how the command prints, or `None` for a plugin, which decides
+    /// for itself.
+    pub fn format_mode(&self) -> Option<FormatMode> {
+        use FormatMode as M;
+        Some(match self {
+            Command::Plugin(_) => return None,
+            Command::Compliance(args) => match args.command {
+                ComplianceCommand::Sbom(_) => M::ComplianceSbom,
+                ComplianceCommand::Attest(_) => M::ComplianceAttest,
+                ComplianceCommand::Audit(_) => M::ComplianceAudit,
+            },
+            Command::Build(_) => M::Build,
+            Command::Check(_) => M::Check,
+            Command::Graph(_) => M::Graph,
+            Command::Diff(_) => M::Diff,
+            Command::Plan(args) if args.read_only => M::PlanReadOnly,
+            Command::Plan(_) => M::Plan,
+            Command::Deploy(args) if args.dry_run && args.saved_plan.is_some() => {
+                M::DeploySavedPlanDryRun
+            }
+            Command::Deploy(args) if args.dry_run => M::DeployDryRun,
+            Command::Deploy(_) => M::Deploy,
+            Command::Rollback(_) => M::Rollback,
+            Command::History(_) => M::History,
+            Command::Status(_) => M::Status,
+            Command::List(_) => M::List,
+            Command::Pin(_) => M::Pin,
+            Command::Completions(_) => M::Completions,
+            Command::SelfCmd(_) => M::SelfCmd,
+            Command::Doctor => M::Doctor,
+            Command::Upgrade(_) => M::Upgrade,
+            Command::Bundle(_) => M::Bundle,
+            Command::Gc(_) => M::Gc,
+            Command::Migrate(_) => M::Migrate,
+            Command::Export(_) => M::Export,
+            Command::Logs(_) => M::Logs,
+            Command::PortForward(_) => M::PortForward,
+            Command::Snapshot(_) => M::Snapshot,
+        })
+    }
+
     /// Return the `-o` formats the command prints, the default first, or
     /// `None` when Kix does not decide.
     ///
     /// `main` refuses any other format before the command runs. Kix passes
     /// any format on to a plugin as `--output`, and the plugin decides.
     pub fn formats(&self) -> Option<&'static [OutputFormat]> {
-        let path = self.format_path()?;
-        let flags = self.format_flags();
-        let row = |flags: &str| {
-            FORMATS
-                .iter()
-                .find(|(p, f, _)| under(path, p) && *f == flags)
-                .map(|(_, _, formats)| *formats)
-        };
-        Some(row(flags).or_else(|| row("")).unwrap_or(TEXT))
-    }
-
-    /// Return the command path that [`FORMATS`] lists the command under, or
-    /// `None` for a plugin.
-    fn format_path(&self) -> Option<&'static str> {
-        Some(match self {
-            Command::Plugin(_) => return None,
-            Command::Compliance(args) => match args.command {
-                ComplianceCommand::Sbom(_) => "compliance sbom",
-                ComplianceCommand::Attest(_) => "compliance attest",
-                ComplianceCommand::Audit(_) => "compliance audit",
-            },
-            Command::Build(_) => "build",
-            Command::Check(_) => "check",
-            Command::Graph(_) => "graph",
-            Command::Diff(_) => "diff",
-            Command::Plan(_) => "plan",
-            Command::Deploy(_) => "deploy",
-            Command::Rollback(_) => "rollback",
-            Command::History(_) => "history",
-            Command::Status(_) => "status",
-            Command::List(_) => "list",
-            Command::Pin(_) => "pin",
-            Command::Completions(_) => "completions",
-            Command::SelfCmd(_) => "self",
-            Command::Doctor => "doctor",
-            Command::Upgrade(_) => "upgrade",
-            Command::Bundle(_) => "bundle",
-            Command::Gc(_) => "gc",
-            Command::Migrate(_) => "migrate",
-            Command::Export(_) => "export",
-            Command::Logs(_) => "logs",
-            Command::PortForward(_) => "port-forward",
-            Command::Snapshot(_) => "snapshot",
-        })
+        self.format_mode().map(FormatMode::formats)
     }
 
     /// Return the formats that the help of the command at `path`, such as
@@ -188,69 +316,33 @@ impl Command {
     /// each with the flags it needs, or `None` when the command prints it
     /// without flags. The second value is the default, or `None` for a
     /// command such as `compliance` whose subcommands differ. Return `None`
-    /// for a path [`FORMATS`] does not list.
+    /// for a path no mode covers.
     pub fn help_formats(path: &str) -> Option<(Vec<HelpFormat>, Option<OutputFormat>)> {
-        let rows: Vec<&(&str, &str, &[OutputFormat])> = FORMATS
-            .iter()
-            .filter(|(row, _, _)| under(path, row) || under(row, path))
-            .collect();
-        let default = rows
-            .iter()
-            .find(|(row, flags, _)| under(path, row) && flags.is_empty())
-            .map(|(_, _, formats)| formats[0]);
-        // Rows that need no flags come first, so that a format one of them
-        // lists needs none. A subcommand's row, as `compliance sbom` is to
+        let default = modes_at(path)
+            .find(|m| under(path, m.path()) && m.flags().is_none())
+            .map(|m| m.formats()[0]);
+        // Modes that need no flags come first, so that a format one of them
+        // lists needs none. A subcommand's mode, as `compliance sbom` is to
         // `compliance`, needs no flags of the command at `path`.
-        let (plain, flagged): (Vec<_>, Vec<_>) = rows
-            .into_iter()
-            .map(|(row, flags, list)| (if under(path, row) { *flags } else { "" }, *list))
-            .partition(|(flags, _)| flags.is_empty());
+        let (plain, flagged): (Vec<_>, Vec<_>) = modes_at(path)
+            .map(|m| {
+                let flags = if under(path, m.path()) {
+                    m.flags()
+                } else {
+                    None
+                };
+                (flags, m.formats())
+            })
+            .partition(|(flags, _)| flags.is_none());
         let mut formats: Vec<HelpFormat> = Vec::new();
-        for (flags, list) in plain.into_iter().chain(flagged) {
+        for (needs, list) in plain.into_iter().chain(flagged) {
             for f in list {
                 if !formats.iter().any(|h| h.format == *f) {
-                    let flags = flags.trim();
-                    formats.push(HelpFormat {
-                        format: *f,
-                        needs: (!flags.is_empty()).then_some(flags),
-                    });
+                    formats.push(HelpFormat { format: *f, needs });
                 }
             }
         }
         (!formats.is_empty()).then_some((formats, default))
-    }
-
-    /// Return the flags that changed [`Command::formats`], as a user types
-    /// them, so that a refusal names the command the user ran.
-    pub fn format_flags(&self) -> &'static str {
-        match self {
-            Command::Deploy(args) if args.dry_run && args.saved_plan.is_some() => {
-                " --plan FILE --dry-run"
-            }
-            Command::Deploy(args) if args.dry_run => " --dry-run",
-            Command::Plan(args) if args.read_only => " --read-only",
-            _ => "",
-        }
-    }
-
-    /// Return advice to add when the command refuses a format.
-    pub fn format_hint(&self) -> Option<String> {
-        let plan = || {
-            format!(
-                "To keep the plan as data, write it with `--out FILE.{}`. \
-                 `kix plan --read-only -o json` prints a read-only plan as JSON, and \
-                 `kix deploy --plan FILE --dry-run -o json` compares a saved plan with the cluster.",
-                kix::plan::file::EXTENSION
-            )
-        };
-        match self {
-            Command::Plan(_) => Some(plan()),
-            Command::Deploy(args) if args.dry_run && args.saved_plan.is_none() => Some(plan()),
-            Command::Deploy(args) if !args.dry_run => {
-                Some("`--log-format json` prints the deploy as JSON lines.".to_string())
-            }
-            _ => None,
-        }
     }
 }
 
@@ -512,10 +604,9 @@ mod tests {
         }
     }
 
-    /// Every command has a row in [`FORMATS`], so none falls back to text
-    /// unnoticed.
-    #[test]
-    fn every_command_has_formats() {
+    /// Return every visible command path of the clap tree, such as
+    /// `compliance sbom`.
+    fn command_paths() -> Vec<String> {
         fn walk(cmd: &clap::Command, prefix: &str, out: &mut Vec<String>) {
             for sc in cmd.get_subcommands().filter(|sc| !sc.is_hide_set()) {
                 let path = format!("{prefix}{}", sc.get_name()).trim().to_string();
@@ -527,13 +618,46 @@ mod tests {
         }
         let mut paths = Vec::new();
         walk(&crate::cli::command(), "", &mut paths);
-        for path in paths {
+        paths
+    }
+
+    /// Every command path has a mode, so its help lists formats, and every
+    /// mode names a command path that exists, so no mode's formats are lost
+    /// from the help.
+    #[test]
+    fn modes_and_command_paths_agree() {
+        let paths = command_paths();
+        for path in &paths {
             assert!(
-                FORMATS
-                    .iter()
-                    .any(|(row, _, _)| under(&path, row) || under(row, &path)),
-                "no formats for `{path}`"
+                modes_at(path).next().is_some(),
+                "no format mode for `{path}`"
             );
+        }
+        for mode in FormatMode::ALL {
+            assert!(
+                paths.iter().any(|p| p == mode.path()),
+                "{mode:?} names `{}`, which is not a command",
+                mode.path()
+            );
+        }
+    }
+
+    /// The help shows `-o` exactly on the commands that print more than
+    /// text.
+    #[test]
+    fn output_flag_shows_where_a_command_prints_data() {
+        for path in [
+            "build",
+            "plan",
+            "deploy",
+            "list clusters",
+            "compliance",
+            "pin",
+        ] {
+            assert!(reads_output(path), "{path}");
+        }
+        for path in ["rollback", "gc", "compliance audit", "self", "doctor"] {
+            assert!(!reads_output(path), "{path}");
         }
     }
 

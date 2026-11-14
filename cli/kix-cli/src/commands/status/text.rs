@@ -163,9 +163,11 @@ fn render_cluster(
 /// Return the `Next:` line for a cluster with a missing or changed object.
 ///
 /// A deploy stops on a field ownership conflict when another manager owns a
-/// field it applies, so the line adds `--force-conflicts` when a manager
-/// other than Kix owns fields of a changed object. A replica count changed
-/// through `/scale` with no recorded owner needs only `--reconcile`.
+/// field it applies and Kix does not, so the line adds `--force-conflicts`
+/// when a manager other than Kix owns such a field of a changed object. A
+/// manager that shares all its fields with Kix changed none of them. A
+/// replica count changed through `/scale` with no recorded owner needs only
+/// `--reconcile`.
 fn next_step(c: &ClusterStatus) -> String {
     let mut managers: Vec<&str> = c
         .packages
@@ -174,6 +176,7 @@ fn next_step(c: &ClusterStatus) -> String {
         .filter(|r| r.problems.contains(&Problem::Changed))
         .filter_map(|r| r.drift.as_ref())
         .flat_map(|d| &d.foreign_owners)
+        .filter(|o| !o.unshared_paths.is_empty())
         .map(|o| o.manager.as_str())
         .collect();
     managers.sort();
@@ -321,6 +324,9 @@ fn resource_state(r: &ResourceStatus) -> String {
 
 /// Describe a changed object: who changed which fields, when Kubernetes
 /// recorded it.
+///
+/// A field another manager shares with Kix still holds the value Kix
+/// applied, so only unshared fields name the manager that changed them.
 fn changed(drift: Option<&Drift>) -> String {
     let Some(drift) = drift else {
         return "changed since deploy".to_string();
@@ -341,7 +347,11 @@ fn changed(drift: Option<&Drift>) -> String {
     let fields: Vec<String> = drift
         .foreign_owners
         .iter()
-        .flat_map(|o| o.paths.iter().map(move |p| format!("{p} by {}", o.manager)))
+        .flat_map(|o| {
+            o.unshared_paths
+                .iter()
+                .map(move |p| format!("{p} by {}", o.manager))
+        })
         .collect();
     const SHOWN: usize = 3;
     match fields.len() {

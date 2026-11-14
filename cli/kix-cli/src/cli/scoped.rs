@@ -11,25 +11,9 @@ use crate::dispatch::HelpFormat;
 /// parent command is included when any of its subcommands reads the flag.
 ///
 /// `-v`, `-q`, and `--no-color` apply to every command and are omitted here.
+/// `-o` is shown where [`crate::dispatch::reads_output`] says, from the
+/// formats each command prints.
 const SCOPED_GLOBALS: &[(&str, &[&str])] = &[
-    (
-        "output",
-        &[
-            "build",
-            "diff",
-            "plan",
-            "deploy",
-            "check",
-            "status",
-            "list",
-            "graph",
-            "rollback",
-            "history",
-            "compliance sbom",
-            "compliance attest",
-            "pin",
-        ],
-    ),
     (
         "context",
         &[
@@ -196,23 +180,28 @@ fn hide_unread_globals(cmd: clap::Command, parent: &str, globals: &[clap::Arg]) 
     } else {
         format!("{parent} {}", cmd.get_name())
     };
+    let global = |id: &str| {
+        globals
+            .iter()
+            .find(|a| a.get_id() == id)
+            .unwrap_or_else(|| panic!("no global flag {id}"))
+    };
     let mut cmd = cmd;
     for (id, readers) in SCOPED_GLOBALS {
         let reads = readers.iter().any(|r| {
             *r == path || r.starts_with(&format!("{path} ")) || path.starts_with(&format!("{r} "))
         });
-        let arg = globals
-            .iter()
-            .find(|a| a.get_id() == *id)
-            .unwrap_or_else(|| panic!("no global flag {id}"));
         if !reads {
-            cmd = cmd.arg(arg.clone().hide(true));
-        } else if *id == "output"
-            && let Some((formats, default)) = crate::cli::Command::help_formats(&path)
-        {
-            cmd = cmd.arg(output_arg(arg, formats, default));
+            cmd = cmd.arg(global(id).clone().hide(true));
         }
     }
+    let output = global("output");
+    cmd = match crate::cli::Command::help_formats(&path) {
+        Some((formats, default)) if crate::dispatch::reads_output(&path) => {
+            cmd.arg(output_arg(output, formats, default))
+        }
+        _ => cmd.arg(output.clone().hide(true)),
+    };
     cmd.mut_subcommands(|sc| hide_unread_globals(sc, &path, globals))
 }
 

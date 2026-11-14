@@ -1,3 +1,0 @@
-# 2026-11-13 · `cli/kix/src/cluster/scheduler/mod.rs` · The plan document's JSON uses a scheduler type, so renaming a scheduler variant changes the JSON.
-
-`PrunePolicy` (line 81) derives `Serialize`, `Deserialize`, and `JsonSchema`, and the plan document and the saved `.kixplan` file store it as `flags.prune`. Renaming one of its variants in the scheduler would change the plan's JSON and break saved plans, with no error and no schema review. A `Prune` enum in `plan::document` with a `From` conversion, or moving `PrunePolicy` into `plan::document`, would keep the JSON in the module that owns it.

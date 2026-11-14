@@ -169,6 +169,7 @@ fn shop() -> Observation {
             subresource: None,
             time: Some("2026-11-12T09:00:00+00:00".into()),
             paths: vec!["data.max_connections".into()],
+            unshared_paths: vec!["data.max_connections".into()],
         }],
         unrecorded_scale: None,
     });
@@ -419,7 +420,8 @@ fn an_unknown_package_names_the_closest_of_many() {
 }
 
 /// The next step adds `--force-conflicts` only when another manager owns
-/// fields of a changed object, because a deploy stops on those fields.
+/// fields of a changed object that Kix does not also own, because a deploy
+/// stops only on those fields.
 #[test]
 fn the_next_step_forces_conflicts_only_for_another_manager() {
     let text = |seen: &Observation| {
@@ -433,6 +435,30 @@ fn the_next_step_forces_conflicts_only_for_another_manager() {
              missing or changed and take back the fields that kubectl-edit owns."
         ),
         "{changed}"
+    );
+
+    // kubeadm owned `data` before Kix took the object and shares it with
+    // Kix, so it changed nothing and cannot conflict.
+    let mut shared = shop();
+    for o in &mut shared.clusters[0].objects {
+        if o.rid.name == "pg-config" {
+            o.content = Some(DriftVerdict::Drifted {
+                foreign: vec![ForeignOwner {
+                    manager: "kubeadm".into(),
+                    operation: "Update".into(),
+                    subresource: None,
+                    time: None,
+                    paths: vec!["data.max_connections".into()],
+                    unshared_paths: vec![],
+                }],
+                unrecorded_scale: None,
+            });
+        }
+    }
+    let shared = text(&shared);
+    assert!(
+        shared.contains("Next: run `kix deploy shop --reconcile` to put back"),
+        "{shared}"
     );
 
     let mut scaled = shop();

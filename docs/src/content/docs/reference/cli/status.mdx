@@ -80,10 +80,12 @@ The text output has four parts:
    `kix plan <cluster> --reconcile`, which shows what that deploy would change
    first. A deploy without `--reconcile` skips objects whose build did not
    change, so it does not put back a missing or changed object. When another
-   field manager owns fields of a changed object, as after `kubectl edit` or
-   `kubectl scale`, a deploy stops on those fields with a field ownership
-   conflict. The line then adds `--force-conflicts`, which takes the fields
-   back from that manager.
+   field manager owns fields on a changed object and Kix does not co-own them
+   (for example, after `kubectl edit` or `kubectl scale`), a deploy stops with
+   a field ownership conflict. The `Next:` line then adds `--force-conflicts`
+   to take those fields back. Fields shared with Kix still hold what Kix
+   applied, so a manager that shares all its fields with Kix does not trigger
+   `--force-conflicts`.
 
 ```text
 Cluster shop on Kubernetes v1.33.1 (context prod)
@@ -191,7 +193,7 @@ Each entry of `resources[]`:
 | `identity_hash` | The object's `kix.run/identity-hash`. |
 | `named` | `false` when Kix could not name a missing object. |
 | `present` | `yes`, `no`, `external` (an import marker for an object Kix does not manage), or `unknown` (the account may not list the kind). |
-| `drift` | `null` when the drift check did not run or the object is gone. Otherwise `verdict` (`in_sync`, `changed`, `unstamped`, or `no_fieldset`), `foreign_owners` (other field managers, each with `manager`, `operation`, `subresource`, `time`, and `paths`), and `unrecorded_scale` (a replica count changed through `/scale` that Kubernetes recorded no owner for). |
+| `drift` | `null` when the drift check did not run or the object is gone. Otherwise `verdict` (`in_sync`, `changed`, `unstamped`, or `no_fieldset`), `foreign_owners` (other field managers, each with `manager`, `operation`, `subresource`, `time`, `paths`, and `unshared_paths`; `unshared_paths` lists the paths Kix does not co-own, which can conflict on deploy), and `unrecorded_scale` (a replica count changed through `/scale` that Kubernetes recorded no owner for). |
 | `ready` | `true` or `false`. `null` when the readiness check did not run, the kind has no readiness (such as a ConfigMap), or the object is gone. |
 | `not_ready_reason` | Why the object is not ready, such as `0/1 ready, 0/1 updated`. |
 | `needed_by` | For a missing object, the objects that depend on it, as `Kind namespace/name`. |
