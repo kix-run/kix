@@ -44,7 +44,7 @@ pub use redact::{
 };
 pub(crate) use redact::{Side, shown_value};
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
@@ -160,6 +160,15 @@ pub enum PlanError {
     Marker(MalformedMarker),
     #[error("{0}")]
     Unshown(objects::Unshown),
+    #[error(
+        "cannot move {} to another API group while keeping the same kind, namespace, and name. \
+         Plans list objects without their API group, so they cannot show the old object being \
+         deleted and the new one being created. Nothing was planned or applied to the cluster. \
+         Next: first deploy a build that removes the object, then deploy a build that adds it \
+         in the new API group.",
+        .0.join(", ")
+    )]
+    SharedNames(Vec<String>),
 }
 
 pub struct PackageDiff {
@@ -252,6 +261,34 @@ pub struct RecordChange {
 }
 
 impl PackageDiff {
+    /// Return the ids that name more than one object this diff shows, each
+    /// once, sorted. The plan document and the plan file name an object by
+    /// its kind, namespace, and name, so two objects that differ only in
+    /// their API group would show as one.
+    pub fn shared_names(&self) -> Vec<String> {
+        let ids = self
+            .shown
+            .writes
+            .keys()
+            .map(|(id, _)| id)
+            .chain(self.shown.deletes.keys())
+            .chain(
+                self.changed
+                    .iter()
+                    .chain(&self.cluster_level)
+                    .flat_map(|c| &c.removed_resources),
+            );
+        let mut by_name: BTreeMap<String, HashSet<&ResourceId>> = BTreeMap::new();
+        for id in ids {
+            by_name.entry(id.display_id()).or_default().insert(id);
+        }
+        by_name
+            .into_iter()
+            .filter(|(_, ids)| ids.len() > 1)
+            .map(|(name, _)| crate::text::printable_up_to(&name, 300))
+            .collect()
+    }
+
     /// Return true when there is any change to report.
     pub fn has_changes(&self) -> bool {
         !self.added.is_empty()

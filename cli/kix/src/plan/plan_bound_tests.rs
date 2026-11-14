@@ -612,3 +612,37 @@ fn a_saved_plan_refuses_a_build_that_lost_a_manifest() {
         vec![super::saved::Rule::Objects]
     );
 }
+
+/// A build that moves an object to another API group under the same kind,
+/// namespace, and name is refused before anything is applied. The plan
+/// names objects without their group, so it could not show the delete and
+/// the write apart.
+#[test]
+fn moving_an_object_to_another_group_is_refused() {
+    let old = build();
+    let mut new = old.clone();
+    let (at, deployment) = new
+        .resources
+        .iter()
+        .find(|(_, n)| n.manifest["kind"] == "Deployment")
+        .map(|(p, n)| (p.clone(), n.manifest.clone()))
+        .expect("the build has a Deployment");
+    let owner = new.resource_owner[&at].clone();
+    let mut moved_to = deployment;
+    moved_to["apiVersion"] = json!("apps.example.com/v1");
+    let moved = path("moved", "Deployment-moved");
+    new.resources.remove(&at);
+    add(&mut new, &moved, moved_to.clone());
+    new.resource_owner.remove(&at);
+    new.resource_owner.insert(moved.clone(), owner.clone());
+    let paths = &mut new.packages[&owner].resource_paths;
+    paths.retain(|p| *p != at);
+    paths.push(moved);
+    new.validate().unwrap();
+    let name = ResourceId::from_value(&moved_to).display_id();
+    match plan(&deployed(Some(&old)), &new, flags(&[])) {
+        Err(PlanError::SharedNames(names)) => assert_eq!(names, vec![name]),
+        Err(e) => panic!("refused for another reason: {e}"),
+        Ok(_) => panic!("the plan was not refused"),
+    }
+}

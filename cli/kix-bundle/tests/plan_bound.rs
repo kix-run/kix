@@ -1217,7 +1217,9 @@ fn plan_and_check(
     };
     let checked = match plan(&baseline, new, flags) {
         Ok(checked) => checked,
-        Err(PlanError::Graph(_) | PlanError::Marker(_)) => return Ok(Outcome::PlanningRefused),
+        Err(PlanError::Graph(_) | PlanError::Marker(_) | PlanError::SharedNames(_)) => {
+            return Ok(Outcome::PlanningRefused);
+        }
         Err(PlanError::Unshown(_)) => return Ok(Outcome::ObjectsRefused),
         Err(e) => return Err(format!("the plan failed: {e}")),
     };
@@ -1497,4 +1499,31 @@ fn a_changed_bundle_is_refused_or_deploys_what_its_plan_shows() {
         counts[4] * 10 >= counts.iter().sum::<usize>(),
         "under a tenth of the cases reached the check: {counts:?}"
     );
+}
+
+/// A field change that moves the `landing` Deployment out of the `apps`
+/// group, keeping its kind, namespace, and name. The plan names objects
+/// without their group, so planning refuses it rather than showing the
+/// delete and the write as one object.
+#[test]
+fn a_deployment_moved_to_the_core_group_is_refused_by_planning() {
+    let honest: Vec<(Contents, StoreGraph)> = SEEDS
+        .iter()
+        .map(|(_, bytes)| {
+            let (mut bundle, graph) = Bundle::read(Cursor::new(*bytes)).unwrap();
+            (bundle.contents().unwrap(), graph)
+        })
+        .collect();
+    let case = Case {
+        seed: 0,
+        changes: vec![Change::SetField {
+            file: 826970914687456496,
+            field: 15257103688815975303,
+            value: 1170401294027661380,
+        }],
+        reorder: None,
+        old: OldSide::Deployed,
+        flags: 0,
+    };
+    assert!(matches!(run(&case, &honest), Ok(Outcome::PlanningRefused)));
 }
