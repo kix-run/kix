@@ -190,7 +190,7 @@ pub fn of_kind(applying: &[Applying], kind: Kind) -> Vec<&Applying> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
 
     fn release(version: &str, date: &str) -> Release {
@@ -340,7 +340,7 @@ mod tests {
         );
     }
 
-    fn doc(version: &str, records: Vec<Record>) -> ReleaseRecords {
+    pub(in crate::commands::upgrade) fn doc(version: &str, records: Vec<Record>) -> ReleaseRecords {
         ReleaseRecords {
             version: v(version),
             document: Some(Document {
@@ -353,7 +353,7 @@ mod tests {
 
     /// Read a record from the file form, a TOML header between `+++` lines
     /// and a body, through the JSON form a release publishes.
-    fn record(name: &str, text: &str) -> Record {
+    pub(in crate::commands::upgrade) fn record(name: &str, text: &str) -> Record {
         let mut parts = text.splitn(3, "+++\n");
         parts.next();
         let header: toml::Table = toml::from_str(parts.next().unwrap()).unwrap();

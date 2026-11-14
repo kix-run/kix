@@ -70,8 +70,9 @@ pub struct UpgradeState {
     pub schema: String,
     pub from: String,
     pub to: String,
-    /// The `--to` value the upgrade started with. Absent when it asked for
-    /// the latest release. A resumed run without `--to` uses it.
+    /// The `--to` value the upgrade started with, or `latest`. A resumed run
+    /// without `--to` asks for it again. Kix 0.10.0-rc.4 and older did not
+    /// write it, and a resume of their state needs `--to`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requested: Option<String>,
     pub status: Status,
