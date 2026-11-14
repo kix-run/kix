@@ -273,7 +273,11 @@ pub async fn reconcile_activation(
             // Failed is terminal. The deploy that owned it has stopped, and
             // the next one folds its closure into the plan and supersedes it.
             None => {
-                tracing::debug!(name, phase, "Skipping activation with no pending spec.request");
+                tracing::debug!(
+                    name,
+                    phase,
+                    "Skipping activation with no pending spec.request"
+                );
                 Ok(Action::await_change())
             }
         },

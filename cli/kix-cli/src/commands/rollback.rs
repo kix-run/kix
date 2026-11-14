@@ -560,7 +560,8 @@ async fn run_operator_async(
                 target = target_name,
             );
             println!(
-                "  Run `kubectl describe activations.kix.run/{target_name}` to see which resources failed."
+                "  Run `kubectl describe {}/{target_name}` to see which resources failed.",
+                kix::manifest::keys::ACTIVATIONS_CRD,
             );
         }
     }
