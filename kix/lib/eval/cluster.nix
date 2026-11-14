@@ -903,7 +903,13 @@ in
       # them from `kix-warnings.json`, because it shows Nix's trace output
       # only when an evaluation fails. The scorecard report carries the
       # scorecard's own warnings.
-      libraryWarnings = clusterDiagnostics.warnings ++ clusterHookWarnings;
+      libraryWarnings = clusterDiagnostics.warnings ++ clusterHookWarnings ++ dnsWarnings;
+
+      # Report missing DNS once for the cluster, however many instances
+      # lack it.
+      dnsWarnings =
+        lib.optional (builtins.any (inst: inst._dnsMissing or false) allInstancesList)
+          "no DNS instance (alias 'dns') was found. Kix will not wait for DNS to be ready before deploying workloads. Add a DNS provider or import if this ordering is required";
 
       # The platform whose interface file supplied `k8sVersion`, or null when
       # the definition writes it or nothing sets it. `kix.interface` sets the
@@ -1385,7 +1391,7 @@ in
             builtins.seq _roleBindingsCheck (
               builtins.seq _annotationDomainsCheck (
                 builtins.seq _clusterHookChecksRun (
-                  builtins.seq clusterDiagnostics.emitExtraWarnings (
+                  builtins.seq clusterDiagnostics.evaluateExtraWarnings (
                     builtins.seq clusterDiagnostics.assertionCheck {
                       _type = "k8s-cluster-v2";
                       inherit name;

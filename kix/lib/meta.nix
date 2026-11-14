@@ -389,9 +389,12 @@ rec {
   # prefix `[namespace/instance]` here, so the code that raises a warning
   # leaves the instance out of its text.
   #
-  # `scorecardWarnings` are traced but left out of `allWarnings`, because the
-  # scorecard report already carries them as findings and the CLI shows that
-  # report.
+  # `scorecardWarnings` are left out of `allWarnings`, because the scorecard
+  # report already carries them as findings and the CLI shows that report.
+  #
+  # `evaluateWarnings` computes every warning and prints nothing. The
+  # instance forces it, so an error raised while a warning is worked out
+  # stops the build of the instance.
   combineDiagnostics =
     {
       instanceName,
@@ -413,17 +416,16 @@ rec {
     in
     {
       inherit allWarnings allAssertions failedAssertions;
-      emitWarnings = emitTraces "warning: " (allWarnings ++ scorecardWarnings);
+      evaluateWarnings = builtins.deepSeq (allWarnings ++ scorecardWarnings) null;
       emitAssertionWarnings = emitTraces "ASSERTION FAILED: " (
         map (a: "${a.instance}: ${a.message}") failedAssertions
       );
     };
 
   # Aggregate diagnostics across all instances and attach cluster- and
-  # namespace-level ones. `scorecardWarnings` are traced but left out of
-  # `warnings`, as in `combineDiagnostics`. `emitExtraWarnings` traces only
-  # them because instance warnings are already traced during instance
-  # evaluation.
+  # namespace-level ones. `scorecardWarnings` are left out of `warnings`, as
+  # in `combineDiagnostics`. `evaluateExtraWarnings` computes them and prints
+  # nothing. Each instance has already computed its own warnings.
   collectClusterDiagnostics =
     {
       clusterName,
@@ -453,6 +455,6 @@ rec {
         failedAssertions
         assertionCheck
         ;
-      emitExtraWarnings = emitTraces "warning: " scorecardWarnings;
+      evaluateExtraWarnings = builtins.deepSeq scorecardWarnings null;
     };
 }
