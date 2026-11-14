@@ -1142,22 +1142,35 @@ fn rerun_job_a_failed_deploy_touched_follows_its_content() {
 
 /// A Job under the rerun rule whose last run failed runs again, and the
 /// reason names the failed run, whether or not its content changed since the
-/// deployed build. Without the rule a failed run changes nothing.
+/// deployed build. A Job no build had runs as new. Without the rule a failed
+/// run changes nothing.
 #[test]
 fn rerun_job_whose_last_run_failed_names_the_failed_run() {
     for old_content in [Some("c1"), Some("c0"), None] {
         assert!(matches!(
-            changed(&rerun_job("id2", Some("c1")), old_content, true),
+            changed(
+                &rerun_job("id2", Some("c1")),
+                Deployed::RerunHash(old_content),
+                true
+            ),
             ChangeAction::Recreate(_, RerunReason::LastRunFailed)
         ));
     }
     assert!(matches!(
-        changed(&rerun_job("id2", Some("c1")), Some("c0"), false),
+        changed(
+            &rerun_job("id2", Some("c1")),
+            Deployed::RerunHash(Some("c0")),
+            false
+        ),
         ChangeAction::Recreate(_, RerunReason::Changed)
+    ));
+    assert!(matches!(
+        changed(&rerun_job("id2", Some("c1")), Deployed::Nothing, false),
+        ChangeAction::Recreate(_, RerunReason::New)
     ));
     let plain = manifest("Job", "bootstrap", "db", "id2");
     assert!(matches!(
-        changed(&plain, None, true),
+        changed(&plain, Deployed::Nothing, true),
         ChangeAction::Apply(_)
     ));
 }

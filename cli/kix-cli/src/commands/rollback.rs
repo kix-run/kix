@@ -347,7 +347,7 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
     )
     .await?;
     if !output::quiet() {
-        planned.print(cluster, &target_name, args.prune, ctx.global.verbose > 0);
+        planned.print(cluster, &target_name, ctx.global.verbose > 0);
     }
     let RollbackPlan {
         target_result_dir,
@@ -573,7 +573,7 @@ async fn run_operator_async(
     )
     .await?;
     if !output::quiet() {
-        planned.print(cluster, &target_name, true, ctx.global.verbose > 0);
+        planned.print(cluster, &target_name, ctx.global.verbose > 0);
     }
     let target_source_path = planned.target_result_dir.display().to_string();
 
@@ -681,7 +681,7 @@ struct RollbackPlan {
 }
 
 impl RollbackPlan {
-    fn print(&self, cluster: &str, target_name: &str, prune: bool, verbose: bool) {
+    fn print(&self, cluster: &str, target_name: &str, verbose: bool) {
         println!();
         println!(
             "{} restoring cluster '{}' to deployment '{}'",
@@ -689,17 +689,8 @@ impl RollbackPlan {
             output::bold(cluster),
             output::bold(target_name),
         );
-        plan::print_package_plan(self.checked.pkg_diff(), verbose);
-        plan::print_plan_summary(self.checked.pkg_diff());
-        let fate = if prune {
-            "to be deleted after the apply (`--prune`)".to_string()
-        } else {
-            plan::kept_orphans_fate(cluster)
-        };
-        print!(
-            "{}",
-            plan::render_plan_orphans(self.checked.orphans(), &fate)
-        );
+        let fate = plan::orphans_fate(self.checked.flags(), true, cluster);
+        plan::print_checked(&self.checked, &fate, verbose);
         plan::print_shared(self.checked.shared_orphans());
     }
 }

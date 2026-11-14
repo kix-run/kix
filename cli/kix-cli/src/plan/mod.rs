@@ -19,17 +19,17 @@ use miette::miette;
 
 use kix::cluster::apply::{ChangeAction, RerunReason};
 use kix::cluster::inventory::SharedOrphan;
-use kix::cluster::scheduler::DeployPlan;
+use kix::cluster::scheduler::{DeployPlan, PrunePolicy};
 use kix::cluster::stream::NodeId;
 use kix::eval::store_graph::StoreGraph;
 use kix::manifest::diff::DiffConfig;
 use kix::manifest::diff::display::format_diffs;
 use kix::manifest::types::ResourceId;
-use kix::plan::document::Plan;
+use kix::plan::document::{Plan, PlanFlags};
 use kix::plan::file;
 use kix::plan::{
-    CLUSTER_LEVEL_KEY, PackageChangeDiff, PackageDiff, PackageInfo, split_never_pruned,
-    without_secrets,
+    CLUSTER_LEVEL_KEY, CheckedPlan, PackageChangeDiff, PackageDiff, PackageInfo,
+    split_never_pruned, without_secrets,
 };
 
 use crate::output;
@@ -551,6 +551,36 @@ pub fn render_never_pruned(kept: &[ResourceId]) -> String {
 /// Return the [`kix::plan::document::KixBuild`] metadata for this CLI binary.
 pub fn kix_build() -> kix::plan::document::KixBuild {
     kix::plan::document::KixBuild::current(&kix::version::running().to_string())
+}
+
+/// Print the plan every command that deploys shows for `checked`: the
+/// package plan and its summary, the Jobs that run again, and the orphans,
+/// with what happens to them (`fate`).
+pub fn print_checked(checked: &CheckedPlan, fate: &str, verbose: bool) {
+    print_package_plan(checked.pkg_diff(), verbose);
+    print_plan_summary(checked.pkg_diff());
+    print_reruns(
+        checked.plan(),
+        &[RerunReason::Changed, RerunReason::LastRunFailed],
+    );
+    output::progress_text(&render_plan_orphans(checked.orphans(), fate));
+}
+
+/// Return what a run of a plan made with `flags` does with the orphans of
+/// `cluster`. `connected` says whether the plan has read the cluster.
+pub fn orphans_fate(flags: PlanFlags, connected: bool, cluster: &str) -> String {
+    match flags.prune {
+        PrunePolicy::Skip => {
+            "still running on the cluster (`--skip-orphan-check`, not deleted)".to_string()
+        }
+        // A plan that has not read the cluster cannot yet tell which orphans
+        // another Kix cluster deploys.
+        PrunePolicy::Delete if !connected => "to be deleted after the apply (`--prune`) except \
+            any still deployed by another Kix cluster (checked once connected)"
+            .to_string(),
+        PrunePolicy::Delete => "to be deleted after the apply (`--prune`)".to_string(),
+        PrunePolicy::WarnOnly => kept_orphans_fate(cluster),
+    }
 }
 
 /// Return the fate of orphans a deploy of `cluster` keeps without `--prune`.

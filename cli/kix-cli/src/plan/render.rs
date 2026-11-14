@@ -43,29 +43,35 @@ pub fn render_text(plan: &Plan) -> String {
 }
 
 /// Write the counts of objects the deploy would write and delete, the plan
-/// digest, and the count of unchanged objects re-applied from earlier builds.
+/// digest, and the count of unchanged objects written again from earlier
+/// builds. An unchanged Job that runs again only if its last run failed is
+/// not counted: the Job rerun lines name the ones that will.
 fn write_objects(out: &mut String, plan: &Plan) {
     let (Some(objects), Some(digest)) = (&plan.objects, &plan.objects_digest) else {
         return;
     };
+    let writes: Vec<_> = objects
+        .writes
+        .iter()
+        .filter(|w| w.change.certain())
+        .collect();
     let _ = writeln!(out);
     let _ = writeln!(
         out,
         "{} {} to write, {} to delete {}",
         output::bold("Objects:"),
-        objects.writes.len(),
+        writes.len(),
         objects.deletes.len(),
         output::dim(&format!("({digest})")),
     );
-    let reapplied = objects
-        .writes
+    let reapplied = writes
         .iter()
         .filter(|w| w.change == WriteChange::Reapplied)
         .count();
     if reapplied > 0 {
         let _ = writeln!(
             out,
-            "  {} {reapplied} written again unchanged: an earlier deployment on this cluster already ran the exact same manifest",
+            "  {} {reapplied} of them are written again as an earlier deploy to this cluster wrote them",
             output::yellow("↻"),
         );
     }

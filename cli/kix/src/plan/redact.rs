@@ -98,16 +98,33 @@ impl<'a> ManifestIndex<'a> {
     }
 }
 
-/// Placeholder for a secret value omitted from the JSON diff. Covers a
-/// Secret's `data` and `stringData` values, a Secret's
-/// `kix.run/content-hash` and `kix.run/applied-hash`, and every
-/// `checksum/*` annotation (where Helm charts store Secret hashes).
+/// Placeholder for a secret value omitted from the JSON diff: a Secret's
+/// `data` and `stringData` values and its
+/// `kubectl.kubernetes.io/last-applied-configuration`.
 pub const SECRET_NOT_SHOWN: &str = "(secret, not shown)";
 
 /// Placeholder for a secret value on the new side when the old side has a
 /// different value at the same path, so a line diff of the two manifests
 /// still shows the line as changed.
 pub const SECRET_CHANGED_NOT_SHOWN: &str = "(secret, changed, not shown)";
+
+/// Placeholder for a hash that may be of a Secret's content: a Secret's
+/// `kix.run/content-hash` and `kix.run/applied-hash`, and every
+/// `checksum/*` annotation, where packages and Helm charts put the hash of a
+/// Secret or ConfigMap a pod reads. A hash of a short secret can be reversed
+/// by guessing, so it is not shown either.
+pub const HASH_NOT_SHOWN: &str = "(hash, not shown)";
+
+/// Placeholder for a hidden hash on the new side when the old side has a
+/// different value at the same path.
+pub const HASH_CHANGED_NOT_SHOWN: &str = "(hash, changed, not shown)";
+
+/// What a hidden value is.
+#[derive(Clone, Copy)]
+enum Hidden {
+    Secret,
+    Hash,
+}
 
 /// Maximum serialized manifest size (3 MiB) shown at `--detail manifests` and
 /// in a plan file. Matches the apiserver's request body limit so any object a
@@ -157,16 +174,18 @@ pub fn without_secrets(is_secret: bool, d: &Difference) -> Difference {
     d
 }
 
-/// Replace every secret value in `value` with [`SECRET_NOT_SHOWN`], or with
-/// [`SECRET_CHANGED_NOT_SHOWN`] when `old` holds a different value at the
-/// same path. Array elements are matched to `old` by position.
+/// Replace every secret value in `value` with [`SECRET_NOT_SHOWN`] and
+/// every hash of one with [`HASH_NOT_SHOWN`], or with the `CHANGED` form
+/// when `old` holds a different value at the same path. Array elements are
+/// matched to `old` by position.
 fn hide_secrets(is_secret: bool, path: &str, value: &mut Value, old: Option<&Value>) {
-    if is_secret_path(is_secret, path) {
+    if let Some(hidden) = hidden_at(is_secret, path) {
         let changed = old.is_some_and(|o| o != value);
-        let marker = if changed {
-            SECRET_CHANGED_NOT_SHOWN
-        } else {
-            SECRET_NOT_SHOWN
+        let marker = match (hidden, changed) {
+            (Hidden::Secret, false) => SECRET_NOT_SHOWN,
+            (Hidden::Secret, true) => SECRET_CHANGED_NOT_SHOWN,
+            (Hidden::Hash, false) => HASH_NOT_SHOWN,
+            (Hidden::Hash, true) => HASH_CHANGED_NOT_SHOWN,
         };
         *value = Value::String(marker.into());
         return;
@@ -188,32 +207,37 @@ fn hide_secrets(is_secret: bool, path: &str, value: &mut Value, old: Option<&Val
     }
 }
 
-/// Return true when the value at `path` is secret. Because annotation keys
-/// contain dots and slashes that diff paths do not escape, keys are matched
-/// by their suffix after `annotations.`.
+/// Return what the value at `path` is when it is hidden, or `None`.
+/// Because annotation keys contain dots and slashes that diff paths do not
+/// escape, keys are matched by their suffix after `annotations.`.
 ///
 /// On a Secret, this also covers `kubectl.kubernetes.io/last-applied-configuration`
 /// and the content and applied hashes under every domain Kix has stamped.
-fn is_secret_path(is_secret: bool, path: &str) -> bool {
+fn hidden_at(is_secret: bool, path: &str) -> Option<Hidden> {
     if path.contains(".annotations.checksum/") {
-        return true;
+        return Some(Hidden::Hash);
     }
     if !is_secret {
-        return false;
+        return None;
     }
     let under = |field: &str| {
         path.starts_with(&format!("{field}.")) || path.starts_with(&format!("{field}["))
     };
     let Some(annotation) = path.strip_prefix("$.metadata.annotations.") else {
-        return under("$.data") || under("$.stringData");
+        return (under("$.data") || under("$.stringData")).then_some(Hidden::Secret);
     };
-    annotation == LAST_APPLIED
-        || [keys::CONTENT_HASH, keys::APPLIED_HASH].iter().any(|k| {
+    if annotation == LAST_APPLIED {
+        return Some(Hidden::Secret);
+    }
+    [keys::CONTENT_HASH, keys::APPLIED_HASH]
+        .iter()
+        .any(|k| {
             annotation == *k
                 || crate::legacy_domain::legacy_spellings(k)
                     .iter()
                     .any(|l| annotation == l)
         })
+        .then_some(Hidden::Hash)
 }
 
 /// The annotation `kubectl apply` keeps the whole applied object in.

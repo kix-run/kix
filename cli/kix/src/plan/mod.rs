@@ -35,8 +35,8 @@ pub use planner::{CheckedPlan, OldSide, Planned, Planner, Target, TargetChecks, 
 #[cfg(test)]
 use redact::LAST_APPLIED;
 pub use redact::{
-    MAX_SHOWN_MANIFEST_BYTES, MAX_SHOWN_VALUE_BYTES, ManifestIndex, SECRET_CHANGED_NOT_SHOWN,
-    SECRET_NOT_SHOWN, without_secrets,
+    HASH_CHANGED_NOT_SHOWN, HASH_NOT_SHOWN, MAX_SHOWN_MANIFEST_BYTES, MAX_SHOWN_VALUE_BYTES,
+    ManifestIndex, SECRET_CHANGED_NOT_SHOWN, SECRET_NOT_SHOWN, without_secrets,
 };
 pub(crate) use redact::{Side, shown_value};
 

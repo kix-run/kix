@@ -30,6 +30,7 @@
 //! which plans from a sweep of the live objects it makes itself without
 //! holding the plan to a package diff.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use kube::client::Client;
@@ -37,7 +38,7 @@ use kube::discovery::{ApiResource, Scope};
 use serde_json::Value;
 
 use super::baseline::Baseline;
-use super::document::{DriftChange, Objects, PlanFlags};
+use super::document::{DriftChange, Objects, PlanFlags, WriteChange};
 use super::objects;
 use super::server::Overlay;
 use super::{PackageDiff, PlanError, PlanEvent, diff_graphs};
@@ -57,7 +58,7 @@ use crate::cluster::migrate::{MigrationPair, detect_migration_pairs};
 use crate::cluster::ops::{Cluster, DryRun, KubeResources, RecordConfig};
 use crate::cluster::preview::DryRunAnswer;
 use crate::cluster::scheduler::{self, DeployError, DeployPlan, PrunePolicy, SchedulerConfig};
-use crate::cluster::stream::{DeployObserver, DeployResult};
+use crate::cluster::stream::{DeployObserver, DeployResult, NodeId};
 use crate::eval::package_index::RecordPackageIndex;
 use crate::eval::store_graph::StoreGraph;
 use crate::manifest::types::ResourceId;
@@ -317,6 +318,24 @@ impl CheckedPlan {
         } else {
             Some(Vec::new())
         };
+        // A Job whose failed last run makes it run again is now a certain
+        // write. The digest leaves out how a write is shown, so it stays the
+        // same.
+        let recreated: HashSet<&ResourceId> = self
+            .plan
+            .nodes()
+            .iter()
+            .filter(|n| matches!(n.action, ChangeAction::Recreate(..)))
+            .filter_map(|n| match &n.id {
+                NodeId::Resource(rid) => Some(rid),
+                _ => None,
+            })
+            .collect();
+        for w in &mut self.objects.writes {
+            if w.change == WriteChange::IfLastRunFailed && recreated.contains(&w.resource_id()) {
+                w.change = WriteChange::Reapplied;
+            }
+        }
         Ok(())
     }
 

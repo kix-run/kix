@@ -79,7 +79,9 @@ fn plan_with_skips(manifests: &[Value], skip: &[&str]) -> DeployPlan {
             if skip.contains(&rid.name.as_str()) {
                 ChangeAction::Skip(rid)
             } else {
-                crate::cluster::apply::changed(m, None, false)
+                // A deployed object whose rerun hash Kix has no record of.
+                let deployed = crate::cluster::apply::Deployed::RerunHash(None);
+                crate::cluster::apply::changed(m, deployed, false)
             }
         })
         .collect();

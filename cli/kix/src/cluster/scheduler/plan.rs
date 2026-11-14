@@ -8,7 +8,7 @@ use crate::manifest::keys;
 use crate::manifest::lifecycle;
 use crate::manifest::types::{CLUSTER_SCOPED, ResourceId};
 
-use super::super::apply::{ChangeAction, changed, wants_rerun};
+use super::super::apply::{ChangeAction, Deployed, changed, wants_rerun};
 use super::super::graph::ResourceGraph;
 use super::super::readiness::{self, ImportTarget};
 use super::super::stream::{NodeId, NodeMeta, PlanNode, TransitionKind};
@@ -215,7 +215,7 @@ impl DeployPlan {
             match &node.rerun {
                 Some(rerun) => {
                     let manifest = node.action.written().unwrap_or(rerun).clone();
-                    node.action = changed(&manifest, None, true);
+                    node.action = changed(&manifest, Deployed::RerunHash(None), true);
                     node.kind = TransitionKind::Recreate;
                 }
                 None if matches!(node.action, ChangeAction::Skip(_)) => {
@@ -237,8 +237,10 @@ impl DeployPlan {
     #[cfg(any(test, feature = "test-util"))]
     pub fn applying(manifests: &[Value]) -> Self {
         let graph = ResourceGraph::from_manifests(manifests).expect("a test plan's graph");
-        let changes: Vec<ChangeAction> =
-            manifests.iter().map(|m| changed(m, None, false)).collect();
+        let changes: Vec<ChangeAction> = manifests
+            .iter()
+            .map(|m| changed(m, Deployed::Nothing, false))
+            .collect();
         Self::from_graph_and_changes(&graph, &changes).expect("a test plan's markers")
     }
 

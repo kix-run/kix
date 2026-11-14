@@ -454,7 +454,7 @@ mod diff_graph_tests {
         assert_eq!(by_path("$.type")["new"], json!("kubernetes.io/basic-auth"));
 
         let changes = json_changes(&d, "Deployment/web@app");
-        assert!(changes.to_string().contains(SECRET_NOT_SHOWN), "{changes}");
+        assert!(changes.to_string().contains(HASH_NOT_SHOWN), "{changes}");
     }
 
     /// A value too large to show is replaced by its size.
@@ -629,12 +629,12 @@ mod diff_graph_tests {
         );
         assert_eq!(
             secret["new"]["metadata"]["annotations"][keys::CONTENT_HASH],
-            json!(SECRET_NOT_SHOWN)
+            json!(HASH_NOT_SHOWN)
         );
         let dep = &json["changed"][0]["manifests"]["Deployment/web@app"];
         assert_eq!(
             dep["new"]["spec"]["template"]["metadata"]["annotations"]["checksum/secret"],
-            json!(SECRET_NOT_SHOWN)
+            json!(HASH_NOT_SHOWN)
         );
     }
 

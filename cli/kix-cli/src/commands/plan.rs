@@ -16,7 +16,6 @@ use miette::{Result, miette};
 use serde_json::Value;
 
 use kix::build_source::InstallableBuild;
-use kix::cluster::apply::RerunReason;
 use kix::cluster::classify::{ChangedCrds, DeployScope, Verdict as DryRunVerdict, classify};
 use kix::cluster::preview::{DryRunAnswer, DryRunOutcome, PruneAnswer, Refusal};
 use kix::cluster::readiness;
@@ -30,8 +29,8 @@ use kix::manifest::lifecycle;
 use kix::manifest::types::ResourceId;
 use kix::plan::document::{
     AdmissionRefusal, Build, Checked, Conflict, ConflictOwner, DeployedBuild, Detail, MadeBy,
-    NotCheckedReason, Plan, PlanFlags, PruneEntry, PruneFate, RefusalReason, UncheckedObject,
-    UncheckedReason,
+    NotCheckedReason, ObjectWrite, Plan, PlanFlags, PruneEntry, PruneFate, RefusalReason,
+    UncheckedObject, UncheckedReason,
 };
 use kix::plan::server::comparable;
 use kix::plan::{ManifestIndex, OldSide, PlanEvent, Planned, Planner, Target};
@@ -267,11 +266,8 @@ pub(crate) fn dry_run(
             .objects()
             .writes
             .iter()
-            .map(|w| ResourceId {
-                kind: w.kind.clone(),
-                namespace: w.namespace.clone(),
-                name: w.name.clone(),
-            })
+            .filter(|w| w.change.certain())
+            .map(ObjectWrite::resource_id)
             .collect();
         let observer = Arc::new(DryRunObserver::new(writes));
         let (result, answers) = p.checked.dry_run(target, config, observer.clone()).await;
@@ -607,36 +603,7 @@ fn prune_entries(p: &Planned, answers: &HashMap<ResourceId, PruneAnswer>) -> Vec
         .checked
         .orphans()
         .iter()
-        .map(|rid| {
-            let (fate, detail) = if lifecycle::never_pruned(&rid.kind) {
-                (PruneFate::KeptNeverPruned, None)
-            } else {
-                match policy {
-                    PrunePolicy::Skip => (PruneFate::KeptSkipped, None),
-                    PrunePolicy::WarnOnly => (PruneFate::KeptWarnOnly, None),
-                    PrunePolicy::Delete => match answers.get(rid) {
-                        Some(PruneAnswer::KeptShared(why)) => {
-                            (PruneFate::KeptShared, Some(why.clone()))
-                        }
-                        Some(PruneAnswer::KeptChanged) => (
-                            PruneFate::KeptChanged,
-                            Some(
-                                "changed since it was read; the next prune checks it again".into(),
-                            ),
-                        ),
-                        Some(PruneAnswer::Refused(why)) => {
-                            (PruneFate::DeleteRefused, Some(why.clone()))
-                        }
-                        Some(PruneAnswer::Deleted) | None => (PruneFate::Delete, None),
-                    },
-                }
-            };
-            PruneEntry {
-                resource: rid.display_id(),
-                fate,
-                detail,
-            }
-        })
+        .map(|rid| prune_entry(rid, policy, answers.get(rid)))
         .collect();
     entries.extend(p.checked.shared_orphans().iter().map(|s| PruneEntry {
         resource: s.rid.display_id(),
@@ -645,6 +612,37 @@ fn prune_entries(p: &Planned, answers: &HashMap<ResourceId, PruneAnswer>) -> Vec
     }));
     entries.sort_by(|a, b| a.resource.cmp(&b.resource));
     entries
+}
+
+/// Return what a deploy with prune policy `policy` does with orphan `rid`,
+/// given the dry run's `answer` for its delete.
+pub(crate) fn prune_entry(
+    rid: &ResourceId,
+    policy: PrunePolicy,
+    answer: Option<&PruneAnswer>,
+) -> PruneEntry {
+    let (fate, detail) = if lifecycle::never_pruned(&rid.kind) {
+        (PruneFate::KeptNeverPruned, None)
+    } else {
+        match policy {
+            PrunePolicy::Skip => (PruneFate::KeptSkipped, None),
+            PrunePolicy::WarnOnly => (PruneFate::KeptWarnOnly, None),
+            PrunePolicy::Delete => match answer {
+                Some(PruneAnswer::KeptShared(why)) => (PruneFate::KeptShared, Some(why.clone())),
+                Some(PruneAnswer::KeptChanged) => (
+                    PruneFate::KeptChanged,
+                    Some("changed since it was read; the next prune checks it again".into()),
+                ),
+                Some(PruneAnswer::Refused(why)) => (PruneFate::DeleteRefused, Some(why.clone())),
+                Some(PruneAnswer::Deleted) | None => (PruneFate::Delete, None),
+            },
+        }
+    };
+    PruneEntry {
+        resource: rid.display_id(),
+        fate,
+        detail,
+    }
 }
 
 fn print_migrations(doc: &Plan, accepted: bool) {
@@ -665,31 +663,13 @@ fn print_migrations(doc: &Plan, accepted: bool) {
 ///
 /// When `verbose` is `true`, lists each changed resource and field.
 pub(crate) fn print_text(p: &Planned, doc: &Plan, verbose: bool) {
-    plan::print_package_plan(p.checked.pkg_diff(), verbose);
-    plan::print_plan_summary(p.checked.pkg_diff());
-
-    plan::print_reruns(
-        p.checked.plan(),
-        &[RerunReason::Changed, RerunReason::LastRunFailed],
+    let fate = plan::orphans_fate(
+        p.checked.flags(),
+        p.client.is_some(),
+        &p.build.graph().cluster_name,
     );
-
-    let prune = p.checked.flags().prune;
-    let deletes = prune == PrunePolicy::Delete;
-    let fate = if prune == PrunePolicy::Skip {
-        "still running on the cluster (`--skip-orphan-check`, not deleted)".to_string()
-    } else if deletes && p.client.is_none() {
-        // `--offline` has not contacted the cluster, so it
-        // cannot yet tell which orphans another Kix cluster deploys.
-        "to be deleted after the apply (`--prune`) except any still deployed by \
-         another Kix cluster (checked once connected)"
-            .to_string()
-    } else if deletes {
-        "to be deleted after the apply (`--prune`)".to_string()
-    } else {
-        plan::kept_orphans_fate(&p.build.graph().cluster_name)
-    };
     // Shared orphans are listed with the prune section of `render::render_text`.
-    output::progress_text(&plan::render_plan_orphans(p.checked.orphans(), &fate));
+    plan::print_checked(&p.checked, &fate, verbose);
 
     // Where the extra work in this plan came from. Without this the reader
     // sees a deploy of an unchanged config proposing changes, and has no way
