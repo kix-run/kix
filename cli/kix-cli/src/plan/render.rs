@@ -211,9 +211,9 @@ fn refusal_title(r: &AdmissionRefusal) -> String {
         }
         (RefusalReason::Decryption, _) => "could not decrypt the SOPS Secret".into(),
         (RefusalReason::WebhookUnreachable, Some(w)) => {
-            format!("admission webhook {w} did not answer")
+            format!("admission webhook {w} is unreachable")
         }
-        (RefusalReason::WebhookUnreachable, None) => "an admission webhook did not answer".into(),
+        (RefusalReason::WebhookUnreachable, None) => "an admission webhook is unreachable".into(),
         (RefusalReason::Other, _) => "refused".into(),
     }
 }

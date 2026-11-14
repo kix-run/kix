@@ -212,7 +212,7 @@ plan reports it as an ownership conflict naming the manager. With
 | `reason` | Meaning |
 | --- | --- |
 | `webhook_denied` | An admission webhook denied the write. `webhook` names it when the apiserver did. |
-| `webhook_unreachable` | The apiserver could not reach the Service behind an admission webhook, and this deploy does not write that Service or the package that serves it. `webhook` names the webhook when the apiserver did. See [Objects not checked](#objects-not-checked). |
+| `webhook_unreachable` | The apiserver could not reach the Service behind an admission webhook, and this deploy does not write that Service or any other object in its package. `webhook` names the webhook when the apiserver reported it. See [Objects not checked](#objects-not-checked). |
 | `policy_denied` | A ValidatingAdmissionPolicy denied the write. `webhook` names the policy. |
 | `invalid` | The object fails validation against the schema or a CRD's rules. |
 | `immutable_field` | A changed field cannot be modified; the object must be deleted and created again. |
@@ -220,7 +220,7 @@ plan reports it as an ownership conflict naming the manager. With
 | `namespace_missing` | The namespace does not exist and the build does not create it. |
 | `unknown_kind` | The apiserver does not serve the kind and the build has no CRD for it. |
 | `decryption` | A SOPS Secret could not be decrypted. |
-| `other` | The deploy refuses the object before sending it, or the apiserver gave another error. |
+| `other` | Kix refused the object before sending it, the dry-run write failed without a response, or the apiserver returned another error. |
 
 ## Prune fates
 
@@ -245,7 +245,7 @@ An admission webhook that cannot reach its Service is not checked only when
 this deploy writes that Service or another object of its package. Otherwise
 nothing in the deploy repairs the webhook, so the deploy would fail at the
 first object the webhook checks. The plan lists the object as a refusal with
-reason `other`, and the deploy stops before it writes anything. Get the
+reason `webhook_unreachable`, and the deploy stops before it writes anything. Get the
 webhook's backend running again. If someone deleted the Service, or scaled
 the workload behind it to 0 replicas, run `kix deploy <cluster> --reconcile`
 to restore what the build defines.

@@ -241,7 +241,7 @@ pub(crate) async fn start(
         Start::Nothing { superseded } => {
             if superseded > 0 {
                 crate::say!(
-                    "  {} {superseded} failed deploy record(s) had nothing left to reconcile; marked superseded",
+                    "  {} Marked {superseded} earlier failed deployment record(s) Superseded (nothing left to change).",
                     output::dim("="),
                 );
             }

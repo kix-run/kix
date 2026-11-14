@@ -285,12 +285,16 @@ pub(crate) async fn dry_run_of(
     cancel.cancel();
     observer.finish();
     if interrupted {
-        return Err(miette!("plan interrupted"));
+        return Err(miette!(
+            "dry run interrupted. Nothing was applied to the cluster."
+        ));
     }
     if let Err(e) = &result
         && !matches!(e, scheduler::DeployError::NodesFailed { .. })
     {
-        return Err(miette!("the dry run stopped: {e}"));
+        return Err(miette!(
+            "the dry run could not finish: {e}. Nothing was applied to the cluster. Next: resolve the problem above and run the command again."
+        ));
     }
 
     let answered: HashSet<&ResourceId> = answers.iter().map(|a| &a.rid).collect();

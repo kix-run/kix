@@ -519,13 +519,13 @@ async fn run_reconcile(
         match plan.read_last_runs().await {
             LastRuns::Read { failed } => {
                 for rid in failed {
-                    tracing::info!(name, resource = %rid, "the last run of an unchanged Job failed; the run reports it");
+                    tracing::info!(name, resource = %rid, "unchanged Job failed on its last run and has no {} annotation; the deploy will report it as failed", keys::RERUN);
                 }
             }
             LastRuns::Unreadable => {
                 tracing::info!(
                     name,
-                    "could not read every Job's last run; the run reads them"
+                    "could not read every Job before starting; Kix will check live Jobs during the deploy"
                 );
             }
         }
