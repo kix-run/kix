@@ -140,7 +140,7 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
         }
         Decision::ResumeNeedsTo { goal } => {
             return refuse(&format!(
-                "Cannot resume the upgrade to Kix {goal}: kix-upgrade.json does not record which version it asked for, because an older Kix wrote it.\nNo project files were modified.\nNext: run `kix upgrade --to <version>` with the version you asked for when the upgrade started, or `kix upgrade --to latest` for the latest release."
+                "Cannot resume upgrade to Kix {goal} without `--to`: an older version of Kix wrote kix-upgrade.json without saving the requested target.\nNo project files were modified.\nNext: run `kix upgrade --to <version>` with the version you asked for, or `kix upgrade --to latest` for the latest release."
             ));
         }
         Decision::InvalidTo(text) => {

@@ -2,4 +2,4 @@
 kind = "fixed"
 cli = ["kix upgrade"]
 +++
-`kix upgrade` no longer moves a project to an older version when it resumes a stopped upgrade that Kix 0.10.0-rc.4 or older started. Those versions did not record which version the upgrade asked for. Without `--to`, the resume aimed at the latest stable release, which can be older than the project. Kix now stops and asks you to run `kix upgrade --to <version>`.
+To resume a stopped upgrade started with Kix 0.10.0-rc.4 or earlier, run `kix upgrade --to <version>` or `kix upgrade --to latest`. Those versions did not save the requested target in `kix-upgrade.json`, so resuming without `--to` defaulted to the latest stable release and could downgrade the project. `kix upgrade` now stops without changing project files and asks for `--to`.
