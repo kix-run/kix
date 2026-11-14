@@ -110,14 +110,16 @@ patterns of the release count in doc 172a
 No library was right alone. Two rules in the script close the gap, and
 they are needed whichever library reads the versions:
 
-- **The same number of parts as the pinned version.** CoreDNS has an old
-  tag `v011`, which reads as version 11 and beats `1.15.0`. A moving tag
-  such as `v2` fails the same way.
+- **At least two parts.** CoreDNS has an old tag `v011`, which reads as
+  version 11 and beats `1.15.0`. A moving tag such as `v2` fails the same
+  way. The rule cannot ask for the same number of parts as the pinned
+  version, because ten upstreams mix lengths. Metabase publishes both
+  `0.65.4` and `0.65.4.4`.
 - **A limit on the line** (`upstream.within`, §2.1). Metabase tags its
   paid edition `v1.x` beside the open-source `v0.x`. Both are stable
   releases, so no version reader can tell them apart.
 
-With those rules, `packaging` was right for 62 of 62. It and the ten-line
+With those rules, `packaging` was right for 62 of 62 in a second run. It and the ten-line
 reader disagreed on 8 tags of the 19,619 that fit a tag shape, all of the
 form `17.0.0-6`, which `packaging` reads as a later release of `17.0.0`.
 The script refuses that form and reports the tag, so the two agree on
@@ -136,8 +138,8 @@ For each package the script lists the upstream's tags and picks a target.
 Every rule is a comparison a program can make:
 
 1. **Stable releases only.** The tag has the shape `upstream.tag` gives.
-   Its version has no prerelease suffix and as many parts as the pinned
-   version, and it is inside `upstream.within` where that is set.
+   Its version has no prerelease suffix and at least two parts, and it is
+   inside `upstream.within` where that is set.
 2. **The newest version.** The target is the highest stable version. The
    step from the pinned version is patch, minor, or major. A minor below
    1.0 counts as major, as in doc 172.
