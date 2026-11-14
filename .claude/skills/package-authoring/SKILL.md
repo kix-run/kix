@@ -419,16 +419,17 @@ existence check before `CREATE`, an upsert, `kubectl annotate --overwrite`).
 Never generate a secret or append to a log in the Job without checking first
 (stackgres-database's bootstrap script is the model).
 
-A Job under `kix.run/rerun` reruns when its own manifest changes, which
-includes the `checksum/*` annotations on its pod template, or when a
-Kix-built Secret or ConfigMap its pod reads through a volume, `env`, or
-`envFrom` changes. The library folds those reads into `kix.run/rerun-hash`,
-so add no checksum for them. Give the Job a `checksum/*` annotation from
-`out.contentHash` for each resource it reaches through the API or the
-network whose change must run it again (the server it bootstraps, the
-webhook it checks), and drop those resources from `requires`. A `secret-ref`
-Secret has no content Kix knows, so a change to it never reruns the Job; say
-so in the package header when that matters.
+A Job with `kix.run/rerun` reruns when its own manifest changes, including
+any `checksum/*` annotations on its pod template. It also reruns when a
+Kix-built Secret or ConfigMap read by its pod (through a volume, `env`, or
+`envFrom`) changes; the Kix library includes those reads in
+`kix.run/rerun-hash`, so do not add `checksum/*` annotations for them. Add a
+`checksum/<name>` annotation set to `out.contentHash` on the pod template
+only for resources the Job reaches over the network or the Kubernetes API
+that should trigger a rerun (such as a server it bootstraps or a webhook it
+checks), and omit those resources from `requires`. Kix does not know the
+content of a `secret-ref` Secret, so changes to it never rerun the Job;
+document this in the package header when relevant.
 A change elsewhere in the graph, such as a namespace label, does not run it.
 
 ### Pattern to reference package
@@ -463,7 +464,7 @@ The only place in this skill with package line numbers. `pkg:N` is
 | Checksum annotations from `out.contentHash`, `enableServiceLinks = false` | metabase:258-271 |
 | Facade: consumer-namespace Secret, server-namespace Job | clickhouse-database:1-36; stackgres-database |
 | Facade resources in the server's namespace named with the consumer's namespace | clickhouse-database:356 (`serverSideName`) |
-| A Job that runs again when its content changes: a fixed name, `kix.run/rerun` (never a hash in the name), and `checksum/*` only for what it reaches over the network or the API | stackgres-database:449-465; clickhouse-database:506-523 |
+| A Job that runs again when its content changes: a fixed name, `kix.run/rerun` (never a hash in the name), and `checksum/*` only for resources reached over the network or the Kubernetes API | stackgres-database:449-465; clickhouse-database:506-523 |
 | Privileges injected into a facade, with the upstream file for each, and asserted on `out` | plausible:183-195, 213-253 |
 | Migrations in an init container sharing the server's env and mounts (`kix.withMountsOn [ "migrate" "plausible" ]`) | plausible:620-626, 693; vaultwarden:180-202, 277 |
 | One volume written by an init container and read by the main containers (two mount records, one `readOnly`) | n8n:499-513, 679-680 |
