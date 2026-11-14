@@ -157,7 +157,7 @@ objects by package and to find objects that are gone from the cluster.
 | `packages` | `object` | Map from `namespace/instance` to `{ instance, resources }`: the identity hash of the package's `PackageInstance`, and the identity hashes of its resources. |
 | `clusterLevel` | `array of string` | Identity hashes of the resources no package lists, such as Namespaces. |
 | `names` | `object` (optional) | Map from each object's identity hash to `[kind, namespace, name]`. `namespace` is `""` for a cluster-scoped object. |
-| `groups` | `object` (optional) | Map from the identity hash of each named object outside the core API group to its group, such as `apps` or `kix.run`. An object it does not list is in the core group. An index written before this field existed has none, so Kix reads its objects as core-group objects. |
+| `groups` | `object` (optional) | Map from each object's identity hash to its API group (such as `apps` or `kix.run`) for objects in `names` outside the core `v1` API group. Kix treats any object in `names` without a `groups` entry as part of the core `v1` API group, including in indexes written by earlier versions. |
 
 ```yaml
 status:
