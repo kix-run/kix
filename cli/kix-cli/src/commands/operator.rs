@@ -56,6 +56,42 @@ async fn open_records(client: &Client) -> Result<Records> {
     Ok(records)
 }
 
+/// Refuse to hand the operator a request when it has not published that it
+/// handles requests (`kix.run/operator-features` on the Activation CRD). An
+/// operator from before requests would ignore it, and the command would wait
+/// for an answer that never comes.
+pub async fn require_requests(client: &Client) -> Result<()> {
+    use kix::cluster::activation::features;
+    let version = kix::version::running();
+    let found = features::read(client).await.map_err(|e| {
+        miette!(
+            "could not read what the Kix operator supports\n  \
+             Nothing was applied to the cluster.\n\n  \
+             Kubernetes API error:\n    \
+             {e}\n\n  \
+             Next:\n    \
+             Make sure your Kubernetes account may read the CustomResourceDefinition {crd}, then run the command again.",
+            crd = kix::manifest::keys::ACTIVATIONS_CRD,
+        )
+    })?;
+    if found.handles(features::REQUESTS) {
+        return Ok(());
+    }
+    Err(miette!(
+        "the Kix operator on this cluster is older than this Kix\n  \
+         Nothing was applied to the cluster.\n\n  \
+         Why:\n    \
+         This Kix asks the operator to deploy by writing a request to the deployment record. \
+         The operator says which features it supports in the {key} annotation on the CustomResourceDefinition {crd}, \
+         and that annotation does not list `{feature}`. An older operator ignores the request, so the command would wait for an answer that never comes.\n\n  \
+         Next:\n    \
+         Upgrade the Kix operator to Kix {version} or later, wait until it has started, and run the command again.",
+        key = kix::manifest::keys::OPERATOR_FEATURES,
+        crd = kix::manifest::keys::ACTIVATIONS_CRD,
+        feature = features::REQUESTS,
+    ))
+}
+
 /// Create or update an Activation CR to trigger operator reconciliation.
 ///
 /// The CR is created without a phase. The operator treats it as Queued and
@@ -321,6 +357,28 @@ mod tests {
             rec["status"]["phase"] = json!("Degraded");
         });
         assert_eq!(watched.await.unwrap().unwrap(), Reconciled::Degraded);
+    }
+
+    /// A command refuses before it writes a request when the operator has
+    /// not published that it handles requests, and goes on once it has.
+    #[tokio::test]
+    async fn an_operator_that_does_not_take_requests_is_refused_up_front() {
+        let crd = |annotations: Value| {
+            json!({
+                "apiVersion": "apiextensions.k8s.io/v1",
+                "kind": "CustomResourceDefinition",
+                "metadata": { "name": keys::ACTIVATIONS_CRD, "annotations": annotations },
+            })
+        };
+        let old = FakeApi::new([crd(json!({}))]);
+        assert!(require_requests(&old.client()).await.is_err());
+        assert!(
+            !old.requests().iter().any(|r| r.starts_with("PATCH")),
+            "{:?}",
+            old.requests()
+        );
+        let new = FakeApi::new([crd(json!({ (keys::OPERATOR_FEATURES): "requests" }))]);
+        assert!(require_requests(&new.client()).await.is_ok());
     }
 
     /// Verify that operator mode requires API discovery and rejects unmigrated clusters.

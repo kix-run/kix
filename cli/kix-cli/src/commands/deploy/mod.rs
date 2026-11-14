@@ -81,7 +81,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
 
     // A saved plan is compared first, because a stale plan is exit 4 whatever
     // the current build would migrate.
-    if saved.is_none() && !migration_gate(&p) {
+    if saved.is_none() && !migration_gate(&p, Command::Deploy, Runner::Cli) {
         return Ok(Exit::Failure);
     }
 
@@ -99,7 +99,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
         if !comparison.matches {
             return Ok(Exit::StalePlan);
         }
-        if !migration_gate(&p) {
+        if !migration_gate(&p, Command::Deploy, Runner::Cli) {
             return Ok(Exit::Failure);
         }
     }
@@ -863,23 +863,32 @@ async fn run_deploy_async(
     Ok(end)
 }
 
+/// What carries out a run: this command, or the Kix operator, which always
+/// prunes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Runner {
+    Cli,
+    Operator,
+}
+
 /// Report the stateful migrations the plan makes. Return false, after saying
-/// why, when the deploy must stop because `--accept-migrations` is not set.
-fn migration_gate(p: &kix::plan::Planned) -> bool {
+/// why, when `command` must stop because `--accept-migrations` is not set.
+/// `kix deploy` and `kix rollback` stop the same way.
+pub(crate) fn migration_gate(p: &kix::plan::Planned, command: Command, runner: Runner) -> bool {
     if p.migration_pairs.is_empty() {
         return true;
     }
     let pairs = plan::migrations::of_pairs(&p.migration_pairs);
     let prune = p.checked.flags().prune == PrunePolicy::Delete;
     if !p.checked.flags().accept_migrations {
-        let fate = if prune {
-            plan::migrations::SourceFate::Pruned
-        } else {
-            plan::migrations::SourceFate::Kept
+        let fate = match runner {
+            Runner::Operator => plan::migrations::SourceFate::OperatorPrunes,
+            Runner::Cli if prune => plan::migrations::SourceFate::Pruned,
+            Runner::Cli => plan::migrations::SourceFate::Kept,
         };
         let cluster = &p.build.graph().cluster_name;
         eprintln!();
-        eprint!("{}", plan::migrations::stop(cluster, &pairs, fate));
+        eprint!("{}", plan::migrations::stop(cluster, &pairs, fate, command));
         return false;
     }
     output::progress_text(&format!("\n{}", plan::migrations::accepted(&pairs, prune)));
@@ -991,18 +1000,7 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
     }
     // Enforce `--accept-migrations` on the CLI before delegating to the
     // non-interactive operator.
-    if !p.migration_pairs.is_empty() && !args.plan.accept_migrations {
-        let pairs = plan::migrations::of_pairs(&p.migration_pairs);
-        let cluster = &p.build.graph().cluster_name;
-        eprintln!();
-        eprint!(
-            "{}",
-            plan::migrations::stop(
-                cluster,
-                &pairs,
-                plan::migrations::SourceFate::OperatorPrunes
-            )
-        );
+    if !migration_gate(&p, Command::Deploy, Runner::Operator) {
         return Ok(Exit::Failure);
     }
     let cluster = p.build.graph().cluster_name.clone();
@@ -1047,6 +1045,7 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
     let reconciled = ctx.runtime()?.block_on(async {
         let (client, records) =
             super::operator::connect_and_verify(global.context.as_deref()).await?;
+        super::operator::require_requests(&client).await?;
         if let Some(checks) = &target_checks {
             let connection = binding::Connection::of_context(global.context.as_deref());
             checks

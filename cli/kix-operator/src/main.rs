@@ -127,6 +127,17 @@ async fn main() -> anyhow::Result<()> {
     // would treat them as Queued and supersede the active deployment.
     let records = open_records(&client).await?;
     tracing::info!("Activation CRD is registered");
+    // The CLI reads this before it hands the operator a request, so an older
+    // CLI or operator is refused up front instead of waiting for an answer.
+    match kix::cluster::activation::features::publish(&client).await {
+        Ok(()) => tracing::info!("Published the operator's features on the Activation CRD"),
+        Err(e) => tracing::warn!(
+            error = %e,
+            "could not write {} on the {} CRD; `kix deploy --operator` and `kix rollback --operator` refuse until this operator may patch that CRD",
+            kix::manifest::keys::OPERATOR_FEATURES,
+            kix::manifest::keys::ACTIVATIONS_CRD,
+        ),
+    }
     let ar = records.watch_resource().clone();
     let activations = records.watcher(watcher::Config::default());
 

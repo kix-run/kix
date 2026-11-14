@@ -24,7 +24,7 @@ use crate::output::{self, CommandResponse};
 use crate::plan;
 
 use super::CommandContext;
-use super::deploy::{Command, Previous, RunOptions};
+use super::deploy::{Command, Previous, RunOptions, Runner};
 
 pub fn run(args: &RollbackArgs, ctx: &mut CommandContext) -> Result<Exit> {
     let cluster = ctx.cluster_identity(&args.cluster, super::Lookup::Mutating)?;
@@ -305,12 +305,15 @@ fn run_direct(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> Resul
             cluster,
             &current,
             selected,
-            flags(args.prune, args.force_conflicts),
+            flags(args.prune, args.force_conflicts, args.accept_migrations),
         )
         .await?;
         Ok::<_, miette::Report>((current, selected.name.clone(), p))
     })?;
 
+    if !super::deploy::migration_gate(&p, Command::Rollback, Runner::Cli) {
+        return Ok(Exit::Failure);
+    }
     if !output::quiet() {
         print_header(cluster, &target);
     }
@@ -439,6 +442,7 @@ async fn run_operator_async(
 ) -> Result<Exit> {
     let (client, records) =
         super::operator::connect_and_verify(ctx.global.context.as_deref()).await?;
+    super::operator::require_requests(&client).await?;
 
     let current = records
         .active(cluster)
@@ -478,7 +482,7 @@ async fn run_operator_async(
         cluster,
         &current,
         selected,
-        flags(true, false),
+        flags(true, false, args.accept_migrations),
     )
     .await?;
     if !output::quiet() {
@@ -486,6 +490,11 @@ async fn run_operator_async(
         let fate = plan::orphans_fate(planned.checked.flags(), true, cluster);
         plan::print_checked(&planned.checked, &fate, ctx.global.verbose > 0);
         plan::print_shared(planned.checked.shared_orphans());
+    }
+    // Enforce `--accept-migrations` on the CLI before delegating to the
+    // non-interactive operator.
+    if !super::deploy::migration_gate(&planned, Command::Rollback, Runner::Operator) {
+        return Ok(Exit::Failure);
     }
     let target_source_path = planned.build.graph().built_via.display().to_string();
 
@@ -599,13 +608,14 @@ fn print_header(cluster: &str, target: &str) {
 /// Build [`PlanFlags`] for a rollback.
 ///
 /// A rollback takes conflicting fields only under `--force-conflicts`, and
-/// never accepts stateful migrations.
-fn flags(prune: bool, force_conflicts: bool) -> PlanFlags {
+/// replaces an object that holds data only under `--accept-migrations`, as a
+/// deploy does.
+fn flags(prune: bool, force_conflicts: bool, accept_migrations: bool) -> PlanFlags {
     PlanFlags {
         prune: PlanFlags::prune_policy_of(prune, false),
         reconcile: false,
         force_conflicts,
-        accept_migrations: false,
+        accept_migrations,
     }
 }
 
@@ -691,6 +701,14 @@ mod tests {
             .to_string();
         assert!(err.contains("'staging'") && err.contains("'prod'"), "{err}");
         assert!(err.contains("Nothing was applied"), "{err}");
+    }
+
+    /// A rollback plans with `--accept-migrations` only when the user
+    /// passes it, so the gate deploy uses stops it otherwise.
+    #[test]
+    fn a_rollback_accepts_migrations_only_when_asked() {
+        assert!(!flags(false, false, false).accept_migrations);
+        assert!(flags(false, false, true).accept_migrations);
     }
 
     fn record(name: &str, hash: Option<&str>, built_via: Option<&str>) -> Record {

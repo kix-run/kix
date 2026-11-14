@@ -19,6 +19,7 @@
 //! records. Opening [`Records`] runs the legacy-domain check so commands cannot
 //! operate on records under a retired API group.
 
+pub mod features;
 mod record;
 mod retention;
 

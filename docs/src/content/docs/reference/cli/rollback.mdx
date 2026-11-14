@@ -17,7 +17,7 @@ This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
 ## Synopsis
 
 ```text
-kix rollback <CLUSTER> [-y] [--dry-run] [--prune] [--force-conflicts] [--operator] [--flake <FLAKE>] [--context <CONTEXT>]
+kix rollback <CLUSTER> [-y] [--dry-run] [--prune] [--force-conflicts] [--accept-migrations] [--operator] [--flake <FLAKE>] [--context <CONTEXT>]
 ```
 
 | Argument or flag | Meaning |
@@ -27,7 +27,8 @@ kix rollback <CLUSTER> [-y] [--dry-run] [--prune] [--force-conflicts] [--operato
 | `--dry-run` | Print the plan and stop. |
 | `--prune` | Delete resources the current activation has and the target does not, and orphans earlier deploys kept. Without it they are listed and kept, and the target Activation records where they came from, as a deploy does. |
 | `--force-conflicts` | Take fields that another field manager owns, such as a replica count set with `kubectl scale`. Without it, a conflict stops the rollback before it writes anything. |
-| `--operator` | Point the Activation record at the target build and let the Kix operator apply it. See [Operator mode](/docs/reference/cli/operator-mode/). |
+| `--accept-migrations` | Go ahead when the rollback removes an object that holds data and adds another in its place, as `kix deploy --accept-migrations` does. Without it, such a rollback stops before it writes anything. Kix does not copy data between them. |
+| `--operator` | Ask the Kix operator to deploy the target record again. The operator makes it current and supersedes the current record. See [Operator mode](/docs/reference/cli/operator-mode/). |
 | `--flake <FLAKE>` | Flake reference used to evaluate the cluster name when no Activation record in the context carries `<CLUSTER>`. See [Global flags](/docs/reference/cli/global-flags/). |
 | `--context <CONTEXT>` | Kubeconfig context. See [Global flags](/docs/reference/cli/global-flags/). |
 
@@ -59,6 +60,12 @@ An object that `kix plan` would list as
 [not checked](/docs/reference/cli/plan/#objects-not-checked), such as one in a
 Namespace the rollback creates, does not stop it. `--dry-run` shows the same
 list.
+
+A rollback that replaces an object that holds data, such as a volume claim
+renamed between the two builds, stops before it writes anything, as
+`kix deploy` does. It lists each replacement and what happens to the old
+object. Move or back up the data, then run the rollback again with
+`--accept-migrations`.
 
 The rollback waits up to 180 seconds for each resource to become ready and
 stops at the first failure.

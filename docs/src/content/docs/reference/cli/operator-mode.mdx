@@ -23,8 +23,8 @@ This page is hand-maintained. Check `cli/kix-cli/src/commands/operator.rs`,
 
 | Command | With `--operator` |
 | --- | --- |
-| `kix deploy <CLUSTER> --operator` | Builds, shows the plan, confirms, then creates the Activation record with the build's store path and the deploy receipt. Waits until the record is `Active` or `Degraded`. |
-| `kix rollback <CLUSTER> --operator` | Selects a Superseded activation, then points the current Activation record at the target's store path. Waits for the operator to apply it. |
+| `kix deploy <CLUSTER> --operator` | Builds, shows the plan, confirms, then writes the Activation record with the build's store path, the deploy receipt, and a new request (`spec.request`). Waits until the operator has finished that request. When the build is already deployed, the operator deploys it again and the record stays current. |
+| `kix rollback <CLUSTER> --operator` | Selects a Superseded activation, then writes a new request on that record. The operator queues it again, makes it current, and supersedes the current record, as `kix rollback` does. Waits until the operator has finished that request. |
 | `kix gc <CLUSTER> --operator` | Deletes the Activation records that retention retires. The operator's finalizer deletes each record's resources; the CLI waits up to 300 seconds per record. |
 
 [`kix status <CLUSTER>`](/docs/reference/cli/status/) takes no `--operator`
@@ -41,7 +41,11 @@ does not contact the operator.
 ## Waiting for the operator
 
 The CLI polls the Activation record every 2 seconds and prints progress as
-the operator reports it.
+the operator reports it. It reads the record's phase only once the operator
+has started the CLI's request (`status.startedRequest`), and counts `Active`
+or `Degraded` only once the operator has finished it
+(`status.finishedRequest`). A phase the record had before, such as `Active`
+for the build already deployed, is not taken for the answer.
 
 | Record phase | CLI result |
 | --- | --- |
@@ -58,6 +62,12 @@ A timeout ends the CLI only. The operator keeps working on the record.
 - The Activation CRD is installed, and the account can list Activation
   records. The `--operator` commands check this before changing anything.
 - The operator is running and watches the `kix.run` API group.
+- The operator is from this Kix release or later. When it starts, it lists
+  what it supports in the `kix.run/operator-features` annotation on the
+  Activation CRD, so it needs permission to patch that CRD.
+  `kix deploy --operator` and `kix rollback --operator` read the annotation
+  before they write anything, and refuse an operator that does not list
+  `requests`, with the advice to upgrade it.
 - The operator can read the store path the CLI wrote. It loads manifests from
   `spec.source.path`, so the build must be present in the store the operator
   reads, not only on the machine that ran the CLI.
