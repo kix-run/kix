@@ -85,25 +85,53 @@ async fn run_list_async(cluster: &str, ctx: &CommandContext) -> Result<()> {
             identity_hash: c.identity_hash,
             built_via: c.built_via,
         }),
-        superseded: superseded
-            .into_iter()
-            .map(|s| {
-                let available_locally = s
-                    .identity_hash
-                    .as_deref()
-                    .and_then(|h| kix::eval::store::resolve_activation_by_hash(cluster, h))
-                    .is_some();
-                EarlierDeploy {
-                    name: s.name,
-                    identity_hash: s.identity_hash,
-                    deployed_at: s.deployed_at,
-                    built_via: s.built_via,
-                    previous_activation: s.previous_activation,
-                    available_locally,
-                }
-            })
-            .collect(),
+        superseded: earlier_deploys(cluster, superseded),
     })
+}
+
+/// Describe the deploys a rollback can go back to, and whether this machine
+/// has the build each one needs.
+fn earlier_deploys(cluster: &str, records: Vec<Record>) -> Vec<EarlierDeploy> {
+    earlier_deploys_with(records, |hash, built_via| {
+        kix::plan::baseline::checked_dir(cluster, hash, built_via)
+    })
+}
+
+/// Run [`earlier_deploys`] with `find` in place of the search for a record's
+/// build.
+fn earlier_deploys_with(
+    records: Vec<Record>,
+    find: impl Fn(&str, Option<&str>) -> Result<Option<std::path::PathBuf>, String>,
+) -> Vec<EarlierDeploy> {
+    records
+        .into_iter()
+        .map(|s| {
+            let build = match s.identity_hash.as_deref() {
+                Some(hash) => match find(hash, s.built_via.as_deref()) {
+                    Ok(Some(_)) => BuildState::Available,
+                    Ok(None) => BuildState::Missing,
+                    Err(_) => BuildState::Broken,
+                },
+                None => BuildState::Missing,
+            };
+            EarlierDeploy {
+                name: s.name,
+                identity_hash: s.identity_hash,
+                deployed_at: s.deployed_at,
+                built_via: s.built_via,
+                previous_activation: s.previous_activation,
+                available_locally: build == BuildState::Available,
+                build,
+            }
+        })
+        .collect()
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BuildState {
+    Available,
+    Missing,
+    Broken,
 }
 
 /// The deploys of a cluster that `kix rollback` can go back to.
@@ -138,6 +166,51 @@ struct EarlierDeploy {
     previous_activation: Option<String>,
     /// Whether this machine has the build, which `kix rollback` needs.
     available_locally: bool,
+    #[serde(skip)]
+    #[schemars(skip)]
+    build: BuildState,
+}
+
+/// Write the numbered list of earlier deploys that `kix history` and the
+/// `kix rollback` picker both show.
+fn write_earlier_deploys(out: &mut String, deploys: &[EarlierDeploy]) {
+    for (i, s) in deploys.iter().enumerate() {
+        let ts = s
+            .deployed_at
+            .clone()
+            .filter(|at| !at.is_empty())
+            .unwrap_or_else(|| output::dim("unknown time").into_owned());
+        let availability = match s.build {
+            BuildState::Available => output::green("available"),
+            BuildState::Missing => output::red("build not on this machine"),
+            BuildState::Broken => output::red("build on this machine does not load"),
+        };
+        let _ = writeln!(
+            out,
+            "  {} {} ({})  deployed {}  [{}]",
+            output::bold(&format!("[{}]", i + 1)),
+            s.name,
+            hash_preview(s.identity_hash.as_deref()),
+            ts,
+            availability,
+        );
+        if let Some(path) = s.built_via.as_deref() {
+            let _ = writeln!(
+                out,
+                "      {} {}",
+                output::dim("build:   "),
+                output::dim(path)
+            );
+        }
+        if let Some(prev) = s.previous_activation.as_deref() {
+            let _ = writeln!(
+                out,
+                "      {} {}",
+                output::dim("previous:"),
+                output::dim(prev)
+            );
+        }
+    }
 }
 
 /// Return `build <first 8 characters>...` for an identity hash.
@@ -187,43 +260,7 @@ impl CommandResponse for HistoryResponse {
             "  {}\n",
             output::bold("Earlier deployments (most recent first):")
         );
-        for (i, s) in self.superseded.iter().enumerate() {
-            let ts = s
-                .deployed_at
-                .clone()
-                .filter(|at| !at.is_empty())
-                .unwrap_or_else(|| output::dim("unknown time").into_owned());
-            let availability = if s.available_locally {
-                output::green("available")
-            } else {
-                output::red("build not on this machine")
-            };
-            let _ = writeln!(
-                out,
-                "  {} {} ({})  deployed {}  [{}]",
-                output::bold(&format!("[{}]", i + 1)),
-                s.name,
-                hash_preview(s.identity_hash.as_deref()),
-                ts,
-                availability,
-            );
-            if let Some(path) = s.built_via.as_deref() {
-                let _ = writeln!(
-                    out,
-                    "      {} {}",
-                    output::dim("build:   "),
-                    output::dim(path)
-                );
-            }
-            if let Some(prev) = s.previous_activation.as_deref() {
-                let _ = writeln!(
-                    out,
-                    "      {} {}",
-                    output::dim("previous:"),
-                    output::dim(prev)
-                );
-            }
-        }
+        write_earlier_deploys(&mut out, &self.superseded);
         let _ = write!(
             out,
             "\nNext:\n  Run `kix rollback {cluster}` to choose a deployment interactively, or `kix rollback {cluster} -y` to restore [1].\n"
@@ -278,7 +315,9 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
     } else {
         println!();
         println!("Earlier deployments you can roll back to:");
-        print_superseded_entries(cluster, &superseded);
+        let mut list = String::new();
+        write_earlier_deploys(&mut list, &earlier_deploys(cluster, superseded.clone()));
+        print!("{list}");
 
         print!("\nSelect deployment to restore [1]: ");
         std::io::stdout().flush().into_diagnostic()?;
@@ -514,7 +553,9 @@ async fn run_operator_async(
     } else {
         println!();
         println!("Earlier deployments you can roll back to:");
-        print_superseded_entries(cluster, &superseded);
+        let mut list = String::new();
+        write_earlier_deploys(&mut list, &earlier_deploys(cluster, superseded.clone()));
+        print!("{list}");
 
         print!("\nSelect deployment to restore [1]: ");
         std::io::Write::flush(&mut std::io::stdout()).into_diagnostic()?;
@@ -884,47 +925,6 @@ fn same_cluster(record: &str, build_cluster: &str, cluster: &str) -> Result<()> 
     ))
 }
 
-/// Print a numbered list of superseded activations with local store
-/// availability, source path, and previous activation link.
-fn print_superseded_entries(cluster: &str, superseded: &[Record]) {
-    for (i, act) in superseded.iter().enumerate() {
-        let hash_preview = act
-            .identity_hash
-            .as_deref()
-            .map(|h| format!("build {}...", &h[..8.min(h.len())]))
-            .unwrap_or_else(|| "no build hash".to_string());
-        let ts = act
-            .deployed_at
-            .clone()
-            .filter(|at| !at.is_empty())
-            .unwrap_or_else(|| "unknown time".to_string());
-        let available = act
-            .identity_hash
-            .as_deref()
-            .and_then(|h| kix::eval::store::resolve_activation_by_hash(cluster, h))
-            .is_some();
-        let availability = if available {
-            output::green("available")
-        } else {
-            output::red("build not on this machine")
-        };
-        println!(
-            "  {} {} ({}), deployed {} [{}]",
-            output::bold(&format!("[{}]", i + 1)),
-            act.name,
-            hash_preview,
-            ts,
-            availability,
-        );
-        if let Some(path) = act.built_via.as_deref() {
-            println!("      {} {}", output::dim("build:   "), output::dim(path));
-        }
-        if let Some(prev) = act.previous_activation.as_deref() {
-            println!("      {} {}", output::dim("previous:"), output::dim(prev),);
-        }
-    }
-}
-
 /// Print the text that closes a rollback: its counts, and when it did not
 /// succeed, what was applied and what to run next.
 fn print_summary(r: &DeployResult, succeeded: bool) {
@@ -958,5 +958,44 @@ mod tests {
             .to_string();
         assert!(err.contains("'staging'") && err.contains("'prod'"), "{err}");
         assert!(err.contains("Nothing was applied"), "{err}");
+    }
+
+    fn record(name: &str, hash: Option<&str>, built_via: Option<&str>) -> Record {
+        Record {
+            name: name.to_string(),
+            identity_hash: hash.map(str::to_string),
+            built_via: built_via.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    /// `kix history` marks each earlier deploy by what the rollback's own
+    /// search finds: a build, no build, or a build that does not load.
+    #[test]
+    fn history_marks_a_deploy_by_what_rollback_would_find() {
+        let records = vec![
+            record("found", Some("a"), Some("/nix/store/a-build")),
+            record("gone", Some("b"), Some("/nix/store/b-build")),
+            record("broken", Some("c"), Some("/nix/store/c-build")),
+            record("unhashed", None, None),
+        ];
+        let deploys = earlier_deploys_with(records, |hash, built_via| match hash {
+            "a" => Ok(built_via.map(std::path::PathBuf::from)),
+            "b" => Ok(None),
+            _ => Err("the build would not load".to_string()),
+        });
+        let available: Vec<bool> = deploys.iter().map(|d| d.available_locally).collect();
+        assert_eq!(available, [true, false, false, false]);
+
+        let mut text = String::new();
+        write_earlier_deploys(&mut text, &deploys);
+        let lines: Vec<&str> = text.lines().filter(|l| l.contains("deployed")).collect();
+        assert!(lines[0].ends_with("[available]"), "{text}");
+        assert!(lines[1].ends_with("[build not on this machine]"), "{text}");
+        assert!(
+            lines[2].ends_with("[build on this machine does not load]"),
+            "{text}"
+        );
+        assert!(lines[3].ends_with("[build not on this machine]"), "{text}");
     }
 }

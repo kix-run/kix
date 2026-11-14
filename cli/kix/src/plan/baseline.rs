@@ -679,8 +679,10 @@ impl LiveClosures {
 }
 
 /// Return the store path of the build matching `identity_hash` on this
-/// machine, validated by [`record_graph`].
-fn checked_dir(
+/// machine, validated by [`record_graph`]. `kix history` calls this to mark
+/// the deploys `kix rollback` can restore, so it must look where
+/// [`target_build`] looks.
+pub fn checked_dir(
     cluster: &str,
     identity_hash: &str,
     built_via: Option<&str>,

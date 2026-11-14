@@ -468,7 +468,7 @@ fn write_prune(out: &mut String, plan: &Plan) {
     let _ = writeln!(out);
     let _ = writeln!(
         out,
-        "{} {} object(s) that left the build stay running on the cluster:",
+        "{} {} object(s) that left the build stay on the cluster:",
         output::bold("Prune:"),
         shared.len()
     );

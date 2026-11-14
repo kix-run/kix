@@ -571,7 +571,7 @@ pub fn print_checked(checked: &CheckedPlan, fate: &str, verbose: bool) {
 pub fn orphans_fate(flags: PlanFlags, connected: bool, cluster: &str) -> String {
     match flags.prune {
         PrunePolicy::Skip => {
-            "still running on the cluster (`--skip-orphan-check`, not deleted)".to_string()
+            "still on the cluster (`--skip-orphan-check`, not deleted)".to_string()
         }
         // A plan that has not read the cluster cannot yet tell which orphans
         // another Kix cluster deploys.
@@ -587,7 +587,7 @@ pub fn orphans_fate(flags: PlanFlags, connected: bool, cluster: &str) -> String 
 /// The new Activation records them under `status.orphansKeptFrom`.
 pub fn kept_orphans_fate(cluster: &str) -> String {
     format!(
-        "still running on the cluster; `kix deploy {cluster} --prune` or `kix gc {cluster}` deletes them"
+        "still on the cluster; `kix deploy {cluster} --prune` or `kix gc {cluster}` deletes them"
     )
 }
 
