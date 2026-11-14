@@ -8,3 +8,4 @@ Seen on 2026-11-13 with up to eleven agents, each with its own worktree and kind
 - `crane auth login` writes to the shared `~/.docker/config.json`.
 
 The `package-authoring` skill's kind steps mention none of this.
+- Hit again 2026-11-14 while running `scripts/copy-pass` from the `kix-warnings` worktree: Antigravity's report described edits to files in the `kix-prerun` worktree, those files were modified there, and the 17 files it was given got no edits. Two `agy` runs at the same time may share one session or workspace.

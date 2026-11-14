@@ -104,9 +104,9 @@ let
       good = lib.filterAttrs (n: _: problemOf.${n} == null) given;
     in
     if !builtins.isAttrs r then
-      throw "kix.fail takes a message or an attribute set with `message`, and got a ${builtins.typeOf r}."
-    else if !(given ? message) then
-      throw "kix.fail needs a `message`."
+      throw "An error or warning for kix.fail, scope.fail, or `warnings` is a message or an attribute set with `message`, and this one is a ${builtins.typeOf r}."
+    else if !(given ? message) || problemOf.message != null then
+      throw "An error or warning for kix.fail, scope.fail, or `warnings` needs a `message` string."
     else
       {
         record = lib.mapAttrs (
