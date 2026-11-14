@@ -53,11 +53,7 @@ fn index(with_names: bool) -> RecordPackageIndex {
         } else {
             BTreeMap::new()
         },
-        groups: if with_names {
-            BTreeMap::from([(h(JOB), "batch".to_string())])
-        } else {
-            BTreeMap::new()
-        },
+        groups: with_names.then(|| BTreeMap::from([(h(JOB), "batch".to_string())])),
     }
 }
 
@@ -286,7 +282,7 @@ fn a_record_without_names_names_a_missing_object_from_the_store() {
         name: "web-db".into(),
     };
 
-    let view = view("shop".into(), record, &live, &HashSet::new(), |hashes| {
+    let view = view("shop".into(), record, &live, &Apis::default(), |hashes| {
         assert_eq!(hashes, [h(SECRET).as_str()]);
         HashMap::from([(h(SECRET), StoreEntry::Resource(secret.clone()))])
     });
@@ -317,7 +313,7 @@ fn an_object_live_under_another_hash_is_present() {
         "shop".into(),
         record,
         &Live::of(&objects),
-        &HashSet::new(),
+        &Apis::default(),
         |_| unreachable!(),
     );
 
@@ -360,7 +356,7 @@ fn a_record_without_an_index_follows_depends_on() {
         "shop".into(),
         record,
         &Live::of(&objects),
-        &HashSet::new(),
+        &Apis::default(),
         |hashes| {
             let mut hashes = hashes.to_vec();
             hashes.sort();
@@ -396,7 +392,7 @@ fn a_record_with_nothing_to_follow_lists_no_objects() {
         "shop".into(),
         record,
         &Live::of(&[]),
-        &HashSet::new(),
+        &Apis::default(),
         |_| unreachable!(),
     );
     assert_eq!(view.expected_from, ExpectedFrom::Nothing);
@@ -427,4 +423,76 @@ async fn every_cluster_with_a_current_record_gets_a_view() {
             .clusters
             .is_empty()
     );
+}
+
+/// Read the Active record and the Deployment that Kix 0.10.0 left on a
+/// cluster (`tests/fixtures/cluster-state/0.10.0`). Its package index names
+/// objects without their API group.
+fn state_from_0_10_0() -> (Record, Value) {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/cluster-state/0.10.0");
+    let read = |file: &str| -> Value {
+        serde_json::from_str(&std::fs::read_to_string(dir.join(file)).unwrap()).unwrap()
+    };
+    let Value::Array(records) = read("activations.json") else {
+        panic!("activations.json holds a list");
+    };
+    let active = records
+        .iter()
+        .map(|r| Record::of(&serde_json::from_value(r.clone()).unwrap()))
+        .find(|r| r.phase == "Active")
+        .unwrap();
+    (active, read("deployment.json"))
+}
+
+fn served(groups: &[&str], kind: &str) -> Vec<(ApiResource, Scope)> {
+    groups
+        .iter()
+        .map(|g| {
+            let gvk = kube::api::GroupVersionKind::gvk(g, "v1", kind);
+            (ApiResource::from_gvk(&gvk), Scope::Namespaced)
+        })
+        .collect()
+}
+
+/// An index written by Kix 0.10.0 does not say an object's API group. A
+/// Deployment live only under an older identity hash is found through the
+/// one group that serves `Deployment`, and is present. When several groups
+/// serve the kind, Kix reports the object as ambiguous: neither missing nor
+/// looked up in a guessed group.
+#[test]
+fn an_object_from_an_index_without_groups_is_found_through_discovery() {
+    let (record, mut deployment) = state_from_0_10_0();
+    let hash = keys::IDENTITY_HASH;
+    assert!(
+        matches!(
+            record.package_index.as_ref().unwrap().name_of(
+                deployment["metadata"]["annotations"][hash]
+                    .as_str()
+                    .unwrap()
+            ),
+            Some(IndexedName::GroupUnknown(_))
+        ),
+        "the 0.10.0 index records no groups"
+    );
+    deployment["metadata"]["annotations"][hash] = json!("o".repeat(32));
+    let objects: Vec<DynamicObject> = vec![serde_json::from_value(deployment).unwrap()];
+    let web = |apis: &Apis| {
+        let view = view(
+            "fixtures".into(),
+            record.clone(),
+            &Live::of(&objects),
+            apis,
+            |_| HashMap::new(),
+        );
+        by_name(&view, "fixture-web").clone()
+    };
+
+    let one = Apis::of(&served(&["apps"], "Deployment"), &[]);
+    let found = web(&one);
+    assert_eq!(found.presence, Presence::Present);
+    assert_eq!(found.rid.group, "apps");
+
+    let two = Apis::of(&served(&["apps", "apps.example.com"], "Deployment"), &[]);
+    assert_eq!(web(&two).presence, Presence::Ambiguous);
 }

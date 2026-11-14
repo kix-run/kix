@@ -24,6 +24,7 @@ use super::drift::{self, DriftVerdict};
 use super::errors::FetchError;
 use super::inventory;
 use super::readiness;
+use crate::eval::package_index::{IndexedName, ObjectName};
 use crate::eval::store_graph::{self, StoreEntry};
 use crate::manifest::keys;
 use crate::manifest::lifecycle::{Lifecycle, lifecycle_of_live};
@@ -107,6 +108,11 @@ pub enum Presence {
     /// Kix can read the object's kind, and the cluster has no object with its
     /// identity hash or its name.
     Missing,
+    /// The object is not on the cluster under its identity hash, and Kix
+    /// cannot look it up by name. Its record was written before records
+    /// stored each object's API group, and more than one group the cluster
+    /// serves has a kind of that name.
+    Ambiguous,
     /// The account may not list the object's kind, so Kix cannot tell.
     Unknown,
 }
@@ -187,16 +193,12 @@ pub async fn observe(
     }
     let sweep =
         inventory::sweep_managed(client, discovery, records, inventory::SweepScope::All).await?;
-    let unreadable_kinds: HashSet<(String, String)> = discovery
-        .iter()
-        .filter(|(ar, _)| sweep.forbidden.contains(&inventory::resource_fqn(ar)))
-        .map(|(ar, _)| (ar.group.clone(), ar.kind.clone()))
-        .collect();
+    let apis = Apis::of(discovery, &sweep.forbidden);
     let live = Live::of(&sweep.managed);
     let clusters = current
         .into_iter()
         .map(|(cluster, record)| {
-            view(cluster, record, &live, &unreadable_kinds, |hashes| {
+            view(cluster, record, &live, &apis, |hashes| {
                 store_graph::lookup_hashes(hashes.iter().copied())
             })
         })
@@ -205,6 +207,48 @@ pub async fn observe(
         clusters,
         unreadable: sweep.forbidden,
     })
+}
+
+/// The APIs the cluster serves, as [`view`] needs them.
+#[derive(Debug, Default)]
+struct Apis {
+    /// `(group, kind)` of each API this account may not list.
+    unreadable: HashSet<(String, String)>,
+    /// The API groups that serve each kind.
+    groups_by_kind: HashMap<String, BTreeSet<String>>,
+}
+
+impl Apis {
+    /// Index `discovery`, where `forbidden` names the resources (as
+    /// [`inventory::resource_fqn`] writes them) this account may not list.
+    fn of(discovery: &[(ApiResource, Scope)], forbidden: &[String]) -> Apis {
+        let mut apis = Apis::default();
+        for (ar, _) in discovery {
+            apis.groups_by_kind
+                .entry(ar.kind.clone())
+                .or_default()
+                .insert(ar.group.clone());
+            if forbidden.contains(&inventory::resource_fqn(ar)) {
+                apis.unreadable.insert((ar.group.clone(), ar.kind.clone()));
+            }
+        }
+        apis
+    }
+
+    /// Return the id of an object that an index written before indexes
+    /// stored groups names. Its group is the one group that serves its kind.
+    /// Return `None` when several groups serve the kind. When none does, the
+    /// object cannot be on the cluster, and the id takes the core group.
+    fn resolve(&self, name: &ObjectName) -> Option<ResourceId> {
+        let groups = self.groups_by_kind.get(&name.0);
+        match groups.map_or(0, BTreeSet::len) {
+            0 => Some(name.resource_id("")),
+            1 => groups
+                .and_then(|g| g.first())
+                .map(|group| name.resource_id(group)),
+            _ => None,
+        }
+    }
 }
 
 /// The objects a sweep found, indexed for [`view`].
@@ -240,7 +284,7 @@ fn view(
     cluster: String,
     record: Record,
     live: &Live<'_>,
-    unreadable_kinds: &HashSet<(String, String)>,
+    apis: &Apis,
     lookup: impl FnOnce(&[&str]) -> HashMap<String, StoreEntry>,
 ) -> ClusterView {
     let root = record.identity_hash.clone().unwrap_or_default();
@@ -317,27 +361,38 @@ fn view(
     let objects = expected
         .iter()
         .map(|e| {
-            let name = index_name(&e.hash)
-                .or_else(|| {
-                    live.by_hash
-                        .get(e.hash.as_str())
-                        .map(|o| drift::resource_id(o))
-                })
-                .or_else(|| match store.get(&e.hash) {
-                    Some(StoreEntry::Resource(rid)) => Some(rid.clone()),
-                    _ => None,
-                });
+            let by_hash = live.by_hash.get(e.hash.as_str()).copied();
+            // An index written before indexes stored groups names an object
+            // without its group. The live object says it, and otherwise the
+            // one group that serves the kind does.
+            let mut ambiguous = None;
+            let name = match index_name(&e.hash) {
+                Some(IndexedName::Named(rid)) => Some(rid),
+                Some(IndexedName::GroupUnknown(name)) => match (by_hash, apis.resolve(&name)) {
+                    (Some(o), _) => Some(drift::resource_id(o)),
+                    (None, Some(rid)) => Some(rid),
+                    (None, None) => {
+                        ambiguous = Some(name.resource_id(""));
+                        None
+                    }
+                },
+                None => by_hash
+                    .map(drift::resource_id)
+                    .or_else(|| match store.get(&e.hash) {
+                        Some(StoreEntry::Resource(rid)) => Some(rid.clone()),
+                        _ => None,
+                    }),
+            };
             // An older version of the object is live under another identity
             // hash, which a deploy that failed partway can leave. It is not
             // missing.
-            let obj = live
-                .by_hash
-                .get(e.hash.as_str())
-                .or_else(|| name.as_ref().and_then(|rid| live.by_rid.get(rid)))
-                .copied();
+            let obj =
+                by_hash.or_else(|| name.as_ref().and_then(|rid| live.by_rid.get(rid)).copied());
             let unreadable = match &name {
-                Some(rid) => unreadable_kinds.contains(&(rid.group.clone(), rid.kind.clone())),
-                None => !unreadable_kinds.is_empty(),
+                Some(rid) => apis
+                    .unreadable
+                    .contains(&(rid.group.clone(), rid.kind.clone())),
+                None => !apis.unreadable.is_empty(),
             };
             let (presence, content, readiness, depends_on) = match obj {
                 Some(obj) => {
@@ -361,9 +416,13 @@ fn view(
                         depends_on,
                     )
                 }
+                None if ambiguous.is_some() => {
+                    (Presence::Ambiguous, None, Readiness::NotApplicable, vec![])
+                }
                 None if unreadable => (Presence::Unknown, None, Readiness::NotApplicable, vec![]),
                 None => (Presence::Missing, None, Readiness::NotApplicable, vec![]),
             };
+            let name = name.or(ambiguous);
             ObjectView {
                 named: name.is_some(),
                 rid: name.unwrap_or_else(|| unnamed_rid(&e.hash)),

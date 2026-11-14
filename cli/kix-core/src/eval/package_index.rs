@@ -59,10 +59,20 @@ pub struct RecordPackageIndex {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub names: BTreeMap<String, ObjectName>,
     /// The API group of each named object outside the core group, keyed by
-    /// identity hash. An index written before the field existed has none,
-    /// and its objects read as core-group objects.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub groups: BTreeMap<String, String>,
+    /// identity hash. `None` in an index written before the field existed,
+    /// whose names do not say their group, and in an index without names.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub groups: Option<BTreeMap<String, String>>,
+}
+
+/// The name an index gives one object.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IndexedName {
+    /// The index says the object's group.
+    Named(ResourceId),
+    /// The index was written before it recorded groups, so the group of the
+    /// object is not known.
+    GroupUnknown(ObjectName),
 }
 
 /// The kind, namespace, and name of one object, stored as a JSON array of
@@ -143,7 +153,7 @@ impl RecordPackageIndex {
             packages,
             cluster_level,
             names,
-            groups,
+            groups: Some(groups),
         }
     }
 
@@ -151,16 +161,21 @@ impl RecordPackageIndex {
     pub fn without_names(&self) -> RecordPackageIndex {
         RecordPackageIndex {
             names: BTreeMap::new(),
-            groups: BTreeMap::new(),
+            groups: None,
             ..self.clone()
         }
     }
 
     /// Return the name of the object with identity hash `hash`, when the
     /// index has names.
-    pub fn name_of(&self, hash: &str) -> Option<ResourceId> {
-        let group = self.groups.get(hash).map_or("", String::as_str);
-        self.names.get(hash).map(|name| name.resource_id(group))
+    pub fn name_of(&self, hash: &str) -> Option<IndexedName> {
+        let name = self.names.get(hash)?;
+        Some(match &self.groups {
+            Some(groups) => {
+                IndexedName::Named(name.resource_id(groups.get(hash).map_or("", String::as_str)))
+            }
+            None => IndexedName::GroupUnknown(name.clone()),
+        })
     }
 
     /// Return the identity hash of every resource the index lists: each
@@ -289,6 +304,13 @@ mod tests {
         );
     }
 
+    fn named_str(index: &RecordPackageIndex, hash: &str) -> Option<String> {
+        match index.name_of(hash)? {
+            IndexedName::Named(rid) => Some(rid.to_string()),
+            IndexedName::GroupUnknown(name) => panic!("{name:?}"),
+        }
+    }
+
     #[test]
     fn hashes_lists_instances_resources_and_cluster_level() {
         let index = RecordPackageIndex::of(&graph());
@@ -307,11 +329,11 @@ mod tests {
         let index = RecordPackageIndex::of(&graph());
         let a = |c: &str| format!("{c:a>32}");
         assert_eq!(
-            index.name_of(&a("4")).map(|r| r.to_string()).as_deref(),
+            named_str(&index, &a("4")).as_deref(),
             Some("Namespace/default")
         );
         assert_eq!(
-            index.name_of(&a("2")).map(|r| r.to_string()).as_deref(),
+            named_str(&index, &a("2")).as_deref(),
             Some("ConfigMap/a@default")
         );
         let old = index.without_names();
@@ -322,20 +344,30 @@ mod tests {
     }
 
     /// A named object outside the core group keeps its group, and an index
-    /// written before `groups` existed reads its objects as core-group ones.
+    /// written before `groups` existed does not say any object's group.
     #[test]
     fn names_carry_the_api_group() {
         let index = RecordPackageIndex::of(&graph());
         let a = |c: &str| format!("{c:a>32}");
-        let instance = index.name_of(&a("1")).unwrap();
-        assert_eq!(instance.group, crate::manifest::keys::GROUP);
-        assert_eq!(instance.kind, "PackageInstance");
-        assert_eq!(index.name_of(&a("2")).unwrap().group, "");
+        let named = |hash: &str| match index.name_of(hash) {
+            Some(IndexedName::Named(rid)) => rid,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(named(&a("1")).group, crate::manifest::keys::GROUP);
+        assert_eq!(named(&a("1")).kind, "PackageInstance");
+        assert_eq!(named(&a("2")).group, "");
 
         let mut value = index.to_value();
         value.as_object_mut().unwrap().remove("groups");
         let read = RecordPackageIndex::from_value(&value).unwrap();
-        assert_eq!(read.name_of(&a("1")).unwrap().group, "");
+        assert_eq!(
+            read.name_of(&a("1")),
+            Some(IndexedName::GroupUnknown(ObjectName(
+                "PackageInstance".into(),
+                "default".into(),
+                "web".into()
+            )))
+        );
     }
 
     /// An index in a format this release does not know, or with no format,

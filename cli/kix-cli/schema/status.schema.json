@@ -276,6 +276,11 @@
           "const": "unknown",
           "description": "This account may not list the object's kind.",
           "type": "string"
+        },
+        {
+          "const": "ambiguous",
+          "description": "The object's record does not say its API group, and more than one\ngroup on the cluster serves its kind, so Kix cannot look it up.",
+          "type": "string"
         }
       ]
     },

@@ -848,7 +848,7 @@ mod tests {
             packages: Default::default(),
             cluster_level: vec!["d".repeat(32), "r".repeat(32)],
             names: Default::default(),
-            groups: Default::default(),
+            groups: None,
         };
         let left = manifest("Job", "bootstrap-old", &"j".repeat(32));
         let removed = manifest("ConfigMap", "removed", &"r".repeat(32));
