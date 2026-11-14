@@ -413,8 +413,8 @@ in
       warnings =
         map (w: {
           object = { inherit (w) kind name; };
-          message = "This workload uses hostNetwork, so CiliumNetworkPolicy does not control its traffic.";
-          fix = "Review network access on the host.";
+          message = "${w.kind}/${w.name} uses hostNetwork, so CiliumNetworkPolicy does not filter its traffic.";
+          fix = "Restrict access to its ports on the node's host network.";
         }) hostNetworkWorkloads
         ++
           lib.optional (packageMeta.isHelm or false)

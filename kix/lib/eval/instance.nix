@@ -819,25 +819,36 @@ in
         structuralWarnings =
           let
             res = r: "${r.kind}/${r.name}";
-            about = r: message: {
+            about = r: message: fix: {
               object = { inherit (r) kind name; };
-              inherit message;
+              inherit message fix;
             };
           in
           lib.concatLists [
             resolutionWarnings
             (map (
               w:
-              about w.resource "It already references '${res w.req}'. Remove the redundant entry from requires; Kix tracks this dependency automatically."
+              about w.resource
+                "${res w.resource} lists '${res w.req}' in requires, and its manifest already references '${res w.req}'. Kix already orders '${res w.resource}' after '${res w.req}'."
+                "Remove '${res w.req}' from requires on ${res w.resource}."
             ) redundantRequiresWarnings)
-            (map (w: about w.resource "It requires '${res w.req}' multiple times.") duplicateRequiresWarnings)
+            (map (
+              w:
+              about w.resource
+                "${res w.resource} lists '${res w.req}' more than once in requires. Kix ignores the duplicate entry."
+                "Remove the duplicate '${res w.req}' entry from requires on ${res w.resource}."
+            ) duplicateRequiresWarnings)
             (map (
               r:
-              about r "It is not referenced by root or its dependencies. Reference it from root, add it to requires, or remove the unused definition."
+              about r
+                "${res r} is not referenced by root or its dependencies. Kix still deploys ${res r}, and consumers of this instance do not wait for it."
+                "Reference ${res r} from root, add it to requires, or remove the unused definition."
             ) orphanedWarnings)
             (map (
               r:
-              about r "This post-hook has no dependency on root or any resource that root requires. Add a dependency to ensure the hook runs after the resource it needs."
+              about r
+                "Post-hook ${res r} does not depend on root or any resource that root requires, so Kix can apply ${res r} before the package's resources are ready."
+                "Reference root or one of its dependencies from ${res r}, or add one to requires on ${res r}."
             ) postHookWarnings)
             processorWarnings
           ];

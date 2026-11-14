@@ -54,9 +54,7 @@ let
       ];
     in
     if !(builtins.elem field fields) then
-      "it has a field `${field}`, which Kix does not take. Kix takes ${
-        lib.concatMapStringsSep ", " (n: "`${n}`") fields
-      }."
+      "Unknown field `${field}`. Allowed fields: ${lib.concatMapStringsSep ", " (n: "`${n}`") fields}."
     else if field == "object" then
       if
         builtins.isAttrs value
@@ -66,11 +64,11 @@ let
       then
         null
       else
-        "object ${builtins.toJSON value} is not an object reference. Write { kind = \"Deployment\"; name = \"web\"; }, with an optional namespace."
+        "`object` (${builtins.toJSON value}) must be an attribute set with `kind`, `name`, and optional `namespace`, such as `{ kind = \"Deployment\"; name = \"web\"; }`."
     else if builtins.isAttrs value || builtins.isList value then
-      "${field} is a ${builtins.typeOf value}. Write a string."
+      "`${field}` has type `${builtins.typeOf value}`, expected a string."
     else if field == "id" && builtins.match "K[0-9]{4}" text == null then
-      "id \"${text}\" is not a change record id. Write `K` and four digits, such as \"K0001\"."
+      "`id` \"${text}\" is not a change ID. Write `K` followed by four digits, such as `\"K0001\"`."
     else if
       builtins.elem field [
         "option"
@@ -78,17 +76,17 @@ let
       ]
       && !(isPath text)
     then
-      "${field} \"${text}\" is not an option path. Write a path without spaces."
+      "`${field}` \"${text}\" contains whitespace. Write a dotted option path without spaces."
     else if field == "option" && prefix == "config" then
-      "option \"${text}\" starts with `config.`. Write the path in the instance's config: \"${lib.removePrefix "config." text}\"."
+      "`option` \"${text}\" starts with `config.`. Drop the `config.` prefix and write `option = \"${lib.removePrefix "config." text}\"`."
     else if field == "option" && prefix == "deps" then
-      "option \"${text}\" names a dependency. Write dependency = \"${lib.removePrefix "deps." text}\"."
+      "`option` \"${text}\" starts with `deps.`, which names a dependency. Use `dependency = \"${lib.removePrefix "deps." text}\"` instead."
     else if field == "option" && prefix == "meta" then
-      "option \"${text}\" is a field of the package's meta, which is not an instance option. Leave `option` out."
+      "`option` \"${text}\" starts with `meta.`. Package `meta` fields cannot be set on an instance, so omit `option`."
     else if field == "dependency" && builtins.match "[A-Za-z_][A-Za-z0-9_'-]*" text == null then
-      "dependency \"${text}\" is not a valid dependency name. Write the name alone, such as \"database\"."
+      "`dependency` \"${text}\" is invalid. Write the dependency name from `deps` by itself, such as `\"database\"`."
     else if field == "clusterOption" && lib.hasPrefix "instances." text then
-      "clusterOption \"${text}\" is inside an instance. Set `instance`, and write the path in its config as `option` or the dependency as `dependency`."
+      "`clusterOption` \"${text}\" points into `instances.`. Set `instance` to `<namespace>/<name>`, and put the config path in `option` or the dependency name in `dependency`."
     else
       null;
 
@@ -104,9 +102,9 @@ let
       good = lib.filterAttrs (n: _: problemOf.${n} == null) given;
     in
     if !builtins.isAttrs r then
-      throw "An error or warning for kix.fail, scope.fail, or `warnings` is a message or an attribute set with `message`, and this one is a ${builtins.typeOf r}."
+      throw "kix.fail, scope.fail, and `warnings` expect a message string or an attribute set with `message`, got type `${builtins.typeOf r}`."
     else if !(given ? message) || problemOf.message != null then
-      throw "An error or warning for kix.fail, scope.fail, or `warnings` needs a `message` string."
+      throw "An attribute set passed to kix.fail, scope.fail, or `warnings` must set `message` to a string."
     else
       {
         record = lib.mapAttrs (
@@ -131,7 +129,7 @@ let
       // {
         message =
           checked.record.message
-          + "\nThe code that raised this passed a field in the wrong form, which Kix left out: "
+          + "\nKix omitted an invalid field from this diagnostic: "
           + lib.concatStringsSep " " checked.problems;
       };
 

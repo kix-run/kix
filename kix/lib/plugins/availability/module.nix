@@ -339,16 +339,16 @@ in
         lib.optional (multiNode == null) {
           clusterOption = "cluster.capabilities.multiNode";
           message =
-            "cluster.capabilities.multiNode is unknown, so availability is derived as "
-            + "\"${substrate.level}\" and Kix cannot verify whether required pod placement rules can be met.";
-          fix = "Set cluster.capabilities.multiNode to match your environment.";
+            "cluster.capabilities.multiNode is not set. Kix assumes \"${substrate.level}\" availability "
+            + "and cannot verify whether the cluster has multiple nodes for required pod spread rules.";
+          fix = "Set cluster.capabilities.multiNode to true or false in the cluster definition.";
         }
         ++ lib.optional (multiNode == true && zones == null) {
           clusterOption = "cluster.capabilities.availabilityZones";
           message =
-            "cluster.capabilities.availabilityZones is unknown, so availability is derived as "
-            + "\"node\" and derived pod spread uses ${hostKey} only.";
-          fix = "Declare the zones (or [ ] for a single zone) in the cluster definition.";
+            "cluster.capabilities.availabilityZones is not set. Kix assumes \"node\" availability "
+            + "and spreads pods across nodes (${hostKey}) without spreading across zones.";
+          fix = "Set cluster.capabilities.availabilityZones to your zone names in the cluster definition, or to [ ] for a single zone.";
         };
     };
   };

@@ -137,7 +137,7 @@ pub fn read_warnings(path: Option<&PathBuf>) -> Vec<LibraryRecord> {
         serde_json::from_str(&text).map_err(|e| e.to_string())
     };
     read().unwrap_or_else(|error| {
-        tracing::warn!(path = %path.display(), %error, "failed to read the library's warnings");
+        tracing::warn!(path = %path.display(), %error, "could not read warnings from the Kix library; continuing without them");
         Vec::new()
     })
 }

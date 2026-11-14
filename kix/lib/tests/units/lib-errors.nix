@@ -249,7 +249,7 @@ in
         let
           r = lib.head (payloadOf (errors.text { errors = [ ({ message = "m"; } // e) ]; })).errors;
         in
-        lib.hasPrefix "m\nThe code that raised this passed a field in the wrong form" r.message
+        lib.hasPrefix "m\nKix omitted an invalid field from this diagnostic: " r.message
         && builtins.all (n: !(r ? ${n})) (builtins.attrNames e);
     in
     refused { fixes = "y"; }
@@ -297,7 +297,7 @@ in
       && lib.hasPrefix "first\n" (builtins.elemAt messages 0)
       && lib.hasInfix "starts with `config.`" (builtins.elemAt messages 0)
       && !((builtins.elemAt payload.errors 0) ? option)
-      && lib.hasInfix "is not a change record id" (builtins.elemAt messages 1)
+      && lib.hasInfix "is not a change ID" (builtins.elemAt messages 1)
       && !((builtins.elemAt payload.errors 1) ? id)
       && builtins.elemAt messages 2 == "third"
     )

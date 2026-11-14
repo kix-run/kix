@@ -47,7 +47,7 @@ let
         if result == null then
           {
             warnings = [
-              (skipped "cannot check ${field}: ${subject} reports version \"${version}\", which is less precise than ${bound} \"${want}\", so Kix cannot tell. Kix skipped the check.")
+              (skipped "cannot check ${field}: ${subject} reports version \"${version}\", which is less precise than ${bound} \"${want}\", so Kix skipped this version check.")
             ];
             assertions = [ ];
           }
@@ -75,14 +75,14 @@ let
     else if version == null then
       {
         warnings = [
-          (skipped "cannot check ${field}: ${subject} reports no version. Kix skipped the check.")
+          (skipped "cannot check ${field}: ${subject} reports no version, so Kix skipped this version check.")
         ];
         assertions = [ ];
       }
     else if !(versions.isVersion version) then
       {
         warnings = [
-          (skipped "cannot check ${field}: ${subject} reports version ${builtins.toJSON version}, which is not a version number. Kix skipped the check.")
+          (skipped "cannot check ${field}: ${subject} reports ${builtins.toJSON version}, which is not a version number (such as \"1.31\" or \"2.4.0\"), so Kix skipped this version check.")
         ];
         assertions = [ ];
       }
