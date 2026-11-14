@@ -130,10 +130,10 @@ async fn main() -> anyhow::Result<()> {
     // The CLI reads this before it hands the operator a request, so an older
     // CLI or operator is refused up front instead of waiting for an answer.
     match kix::cluster::activation::features::publish(&client).await {
-        Ok(()) => tracing::info!("Published the operator's features on the Activation CRD"),
+        Ok(()) => tracing::info!("Published operator features on Activation CRD"),
         Err(e) => tracing::warn!(
             error = %e,
-            "could not write {} on the {} CRD; `kix deploy --operator` and `kix rollback --operator` refuse until this operator may patch that CRD",
+            "Could not write {} on CustomResourceDefinition {}. Continuing to reconcile existing records, but `kix deploy --operator` and `kix rollback --operator` will fail until kix-operator has permission to patch that CRD and is restarted",
             kix::manifest::keys::OPERATOR_FEATURES,
             kix::manifest::keys::ACTIVATIONS_CRD,
         ),

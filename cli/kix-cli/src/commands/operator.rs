@@ -65,12 +65,12 @@ pub async fn require_requests(client: &Client) -> Result<()> {
     let version = kix::version::running();
     let found = features::read(client).await.map_err(|e| {
         miette!(
-            "could not read what the Kix operator supports\n  \
+            "could not read CustomResourceDefinition `{crd}` to check the Kix operator's features\n  \
              Nothing was applied to the cluster.\n\n  \
              Kubernetes API error:\n    \
              {e}\n\n  \
              Next:\n    \
-             Make sure your Kubernetes account may read the CustomResourceDefinition {crd}, then run the command again.",
+             Check that your Kubernetes account has permission to read CustomResourceDefinition `{crd}`, then run the command again.",
             crd = kix::manifest::keys::ACTIVATIONS_CRD,
         )
     })?;
@@ -78,14 +78,14 @@ pub async fn require_requests(client: &Client) -> Result<()> {
         return Ok(());
     }
     Err(miette!(
-        "the Kix operator on this cluster is older than this Kix\n  \
+        "the Kix operator on this cluster has not reported support for deployment requests\n  \
          Nothing was applied to the cluster.\n\n  \
          Why:\n    \
-         This Kix asks the operator to deploy by writing a request to the deployment record. \
-         The operator says which features it supports in the {key} annotation on the CustomResourceDefinition {crd}, \
-         and that annotation does not list `{feature}`. An older operator ignores the request, so the command would wait for an answer that never comes.\n\n  \
+         CustomResourceDefinition `{crd}` does not list `{feature}` in its `{key}` annotation. \
+         Kix {version} sends each `--operator` run through `spec.request` on the deployment record, which an older operator ignores. \
+         The operator writes `{key}` when it starts, so it is either older than Kix {version}, still starting, or missing permission to patch `{crd}`.\n\n  \
          Next:\n    \
-         Upgrade the Kix operator to Kix {version} or later, wait until it has started, and run the command again.",
+         Upgrade the Kix operator to Kix {version} or later, grant its Kubernetes account permission to patch CustomResourceDefinition `{crd}`, and restart it so it writes `{key}`. Then run the command again.",
         key = kix::manifest::keys::OPERATOR_FEATURES,
         crd = kix::manifest::keys::ACTIVATIONS_CRD,
         feature = features::REQUESTS,

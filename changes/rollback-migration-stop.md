@@ -2,4 +2,4 @@
 kind = "error"
 id = "K3354"
 +++
-`kix rollback` now stops when it would remove an object that holds data and add another in its place, as `kix deploy` does. Before, it went ahead without a word. The message starts with `[K3354]` and lists each replacement. Move or back up the data, then run the rollback again with the new `--accept-migrations` flag. This applies to `kix rollback --operator` too.
+When a rollback replaces a resource that holds data (such as a PersistentVolumeClaim or a database), back up or migrate the data first, then pass `--accept-migrations` to `kix rollback` or `kix rollback --operator`. Without `--accept-migrations`, both commands now stop before changing the cluster, print `[K3354]`, and list each replacement, matching `kix deploy`. Kix does not copy data between the old and new resources. Previously, `kix rollback` applied these replacements without stopping.
