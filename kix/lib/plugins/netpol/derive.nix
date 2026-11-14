@@ -411,10 +411,11 @@ in
       ) terminatingCrs;
 
       warnings =
-        map (
-          w:
-          "workload '${w.kind}/${w.name}' uses hostNetwork, so CiliumNetworkPolicy does not control its traffic. Review network access on the host"
-        ) hostNetworkWorkloads
+        map (w: {
+          object = { inherit (w) kind name; };
+          message = "${w.kind}/${w.name} uses hostNetwork, so CiliumNetworkPolicy does not filter its traffic.";
+          fix = "Restrict access to its ports on the node's host network.";
+        }) hostNetworkWorkloads
         ++
           lib.optional (packageMeta.isHelm or false)
             "Kix may not detect every connection between workloads in this Helm chart. Review the generated network policies and add any missing rules";

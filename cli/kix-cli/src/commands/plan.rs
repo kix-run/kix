@@ -471,6 +471,7 @@ pub(crate) fn document(p: &mut Planned, report: Option<&DryRunReport>, manifests
         &p.migration_pairs,
         NotCheckedReason::BuildsOnly,
     );
+    doc.warnings = p.build.warnings().to_vec();
     doc.deployed = p.baseline.active().map(|a| DeployedBuild {
         activation: a.name.clone(),
         identity_hash: a.identity_hash.clone(),

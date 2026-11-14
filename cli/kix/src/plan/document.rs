@@ -97,6 +97,11 @@ pub struct Plan {
     /// Whether Pods start, pull their images, and pass their probes. No
     /// preview can tell, so this is always `not_checked`.
     pub readiness: Checked<String>,
+    /// The Kix library's warnings for the new build, when the command
+    /// evaluated it. A build read from a bundle has none. Left out when
+    /// there are none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<crate::eval::library_record::LibraryRecord>,
 }
 
 fn is_zero(n: &usize) -> bool {
@@ -731,6 +736,7 @@ impl Plan {
             prune: Checked::not_checked(reason),
             not_checked: Vec::new(),
             readiness: Checked::not_checked(NotCheckedReason::NotPreviewable),
+            warnings: Vec::new(),
         }
     }
 

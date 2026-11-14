@@ -7,6 +7,10 @@ let
 in
 rec {
 
+  # Return the entries of a `requires` or `extraDeps` list that are
+  # resources. Kix skips the other entries, such as strings.
+  resourcesIn = builtins.filter (dep: builtins.isAttrs dep && dep ? outPath);
+
   facts = import ./facts.nix { inherit lib; };
 
   markers = import ./markers.nix { inherit lib; };
@@ -410,10 +414,10 @@ rec {
       ) (builtins.attrNames (builtins.getContext manifestJson));
       implicitEntries = map extractStoreHash implicitCtxPaths;
 
-      requiresResources = builtins.filter (dep: builtins.isAttrs dep && dep ? outPath) requires;
+      requiresResources = resourcesIn requires;
       requiresEntries = map (dep: "requires:${extractStoreHash dep}") requiresResources;
 
-      extraResources = builtins.filter (dep: builtins.isAttrs dep && dep ? outPath) extraDeps;
+      extraResources = resourcesIn extraDeps;
       extraEntries = map (dep: "extra:${extractStoreHash dep}") extraResources;
 
       depEntries = implicitEntries ++ requiresEntries ++ extraEntries;

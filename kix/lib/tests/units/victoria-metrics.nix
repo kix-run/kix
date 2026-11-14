@@ -210,7 +210,7 @@ let
         r: r.stubRule == "service-egress" && (r.selector."app.kubernetes.io/name" or null) == app
       ) null (p.spec.egress or [ ]);
   portsOf = r: map (p: p.port) r.ports;
-  warningsOf = cluster: cluster.diagnostics.warnings;
+  warningsOf = cluster: map (w: w.message) cluster.diagnostics.warnings;
   show = builtins.toJSON;
 in
 {

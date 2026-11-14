@@ -141,23 +141,25 @@ pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<Exit> {
 /// side is loaded from a build or a bundle, or synthesized from a manifest
 /// directory or the live cluster's Kix-owned view.
 pub(super) fn compare(args: &Comparison, ctx: &mut CommandContext) -> Result<Exit> {
-    let new_graph = match args.bundle {
-        Some(path) => kix_bundle::read_build(path, &[], args.cluster)
-            .map_err(|e| miette!("{e}"))?
-            .into_graph(),
+    let new_build = match args.bundle {
+        Some(path) => {
+            kix_bundle::read_build(path, &[], args.cluster).map_err(|e| miette!("{e}"))?
+        }
         None => {
-            let spinner = output::spinner(format!("Building cluster '{}'...", args.cluster));
-            let status = |msg: &str| set_spinner(&spinner, msg);
-            let build = super::build_flake(
+            // A status line, which `build_flake` clears before it prints the
+            // library's warnings. A spinner would draw over them.
+            let status = |msg: &str| output::status_line(msg);
+            status(&format!("Building cluster '{}'...", args.cluster));
+            super::build_flake(
                 &ctx.global,
                 args.cluster,
                 &status,
                 super::ACTIVATION_BUILD_FAILED,
-            )?;
-            clear_spinner(&spinner);
-            build.into_graph()
+            )?
         }
     };
+    let warnings = new_build.warnings().to_vec();
+    let new_graph = new_build.into_graph();
 
     let (old_graph, side) = match args.baseline {
         Baseline::FromBundle(path) => {
@@ -227,6 +229,7 @@ pub(super) fn compare(args: &Comparison, ctx: &mut CommandContext) -> Result<Exi
     };
     let mut result = diff_graphs(&old_graph, &new_graph, &side, detail);
     result.command = args.command;
+    result.doc.warnings = warnings;
     if let Some(path) = args.out {
         let sha256 = plan::save(result.doc.clone(), &new_graph, path)?;
         crate::esay!(
@@ -683,6 +686,11 @@ fn markdown_output(result: &DiffResult) -> String {
         out.push_str(&render::render_markdown(&result.doc));
     } else {
         out.push_str("No differences found.\n");
+        let warnings = render::render_warnings_markdown(&result.doc);
+        if !warnings.is_empty() {
+            out.push('\n');
+            out.push_str(&warnings);
+        }
         let drift = render::render_drift_markdown(&result.doc);
         if !drift.is_empty() {
             out.push('\n');

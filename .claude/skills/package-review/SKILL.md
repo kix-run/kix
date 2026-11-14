@@ -353,6 +353,7 @@ These items also apply to text the change adds under `docs/`, `housekeeping/`, a
 - Pr11. Does a package assertion never fire because a builder forced in `build` (`mkSecret`, `mkCR`, `keyRef`) throws first with a lib message? Eval with the condition true. Fix: check before the builder, or drop the dead assertion.
 - Pr12. Does a package-internal consistency check (vendored sources against `release`) sit in `assertions` that every cluster evaluates? Fix: a lib test or the vendoring script.
 - Pr13. Do docs or CLI text list packages by behaviour ("packages that hash a ConfigMap")? Fix: phrase them as examples, or give the grep that finds the current set.
+- Pr14. Does the package warn with `builtins.trace` or `lib.warn`, or name the instance or a resource in a warning's text? No command shows a trace when the build succeeds, and Kix adds the instance itself. Detect: `grep -n 'lib.warn\|builtins.trace' *.nix`. Fix: return the warning from `warnings` (or `deps.<arg>.warnings`) as `{ message; fix ? ; object ? ; option ? ; dependency ? ; }`.
 
 ### Docs and tests (T)
 
@@ -443,9 +444,11 @@ any Nix evaluation, and never use a `path:` flakeref.
 | smoke cluster | `nix run .#kix -- check homelab-kind` | regressions in the full package set |
 
 Check `df -BG --output=avail /` before a build. Redundant-requires and
-orphaned-part warnings are traces, not failures, and appear only when the
-toggle that creates the part is on: evaluate the test cluster that turns on
-every toggle and has each optional dependency present, and read its traces.
+orphaned-part warnings do not fail the build, and appear only when the
+toggle that creates the part is on: run `kix check` on the test cluster that
+turns on every toggle and has each optional dependency present, and read the
+"Warnings from the Kix library" list under its table. Each warning names its
+object.
 A test cluster that depends on a package from an unmerged change builds with
 a `kix.mkImport` stand-in; note the merge order.
 

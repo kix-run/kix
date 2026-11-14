@@ -285,7 +285,8 @@ let
     in
     cluster.instances.app.consumer._diagnostics;
   hasWarning =
-    infix: diag: builtins.any (w: lib.hasInfix infix w) diag.warnings && diag.failedAssertions == [ ];
+    infix: diag:
+    builtins.any (w: lib.hasInfix infix w.message) diag.warnings && diag.failedAssertions == [ ];
   # A failed meta assertion fails the cluster before its diagnostics can be
   # read.
   diagnosticsFail = args: !(builtins.tryEval (builtins.deepSeq (diagnosticsOf args) true)).success;
@@ -766,7 +767,7 @@ in
       && k8sTooOld
       && hasWarning "which is not a version number" depWord
       && depOk.failedAssertions == [ ]
-      && !(builtins.any (lib.hasInfix "cannot check") depOk.warnings)
+      && !(builtins.any (w: lib.hasInfix "cannot check" w.message) depOk.warnings)
       && builtins.any (
         a: !a.assertion && lib.hasInfix "minVersion \"abc\" is not a version" a.message
       ) badConstraint

@@ -8,6 +8,7 @@
 }:
 
 let
+  inherit (import ../core/resource.nix { inherit lib; }) resourcesIn;
   kixAnnotations = import ../core/annotations.nix;
   kixKeys = kixAnnotations.keys;
   imageRef = image.ref;
@@ -95,9 +96,7 @@ in
       # template. That annotation already makes the Job depend on the
       # resource, so only the required values without a content hash stay
       # in `requires`.
-      # `mkResource` skips `requires` entries that are not resources, so the
-      # probe skips them too.
-      required = builtins.filter (r: builtins.isAttrs r && r ? outPath) (requires ctx);
+      required = resourcesIn (requires ctx);
       hasContentHash = r: (r.out or { }) ? contentHash;
       checkedRequired = builtins.filter (
         r: hasContentHash r && r.outPath or null != rootRes.outPath

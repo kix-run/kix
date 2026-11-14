@@ -548,7 +548,7 @@ let
     lib.findFirst (m: builtins.match "${prefix}-[0-9a-f]{8}" m.metadata.name != null) null ms;
   allByPrefix =
     prefix: ms: builtins.filter (m: builtins.match "${prefix}-[0-9a-f]{8}" m.metadata.name != null) ms;
-  warningsOf = cluster: cluster.diagnostics.warnings;
+  warningsOf = cluster: map (w: w.message) cluster.diagnostics.warnings;
   hasWarning = infix: cluster: builtins.any (lib.hasInfix infix) (warningsOf cluster);
   scrapeEgress = cluster: byName "prometheus-server-scrape-egress" (cnpsOf cluster);
   egressRules = cluster: (scrapeEgress cluster).spec.egress;

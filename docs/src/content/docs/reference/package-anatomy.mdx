@@ -114,7 +114,7 @@ The package returns an attribute set with the following top-level keys:
 | `config` | attrset or module function | No | Package-level configuration module merged with `options`. Values inside `config` that the author wraps in `lib.mkDefault` are lowered from priority `1000` to `1250` (between option defaults at `1500` and instance or injected `lib.mkDefault` values at `1000`). |
 | `deps` | attrset | No | Per-dependency configuration injection (`config`), `warnings`, and `assertions` keyed by `build` argument name. |
 | `build` | function or list of functions | Yes | One or more functions returning named resource parts and a `root` entry. |
-| `warnings` | `{ config, self, deps }: [ string ]` | No | Evaluation-time warnings that `kix check` lists. |
+| `warnings` | `{ config, self, deps }: [ string or attrset ]` | No | Evaluation-time warnings that `kix check`, `kix build`, `kix plan`, and `kix deploy` show. |
 | `assertions` | `{ config, self, deps }: [ { assertion; message; fix ? null; id ? null; option ? null; } ]` | No | Evaluation-time assertions checked before building manifests. |
 
 ### The `root` entry and part reachability
@@ -494,7 +494,7 @@ deps.postgres = {
 | --- | --- | --- |
 | `config` | attrset or `consumerConfig: attrset` | Configuration module injected into the upstream provider instance. Throws an error if the provider instance's `config` in the cluster definition locked the target option with `kix.mkLocked`. |
 | `assertions` | `dep: [ { assertion; message; } ]` | Assertions evaluated only when `<arg>` is non-null. |
-| `warnings` | `dep: [ string ]` | Warnings evaluated only when `<arg>` is non-null. |
+| `warnings` | `dep: [ string or attrset ]` | Warnings evaluated only when `<arg>` is non-null. Each takes the fields of a package's top-level `warnings`, and Kix sets `dependency` to `<arg>` unless the warning sets it. |
 | `renamedFrom` | `{ name; id; }` | The name this dependency had in earlier releases, and a change id such as `"K1234"`. When no instance matches the dependency, the error carries `id` and adds a sentence saying that the dependency was named `name` in earlier releases. |
 
 ### Built-in dependency contracts (`kix.contracts.*`)
@@ -577,8 +577,10 @@ A package can define top-level `warnings` and `assertions` functions. Both recei
 ```nix
 warnings =
   { config, deps, ... }:
-  lib.optional (config.ingress.host != null && !(deps ? gateway) && !(deps ? ingressController))
-    "echo: ingress.host is set, but neither gateway nor ingressController is present in the cluster.";
+  lib.optional (config.ingress.host != null && !(deps ? gateway) && !(deps ? ingressController)) {
+    message = "ingress.host is set, but neither gateway nor ingressController is present in the cluster.";
+    option = "ingress.host";
+  };
 
 assertions =
   { config, ... }:
@@ -592,7 +594,7 @@ assertions =
   ];
 ```
 
-An assertion takes the same optional fields as `scope.fail` (below): `fix`, `id`, `option`, `dependency`, and `clusterOption`. Kix adds the instance, so the message does not name it. Failed `assertions` stop evaluation, and Kix lists every failed assertion of the cluster at once. `warnings` do not stop evaluation. `kix check` lists them under its table.
+An assertion takes the same optional fields as `scope.fail` (below): `fix`, `id`, `object`, `option`, `dependency`, and `clusterOption`. A warning is a message, or an attribute set with `message` and the same optional fields. Kix adds the instance to each, so the message does not name it. Failed `assertions` stop evaluation, and Kix lists every failed assertion of the cluster at once. `warnings` do not stop evaluation. `kix check` lists them under its table, and the commands that build a cluster print them to stderr. A field in the wrong form, such as an `id` that is not a change record id, stops evaluation in a warning as it does in an error.
 
 ### Raising an error with `scope.fail`
 
@@ -616,13 +618,14 @@ _passwordCheck =
 | `message` | Yes | What is wrong. `scope.fail "text"` is short for `scope.fail { message = "text"; }`. |
 | `fix` | No | What to change. It may span several lines, such as a line to paste into the cluster definition. |
 | `id` | No | The change record id, such as `"K0001"`, when the error refuses something an upgrade removed. |
+| `object` | No | The Kubernetes object at fault, as `{ kind = "Deployment"; name = "web"; }`, with an optional `namespace`. |
 | `option` | No | The option to change, as a path in the instance's `config`, such as `"tls.secretName"`. `kix pin set --option` takes the same form. |
 | `dependency` | No | The dependency to change, as its name in the instance's `deps`, such as `"database"`. |
 | `clusterOption` | No | The cluster option to change, as a path in the cluster definition, such as `"cluster.domain"`. |
 | `instance` | No | Set by `scope.fail` to `<namespace>/<instance>`. |
 | `package` | No | The package's name. |
 
-`option`, `dependency`, and `clusterOption` name settings a person can change in a cluster definition. A package's `meta` is not an instance option, so leave `option` out when an error is about `meta`. `kix.fail` refuses an `option` that starts with `config.`, `deps.`, or `meta.`, and a `clusterOption` that starts with `instances.`. Start `fix` with a capital letter.
+`option`, `dependency`, and `clusterOption` name settings a person can change in a cluster definition. A package's `meta` is not an instance option, so leave `option` out when an error is about `meta`. An `option` must not start with `config.`, `deps.`, or `meta.`, and a `clusterOption` must not start with `instances.`. Kix leaves out a field in the wrong form, or one it does not take, and adds a line to the message that says why. A warning with such a field stops evaluation with that error. Start `fix` with a capital letter.
 
 `scope.fail` also takes a list of errors, to report several problems at once. A cluster definition, which has no `scope`, uses `kix.fail`, which takes the same arguments and leaves out the instance.
 
@@ -636,7 +639,7 @@ Fix: Give the password as the dependency `password`.
 
 ### Structural build-time warnings
 
-During package evaluation, Kix also gives structural warnings for common wiring mistakes, which `kix check` lists with the package's own warnings:
+During package evaluation, Kix also gives structural warnings for common wiring mistakes, which `kix check` lists with the package's own warnings. Each names the resource in its `object` field:
 
 - **Orphaned resources**: A part defined in `build` is not reachable from `root.resource`, `root.requires`, or `root.postHooks`.
 - **Redundant `requires`**: A resource lists a dependency in `requires = [ ... ]` that is already tracked implicitly through `.out` string context in its manifest.

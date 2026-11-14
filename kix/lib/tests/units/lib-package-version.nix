@@ -194,7 +194,11 @@ in
           }
         )
       ];
-      expected = "[x/consumer] cannot check meta.compatibleWith.dep: dependency 'dep' reports no version. Kix skipped the check.";
+      expected = {
+        instance = "x/consumer";
+        dependency = "dep";
+        message = "cannot check meta.compatibleWith.dep: dependency 'dep' reports no version, so Kix skipped this version check.";
+      };
       listed = builtins.fromJSON (builtins.readFile cluster.activationFiles.warnings);
     in
     builtins.elem expected listed || throw "warnings: ${builtins.toJSON listed}";

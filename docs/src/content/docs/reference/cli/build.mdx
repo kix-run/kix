@@ -26,7 +26,9 @@ kix build <CLUSTER> [-o yaml|json] [--flake <FLAKE>] [--no-cache]
 | `--no-cache` | Off | Evaluate from Nix instead of reading the [eval cache](/docs/reference/cli/eval-cache-behavior/). |
 
 On a terminal, a spinner on stderr shows progress; `-q` hides it. Stdout
-carries only the manifests. See [Global flags](/docs/reference/cli/global-flags/)
+carries only the manifests. The Kix library's warnings about the build go to
+stderr, even with `-q`. [`kix check`](/docs/reference/cli/check/#library-warnings)
+describes them. See [Global flags](/docs/reference/cli/global-flags/)
 for `--override-input`.
 
 ## Examples

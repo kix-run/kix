@@ -18,14 +18,20 @@ pub(crate) struct CheckResult {
     details: String,
     /// The scorecard's findings on the scorecard row. On the eval row, the
     /// Kix library's errors when the evaluation failed, which its details
-    /// already show as text, or its warnings when it passed. A warning has
-    /// `severity` and `message`. An error has `message`, and may have `id`,
-    /// `instance`, `package`, and `fix`. It names what to change in one of
-    /// three fields: `option` is a path in the instance's `config`,
-    /// `dependency` is the name of one of the instance's `deps`, and
-    /// `clusterOption` is a path in the cluster definition.
+    /// already show as text, or its warnings when it passed. Errors and
+    /// warnings have the same fields, and a warning also has `severity`.
+    /// Each has `message`, and may have `id`, `instance`, `package`,
+    /// `object`, and `fix`. `object` is the Kubernetes object it is about,
+    /// with `kind`, `name`, and an optional `namespace`. It names what to
+    /// change in one of three fields: `option` is a path in the instance's
+    /// `config`, `dependency` is the name of one of the instance's `deps`,
+    /// and `clusterOption` is a path in the cluster definition.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     findings: Vec<serde_json::Value>,
+    /// The library's warnings on the eval row, for the text output.
+    #[serde(skip)]
+    #[schemars(skip)]
+    warnings: Vec<kix::eval::library_record::LibraryRecord>,
 }
 
 /// The rows of `kix check`. JSON and YAML print the bare list.
@@ -66,7 +72,7 @@ impl CommandResponse for CheckResponse {
         }
         for r in &self.results {
             let listed = match (r.tool.as_str(), r.result.as_str()) {
-                ("eval", "pass") => list_warnings(&r.findings),
+                ("eval", "pass") => kix::eval::library_record::describe_warnings(&r.warnings),
                 ("eval", _) => String::new(),
                 _ => list_findings(&r.findings, self.verbose),
             };
@@ -116,26 +122,6 @@ impl CheckResponse {
 /// The SARIF rule of the Kix library's warnings, which belong to no
 /// scorecard rule.
 const LIBRARY_WARNING_RULE: &str = "kix/library-warning";
-
-/// Return the Kix library's warnings as text, one to a line, with the lines
-/// of a longer warning indented under its first.
-fn list_warnings(warnings: &[serde_json::Value]) -> String {
-    let messages: Vec<&str> = warnings
-        .iter()
-        .filter_map(|w| w.get("message").and_then(|m| m.as_str()))
-        .collect();
-    if messages.is_empty() {
-        return String::new();
-    }
-    let mut out = format!("Warnings from the Kix library, {}:", messages.len());
-    for message in messages {
-        for (i, line) in message.trim_end().lines().enumerate() {
-            out.push_str(if i == 0 { "\n  " } else { "\n    " });
-            out.push_str(line);
-        }
-    }
-    out
-}
 
 /// Return the scorecard findings as text, grouped by rule, errors first.
 /// `info` findings are listed only when `verbose`.
@@ -334,12 +320,16 @@ fn eval_passed(output: &kix::eval::ClusterOutput) -> CheckResult {
         tool: "eval".into(),
         result: "pass".into(),
         details,
-        findings: output
-            .warnings
-            .iter()
-            .map(|w| serde_json::json!({ "severity": "warning", "message": w }))
-            .collect(),
+        findings: output.warnings.iter().map(warning_finding).collect(),
+        warnings: output.warnings.clone(),
     }
+}
+
+/// Return a library warning as a finding: its fields and `severity`.
+fn warning_finding(w: &kix::eval::library_record::LibraryRecord) -> serde_json::Value {
+    let mut finding = serde_json::to_value(w).unwrap_or_default();
+    finding["severity"] = "warning".into();
+    finding
 }
 
 pub fn run(args: &CheckArgs, ctx: &mut CommandContext) -> Result<Exit> {
@@ -379,6 +369,7 @@ pub fn run(args: &CheckArgs, ctx: &mut CommandContext) -> Result<Exit> {
                 result: "fail".into(),
                 details: e.to_string(),
                 findings,
+                warnings: Vec::new(),
             });
             None
         }
@@ -406,6 +397,7 @@ pub fn run(args: &CheckArgs, ctx: &mut CommandContext) -> Result<Exit> {
                     result: result_str.into(),
                     details: format!("{} errors, {} warnings, {} info", errors, warnings, infos),
                     findings: findings.clone(),
+                    warnings: Vec::new(),
                 });
             }
         } else {
@@ -414,6 +406,7 @@ pub fn run(args: &CheckArgs, ctx: &mut CommandContext) -> Result<Exit> {
                 result: "skip".into(),
                 details: "scorecard not enabled in cluster definition".into(),
                 findings: Vec::new(),
+                warnings: Vec::new(),
             });
         }
     }
@@ -469,7 +462,15 @@ mod sarif_tests {
             raw_manifests: vec![serde_json::json!({})],
             scorecard_report: None,
             extra_images: None,
-            warnings: warnings.iter().map(|w| w.to_string()).collect(),
+            warnings: warnings
+                .iter()
+                .map(|w| kix::eval::library_record::LibraryRecord {
+                    instance: Some("a/b".into()),
+                    option: Some("replicas".into()),
+                    message: w.to_string(),
+                    ..Default::default()
+                })
+                .collect(),
         };
         CheckResponse {
             results: vec![eval_passed(&output)],
@@ -477,30 +478,38 @@ mod sarif_tests {
         }
     }
 
-    /// The library's warnings follow the table, with the further lines of a
-    /// warning indented under its first.
+    /// The library's warnings follow the table.
     #[test]
     fn library_warnings_are_listed_under_the_table() {
-        let text = passed_with(&["[a] first", "[b] second\nFix: do this"]).text();
+        let text = passed_with(&["first", "second"]).text();
         assert!(text.contains("1 manifests evaluated, 2 warnings"), "{text}");
         assert!(
-            text.ends_with(
-                "Warnings from the Kix library, 2:\n  [a] first\n  [b] second\n    Fix: do this"
-            ),
+            text.contains("Warnings from the Kix library, 2:\n  a/b: first"),
             "{text}"
         );
         assert!(!passed_with(&[]).text().contains("Warnings"));
     }
 
+    /// A warning's finding in JSON keeps every field of the record.
+    #[test]
+    fn library_warnings_keep_their_fields() {
+        let response = passed_with(&["first"]);
+        let finding = &response.results[0].findings[0];
+        assert_eq!(finding["severity"], "warning");
+        assert_eq!(finding["instance"], "a/b");
+        assert_eq!(finding["option"], "replicas");
+        assert_eq!(finding["message"], "first");
+    }
+
     /// SARIF lists each library warning under one rule of its own.
     #[test]
     fn library_warnings_are_sarif_results() {
-        let sarif = passed_with(&["[a] first"]).sarif();
+        let sarif = passed_with(&["first"]).sarif();
         let results = sarif["runs"][0]["results"].as_array().expect("results");
         assert_eq!(results.len(), 1);
         assert_eq!(results[0]["ruleId"], LIBRARY_WARNING_RULE);
         assert_eq!(results[0]["level"], "warning");
-        assert_eq!(results[0]["message"]["text"], "[a] first");
+        assert_eq!(results[0]["message"]["text"], "first");
     }
 
     /// Verify that a successful evaluation with the scorecard disabled emits an

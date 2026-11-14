@@ -214,7 +214,8 @@ fn resolve_identity(
 }
 
 /// Build `cluster` from `global.flake` into the local Nix store, reporting
-/// progress lines to `status` and prefixing evaluation errors with `build_failed`.
+/// progress lines to `status`, printing the library's warnings, and
+/// prefixing evaluation errors with `build_failed`.
 pub(crate) fn build_flake(
     global: &GlobalArgs,
     cluster: &str,
@@ -222,13 +223,21 @@ pub(crate) fn build_flake(
     build_failed: &str,
 ) -> miette::Result<Build> {
     let flake_path = resolve_flake_path(&global.flake)?;
-    Build::of_flake(&flake_path, cluster, &global.input_overrides(), status).map_err(|e| match e {
-        FlakeBuildError::Build(e @ kix::eval::error::KixEvalError::ClusterNotFound { .. }) => {
-            miette::miette!("{e}")
-        }
-        FlakeBuildError::Build(e) => miette::miette!("{build_failed}: {e}"),
-        FlakeBuildError::Load(e) => miette::miette!("{e}"),
-    })
+    let build =
+        Build::of_flake(&flake_path, cluster, &global.input_overrides(), status).map_err(|e| {
+            match e {
+                FlakeBuildError::Build(
+                    e @ kix::eval::error::KixEvalError::ClusterNotFound { .. },
+                ) => {
+                    miette::miette!("{e}")
+                }
+                FlakeBuildError::Build(e) => miette::miette!("{build_failed}: {e}"),
+                FlakeBuildError::Load(e) => miette::miette!("{e}"),
+            }
+        })?;
+    crate::output::clear_status_line();
+    crate::output::library_warnings(build.warnings());
+    Ok(build)
 }
 
 /// Error prefix for commands whose evaluation step fails.
