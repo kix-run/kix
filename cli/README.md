@@ -326,7 +326,8 @@ pins.
   since evaluation writes a new lock when `flake.nix` changed), then one
   `nix eval --apply` of `legacyPackages.<system>` reads
   `kixConfig.builder`, `kixLibrary.version`, and `kixLibrary.projectRoot`
-  (`library_facts`). The builder goes to `project::check_agreement`. For a
+  (`library_facts`). This is the one evaluation that reads the library's
+  version: `eval::nix::library_version` serves `pin_library` from it. The builder goes to `project::check_agreement`. For a
   project on a release, the version goes to `policy::check_library`, and a
   mismatch is `KixEvalError::LibraryMismatch`. A development library is
   never compared. A library that publishes no version is left to
@@ -447,6 +448,16 @@ name), and the directory `export <c> --out <dir> --with-kix-metadata`
 writes. Versions before 0.10.0-rc.4 take the older spellings `list packages
 --cluster <c>` and `export --for audit`, which `new_command_line` picks.
 
+- `target.rs` (pure): `decide` is the one place that chooses the target.
+  It reads the pin, the stopped run being resumed (its baseline `from` and
+  `requested`), and `--to`, and returns a `Decision` that `run` only acts
+  on and prints: `Proceed`, `PinOnly`, `NothingToDo`, `RefuseOlder`,
+  `ResumeNotNewer`, `NoRelease`, `InvalidTo`, `ResumeNeedsTo`, or
+  `NeedsReleases`, which asks for a second call with the release index (so
+  an exact `--to` at or below the pin needs no network). Whether a target
+  is newer is `policy::judge_upgrade` in kix-core: never below the pin,
+  and newer than the baseline. `flake_lock::moved_tag_next_step` asks the
+  same function.
 - `plan.rs` (pure): `usable` (releases for this system, no prereleases),
   `choose_target` (`--to`, and `[upgrade] min-age` from
   `ProjectConfig::upgrade_min_age`), `steps` (the newest patch of each
@@ -487,8 +498,10 @@ writes. Versions before 0.10.0-rc.4 take the older spellings `list packages
   step, so a project left part of the way always has one. A state that is
   `fix-needed` or `edit-needed` resumes: `from`, `before`, the steps, the
   acknowledgements, `packagesInUse`, and `requested` (the first run's
-  `--to`, used when the resume passes none) come from the file, and the
-  target and any required stop are worked out again. A resume refuses a
+  `--to`, or `latest`, used when the resume passes none) come from the
+  file, and the target and any required stop are worked out again. A
+  state that Kix 0.10.0-rc.4 or older wrote has no `requested`, and its
+  resume without `--to` is `ResumeNeedsTo`. A resume refuses a
   target below the version the project is pinned to now. A resume never runs the
   version the upgrade started from, and refuses when `before` is gone.
   Another run refuses while the last state has unacknowledged
@@ -1160,7 +1173,7 @@ a record line need regenerating.
 
 #### pin_library (`kix-core/src/pin_library.rs`)
 
-- `pin_library.rs`: `plan(dir, version)` then `Plan::apply`, which `kix upgrade` calls for each step and for a project that pins no version. `plan` runs `nix flake metadata --json --no-write-lock-file` once and never reads `flake.lock` on disk, so a project with no lock, or one behind `flake.nix`, can be pinned. The library is the root input named `kix`, found by `flake_lock::kix_input`, whose `InputError` (`OldName`, `[K9179]`; `Follows`; `Missing`) comes back as `PinLibraryError::Input`. A `path` input is `Folder`, and an input type other than Git, GitHub, GitLab, or SourceHut is `Unsupported`. Unless the input's `original` already names the tag, `retag_flake` rewrites the one string literal in `flake.nix` that names the input's repository and pins what the input pins (no ref, a branch, a commit, or a tag) to the release tag `v<version>`, else `UrlNotFound` or `Edit` with the lines. `apply` writes `flake.nix`, runs `nix flake lock`, evaluates the library version once (`eval_version`, `legacyPackages.<system>.kixLibrary.version`), and requires it to be the version. On a failed lock or check it puts `flake.nix` and `flake.lock` back.
+- `pin_library.rs`: `plan(dir, version)` then `Plan::apply`, which `kix upgrade` calls for each step and for a project that pins no version. `plan` runs `nix flake metadata --json --no-write-lock-file` once and never reads `flake.lock` on disk, so a project with no lock, or one behind `flake.nix`, can be pinned. The library is the root input named `kix`, found by `flake_lock::kix_input`, whose `InputError` (`OldName`, `[K9179]`; `Follows`; `Missing`) comes back as `PinLibraryError::Input`. A `path` input is `Folder`, and an input type other than Git, GitHub, GitLab, or SourceHut is `Unsupported`. Unless the input's `original` already names the tag, `retag_flake` rewrites the one string literal in `flake.nix` that names the input's repository and pins what the input pins (no ref, a branch, a commit, or a tag) to the release tag `v<version>`, else `UrlNotFound` or `Edit` with the lines. `apply` writes `flake.nix`, runs `nix flake lock`, evaluates the library version once (`eval::nix::library_version`), and requires it to be the version. On a failed lock or check it puts `flake.nix` and `flake.lock` back.
 
 #### version, installs, and release (`kix-core/src/version/`, `kix/src/installs.rs`, `kix/src/release/`)
 

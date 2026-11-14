@@ -12,6 +12,7 @@ mod pin;
 mod plan;
 mod search;
 pub mod state;
+mod target;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -29,6 +30,7 @@ use crate::exit::{Exit, Stopped};
 use out::Failed;
 use plan::{Applying, ReleaseRecords};
 use state::{DataChange, Status, Step, UpgradeState};
+use target::Decision;
 
 /// A build failed.
 const EXIT_BUILD_FAILED: Exit = Exit::UpgradeBuildFailed;
@@ -56,48 +58,42 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
     let resume = previous
         .clone()
         .filter(|s| matches!(s.status, Status::FixNeeded | Status::EditNeeded));
-    let from: Option<Version> = match &resume {
-        Some(s) => Some(
-            s.from
+    let resumed = match &resume {
+        Some(s) => Some(target::Resume {
+            baseline: s
+                .from
                 .parse()
                 .map_err(|_| miette!("{} names no version in `from`", state::FILE))?,
-        ),
-        None => project_version(&dir)?,
+            requested: s.requested.clone(),
+            goal: s.to.clone(),
+        }),
+        None => None,
     };
-    // A resumed run without `--to` goes on to what the first run asked for,
-    // which may be a prerelease or a minor series that "latest" would not
-    // choose.
-    let requested: Option<String> = args
-        .to
-        .clone()
-        .or_else(|| resume.as_ref().and_then(|s| s.requested.clone()));
-    let to = match requested.as_deref() {
-        None | Some("latest") => None,
-        Some(text) => match text.parse::<Requirement>() {
-            Ok(req) => Some(req),
-            Err(_) => {
-                return refuse(&format!(
-                    "Invalid `--to` value `{text}`: expected a version (such as `0.12.1`), a minor series (such as `0.12`), or `latest`."
-                ));
-            }
-        },
+    // A resumed run keeps its baseline even when flake.lock no longer pins a
+    // release.
+    let pinned = project_version(&dir)?.or_else(|| resumed.as_ref().map(|r| r.baseline.clone()));
+    let source = Source::from_env();
+    let system = release::system().map_err(|e| miette!("{e}"))?;
+    let min_age = config.upgrade_min_age;
+    let ask = target::Ask {
+        pinned: pinned.as_ref(),
+        resume: resumed.as_ref(),
+        to: args.to.as_deref(),
+        system: &system,
+        min_age,
+        today: chrono::Utc::now().date_naive(),
     };
-    // A version the project is on already, or an older one, needs no
-    // release index.
-    if resume.is_none()
-        && let (Some(from), Some(Requirement::Exact(v))) = (&from, &to)
-    {
-        if v == from {
-            println!("Already on Kix {}. Nothing to upgrade.", from.release());
-            return Ok(());
-        }
-        if v < from {
-            return refuse_older(from, v);
-        }
+    let mut index = None;
+    let mut decision = target::decide(&ask, None);
+    if decision == Decision::NeedsReleases {
+        let fetched = release::fetch_index(&source).map_err(|e| miette!("{e}"))?;
+        decision = target::decide(&ask, Some(&fetched.releases));
+        index = Some(fetched);
     }
 
     if resume.is_none()
         && !args.dry_run
+        && matches!(decision, Decision::Proceed { .. } | Decision::PinOnly(_))
         && let Some(p) = &previous
         && !p.unacknowledged().is_empty()
     {
@@ -120,81 +116,69 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
         ));
     }
 
-    // A project that pins no version has nothing to build and compare
-    // against, so Kix only pins the version it names exactly.
-    if from.is_none()
-        && let Some(Requirement::Exact(v)) = &to
-    {
-        return pin_only(&dir, v, args.dry_run);
-    }
-
-    let source = Source::from_env();
-    let system = release::system().map_err(|e| miette!("{e}"))?;
-    let index = release::fetch_index(&source).map_err(|e| miette!("{e}"))?;
-    let releases = plan::usable(&index.releases, &system);
-    let min_age = config.upgrade_min_age;
-    let today = chrono::Utc::now().date_naive();
-    // A prerelease is a target only when `--to` names it in full.
-    let prerelease = match &to {
-        Some(Requirement::Exact(v)) if v.is_prerelease() => index
-            .releases
-            .iter()
-            .find(|r| r.version == *v && r.systems.contains(&system))
-            .map(|r| r.version.clone()),
-        _ => None,
-    };
-    let Some(target) =
-        prerelease.or_else(|| plan::choose_target(&releases, to.as_ref(), min_age, today))
-    else {
-        let newest_age = plan::newest_age(&releases, today).map(|d| {
-            format!(
-                "newest release is {d} {} old",
-                if d == 1 { "day" } else { "days" }
-            )
-        });
-        return refuse(&match (&to, min_age) {
-            (Some(to), Some(days)) => format!(
-                "No Kix release for {system} matches `--to {to}` and `min-age = \"{days}d\"` in kix.toml{}.\nNext: pass an exact version with `--to`, or lower `min-age` in kix.toml.",
-                newest_age.map(|a| format!(" ({a})")).unwrap_or_default()
-            ),
-            (Some(to), None) => format!(
-                "No Kix release for {system} matches `--to {to}`.\nNext: pass an available version or minor series with `--to`, or omit `--to` for the latest release."
-            ),
-            (None, Some(days)) => format!(
-                "No Kix release for {system} is at least {days} days old (`min-age = \"{days}d\"` in kix.toml{}).\nNext: lower `min-age` in kix.toml, or pass an exact version with `--to`.",
-                newest_age.map(|a| format!("; {a}")).unwrap_or_default()
-            ),
-            (None, None) => format!("No Kix release found for {system}."),
-        });
-    };
-    let Some(from) = from else {
-        return pin_only(&dir, &target, args.dry_run);
-    };
-    // A resumed run may already have pinned a step past `from`, and a target
-    // below that pin would downgrade the project.
-    if resume.is_some()
-        && let Ok(Some(pinned)) = project_version(&dir)
-        && target < pinned
-    {
-        return refuse_older(&pinned, &target);
-    }
-    if target <= from {
-        if resume.is_some() {
+    let (from, target, requested) = match decision {
+        Decision::Proceed {
+            from,
+            target,
+            requested,
+        } => (from, target, requested),
+        Decision::PinOnly(v) => return pin_only(&dir, &v, args.dry_run),
+        Decision::NothingToDo { from, target, to } => {
+            println!(
+                "{}",
+                nothing_to_upgrade(&from, &target, to.as_ref(), min_age)
+            );
+            return Ok(());
+        }
+        Decision::RefuseOlder { pinned, target } => return refuse_older(&pinned, &target),
+        Decision::ResumeNotNewer { from, target } => {
             return refuse(&format!(
                 "Cannot resume upgrade from Kix {from}: target Kix {target} is not newer than {from}.\nNo project files were modified.\nNext: pass a version newer than {from} with `--to`, or delete kix-upgrade.json to start a new upgrade.",
                 from = from.release(),
                 target = target.release()
             ));
         }
-        if to.is_some() && target < from {
-            return refuse_older(&from, &target);
+        Decision::ResumeNeedsTo { goal } => {
+            return refuse(&format!(
+                "Cannot resume upgrade to Kix {goal} without `--to`: an older version of Kix wrote kix-upgrade.json without saving the requested target.\nNo project files were modified.\nNext: run `kix upgrade --to <version>` with the version you asked for, or `kix upgrade --to latest` for the latest release."
+            ));
         }
-        println!(
-            "{}",
-            nothing_to_upgrade(&from, &target, to.as_ref(), min_age)
-        );
-        return Ok(());
-    }
+        Decision::InvalidTo(text) => {
+            return refuse(&format!(
+                "Invalid `--to` value `{text}`: expected a version (such as `0.12.1`), a minor series (such as `0.12`), or `latest`."
+            ));
+        }
+        Decision::NoRelease { to } => {
+            let today = ask.today;
+            let releases = index
+                .as_ref()
+                .map(|i| plan::usable(&i.releases, &system))
+                .unwrap_or_default();
+            let newest_age = plan::newest_age(&releases, today).map(|d| {
+                format!(
+                    "newest release is {d} {} old",
+                    if d == 1 { "day" } else { "days" }
+                )
+            });
+            return refuse(&match (&to, min_age) {
+                (Some(to), Some(days)) => format!(
+                    "No Kix release for {system} matches `--to {to}` and `min-age = \"{days}d\"` in kix.toml{}.\nNext: pass an exact version with `--to`, or lower `min-age` in kix.toml.",
+                    newest_age.map(|a| format!(" ({a})")).unwrap_or_default()
+                ),
+                (Some(to), None) => format!(
+                    "No Kix release for {system} matches `--to {to}`.\nNext: pass an available version or minor series with `--to`, or omit `--to` for the latest release."
+                ),
+                (None, Some(days)) => format!(
+                    "No Kix release for {system} is at least {days} days old (`min-age = \"{days}d\"` in kix.toml{}).\nNext: lower `min-age` in kix.toml, or pass an exact version with `--to`.",
+                    newest_age.map(|a| format!("; {a}")).unwrap_or_default()
+                ),
+                (None, None) => format!("No Kix release found for {system}."),
+            });
+        }
+        Decision::NeedsReleases => unreachable!("decide had the release index"),
+    };
+    let index = index.expect("a decision to proceed reads the release index");
+    let releases = plan::usable(&index.releases, &system);
     // The upgrade builds the baseline with the version the lock pins, so a
     // tag a person moved in flake.nix goes back to it first.
     if resume.is_none() && !args.dry_run {
@@ -214,10 +198,7 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
         work: work_dir(&dir),
         installed_here: Vec::new(),
         from: from.clone(),
-        pinned: match project_version(&dir) {
-            Ok(Some(v)) => v,
-            _ => from.clone(),
-        },
+        pinned: pinned.clone().unwrap_or_else(|| from.clone()),
         state: None,
         verbose,
     };
@@ -361,7 +342,7 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
         schema: state::SCHEMA.into(),
         from: from.release(),
         to: goal.release(),
-        requested: requested.clone(),
+        requested: Some(requested.clone()),
         status: Status::FixNeeded,
         steps: resume.as_ref().map(|s| s.steps.clone()).unwrap_or_default(),
         records: by_kind(&applying),
@@ -600,8 +581,14 @@ fn nothing_to_upgrade(
     min_age: Option<u32>,
 ) -> String {
     let (from, target) = (from.release(), target.release());
-    if to.is_some() {
-        return format!("Already on Kix {from} (matches target {target}). Nothing to upgrade.");
+    match to {
+        Some(Requirement::Exact(_)) => {
+            return format!("Already on Kix {from}. Nothing to upgrade.");
+        }
+        Some(Requirement::Minor(..)) => {
+            return format!("Already on Kix {from} (matches target {target}). Nothing to upgrade.");
+        }
+        None => {}
     }
     match (from == target, min_age) {
         (true, None) => format!("Already on the latest Kix release ({from}). Nothing to upgrade."),

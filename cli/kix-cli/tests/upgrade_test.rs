@@ -1307,6 +1307,46 @@ fn a_resume_never_moves_the_project_below_its_pin() {
 }
 
 #[test]
+fn a_resume_of_a_state_without_its_request_asks_for_to() {
+    let s = Setup::new();
+    s.releases(vec![]);
+    s.publish("9.2.0-rc.1", "2026-01-15", None);
+    s.write("fake/fail-9.2.0-rc.1", "");
+    let (code, out) = s.upgrade(&["--to", "9.2.0-rc.1"]);
+    assert_eq!(code, 1, "{out}");
+    let mut state = s.state();
+    assert_eq!(state["requested"], "9.2.0-rc.1");
+
+    // A Kix that did not record the request wrote this state. Aiming at the
+    // latest release, 9.3.0, would leave the prerelease track unasked.
+    state.as_object_mut().unwrap().remove("requested");
+    s.write(
+        "kix-upgrade.json",
+        &serde_json::to_string_pretty(&state).unwrap(),
+    );
+    let lock = s.read("flake.lock");
+    std::fs::remove_file(s.project.join("fake/fail-9.2.0-rc.1")).unwrap();
+    let (code, out) = s.upgrade(&[]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("kix upgrade --to <version>"), "{out}");
+    assert_eq!(s.read("flake.lock"), lock);
+
+    let (code, out) = s.upgrade(&["--to", "9.2.0-rc.1"]);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(s.pinned(), "9.2.0-rc.1");
+}
+
+#[test]
+fn an_upgrade_to_the_latest_release_records_that_it_asked_for_it() {
+    let s = Setup::new();
+    s.releases(vec![]);
+    s.write("fake/fail-9.3.0", "");
+    let (code, out) = s.upgrade(&[]);
+    assert_eq!(code, 1, "{out}");
+    assert_eq!(s.state()["requested"], "latest");
+}
+
+#[test]
 fn the_version_the_project_is_on_needs_no_release_index() {
     let s = Setup::new();
     // No release site: Kix must not read the index.

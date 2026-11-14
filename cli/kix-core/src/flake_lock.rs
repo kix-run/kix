@@ -189,7 +189,8 @@ pub fn pin_then_upgrade(current: Option<&str>) -> String {
 /// pins Kix `locked`. `kix upgrade` only moves a project to a newer version,
 /// so an older `asked` gets the two ways out that do not need it.
 pub fn moved_tag_next_step(locked: &Version, asked: &Version) -> String {
-    if asked > locked {
+    use crate::version::policy::{UpgradeVerdict, judge_upgrade};
+    if judge_upgrade(locked, locked, asked) == UpgradeVerdict::Proceed {
         return format!("Run `kix upgrade --to {}`.", asked.release());
     }
     let (locked, asked) = (locked.release(), asked.release());

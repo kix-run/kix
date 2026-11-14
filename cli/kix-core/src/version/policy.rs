@@ -10,7 +10,8 @@
 //! hand in `flake.nix` stops before evaluation (`LockError::TagMoved`). The
 //! check after evaluation ([`check_library`]) catches the moves that check
 //! cannot find, such as an input written as an attribute set or pointed at
-//! another repository.
+//! another repository. It also holds the rule for which versions
+//! `kix upgrade` may move a project to ([`judge_upgrade`]).
 
 use std::fmt;
 use std::str::FromStr;
@@ -189,6 +190,36 @@ pub fn library_next_step(kix: &Version, library: &LibraryVersion) -> String {
     }
 }
 
+/// What `kix upgrade` makes of a target version, by [`judge_upgrade`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpgradeVerdict {
+    /// The target is newer than the baseline and not below the pin.
+    Proceed,
+    /// The target is the version the project is pinned to and the upgrade
+    /// started from, so there is nothing to move.
+    AlreadyThere,
+    /// The target is older than the version the project is pinned to.
+    Older,
+}
+
+/// Judge `target` for an upgrade of a project that `flake.lock` pins to
+/// `pinned`. `baseline` is the version the upgrade builds the project with
+/// to compare against: `pinned` on a new run, and the version a stopped run
+/// started from when it resumes.
+///
+/// `kix upgrade` never moves a project below its pin, and moves only to a
+/// version newer than its baseline. A resumed run pinned to the step that
+/// failed may therefore aim at that same step again.
+pub fn judge_upgrade(pinned: &Version, baseline: &Version, target: &Version) -> UpgradeVerdict {
+    if target < pinned {
+        UpgradeVerdict::Older
+    } else if target <= baseline {
+        UpgradeVerdict::AlreadyThere
+    } else {
+        UpgradeVerdict::Proceed
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -310,6 +341,44 @@ mod tests {
                 .unwrap_err()
                 .to_string(),
             "flake.lock pins Kix 0.10.1, but this is Kix 0.10.3. Unset KIX_SELECTED_BY, so Kix runs 0.10.1 for this project."
+        );
+    }
+
+    #[test]
+    fn an_upgrade_never_goes_below_the_pin_and_always_past_the_baseline() {
+        let v = |t: &str| t.parse::<Version>().unwrap();
+        let judge = |pinned: &str, baseline: &str, target: &str| {
+            judge_upgrade(&v(pinned), &v(baseline), &v(target))
+        };
+        // A new run: the pin is the baseline.
+        assert_eq!(judge("0.9.2", "0.9.2", "0.10.0"), UpgradeVerdict::Proceed);
+        assert_eq!(
+            judge("0.9.2", "0.9.2", "0.9.2"),
+            UpgradeVerdict::AlreadyThere
+        );
+        assert_eq!(judge("0.9.2", "0.9.2", "0.9.1"), UpgradeVerdict::Older);
+        assert_eq!(
+            judge("0.10.0-rc.4", "0.10.0-rc.4", "0.9.2"),
+            UpgradeVerdict::Older
+        );
+        assert_eq!(
+            judge("0.10.0-rc.4", "0.10.0-rc.4", "0.10.0"),
+            UpgradeVerdict::Proceed
+        );
+        // A resumed run pinned to the step that failed builds it again.
+        assert_eq!(
+            judge("0.10.0-rc.4", "0.9.2", "0.10.0-rc.4"),
+            UpgradeVerdict::Proceed
+        );
+        assert_eq!(
+            judge("0.10.0-rc.4", "0.9.2", "0.9.2"),
+            UpgradeVerdict::Older
+        );
+        // A resumed run that pinned nothing yet has nowhere to go at its
+        // baseline.
+        assert_eq!(
+            judge("0.9.2", "0.9.2", "0.9.2"),
+            UpgradeVerdict::AlreadyThere
         );
     }
 }
