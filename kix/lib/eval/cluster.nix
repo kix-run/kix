@@ -909,7 +909,7 @@ in
       # lack it.
       dnsWarnings =
         lib.optional (builtins.any (inst: inst._dnsMissing or false) allInstancesList)
-          "no DNS instance (alias 'dns') was found. Kix will not wait for DNS to be ready before deploying workloads. Add a DNS provider or import if this ordering is required";
+          "cluster '${name}' has no DNS instance (alias 'dns'), so Kix will not wait for DNS to be ready before deploying workloads. Import a cluster flavor (kix.flavors.<name>), add a coredns instance, or declare a kix.mkImport with roles = [ \"dns\" ].";
 
       # The platform whose interface file supplied `k8sVersion`, or null when
       # the definition writes it or nothing sets it. `kix.interface` sets the
