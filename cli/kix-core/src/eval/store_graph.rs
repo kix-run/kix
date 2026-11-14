@@ -549,8 +549,8 @@ impl StoreGraph {
     ///   not one URL path segment, since kube-rs puts them in request paths
     ///   unescaped, and a request could reach another object than plan
     ///   shows;
-    /// - two manifests of one object (kind, namespace, name), since plan
-    ///   and deploy key objects that way, without the API group;
+    /// - two manifests of one object (API group, kind, namespace, name),
+    ///   since plan and deploy key objects that way;
     /// - any Activation record but one, at `activation_path`, labelled with
     ///   the index's cluster;
     /// - two packages of one namespace and instance, which plan would show
@@ -751,9 +751,8 @@ impl StoreGraph {
                 (ResourceId::from_value(&node.manifest), place)
             })
             .fold(HashMap::new(), |mut places, (id, place)| {
-                // A `ResourceId` has no API group, so two kinds of one name in
-                // different groups share it. Neither can then be placed by
-                // identity, and both fall back to their stamps.
+                // Two objects with one id cannot be placed by identity, so
+                // both fall back to their stamps.
                 match places.entry(id) {
                     std::collections::hash_map::Entry::Vacant(e) => {
                         e.insert(Some(place));
@@ -1478,11 +1477,11 @@ mod tests {
             }
         }
 
-        /// Two build objects of one kind, namespace, and name (two API groups)
-        /// share a `ResourceId`, so neither is placed by identity. A live one
-        /// groups by its stamp.
+        /// Two build objects of one kind, namespace, and name in two API
+        /// groups have different ids. A live one is placed with the build
+        /// object of its own group, whatever its stamp says.
         #[test]
-        fn objects_sharing_a_resource_id_group_by_their_stamps() {
+        fn objects_of_one_kind_in_two_groups_place_by_their_own_group() {
             let mut other_group = rendered("Certificate", "app", "tls");
             other_group["apiVersion"] = json!("other.example/v1");
             let build = built(&[
@@ -1506,7 +1505,7 @@ mod tests {
                 json!({}),
             )];
             let old = StoreGraph::synthesize(&live, &build);
-            assert_eq!(names_in(&old, "app", "stamped"), vec!["tls"]);
+            assert_eq!(names_in(&old, "app", "web"), vec!["tls"]);
         }
 
         /// An object the build does not have still groups by its stamp: a

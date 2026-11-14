@@ -590,6 +590,7 @@ mod tests {
         let progress = Progress::new();
         progress.set_readiness_budget(secs(180));
         let node = NodeId::Resource(ResourceId {
+            group: String::new(),
             kind: "Service".into(),
             namespace: "app".into(),
             name: "web".into(),
@@ -629,6 +630,7 @@ mod tests {
 
     fn res(kind: &str, namespace: &str, name: &str) -> NodeId {
         NodeId::Resource(ResourceId {
+            group: String::new(),
             kind: kind.into(),
             namespace: namespace.into(),
             name: name.into(),
@@ -897,6 +899,7 @@ mod tests {
     fn describe_names_the_longest_waiting_first_and_caps_the_list() {
         let f = |name: &str, phase: Phase, s: u64| InFlight {
             node: NodeId::Resource(ResourceId {
+                group: "apps".into(),
                 kind: "Deployment".into(),
                 namespace: "default".into(),
                 name: name.into(),

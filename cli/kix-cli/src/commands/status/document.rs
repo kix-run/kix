@@ -142,6 +142,9 @@ pub enum Present {
     No,
     /// This account may not list the object's kind.
     Unknown,
+    /// The object's record does not say its API group, and more than one
+    /// group on the cluster serves its kind, so Kix cannot look it up.
+    Ambiguous,
 }
 
 /// Something a check found wrong with an object.
@@ -429,10 +432,11 @@ fn resource_status(view: &ClusterView, obj: &ObjectView, checks: &[StatusCheck])
         Presence::External => Present::External,
         Presence::Missing => Present::No,
         Presence::Unknown => Present::Unknown,
+        Presence::Ambiguous => Present::Ambiguous,
     };
     let on_cluster = matches!(present, Present::Yes | Present::External);
     let mut problems = Vec::new();
-    let mut not_checked = present == Present::Unknown;
+    let mut not_checked = matches!(present, Present::Unknown | Present::Ambiguous);
     if present == Present::No {
         problems.push(Problem::Missing);
     }

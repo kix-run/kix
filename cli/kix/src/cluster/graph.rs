@@ -435,6 +435,7 @@ mod tests {
         assert_eq!(graph.edge_count(), 1);
 
         let deploy_id = ResourceId {
+            group: String::new(),
             kind: "Deployment".into(),
             namespace: "default".into(),
             name: "my-app".into(),
@@ -497,6 +498,7 @@ mod tests {
 
         let graph = ResourceGraph::from_manifests(&manifests).unwrap();
         let consumer_id = ResourceId {
+            group: String::new(),
             kind: "Ingress".into(),
             namespace: "ns-b".into(),
             name: "consumer".into(),
@@ -533,6 +535,7 @@ mod tests {
 
         let graph = ResourceGraph::from_manifests(&manifests).unwrap();
         let dep_id = ResourceId {
+            group: String::new(),
             kind: "Deployment".into(),
             namespace: "ns-a".into(),
             name: "dep".into(),
@@ -562,6 +565,7 @@ mod tests {
 
         let graph = ResourceGraph::from_manifests(&manifests).unwrap();
         let consumer_id = ResourceId {
+            group: String::new(),
             kind: "Ingress".into(),
             namespace: "ns-b".into(),
             name: "consumer".into(),
@@ -583,6 +587,7 @@ mod tests {
 
         let graph = ResourceGraph::from_manifests(&manifests).unwrap();
         let act_id = ResourceId {
+            group: String::new(),
             kind: "Activation".into(),
             namespace: CLUSTER_SCOPED.into(),
             name: "root".into(),

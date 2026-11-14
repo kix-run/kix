@@ -305,6 +305,9 @@ fn resource_state(r: &ResourceStatus) -> String {
     if parts.is_empty() {
         let not_checked = match (r.present, r.drift.as_ref().map(|d| d.verdict)) {
             (Present::Unknown, _) => Some("not checked: this account may not list its kind"),
+            (Present::Ambiguous, _) => Some(
+                "not checked: multiple API groups serve this kind, and this object's API group is not in the deploy record; run `kix deploy <cluster> --reconcile` to record it",
+            ),
             (_, Some(DriftState::Unstamped)) => {
                 Some("not checked for changes: no applied-hash stamp yet, the next deploy adds it")
             }

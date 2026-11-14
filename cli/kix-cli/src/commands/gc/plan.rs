@@ -183,26 +183,8 @@ pub(super) fn judge_hard(
             continue;
         }
 
-        let kind = live_kind(obj);
-        let name = obj
-            .metadata
-            .name
-            .as_deref()
-            .unwrap_or("unknown")
-            .to_string();
-        let namespace = obj
-            .metadata
-            .namespace
-            .as_deref()
-            .unwrap_or(CLUSTER_SCOPED)
-            .to_string();
-
         garbage.push(GarbageEntry {
-            id: ResourceId {
-                kind,
-                name,
-                namespace,
-            },
+            id: kix::cluster::drift::resource_id(obj),
             identity_hash,
             package: ann_get(keys::PACKAGE),
             package_namespace: ann_get(keys::PACKAGE_NAMESPACE),
@@ -365,6 +347,7 @@ pub(super) fn record_garbage(plan: &Retirement) -> Vec<GarbageEntry> {
         .iter()
         .map(|retired| GarbageEntry {
             id: ResourceId {
+                group: keys::GROUP.to_string(),
                 kind: kix::manifest::lifecycle::RECORD_KIND.to_string(),
                 namespace: CLUSTER_SCOPED.to_string(),
                 name: retired.record.name.clone(),

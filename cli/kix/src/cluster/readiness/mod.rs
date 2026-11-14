@@ -83,10 +83,7 @@ pub(super) async fn probe_crd_discovery(client: &Client, crd: &Value) -> bool {
         // Query only the target group rather than walking all API groups, which
         // would wait on any unrelated group version that returns 404.
         if let Ok(walk) = discovery::discover_group(client, group).await
-            && walk
-                .resources
-                .iter()
-                .any(|(ar, _)| ar.group == group && ar.kind == kind)
+            && discovery::find(&walk.resources, group, kind).is_some()
         {
             return true;
         }

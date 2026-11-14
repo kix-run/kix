@@ -1,0 +1,3 @@
+# 2026-11-14 · `cli/kix/src/cluster` · Rules about one kind check the kind name and not its API group.
+
+`ResourceId` now carries the group, and every discovery lookup uses it, but the rules for a kind still compare the name alone. `readiness::classify_workload_terminal` and the readiness checks treat any `Job` or `Deployment` as the built-in one, `lifecycle::never_pruned` keeps any `Namespace` or `CustomResourceDefinition`, `scheduler::plan` and `classify.rs` treat any `CustomResourceDefinition` as Kubernetes' own, and `recreate_refusal` refuses by kind. A custom resource of one of those names gets the built-in rule. Only `skip_reads_live` in `scheduler/plan.rs` checks for `batch`.

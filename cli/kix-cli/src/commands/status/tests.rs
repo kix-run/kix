@@ -137,6 +137,7 @@ fn object(
     ObjectView {
         identity_hash: h(c),
         rid: ResourceId {
+            group: String::new(),
             kind: kind.into(),
             namespace: ns.into(),
             name: name.into(),

@@ -862,6 +862,7 @@ mod package_index_tests {
             )]),
             cluster_level: vec![hash(resources + 1)],
             names: BTreeMap::new(),
+            groups: None,
         }
     }
 

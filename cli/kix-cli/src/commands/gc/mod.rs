@@ -691,7 +691,7 @@ pub(super) async fn delete_resources(
     let guard = PruneGuard::new(client.clone(), records, cluster);
 
     for rid in &resources {
-        let Some((ar, scope)) = discovery.iter().find(|(ar, _)| ar.kind == rid.kind) else {
+        let Some((ar, scope)) = discovery::find(&discovery, &rid.group, &rid.kind) else {
             eprintln!(
                 "  {} {}: Kubernetes does not recognize this kind; skipping it",
                 output::red("!"),

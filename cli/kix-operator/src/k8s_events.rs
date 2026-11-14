@@ -389,6 +389,7 @@ mod tests {
 
     fn rid(kind: &str, name: &str) -> ResourceId {
         ResourceId {
+            group: String::new(),
             kind: kind.into(),
             name: name.into(),
             namespace: "app".into(),

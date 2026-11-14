@@ -138,7 +138,7 @@ impl ActivationRecord {
         // existing Activation, it skips creation and marks the phase directly.
         if let Some(manifest) = self.config.manifest.as_ref() {
             let rid = ResourceId::from_value(manifest);
-            let Some((manifest_ar, scope)) = self.resources.cached_kind(&rid.kind).await else {
+            let Some((manifest_ar, scope)) = self.resources.cached(&rid).await else {
                 return false;
             };
 
@@ -262,7 +262,7 @@ impl DeployRecord for ActivationRecord {
         // count.
         let (ar, scope) = self
             .resources
-            .cached_kind(&rid.kind)
+            .cached(rid)
             .await
             .ok_or(StampError::NotDiscovered)?;
         let live = self.resources.live_activations();

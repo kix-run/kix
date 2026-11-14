@@ -215,8 +215,8 @@ pub(crate) struct DryRunReport {
     pub failed: HashMap<ResourceId, String>,
     /// Nodes the engine never tried, with the failed predecessor.
     pub cancelled: HashMap<ResourceId, Option<ResourceId>>,
-    /// Kinds the apiserver serves.
-    pub served_kinds: HashSet<String>,
+    /// The APIs the apiserver serves, as discovery lists them.
+    pub served: Vec<(kube::discovery::ApiResource, kube::discovery::Scope)>,
 }
 
 /// Run the deploy's engine plan with every write sent as a dry run
@@ -254,11 +254,7 @@ pub(crate) async fn dry_run_of(
         .await
         .map_err(|e| miette!("{e}"))?;
     kix::legacy_domain::check_discovery(target.discovery()).map_err(|e| miette!("{e}"))?;
-    let served_kinds: HashSet<String> = target
-        .discovery()
-        .iter()
-        .map(|(ar, _)| ar.kind.clone())
-        .collect();
+    let served = target.discovery().to_vec();
 
     let config = scheduler_config(
         readiness::DEFAULT_TIMEOUT,
@@ -308,7 +304,7 @@ pub(crate) async fn dry_run_of(
         answers,
         failed,
         cancelled: seen.cancelled,
-        served_kinds,
+        served,
     })
 }
 
@@ -534,12 +530,11 @@ pub(crate) fn fill_checks(
             _ => None,
         })
         .collect();
-    let no_kinds = HashSet::new();
     let scope = DeployScope {
         cluster,
         build,
         plan: checked.plan(),
-        served_kinds: report.map_or(&no_kinds, |r| &r.served_kinds),
+        served: report.map_or(&[], |r| &r.served),
     };
 
     for (rid, verdict) in classify(answers, &scope) {

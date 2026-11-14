@@ -21,7 +21,7 @@ const DISCOVERY_BACKOFF_MAX: Duration = Duration::from_secs(2);
 /// Run API discovery and return all listable resources with their scope.
 ///
 /// The core group comes first, then the groups in the order `/apis` lists
-/// them, so a kind lookup that takes the first match is deterministic.
+/// them. Look an API up with [`find`], by group and kind.
 ///
 /// If a listed group version returns 404, the walk repeats from `/apis` with
 /// backoff until every listed group version responds or `DISCOVERY_SETTLE`
@@ -227,15 +227,15 @@ pub(crate) fn merge_discovery(
     merged
 }
 
-/// Return the discovered API that serves `kind` in the group of
-/// `api_version`. Two groups can serve one kind, such as `Job` in `batch`
-/// and in `batch.volcano.sh`, so the kind alone does not name the API.
-pub(crate) fn find<'a>(
+/// Return the discovered API that serves `kind` in API group `group` (`""`
+/// for the core group). Two groups can serve one kind, such as `Job` in
+/// `batch` and in `batch.volcano.sh`, so every lookup of an API by kind goes
+/// through this function with the object's group.
+pub fn find<'a>(
     discovery: &'a [(ApiResource, Scope)],
-    api_version: &str,
+    group: &str,
     kind: &str,
 ) -> Option<&'a (ApiResource, Scope)> {
-    let group = api_version.split_once('/').map_or("", |(g, _)| g);
     discovery
         .iter()
         .find(|(ar, _)| ar.group == group && ar.kind == kind)
@@ -269,8 +269,8 @@ mod tests {
 
     const RBAC_V1: &str = "/apis/rbac.authorization.k8s.io/v1";
 
-    /// Two groups that serve one kind are told apart by the manifest's
-    /// `apiVersion`, whichever the cluster lists first.
+    /// Two groups that serve one kind are told apart by the group, whichever
+    /// the cluster lists first.
     #[test]
     fn find_matches_the_group_as_well_as_the_kind() {
         let job = |group: &str, version: &str| {
@@ -278,11 +278,10 @@ mod tests {
             (ApiResource::from_gvk(&gvk), Scope::Namespaced)
         };
         let discovery = vec![job("batch.volcano.sh", "v1alpha1"), job("batch", "v1")];
-        let found =
-            |api_version| find(&discovery, api_version, "Job").map(|(ar, _)| ar.group.as_str());
-        assert_eq!(found("batch/v1"), Some("batch"));
-        assert_eq!(found("batch.volcano.sh/v1alpha1"), Some("batch.volcano.sh"));
-        assert_eq!(found("v1"), None);
+        let found = |group| find(&discovery, group, "Job").map(|(ar, _)| ar.group.as_str());
+        assert_eq!(found("batch"), Some("batch"));
+        assert_eq!(found("batch.volcano.sh"), Some("batch.volcano.sh"));
+        assert_eq!(found(""), None);
     }
 
     fn gets(api: &crate::cluster::fake_api::FakeApi, path: &str) -> usize {

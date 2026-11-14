@@ -8,11 +8,13 @@ mod prune_start_and_timeout_tests {
     fn orphans() -> Vec<ResourceId> {
         vec![
             ResourceId {
+                group: String::new(),
                 kind: "ConfigMap".into(),
                 name: "old".into(),
                 namespace: "app".into(),
             },
             ResourceId {
+                group: String::new(),
                 kind: "Namespace".into(),
                 name: "gone".into(),
                 namespace: kix::manifest::types::CLUSTER_SCOPED.into(),
@@ -222,6 +224,7 @@ mod run_end_tests {
 
     fn deployment_id(name: &str) -> ResourceId {
         ResourceId {
+            group: "apps".into(),
             kind: "Deployment".into(),
             namespace: "default".into(),
             name: name.into(),
@@ -411,6 +414,7 @@ mod run_end_tests {
             cancelled: 4,
             failures: vec![kix::cluster::stream::NodeFailure {
                 node: NodeId::Resource(ResourceId {
+                    group: "apps".into(),
                     kind: "Deployment".into(),
                     namespace: "app".into(),
                     name: "api".into(),
@@ -603,6 +607,7 @@ mod stop_advice_tests {
         use kix::manifest::types::ResourceId;
 
         let service = ResourceId {
+            group: String::new(),
             kind: "Service".into(),
             namespace: "cert-manager".into(),
             name: "cert-manager-webhook".into(),
