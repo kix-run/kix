@@ -508,7 +508,19 @@ writes. Versions before 0.10.0-rc.4 take the older spellings `list packages
   `dataChanges`. `check_deploy` (called from `main` for every deploy but a
   dry run, before the runtime check) refuses while `dataChanges` holds a
   reference not in `acknowledged`; `--acknowledge` adds to it.
-- `mod.rs`: the run. The builds live under
+- `halt.rs`: `Halt`, how a run ends early. Every phase returns
+  `Flow<T>` (`Result<T, Halt>`): `Refused(text)` prints the text and exits
+  1, `Stopped(exit)` exits with a code after the phase printed why, and
+  `Error` goes to `main`. `run` is the one place that turns a halt into the
+  command's `Exit` (`Halt::end`).
+- `mod.rs`: the run. `upgrade` calls one function per job: `choose` (the
+  target decision, fetching the index only when it is needed), `conclude`
+  (every decision that does not proceed), `plan_route` (records, required
+  stop, steps), `dry_run`, then on `Run`: `baseline` (build the project as it
+  is, or reuse a stopped run's cache), `begin` (write the state), `walk`
+  (pin and build; `walk_from` decides where a stopped run goes on),
+  `stopped_at` (a failed step; `stopped_lines`), and `finish` (compare,
+  notes, review list; `finished_status` decides the final status). The builds live under
   `default_cache_dir()/upgrade/<sha256 of the project path, 16 hex>/`
   (`before/`, and one directory per version). `Run::step` plans the
   library move, and stops for a `flake.nix` edit, before it installs the
