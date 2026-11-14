@@ -191,6 +191,21 @@ def normalized_lines(text: str) -> collections.Counter[str]:
     )
 
 
+def list_key(i: int, item) -> str:
+    """Return the path segment for one item of a JSON list.
+
+    Schema lists such as `enum`, `required`, and the `oneOf` of an enum are
+    sets: adding a value in the middle moves the later ones without removing
+    them. A scalar item and an item with a `const` are keyed by their value,
+    so only a removed or changed value counts. Other items keep their index.
+    """
+    if isinstance(item, dict) and "const" in item:
+        return f"[const={json.dumps(item['const'])}]"
+    if item is None or isinstance(item, (str, int, float, bool)):
+        return f"[{json.dumps(item)}]"
+    return str(i)
+
+
 def flatten(value, path: str = "") -> dict[str, object]:
     """Map each leaf of a JSON value to its path."""
     if isinstance(value, dict):
@@ -201,7 +216,7 @@ def flatten(value, path: str = "") -> dict[str, object]:
     if isinstance(value, list):
         out = {}
         for i, v in enumerate(value):
-            out.update(flatten(v, f"{path}/{i}"))
+            out.update(flatten(v, f"{path}/{list_key(i, v)}"))
         return out
     return {path: value}
 
