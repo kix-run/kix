@@ -83,7 +83,7 @@ pub const COMMANDS: &[RemovedCommand] = &[
             old: "kix lib update",
             new: "kix upgrade --to {running}",
             id: "K6054",
-            note: "",
+            note: "A project whose `kix` input is a local folder or a branch, or that sets `library = \"self\"`, uses its library as it is, so it has nothing to update.",
         },
     },
     RemovedCommand {
@@ -608,7 +608,7 @@ mod tests {
         assert_eq!(
             lib.removed.message(),
             format!(
-                "[K6054] `kix lib update` was removed. Use `kix upgrade --to {}` instead.",
+                "[K6054] `kix lib update` was removed. Use `kix upgrade --to {}` instead. A project whose `kix` input is a local folder or a branch, or that sets `library = \"self\"`, uses its library as it is, so it has nothing to update.",
                 kix::version::running().release()
             )
         );
