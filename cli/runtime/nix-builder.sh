@@ -46,6 +46,12 @@ fi
 tmp="$(cd "$(mktemp -d)" && pwd -P)"
 trap 'chmod -R u+w "$tmp" 2>/dev/null; rm -rf "$tmp"' EXIT
 
+# Write and track flake.lock, which names a project's Kix library.
+lock() {
+  nix --extra-experimental-features "nix-command flakes" flake lock
+  git add flake.lock
+}
+
 echo "== the repository's Helm cluster under both builders"
 (cd "$repo" && KIX_TEST_BUILDER=kix "$kix" --no-color build helm >"$tmp/kix.yaml")
 (cd "$repo" && KIX_TEST_BUILDER=nix "$kix" --no-color build helm >"$tmp/nix.yaml")
@@ -87,6 +93,7 @@ echo 'builder = "nix"' >"$proj/kix.toml"
 cd "$proj"
 git init -q
 git add flake.nix cluster.nix helm-test-chart
+lock
 
 if "$kix" --no-color build helm >"$tmp/untracked.yaml" 2>"$tmp/untracked.err"; then
   echo "kix build succeeded although Nix cannot see kix.toml" >&2
@@ -160,6 +167,7 @@ FLAKE
 cd "$merged"
 git init -q
 git add flake.nix cluster.nix helm-test-chart kix.toml
+lock
 "$kix" --no-color build helm >"$tmp/merged.yaml"
 if ! cmp -s "$tmp/kix.yaml" "$tmp/merged.yaml"; then
   echo "the merged flake built different YAML from the repository's helm cluster:" >&2
