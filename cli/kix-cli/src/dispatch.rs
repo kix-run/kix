@@ -363,7 +363,7 @@ pub fn run(cli: &Cli) -> Result<Exit> {
         Command::SelfCmd(command) => commands::self_cmd::run(command).map(Exit::from),
         Command::Doctor => commands::doctor::run(global).map(Exit::from),
         Command::Pin(command) => commands::pin::run(command, ctx),
-        Command::Upgrade(args) => commands::upgrade::run(args, global).map(Exit::from),
+        Command::Upgrade(args) => commands::upgrade::run(args, global),
         Command::Build(args) => commands::build::run(args, ctx).map(Exit::from),
         Command::Diff(args) => commands::diff::run(args, ctx),
         Command::Plan(args) if args.read_only => commands::plan::run_read_only(args, ctx),
