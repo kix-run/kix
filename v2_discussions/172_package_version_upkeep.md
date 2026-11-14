@@ -267,7 +267,7 @@ the work is finished only when a completeness script prints PASS.
 | | Notes only | Notes plus the command |
 |---|---|---|
 | Edited the unit test that had to change | 1 of 3 | 3 of 3 |
-| Reported the checks passing | n/a | 3 of 3 |
+| Passed the command when I ran it afterwards | n/a | 3 of 3 |
 | Minutes | 10 to 13 | 16 to 24 |
 | Cost | $0.10 to $0.13 | $0.14 to $0.31 |
 
@@ -335,8 +335,9 @@ instruction had not.
 
 ## 8. Next steps
 
-1. Put the completeness command and the "upgrading a package" section in
-   the repository (branch `upkeep-tooling`).
+1. Review pull request #118, which adds the completeness command
+   (`scripts/check-bump.sh`) and the "upgrading a package" section of the
+   `package-authoring` skill.
 2. Decide the upgrade rule form, with "cannot go back" as the first rule.
 3. Write the detection script and name each package's upstream.
 4. Quiet the library tests at the source.
