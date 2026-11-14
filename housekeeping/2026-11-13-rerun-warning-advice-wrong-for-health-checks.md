@@ -1,3 +1,0 @@
-# 2026-11-13 · `kix/lib/plugins/rerun/module.nix` · The rerun warning tells the author to add a checksum to a pod template they do not write.
-
-The `rerun` cluster processor warns when a Job with `kix.run/rerun` reads a Secret or ConfigMap that has no checksum annotation, and always says "Add `checksum/<name>` to the pod template annotations". A Job built by `kix.healthCheck` has a pod template the package author cannot edit, so for that Job the advice is wrong: the author has to list the object in the health check's `requires`. Better still, `kix.healthCheck` (`kix/lib/vocab/health-check.nix`) could add checksums itself for the Kix-built Secrets and ConfigMaps its `env` reads, since it already computes `envContext`.

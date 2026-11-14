@@ -16,12 +16,8 @@ let
 
   isWorkloadKind = kind: builtins.elem kind workloadKinds;
 
-  podSpecOf =
-    r:
-    if r.kind == "CronJob" then
-      (((r.spec or { }).jobTemplate or { }).spec or { }).template.spec or { }
-    else
-      ((r.spec or { }).template or { }).spec or { };
+  podSpec = import ./core/pod-spec.nix { inherit lib; };
+  inherit (podSpec) podSpecOf;
 
   podLabelsOf =
     r:
@@ -87,146 +83,17 @@ rec {
 
       volumeEdges = builtins.concatMap (
         r:
-        let
-          ps = podSpecOf r;
-
-          volRefs = builtins.concatMap (
-            v:
-            let
-              cmName = (v.configMap or { }).name or null;
-              secName = (v.secret or { }).secretName or null;
-              projRefs = builtins.concatMap (
-                s:
-                let
-                  pcm = (s.configMap or { }).name or null;
-                  psec = (s.secret or { }).name or null;
-                in
-                (
-                  if pcm != null && byKindName ? "ConfigMap/${pcm}" then
-                    [
-                      {
-                        from = r;
-                        to = byKindName."ConfigMap/${pcm}";
-                        type = "mounts";
-                      }
-                    ]
-                  else
-                    [ ]
-                )
-                ++ (
-                  if psec != null && byKindName ? "Secret/${psec}" then
-                    [
-                      {
-                        from = r;
-                        to = byKindName."Secret/${psec}";
-                        type = "mounts";
-                      }
-                    ]
-                  else
-                    [ ]
-                )
-              ) (safeList ((v.projected or { }).sources or [ ]));
-            in
-            (
-              if cmName != null && byKindName ? "ConfigMap/${cmName}" then
-                [
-                  {
-                    from = r;
-                    to = byKindName."ConfigMap/${cmName}";
-                    type = "mounts";
-                  }
-                ]
-              else
-                [ ]
+        map
+          (key: {
+            from = r;
+            to = byKindName.${key};
+            type = "mounts";
+          })
+          (
+            builtins.filter (key: byKindName ? ${key}) (
+              lib.unique (map (read: "${read.kind}/${read.name}") (podSpec.reads (podSpecOf r)))
             )
-            ++ (
-              if secName != null && byKindName ? "Secret/${secName}" then
-                [
-                  {
-                    from = r;
-                    to = byKindName."Secret/${secName}";
-                    type = "mounts";
-                  }
-                ]
-              else
-                [ ]
-            )
-            ++ projRefs
-          ) (safeList (ps.volumes or [ ]));
-
-          containers = safeList (ps.containers or [ ]) ++ safeList (ps.initContainers or [ ]);
-          envFromRefs = builtins.concatMap (
-            c:
-            builtins.concatMap (
-              ef:
-              let
-                cmRef = (ef.configMapRef or { }).name or null;
-                secRef = (ef.secretRef or { }).name or null;
-              in
-              (
-                if cmRef != null && byKindName ? "ConfigMap/${cmRef}" then
-                  [
-                    {
-                      from = r;
-                      to = byKindName."ConfigMap/${cmRef}";
-                      type = "mounts";
-                    }
-                  ]
-                else
-                  [ ]
-              )
-              ++ (
-                if secRef != null && byKindName ? "Secret/${secRef}" then
-                  [
-                    {
-                      from = r;
-                      to = byKindName."Secret/${secRef}";
-                      type = "mounts";
-                    }
-                  ]
-                else
-                  [ ]
-              )
-            ) (safeList (c.envFrom or [ ]))
-          ) containers;
-
-          envValueFromRefs = builtins.concatMap (
-            c:
-            builtins.concatMap (
-              e:
-              let
-                vf = e.valueFrom or { };
-                cmKey = (vf.configMapKeyRef or { }).name or null;
-                secKey = (vf.secretKeyRef or { }).name or null;
-              in
-              (
-                if cmKey != null && byKindName ? "ConfigMap/${cmKey}" then
-                  [
-                    {
-                      from = r;
-                      to = byKindName."ConfigMap/${cmKey}";
-                      type = "mounts";
-                    }
-                  ]
-                else
-                  [ ]
-              )
-              ++ (
-                if secKey != null && byKindName ? "Secret/${secKey}" then
-                  [
-                    {
-                      from = r;
-                      to = byKindName."Secret/${secKey}";
-                      type = "mounts";
-                    }
-                  ]
-                else
-                  [ ]
-              )
-            ) (safeList (c.env or [ ]))
-          ) containers;
-        in
-        volRefs ++ envFromRefs ++ envValueFromRefs
+          )
       ) workloads;
 
       bindingEdges = builtins.concatMap (

@@ -18,6 +18,7 @@
   byName,
   evalFails,
   kixKeys,
+  kixlib,
   alertRulesOf,
   allSelect,
   prometheusStub,
@@ -472,6 +473,41 @@ in
       && fromSops "app-db-apps-bootstrap-password"
     )
     || throw "clickhouse-database password: ${builtins.toJSON (secretIn "app-db-credentials")}";
+
+  # The bootstrap Job keeps one name and carries the rerun annotation. A
+  # new SOPS file for the password changes the Job's rerun hash, so the
+  # deploy runs it again without renaming it.
+  clickhouse-database-bootstrap-reruns-on-new-password =
+    let
+      withSource =
+        source:
+        withDatabase {
+          password = {
+            package = secretPackage;
+            config = {
+              inherit source;
+              keys = [ "password" ];
+            };
+          };
+        };
+      jobOf = cluster: byName "app-db-apps-bootstrap" (ofKind "Job" (manifests cluster));
+      hashOf = cluster: (jobOf cluster).metadata.annotations.${kixKeys.rerunHash} or null;
+      before = withSource ./clickhouse.nix;
+      after = withSource ./stackgres.nix;
+      job = jobOf before;
+    in
+    (
+      job != null
+      && job.metadata.annotations.${kixKeys.rerun} or null == kixlib.keyValues.rerunOnChange
+      && hashOf before != null
+      && hashOf before != hashOf after
+    )
+    || throw "clickhouse-database bootstrap rerun: ${
+      builtins.toJSON {
+        name = job.metadata.name or null;
+        annotations = job.metadata.annotations or null;
+      }
+    }";
 
   # A password from a secret-ref holding `username` and `password` is the
   # credentials Secret. The package renders no Secret of its own, and the

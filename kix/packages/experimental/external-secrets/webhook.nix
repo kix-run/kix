@@ -469,7 +469,6 @@ in
             metadata = {
               labels = checkLabels;
               annotations = {
-                "checksum/manifest" = self.webhookCheckManifest.out.contentHash;
                 "checksum/webhook-deployment" = self.webhookDeployment.out.contentHash;
                 "checksum/webhook-service" = self.webhookService.out.contentHash;
                 "checksum/cert-controller" = self.certControllerDeployment.out.contentHash;
