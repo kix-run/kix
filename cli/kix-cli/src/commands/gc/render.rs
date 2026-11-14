@@ -97,7 +97,7 @@ pub(super) fn print_garbage_plan(garbage: &[GarbageEntry]) {
 
     println!();
     println!(
-        "{} ({} left the build, still running on the cluster):",
+        "{} ({} left the build, still on the cluster):",
         output::bold("Objects to delete"),
         garbage.len(),
     );

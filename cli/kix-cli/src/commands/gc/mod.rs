@@ -263,7 +263,7 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         crate::say!(
             "{}",
             output::bold(&format!(
-                "Objects that left the build in earlier deploys, still running on the cluster ({} to delete):",
+                "Objects that left the build in earlier deploys, still on the cluster ({} to delete):",
                 kept_rids.len()
             ))
         );

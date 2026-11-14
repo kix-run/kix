@@ -219,7 +219,7 @@ fn lib_update_is_refused_with_the_new_command() {
         .assert()
         .failure()
         .stderr(predicate::str::contains(format!(
-            "[K6054] `kix lib update` was removed. Use `kix upgrade --to {VERSION}` instead."
+            "[K6054] `kix lib update` was removed. Use `kix upgrade --to {VERSION}` instead. A project whose `kix` input is a local folder or a branch, or that sets `library = \"self\"`, uses its library as it is, so it has nothing to update."
         )));
 }
 

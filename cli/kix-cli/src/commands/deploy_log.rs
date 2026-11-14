@@ -225,15 +225,14 @@ fn prune_lines(resources: &[ResourceId], kept: &[ResourceId], delete: bool) -> V
             format!("prune> deleting {count} object(s) that left the build")
         } else {
             format!(
-                "prune> {count} object(s) left the build, still running on the cluster; run `kix deploy --prune` or `kix gc` to delete them"
+                "prune> {count} object(s) left the build, still on the cluster; run `kix deploy --prune` or `kix gc` to delete them"
             )
         });
-        lines.extend(resources.iter().map(|rid| {
-            format!(
-                "{}> left the build, still running on the cluster",
-                rid.display_id()
-            )
-        }));
+        lines.extend(
+            resources
+                .iter()
+                .map(|rid| format!("{}> left the build, still on the cluster", rid.display_id())),
+        );
     }
     if !kept.is_empty() {
         lines.push(format!(
@@ -622,8 +621,8 @@ mod tests {
         assert_eq!(
             lines,
             vec![
-                "prune> 1 object(s) left the build, still running on the cluster; run `kix deploy --prune` or `kix gc` to delete them",
-                "ConfigMap/old@app> left the build, still running on the cluster",
+                "prune> 1 object(s) left the build, still on the cluster; run `kix deploy --prune` or `kix gc` to delete them",
+                "ConfigMap/old@app> left the build, still on the cluster",
                 "prune> 1 object(s) left the build and are never deleted automatically",
                 "Namespace/gone@app> left the build, kept (never deleted automatically)",
             ]

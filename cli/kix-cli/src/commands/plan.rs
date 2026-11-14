@@ -676,7 +676,7 @@ pub(crate) fn print_text(p: &Planned, doc: &Plan, verbose: bool) {
     let prune = p.checked.flags().prune;
     let deletes = prune == PrunePolicy::Delete;
     let fate = if prune == PrunePolicy::Skip {
-        "still running on the cluster (`--skip-orphan-check`, not deleted)".to_string()
+        "still on the cluster (`--skip-orphan-check`, not deleted)".to_string()
     } else if deletes && p.client.is_none() {
         // `--offline` has not contacted the cluster, so it
         // cannot yet tell which orphans another Kix cluster deploys.

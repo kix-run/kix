@@ -32,8 +32,12 @@ Text output shows the current deploy first, marked as live on the cluster,
 then each earlier deploy, most recent first, numbered from `[1]`. Each entry
 gives the Activation record's name, the start of its identity hash, the store
 path of its build, and for an earlier deploy its deploy time, the record it
-replaced, and whether the build is on this machine (`available`) or not
-(`build not on this machine`). `kix rollback` can only go back to an
+replaced, and whether `kix rollback` can restore it from this machine.
+Kix looks for the build at the store path the record names, then in its cache
+of the last build deployed from this machine, the same places a rollback
+looks. An entry reads `available` when Kix finds the build, `build not on this
+machine` when it finds none, and `build on this machine does not load` when it
+finds a build it cannot read. `kix rollback` can only go back to an
 `available` deploy. The numbers are the ones `kix rollback` asks for.
 
 Only records that were once the cluster's running state are listed. A deploy
