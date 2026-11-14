@@ -1260,6 +1260,53 @@ fn a_prerelease_named_in_full_is_a_target() {
 }
 
 #[test]
+fn a_resumed_upgrade_keeps_its_prerelease_target() {
+    let s = Setup::new();
+    s.releases(vec![]);
+    s.publish("9.2.0-rc.1", "2026-01-15", None);
+    s.write("fake/fail-9.2.0-rc.1", "");
+    let (code, out) = s.upgrade(&["--to", "9.2.0-rc.1"]);
+    assert_eq!(code, 1, "{out}");
+    assert_eq!(s.pinned(), "9.2.0-rc.1");
+    assert!(
+        out.contains("Next: fix the error above, then run `kix upgrade` to finish the upgrade."),
+        "{out}"
+    );
+
+    // The rerun the message names finishes at the prerelease. It does not
+    // go to the latest release, 9.3.0.
+    std::fs::remove_file(s.project.join("fake/fail-9.2.0-rc.1")).unwrap();
+    let (code, out) = s.upgrade(&[]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.starts_with("Resuming upgrade Kix 9.1.0 -> 9.2.0-rc.1 (reusing 9.1.0 baseline)\n"),
+        "{out}"
+    );
+    assert_eq!(s.pinned(), "9.2.0-rc.1");
+    assert_eq!(s.state()["status"], "done");
+}
+
+#[test]
+fn a_resume_never_moves_the_project_below_its_pin() {
+    let s = Setup::new();
+    s.releases(vec![]);
+    s.publish("9.2.0-rc.1", "2026-01-15", None);
+    s.write("fake/fail-9.2.0-rc.1", "");
+    let (code, out) = s.upgrade(&["--to", "9.2.0-rc.1"]);
+    assert_eq!(code, 1, "{out}");
+    let lock = s.read("flake.lock");
+
+    // 9.1.0 is older than the 9.2.0-rc.1 the stopped run pinned.
+    let (code, out) = s.upgrade(&["--to", "9.1"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains("Cannot move this project to Kix 9.1.0: it is on Kix 9.2.0-rc.1"),
+        "{out}"
+    );
+    assert_eq!(s.read("flake.lock"), lock);
+}
+
+#[test]
 fn the_version_the_project_is_on_needs_no_release_index() {
     let s = Setup::new();
     // No release site: Kix must not read the index.

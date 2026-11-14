@@ -64,7 +64,14 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
         ),
         None => project_version(&dir)?,
     };
-    let to = match args.to.as_deref() {
+    // A resumed run without `--to` goes on to what the first run asked for,
+    // which may be a prerelease or a minor series that "latest" would not
+    // choose.
+    let requested: Option<String> = args
+        .to
+        .clone()
+        .or_else(|| resume.as_ref().and_then(|s| s.requested.clone()));
+    let to = match requested.as_deref() {
         None | Some("latest") => None,
         Some(text) => match text.parse::<Requirement>() {
             Ok(req) => Some(req),
@@ -163,6 +170,14 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
     let Some(from) = from else {
         return pin_only(&dir, &target, args.dry_run);
     };
+    // A resumed run may already have pinned a step past `from`, and a target
+    // below that pin would downgrade the project.
+    if resume.is_some()
+        && let Ok(Some(pinned)) = project_version(&dir)
+        && target < pinned
+    {
+        return refuse_older(&pinned, &target);
+    }
     if target <= from {
         if resume.is_some() {
             return refuse(&format!(
@@ -346,6 +361,7 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<()> {
         schema: state::SCHEMA.into(),
         from: from.release(),
         to: goal.release(),
+        requested: requested.clone(),
         status: Status::FixNeeded,
         steps: resume.as_ref().map(|s| s.steps.clone()).unwrap_or_default(),
         records: by_kind(&applying),

@@ -197,7 +197,8 @@ range has no breaking, security, or upgrade notes, it says
    Fix the errors against that
    release, then run `kix upgrade` again. The next run reuses the builds from
    step 1 and the package list made then, tries that release again, and
-   continues. So does a run after an interruption, since Kix writes
+   continues to the version the first run aimed at, such as the release
+   candidate it named with `--to`. So does a run after an interruption, since Kix writes
    `kix-upgrade.json` before it first pins the project. If the cached builds
    from step 1 are missing, Kix stops with an error. Delete `kix-upgrade.json`
    and run `kix upgrade` again; the comparison then starts from the version
@@ -287,6 +288,7 @@ moved by hand gets no refusal. Commit `kix-upgrade.json` with the upgrade.
 | --- | --- |
 | `schema` | `kix.run/upgrade/v1` |
 | `from`, `to` | The version the upgrade started from, and the version it moved to. |
+| `requested` | The `--to` value the upgrade started with. Absent when it moved to the latest release. A run that resumes without `--to` uses it. |
 | `status` | `done`, `fix-needed` (a build failed, or the run stopped part of the way), `edit-needed` (a person must edit `flake.nix`), `needs-person`, or `required-stop`. |
 | `steps` | Each version the project was built with: `version`, `result` (`ok`, `failed`, or `started` for a step that stopped before it built), and `failed`, the clusters that did not build. |
 | `records` | The ids (or names, for a note without an id) of the release notes that apply, by kind. |
