@@ -42,7 +42,7 @@ use serde_json::{Value, json};
 use thiserror::Error;
 
 pub use record::{
-    KeptOrphanSource, PinnedInterface, Record, WaveRecord, WaveStatus, current_record,
+    KeptOrphanSource, PinnedInterface, Record, WaveRecord, WaveStatus, current_record, new_request,
 };
 pub use retention::{
     DEFAULT_KEEP_MAX, DEFAULT_KEEP_MIN, RetentionPolicy, RetireReason, Retired, Retirement,
@@ -51,7 +51,10 @@ pub use retention::{
 
 pub(crate) use record::KeptOrphans;
 
-use record::{is_current_phase, phase_on_abort, phase_on_begin, read_phase, sort_newest_first};
+use record::{
+    FINISHED_REQUEST_FIELD, REQUEST_FIELD, STARTED_REQUEST_FIELD, is_current_phase, phase_on_abort,
+    phase_on_begin, read_phase, sort_newest_first,
+};
 
 #[cfg(test)]
 use record::{parse_time, pick_current};
@@ -596,6 +599,7 @@ impl Records {
         source_path: &str,
         identity_hash: Option<&str>,
         kubernetes_uid: Option<&str>,
+        request: &str,
     ) -> Result<(), RecordsError> {
         let mut annotations = serde_json::Map::new();
         if let Some(hash) = identity_hash {
@@ -638,6 +642,7 @@ impl Records {
                     "type": "storePath",
                     "path": source_path,
                 },
+                REQUEST_FIELD: request,
             },
         });
         self.api()
@@ -649,6 +654,36 @@ impl Records {
             .await
             .map_err(RecordsError::on("apply", name))?;
         Ok(())
+    }
+
+    /// Record that the operator started `request` on record `name`.
+    pub async fn start_request(&self, name: &str, request: &str) -> Result<(), RecordsError> {
+        self.patch_status(
+            name,
+            &json!({ "status": { STARTED_REQUEST_FIELD: request } }),
+        )
+        .await
+    }
+
+    /// Queue record `name` again for the operator's `request`, and record
+    /// that the operator started it. The operator then deploys the record as
+    /// it deploys a new one.
+    pub async fn requeue(&self, name: &str, request: &str) -> Result<(), RecordsError> {
+        self.patch_status(
+            name,
+            &json!({ "status": { "phase": PHASE_QUEUED, STARTED_REQUEST_FIELD: request } }),
+        )
+        .await
+    }
+
+    /// Record that the operator finished the run of `request` on record
+    /// `name`.
+    pub async fn finish_request(&self, name: &str, request: &str) -> Result<(), RecordsError> {
+        self.patch_status(
+            name,
+            &json!({ "status": { FINISHED_REQUEST_FIELD: request } }),
+        )
+        .await
     }
 
     /// Write a deploy receipt to `name`'s status subresource via merge patch.

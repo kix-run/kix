@@ -516,31 +516,34 @@ async fn run_operator_async(
         }
     }
 
+    // The request queues the target record again. The operator then deploys
+    // it as a new record and supersedes the current one, as a direct
+    // rollback does.
     crate::say!(
-        "Updating deployment record '{}' to point to rollback target...",
-        output::bold(&current.name),
+        "Asking the operator to deploy deployment record '{}' again...",
+        output::bold(&target_name),
     );
-
-    super::operator::apply_activation(
+    let request = super::operator::apply_activation(
         &records,
-        &current.name,
+        &target_name,
         cluster,
         &target_source_path,
         target_hash.as_deref(),
         planned.checked.kubernetes_uid(),
-        // A rollback re-applies a build from an earlier deploy, which wrote
-        // its own receipt. See the non-operator path in this file.
+        // A rollback passes no receipt, so the target record keeps the
+        // receipt its own deploy wrote.
         None,
         planned.checked.package_index(),
     )
     .await?;
 
     crate::say!(
-        "  {} Deployment record updated. Waiting for the Kix operator...",
+        "  {} Request sent. Waiting for the Kix operator...",
         output::green("✓"),
     );
 
-    let reconciled = super::operator::watch_activation_progress(&records, &current.name).await?;
+    let reconciled =
+        super::operator::watch_activation_progress(&records, &target_name, &request).await?;
 
     println!();
     match reconciled {
@@ -551,15 +554,13 @@ async fn run_operator_async(
         ),
         super::operator::Reconciled::Degraded => {
             println!(
-                "Rollback via operator {}: deployment record '{current}' was updated to restore '{}', and '{current}' is {}.",
+                "Rollback via operator {}: deployment record '{target}' is {}.",
                 output::red("failed"),
-                output::bold(&target_name),
                 output::yellow("Degraded"),
-                current = current.name,
+                target = target_name,
             );
             println!(
-                "  Inspect deployment record '{}' on the cluster to see which resources failed to reconcile.",
-                current.name
+                "  Inspect deployment record '{target_name}' on the cluster to see which resources failed to reconcile."
             );
         }
     }

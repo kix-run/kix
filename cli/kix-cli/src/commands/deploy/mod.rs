@@ -1061,7 +1061,7 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
             output::dim(&source_path),
         );
 
-        super::operator::apply_activation(
+        let request = super::operator::apply_activation(
             &records,
             &activation_name,
             &cluster,
@@ -1079,7 +1079,8 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
         );
 
         let reconciled =
-            super::operator::watch_activation_progress(&records, &activation_name).await?;
+            super::operator::watch_activation_progress(&records, &activation_name, &request)
+                .await?;
 
         let (ending, phase) = match reconciled {
             Reconciled::Active => (output::green("complete"), output::green("Active")),
