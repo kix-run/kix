@@ -50,9 +50,18 @@ version sits. The default is `{version}` with an optional leading `v`,
 which fits most upstreams. Other examples are `n8n@{version}` and
 `gha-runner-scale-set-{version}`. The script reads the `{version}` part
 with the same version grammar that `meta.version` uses, and drops a tag
-whose version has a prerelease suffix such as `-rc1`. An upstream that
-versions by date adds `upstream.scheme = "calendar"`, which tells the
-script that the steps are not major, minor, and patch.
+whose version has a prerelease suffix such as `-rc1`. 
+Three more fields cover the upstreams that need them:
+
+- `upstream.scheme = "calendar"` for an upstream that versions by date,
+  where the steps are not major, minor, and patch.
+- `upstream.separator = "_"` for tags such as PostgreSQL's `REL_18_7`,
+  with the shape `REL_{version}`.
+- `upstream.within = "major"` or `"minor"` keeps detection inside the
+  pinned major or minor line. Metabase needs `"major"` (§2.2). The
+  `echo-server` package follows nginx's stable branch, which is one minor
+  line, so it sets `"minor"`. A move to the next line is then a person's
+  decision.
 
 The upstream is a fact about the software, like the version beside it. In
 the package, it is reviewed with the package, it moves with the package
@@ -82,29 +91,53 @@ nothing about the software, so it stays out of the package.
 ### 2.2 The script
 
 The script is Python, run with `uv`, like `scripts/vendor-crds.py`. It
-reads and orders versions with the `packaging` library and does not parse
-them itself. Tried on the tag forms in the current package set, the
-library:
+reads and orders versions with the `packaging` library.
 
-- reads `8.1.11`, `v2.19.1`, `18.1`, `0.52.3.1`, and the date form
-  `2026.10.1`;
-- marks `9.0.0-rc1` as a prerelease and orders it before `9.0.0`;
-- orders `13.1.8+security-01` after `13.1.8`;
-- refuses `1.2.3-alpine`, which the script then skips.
+The choice was tested on the real tags of the 62 upstreams, 25,819 tags
+listed over git on 2026-11-14. Each candidate picked the newest stable tag
+for each upstream, and the answer was compared with the hand-tuned
+patterns of the release count in doc 172a
+(`/scratch/worktrees/upkeep/_keep/version-libs/`):
 
-It reads `1.2.3-1` as a later release of `1.2.3`. That is right for a
-rebuilt image and should be checked when an upstream uses the form. The
-library follows Python's version rules, and Kix compares versions in Nix
-and Rust with its own. A test runs the three on one list of versions so
-that they cannot drift apart.
+| Reader | Right, of 62 | Wrong on |
+|---|---|---|
+| `packaging` | 60 | CoreDNS, Metabase |
+| a ten-line reader of the `meta.version` grammar | 60 | the same two |
+| `semver`, `semantic_version` (strict) | 59 | Metabase, and they cannot read PostgreSQL `18.7` or ClickHouse `26.8.37.168` |
+| `univers`, `semantic_version` in its lenient mode | 59 | CoreDNS, Metabase, and they read `19.BETA1` as stable |
+| `looseversion` | 31 | every upstream with a release candidate or a second family of tags |
+
+No library was right alone. Two rules in the script close the gap, and
+they are needed whichever library reads the versions:
+
+- **The same number of parts as the pinned version.** CoreDNS has an old
+  tag `v011`, which reads as version 11 and beats `1.15.0`. A moving tag
+  such as `v2` fails the same way.
+- **A limit on the line** (`upstream.within`, §2.1). Metabase tags its
+  paid edition `v1.x` beside the open-source `v0.x`. Both are stable
+  releases, so no version reader can tell them apart.
+
+With those rules, `packaging` was right for 62 of 62. It and the ten-line
+reader disagreed on 8 tags of the 19,619 that fit a tag shape, all of the
+form `17.0.0-6`, which `packaging` reads as a later release of `17.0.0`.
+The script refuses that form and reports the tag, so the two agree on
+every tag.
+
+`packaging` is kept because it already orders build suffixes such as
+Grafana's `+security-01` and recognises every prerelease spelling, which
+the script would otherwise have to write and test. It follows Python's
+version rules, and Kix compares versions in Nix and Rust with its own. A
+test runs the three on one list of versions so that they cannot drift
+apart.
 
 ### 2.3 Rules
 
 For each package the script lists the upstream's tags and picks a target.
 Every rule is a comparison a program can make:
 
-1. **Stable releases only.** The tag has the shape `upstream.tag` gives,
-   and its version has no prerelease suffix.
+1. **Stable releases only.** The tag has the shape `upstream.tag` gives.
+   Its version has no prerelease suffix and as many parts as the pinned
+   version, and it is inside `upstream.within` where that is set.
 2. **The newest version.** The target is the highest stable version. The
    step from the pinned version is patch, minor, or major. A minor below
    1.0 counts as major, as in doc 172.
