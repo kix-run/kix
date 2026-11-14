@@ -565,10 +565,6 @@ pub struct AdmissionRefusal {
 pub enum RefusalReason {
     /// An admission webhook denied the write.
     WebhookDenied,
-    /// The apiserver could not reach the Service behind an admission
-    /// webhook, so the webhook did not answer. This deploy does not write
-    /// that Service or the package that serves it.
-    WebhookUnreachable,
     /// A ValidatingAdmissionPolicy denied the write; `webhook` names the
     /// policy.
     PolicyDenied,
@@ -588,6 +584,10 @@ pub enum RefusalReason {
     /// The deploy refuses it before sending, or the apiserver gave another
     /// error.
     Other,
+    /// The apiserver could not reach the Service behind an admission
+    /// webhook, so the webhook did not answer. This deploy does not write
+    /// that Service or the package that serves it.
+    WebhookUnreachable,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

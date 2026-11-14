@@ -1231,11 +1231,6 @@
           "type": "string"
         },
         {
-          "const": "webhook_unreachable",
-          "description": "The apiserver could not reach the Service behind an admission\nwebhook, so the webhook did not answer. This deploy does not write\nthat Service or the package that serves it.",
-          "type": "string"
-        },
-        {
           "const": "policy_denied",
           "description": "A ValidatingAdmissionPolicy denied the write; `webhook` names the\npolicy.",
           "type": "string"
@@ -1273,6 +1268,11 @@
         {
           "const": "other",
           "description": "The deploy refuses it before sending, or the apiserver gave another\nerror.",
+          "type": "string"
+        },
+        {
+          "const": "webhook_unreachable",
+          "description": "The apiserver could not reach the Service behind an admission\nwebhook, so the webhook did not answer. This deploy does not write\nthat Service or the package that serves it.",
           "type": "string"
         }
       ]
