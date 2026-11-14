@@ -186,6 +186,10 @@ pub struct Owner {
     /// When the manager last wrote (RFC 3339), when Kubernetes recorded it.
     pub time: Option<String>,
     pub paths: Vec<String>,
+    /// The paths in `paths` that Kix does not also own. Only these can stop
+    /// a deploy on a field ownership conflict. A field Kix also owns still
+    /// holds the value Kix applied.
+    pub unshared_paths: Vec<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -493,6 +497,7 @@ fn drift_of(verdict: &DriftVerdict) -> Drift {
         subresource: o.subresource.clone(),
         time: o.time.clone(),
         paths: o.paths.clone(),
+        unshared_paths: o.unshared_paths.clone(),
     };
     let scale = |s: &UnrecordedScale| Scale {
         path: s.path.clone(),

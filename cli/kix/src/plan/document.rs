@@ -205,6 +205,8 @@ impl DeployedBuild {
 pub struct PlanFlags {
     /// What the deploy does with orphans: `delete` with `--prune`, `skip`
     /// with `--skip-orphan-check`, and `warn_only` otherwise.
+    #[serde(with = "prune_field")]
+    #[schemars(with = "PruneField")]
     pub prune: PrunePolicy,
     pub reconcile: bool,
     pub force_conflicts: bool,
@@ -229,6 +231,48 @@ impl PlanFlags {
             PrunePolicy::Skip => Some("--skip-orphan-check"),
             PrunePolicy::WarnOnly => None,
         }
+    }
+}
+
+// The JSON of `PlanFlags::prune`, which a saved plan file keeps. The
+// scheduler's `PrunePolicy` maps to it in `prune_field`, so a change to the
+// scheduler cannot change the file format without a change here. Its doc
+// comment is the schema's description.
+
+/// Policy for handling orphaned resources after all plan nodes terminate.
+/// A saved plan records it as `flags.prune`.
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[schemars(rename = "PrunePolicy")]
+enum PruneField {
+    /// Do not look for orphans at all (`--skip-orphan-check`).
+    Skip,
+    /// Report orphans and keep them, recorded on the new Activation for a
+    /// later `--prune` or `kix gc` (the default).
+    WarnOnly,
+    /// Delete orphans in reverse-topological order (`--prune`).
+    Delete,
+}
+
+mod prune_field {
+    use super::{PruneField, PrunePolicy};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(policy: &PrunePolicy, s: S) -> Result<S::Ok, S::Error> {
+        match policy {
+            PrunePolicy::Skip => PruneField::Skip,
+            PrunePolicy::WarnOnly => PruneField::WarnOnly,
+            PrunePolicy::Delete => PruneField::Delete,
+        }
+        .serialize(s)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<PrunePolicy, D::Error> {
+        Ok(match PruneField::deserialize(d)? {
+            PruneField::Skip => PrunePolicy::Skip,
+            PruneField::WarnOnly => PrunePolicy::WarnOnly,
+            PruneField::Delete => PrunePolicy::Delete,
+        })
     }
 }
 

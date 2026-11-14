@@ -211,6 +211,13 @@
             "string",
             "null"
           ]
+        },
+        "unshared_paths": {
+          "description": "The paths in `paths` that Kix does not also own. Only these can stop\na deploy on a field ownership conflict. A field Kix also owns still\nholds the value Kix applied.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -218,7 +225,8 @@
         "operation",
         "subresource",
         "time",
-        "paths"
+        "paths",
+        "unshared_paths"
       ],
       "type": "object"
     },
