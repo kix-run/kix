@@ -391,13 +391,13 @@ mod run_end_tests {
             cancelled: 3,
             ..DeployResult::default()
         };
-        let line = summary_line(&counts, false, false);
+        let line = summary_line(&counts, Command::Deploy, false);
         assert!(line.starts_with("Deploy failed: "), "{line}");
         assert!(line.contains("2 failed"), "{line}");
-        let stopped = summary_line(&DeployResult::default(), false, false);
+        let stopped = summary_line(&DeployResult::default(), Command::Deploy, false);
         assert!(stopped.starts_with("Deploy stopped: "), "{stopped}");
-        let ok = summary_line(&DeployResult::default(), true, true);
-        assert!(ok.starts_with("Dry run complete: "), "{ok}");
+        let ok = summary_line(&DeployResult::default(), Command::Rollback, true);
+        assert!(ok.starts_with("Rollback complete: "), "{ok}");
     }
 
     /// A failed deploy closes with the failed resources, the records, and a
@@ -420,6 +420,7 @@ mod run_end_tests {
             ..DeployResult::default()
         };
         let closing = |previous, interrupted| Closing {
+            command: Command::Deploy,
             cluster: "prod",
             record: Some("prod-8a1f3c20"),
             previous,
@@ -467,6 +468,7 @@ mod run_end_tests {
             ..DeployResult::default()
         };
         let closing = Closing {
+            command: Command::Deploy,
             cluster: "prod",
             record: Some("prod-4be1c09a"),
             previous: Previous::Active("prod-4be1c09a".into()),
@@ -566,7 +568,11 @@ mod stop_advice_tests {
 
     #[test]
     fn a_conflict_stop_points_to_force_conflicts_and_cede() {
-        let text = super::super::stop_advice(&plan(vec![conflict()], Vec::new())).join("\n");
+        let text = super::super::stop_advice(
+            &plan(vec![conflict()], Vec::new()),
+            super::super::Command::Deploy,
+        )
+        .join("\n");
         assert!(text.contains("--force-conflicts"), "{text}");
         assert!(text.contains("`ownership.cede`"), "{text}");
         assert!(!text.contains("--on-error continue"), "{text}");
@@ -578,7 +584,11 @@ mod stop_advice_tests {
             RefusalReason::WebhookUnreachable,
             Some("cert-manager-webhook"),
         );
-        let text = super::super::stop_advice(&plan(Vec::new(), vec![unreachable])).join("\n");
+        let text = super::super::stop_advice(
+            &plan(Vec::new(), vec![unreachable]),
+            super::super::Command::Deploy,
+        )
+        .join("\n");
         assert!(text.contains("get its backend running again"), "{text}");
         assert!(!text.contains("--on-error continue"), "{text}");
     }
@@ -620,14 +630,36 @@ mod stop_advice_tests {
         assert_eq!(admission_reason(&other), (RefusalReason::Other, None));
 
         let named_but_other = refusal(RefusalReason::Other, Some("policy.example.com"));
-        let text = super::super::stop_advice(&plan(Vec::new(), vec![named_but_other])).join("\n");
+        let text = super::super::stop_advice(
+            &plan(Vec::new(), vec![named_but_other]),
+            super::super::Command::Deploy,
+        )
+        .join("\n");
         assert!(!text.contains("get its backend running again"), "{text}");
+    }
+
+    /// `kix rollback` has no `--on-error` flag, so its advice never offers
+    /// it, and it says to roll back again.
+    #[test]
+    fn a_rollback_stop_never_offers_on_error_continue() {
+        let invalid = refusal(RefusalReason::Invalid, None);
+        let text = super::super::stop_advice(
+            &plan(Vec::new(), vec![invalid]),
+            super::super::Command::Rollback,
+        )
+        .join("\n");
+        assert!(text.contains("Then roll back again."), "{text}");
+        assert!(!text.contains("--on-error"), "{text}");
     }
 
     #[test]
     fn a_refused_write_still_offers_on_error_continue() {
         let invalid = refusal(RefusalReason::Invalid, None);
-        let text = super::super::stop_advice(&plan(Vec::new(), vec![invalid])).join("\n");
+        let text = super::super::stop_advice(
+            &plan(Vec::new(), vec![invalid]),
+            super::super::Command::Deploy,
+        )
+        .join("\n");
         assert!(text.contains("Fix the refused writes."), "{text}");
         assert!(text.contains("--on-error continue"), "{text}");
     }
