@@ -267,7 +267,7 @@ pub(crate) fn refused(doc: &Plan, command: Command) -> bool {
     eprintln!(
         "{}",
         output::red(&format!(
-            "{} stopped before writing anything to the cluster: the dry run shows writes the cluster would refuse.",
+            "{} stopped: one or more changes failed the dry run. Nothing was applied to the cluster.",
             command.noun()
         ))
     );

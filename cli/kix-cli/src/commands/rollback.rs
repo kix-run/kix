@@ -520,7 +520,7 @@ async fn run_operator_async(
     // it as a new record and supersedes the current one, as a direct
     // rollback does.
     crate::say!(
-        "Asking the operator to deploy deployment record '{}' again...",
+        "Asking the Kix operator to restore deployment '{}'...",
         output::bold(&target_name),
     );
     let request = super::operator::apply_activation(
@@ -554,13 +554,13 @@ async fn run_operator_async(
         ),
         super::operator::Reconciled::Degraded => {
             println!(
-                "Rollback via operator {}: deployment record '{target}' is {}.",
+                "Rollback via operator {}: deployment '{target}' is now current, with status {} (one or more resources failed).",
                 output::red("failed"),
                 output::yellow("Degraded"),
                 target = target_name,
             );
             println!(
-                "  Inspect deployment record '{target_name}' on the cluster to see which resources failed to reconcile."
+                "  Run `kubectl describe activations.kix.run/{target_name}` to see which resources failed."
             );
         }
     }

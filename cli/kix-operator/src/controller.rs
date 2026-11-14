@@ -261,7 +261,7 @@ pub async fn reconcile_activation(
         // it as a new record and supersedes the current one.
         s if s == PHASE_SUPERSEDED || s == PHASE_FAILED => match request {
             Some(request) => {
-                tracing::info!(name, phase, "Queueing the record again on request");
+                tracing::info!(name, phase, "Re-queueing activation for new spec.request");
                 ctx.records
                     .requeue(name, request)
                     .await
@@ -273,7 +273,7 @@ pub async fn reconcile_activation(
             // Failed is terminal. The deploy that owned it has stopped, and
             // the next one folds its closure into the plan and supersedes it.
             None => {
-                tracing::debug!(name, phase, "nothing to reconcile");
+                tracing::debug!(name, phase, "Skipping activation with no pending spec.request");
                 Ok(Action::await_change())
             }
         },
@@ -452,7 +452,7 @@ pub async fn reconcile_activation(
             let Some(request) = request else {
                 return run_reconcile(&activation, &ctx, name, Reconcile::Repair).await;
             };
-            tracing::info!(name, "Deploying the current record again on request");
+            tracing::info!(name, "Redeploying current activation for new spec.request");
             ctx.records
                 .start_request(name, request)
                 .await
