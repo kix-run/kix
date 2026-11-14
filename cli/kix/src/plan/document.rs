@@ -460,7 +460,7 @@ pub enum WriteChange {
     /// object. `--reconcile` writes such objects again, as does a deploy that
     /// repairs what a stopped deploy changed.
     Reapplied,
-    /// An unchanged Job under `kix.run/rerun`. The deploy reads its last run
+    /// An unchanged Job under the rerun rule. The deploy reads its last run
     /// and creates it again only if that run failed, so the plan cannot
     /// count it as a write.
     IfLastRunFailed,

@@ -1442,7 +1442,7 @@
         },
         {
           "const": "if_last_run_failed",
-          "description": "An unchanged Job under `kix.run/rerun`. The deploy reads its last run\nand creates it again only if that run failed, so the plan cannot\ncount it as a write.",
+          "description": "An unchanged Job under the rerun rule. The deploy reads its last run\nand creates it again only if that run failed, so the plan cannot\ncount it as a write.",
           "type": "string"
         }
       ]
