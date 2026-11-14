@@ -14,7 +14,9 @@
 //! The index also names each object (`names`), so `kix status` can say which
 //! object is missing on a machine that does not have the build. Records
 //! written before 0.10 have no `names`, and readers before 0.10 skip the
-//! field.
+//! field. The API group of each named object outside the core group is in
+//! `groups`, a separate field so that readers which do not know it still
+//! read `names`.
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -56,6 +58,11 @@ pub struct RecordPackageIndex {
     /// store with its names.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub names: BTreeMap<String, ObjectName>,
+    /// The API group of each named object outside the core group, keyed by
+    /// identity hash. An index written before the field existed has none,
+    /// and its objects read as core-group objects.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub groups: BTreeMap<String, String>,
 }
 
 /// The kind, namespace, and name of one object, stored as a JSON array of
@@ -74,9 +81,10 @@ impl ObjectName {
         ObjectName(rid.kind.clone(), namespace, rid.name.clone())
     }
 
-    /// Return the object's [`ResourceId`].
-    pub fn resource_id(&self) -> ResourceId {
+    /// Return the object's [`ResourceId`] in API group `group`.
+    pub fn resource_id(&self, group: &str) -> ResourceId {
         ResourceId {
+            group: group.to_string(),
             kind: self.0.clone(),
             namespace: if self.1.is_empty() {
                 CLUSTER_SCOPED.to_string()
@@ -120,21 +128,22 @@ impl RecordPackageIndex {
             .map(|p| store_hash(p))
             .collect();
         cluster_level.sort();
-        let names = graph
-            .resources
-            .iter()
-            .map(|(path, node)| {
-                (
-                    store_hash(path),
-                    ObjectName::of(&ResourceId::from_value(&node.manifest)),
-                )
-            })
-            .collect();
+        let mut names = BTreeMap::new();
+        let mut groups = BTreeMap::new();
+        for (path, node) in &graph.resources {
+            let rid = ResourceId::from_value(&node.manifest);
+            let hash = store_hash(path);
+            if !rid.group.is_empty() {
+                groups.insert(hash.clone(), rid.group.clone());
+            }
+            names.insert(hash, ObjectName::of(&rid));
+        }
         RecordPackageIndex {
             format: FORMAT,
             packages,
             cluster_level,
             names,
+            groups,
         }
     }
 
@@ -142,6 +151,7 @@ impl RecordPackageIndex {
     pub fn without_names(&self) -> RecordPackageIndex {
         RecordPackageIndex {
             names: BTreeMap::new(),
+            groups: BTreeMap::new(),
             ..self.clone()
         }
     }
@@ -149,7 +159,8 @@ impl RecordPackageIndex {
     /// Return the name of the object with identity hash `hash`, when the
     /// index has names.
     pub fn name_of(&self, hash: &str) -> Option<ResourceId> {
-        self.names.get(hash).map(ObjectName::resource_id)
+        let group = self.groups.get(hash).map_or("", String::as_str);
+        self.names.get(hash).map(|name| name.resource_id(group))
     }
 
     /// Return the identity hash of every resource the index lists: each
@@ -269,6 +280,7 @@ mod tests {
                     a("3"): ["ConfigMap", "default", "b"],
                     a("4"): ["Namespace", "", "default"],
                 },
+                "groups": { a("1"): crate::manifest::keys::GROUP },
             })
         );
         assert_eq!(
@@ -307,6 +319,23 @@ mod tests {
         let read = RecordPackageIndex::from_value(&old.to_value()).unwrap();
         assert_eq!(read.name_of(&a("2")), None);
         assert_eq!(read.hashes(), index.hashes());
+    }
+
+    /// A named object outside the core group keeps its group, and an index
+    /// written before `groups` existed reads its objects as core-group ones.
+    #[test]
+    fn names_carry_the_api_group() {
+        let index = RecordPackageIndex::of(&graph());
+        let a = |c: &str| format!("{c:a>32}");
+        let instance = index.name_of(&a("1")).unwrap();
+        assert_eq!(instance.group, crate::manifest::keys::GROUP);
+        assert_eq!(instance.kind, "PackageInstance");
+        assert_eq!(index.name_of(&a("2")).unwrap().group, "");
+
+        let mut value = index.to_value();
+        value.as_object_mut().unwrap().remove("groups");
+        let read = RecordPackageIndex::from_value(&value).unwrap();
+        assert_eq!(read.name_of(&a("1")).unwrap().group, "");
     }
 
     /// An index in a format this release does not know, or with no format,

@@ -914,17 +914,29 @@ fn manifests_kix_cannot_request_are_refused() {
     }
 }
 
-// Plan and deploy key objects by kind, namespace, and name, without the
-// API group.
+// Plan and deploy key objects by API group, kind, namespace, and name.
 #[test]
 fn two_manifests_of_one_object_are_refused() {
+    let mut contents = real();
+    let config = path_ending(&contents, STATUS_CONFIG);
+    let mut copy: Value = serde_json::from_slice(&contents.files[&config].bytes).unwrap();
+    copy["data"] = json!({ "other": "content" });
+    add_manifest(&mut contents, "k8s-ConfigMap-x", &copy);
+    let message = build_error(&contents);
+    assert!(message.contains("are both ConfigMap/"), "{message}");
+}
+
+/// A kind of the same name in another API group is another object.
+#[test]
+fn one_kind_name_in_two_groups_is_two_objects() {
     let mut contents = real();
     let config = path_ending(&contents, STATUS_CONFIG);
     let mut other_group: Value = serde_json::from_slice(&contents.files[&config].bytes).unwrap();
     other_group["apiVersion"] = json!("example.com/v1");
     add_manifest(&mut contents, "k8s-ConfigMap-x", &other_group);
-    let message = build_error(&contents);
-    assert!(message.contains("are both ConfigMap/"), "{message}");
+    let bytes = written(&contents);
+    checked(&bytes).unwrap();
+    assert!(!matches!(read(&bytes), Err(BundleError::Build(_))));
 }
 
 #[test]

@@ -187,10 +187,10 @@ pub async fn observe(
     }
     let sweep =
         inventory::sweep_managed(client, discovery, records, inventory::SweepScope::All).await?;
-    let unreadable_kinds: HashSet<String> = discovery
+    let unreadable_kinds: HashSet<(String, String)> = discovery
         .iter()
         .filter(|(ar, _)| sweep.forbidden.contains(&inventory::resource_fqn(ar)))
-        .map(|(ar, _)| ar.kind.clone())
+        .map(|(ar, _)| (ar.group.clone(), ar.kind.clone()))
         .collect();
     let live = Live::of(&sweep.managed);
     let clusters = current
@@ -240,7 +240,7 @@ fn view(
     cluster: String,
     record: Record,
     live: &Live<'_>,
-    unreadable_kinds: &HashSet<String>,
+    unreadable_kinds: &HashSet<(String, String)>,
     lookup: impl FnOnce(&[&str]) -> HashMap<String, StoreEntry>,
 ) -> ClusterView {
     let root = record.identity_hash.clone().unwrap_or_default();
@@ -336,7 +336,7 @@ fn view(
                 .or_else(|| name.as_ref().and_then(|rid| live.by_rid.get(rid)))
                 .copied();
             let unreadable = match &name {
-                Some(rid) => unreadable_kinds.contains(&rid.kind),
+                Some(rid) => unreadable_kinds.contains(&(rid.group.clone(), rid.kind.clone())),
                 None => !unreadable_kinds.is_empty(),
             };
             let (presence, content, readiness, depends_on) = match obj {
@@ -461,6 +461,7 @@ fn annotation<'a>(obj: &'a DynamicObject, key: &str) -> Option<&'a str> {
 /// start of its identity hash.
 fn unnamed_rid(hash: &str) -> ResourceId {
     ResourceId {
+        group: String::new(),
         kind: "Unknown".to_string(),
         namespace: CLUSTER_SCOPED.to_string(),
         name: format!("(hash: {}...)", &hash[..12.min(hash.len())]),

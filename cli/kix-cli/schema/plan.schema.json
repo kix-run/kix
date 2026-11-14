@@ -815,6 +815,10 @@
     "ObjectDelete": {
       "description": "An object the deploy's prune deletes.",
       "properties": {
+        "group": {
+          "description": "The API group. Left out for the core group, so a plan written before\nthe field existed reads as the core group.",
+          "type": "string"
+        },
         "kind": {
           "type": "string"
         },
@@ -837,6 +841,10 @@
       "properties": {
         "change": {
           "$ref": "#/$defs/WriteChange"
+        },
+        "group": {
+          "description": "The API group. Left out for the core group, so a plan written before\nthe field existed reads as the core group.",
+          "type": "string"
         },
         "kind": {
           "type": "string"

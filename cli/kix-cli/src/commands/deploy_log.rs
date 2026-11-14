@@ -266,6 +266,7 @@ mod tests {
 
     fn rid(kind: &str, name: &str) -> ResourceId {
         ResourceId {
+            group: String::new(),
             kind: kind.into(),
             name: name.into(),
             namespace: "app".into(),
@@ -297,6 +298,7 @@ mod tests {
         use kix::cluster::stream::{InFlight, NodeMeta, Phase, PlanNode};
         use std::time::Duration;
         let crd = NodeId::Resource(ResourceId {
+            group: "apiextensions.k8s.io".into(),
             kind: "CustomResourceDefinition".into(),
             name: "things.example.com".into(),
             namespace: kix::manifest::types::CLUSTER_SCOPED.into(),

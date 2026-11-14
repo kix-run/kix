@@ -15,16 +15,9 @@ fn secs(n: u64) -> Duration {
     Duration::from_secs(n)
 }
 
+/// Return the id of the manifest [`m`] builds.
 fn rid(kind: &str, name: &str) -> ResourceId {
-    ResourceId {
-        kind: kind.into(),
-        namespace: if kind == "CustomResourceDefinition" {
-            CLUSTER_SCOPED.into()
-        } else {
-            "default".into()
-        },
-        name: name.into(),
-    }
+    ResourceId::from_value(&m(kind, name, &[]))
 }
 
 /// Build a manifest with identity hash `h_<name>` and dependencies `deps`.
@@ -39,7 +32,11 @@ fn m(kind: &str, name: &str, deps: &[&str]) -> Value {
     if kind != "CustomResourceDefinition" {
         metadata["namespace"] = json!("default");
     }
-    let api_version = if kind == "Job" { "batch/v1" } else { "v1" };
+    let api_version = match kind {
+        "Job" => "batch/v1",
+        "CustomResourceDefinition" => "apiextensions.k8s.io/v1",
+        _ => "v1",
+    };
     json!({ "apiVersion": api_version, "kind": kind, "metadata": metadata })
 }
 
@@ -1049,6 +1046,7 @@ fn recreate_refusal_names_the_consequence() {
     assert!(crd.contains("every custom resource of that kind"), "{crd}");
     assert!(crd.contains("kubectl"), "{crd}");
     let ns = recreate_refusal(&ResourceId {
+        group: String::new(),
         kind: "Namespace".into(),
         namespace: CLUSTER_SCOPED.into(),
         name: "apps".into(),
@@ -1457,12 +1455,61 @@ async fn read_last_runs_does_not_answer_for_a_job_it_cannot_read() {
 
     let api = crate::cluster::fake_api::FakeApi::new([live_job_named("other", true)]);
     let client = api.client();
-    let mut other = m("Job", "other", &[]);
+    let mut other = rerun_m("Job", "other", &[]);
     other["apiVersion"] = json!("batch.volcano.sh/v1alpha1");
     let mut plan = plan_with_skips(&[other], &["other"]);
     assert_eq!(
         plan.read_last_runs(&client, &discovery).await,
         LastRuns::Unreadable
+    );
+}
+
+/// A kind named `Job` in another group is read through its own group's API,
+/// even where `/apis` lists that group before `batch`. Only a `batch` Job
+/// left unchanged is read for its last run.
+#[tokio::test]
+async fn read_last_runs_reads_each_job_through_its_own_group() {
+    use crate::cluster::fake_api::OTHER_JOB_GROUP;
+    let mut other_failed = live_job_named("x", true);
+    other_failed["apiVersion"] = json!(format!("{OTHER_JOB_GROUP}/v1alpha1"));
+    let api = crate::cluster::fake_api::FakeApi::new([live_job_named("x", false), other_failed]);
+    let client = api.client();
+    let discovery = crate::cluster::discovery::discover_resources(&client)
+        .await
+        .unwrap();
+
+    let mut plan = plan_with_skips(&[m("Job", "x", &[])], &["x"]);
+    assert_eq!(
+        plan.read_last_runs(&client, &discovery).await,
+        LastRuns::Read { failed: vec![] }
+    );
+
+    let mut other = m("Job", "x", &[]);
+    other["apiVersion"] = json!(format!("{OTHER_JOB_GROUP}/v1alpha1"));
+    let mut plan = plan_with_skips(&[other.clone()], &["x"]);
+    assert_eq!(
+        plan.read_last_runs(&client, &discovery).await,
+        LastRuns::Read { failed: vec![] }
+    );
+    assert!(
+        !api.requests()
+            .iter()
+            .any(|r| r.contains(OTHER_JOB_GROUP) && r.contains("/jobs/")),
+        "{:?}",
+        api.requests()
+    );
+
+    other["metadata"]["annotations"][keys::RERUN] = json!("on-change");
+    let mut plan = plan_with_skips(&[other], &["x"]);
+    assert_eq!(
+        plan.read_last_runs(&client, &discovery).await,
+        LastRuns::Read { failed: vec![] }
+    );
+    assert!(
+        plan.nodes()
+            .iter()
+            .any(|n| matches!(n.action, ChangeAction::Recreate(..))),
+        "the other group's failed Job runs again"
     );
 }
 

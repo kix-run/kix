@@ -1289,6 +1289,7 @@ fn plan_and_check(
         .deletes
         .iter()
         .map(|d| ResourceId {
+            group: d.group.clone(),
             kind: d.kind.clone(),
             namespace: d.namespace.clone(),
             name: d.name.clone(),
@@ -1332,11 +1333,7 @@ fn plan_and_check(
             .find(|m| ResourceId::from_value(m) == *id)
     };
     for ((kind, namespace, name, hash), manifest) in &written {
-        let id = ResourceId {
-            kind: kind.clone(),
-            namespace: namespace.clone(),
-            name: name.clone(),
-        };
+        let id = ResourceId::from_value(manifest);
         let shown_id = id.display_id();
         let (package, change) =
             listed[&(kind.clone(), namespace.clone(), name.clone(), hash.clone())];

@@ -885,6 +885,7 @@ mod tests {
 
     fn rid(kind: &str, ns: &str, name: &str) -> ResourceId {
         ResourceId {
+            group: String::new(),
             kind: kind.into(),
             namespace: ns.into(),
             name: name.into(),

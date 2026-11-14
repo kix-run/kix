@@ -774,7 +774,7 @@ async fn delete_closure(
         .map_err(|e| OperatorError::DiscoveryError(e.to_string()))?;
     let guard = PruneGuard::new(client.clone(), records.clone().into(), cluster);
     for rid in ordered {
-        let Some((ar, scope)) = discovery.iter().find(|(ar, _)| ar.kind == rid.kind) else {
+        let Some((ar, scope)) = discovery::find(&discovery, &rid.group, &rid.kind) else {
             continue;
         };
         match guard
@@ -1325,6 +1325,7 @@ mod tests {
             role("shared", "a1,b1"),
         ]);
         let rid = |name: &str| ResourceId {
+            group: "rbac.authorization.k8s.io".into(),
             kind: "ClusterRole".into(),
             namespace: kix::manifest::types::CLUSTER_SCOPED.into(),
             name: name.into(),
@@ -1336,5 +1337,35 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(api.names("ClusterRole"), vec!["shared"]);
+    }
+
+    /// A deleted record's objects are deleted through the API of their own
+    /// group, though `/apis` lists another group that serves a `Job` kind
+    /// first.
+    #[tokio::test]
+    async fn delete_closure_deletes_through_the_objects_group() {
+        use kix::cluster::fake_api::OTHER_JOB_GROUP;
+        let other_version = format!("{OTHER_JOB_GROUP}/v1alpha1");
+        let job = |api_version: &str| {
+            json!({
+                "apiVersion": api_version,
+                "kind": "Job",
+                "metadata": {
+                    "name": "x",
+                    "namespace": "app",
+                    "annotations": { (keys::ACTIVATIONS): "b1" },
+                },
+            })
+        };
+        let api = FakeApi::new([job("batch/v1"), job(&other_version)]);
+        let client = api.client();
+        let discovery = discovery::discover_resources(&client).await.unwrap();
+        let records = Records::open_installed(&client, &discovery).unwrap();
+        let rid = ResourceId::from_value(&job("batch/v1"));
+        delete_closure(&client, &records, "b", "b", &[rid])
+            .await
+            .unwrap();
+        assert!(api.names_of("batch/v1", "Job").is_empty());
+        assert_eq!(api.names_of(&other_version, "Job"), vec!["x"]);
     }
 }

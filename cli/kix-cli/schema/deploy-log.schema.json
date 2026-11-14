@@ -413,8 +413,12 @@
       "type": "object"
     },
     "ResourceId": {
-      "description": "Unique identifier for a K8s resource.",
+      "description": "Unique identifier for a K8s resource.\n\nThe API group is part of the identity, because two groups can serve a\nkind of one name (`Job` in `batch` and in `batch.volcano.sh`).",
       "properties": {
+        "group": {
+          "description": "The API group, `\"\"` for the core group. JSON leaves out the core\ngroup, so JSON written before the id carried a group reads as it.",
+          "type": "string"
+        },
         "kind": {
           "type": "string"
         },

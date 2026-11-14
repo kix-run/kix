@@ -333,6 +333,16 @@ fn apply_action_eq() {
 }
 
 fn live_object(kind: &str, name: &str, ns: &str, identity_hash: &str) -> DynamicObject {
+    live_object_as("apps/v1", kind, name, ns, identity_hash)
+}
+
+fn live_object_as(
+    api_version: &str,
+    kind: &str,
+    name: &str,
+    ns: &str,
+    identity_hash: &str,
+) -> DynamicObject {
     let mut annotations = std::collections::BTreeMap::new();
     annotations.insert(keys::IDENTITY_HASH.to_string(), identity_hash.to_string());
     DynamicObject {
@@ -348,11 +358,11 @@ fn live_object(kind: &str, name: &str, ns: &str, identity_hash: &str) -> Dynamic
         },
         types: Some(kube::api::TypeMeta {
             kind: kind.to_string(),
-            api_version: "apps/v1".to_string(),
+            api_version: api_version.to_string(),
         }),
         data: json!({
             "kind": kind,
-            "apiVersion": "apps/v1",
+            "apiVersion": api_version,
             "metadata": {
                 "name": name,
                 "namespace": ns,
@@ -789,7 +799,8 @@ fn unchanged_record_is_skip_not_apply() {
     );
 
     let live = vec![
-        live_object(
+        live_object_as(
+            keys::API_VERSION,
             "Activation",
             "stage1-0f3g4dhhzqfd",
             CLUSTER_SCOPED,
@@ -944,20 +955,43 @@ async fn a_namespaced_kind_without_a_namespace_is_refused() {
     );
     assert_eq!(api.requests().len(), before, "{:?}", api.requests());
 
-    let rid = |kind: &str, ns: &str| ResourceId {
+    let rid = |group: &str, kind: &str, ns: &str| ResourceId {
+        group: group.into(),
         kind: kind.into(),
         namespace: ns.into(),
         name: "shared".into(),
     };
     let candidates = [
-        rid("ConfigMap", CLUSTER_SCOPED),
-        rid("ConfigMap", "default"),
-        rid("ClusterRole", CLUSTER_SCOPED),
-        rid("Widget", CLUSTER_SCOPED),
+        rid("", "ConfigMap", CLUSTER_SCOPED),
+        rid("", "ConfigMap", "default"),
+        rid("rbac.authorization.k8s.io", "ClusterRole", CLUSTER_SCOPED),
+        rid("", "Widget", CLUSTER_SCOPED),
     ];
     assert_eq!(
         super::namespaceless(&discovery, &candidates),
-        vec![rid("ConfigMap", CLUSTER_SCOPED)]
+        vec![rid("", "ConfigMap", CLUSTER_SCOPED)]
+    );
+}
+
+/// Each kind is looked up in its own group: a `batch` Job without a
+/// namespace is refused, and a cluster-scoped `Job` of another group that
+/// discovery lists first is not.
+#[tokio::test]
+async fn namespaceless_looks_each_kind_up_in_its_own_group() {
+    use crate::cluster::{discovery, fake_api::FakeApi, fake_api::OTHER_JOB_GROUP};
+    use crate::manifest::types::{CLUSTER_SCOPED, ResourceId};
+
+    let api = FakeApi::default();
+    let discovery = discovery::discover_resources(&api.client()).await.unwrap();
+    let job = |group: &str| ResourceId {
+        group: group.into(),
+        kind: "Job".into(),
+        namespace: CLUSTER_SCOPED.into(),
+        name: "x".into(),
+    };
+    assert_eq!(
+        super::namespaceless(&discovery, &[job("batch"), job(OTHER_JOB_GROUP)]),
+        vec![job("batch")]
     );
 }
 
@@ -1092,7 +1126,7 @@ fn rerun_hash_on_a_plain_resource_is_ignored() {
 #[test]
 fn live_rerun_job_compares_the_live_rerun_hash() {
     let live_with = |rerun_hash: &str| {
-        let mut obj = live_object("Job", "bootstrap", "db", "id1");
+        let mut obj = live_object_as("batch/v1", "Job", "bootstrap", "db", "id1");
         obj.metadata
             .annotations
             .as_mut()
@@ -1110,7 +1144,10 @@ fn live_rerun_job_compares_the_live_rerun_hash() {
         [ChangeAction::Recreate(..)]
     ));
     assert!(matches!(
-        &detect_changes_live(&desired, &[live_object("Job", "bootstrap", "db", "id1")])[..],
+        &detect_changes_live(
+            &desired,
+            &[live_object_as("batch/v1", "Job", "bootstrap", "db", "id1")]
+        )[..],
         [ChangeAction::Recreate(..)]
     ));
 }
@@ -1173,4 +1210,36 @@ fn rerun_job_whose_last_run_failed_names_the_failed_run() {
         changed(&plain, Deployed::Nothing, true),
         ChangeAction::Apply(_)
     ));
+}
+
+/// Two kinds of one name in two groups are two objects. A build that swaps
+/// one for the other applies the new one and prunes the old one, from the
+/// old build or from the live objects.
+#[test]
+fn a_kind_of_one_name_in_another_group_is_another_object() {
+    let cert = |api_version: &str| {
+        let mut m = manifest("Certificate", "tls", "app", "c1");
+        m["apiVersion"] = json!(api_version);
+        m
+    };
+    let old = cert("a.example/v1");
+    let new = cert("b.example/v1");
+    let orphan = |actions: &[ChangeAction]| -> Vec<ResourceId> {
+        actions
+            .iter()
+            .filter_map(|a| match a {
+                ChangeAction::Orphan(rid) => Some(rid.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+
+    let actions = detect_changes(std::slice::from_ref(&new), std::slice::from_ref(&old));
+    assert_eq!(apply_ids(&actions), vec!["Certificate/tls@app"]);
+    assert_eq!(orphan(&actions), vec![ResourceId::from_value(&old)]);
+
+    let live = live_object_as("a.example/v1", "Certificate", "tls", "app", "c1");
+    let actions = detect_changes_live(std::slice::from_ref(&new), &[live]);
+    assert_eq!(apply_ids(&actions), vec!["Certificate/tls@app"]);
+    assert_eq!(orphan(&actions), vec![ResourceId::from_value(&old)]);
 }

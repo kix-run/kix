@@ -53,6 +53,11 @@ fn index(with_names: bool) -> RecordPackageIndex {
         } else {
             BTreeMap::new()
         },
+        groups: if with_names {
+            BTreeMap::from([(h(JOB), "batch".to_string())])
+        } else {
+            BTreeMap::new()
+        },
     }
 }
 
@@ -275,6 +280,7 @@ fn a_record_without_names_names_a_missing_object_from_the_store() {
         ..Record::default()
     };
     let secret = ResourceId {
+        group: String::new(),
         kind: "Secret".into(),
         namespace: "web".into(),
         name: "web-db".into(),

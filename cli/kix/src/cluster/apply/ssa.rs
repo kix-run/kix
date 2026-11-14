@@ -118,9 +118,7 @@ pub fn namespaceless<'a>(
 ) -> Vec<ResourceId> {
     rids.into_iter()
         .filter(|rid| {
-            discovery
-                .iter()
-                .find(|(ar, _)| ar.kind == rid.kind)
+            super::super::discovery::find(discovery, &rid.group, &rid.kind)
                 .is_some_and(|(_, scope)| is_namespaceless(scope, rid))
         })
         .cloned()

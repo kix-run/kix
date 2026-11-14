@@ -533,16 +533,10 @@ async fn wait_live(ctx: &NodeCtx, entry: &PlanNodeEntry, rid: &ResourceId) -> No
 /// `old_manifests`. Orphans without a matching manifest in `old_manifests`
 /// have no known dependencies and are appended at the end.
 pub(super) fn prune_order(orphan_rids: &[ResourceId], old_manifests: &[Value]) -> Vec<ResourceId> {
-    let orphan_set: HashSet<String> = orphan_rids
-        .iter()
-        .map(|rid| format!("{}/{}/{}", rid.kind, rid.namespace, rid.name))
-        .collect();
+    let orphan_set: HashSet<&ResourceId> = orphan_rids.iter().collect();
     let orphan_manifests: Vec<Value> = old_manifests
         .iter()
-        .filter(|m| {
-            let rid = ResourceId::from_value(m);
-            orphan_set.contains(&format!("{}/{}/{}", rid.kind, rid.namespace, rid.name))
-        })
+        .filter(|m| orphan_set.contains(&ResourceId::from_value(m)))
         .cloned()
         .collect();
     let mut ordered = match ResourceGraph::from_manifests(&orphan_manifests) {

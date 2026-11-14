@@ -479,12 +479,17 @@ pub struct ObjectWrite {
     /// Activation record.
     pub package: String,
     pub change: WriteChange,
+    /// The API group. Left out for the core group, so a plan written before
+    /// the field existed reads as the core group.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub group: String,
 }
 
 impl ObjectWrite {
     /// Return the id of the object written.
     pub fn resource_id(&self) -> ResourceId {
         ResourceId {
+            group: self.group.clone(),
             kind: self.kind.clone(),
             namespace: self.namespace.clone(),
             name: self.name.clone(),
@@ -529,6 +534,10 @@ pub struct ObjectDelete {
     pub kind: String,
     pub namespace: String,
     pub name: String,
+    /// The API group. Left out for the core group, so a plan written before
+    /// the field existed reads as the core group.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub group: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

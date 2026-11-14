@@ -915,11 +915,13 @@ mod render_tests {
     fn plan_orphans_list_a_namespace_as_kept() {
         let orphans = [
             ResourceId {
+                group: String::new(),
                 kind: "ConfigMap".into(),
                 name: "old".into(),
                 namespace: "app".into(),
             },
             ResourceId {
+                group: String::new(),
                 kind: "Namespace".into(),
                 name: "gone".into(),
                 namespace: kix::manifest::types::CLUSTER_SCOPED.into(),

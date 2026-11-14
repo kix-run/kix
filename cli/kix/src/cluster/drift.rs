@@ -417,10 +417,17 @@ fn format_list_key(key_json: &str) -> String {
     }
 }
 
-/// Build a `ResourceId` from typed metadata + the kind that
+/// Build a `ResourceId` from typed metadata + the kind and apiVersion that
 /// `fetch_managed_resources` injects into raw data.
-pub(crate) fn resource_id(obj: &DynamicObject) -> ResourceId {
+pub fn resource_id(obj: &DynamicObject) -> ResourceId {
+    let api_version = obj
+        .data
+        .get("apiVersion")
+        .and_then(Value::as_str)
+        .or_else(|| obj.types.as_ref().map(|t| t.api_version.as_str()))
+        .unwrap_or("");
     ResourceId {
+        group: crate::manifest::types::api_group(api_version).to_string(),
         kind: resource_id_kind(obj).to_string(),
         namespace: obj
             .metadata

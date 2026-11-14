@@ -194,6 +194,7 @@ fn a_delete_the_plan_does_not_show_is_refused() {
     let checked = plan(&baseline, &new, flags(&[])).unwrap();
     let (plan, pkg_diff) = (checked.plan(), checked.pkg_diff());
     let stray = ResourceId {
+        group: String::new(),
         kind: "ConfigMap".into(),
         namespace: NS.into(),
         name: "not-in-any-build".into(),

@@ -678,6 +678,7 @@ mod diff_graph_tests {
         let (old_graph, new_graph) = graphs_of(&baseline(), &baseline());
         let mut index = ManifestIndex::new(&old_graph, &new_graph);
         let rid = ResourceId {
+            group: String::new(),
             kind: "Secret".into(),
             namespace: "app".into(),
             name: "s".into(),
@@ -730,6 +731,7 @@ mod never_pruned_tests {
 
     fn rid(kind: &str, name: &str) -> ResourceId {
         ResourceId {
+            group: String::new(),
             kind: kind.into(),
             name: name.into(),
             namespace: CLUSTER_SCOPED.into(),

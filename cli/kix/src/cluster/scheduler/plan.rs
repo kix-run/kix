@@ -30,9 +30,6 @@ pub struct PlanNodeEntry {
     /// `Skip` tag, and an unchanged one still runs a task that reports a
     /// failed last run.
     pub rerun: Option<Value>,
-    /// The manifest's `apiVersion`. With the kind it finds the object's API
-    /// in discovery, because [`ResourceId`] carries no group.
-    pub api_version: String,
 }
 
 /// What reading the last runs of a plan's Jobs found
@@ -75,17 +72,14 @@ impl DeployPlan {
         graph: &ResourceGraph,
         changes: &[ChangeAction],
     ) -> Result<Self, readiness::MalformedMarker> {
-        let mut by_id: HashMap<String, &ChangeAction> = HashMap::new();
+        let mut by_id: HashMap<ResourceId, &ChangeAction> = HashMap::new();
         for action in changes {
             let rid = match action {
                 ChangeAction::Apply(m) | ChangeAction::Recreate(m, _) => ResourceId::from_value(m),
                 ChangeAction::Skip(rid) => rid.clone(),
                 ChangeAction::Orphan(_) => continue,
             };
-            by_id.insert(
-                format!("{}/{}/{}", rid.kind, rid.namespace, rid.name),
-                action,
-            );
+            by_id.insert(rid, action);
         }
 
         // Consumer clusters do not apply Kix's own CRDs because the platform
@@ -114,12 +108,10 @@ impl DeployPlan {
                         )),
                     },
                     rerun: None,
-                    api_version: api_version(&node.manifest),
                 });
                 continue;
             }
-            let k8s_id = format!("{}/{}/{}", node.id.kind, node.id.namespace, node.id.name);
-            let action = match by_id.get(&k8s_id) {
+            let action = match by_id.get(&node.id) {
                 Some(action @ (ChangeAction::Apply(_) | ChangeAction::Recreate(..))) => {
                     (*action).clone()
                 }
@@ -147,7 +139,6 @@ impl DeployPlan {
                 action,
                 meta,
                 rerun,
-                api_version: api_version(&node.manifest),
             });
         }
 
@@ -187,10 +178,9 @@ impl DeployPlan {
             let NodeId::Resource(rid) = &entry.id else {
                 continue;
             };
-            let Some((ar, scope)) =
-                super::super::discovery::find(discovery, &entry.api_version, &rid.kind)
+            let Some((ar, scope)) = super::super::discovery::find(discovery, &rid.group, &rid.kind)
             else {
-                tracing::debug!(resource = %rid, api_version = %entry.api_version, "no API serves a Job's kind");
+                tracing::debug!(resource = %rid, group = %rid.group, "no API serves a Job's kind");
                 all_read = false;
                 continue;
             };
@@ -443,14 +433,6 @@ impl SchedulerState {
     }
 }
 
-fn api_version(manifest: &Value) -> String {
-    manifest
-        .get("apiVersion")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string()
-}
-
 /// Return whether the plan reads the live object of `entry` to learn whether
 /// its last run failed: a Job under `kix.run/rerun`, which then runs again,
 /// or a Job the plan leaves unchanged, which is then reported.
@@ -469,7 +451,7 @@ fn reads_last_run(entry: &PlanNodeEntry) -> bool {
 pub(super) fn skip_reads_live(entry: &PlanNodeEntry) -> bool {
     match (&entry.action, &entry.rerun) {
         (ChangeAction::Skip(_), Some(_)) => true,
-        (ChangeAction::Skip(rid), None) => rid.kind == "Job",
+        (ChangeAction::Skip(rid), None) => rid.group == "batch" && rid.kind == "Job",
         _ => false,
     }
 }

@@ -130,12 +130,12 @@ pub enum OpenError {
 /// in `discovery`. Callers must still go through [`Records::open`] to enforce
 /// the legacy-domain check.
 fn served_resource(discovery: &[(ApiResource, Scope)]) -> Option<&ApiResource> {
-    discovery
-        .iter()
-        .find(|(ar, _)| {
-            crate::manifest::lifecycle::is_record_kind(&ar.kind) && ar.group == keys::GROUP
-        })
-        .map(|(ar, _)| ar)
+    super::discovery::find(
+        discovery,
+        keys::GROUP,
+        crate::manifest::lifecycle::RECORD_KIND,
+    )
+    .map(|(ar, _)| ar)
 }
 
 /// Return the Activation `ApiResource` under the current API group, spelled
