@@ -160,6 +160,16 @@ Instructions:
 7. Do not run tests, builds, or formatters, and do not commit, push, or change anything outside the working tree. Whoever runs this pass runs the checks afterwards.
 8. Output a short summary: each string you changed and why, each string you left alone and why, and any fact you could not find."
 
+# Two passes run at the same time from different worktrees have edited
+# each other's files and returned each other's summaries, so passes on one
+# machine run one at a time.
+lock="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/kix-copy-pass.lock"
+exec 9>"$lock"
+if ! flock -n 9; then
+  echo "==> Another copy pass is running on this machine. Waiting for it to finish..."
+  flock 9
+fi
+
 echo "==> Running Antigravity (${model}) copy pass on ${#files[@]} file(s)..."
 # --print takes the next word as its prompt, so it goes last.
 result="$("$agy_bin" --model "$model" --mode accept-edits --add-dir "$diff_dir" \
