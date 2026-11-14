@@ -670,7 +670,7 @@ prints `check-bump: PASS` and the upgrade deploy below has run.
 
 - The target is the latest stable upstream release, unless the task names
   another. When you stay on an older line, name the newer release and say
-  why you did not take it. Confirm the target's images exist for every
+  why you did not upgrade to it. Confirm the target's images exist for every
   platform the old ones did: a release whose image publishing failed is
   followed by a fix release.
 - Read the notes of every release between the pinned version and the
@@ -705,7 +705,7 @@ still appears. Update each place, or say why it stays.
 
 - `cli/kix-cli/tests/snapshots/` when the package is in the example
   cluster. The snapshots hold hashes that change too, so regenerate them
-  and never edit them by hand. From `cli/`: `nix develop .. -c env
+  instead of editing them directly. From `cli/`: `nix develop .. -c env
   INSTA_UPDATE=always cargo test -p kix-cli --test snapshot_test`.
 - `docs/src/command-output/`: `nix run ./docs#regen-captures-offline --
   --apply`. Revert a file in which only a timestamp changed.
