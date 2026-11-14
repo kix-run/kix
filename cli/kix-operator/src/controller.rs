@@ -51,6 +51,7 @@ use kix::manifest::lifecycle::{
     PHASE_ACTIVE, PHASE_DEGRADED, PHASE_DEPLOYING, PHASE_FAILED, PHASE_QUEUED, PHASE_SUPERSEDED,
 };
 use kix::manifest::types::ResourceId;
+use kix::plan::LastRuns;
 use kix::plan::live::{LivePlan, LivePlanError, cluster_of};
 use kix::version::Version;
 
@@ -387,7 +388,7 @@ pub async fn reconcile_activation(
 
             ensure_finalizer(&ctx.records, name, &activation).await?;
 
-            return run_reconcile(&activation, &ctx, name, true).await;
+            return run_reconcile(&activation, &ctx, name, Reconcile::Start).await;
         }
 
         // Active and Degraded records run drift detection on requeue. Degraded
@@ -412,7 +413,7 @@ pub async fn reconcile_activation(
 
             ensure_finalizer(&ctx.records, name, &activation).await?;
 
-            return run_reconcile(&activation, &ctx, name, false).await;
+            return run_reconcile(&activation, &ctx, name, Reconcile::Repair).await;
         }
 
         // Resume an interrupted operator deployment. Records without
@@ -428,7 +429,7 @@ pub async fn reconcile_activation(
             }
             tracing::info!(name, "Resuming Deploying activation");
             ensure_finalizer(&ctx.records, name, &activation).await?;
-            return run_reconcile(&activation, &ctx, name, true).await;
+            return run_reconcile(&activation, &ctx, name, Reconcile::Resume).await;
         }
 
         // Failed is terminal. The deploy that owned it has stopped, and the
@@ -446,17 +447,46 @@ pub async fn reconcile_activation(
     }
 }
 
+/// Which reconcile of an Activation record the operator runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Reconcile {
+    /// Start the deploy of a Queued record. This happens once for each
+    /// record someone submits.
+    Start,
+    /// Resume a Deploying record, after the operator restarted or a run
+    /// returned an error.
+    Resume,
+    /// Correct drift from an Active or Degraded record's build, on every
+    /// requeue.
+    Repair,
+}
+
+impl Reconcile {
+    /// Return whether the run writes the record's lifecycle (`begin_deploy`,
+    /// `record_waves`, and `finalize_deploy`). A repair leaves the record's
+    /// phase alone.
+    fn manages_lifecycle(self) -> bool {
+        self != Reconcile::Repair
+    }
+
+    /// Return whether the plan reads the last runs of its Jobs, so that a
+    /// Job under `kix.run/rerun` whose last run failed runs again. Only the
+    /// start of a deploy does, as each `kix deploy` does. The operator
+    /// retries a resume and a repair, and would recreate a failing Job on
+    /// every retry.
+    fn reads_last_runs(self) -> bool {
+        self == Reconcile::Start
+    }
+}
+
 /// Load desired state, fetch live state, diff, wave-plan, and apply.
-///
-/// When `manage_lifecycle` is true, records deployment lifecycle transitions
-/// on the Activation CR (`begin_deploy`, `record_waves`, and `finalize_deploy`).
-/// When false, runs drift correction without modifying the Activation phase.
 async fn run_reconcile(
     activation: &DynamicObject,
     ctx: &Context,
     name: &str,
-    manage_lifecycle: bool,
+    reconcile: Reconcile,
 ) -> Result<Action, OperatorError> {
+    let manage_lifecycle = reconcile.manages_lifecycle();
     let path = source_path(activation).ok_or(OperatorError::MissingSourcePath)?;
     let new_manifests = load_manifests(&path)?;
 
@@ -482,9 +512,24 @@ async fn run_reconcile(
         return Ok(Action::requeue(requeue_interval()));
     }
 
-    let plan = LivePlan::sweep(&ctx.client, activation, &managed_manifests)
+    let mut plan = LivePlan::sweep(&ctx.client, activation, &managed_manifests)
         .await
         .map_err(operator_error)?;
+    if reconcile.reads_last_runs() {
+        match plan.read_last_runs().await {
+            LastRuns::Read { failed } => {
+                for rid in failed {
+                    tracing::info!(name, resource = %rid, "the last run of an unchanged Job failed; the run reports it");
+                }
+            }
+            LastRuns::Unreadable => {
+                tracing::info!(
+                    name,
+                    "could not read every Job's last run; the run reads them"
+                );
+            }
+        }
+    }
     for (owner, count) in plan.foreign() {
         tracing::debug!(name, owner = %owner, count, "left out objects of another Kix cluster");
     }
@@ -714,6 +759,17 @@ pub fn error_policy(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Only the start of a submitted deploy reruns a failed Job, once. The
+    /// operator retries a resume and a repair, so they must not.
+    #[test]
+    fn only_the_start_of_a_deploy_reads_last_runs() {
+        assert!(Reconcile::Start.reads_last_runs());
+        assert!(!Reconcile::Resume.reads_last_runs());
+        assert!(!Reconcile::Repair.reads_last_runs());
+        assert!(Reconcile::Start.manages_lifecycle() && Reconcile::Resume.manages_lifecycle());
+        assert!(!Reconcile::Repair.manages_lifecycle());
+    }
     use kix::cluster::fake_api::{FakeApi, kube_system};
     use serde_json::json;
 

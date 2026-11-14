@@ -5,7 +5,6 @@
 //! No Nix build is required because the target activation's manifests are already
 //! in the local Nix store.
 
-use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::io::Write;
 use std::sync::Arc;
@@ -17,17 +16,14 @@ use crate::client;
 use kix::build_source::SopsSources;
 use kix::cluster::activation::{Record, Records};
 use kix::cluster::binding;
-use kix::cluster::classify::{DeployScope, Verdict as DryRunVerdict, classify};
 use kix::cluster::discovery;
-use kix::cluster::preview::Refusal;
 use kix::cluster::readiness;
-use kix::cluster::scheduler::{self, OnErrorPolicy, SchedulerConfig};
-use kix::cluster::stream::{DeployObserver, DeployResult, NullObserver};
-use kix::cluster::watchdog::StallPolicy;
-use kix::manifest::types::ResourceId;
+use kix::cluster::scheduler::{self, OnErrorPolicy};
+use kix::cluster::stream::{DeployObserver, DeployResult};
+use kix::eval::store_graph::StoreGraph;
 use kix::plan::baseline::{self, Baseline};
-use kix::plan::document::PlanFlags;
-use kix::plan::{CheckedPlan, PlanEvent, Planner, Target};
+use kix::plan::document::{Build, Detail, MadeBy, NotCheckedReason, Plan, PlanFlags, PruneFate};
+use kix::plan::{CheckedPlan, LastRuns, PlanEvent, Planner, Target};
 
 use crate::cli::{HistoryArgs, RollbackArgs};
 use crate::exit::Exit;
@@ -35,6 +31,7 @@ use crate::output::{self, CommandResponse};
 use crate::plan;
 
 use super::CommandContext;
+use super::plan::DryRunReport;
 
 pub fn run(args: &RollbackArgs, ctx: &mut CommandContext) -> Result<Exit> {
     let cluster = ctx.cluster_identity(&args.cluster, super::Lookup::Mutating)?;
@@ -390,13 +387,18 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
     }
     let RollbackPlan {
         target_result_dir,
-        build,
+        graph,
         checked,
+        last_runs,
     } = planned;
 
-    let refused = refused_writes(&client, cluster, &build, &checked).await?;
-    if !refused.is_empty() {
-        print_refused(&refused);
+    let report =
+        super::plan::dry_run_of(&checked, client.clone(), SopsSources::Local, false).await?;
+    let doc = document(cluster, &graph, &checked, &report);
+    if !output::quiet() {
+        output::progress_text(&plan::render::render_text(&doc));
+    }
+    if doc.stops() {
         let next = if args.force_conflicts {
             String::new()
         } else {
@@ -406,16 +408,9 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
         };
         return Err(miette!(
             "the rollback would stop on {} write(s), so Kix did not start it. Nothing was applied to the cluster.{next}",
-            refused.len()
+            stop_count(&doc)
         ));
     }
-
-    let total_apply = checked
-        .plan()
-        .nodes()
-        .iter()
-        .filter(|n| n.action.written().is_some())
-        .count();
 
     if args.dry_run {
         crate::say!();
@@ -426,14 +421,11 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
         return Ok(Exit::Success);
     }
 
-    if checked.nothing_to_do() {
+    if !super::deploy::start(&client, &checked, &last_runs).await {
         crate::say!(
             "Nothing to change. The cluster already matches the target deployment. Nothing was applied to the cluster."
         );
         return Ok(Exit::Success);
-    }
-    if total_apply == 0 && checked.orphans().is_empty() {
-        super::deploy::say_failed_jobs(checked.failed_jobs());
     }
 
     if !args.yes {
@@ -456,16 +448,9 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
 
     super::deploy::refuse_before_writing(&checked, Some(&records), target.discovery()).await?;
 
-    let config = SchedulerConfig {
-        timeout: readiness::DEFAULT_TIMEOUT,
-        on_error: OnErrorPolicy::Stop,
-        cancel: kix::cluster::cancel::CancelToken::new(),
-        concurrency: scheduler::CONCURRENCY,
-        stall: StallPolicy::from_env(),
-        check_unchanged: true,
-        // Rollback has no --on-error flag, so messages must not suggest it.
-        names_flags: false,
-    };
+    // Rollback has no --on-error flag, so messages must not suggest it.
+    let config =
+        super::plan::scheduler_config(readiness::DEFAULT_TIMEOUT, OnErrorPolicy::Stop, false);
 
     let observer: Arc<dyn DeployObserver> = if !output::is_interactive() {
         Arc::new(super::deploy_log::LineObserver {
@@ -477,21 +462,13 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
         })
     };
 
-    // Forward SIGINT and SIGTERM to the engine so the Activation record is not
-    // left in Deploying if the process is interrupted.
-    config.cancel.cancel_on_interrupt();
-
     // Pass `None` for the receipt so the rollback preserves the receipt
     // originally written when the target activation was deployed.
-    let (result, kept) = checked.run(target, None, config, observer).await;
-
-    if let Some(recorded) = kept {
-        kix::plan::baseline::sync_kept_roots(cluster, &recorded);
-    }
+    let (result, end) =
+        super::deploy::run_plan(checked, target, None, config, observer, cluster).await;
 
     // Save activation path for next deploy's diff, once the target's record
     // is current again.
-    let end = super::deploy::RunEnd::of(&result);
     if end.current
         && let Err(e) = kix::eval::store::save_activation_path(cluster, &target_result_dir)
     {
@@ -716,9 +693,10 @@ fn print_current(current: &Record) {
 /// path.
 struct RollbackPlan {
     target_result_dir: std::path::PathBuf,
-    /// Every manifest of the target build.
-    build: Vec<Value>,
+    /// The target build.
+    graph: StoreGraph,
     checked: CheckedPlan,
+    last_runs: LastRuns,
 }
 
 impl RollbackPlan {
@@ -817,101 +795,64 @@ async fn plan_rollback(
 
     let report = |event: PlanEvent<'_>| plan::progress::print(event);
     let baseline = Baseline::of_record(records, cluster, current, &report).await;
-    let checked = Planner::new(flags, &report)
+    let mut checked = Planner::new(flags, &report)
         .plan(&target_graph, cluster, &baseline, Some(client))
+        .await
+        .map_err(|e| miette!("{e}"))?;
+    let last_runs = checked
+        .read_last_runs(client)
         .await
         .map_err(|e| miette!("{e}"))?;
     Ok(RollbackPlan {
         target_result_dir,
-        build: target_graph
-            .resources
-            .values()
-            .map(|r| r.manifest.clone())
-            .collect(),
+        graph: target_graph,
         checked,
+        last_runs,
     })
 }
 
-/// Send the rollback's writes to the apiserver as a dry run, and return each
-/// write it refuses with the reason. A rollback that stops halfway leaves the
-/// cluster between two builds, so a refusal stops it before any write. The
-/// answers are sorted by [`classify`], as `kix plan` sorts them, so a write
-/// that is not checked does not stop the rollback.
-async fn refused_writes(
-    client: &kube::Client,
+/// Build the plan document of a rollback of Kix cluster `cluster` to the
+/// build `graph`, with the dry run's answers in `report`. A rollback that
+/// stops halfway leaves the cluster between two builds, so it stops before
+/// any write on what this finds ([`Plan::stops`]), as `kix deploy` does.
+fn document(
     cluster: &str,
-    build: &[Value],
+    graph: &StoreGraph,
     checked: &CheckedPlan,
-) -> Result<Vec<(ResourceId, String)>> {
-    let target = Target::connect(client.clone(), SopsSources::Local)
-        .await
-        .map_err(|e| miette!("{e}"))?;
-    let served_kinds: HashSet<String> = target
-        .discovery()
-        .iter()
-        .map(|(ar, _)| ar.kind.clone())
-        .collect();
-    let config = SchedulerConfig {
-        timeout: readiness::DEFAULT_TIMEOUT,
-        on_error: OnErrorPolicy::Continue,
-        cancel: kix::cluster::cancel::CancelToken::new(),
-        concurrency: scheduler::CONCURRENCY,
-        stall: StallPolicy::from_env(),
-        check_unchanged: true,
-        names_flags: false,
-    };
-    let (result, answers) = checked
-        .dry_run(target, config, Arc::new(NullObserver))
-        .await;
-    if let Err(e) = &result
-        && !matches!(e, scheduler::DeployError::NodesFailed { .. })
-    {
-        return Err(miette!(
-            "the rollback's dry run stopped: {e}. Nothing was applied to the cluster."
-        ));
-    }
-    let scope = DeployScope {
+    report: &DryRunReport,
+) -> Plan {
+    let mut doc = Plan::new(
+        plan::kix_build(),
+        MadeBy::DryRun,
         cluster,
-        build,
-        plan: checked.plan(),
-        served_kinds: &served_kinds,
-    };
-    let mut refused = Vec::new();
-    for (rid, verdict) in classify(&answers, &scope) {
-        match verdict {
-            DryRunVerdict::Accepted => {}
-            DryRunVerdict::NotChecked { detail, .. } => {
-                if !output::quiet() {
-                    eprintln!("  {} {rid}: not checked, {detail}", output::dim("?"));
-                }
-            }
-            DryRunVerdict::Refused(r) => refused.push((rid, describe_refusal(&r))),
-        }
-    }
-    Ok(refused)
+        Build::of(graph),
+        checked.pkg_diff(),
+        Detail::Plain,
+        &[],
+        NotCheckedReason::BuildsOnly,
+    );
+    doc.flags = Some(checked.flags());
+    doc.objects_digest = Some(kix::plan::objects::digest(checked.objects()));
+    doc.objects = Some(checked.objects().clone());
+    let build: Vec<Value> = graph
+        .resources
+        .values()
+        .map(|r| r.manifest.clone())
+        .collect();
+    super::plan::fill_checks(&mut doc, checked, cluster, &build, Some(report));
+    doc
 }
 
-/// Return one line for a refused write: who owns which fields for a
-/// conflict, or the apiserver's message.
-fn describe_refusal(refusal: &Refusal) -> String {
-    match refusal {
-        Refusal::Conflict { owners, .. } if !owners.is_empty() => {
-            let owned: Vec<String> = owners
-                .iter()
-                .map(|o| format!("{} owns {}", o.manager, o.fields.join(", ")))
-                .collect();
-            format!("field ownership conflict: {}", owned.join("; "))
-        }
-        other => other.message(),
-    }
-}
-
-fn print_refused(refused: &[(ResourceId, String)]) {
-    eprintln!();
-    eprintln!("The rollback would stop on {} write(s):", refused.len());
-    for (rid, why) in refused {
-        eprintln!("  {} {rid}: {why}", output::red("✗"));
-    }
+/// Return the number of writes and prune deletes that stop the rollback.
+fn stop_count(doc: &Plan) -> usize {
+    doc.conflicts.items().len()
+        + doc.admission.items().len()
+        + doc
+            .prune
+            .items()
+            .iter()
+            .filter(|p| p.fate == PruneFate::DeleteRefused)
+            .count()
 }
 
 /// Reject a rollback target whose build belongs to a different Kix cluster

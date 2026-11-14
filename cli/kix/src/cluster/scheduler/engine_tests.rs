@@ -1403,7 +1403,12 @@ async fn read_last_runs_reruns_failed_rerun_jobs_and_names_the_others() {
     ];
     let mut plan = plan_with_skips(&manifests, &["bootstrap", "probe", "done", "cm"]);
     let failed = plan.read_last_runs(&client, &discovery).await;
-    assert_eq!(failed, Some(vec![rid("Job", "bootstrap")]));
+    assert_eq!(
+        failed,
+        LastRuns::Read {
+            failed: vec![rid("Job", "bootstrap")]
+        }
+    );
     let reruns: Vec<(&NodeId, &'static str)> = plan
         .nodes()
         .iter()
@@ -1441,15 +1446,24 @@ async fn read_last_runs_does_not_answer_for_a_job_it_cannot_read() {
         .unwrap();
     let manifests = vec![m("Job", "done", &[])];
     let mut plan = plan_with_skips(&manifests, &["done"]);
-    assert_eq!(plan.read_last_runs(&client, &discovery).await, None);
-    assert_eq!(plan.read_last_runs(&client, &discovery).await, Some(vec![]));
+    assert_eq!(
+        plan.read_last_runs(&client, &discovery).await,
+        LastRuns::Unreadable
+    );
+    assert_eq!(
+        plan.read_last_runs(&client, &discovery).await,
+        LastRuns::Read { failed: vec![] }
+    );
 
     let api = crate::cluster::fake_api::FakeApi::new([live_job_named("other", true)]);
     let client = api.client();
     let mut other = m("Job", "other", &[]);
     other["apiVersion"] = json!("batch.volcano.sh/v1alpha1");
     let mut plan = plan_with_skips(&[other], &["other"]);
-    assert_eq!(plan.read_last_runs(&client, &discovery).await, None);
+    assert_eq!(
+        plan.read_last_runs(&client, &discovery).await,
+        LastRuns::Unreadable
+    );
 }
 
 /// Under dry run a changed rerun Job with a live object still takes the

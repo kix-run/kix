@@ -212,6 +212,7 @@ plan reports it as an ownership conflict naming the manager. With
 | `reason` | Meaning |
 | --- | --- |
 | `webhook_denied` | An admission webhook denied the write. `webhook` names it when the apiserver did. |
+| `webhook_unreachable` | The apiserver could not reach the Service behind an admission webhook, and this deploy does not write that Service or the package that serves it. `webhook` names the webhook when the apiserver did. See [Objects not checked](#objects-not-checked). |
 | `policy_denied` | A ValidatingAdmissionPolicy denied the write. `webhook` names the policy. |
 | `invalid` | The object fails validation against the schema or a CRD's rules. |
 | `immutable_field` | A changed field cannot be modified; the object must be deleted and created again. |
@@ -219,7 +220,7 @@ plan reports it as an ownership conflict naming the manager. With
 | `namespace_missing` | The namespace does not exist and the build does not create it. |
 | `unknown_kind` | The apiserver does not serve the kind and the build has no CRD for it. |
 | `decryption` | A SOPS Secret could not be decrypted. |
-| `other` | The deploy refuses the object before sending it, or the apiserver gave another error. When `webhook` is set, an admission webhook could not reach its Service and this deploy does not repair it. See [Objects not checked](#objects-not-checked). |
+| `other` | The deploy refuses the object before sending it, or the apiserver gave another error. |
 
 ## Prune fates
 

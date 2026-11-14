@@ -1,0 +1,4 @@
++++
+kind = "fixed"
++++
+`kix rollback` now takes the same steps as `kix deploy` before it writes. When there is nothing to change, it marks the failed deploy records it took over as superseded, as `kix deploy` does. Before, those records stayed failed. Its dry run now also stops on a write that failed without an answer from the apiserver, and lists the objects it never reached, as `kix plan` does. It prints the same sections after the package plan as `kix deploy`. With `kix deploy --operator`, the operator now runs a Job marked `kix.run/rerun` again when its last run failed, once for each new build you submit, as `kix deploy` does. `kix deploy --offline` now always connects before it says "Nothing to apply". In `kix plan -o json`, an admission webhook that could not be reached now has the refusal reason `webhook_unreachable`, not `other`.

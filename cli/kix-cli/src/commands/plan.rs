@@ -16,6 +16,7 @@ use miette::{Result, miette};
 use serde_json::Value;
 
 use kix::build_source::InstallableBuild;
+use kix::build_source::SopsSources;
 use kix::cluster::classify::{ChangedCrds, DeployScope, Verdict as DryRunVerdict, classify};
 use kix::cluster::preview::{DryRunAnswer, DryRunOutcome, PruneAnswer, Refusal};
 use kix::cluster::readiness;
@@ -33,7 +34,7 @@ use kix::plan::document::{
     UncheckedObject, UncheckedReason,
 };
 use kix::plan::server::comparable;
-use kix::plan::{ManifestIndex, OldSide, PlanEvent, Planned, Planner, Target};
+use kix::plan::{CheckedPlan, ManifestIndex, OldSide, PlanEvent, Planned, Planner, Target};
 
 use crate::cli::{OutputFormat, PlanArgs, PlanCommandArgs};
 use crate::output;
@@ -59,7 +60,7 @@ pub fn run(args: &PlanArgs, save: Option<&Path>, ctx: &mut CommandContext) -> Re
     // A plan decrypts no SOPS file the build carries: those Secrets get
     // placeholder values, so planning before anyone has approved reads no
     // secret.
-    let report = match p.client.clone() {
+    let report = match p.client().cloned() {
         Some(client) => Some(dry_run(&mut p, true, client, ctx)?),
         None => None,
     };
@@ -218,13 +219,8 @@ pub(crate) struct DryRunReport {
     pub served_kinds: HashSet<String>,
 }
 
-/// Run the deploy's engine plan with every write sent as a dry run.
-///
-/// The engine runs with `--on-error continue`, and under dry run it still
-/// tries the dependents of a refused node, so one refused write does not hide
-/// the answers for the rest. Nothing is persisted: every write goes with
-/// `dryRun=All` and the Activation record's lifecycle writes are skipped
-/// ([`kix::plan::CheckedPlan::dry_run`]).
+/// Run the deploy's engine plan with every write sent as a dry run
+/// ([`dry_run_of`]).
 ///
 /// `placeholders` goes to [`kix::build_source::Build::sops_sources`]: true
 /// for `kix plan`, which decrypts nothing.
@@ -235,70 +231,99 @@ pub(crate) fn dry_run(
     ctx: &CommandContext,
 ) -> Result<DryRunReport> {
     let sops = p.sops_sources(placeholders).map_err(|e| miette!("{e}"))?;
-    let p = &*p;
-    ctx.runtime()?.block_on(async {
-        let target = Target::connect(client, sops)
-            .await
-            .map_err(|e| miette!("{e}"))?;
-        kix::legacy_domain::check_discovery(target.discovery()).map_err(|e| miette!("{e}"))?;
-        let served_kinds: HashSet<String> = target
-            .discovery()
-            .iter()
-            .map(|(ar, _)| ar.kind.clone())
-            .collect();
+    ctx.runtime()?
+        .block_on(dry_run_of(&p.checked, client, sops, true))
+}
 
-        let config = SchedulerConfig {
-            timeout: readiness::DEFAULT_TIMEOUT,
-            on_error: OnErrorPolicy::Continue,
-            cancel: kix::cluster::cancel::CancelToken::new(),
-            concurrency: scheduler::CONCURRENCY,
-            stall: StallPolicy::from_env(),
-            check_unchanged: true,
-            names_flags: true,
-        };
-        let cancel = config.cancel.clone();
-        cancel.cancel_on_interrupt();
+/// Run the engine over `checked` with every write sent as a dry run, for
+/// `kix plan`, `kix deploy`, and `kix rollback`.
+///
+/// The engine runs with `--on-error continue`, and under dry run it still
+/// tries the dependents of a refused node, so one refused write does not hide
+/// the answers for the rest. Nothing is persisted: every write goes with
+/// `dryRun=All` and the Activation record's lifecycle writes are skipped
+/// ([`kix::plan::CheckedPlan::dry_run`]). `names_flags` says whether the
+/// engine's messages may suggest `kix deploy`'s flags.
+pub(crate) async fn dry_run_of(
+    checked: &CheckedPlan,
+    client: kube::Client,
+    sops: SopsSources,
+    names_flags: bool,
+) -> Result<DryRunReport> {
+    let target = Target::connect(client, sops)
+        .await
+        .map_err(|e| miette!("{e}"))?;
+    kix::legacy_domain::check_discovery(target.discovery()).map_err(|e| miette!("{e}"))?;
+    let served_kinds: HashSet<String> = target
+        .discovery()
+        .iter()
+        .map(|(ar, _)| ar.kind.clone())
+        .collect();
 
-        // Count the writes the plan's `objects` lists, so the progress line
-        // and the plan's object count agree.
-        let writes: HashSet<ResourceId> = p
-            .checked
-            .objects()
-            .writes
-            .iter()
-            .filter(|w| w.change.certain())
-            .map(ObjectWrite::resource_id)
-            .collect();
-        let observer = Arc::new(DryRunObserver::new(writes));
-        let (result, answers) = p.checked.dry_run(target, config, observer.clone()).await;
-        // Cancelling the token ends its interrupt watcher, so Ctrl-C at the
-        // deploy's confirmation exits the process.
-        let interrupted = cancel.is_cancelled();
-        cancel.cancel();
-        observer.finish();
-        if interrupted {
-            return Err(miette!("plan interrupted"));
-        }
-        if let Err(e) = &result
-            && !matches!(e, scheduler::DeployError::NodesFailed { .. })
-        {
-            return Err(miette!("the dry run stopped: {e}"));
-        }
+    let config = scheduler_config(
+        readiness::DEFAULT_TIMEOUT,
+        OnErrorPolicy::Continue,
+        names_flags,
+    );
+    let cancel = config.cancel.clone();
+    cancel.cancel_on_interrupt();
 
-        let answered: HashSet<&ResourceId> = answers.iter().map(|a| &a.rid).collect();
-        let seen = observer.take();
-        let failed = seen
-            .failed
-            .into_iter()
-            .filter(|(rid, _)| !answered.contains(rid))
-            .collect();
-        Ok(DryRunReport {
-            answers,
-            failed,
-            cancelled: seen.cancelled,
-            served_kinds,
-        })
+    // Count the writes the plan's `objects` lists, so the progress line
+    // and the plan's object count agree.
+    let writes: HashSet<ResourceId> = checked
+        .objects()
+        .writes
+        .iter()
+        .filter(|w| w.change.certain())
+        .map(ObjectWrite::resource_id)
+        .collect();
+    let observer = Arc::new(DryRunObserver::new(writes));
+    let (result, answers) = checked.dry_run(target, config, observer.clone()).await;
+    // Cancelling the token ends its interrupt watcher, so Ctrl-C at the
+    // deploy's confirmation exits the process.
+    let interrupted = cancel.is_cancelled();
+    cancel.cancel();
+    observer.finish();
+    if interrupted {
+        return Err(miette!("plan interrupted"));
+    }
+    if let Err(e) = &result
+        && !matches!(e, scheduler::DeployError::NodesFailed { .. })
+    {
+        return Err(miette!("the dry run stopped: {e}"));
+    }
+
+    let answered: HashSet<&ResourceId> = answers.iter().map(|a| &a.rid).collect();
+    let seen = observer.take();
+    let failed = seen
+        .failed
+        .into_iter()
+        .filter(|(rid, _)| !answered.contains(rid))
+        .collect();
+    Ok(DryRunReport {
+        answers,
+        failed,
+        cancelled: seen.cancelled,
+        served_kinds,
     })
+}
+
+/// Return the engine settings `kix plan`, `kix deploy`, and `kix rollback`
+/// run with. Each run has its own cancel token.
+pub(crate) fn scheduler_config(
+    timeout: std::time::Duration,
+    on_error: OnErrorPolicy,
+    names_flags: bool,
+) -> SchedulerConfig {
+    SchedulerConfig {
+        timeout,
+        on_error,
+        cancel: kix::cluster::cancel::CancelToken::new(),
+        concurrency: scheduler::CONCURRENCY,
+        stall: StallPolicy::from_env(),
+        check_unchanged: true,
+        names_flags,
+    }
 }
 
 #[derive(Default)]
@@ -403,7 +428,7 @@ impl DeployObserver for DryRunObserver {
 /// When `manifests` is `true`, includes full manifest diffs (`Detail::Manifests`)
 /// as required when saving a plan file; otherwise uses `Detail::Plain`.
 pub(crate) fn document(p: &mut Planned, report: Option<&DryRunReport>, manifests: bool) -> Plan {
-    let connected = p.client.is_some();
+    let connected = p.client().is_some();
     let made_by = if connected {
         MadeBy::DryRun
     } else {
@@ -454,6 +479,46 @@ pub(crate) fn document(p: &mut Planned, report: Option<&DryRunReport>, manifests
         return doc;
     }
 
+    fill_checks(
+        &mut doc,
+        &p.checked,
+        &p.build.graph().cluster_name,
+        p.new_manifests(),
+        report,
+    );
+    doc.drift = match drift {
+        Some(drift) => Checked::found(drift),
+        None => Checked::not_checked(NotCheckedReason::DeployedBuildUnavailable),
+    };
+    // A custom resource whose CRD this deploy changes was checked against the
+    // CRD on the cluster now, which prunes the fields the new CRD adds.
+    let changed_crds = ChangedCrds::of(answers);
+    let manifests: HashMap<ResourceId, &Value> = p
+        .new_manifests()
+        .iter()
+        .map(|m| (ResourceId::from_value(m), m))
+        .collect();
+    doc.not_kept = kix::plan::server::not_kept(answers, |rid| {
+        manifests
+            .get(rid)
+            .is_some_and(|m| changed_crds.crd_of(m).is_some())
+    });
+    doc
+}
+
+/// Fill the sections of `doc` that the dry run in `report` answers: field
+/// ownership conflicts, refused writes, objects it did not check, and the
+/// prune. `build` is every manifest of the build `checked` deploys to Kix
+/// cluster `cluster`. A deploy and a rollback stop on what this finds
+/// ([`Plan::stops`]).
+pub(crate) fn fill_checks(
+    doc: &mut Plan,
+    checked: &CheckedPlan,
+    cluster: &str,
+    build: &[Value],
+    report: Option<&DryRunReport>,
+) {
+    let answers: &[DryRunAnswer] = report.map(|r| r.answers.as_slice()).unwrap_or(&[]);
     let mut conflicts = Vec::new();
     let mut admission = Vec::new();
     let mut not_checked = Vec::new();
@@ -466,9 +531,9 @@ pub(crate) fn document(p: &mut Planned, report: Option<&DryRunReport>, manifests
         .collect();
     let no_kinds = HashSet::new();
     let scope = DeployScope {
-        cluster: &p.build.graph().cluster_name,
-        build: p.new_manifests(),
-        plan: p.checked.plan(),
+        cluster,
+        build,
+        plan: checked.plan(),
         served_kinds: report.map_or(&no_kinds, |r| &r.served_kinds),
     };
 
@@ -491,15 +556,9 @@ pub(crate) fn document(p: &mut Planned, report: Option<&DryRunReport>, manifests
             }
             DryRunVerdict::Refused(refusal) => refusal,
         };
-        let refused = |reason, webhook: Option<String>, message: String| AdmissionRefusal {
-            resource: resource.clone(),
-            reason,
-            webhook,
-            message,
-        };
         match refusal {
             Refusal::Conflict { owners, message } => conflicts.push(Conflict {
-                resource: resource.clone(),
+                resource,
                 owners: owners
                     .into_iter()
                     .map(|o| ConflictOwner {
@@ -509,41 +568,14 @@ pub(crate) fn document(p: &mut Planned, report: Option<&DryRunReport>, manifests
                     .collect(),
                 message,
             }),
-            Refusal::WebhookUnreachable {
-                webhook, message, ..
-            }
-            | Refusal::WebhookNoDryRun { webhook, message } => {
-                admission.push(refused(RefusalReason::Other, webhook, message))
-            }
-            Refusal::WebhookDenied { webhook, message } => {
-                admission.push(refused(RefusalReason::WebhookDenied, webhook, message))
-            }
-            Refusal::PolicyDenied { policy, message } => {
-                admission.push(refused(RefusalReason::PolicyDenied, policy, message))
-            }
-            Refusal::Invalid { immutable, message } => admission.push(refused(
-                if immutable {
-                    RefusalReason::ImmutableField
-                } else {
-                    RefusalReason::Invalid
-                },
-                None,
-                message,
-            )),
-            Refusal::Forbidden { message } => {
-                admission.push(refused(RefusalReason::Forbidden, None, message))
-            }
-            Refusal::NamespaceMissing { message, .. } => {
-                admission.push(refused(RefusalReason::NamespaceMissing, None, message))
-            }
-            Refusal::UnknownKind { .. } => {
-                admission.push(refused(RefusalReason::UnknownKind, None, refusal.message()))
-            }
-            Refusal::Hydration { message } => {
-                admission.push(refused(RefusalReason::Decryption, None, message))
-            }
-            Refusal::Other { message } => {
-                admission.push(refused(RefusalReason::Other, None, message))
+            refusal => {
+                let (reason, webhook) = admission_reason(&refusal);
+                admission.push(AdmissionRefusal {
+                    resource,
+                    reason,
+                    webhook,
+                    message: refusal.message(),
+                });
             }
         }
     }
@@ -575,37 +607,46 @@ pub(crate) fn document(p: &mut Planned, report: Option<&DryRunReport>, manifests
     doc.conflicts = Checked::found(conflicts);
     doc.admission = Checked::found(admission);
     doc.not_checked = not_checked;
-    doc.drift = match drift {
-        Some(drift) => Checked::found(drift),
-        None => Checked::not_checked(NotCheckedReason::DeployedBuildUnavailable),
-    };
-    doc.prune = Checked::found(prune_entries(p, &prune_answers));
-    // A custom resource whose CRD this deploy changes was checked against the
-    // CRD on the cluster now, which prunes the fields the new CRD adds.
-    let changed_crds = ChangedCrds::of(answers);
-    let manifests: HashMap<ResourceId, &Value> = p
-        .new_manifests()
-        .iter()
-        .map(|m| (ResourceId::from_value(m), m))
-        .collect();
-    doc.not_kept = kix::plan::server::not_kept(answers, |rid| {
-        manifests
-            .get(rid)
-            .is_some_and(|m| changed_crds.crd_of(m).is_some())
-    });
-    doc
+    doc.prune = Checked::found(prune_entries(checked, &prune_answers));
+}
+
+/// Return the reason the plan document gives for a refused write, and the
+/// admission webhook or policy that answered. A field ownership conflict is
+/// listed apart from these.
+pub(crate) fn admission_reason(refusal: &Refusal) -> (RefusalReason, Option<String>) {
+    match refusal {
+        Refusal::WebhookUnreachable { webhook, .. } => {
+            (RefusalReason::WebhookUnreachable, webhook.clone())
+        }
+        Refusal::WebhookDenied { webhook, .. } => (RefusalReason::WebhookDenied, webhook.clone()),
+        Refusal::PolicyDenied { policy, .. } => (RefusalReason::PolicyDenied, policy.clone()),
+        Refusal::Invalid {
+            immutable: true, ..
+        } => (RefusalReason::ImmutableField, None),
+        Refusal::Invalid { .. } => (RefusalReason::Invalid, None),
+        Refusal::Forbidden { .. } => (RefusalReason::Forbidden, None),
+        Refusal::NamespaceMissing { .. } => (RefusalReason::NamespaceMissing, None),
+        Refusal::UnknownKind { .. } => (RefusalReason::UnknownKind, None),
+        Refusal::Hydration { .. } => (RefusalReason::Decryption, None),
+        // `classify` lists a webhook without dry-run support as not checked,
+        // so no such refusal reaches the document.
+        Refusal::WebhookNoDryRun { webhook, .. } => (RefusalReason::Other, webhook.clone()),
+        Refusal::Conflict { .. } | Refusal::Other { .. } => (RefusalReason::Other, None),
+    }
 }
 
 /// Build the list of [`PruneEntry`] records for orphaned resources.
-fn prune_entries(p: &Planned, answers: &HashMap<ResourceId, PruneAnswer>) -> Vec<PruneEntry> {
-    let policy = p.checked.flags().prune;
-    let mut entries: Vec<PruneEntry> = p
-        .checked
+fn prune_entries(
+    checked: &CheckedPlan,
+    answers: &HashMap<ResourceId, PruneAnswer>,
+) -> Vec<PruneEntry> {
+    let policy = checked.flags().prune;
+    let mut entries: Vec<PruneEntry> = checked
         .orphans()
         .iter()
         .map(|rid| prune_entry(rid, policy, answers.get(rid)))
         .collect();
-    entries.extend(p.checked.shared_orphans().iter().map(|s| PruneEntry {
+    entries.extend(checked.shared_orphans().iter().map(|s| PruneEntry {
         resource: s.rid.display_id(),
         fate: PruneFate::KeptShared,
         detail: Some(s.describe()),
@@ -665,7 +706,7 @@ fn print_migrations(doc: &Plan, accepted: bool) {
 pub(crate) fn print_text(p: &Planned, doc: &Plan, verbose: bool) {
     let fate = plan::orphans_fate(
         p.checked.flags(),
-        p.client.is_some(),
+        p.client().is_some(),
         &p.build.graph().cluster_name,
     );
     // Shared orphans are listed with the prune section of `render::render_text`.

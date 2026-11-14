@@ -35,6 +35,22 @@ pub struct PlanNodeEntry {
     pub api_version: String,
 }
 
+/// What reading the last runs of a plan's Jobs found
+/// ([`DeployPlan::read_last_runs`]). Only that read makes one, so code that
+/// needs the answer cannot run before the plan has read the cluster.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LastRuns {
+    /// Kix read every Job. `failed` lists the Jobs the plan leaves unchanged
+    /// whose last run failed. They do not run again, and the run reports
+    /// them as failed. A Job under `kix.run/rerun` whose last run failed is
+    /// not listed, because the plan now runs it again.
+    Read { failed: Vec<ResourceId> },
+    /// Kix could not read at least one Job. The run reads it itself, because
+    /// the scheduler runs a task for every rerun Job and reads every
+    /// unchanged Job (see `skip_reads_live`).
+    Unreadable,
+}
+
 /// The planner's output, consumed by `run_deploy`. Constructed
 /// only inside the library; callers read [`DeployPlan::nodes`].
 ///
@@ -159,15 +175,12 @@ impl DeployPlan {
 
     /// Read the live object of every Job whose last run decides what the
     /// plan does with it, and apply [`DeployPlan::rerun_failed`] to the Jobs
-    /// whose last run failed. Return the unchanged Jobs that failed and do
-    /// not run again, or `None` when Kix could not read one of the Jobs. The
-    /// run reads that Job again, because the scheduler runs a task for every
-    /// rerun Job and reads every unchanged Job (see `skip_reads_live`).
+    /// whose last run failed. A plan with no such Job reads nothing.
     pub(crate) async fn read_last_runs(
         &mut self,
         client: &kube::Client,
         discovery: &[(kube::discovery::ApiResource, kube::discovery::Scope)],
-    ) -> Option<Vec<ResourceId>> {
+    ) -> LastRuns {
         let mut failed = HashSet::new();
         let mut all_read = true;
         for entry in self.nodes.iter().filter(|e| reads_last_run(e)) {
@@ -196,7 +209,11 @@ impl DeployPlan {
             }
         }
         let reported = self.rerun_failed(&failed);
-        all_read.then_some(reported)
+        if all_read {
+            LastRuns::Read { failed: reported }
+        } else {
+            LastRuns::Unreadable
+        }
     }
 
     /// Recreate every Job under `kix.run/rerun` in `failed`, the Jobs whose
@@ -447,7 +464,8 @@ fn reads_last_run(entry: &PlanNodeEntry) -> bool {
 /// and reconcile. The run reports such a Job as failed. The plan recreates a
 /// Job carrying `kix.run/rerun` whose last run it saw fail
 /// ([`DeployPlan::rerun_failed`]), so only one that failed after the plan, or
-/// one an operator's plan left, is reported here.
+/// one left by a plan that did not read last runs (the operator's repair or
+/// resume of a running build), is reported here.
 pub(super) fn skip_reads_live(entry: &PlanNodeEntry) -> bool {
     match (&entry.action, &entry.rerun) {
         (ChangeAction::Skip(_), Some(_)) => true,
