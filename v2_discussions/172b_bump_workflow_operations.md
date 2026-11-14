@@ -118,9 +118,10 @@ Every rule is a comparison a program can make:
 There is no waiting period. A bump is queued as soon as the tag and its
 image exist. A user who wants to stay some days behind chooses when to
 upgrade Kix. Upstream sometimes replaces a release within a day, and the
-experiment met one such case. The reconcile step handles it (§3): when the
-target's tag is gone upstream, or a newer version replaces it before the
-pull request is merged, the bump is redone for the newer version.
+experiment met one such case. When upstream removes the tag, the reconcile
+step closes the bump and queues the newer version (§3). When upstream
+leaves the tag in place, the newer version is picked up after the open
+pull request merges or closes, or sooner if a person closes it.
 
 ### 2.4 Output
 
