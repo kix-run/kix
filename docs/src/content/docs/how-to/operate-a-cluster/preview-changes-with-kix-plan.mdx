@@ -157,9 +157,9 @@ object and the cluster's dry-run result:
 />
 
 At both levels, Secret values read `(secret, not shown)`, or
-`(secret, changed, not shown)` on the new side when the value changes. A hash
-that may be of a Secret, such as a `checksum/*` annotation, reads
-`(hash, not shown)` or `(hash, changed, not shown)`. A
+`(secret, changed, not shown)` on the new side when the value changes. Secret
+hashes and `checksum/*` annotations read `(hash, not shown)` or
+`(hash, changed, not shown)`. A
 field value larger than 16 KiB, or a manifest larger than 3 MiB (the apiserver's limit on a request), reads
 `(N bytes, not shown)`. A password written as a literal container `env`
 value or into a ConfigMap is shown as it is, so keep secrets in Secrets.

@@ -71,7 +71,7 @@ fn write_objects(out: &mut String, plan: &Plan) {
     if reapplied > 0 {
         let _ = writeln!(
             out,
-            "  {} {reapplied} of them resend content from an earlier deploy (changes the cluster only if edited since)",
+            "  {} {reapplied} written again unchanged from an earlier deploy (changes nothing unless edited on the cluster)",
             output::yellow("↻"),
         );
     }
