@@ -575,9 +575,31 @@ fn write_not_checked(out: &mut String, plan: &Plan) {
     }
 }
 
+/// Render the Kix library's warnings for the new build as a Markdown
+/// section, or nothing when there are none.
+pub fn render_warnings_markdown(plan: &Plan) -> String {
+    let mut out = String::new();
+    if plan.warnings.is_empty() {
+        return out;
+    }
+    let _ = writeln!(
+        out,
+        "#### :warning: Warnings from the Kix library ({})",
+        plan.warnings.len()
+    );
+    let _ = writeln!(out);
+    let _ = writeln!(out, "```text");
+    for w in &plan.warnings {
+        let _ = writeln!(out, "{}", w.describe("  "));
+    }
+    let _ = writeln!(out, "```");
+    let _ = writeln!(out);
+    out
+}
+
 /// Render the Markdown plan sections that follow the package diff.
 pub fn render_markdown(plan: &Plan) -> String {
-    let mut out = String::new();
+    let mut out = render_warnings_markdown(plan);
     let conflicts = plan.conflicts.items();
     let refusals = plan.admission.items();
     let prune_refused: Vec<_> = plan

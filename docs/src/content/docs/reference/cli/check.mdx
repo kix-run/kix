@@ -46,10 +46,27 @@ The Kix library warns about problems that do not stop the build. For example,
 it warns when it skips a `meta.compatibleWith` check because a dependency
 reports no version, or when an instance cannot reach the availability you asked
 for. A package's own `warnings` and its structural warnings are listed here
-too. A warning about one instance starts with its namespace and name in
-brackets, such as `[monitoring/prometheus]`. When `eval` passes, text output lists these warnings under the table. In
-`json` and `yaml`, the `eval` entry lists each one in `findings` with a
-`severity` of `warning` and its `message`.
+too. When `eval` passes, text output lists these warnings under the table. Each
+starts with the instance it is about, such as `monitoring/prometheus:`, and
+shows the object, option, dependency, cluster option, or fix on a line of its
+own.
+
+In `json` and `yaml`, the `eval` entry lists each warning in `findings`. A
+warning has the same fields as a library error, and `severity` is `warning`:
+
+| Field | Meaning |
+| --- | --- |
+| `message` | What is wrong. |
+| `instance` | The instance, as `namespace/name`. Missing for a warning about the whole cluster. |
+| `object` | The Kubernetes object, as `kind`, `name`, and an optional `namespace`. |
+| `option`, `dependency`, `clusterOption` | What to change: a path in the instance's `config`, the name of one of its `deps`, or a path in the cluster definition. |
+| `fix` | How to fix it. |
+| `id` | The change record id, such as `K0001`, for a warning about a coming change. |
+
+`kix build`, `kix plan`, `kix deploy`, and the other commands that build a
+cluster print the same warnings to stderr. A plan saved with `kix plan --out`
+or printed by `kix diff -o json` lists them in `warnings`, and
+`kix plan -o markdown` shows them in a section of their own.
 
 Scorecard warnings are not repeated here. They appear only as scorecard
 findings.

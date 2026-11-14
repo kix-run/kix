@@ -593,6 +593,102 @@
       ],
       "type": "object"
     },
+    "LibraryObject": {
+      "description": "A Kubernetes object a record is about.",
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "namespace": {
+          "description": "Absent for an object at cluster scope, or when the library does not\nknow it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "name"
+      ],
+      "type": "object"
+    },
+    "LibraryRecord": {
+      "description": "One error or warning of the Kix library. Fields this Kix does not know\nare skipped, so a newer library can add them.",
+      "properties": {
+        "clusterOption": {
+          "description": "The cluster option to change, as a path in the cluster definition.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dependency": {
+          "description": "The dependency to change, as its name in the instance's `deps`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fix": {
+          "description": "What to change, which may span lines.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "The change record id, such as `K0001`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "instance": {
+          "description": "The instance it is about, as `<namespace>/<name>`. Absent for the\nwhole cluster.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message": {
+          "description": "What is wrong, which may span lines.",
+          "type": "string"
+        },
+        "object": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LibraryObject"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The Kubernetes object it is about."
+        },
+        "option": {
+          "description": "The option to change, as a path in the instance's `config`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "package": {
+          "description": "The package of that instance.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "type": "object"
+    },
     "MadeBy": {
       "description": "How a [`Plan`] was made, which bounds what it can know.",
       "oneOf": [
@@ -1281,6 +1377,13 @@
     "schema_version": {
       "description": "The date, `YYYY-MM-DD`, of the document shape's last change that was\nnot backward compatible.",
       "type": "string"
+    },
+    "warnings": {
+      "description": "The Kix library's warnings for the new build, when the command\nevaluated it. A build read from a bundle has none. Left out when\nthere are none.",
+      "items": {
+        "$ref": "#/$defs/LibraryRecord"
+      },
+      "type": "array"
     }
   },
   "required": [

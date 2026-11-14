@@ -199,8 +199,12 @@ in
         }
       ];
       warnings = cluster.instances.a.consumer._diagnostics.warnings;
-      message = "optional dependency 'svc' has no instance in namespace 'a', so Kix skipped it. b/svc matches in another namespace.\nFix: To use it, add this line to instances.a.consumer:\n  deps.svc = ref.b.svc;";
-      expected = "[a/consumer] ${message}";
+      expected = {
+        instance = "a/consumer";
+        dependency = "svc";
+        message = "optional dependency 'svc' has no instance in namespace 'a', so Kix skipped it. b/svc matches in another namespace.";
+        fix = "To use it, add this line to instances.a.consumer:\n  deps.svc = ref.b.svc;";
+      };
       # The cluster lists the warning in the file the CLI reads, so `kix
       # check` shows it.
       listed = builtins.fromJSON (builtins.readFile cluster.activationFiles.warnings);
@@ -230,7 +234,9 @@ in
     in
     (
       builtins.elem "organization.alwaysWarns" findings
-      && !(builtins.any (lib.hasInfix "alwaysWarns") (cluster.diagnostics.warnings ++ listed))
+      && !(builtins.any (w: lib.hasInfix "alwaysWarns" w.message) (
+        cluster.diagnostics.warnings ++ listed
+      ))
     )
     || throw "scorecard warnings: findings ${builtins.toJSON findings}; warnings ${builtins.toJSON cluster.diagnostics.warnings}";
 
@@ -246,7 +252,10 @@ in
       ];
       warnings = cluster.instances.a.consumer._diagnostics.warnings;
     in
-    (boundTo cluster == "b/svc" && !(builtins.any (lib.hasInfix "optional dependency 'svc'") warnings))
+    (
+      boundTo cluster == "b/svc"
+      && !(builtins.any (w: lib.hasInfix "optional dependency 'svc'" w.message) warnings)
+    )
     || throw "optional serving dependency: bound to ${boundTo cluster}; warnings ${builtins.toJSON warnings}";
 
   # A demand from `a` switches on a dormant optional instance in `b` and

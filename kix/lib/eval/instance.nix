@@ -819,24 +819,25 @@ in
         structuralWarnings =
           let
             res = r: "${r.kind}/${r.name}";
-            warn = msg: items: map msg items;
+            about = r: message: {
+              object = { inherit (r) kind name; };
+              inherit message;
+            };
           in
           lib.concatLists [
             resolutionWarnings
-            (warn (
+            (map (
               w:
-              "resource '${res w.resource}' already references '${res w.req}'. Remove the redundant entry from requires; Kix tracks this dependency automatically."
+              about w.resource "It already references '${res w.req}'. Remove the redundant entry from requires; Kix tracks this dependency automatically."
             ) redundantRequiresWarnings)
-            (warn (
-              w: "resource '${res w.resource}' requires '${res w.req}' multiple times"
-            ) duplicateRequiresWarnings)
-            (warn (
+            (map (w: about w.resource "It requires '${res w.req}' multiple times.") duplicateRequiresWarnings)
+            (map (
               r:
-              "resource '${res r}' is not referenced by root or its dependencies. Reference it from root, add it to requires, or remove the unused definition."
+              about r "It is not referenced by root or its dependencies. Reference it from root, add it to requires, or remove the unused definition."
             ) orphanedWarnings)
-            (warn (
+            (map (
               r:
-              "post-hook '${res r}' has no dependency on root or any resource that root requires. Add a dependency to ensure the hook runs after the resource it needs."
+              about r "This post-hook has no dependency on root or any resource that root requires. Add a dependency to ensure the hook runs after the resource it needs."
             ) postHookWarnings)
             processorWarnings
           ];

@@ -98,7 +98,8 @@ let
 
   warningsOf =
     modules:
-    (mkCluster ([ certManager ] ++ modules)).instances.cert-manager.solver._diagnostics.warnings;
+    map (w: w.message)
+      (mkCluster ([ certManager ] ++ modules)).instances.cert-manager.solver._diagnostics.warnings;
   http01Issuer = issuer "cert-manager" "solver" (acmeSpec [
     { http01.ingress.ingressClassName = "nginx"; }
   ]) { aliases = [ "clusterIssuer" ]; };

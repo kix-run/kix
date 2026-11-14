@@ -7,7 +7,7 @@ let
   versions = import ./core/version.nix { inherit lib; };
   errors = import ./core/error.nix { inherit lib; };
 
-  fail = message: {
+  failedAssertion = message: {
     assertion = false;
     inherit message;
   };
@@ -15,7 +15,8 @@ let
   # Check `version` against a `minVersion`/`maxVersion` constraint set.
   # Non-version constraints fail as author errors. Null, non-version, or
   # under-precise versions emit warnings instead, except that null is skipped
-  # silently when `warnWhenNull` is false.
+  # silently when `warnWhenNull` is false. `dependency` names the dependency
+  # whose version this is, or is null.
   constraintDiagnostics =
     {
       field,
@@ -24,8 +25,12 @@ let
       constraint,
       describeFailure,
       warnWhenNull ? true,
+      dependency ? null,
     }:
     let
+      skipped = message: {
+        inherit message dependency;
+      };
       bounds = builtins.filter (b: constraint ? ${b}) [
         "minVersion"
         "maxVersion"
@@ -42,14 +47,14 @@ let
         if result == null then
           {
             warnings = [
-              "cannot check ${field}: ${subject} reports version \"${version}\", which is less precise than ${bound} \"${want}\", so Kix cannot tell. Kix skipped the check."
+              (skipped "cannot check ${field}: ${subject} reports version \"${version}\", which is less precise than ${bound} \"${want}\", so Kix cannot tell. Kix skipped the check.")
             ];
             assertions = [ ];
           }
         else
           {
             warnings = [ ];
-            assertions = lib.optional (!result) (fail (describeFailure bound want + reason));
+            assertions = lib.optional (!result) (failedAssertion (describeFailure bound want + reason));
           };
       checks = map check bounds;
     in
@@ -58,7 +63,7 @@ let
         warnings = [ ];
         assertions = map (
           b:
-          fail "${field}.${b} ${
+          failedAssertion "${field}.${b} ${
             builtins.toJSON constraint.${b}
           } is not a version: expected numbers separated by dots, for example \"1.31\" or \"v2.12.2\"."
         ) badBounds;
@@ -69,13 +74,15 @@ let
       noDiagnostics
     else if version == null then
       {
-        warnings = [ "cannot check ${field}: ${subject} reports no version. Kix skipped the check." ];
+        warnings = [
+          (skipped "cannot check ${field}: ${subject} reports no version. Kix skipped the check.")
+        ];
         assertions = [ ];
       }
     else if !(versions.isVersion version) then
       {
         warnings = [
-          "cannot check ${field}: ${subject} reports version ${builtins.toJSON version}, which is not a version number. Kix skipped the check."
+          (skipped "cannot check ${field}: ${subject} reports version ${builtins.toJSON version}, which is not a version number. Kix skipped the check.")
         ];
         assertions = [ ];
       }
@@ -84,6 +91,14 @@ let
         warnings = builtins.concatMap (c: c.warnings) checks;
         assertions = builtins.concatMap (c: c.assertions) checks;
       };
+
+  # Return warning `w` with `dependency` set to `name` unless it sets one.
+  aboutDependency =
+    name: w:
+    {
+      dependency = name;
+    }
+    // (if builtins.isString w then { message = w; } else w);
 
   emitTraces = prefix: items: lib.foldl' (acc: msg: builtins.trace "${prefix}${msg}" acc) null items;
 
@@ -251,6 +266,7 @@ rec {
           constraintDiagnostics {
             field = "meta.compatibleWith.${depName}";
             subject = "dependency '${depName}'";
+            dependency = depName;
             version = depVersion;
             constraint = compat.${depName};
             describeFailure =
@@ -299,7 +315,7 @@ rec {
           );
         in
         lib.optional (matching != [ ]) (
-          fail "It conflicts with '${name}' ${scope}. Conflicting instances: ${instances}${autoAdvice}"
+          failedAssertion "It conflicts with '${name}' ${scope}. Conflicting instances: ${instances}${autoAdvice}"
         )
       ) (packageMeta.conflictsWith or [ ]);
 
@@ -307,7 +323,7 @@ rec {
       # a dependency from another namespace.
       scopeValue = packageMeta.scope or null;
       scopeAssertions = lib.optional (scopeValue != null && !(builtins.elem scopeValue scopeValues)) (
-        fail "meta.scope is ${builtins.toJSON scopeValue}. Set it to \"cluster\" or \"namespace\", or leave it unset."
+        failedAssertion "meta.scope is ${builtins.toJSON scopeValue}. Set it to \"cluster\" or \"namespace\", or leave it unset."
       );
 
       # Validate `meta.unsafe` grants up front so unknown grant names fail even
@@ -315,7 +331,7 @@ rec {
       unsafeAssertions = builtins.concatMap (
         grant:
         lib.optional (!(unsafe.registry ? ${grant})) (
-          fail "meta.unsafe contains unknown grant '${grant}'. ${unsafe.knownGrantsHint}"
+          failedAssertion "meta.unsafe contains unknown grant '${grant}'. ${unsafe.knownGrantsHint}"
         )
       ) (packageMeta.unsafe or [ ]);
 
@@ -368,7 +384,9 @@ rec {
               acc
             else
               {
-                warnings = acc.warnings ++ (if enrichment ? warnings then enrichment.warnings dep else [ ]);
+                warnings =
+                  acc.warnings
+                  ++ map (aboutDependency depName) (if enrichment ? warnings then enrichment.warnings dep else [ ]);
                 assertions = acc.assertions ++ (if enrichment ? assertions then enrichment.assertions dep else [ ]);
               }
           )
@@ -384,10 +402,10 @@ rec {
     };
 
   # An assertion is `{ assertion; message; fix ? null; id ? null; option ?
-  # null; }`, with the fields `kix.fail` takes (`core/error.nix`). Each one
-  # gets `instance` set to the instance that raised it. Every warning gets the
-  # prefix `[namespace/instance]` here, so the code that raises a warning
-  # leaves the instance out of its text.
+  # null; }`, with the fields `kix.fail` takes (`core/error.nix`). A warning
+  # is a message or a record with those fields. Each assertion and warning
+  # gets `instance` set to the instance that raised it, so the code that
+  # raises one leaves the instance out of its text.
   #
   # `scorecardWarnings` are traced but left out of `allWarnings`, because the
   # scorecard report already carries them as findings and the CLI shows that
@@ -403,7 +421,7 @@ rec {
     }:
     let
       instance = "${namespaceName}/${instanceName}";
-      allWarnings = map (w: "[${instance}] ${w}") (
+      allWarnings = map (errors.warning instance) (
         metaResult.warnings ++ structuralWarnings ++ packageResult.warnings
       );
       allAssertions = map (a: { inherit instance; } // a) (
@@ -413,7 +431,7 @@ rec {
     in
     {
       inherit allWarnings allAssertions failedAssertions;
-      emitWarnings = emitTraces "warning: " (allWarnings ++ scorecardWarnings);
+      emitWarnings = emitTraces "warning: " (map (errors.describe "  ") allWarnings ++ scorecardWarnings);
       emitAssertionWarnings = emitTraces "ASSERTION FAILED: " (
         map (a: "${a.instance}: ${a.message}") failedAssertions
       );

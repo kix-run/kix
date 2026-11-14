@@ -520,7 +520,7 @@ in
       cluster = mkVelero { config.schedules.nightly.schedule = "@daily"; };
       warnings = cluster.instances.velero.velero._diagnostics.warnings;
     in
-    (builds cluster && !(builtins.any (lib.hasInfix "already references") warnings))
+    (builds cluster && !(builtins.any (w: lib.hasInfix "already references" w.message) warnings))
     || throw "velero schedule warnings: ${builtins.toJSON warnings}";
 
   # Under network policy, a store outside the cluster gets the

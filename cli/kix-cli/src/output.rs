@@ -125,6 +125,15 @@ pub fn spinner(msg: impl Into<Cow<'static, str>>) -> Option<indicatif::ProgressB
     }
 }
 
+/// Print the Kix library's warnings for a build to stderr, even under `-q`.
+/// Every command that evaluates a build calls this, except `kix check`,
+/// which lists them in its own output.
+pub fn library_warnings(warnings: &[kix::eval::library_record::LibraryRecord]) {
+    if !warnings.is_empty() {
+        eprintln!("{}", kix::eval::library_record::describe_warnings(warnings));
+    }
+}
+
 /// Print a progress line to stderr unless `-q` is set.
 #[macro_export]
 macro_rules! esay {

@@ -36,6 +36,7 @@ fn deploy_dry_run_shows_plan() {
         .args(["deploy", "example", "--dry-run", "--yes", "--offline"])
         .assert()
         .code(2)
+        .stderr(predicate::str::contains("Warnings from the Kix library"))
         .stdout(predicate::str::contains("Plan:"))
         .stdout(predicate::str::contains("added"))
         .stdout(predicate::str::contains(
@@ -66,11 +67,22 @@ fn plan_save_writes_the_plan_file() {
         .arg(&path)
         .assert()
         .code(2)
-        .stderr(predicate::str::contains("Saved the plan to"));
+        .stderr(predicate::str::contains("Saved the plan to"))
+        .stderr(predicate::str::contains("Warnings from the Kix library"));
     let file = std::fs::File::open(&path).unwrap();
     let (mut file, _) = kix::plan::file::PlanFile::verify(file).expect("a valid plan file");
     let header = file.header().clone();
     let doc = &header.plan;
+    // The plan carries the library's warnings for its build, each with the
+    // instance that raised it.
+    assert!(
+        doc.warnings
+            .iter()
+            .any(|w| w.instance.is_some()
+                && w.message.contains("availability \"node\" was requested")),
+        "{:?}",
+        doc.warnings
+    );
     assert_eq!(doc.made_by, kix::plan::document::MadeBy::Builds);
     assert!(doc.conflicts.items().is_empty());
     assert!(!doc.packages.added.is_empty());
@@ -226,4 +238,22 @@ fn deploy_dry_run_refuses_json_in_its_own_name() {
             "`kix deploy --dry-run` cannot print json output",
         ))
         .stderr(predicate::str::contains("--out FILE.kixplan"));
+}
+
+/// `kix plan -o markdown`, the form a pull request comment takes, lists the
+/// library's warnings for the build.
+#[test]
+fn plan_markdown_lists_library_warnings() {
+    let cache = common::tempdir();
+    kix()
+        .env("XDG_CACHE_HOME", cache.path())
+        .args(["plan", "example", "--offline", "-o", "markdown"])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains(
+            "#### :warning: Warnings from the Kix library",
+        ))
+        .stdout(predicate::str::contains(
+            "availability \"node\" was requested",
+        ));
 }

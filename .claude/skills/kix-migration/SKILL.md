@@ -266,10 +266,12 @@ A resource's `requires` and `root.requires` order different things. A resource's
 
 ### Warning system
 
-The build emits `builtins.trace` warnings for:
+`kix check`, `kix build`, `kix plan`, and `kix deploy` show the Kix library's warnings. Among them, the structural warnings name the resource in their `object` field:
 - **Redundant requires:** resource already referenced via `"${self.x}"`, no need to also list in `requires`
 - **Duplicate requires:** same resource listed twice
 - **Orphaned resources:** defined in the package but unreachable from `root`
+
+A package's own `warnings` function returns messages or records with the fields of `scope.fail` (`message`, `fix`, `object`, `option`, `dependency`, `clusterOption`, `id`). Return a warning through `warnings`, not `builtins.trace` or `lib.warn`, which no command shows when the build succeeds.
 
 Fix all warnings before committing.
 

@@ -97,7 +97,9 @@ impl Builder for LocalBuilder {
         let files = super::build_files::BuildFiles::read(&index)?;
 
         // Stamped, because kix.run/depends-on edges name identity hashes.
-        let graph = crate::build_source::Build::local(&index, &|_| {})?.into_graph();
+        let build = crate::build_source::Build::local(&index, &|_| {})?;
+        let warnings = build.warnings().to_vec();
+        let graph = build.into_graph();
 
         let mut raw_manifests: Vec<serde_json::Value> = graph
             .resources
@@ -111,8 +113,6 @@ impl Builder for LocalBuilder {
 
         let scorecard_report = read_build_file(files.scorecard, cluster_name, "scorecard report");
         let extra_images = read_build_file(files.extra_images, cluster_name, "extra images");
-        let warnings =
-            read_build_file(files.warnings, cluster_name, "library warnings").unwrap_or_default();
 
         tracing::info!(
             cluster = cluster_name,

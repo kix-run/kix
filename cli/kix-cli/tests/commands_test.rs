@@ -132,13 +132,34 @@ fn check_shows_library_warnings() {
         .expect("an eval row");
     assert_eq!(eval["result"], "pass");
     let listed = eval["findings"].as_array().expect("eval findings");
+    // The warning is a record: the instance that raised it is a field of
+    // its own, and the message does not repeat it.
+    let found = listed
+        .iter()
+        .find(|f| f["message"].as_str().unwrap_or("").contains(warning))
+        .unwrap_or_else(|| panic!("the availability warning: {eval}"));
+    assert_eq!(found["severity"], "warning");
+    let instance = found["instance"].as_str().expect("an instance field");
+    assert!(instance.contains('/'), "{found}");
     assert!(
-        listed
-            .iter()
-            .any(|f| f["severity"] == "warning"
-                && f["message"].as_str().unwrap_or("").contains(warning)),
-        "{eval}"
+        !found["message"].as_str().unwrap().contains(instance),
+        "{found}"
     );
+}
+
+/// `kix build` shows the library's warnings on stderr, and keeps stdout for
+/// the manifests.
+#[test]
+fn build_shows_library_warnings() {
+    kix()
+        .args(["build", "example"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Warnings from the Kix library"))
+        .stderr(predicate::str::contains(
+            "availability \"node\" was requested",
+        ))
+        .stdout(predicate::str::contains("Warnings").not());
 }
 
 #[test]

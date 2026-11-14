@@ -38,6 +38,7 @@ pub fn run(args: &BuildArgs, ctx: &mut CommandContext) -> Result<()> {
     }
 
     let cluster_output = cluster_output?;
+    output::library_warnings(&cluster_output.warnings);
 
     let response = BuildResponse {
         manifests: cluster_output.raw_manifests,
