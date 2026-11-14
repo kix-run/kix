@@ -9,7 +9,7 @@ core/     Ring 0: the artifact. Sealing, string-context machinery, and PackageIn
 eval/     Ring 1: the pipeline. Module eval, DI, fixpoints, edge analysis, hooks, and validation.
 scope/    Ring 1: the authoring surface. Builders, validators, and labels.
 vocab/    Open vocabulary: pure helper libraries, importable without the core.
-plugins/  Ring 2: cross-cutting layers attached via hooks (netpol, availability, rerun).
+plugins/  Ring 2: cross-cutting layers attached via hooks (netpol, availability).
 ```
 
 Root files: `default.nix` (entry + YAML emission), `modules.nix` (option schema + hook options + plugin imports), `mkFlake.nix`, `meta.nix`, `env.nix`, `scorecard.nix`, `unsafe.nix`, `rules/`, `flavors/`, `helm.nix` + `helm-dag.nix`. The monitoring module lives outside the library, in `kix/modules/` (`kix/modules/default.nix` builds `kix.modules` with `core/levels.nix`).

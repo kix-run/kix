@@ -12959,7 +12959,7 @@ expression: stable
     "kind": "Activation",
     "metadata": {
       "annotations": {
-        "kix.run/built-via": "/nix/store/nyypxnn8ydg1x8bawmc2w3hs63j3w3gy-kix-activation-example.json",
+        "kix.run/built-via": "/nix/store/ja1p7p2lclzdg7kh3jxcnxj0dgh8mzb5-kix-activation-example.json",
         "kix.run/depends-on": "1mca17qqf22pd9n20lvscfj5f8ybw65r,2hb39vp5dk02a0cbp5wx72babl4pb007,a57sgndwibybw8ff9v6q7s08qh1dbm6m,cwqn9k5f52rwg6w2fzks9i3w773196cy,dd0si3rkg4yak9q2hpnb29g4spj7grzs,ha8v9xi9sl460c1vi0i85g2f6wp86xdq,jxxgrjabirnh46il0mvn3bj6qq0b9df7,kiig0vakys3kkhqdxys2zkznlvnwmmdz,kpppzkza8b4qrn788ppn2xi0sfmpcf03,kxp256xpy6sfk61m1c61g58a82niijxk,spi8qjq6x9y4l363wip2342h53n7r7pa,vwn988bxm7vbrszhyv5kiy5h70fpbbrn,w4jfxii3b0w1bl78pjanhkxinzl0kiys,requires:gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj",
         "kix.run/identity-hash": "iyhn68k1j8wd16mmvgydhklvdykjbkla",
         "kix.run/package": "_cluster",
