@@ -1,0 +1,3 @@
+# 2026-11-14 · `changes/README.md`, `CLAUDE.md` · The change record kinds do not say what a version bump with a one-way data change is.
+
+Agents given the same facts chose different kinds. For Valkey 8.1 to 9.1, where the new version writes files the old one refuses, runs chose `note`, `changed` plus `note`, and `silent` with `touches-data`. For CDI 1.62 to 1.66 they chose `note` and `silent`. For a patch bump of `metrics-server` three runs of one model chose `security`, `note`, and `note`, and the reference run chose `changed`. Each run argued its choice from the rules as written. The Change kind workflow cannot settle it, because it checks that a record exists and not that its kind is right.
