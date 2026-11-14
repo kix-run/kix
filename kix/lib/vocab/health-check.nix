@@ -89,8 +89,9 @@ in
           r = self.root;
         in
         r.resource or r;
-      # The probe reruns when the own content of the root or of a required
-      # resource changes, through a `checksum/*` annotation on its pod
+      # The probe reaches the root and the required resources through the
+      # API, so the rerun hash cannot see them. It reruns when the own content
+      # of one of them changes, through a `checksum/*` annotation on its pod
       # template. That annotation already makes the Job depend on the
       # resource, so only the required values without a content hash stay
       # in `requires`.
@@ -123,15 +124,14 @@ in
           full
         else
           "${builtins.substring 0 54 full}-${builtins.substring 0 8 (builtins.hashString "sha256" full)}";
-      checksums = {
-        "checksum/script" = self.${scriptPart}.out.contentHash;
-      }
-      // lib.optionalAttrs (hasContentHash rootRes) {
-        "checksum/root" = rootRes.out.contentHash;
-      }
-      // builtins.listToAttrs (
-        map (r: lib.nameValuePair "checksum/${checksumName r}" r.out.contentHash) checkedRequired
-      );
+      # The rerun hash already covers the script ConfigMap the pod mounts.
+      checksums =
+        lib.optionalAttrs (hasContentHash rootRes) {
+          "checksum/root" = rootRes.out.contentHash;
+        }
+        // builtins.listToAttrs (
+          map (r: lib.nameValuePair "checksum/${checksumName r}" r.out.contentHash) checkedRequired
+        );
     in
     if !(when ctx) then
       { }

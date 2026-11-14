@@ -13,6 +13,16 @@ rec {
 
   normalize = import ./normalize.nix { inherit lib; };
 
+  podSpecReader = import ./pod-spec.nix { inherit lib; };
+
+  # Return the name of the store file that holds a resource's sealed
+  # manifest. `podReadContentHashes` finds a Kix-built object by this name in
+  # the string context of a reference to it.
+  identityFilePrefix = kind: "k8s-${kind}-";
+  identityFileName =
+    kind: nsKey: name:
+    "${identityFilePrefix kind}${nsKey}-${name}";
+
   clusterScoped = {
     _type = "k8s-cluster-scoped";
     __toString = _: "";
@@ -94,6 +104,45 @@ rec {
     builtins.hashString "sha256" (
       builtins.unsafeDiscardStringContext (builtins.toJSON (manifest // { metadata = ownMetadata; }))
     );
+
+  # Return the own content hash of each Kix-built Secret and ConfigMap that
+  # `podSpec` reads, keyed by `<kind>/<name>`. A reference names a Kix-built
+  # object when its string context carries that object's identity file, which
+  # holds the object's sealed manifest. A Secret from `mkSecretRef` carries an
+  # import marker instead, and a plain string carries no context, so Kix does
+  # not know their content and leaves them out.
+  podReadContentHashes =
+    podSpec:
+    builtins.listToAttrs (
+      builtins.concatMap (
+        read:
+        let
+          plainName = builtins.unsafeDiscardStringContext read.name;
+          files = builtins.filter (p: lib.hasPrefix (identityFilePrefix read.kind) (markers.pathName p)) (
+            builtins.attrNames (builtins.getContext read.name)
+          );
+          manifests = builtins.filter (
+            m:
+            (m.apiVersion or null) == "v1"
+            && (m.kind or null) == read.kind
+            && (m.metadata.name or null) == plainName
+          ) (map (p: builtins.fromJSON (builtins.unsafeDiscardStringContext (builtins.readFile p))) files);
+        in
+        map (m: lib.nameValuePair "${read.kind}/${plainName}" (contentHashOf m)) manifests
+      ) (builtins.filter (read: builtins.isString read.name) (podSpecReader.reads podSpec))
+    );
+
+  # Return the `kix.run/rerun-hash` of a manifest. It is the manifest's own
+  # content hash, folded with the content hashes of the Kix-built Secrets and
+  # ConfigMaps its pod reads, so a Job reruns when any of them changes. A
+  # manifest whose pod reads none of them keeps its own content hash.
+  rerunHashOf =
+    manifest:
+    let
+      own = contentHashOf manifest;
+      reads = podReadContentHashes (podSpecReader.podSpecOf manifest);
+    in
+    if reads == { } then own else builtins.hashString "sha256" (builtins.toJSON { inherit own reads; });
 
   # Return whether a manifest holds data, as `kix.run/holds-data` records it:
   # `declared` (the kind's `holdsData`) when it is set, true for a
@@ -468,7 +517,7 @@ rec {
           ${kixKeys.expects} = builtins.concatStringsSep "," expectEntries;
         }
         // lib.optionalAttrs ((rawManifest.metadata.annotations or { }) ? ${kixKeys.rerun}) {
-          ${kixKeys.rerunHash} = contentHashOf rawManifest;
+          ${kixKeys.rerunHash} = rerunHashOf rawManifest;
         };
 
       rawManifestStamped =
@@ -546,7 +595,9 @@ rec {
       sanitizedName = builtins.unsafeDiscardStringContext (builtins.replaceStrings [ ":" ] [ "_" ] name);
       sanitizedNsKey = builtins.unsafeDiscardStringContext (toString nsKey);
 
-      _identityPath = builtins.toFile "k8s-${kind}-${sanitizedNsKey}-${sanitizedName}" manifestJsonSealed;
+      _identityPath = builtins.toFile (identityFileName kind sanitizedNsKey
+        sanitizedName
+      ) manifestJsonSealed;
 
       _identityPathPlain = builtins.unsafeDiscardStringContext _identityPath;
 

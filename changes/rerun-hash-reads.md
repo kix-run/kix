@@ -1,0 +1,6 @@
++++
+kind = "changed"
+library = ["kix.healthCheck"]
+packages = ["cnpg-operator", "victoria-metrics-agent", "victoria-metrics-alert", "experimental/clickhouse", "experimental/clickhouse-cluster", "experimental/clickhouse-database", "experimental/clickhouse-logs", "experimental/external-secrets", "experimental/loki", "experimental/openbao", "experimental/plausible", "experimental/rabbitmq-operator", "experimental/stackgres-database"]
++++
+A Job with `kix.run/rerun: on-change` now runs again when a Secret or ConfigMap that Kix builds and the Job's pod reads changes, through a volume, `env`, or `envFrom`. Kix adds the content of each such object to the Job's `kix.run/rerun-hash`, so a package no longer needs a `checksum/<name>` annotation on the pod template for it, and `kix check` no longer warns when one is missing. Kix's packages drop those annotations from their Jobs. A `checksum/*` annotation you already have still works. Kix cannot see a Secret that something outside Kix writes, such as one from the `secret-ref` package, so a change to it still does not run the Job again. For an object a Job reaches through the Kubernetes API or the network, such as the server it sets up or the webhook it checks, keep a `checksum/<name>` annotation from that object's `out.contentHash`.

@@ -1,8 +1,8 @@
 # Tests for `kix.run/rerun-hash` on a Job under `kix.run/rerun`. The deploy
 # engine reruns such a Job only when this hash changes. It follows the Job's
-# own manifest, including the `checksum/*` annotations on its pod template,
-# and ignores changes elsewhere in the graph, such as a namespace label or a
-# resource the Job only waits for.
+# own manifest and the content of the Kix-built Secrets and ConfigMaps its pod
+# reads. It ignores changes elsewhere in the graph, such as a namespace label
+# or a resource the Job only waits for.
 
 {
   lib,
@@ -15,13 +15,17 @@
 
 let
   # A package with a ConfigMap the Job waits for, a password Secret the Job
-  # reads, and the Job. `upstream` changes the ConfigMap, `password` the
-  # Secret, and `image` the Job's own spec.
+  # reads through env, a script ConfigMap an init container reads through
+  # envFrom, a Secret imported with `mkSecretRef`, and the Job. `upstream`
+  # changes the ConfigMap, `password` the Secret, `script` the script, and
+  # `image` the Job's own spec. `reads = false` drops every read.
   jobPackage =
     {
       upstream ? "a",
       password ? "p",
+      script ? "echo hi",
       image ? "postgres:17",
+      reads ? true,
     }:
     {
       meta.version = "test";
@@ -38,23 +42,47 @@ let
             name = "pw";
             stringData.password = password;
           };
+          script = scope.mkResource {
+            apiVersion = "v1";
+            kind = "ConfigMap";
+            name = "script";
+            data.SCRIPT = script;
+          };
+          external = scope.mkSecretRef {
+            name = "made-elsewhere";
+            keys = [ "token" ];
+          };
           job = scope.mkJob {
             name = "bootstrap";
             annotations.${kixKeys.rerun} = "on-change";
             requires = [ self.upstream ];
             spec.template = {
-              metadata = {
-                labels = scope.selectorLabels;
-                annotations."checksum/password" = self.password.out.contentHash;
-              };
+              metadata.labels = scope.selectorLabels;
               spec = {
                 restartPolicy = "OnFailure";
+                initContainers = lib.optional reads {
+                  name = "prepare";
+                  inherit image;
+                  envFrom = [ { configMapRef.name = self.script.out.name; } ];
+                };
                 containers = [
-                  {
-                    name = "bootstrap";
-                    inherit image;
-                    env = self.password.out.mkEnv { PASSWORD = "password"; };
-                  }
+                  (
+                    {
+                      name = "bootstrap";
+                      inherit image;
+                    }
+                    // lib.optionalAttrs reads {
+                      env = self.password.out.mkEnv { PASSWORD = "password"; } ++ [
+                        {
+                          name = "EXTERNAL";
+                          valueFrom.secretKeyRef = {
+                            name = self.external.out.name;
+                            key = "token";
+                          };
+                        }
+                      ];
+                    }
+                  )
                 ];
               };
             };
@@ -83,14 +111,16 @@ let
   base = stampOf { };
 in
 {
-  # The stamp is the Job's own out.contentHash.
+  # A Job whose pod reads no Kix-built Secret or ConfigMap stamps its own
+  # out.contentHash, so its hash does not move when nothing it reads exists.
   rerun-hash-stamped =
     let
-      out = (clusterOf { }).instances.a.app.raw.job.out;
+      args.reads = false;
+      out = (clusterOf args).instances.a.app.raw.job.out;
     in
-    (base != null || throw "the Job should carry the content hash")
+    (stampOf args != null || throw "the Job should carry the content hash")
     && (
-      base == builtins.unsafeDiscardStringContext out.contentHash
+      stampOf args == builtins.unsafeDiscardStringContext out.contentHash
       || throw "the stamp should equal out.contentHash"
     );
 
@@ -118,10 +148,26 @@ in
     (identityOf args != identityOf { } || throw "the identity hash should change with the ConfigMap")
     && (stampOf args == base || throw "the content hash should not change with a dependency");
 
-  # A new password reaches the Job through its checksum annotation.
+  # A new password in a Secret the Job reads through env reruns it.
   rerun-hash-follows-read-secret =
     stampOf { password = "q"; } != base
-    || throw "the content hash should change with the Secret the Job reads";
+    || throw "the rerun hash should change with the Secret the Job reads";
+
+  # A new script in a ConfigMap an init container reads through envFrom
+  # reruns the Job.
+  rerun-hash-follows-read-configmap =
+    stampOf { script = "echo bye"; } != base
+    || throw "the rerun hash should change with the ConfigMap the Job reads";
+
+  # A read Secret or ConfigMap changes only the rerun hash. The Job's own
+  # manifest, and so its pod template, stays the same.
+  rerun-hash-reads-leave-manifest-alone =
+    let
+      ownHash =
+        args: builtins.unsafeDiscardStringContext (clusterOf args).instances.a.app.raw.job.out.contentHash;
+    in
+    ownHash { password = "q"; } == ownHash { }
+    || throw "a read Secret should not change the Job's own content hash";
 
   # A change to the Job's own spec changes the hash.
   rerun-hash-follows-own-spec =

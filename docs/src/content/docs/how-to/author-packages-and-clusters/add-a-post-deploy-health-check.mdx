@@ -101,9 +101,10 @@ reported with the final lines from the script:
 
 The Job carries `kix.run/rerun: on-change`. When the Job's own content
 changes, Kix deletes the existing Job in the foreground and recreates it. That
-content includes the script, the environment, and a `checksum/*` annotation
-for `self.root` and for each resource `requires` returns, so a change to one
-of those runs the probe again. When
+content includes the script, the environment, the Secrets and ConfigMaps that
+Kix builds and the environment reads, and a `checksum/*` annotation for
+`self.root` and for each resource `requires` returns, so a change to one of
+those runs the probe again. When
 the Job is unchanged, `kix deploy` and `kix rollback` inspect the live Job: they
 skip it if its previous run succeeded and recreate it if its previous run
 failed (the in-cluster operator reports an unchanged failed Job without

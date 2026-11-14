@@ -513,14 +513,12 @@ in
               template = {
                 metadata = {
                   inherit labels;
-                  # The deploy reruns the Job when its own content changes.
-                  # These put the content of what it reads into it. A
-                  # secret-ref or an imported server has no content hash.
+                  # The deploy reruns the Job when its content or the content
+                  # of a Kix-built Secret or ConfigMap it reads changes. The
+                  # server is reached over the network, so its checksum
+                  # annotation reruns the Job when the server changes. An
+                  # imported server has no content hash.
                   annotations = lib.filterAttrs (_: v: v != null) {
-                    "checksum/bootstrap" = self.bootstrapFiles.out.contentHash;
-                    "checksum/schema" = if hasSchema then self.schemaFiles.out.contentHash else null;
-                    "checksum/password" = self.bootstrapPassword.out.contentHash or null;
-                    "checksum/admin" = server.credentials.out.contentHash or null;
                     "checksum/server" = server.contentHash or null;
                   };
                 };

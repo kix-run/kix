@@ -569,7 +569,7 @@ in
     || throw "stackgres-database password: ${builtins.toJSON (secretIn "app-db-credentials")}";
 
   # The bootstrap Job keeps one name and carries the rerun annotation. A
-  # new SOPS file for the password changes the Job's identity hash, so the
+  # new SOPS file for the password changes the Job's rerun hash, so the
   # deploy runs it again without renaming it. A rename would be reported as
   # a stateful replacement.
   stackgres-database-bootstrap-reruns-on-new-password =
@@ -597,9 +597,7 @@ in
             };
         };
       jobOf = cluster: byName "app-db-apps-bootstrap" (ofKind "Job" (manifests cluster));
-      hashOf =
-        cluster:
-        builtins.unsafeDiscardStringContext cluster.instances.apps.app-db.raw.bootstrapJob.out.identityHash;
+      hashOf = cluster: (jobOf cluster).metadata.annotations.${kixKeys.rerunHash} or null;
       before = withSource ./stackgres.nix;
       after = withSource ./clickhouse.nix;
       job = jobOf before;
@@ -608,6 +606,7 @@ in
       job != null
       && jobOf after != null
       && job.metadata.annotations.${kixKeys.rerun} or null == kixlib.keyValues.rerunOnChange
+      && hashOf before != null
       && hashOf before != hashOf after
     )
     || throw "stackgres-database bootstrap rerun: ${

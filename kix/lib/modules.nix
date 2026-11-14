@@ -68,7 +68,6 @@ in
   imports = [
     ./plugins/netpol/module.nix
     ./plugins/availability/module.nix
-    ./plugins/rerun/module.nix
   ];
 
   options = {
