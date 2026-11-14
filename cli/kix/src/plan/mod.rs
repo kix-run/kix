@@ -27,11 +27,15 @@ mod synthesize_tests;
 #[cfg(test)]
 mod tests;
 
+pub use crate::cluster::scheduler::LastRuns;
 #[cfg(test)]
 use diff::is_propagation_path;
 pub(crate) use diff::partition_propagation;
 pub use diff::{diff_garbage, diff_graphs};
-pub use planner::{CheckedPlan, OldSide, Planned, Planner, Target, TargetChecks, keep_shared};
+pub use planner::{
+    CheckedPlan, Connected, OldSide, Planned, Planner, Start, Target, TargetChecks, Work,
+    keep_shared,
+};
 #[cfg(test)]
 use redact::LAST_APPLIED;
 pub use redact::{

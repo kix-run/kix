@@ -60,7 +60,7 @@ use node::recreate_refusal;
 use node::{NodeCtx, NodeOutcome, execute_node, prune_order, with_sentence};
 use plan::{SchedulerState, is_crd_like, runs_task};
 
-pub use plan::{DeployPlan, PlanNodeEntry};
+pub use plan::{DeployPlan, LastRuns, PlanNodeEntry};
 
 /// Policy for handling a node that reaches `Verdict::Failed`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

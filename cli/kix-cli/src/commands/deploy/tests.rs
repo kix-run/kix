@@ -104,6 +104,7 @@ mod prune_flag_tests {
 
 mod cached_baseline_tests {
     use super::*;
+    use kix::cluster::discovery;
     use kix::cluster::fake_api::FakeApi;
     use kix::manifest::keys;
     use kix::manifest::lifecycle;
@@ -201,6 +202,7 @@ mod run_end_tests {
     use kix::cluster::scheduler::{DeployPlan, PrunePolicy};
     use kix::cluster::scripted::{ApplyFailure, Behaviour, NodeScript, ScriptedOps};
     use kix::cluster::stream::NullObserver;
+    use kix::cluster::watchdog::StallPolicy;
     use kix::manifest::keys;
     use serde_json::json;
 
@@ -572,10 +574,54 @@ mod stop_advice_tests {
 
     #[test]
     fn a_webhook_stop_points_to_the_backend() {
-        let unreachable = refusal(RefusalReason::Other, Some("cert-manager-webhook"));
+        let unreachable = refusal(
+            RefusalReason::WebhookUnreachable,
+            Some("cert-manager-webhook"),
+        );
         let text = super::super::stop_advice(&plan(Vec::new(), vec![unreachable])).join("\n");
         assert!(text.contains("get its backend running again"), "{text}");
         assert!(!text.contains("--on-error continue"), "{text}");
+    }
+
+    /// The reason of a refused write says what stopped it. A webhook that
+    /// could not be reached has its own reason, so a refusal that only
+    /// names a webhook is not taken for one.
+    #[test]
+    fn a_refusal_keeps_the_reason_it_was_classified_with() {
+        use crate::commands::plan::admission_reason;
+        use kix::cluster::preview::Refusal;
+        use kix::manifest::types::ResourceId;
+
+        let service = ResourceId {
+            kind: "Service".into(),
+            namespace: "cert-manager".into(),
+            name: "cert-manager-webhook".into(),
+        };
+        let unreachable = Refusal::WebhookUnreachable {
+            webhook: Some("webhook.cert-manager.io".into()),
+            service,
+            message: "no endpoints".into(),
+        };
+        assert_eq!(
+            admission_reason(&unreachable),
+            (
+                RefusalReason::WebhookUnreachable,
+                Some("webhook.cert-manager.io".into())
+            )
+        );
+        let denied = Refusal::WebhookDenied {
+            webhook: Some("policy.example.com".into()),
+            message: "denied".into(),
+        };
+        assert_eq!(admission_reason(&denied).0, RefusalReason::WebhookDenied);
+        let other = Refusal::Other {
+            message: "boom".into(),
+        };
+        assert_eq!(admission_reason(&other), (RefusalReason::Other, None));
+
+        let named_but_other = refusal(RefusalReason::Other, Some("policy.example.com"));
+        let text = super::super::stop_advice(&plan(Vec::new(), vec![named_but_other])).join("\n");
+        assert!(!text.contains("get its backend running again"), "{text}");
     }
 
     #[test]

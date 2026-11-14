@@ -102,7 +102,7 @@ pub(super) fn check_saved_plan(
     let Some(mut p) = prepare(args, saved.flags, ctx)? else {
         return Ok(Exit::Success);
     };
-    let report = match p.client.clone() {
+    let report = match p.client().cloned() {
         Some(client) => Some(dry_run(&mut p, false, client, ctx)?),
         None => None,
     };

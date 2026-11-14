@@ -560,15 +560,6 @@ pub struct AdmissionRefusal {
     pub message: String,
 }
 
-impl AdmissionRefusal {
-    /// Return true when the write stopped because the apiserver could not
-    /// reach an admission webhook's backend. Such a refusal is the only one
-    /// that names a webhook under [`RefusalReason::Other`].
-    pub fn webhook_unreachable(&self) -> bool {
-        self.reason == RefusalReason::Other && self.webhook.is_some()
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RefusalReason {
@@ -593,6 +584,10 @@ pub enum RefusalReason {
     /// The deploy refuses it before sending, or the apiserver gave another
     /// error.
     Other,
+    /// The apiserver could not reach the Service behind an admission
+    /// webhook, so the webhook did not answer. This deploy does not write
+    /// that Service or the package that serves it.
+    WebhookUnreachable,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

@@ -210,8 +210,11 @@ fn refusal_title(r: &AdmissionRefusal) -> String {
             "the cluster does not serve its kind and the build has no CRD for it".into()
         }
         (RefusalReason::Decryption, _) => "could not decrypt the SOPS Secret".into(),
-        (RefusalReason::Other, Some(w)) => format!("admission webhook {w} did not answer"),
-        (RefusalReason::Other, None) => "refused".into(),
+        (RefusalReason::WebhookUnreachable, Some(w)) => {
+            format!("admission webhook {w} is unreachable")
+        }
+        (RefusalReason::WebhookUnreachable, None) => "an admission webhook is unreachable".into(),
+        (RefusalReason::Other, _) => "refused".into(),
     }
 }
 
