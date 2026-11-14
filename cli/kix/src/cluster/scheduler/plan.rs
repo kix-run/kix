@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use serde_json::Value;
 
 use crate::manifest::keys;
+use crate::manifest::kinds;
 use crate::manifest::lifecycle;
 use crate::manifest::types::{CLUSTER_SCOPED, ResourceId};
 
@@ -187,7 +188,8 @@ impl DeployPlan {
             let api = super::super::discovery::api_for(client, ar, scope, rid);
             match api.get_opt(&rid.name).await {
                 Ok(Some(live))
-                    if readiness::classify_workload_terminal(&live.data, &rid.kind).is_some() =>
+                    if readiness::classify_workload_terminal(&live.data, rid.group_kind())
+                        .is_some() =>
                 {
                     failed.insert(rid.clone());
                 }
@@ -451,7 +453,7 @@ fn reads_last_run(entry: &PlanNodeEntry) -> bool {
 pub(super) fn skip_reads_live(entry: &PlanNodeEntry) -> bool {
     match (&entry.action, &entry.rerun) {
         (ChangeAction::Skip(_), Some(_)) => true,
-        (ChangeAction::Skip(rid), None) => rid.group == "batch" && rid.kind == "Job",
+        (ChangeAction::Skip(rid), None) => rid.group_kind() == kinds::JOB,
         _ => false,
     }
 }
@@ -497,11 +499,11 @@ fn checked_unchanged(
 
 pub(super) fn is_crd_like(entry: &PlanNodeEntry) -> bool {
     match &entry.id {
-        NodeId::Resource(rid) if rid.kind == "CustomResourceDefinition" => true,
+        NodeId::Resource(rid) if rid.group_kind() == kinds::CUSTOM_RESOURCE_DEFINITION => true,
         _ => entry
             .meta
             .import_target
             .as_ref()
-            .is_some_and(|t| t.kind == "CustomResourceDefinition"),
+            .is_some_and(|t| t.group_kind() == kinds::CUSTOM_RESOURCE_DEFINITION),
     }
 }

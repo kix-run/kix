@@ -596,6 +596,7 @@ fn a_closure_leaves_orphans_only_for_deletable_objects_the_new_build_lacks() {
     // Records are superseded and Namespaces are never pruned.
     assert!(!leaves_orphans(&[record("demo-old", "h8")], &new));
     let mut ns = manifest("Namespace", "app", "app", "h7");
+    ns["apiVersion"] = json!("v1");
     ns["metadata"].as_object_mut().unwrap().remove("namespace");
     assert!(!leaves_orphans(&[ns], &new));
 }

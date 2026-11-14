@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
+use crate::manifest::kinds;
 use crate::manifest::lifecycle::never_pruned;
 use crate::manifest::types::ResourceId;
 
@@ -88,12 +89,12 @@ async fn recreate(
 /// Return an error message if `rid` is a protected kind that Kix must not
 /// delete and recreate automatically, or `None` if recreation is allowed.
 pub(super) fn recreate_refusal(rid: &ResourceId) -> Option<String> {
-    if !never_pruned(&rid.kind) {
+    if !never_pruned(rid.group_kind()) {
         return None;
     }
-    let consequence = match rid.kind.as_str() {
-        "Namespace" => "deleting a Namespace deletes everything in it",
-        "CustomResourceDefinition" => {
+    let consequence = match rid.group_kind() {
+        kinds::NAMESPACE => "deleting a Namespace deletes everything in it",
+        kinds::CUSTOM_RESOURCE_DEFINITION => {
             "deleting a CustomResourceDefinition deletes every custom resource of that kind"
         }
         _ => "deleting it also deletes objects outside the build",
@@ -127,7 +128,7 @@ pub(super) async fn execute_node(
             // whether a Job runs again, so nothing is deleted here.
             let live = ctx.resources.get_live(rid).await;
             let terminal = match &live {
-                Ok(Some(obj)) => readiness::classify_workload_terminal(obj, &rid.kind),
+                Ok(Some(obj)) => readiness::classify_workload_terminal(obj, rid.group_kind()),
                 _ => None,
             };
             match (live, terminal) {
@@ -318,7 +319,7 @@ pub(super) async fn execute_node(
     }
 
     let import_target: Option<ImportTarget> = entry.meta.import_target.clone();
-    if import_target.is_none() && readiness::is_immediate_kind(&rid.kind) {
+    if import_target.is_none() && readiness::is_immediate_kind(rid.group_kind()) {
         return done(recreated_reason);
     }
 
@@ -429,7 +430,7 @@ async fn check_unchanged(ctx: &NodeCtx, entry: &PlanNodeEntry, rid: &ResourceId)
     if ctx.dry_run {
         return unchanged;
     }
-    if entry.meta.import_target.is_none() && readiness::is_immediate_kind(&rid.kind) {
+    if entry.meta.import_target.is_none() && readiness::is_immediate_kind(rid.group_kind()) {
         return unchanged;
     }
     match wait_live(ctx, entry, rid).await {

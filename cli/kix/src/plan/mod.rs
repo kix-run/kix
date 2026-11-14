@@ -384,7 +384,7 @@ impl PackageInfo {
             .collect();
         let kept = resources
             .iter()
-            .filter(|rid| lifecycle::never_pruned(&rid.kind))
+            .filter(|rid| lifecycle::never_pruned(rid.group_kind()))
             .cloned()
             .collect();
         PackageInfo {
@@ -437,7 +437,7 @@ impl PackageChangeDiff {
         let (removed, mut kept): (Vec<&ResourceId>, Vec<&ResourceId>) = self
             .removed_resources
             .iter()
-            .partition(|id| !lifecycle::never_pruned(&id.kind));
+            .partition(|id| !lifecycle::never_pruned(id.group_kind()));
         kept.extend(&self.shared_kept);
         (removed, kept)
     }
@@ -452,6 +452,6 @@ pub const CLUSTER_LEVEL_KEY: &str = "_cluster";
 pub fn split_never_pruned(rids: Vec<ResourceId>) -> (Vec<ResourceId>, Vec<ResourceId>) {
     let (kept, delete) = rids
         .into_iter()
-        .partition(|rid| lifecycle::never_pruned(&rid.kind));
+        .partition(|rid| lifecycle::never_pruned(rid.group_kind()));
     (delete, kept)
 }

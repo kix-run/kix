@@ -12,6 +12,7 @@ use crate::client;
 use kix::build_source::InstallableBuild;
 use kix::legacy_domain::{KubeMigrationOps, migrate};
 use kix::manifest::keys;
+use kix::manifest::kinds::{self, GroupKind};
 
 use crate::cli::MigrateArgs;
 use crate::output;
@@ -92,7 +93,7 @@ fn kix_crds(build: &InstallableBuild) -> Result<Vec<Value>> {
         .values()
         .map(|r| &r.manifest)
         .filter(|m| {
-            m.get("kind").and_then(Value::as_str) == Some("CustomResourceDefinition")
+            GroupKind::of_manifest(m) == kinds::CUSTOM_RESOURCE_DEFINITION
                 && m.pointer("/metadata/name")
                     .and_then(Value::as_str)
                     .is_some_and(|n| wanted.iter().any(|w| w == n))

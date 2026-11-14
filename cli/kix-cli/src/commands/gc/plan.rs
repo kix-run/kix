@@ -175,7 +175,9 @@ pub(super) fn judge_hard(
         };
 
         let others = tenancy.still_deployed_by_others(obj);
-        if !others.is_empty() && !lifecycle::never_pruned(&live_kind(obj)) {
+        if !others.is_empty()
+            && !lifecycle::never_pruned(kix::cluster::drift::resource_id(obj).group_kind())
+        {
             shared.push(inventory::SharedOrphan {
                 rid: ResourceId::from_value(&to_manifest_value(obj)),
                 clusters: others,
@@ -193,15 +195,6 @@ pub(super) fn judge_hard(
         });
     }
     (garbage, shared)
-}
-
-fn live_kind(obj: &kube::api::DynamicObject) -> String {
-    obj.data
-        .get("kind")
-        .and_then(|v| v.as_str())
-        .or_else(|| obj.types.as_ref().map(|t| t.kind.as_str()))
-        .unwrap_or("Unknown")
-        .to_string()
 }
 
 /// Return `true` if `obj` carries annotation `key` in its raw data or typed metadata.

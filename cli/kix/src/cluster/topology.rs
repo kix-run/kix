@@ -298,7 +298,7 @@ mod tests {
                 ]),
             ),
             json!({
-                "kind": "CronJob", "metadata": { "name": "tick", "namespace": "app" },
+                "apiVersion": "batch/v1", "kind": "CronJob", "metadata": { "name": "tick", "namespace": "app" },
                 "spec": { "jobTemplate": { "spec": { "template": { "spec": { "affinity": {
                     "podAntiAffinity": {
                         "requiredDuringSchedulingIgnoredDuringExecution": [ { "topologyKey": HOST } ],
@@ -308,7 +308,7 @@ mod tests {
                     }
                 } } } } } }
             }),
-            json!({ "kind": "Service", "metadata": { "name": "svc" }, "spec": {} }),
+            json!({ "apiVersion": "v1", "kind": "Service", "metadata": { "name": "svc" }, "spec": {} }),
         ];
         let keys = topology_keys(&manifests);
         assert_eq!(keys.len(), 2);

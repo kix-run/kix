@@ -10,8 +10,7 @@ pub const CLUSTER_SCOPED: &str = "_cluster";
 /// Kix redacts secret values based on this check. Custom resources in other API
 /// groups whose kind happens to be `Secret` are not redacted.
 pub fn is_secret(manifest: &serde_json::Value) -> bool {
-    manifest.get("apiVersion").and_then(|v| v.as_str()) == Some("v1")
-        && manifest.get("kind").and_then(|v| v.as_str()) == Some("Secret")
+    super::kinds::GroupKind::of_manifest(manifest) == super::kinds::SECRET
 }
 
 /// Return whether the manifest's API group is one whose kinds Kix knows: the
@@ -137,6 +136,11 @@ impl ResourceId {
             namespace: ns_dir.to_string(),
             name: name.to_string(),
         })
+    }
+
+    /// Return the id's API group and kind.
+    pub fn group_kind(&self) -> super::kinds::GroupKind<'_> {
+        super::kinds::GroupKind::new(&self.group, &self.kind)
     }
 
     /// Return `"Kind/name@namespace"` (or `"Kind/name"` when cluster-scoped)

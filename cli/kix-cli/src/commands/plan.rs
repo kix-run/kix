@@ -662,7 +662,7 @@ pub(crate) fn prune_entry(
     policy: PrunePolicy,
     answer: Option<&PruneAnswer>,
 ) -> PruneEntry {
-    let (fate, detail) = if lifecycle::never_pruned(&rid.kind) {
+    let (fate, detail) = if lifecycle::never_pruned(rid.group_kind()) {
         (PruneFate::KeptNeverPruned, None)
     } else {
         match policy {

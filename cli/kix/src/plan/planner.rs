@@ -833,7 +833,7 @@ pub(crate) fn deletes_of(prune: PrunePolicy, orphans: &[ResourceId]) -> Vec<Reso
     }
     orphans
         .iter()
-        .filter(|rid| !lifecycle::never_pruned(&rid.kind))
+        .filter(|rid| !lifecycle::never_pruned(rid.group_kind()))
         .cloned()
         .collect()
 }
