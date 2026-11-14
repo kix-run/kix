@@ -1,7 +1,7 @@
 # 172b: Running the package bump workflow
 
 **Status:** Draft
-**Related:** `172_package_version_upkeep.md` (the proposal this doc makes runnable), `172a_upstream_release_rates.md`, `159_patched_images_pipeline.md` (shares the queue and the runner)
+**Related:** `172_package_version_upkeep.md` (the proposal this doc makes runnable), `172a_upstream_release_rates.md`
 
 ## 1. Summary
 
@@ -30,30 +30,41 @@ every hour                          when the queue has work
 **The version each package pins.** Every package sets `meta.version`. One
 evaluation of the Kix library lists it for all packages.
 
-**The upstream of each package.** A data file, `kix/packages/upstreams.toml`,
-with one entry per package:
+**The upstream of each package.** A new `meta.upstream` in the package:
 
-```toml
-[valkey]
-repo = "valkey-io/valkey"
-care = "data"            # plain | operator | data
-
-[ingress-nginx]
-repo = "kubernetes/ingress-nginx"
-tag = '^controller-v(\d+\.\d+\.\d+)$'
-
-[victoria-metrics-agent]
-repo = "VictoriaMetrics/VictoriaMetrics"
-group = "victoria-metrics"   # packages that move together
+```nix
+meta = {
+  version = release;
+  upstream.repo = "kubernetes/ingress-nginx";
+  # Only where the release tags are not plain versions.
+  upstream.tag = "^controller-v(\\d+\\.\\d+\\.\\d+)$";
+};
 ```
 
-The experiment already built this table for 69 packages, with the tag
-pattern for each upstream that needs one
-(`/scratch/worktrees/upkeep/_keep/release-rates/fetch.py`). A test fails
-when a package has no entry, so a new package cannot be left out.
+The upstream is a fact about the software, like the version beside it. In
+the package, it is reviewed with the package, it moves with the package
+when the folder moves, and a package outside this repository can carry it.
+Detection already evaluates every package to read `meta.version`, so
+reading one more field costs nothing. A stable package with no
+`meta.upstream` fails a library test, so a new package cannot be left out.
+The experiment collected the repository and tag pattern for 69 packages
+(`/scratch/worktrees/upkeep/_keep/release-rates/fetch.py`), which fills the
+field for the current set.
 
-`care` picks the first model (§4.3). The script cannot work it out from the
-package: nothing in a package says that it holds data.
+Packages that name the same repository move together and share one queue
+item.
+
+**How careful a bump must be.** The script derives this from what the
+package already says, so there is no field to keep in step:
+
+- `data`: the package sets `meta.lifecycle = "stateful"`.
+- `operator`: the package ships CRDs.
+- `plain`: every other package.
+
+**Holds.** A small data file, `kix/packages/bump-holds.toml`, lists the
+packages held at a version, each with a reason and an end date. A hold is
+a decision about this repository's schedule. It changes often and says
+nothing about the software, so it stays out of the package.
 
 ### 2.2 Rules
 
@@ -71,9 +82,8 @@ target. Every rule is a comparison a program can make:
 4. **The image exists.** The script looks the target's tag up in the
    registry and records the digest. A release with no image is not a
    target.
-5. **Holds.** An entry can hold a package at a version, with a reason and
-   an end date. A hold whose date has passed fails the script, so that
-   holds get removed.
+5. **Holds.** A held package is not a target. A hold whose end date has
+   passed fails the script, so that holds get removed.
 
 ### 2.3 Output
 
@@ -117,7 +127,7 @@ pull requests that exist. It is safe to run any number of times:
 for review, a newer release starts no second agent. When the pull request
 merges or closes, the next detection run finds whatever gap is left. This
 keeps a package that releases three patches in a week from costing three
-agent runs. A security fix is the exception (§7, question 2).
+agent runs. An urgent item is the exception (§6).
 
 **Labels hold the state:** `bump:queued`, `bump:running`, `bump:failed-1`,
 `bump:failed-2`, `bump:needs-person`, and `bump:hold`. The runner takes
@@ -169,7 +179,8 @@ the package change.
 
 ### 4.3 Which model, and what happens on failure
 
-The first model comes from the step and the `care` field:
+The first model comes from the step and how careful the bump must be
+(§2.1):
 
 | Bump | First | Then | Then |
 |---|---|---|---|
@@ -210,24 +221,29 @@ A weekly digest issue lists what is waiting: pull requests by step, bumps
 that need a person, packages on hold, and packages detection could not
 read.
 
-## 6. What doc 159 shares
+## 6. Items from other sources
 
-Doc 159 finds work from CVE feeds, and this doc finds it from upstream
-releases. After that the two need the same parts: a queue, a runner with
-isolation and cleanup, the kind verification, and a pull request that
-bumps a pin. Build those here, with a `source` field on each queue item,
-and let doc 159 add items of its own.
+Detection is one source of queue items. The queue, the runner, the kind
+verification, and the pull request that moves a pin do not depend on why
+a bump is wanted. Each item carries a `source` field, and another tool can
+add items of its own.
+
+An item can be marked urgent with the label `bump:urgent`. An urgent item
+skips the waiting period, goes to the front of the queue, and may replace
+an open pull request for the same package. A security fix is the main
+case. This workflow does not decide that a release is a security fix: a
+version number does not say so. The mark comes from the item's source, or
+from a person.
 
 ## 7. Open questions
 
-1. **Where the upstream is named.** This doc proposes one data file. The
-   other choice is a field in each package's `meta`. A file keeps tag
-   patterns and holds out of the package, and a script can read it without
-   an evaluation.
-2. **Security fixes.** A release that fixes a CVE should skip the waiting
-   period and the one-pull-request rule. Detection cannot tell from a
-   version number that a release is a security fix. Doc 159's feed can.
-   Until it exists, a person adds a `bump:security` label by hand.
+1. **`meta.upstream` is new package surface.** It needs a row in the
+   package reference, an item in the `package-review` checklist, and a
+   decision on packages with no single upstream release line, such as
+   `echo-server`. A value of `null` with a comment may be enough.
+2. **Several upstreams in one package.** A package that pins images from
+   two projects has one `meta.version` and would have one `meta.upstream`.
+   Doc 172, question 4, asks the same about helper images.
 3. **A public repository.** A self-hosted runner that holds model logins is
    safe while only maintainers can start its workflows. If the repository
    becomes public, the bump workflow must never run on a pull request from
@@ -235,9 +251,9 @@ and let doc 159 add items of its own.
 4. **Subscription limits.** The cost figures in doc 172 are API prices. The
    runs go through subscriptions, which have usage limits. The cap of six
    bumps an hour is a guess until a week of real runs shows the usage.
-5. **Packages that move together.** `group` lets several packages share
-   one bump. It is not settled whether that is one agent run and one pull
-   request, or one run per package in a fixed order.
+5. **Packages that move together.** Packages with the same upstream
+   repository share one queue item. It is not settled whether that is one
+   agent run and one pull request, or one run per package in a fixed order.
 6. **The build cache.** Each checkout builds its own 2.4 GB Rust cache for
    the snapshot test (doc 172, question 8). Two slots that reuse two fixed
    checkout paths would keep the caches warm and remove the cost.
@@ -246,7 +262,7 @@ and let doc 159 add items of its own.
 
 Each step is useful without the next.
 
-1. **The upstream table and the detection script**, tested against
+1. **`meta.upstream` on every package and the detection script**, tested against
    recorded upstream responses. Run it by hand and read the list.
 2. **Reconcile, in a mode that prints what it would do.** Turn on the
    hourly schedule once the printed actions look right for a few days.
