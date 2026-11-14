@@ -35,11 +35,24 @@ evaluation of the Kix library lists it for all packages.
 ```nix
 meta = {
   version = release;
-  upstream.repo = "kubernetes/ingress-nginx";
-  # Only where the release tags are not plain versions.
-  upstream.tag = "^controller-v(\\d+\\.\\d+\\.\\d+)$";
+  upstream.git = "https://github.com/kubernetes/ingress-nginx";
+  # Only where a release tag is more than the version.
+  upstream.tag = "controller-v{version}";
 };
 ```
+
+`upstream.git` is the URL of upstream's git repository. The script lists
+its tags over git, which works the same on GitHub, GitLab, Gitea, and a
+self-hosted server. It needs no forge API and no token.
+
+`upstream.tag` is the shape of a release tag, with `{version}` where the
+version sits. The default is `{version}` with an optional leading `v`,
+which fits most upstreams. Other examples are `n8n@{version}` and
+`gha-runner-scale-set-{version}`. The script reads the `{version}` part
+with the same version grammar that `meta.version` uses, and drops a tag
+whose version has a prerelease suffix such as `-rc1`. An upstream that
+versions by date adds `upstream.scheme = "calendar"`, which tells the
+script that the steps are not major, minor, and patch.
 
 The upstream is a fact about the software, like the version beside it. In
 the package, it is reviewed with the package, it moves with the package
@@ -47,7 +60,7 @@ when the folder moves, and a package outside this repository can carry it.
 Detection already evaluates every package to read `meta.version`, so
 reading one more field costs nothing. A stable package with no
 `meta.upstream` fails a library test, so a new package cannot be left out.
-The experiment collected the repository and tag pattern for 69 packages
+The experiment collected the repository and tag shape for 69 packages
 (`/scratch/worktrees/upkeep/_keep/release-rates/fetch.py`), which fills the
 field for the current set.
 
@@ -68,20 +81,22 @@ nothing about the software, so it stays out of the package.
 
 ### 2.2 Rules
 
-For each package the script fetches the upstream's releases and picks a
-target. Every rule is a comparison a program can make:
+For each package the script lists the upstream's tags and picks a target.
+Every rule is a comparison a program can make:
 
-1. **Stable releases only.** The tag matches the pattern, and upstream has
-   not marked it as a prerelease.
+1. **Stable releases only.** The tag has the shape `upstream.tag` gives,
+   and its version has no prerelease suffix.
 2. **The newest version.** The target is the highest stable version. The
    step from the pinned version is patch, minor, or major. A minor below
    1.0 counts as major, as in doc 172.
-3. **A waiting period.** A release must be three days old. In the
-   experiment, one release was replaced a day later because its images were
-   broken.
+3. **A waiting period.** Three days must pass after the script first sees
+   a tag. A tag list carries no dates, so the queue issue records the
+   first sighting (§3). In the experiment, one release was replaced a day
+   later because its images were broken.
 4. **The image exists.** The script looks the target's tag up in the
-   registry and records the digest. A release with no image is not a
-   target.
+   registry and records the digest. A tag with no image is not a target.
+   Upstream can push a tag before it publishes anything, and this rule
+   and the waiting period cover that.
 5. **Holds.** A held package is not a target. A hold whose end date has
    passed fails the script, so that holds get removed.
 
@@ -91,8 +106,8 @@ A list of pending bumps as JSON:
 
 ```json
 { "package": "valkey", "pinned": "8.1.10", "target": "8.1.11",
-  "step": "patch", "care": "data", "released": "2026-11-09",
-  "digest": "sha256:…", "notes_url": "https://github.com/valkey-io/valkey/releases/tag/8.1.11" }
+  "tag": "8.1.11", "step": "patch", "care": "data",
+  "git": "https://github.com/valkey-io/valkey", "digest": "sha256:…" }
 ```
 
 When the script cannot decide for a package (a tag it cannot read, a
@@ -101,10 +116,10 @@ carries on with the others. A broken package starts no agent.
 
 ### 2.4 Cost of a run
 
-One run makes about 61 requests to GitHub and one registry lookup for each
-new target. Requests that send the last response's ETag do not count
-against the rate limit when nothing changed. An hourly run is cheap. Most
-runs find nothing and end there.
+One run lists the tags of about 61 repositories over git and makes one
+registry lookup for each new target. No forge API is involved, so no API
+rate limit applies. An hourly run is cheap. Most runs find nothing and end
+there.
 
 ## 3. The queue
 
@@ -117,7 +132,8 @@ pull requests that exist. It is safe to run any number of times:
 
 | Detection says | Exists | Reconcile does |
 |---|---|---|
-| bump pending | nothing | opens an issue, labelled `bump:queued` |
+| bump pending | nothing | opens an issue, labelled `bump:waiting` |
+| bump pending | an issue opened three days ago or more, labelled `bump:waiting` | changes the label to `bump:queued` |
 | bump pending | an issue for an older target, no pull request | updates the issue to the new target |
 | bump pending | an open pull request for the package | nothing (see below) |
 | package current | an open issue | closes it |
@@ -129,7 +145,7 @@ merges or closes, the next detection run finds whatever gap is left. This
 keeps a package that releases three patches in a week from costing three
 agent runs. An urgent item is the exception (§6).
 
-**Labels hold the state:** `bump:queued`, `bump:running`, `bump:failed-1`,
+**Labels hold the state:** `bump:waiting`, `bump:queued`, `bump:running`, `bump:failed-1`,
 `bump:failed-2`, `bump:needs-person`, and `bump:hold`. The runner takes
 only `bump:queued`. A person stops a bump by adding `bump:hold`, and
 restarts one by setting `bump:queued`.
@@ -162,7 +178,7 @@ the package change.
    that belong to this run alone, named after the issue number.
 3. **Run the agent** with a time limit of 45 minutes. The brief is a
    template filled from the detection record: the package, the pinned
-   version, the target, the digest, the link to upstream's release notes,
+   version, the target, the digest, upstream's repository and the two tags,
    the "upgrading a package" section of the `package-authoring` skill, and
    the sentence "the work is finished when `scripts/check-bump.sh` prints
    `check-bump: PASS`".
