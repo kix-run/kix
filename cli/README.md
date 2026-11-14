@@ -486,8 +486,10 @@ writes. Versions before 0.10.0-rc.4 take the older spellings `list packages
   before the first pin (`fix-needed`, the step `started`) and after each
   step, so a project left part of the way always has one. A state that is
   `fix-needed` or `edit-needed` resumes: `from`, `before`, the steps, the
-  acknowledgements, and `packagesInUse` come from the file, and the target
-  and any required stop are worked out again. A resume never runs the
+  acknowledgements, `packagesInUse`, and `requested` (the first run's
+  `--to`, used when the resume passes none) come from the file, and the
+  target and any required stop are worked out again. A resume refuses a
+  target below the version the project is pinned to now. A resume never runs the
   version the upgrade started from, and refuses when `before` is gone.
   Another run refuses while the last state has unacknowledged
   `dataChanges`. `check_deploy` (called from `main` for every deploy but a

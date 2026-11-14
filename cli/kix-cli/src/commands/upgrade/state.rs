@@ -70,6 +70,10 @@ pub struct UpgradeState {
     pub schema: String,
     pub from: String,
     pub to: String,
+    /// The `--to` value the upgrade started with. Absent when it asked for
+    /// the latest release. A resumed run without `--to` uses it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested: Option<String>,
     pub status: Status,
     pub steps: Vec<Step>,
     /// The applying records by kind, each named by its id or its name.
@@ -140,6 +144,7 @@ mod tests {
             schema: SCHEMA.into(),
             from: "0.9.0".into(),
             to: "0.10.0".into(),
+            requested: Some("0.10".into()),
             status: Status::NeedsPerson,
             steps: vec![Step {
                 version: "0.10.0".into(),
