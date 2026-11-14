@@ -1352,10 +1352,12 @@ fn plan_and_check(
             .map(|s| s.package.as_str());
         let shows = || shown_new.as_ref() == Some(&expected) && shown_under == Some(package);
         let ok = match change {
-            WriteChange::Reapplied => active_manifests.iter().any(|m| {
-                ResourceId::from_value(m) == id
-                    && keys::get(m, keys::IDENTITY_HASH) == Some(hash.as_str())
-            }),
+            WriteChange::Reapplied | WriteChange::IfLastRunFailed => {
+                active_manifests.iter().any(|m| {
+                    ResourceId::from_value(m) == id
+                        && keys::get(m, keys::IDENTITY_HASH) == Some(hash.as_str())
+                })
+            }
             _ if lifecycle::is_record_kind(kind) => {
                 package == CLUSTER_LEVEL_KEY
                     && doc.activation.as_ref().and_then(|a| a.new.as_deref()) == Some(name.as_str())

@@ -32,7 +32,7 @@ use super::{ManifestIndex, PackageChangeDiff, PackageDiff, PackageInfo, Side};
 /// Version of the document's shape: the date, `YYYY-MM-DD`, of its last
 /// change that was not backward compatible. Readers should refuse a version
 /// they do not know.
-pub const SCHEMA_VERSION: &str = "2026-11-13";
+pub const SCHEMA_VERSION: &str = "2026-11-14";
 
 /// What a deploy of a build would change, or how two things differ.
 ///
@@ -414,8 +414,8 @@ pub struct Objects {
     pub deletes: Vec<ObjectDelete>,
 }
 
-/// An object the deploy applies, or may create again (a probe Job under the
-/// rerun rule).
+/// An object the deploy applies, or may create again (an unchanged Job under
+/// the rerun rule, [`WriteChange::IfLastRunFailed`]).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 pub struct ObjectWrite {
     pub kind: String,
@@ -430,6 +430,17 @@ pub struct ObjectWrite {
     /// Activation record.
     pub package: String,
     pub change: WriteChange,
+}
+
+impl ObjectWrite {
+    /// Return the id of the object written.
+    pub fn resource_id(&self) -> ResourceId {
+        ResourceId {
+            kind: self.kind.clone(),
+            namespace: self.namespace.clone(),
+            name: self.name.clone(),
+        }
+    }
 }
 
 /// How `packages` shows a write.
@@ -449,6 +460,18 @@ pub enum WriteChange {
     /// object. `--reconcile` writes such objects again, as does a deploy that
     /// repairs what a stopped deploy changed.
     Reapplied,
+    /// An unchanged Job under the rerun rule. The deploy reads its last run
+    /// and creates it again only if that run failed, so the plan cannot
+    /// count it as a write.
+    IfLastRunFailed,
+}
+
+impl WriteChange {
+    /// Return whether the deploy writes the object whatever it finds on the
+    /// cluster.
+    pub fn certain(self) -> bool {
+        self != WriteChange::IfLastRunFailed
+    }
 }
 
 /// An object the deploy's prune deletes.

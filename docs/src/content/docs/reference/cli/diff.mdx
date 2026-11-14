@@ -150,8 +150,9 @@ describes the top-level keys, the checked-section shape, and the
 Stateful migrations are under the top-level `migrations` section, each
 `{ slot, source, target, reason }`.
 
-A Secret value, or a hash of one, reads `(secret, not shown)`, or
-`(secret, changed, not shown)` on the new side when the value changes. A
+A Secret value reads `(secret, not shown)`, or `(secret, changed, not shown)`
+on the new side when the value changes. Secret hashes and `checksum/*`
+annotations read `(hash, not shown)` or `(hash, changed, not shown)`. A
 field value larger than 16 KiB, or a manifest larger than 3 MiB (the apiserver's limit on a request), reads
 `(N bytes, not shown)`.
 

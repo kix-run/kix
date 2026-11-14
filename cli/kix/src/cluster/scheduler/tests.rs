@@ -217,7 +217,11 @@ fn plan_ignores_rerun_on_non_jobs() {
     let graph = ResourceGraph::from_manifests(&manifests).unwrap();
     let plan = DeployPlan::from_graph_and_changes(
         &graph,
-        &[crate::cluster::apply::changed(&deploy, None, false)],
+        &[crate::cluster::apply::changed(
+            &deploy,
+            crate::cluster::apply::Deployed::Nothing,
+            false,
+        )],
     )
     .unwrap();
     assert!(matches!(plan.nodes[0].kind, TransitionKind::Apply));

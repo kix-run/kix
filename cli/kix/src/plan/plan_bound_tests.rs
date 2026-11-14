@@ -293,6 +293,32 @@ fn a_redeploy_of_the_deployed_build_writes_nothing() {
     assert_eq!(objects, Objects::default());
 }
 
+/// An unchanged Job under `kix.run/rerun` runs again only if its last run
+/// failed, so a redeploy lists it apart from the writes it makes.
+#[test]
+fn a_redeploy_lists_an_unchanged_rerun_job_as_a_write_only_if_it_failed() {
+    let mut build = build();
+    let job = json!({
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "metadata": {
+            "name": "bootstrap",
+            "namespace": NS,
+            "annotations": {keys::RERUN: keys::RERUN_ON_CHANGE},
+        },
+        "spec": {"template": {"spec": {"restartPolicy": "Never", "containers": []}}},
+    });
+    add(&mut build, &path("rerunjob", "Job-bootstrap"), job);
+    let objects = objects(Some(&build), &build, &["--prune"]).unwrap();
+    let changes: Vec<(&str, WriteChange)> = objects
+        .writes
+        .iter()
+        .map(|w| (w.name.as_str(), w.change))
+        .collect();
+    assert_eq!(changes, [("bootstrap", WriteChange::IfLastRunFailed)]);
+    assert!(objects.writes.iter().all(|w| !w.change.certain()));
+}
+
 /// `--reconcile` writes every object again, each re-applied: the
 /// deployed build holds the same file for it.
 #[test]

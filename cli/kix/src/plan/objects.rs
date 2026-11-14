@@ -13,8 +13,10 @@
 //! - A re-apply is a write of a file that a build this cluster already ran
 //!   holds for the same object: the deployed build, or the closure of a
 //!   deploy that stopped part way or kept its orphans. `--reconcile` writes
-//!   unchanged objects again this way, a deploy repairs what a stopped
-//!   deploy changed, and a probe Job under `kix.run/rerun` is created again.
+//!   unchanged objects again this way, and a deploy repairs what a stopped
+//!   deploy changed. An unchanged Job under `kix.run/rerun` is written
+//!   again only if its last run failed. The deploy reads that run when it
+//!   runs, so the plan lists the Job as `if_last_run_failed`.
 //!   It adds no object and no file those builds lack, so the diff does not
 //!   list it; the plan document's `objects` does.
 //! - Each delete must be one the diff lists as removed, or, when the plan
@@ -90,9 +92,11 @@ pub(crate) fn of<'a>(
     let mut unshown = Unshown::default();
     let mut writes = Vec::new();
     for node in &plan.nodes {
-        let id = match (&node.action, &node.rerun) {
-            (ChangeAction::Apply(m) | ChangeAction::Recreate(m, _), _) => ResourceId::from_value(m),
-            (ChangeAction::Skip(id), Some(_)) => id.clone(),
+        let (id, certain) = match (&node.action, &node.rerun) {
+            (ChangeAction::Apply(m) | ChangeAction::Recreate(m, _), _) => {
+                (ResourceId::from_value(m), true)
+            }
+            (ChangeAction::Skip(id), Some(_)) => (id.clone(), false),
             _ => continue,
         };
         let path = match files.get(&id).map(Vec::as_slice) {
@@ -116,7 +120,12 @@ pub(crate) fn of<'a>(
         let (package, change) = match shown.writes.get(&(id.clone(), hash.clone())) {
             Some((package, change)) => (package.clone(), *change),
             None if ran.contains(&(id.clone(), hash.as_str())) => {
-                (owner(graph, path), WriteChange::Reapplied)
+                let change = if certain {
+                    WriteChange::Reapplied
+                } else {
+                    WriteChange::IfLastRunFailed
+                };
+                (owner(graph, path), change)
             }
             None => {
                 unshown

@@ -737,7 +737,7 @@
       "type": "object"
     },
     "ObjectWrite": {
-      "description": "An object the deploy applies, or may create again (a probe Job under the\nrerun rule).",
+      "description": "An object the deploy applies, or may create again (an unchanged Job under\nthe rerun rule, [`WriteChange::IfLastRunFailed`]).",
       "properties": {
         "change": {
           "$ref": "#/$defs/WriteChange"
@@ -1163,6 +1163,11 @@
         {
           "const": "reapplied",
           "description": "Not shown in `packages`: the deployed build, or a deploy of this\ncluster that stopped part way, already holds this file for the\nobject. `--reconcile` writes such objects again, as does a deploy that\nrepairs what a stopped deploy changed.",
+          "type": "string"
+        },
+        {
+          "const": "if_last_run_failed",
+          "description": "An unchanged Job under the rerun rule. The deploy reads its last run\nand creates it again only if that run failed, so the plan cannot\ncount it as a write.",
           "type": "string"
         }
       ]

@@ -865,14 +865,10 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
         .map(str::to_string)
         .ok_or_else(|| miette!("no Activation resource found in cluster manifests"))?;
     if !output::quiet() {
-        plan::print_package_plan(checked.pkg_diff(), ctx.global.verbose > 0);
-        plan::print_plan_summary(checked.pkg_diff());
-        print!(
-            "{}",
-            plan::render_plan_orphans(
-                checked.orphans(),
-                "to be deleted after the apply (the operator always prunes)"
-            )
+        plan::print_checked(
+            checked,
+            "to be deleted after the apply (the operator always prunes)",
+            ctx.global.verbose > 0,
         );
         plan::print_shared(checked.shared_orphans());
     }
