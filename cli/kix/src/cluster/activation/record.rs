@@ -36,6 +36,16 @@ pub struct Record {
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
     /// `true` when `spec.source` is set, indicating an operator-driven deploy.
     pub operator_driven: bool,
+    /// `spec.request`: the request a person last made, through `kix deploy
+    /// --operator` or `kix rollback --operator`, for the operator to deploy
+    /// this record. Only those commands write it, so a record a direct
+    /// deploy wrote, or one written before Kix had requests, has none.
+    pub request: Option<String>,
+    /// `status.startedRequest`: the last request the operator started.
+    pub started_request: Option<String>,
+    /// `status.finishedRequest`: the last request whose run the operator
+    /// finished.
+    pub finished_request: Option<String>,
     /// `status.orphansKeptFrom`, listing builds whose orphans remain on the cluster.
     pub orphans_kept_from: Vec<KeptOrphanSource>,
     /// `status.packageIndex`, which package each resource of the record's
@@ -76,6 +86,18 @@ pub struct PinnedInterface {
     pub sha256: String,
 }
 
+/// The `spec` field that holds a person's request to deploy the record.
+pub(crate) const REQUEST_FIELD: &str = "request";
+/// The `status` field that holds the last request the operator started.
+pub(crate) const STARTED_REQUEST_FIELD: &str = "startedRequest";
+/// The `status` field that holds the last request the operator finished.
+pub(crate) const FINISHED_REQUEST_FIELD: &str = "finishedRequest";
+
+/// Return a new request token: 32 random hexadecimal digits.
+pub fn new_request() -> String {
+    format!("{:032x}", fastrand::u128(..))
+}
+
 impl Record {
     /// Parse a [`Record`] from a live Activation `DynamicObject`.
     pub fn of(obj: &DynamicObject) -> Record {
@@ -106,6 +128,9 @@ impl Record {
                 .as_ref()
                 .and_then(crate::cluster::chrono_time),
             operator_driven: obj.data.pointer("/spec/source").is_some(),
+            request: status(&format!("/spec/{REQUEST_FIELD}")),
+            started_request: status(&format!("/status/{STARTED_REQUEST_FIELD}")),
+            finished_request: status(&format!("/status/{FINISHED_REQUEST_FIELD}")),
             orphans_kept_from: orphans_kept_from(obj),
             package_index: obj
                 .data
@@ -135,6 +160,15 @@ impl Record {
                 status(&format!("/status/{}/{who}/kixVersion", keys::RECEIPT_FIELD))
             }),
         }
+    }
+
+    /// Return the request the operator has not started yet, or `None` when
+    /// there is none. A request is a token compared only for equality, so
+    /// the clocks of the machines that wrote it do not matter.
+    pub fn pending_request(&self) -> Option<&str> {
+        self.request
+            .as_deref()
+            .filter(|request| self.started_request.as_deref() != Some(*request))
     }
 
     /// Return `true` if this record ever completed a deploy and is therefore a

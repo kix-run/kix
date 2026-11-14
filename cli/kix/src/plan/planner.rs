@@ -11,8 +11,9 @@
 //!    check that refuses a write or delete the diff does not show
 //!    ([`super::objects::of`]).
 //!
-//! A rollback runs [`Planner::plan`], the last two steps, over the baseline
-//! of the record it returns to ([`Baseline::of_record`]). The planner prints
+//! A rollback runs [`Planner::rollback`], the last two steps, over the
+//! baseline of the record it returns to ([`Baseline::of_record`]), and gets
+//! the same [`Planned`] a deploy does. The planner prints
 //! nothing: it reports what it finds through a [`PlanEvent`] callback.
 //!
 //! [`Planned`] is plain data: the build, its manifests, the baseline, and the
@@ -44,7 +45,7 @@ use super::server::Overlay;
 use super::{PackageDiff, PlanError, PlanEvent, diff_graphs};
 use crate::build_source::InstallableBuild;
 use crate::build_source::SopsSources;
-use crate::cluster::activation::{KeptOrphanSource, KeptOrphans, OpenedRecords, Records};
+use crate::cluster::activation::{KeptOrphanSource, KeptOrphans, OpenedRecords, Record, Records};
 use crate::cluster::apply::ChangeAction;
 use crate::cluster::binding;
 use crate::cluster::client::{self, ResiliencePolicy};
@@ -646,6 +647,35 @@ impl<'a> Planner<'a> {
             Some(client) => Baseline::of_cluster(client, &build, self.report).await?,
             None => Baseline::of_cache(&new_graph.cluster_name, self.report),
         };
+        self.planned(build, baseline, client).await
+    }
+
+    /// Plan a rollback of Kix cluster `cluster` from its current record
+    /// `current` to `build`, the build of an earlier record, through `client`.
+    /// The baseline is [`Baseline::of_record`]. The rollback command makes
+    /// its own target checks before this, because a rollback must not be
+    /// refused for a Kubernetes upgrade during an incident.
+    pub async fn rollback(
+        &self,
+        build: InstallableBuild,
+        records: &Records,
+        current: &Record,
+        client: Client,
+    ) -> Result<Planned, PlanError> {
+        let cluster = build.graph().cluster_name.clone();
+        let baseline = Baseline::of_record(records, &cluster, current, self.report).await;
+        self.planned(build, baseline, Some(client)).await
+    }
+
+    /// Plan `build` against `baseline`, and with a client read the last runs
+    /// of the plan's Jobs.
+    async fn planned(
+        &self,
+        build: InstallableBuild,
+        baseline: Baseline,
+        client: Option<Client>,
+    ) -> Result<Planned, PlanError> {
+        let new_graph = build.graph();
         let new_manifests = manifests_of(new_graph);
         // A half-applied closure is not a previous intended state, so
         // pairing against it would invent migrations nobody declared.

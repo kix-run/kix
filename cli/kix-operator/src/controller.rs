@@ -249,12 +249,36 @@ pub async fn reconcile_activation(
 
     let record = Record::of(&activation);
     let phase = record.phase.as_str();
+    let request = record.pending_request();
 
     match phase {
-        s if s == PHASE_SUPERSEDED => {
-            tracing::debug!(name, "Activation is Superseded, skipping");
-            Ok(Action::await_change())
-        }
+        // A person asked to deploy this record again: `kix rollback
+        // --operator` to an earlier record, or `kix deploy --operator` of a
+        // build whose deploy failed. Queue it and deploy it in this
+        // reconcile, as a new record that supersedes the current one.
+        s if s == PHASE_SUPERSEDED || s == PHASE_FAILED => match request {
+            Some(request) => {
+                tracing::info!(name, phase, "Re-queueing activation for new spec.request");
+                ctx.records
+                    .requeue(name, request)
+                    .await
+                    .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
+                let mut queued = record.clone();
+                queued.phase = PHASE_QUEUED.to_string();
+                queued.started_request = Some(request.to_string());
+                start_queued(&activation, &ctx, name, &cluster, &queued).await
+            }
+            // Failed is terminal. The deploy that owned it has stopped, and
+            // the next one folds its closure into the plan and supersedes it.
+            None => {
+                tracing::debug!(
+                    name,
+                    phase,
+                    "Skipping activation with no pending spec.request"
+                );
+                Ok(Action::await_change())
+            }
+        },
 
         // Ignore records without `spec.source`. The CLI creates an Activation
         // record before marking it `Deploying`, so a newly created CLI record
@@ -267,128 +291,7 @@ pub async fn reconcile_activation(
                 return Ok(Action::await_change());
             }
             tracing::info!(name, cluster = %cluster, "Processing Queued activation");
-
-            // A build bound to another Kubernetes cluster, or an unbound one
-            // where a bound build has deployed, fails here, before any other
-            // record is superseded and before anything is applied. A 403 on
-            // the Namespace leaves the record Queued and retries, since a
-            // grant of permission resolves it. A build checked against a
-            // Kubernetes version this cluster does not run fails the same
-            // way. Only a Queued record gets these checks: an Active record
-            // keeps being repaired after a Kubernetes upgrade.
-            let events = || {
-                K8sEventObserver::new(
-                    ctx.client.clone(),
-                    &activation,
-                    keys::API_VERSION,
-                    Some(name.to_string()),
-                )
-            };
-            let index = index_of(&activation)?;
-            match check_binding(&ctx.client, &index).await? {
-                Binding::Accepted => {}
-                Binding::Refused(reason) => {
-                    tracing::warn!(name, %reason, "Refusing the Queued activation");
-                    ctx.records
-                        .fail_queued(name, &reason)
-                        .await
-                        .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
-                    events().warn_now("BindingRefused", &reason).await;
-                    return Ok(Action::await_change());
-                }
-                Binding::Forbidden(reason) => {
-                    tracing::warn!(name, %reason, "Cannot check the Queued activation's binding yet");
-                    events().warn_now("BindingUnchecked", &reason).await;
-                    return Err(OperatorError::DiscoveryError(reason));
-                }
-            }
-            match check_version(&ctx.client, &index).await {
-                VersionCheck::Accepted => {}
-                VersionCheck::Refused(reason) => {
-                    tracing::warn!(name, %reason, "Refusing the Queued activation");
-                    ctx.records
-                        .fail_queued(name, &reason)
-                        .await
-                        .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
-                    events().warn_now("KubernetesVersionRefused", &reason).await;
-                    return Ok(Action::await_change());
-                }
-                VersionCheck::Unread(reason) => {
-                    tracing::warn!(name, %reason, "Cannot check the Queued activation's Kubernetes version yet");
-                    events()
-                        .warn_now("KubernetesVersionUnchecked", &reason)
-                        .await;
-                    return Err(OperatorError::DiscoveryError(reason));
-                }
-            }
-
-            // The operator writes this deploy with its own Kix, so a cluster
-            // that Kix last deployed before a required stop fails here when
-            // the operator's Kix is past that stop's minor.
-            let old_active = ctx
-                .records
-                .active(&cluster)
-                .await
-                .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
-            if let Err(refusal) = stops::check(
-                old_active.as_ref().and_then(|r| r.deployed_with.as_deref()),
-                kix::version::running(),
-                &ctx.required_stops,
-            ) {
-                let reason = refusal.to_string();
-                tracing::warn!(name, %reason, "Refusing the Queued activation");
-                ctx.records
-                    .fail_queued(name, &reason)
-                    .await
-                    .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
-                events().warn_now("RequiredStopSkipped", &reason).await;
-                return Ok(Action::await_change());
-            }
-
-            let queued = ctx
-                .records
-                .queued(&cluster)
-                .await
-                .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
-
-            // If a newer Queued activation exists, supersede this one.
-            if let Some(newest) = queued.first()
-                && newest.name != name
-            {
-                tracing::info!(
-                    name,
-                    newest = %newest.name,
-                    "Newer Queued activation exists, superseding self"
-                );
-                ctx.records
-                    .supersede(name)
-                    .await
-                    .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
-                return Ok(Action::await_change());
-            }
-
-            // Supersede any older Queued activations.
-            for q in &queued {
-                if q.name != name {
-                    tracing::info!(name, superseding = %q.name, "Superseding older Queued activation");
-                    ctx.records
-                        .supersede(&q.name)
-                        .await
-                        .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
-                }
-            }
-
-            if let Some(ref old) = old_active {
-                tracing::info!(name, old = %old.name, "Superseding current Active activation");
-                ctx.records
-                    .supersede(&old.name)
-                    .await
-                    .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
-            }
-
-            ensure_finalizer(&ctx.records, name, &activation).await?;
-
-            return run_reconcile(&activation, &ctx, name, Reconcile::Start).await;
+            start_queued(&activation, &ctx, name, &cluster, &record).await
         }
 
         // Active and Degraded records run drift detection on requeue. Degraded
@@ -413,7 +316,21 @@ pub async fn reconcile_activation(
 
             ensure_finalizer(&ctx.records, name, &activation).await?;
 
-            return run_reconcile(&activation, &ctx, name, Reconcile::Repair).await;
+            // A request on the current record deploys its build again, as a
+            // `kix deploy` of the build already deployed does. The record
+            // stays current throughout, and the checks for a Queued record
+            // do not run, because this build already runs here.
+            let Some(request) = request else {
+                return run_reconcile(&activation, &ctx, name, Reconcile::Repair).await;
+            };
+            tracing::info!(name, "Redeploying current activation for new spec.request");
+            ctx.records
+                .start_request(name, request)
+                .await
+                .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
+            let action = run_reconcile(&activation, &ctx, name, Reconcile::Start).await?;
+            finish_request(&ctx, name, Some(request)).await?;
+            Ok(action)
         }
 
         // Resume an interrupted operator deployment. Records without
@@ -432,14 +349,6 @@ pub async fn reconcile_activation(
             return run_reconcile(&activation, &ctx, name, Reconcile::Resume).await;
         }
 
-        // Failed is terminal. The deploy that owned it has stopped, and the
-        // next one folds its closure into the plan and supersedes it. There
-        // is nothing here to reconcile toward.
-        s if s == PHASE_FAILED => {
-            tracing::debug!(name, "Failed activation, nothing to reconcile");
-            Ok(Action::await_change())
-        }
-
         _ => {
             tracing::debug!(name, phase, "Unknown phase, skipping");
             Ok(Action::requeue(requeue_interval()))
@@ -447,11 +356,172 @@ pub async fn reconcile_activation(
     }
 }
 
+/// Start the deploy of Queued record `name` of Kix cluster `cluster`: start
+/// its pending request, run the checks a new record gets, supersede the
+/// records it replaces, and deploy it.
+async fn start_queued(
+    activation: &DynamicObject,
+    ctx: &Context,
+    name: &str,
+    cluster: &str,
+    record: &Record,
+) -> Result<Action, OperatorError> {
+    // The request is started here, before the checks, so a refusal
+    // answers it too and the command that waits on it stops.
+    if let Some(request) = record.pending_request() {
+        ctx.records
+            .start_request(name, request)
+            .await
+            .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
+    }
+
+    // A build bound to another Kubernetes cluster, or an unbound one
+    // where a bound build has deployed, fails here, before any other
+    // record is superseded and before anything is applied. A 403 on
+    // the Namespace leaves the record Queued and retries, since a
+    // grant of permission resolves it. A build checked against a
+    // Kubernetes version this cluster does not run fails the same
+    // way. Only a Queued record gets these checks: an Active record
+    // keeps being repaired after a Kubernetes upgrade.
+    let events = || {
+        K8sEventObserver::new(
+            ctx.client.clone(),
+            activation,
+            keys::API_VERSION,
+            Some(name.to_string()),
+        )
+    };
+    let index = index_of(activation)?;
+    match check_binding(&ctx.client, &index).await? {
+        Binding::Accepted => {}
+        Binding::Refused(reason) => {
+            tracing::warn!(name, %reason, "Refusing the Queued activation");
+            ctx.records
+                .fail_queued(name, &reason)
+                .await
+                .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
+            events().warn_now("BindingRefused", &reason).await;
+            return Ok(Action::await_change());
+        }
+        Binding::Forbidden(reason) => {
+            tracing::warn!(name, %reason, "Cannot check the Queued activation's binding yet");
+            events().warn_now("BindingUnchecked", &reason).await;
+            return Err(OperatorError::DiscoveryError(reason));
+        }
+    }
+    match check_version(&ctx.client, &index).await {
+        VersionCheck::Accepted => {}
+        VersionCheck::Refused(reason) => {
+            tracing::warn!(name, %reason, "Refusing the Queued activation");
+            ctx.records
+                .fail_queued(name, &reason)
+                .await
+                .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
+            events().warn_now("KubernetesVersionRefused", &reason).await;
+            return Ok(Action::await_change());
+        }
+        VersionCheck::Unread(reason) => {
+            tracing::warn!(name, %reason, "Cannot check the Queued activation's Kubernetes version yet");
+            events()
+                .warn_now("KubernetesVersionUnchecked", &reason)
+                .await;
+            return Err(OperatorError::DiscoveryError(reason));
+        }
+    }
+
+    // The operator writes this deploy with its own Kix, so a cluster
+    // that Kix last deployed before a required stop fails here when
+    // the operator's Kix is past that stop's minor.
+    let old_active = ctx
+        .records
+        .active(cluster)
+        .await
+        .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
+    if let Err(refusal) = stops::check(
+        old_active.as_ref().and_then(|r| r.deployed_with.as_deref()),
+        kix::version::running(),
+        &ctx.required_stops,
+    ) {
+        let reason = refusal.to_string();
+        tracing::warn!(name, %reason, "Refusing the Queued activation");
+        ctx.records
+            .fail_queued(name, &reason)
+            .await
+            .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
+        events().warn_now("RequiredStopSkipped", &reason).await;
+        return Ok(Action::await_change());
+    }
+
+    let queued = ctx
+        .records
+        .queued(cluster)
+        .await
+        .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
+
+    // If a newer Queued activation exists, supersede this one.
+    if let Some(newest) = queued.first()
+        && newest.name != name
+    {
+        tracing::info!(
+            name,
+            newest = %newest.name,
+            "Newer Queued activation exists, superseding self"
+        );
+        ctx.records
+            .supersede(name)
+            .await
+            .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
+        return Ok(Action::await_change());
+    }
+
+    // Supersede any older Queued activations.
+    for q in &queued {
+        if q.name != name {
+            tracing::info!(name, superseding = %q.name, "Superseding older Queued activation");
+            ctx.records
+                .supersede(&q.name)
+                .await
+                .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
+        }
+    }
+
+    if let Some(ref old) = old_active {
+        tracing::info!(name, old = %old.name, "Superseding current Active activation");
+        ctx.records
+            .supersede(&old.name)
+            .await
+            .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
+    }
+
+    ensure_finalizer(&ctx.records, name, activation).await?;
+
+    let action = run_reconcile(activation, ctx, name, Reconcile::Start).await?;
+    finish_request(ctx, name, record.request.as_deref()).await?;
+    Ok(action)
+}
+
+/// Record that the run of `request` on record `name` finished, so the
+/// command that submitted it stops waiting. A record with no request has
+/// nothing to record.
+async fn finish_request(
+    ctx: &Context,
+    name: &str,
+    request: Option<&str>,
+) -> Result<(), OperatorError> {
+    let Some(request) = request else {
+        return Ok(());
+    };
+    ctx.records
+        .finish_request(name, request)
+        .await
+        .map_err(|e| OperatorError::LifecycleError(e.to_string()))
+}
+
 /// Which reconcile of an Activation record the operator runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Reconcile {
-    /// Start the deploy of a Queued record. This happens once for each
-    /// record someone submits.
+    /// Start the deploy of a Queued record, or of a request on the current
+    /// record. This happens once for each deploy someone submits.
     Start,
     /// Resume a Deploying record, after the operator restarted or a run
     /// returned an error.
@@ -1122,6 +1192,103 @@ mod tests {
         assert_eq!(after["status"]["phase"], PHASE_ACTIVE);
         assert!(
             !api.requests().iter().any(|r| r.ends_with("/version")),
+            "{:?}",
+            api.requests()
+        );
+    }
+
+    /// An earlier record with a request, as `kix rollback --operator`
+    /// writes one, is queued again and deployed in the same reconcile: the
+    /// current record is superseded at once, with no wait for another
+    /// reconcile. One without a request, such as a record a direct deploy
+    /// wrote or one from before requests, stays Superseded and is not
+    /// written.
+    #[tokio::test]
+    async fn a_request_deploys_an_earlier_record_in_the_same_reconcile() {
+        let dir = tempfile::tempdir().unwrap();
+        let active = json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": "Activation",
+            "metadata": {
+                "name": "a-old",
+                "labels": {
+                    "app.kubernetes.io/managed-by": "kix",
+                    (keys::CLUSTER_LABEL): "a",
+                },
+            },
+            "status": { "phase": PHASE_ACTIVE },
+        });
+        let mut record = queued(dir.path(), Some(HERE), None);
+        record["status"] = json!({ "phase": PHASE_SUPERSEDED });
+        record["spec"]["request"] = json!("r1");
+        let api = FakeApi::new(vec![kube_system(HERE), active, record.clone()]);
+        // Loading the build fails in the temporary directory, after the
+        // record was queued, its request started, and the current record
+        // superseded.
+        let (result, after) = reconcile_on(&api, record.clone()).await;
+        assert!(result.is_err());
+        assert_eq!(after["status"]["phase"], PHASE_QUEUED);
+        assert_eq!(after["status"]["startedRequest"], "r1");
+        let old = kube::Api::<DynamicObject>::all_with(
+            api.client(),
+            &kube::discovery::ApiResource::from_gvk_with_plural(
+                &kube::api::GroupVersionKind::gvk(keys::GROUP, "v1alpha1", "Activation"),
+                "activations",
+            ),
+        )
+        .get("a-old")
+        .await
+        .unwrap();
+        assert_eq!(old.data["status"]["phase"], PHASE_SUPERSEDED);
+
+        let mut direct = record;
+        direct["spec"].as_object_mut().unwrap().remove("request");
+        let api = FakeApi::new(vec![kube_system(HERE), direct.clone()]);
+        let (_, after) = reconcile_on(&api, direct).await;
+        assert_eq!(after["status"]["phase"], PHASE_SUPERSEDED);
+        assert!(
+            !api.requests().iter().any(|r| r.contains("PATCH")),
+            "{:?}",
+            api.requests()
+        );
+    }
+
+    /// A request on the current record, as `kix deploy --operator` of the
+    /// build already deployed writes one, is started while the record stays
+    /// Active. The checks for a Queued record do not run, so a Kubernetes
+    /// upgrade cannot fail the current record.
+    #[tokio::test]
+    async fn a_request_on_the_current_record_keeps_it_active() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut record = queued(dir.path(), Some(HERE), Some("1.30"));
+        record["status"] = json!({ "phase": PHASE_ACTIVE });
+        record["spec"]["request"] = json!("r1");
+        let api = FakeApi::new(vec![kube_system(HERE), record.clone()]);
+        api.serve_version("v1.31.4+k3s1", "1", "31");
+        // Loading the build fails in the temporary directory, after the
+        // request was started.
+        let (result, after) = reconcile_on(&api, record).await;
+        assert!(result.is_err());
+        assert_eq!(after["status"]["phase"], PHASE_ACTIVE);
+        assert_eq!(after["status"]["startedRequest"], "r1");
+        assert!(after["status"].get("finishedRequest").is_none());
+    }
+
+    /// A request the operator already started is not started again: a
+    /// direct deploy that reuses the record leaves its request as it was,
+    /// and the operator only repairs the record.
+    #[tokio::test]
+    async fn a_started_request_is_not_started_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut record = queued(dir.path(), Some(HERE), None);
+        record["status"] = json!({ "phase": PHASE_ACTIVE, "startedRequest": "r1" });
+        record["spec"]["request"] = json!("r1");
+        let api = FakeApi::new(vec![kube_system(HERE), record.clone()]);
+        let _ = reconcile_on(&api, record).await;
+        assert!(
+            !api.requests()
+                .iter()
+                .any(|r| r.contains("PATCH") && r.contains("/status")),
             "{:?}",
             api.requests()
         );

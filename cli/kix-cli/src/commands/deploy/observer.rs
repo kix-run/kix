@@ -363,8 +363,8 @@ fn counts_labelled(r: &DeployResult, held_back: Option<&str>) -> String {
 
 /// Format the one-line summary of a deploy or dry run that succeeded, or of
 /// one that stopped for a reason [`closing`] does not describe.
-pub(super) fn summary_line(r: &DeployResult, dry_run: bool, succeeded: bool) -> String {
-    let run = if dry_run { "Dry run" } else { "Deploy" };
+pub(super) fn summary_line(r: &DeployResult, command: super::Command, succeeded: bool) -> String {
+    let run = command.noun();
     let ending = if succeeded {
         "complete"
     } else if r.failed > 0 {
@@ -388,6 +388,7 @@ pub(crate) enum Previous {
 
 /// What the text that closes a failed deploy needs besides the counts.
 pub(crate) struct Closing<'a> {
+    pub command: super::Command,
     pub cluster: &'a str,
     /// This run's deployment record, when the build has one.
     pub record: Option<&'a str>,
@@ -405,6 +406,8 @@ pub(crate) struct Closing<'a> {
 pub(super) fn closing(r: &DeployResult, c: &Closing<'_>) -> String {
     use std::fmt::Write;
     let cluster = c.cluster;
+    let noun = c.command.noun();
+    let again = format!("{} {cluster}", c.command.invocation());
     let mut out = String::new();
     let failures = |out: &mut String| {
         if r.failures.is_empty() {
@@ -423,14 +426,14 @@ pub(super) fn closing(r: &DeployResult, c: &Closing<'_>) -> String {
         if c.on_error_continue {
             let _ = writeln!(
                 out,
-                "Deploy of '{cluster}' finished with {} failure(s) (`--on-error continue`): {}",
+                "{noun} of '{cluster}' finished with {} failure(s) (`--on-error continue`): {}",
                 r.failed,
                 counts(r, false)
             );
         } else {
             let _ = writeln!(
                 out,
-                "Deploy of '{cluster}' finished with {} failure(s): {}",
+                "{noun} of '{cluster}' finished with {} failure(s): {}",
                 r.failed,
                 counts(r, false)
             );
@@ -457,7 +460,7 @@ pub(super) fn closing(r: &DeployResult, c: &Closing<'_>) -> String {
         let _ = writeln!(out, "  Next:");
         let _ = write!(
             out,
-            "    Fix the failed resource(s) above and run `kix deploy {cluster}` again."
+            "    Fix the failed resource(s) above and run `{again}` again."
         );
         return out;
     }
@@ -493,7 +496,7 @@ pub(super) fn closing(r: &DeployResult, c: &Closing<'_>) -> String {
         Some(reason) => {
             let _ = writeln!(
                 out,
-                "Deploy of '{cluster}' stopped ({reason}): {}",
+                "{noun} of '{cluster}' stopped ({reason}): {}",
                 counts(r, true)
             );
             let _ = writeln!(out);
@@ -520,15 +523,12 @@ pub(super) fn closing(r: &DeployResult, c: &Closing<'_>) -> String {
             }
             let _ = writeln!(out);
             let _ = writeln!(out, "  Next:");
-            let _ = write!(
-                out,
-                "    Run `kix deploy {cluster}` again to finish applying the build."
-            );
+            let _ = write!(out, "    Run `{again}` again to finish applying the build.");
         }
         None => {
             let _ = writeln!(
                 out,
-                "Deploy of '{cluster}' failed: {}",
+                "{noun} of '{cluster}' failed: {}",
                 counts_labelled(r, Some("not started"))
             );
             failures(&mut out);
@@ -553,7 +553,7 @@ pub(super) fn closing(r: &DeployResult, c: &Closing<'_>) -> String {
             let _ = writeln!(out, "  Next:");
             let _ = write!(
                 out,
-                "    Fix the failed resource(s) above and run `kix deploy {cluster}` again."
+                "    Fix the failed resource(s) above and run `{again}` again."
             );
         }
     }

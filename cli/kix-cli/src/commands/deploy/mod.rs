@@ -31,15 +31,15 @@ use kix::cluster::binding;
 use kix::cluster::readiness;
 use kix::cluster::scheduler::{self, OnErrorPolicy, PrunePolicy, SchedulerConfig};
 use kix::cluster::stream::{DeployObserver, DeployResult, NodeId};
-use kix::plan::document::{AdmissionRefusal, PlanFlags, RefusalReason};
-use kix::plan::{CheckedPlan, Connected, LastRuns, Start, Target, Work};
+use kix::plan::document::{AdmissionRefusal, Plan, PlanFlags, RefusalReason};
+use kix::plan::{CheckedPlan, Connected, LastRuns, Planned, Start, Target, Work};
 
 use super::CommandContext;
 use super::operator::Reconciled;
 use super::plan::{document, dry_run, flags_of, prepare, print_text, scheduler_config};
 
 use self::observer::*;
-pub(crate) use self::observer::{StreamCliObserver, counts, held_back};
+pub(crate) use self::observer::{Previous, StreamCliObserver, held_back};
 #[cfg(test)]
 pub(crate) use self::saved_plan::ComparisonResponse;
 use self::saved_plan::*;
@@ -81,31 +81,11 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
 
     // A saved plan is compared first, because a stale plan is exit 4 whatever
     // the current build would migrate.
-    if saved.is_none() && !migration_gate(&p) {
+    if saved.is_none() && !migration_gate(&p, Command::Deploy, Runner::Cli) {
         return Ok(Exit::Failure);
     }
 
-    // When connected and changes exist, run a server-side dry run so any
-    // writes the API server would reject appear in the plan before confirmation.
-    let total_apply = p
-        .checked
-        .plan()
-        .nodes()
-        .iter()
-        .filter(|n| n.action.written().is_some())
-        .count();
-    let report = match p.client() {
-        Some(client) if total_apply > 0 || !p.checked.orphans().is_empty() => {
-            let client = client.clone();
-            Some(dry_run(&mut p, false, client, ctx)?)
-        }
-        _ => None,
-    };
-    let doc = document(&mut p, report.as_ref(), false);
-
-    if !output::quiet() {
-        print_text(&p, &doc, ctx.global.verbose > 0);
-    }
+    let doc = preview(&mut p, ctx)?;
 
     // Refuse to apply when a saved plan no longer matches the current plan.
     if let Some(s) = &saved {
@@ -119,24 +99,13 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
         if !comparison.matches {
             return Ok(Exit::StalePlan);
         }
-        if !migration_gate(&p) {
+        if !migration_gate(&p, Command::Deploy, Runner::Cli) {
             return Ok(Exit::Failure);
         }
     }
 
-    // Under `--on-error stop`, abort before applying anything when the dry run
-    // reports a write that the cluster would reject.
-    if doc.stops() && matches!(args.on_error, OnError::Stop) {
-        eprintln!();
-        eprintln!(
-            "{}",
-            output::red(
-                "Deployment stopped before writing anything to the cluster: the dry run shows writes the cluster would refuse."
-            )
-        );
-        for line in stop_advice(&doc) {
-            eprintln!("{}", output::yellow(&line));
-        }
+    // Under `--on-error continue` the run applies everything else.
+    if args.on_error == OnError::Stop && refused(&doc, Command::Deploy) {
         return Ok(Exit::Failure);
     }
 
@@ -168,22 +137,8 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
         report_topology_labels(ctx, client, p.new_manifests());
     }
 
-    if !args.yes {
-        if !output::is_interactive() {
-            return Err(output::refuse_unconfirmed(
-                output::Unconfirmed::Deploy,
-                &cluster,
-            ));
-        }
-        output::progress_text("\nProceed with deploy? [y/N] ");
-        std::io::stdout().flush().into_diagnostic()?;
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input).into_diagnostic()?;
-        let input = input.trim().to_lowercase();
-        if input != "y" && input != "yes" {
-            output::progress_text("Deploy cancelled.\n");
-            return Ok(Exit::Success);
-        }
+    if !confirm(Command::Deploy, &cluster, args.yes)? {
+        return Ok(Exit::Success);
     }
 
     let previous = if args.plan.offline {
@@ -194,19 +149,189 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
             None => Previous::FirstDeploy,
         }
     };
+    let options = RunOptions {
+        timeout: parse_timeout(args.timeout.as_deref())?,
+        on_error: args.on_error,
+        log_format: args.log_format,
+        group_by: args.group_by,
+    };
+    let cached_baseline = if args.plan.offline { active_hash } else { None };
+    let end = run_planned(
+        ctx,
+        Command::Deploy,
+        p,
+        &options,
+        Some(receipt),
+        sops,
+        previous,
+        cached_baseline.as_deref(),
+    )?;
+    Ok(Exit::failure_if(!end.succeeded))
+}
+
+/// The command that runs a plan. `kix deploy` and `kix rollback` share every
+/// step after the plan, and differ in the words they print and the flags
+/// they offer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Command {
+    Deploy,
+    Rollback,
+}
+
+impl Command {
+    /// Return the noun that starts the command's summary lines.
+    pub(crate) fn noun(self) -> &'static str {
+        match self {
+            Command::Deploy => "Deploy",
+            Command::Rollback => "Rollback",
+        }
+    }
+
+    /// Return what a user types to run the command.
+    pub(crate) fn invocation(self) -> &'static str {
+        match self {
+            Command::Deploy => "kix deploy",
+            Command::Rollback => "kix rollback",
+        }
+    }
+
+    /// Return whether the command takes `--on-error`, so its messages may
+    /// suggest it.
+    fn takes_on_error(self) -> bool {
+        self == Command::Deploy
+    }
+
+    fn unconfirmed(self) -> output::Unconfirmed {
+        match self {
+            Command::Deploy => output::Unconfirmed::Deploy,
+            Command::Rollback => output::Unconfirmed::Rollback,
+        }
+    }
+}
+
+/// How a run is carried out. `kix deploy` takes these as flags; `kix
+/// rollback` uses [`RunOptions::rollback`].
+pub(crate) struct RunOptions {
+    pub timeout: Duration,
+    pub on_error: OnError,
+    pub log_format: LogFormat,
+    pub group_by: GroupBy,
+}
+
+impl RunOptions {
+    /// Return the settings of a rollback, which takes none of these flags.
+    /// It stops at the first failure, because a rollback that goes on past
+    /// one leaves the cluster between two builds.
+    pub(crate) fn rollback() -> Self {
+        RunOptions {
+            timeout: readiness::DEFAULT_TIMEOUT,
+            on_error: OnError::Stop,
+            log_format: LogFormat::Pretty,
+            group_by: GroupBy::Namespace,
+        }
+    }
+}
+
+/// Check the plan's writes with the apiserver as a dry run when Kix is
+/// connected and the plan writes or prunes, then build the plan document and
+/// print it. The dry run decrypts the build's SOPS Secrets, as the run does.
+pub(crate) fn preview(p: &mut Planned, ctx: &CommandContext) -> Result<Plan> {
+    let writes = p
+        .checked
+        .plan()
+        .nodes()
+        .iter()
+        .any(|n| n.action.written().is_some());
+    let report = match p.client() {
+        Some(client) if writes || !p.checked.orphans().is_empty() => {
+            let client = client.clone();
+            Some(dry_run(p, false, client, ctx)?)
+        }
+        _ => None,
+    };
+    let doc = document(p, report.as_ref(), false);
+    if !output::quiet() {
+        print_text(p, &doc, ctx.global.verbose > 0);
+    }
+    Ok(doc)
+}
+
+/// Return true, after saying why and what to do, when the dry run in `doc`
+/// shows writes the cluster would refuse, so `command` stops before it
+/// writes anything.
+pub(crate) fn refused(doc: &Plan, command: Command) -> bool {
+    if !doc.stops() {
+        return false;
+    }
+    eprintln!();
+    eprintln!(
+        "{}",
+        output::red(&format!(
+            "{} stopped: one or more changes failed the dry run. Nothing was applied to the cluster.",
+            command.noun()
+        ))
+    );
+    for line in stop_advice(doc, command) {
+        eprintln!("{}", output::yellow(&line));
+    }
+    true
+}
+
+/// Ask whether to go on with `command` on `cluster`, unless `yes` is set,
+/// and return false when the user declines. Refuse when no one can answer.
+pub(crate) fn confirm(command: Command, cluster: &str, yes: bool) -> Result<bool> {
+    if yes {
+        return Ok(true);
+    }
+    if !output::is_interactive() {
+        return Err(output::refuse_unconfirmed(command.unconfirmed(), cluster));
+    }
+    output::progress_text(&format!(
+        "\nProceed with {}? [y/N] ",
+        command.noun().to_lowercase()
+    ));
+    std::io::stdout().flush().into_diagnostic()?;
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input).into_diagnostic()?;
+    let input = input.trim().to_lowercase();
+    if input != "y" && input != "yes" {
+        output::progress_text(&format!(
+            "{} cancelled. Nothing was applied to the cluster.\n",
+            command.noun()
+        ));
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+/// Run the plan of `p` for `command` with `options`, print how the run
+/// ended, and save the build as this machine's copy of the cluster's build
+/// once the run's record became current. `receipt` is the provenance the
+/// record gets; a rollback passes `None` and keeps the receipt its target
+/// record already has. `cached_baseline` is the identity hash an
+/// `--offline` plan was made against.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_planned(
+    ctx: &CommandContext,
+    command: Command,
+    p: Planned,
+    options: &RunOptions,
+    receipt: Option<Value>,
+    sops: kix::build_source::SopsSources,
+    previous: Previous,
+    cached_baseline: Option<&str>,
+) -> Result<RunEnd> {
+    let cluster = p.build.graph().cluster_name.clone();
     let global = ctx.global.clone();
     let end = ctx.runtime()?.block_on(run_deploy_async(
-        args,
+        command,
+        options,
         &global,
         p.checked,
         &cluster,
-        Some(&receipt),
+        receipt,
         p.connected,
-        if args.plan.offline {
-            active_hash.as_deref()
-        } else {
-            None
-        },
+        cached_baseline,
         previous,
         sops,
     ))?;
@@ -223,8 +348,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
             "could not save the local build path; later commands may be unable to find this deployment: {e}"
         );
     }
-
-    Ok(Exit::failure_if(!end.succeeded))
+    Ok(end)
 }
 
 /// Decide whether a deploy or a rollback of `checked` starts its run, and
@@ -560,18 +684,17 @@ fn tui_height() -> Option<u16> {
 /// was built.
 #[allow(clippy::too_many_arguments)]
 async fn run_deploy_async(
-    args: &DeployArgs,
+    command: Command,
+    options: &RunOptions,
     global: &crate::cli::GlobalArgs,
     mut checked: CheckedPlan,
     cluster_name: &str,
-    receipt: Option<&Value>,
+    receipt: Option<Value>,
     connected: Option<Connected>,
     cached_baseline: Option<&str>,
     previous: Previous,
     sops: kix::build_source::SopsSources,
 ) -> Result<RunEnd> {
-    let timeout = parse_timeout(args.timeout.as_deref())?;
-
     // Reuse the pre-confirm client, which the plan ran the target checks
     // through and read the Jobs with, or connect now, run the checks, filter
     // orphans shared with other Kix clusters, and read the Jobs.
@@ -641,17 +764,17 @@ async fn run_deploy_async(
 
     refuse_before_writing(&checked, records.as_ref(), discovery).await?;
 
-    let on_error = match args.on_error {
+    let on_error = match options.on_error {
         OnError::Stop => OnErrorPolicy::Stop,
         OnError::Continue => OnErrorPolicy::Continue,
     };
 
-    let config = scheduler_config(timeout, on_error, true);
+    let config = scheduler_config(options.timeout, on_error, command.takes_on_error());
 
     let interactive = output::is_interactive();
-    let use_tui = args.log_format == LogFormat::Tui && interactive;
+    let use_tui = options.log_format == LogFormat::Tui && interactive;
     let tui_driver = if use_tui {
-        let axis = match args.group_by {
+        let axis = match options.group_by {
             GroupBy::Namespace => super::graph_stream::GroupAxis::Namespace,
             GroupBy::Package => super::graph_stream::GroupAxis::Package,
         };
@@ -677,13 +800,13 @@ async fn run_deploy_async(
 
     // In JSON log mode, emit a final NDJSON summary object instead of a text
     // summary line.
-    let json_log = (tui_driver.is_none() && args.log_format == LogFormat::Json)
+    let json_log = (tui_driver.is_none() && options.log_format == LogFormat::Json)
         .then(|| Arc::new(super::deploy_log::JsonObserver::new()));
     let observer: Arc<dyn DeployObserver> = match (&tui_driver, &json_log) {
         (Some(d), _) => d.observer(),
         (None, Some(json)) => json.clone(),
         (None, None)
-            if matches!(args.log_format, LogFormat::Pretty | LogFormat::Tui) && interactive =>
+            if matches!(options.log_format, LogFormat::Pretty | LogFormat::Tui) && interactive =>
         {
             Arc::new(StreamCliObserver {
                 verbose: global.verbose > 0,
@@ -695,15 +818,7 @@ async fn run_deploy_async(
     };
 
     let record = checked.activation_name().map(str::to_string);
-    let (result, end) = run_plan(
-        checked,
-        target,
-        receipt.cloned(),
-        config,
-        observer,
-        cluster_name,
-    )
-    .await;
+    let (result, end) = run_plan(checked, target, receipt, config, observer, cluster_name).await;
 
     // Drop the TUI before printing the summary so it lands in normal scrollback.
     drop(tui_driver);
@@ -716,7 +831,7 @@ async fn run_deploy_async(
         Some(json) => json.summary(counts, false, end.succeeded),
         None if end.succeeded => {
             println!();
-            println!("{}", summary_line(counts, false, true));
+            println!("{}", summary_line(counts, command, true));
         }
         None => {
             let interrupted = match &result {
@@ -724,12 +839,13 @@ async fn run_deploy_async(
                 _ => None,
             };
             let closing = Closing {
+                command,
                 cluster: cluster_name,
                 record: record.as_deref(),
                 previous,
                 interrupted,
                 current: end.current,
-                on_error_continue: args.on_error == OnError::Continue,
+                on_error_continue: options.on_error == OnError::Continue,
             };
             println!();
             println!("{}", observer::closing(counts, &closing));
@@ -747,23 +863,32 @@ async fn run_deploy_async(
     Ok(end)
 }
 
+/// What carries out a run: this command, or the Kix operator, which always
+/// prunes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Runner {
+    Cli,
+    Operator,
+}
+
 /// Report the stateful migrations the plan makes. Return false, after saying
-/// why, when the deploy must stop because `--accept-migrations` is not set.
-fn migration_gate(p: &kix::plan::Planned) -> bool {
+/// why, when `command` must stop because `--accept-migrations` is not set.
+/// `kix deploy` and `kix rollback` stop the same way.
+pub(crate) fn migration_gate(p: &kix::plan::Planned, command: Command, runner: Runner) -> bool {
     if p.migration_pairs.is_empty() {
         return true;
     }
     let pairs = plan::migrations::of_pairs(&p.migration_pairs);
     let prune = p.checked.flags().prune == PrunePolicy::Delete;
     if !p.checked.flags().accept_migrations {
-        let fate = if prune {
-            plan::migrations::SourceFate::Pruned
-        } else {
-            plan::migrations::SourceFate::Kept
+        let fate = match runner {
+            Runner::Operator => plan::migrations::SourceFate::OperatorPrunes,
+            Runner::Cli if prune => plan::migrations::SourceFate::Pruned,
+            Runner::Cli => plan::migrations::SourceFate::Kept,
         };
         let cluster = &p.build.graph().cluster_name;
         eprintln!();
-        eprint!("{}", plan::migrations::stop(cluster, &pairs, fate));
+        eprint!("{}", plan::migrations::stop(cluster, &pairs, fate, command));
         return false;
     }
     output::progress_text(&format!("\n{}", plan::migrations::accepted(&pairs, prune)));
@@ -774,7 +899,7 @@ fn migration_gate(p: &kix::plan::Planned) -> bool {
 /// by the kind of refusal. `--on-error continue` is offered only when every
 /// stop is a write the user fixes in the build, because it does not resolve
 /// a conflict or bring a webhook back.
-pub(super) fn stop_advice(doc: &kix::plan::document::Plan) -> Vec<String> {
+pub(super) fn stop_advice(doc: &Plan, command: Command) -> Vec<String> {
     let conflicts = !doc.conflicts.items().is_empty();
     let unreachable = |r: &AdmissionRefusal| r.reason == RefusalReason::WebhookUnreachable;
     let webhooks = doc.admission.items().iter().any(unreachable);
@@ -802,11 +927,17 @@ pub(super) fn stop_advice(doc: &kix::plan::document::Plan) -> Vec<String> {
             "Fix the refused writes.".to_string()
         });
     }
-    lines.push(if others && !conflicts && !webhooks {
-        "Then deploy again, or rerun with --on-error continue to apply everything else.".to_string()
-    } else {
-        "Then deploy again.".to_string()
-    });
+    let again = match command {
+        Command::Deploy => "Then deploy again",
+        Command::Rollback => "Then roll back again",
+    };
+    lines.push(
+        if others && !conflicts && !webhooks && command.takes_on_error() {
+            format!("{again}, or rerun with --on-error continue to apply everything else.")
+        } else {
+            format!("{again}.")
+        },
+    );
     lines
 }
 
@@ -869,18 +1000,7 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
     }
     // Enforce `--accept-migrations` on the CLI before delegating to the
     // non-interactive operator.
-    if !p.migration_pairs.is_empty() && !args.plan.accept_migrations {
-        let pairs = plan::migrations::of_pairs(&p.migration_pairs);
-        let cluster = &p.build.graph().cluster_name;
-        eprintln!();
-        eprint!(
-            "{}",
-            plan::migrations::stop(
-                cluster,
-                &pairs,
-                plan::migrations::SourceFate::OperatorPrunes
-            )
-        );
+    if !migration_gate(&p, Command::Deploy, Runner::Operator) {
         return Ok(Exit::Failure);
     }
     let cluster = p.build.graph().cluster_name.clone();
@@ -925,6 +1045,7 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
     let reconciled = ctx.runtime()?.block_on(async {
         let (client, records) =
             super::operator::connect_and_verify(global.context.as_deref()).await?;
+        super::operator::require_requests(&client).await?;
         if let Some(checks) = &target_checks {
             let connection = binding::Connection::of_context(global.context.as_deref());
             checks
@@ -939,7 +1060,7 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
             output::dim(&source_path),
         );
 
-        super::operator::apply_activation(
+        let request = super::operator::apply_activation(
             &records,
             &activation_name,
             &cluster,
@@ -957,7 +1078,8 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
         );
 
         let reconciled =
-            super::operator::watch_activation_progress(&records, &activation_name).await?;
+            super::operator::watch_activation_progress(&records, &activation_name, &request)
+                .await?;
 
         let (ending, phase) = match reconciled {
             Reconciled::Active => (output::green("complete"), output::green("Active")),

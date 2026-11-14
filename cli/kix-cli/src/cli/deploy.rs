@@ -115,6 +115,13 @@ pub struct RollbackArgs {
     #[arg(long)]
     pub force_conflicts: bool,
 
+    /// Acknowledge detected stateful migration pairs. Without this flag, a
+    /// rollback that would remove an object that holds data from a stateful
+    /// package and add another in its place is rejected (even with --yes)
+    /// to prevent silent data loss. Kix does not copy data between them.
+    #[arg(long)]
+    pub accept_migrations: bool,
+
     /// Delegate rollback to the operator instead of applying directly
     #[arg(long)]
     pub operator: bool,

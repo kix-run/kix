@@ -233,6 +233,20 @@ impl Build {
         }
     }
 
+    /// Convert a build that a deploy record of the cluster names, which a
+    /// rollback applies again, into an [`InstallableBuild`].
+    ///
+    /// Unlike [`Build::installable`], this does not refuse a build that
+    /// renders Kix's own CRDs under a retired group. That refusal diagnoses a
+    /// new build evaluated against a library from before the domain moved. A
+    /// recorded build was valid when the cluster ran it, and loading it
+    /// stamped its Kix keys and Kix's own CRDs into the current group
+    /// (`legacy_domain::upgrade_manifest`), so installing it creates no
+    /// retired CRD.
+    pub fn installable_as_deployed(self) -> InstallableBuild {
+        InstallableBuild(self)
+    }
+
     /// Return whether the build lives in the local Nix store.
     pub fn is_local(&self) -> bool {
         matches!(self.origin, Origin::Local)
@@ -489,6 +503,33 @@ mod tests {
                 .unwrap()
                 .installable()
                 .is_ok()
+        );
+    }
+
+    /// A build a deploy record names is installable although it predates
+    /// the domain move, and what it installs is the stamped graph in the
+    /// current domain.
+    #[test]
+    fn a_deployed_build_from_before_the_domain_move_is_installable() {
+        let mut graph = fixture();
+        let record = graph
+            .resources
+            .values_mut()
+            .find(|r| crate::manifest::lifecycle::is_record(&r.manifest))
+            .unwrap();
+        let version = record.manifest["apiVersion"].as_str().unwrap();
+        let legacy = version.replace(keys::GROUP, legacy_domain::DOMAINS[0]);
+        record.manifest["apiVersion"] = Value::String(legacy);
+        let deployed = carried(&graph, &fixture())
+            .unwrap()
+            .installable_as_deployed();
+        assert!(
+            deployed
+                .graph()
+                .resources
+                .values()
+                .filter_map(|r| r.manifest["apiVersion"].as_str())
+                .all(|v| !v.starts_with(legacy_domain::DOMAINS[0]))
         );
     }
 

@@ -147,7 +147,12 @@
         "drift-fixtures": {
           "fixtures": "fixtures"
         }
-      }
+      },
+      "source": {
+        "type": "storePath",
+        "path": "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaabvold-kix-activation-fixtures.json"
+      },
+      "request": "7d2e4f6a8b0c1d3e5f7a9b1c3d5e7f9a"
     },
     "status": {
       "packageIndex": {
@@ -181,7 +186,9 @@
           "status": "Complete",
           "wave": 1
         }
-      ]
+      ],
+      "startedRequest": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+      "finishedRequest": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a"
     }
   },
   {
@@ -267,7 +274,11 @@
       "source": {
         "path": "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaasrc-kix-bundle-fixtures",
         "type": "storePath"
-      }
+      },
+      "request": "3f1c9a2be47d4c0e9b8a6d5f2e1c0b9a"
+    },
+    "status": {
+      "startedRequest": "3f1c9a2be47d4c0e9b8a6d5f2e1c0b9a"
     }
   }
 ]
