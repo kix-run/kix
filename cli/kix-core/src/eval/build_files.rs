@@ -47,6 +47,29 @@ pub struct BuildFiles {
     pub interfaces: BTreeMap<String, PathBuf>,
 }
 
+/// Why Kix cannot read the files of a build.
+#[derive(Debug, thiserror::Error)]
+pub enum BuildFilesError {
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error("it is not a Kix build index: {0}")]
+    NotAnIndex(serde_json::Error),
+    #[error(
+        "it is a build index of version {0}, and Kix reads version {INDEX_VERSION}. \
+         Use the version of Kix that matches the Kix library that made the build"
+    )]
+    IndexVersion(u64),
+    /// A result directory has no `kix-packages.json` entry.
+    #[error("no kix-packages.json: {0}")]
+    NoPackages(std::io::Error),
+    /// A result directory read in full has no `activation` link.
+    #[error("no activation link: {0}")]
+    NoActivationLink(std::io::Error),
+    /// A result directory read in full has no `kix-packages.json` link.
+    #[error("no kix-packages.json link: {0}")]
+    NoPackagesLink(std::io::Error),
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct IndexFile {
@@ -73,7 +96,7 @@ impl BuildFiles {
             Opened::Dir(dir) => Self::read_result_dir(&dir),
             Opened::Index(bytes) => Self::parse_index(&bytes),
         };
-        read().map_err(|what| unreadable(location, what))
+        read().map_err(|reason| unreadable(location, reason))
     }
 
     /// Return the store path of `kix-packages.json` of the build at
@@ -81,11 +104,11 @@ impl BuildFiles {
     pub fn packages_of(location: &Path) -> Result<PathBuf, KixEvalError> {
         let read = || match open(location)? {
             Opened::Dir(dir) => {
-                entry(&dir, "kix-packages.json").map_err(|e| format!("no kix-packages.json: {e}"))
+                entry(&dir, "kix-packages.json").map_err(BuildFilesError::NoPackages)
             }
             Opened::Index(bytes) => Self::parse_index(&bytes).map(|files| files.packages),
         };
-        read().map_err(|what| unreadable(location, what))
+        read().map_err(|reason| unreadable(location, reason))
     }
 
     /// Return whether `location` holds a build in either form: an index
@@ -94,15 +117,11 @@ impl BuildFiles {
         Self::packages_of(location).is_ok()
     }
 
-    fn parse_index(bytes: &[u8]) -> Result<Self, String> {
-        let index: IndexFile = serde_json::from_slice(bytes)
-            .map_err(|e| format!("it is not a Kix build index: {e}"))?;
+    fn parse_index(bytes: &[u8]) -> Result<Self, BuildFilesError> {
+        let index: IndexFile =
+            serde_json::from_slice(bytes).map_err(BuildFilesError::NotAnIndex)?;
         if index.version != INDEX_VERSION {
-            return Err(format!(
-                "it is a build index of version {}, and Kix reads version {INDEX_VERSION}. \
-                 Use the version of Kix that matches the Kix library that made the build",
-                index.version
-            ));
+            return Err(BuildFilesError::IndexVersion(index.version));
         }
         Ok(Self {
             activation: index.activation,
@@ -117,15 +136,14 @@ impl BuildFiles {
 
     /// Read a result directory of links ([`entry`]). `activation` and
     /// `kix-packages.json` must be present. The other files are optional.
-    fn read_result_dir(dir: &Path) -> Result<Self, String> {
+    fn read_result_dir(dir: &Path) -> Result<Self, BuildFilesError> {
         let link = |name: &str| entry(dir, name);
         let optional = |name: &str| link(name).ok();
-        let activation = link("activation").map_err(|e| format!("no activation link: {e}"))?;
-        let packages =
-            link("kix-packages.json").map_err(|e| format!("no kix-packages.json link: {e}"))?;
+        let activation = link("activation").map_err(BuildFilesError::NoActivationLink)?;
+        let packages = link("kix-packages.json").map_err(BuildFilesError::NoPackagesLink)?;
         let mut interfaces = BTreeMap::new();
-        for listed in std::fs::read_dir(store::real_path(dir)).map_err(|e| e.to_string())? {
-            let name = listed.map_err(|e| e.to_string())?.file_name();
+        for listed in std::fs::read_dir(store::real_path(dir))? {
+            let name = listed?.file_name();
             let Some(name) = name.to_str() else { continue };
             if let Some(consumer) = name
                 .strip_prefix("kix-interface-")
@@ -154,18 +172,12 @@ enum Opened {
     Index(Vec<u8>),
 }
 
-fn open(location: &Path) -> Result<Opened, String> {
-    let on_disk = store::disk_path(location).map_err(|e| e.to_string())?;
-    if std::fs::metadata(&on_disk)
-        .map_err(|e| e.to_string())?
-        .is_dir()
-    {
-        let dir = store::canonicalize(location).map_err(|e| e.to_string())?;
-        return Ok(Opened::Dir(dir));
+fn open(location: &Path) -> Result<Opened, BuildFilesError> {
+    let on_disk = store::disk_path(location)?;
+    if std::fs::metadata(&on_disk)?.is_dir() {
+        return Ok(Opened::Dir(store::canonicalize(location)?));
     }
-    std::fs::read(&on_disk)
-        .map(Opened::Index)
-        .map_err(|e| e.to_string())
+    Ok(Opened::Index(std::fs::read(&on_disk)?))
 }
 
 /// Return the store path that the entry `name` of the result directory
@@ -184,9 +196,10 @@ fn entry(dir: &Path, name: &str) -> std::io::Result<PathBuf> {
     }
 }
 
-fn unreadable(location: &Path, what: String) -> KixEvalError {
-    KixEvalError::StoreGraphError {
-        message: format!("failed to read the build at {}: {what}", location.display()),
+fn unreadable(location: &Path, reason: BuildFilesError) -> KixEvalError {
+    KixEvalError::UnreadableBuild {
+        location: location.to_path_buf(),
+        reason,
     }
 }
 

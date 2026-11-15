@@ -93,8 +93,11 @@ pub enum InstallError {
     #[error("could not download {url}: {message}")]
     Download { url: String, message: String },
 
-    #[error("the release index from {site} cannot be read: {message}")]
-    BadIndex { site: String, message: String },
+    #[error("the release index from {site} cannot be read: {reason}")]
+    BadIndex {
+        site: String,
+        reason: serde_json::Error,
+    },
 
     #[error("{}", no_release_message(.req, .system, .latest.as_deref(), .prerelease.as_deref()))]
     NoRelease {
@@ -130,7 +133,10 @@ pub enum InstallError {
     },
 
     #[error("the release archive of Kix {version} cannot be installed: {reason}")]
-    BadArchive { version: String, reason: String },
+    BadArchive {
+        version: String,
+        reason: download::ArchiveError,
+    },
 
     #[error(
         "the release notes of Kix {version} cannot be read: {message}. Kix changed nothing. Upgrade Kix with `kix self upgrade` if Kix {version} is newer than Kix {}",
@@ -236,9 +242,9 @@ pub fn install(
     let index_bytes = fetcher
         .get(index::PATH)
         .map_err(|e| e.into_install_error(&unreachable))?;
-    let index = index::Index::parse(&index_bytes).map_err(|message| InstallError::BadIndex {
+    let index = index::Index::parse(&index_bytes).map_err(|reason| InstallError::BadIndex {
         site: source.to_string(),
-        message,
+        reason,
     })?;
     let release = index
         .newest(req, system)
@@ -295,7 +301,7 @@ pub fn install(
     if !new.join("bin").join("kix").is_file() {
         return Err(InstallError::BadArchive {
             version: v.clone(),
-            reason: format!("it has no {top}/bin/kix"),
+            reason: download::ArchiveError::NoKix { top },
         });
     }
     let dest = data.join(&v);
@@ -347,9 +353,9 @@ pub fn fetch_index(source: &Source) -> Result<index::Index, InstallError> {
             message,
         })
     })?;
-    index::Index::parse(&bytes).map_err(|message| InstallError::BadIndex {
+    index::Index::parse(&bytes).map_err(|reason| InstallError::BadIndex {
         site: source.to_string(),
-        message,
+        reason,
     })
 }
 
@@ -432,9 +438,9 @@ pub fn latest(
             message,
         })
     })?;
-    let index = index::Index::parse(&bytes).map_err(|message| InstallError::BadIndex {
+    let index = index::Index::parse(&bytes).map_err(|reason| InstallError::BadIndex {
         site: source.to_string(),
-        message,
+        reason,
     })?;
     Ok(index.latest_for(system, running).map(|r| r.version.clone()))
 }
