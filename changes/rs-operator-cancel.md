@@ -1,4 +1,4 @@
 +++
 kind = "changed"
 +++
-When the Kix operator gets SIGTERM, such as when Kubernetes stops its pod, it now cancels the deploy it is running at the next step and starts no new one, and then exits. The Activation record stays `Deploying`, and the operator resumes it when it starts again.
+When the Kix operator receives `SIGTERM` (such as when Kubernetes stops its pod) or `Ctrl-C`, it now cancels any running deploy, starts no new ones, and exits. An interrupted deploy leaves its Activation record `Deploying`, and the operator resumes it when it starts again.
