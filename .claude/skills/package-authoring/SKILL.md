@@ -497,7 +497,7 @@ Mandatory:
    deploy commands in the header (`clusters/test-clickhouse.nix:13-21`,
    `clusters/test-keycloak.nix:1-15`). A dependency from an unmerged change
    is a `kix.mkImport` stand-in; note the merge order.
-4. `flake.nix`: register the cluster under a key in `clusters`.
+4. `flake.nix`: add the cluster to `clusters`.
 5. `kix/lib/tests/units/<pkg>.nix`: names `<topic>-<what>`, helpers as in
    `kix/lib/tests/units/keycloak.nix:8-18`. Each `evalFails` has a positive
    control (T2). Two instances in two namespaces (Na2, Na10) and each
@@ -521,7 +521,7 @@ Conditional:
 11. `crds/` with `crds/sources.txt`, and `rbac/` (crd-vendoring skill); sibling
     files such as `health-check.py`, `release.nix`, and `alerts.nix`.
 12. `clusters/test-<contract>-swap/` for a second implementation of an alias,
-    registered in `flake.nix`.
+    added to `clusters` and `checks` (`<contract>-swap`) in `flake.nix`.
 13. `docs/src/content/docs/reference/` and `docs/src/content/docs/explanation/`,
     and the kix-migration, package-review, and crd-vendoring skills and this
     one, when a lib API, role, `meta` key, or convention changes (T6).
@@ -543,7 +543,7 @@ nix shell nixpkgs#uv -c uv run --frozen scripts/vendor-crds.py --check   # 6. CR
 nix run .#kix -- check homelab-kind                                       # 7. smoke over the full package set
 ```
 
-`<cluster>` is the key in `flake.nix`. When `every-package-evaluates`
+`<cluster>` is the key under `clusters` in `flake.nix`. When `every-package-evaluates`
 fails, `evaluate level name` (`kix/package-eval.nix:742`) evaluates one
 package at one level. From the worktree root, with `$PWD` absolute:
 
