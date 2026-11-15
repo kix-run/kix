@@ -1,12 +1,13 @@
-# envoy-gateway Kix package: Gateway API resources.
+# envoy-gateway: the GatewayClass and Gateway for an Envoy Gateway
+# controller that is installed outside Kix.
 #
-# Creates GatewayClass and Gateway resources for the Gateway API, plus an
-# optional EnvoyProxy that tells Envoy Gateway how to provision the data
-# plane for that class.
-#
-# The actual Envoy Gateway controller is installed separately (e.g.
-# via Helm at the cluster level). This package provides the Gateway
-# API resources and the DI contract that kix.expose consumes.
+# This package does not install Envoy Gateway. It creates no controller, no
+# data plane, and no CRDs. Install the controller and the Gateway API CRDs
+# first, for example with upstream's Helm chart, as the how-to guide
+# "Install Envoy Gateway" shows. The package creates GatewayClass and
+# Gateway resources, an optional EnvoyProxy that tells Envoy Gateway how to
+# provision the data plane for that class, and the gateway contract that
+# kix.expose reads.
 #
 # Supports multiple instances (public gateway, private gateway, etc.);
 # all resource names derive from scope.instanceName.
@@ -50,7 +51,7 @@ in
 
 {
   meta = {
-    description = "Gateway API resources (GatewayClass + Gateway)";
+    description = "GatewayClass and Gateway for an Envoy Gateway controller installed outside Kix (does not install the controller)";
     owner = "platform";
     defaultAliases = [ "gateway" ];
     # One Gateway accepts HTTPRoutes from every namespace, so consumers in

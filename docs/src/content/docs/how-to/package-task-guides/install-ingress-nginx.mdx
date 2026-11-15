@@ -1,6 +1,6 @@
 ---
 title: "Install ingress-nginx"
-description: "Add the ingress-nginx controller, Service, and IngressClass to a Kix cluster."
+description: "Add the deprecated ingress-nginx controller, Service, and IngressClass to a Kix cluster."
 ---
 
 import Command from '/src/components/Command.astro';
@@ -12,10 +12,12 @@ Add the `ingress-nginx` package when the cluster should run its own NGINX
 Ingress controller. The package creates the controller workload, Service,
 IngressClass, admission webhook, and their RBAC resources.
 
-:::caution[Legacy controller]
-Upstream ingress-nginx stopped development after v1.15.1, the release this
-package runs. For a new cluster, route traffic through Gateway API instead:
-see [Expose a service with Gateway API](/docs/how-to/platform-capabilities/expose-a-service-with-gateway-api/).
+:::caution[Deprecated]
+Kubernetes retired ingress-nginx in March 2026. v1.15.1, the release this
+package runs, is the last one, and the project gets no security fixes. The
+package is deprecated, and Kix warns on every build that uses it. Route
+traffic through Gateway API instead, with the `traefik` package or with
+Envoy Gateway: see [Expose a service with Gateway API](/docs/how-to/platform-capabilities/expose-a-service-with-gateway-api/).
 :::
 
 ## Add the controller instance
