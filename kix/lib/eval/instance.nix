@@ -397,6 +397,13 @@ in
           r: r._injectedResources or [ ]
         ) _partResourcesFromParts;
 
+        # Collect the warnings the builders attached to the instance's
+        # resources (`_warnings`, `scope/builders.nix`). A resource that two
+        # parts name gives its warnings once.
+        _resourceWarnings = lib.unique (
+          builtins.concatMap (r: r._warnings or [ ]) (_partResourcesFromParts ++ _scopeInjectedResources)
+        );
+
         # collectTypedAttrs excludes root, so the root resource must also be
         # assigned to a named part to be included in the manifest set.
         _rootRendersCheck =
@@ -851,6 +858,7 @@ in
                 "Reference root or one of its dependencies from ${res r}, or add one to requires on ${res r}."
             ) postHookWarnings)
             processorWarnings
+            _resourceWarnings
           ];
 
         diagnostics = meta.combineDiagnostics {

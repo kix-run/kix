@@ -71,8 +71,10 @@ in
       failHere = failFor "${namespaceName}/${instanceName}";
 
       # Validate a required cluster capability. Throw when the capability is
-      # false, warn when it is null, and skip checks when `capabilities` is empty
-      # in standalone test scopes.
+      # false, return a warning when it is null, and skip checks when
+      # `capabilities` is empty in standalone test scopes. The checks below
+      # that can warn return a list of warnings, which the builders attach to
+      # the resource as `_warnings` (`scope/builders.nix`).
       checkCapability =
         {
           cap,
@@ -84,26 +86,30 @@ in
           value = capabilities.${cap} or null;
         in
         if capabilities == { } then
-          null
+          [ ]
         else if value == false then
           failHere { inherit message fix clusterOption; }
         else if value == null then
-          builtins.trace (
-            "warning: instance '${instanceName}': requires cluster.capabilities.${cap} = true, which is not set in the cluster definition, so Kix skipped verifying this requirement."
-            + "\nFix: Set `cluster.capabilities.${cap} = true;` (or `false;`) in the cluster definition to match your cluster."
-          ) null
+          [
+            {
+              inherit clusterOption;
+              message = "This instance requires cluster.capabilities.${cap} = true, which is not set in the cluster definition. Kix built the instance without checking whether the cluster supports this capability.";
+              fix = "Set `cluster.capabilities.${cap} = true;` in the cluster definition if the cluster supports it, or `false;` if it does not.";
+            }
+          ]
         else
-          null;
+          [ ];
 
-      # Check that the cluster provides `metrics.k8s.io` for `subject`.
-      requireMetricsApi =
+      # Check that the cluster provides `metrics.k8s.io` for `subject`. Return
+      # a list holding a warning when the metricsApi role is unset.
+      metricsApiWarnings =
         subject:
         let
           status = roleStatus "metricsApi";
           desc = "instance '${instanceName}': ${subject} requires the Kubernetes Metrics API (metrics.k8s.io), and";
         in
         if capabilities == { } then
-          null
+          [ ]
         else if status == "absent" then
           fail {
             message =
@@ -115,14 +121,24 @@ in
               + "\nIf your cluster environment already runs metrics-server, set `cluster.roles.metricsApi.binding = \"exclusive\";` in your cluster definition instead.";
           }
         else if status == "unknown" then
-          builtins.trace (
-            "warning: "
-            + desc
-            + " cluster.roles.metricsApi.binding is unset, so Kix skipped checking for a provider."
-            + "\nFix: Set `cluster.roles.metricsApi.binding = \"exclusive\";` (or `\"absent\";`) in your cluster definition, or add a metrics-server instance."
-          ) null
+          [
+            {
+              clusterOption = "cluster.roles.metricsApi.binding";
+              message = "${subject} requires the Kubernetes Metrics API (metrics.k8s.io), and cluster.roles.metricsApi.binding is not set. Kix built the instance without checking whether anything in the cluster serves metrics.k8s.io.";
+              fix = "Add a `metrics-server` instance to the cluster definition, or set `cluster.roles.metricsApi.binding = \"exclusive\";` if the cluster already runs `metrics-server` outside Kix (or `\"absent\";` if it does not).";
+            }
+          ]
         else
-          null;
+          [ ];
+
+      # Check that the cluster provides `metrics.k8s.io` for `subject`, for a
+      # package to call directly. It returns null, so it has no value to carry
+      # a warning in, and prints the warning as a trace.
+      requireMetricsApi =
+        subject:
+        builtins.foldl' (
+          acc: w: builtins.trace "warning: instance '${instanceName}': ${w.message}\nFix: ${w.fix}" acc
+        ) null (metricsApiWarnings subject);
 
       _checkDuplicateNames =
         { includeEnv }:
@@ -296,16 +312,21 @@ in
                 + "\nIf this cluster has no load balancer, change the Service to `type = \"ClusterIP\";` (or `\"NodePort\"`).";
             }
           else if status == "unknown" then
-            builtins.trace (
-              "warning: "
-              + serviceDesc
-              + " cluster.roles.loadBalancer.binding is unset, so Kix skipped checking for a load balancer."
-              + "\nFix: Set `cluster.roles.loadBalancer.binding = \"shadowable\";` (or `\"absent\";`) in your cluster definition."
-            ) null
+            [
+              {
+                object = {
+                  kind = "Service";
+                  name = builtins.unsafeDiscardStringContext (args.name or "unknown");
+                };
+                clusterOption = "cluster.roles.loadBalancer.binding";
+                message = "Service '${args.name or "unknown"}' sets type = \"LoadBalancer\", and cluster.roles.loadBalancer.binding is not set. Kix built the Service without checking whether the cluster provides a load balancer.";
+                fix = "Set `cluster.roles.loadBalancer.binding = \"shadowable\";` in the cluster definition if the cluster provides a load balancer (such as a cloud controller or MetalLB), or `\"absent\";` if it does not.";
+              }
+            ]
           else
-            null
+            [ ]
         else
-          null;
+          [ ];
 
       # Check that `metrics.k8s.io` is available when a HorizontalPodAutoscaler
       # uses CPU defaults or `Resource`/`ContainerResource` metrics.
@@ -327,9 +348,9 @@ in
             ) metrics;
         in
         if (args.kind or "") == "HorizontalPodAutoscaler" && readsResourceMetrics then
-          requireMetricsApi "HorizontalPodAutoscaler '${args.name or "unknown"}'"
+          metricsApiWarnings "HorizontalPodAutoscaler '${args.name or "unknown"}'"
         else
-          null;
+          [ ];
 
       checkPrivileged =
         templateSpec:
@@ -362,7 +383,7 @@ in
             fix = "Remove the privileged settings or use a cluster that supports them.";
           }
         else
-          null;
+          [ ];
 
       checkDaemonSet =
         kind:
@@ -373,7 +394,7 @@ in
             fix = "Remove this DaemonSet or use a cluster that supports it.";
           }
         else
-          null;
+          [ ];
 
       # Check that multi-replica workloads with required anti-affinity or
       # `DoNotSchedule` spread constraints do not target a single-node cluster,
@@ -408,16 +429,25 @@ in
           fix = "Use preferred anti-affinity or ScheduleAnyway, set replicas to 1, or set multiNode = true if the cluster has multiple nodes.";
         in
         if capabilities == { } || rule == null || !(builtins.isInt replicas) || replicas <= 1 then
-          null
+          [ ]
         else if multiNode == false then
           failHere {
             inherit message fix;
             clusterOption = "cluster.capabilities.multiNode";
           }
         else if multiNode == null then
-          builtins.trace "[kix] warning: [${namespaceName}/${instanceName}] ${message} ${fix}" null
+          [
+            {
+              inherit message fix;
+              object = {
+                inherit kind;
+                name = builtins.unsafeDiscardStringContext name;
+              };
+              clusterOption = "cluster.capabilities.multiNode";
+            }
+          ]
         else
-          null;
+          [ ];
 
       checkNamespacedRefs =
         templateSpec:
