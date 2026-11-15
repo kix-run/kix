@@ -251,6 +251,8 @@ let
       config.clusterIP = "10.96.0.53";
       instances.prometheus-operator.package = packages.prometheus-operator;
     };
+    # A Gateway API implementation needs the Gateway API CRDs.
+    envoy-gateway.instances.gateway-api.package = packages.gateway-api;
     external-dns = {
       config = {
         provider = "cloudflare";
@@ -577,6 +579,7 @@ let
       };
     };
     # A Prometheus provider, so the ServiceMonitor is built.
+    traefik.instances.gateway-api.package = packages.gateway-api;
     tempo.instances = {
       inherit storage;
       prometheus-operator.package = packages.prometheus-operator;
