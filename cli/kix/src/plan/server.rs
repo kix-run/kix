@@ -360,12 +360,7 @@ mod tests {
     }
 
     fn rid(name: &str) -> ResourceId {
-        ResourceId {
-            group: String::new(),
-            kind: "ConfigMap".into(),
-            namespace: "app".into(),
-            name: name.into(),
-        }
+        ResourceId::new("", "ConfigMap", "app", name)
     }
 
     fn served(obj: &Value) -> Value {

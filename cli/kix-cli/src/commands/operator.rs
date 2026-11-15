@@ -336,7 +336,7 @@ mod tests {
     /// A record that is already Active, as when `kix deploy --operator`
     /// submits the build already deployed, is not the answer until the
     /// operator has started and finished the request.
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn the_watch_waits_for_its_own_request() {
         let mut active = record("rec", "Active");
         active["status"]["startedRequest"] = json!("r0");

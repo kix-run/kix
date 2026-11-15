@@ -174,15 +174,6 @@ mod tests {
         })
     }
 
-    fn rid(group: &str, kind: &str, ns: &str, name: &str) -> ResourceId {
-        ResourceId {
-            group: group.into(),
-            kind: kind.into(),
-            namespace: ns.into(),
-            name: name.into(),
-        }
-    }
-
     async fn guard(api: &FakeApi, cluster: &str) -> (PruneGuard, Vec<(ApiResource, Scope)>) {
         let client = api.client();
         let discovery = discovery::discover_resources(&client).await.unwrap();
@@ -209,7 +200,7 @@ mod tests {
             role("once-shared", "a1,b0"),
         ]);
         let (g, d) = guard(&api, "a").await;
-        let shared = rid(
+        let shared = ResourceId::new(
             "rbac.authorization.k8s.io",
             "ClusterRole",
             CLUSTER_SCOPED,
@@ -222,7 +213,7 @@ mod tests {
                 clusters: vec!["b".into()],
             })
         );
-        let once = rid(
+        let once = ResourceId::new(
             "rbac.authorization.k8s.io",
             "ClusterRole",
             CLUSTER_SCOPED,
@@ -245,7 +236,7 @@ mod tests {
             o["metadata"]["annotations"][keys::ACTIVATIONS] = json!("a1,b1");
         });
         let (g, d) = guard(&api, "a").await;
-        let mine = rid(
+        let mine = ResourceId::new(
             "rbac.authorization.k8s.io",
             "ClusterRole",
             CLUSTER_SCOPED,
@@ -264,7 +255,7 @@ mod tests {
             role("first", "a1"),
         ]);
         let (g, d) = guard(&api, "a").await;
-        let first = rid(
+        let first = ResourceId::new(
             "rbac.authorization.k8s.io",
             "ClusterRole",
             CLUSTER_SCOPED,
@@ -275,7 +266,7 @@ mod tests {
         // `b`'s first deploy: its record, then an object naming it.
         api.insert(record("b", "b1", lifecycle::PHASE_DEPLOYING));
         api.insert(role("later", "a1,b1"));
-        let later = rid(
+        let later = ResourceId::new(
             "rbac.authorization.k8s.io",
             "ClusterRole",
             CLUSTER_SCOPED,
@@ -302,7 +293,7 @@ mod tests {
             }),
         ]);
         let (g, d) = guard(&api, "a").await;
-        let cm = rid("", "ConfigMap", CLUSTER_SCOPED, "cm");
+        let cm = ResourceId::new("", "ConfigMap", CLUSTER_SCOPED, "cm");
         assert!(matches!(delete(&g, &d, &cm).await, Pruned::Kept(_)));
         assert_eq!(api.names("ConfigMap"), vec!["cm"]);
     }

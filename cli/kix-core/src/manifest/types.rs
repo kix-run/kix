@@ -78,6 +78,18 @@ pub struct ResourceId {
 }
 
 impl ResourceId {
+    /// Return the id of the object `name` of `kind` in API group `group`
+    /// (`""` for the core group) and `namespace` ([`CLUSTER_SCOPED`] for a
+    /// cluster-scoped object).
+    pub fn new(group: &str, kind: &str, namespace: &str, name: &str) -> Self {
+        ResourceId {
+            group: group.to_string(),
+            kind: kind.to_string(),
+            namespace: namespace.to_string(),
+            name: name.to_string(),
+        }
+    }
+
     /// Extract a ResourceId from a manifest JSON value.
     pub fn from_value(doc: &serde_json::Value) -> Self {
         ResourceId {

@@ -888,12 +888,7 @@ mod tests {
     }
 
     fn rid(kind: &str, ns: &str, name: &str) -> ResourceId {
-        ResourceId {
-            group: String::new(),
-            kind: kind.into(),
-            namespace: ns.into(),
-            name: name.into(),
-        }
+        ResourceId::new("", kind, ns, name)
     }
 
     /// Kix cluster `a` drops a ClusterRole and a ConfigMap that `b` still

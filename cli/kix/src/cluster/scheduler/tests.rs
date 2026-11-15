@@ -1,25 +1,8 @@
 use super::*;
 use crate::cluster::apply::RerunReason;
+use crate::cluster::test_fixtures::manifest;
 use crate::manifest::types::CLUSTER_SCOPED;
 use serde_json::json;
-
-fn manifest(kind: &str, name: &str, ns: &str, id_hash: &str, deps: &str) -> Value {
-    let mut annotations = serde_json::Map::new();
-    annotations.insert(keys::IDENTITY_HASH.into(), json!(id_hash));
-    if !deps.is_empty() {
-        annotations.insert(keys::DEPENDS_ON.into(), json!(deps));
-    }
-    let api_version = if kind == "Job" { "batch/v1" } else { "v1" };
-    json!({
-        "apiVersion": api_version,
-        "kind": kind,
-        "metadata": {
-            "name": name,
-            "namespace": ns,
-            "annotations": annotations,
-        }
-    })
-}
 
 #[test]
 fn plan_from_linear_chain_has_expected_edges() {
