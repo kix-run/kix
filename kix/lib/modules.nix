@@ -161,15 +161,13 @@ in
                 type = lib.types.nullOr (lib.types.listOf lib.types.str);
                 default = null;
                 description = ''
-                  DI resolution keys for this instance, in addition to the
-                  instance name itself. A list replaces the package's
-                  `meta.defaultAliases`, so `[ ]` gives the instance no
-                  aliases. When unset (null, the default), the package
-                  defaults apply.
+                  Extra dependency names that resolve to this instance, besides
+                  its own name and the package's `meta.roles`. When `null` (the
+                  default), Kix uses the package's `meta.defaultAliases`. Setting
+                  a list replaces `meta.defaultAliases`, so `[ ]` clears them.
 
-                  For multi-instance disambiguation prefer `deps.<argName>
-                  = ref.<ns>.<inst>` at the consumer site. Aliases are
-                  not the right tool for that case.
+                  When a cluster runs multiple instances of the same service,
+                  wire consumers explicitly with `deps.<argName> = ref.<ns>.<inst>`.
                 '';
               };
               config = lib.mkOption {
@@ -771,17 +769,17 @@ in
             default = [ ];
             example = [ "eks.amazonaws.com" ];
             description = ''
-              Annotation domains consumed by something outside kix (a cloud
-              control plane, org-convention metadata). Exempted from the
-              architecture.annotationDomainOwnership lint alongside the
-              reserved Kubernetes domains and domains declared by in-cluster
-              packages via meta.annotationDomains.
+              Annotation domains handled outside Kix, such as cloud provider
+              or organization annotations. The
+              `architecture.annotationDomainOwnership` scorecard rule ignores
+              these domains instead of requiring an in-cluster package that
+              declares them in `meta.annotationDomains`.
             '';
           };
         };
       };
       default = { };
-      description = "Scorecard policy evaluation. See https://kix.run/docs/reference/scorecard-and-rules/.";
+      description = "Build-time policy rules and severity settings for the cluster. See https://kix.run/docs/reference/scorecard-and-rules/.";
     };
 
     consumers = lib.mkOption {
