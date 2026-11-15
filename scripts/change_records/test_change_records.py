@@ -513,6 +513,18 @@ class PullRequestTest(RepoTest):
         self.assertIn("`cady` in `packages` is not a folder", err)
         self.assertNotIn("`caddy` in", err)
 
+    def test_a_removed_package_is_accepted(self):
+        self.repo.write(
+            "kix/packages/removed.toml",
+            '["experimental/gone"]\nid = "K0008"\nmessage = "[K0008] gone"\n',
+        )
+        self.repo.write(
+            "changes/x.md",
+            record('kind = "error"\nid = "K0008"\npackages = ["experimental/gone"]'),
+        )
+        code, _, err = self.repo.run("check")
+        self.assertEqual(code, 0, err)
+
     def test_an_error_record_needs_its_id_in_an_error_message(self):
         self.repo.write("kix/packages/stable/caddy/default.nix", "{}\n")
         self.repo.write(

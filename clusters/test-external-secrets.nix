@@ -126,7 +126,7 @@ kix.buildCluster {
         instances.app = {
           app-secrets.package = appSecretsPackage;
           secret-echo = {
-            package = packages.experimental.secret-echo;
+            package = import ./secret-echo.nix;
             deps.credentials = ref.app.app-secrets;
           };
         };

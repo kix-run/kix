@@ -7,6 +7,13 @@
 let
   levels = import ../lib/core/levels.nix { inherit lib; };
   wasStable = import ./was-stable.nix;
+  removed = lib.mapAttrs' (
+    key: error:
+    assert lib.assertMsg (lib.hasPrefix "experimental/" key)
+      "kix/packages/removed.toml: ${key} must start with experimental/. A stable package's old name is not supported.";
+    lib.nameValuePair (lib.removePrefix "experimental/" key) error
+  ) (builtins.fromTOML (builtins.readFile ./removed.toml));
+  inherit (import ../lib/core/error.nix { inherit lib; }) fail;
   byLevel = import ./by-level.nix { inherit lib; };
 
   merged = levels.merge (
@@ -45,4 +52,7 @@ in
 merged
 // {
   stable = misplaced // merged.stable;
+  # An attribute is evaluated only when a cluster names it, so the error
+  # shows only then.
+  experimental = lib.mapAttrs (_: fail) removed // merged.experimental;
 }

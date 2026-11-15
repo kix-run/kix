@@ -1,10 +1,13 @@
-# Secret echo server: test package for SOPS secret integration.
+# clusters/secret-echo.nix: a test fixture that proves a secret reaches a
+# pod, used by test-secrets.nix and test-external-secrets.nix.
 #
-# Runs a simple pod that reads secret credentials from env vars and
-# serves them via an HTTP endpoint. Used by integration tests to verify
-# that SOPS-encrypted secrets are correctly decrypted and injected.
+# The pod reads the keys username, password, host, and port of its
+# `credentials` dependency into environment variables and serves them in
+# plain text on its HTTP page, where tests/secrets-integration.sh reads
+# them. It publishes the credentials it receives, so it is no package a
+# cluster should run, and the package set does not offer it.
 #
-# Expects a `credentials` dep (a secret with keys: username, password, host, port).
+#   secret-echo.package = import ./secret-echo.nix;
 
 {
   scope,
@@ -17,15 +20,15 @@ let
 in
 {
   meta = {
-    version = "1.0.0";
-    description = "Echo server that reads secrets from env vars (test only)";
+    description = "Test fixture that serves the secret it reads on an HTTP page";
     owner = "platform";
   };
 
   options = {
     image = kix.options.image {
-      repository = "nginxinc/nginx-unprivileged";
+      repository = "docker.io/nginxinc/nginx-unprivileged";
       tag = "1.27-alpine";
+      digest = "sha256:65e3e85dbaed8ba248841d9d58a899b6197106c23cb0ff1a132b7bfe0547e4c0";
     };
   };
 
