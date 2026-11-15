@@ -39,7 +39,7 @@ let
     containers = [ restrictedContainer ];
   };
 
-  # The echo-server package's container: non-root, nothing else.
+  # A container that sets non-root and nothing else.
   echoContainer = {
     name = "echo-server";
     securityContext = {
@@ -56,14 +56,33 @@ let
     change: restrictedPod // { containers = [ (lib.recursiveUpdate restrictedContainer change) ]; };
 
   echoPackage = import ../../../packages/stable/echo-server;
+
+  # A package whose one container is `echoContainer`.
+  baselinePackage = {
+    build =
+      { self, scope, ... }:
+      {
+        deployment = scope.mkDeployment {
+          name = "app";
+          spec = {
+            selector.matchLabels = scope.selectorLabels;
+            template = {
+              metadata.labels = scope.selectorLabels;
+              spec.containers = [ (echoContainer // { image = "registry.example.com/app:1"; }) ];
+            };
+          };
+        };
+        root = self.deployment;
+      };
+  };
 in
 {
   lib-pod-security-restricted-pod-passes =
     (passes "restricted" restrictedPod && passes "baseline" restrictedPod)
     || throw "a restricted pod failed: ${builtins.toJSON (problemsOf "restricted" (deployment restrictedPod))}";
 
-  # echo-server sets runAsNonRoot only: it meets "baseline" and breaks
-  # "restricted" on three fields of its container.
+  # A container that sets runAsNonRoot only meets "baseline" and breaks
+  # "restricted" on three fields.
   lib-pod-security-echo-server =
     let
       pod.containers = [ echoContainer ];
@@ -277,18 +296,23 @@ in
     || throw "a pod-creating kind was missed, or another kind checked";
 
   # A cluster that sets a namespace's level itself gets the same check.
+  # echo-server meets "restricted".
   lib-pod-security-cluster-namespace-level =
     let
       with' =
-        level:
+        level: package:
         mkCluster [
           baseInstances
           {
             namespaces.web.podSecurity = level;
-            instances.web.echo.package = echoPackage;
+            instances.web.app.package = package;
           }
         ];
     in
-    (evalFails (with' "restricted") && builtins.deepSeq (manifests (with' "baseline")) true)
-    || throw "echo-server built under \"restricted\", or failed under \"baseline\"";
+    (
+      evalFails (with' "restricted" baselinePackage)
+      && builtins.deepSeq (manifests (with' "baseline" baselinePackage)) true
+      && builtins.deepSeq (manifests (with' "restricted" echoPackage)) true
+    )
+    || throw "a baseline container built under \"restricted\", it failed under \"baseline\", or echo-server failed under \"restricted\"";
 }

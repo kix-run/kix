@@ -109,8 +109,6 @@ let
     kind: name: ms:
     builtins.filter (m: m.metadata.name == name) (ofKind kind ms);
 
-  echoPackage = import ../../../packages/stable/echo-server;
-
   # A Deployment whose container is `container`.
   deploymentPackage = container: {
     meta.version = "test";
@@ -138,6 +136,9 @@ let
         root = self.deployment;
       };
   };
+
+  # A container that meets Pod Security "baseline" and breaks "restricted".
+  baselinePackage = deploymentPackage { securityContext.runAsNonRoot = true; };
 
   # `fixture` with `change` applied, as a file.
   fixtureWith =
@@ -607,10 +608,10 @@ in
     evalFails (consumerWith { file = fixtureWith (i: i // { version = 1; }); } [ ])
     || throw "an interface of version 1 was loaded";
 
-  # The fixture's namespaces enforce "restricted": echo-server's pods break
-  # it, so the build refuses them; a container that meets it builds.
+  # The fixture's namespaces enforce "restricted": a baseline container
+  # breaks it, so the build refuses it; a container that meets it builds.
   lib-consumers-pod-security-refuses-at-build =
-    evalFails (consumerWith { } [ { instances.acme-app.echo.package = echoPackage; } ])
+    evalFails (consumerWith { } [ { instances.acme-app.echo.package = baselinePackage; } ])
     && builtins.deepSeq (manifests (
       consumerWith { } [
         {
@@ -625,9 +626,9 @@ in
         }
       ]
     )) true
-    || throw "echo-server built under \"restricted\", or a restricted container did not";
+    || throw "a baseline container built under \"restricted\", or a restricted container did not";
 
-  # Under "baseline" or no level, echo-server builds; a privileged
+  # Under "baseline" or no level, a baseline container builds; a privileged
   # container still fails "baseline".
   lib-consumers-pod-security-follows-the-interface-level =
     let
@@ -646,7 +647,7 @@ in
             }
           );
         } modules;
-      echo = [ { instances.acme-app.echo.package = echoPackage; } ];
+      echo = [ { instances.acme-app.echo.package = baselinePackage; } ];
     in
     (
       builtins.deepSeq (manifests (levelled "baseline" echo)) true
