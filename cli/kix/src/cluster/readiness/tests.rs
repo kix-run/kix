@@ -2136,3 +2136,120 @@ fn gk(kind: &'static str) -> crate::manifest::kinds::GroupKind<'static> {
     .find(|k| k.kind == kind)
     .unwrap_or(GroupKind::new("example.com", kind))
 }
+
+mod discovery_waits {
+    use super::*;
+    use crate::cluster::fake_api::{FakeApi, TWO_VERSION_GROUP};
+    use crate::manifest::types::CLUSTER_SCOPED;
+
+    const CRD_GROUP: &str = "apiextensions.k8s.io";
+    /// The readiness loops measure time with `std::time::Instant`, which a
+    /// paused tokio clock does not advance, so a timeout here is real time.
+    const TIMEOUT: Duration = Duration::from_secs(1);
+
+    /// An established CRD that defines `kind` in `group`.
+    fn crd(name: &str, group: &str, kind: &str) -> Value {
+        json!({
+            "apiVersion": "apiextensions.k8s.io/v1",
+            "kind": "CustomResourceDefinition",
+            "metadata": { "name": name },
+            "spec": {
+                "group": group,
+                "names": { "kind": kind },
+                "versions": [{ "name": "v1", "served": true }],
+            },
+            "status": { "conditions": [{ "type": "Established", "status": "True" }] },
+        })
+    }
+
+    async fn wait_for_crd(api: &FakeApi, name: &str) -> ReadinessResult {
+        let ar = ApiResource {
+            group: CRD_GROUP.into(),
+            version: "v1".into(),
+            api_version: "apiextensions.k8s.io/v1".into(),
+            kind: "CustomResourceDefinition".into(),
+            plural: "customresourcedefinitions".into(),
+        };
+        let rid = ResourceId {
+            group: CRD_GROUP.into(),
+            kind: "CustomResourceDefinition".into(),
+            namespace: CLUSTER_SCOPED.into(),
+            name: name.into(),
+        };
+        wait_for_ready(
+            &api.client(),
+            &ar,
+            &Scope::Cluster,
+            &rid,
+            None,
+            TIMEOUT,
+            &CancelToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap()
+    }
+
+    fn import(kind: &str, api_version: &str, name: &str) -> ImportTarget {
+        ImportTarget {
+            kind: kind.into(),
+            api_version: api_version.into(),
+            name: name.into(),
+            namespace: None,
+            expected_keys: Vec::new(),
+            served_versions: vec!["v1".into()],
+            platform: None,
+        }
+    }
+
+    async fn wait_for_import(api: &FakeApi, target: &ImportTarget) -> ReadinessResult {
+        wait_for_import_target(&api.client(), target, TIMEOUT, &CancelToken::new(), |_| {})
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_crd_whose_kind_discovery_serves_is_ready() {
+        let name = format!("gizmos.{TWO_VERSION_GROUP}");
+        let api = FakeApi::new([crd(&name, TWO_VERSION_GROUP, "Gizmo")]);
+        assert_eq!(wait_for_crd(&api, &name).await, ReadinessResult::Ready);
+    }
+
+    /// An established CRD whose kind discovery never serves times out with
+    /// a message that says what it waited for.
+    #[tokio::test(start_paused = true)]
+    async fn a_crd_waits_until_discovery_serves_its_kind() {
+        let api = FakeApi::new([crd("widgets.example.com", "example.com", "Widget")]);
+        let result = wait_for_crd(&api, "widgets.example.com").await;
+        let ReadinessResult::TimedOut { message, .. } = result else {
+            panic!("expected a timeout, got {result:?}");
+        };
+        assert!(message.contains(CRD_AWAITING_DISCOVERY), "{message}");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_imported_crd_is_ready_once_discovery_serves_its_kind() {
+        let name = format!("gizmos.{TWO_VERSION_GROUP}");
+        let api = FakeApi::new([crd(&name, TWO_VERSION_GROUP, "Gizmo")]);
+        let target = import("CustomResourceDefinition", "apiextensions.k8s.io/v1", &name);
+        assert_eq!(wait_for_import(&api, &target).await, ReadinessResult::Ready);
+    }
+
+    /// An import of a kind discovery does not serve waits for discovery and
+    /// never requests a resource path made up from the kind's name.
+    #[tokio::test(start_paused = true)]
+    async fn an_import_of_an_unserved_kind_waits_for_discovery() {
+        let api = FakeApi::new([]);
+        let target = import("Widget", "example.com/v1", "w");
+        let result = wait_for_import(&api, &target).await;
+        assert!(
+            matches!(result, ReadinessResult::TimedOut { .. }),
+            "{result:?}"
+        );
+        assert!(
+            !api.requests().iter().any(|r| r.contains("widget")),
+            "{:?}",
+            api.requests()
+        );
+    }
+}

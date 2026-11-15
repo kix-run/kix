@@ -1,0 +1,3 @@
+# 2026-11-15 · `cli/kix/src/cluster/` · Three pieces of code each wait for discovery to serve a new CRD's kind.
+
+CRD readiness (`readiness::crd_kind_served`) waits until discovery of the CRD's group serves its kind. The scheduler's CRD barrier then refreshes the whole discovery cache (`ResourceIo::rediscover`). Apply resolves the kind again and retries up to five times on a miss (`KubeResources::refresh_until_found`), to cover HA apiservers whose replicas disagree. Each was added for the same race. One owner, such as a barrier that refreshes until every covered CRD's kind is in the cache, could replace all three.
