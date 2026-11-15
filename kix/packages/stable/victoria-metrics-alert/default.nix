@@ -156,7 +156,7 @@ in
     extraSpec = lib.mkOption {
       type = lib.types.attrsOf lib.types.anything;
       default = { };
-      description = "Extra fields deep-merged into the VMAlert CR spec. The package refuses `datasource.url`, `remoteWrite.url`, `remoteRead.url`, and `notifiers`, which come from the vmCluster dependency and the alertmanager this package runs, and `image`, `replicaCount`, `evaluationInterval`, `selectAllByDefault`, `resources`, and `extraArgs`, which have options of their own. A `topologySpreadConstraints` here replaces the spread the package derives from the availability level.";
+      description = "Extra fields deep-merged into the VMAlert CR spec. The package refuses `datasource.url`, `remoteWrite.url`, `remoteRead.url`, and `notifiers`, which come from the vmCluster dependency and the alertmanager this package runs, and `image`, `replicaCount`, `evaluationInterval`, `selectAllByDefault`, `resources`, and `extraArgs`, which have options of their own. Setting `topologySpreadConstraints` here replaces the default pod spread constraints set from the availability level.";
     };
 
     alertmanager = {
@@ -228,7 +228,7 @@ in
       extraSpec = lib.mkOption {
         type = lib.types.attrsOf lib.types.anything;
         default = { };
-        description = "Extra fields deep-merged into the VMAlertmanager CR spec. The package refuses `configSecret` and `configRawYaml`, which the configuration options and the `alertmanagerConfig` dependency decide, and `image`, `replicaCount`, `retention`, `storage`, `secrets`, `configMaps`, and `resources`, which have options of their own. A `topologySpreadConstraints` here replaces the spread the package derives from the availability level.";
+        description = "Extra fields deep-merged into the VMAlertmanager CR spec. The package refuses `configSecret` and `configRawYaml`, which the configuration options and the `alertmanagerConfig` dependency decide, and `image`, `replicaCount`, `retention`, `storage`, `secrets`, `configMaps`, and `resources`, which have options of their own. Setting `topologySpreadConstraints` here replaces the default pod spread constraints set from the availability level.";
       };
     };
     # The operator scrapes vmalert and Alertmanager whatever this says;

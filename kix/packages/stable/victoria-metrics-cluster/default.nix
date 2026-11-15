@@ -274,9 +274,9 @@ in
         Extra fields deep-merged into the VMCluster CR spec via
         lib.recursiveUpdate. Escape hatch for fields not exposed as typed
         options (downsampling, requestsLoadBalancer, per-component
-        overrides). A component's `topologySpreadConstraints` here
-        replaces the spread the package derives from the availability
-        level.
+        overrides). Setting `topologySpreadConstraints` on `vmstorage`,
+        `vmselect`, or `vminsert` here replaces the default pod spread
+        constraints set from the availability level.
       '';
     };
   };
