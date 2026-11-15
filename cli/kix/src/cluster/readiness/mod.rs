@@ -59,41 +59,34 @@ use terminal::{
 use declared::{FailureWatch, declared_failure, is_wait_for_first_consumer, readiness_message};
 use terminal::{progress_fingerprint, scan_terminal};
 
-/// After a CRD reaches `Established=True`, the API server's discovery endpoint
-/// (and replicas behind an HA load balancer) may still lag by a few hundred
-/// milliseconds before the new group/version/kind appears. Dependents that race in
-/// during that window would hit "no matches for kind" on apply. Poll
-/// discovery for up to this budget after `Established=True`.
-const CRD_DISCOVERY_PROBE_BUDGET: Duration = Duration::from_secs(5);
-const CRD_DISCOVERY_PROBE_INTERVAL: Duration = Duration::from_millis(300);
-
-/// Run a bounded discovery probe until the CRD's group/version/kind appears.
-/// Called after a newly applied CRD reports `Established=True`. Returns
-/// `true` if the kind was observed in discovery, or `false` if the budget
-/// elapsed before it appeared (the deploy still proceeds, and retry-on-miss
-/// in the scheduler absorbs any remaining skew).
-pub(super) async fn probe_crd_discovery(client: &Client, crd: &Value) -> bool {
-    let Some(group) = crd.pointer("/spec/group").and_then(Value::as_str) else {
+/// Return whether API discovery serves the kind that `crd` defines.
+///
+/// The apiserver can report a CRD `Established=True` a moment before its
+/// discovery endpoint lists the new kind, and longer behind an HA load
+/// balancer. A dependent applied in that window fails with "no matches for
+/// kind", so a CRD counts as ready only once discovery serves its kind. The
+/// query asks for the CRD's group alone, so an unrelated group version that
+/// answers 404 cannot hold it up. A CRD without a group or kind is left to
+/// the apiserver to refuse.
+pub(super) async fn crd_kind_served(client: &Client, crd: &Value) -> bool {
+    let (Some(group), Some(kind)) = (
+        crd.pointer("/spec/group").and_then(Value::as_str),
+        crd.pointer("/spec/names/kind").and_then(Value::as_str),
+    ) else {
         return true;
     };
-    let Some(kind) = crd.pointer("/spec/names/kind").and_then(Value::as_str) else {
-        return true;
-    };
-    let deadline = Instant::now() + CRD_DISCOVERY_PROBE_BUDGET;
-    loop {
-        // Query only the target group rather than walking all API groups, which
-        // would wait on any unrelated group version that returns 404.
-        if let Ok(walk) = discovery::discover_group(client, group).await
-            && discovery::find(&walk.resources, group, kind).is_some()
-        {
-            return true;
+    match discovery::discover_group(client, group).await {
+        Ok(walk) => discovery::find(&walk.resources, group, kind).is_some(),
+        Err(e) => {
+            tracing::debug!(group, kind, error = %e, "CRD group discovery failed, retrying");
+            false
         }
-        if Instant::now() >= deadline {
-            return false;
-        }
-        tokio::time::sleep(CRD_DISCOVERY_PROBE_INTERVAL).await;
     }
 }
+
+/// The status a CRD reports while it waits for discovery to serve its kind.
+pub(super) const CRD_AWAITING_DISCOVERY: &str =
+    "CRD established, waiting for API discovery to serve its kind";
 
 /// Default timeout for readiness polling.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(180);
@@ -252,6 +245,7 @@ pub(crate) async fn wait_for_ready(
             });
         }
 
+        let mut message = readiness_message(&obj, kind);
         if check_readiness(&obj, kind) {
             if kind == kinds::DAEMON_SET
                 && let Some(stale) = daemonset_pending_restart(&obj.data)
@@ -261,15 +255,11 @@ pub(crate) async fn wait_for_ready(
                     message: "the DaemonSet replaces a pod with the current template only when the pod is deleted".into(),
                 });
             }
-            // A CRD that reports Established=True can still be invisible to
-            // the apiserver's discovery endpoint for a few hundred ms (and
-            // longer across HA replicas). Probe discovery before declaring
-            // the CRD ready so dependents don't race.
-            if kind == kinds::CUSTOM_RESOURCE_DEFINITION {
-                on_status("CRD Established, probing discovery");
-                let _ = probe_crd_discovery(client, &obj.data).await;
+            if kind != kinds::CUSTOM_RESOURCE_DEFINITION || crd_kind_served(client, &obj.data).await
+            {
+                return Ok(ReadinessResult::Ready);
             }
-            return Ok(ReadinessResult::Ready);
+            message = CRD_AWAITING_DISCOVERY.to_string();
         }
 
         // Compute progress fingerprint and reset the idle timer on any change.
@@ -279,7 +269,6 @@ pub(crate) async fn wait_for_ready(
             last_progress_at = Instant::now();
         }
 
-        let mut message = readiness_message(&obj, kind);
         let idle = last_progress_at.elapsed();
         let total = start.elapsed();
         if scan.pull_retrying.is_some() {
