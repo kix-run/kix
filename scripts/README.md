@@ -1,25 +1,45 @@
-# Cluster Diff Tools
+# Scripts
 
-Compare Kix-generated manifests against a live Kubernetes cluster.
+Every script in this folder, what runs it, and what it is for. Run them from
+the repository root. Scripts that start with a `# /// script` block declare
+their own Python dependencies, so `uv run` or running the file directly
+installs them.
 
-## Quick Start
+| Script | Run by | What it does |
+|---|---|---|
+| `change-kind.py` | Change kind workflow | Builds a set of clusters at a pull request's base and head and checks its change records against what changed. |
+| `change-records.py` | Changelog workflow, release skill | Checks the change records under `changes/` and writes the changelog from them. |
+| `copy-pass` | Authors, before a pull request | Hands the changed user-facing text to Antigravity for an edit (CLAUDE.md, "User-facing text"). |
+| `vendor-crds.py` | CRD vendoring workflow, crd-vendoring skill | Refreshes the CRDs and operator roles packages vendor, or checks them with `--check`. |
+| `vendor-clickhouse-crd-schemas.py` | By hand, when bumping clickhouse-operator | Vendors the Altinity operator's CRD schemas into the package. |
+| `sign-release.sh` | Release job in `cli-tests.yml` | Signs a release's `SHA256SUMS`. |
+| `kix-manifests.sh` | Other scripts, by hand | Writes a cluster's manifests to a directory through `kix build`, so it works for clusters that use Helm. |
+| `cluster-checks.sh` | By hand | Runs the schema check and the alert rule tests of one cluster on those manifests. |
+| `kix-rollback-check.sh` | By hand | Builds one cluster, a variant of it, and the first again, and checks the first and last builds are identical. |
+| `kind-mayastor.sh`, `kind-operators.sh`, `kind-spread.sh`, `kind-velero.sh`, `kind-virtualization.sh` | By hand | Each creates a kind cluster, deploys the test cluster its header names, and checks the result. |
+| `test-monitoring-integration.sh` | By hand | Deploys `clusters/test-monitoring-native.nix` to a new kind cluster and checks that Prometheus, Alertmanager, and Grafana work. |
+| `kix-dump.py` | By hand | Dumps live cluster resources into a directory of normalized YAML. |
+| `compare-cluster-dump.py` | By hand | Compares a Kix build with a dump from `kix-dump.py` and reports the differences. |
+| `cnp-diff.py` | By hand | Compares the Cilium network policies of a build and a dump by the access they allow, whatever their names. |
+| `summarize-report.py` | By hand | Summarizes the JSON report of `compare-cluster-dump.py --json-output`. |
+
+`parity/`, `change_records/`, and `vendor_crds/` hold the code these scripts
+share, and their tests.
+
+## Compare a build with a live cluster
 
 ```bash
-# 1. Build Kix manifests into ./result (works for all clusters, including Helm charts)
-./scripts/kix-manifests.sh . nw1 ./result
+# 1. Write the cluster's manifests to ./result
+./scripts/kix-manifests.sh . <cluster> ./result
 
-# 2. Dump the live cluster (matching only what Kix declares)
-./scripts/kix-dump.py --match-kix ./result --context nw1-prod cluster-dump/
+# 2. Dump the live cluster, only the objects the build declares
+./scripts/kix-dump.py --match-kix ./result --context <context> cluster-dump/
 
 # 3. Compare
-./scripts/kix-diff.py ./result cluster-dump/
+./scripts/compare-cluster-dump.py ./result cluster-dump/
 ```
 
-Or use the devenv shortcut:
-
-```bash
-kix-check nw1 nw1-prod
-```
+In the devenv shell, `kix-check <cluster> [<context>]` runs all three.
 
 ## kix-manifests.sh and cluster-checks.sh
 
@@ -89,22 +109,22 @@ cluster-dump/
 
 **Skipped resource types:** Ephemeral/runtime resources (pods, replicasets, events, jobs, endpoints, etc.) are excluded from broad dumps. See the generated `README.md` in the dump directory for the full list.
 
-## kix-diff.py
+## compare-cluster-dump.py
 
 Compares a Kix output directory against a cluster dump and produces a structured markdown report on stdout. Progress goes to stderr.
 
 ```bash
 # View in terminal
-./scripts/kix-diff.py ./result cluster-dump/
+./scripts/compare-cluster-dump.py ./result cluster-dump/
 
 # Copy to clipboard for LLM
-./scripts/kix-diff.py ./result cluster-dump/ | pbcopy
+./scripts/compare-cluster-dump.py ./result cluster-dump/ | pbcopy
 
 # Save to file
-./scripts/kix-diff.py ./result cluster-dump/ > drift-report.md
+./scripts/compare-cluster-dump.py ./result cluster-dump/ > drift-report.md
 
 # Ignore specific JSON paths
-./scripts/kix-diff.py ./result cluster-dump/ --ignore-path '*.annotations'
+./scripts/compare-cluster-dump.py ./result cluster-dump/ --ignore-path '*.annotations'
 ```
 
 **Report sections:**
@@ -126,4 +146,4 @@ Compares a Kix output directory against a cluster dump and produces a structured
   - $.spec.template.spec.nodeSelector: ...   (kix only)
 ```
 
-Both scripts auto-detect the directory layout (flat `{ns}--{name}-{kind}.yaml` from nix build, or nested `{ns}/{name}-{kind}.yaml` from dump).
+Both scripts detect the directory layout: flat `{ns}--{name}-{kind}.yaml` files, or nested `{ns}/{name}-{kind}.yaml` files as `kix-manifests.sh` and `kix-dump.py` write them.
