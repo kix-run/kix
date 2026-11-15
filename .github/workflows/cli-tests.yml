@@ -73,7 +73,7 @@ jobs:
         access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           # Nix's git fetcher needs the full history to resolve refs
           # cleanly; the default shallow clone breaks it.
@@ -148,7 +148,7 @@ jobs:
       prerelease: ${{ steps.version.outputs.prerelease }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           # Reads the release tags.
           fetch-depth: 0
@@ -321,7 +321,7 @@ jobs:
         access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
 
@@ -355,10 +355,12 @@ jobs:
           for kubectl in "$r"/kubectl-*/bin/kubectl; do "$kubectl" version --client; done
           for sops in "$r"/sops-*/bin/sops; do "$sops" --version --disable-version-check; done
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable branch
         if: runner.os == 'macOS'
+        with:
+          toolchain: stable
 
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
         if: runner.os == 'macOS'
         with:
           tool: cargo-auditable@0.7.2
@@ -375,7 +377,7 @@ jobs:
           test "$("$bin" --version)" = "kix $KIX_VERSION" || { "$bin" --version; exit 1; }
           tar -cf kix-aarch64-darwin.tar -C cli/target/release kix
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: runtime-${{ matrix.system }}
           path: |
@@ -401,20 +403,21 @@ jobs:
       TARGETS: x86_64-unknown-linux-musl aarch64-unknown-linux-musl
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable branch
         with:
+          toolchain: stable
           targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl
 
       # cargo-zigbuild uses zig as the C compiler and linker, which builds
       # ring and the bundled SQLite for both architectures from one runner.
       # Release builds start clean, so saving zig's cache only costs time.
-      - uses: mlugg/setup-zig@v2
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
           version: 0.14.1
           use-cache: false
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
         with:
           tool: cargo-zigbuild,cargo-auditable@0.7.2
 
@@ -435,7 +438,7 @@ jobs:
           tar -cf kix-linux.tar -C cli/target \
             x86_64-unknown-linux-musl/release/kix aarch64-unknown-linux-musl/release/kix
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: kix-linux
           path: kix-linux.tar
@@ -459,23 +462,25 @@ jobs:
       # The change records and scripts/change-records.py, kept apart from
       # the packaging folders below.
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           path: src
 
       # `cargo audit` reads each binary's crate list and needs cargo to run.
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: taiki-e/install-action@v2
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable branch
+        with:
+          toolchain: stable
+      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
         with:
           tool: cargo-audit@0.22.0
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: runtime-*
           path: runtime
           merge-multiple: true
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: kix-linux
 
@@ -545,7 +550,7 @@ jobs:
           (cd dist && sha256sum -- *.tar.gz *.tar.zst *.json > SHA256SUMS)
           cat dist/SHA256SUMS
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: kix-${{ needs.version.outputs.version }}
           path: dist/
@@ -581,11 +586,11 @@ jobs:
       # A clone, not a worktree, with the full history that Nix's git
       # fetcher needs.
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: kix-${{ needs.version.outputs.version }}
           path: dist
@@ -633,7 +638,7 @@ jobs:
         access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
 
@@ -656,7 +661,7 @@ jobs:
           fi
           test "$(trusted)" = false
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: kix-${{ needs.version.outputs.version }}
           path: dist
@@ -697,9 +702,9 @@ jobs:
       PRERELEASE: ${{ needs.version.outputs.prerelease }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: kix-${{ needs.version.outputs.version }}
           path: dist
@@ -778,9 +783,9 @@ jobs:
       VERSION: ${{ needs.version.outputs.version }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: kix-${{ needs.version.outputs.version }}
           path: dist

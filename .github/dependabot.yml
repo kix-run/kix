@@ -1,0 +1,19 @@
+# Keep the GitHub Actions the workflows use up to date. Each `uses:` line
+# pins an action to a commit and names its version in a comment. Dependabot
+# moves both and opens one pull request a week for all of them.
+#
+# dtolnay/rust-toolchain has no releases. Its pin is a commit of the
+# `stable` branch, which Dependabot does not follow, so update it by hand:
+# `gh api repos/dtolnay/rust-toolchain/git/ref/heads/stable`.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      github-actions:
+        patterns:
+          - '*'
