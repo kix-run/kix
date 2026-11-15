@@ -6,6 +6,7 @@ use std::path::Path;
 
 use kix::manifest::hash::strip_kix_annotations;
 use kix::manifest::keys;
+use kix::manifest::kinds::{self, GroupKind};
 use kix::manifest::lifecycle::is_kix_internal_kind;
 use kix::manifest::types::ResourceId;
 use serde_json::Value;
@@ -74,28 +75,30 @@ pub struct ObjectChange {
     pub id: String,
     pub change: Change,
     pub package: Option<String>,
-    /// The object controls access, network reach, or encryption.
-    pub sensitive: bool,
+    /// The label a person reviews the change under, such as `ClusterRole`
+    /// or `Ingress TLS`, when the object controls access, network reach, or
+    /// encryption.
+    pub review: Option<String>,
 }
 
 /// The kinds whose every change a person should read.
-const SENSITIVE_KINDS: &[&str] = &[
-    "Secret",
-    "Role",
-    "ClusterRole",
-    "RoleBinding",
-    "ClusterRoleBinding",
-    "NetworkPolicy",
-    "CiliumNetworkPolicy",
-    "CiliumClusterwideNetworkPolicy",
-    "Certificate",
+const SENSITIVE_KINDS: &[GroupKind<'static>] = &[
+    kinds::SECRET,
+    kinds::ROLE,
+    kinds::CLUSTER_ROLE,
+    kinds::ROLE_BINDING,
+    kinds::CLUSTER_ROLE_BINDING,
+    kinds::NETWORK_POLICY,
+    GroupKind::new("cilium.io", "CiliumNetworkPolicy"),
+    GroupKind::new("cilium.io", "CiliumClusterwideNetworkPolicy"),
+    GroupKind::new("cert-manager.io", "Certificate"),
 ];
 
 /// Return the TLS settings of an Ingress or a Gateway.
 fn tls(manifest: &Value) -> Value {
-    match manifest["kind"].as_str() {
-        Some("Ingress") => manifest["spec"]["tls"].clone(),
-        Some("Gateway") => Value::Array(
+    match GroupKind::of_manifest(manifest) {
+        kinds::INGRESS => manifest["spec"]["tls"].clone(),
+        kinds::GATEWAY => Value::Array(
             manifest["spec"]["listeners"]
                 .as_array()
                 .into_iter()
@@ -107,14 +110,23 @@ fn tls(manifest: &Value) -> Value {
     }
 }
 
-/// Return whether a change from `before` to `after` is sensitive.
-pub fn sensitive(kind: &str, before: Option<&Value>, after: Option<&Value>) -> bool {
+/// Return the label a person reviews a change from `before` to `after` under,
+/// or `None` when the change is not sensitive.
+pub fn review(
+    kind: GroupKind<'_>,
+    before: Option<&Value>,
+    after: Option<&Value>,
+) -> Option<String> {
     if SENSITIVE_KINDS.contains(&kind) {
-        return true;
+        return Some(kind.kind.to_string());
     }
-    if !matches!(kind, "Ingress" | "Gateway") {
-        return false;
-    }
+    let tls_kind = matches!(kind, kinds::INGRESS | kinds::GATEWAY);
+    (tls_kind && tls_changed(before, after)).then(|| format!("{} TLS", kind.kind))
+}
+
+/// Return whether the TLS settings of an Ingress or a Gateway differ
+/// between `before` and `after`.
+fn tls_changed(before: Option<&Value>, after: Option<&Value>) -> bool {
     let tls_of = |m: Option<&Value>| m.map(tls).unwrap_or(Value::Null);
     let (old, new) = (tls_of(before), tls_of(after));
     old != new && !(is_empty(&old) && is_empty(&new))
@@ -145,11 +157,11 @@ pub fn compare(
         };
         let either = new.or(old).expect("one side holds the object");
         let package = either.package.clone();
-        let kind = either.manifest["kind"].as_str().unwrap_or_default();
+        let kind = GroupKind::of_manifest(&either.manifest);
         out.push(ObjectChange {
             id: id.clone(),
             change,
-            sensitive: sensitive(kind, old.map(|o| &o.manifest), new.map(|n| &n.manifest)),
+            review: review(kind, old.map(|o| &o.manifest), new.map(|n| &n.manifest)),
             package,
         });
     }
@@ -183,11 +195,11 @@ mod tests {
             ),
             (
                 "Secret/old@shop".to_string(),
-                object("web", json!({"kind": "Secret"})),
+                object("web", json!({"apiVersion": "v1", "kind": "Secret"})),
             ),
             (
                 "ConfigMap/same@shop".to_string(),
-                object("db", json!({"kind": "ConfigMap"})),
+                object("db", json!({"apiVersion": "v1", "kind": "ConfigMap"})),
             ),
         ]);
         let after = BTreeMap::from([
@@ -197,17 +209,20 @@ mod tests {
             ),
             (
                 "ConfigMap/same@shop".to_string(),
-                object("db", json!({"kind": "ConfigMap"})),
+                object("db", json!({"apiVersion": "v1", "kind": "ConfigMap"})),
             ),
             (
                 "ClusterRole/new".to_string(),
-                object("db", json!({"kind": "ClusterRole"})),
+                object(
+                    "db",
+                    json!({"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "ClusterRole"}),
+                ),
             ),
         ]);
         let got = compare(&before, &after);
         let view: Vec<(&str, Change, bool)> = got
             .iter()
-            .map(|c| (c.id.as_str(), c.change, c.sensitive))
+            .map(|c| (c.id.as_str(), c.change, c.review.is_some()))
             .collect();
         assert_eq!(
             view,
@@ -221,28 +236,45 @@ mod tests {
 
     #[test]
     fn an_ingress_or_gateway_is_sensitive_when_its_tls_changes() {
-        let ingress = |tls: Value| json!({"kind": "Ingress", "spec": {"rules": [], "tls": tls}});
+        let ingress = |tls: Value| json!({"apiVersion": "networking.k8s.io/v1", "kind": "Ingress", "spec": {"rules": [], "tls": tls}});
         let a = ingress(json!([{"secretName": "a"}]));
         let b = ingress(json!([{"secretName": "b"}]));
-        assert!(sensitive("Ingress", Some(&a), Some(&b)));
-        assert!(!sensitive("Ingress", Some(&a), Some(&a)));
-        let plain = json!({"kind": "Ingress", "spec": {"rules": [1]}});
-        assert!(!sensitive("Ingress", None, Some(&plain)));
-        assert!(sensitive("Ingress", None, Some(&a)));
+        let label = |before, after| review(kinds::INGRESS, before, after);
+        assert_eq!(label(Some(&a), Some(&b)).as_deref(), Some("Ingress TLS"));
+        assert_eq!(label(Some(&a), Some(&a)), None);
+        let plain = json!({"apiVersion": "networking.k8s.io/v1", "kind": "Ingress", "spec": {"rules": [1]}});
+        assert_eq!(label(None, Some(&plain)), None);
+        assert!(label(None, Some(&a)).is_some());
 
-        let gateway = |tls: Value| json!({"kind": "Gateway", "spec": {"listeners": [{"name": "h", "tls": tls}]}});
-        assert!(sensitive(
-            "Gateway",
-            Some(&gateway(json!({"mode": "Terminate"}))),
-            Some(&gateway(json!({"mode": "Passthrough"})))
-        ));
-        assert!(!sensitive(
-            "Gateway",
-            Some(&gateway(Value::Null)),
-            Some(&gateway(Value::Null))
-        ));
-        assert!(!sensitive("Deployment", None, None));
-        assert!(sensitive("CiliumNetworkPolicy", None, None));
+        let gateway = |tls: Value| {
+            json!({"apiVersion": "gateway.networking.k8s.io/v1", "kind": "Gateway",
+                   "spec": {"listeners": [{"name": "h", "tls": tls}]}})
+        };
+        let terminate = gateway(json!({"mode": "Terminate"}));
+        let passthrough = gateway(json!({"mode": "Passthrough"}));
+        assert_eq!(
+            review(kinds::GATEWAY, Some(&terminate), Some(&passthrough)).as_deref(),
+            Some("Gateway TLS")
+        );
+        let none = gateway(Value::Null);
+        assert_eq!(review(kinds::GATEWAY, Some(&none), Some(&none)), None);
+        assert_eq!(review(kinds::DEPLOYMENT, None, None), None);
+        let cilium = GroupKind::new("cilium.io", "CiliumNetworkPolicy");
+        assert_eq!(
+            review(cilium, None, None).as_deref(),
+            Some("CiliumNetworkPolicy")
+        );
+    }
+
+    /// A kind of a sensitive name in another group is reviewed like any
+    /// other object.
+    #[test]
+    fn a_custom_kind_of_a_sensitive_name_is_not_sensitive() {
+        assert_eq!(
+            review(GroupKind::new("example.com", "Secret"), None, None),
+            None
+        );
+        assert_eq!(review(kinds::SECRET, None, None).as_deref(), Some("Secret"));
     }
 
     #[test]
@@ -266,7 +298,7 @@ mod tests {
         std::fs::write(dir.path().join("README.md"), "not a manifest").unwrap();
         let got = load_dir(dir.path()).unwrap();
         assert_eq!(got.len(), 1);
-        let web = &got["Deployment/web@shop"];
+        let web = &got["Deployment.apps/web@shop"];
         assert_eq!(web.package.as_deref(), Some("web"));
         assert!(web.manifest["metadata"].get("annotations").is_none());
     }

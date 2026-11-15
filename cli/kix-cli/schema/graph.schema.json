@@ -43,8 +43,12 @@
     "ListedNode": {
       "additionalProperties": false,
       "properties": {
+        "group": {
+          "description": "The kind's API group. Left out for the core group.",
+          "type": "string"
+        },
         "id": {
-          "description": "`Kind/name@namespace`, or `Kind/name` for a cluster-scoped object.",
+          "description": "[`ResourceId::display_id`]: `Kind.group/name@namespace`, without\n`.group` for the core group and `@namespace` for a cluster-scoped\nobject.",
           "type": "string"
         },
         "identityHash": {

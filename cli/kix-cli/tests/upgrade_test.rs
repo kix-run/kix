@@ -145,6 +145,11 @@ impl Setup {
         } else {
             "shop"
         };
+        let api_version = match kind {
+            "ClusterRole" => "rbac.authorization.k8s.io/v1",
+            "Deployment" => "apps/v1",
+            _ => "v1",
+        };
         let ns_line = if kind == "ClusterRole" {
             String::new()
         } else {
@@ -153,7 +158,7 @@ impl Setup {
         self.write(
             &format!("fake/{out}/{cluster}/{namespace}/{kind}-{name}.yaml"),
             &format!(
-                "apiVersion: v1\nkind: {kind}\nmetadata:\n  name: {name}\n{ns_line}  annotations:\n    {key}: {package}\nspec:\n  {spec}\n",
+                "apiVersion: {api_version}\nkind: {kind}\nmetadata:\n  name: {name}\n{ns_line}  annotations:\n    {key}: {package}\nspec:\n  {spec}\n",
                 key = kix::manifest::keys::PACKAGE
             ),
         );
@@ -449,7 +454,7 @@ fn a_jump_that_builds_pins_the_target_and_removes_nothing_it_keeps() {
         "{out}"
     );
     assert!(
-        out.contains("  east, west:\n    ~ Deployment/web@shop (web)\n"),
+        out.contains("  east, west:\n    ~ Deployment.apps/web@shop (web)\n"),
         "{out}"
     );
     assert!(
@@ -626,11 +631,11 @@ fn a_sensitive_change_needs_a_person() {
     assert_eq!(code, 3, "{out}");
     assert!(out.contains("  east: no objects changed\n"), "{out}");
     assert!(
-        out.contains("  west:\n    ~ ClusterRole/db-reader (db) [review: ClusterRole]\n"),
+        out.contains("  west:\n    ~ ClusterRole.rbac.authorization.k8s.io/db-reader (db) [review: ClusterRole]\n"),
         "{out}"
     );
     assert!(
-        out.contains("Upgraded to Kix 9.3.0, but review before deploying:\n  1. 1 ClusterRole changed in cluster west (ClusterRole/db-reader).\n  2. 1 object changed in cluster west; read the changes above, or run `kix plan\n     west`, before you deploy.\n"),
+        out.contains("Upgraded to Kix 9.3.0, but review before deploying:\n  1. 1 ClusterRole changed in cluster west\n     (ClusterRole.rbac.authorization.k8s.io/db-reader).\n  2. 1 object changed in cluster west; read the changes above, or run `kix plan\n     west`, before you deploy.\n"),
         "{out}"
     );
     let state = s.state();
@@ -1414,7 +1419,7 @@ fn a_tag_moved_by_hand_upgrades_from_the_locked_version() {
     let calls = s.calls();
     assert!(calls.contains("9.1.0 export east"), "{calls}");
     assert!(calls.contains("9.3.0 export east"), "{calls}");
-    assert!(out.contains("~ Deployment/web@shop (web)"), "{out}");
+    assert!(out.contains("~ Deployment.apps/web@shop (web)"), "{out}");
     assert_eq!(s.pinned(), "9.3.0");
     assert_eq!(s.read("flake.nix"), moved);
 }

@@ -20,7 +20,8 @@ pub(crate) struct InspectResponse {
     #[serde(rename = "namespaces", serialize_with = "namespaces")]
     #[schemars(with = "Vec<InspectNamespace>")]
     by_namespace: BTreeMap<String, Vec<ResourceId>>,
-    /// The number of resources of each kind.
+    /// The number of resources of each kind, keyed `Kind.group`, or `Kind`
+    /// for the core group.
     kind_counts: BTreeMap<String, usize>,
 }
 
@@ -34,6 +35,9 @@ struct InspectNamespace {
 #[derive(serde::Serialize, schemars::JsonSchema)]
 struct InspectResource {
     kind: String,
+    /// The kind's API group. Left out for the core group.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    group: String,
     name: String,
 }
 
@@ -48,6 +52,7 @@ fn namespaces<S: serde::Serializer>(
                 .iter()
                 .map(|r| InspectResource {
                     kind: r.kind.clone(),
+                    group: r.group.clone(),
                     name: r.name.clone(),
                 })
                 .collect(),
@@ -97,9 +102,10 @@ impl CommandResponse for InspectResponse {
             };
             out.push_str(&format!("  {}:\n", ns_display));
             let mut sorted = resources.clone();
-            sorted.sort_by(|a, b| a.kind.cmp(&b.kind).then(a.name.cmp(&b.name)));
+            sorted.sort_by(|a, b| (&a.kind, &a.group, &a.name).cmp(&(&b.kind, &b.group, &b.name)));
             for rid in sorted {
-                out.push_str(&format!("    {}/{}\n", rid.kind, rid.name));
+                let kind = kix::manifest::types::qualified_kind(&rid.group, &rid.kind);
+                out.push_str(&format!("    {kind}/{}\n", rid.name));
             }
         }
 
@@ -121,7 +127,9 @@ pub fn run(args: &ListResourcesArgs, ctx: &mut CommandContext) -> Result<()> {
             .entry(rid.namespace.clone())
             .or_default()
             .push(rid.clone());
-        *kind_counts.entry(rid.kind.clone()).or_default() += 1;
+        *kind_counts
+            .entry(kix::manifest::types::qualified_kind(&rid.group, &rid.kind))
+            .or_default() += 1;
     }
 
     let response = InspectResponse {

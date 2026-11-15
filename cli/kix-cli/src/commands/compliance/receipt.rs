@@ -158,12 +158,11 @@ fn images(graph: &StoreGraph) -> Value {
     for resource in graph.resources.values() {
         // Skip ConfigMap and Secret manifests so `image` keys inside opaque
         // configuration data are not mistaken for container images.
-        let kind = resource
-            .manifest
-            .get("kind")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default();
-        if kind == "ConfigMap" || kind == "Secret" {
+        use kix::manifest::kinds::{self, GroupKind};
+        if matches!(
+            GroupKind::of_manifest(&resource.manifest),
+            kinds::CONFIG_MAP | kinds::SECRET
+        ) {
             continue;
         }
         collect_images(&resource.manifest, &mut found);

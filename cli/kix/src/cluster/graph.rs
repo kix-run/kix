@@ -319,6 +319,7 @@ impl ResourceGraph {
                 ListedNode {
                     id: node.id.display_id(),
                     kind: node.id.kind.clone(),
+                    group: node.id.group.clone(),
                     name: node.id.name.clone(),
                     namespace: node.id.namespace.clone(),
                     identity_hash: node.identity_hash.clone(),
@@ -353,9 +354,14 @@ pub struct GraphListing {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ListedNode {
-    /// `Kind/name@namespace`, or `Kind/name` for a cluster-scoped object.
+    /// [`ResourceId::display_id`]: `Kind.group/name@namespace`, without
+    /// `.group` for the core group and `@namespace` for a cluster-scoped
+    /// object.
     pub id: String,
     pub kind: String,
+    /// The kind's API group. Left out for the core group.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub group: String,
     pub name: String,
     /// `_cluster` for a cluster-scoped object.
     pub namespace: String,

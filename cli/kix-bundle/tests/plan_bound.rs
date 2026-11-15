@@ -1217,7 +1217,7 @@ fn plan_and_check(
     };
     let checked = match plan(&baseline, new, flags) {
         Ok(checked) => checked,
-        Err(PlanError::Graph(_) | PlanError::Marker(_) | PlanError::SharedNames(_)) => {
+        Err(PlanError::Graph(_) | PlanError::Marker(_) | PlanError::AliasedMove(_)) => {
             return Ok(Outcome::PlanningRefused);
         }
         Err(PlanError::Unshown(_)) => return Ok(Outcome::ObjectsRefused),
@@ -1502,11 +1502,10 @@ fn a_changed_bundle_is_refused_or_deploys_what_its_plan_shows() {
 }
 
 /// A field change that moves the `landing` Deployment out of the `apps`
-/// group, keeping its kind, namespace, and name. The plan names objects
-/// without their group, so planning refuses it rather than showing the
-/// delete and the write as one object.
+/// group, keeping its kind, namespace, and name. The plan shows the delete
+/// and the write as two objects, and the deploy does what it shows.
 #[test]
-fn a_deployment_moved_to_the_core_group_is_refused_by_planning() {
+fn a_deployment_moved_to_the_core_group_deploys_what_its_plan_shows() {
     let honest: Vec<(Contents, StoreGraph)> = SEEDS
         .iter()
         .map(|(_, bytes)| {
@@ -1525,5 +1524,5 @@ fn a_deployment_moved_to_the_core_group_is_refused_by_planning() {
         old: OldSide::Deployed,
         flags: 0,
     };
-    assert!(matches!(run(&case, &honest), Ok(Outcome::PlanningRefused)));
+    assert_eq!(run(&case, &honest), Ok(Outcome::Checked));
 }

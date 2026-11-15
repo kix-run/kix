@@ -44,7 +44,7 @@ pub use redact::{
 };
 pub(crate) use redact::{Side, shown_value};
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
@@ -57,6 +57,7 @@ use crate::eval::PackageNode;
 use crate::eval::store_graph::StoreGraph;
 use crate::legacy_domain::LegacyDomainError;
 use crate::manifest::diff::Difference;
+use crate::manifest::kinds;
 use crate::manifest::lifecycle;
 use crate::manifest::types::ResourceId;
 
@@ -161,14 +162,14 @@ pub enum PlanError {
     #[error("{0}")]
     Unshown(objects::Unshown),
     #[error(
-        "cannot move {} to another API group while keeping the same kind, namespace, and name. \
-         Plans list objects without their API group, so they cannot show the old object being \
-         deleted and the new one being created. Nothing was planned or applied to the cluster. \
-         Next: first deploy a build that removes the object, then deploy a build that adds it \
-         in the new API group.",
+        "[K8031] {} moves to another API group that Kubernetes serves as the same object. \
+         A deploy would write the object through the new group and then delete it \
+         through the old one, which deletes what it just wrote. Nothing was planned \
+         or applied to the cluster. Next: keep the object's apiVersion, or deploy a \
+         build without the object first and then a build with it in the new group.",
         .0.join(", ")
     )]
-    SharedNames(Vec<String>),
+    AliasedMove(Vec<String>),
 }
 
 pub struct PackageDiff {
@@ -261,32 +262,32 @@ pub struct RecordChange {
 }
 
 impl PackageDiff {
-    /// Return the ids that name more than one object this diff shows, each
-    /// once, sorted. The plan document and the plan file name an object by
-    /// its kind, namespace, and name, so two objects that differ only in
-    /// their API group would show as one.
-    pub fn shared_names(&self) -> Vec<String> {
-        let ids = self
-            .shown
-            .writes
-            .keys()
-            .map(|(id, _)| id)
-            .chain(self.shown.deletes.keys())
-            .chain(
-                self.changed
-                    .iter()
-                    .chain(&self.cluster_level)
-                    .flat_map(|c| &c.removed_resources),
-            );
-        let mut by_name: BTreeMap<String, HashSet<&ResourceId>> = BTreeMap::new();
-        for id in ids {
-            by_name.entry(id.display_id()).or_default().insert(id);
+    /// Return each object this diff deletes in one API group and writes in
+    /// another group that stores the same objects ([`kinds::ALIASED`]), as
+    /// `"<old> to <new>"`, sorted.
+    pub fn aliased_moves(&self) -> Vec<String> {
+        let mut written: HashMap<(&str, &str), Vec<&ResourceId>> = HashMap::new();
+        for (id, _) in self.shown.writes.keys() {
+            written
+                .entry((id.namespace.as_str(), id.name.as_str()))
+                .or_default()
+                .push(id);
         }
-        by_name
-            .into_iter()
-            .filter(|(_, ids)| ids.len() > 1)
-            .map(|(name, _)| crate::text::printable_up_to(&name, 300))
-            .collect()
+        let mut moves: Vec<String> = self
+            .shown
+            .deletes
+            .keys()
+            .flat_map(|old| {
+                written
+                    .get(&(old.namespace.as_str(), old.name.as_str()))
+                    .into_iter()
+                    .flatten()
+                    .filter(|new| kinds::aliased(old.group_kind(), new.group_kind()))
+                    .map(move |new| format!("{old} to {new}"))
+            })
+            .collect();
+        moves.sort();
+        moves
     }
 
     /// Return true when there is any change to report.
@@ -404,9 +405,6 @@ pub struct PackageChangeDiff {
     /// Resources with actual manifest field changes (propagation-only diffs filtered out).
     /// Only contains the real (non-propagation) differences.
     pub resource_diffs: Vec<(ResourceId, Vec<Difference>)>,
-    /// The resources in `resource_diffs` that are Secrets (see
-    /// `types::is_secret`) on either side. Renderers hide their values.
-    pub secrets: BTreeSet<ResourceId>,
     /// Resources whose identity-hash changed purely because a dependency's hash
     /// propagated up (via `kix.run/identity-hash`/`kix.run/depends-on`/`kix.run/activations`/
     /// `kix.run/built-via`). Manifest content is otherwise identical and redeploys

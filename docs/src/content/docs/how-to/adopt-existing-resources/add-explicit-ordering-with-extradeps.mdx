@@ -53,8 +53,8 @@ Print the dependency tree:
 The relevant chain is:
 
 1. `ConfigMap/legacy-api-contract@apps` is deployed.
-2. `PackageInstance/legacy-api-contract@apps` records the managed instance.
-3. `PackageInstance/legacy-api@legacy` records the import.
+2. `PackageInstance.kix.run/legacy-api-contract@apps` records the managed instance.
+3. `PackageInstance.kix.run/legacy-api@legacy` records the import.
 
 Use `extraDeps` only when the ordering relationship has no corresponding
 manifest value. Reading a dependency's tracked `out` value already creates an

@@ -293,7 +293,6 @@ fn empty_change(key: &str, version: Option<String>) -> PackageChangeDiff {
         old_version: version.clone(),
         new_version: version,
         resource_diffs: Vec::new(),
-        secrets: Default::default(),
         dep_affected_resources: Vec::new(),
         added_resources: Vec::new(),
         removed_resources: Vec::new(),
@@ -454,9 +453,14 @@ mod tests {
         assert_eq!(
             summary,
             vec![
-                ("Widget/new@app", "$.spec.colour", NotKept::Dropped, None),
                 (
-                    "Widget/old@app",
+                    "Widget.example.com/new@app",
+                    "$.spec.colour",
+                    NotKept::Dropped,
+                    None
+                ),
+                (
+                    "Widget.example.com/old@app",
                     "$.spec.size",
                     NotKept::Changed,
                     Some(&json!(5))

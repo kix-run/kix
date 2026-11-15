@@ -309,16 +309,6 @@ pub fn excerpt(output: &str) -> Vec<String> {
     out
 }
 
-/// Return the label a sensitive object is reviewed under.
-fn review_label(c: &ObjectChange) -> String {
-    let kind = c.id.split('/').next().unwrap_or_default();
-    if matches!(kind, "Ingress" | "Gateway") {
-        format!("{kind} TLS")
-    } else {
-        kind.to_string()
-    }
-}
-
 /// Return a manifest change line, such as `~ Deployment/web@shop (web)`.
 pub fn change_line(c: &ObjectChange) -> String {
     let sign = match c.change {
@@ -330,8 +320,8 @@ pub fn change_line(c: &ObjectChange) -> String {
     if let Some(p) = &c.package {
         line.push_str(&format!(" ({p})"));
     }
-    if c.sensitive {
-        line.push_str(&format!(" [review: {}]", review_label(c)));
+    if let Some(label) = &c.review {
+        line.push_str(&format!(" [review: {label}]"));
     }
     line
 }
@@ -387,11 +377,13 @@ impl Review {
     /// Add one cluster's changes.
     pub fn add(&mut self, cluster: &str, changes: &[ObjectChange]) {
         let mut by_label: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        for c in changes.iter().filter(|c| c.sensitive) {
-            by_label
-                .entry(review_label(c))
-                .or_default()
-                .push(c.id.clone());
+        for c in changes {
+            if let Some(label) = &c.review {
+                by_label
+                    .entry(label.clone())
+                    .or_default()
+                    .push(c.id.clone());
+            }
         }
         for (label, ids) in by_label {
             self.sensitive

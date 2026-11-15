@@ -11,7 +11,7 @@ use kix::cluster::drift::{DriftVerdict, ForeignOwner, UnrecordedScale};
 use kix::cluster::observe::{
     ClusterView, ExpectedFrom, ObjectView, Observation, Presence, Readiness,
 };
-use kix::manifest::types::{CLUSTER_SCOPED, ResourceId};
+use kix::manifest::types::{CLUSTER_SCOPED, ResourceId, qualified_kind};
 use schemars::JsonSchema;
 use serde::Serialize;
 
@@ -20,7 +20,7 @@ use crate::exit::Exit;
 
 /// The date of the last change to the shape of [`StatusDocument`] that is
 /// not backward compatible.
-pub const SCHEMA_VERSION: &str = "2026-11-13";
+pub const SCHEMA_VERSION: &str = "2026-11-15";
 
 /// What `kix status` found. Programs that read it must skip fields they do
 /// not know.
@@ -105,6 +105,9 @@ pub struct PackageStatus {
 pub struct ResourceStatus {
     /// The kind, or `Unknown` when Kix cannot name a missing object.
     pub kind: String,
+    /// The kind's API group. Left out for the core group.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub group: String,
     /// `null` for a cluster-scoped object.
     pub namespace: Option<String>,
     pub name: String,
@@ -123,8 +126,8 @@ pub struct ResourceStatus {
     pub ready: Option<bool>,
     /// Why the object is not ready, such as `0/1 ready, 0/1 updated`.
     pub not_ready_reason: Option<String>,
-    /// The objects that depend on this one, as `Kind namespace/name`, when
-    /// it is missing.
+    /// The objects that depend on this one, as `Kind.group namespace/name`
+    /// (`Kind namespace/name` for the core group), when it is missing.
     pub needed_by: Vec<String>,
     /// What the checks found wrong. Empty when the object is fine.
     pub problems: Vec<Problem>,
@@ -471,6 +474,7 @@ fn resource_status(view: &ClusterView, obj: &ObjectView, checks: &[StatusCheck])
     };
     ResourceStatus {
         kind: obj.rid.kind.clone(),
+        group: obj.rid.group.clone(),
         namespace: (obj.rid.namespace != CLUSTER_SCOPED).then(|| obj.rid.namespace.clone()),
         name: obj.rid.name.clone(),
         identity_hash: obj.identity_hash.clone(),
@@ -487,10 +491,11 @@ fn resource_status(view: &ClusterView, obj: &ObjectView, checks: &[StatusCheck])
 
 /// Return `Kind namespace/name`, or `Kind name` for a cluster-scoped object.
 pub fn label(rid: &ResourceId) -> String {
+    let kind = qualified_kind(&rid.group, &rid.kind);
     if rid.namespace == CLUSTER_SCOPED {
-        format!("{} {}", rid.kind, rid.name)
+        format!("{kind} {}", rid.name)
     } else {
-        format!("{} {}/{}", rid.kind, rid.namespace, rid.name)
+        format!("{kind} {}/{}", rid.namespace, rid.name)
     }
 }
 

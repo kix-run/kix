@@ -913,7 +913,7 @@ mod tests {
         );
         assert_eq!(
             line,
-            "no progress for 31s: waiting on Deployment/a@default (apply, 31s), Deployment/b@default (readiness, 29s)"
+            "no progress for 31s: waiting on Deployment.apps/a@default (apply, 31s), Deployment.apps/b@default (readiness, 29s)"
         );
         let many: Vec<InFlight> = (0..7)
             .map(|i| f(&format!("n{i}"), Phase::Apply, 10))

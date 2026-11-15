@@ -563,7 +563,7 @@ mod diff_graph_tests {
             json!("b")
         );
         assert!(
-            api["manifests"]["PackageInstance/api@app"]
+            api["manifests"][format!("PackageInstance.{}/api@app", keys::GROUP).as_str()]
                 .get("new")
                 .is_some(),
             "{api}"

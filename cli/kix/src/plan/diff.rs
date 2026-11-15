@@ -1,6 +1,6 @@
 //! Package-by-package structural diffs and garbage collection diffs between store graphs.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
 use serde_json::Value;
@@ -14,7 +14,7 @@ use crate::manifest::diff::engine::structural_diff;
 use crate::manifest::diff::{DiffConfig, Difference};
 use crate::manifest::keys;
 use crate::manifest::lifecycle;
-use crate::manifest::types::{self, ResourceId};
+use crate::manifest::types::ResourceId;
 
 /// Return true when a structural-diff path points at a `kix.run` stamped
 /// annotation that only carries hash propagation (`identity-hash`,
@@ -253,7 +253,6 @@ fn diff_resource_maps(
     config: &DiffConfig,
 ) -> PackageChangeDiff {
     let mut resource_diffs = Vec::new();
-    let mut secrets = BTreeSet::new();
     let mut dep_affected_resources = Vec::new();
     let mut added_resources = Vec::new();
     let mut removed_resources = Vec::new();
@@ -272,9 +271,6 @@ fn diff_resource_maps(
                 // bumped because a dependency changed, but content is the same.
                 dep_affected_resources.push(id.clone());
             } else {
-                if types::is_secret(old_val) || types::is_secret(new_val) {
-                    secrets.insert(id.clone());
-                }
                 resource_diffs.push((id.clone(), real));
             }
         } else {
@@ -293,7 +289,6 @@ fn diff_resource_maps(
         old_version,
         new_version,
         resource_diffs,
-        secrets,
         dep_affected_resources,
         added_resources,
         removed_resources,
@@ -367,7 +362,6 @@ pub fn diff_garbage(old: &StoreGraph, new: &StoreGraph) -> PackageDiff {
                     old_version: old_pkg.version.clone(),
                     new_version: new_pkg.version.clone(),
                     resource_diffs: Vec::new(),
-                    secrets: BTreeSet::new(),
                     dep_affected_resources: Vec::new(),
                     added_resources: Vec::new(),
                     removed_resources,

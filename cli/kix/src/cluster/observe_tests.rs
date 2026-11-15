@@ -214,7 +214,7 @@ async fn each_object_gets_presence_content_and_readiness() {
         .iter()
         .map(|o| o.rid.to_string())
         .collect();
-    assert_eq!(needed_by, ["Job/web-migrate@web"]);
+    assert_eq!(needed_by, ["Job.batch/web-migrate@web"]);
     assert_eq!(at_risk(view), BTreeSet::from([h(JOB)]));
 }
 

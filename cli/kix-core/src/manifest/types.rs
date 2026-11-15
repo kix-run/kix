@@ -143,23 +143,32 @@ impl ResourceId {
         super::kinds::GroupKind::new(&self.group, &self.kind)
     }
 
-    /// Return `"Kind/name@namespace"` (or `"Kind/name"` when cluster-scoped)
-    /// without escaping control characters. Use `Display` for user-facing output.
+    /// Return `"Kind.group/name@namespace"` without escaping control
+    /// characters. The group is left out for the core group (`"ConfigMap/name@namespace"`)
+    /// and the namespace for a cluster-scoped object (`"Kind.group/name"`), so
+    /// two different ids never give one string. Use `Display` for
+    /// user-facing output.
     pub fn display_id(&self) -> String {
+        let kind = qualified_kind(&self.group, &self.kind);
         if self.namespace == CLUSTER_SCOPED {
-            format!("{}/{}", self.kind, self.name)
+            format!("{kind}/{}", self.name)
         } else {
-            format!("{}/{}@{}", self.kind, self.name, self.namespace)
+            format!("{kind}/{}@{}", self.name, self.namespace)
         }
     }
 }
 
-/// Format `"Kind/name@namespace"` for user-facing output, passing each segment
+/// Format the id as [`ResourceId::display_id`] does, passing each segment
 /// through [`crate::text::printable`].
 impl std::fmt::Display for ResourceId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use crate::text::printable;
-        write!(f, "{}/{}", printable(&self.kind), printable(&self.name))?;
+        write!(
+            f,
+            "{}/{}",
+            printable(&qualified_kind(&self.group, &self.kind)),
+            printable(&self.name)
+        )?;
         if self.namespace != CLUSTER_SCOPED {
             write!(f, "@{}", printable(&self.namespace))?;
         }
