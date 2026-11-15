@@ -100,7 +100,7 @@ jobs:
         access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout kixpkgs
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           path: kixpkgs
           # Nix's git fetcher needs the full history to resolve refs/revs
@@ -128,7 +128,7 @@ jobs:
           done
 
       - name: Checkout kix-examples
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           repository: kix-run/kix-examples
           token: ${{ secrets.KIX_EXAMPLES_TOKEN }}
@@ -191,7 +191,7 @@ jobs:
       - name: Restore release docs
         id: release-docs
         if: steps.docs.outputs.latest != ''
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: docs-releases
           key: ${{ steps.docs.outputs.key }}
@@ -280,7 +280,7 @@ jobs:
           chmod -R a+rX _site
 
       - name: Deploy to Cloudflare Pages
-        uses: cloudflare/wrangler-action@v3
+        uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3.15.0
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
