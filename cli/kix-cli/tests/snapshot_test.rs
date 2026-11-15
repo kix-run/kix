@@ -1,3 +1,8 @@
+//! Snapshots of what `kix` prints. The build and graph snapshots protect the
+//! shape of each output format, so they use the smallest cluster
+//! (`minimal`). The Change kind workflow (`scripts/change-kind.py`) compares
+//! every manifest of the larger clusters between a pull request and its base.
+
 use assert_cmd::Command;
 
 fn kix() -> Command {
@@ -13,20 +18,20 @@ fn kix() -> Command {
 }
 
 #[test]
-fn snapshot_build_example_yaml() {
+fn snapshot_build_minimal_yaml() {
     let output = kix()
-        .args(["build", "example"])
+        .args(["build", "minimal"])
         .output()
         .expect("failed to run kix build");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    insta::assert_snapshot!("build_example_yaml", stdout);
+    insta::assert_snapshot!("build_minimal_yaml", stdout);
 }
 
 #[test]
-fn snapshot_build_example_json() {
+fn snapshot_build_minimal_json() {
     let output = kix()
-        .args(["build", "example", "-o", "json"])
+        .args(["build", "minimal", "-o", "json"])
         .output()
         .expect("failed to run kix build");
 
@@ -34,7 +39,7 @@ fn snapshot_build_example_json() {
     // Parse and re-serialize for stable key ordering
     let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
     let stable = serde_json::to_string_pretty(&parsed).unwrap();
-    insta::assert_snapshot!("build_example_json", stable);
+    insta::assert_snapshot!("build_minimal_json", stable);
 }
 
 #[test]
@@ -62,7 +67,7 @@ fn snapshot_inspect_example() {
 #[test]
 fn snapshot_graph_tree() {
     let output = kix()
-        .args(["graph", "example", "-q"])
+        .args(["graph", "minimal", "-q"])
         .output()
         .expect("failed to run kix graph");
 

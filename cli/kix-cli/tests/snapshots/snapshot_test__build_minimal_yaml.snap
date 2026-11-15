@@ -1,0 +1,396 @@
+---
+source: kix-cli/tests/snapshot_test.rs
+expression: stdout
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    kix.run/identity-hash: gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj
+    kix.run/package: _cluster
+    kix.run/package-namespace: _cluster
+  labels:
+    app.kubernetes.io/managed-by: kix
+  name: activations.kix.run
+spec:
+  group: kix.run
+  names:
+    kind: Activation
+    listKind: ActivationList
+    plural: activations
+    singular: activation
+  scope: Cluster
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            type: string
+          kind:
+            type: string
+          metadata:
+            type: object
+          spec:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+          status:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    kix.run/identity-hash: pk4hih6jm4yj336rlaqk2qycz2k46xvs
+    kix.run/package: _cluster
+    kix.run/package-namespace: _cluster
+  labels:
+    app.kubernetes.io/managed-by: kix
+  name: packageinstances.kix.run
+spec:
+  group: kix.run
+  names:
+    kind: PackageInstance
+    listKind: PackageInstanceList
+    plural: packageinstances
+    singular: packageinstance
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            type: string
+          kind:
+            type: string
+          metadata:
+            type: object
+          spec:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+          status:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    kix.run/depends-on: q7x7scjvyzqah44crggq3gkbf9q4psvf,sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m,x7p9j83hg3nmkyvn8y9a9wg3fz7ip307
+    kix.run/identity-hash: yywbz822dr4vl02lmvsj4qxgk0xr615r
+    kix.run/package: coredns
+    kix.run/package-namespace: kube-system
+  labels:
+    app.kubernetes.io/instance: coredns
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/name: coredns
+  name: coredns
+  namespace: kube-system
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: coredns
+      app.kubernetes.io/name: coredns
+  template:
+    metadata:
+      annotations:
+        checksum/corefile: acf2e446fe46e97433add4260b9db635b7b90881a55fc78fa319357aacb98e7f
+      labels:
+        app.kubernetes.io/instance: coredns
+        app.kubernetes.io/name: coredns
+        k8s-app: kube-dns
+    spec:
+      containers:
+      - args:
+        - -conf
+        - /etc/coredns/Corefile
+        image: docker.io/coredns/coredns:1.13.1@sha256:9b9128672209474da07c91439bf15ed704ae05ad918dd6454e5b6ae14e35fee6
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          failureThreshold: 5
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 60
+          periodSeconds: 10
+          timeoutSeconds: 5
+        name: coredns
+        ports:
+        - containerPort: 53
+          name: dns
+          protocol: UDP
+        - containerPort: 53
+          name: dns-tcp
+          protocol: TCP
+        - containerPort: 9153
+          name: metrics
+          protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8181
+          periodSeconds: 10
+        resources:
+          limits:
+            memory: 170Mi
+          requests:
+            cpu: 100m
+            memory: 70Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            add:
+            - NET_BIND_SERVICE
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+          runAsGroup: 65532
+          runAsNonRoot: true
+          runAsUser: 65532
+        volumeMounts:
+        - mountPath: /etc/coredns
+          name: coredns
+          readOnly: true
+      dnsPolicy: Default
+      priorityClassName: system-cluster-critical
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      serviceAccountName: coredns
+      tolerations:
+      - key: CriticalAddonsOnly
+        operator: Exists
+      - effect: NoSchedule
+        key: node-role.kubernetes.io/control-plane
+      topologySpreadConstraints:
+      - labelSelector:
+          matchLabels:
+            app.kubernetes.io/instance: coredns
+            app.kubernetes.io/name: coredns
+        matchLabelKeys:
+        - pod-template-hash
+        maxSkew: 1
+        nodeTaintsPolicy: Honor
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: DoNotSchedule
+      volumes:
+      - configMap:
+          name: coredns
+        name: coredns
+---
+apiVersion: kix.run/v1alpha1
+kind: Activation
+metadata:
+  annotations:
+    kix.run/built-via: /nix/store/xrjxqsa9ls91p4c67al2kndmpmlb2sgz-kix-activation-test-minimal.json
+    kix.run/depends-on: w292z6zi6i3z5lnp7wz61v5g9qjdi1wp,requires:gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj
+    kix.run/identity-hash: dsnfplzp4745qvqs74vcl16y8bfdd56n
+    kix.run/package: _cluster
+    kix.run/package-namespace: _cluster
+  labels:
+    app.kubernetes.io/managed-by: kix
+    kix.run/cluster: test-minimal
+  name: test-minimal-dsnfplzp4745
+spec:
+  instances:
+    kube-system:
+      coredns: coredns
+---
+apiVersion: kix.run/v1alpha1
+kind: PackageInstance
+metadata:
+  annotations:
+    kix.run/depends-on: 7z8q3qb0p110445n6wdjdnwfqk3y1957,bfjmwgck5555jazsn70xiib5amcdnwwl,g8a9a1ad5b62ym06hdp6h4dh0v6kwyil,sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs
+    kix.run/identity-hash: w292z6zi6i3z5lnp7wz61v5g9qjdi1wp
+    kix.run/inverse-deps: ClusterRoleBinding/coredns,PodDisruptionBudget/coredns
+    kix.run/package: _cluster
+    kix.run/package-namespace: _cluster
+    kix.run/root: coredns
+  labels:
+    app.kubernetes.io/instance: coredns
+    app.kubernetes.io/managed-by: kix
+  name: coredns
+  namespace: kube-system
+spec:
+  instanceName: coredns
+  namespaceName: kube-system
+  version: "1.13.1"
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  annotations:
+    kix.run/depends-on: sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m
+    kix.run/identity-hash: 7z8q3qb0p110445n6wdjdnwfqk3y1957
+    kix.run/package: coredns
+    kix.run/package-namespace: kube-system
+  labels:
+    app.kubernetes.io/instance: coredns
+    app.kubernetes.io/managed-by: kix
+  name: coredns
+  namespace: kube-system
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: coredns
+      app.kubernetes.io/name: coredns
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  annotations:
+    kix.run/identity-hash: z8vwnkd615b6maajw1sy631cfl6anfh0
+    kix.run/package: coredns
+    kix.run/package-namespace: kube-system
+  labels:
+    app.kubernetes.io/instance: coredns
+    app.kubernetes.io/managed-by: kix
+  name: coredns
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - endpoints
+  - services
+  - pods
+  - namespaces
+  verbs:
+  - list
+  - watch
+- apiGroups:
+  - discovery.k8s.io
+  resources:
+  - endpointslices
+  verbs:
+  - list
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  annotations:
+    kix.run/depends-on: x7p9j83hg3nmkyvn8y9a9wg3fz7ip307,z8vwnkd615b6maajw1sy631cfl6anfh0
+    kix.run/identity-hash: g8a9a1ad5b62ym06hdp6h4dh0v6kwyil
+    kix.run/package: coredns
+    kix.run/package-namespace: kube-system
+  labels:
+    app.kubernetes.io/instance: coredns
+    app.kubernetes.io/managed-by: kix
+  name: coredns
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: coredns
+subjects:
+- kind: ServiceAccount
+  name: coredns
+  namespace: kube-system
+---
+apiVersion: v1
+data:
+  Corefile: |
+    .:53 {
+        cache 30 {
+            disable success cluster.local
+            disable denial cluster.local
+        }
+        errors
+        forward . /etc/resolv.conf {
+            max_concurrent 1000
+        }
+        health {
+            lameduck 5s
+        }
+        kubernetes cluster.local in-addr.arpa ip6.arpa {
+            pods insecure
+            fallthrough in-addr.arpa ip6.arpa
+            ttl 30
+        }
+        loadbalance
+        loop
+        prometheus :9153
+        ready
+        reload
+    }
+kind: ConfigMap
+metadata:
+  annotations:
+    kix.run/depends-on: sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m
+    kix.run/identity-hash: q7x7scjvyzqah44crggq3gkbf9q4psvf
+    kix.run/package: coredns
+    kix.run/package-namespace: kube-system
+  labels:
+    app.kubernetes.io/instance: coredns
+    app.kubernetes.io/managed-by: kix
+  name: coredns
+  namespace: kube-system
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  annotations:
+    kix.run/identity-hash: sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m
+    kix.run/package: _cluster
+    kix.run/package-namespace: _cluster
+  labels:
+    app.kubernetes.io/managed-by: kix
+    kubernetes.io/metadata.name: kube-system
+  name: kube-system
+---
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    kix.run/depends-on: sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m,yywbz822dr4vl02lmvsj4qxgk0xr615r
+    kix.run/identity-hash: bfjmwgck5555jazsn70xiib5amcdnwwl
+    kix.run/package: coredns
+    kix.run/package-namespace: kube-system
+  labels:
+    app.kubernetes.io/instance: coredns
+    app.kubernetes.io/managed-by: kix
+    k8s-app: kube-dns
+    kubernetes.io/cluster-service: "true"
+    kubernetes.io/name: CoreDNS
+  name: coredns
+  namespace: kube-system
+spec:
+  clusterIP: "10.96.0.10"
+  ports:
+  - name: dns
+    port: 53
+    protocol: UDP
+  - name: dns-tcp
+    port: 53
+    protocol: TCP
+  selector:
+    app.kubernetes.io/instance: coredns
+    app.kubernetes.io/name: coredns
+  type: ClusterIP
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  annotations:
+    kix.run/depends-on: sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m
+    kix.run/identity-hash: x7p9j83hg3nmkyvn8y9a9wg3fz7ip307
+    kix.run/package: coredns
+    kix.run/package-namespace: kube-system
+  labels:
+    app.kubernetes.io/instance: coredns
+    app.kubernetes.io/managed-by: kix
+  name: coredns
+  namespace: kube-system
