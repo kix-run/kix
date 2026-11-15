@@ -98,9 +98,9 @@ in
       type = lib.types.str;
       default = "kix echo server is running";
       description = ''
-        Plain-text response body the echo-server returns for every path
-        except `/healthz`. Any text works. Useful for distinguishing
-        instances during connectivity checks.
+        Plain-text response body returned for every path except `/healthz`.
+        The server returns quotes and `$` characters as written. Set this to
+        tell instances apart during connectivity checks.
       '';
     };
   };

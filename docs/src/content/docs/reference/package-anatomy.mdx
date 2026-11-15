@@ -195,7 +195,7 @@ meta = {
 | `network` | attrset | `{ }` | Ambient network intents (`intents.<part>.{egress,ingress}`) and `externalIngressEntities`. |
 | `lifecycle` | `"stateful"` | None | Marks the `PackageInstance` with `kix.run/lifecycle: stateful`. |
 | `scope` | `"cluster"` \| `"namespace"` | unset | `"cluster"`: consumers in every namespace find an instance by name, and auto-instantiation places the package once per cluster in `autoNamespace` or the catalog entry's `namespace` (without either, evaluation fails; declare the instance under `instances` or set `autoNamespace`). `"namespace"`: an instance is never used from another namespace, not even with `ref`. Unset: an instance in another namespace is used only when the consumer names it with `deps.<arg> = ref.<namespace>.<instance>`. Packages that claim a role or declare a `cluster:` conflict still serve the whole cluster, as do instances that Kix creates from `availablePackages` or enables via `optional = true` to satisfy a dependency. A `kix.mkImport` stand-in defaults to `"cluster"`. |
-| `owner` | string | None | Team or owner identifier used by `governance.hasOwner` and `byOwner` policy rules. The packages Kix ships set `"platform"` for cluster infrastructure and `"app-team"` for applications, so a cluster can give the two groups different rule severities. |
+| `owner` | string | None | Team or owner identifier used by `governance.hasOwner` and `byOwner` policy rules. Built-in packages use `"platform"` for cluster infrastructure and `"app-team"` for applications, so you can set different rule severities for each. |
 | `deprecated` | `{ message; replacement?; }` | None | Emits an evaluation warning when the package is instantiated. |
 
 ### `meta.version`
