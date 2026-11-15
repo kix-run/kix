@@ -1,5 +1,9 @@
 # Firezone: self-hosted WireGuard VPN server with web UI.
 #
+# Deprecated: this package runs Firezone 0.7, which upstream renamed
+# Firezone Legacy and stopped updating on 31 January 2024. Firezone 1.x is
+# a different product that upstream does not support self-hosting.
+#
 # Based on BeanVPN/firezone-helm-chart. Every credential is a secret
 # dependency, so the package renders no Secret of its own and the site
 # chooses where each value comes from (a SOPS file, a secrets operator, or
@@ -82,8 +86,9 @@ in
 {
   meta = {
     version = release;
-    description = "Firezone: self-hosted WireGuard VPN";
+    description = "Firezone 0.7: self-hosted WireGuard VPN (deprecated: no updates or security fixes since January 2024)";
     owner = "app-team";
+    deprecated.message = "Firezone stopped updating Firezone 0.7 (Firezone Legacy) on 31 January 2024, so it no longer receives security fixes. Firezone 1.x does not support self-hosting. Kix still builds this instance. Replace Firezone and remove this instance from your cluster definition.";
     # One process owns the WireGuard interface and its peer state, so
     # Firezone 0.7 cannot run more than one replica.
     availability.max = "none";

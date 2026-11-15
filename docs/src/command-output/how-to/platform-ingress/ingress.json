@@ -10,9 +10,9 @@
     {
       "command": "kix build how-to-platform-ingress --output json",
       "stdout": "{\n  \"apiVersion\": \"networking.k8s.io/v1\",\n  \"kind\": \"Ingress\",\n  \"metadata\": {\n    \"name\": \"web\",\n    \"namespace\": \"ingress-example\"\n  },\n  \"spec\": {\n    \"ingressClassName\": \"ingress-nginx\",\n    \"rules\": [\n      {\n        \"host\": \"web.example.test\",\n        \"http\": {\n          \"paths\": [\n            {\n              \"backend\": {\n                \"service\": {\n                  \"name\": \"web\",\n                  \"port\": {\n                    \"number\": 80\n                  }\n                }\n              },\n              \"path\": \"/\",\n              \"pathType\": \"Prefix\"\n            }\n          ]\n        }\n      }\n    ]\n  }\n}\n",
-      "stderr": "",
+      "stderr": "Warnings from the Kix library, 1:\n  ingress-system/ingress-nginx: package 'ingress-nginx' is deprecated: Kubernetes retired ingress-nginx in March 2026 after v1.15.1, so it no longer receives security fixes. Kix still builds this instance. Move Ingress routes to Gateway API. Use 'packages.experimental.traefik' instead\n",
       "stdoutDrift": "\"apiVersion\": \"networking.k8s.io/v1\",\n\"backend\": {\n\"host\": \"web.example.test\",\n\"http\": {\n\"ingressClassName\": \"ingress-nginx\",\n\"kind\": \"Ingress\",\n\"metadata\": {\n\"name\": \"web\",\n\"namespace\": \"ingress-example\"\n\"number\": 80\n\"path\": \"/\",\n\"pathType\": \"Prefix\"\n\"paths\": [\n\"port\": {\n\"rules\": [\n\"service\": {\n\"spec\": {\n]\n{\n}\n},\n",
-      "stderrDrift": "",
+      "stderrDrift": "Warnings from the Kix library, 1:\ningress-system/ingress-nginx: package 'ingress-nginx' is deprecated: Kubernetes retired ingress-nginx in March 2026 after v1.15.1, so it no longer receives security fixes. Kix still builds this instance. Move Ingress routes to Gateway API. Use 'packages.experimental.traefik' instead\n",
       "exitCode": 0
     }
   ]

@@ -1,6 +1,8 @@
 # ingress-nginx: the NGINX Ingress controller, which serves the Ingresses of
-# its IngressClass. Upstream ended development after v1.15.1; new clusters
-# should route through Gateway API (the envoy-gateway package).
+# its IngressClass. Deprecated: Kubernetes retired the project in March 2026
+# after v1.15.1, the release this package runs, and it gets no security
+# fixes. Route through Gateway API instead, with the traefik package or with
+# the envoy-gateway package and an Envoy Gateway controller.
 #
 # Installs the controller Deployment, its Service, ConfigMap, ServiceAccount,
 # and RBAC, an IngressClass, and a validating admission webhook whose
@@ -99,8 +101,12 @@ in
 {
   meta = {
     version = lib.removePrefix "v" release;
-    description = "NGINX Ingress controller (legacy: upstream retired after v1.15.1; prefer envoy-gateway)";
+    description = "NGINX Ingress controller (deprecated: retired by Kubernetes in March 2026, no security fixes; use traefik)";
     owner = "platform";
+    deprecated = {
+      message = "Kubernetes retired ingress-nginx in March 2026 after v1.15.1, so it no longer receives security fixes. Kix still builds this instance. Move Ingress routes to Gateway API";
+      replacement = "packages.experimental.traefik";
+    };
     defaultAliases = [ "ingressNginx" ];
     # One controller serves Ingress objects in every namespace, so consumers
     # in any namespace find it by name.
