@@ -1,4 +1,4 @@
 +++
 kind = "changed"
 +++
-When a deploy stalls or waits, its messages now name objects the same way the rest of Kix does. A step that is not a Kubernetes object appears in brackets, such as `⟦api-discovery⟧`. Kix also replaces control characters in object names with printable escapes.
+During a deploy, stall and wait messages now show steps that are not Kubernetes objects in brackets (such as `⟦api-discovery⟧`), matching the rest of Kix's output. They also replace control and invisible characters in object names with their Unicode code points, such as `⟨U+200B⟩`.
