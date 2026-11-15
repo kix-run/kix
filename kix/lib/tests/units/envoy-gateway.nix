@@ -9,6 +9,7 @@
 {
   lib,
   k8s,
+  kixKeys,
   mkCluster,
   manifests,
   ofKind,
@@ -55,7 +56,7 @@ let
   configOf =
     ms:
     builtins.fromJSON (byName "envoy-gateway-config" (ofKind "ConfigMap" ms)).data."envoy-gateway.yaml";
-  dependsOn = m: m.metadata.annotations."kix.run/depends-on" or "";
+  dependsOn = m: m.metadata.annotations.${kixKeys.dependsOn} or "";
   hashOf = cluster: part: k8s.extractStoreHash cluster.instances.${ns}.eg.raw.${part}.outPath;
 in
 {
