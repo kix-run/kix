@@ -417,7 +417,7 @@ in
       ms = manifests cluster;
       operator = cluster.instances.stackgres-system.stackgres-operator;
       jobHash = builtins.unsafeDiscardStringContext operator.raw.webhookCheck.out.identityHash;
-      dependsOn = m: (m.metadata.annotations or { }).${kixKeys.dependsOn} or "";
+      dependsOn = m: m.metadata.annotations.${kixKeys.dependsOn} or "";
       customResources = builtins.filter (
         m: lib.hasPrefix "stackgres.io/" m.apiVersion && m.kind != "SGConfig"
       ) ms;
@@ -651,7 +651,7 @@ in
         builtins.filter (m: m.metadata.namespace != "stackgres-system") (ofKind "Secret" ms)
       );
       imported = map (m: "${m.metadata.namespace}/${m.metadata.annotations.${kixKeys.importName}}") (
-        builtins.filter (m: (m.metadata.annotations or { }).${kixKeys.importKind} or null == "Secret") (
+        builtins.filter (m: m.metadata.annotations.${kixKeys.importKind} or null == "Secret") (
           ofKind "PackageInstance" ms
         )
       );

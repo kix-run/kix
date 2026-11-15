@@ -19,9 +19,10 @@
 #      fact warns when a workload references a Service without connecting to it
 #      or marking `facts.refOnly`.
 
-{ k8s }:
+{ lib, k8s }:
 
 let
+  inherit (import ../core/pod-spec.nix { inherit lib; }) podTemplateOf;
   kixAnnotations = import ../core/annotations.nix;
   kixKeys = kixAnnotations.keys;
   inherit (k8s) facts;
@@ -34,7 +35,7 @@ rec {
     w:
     let
       selectorLabels = w.rawManifest.spec.selector.matchLabels or null;
-      templateLabels = w.rawManifest.spec.template.metadata.labels or { };
+      templateLabels = (podTemplateOf w.rawManifest).metadata.labels or { };
     in
     if selectorLabels != null then selectorLabels else templateLabels;
 
@@ -91,7 +92,7 @@ rec {
       acc: r:
       acc
       // {
-        "${k8s.nsOf r}/${(r.rawManifest.metadata.annotations or { }).${kixKeys.importName} or r.name}" = r;
+        "${k8s.nsOf r}/${r.rawManifest.metadata.annotations.${kixKeys.importName} or r.name}" = r;
       }
     ) { } (builtins.filter isServiceRef resources)
     // builtins.foldl' (

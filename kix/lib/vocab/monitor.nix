@@ -20,7 +20,7 @@ let
     }:
     let
       ruleName = if name != null then name else scope.instanceName;
-      metricsEnabled = ((config.metrics or { }).enabled or true) && prometheus != null;
+      metricsEnabled = (config.metrics.enabled or true) && prometheus != null;
       alertRules = lib.mapAttrsToList (
         alertName: alertDef:
         {

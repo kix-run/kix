@@ -27,7 +27,7 @@ let
     "fix"
   ];
 
-  plain = v: builtins.unsafeDiscardStringContext (toString v);
+  inherit (import ./util.nix { inherit lib; }) plain;
 
   isPath = v: builtins.isString v && builtins.match ".*[[:space:]].*" v == null;
 

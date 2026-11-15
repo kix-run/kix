@@ -6,26 +6,22 @@
 let
   normalize = import ../core/normalize.nix { inherit lib; };
 
-  listOr = v: if v == null then [ ] else v;
+  inherit (import ../core/util.nix { inherit lib; }) listOr;
+  inherit (import ../core/pod-spec.nix { inherit lib; }) podSpecOf;
+  workloadKinds = import ../core/workload-kinds.nix { inherit lib; };
 
   getContainers =
     resource:
     let
-      podSpec = resource.spec.template.spec or { };
+      podSpec = podSpecOf resource;
     in
     # Helm charts can render `initContainers: null`, and scorecard rules inspect
     # manifests before null fields are stripped.
     listOr (podSpec.containers or [ ]) ++ listOr (podSpec.initContainers or [ ]);
 
-  getMainContainers = resource: listOr ((resource.spec.template.spec or { }).containers or [ ]);
+  getMainContainers = resource: listOr ((podSpecOf resource).containers or [ ]);
 
-  isWorkload =
-    resource:
-    builtins.elem (resource.kind or "") [
-      "Deployment"
-      "StatefulSet"
-      "DaemonSet"
-    ];
+  isWorkload = resource: builtins.elem (resource.kind or "") workloadKinds.servingKinds;
 in
 {
   # Require both CPU and memory in `requests` and `limits` on every container.
@@ -138,7 +134,7 @@ in
     check =
       { resource, ... }:
       let
-        volumes = (resource.spec.template.spec or { }).volumes or [ ];
+        volumes = resource.spec.template.spec.volumes or [ ];
         rendered =
           let
             n = normalize.normalizeValue volumes;

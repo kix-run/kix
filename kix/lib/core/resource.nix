@@ -18,6 +18,8 @@ rec {
   normalize = import ./normalize.nix { inherit lib; };
 
   podSpecReader = import ./pod-spec.nix { inherit lib; };
+  workloadKinds = import ./workload-kinds.nix { inherit lib; };
+  util = import ./util.nix { inherit lib; };
 
   # Return the name of the store file that holds a resource's sealed
   # manifest. `podReadContentHashes` finds a Kix-built object by this name in
@@ -444,29 +446,10 @@ rec {
       # creates itself. Names passed as args or env values are not checked.
       _selfRequiredCheck =
         let
-          lst = x: if builtins.isList x then x else [ ];
+          lst = util.listOr;
           required =
             obj: field: if obj.${field} or null == null || obj.optional or false then [ ] else [ obj.${field} ];
-          workloadKinds = {
-            v1 = [ "Pod" ];
-            "apps/v1" = [
-              "Deployment"
-              "StatefulSet"
-              "DaemonSet"
-              "ReplicaSet"
-            ];
-            "batch/v1" = [
-              "Job"
-              "CronJob"
-            ];
-          };
-          podSpec =
-            if kind == "Pod" then
-              rawManifest.spec or { }
-            else if kind == "CronJob" then
-              rawManifest.spec.jobTemplate.spec.template.spec or { }
-            else
-              rawManifest.spec.template.spec or { };
+          podSpec = podSpecReader.podSpecOf rawManifest;
           containers = lst (podSpec.containers or [ ]) ++ lst (podSpec.initContainers or [ ]);
           volumeRefs = builtins.concatMap (
             v:
@@ -491,7 +474,7 @@ rec {
           refs = volumeRefs ++ envRefs ++ required podSpec "serviceAccountName";
           selfRequired = builtins.concatMap markers.selfCreatedNames (builtins.filter builtins.isString refs);
         in
-        if !(builtins.elem kind (workloadKinds.${apiVersion} or [ ])) || selfRequired == [ ] then
+        if !(workloadKinds.isPodKind { inherit apiVersion kind; }) || selfRequired == [ ] then
           null
         else
           fail {

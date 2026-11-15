@@ -58,7 +58,7 @@ let
 
   issuerOf = name: cluster: byName name (ofKind "ClusterIssuer" (manifests cluster));
   specOf = name: cluster: (issuerOf name cluster).spec;
-  dependsOn = m: lib.splitString "," ((m.metadata.annotations or { }).${kixKeys.dependsOn} or "");
+  dependsOn = m: lib.splitString "," (m.metadata.annotations.${kixKeys.dependsOn} or "");
 
   # DNS-01 through a secret-ref in cert-manager's namespace.
   wiredCluster =

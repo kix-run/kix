@@ -626,7 +626,7 @@ rec {
             requester
             requesterName
             ;
-          renamedFrom = (depsEnrichment.${argName} or { }).renamedFrom or null;
+          renamedFrom = depsEnrichment.${argName}.renamedFrom or null;
           requesterNamespace = namespace;
           hasDefault = isOptional;
         };
@@ -670,7 +670,7 @@ rec {
             requester
             requesterName
             ;
-          renamedFrom = (depsEnrichment.${argName} or { }).renamedFrom or null;
+          renamedFrom = depsEnrichment.${argName}.renamedFrom or null;
           requesterNamespace = namespace;
           hasDefault = isOptional;
         };
@@ -730,7 +730,7 @@ rec {
     builtins.foldl' (
       acc: e:
       let
-        existing = (acc.${e.targetNs} or { }).${e.targetInst} or [ ];
+        existing = acc.${e.targetNs}.${e.targetInst} or [ ];
       in
       acc
       // {

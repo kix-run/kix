@@ -143,7 +143,7 @@ let
     );
   ms = cluster: manifests cluster;
   clusterOf = all: byName "rabbitmq" (ofKind "RabbitmqCluster" all);
-  dependsOn = m: (m.metadata.annotations or { }).${kixKeys.dependsOn} or "";
+  dependsOn = m: m.metadata.annotations.${kixKeys.dependsOn} or "";
   withPrometheus.instances.monitoring.prometheus.package = prometheusStub;
 
   # Cilium as the enforcer, as the environment's CNI.
