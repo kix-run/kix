@@ -513,14 +513,19 @@ writes. Versions before 0.10.0-rc.4 take the older spellings `list packages
   1, `Stopped(exit)` exits with a code after the phase printed why, and
   `Error` goes to `main`. `run` is the one place that turns a halt into the
   command's `Exit` (`Halt::end`).
-- `mod.rs`: the run. `upgrade` calls one function per job: `choose` (the
-  target decision, fetching the index only when it is needed), `conclude`
-  (every decision that does not proceed), `plan_route` (records, required
-  stop, steps), `dry_run`, then on `Run`: `baseline` (build the project as it
-  is, or reuse a stopped run's cache), `begin` (write the state), `walk`
-  (pin and build; `walk_from` decides where a stopped run goes on),
-  `stopped_at` (a failed step; `stopped_lines`), and `finish` (compare,
-  notes, review list; `finished_status` decides the final status). The builds live under
+- `mod.rs`: the run. `upgrade` calls one function per job, each in its own
+  file. `choose.rs`: `choose` (the target decision, fetching the index only
+  when it is needed) and `conclude` (every decision that does not proceed).
+  `route.rs`: `plan_route` (records, required stop, steps). `preview.rs`:
+  `dry_run`. Then on `Run` (`run.rs`, which also pins and builds one step):
+  `baseline` (build the project as it is, or reuse a stopped run's cache),
+  `begin` (write the state), `walk` (pin and build; `walk_from` decides
+  where a stopped run goes on), and `stopped_at` (a failed step;
+  `stopped_lines`), all in `phases.rs`, and `finish` (compare, notes,
+  review list; `finished_status` decides the final status) in `finish.rs`.
+  `subprocess.rs` runs the other Kix (`run_kix`, `clusters`,
+  `packages_in_use`), and `acknowledge.rs` holds `--acknowledge` and
+  `check_deploy`. The builds live under
   `default_cache_dir()/upgrade/<sha256 of the project path, 16 hex>/`
   (`before/`, and one directory per version). `Run::step` plans the
   library move, and stops for a `flake.nix` edit, before it installs the
