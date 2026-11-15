@@ -988,7 +988,7 @@ const OPERATOR_TIMEOUT_ID: &str = "K7218";
 fn refuse_operator_timeout(args: &DeployArgs) -> Result<()> {
     if args.operator && args.timeout.is_some() {
         return Err(miette!(
-            "[{OPERATOR_TIMEOUT_ID}] `kix deploy --operator` does not take `--timeout`, because the Kix operator waits for each resource with its own readiness timeout. Remove `--timeout`."
+            "[{OPERATOR_TIMEOUT_ID}] `kix deploy --operator` does not accept `--timeout`. The Kix operator uses a fixed 300-second readiness timeout for each resource. Nothing was applied to the cluster. Remove `--timeout` to deploy with the operator, or remove `--operator` to use `--timeout`."
         ));
     }
     Ok(())

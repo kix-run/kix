@@ -31,11 +31,11 @@ This page is hand-maintained. Check `cli/kix-cli/src/commands/operator.rs`,
 flag. It reads the cluster's current Activation record the same way whoever
 applied it, and does not need the operator to be running.
 
-`kix deploy --operator` refuses `--timeout` (`[K7218]`), because the operator
-uses its own readiness timeout. Other flags that control the local engine
-have no effect in operator mode: `--on-error`, `--prune`,
-`--skip-orphan-check`, `--reconcile`, `--force-conflicts`, `--group-by`, and
-`--log-format`. `--yes`,
+`kix deploy --operator` does not accept `--timeout` (`[K7218]`). The Kix
+operator uses a fixed 300-second readiness timeout for each resource. Flags
+that control how a direct deploy applies changes or prints progress have no
+effect with `--operator`: `--on-error`, `--prune`, `--skip-orphan-check`,
+`--reconcile`, `--force-conflicts`, `--group-by`, and `--log-format`. `--yes`,
 `--offline`, and `--accept-migrations` still apply to the local
 plan. `--dry-run` runs [`kix plan`](/docs/reference/cli/plan/) locally and
 does not contact the operator.
