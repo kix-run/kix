@@ -27,7 +27,6 @@
   containerBase,
   multiZone,
   singleNode,
-  evalFails,
   ...
 }:
 
@@ -622,10 +621,26 @@ in
     )
     || throw "placement on one node: ${builtins.toJSON vmstorage}";
 
-  # The spread comes from the availability level, so extraSpec cannot set it.
-  victoria-metrics-placement-locked =
-    evalFails (vmStack {
-      clusterConfig.extraSpec.vmstorage.topologySpreadConstraints = [ ];
-    })
-    || throw "extraSpec set vmstorage.topologySpreadConstraints";
+  # A component's topologySpreadConstraints in extraSpec replaces the
+  # derived spread, as an escape hatch.
+  victoria-metrics-placement-extra-spec-replaces =
+    let
+      own = [
+        {
+          topologyKey = "example.com/rack";
+          maxSkew = 1;
+          whenUnsatisfiable = "DoNotSchedule";
+          labelSelector.matchLabels.app = "x";
+        }
+      ];
+      ms = vmStack {
+        extra = [
+          multiZone
+          { cluster.availability.default = "zone"; }
+        ];
+        clusterConfig.extraSpec.vmstorage.topologySpreadConstraints = own;
+      };
+    in
+    (byName "vm-cluster" (ofKind "VMCluster" ms)).spec.vmstorage.topologySpreadConstraints == own
+    || throw "extraSpec did not replace vmstorage.topologySpreadConstraints";
 }

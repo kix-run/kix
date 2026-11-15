@@ -274,9 +274,9 @@ in
         Extra fields deep-merged into the VMCluster CR spec via
         lib.recursiveUpdate. Escape hatch for fields not exposed as typed
         options (downsampling, requestsLoadBalancer, per-component
-        overrides). It refuses each component's
-        `topologySpreadConstraints`, which the package derives from the
-        availability level.
+        overrides). A component's `topologySpreadConstraints` here
+        replaces the spread the package derives from the availability
+        level.
       '';
     };
   };
@@ -421,18 +421,7 @@ in
               "vmselect"
               "extraArgs"
             ]
-          ]
-          ++
-            map
-              (component: [
-                component
-                "topologySpreadConstraints"
-              ])
-              [
-                "vmstorage"
-                "vmselect"
-                "vminsert"
-              ];
+          ];
         } baseSpec config.extraSpec;
 
         # vmbackupmanager runs in the vmstorage pods when extraSpec sets

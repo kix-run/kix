@@ -145,7 +145,7 @@ in
     extraSpec = lib.mkOption {
       type = lib.types.attrsOf lib.types.anything;
       default = { };
-      description = "Extra fields deep-merged into the VMAgent CR spec. The package refuses `remoteWrite` and `scrapeInterval`, which come from the vmCluster dependency, and `image`, `replicaCount`, `selectAllByDefault`, `resources`, and `extraArgs`, which have options of their own. It also refuses `topologySpreadConstraints`, which the package derives from the availability level.";
+      description = "Extra fields deep-merged into the VMAgent CR spec. The package refuses `remoteWrite` and `scrapeInterval`, which come from the vmCluster dependency, and `image`, `replicaCount`, `selectAllByDefault`, `resources`, and `extraArgs`, which have options of their own. A `topologySpreadConstraints` here replaces the spread the package derives from the availability level.";
     };
 
     # The operator scrapes the agent whatever this says; `enabled` only
@@ -235,7 +235,6 @@ in
               "selectAllByDefault"
               "resources"
               "extraArgs"
-              "topologySpreadConstraints"
             ];
           } baseSpec config.extraSpec;
         };
