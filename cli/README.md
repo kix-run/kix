@@ -406,7 +406,7 @@ pins.
 | `KIX_AUTO_INSTALL` | selection | `0`, `false`, or `no` stops Kix from downloading a version. Selection then stops with the `kix self install` hint. |
 | `KIX_DATA_DIR` | `installs::data_dir` | Tests only, and not documented for users: replaces the data directory. |
 | `KIX_RELEASE_SOURCE` | `release::Source` | A site laid out like kix.run, such as a mirror, in place of `https://kix.run` (documented for users). An absolute path is a directory with that layout, which only tests use. |
-| `KIX_RELEASE_TEST_KEY` | `release::verify` | Tests only: a hex Ed25519 public key trusted beside `KEYS`, honoured only with a directory `KIX_RELEASE_SOURCE`. |
+| `KIX_RELEASE_TEST_KEY` | `release::verify` | Tests only: a hex Ed25519 public key trusted beside `KEYS`, honoured only with a directory `KIX_RELEASE_SOURCE`. Only a build with the `kix` crate's `test-release-key` feature reads it, which `kix-cli`'s dev-dependencies enable, so the release binaries ignore it. |
 
 The install script reads `KIX_VERSION`, `KIX_INSTALL_DIR`, and
 `XDG_DATA_HOME`, and, in its test only, `KIX_INSTALL_SOURCE` and

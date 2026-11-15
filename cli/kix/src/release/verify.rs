@@ -18,11 +18,26 @@ use sha2::{Digest, Sha256};
 
 use super::Source;
 
-/// The environment variable that adds a release key, as 64 hex digits. Kix
-/// honours it only for a [`Source::Dir`], so tests can sign their own
-/// releases and nothing can add a key for a download from a site. Do not
-/// document it for users.
+/// The environment variable that adds a release key, as 64 hex digits, so
+/// Kix's own tests can sign their releases. Only a build with the
+/// `test-release-key` feature reads it ([`test_key`]), and the release
+/// binaries are built without it. Even then Kix honours it only for a
+/// [`Source::Dir`].
 pub const TEST_KEY_VAR: &str = "KIX_RELEASE_TEST_KEY";
+
+/// Return the value of [`TEST_KEY_VAR`] in a build with the
+/// `test-release-key` feature.
+#[cfg(feature = "test-release-key")]
+pub fn test_key() -> Option<String> {
+    std::env::var(TEST_KEY_VAR).ok()
+}
+
+/// Return `None`: a build without the `test-release-key` feature trusts only
+/// the built-in keys.
+#[cfg(not(feature = "test-release-key"))]
+pub fn test_key() -> Option<String> {
+    None
+}
 
 /// The release keys built into Kix, as `(keyid, hex of the raw public key)`.
 /// Add one line per key in `cli/kix/release-keys/`:
