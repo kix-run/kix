@@ -226,10 +226,10 @@ let
   # Options of earlier releases of this package, when it rendered only the
   # GatewayClass and Gateway for a controller installed outside Kix.
   removedOptions = {
-    controllerName = "The package installs Envoy Gateway, whose controller name is fixed. For another Gateway API implementation, use its own package, such as traefik.";
-    proxyNamespace = "The proxies run in the instance's namespace, where the package installs the controller.";
-    gatewayClassName = "The GatewayClass takes the instance name.";
-    gatewayName = "The Gateway takes the instance name.";
+    controllerName = "Remove `controllerName` to use Envoy Gateway, or switch `package` to another Gateway API package such as `packages.experimental.traefik`.";
+    proxyNamespace = "Remove `proxyNamespace`. Envoy proxy pods now always run in this instance's namespace alongside the controller.";
+    gatewayClassName = "Remove `gatewayClassName`. The GatewayClass now always uses the instance name.";
+    gatewayName = "Remove `gatewayName`. The Gateway now always uses the instance name.";
   };
 
   # Paths of the EnvoyGateway configuration that the package writes or that
@@ -271,7 +271,7 @@ in
 {
   meta = {
     version = lib.removePrefix "v" release;
-    description = "Envoy Gateway: the Gateway API controller, its Envoy proxies, and one GatewayClass and Gateway";
+    description = "Envoy Gateway controller, Envoy proxy data plane, GatewayClass, and Gateway";
     owner = "platform";
     defaultAliases = [
       "gateway"
@@ -312,14 +312,14 @@ in
       assertion = config.${option} == null;
       id = "K5531";
       inherit option fix;
-      message = "${option} was removed when the package began to install the Envoy Gateway controller.";
+      message = "option '${option}' was removed; envoy-gateway now deploys and configures the Envoy Gateway controller itself.";
     }) removedOptions
     ++ [
       {
         assertion = minorOf imageTag == minorOf release;
         option = "image.tag";
-        message = "image.tag \"${imageTag}\" is not an Envoy Gateway ${minorOf release} release, and the CRDs and roles under kix/packages/experimental/envoy-gateway are vendored from ${release}.";
-        fix = "Set image.tag to a v${minorOf release}.x tag, or move the package to another release as its header describes.";
+        message = "image.tag is \"${imageTag}\", which does not match Envoy Gateway ${minorOf release}. This package bundles CRDs and RBAC manifests from ${release}, so running a different minor version can fail at deploy or runtime.";
+        fix = "Set image.tag to a v${minorOf release}.x release (and matching image.digest).";
       }
     ];
 
@@ -328,7 +328,7 @@ in
       repository = "docker.io/envoyproxy/gateway";
       tag = release;
       digest = "sha256:c2243d43518bed91d3ed8c2db849a4b7a14ac9b96eb019f2ab104bb1ca8572b1";
-      description = "Image of the Envoy Gateway controller. The certgen Job and the shutdown manager in each proxy pod run it too. Its major.minor must be the package's release.";
+      description = "Container image for the Envoy Gateway controller, the certificate-generation Job, and the shutdown-manager sidecar in each proxy pod. Must be a v${minorOf release}.x release to match the bundled CRDs and RBAC.";
     };
 
     operandImages = {
@@ -336,13 +336,13 @@ in
         repository = "docker.io/envoyproxy/envoy";
         tag = "distroless-v1.40.2";
         digest = "sha256:09ca6f2140a61ad8df11779a4a30d52b48433d444466328494f9188c9c35eded";
-        description = "Image of the Envoy proxies the controller runs for each Gateway. The default is the release's DefaultEnvoyProxyImage.";
+        description = "Container image for the Envoy proxy pods that the controller deploys for each Gateway. Defaults to the Envoy image shipped with Envoy Gateway ${release}.";
       };
       rateLimit = kix.options.image {
         repository = "docker.io/envoyproxy/ratelimit";
         tag = "5ae0682e";
         digest = "sha256:b95206e32b1a5f824fb06062fbb85bbdfb7f5de54135e92afe8462f22c979681";
-        description = "Image of the rate limit service the controller runs when `settings.rateLimit` is set. The default is the release's DefaultRateLimitImage.";
+        description = "Container image for the rate-limit service that the controller deploys when `settings.rateLimit` is configured. Defaults to the rate-limit image shipped with Envoy Gateway ${release}.";
       };
     };
 
@@ -374,8 +374,11 @@ in
         with the upstream field names. An HTTPS listener with no
         `tls.certificateRefs` is a placeholder and is not rendered.
 
-        Envoy listens on each port, plus 10000 for a port below 1024, and
-        under network policy the package opens those ports to clients.
+        For listener ports below 1024, Envoy binds to container port
+        `port + 10000` (for example, port 80 maps to 10080) unless
+        `proxySpec.provider.kubernetes.useListenerPortAsContainerPort` is
+        `true`. When network policy is enabled, the package allows incoming
+        client traffic to those container ports.
         kix.expose reads the rendered listeners: `protocol`, `hostname`,
         `port`, and `allowedRoutes.namespaces.from` decide whether an
         HTTPRoute can attach and which URL scheme and port it gets.
@@ -402,7 +405,7 @@ in
           value = "192.0.2.10";
         }
       ];
-      description = "The Gateway's `spec.addresses`, such as a static IP for the proxy's LoadBalancer Service.";
+      description = "Addresses to request on the Gateway (`spec.addresses`), such as a static IP for the proxy `LoadBalancer` Service.";
     };
 
     proxySpec = lib.mkOption {
@@ -415,19 +418,26 @@ in
         }
       '';
       description = ''
-        Fields of the EnvoyProxy (gateway.envoyproxy.io/v1alpha1) `spec`
-        that the GatewayClass names, merged over the package's own. The
-        package sets `provider.type`, the Envoy image, the replica count
-        (`provider.kubernetes.envoyDeployment.replicas`, from the
-        availability level), the proxies' topology spread and
-        PodDisruptionBudget, and the Service type (`NodePort` when the
-        cluster has no load balancer, `LoadBalancer` otherwise). The replica
-        count and the Service type may be set here. A `provider.type` other
-        than `Kubernetes`, the Envoy image (`operandImages.envoy`), and the
-        topology spread are refused.
+        EnvoyProxy `spec` fields (`gateway.envoyproxy.io/v1alpha1`) merged
+        into the `EnvoyProxy` resource for this `GatewayClass`.
 
-        `mergeGateways = true` runs one proxy fleet for every Gateway of
-        the class, and `out.podSelector` then selects by class.
+        By default, the package sets `provider.type = "Kubernetes"`, the
+        Envoy image (`operandImages.envoy`), the replica count from the
+        cluster's availability level
+        (`provider.kubernetes.envoyDeployment.replicas`), pod topology spread
+        constraints and a `PodDisruptionBudget` when running multiple
+        replicas, and the proxy Service type (`NodePort` when
+        `cluster.roles.loadBalancer.binding = "absent"`, or `LoadBalancer`
+        otherwise).
+
+        You can override the replica count, Service type, and other
+        `EnvoyProxy` fields here. Setting `mergeGateways = true` shares one
+        proxy Deployment across all Gateways in the class and updates
+        `out.podSelector` to match. Kix rejects overrides to `provider.type`
+        (must be `"Kubernetes"`),
+        `provider.kubernetes.envoyDeployment.container.image` (set
+        `operandImages.envoy` instead), and
+        `provider.kubernetes.envoyDeployment.pod.topologySpreadConstraints`.
       '';
     };
 
@@ -441,16 +451,21 @@ in
         }
       '';
       description = ''
-        Fields of the EnvoyGateway configuration file
-        (gateway.envoyproxy.io/v1alpha1 EnvoyGateway), merged over the
-        package's own. The package sets `gateway`, `provider.type`,
-        `provider.kubernetes.shutdownManager`, the rate limit image, and
-        `logging.level.default` (`info`, which may be set here).
+        EnvoyGateway controller configuration fields
+        (`gateway.envoyproxy.io/v1alpha1` `EnvoyGateway`), merged over the
+        package defaults.
+
+        By default, the package sets `logging.level.default = "info"` (which
+        you can override here) and configures `gateway`, `provider.type`,
+        `provider.kubernetes.shutdownManager`, and the rate-limit container
+        image (`operandImages.rateLimit`).
+
+        Kix rejects overrides to `gateway`, `provider.type`,
         `provider.kubernetes.deploy`, `provider.kubernetes.watch`,
-        `proxyTopologyInjector`, and `envoyProxy` are refused: the roles
-        and the network policy assume the default deployment mode and a
-        cluster-wide watch, and the proxies take their settings from
-        `proxySpec`.
+        `provider.kubernetes.shutdownManager`,
+        `provider.kubernetes.rateLimitDeployment.container.image` (set
+        `operandImages.rateLimit` instead), `proxyTopologyInjector`, and
+        `envoyProxy` (set `proxySpec` instead).
       '';
     };
 
@@ -458,7 +473,7 @@ in
       nackWindow = lib.mkOption {
         type = kix.types.promDuration;
         default = "15m";
-        description = "How far back EnvoyGatewayConfigRejected looks for a configuration a proxy refused, as a Prometheus duration. The alert clears this long after the last refusal.";
+        description = "Prometheus lookback window (such as `15m`) for the `EnvoyGatewayConfigRejected` alert. The alert fires when a proxy rejects a configuration update within this window and resolves once this duration passes without another rejection.";
       };
     };
   }
@@ -537,8 +552,8 @@ in
           if proxyProviderType != "Kubernetes" then
             scope.fail {
               option = "proxySpec.provider.type";
-              message = "proxySpec.provider.type is \"${toString proxyProviderType}\", and Envoy Gateway runs proxies in a cluster only with the Kubernetes provider.";
-              fix = "Remove proxySpec.provider.type.";
+              message = "proxySpec.provider.type is \"${toString proxyProviderType}\", which this package does not support. Envoy Gateway only deploys in-cluster proxy pods when provider.type is \"Kubernetes\".";
+              fix = "Remove proxySpec.provider.type (it defaults to \"Kubernetes\").";
             }
           else
             kix.mergeGuarded {
@@ -1109,13 +1124,13 @@ in
             _warnings =
               lib.optional (loadBalancerBinding == null && proxyServiceType == "LoadBalancer") {
                 clusterOption = "cluster.roles.loadBalancer.binding";
-                message = "The proxies get a LoadBalancer Service, and cluster.roles.loadBalancer.binding is not set. If the cluster has no load balancer, the Service gets no address, the Gateway never becomes Programmed, and the deploy waits until it times out.";
-                fix = "Set cluster.roles.loadBalancer.binding to \"shadowable\" if the cluster provides a load balancer, or to \"absent\" to give the proxies a NodePort Service.";
+                message = "cluster.roles.loadBalancer.binding is not set, so Kix configured EnvoyProxy '${ns}/${name}' with a LoadBalancer Service for Gateway '${ns}/${name}'. If the cluster has no load balancer controller, that Service will never get an address, Gateway '${ns}/${name}' will never become Programmed, and `kix deploy` will time out.";
+                fix = "Set `cluster.roles.loadBalancer.binding = \"shadowable\";` if the cluster provides a load balancer, or `\"absent\";` so Kix configures a NodePort Service instead.";
               }
               ++ lib.optional (scope.networkPolicyEnforcer != null && config.settings ? rateLimit) {
                 option = "settings.rateLimit";
-                message = "settings.rateLimit makes the controller run a rate limit Deployment, and the package writes no network policy for it. Under default deny it cannot reach Redis or the controller, and the proxies cannot reach it.";
-                fix = "Write a policy for the pods labelled app.kubernetes.io/name=envoy-ratelimit outside Kix, or remove settings.rateLimit.";
+                message = "settings.rateLimit configures Envoy Gateway to deploy rate-limit pods in '${ns}', and Kix does not generate network policies for them. Because network policy is enabled, default-deny rules will block traffic between the Envoy proxies, the rate-limit pods, the controller, and Redis.";
+                fix = "Add network policies for pods labelled `app.kubernetes.io/name=envoy-ratelimit` in namespace '${ns}' (via `namespaces.${ns}.networkPolicies` or outside Kix) to allow traffic with the Envoy proxies, the controller, and Redis, or remove `settings.rateLimit`.";
               };
           };
 
@@ -1139,8 +1154,8 @@ in
           if activeListeners == [ ] then
             scope.fail {
               option = "listeners";
-              message = "no listener is rendered, and a Gateway needs at least one. An HTTPS listener without tls.certificateRefs is not rendered.";
-              fix = "Add an HTTP listener, or set tls.certificateRefs on the HTTPS listener.";
+              message = "Gateway '${ns}/${name}' has no active listeners; Kubernetes requires at least one listener on a Gateway. Kix omits HTTPS listeners that have an empty `tls.certificateRefs` list.";
+              fix = "Add an active listener in `config.listeners`, or set `tls.certificateRefs` on an HTTPS listener.";
             }
           else
             scope.mkCR gatewayCrds.Gateway {

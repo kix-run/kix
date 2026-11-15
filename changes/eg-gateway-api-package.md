@@ -2,10 +2,13 @@
 kind = "added"
 packages = ["experimental/gateway-api"]
 +++
-The `gateway-api` package installs the Gateway API standard-channel CRDs
-(v1.6.1) and the upstream policy that refuses older or experimental-channel
-CRDs over them. It claims the new `gatewayApi` role, so a cluster has one
-set, and Gateway API implementations build their GatewayClass and Gateway
-from its `out.crds`. On a cluster whose provider installs the CRDs, bind
-`cluster.roles.gatewayApi` to `exclusive` and declare them with
-`kix.mkImport`.
+A new experimental `gateway-api` package (`packages.experimental.gateway-api`)
+installs the Kubernetes Gateway API v1.6.1 standard-channel CRDs and the
+upstream `ValidatingAdmissionPolicy` that blocks downgrades below v1.5.0 or
+replacing standard-channel CRDs with experimental-channel ones. It claims the
+new `gatewayApi` role so a cluster installs only one copy of the CRDs, and
+exposes CRD builders on `out.crds` for Gateway API controllers such as
+`envoy-gateway` and `traefik`. If your Kubernetes provider already installs the
+Gateway API CRDs, set `cluster.roles.gatewayApi.binding = "exclusive"` and
+declare them with `kix.mkImport` (`roles = [ "gatewayApi" ]` and `crds`) instead
+of adding `gateway-api`.

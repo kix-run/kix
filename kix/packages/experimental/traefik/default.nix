@@ -153,7 +153,7 @@ in
     k8s.minVersion = "1.26";
     compatibleWith.gatewayApi = {
       minVersion = "1.6.1";
-      reason = "Traefik watches TLSRoute and BackendTLSPolicy at v1, and the package is tested with Gateway API 1.6.1.";
+      reason = "Traefik watches gateway.networking.k8s.io/v1 TLSRoute and BackendTLSPolicy resources, and this package is tested against Gateway API 1.6.1.";
     };
     network.intents = {
       # HTTPRoutes name their backends at runtime, on any port, so the graph

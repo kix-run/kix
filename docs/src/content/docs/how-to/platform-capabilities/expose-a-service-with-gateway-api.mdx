@@ -17,9 +17,8 @@ uses Gateway API.
 
 This guide assumes:
 
-- Your cluster has a `gateway-api` instance, which installs the Gateway API
-  CRDs. [Install Envoy Gateway](/docs/how-to/package-task-guides/install-envoy-gateway/)
-  shows it.
+- Your cluster declares a `gateway-api` instance to install the Gateway API
+  CRDs (see [Install Envoy Gateway](/docs/how-to/package-task-guides/install-envoy-gateway/)).
 - You have a local package whose returned parts include a Service named
   `service`.
 
@@ -57,8 +56,8 @@ application's public URL (`self.exposure.url`): an HTTP listener on port
 80 gives `http://<host>`. If no listener accepts the host from the
 application's namespace, evaluation fails and names each listener.
 
-To route through Traefik instead, give the instance
-`packages.experimental.traefik`. The application instance does not change.
+To use Traefik instead of Envoy Gateway, set `package = packages.experimental.traefik;`
+on the Gateway instance. The application configuration stays the same.
 
 ## Set the application hostname
 

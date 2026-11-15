@@ -51,7 +51,7 @@ rec {
     };
 
     gatewayApi = {
-      description = "The Gateway API CRDs (gateway.networking.k8s.io), one set per cluster. Gateway API implementations build their GatewayClass and Gateway through out.crds. An environment that installs the CRDs itself binds the role exclusive, so a second, managed set is refused at eval.";
+      description = "Kubernetes Gateway API CRDs (gateway.networking.k8s.io), one set per cluster. Gateway API controllers read CRD handles from out.crds. Environments that pre-install these CRDs set cluster.roles.gatewayApi.binding = \"exclusive\" so Kix rejects a duplicate managed set during evaluation.";
       outContract = [ "crds" ];
     };
 

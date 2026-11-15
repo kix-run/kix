@@ -9,8 +9,11 @@ if gatewayApi == null then
   scope.fail {
     id = "K5531";
     dependency = "gatewayApi";
-    message = "this package needs the Gateway API CRDs, and no instance answers the gatewayApi role.";
-    fix = "Add a gateway-api instance, such as `instances.gateway-system.gateway-api.package = packages.experimental.gateway-api;`, or, when the cluster's provider installs the CRDs, bind `cluster.roles.gatewayApi` to \"exclusive\" and declare the CRDs with a `kix.mkImport` that claims the gatewayApi role.";
+    message = "this instance requires the Kubernetes Gateway API CRDs (gateway.networking.k8s.io), and nothing in the cluster provides the 'gatewayApi' role.";
+    fix =
+      "Add a `gateway-api` instance to your cluster definition:\n"
+      + "  instances.gateway-system.gateway-api.package = packages.experimental.gateway-api;\n"
+      + "If your Kubernetes provider already installs the Gateway API CRDs, set `cluster.roles.gatewayApi.binding = \"exclusive\";` and declare them with `kix.mkImport` (`roles = [ \"gatewayApi\" ]` and `crds`).";
   }
 else
   gatewayApi.out.crds

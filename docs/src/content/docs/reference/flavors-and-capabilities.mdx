@@ -61,18 +61,18 @@ Each flavor sets defaults under [`cluster.capabilities`](/docs/reference/cluster
 
 | Flavor | `multiNode` | `availabilityZones` | `managedControlPlane` | `nodeAutoscaling` | `privilegedContainers` | `daemonSets` | `podSecurityEnforcement` | `containerd.discardUnpackedLayers` |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `aks` | `null` | `null` | `true` | `false` | `true` | `true` | `null` | `null` | `false` |
-| `eks` | `null` | `null` | `true` | `false` | `true` | `true` | `null` | `null` | `true` |
-| `gke` | `null` | `null` | `true` | `false` | `true` | `true` | `null` | `null` | `true` |
-| `gke-autopilot` | `null` | `null` | `true` | `true` | `false` | `false` | `null` | `"baseline"` | `null` |
-| `k3s` | `null` | `null` | `false` | `false` | `true` | `true` | `null` | `null` | `false` |
-| `kind` | `false` | `[ ]` | `false` | `false` | `true` | `true` | `absent` | `null` | `true` |
-| `kubeadm` | `null` | `null` | `false` | `false` | `true` | `true` | `null` | `null` | `null` |
-| `openshift` | `null` | `null` | `false` | `false` | `false` | `true` | `null` | `"restricted"` | `null` |
-| `ovh` | `true` | `null` | `true` | `false` | `true` | `true` | `null` | `null` | `null` |
-| `rke2` | `null` | `null` | `false` | `false` | `true` | `true` | `null` | `null` | `false` |
-| `scaleway` | `true` | `null` | `true` | `false` | `true` | `true` | `null` | `null` | `false` |
-| `talos` | `null` | `null` | `false` | `false` | `true` | `true` | `null` | `null` | `true` |
+| `aks` | `null` | `null` | `true` | `false` | `true` | `true` | `null` | `false` |
+| `eks` | `null` | `null` | `true` | `false` | `true` | `true` | `null` | `true` |
+| `gke` | `null` | `null` | `true` | `false` | `true` | `true` | `null` | `true` |
+| `gke-autopilot` | `null` | `null` | `true` | `true` | `false` | `false` | `"baseline"` | `null` |
+| `k3s` | `null` | `null` | `false` | `false` | `true` | `true` | `null` | `false` |
+| `kind` | `false` | `[ ]` | `false` | `false` | `true` | `true` | `null` | `true` |
+| `kubeadm` | `null` | `null` | `false` | `false` | `true` | `true` | `null` | `null` |
+| `openshift` | `null` | `null` | `false` | `false` | `false` | `true` | `"restricted"` | `null` |
+| `ovh` | `true` | `null` | `true` | `false` | `true` | `true` | `null` | `null` |
+| `rke2` | `null` | `null` | `false` | `false` | `true` | `true` | `null` | `false` |
+| `scaleway` | `true` | `null` | `true` | `false` | `true` | `true` | `null` | `false` |
+| `talos` | `null` | `null` | `false` | `false` | `true` | `true` | `null` | `true` |
 
 `gke` also sets `cluster.capabilities.gpu = false` by default (override to `true` when attaching a GPU node pool).
 
@@ -112,18 +112,18 @@ The table below lists the exact DNS Service FQDNs and default `StorageClass` nam
 
 | Flavor | Import namespace | `platform-dns` Deployment name | `platform-dns.out.fqdn` | `platform-storage` (`out.storageClassName`) |
 | --- | --- | --- | --- | --- |
-| `aks` | `kube-system` | `coredns` | `kube-dns.kube-system.svc.<clusterDomain>` | `"managed-csi"` | | `null`
-| `eks` | `kube-system` | `coredns` | `kube-dns.kube-system.svc.<clusterDomain>` | none (`storageClasses` is `"absent"`; install the EBS CSI driver or declare a `storage-classes` instance) | | `null`
-| `gke` | `kube-system` | `kube-dns` | `kube-dns.kube-system.svc.<clusterDomain>` | `"standard-rwo"` | | `null`
-| `gke-autopilot` | `gke-managed` | `kube-dns` | `kube-dns.kube-system.svc.<clusterDomain>` | `"premium-rwo"` | | `null`
-| `k3s` | `kube-system` | `coredns` | `kube-dns.kube-system.svc.<clusterDomain>` | `"local-path"` | | `null`
-| `kind` | `kube-system` | `coredns` | `kube-dns.kube-system.svc.<clusterDomain>` | `"standard"` | | `absent`
-| `kubeadm` | `kube-system` | `coredns` | `kube-dns.kube-system.svc.<clusterDomain>` | none (`storageClasses` is `"absent"`) | | `null`
-| `openshift` | `kube-system` | `coredns` | `dns-default.openshift-dns.svc.<clusterDomain>` | none (`storageClasses` is `"absent"` by default) | | `null`
-| `ovh` | `kube-system` | `coredns` | `kube-dns.kube-system.svc.<clusterDomain>` | `"csi-cinder-high-speed"` | | `null`
-| `rke2` | `kube-system` | `coredns` | `kube-dns.kube-system.svc.<clusterDomain>` | none (`storageClasses` is `"absent"`) | | `null`
-| `scaleway` | `kube-system` | `coredns` | `kube-dns.kube-system.svc.<clusterDomain>` | `"sbs-default"` | | `null`
-| `talos` | `kube-system` | `coredns` | `kube-dns.kube-system.svc.<clusterDomain>` | none (`storageClasses` is `"absent"`) | | `null`
+| `aks` | `kube-system` | `coredns` | `kube-dns.kube-system.svc.<clusterDomain>` | `"managed-csi"` |
+| `eks` | `kube-system` | `coredns` | `kube-dns.kube-system.svc.<clusterDomain>` | none (`storageClasses` is `"absent"`; install the EBS CSI driver or declare a `storage-classes` instance) |
+| `gke` | `kube-system` | `kube-dns` | `kube-dns.kube-system.svc.<clusterDomain>` | `"standard-rwo"` |
+| `gke-autopilot` | `gke-managed` | `kube-dns` | `kube-dns.kube-system.svc.<clusterDomain>` | `"premium-rwo"` |
+| `k3s` | `kube-system` | `coredns` | `kube-dns.kube-system.svc.<clusterDomain>` | `"local-path"` |
+| `kind` | `kube-system` | `coredns` | `kube-dns.kube-system.svc.<clusterDomain>` | `"standard"` |
+| `kubeadm` | `kube-system` | `coredns` | `kube-dns.kube-system.svc.<clusterDomain>` | none (`storageClasses` is `"absent"`) |
+| `openshift` | `kube-system` | `coredns` | `dns-default.openshift-dns.svc.<clusterDomain>` | none (`storageClasses` is `"absent"` by default) |
+| `ovh` | `kube-system` | `coredns` | `kube-dns.kube-system.svc.<clusterDomain>` | `"csi-cinder-high-speed"` |
+| `rke2` | `kube-system` | `coredns` | `kube-dns.kube-system.svc.<clusterDomain>` | none (`storageClasses` is `"absent"`) |
+| `scaleway` | `kube-system` | `coredns` | `kube-dns.kube-system.svc.<clusterDomain>` | `"sbs-default"` |
+| `talos` | `kube-system` | `coredns` | `kube-dns.kube-system.svc.<clusterDomain>` | none (`storageClasses` is `"absent"`) |
 
 When a flavor imports a default `StorageClass` (`cluster.roles.storageClasses.binding = "shadowable"`), `kix.storage.mkClasses` (used by `packages.storage-classes`) refuses to annotate a managed `StorageClass` with `storageclass.kubernetes.io/is-default-class: "true"` because the cluster's existing default class is not removed by Kix and Kubernetes would see two defaults. (When multiple rendered `StorageClass` manifests in the same build are marked default, cross-resource [validation check 23](/docs/reference/validation-checks/) also fails the build.)
 
