@@ -7,9 +7,9 @@
 # because the database depends on it.
 # ingress-nginx routes n8n.localtest.me, a name that resolves to 127.0.0.1.
 #
-# Build:   nix build .#cluster-n8n --extra-experimental-features pipe-operators
+# Build:   kix build n8n
 # Kind:    a cluster created with `networking.disableDefaultCNI: true`, then
-#          kix --flake ./clusters --context kind-<name> deploy n8n -y
+#          kix deploy n8n --context kind-<name> -y
 # Reach:   kubectl -n ingress-system port-forward svc/ingress-nginx 8080:80
 #          curl -H 'Host: n8n.localtest.me' localhost:8080/healthz
 

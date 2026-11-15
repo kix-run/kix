@@ -16,8 +16,8 @@
 # publishes and consumes one message a second on the default vhost with the
 # default user's credentials.
 #
-# Build:  nix build .#cluster-rabbitmq --extra-experimental-features pipe-operators
-# Deploy: kix deploy rabbitmq --flake ./clusters --context <kind context>
+# Build:  kix build rabbitmq
+# Deploy: kix deploy rabbitmq --context <kind context>
 #         on a kind cluster created with `disableDefaultCNI: true`.
 
 { kix, packages }:

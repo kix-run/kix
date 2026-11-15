@@ -497,7 +497,7 @@ Mandatory:
    deploy commands in the header (`clusters/test-clickhouse.nix:13-21`,
    `clusters/test-keycloak.nix:1-15`). A dependency from an unmerged change
    is a `kix.mkImport` stand-in; note the merge order.
-4. `clusters/flake.nix`: register the cluster in `clusters`.
+4. `flake.nix`: register the cluster under a key in `clusters`.
 5. `kix/lib/tests/units/<pkg>.nix`: names `<topic>-<what>`, helpers as in
    `kix/lib/tests/units/keycloak.nix:8-18`. Each `evalFails` has a positive
    control (T2). Two instances in two namespaces (Na2, Na10) and each
@@ -521,7 +521,7 @@ Conditional:
 11. `crds/` with `crds/sources.txt`, and `rbac/` (crd-vendoring skill); sibling
     files such as `health-check.py`, `release.nix`, and `alerts.nix`.
 12. `clusters/test-<contract>-swap/` for a second implementation of an alias,
-    registered in `clusters/flake.nix` and the root `flake.nix`.
+    registered in `flake.nix`.
 13. `docs/src/content/docs/reference/` and `docs/src/content/docs/explanation/`,
     and the kix-migration, package-review, and crd-vendoring skills and this
     one, when a lib API, role, `meta` key, or convention changes (T6).
@@ -534,16 +534,16 @@ Cheap first. Each step assumes the earlier ones pass.
 ```bash
 F=--extra-experimental-features; P=pipe-operators
 git add -A kix/packages/experimental/<pkg> clusters kix/lib/tests                     # 0. the fetcher sees nothing untracked
-nix build ./clusters#cluster-<cluster> $F $P                             # 1. the test cluster, every toggle on (use ./scripts/kix-manifests.sh ./clusters <cluster> ./result if it uses Helm); read its traces
+nix build .#cluster-<cluster> $F $P                                      # 1. the test cluster, every toggle on (use ./scripts/kix-manifests.sh . <cluster> ./result if it uses Helm); read its traces
 nix build .#checks.x86_64-linux.every-package-evaluates $F $P            # 2. defaults at none and zone, option contract, settings entry
 nix build .#checks.x86_64-linux.kix-lib-tests $F $P                      # 3. unit tests, negative tests with controls
-nix build ./clusters#checks.x86_64-linux.rules-cluster-<cluster> $F $P   # 4. promtool check and the .rules-test.yaml (alerts only; use ./scripts/cluster-checks.sh if the cluster uses Helm)
+nix build .#checks.x86_64-linux.rules-cluster-<cluster> $F $P            # 4. promtool check and the .rules-test.yaml (alerts only; use ./scripts/cluster-checks.sh if the cluster uses Helm)
 nix build .#checks.x86_64-linux.{clickhouse,postgres,gateway}-swap $F $P # 5. the contract's swap check (contract changes only)
 nix shell nixpkgs#uv -c uv run --frozen scripts/vendor-crds.py --check   # 6. CRDs only
 nix run .#kix -- check homelab-kind                                       # 7. smoke over the full package set
 ```
 
-`<cluster>` is the key in `clusters/flake.nix`. When `every-package-evaluates`
+`<cluster>` is the key in `flake.nix`. When `every-package-evaluates`
 fails, `evaluate level name` (`kix/package-eval.nix:742`) evaluates one
 package at one level. From the worktree root, with `$PWD` absolute:
 
@@ -587,8 +587,8 @@ deploy is the slowest and most informative step.
      - { role: worker, labels: { topology.kubernetes.io/zone: c } }
    ```
 
-   Deploy with `nix run .#kix -- deploy <cluster> --flake ./clusters
-   --context <context> -y`, taking the cluster key and context from the
+   Deploy with `nix run .#kix -- deploy <cluster> --context <context> -y`,
+   taking the cluster key and context from the
    header (`scripts/kind-operators.sh:49`; add `--timeout` for a slow first
    start, `clusters/test-keycloak.nix:12-14`). Run clusters one at a time.
    Kind finds what evaluation cannot: a wrong uid, a duplicate extension, a
@@ -624,9 +624,9 @@ deploy is the slowest and most informative step.
    then deploy the change on top:
 
    ```bash
-   git fetch origin && git worktree add ../kixpkgs-wt/main origin/main
-   nix run .#kix -- deploy <cluster> --flake ../kixpkgs-wt/main/clusters --context <context> -y
-   nix run .#kix -- deploy <cluster> --flake ./clusters --context <context> -y
+   git fetch origin && git worktree add ../kix-main origin/main
+   nix run .#kix -- deploy <cluster> --flake ../kix-main --context <context> -y
+   nix run .#kix -- deploy <cluster> --context <context> -y
    ```
 
    The second deploy applies with no extra flag (`--accept-migrations`,

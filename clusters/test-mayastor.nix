@@ -13,7 +13,7 @@
 # cluster starts, and /run/udev on the host. io-engine runs on one core per
 # node (`ioEngine.cpuCount = 1`).
 #
-# Build:  nix build .#cluster-mayastor --extra-experimental-features pipe-operators
+# Build:  kix build mayastor
 # Deploy: scripts/kind-mayastor.sh
 
 { kix, packages }:

@@ -10,7 +10,7 @@
 # the database, which forwards them to its postgres cluster, and the
 # operator installs them on the postgres image.
 #
-# Build:  nix build .#cluster-immich --extra-experimental-features pipe-operators
+# Build:  kix build immich
 
 { kix, packages }:
 

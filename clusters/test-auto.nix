@@ -6,7 +6,7 @@
 # 3. Transitive auto-instantiation (test-app → valkey)
 # 4. Inactive optional not deployed
 #
-# Build:  nix build .#cluster-auto
+# Build:  kix build auto
 
 { kix, packages }:
 

@@ -17,8 +17,8 @@
 #   networking: { disableDefaultCNI: true, podSubnet: "10.244.0.0/16" }
 #   nodes: [ { role: control-plane }, { role: worker }, { role: worker }, { role: worker } ]
 #   EOF
-# Build:   nix build .#cluster-clickhouse --extra-experimental-features pipe-operators
-# Deploy:  kix --flake ./clusters --context kind-kix-clickhouse deploy clickhouse -y
+# Build:   kix build clickhouse
+# Deploy:  kix deploy clickhouse --context kind-kix-clickhouse -y
 #
 { kix, packages }:
 

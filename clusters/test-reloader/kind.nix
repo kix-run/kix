@@ -9,7 +9,7 @@
 #           kubectl -n demo create secret generic demo-token --from-literal=token=a
 #           kubectl -n demo create secret generic demo-other --from-literal=token=a
 #           (the deploy waits for both)
-# Deploy:   kix --flake ./clusters --context kind-kix-reloader deploy reloader -y
+# Deploy:   kix deploy reloader --context kind-kix-reloader -y
 # Rotate:   kubectl -n demo patch secret demo-token -p '{"stringData":{"token":"b"}}'
 #           restarts web, not web2.
 { kix, packages }:

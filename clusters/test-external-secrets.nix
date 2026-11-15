@@ -11,7 +11,7 @@
 # The builders' refusals and the secret-dependency path of mkSecretStore are
 # covered by kix/lib/tests/units/external-secrets.nix.
 #
-# Build:  nix build .#cluster-external-secrets --extra-experimental-features pipe-operators
+# Build:  kix build external-secrets
 
 { kix, packages }:
 

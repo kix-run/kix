@@ -11,14 +11,14 @@
 #
 # Commands run from the repository root. Build:
 #
-#   nix build ./clusters#cluster-tailscale --extra-experimental-features pipe-operators
+#   kix build tailscale
 #
 # Deploy on a kind cluster that runs Cilium, after creating the Secret:
 #
 #   kubectl create namespace tailscale
 #   kubectl -n tailscale create secret generic oauth-credentials \
 #     --from-literal=client_id=<id> --from-literal=client_secret=<secret>
-#   nix run .#kix -- deploy tailscale --flake ./clusters
+#   kix deploy tailscale
 #
 # With dummy credentials the operator exits on its first call to the
 # Tailscale API, which shows that its egress policy lets TCP 443 out, and

@@ -4,7 +4,7 @@
 # replicas with the derived zone spread and PodDisruptionBudgets. Its
 # startupapicheck Job goes through scope.mkJob.
 #
-# Build:  nix build .#cluster-sealed-jobs --extra-experimental-features pipe-operators
+# Build:  kix build sealed-jobs
 
 { kix, packages }:
 

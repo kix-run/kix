@@ -19,7 +19,7 @@
 # OIDC wiring is evaluated here, not signed into. Their headers say what
 # network path the request needs.
 #
-# Build:  nix build ./clusters#cluster-keycloak-oidc --extra-experimental-features pipe-operators
+# Build:  kix build keycloak-oidc
 
 { kix, packages }:
 

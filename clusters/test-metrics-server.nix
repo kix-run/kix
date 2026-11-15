@@ -7,7 +7,7 @@
 # so the instance passes --kubelet-insecure-tls. Network policy is on, so
 # the package's intents (API server ingress, kubelet egress) are rendered.
 #
-# Build:  nix build .#cluster-metrics-server --extra-experimental-features pipe-operators
+# Build:  kix build metrics-server
 
 { kix, packages }:
 

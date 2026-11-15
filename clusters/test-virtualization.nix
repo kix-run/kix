@@ -21,7 +21,7 @@
 # `extraSpec.configuration.developerConfiguration.useEmulation = true` on the
 # kubevirt instance.
 #
-# Build:  nix build .#cluster-virtualization --extra-experimental-features pipe-operators
+# Build:  kix build virtualization
 # Deploy: scripts/kind-virtualization.sh
 
 { kix, packages }:

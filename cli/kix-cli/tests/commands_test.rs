@@ -243,13 +243,12 @@ fn every_test_cluster_bundles() {
     assert!(failed.is_empty(), "{}", failed.join("\n"));
 }
 
-/// Verify that the evaluation-only flake checks of every flake in the
-/// repository pass when Kix renders their Helm charts: the
-/// `pi-wiring-cluster-<name>` check of each cluster and
-/// `every-package-evaluates`. Plain `nix flake check` stops at the first
-/// chart, because only `kix` renders charts. Evaluates every cluster, so it
-/// runs only when asked: `cargo test -p kix-cli --test commands_test --
-/// --ignored flake_checks_evaluate_with_helm`.
+/// Verify that the repository flake's evaluation-only checks pass when Kix
+/// renders their Helm charts: the `pi-wiring-cluster-<name>` check of each
+/// cluster and `every-package-evaluates`. Plain `nix flake check` stops at
+/// the first chart, because only `kix` renders charts. Evaluates every
+/// cluster, so it runs only when asked: `cargo test -p kix-cli --test
+/// commands_test -- --ignored flake_checks_evaluate_with_helm`.
 #[test]
 #[ignore]
 fn flake_checks_evaluate_with_helm() {
@@ -261,36 +260,33 @@ fn flake_checks_evaluate_with_helm() {
     let system = kix::eval::nix::current_system();
     let mut failed = Vec::new();
     let mut evaluated = 0;
-    for flake in [".", "clusters"] {
-        let dir = repo.join(flake);
-        let checks = format!(".#checks.{system}");
-        let names = kix::eval::nix::eval_with_helm(
-            &dir,
-            &[
-                &checks,
-                "--apply",
-                "c: builtins.concatStringsSep \" \" (builtins.attrNames c)",
-            ],
+    let checks = format!(".#checks.{system}");
+    let names = kix::eval::nix::eval_with_helm(
+        repo,
+        &[
+            &checks,
+            "--apply",
+            "c: builtins.concatStringsSep \" \" (builtins.attrNames c)",
+        ],
+        &[],
+        &kix::version::policy::LibraryVersion::Unknown,
+        &|_| {},
+    )
+    .unwrap();
+    for name in names
+        .split_whitespace()
+        .filter(|n| n.starts_with("pi-wiring-cluster-") || *n == "every-package-evaluates")
+    {
+        evaluated += 1;
+        let attr = format!("{checks}.{name}.drvPath");
+        if let Err(e) = kix::eval::nix::eval_with_helm(
+            repo,
+            &[&attr],
             &[],
             &kix::version::policy::LibraryVersion::Unknown,
             &|_| {},
-        )
-        .unwrap();
-        for name in names
-            .split_whitespace()
-            .filter(|n| n.starts_with("pi-wiring-cluster-") || *n == "every-package-evaluates")
-        {
-            evaluated += 1;
-            let attr = format!("{checks}.{name}.drvPath");
-            if let Err(e) = kix::eval::nix::eval_with_helm(
-                &dir,
-                &[&attr],
-                &[],
-                &kix::version::policy::LibraryVersion::Unknown,
-                &|_| {},
-            ) {
-                failed.push(format!("{flake}#{name}: {e}"));
-            }
+        ) {
+            failed.push(format!("{name}: {e}"));
         }
     }
     assert!(evaluated > 0);

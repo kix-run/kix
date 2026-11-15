@@ -3,7 +3,7 @@
 # Exercises the public `kix.mergeFragments` entry point re-exported by
 # `kix/lib/default.nix`.
 #
-# Build:  nix build .#cluster-fragments --extra-experimental-features pipe-operators
+# Build:  kix build fragments
 
 { kix, packages }:
 

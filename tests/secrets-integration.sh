@@ -7,7 +7,7 @@
 #   1. Generates an age keypair for testing
 #   2. Creates a SOPS-encrypted secret file
 #   3. Creates a kind cluster
-#   4. Builds and deploys the test-secrets cluster
+#   4. Builds and deploys the secrets cluster (clusters/test-secrets.nix)
 #   5. Verifies the Secret was hydrated correctly
 #   6. Verifies the pod can read the env vars
 #   7. Cleans up
@@ -69,10 +69,10 @@ cd "$REPO_ROOT"
 git add "$SOPS_FILE" 2>/dev/null || true
 
 echo ""
-echo "=== Step 3: Build the test-secrets cluster ==="
+echo "=== Step 3: Build the secrets cluster ==="
 cd "$REPO_ROOT"
 cargo run --manifest-path cli/Cargo.toml --bin kix -- \
-    build test-secrets --flake ./clusters -o yaml > /dev/null
+    build secrets -o yaml > /dev/null
 echo "Build complete."
 
 echo ""
@@ -84,8 +84,7 @@ echo ""
 echo "=== Step 5: Deploy with kix ==="
 cd "$REPO_ROOT"
 cargo run --manifest-path cli/Cargo.toml --bin kix -- \
-    deploy test-secrets \
-    --flake ./clusters \
+    deploy secrets \
     --yes \
     --context "kind-$KIND_CLUSTER" \
     --timeout 120s
