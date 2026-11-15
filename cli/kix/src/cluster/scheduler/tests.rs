@@ -9,8 +9,9 @@ fn manifest(kind: &str, name: &str, ns: &str, id_hash: &str, deps: &str) -> Valu
     if !deps.is_empty() {
         annotations.insert(keys::DEPENDS_ON.into(), json!(deps));
     }
+    let api_version = if kind == "Job" { "batch/v1" } else { "v1" };
     json!({
-        "apiVersion": "v1",
+        "apiVersion": api_version,
         "kind": kind,
         "metadata": {
             "name": name,

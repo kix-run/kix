@@ -279,9 +279,10 @@ fn summary_line(s: &Summary) -> String {
 }
 
 fn resource_label(r: &ResourceStatus) -> String {
+    let kind = kix::manifest::types::qualified_kind(&r.group, &r.kind);
     match &r.namespace {
-        Some(ns) => format!("{} {ns}/{}", r.kind, r.name),
-        None => format!("{} {}", r.kind, r.name),
+        Some(ns) => format!("{kind} {ns}/{}", r.name),
+        None => format!("{kind} {}", r.name),
     }
 }
 

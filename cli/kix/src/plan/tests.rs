@@ -563,7 +563,7 @@ mod diff_graph_tests {
             json!("b")
         );
         assert!(
-            api["manifests"]["PackageInstance/api@app"]
+            api["manifests"][format!("PackageInstance.{}/api@app", keys::GROUP).as_str()]
                 .get("new")
                 .is_some(),
             "{api}"
@@ -731,7 +731,11 @@ mod never_pruned_tests {
 
     fn rid(kind: &str, name: &str) -> ResourceId {
         ResourceId {
-            group: String::new(),
+            group: match kind {
+                "CustomResourceDefinition" => "apiextensions.k8s.io".into(),
+                "Widget" => "example.com".into(),
+                _ => String::new(),
+            },
             kind: kind.into(),
             name: name.into(),
             namespace: CLUSTER_SCOPED.into(),

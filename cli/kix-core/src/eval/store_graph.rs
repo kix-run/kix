@@ -507,12 +507,9 @@ impl StoreGraph {
                         continue;
                     }
                     let dep_res = &resources[dep_ref];
-                    let dep_kind = dep_res
-                        .manifest
-                        .pointer("/kind")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-                    if dep_kind == "Namespace" {
+                    if crate::manifest::kinds::GroupKind::of_manifest(&dep_res.manifest)
+                        == crate::manifest::kinds::NAMESPACE
+                    {
                         continue;
                     }
                     deps.push(CrossDep {

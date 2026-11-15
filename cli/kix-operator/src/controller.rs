@@ -730,7 +730,7 @@ async fn handle_delete(
             .into_iter()
             // Namespaces and CRDs stay, which also keeps the CRD this
             // operator's own Activation records live in. See `never_pruned`.
-            .filter(|rid| !kix::manifest::lifecycle::never_pruned(&rid.kind))
+            .filter(|rid| !kix::manifest::lifecycle::never_pruned(rid.group_kind()))
             .collect();
 
             delete_closure(&ctx.client, &ctx.records, cluster, name, &ordered).await?;

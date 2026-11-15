@@ -68,9 +68,9 @@ Why does `kix.flavors.kind` register `platform-dns` and `platform-storage` as in
 You can see that `platform-dns` dependency in the `kix graph` output you ran in tutorial 08:
 
 ```text
-PackageInstance/platform-dns@kube-system (import)
-├── Activation/08-namespace-deps-y50i580sy41b
-└── Deployment/gateway@app
+PackageInstance.kix.run/platform-dns@kube-system (import)
+├── Activation.kix.run/08-namespace-deps-y50i580sy41b
+└── Deployment.apps/gateway@app
     └── Service/gateway@app
 ```
 

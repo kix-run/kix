@@ -23,6 +23,7 @@
 use std::collections::HashSet;
 
 use crate::manifest::keys;
+use crate::manifest::kinds::{self, GroupKind};
 use crate::manifest::types::ResourceId;
 use serde_json::Value;
 
@@ -125,15 +126,16 @@ pub fn is_kix_internal_kind(kind: &str) -> bool {
 }
 
 /// Return whether `kind` is reported as an orphan when it leaves the build but
-/// never deleted automatically (`Namespace` and `CustomResourceDefinition`).
+/// never deleted automatically (core `Namespace` and
+/// `apiextensions.k8s.io` `CustomResourceDefinition`).
 ///
 /// Deleting a `Namespace` deletes every object inside it, and deleting a
 /// `CustomResourceDefinition` deletes every custom resource of that kind across
 /// the cluster, including resources Kix does not manage. Deploy pruning, all
 /// `kix gc` modes, and operator teardown consult this predicate and leave
 /// deletion to an explicit `kubectl delete`.
-pub fn never_pruned(kind: &str) -> bool {
-    matches!(kind, "Namespace" | "CustomResourceDefinition")
+pub fn never_pruned(kind: GroupKind<'_>) -> bool {
+    matches!(kind, kinds::NAMESPACE | kinds::CUSTOM_RESOURCE_DEFINITION)
 }
 
 /// Return the platform Kix cluster name for a consumer `Activation` record
@@ -149,7 +151,7 @@ pub fn platform_of(record: &Value) -> Option<&str> {
 
 /// Return whether `manifest` is one of Kix's own CustomResourceDefinitions.
 pub fn is_kix_crd(manifest: &Value) -> bool {
-    manifest.get("kind").and_then(Value::as_str) == Some("CustomResourceDefinition")
+    GroupKind::of_manifest(manifest) == kinds::CUSTOM_RESOURCE_DEFINITION
         && matches!(
             manifest.pointer("/metadata/name").and_then(Value::as_str),
             Some(keys::ACTIVATIONS_CRD | keys::PACKAGE_INSTANCES_CRD)
@@ -220,17 +222,34 @@ mod left_to_platform_tests {
 
 #[cfg(test)]
 mod never_pruned_tests {
+    use crate::manifest::kinds::{self, GroupKind};
+
     #[test]
     fn namespaces_and_crds_are_kept() {
-        assert!(super::never_pruned("Namespace"));
-        assert!(super::never_pruned("CustomResourceDefinition"));
+        assert!(super::never_pruned(kinds::NAMESPACE));
+        assert!(super::never_pruned(kinds::CUSTOM_RESOURCE_DEFINITION));
     }
 
     #[test]
     fn ordinary_kinds_are_pruned() {
-        for kind in ["Deployment", "Service", "ConfigMap", "Secret", "SGCluster"] {
-            assert!(!super::never_pruned(kind), "{kind} should be prunable");
+        for kind in [
+            kinds::DEPLOYMENT,
+            kinds::SERVICE,
+            kinds::CONFIG_MAP,
+            kinds::SECRET,
+            GroupKind::new("stackgres.io", "SGCluster"),
+        ] {
+            assert!(!super::never_pruned(kind), "{kind:?} should be prunable");
         }
+    }
+
+    /// A custom resource named like a protected kind is pruned as usual.
+    #[test]
+    fn a_custom_kind_of_a_protected_name_is_pruned() {
+        assert!(!super::never_pruned(GroupKind::new(
+            "example.com",
+            "Namespace"
+        )));
     }
 }
 

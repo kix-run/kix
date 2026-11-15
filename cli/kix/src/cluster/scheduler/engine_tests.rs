@@ -1054,6 +1054,16 @@ fn recreate_refusal_names_the_consequence() {
     .expect("a Namespace is refused");
     assert!(ns.contains("deletes everything in it"), "{ns}");
     assert!(recreate_refusal(&rid("Job", "probe")).is_none());
+    let custom = ResourceId {
+        group: "example.com".into(),
+        kind: "Namespace".into(),
+        namespace: CLUSTER_SCOPED.into(),
+        name: "apps".into(),
+    };
+    assert!(
+        recreate_refusal(&custom).is_none(),
+        "a custom kind named Namespace is recreated like any other"
+    );
 }
 
 fn rerun_details(rec: &Recorder) -> Vec<String> {
@@ -1460,13 +1470,15 @@ async fn read_last_runs_does_not_answer_for_a_job_it_cannot_read() {
     let mut plan = plan_with_skips(&[other], &["other"]);
     assert_eq!(
         plan.read_last_runs(&client, &discovery).await,
-        LastRuns::Unreadable
+        LastRuns::Read { failed: vec![] },
+        "a Job outside `batch` has no last run to read"
     );
 }
 
-/// A kind named `Job` in another group is read through its own group's API,
-/// even where `/apis` lists that group before `batch`. Only a `batch` Job
-/// left unchanged is read for its last run.
+/// The `batch` Job is read through its own group's API, even where `/apis`
+/// lists another group with a `Job` kind first. A kind named `Job` in another
+/// group is not a Job: it is not read for a last run and does not run again
+/// under `kix.run/rerun`.
 #[tokio::test]
 async fn read_last_runs_reads_each_job_through_its_own_group() {
     use crate::cluster::fake_api::OTHER_JOB_GROUP;
@@ -1506,10 +1518,18 @@ async fn read_last_runs_reads_each_job_through_its_own_group() {
         LastRuns::Read { failed: vec![] }
     );
     assert!(
-        plan.nodes()
+        !plan
+            .nodes()
             .iter()
             .any(|n| matches!(n.action, ChangeAction::Recreate(..))),
-        "the other group's failed Job runs again"
+        "the other group's Job does not run again"
+    );
+    assert!(
+        !api.requests()
+            .iter()
+            .any(|r| r.contains(OTHER_JOB_GROUP) && r.contains("/jobs/")),
+        "{:?}",
+        api.requests()
     );
 }
 

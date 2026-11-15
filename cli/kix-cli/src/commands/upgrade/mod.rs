@@ -1494,7 +1494,7 @@ fn report_changes(before: &Path, after: &Path, from: &Version, to: &Version) -> 
     for cluster in &clusters {
         let changes = compare::compare(&load(before.join(cluster))?, &load(after.join(cluster))?);
         report.any_changed |= !changes.is_empty();
-        report.sensitive += changes.iter().filter(|c| c.sensitive).count();
+        report.sensitive += changes.iter().filter(|c| c.review.is_some()).count();
         report.review.add(cluster, &changes);
         groups
             .entry(out::change_lines(&changes))

@@ -2172,7 +2172,7 @@
           "--force-conflicts"
           "-y"
         ];
-        stdoutGrep = "Deployment/legacy-web|activation .*Active|Deploy complete";
+        stdoutGrep = "Deployment.apps/legacy-web|activation .*Active|Deploy complete";
       }
     ];
   }
@@ -2227,7 +2227,7 @@
           "-y"
         ];
         allowFailure = true;
-        stdoutGrep = "Deployment/legacy-web|Dry run complete";
+        stdoutGrep = "Deployment.apps/legacy-web|Dry run complete";
       }
       {
         capture = "resolve";
@@ -2239,7 +2239,7 @@
           "--force-conflicts"
           "-y"
         ];
-        stdoutGrep = "Deployment/legacy-web|activation .*Active|Deploy complete";
+        stdoutGrep = "Deployment.apps/legacy-web|activation .*Active|Deploy complete";
       }
     ];
   }
@@ -2321,7 +2321,7 @@
           "--force-conflicts"
           "-y"
         ];
-        stdoutGrep = "Deployment/reflector|activation .*Active|Deploy complete";
+        stdoutGrep = "Deployment.apps/reflector|activation .*Active|Deploy complete";
       }
       {
         capture = "remove-release-record";
@@ -2360,7 +2360,7 @@
           "-o"
           "tree"
         ];
-        stdoutGrep = "legacy-api-contract|PackageInstance/legacy-api@legacy";
+        stdoutGrep = "legacy-api-contract|PackageInstance.kix.run/legacy-api@legacy";
       }
     ];
   }

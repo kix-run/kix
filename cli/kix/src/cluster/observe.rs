@@ -485,13 +485,14 @@ fn walk_depends_on<'a>(
 
 /// Return the readiness of a live object by the rules a deploy waits on.
 fn readiness_of(obj: &DynamicObject) -> Readiness {
-    let kind = drift::resource_id(obj).kind;
-    if readiness::is_immediate_kind(&kind) {
+    let rid = drift::resource_id(obj);
+    let kind = rid.group_kind();
+    if readiness::is_immediate_kind(kind) {
         Readiness::NotApplicable
-    } else if readiness::check_readiness(obj, &kind) {
+    } else if readiness::check_readiness(obj, kind) {
         Readiness::Ready
     } else {
-        Readiness::NotReady(readiness::not_ready_reason(obj, &kind))
+        Readiness::NotReady(readiness::not_ready_reason(obj, kind))
     }
 }
 

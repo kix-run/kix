@@ -778,9 +778,9 @@ impl<'a> Planner<'a> {
 
         let mut pkg_diff = diff_graphs(&baseline.diff_side(new_graph), new_graph);
         pkg_diff.keep_shared(&shared_orphans);
-        let shared_names = pkg_diff.shared_names();
-        if !shared_names.is_empty() {
-            return Err(PlanError::SharedNames(shared_names));
+        let aliased = pkg_diff.aliased_moves();
+        if !aliased.is_empty() {
+            return Err(PlanError::AliasedMove(aliased));
         }
 
         let listed_deletes: &[ResourceId] = match client {
@@ -833,7 +833,7 @@ pub(crate) fn deletes_of(prune: PrunePolicy, orphans: &[ResourceId]) -> Vec<Reso
     }
     orphans
         .iter()
-        .filter(|rid| !lifecycle::never_pruned(&rid.kind))
+        .filter(|rid| !lifecycle::never_pruned(rid.group_kind()))
         .cloned()
         .collect()
 }

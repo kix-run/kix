@@ -335,7 +335,8 @@ pub(crate) fn check_build<'a>(
         // group. This is the one that survives `upgrade_manifest`, because
         // the group lives in the CRD's spec and its name, not in the
         // apiVersion of the CRD object.
-        if m.get("kind").and_then(Value::as_str) == Some("CustomResourceDefinition")
+        if crate::manifest::kinds::GroupKind::of_manifest(m)
+            == crate::manifest::kinds::CUSTOM_RESOURCE_DEFINITION
             && let Some(group) = m.pointer("/spec/group").and_then(Value::as_str)
             && DOMAINS.contains(&group)
             // Kix's own two kinds only. Kix does not own the retired domain,

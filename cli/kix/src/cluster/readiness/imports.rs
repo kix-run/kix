@@ -17,6 +17,7 @@ use super::declared::{
 };
 use super::{POLL_INTERVAL, ReadinessError, ReadinessResult, probe_crd_discovery};
 use crate::manifest::keys;
+use crate::manifest::kinds::{self, GroupKind};
 
 /// A resource described by an import marker. The CLI polls the cluster for
 /// this resource and blocks dependents until it is present and ready, using the
@@ -57,6 +58,14 @@ pub struct ImportTarget {
 }
 
 impl ImportTarget {
+    /// Return the API group and kind of the imported resource.
+    pub fn group_kind(&self) -> GroupKind<'_> {
+        GroupKind::new(
+            crate::manifest::types::api_group(&self.api_version),
+            &self.kind,
+        )
+    }
+
     /// Build the target that a consumer deploy waits for instead of applying
     /// `crd`, one of Kix's own CRDs managed by `platform`. The live CRD must
     /// serve every version that `crd` declares.
@@ -117,7 +126,11 @@ pub fn import_target_from_manifest(
         return Ok(None);
     };
 
-    let namespace = if import_kind == "CustomResourceDefinition" {
+    let namespace = if GroupKind::new(
+        crate::manifest::types::api_group(import_api_version),
+        import_kind,
+    ) == kinds::CUSTOM_RESOURCE_DEFINITION
+    {
         None
     } else {
         manifest
@@ -202,7 +215,7 @@ pub(crate) async fn wait_for_import_target(
 ) -> Result<ReadinessResult, ReadinessError> {
     // Construct the ApiResource for CRDs directly so polling does not depend on
     // initial discovery when the CRD is not registered yet.
-    let (ar, scope) = if target.kind == "CustomResourceDefinition" {
+    let (ar, scope) = if target.group_kind() == kinds::CUSTOM_RESOURCE_DEFINITION {
         (
             ApiResource {
                 group: "apiextensions.k8s.io".into(),
@@ -257,7 +270,7 @@ pub(crate) async fn wait_for_import_target(
         }
         let status_msg: String = match api.get_opt(&target.name).await {
             Ok(Some(obj)) => {
-                if target.kind == "CustomResourceDefinition" {
+                if target.group_kind() == kinds::CUSTOM_RESOURCE_DEFINITION {
                     if check_crd_ready(&obj.data) {
                         // Fail immediately if the live CRD does not serve a
                         // required API version.
@@ -283,7 +296,7 @@ pub(crate) async fn wait_for_import_target(
                         return Ok(ReadinessResult::Ready);
                     }
                     "CRD present, waiting for Established=True".into()
-                } else if target.kind == "Secret" && !target.expected_keys.is_empty() {
+                } else if target.group_kind() == kinds::SECRET && !target.expected_keys.is_empty() {
                     // Once the Secret exists, any missing declared key in `data`
                     // is treated as an immediate mismatch rather than a transient
                     // state because external secret controllers populate keys
@@ -304,7 +317,7 @@ pub(crate) async fn wait_for_import_target(
                             message,
                         });
                     }
-                } else if target.kind == "Service" {
+                } else if target.group_kind() == kinds::SERVICE {
                     // Wait for at least one ready endpoint because a controller
                     // may create the Service before its backing pods are ready.
                     // Headless Services and manual Endpoints populate the
@@ -323,10 +336,12 @@ pub(crate) async fn wait_for_import_target(
                             format!("Service exists, endpoints check error: {e}")
                         }
                     }
-                } else if is_immediate_kind(&target.kind) || check_readiness(&obj, &target.kind) {
+                } else if is_immediate_kind(target.group_kind())
+                    || check_readiness(&obj, target.group_kind())
+                {
                     return Ok(ReadinessResult::Ready);
                 } else {
-                    readiness_message(&obj, &target.kind)
+                    readiness_message(&obj, target.group_kind())
                 }
             }
             Ok(None) => "not found yet".into(),

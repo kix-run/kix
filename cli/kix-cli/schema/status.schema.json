@@ -319,6 +319,10 @@
           ],
           "description": "The drift check, or `null` when it did not run or the object is not\non the cluster."
         },
+        "group": {
+          "description": "The kind's API group. Left out for the core group.",
+          "type": "string"
+        },
         "identity_hash": {
           "type": "string"
         },
@@ -341,7 +345,7 @@
           ]
         },
         "needed_by": {
-          "description": "The objects that depend on this one, as `Kind namespace/name`, when\nit is missing.",
+          "description": "The objects that depend on this one, as `Kind.group namespace/name`\n(`Kind namespace/name` for the core group), when it is missing.",
           "items": {
             "type": "string"
           },

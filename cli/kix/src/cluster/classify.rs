@@ -21,6 +21,7 @@ use crate::cluster::discovery;
 use crate::cluster::readiness;
 use crate::cluster::scheduler::DeployPlan;
 use crate::manifest::keys;
+use crate::manifest::kinds::{self, GroupKind};
 use crate::manifest::types::{CLUSTER_SCOPED, ResourceId};
 use crate::plan::document::UncheckedReason;
 use crate::plan::server::comparable;
@@ -108,7 +109,7 @@ impl<'a> Context<'a> {
         let namespaces = scope
             .build
             .iter()
-            .filter(|m| m.get("kind").and_then(Value::as_str) == Some("Namespace"))
+            .filter(|m| GroupKind::of_manifest(m) == kinds::NAMESPACE)
             .filter_map(|m| m.pointer("/metadata/name").and_then(Value::as_str))
             .collect();
         let applied: Vec<&Value> = scope
@@ -270,7 +271,7 @@ impl ChangedCrds {
     pub fn of(answers: &[DryRunAnswer]) -> Self {
         let changed = answers
             .iter()
-            .filter(|a| a.rid.kind == "CustomResourceDefinition")
+            .filter(|a| a.rid.group_kind() == kinds::CUSTOM_RESOURCE_DEFINITION)
             .filter_map(|a| match &a.outcome {
                 DryRunOutcome::Applied(p) => {
                     let unchanged = p
@@ -304,14 +305,14 @@ impl BuildCrds {
     fn of(manifests: &[Value]) -> Self {
         let kinds = manifests
             .iter()
-            .filter(|m| m.get("kind").and_then(Value::as_str) == Some("CustomResourceDefinition"))
+            .filter(|m| GroupKind::of_manifest(m) == kinds::CUSTOM_RESOURCE_DEFINITION)
             .filter_map(|m| Some((defined_by(m)?, ResourceId::from_value(m))))
             .collect();
         let mut groups: HashMap<String, Vec<ResourceId>> = HashMap::new();
         for target in manifests
             .iter()
             .filter_map(|m| readiness::import_target_from_manifest(m).ok().flatten())
-            .filter(|t| t.kind == "CustomResourceDefinition")
+            .filter(|t| t.group_kind() == kinds::CUSTOM_RESOURCE_DEFINITION)
         {
             if let Some((_, group)) = target.name.split_once('.') {
                 groups

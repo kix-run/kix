@@ -128,7 +128,7 @@ fn a_package_hidden_behind_another_of_its_instance_is_refused() {
         .iter()
         .map(|w| w.split(' ').next().unwrap())
         .collect();
-    let pi = format!("{}/shop-2@{NS}", lifecycle::PACKAGE_INSTANCE_KIND);
+    let pi = ResourceId::from_value(&package_instance("shop-2", None)).display_id();
     assert_eq!(hidden, vec![id.display_id(), pi], "{refused:?}");
 }
 
@@ -158,7 +158,10 @@ fn a_second_activation_record_is_refused() {
     add(&mut new, &path("second", "Activation-second"), second);
     let refused = refused_writes(objects(None, &new, &[]));
     assert_eq!(refused.len(), 1, "{refused:?}");
-    assert!(refused[0].starts_with("Activation/"), "{refused:?}");
+    assert!(
+        refused[0].starts_with(&format!("Activation.{}/", keys::GROUP)),
+        "{refused:?}"
+    );
 }
 
 /// Two files of one object: the deploy applies one of them, and which
@@ -613,35 +616,106 @@ fn a_saved_plan_refuses_a_build_that_lost_a_manifest() {
     );
 }
 
-/// A build that moves an object to another API group under the same kind,
-/// namespace, and name is refused before anything is applied. The plan
-/// names objects without their group, so it could not show the delete and
-/// the write apart.
-#[test]
-fn moving_an_object_to_another_group_is_refused() {
-    let old = build();
-    let mut new = old.clone();
-    let (at, deployment) = new
+/// Replace the object of `kind` that `graph` holds first with `manifest`,
+/// in a new file `seed` names, owned by the same package. Return the old
+/// manifest.
+fn replace_first(
+    graph: &mut StoreGraph,
+    kind: &str,
+    seed: &str,
+    manifest: impl FnOnce(&Value) -> Value,
+) -> Value {
+    let (at, old) = graph
         .resources
         .iter()
-        .find(|(_, n)| n.manifest["kind"] == "Deployment")
+        .filter(|(_, n)| n.manifest["kind"] == kind)
+        .min_by_key(|(p, _)| (*p).clone())
         .map(|(p, n)| (p.clone(), n.manifest.clone()))
-        .expect("the build has a Deployment");
-    let owner = new.resource_owner[&at].clone();
-    let mut moved_to = deployment;
-    moved_to["apiVersion"] = json!("apps.example.com/v1");
-    let moved = path("moved", "Deployment-moved");
-    new.resources.remove(&at);
-    add(&mut new, &moved, moved_to.clone());
-    new.resource_owner.remove(&at);
-    new.resource_owner.insert(moved.clone(), owner.clone());
-    let paths = &mut new.packages[&owner].resource_paths;
+        .unwrap_or_else(|| panic!("the build has a {kind}"));
+    let owner = graph.resource_owner[&at].clone();
+    let to = path(seed, &format!("{kind}-{seed}"));
+    graph.resources.remove(&at);
+    add(graph, &to, manifest(&old));
+    graph.resource_owner.remove(&at);
+    graph.resource_owner.insert(to.clone(), owner.clone());
+    let paths = &mut graph.packages[&owner].resource_paths;
     paths.retain(|p| *p != at);
-    paths.push(moved);
-    new.validate().unwrap();
-    let name = ResourceId::from_value(&moved_to).display_id();
-    match plan(&deployed(Some(&old)), &new, flags(&[])) {
-        Err(PlanError::SharedNames(names)) => assert_eq!(names, vec![name]),
+    paths.push(to);
+    graph.validate().unwrap();
+    old
+}
+
+fn with_api_version(api_version: &str) -> impl FnOnce(&Value) -> Value + '_ {
+    move |m| {
+        let mut m = m.clone();
+        m["apiVersion"] = json!(api_version);
+        m
+    }
+}
+
+/// A build that moves an object to another API group, keeping its kind,
+/// namespace, and name, writes the object in its new group and deletes the
+/// one in its old group, and the plan shows both.
+#[test]
+fn moving_an_object_to_another_group_writes_one_and_deletes_the_other() {
+    let old = build();
+    let mut new = old.clone();
+    let before = replace_first(
+        &mut new,
+        "Deployment",
+        "moved",
+        with_api_version("apps.example.com/v1"),
+    );
+    let mut after = before.clone();
+    after["apiVersion"] = json!("apps.example.com/v1");
+    let objects = objects(Some(&old), &new, &["--prune"]).unwrap();
+    let (old_id, new_id) = (
+        ResourceId::from_value(&before),
+        ResourceId::from_value(&after),
+    );
+    assert_ne!(old_id.display_id(), new_id.display_id());
+    assert!(
+        objects
+            .writes
+            .iter()
+            .any(|w| w.resource_id() == new_id && w.change == WriteChange::Added),
+        "{objects:?}"
+    );
+    assert!(
+        objects
+            .deletes
+            .iter()
+            .any(|d| d.group == old_id.group && d.kind == old_id.kind && d.name == old_id.name),
+        "{objects:?}"
+    );
+}
+
+/// Kubernetes serves the core `Event` again as `events.k8s.io` `Event`. A
+/// build that moves an Event between the two is refused, because the deploy
+/// would delete through one group the object it wrote through the other.
+#[test]
+fn moving_an_object_between_aliased_groups_is_refused() {
+    let mut old = build();
+    replace_first(&mut old, "ConfigMap", "event", |m| {
+        let mut m = m.clone();
+        m["apiVersion"] = json!("v1");
+        m["kind"] = json!("Event");
+        m
+    });
+    let mut new = old.clone();
+    let before = replace_first(
+        &mut new,
+        "Event",
+        "moved",
+        with_api_version("events.k8s.io/v1"),
+    );
+    let old_id = ResourceId::from_value(&before);
+    match plan(&deployed(Some(&old)), &new, flags(&["--prune"])) {
+        Err(PlanError::AliasedMove(moves)) => {
+            assert_eq!(moves.len(), 1, "{moves:?}");
+            assert!(moves[0].starts_with(&old_id.to_string()), "{moves:?}");
+            assert!(moves[0].contains("Event.events.k8s.io/"), "{moves:?}");
+        }
         Err(e) => panic!("refused for another reason: {e}"),
         Ok(_) => panic!("the plan was not refused"),
     }

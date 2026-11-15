@@ -438,7 +438,7 @@ mod run_end_tests {
         );
         assert!(text.starts_with("Deploy of 'prod' failed: "), "{text}");
         assert!(
-            text.contains("    - Deployment/api@app: ImagePullBackOff\n"),
+            text.contains("    - Deployment.apps/api@app: ImagePullBackOff\n"),
             "{text}"
         );
         assert!(
@@ -555,7 +555,7 @@ mod stop_advice_tests {
 
     fn conflict() -> Conflict {
         Conflict {
-            resource: "Deployment/web@app".into(),
+            resource: "Deployment.apps/web@app".into(),
             owners: Vec::new(),
             message: "conflict".into(),
         }

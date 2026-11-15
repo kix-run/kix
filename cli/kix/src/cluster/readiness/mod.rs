@@ -29,6 +29,7 @@ use thiserror::Error;
 
 use super::cancel::CancelToken;
 use super::discovery;
+use crate::manifest::kinds;
 use crate::manifest::types::ResourceId;
 
 pub use declared::{check_readiness, declared_rule, is_immediate_kind, not_ready_reason};
@@ -187,7 +188,7 @@ pub(crate) async fn wait_for_ready(
     cancel: &CancelToken,
     on_status: impl Fn(&str),
 ) -> Result<ReadinessResult, ReadinessError> {
-    let (name, kind) = (rid.name.as_str(), rid.kind.as_str());
+    let (name, kind) = (rid.name.as_str(), rid.group_kind());
     if is_immediate_kind(kind) {
         return Ok(ReadinessResult::Ready);
     }
@@ -214,7 +215,7 @@ pub(crate) async fn wait_for_ready(
         // PVCs with WaitForFirstConsumer storage classes stay Pending until a pod
         // mounts them. Treat these as ready so downstream pods can be created,
         // which will then trigger the actual binding.
-        if kind == "PersistentVolumeClaim" {
+        if kind == kinds::PERSISTENT_VOLUME_CLAIM {
             let phase = obj
                 .data
                 .pointer("/status/phase")
@@ -252,7 +253,7 @@ pub(crate) async fn wait_for_ready(
         }
 
         if check_readiness(&obj, kind) {
-            if kind == "DaemonSet"
+            if kind == kinds::DAEMON_SET
                 && let Some(stale) = daemonset_pending_restart(&obj.data)
             {
                 return Ok(ReadinessResult::ReadyPendingRestart {
@@ -264,7 +265,7 @@ pub(crate) async fn wait_for_ready(
             // the apiserver's discovery endpoint for a few hundred ms (and
             // longer across HA replicas). Probe discovery before declaring
             // the CRD ready so dependents don't race.
-            if kind == "CustomResourceDefinition" {
+            if kind == kinds::CUSTOM_RESOURCE_DEFINITION {
                 on_status("CRD Established, probing discovery");
                 let _ = probe_crd_discovery(client, &obj.data).await;
             }

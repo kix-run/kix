@@ -10,8 +10,7 @@ pub const CLUSTER_SCOPED: &str = "_cluster";
 /// Kix redacts secret values based on this check. Custom resources in other API
 /// groups whose kind happens to be `Secret` are not redacted.
 pub fn is_secret(manifest: &serde_json::Value) -> bool {
-    manifest.get("apiVersion").and_then(|v| v.as_str()) == Some("v1")
-        && manifest.get("kind").and_then(|v| v.as_str()) == Some("Secret")
+    super::kinds::GroupKind::of_manifest(manifest) == super::kinds::SECRET
 }
 
 /// Return whether the manifest's API group is one whose kinds Kix knows: the
@@ -139,23 +138,37 @@ impl ResourceId {
         })
     }
 
-    /// Return `"Kind/name@namespace"` (or `"Kind/name"` when cluster-scoped)
-    /// without escaping control characters. Use `Display` for user-facing output.
+    /// Return the id's API group and kind.
+    pub fn group_kind(&self) -> super::kinds::GroupKind<'_> {
+        super::kinds::GroupKind::new(&self.group, &self.kind)
+    }
+
+    /// Return `"Kind.group/name@namespace"` without escaping control
+    /// characters. The group is left out for the core group (`"ConfigMap/name@namespace"`)
+    /// and the namespace for a cluster-scoped object (`"Kind.group/name"`), so
+    /// two different ids never give one string. Use `Display` for
+    /// user-facing output.
     pub fn display_id(&self) -> String {
+        let kind = qualified_kind(&self.group, &self.kind);
         if self.namespace == CLUSTER_SCOPED {
-            format!("{}/{}", self.kind, self.name)
+            format!("{kind}/{}", self.name)
         } else {
-            format!("{}/{}@{}", self.kind, self.name, self.namespace)
+            format!("{kind}/{}@{}", self.name, self.namespace)
         }
     }
 }
 
-/// Format `"Kind/name@namespace"` for user-facing output, passing each segment
+/// Format the id as [`ResourceId::display_id`] does, passing each segment
 /// through [`crate::text::printable`].
 impl std::fmt::Display for ResourceId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use crate::text::printable;
-        write!(f, "{}/{}", printable(&self.kind), printable(&self.name))?;
+        write!(
+            f,
+            "{}/{}",
+            printable(&qualified_kind(&self.group, &self.kind)),
+            printable(&self.name)
+        )?;
         if self.namespace != CLUSTER_SCOPED {
             write!(f, "@{}", printable(&self.namespace))?;
         }

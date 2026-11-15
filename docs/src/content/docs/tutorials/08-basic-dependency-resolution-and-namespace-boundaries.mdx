@@ -88,12 +88,12 @@ In the dependency tree output, look under `Namespace/platform`:
 Namespace/platform
 ├── Service/backend@platform
 │   ├── ConfigMap/gateway@app
-│   │   └── Deployment/gateway@app
+│   │   └── Deployment.apps/gateway@app
 │   │       └── Service/gateway@app
-│   │           └── PackageInstance/gateway@app
+│   │           └── PackageInstance.kix.run/gateway@app
 ```
 
-Even though `backend` and `gateway` are in different namespaces, the dependency graph connects `Service/backend@platform` directly to `ConfigMap/gateway@app` and `Deployment/gateway@app`. When you run `kix deploy 08-namespace-deps`, Kix creates both namespaces, deploys `backend@platform` first, waits for it to pass readiness, and only then rolls out `gateway@app`.
+Even though `backend` and `gateway` are in different namespaces, the dependency graph connects `Service/backend@platform` directly to `ConfigMap/gateway@app` and `Deployment.apps/gateway@app`. When you run `kix deploy 08-namespace-deps`, Kix creates both namespaces, deploys `backend@platform` first, waits for it to pass readiness, and only then rolls out `gateway@app`.
 
 ## Deploy And Test The Cross-Namespace Proxy
 

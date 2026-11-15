@@ -13,6 +13,7 @@ mod tests;
 use std::collections::{HashMap, HashSet};
 
 use crate::manifest::keys;
+use crate::manifest::kinds::{self, GroupKind};
 use crate::manifest::lifecycle::{is_record, lifecycle_of, lifecycle_of_live};
 #[cfg(test)]
 use crate::manifest::types::CLUSTER_SCOPED;
@@ -36,7 +37,7 @@ use ssa::{
 /// live object before re-creating it; deleting a rollout-based workload such as
 /// a `Deployment` would cause an outage rather than a retry.
 pub(crate) fn wants_rerun(manifest: &Value) -> bool {
-    manifest.get("kind").and_then(Value::as_str) == Some("Job")
+    GroupKind::of_manifest(manifest) == kinds::JOB
         && manifest
             .pointer("/metadata/annotations")
             .and_then(|a| a.get(keys::RERUN))
@@ -396,7 +397,7 @@ pub(crate) fn leaves_orphans(closure: &[Value], new_manifests: &[Value]) -> bool
         let rid = ResourceId::from_value(m);
         manifest_identity_hash(m).is_some()
             && lifecycle_of(m).prunable()
-            && !crate::manifest::lifecycle::never_pruned(&rid.kind)
+            && !crate::manifest::lifecycle::never_pruned(rid.group_kind())
             && !new_ids.contains(&rid)
     })
 }

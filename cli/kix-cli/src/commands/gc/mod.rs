@@ -256,7 +256,9 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     }
     let mut kept_rids: Vec<&ResourceId> = kept_rids
         .iter()
-        .filter(|r| !lifecycle::never_pruned(&r.kind) && !shared.iter().any(|s| &s.rid == *r))
+        .filter(|r| {
+            !lifecycle::never_pruned(r.group_kind()) && !shared.iter().any(|s| &s.rid == *r)
+        })
         .collect();
     if !kept_rids.is_empty() {
         crate::say!();
@@ -492,7 +494,7 @@ async fn run_hard_async(
         garbage.into_iter().partition(|g| {
             g.reason == GarbageReason::NoIdentityHash
                 && !args.includes(Include::Unstamped)
-                && !lifecycle::never_pruned(&g.id.kind)
+                && !lifecycle::never_pruned(g.id.group_kind())
         });
     if !unstamped.is_empty() && !output::quiet() {
         print_unstamped(&unstamped);
@@ -523,7 +525,7 @@ async fn run_hard_async(
         .partition(|g| g.reason == GarbageReason::RetiredActivation);
     let (kept, resource_entries): (Vec<GarbageEntry>, Vec<GarbageEntry>) = resource_entries
         .into_iter()
-        .partition(|g| lifecycle::never_pruned(&g.id.kind));
+        .partition(|g| lifecycle::never_pruned(g.id.group_kind()));
     if !resource_entries.is_empty() {
         print_garbage_plan(&resource_entries);
     }

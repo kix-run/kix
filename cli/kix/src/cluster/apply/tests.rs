@@ -172,9 +172,19 @@ fn unstamped_live_object_is_never_an_orphan() {
     assert_eq!(orphans, vec!["gone"]);
 }
 
+/// Return the `apiVersion` of `kind` in these tests.
+fn api_version_of(kind: &str) -> &'static str {
+    match kind {
+        "Deployment" | "StatefulSet" => "apps/v1",
+        "Job" => "batch/v1",
+        "PackageInstance" | "Activation" => keys::API_VERSION,
+        _ => "v1",
+    }
+}
+
 fn manifest(kind: &str, name: &str, ns: &str, identity_hash: &str) -> Value {
     json!({
-        "apiVersion": "apps/v1",
+        "apiVersion": api_version_of(kind),
         "kind": kind,
         "metadata": {
             "name": name,
@@ -333,7 +343,7 @@ fn apply_action_eq() {
 }
 
 fn live_object(kind: &str, name: &str, ns: &str, identity_hash: &str) -> DynamicObject {
-    live_object_as("apps/v1", kind, name, ns, identity_hash)
+    live_object_as(api_version_of(kind), kind, name, ns, identity_hash)
 }
 
 fn live_object_as(
@@ -544,7 +554,7 @@ fn an_object_only_a_kept_closure_has_is_an_orphan_again() {
     let folded = fold_kept_closures(detect_changes(&new, &active), &new, &[kept]);
     assert_eq!(orphan_ids(&folded), vec!["ConfigMap/removed@app"]);
     // A kept closure never turns a Skip into an Apply: A replaced it in full.
-    assert_eq!(skip_ids(&folded), vec!["Deployment/web@app"]);
+    assert_eq!(skip_ids(&folded), vec!["Deployment.apps/web@app"]);
     assert!(apply_ids(&folded).is_empty());
 }
 
@@ -596,6 +606,7 @@ fn a_closure_leaves_orphans_only_for_deletable_objects_the_new_build_lacks() {
     // Records are superseded and Namespaces are never pruned.
     assert!(!leaves_orphans(&[record("demo-old", "h8")], &new));
     let mut ns = manifest("Namespace", "app", "app", "h7");
+    ns["apiVersion"] = json!("v1");
     ns["metadata"].as_object_mut().unwrap().remove("namespace");
     assert!(!leaves_orphans(&[ns], &new));
 }
@@ -626,10 +637,10 @@ fn an_object_the_failed_deploy_may_have_changed_is_reapplied() {
     let failed = vec![manifest("Deployment", "web", "app", "h2")];
 
     let actions = detect_changes(&new, &active);
-    assert_eq!(skip_ids(&actions), vec!["Deployment/web@app"]);
+    assert_eq!(skip_ids(&actions), vec!["Deployment.apps/web@app"]);
 
     let folded = fold_failed_closures(actions, &new, &[failed]);
-    assert_eq!(apply_ids(&folded), vec!["Deployment/web@app"]);
+    assert_eq!(apply_ids(&folded), vec!["Deployment.apps/web@app"]);
     assert!(skip_ids(&folded).is_empty());
 }
 
@@ -642,7 +653,7 @@ fn a_hash_the_failed_closure_agrees_on_stays_skipped() {
     let failed = vec![manifest("Deployment", "web", "app", "h1")];
 
     let folded = fold_failed_closures(detect_changes(&new, &active), &new, &[failed]);
-    assert_eq!(skip_ids(&folded), vec!["Deployment/web@app"]);
+    assert_eq!(skip_ids(&folded), vec!["Deployment.apps/web@app"]);
     assert!(apply_ids(&folded).is_empty());
 }
 
@@ -660,7 +671,7 @@ fn retrying_the_closure_that_failed_applies_it_and_orphans_nothing() {
     let folded = fold_failed_closures(detect_changes(&new, &active), &new, &[failed]);
     assert_eq!(
         apply_ids(&folded),
-        vec!["ConfigMap/extra@app", "Deployment/web@app"]
+        vec!["ConfigMap/extra@app", "Deployment.apps/web@app"]
     );
     assert!(orphan_ids(&folded).is_empty());
 }
@@ -777,7 +788,10 @@ fn record_rename_is_not_an_orphan() {
         "{:?}",
         orphan_ids(&actions)
     );
-    assert_eq!(apply_ids(&actions), vec!["Activation/stage1-680afyh7g9kd"]);
+    assert_eq!(
+        apply_ids(&actions),
+        vec![format!("Activation.{}/stage1-680afyh7g9kd", keys::GROUP)]
+    );
 }
 
 /// An unchanged build keeps the same record name and hash, and must
@@ -829,8 +843,8 @@ fn markers_and_plain_package_instances_can_be_orphans() {
     assert_eq!(
         orphans,
         vec![
-            "PackageInstance/pi-import@ns",
-            "PackageInstance/pi-plain@ns"
+            format!("PackageInstance.{}/pi-import@ns", keys::GROUP),
+            format!("PackageInstance.{}/pi-plain@ns", keys::GROUP)
         ]
     );
 }
@@ -867,7 +881,7 @@ fn records_are_never_orphans() {
     }
     // The last case must still report the Deployment.
     let actions = detect_changes(&[record("c-b", "b")], &[record("c-a", "a"), dep]);
-    assert_eq!(orphan_ids(&actions), vec!["Deployment/web@default"]);
+    assert_eq!(orphan_ids(&actions), vec!["Deployment.apps/web@default"]);
 }
 
 /// Invariant 3: the store path and the live path agree on the orphan
@@ -890,19 +904,19 @@ fn store_and_live_paths_agree_on_orphans() {
     ];
     let via_store = orphan_ids(&detect_changes(&desired, &old));
     let via_live = orphan_ids(&detect_changes_live(&desired, &live));
-    assert_eq!(via_store, vec!["Deployment/gone@default"]);
+    assert_eq!(via_store, vec!["Deployment.apps/gone@default"]);
     assert_eq!(via_store, via_live);
     // Both paths still apply the new record.
     assert!(
         apply_ids(&detect_changes(&desired, &old))
             .iter()
-            .any(|id| id.starts_with("Activation/")),
+            .any(|id| id.starts_with(&format!("Activation.{}/", keys::GROUP))),
         "store path drops the new record"
     );
     assert!(
         apply_ids(&detect_changes_live(&desired, &live))
             .iter()
-            .any(|id| id.starts_with("Activation/")),
+            .any(|id| id.starts_with(&format!("Activation.{}/", keys::GROUP))),
         "live path drops the new record"
     );
 }
@@ -1235,11 +1249,11 @@ fn a_kind_of_one_name_in_another_group_is_another_object() {
     };
 
     let actions = detect_changes(std::slice::from_ref(&new), std::slice::from_ref(&old));
-    assert_eq!(apply_ids(&actions), vec!["Certificate/tls@app"]);
+    assert_eq!(apply_ids(&actions), vec!["Certificate.b.example/tls@app"]);
     assert_eq!(orphan(&actions), vec![ResourceId::from_value(&old)]);
 
     let live = live_object_as("a.example/v1", "Certificate", "tls", "app", "c1");
     let actions = detect_changes_live(std::slice::from_ref(&new), &[live]);
-    assert_eq!(apply_ids(&actions), vec!["Certificate/tls@app"]);
+    assert_eq!(apply_ids(&actions), vec!["Certificate.b.example/tls@app"]);
     assert_eq!(orphan(&actions), vec![ResourceId::from_value(&old)]);
 }

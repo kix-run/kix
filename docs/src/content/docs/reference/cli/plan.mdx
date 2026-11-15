@@ -153,7 +153,7 @@ Its JSON Schema is `cli/kix-cli/schema/plan.schema.json`.
 
 | Key | Content |
 | --- | --- |
-| `schema_version` | A date string, `YYYY-MM-DD`, currently `"2026-11-14"`. It changes only when the document changes in a way that is not backward compatible. |
+| `schema_version` | A date string, `YYYY-MM-DD`, currently `"2026-11-15"`. It changes only when the document changes in a way that is not backward compatible. |
 | `made_by` | `dry_run` from `kix plan`; `builds` from `kix plan --offline` or `kix diff --from <build>`; `live_read` from `kix plan --read-only` or `kix diff --from <snapshot>`. |
 | `kix` | `{ version, store_path }` of the Kix that made the plan. `store_path` is the store path of the binary, or `null` for a binary built outside the store. |
 | `cluster` | The name the build gives the Kix cluster. |
@@ -184,7 +184,7 @@ Each checked section is one of:
 | `deployed_build_unavailable` | The deployed build's manifests are not on this machine, so a change the commit makes cannot be told apart from drift. |
 | `not_previewable` | No preview can tell. |
 
-Resource identifiers have the form `Kind/name@namespace`.
+Resource identifiers have the form `Kind.group/name@namespace`, such as `Deployment.apps/web@shop`. Core `v1` kinds omit `.group` (`Service/web@shop`), and cluster-scoped objects omit `@namespace` (`Namespace/shop`).
 
 ## Field change labels
 

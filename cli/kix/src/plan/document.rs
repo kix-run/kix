@@ -32,7 +32,7 @@ use super::{ManifestIndex, PackageChangeDiff, PackageDiff, PackageInfo, Side};
 /// Version of the document's shape: the date, `YYYY-MM-DD`, of its last
 /// change that was not backward compatible. Readers should refuse a version
 /// they do not know.
-pub const SCHEMA_VERSION: &str = "2026-11-14";
+pub const SCHEMA_VERSION: &str = "2026-11-15";
 
 /// What a deploy of a build would change, or how two things differ.
 ///
@@ -930,7 +930,10 @@ impl ChangedPackage {
                                 .iter()
                                 .enumerate()
                                 .map(|(i, d)| {
-                                    let mut change = FieldChange::of(c.secrets.contains(id), d);
+                                    let mut change = FieldChange::of(
+                                        id.group_kind() == crate::manifest::kinds::SECRET,
+                                        d,
+                                    );
                                     change.labels = resource_labels.map(|l| {
                                         l.and_then(|l| l.get(i)).cloned().unwrap_or_default()
                                     });

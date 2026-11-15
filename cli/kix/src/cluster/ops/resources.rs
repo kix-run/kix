@@ -16,6 +16,7 @@ use serde_json::Value;
 use tokio::sync::RwLock;
 
 use crate::legacy_domain::LegacyDomainError;
+use crate::manifest::kinds::{self, GroupKind};
 use crate::manifest::types::ResourceId;
 
 use super::super::activation::{OpenedRecords, Records};
@@ -51,10 +52,10 @@ const EXPECTS_TIMEOUT: Duration = Duration::from_secs(180);
 /// Return the kind-aware propagation policy for in-place recreate. Jobs use
 /// `Foreground` so old pods are gone before re-applying, StatefulSets use
 /// `Orphan` so PVCs are retained, and all other kinds use `Background`.
-fn delete_propagation_for(kind: &str) -> kube::api::PropagationPolicy {
+fn delete_propagation_for(kind: GroupKind<'_>) -> kube::api::PropagationPolicy {
     match kind {
-        "Job" => kube::api::PropagationPolicy::Foreground,
-        "StatefulSet" => kube::api::PropagationPolicy::Orphan,
+        kinds::JOB => kube::api::PropagationPolicy::Foreground,
+        kinds::STATEFUL_SET => kube::api::PropagationPolicy::Orphan,
         _ => kube::api::PropagationPolicy::Background,
     }
 }
@@ -288,7 +289,7 @@ impl KubeResources {
         let (ar, scope) = self.cached(rid).await.ok_or_else(|| not_discovered(rid))?;
         let api = self.api_for(&ar, &scope, rid);
         let dp = DeleteParams {
-            propagation_policy: Some(delete_propagation_for(&rid.kind)),
+            propagation_policy: Some(delete_propagation_for(rid.group_kind())),
             dry_run: self.dry(),
             ..Default::default()
         };

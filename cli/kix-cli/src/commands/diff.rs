@@ -797,7 +797,7 @@ mod tests {
         assert_eq!(drift.len(), 1);
         assert_eq!(drift[0].path, "$.spec.template.spec.containers[web].image");
         let text = render::render_drift_text(&result.doc);
-        assert!(text.contains("Deployment/web@app"), "{text}");
+        assert!(text.contains("Deployment.apps/web@app"), "{text}");
         assert!(
             text.contains(&format!(
                 "2 object(s) not checked for drift: missing `{}` annotation",

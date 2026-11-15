@@ -8,32 +8,33 @@ use kube::{
 use serde_json::Value;
 
 use crate::manifest::keys;
+use crate::manifest::kinds::{self, GroupKind};
 
 /// Check if a kind is immediately ready upon existence (no polling needed).
-pub fn is_immediate_kind(kind: &str) -> bool {
+/// Kix's own kinds count in any group, because records under a retired
+/// domain are Kix's too.
+pub fn is_immediate_kind(kind: GroupKind<'_>) -> bool {
     matches!(
         kind,
-        "ConfigMap"
-            | "Secret"
-            | "ServiceAccount"
-            | "Namespace"
-            | "Service"
-            | "ClusterRole"
-            | "ClusterRoleBinding"
-            | "Role"
-            | "RoleBinding"
-            | "Ingress"
-            | "NetworkPolicy"
-            | "LimitRange"
-            | "ResourceQuota"
-            | "PodDisruptionBudget"
-            | "HorizontalPodAutoscaler"
-            | "ServiceMonitor"
-            | "PriorityClass"
-            | crate::manifest::lifecycle::PACKAGE_INSTANCE_KIND
-            | crate::manifest::lifecycle::RECORD_KIND
-            | "StorageClass"
-    )
+        kinds::CONFIG_MAP
+            | kinds::SECRET
+            | kinds::SERVICE_ACCOUNT
+            | kinds::NAMESPACE
+            | kinds::SERVICE
+            | kinds::CLUSTER_ROLE
+            | kinds::CLUSTER_ROLE_BINDING
+            | kinds::ROLE
+            | kinds::ROLE_BINDING
+            | kinds::INGRESS
+            | kinds::NETWORK_POLICY
+            | kinds::LIMIT_RANGE
+            | kinds::RESOURCE_QUOTA
+            | kinds::POD_DISRUPTION_BUDGET
+            | kinds::HORIZONTAL_POD_AUTOSCALER
+            | kinds::SERVICE_MONITOR
+            | kinds::PRIORITY_CLASS
+            | kinds::STORAGE_CLASS
+    ) || crate::manifest::lifecycle::is_kix_internal_kind(kind.kind)
 }
 
 /// Readiness convention declared by the CRD-owning package and stamped on the
@@ -220,7 +221,7 @@ pub(super) struct DeclaredFailure {
 /// apply. The controller has not judged this spec yet.
 pub(super) fn declared_failure(
     obj: &DynamicObject,
-    kind: &str,
+    kind: GroupKind<'_>,
     applied_at: Option<DateTime<Utc>>,
 ) -> Option<DeclaredFailure> {
     let rules = declared_readiness(obj)?.failed;
@@ -263,7 +264,7 @@ pub(super) fn declared_failure(
                 .filter(|m| !m.is_empty())
                 .map(|m| format!(": {}", m.trim_end_matches('.')));
             Some(DeclaredFailure {
-                message: rejected_message(kind, &reported, detail.as_deref()),
+                message: rejected_message(kind.kind, &reported, detail.as_deref()),
                 confirmed,
             })
         }
@@ -286,7 +287,7 @@ pub(super) fn declared_failure(
             let quoted = quoted_status(data, message);
             let message = if *rejected {
                 let detail = quoted.map(|q| format!(": {q}"));
-                rejected_message(kind, &reported, detail.as_deref())
+                rejected_message(kind.kind, &reported, detail.as_deref())
             } else {
                 outcome_message(&reported, quoted.as_deref(), hint.as_deref())
             };
@@ -412,7 +413,7 @@ fn scalar_text(v: &Value) -> Option<String> {
 
 /// Check whether a single resource is ready based on its kind or declared
 /// readiness rule.
-pub fn check_readiness(obj: &DynamicObject, kind: &str) -> bool {
+pub fn check_readiness(obj: &DynamicObject, kind: GroupKind<'_>) -> bool {
     if is_immediate_kind(kind) {
         return true;
     }
@@ -457,13 +458,15 @@ pub fn check_readiness(obj: &DynamicObject, kind: &str) -> bool {
     }
 
     match kind {
-        "Deployment" | "StatefulSet" => {
-            check_deployment_ready(obj.metadata.generation, &obj.data, kind == "Deployment")
-        }
-        "DaemonSet" => check_daemonset_ready(obj.metadata.generation, &obj.data),
-        "Job" => check_job_ready(&obj.data),
-        "PersistentVolumeClaim" => check_pvc_ready(&obj.data),
-        "CustomResourceDefinition" => check_crd_ready(&obj.data),
+        kinds::DEPLOYMENT | kinds::STATEFUL_SET => check_deployment_ready(
+            obj.metadata.generation,
+            &obj.data,
+            kind == kinds::DEPLOYMENT,
+        ),
+        kinds::DAEMON_SET => check_daemonset_ready(obj.metadata.generation, &obj.data),
+        kinds::JOB => check_job_ready(&obj.data),
+        kinds::PERSISTENT_VOLUME_CLAIM => check_pvc_ready(&obj.data),
+        kinds::CUSTOM_RESOURCE_DEFINITION => check_crd_ready(&obj.data),
         _ => check_generic_ready(&obj.data),
     }
 }
@@ -713,16 +716,16 @@ fn has_condition(data: &Value, condition_type: &str, expected_status: &str) -> b
 
 /// Build a human-readable message about why a resource isn't ready, which
 /// starts with the resource's kind and name.
-pub(super) fn readiness_message(obj: &DynamicObject, kind: &str) -> String {
+pub(super) fn readiness_message(obj: &DynamicObject, kind: GroupKind<'_>) -> String {
     let name = obj.metadata.name.as_deref().unwrap_or("unknown");
-    format!("{kind}/{name}: {}", not_ready_reason(obj, kind))
+    format!("{}/{name}: {}", kind.kind, not_ready_reason(obj, kind))
 }
 
 /// Return why `obj` is not ready, or the state it is in, in a few words such
 /// as `0/1 ready, 0/1 updated`. `kix status` shows it beside the object's
 /// name, and a deploy that waits for the object shows it in
 /// [`readiness_message`].
-pub fn not_ready_reason(obj: &DynamicObject, kind: &str) -> String {
+pub fn not_ready_reason(obj: &DynamicObject, kind: GroupKind<'_>) -> String {
     if let Some(rule) = declared_readiness(obj) {
         return match rule.ready {
             ReadyRule::Path { path, equals } => {
@@ -782,7 +785,7 @@ pub fn not_ready_reason(obj: &DynamicObject, kind: &str) -> String {
         };
     }
     match kind {
-        "Deployment" | "StatefulSet" => {
+        kinds::DEPLOYMENT | kinds::STATEFUL_SET => {
             let desired = obj
                 .data
                 .pointer("/spec/replicas")
@@ -805,14 +808,14 @@ pub fn not_ready_reason(obj: &DynamicObject, kind: &str) -> String {
                 .unwrap_or(0)
                 - updated;
             let old = match old {
-                _ if kind != "Deployment" => String::new(),
+                _ if kind != kinds::DEPLOYMENT => String::new(),
                 n if n <= 0 => String::new(),
                 1 => ", 1 old pod left".to_string(),
                 n => format!(", {n} old pods left"),
             };
             format!("{ready}/{desired} ready, {updated}/{desired} updated{old}")
         }
-        "DaemonSet" => {
+        kinds::DAEMON_SET => {
             let desired = obj
                 .data
                 .pointer("/status/desiredNumberScheduled")
@@ -825,7 +828,7 @@ pub fn not_ready_reason(obj: &DynamicObject, kind: &str) -> String {
                 .unwrap_or(0);
             format!("{ready}/{desired} ready")
         }
-        "Job" => {
+        kinds::JOB => {
             let succeeded = obj
                 .data
                 .pointer("/status/succeeded")
@@ -833,7 +836,7 @@ pub fn not_ready_reason(obj: &DynamicObject, kind: &str) -> String {
                 .unwrap_or(0);
             format!("{succeeded} succeeded")
         }
-        "PersistentVolumeClaim" => {
+        kinds::PERSISTENT_VOLUME_CLAIM => {
             let phase = obj
                 .data
                 .pointer("/status/phase")
@@ -864,7 +867,8 @@ pub fn not_ready_reason(obj: &DynamicObject, kind: &str) -> String {
             } else {
                 format!(
                     "no Ready or Available condition (conditions: {seen}). The package that defines {kind} can declare how Kix should read its readiness.",
-                    seen = seen.join(", ")
+                    seen = seen.join(", "),
+                    kind = kind.kind
                 )
             }
         }

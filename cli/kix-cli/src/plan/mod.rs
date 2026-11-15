@@ -448,7 +448,10 @@ pub fn render_package_plan(diff: &PackageDiff, verbose: bool) -> String {
                             );
                             let labels = diff.labels.get(id);
                             for (i, d) in diffs.iter().enumerate() {
-                                let shown = without_secrets(change.secrets.contains(id), d);
+                                let shown = without_secrets(
+                                    id.group_kind() == kix::manifest::kinds::SECRET,
+                                    d,
+                                );
                                 let formatted = format_diffs(
                                     std::slice::from_ref(&shown),
                                     &config,
@@ -752,7 +755,7 @@ mod render_tests {
         assert!(text.contains("~ web 1.0.0 (1 kept)"), "{text}");
         assert!(
             text.contains(
-                "! CustomResourceDefinition/widgets.example.com (kept; never deleted automatically)"
+                "! CustomResourceDefinition.apiextensions.k8s.io/widgets.example.com (kept; never deleted automatically)"
             ),
             "{text}"
         );
@@ -774,7 +777,7 @@ mod render_tests {
         assert!(md.contains("(1 kept)"), "{md}");
         assert!(!md.contains("**Removed resources:**"), "{md}");
         assert!(
-            md.contains("**Left the build, never deleted automatically:**\n\n- `CustomResourceDefinition/widgets.example.com`"),
+            md.contains("**Left the build, never deleted automatically:**\n\n- `CustomResourceDefinition.apiextensions.k8s.io/widgets.example.com`"),
             "{md}"
         );
 
@@ -783,7 +786,7 @@ mod render_tests {
         assert_eq!(web["removed_resources"], json!([]));
         assert_eq!(
             web["kept_resources"],
-            json!(["CustomResourceDefinition/widgets.example.com"])
+            json!(["CustomResourceDefinition.apiextensions.k8s.io/widgets.example.com"])
         );
     }
 
@@ -811,20 +814,20 @@ mod render_tests {
                 "{text}"
             );
             assert!(
-                text.contains("! CustomResourceDefinition/widgets.example.com (kept; never deleted automatically)"),
+                text.contains("! CustomResourceDefinition.apiextensions.k8s.io/widgets.example.com (kept; never deleted automatically)"),
                 "{text}"
             );
             let md = render_package_diff_markdown(&d);
             assert!(
                 md.contains(&format!(
-                    "({removed} removed, 1 kept)\n  - kept, never deleted automatically: `CustomResourceDefinition/widgets.example.com`"
+                    "({removed} removed, 1 kept)\n  - kept, never deleted automatically: `CustomResourceDefinition.apiextensions.k8s.io/widgets.example.com`"
                 )),
                 "{md}"
             );
             let json = packages_json(&d, Detail::Plain);
             assert_eq!(
                 json["removed"][0]["kept_resources"],
-                json!(["CustomResourceDefinition/widgets.example.com"])
+                json!(["CustomResourceDefinition.apiextensions.k8s.io/widgets.example.com"])
             );
             assert_eq!(json["removed"][0]["resources"], json!(removed + 1));
         }
