@@ -101,10 +101,10 @@ in
 {
   meta = {
     version = lib.removePrefix "v" release;
-    description = "NGINX Ingress controller (deprecated: retired upstream in March 2026, no security fixes)";
+    description = "NGINX Ingress controller (deprecated: retired by Kubernetes in March 2026, no security fixes; use traefik)";
     owner = "platform";
     deprecated = {
-      message = "Kubernetes retired ingress-nginx in March 2026 after v1.15.1, and it gets no security fixes. Move its routes to Gateway API HTTPRoutes";
+      message = "Kubernetes retired ingress-nginx in March 2026 after v1.15.1, so it no longer receives security fixes. Kix still builds this instance. Move Ingress routes to Gateway API";
       replacement = "packages.experimental.traefik";
     };
     defaultAliases = [ "ingressNginx" ];

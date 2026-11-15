@@ -51,7 +51,7 @@ in
 
 {
   meta = {
-    description = "GatewayClass and Gateway for an Envoy Gateway controller installed outside Kix (does not install the controller)";
+    description = "GatewayClass, Gateway, and optional EnvoyProxy for Envoy Gateway. Does not install the Envoy Gateway controller or Gateway API CRDs";
     owner = "platform";
     defaultAliases = [ "gateway" ];
     # One Gateway accepts HTTPRoutes from every namespace, so consumers in

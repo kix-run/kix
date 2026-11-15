@@ -86,9 +86,9 @@ in
 {
   meta = {
     version = release;
-    description = "Firezone 0.7: self-hosted WireGuard VPN (deprecated: no upstream updates since January 2024)";
+    description = "Firezone 0.7: self-hosted WireGuard VPN (deprecated: no updates or security fixes since January 2024)";
     owner = "app-team";
-    deprecated.message = "Firezone 0.7 (Firezone Legacy) has had no upstream updates or security fixes since 31 January 2024, and upstream does not support self-hosting Firezone 1.x";
+    deprecated.message = "Firezone stopped updating Firezone 0.7 (Firezone Legacy) on 31 January 2024, so it no longer receives security fixes. Firezone 1.x does not support self-hosting. Kix still builds this instance. Replace Firezone and remove this instance from your cluster definition.";
     # One process owns the WireGuard interface and its peer state, so
     # Firezone 0.7 cannot run more than one replica.
     availability.max = "none";

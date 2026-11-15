@@ -13,11 +13,11 @@ Ingress controller. The package creates the controller workload, Service,
 IngressClass, admission webhook, and their RBAC resources.
 
 :::caution[Deprecated]
-Kubernetes retired ingress-nginx in March 2026. v1.15.1, the release this
-package runs, is the last one, and the project gets no security fixes. The
-package is deprecated, and Kix warns on every build that uses it. Route
-traffic through Gateway API instead, with the `traefik` package or with
-Envoy Gateway: see [Expose a service with Gateway API](/docs/how-to/platform-capabilities/expose-a-service-with-gateway-api/).
+Kubernetes retired ingress-nginx in March 2026 after v1.15.1, the version this
+package runs, so it no longer receives security fixes. Kix still builds clusters
+that use `ingress-nginx`, and warns on every build. Route traffic through
+Gateway API instead, with `packages.experimental.traefik` or by [installing Envoy Gateway](/docs/how-to/package-task-guides/install-envoy-gateway/).
+To attach application routes to a Gateway, see how to [expose a service with Gateway API](/docs/how-to/platform-capabilities/expose-a-service-with-gateway-api/).
 :::
 
 ## Add the controller instance
