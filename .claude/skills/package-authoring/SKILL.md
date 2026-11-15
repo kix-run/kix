@@ -36,7 +36,7 @@ package in the pattern table below, the code wins.
 
 ## Setup
 
-- One git worktree per package, outside the checkout (`../kixpkgs-wt/<name>`).
+- One git worktree per package, outside the checkout (`../kix-wt/<name>`).
   If one exists, check `git -C <path> status` and its log; reuse it when it
   holds no work, and rebase it on `origin/main` before the review, or the
   reviewer's diff against `origin/main` shows main's newer commits reversed.
@@ -625,8 +625,8 @@ deploy is the slowest and most informative step.
    then deploy the change on top:
 
    ```bash
-   git fetch origin && git worktree add ../kix-main origin/main
-   nix run .#kix -- deploy <cluster> --flake ../kix-main --context <context> -y
+   git fetch origin && git worktree add ../kix-wt/main origin/main
+   nix run .#kix -- deploy <cluster> --flake ../kix-wt/main --context <context> -y
    nix run .#kix -- deploy <cluster> --context <context> -y
    ```
 

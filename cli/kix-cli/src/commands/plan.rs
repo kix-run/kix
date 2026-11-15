@@ -164,7 +164,7 @@ pub(crate) fn prepare(
 /// Load the target build from `--bundle` or by building the flake into the
 /// local Nix store.
 ///
-/// Rejects builds pinned to a pre-migration `kixpkgs` revision that still
+/// Rejects builds pinned to a pre-migration Kix library revision that still
 /// renders Kix's CRDs under the retired API group.
 fn new_build(args: &PlanArgs, ctx: &CommandContext) -> Result<InstallableBuild> {
     let build = match &args.bundle {

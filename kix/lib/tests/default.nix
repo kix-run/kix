@@ -852,8 +852,7 @@ let
         };
       in
       {
-        # Named part: `root` may only alias a named part (kixpkgs#25). Before
-        # this the whole netpol matrix failed on that check, unnoticed.
+        # Named part: `root` may only alias a named part.
         inherit crdRef;
         root = {
           resource = crdRef;
@@ -2286,7 +2285,7 @@ let
       || throw "untracked-ref marker ${markerHash} leaked into depends-on: '${annot}'";
 
     # ------------------------------------------------------------------
-    # Collapse-rule normalization + kix.keep (kixpkgs#9).
+    # Collapse-rule normalization + kix.keep.
 
     # A literal `{ }`/`[ ]` is an intentional Kubernetes value (emptyDir
     # volume source, select-everything selector, default-deny rule list)
@@ -3708,7 +3707,7 @@ let
       || throw "ref fqdn: default=${dflt} custom=${custom}";
     # Two same-named Services are a name collision, not a label question:
     # the rule must say so instead of prescribing a label fix that cannot
-    # converge (kixpkgs#71 item 14).
+    # converge.
     # The velero shape: a Deployment selecting on the instance labels alone
     # while a DaemonSet's pod template carries those plus its own name. The
     # Deployment's selector matches both pod sets, so `kix deploy` judged it
@@ -3796,9 +3795,9 @@ let
       )
       || throw "expected one collision finding, got: ${msg}";
 
-    # A chart-rendered workload gets the pod-spec validators (kixpkgs#71
-    # item 13): a probe naming a port the container does not declare fails
-    # the eval; the same workload without it builds.
+    # A chart-rendered workload gets the pod-spec validators: a probe naming
+    # a port the container does not declare fails the eval, and the same
+    # workload without it builds.
     t56-helm-workload-runs-validators =
       let
         chartWorkload = probe: {

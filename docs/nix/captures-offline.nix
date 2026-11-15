@@ -24,7 +24,7 @@
   lib,
   kix,
   kixExamples,
-  kixpkgsSrc,
+  kixSrc,
 }:
 
 let
@@ -34,7 +34,7 @@ let
       lib
       kix
       kixExamples
-      kixpkgsSrc
+      kixSrc
       ;
   };
 
@@ -153,7 +153,7 @@ let
 
     repo_root=$(pwd)
     if [ ! -f "$repo_root/docs/package.json" ]; then
-      echo "error: run from the kixpkgs repo root" >&2
+      echo "error: run from the repository root" >&2
       exit 1
     fi
     target_dir="$repo_root/docs/src/command-output"

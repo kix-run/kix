@@ -2,9 +2,9 @@
 # Run an unpacked Kix release archive on a machine without Nix: `kix doctor`,
 # then `kix build` of a cluster without Helm and of one with Helm.
 #
-# usage: cli/runtime/without-nix.sh <unpacked-archive> <kixpkgs-checkout>
+# usage: cli/runtime/without-nix.sh <unpacked-archive> <kix-checkout>
 #
-# <unpacked-archive> holds bin/kix and libexec/kix. <kixpkgs-checkout> must be
+# <unpacked-archive> holds bin/kix and libexec/kix. <kix-checkout> must be
 # a git clone, not a git worktree, because only the checkout is visible to
 # Kix.
 #

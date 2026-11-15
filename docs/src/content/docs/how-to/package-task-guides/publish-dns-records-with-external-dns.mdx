@@ -199,7 +199,7 @@ external addresses, so this instance publishes one record per node:
 
 `--fqdn-template` names each node's record, and `--log-level=debug` logs every
 record external-dns plans to write. The instance needs no Secret and no CRDs.
-Deploy it from the kixpkgs checkout and read the log:
+Deploy it from a checkout of the Kix repository and read the log:
 
 <Command
   commands={[
@@ -207,7 +207,7 @@ Deploy it from the kixpkgs checkout and read the log:
     "kix deploy external-dns-tryout --context kind-external-dns",
     "kubectl logs deployment/nodes --namespace external-dns --context kind-external-dns",
   ]}
-  cwd="kixpkgs/"
+  cwd="kix/"
 />
 
 ## Change the owner id

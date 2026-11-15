@@ -494,7 +494,7 @@ in
       );
 
   # A namespaced lookup must not be satisfied by a cluster-scoped object of
-  # the same kind and name (kixpkgs#71 item 5). ConfigMap is namespaced in
+  # the same kind and name. ConfigMap is namespaced in
   # Kubernetes; the cluster-scoped one here is synthetic, which is the point:
   # the checker must not guess. Check 18 also refuses the synthetic object.
   v03b-cluster-scoped-namesake-does-not-satisfy-namespaced-lookup =

@@ -4,8 +4,8 @@
 #         nix build ./docs#site-main   (as main, at /docs/main)
 # Dev:    nix run  ./docs#dev
 #
-# This is a true sibling subflake; the top-level kixpkgs flake does NOT
-# depend on it.
+# This is a separate flake beside the repository's flake.nix, which does
+# not depend on it.
 #
 # Requires `nix-command` and `flakes` to be enabled in the host's Nix
 # config (standard on nix-darwin / NixOS / most setups). `pipe-operators`
@@ -21,14 +21,12 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
-    # kixpkgs keeps its own nixpkgs. The `kix` package carries a runtime
-    # built from it, and kix refuses a runtime whose programs differ from the
-    # versions compiled into it (cli/kix-core/runtime/programs.json).
-    kixpkgs.url = "path:..";
-    # Fetched via the GitHub fetcher. Both kixpkgs (above) and
-    # kix-examples are currently private; any consumer must supply
-    # `access-tokens = github.com=…` to Nix. See the project README
-    # for setup.
+    # The repository flake keeps its own nixpkgs. The `kix` package carries a
+    # runtime built from it, and kix refuses a runtime whose programs differ
+    # from the versions compiled into it (cli/kix-core/runtime/programs.json).
+    kix.url = "path:..";
+    # Fetched via the GitHub fetcher. kix-examples is private, so a
+    # consumer must supply `access-tokens = github.com=…` to Nix.
     kix-examples.url = "github:kix-run/kix-examples";
     # kix-examples declares its own `kix` input, and this flake uses only its
     # source tree (snippet regions, and the workspace the captures runner
@@ -36,13 +34,13 @@
     # of the lock. It is not just waste: when the lock resolves it to a
     # `git+https://` ref, fetching it needs git credentials rather than the
     # `access-tokens` the `github:` fetcher uses, which no CI runner has.
-    kix-examples.inputs.kix.follows = "kixpkgs";
+    kix-examples.inputs.kix.follows = "kix";
   };
 
   outputs =
     {
       nixpkgs,
-      kixpkgs,
+      kix,
       kix-examples,
       ...
     }:
@@ -76,18 +74,18 @@
               sourceUrlBase = "https://github.com/kix-run/kix-examples/blob/${kix-examples.rev or "main"}";
             };
             repositorySnippets = snippetLib.mkSnippetsFromTree {
-              root = "${kixpkgs}";
-              sourceUrlBase = "https://github.com/kix-run/kix/blob/${kixpkgs.rev or "main"}";
+              root = "${kix}";
+              sourceUrlBase = "https://github.com/kix-run/kix/blob/${kix.rev or "main"}";
             };
           in
-          # Auto-discovery: every `.nix` file under kix-examples or kixpkgs
+          # Auto-discovery: every `.nix` file under kix-examples or this repository
           # with at least one `# region:NAME` marker is picked up
           # automatically. To add a snippet, add the marker. No registration
           # step.
           #
           # `sourceUrlBase` powers the "View source" link in the
           # `<Snippet>` component. kix-examples links are pinned to the commit
-          # currently locked in `flake.lock`. The local kixpkgs path input has
+          # currently locked in `flake.lock`. The local `kix` path input has
           # no revision, so its links use main.
           pkgs.runCommand "kix-doc-snippets-combined" { } ''
             mkdir -p $out
@@ -186,7 +184,7 @@
             cp -r --no-preserve=mode ${reference}/. src/content/docs/reference/package-catalog/
             chmod -R u+w src/content/docs/reference/package-catalog
             npm run check:local-imports
-            KIX_REPO_ROOT=${kixpkgs} npm run check:doc-refs
+            KIX_REPO_ROOT=${kix} npm run check:doc-refs
           '';
 
           # `npm run build` writes the static site to ./dist.
@@ -234,7 +232,7 @@
       #   3. `npm install` if node_modules is missing.
       #   4. Start the Astro dev server with HMR.
       #
-      # Run from the kixpkgs repo root. The script expects cwd to contain
+      # Run from the repository root. The script expects cwd to contain
       # the `docs/` directory.
       apps = forAllSystems (pkgs: {
         # Live driver for the captures pipeline. Spins up a dedicated kind
@@ -250,9 +248,9 @@
           (import ./nix/captures-live.nix {
             inherit pkgs;
             inherit (pkgs) lib;
-            kix = kixpkgs.packages.${pkgs.system}.kix;
+            kix = kix.packages.${pkgs.system}.kix;
             kixExamples = kix-examples;
-            kixpkgsSrc = kixpkgs;
+            kixSrc = kix;
           }).app;
 
         # Offline captures regen. Same shape as regen-captures, but
@@ -263,9 +261,9 @@
           (import ./nix/captures-offline.nix {
             inherit pkgs;
             inherit (pkgs) lib;
-            kix = kixpkgs.packages.${pkgs.system}.kix;
+            kix = kix.packages.${pkgs.system}.kix;
             kixExamples = kix-examples;
-            kixpkgsSrc = kixpkgs;
+            kixSrc = kix;
           }).app;
 
         dev = {
@@ -275,7 +273,7 @@
               set -euo pipefail
 
               if [ ! -f docs/package.json ]; then
-                echo "error: run \`nix run ./docs#dev\` from the kixpkgs repo root" >&2
+                echo "error: run \`nix run ./docs#dev\` from the repository root" >&2
                 echo "       (cwd must contain a docs/ directory)" >&2
                 exit 1
               fi

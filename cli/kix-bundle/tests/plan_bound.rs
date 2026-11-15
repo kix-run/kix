@@ -52,7 +52,7 @@ use kix::plan::fixtures::{
 use kix::plan::{CLUSTER_LEVEL_KEY, ManifestIndex, PlanError};
 use kix_bundle::{Bundle, BundleError, BundleFile, Contents, INDEX_NAME, Provenance};
 
-/// Honest bundles: the kix-enterprise-test build, and kixpkgs'
+/// Honest bundles: the kix-enterprise-test build, and this repository's
 /// `bundle-alias` and `immich` test clusters, the second with import
 /// markers several packages list.
 const SEEDS: &[(&str, &[u8])] = &[
