@@ -38,6 +38,7 @@ use thiserror::Error;
 use kix::build_source::Build;
 use kix::cluster::activation::{Record, Records};
 use kix::cluster::binding::{self, BindingError, Connection};
+use kix::cluster::cancel::CancelToken;
 use kix::cluster::discovery;
 use kix::cluster::graph::ResourceGraph;
 use kix::cluster::kubernetes_version;
@@ -90,6 +91,10 @@ pub struct Context {
     /// The required stops a Queued record must not skip, normally
     /// [`stops::required_stops`].
     pub required_stops: Vec<Version>,
+    /// Cancelled when the operator is asked to stop. A running deploy then
+    /// stops at its next step and leaves its record `Deploying`, and the
+    /// next operator start resumes it.
+    pub shutdown: CancelToken,
 }
 
 /// Errors from the operator reconcile loop.
@@ -631,10 +636,7 @@ async fn run_reconcile(
     let config = SchedulerConfig {
         timeout: READINESS_TIMEOUT,
         on_error: OnErrorPolicy::Stop,
-        // Nothing cancels an operator deploy once it starts. When the
-        // operator restarts, it resumes a `Deploying` record. A cancelled run
-        // would mark the record `Failed`, which the operator does not resume.
-        cancel: kix::cluster::cancel::CancelToken::new(),
+        cancel: ctx.shutdown.clone(),
         concurrency: scheduler::CONCURRENCY,
         stall: StallPolicy::from_env(),
         // A new build is checked against the objects it leaves unchanged.
@@ -903,6 +905,7 @@ mod tests {
             client,
             records,
             required_stops: stops::required_stops(),
+            shutdown: CancelToken::new(),
         });
         let activation: DynamicObject = serde_json::from_value(queued).unwrap();
         reconcile_activation(Arc::new(activation), ctx.clone())
@@ -989,6 +992,7 @@ mod tests {
             client,
             records,
             required_stops: stops::required_stops(),
+            shutdown: CancelToken::new(),
         });
         let activation: DynamicObject = serde_json::from_value(record).unwrap();
         let err = reconcile_activation(Arc::new(activation), ctx.clone())
@@ -1027,6 +1031,7 @@ mod tests {
             client,
             records,
             required_stops,
+            shutdown: CancelToken::new(),
         });
         let name = record["metadata"]["name"].as_str().unwrap().to_string();
         let activation: DynamicObject = serde_json::from_value(record).unwrap();
