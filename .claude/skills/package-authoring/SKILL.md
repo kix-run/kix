@@ -521,7 +521,8 @@ Conditional:
 11. `crds/` with `crds/sources.txt`, and `rbac/` (crd-vendoring skill); sibling
     files such as `health-check.py`, `release.nix`, and `alerts.nix`.
 12. `clusters/test-<contract>-swap/` for a second implementation of an alias,
-    added to `clusters` and `checks` (`<contract>-swap`) in `flake.nix`.
+    and `flake.nix` to add both clusters to `clusters` and a `<contract>-swap`
+    check to `checks`.
 13. `docs/src/content/docs/reference/` and `docs/src/content/docs/explanation/`,
     and the kix-migration, package-review, and crd-vendoring skills and this
     one, when a lib API, role, `meta` key, or convention changes (T6).
