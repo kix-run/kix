@@ -416,7 +416,7 @@ pub(crate) async fn run_plan(
     observer: Arc<dyn DeployObserver>,
     cluster: &str,
 ) -> (Result<DeployResult, scheduler::DeployError>, RunEnd) {
-    config.cancel.cancel_on_interrupt();
+    crate::interrupt::cancel_on_interrupt(&config.cancel);
     let (result, kept) = checked.run(target, receipt, config, observer).await;
     if let Some(recorded) = kept {
         kix::plan::baseline::sync_kept_roots(cluster, &recorded);
