@@ -460,7 +460,7 @@ impl ViewState {
 
 fn detail_message(detail: &Option<NodeDetail>) -> Option<String> {
     match detail.as_ref()? {
-        NodeDetail::Applied(action) => Some(apply_label(action).to_string()),
+        NodeDetail::Applied(action) => Some(action.to_string()),
         NodeDetail::ReadinessProgress(msg) => Some(msg.clone()),
         NodeDetail::ApplyFailed(msg) => Some(msg.clone()),
         NodeDetail::ReadinessTimeout { message, .. } => Some(message.clone()),
@@ -474,15 +474,6 @@ fn detail_message(detail: &Option<NodeDetail>) -> Option<String> {
         NodeDetail::PendingRestart { stale, .. } => {
             Some(format!("{stale} pods pending manual restart (OnDelete)"))
         }
-    }
-}
-
-fn apply_label(action: &ApplyAction) -> &'static str {
-    match action {
-        ApplyAction::Created => "created",
-        ApplyAction::Configured => "configured",
-        ApplyAction::Unchanged => "unchanged",
-        ApplyAction::Skipped => "skipped",
     }
 }
 

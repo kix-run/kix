@@ -44,7 +44,7 @@ impl DeployObserver for LineObserver {
                     Verdict::Pending => {}
                     Verdict::Running => match detail {
                         Some(NodeDetail::Applied(action)) => {
-                            println!("{label}> {tag}{}", apply_label(action));
+                            println!("{label}> {tag}{action}");
                         }
                         Some(NodeDetail::SecretHydrated { keys }) => {
                             println!("{label}> hydrated {keys} keys from SOPS");
@@ -247,15 +247,6 @@ fn prune_lines(resources: &[ResourceId], kept: &[ResourceId], delete: bool) -> V
         }));
     }
     lines
-}
-
-fn apply_label(action: &ApplyAction) -> &'static str {
-    match action {
-        ApplyAction::Created => "created",
-        ApplyAction::Configured => "configured",
-        ApplyAction::Unchanged => "unchanged",
-        ApplyAction::Skipped => "skipped",
-    }
 }
 
 #[cfg(test)]

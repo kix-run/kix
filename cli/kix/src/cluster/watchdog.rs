@@ -401,14 +401,7 @@ pub fn describe(idle: Duration, in_flight: &[InFlight]) -> String {
     let mut parts: Vec<String> = in_flight
         .iter()
         .take(SHOWN)
-        .map(|f| {
-            format!(
-                "{} ({}, {}s)",
-                node_label(&f.node),
-                f.phase.as_str(),
-                f.since.as_secs()
-            )
-        })
+        .map(|f| format!("{} ({}, {}s)", f.node, f.phase.as_str(), f.since.as_secs()))
         .collect();
     if in_flight.len() > SHOWN {
         parts.push(format!("and {} more", in_flight.len() - SHOWN));
@@ -449,7 +442,7 @@ pub fn describe_wait(
     };
     format!(
         "{} waiting: {doing} ({age}){}",
-        node_label(node),
+        node,
         describe_holds(holds, holds_total)
     )
 }
@@ -466,7 +459,7 @@ fn describe_holds(holds: &[NodeId], holds_total: usize) -> String {
     } else {
         format!("{holds_total} objects wait for it")
     };
-    let names: Vec<String> = holds.iter().take(NAMED).map(node_label).collect();
+    let names: Vec<String> = holds.iter().take(NAMED).map(NodeId::to_string).collect();
     let more = holds_total.saturating_sub(names.len());
     let list = match (names.len(), more) {
         (0, _) => String::new(),
@@ -478,13 +471,6 @@ fn describe_holds(holds: &[NodeId], holds_total: usize) -> String {
         format!("; {what}")
     } else {
         format!("; {what}: {list}")
-    }
-}
-
-fn node_label(id: &NodeId) -> String {
-    match id {
-        NodeId::Resource(rid) => rid.display_id(),
-        NodeId::Synthetic(s) => s.clone(),
     }
 }
 

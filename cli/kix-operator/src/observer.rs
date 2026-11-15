@@ -6,10 +6,7 @@
 //! the JSON log format used by the CLI so consumers downstream can correlate
 //! CLI and operator logs on the same deploy.
 
-use kix::cluster::apply::ApplyAction;
-use kix::cluster::stream::{
-    CancelReason, DeployEvent, DeployObserver, NodeDetail, NodeId, Verdict,
-};
+use kix::cluster::stream::{CancelReason, DeployEvent, DeployObserver, NodeDetail, Verdict};
 
 pub struct OperatorObserver {
     activation_name: String,
@@ -41,17 +38,8 @@ impl DeployObserver for OperatorObserver {
                 verdict,
                 detail,
             } => {
-                let resource = node_label(node);
-                let kind_str = match kind {
-                    kix::cluster::stream::TransitionKind::Apply => "apply",
-                    kix::cluster::stream::TransitionKind::Skip => "skip",
-                    kix::cluster::stream::TransitionKind::Recreate => "recreate",
-                    kix::cluster::stream::TransitionKind::Migrate => "migrate",
-                    kix::cluster::stream::TransitionKind::Drain => "drain",
-                    kix::cluster::stream::TransitionKind::Delete => "delete",
-                    kix::cluster::stream::TransitionKind::Pause => "pause",
-                    kix::cluster::stream::TransitionKind::Wait => "wait",
-                };
+                let resource = node.to_string();
+                let kind_str = kind.as_str();
                 match verdict {
                     Verdict::Pending => {}
                     Verdict::Running => match detail {
@@ -60,7 +48,7 @@ impl DeployObserver for OperatorObserver {
                                 activation,
                                 resource = %resource,
                                 kind = kind_str,
-                                action = apply_label(action),
+                                action = action.as_str(),
                                 "Resource applied"
                             );
                         }
@@ -240,21 +228,5 @@ impl DeployObserver for OperatorObserver {
                 );
             }
         }
-    }
-}
-
-fn node_label(id: &NodeId) -> String {
-    match id {
-        NodeId::Resource(rid) => rid.to_string(),
-        NodeId::Synthetic(s) => format!("⟦{s}⟧"),
-    }
-}
-
-fn apply_label(action: &ApplyAction) -> &'static str {
-    match action {
-        ApplyAction::Created => "created",
-        ApplyAction::Configured => "configured",
-        ApplyAction::Unchanged => "unchanged",
-        ApplyAction::Skipped => "skipped",
     }
 }

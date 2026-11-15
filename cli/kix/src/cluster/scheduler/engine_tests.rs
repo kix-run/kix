@@ -1634,7 +1634,7 @@ async fn hung_rediscovery_is_reported_and_aborted() {
     let DeployError::Cancelled { reason, partial } = err else {
         panic!("expected Cancelled, got {err}");
     };
-    assert!(reason.contains("api-discovery (discovery, 3"), "{reason}");
+    assert!(reason.contains("⟦api-discovery⟧ (discovery, 3"), "{reason}");
     assert!(start.elapsed() >= secs(30) && start.elapsed() < secs(36));
     assert_eq!(partial.created, 1);
     assert_eq!(
