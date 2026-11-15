@@ -93,8 +93,8 @@ in
           [
             {
               inherit clusterOption;
-              message = "This instance requires cluster.capabilities.${cap} = true, which is not set in the cluster definition, so Kix skipped verifying this requirement.";
-              fix = "Set `cluster.capabilities.${cap} = true;` (or `false;`) in the cluster definition to match your cluster.";
+              message = "This instance requires cluster.capabilities.${cap} = true, which is not set in the cluster definition. Kix built the instance without checking whether the cluster supports this capability.";
+              fix = "Set `cluster.capabilities.${cap} = true;` in the cluster definition if the cluster supports it, or `false;` if it does not.";
             }
           ]
         else
@@ -124,8 +124,8 @@ in
           [
             {
               clusterOption = "cluster.roles.metricsApi.binding";
-              message = "${subject} requires the Kubernetes Metrics API (metrics.k8s.io), and cluster.roles.metricsApi.binding is unset, so Kix skipped checking for a provider.";
-              fix = "Set `cluster.roles.metricsApi.binding = \"exclusive\";` (or `\"absent\";`) in your cluster definition, or add a metrics-server instance.";
+              message = "${subject} requires the Kubernetes Metrics API (metrics.k8s.io), and cluster.roles.metricsApi.binding is not set. Kix built the instance without checking whether anything in the cluster serves metrics.k8s.io.";
+              fix = "Add a `metrics-server` instance to the cluster definition, or set `cluster.roles.metricsApi.binding = \"exclusive\";` if the cluster already runs `metrics-server` outside Kix (or `\"absent\";` if it does not).";
             }
           ]
         else
@@ -319,8 +319,8 @@ in
                   name = builtins.unsafeDiscardStringContext (args.name or "unknown");
                 };
                 clusterOption = "cluster.roles.loadBalancer.binding";
-                message = "Service '${args.name or "unknown"}' sets type = \"LoadBalancer\", and cluster.roles.loadBalancer.binding is unset, so Kix skipped checking for a load balancer.";
-                fix = "Set `cluster.roles.loadBalancer.binding = \"shadowable\";` (or `\"absent\";`) in your cluster definition.";
+                message = "Service '${args.name or "unknown"}' sets type = \"LoadBalancer\", and cluster.roles.loadBalancer.binding is not set. Kix built the Service without checking whether the cluster provides a load balancer.";
+                fix = "Set `cluster.roles.loadBalancer.binding = \"shadowable\";` in the cluster definition if the cluster provides a load balancer (such as a cloud controller or MetalLB), or `\"absent\";` if it does not.";
               }
             ]
           else

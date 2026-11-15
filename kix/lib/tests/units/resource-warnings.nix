@@ -92,7 +92,7 @@ in
   # cluster option to set.
   resource-warnings-load-balancer-binding-unset =
     let
-      found = find "cluster.roles.loadBalancer.binding is unset" (
+      found = find "cluster.roles.loadBalancer.binding is not set" (
         warningsOf [ someCapabilities ] loadBalancer
       );
       w = builtins.head found;
