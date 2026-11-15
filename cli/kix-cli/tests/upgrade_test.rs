@@ -9,7 +9,6 @@
 
 mod common;
 
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use assert_cmd::Command;
@@ -406,8 +405,7 @@ fn dry_run_asks_the_installed_kix_which_packages_are_in_use() {
     s.releases(vec![]);
     let bin = s.data.join("9.1.0/bin");
     std::fs::create_dir_all(&bin).unwrap();
-    std::fs::write(bin.join("kix"), FAKE.replace("__VERSION__", "9.1.0")).unwrap();
-    std::fs::set_permissions(bin.join("kix"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    common::write_executable(&bin.join("kix"), FAKE.replace("__VERSION__", "9.1.0"));
     let (code, out) = s.upgrade(&["--dry-run"]);
     assert_eq!(code, 0, "{out}");
     // Every note is listed. The one whose package an instance is named
@@ -904,8 +902,7 @@ fn pruning_leaves_a_version_installed_before_the_run() {
     s.releases(vec![]);
     let bin = s.data.join("9.2.1/bin");
     std::fs::create_dir_all(&bin).unwrap();
-    std::fs::write(bin.join("kix"), FAKE.replace("__VERSION__", "9.2.1")).unwrap();
-    std::fs::set_permissions(bin.join("kix"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    common::write_executable(&bin.join("kix"), FAKE.replace("__VERSION__", "9.2.1"));
     s.write("fake/fail-9.3.0", "");
     let (code, out) = s.upgrade(&[]);
     assert_eq!(code, 1, "{out}");

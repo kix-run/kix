@@ -53,3 +53,31 @@ fn make_writable(dir: &Path) {
         make_writable(&entry.path());
     }
 }
+
+/// Write `contents` to `path` as an executable file.
+///
+/// Linux refuses to run a file that a process holds open for writing
+/// (`ETXTBSY`, "Text file busy"). Test threads start child processes all the
+/// time, and a child started while this process held the file open keeps the
+/// open file until it runs its own program. A test that ran the file in that
+/// moment failed. So this process never opens the file: it writes the
+/// contents to a separate temporary file, and a `cp` child process copies
+/// them into place and exits before any test runs the file.
+pub fn write_executable(path: &Path, contents: impl AsRef<[u8]>) {
+    let staged = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(staged.path(), contents).unwrap();
+    copy_executable(staged.path(), path);
+}
+
+/// Copy the file at `from` to `path` as an executable file, for the reason
+/// [`write_executable`] gives.
+pub fn copy_executable(from: &Path, path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let status = std::process::Command::new("cp")
+        .arg(from)
+        .arg(path)
+        .status()
+        .unwrap();
+    assert!(status.success(), "cp {} {}", from.display(), path.display());
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+}

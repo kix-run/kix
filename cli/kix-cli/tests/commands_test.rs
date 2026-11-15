@@ -401,9 +401,7 @@ fn without_a_runtime_kix_refuses_to_run_programs() {
     // A `nix` on PATH that would succeed if Kix ran it.
     let bin = tempfile::tempdir().unwrap();
     let fake = bin.path().join("nix");
-    std::fs::write(&fake, "#!/bin/sh\necho 'fake nix ran' >&2\nexit 0\n").unwrap();
-    use std::os::unix::fs::PermissionsExt as _;
-    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    common::write_executable(&fake, "#!/bin/sh\necho 'fake nix ran' >&2\nexit 0\n");
     let path = format!("{}:/usr/bin:/bin", bin.path().display());
 
     let without_runtime = || {
