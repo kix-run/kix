@@ -26,7 +26,7 @@ python3 -m http.server -d result 8000
 
 ## Dev server (live reload)
 
-One command, run from the kixpkgs repo root:
+One command, run from the repository root:
 
 ```bash
 nix run ./docs#dev
@@ -189,7 +189,7 @@ mutate / capture step shells, drift comparison) and consume the
 declarative manifest at `docs/nix/captures.nix`. The workspace's
 `kix` input is overridden via the Kix CLI's `--override-input`
 flag to a known store path, so the eval never has to re-fetch the
-private kixpkgs repo from GitHub. A kix-examples flake that still names
+repository from GitHub. A kix-examples flake that still names
 the input `kixpkgs` has it renamed to `kix` in the workspace copy, since
 Kix reads the library only from an input named `kix`. Kix treats the
 overridden input as a development library and prints a note on each

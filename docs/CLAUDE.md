@@ -109,8 +109,6 @@ little or no Nix experience:
   template a plain `.map(node => <jsx/>)`. See `Command.astro` for the
   pattern (the `RenderUnit` / `PreUnit` / `DetailsUnit` shape) and
   [withastro/astro#6955](https://github.com/withastro/astro/issues/6955).
-- The canonical planning issue is:
-  https://github.com/adamcharnock/kixpkgs/issues/20
 - The example repo guidance in `kix-examples/CLAUDE.md` applies when writing
   tutorial/example material, especially around concept sequencing and inline
   comments.

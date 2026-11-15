@@ -73,7 +73,7 @@ let
     # Kix identity hashes: 32-char base32 Nix-style hashes that appear in
     # `kix.run/identity-hash`, `kix.run/depends-on`, and embedded store
     # paths in `kix build`/`kix graph` output. These are content-addressed
-    # over the kixpkgs source path, so when the source changes (e.g.
+    # over the repository source path, so when the source changes (e.g.
     # because `--apply` just wrote new sidecars into
     # docs/src/command-output/), every hash shifts. Redacting them in the
     # drift view lets the comparison ignore that churn while still

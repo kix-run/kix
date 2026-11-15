@@ -2,7 +2,7 @@
 @import "@fontsource-variable/inter-tight";
 @import "@fontsource-variable/jetbrains-mono";
 
-/* This app lives inside the larger kixpkgs git repo, which breaks
+/* This app lives inside the larger Kix git repository, which breaks
    Tailwind v4's automatic (git-root-based) source detection. Declare
    the sources explicitly so utilities are generated. */
 @source "../**/*.{astro,ts}";

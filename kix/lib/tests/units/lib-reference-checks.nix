@@ -670,7 +670,7 @@ in
 
   # The reference-mode VM operator names every monitoring.coreos.com kind it
   # converts, at the version upstream serves. The AlertmanagerConfig marker
-  # is the longest CRD ref marker name in kixpkgs.
+  # is the longest CRD ref marker name in this repository.
   lib-reference-checks-victoria-metrics-operator-refs =
     let
       ms = manifests (mkCluster [

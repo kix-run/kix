@@ -1,4 +1,4 @@
-# Pre-commit hooks for kixpkgs
+# Pre-commit hooks for the Kix repository
 # Install: lefthook install
 #
 # Rust hooks adapted from lithus monorepo pattern (no mise: uses cargo directly)

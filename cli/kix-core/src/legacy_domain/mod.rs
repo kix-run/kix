@@ -323,7 +323,7 @@ pub fn check_cluster(groups_in_discovery: &[&str]) -> Result<(), LegacyDomainErr
 /// Check whether a raw build renders Kix's own records or CRDs under a retired
 /// API group.
 ///
-/// Rejects builds evaluated against a `kixpkgs` revision from before the
+/// Rejects builds evaluated against a Kix library revision from before the
 /// domain migration so deploying them cannot re-create the retired CRDs on a
 /// migrated cluster. [`crate::build_source::Build`] runs this check before
 /// stamping because stamping upgrades manifests to the current domain.

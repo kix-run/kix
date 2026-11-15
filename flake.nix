@@ -1,10 +1,11 @@
-# kixpkgs root flake: aggregates all clusters.
+# The Kix repository flake: the Kix CLI, its runtime, the library checks,
+# and every cluster under clusters/.
 #
 # The smoke test is homelab-kind:
 #   nix run .#kix -- check homelab-kind
 
 {
-  description = "kixpkgs - Kubernetes packages built with Nix";
+  description = "Kix, the Kubernetes compiler: its CLI, library, packages, and clusters";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
@@ -427,7 +428,7 @@
       # Wrap cluster definitions into a complete per-system flake output for
       # external consumers:
       #
-      #   outputs = inputs: inputs.kixpkgs.lib.mkFlake {
+      #   outputs = inputs: inputs.kix.lib.mkFlake {
       #     inherit inputs;
       #     clusters.my-cluster = ./cluster.nix;
       #   };

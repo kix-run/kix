@@ -721,13 +721,13 @@ mod tests {
             ),
             "kix.url = \"git+file:///src/kix?dir=kix&ref=refs/tags/v0.10.0\";"
         );
-        let mirror = json!({ "type": "git", "url": "ssh://git@git.example:30232/org/kixpkgs.git", "ref": "v0.9.1" });
+        let mirror = json!({ "type": "git", "url": "ssh://git@git.example:30232/org/kix.git", "ref": "v0.9.1" });
         assert_eq!(
             new_flake(
                 mirror,
-                "url = \"git+ssh://git@git.example:30232/org/kixpkgs.git?ref=v0.9.1&shallow=1\";"
+                "url = \"git+ssh://git@git.example:30232/org/kix.git?ref=v0.9.1&shallow=1\";"
             ),
-            "url = \"git+ssh://git@git.example:30232/org/kixpkgs.git?shallow=1&ref=refs/tags/v0.10.0\";"
+            "url = \"git+ssh://git@git.example:30232/org/kix.git?shallow=1&ref=refs/tags/v0.10.0\";"
         );
     }
 
@@ -744,13 +744,13 @@ mod tests {
 
     #[test]
     fn two_urls_of_the_repository_are_left_to_a_person() {
-        let url = "git+ssh://git@git.example:30232/org/kixpkgs.git?ref=refs/tags/v0.8.0-rc.1";
+        let url = "git+ssh://git@git.example:30232/org/kix.git?ref=refs/tags/v0.8.0-rc.1";
         let flake = format!(
             "inputs = {{\n  kix = {{\n    url = \"{url}\";\n  }};\n  image-kix = {{\n    url = \"{url}\";\n  }};\n}};\n"
         );
         let original = json!({
             "type": "git",
-            "url": "ssh://git@git.example:30232/org/kixpkgs.git",
+            "url": "ssh://git@git.example:30232/org/kix.git",
             "ref": "refs/tags/v0.8.0-rc.1"
         });
         let Err(PinLibraryError::Edit(edit)) = plan_for(&lock_with(original), &flake) else {
@@ -758,7 +758,7 @@ mod tests {
         };
         assert_eq!(
             edit.to_url,
-            "git+ssh://git@git.example:30232/org/kixpkgs.git?ref=refs/tags/v0.10.0"
+            "git+ssh://git@git.example:30232/org/kix.git?ref=refs/tags/v0.10.0"
         );
         let numbers: Vec<usize> = edit.lines.iter().map(|(n, _)| *n).collect();
         assert_eq!(numbers, [3, 6]);

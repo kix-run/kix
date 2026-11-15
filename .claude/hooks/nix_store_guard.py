@@ -144,7 +144,7 @@ def path_refs(command: str) -> list[pathlib.Path]:
 
     Store paths are already immutable and already filtered, so they are
     exactly the case this guard must stay out of the way of: the capture
-    pipeline passes `--override-input kixpkgs path:/nix/store/...` on every
+    pipeline passes `--override-input kix path:/nix/store/...` on every
     documented command it runs.
     """
     found: list[pathlib.Path] = []

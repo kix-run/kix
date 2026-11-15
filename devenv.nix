@@ -8,7 +8,7 @@
 
 let
   # A stable, readable name for this checkout: the directory name plus a
-  # short digest of its absolute path, so two worktrees of kixpkgs never
+  # short digest of its absolute path, so two worktrees of this repository never
   # collide and neither name is a mystery when you look in ~/.cache.
   targetDirKey =
     "${builtins.baseNameOf config.devenv.root}-"

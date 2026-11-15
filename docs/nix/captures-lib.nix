@@ -12,14 +12,14 @@
   lib,
   kix,
   kixExamples,
-  # Store path of the kixpkgs flake source. Forwarded to every kix
+  # Store path of the repository flake source. Forwarded to every kix
   # invocation as `--override-input kix path:<store>` so the
   # workspace's eval resolves against a known, already-realised
   # source instead of re-fetching via github. The workspace's
   # flake.lock for nixpkgs is left untouched: both drivers run
   # host-side with network access, so the standard fetcher just
   # works for everything else.
-  kixpkgsSrc,
+  kixSrc,
 }:
 
 let
@@ -443,7 +443,7 @@ let
   # which still points at a different rev, is harmless). Kix treats an
   # overridden `kix` input as a development library: it runs itself and
   # compares no versions.
-  kixOverrideArgs = ''--override-input kix "path:${kixpkgsSrc}"'';
+  kixOverrideArgs = ''--override-input kix "path:${kixSrc}"'';
 in
 {
   inherit manifest;
