@@ -8,6 +8,10 @@
 # policies for the operator's pods, and the scrape join's paths from
 # vmagent to the scrape objects it selects (VMServiceScrapes, converted
 # ServiceMonitors, and the operator's own VMServiceScrapes).
+#
+# Also the placement of the operator's pods: each CR above one replica
+# carries topology spread at the availability level and a budget of one
+# pod (victoria-metrics-operator/operand-placement.nix).
 
 {
   lib,
@@ -21,6 +25,9 @@
   baseInstances,
   netpolOn,
   containerBase,
+  multiZone,
+  singleNode,
+  evalFails,
   ...
 }:
 
@@ -562,4 +569,63 @@ in
       says = builtins.any (lib.hasInfix "VMAgent monitoring/vm-agent sets spec.inlineScrapeConfig");
     in
     (says warned && !(says plain)) || throw "inline scrape config warnings: ${show warned}";
+
+  # Under "zone", every component above one replica spreads hard across
+  # zones and softly across nodes, and gets a budget of one pod. A single
+  # replica gets neither.
+  victoria-metrics-placement-zone =
+    let
+      ms = vmStack {
+        extra = [
+          multiZone
+          { cluster.availability.default = "zone"; }
+        ];
+        agentConfig.replicaCount = 1;
+      };
+      vmc = (byName "vm-cluster" (ofKind "VMCluster" ms)).spec;
+      agent = (byName "vm-agent" (ofKind "VMAgent" ms)).spec;
+      am = (byName "vm-alert" (ofKind "VMAlertmanager" ms)).spec;
+      whenOf = key: c: map (x: x.whenUnsatisfiable) (builtins.filter (x: x.topologyKey == key) c);
+      zoneHard =
+        spec:
+        whenOf "topology.kubernetes.io/zone" spec.topologySpreadConstraints == [ "DoNotSchedule" ]
+        && whenOf "kubernetes.io/hostname" spec.topologySpreadConstraints == [ "ScheduleAnyway" ]
+        && spec.podDisruptionBudget == { maxUnavailable = 1; };
+    in
+    (
+      zoneHard vmc.vmstorage
+      && zoneHard vmc.vmselect
+      && zoneHard vmc.vminsert
+      && zoneHard am
+      && !(agent ? topologySpreadConstraints)
+      && !(agent ? podDisruptionBudget)
+      && !(vmc.vmstorage ? affinity)
+    )
+    || throw "placement under zone: ${
+      builtins.toJSON {
+        inherit (vmc) vmstorage;
+        inherit agent;
+      }
+    }";
+
+  # A single-node cluster has nothing to spread over.
+  victoria-metrics-placement-single-node =
+    let
+      ms = vmStack {
+        extra = [ singleNode ];
+        clusterConfig.vmstorage.replicaCount = 2;
+      };
+      vmstorage = (byName "vm-cluster" (ofKind "VMCluster" ms)).spec.vmstorage;
+    in
+    (
+      !(vmstorage ? topologySpreadConstraints) && vmstorage.podDisruptionBudget == { maxUnavailable = 1; }
+    )
+    || throw "placement on one node: ${builtins.toJSON vmstorage}";
+
+  # The spread comes from the availability level, so extraSpec cannot set it.
+  victoria-metrics-placement-locked =
+    evalFails (vmStack {
+      clusterConfig.extraSpec.vmstorage.topologySpreadConstraints = [ ];
+    })
+    || throw "extraSpec set vmstorage.topologySpreadConstraints";
 }

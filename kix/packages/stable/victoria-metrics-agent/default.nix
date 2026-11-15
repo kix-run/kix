@@ -56,6 +56,9 @@ let
   name = scope.instanceName;
 
   inherit (import ../victoria-metrics-operator/cr-image.nix { inherit lib kix; }) crImage;
+  inherit (import ../victoria-metrics-operator/operand-placement.nix { inherit lib kix; })
+    operandPlacement
+    ;
 in
 {
   meta = {
@@ -142,7 +145,7 @@ in
     extraSpec = lib.mkOption {
       type = lib.types.attrsOf lib.types.anything;
       default = { };
-      description = "Extra fields deep-merged into the VMAgent CR spec. The package refuses `remoteWrite` and `scrapeInterval`, which come from the vmCluster dependency, and `image`, `replicaCount`, `selectAllByDefault`, `resources`, and `extraArgs`, which have options of their own.";
+      description = "Extra fields deep-merged into the VMAgent CR spec. The package refuses `remoteWrite` and `scrapeInterval`, which come from the vmCluster dependency, and `image`, `replicaCount`, `selectAllByDefault`, `resources`, and `extraArgs`, which have options of their own. It also refuses `topologySpreadConstraints`, which the package derives from the availability level.";
     };
 
     # The operator scrapes the agent whatever this says; `enabled` only
@@ -203,26 +206,17 @@ in
           scrapeInterval =
             if config.scrapeInterval == null then vmCluster.out.scrapeInterval else config.scrapeInterval;
           selectAllByDefault = config.selectAllByDefault;
-          podDisruptionBudget = {
-            maxUnavailable = 1;
-          };
-          # Operand pods are rendered by the operator, so Kix's derived
-          # spread never sees them: the CR carries the rule, and the
-          # failure-domain keys come from the cluster, never a literal.
-          affinity = {
-            podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution = map (topologyKey: {
-              weight = 100;
-              podAffinityTerm = {
-                labelSelector.matchLabels = {
-                  "app.kubernetes.io/name" = "vmagent";
-                  "app.kubernetes.io/instance" = name;
-                };
-                inherit topologyKey;
-              };
-            }) clusterConfig.cluster.topology.failureDomainKeys;
-          };
           resources = config.resources;
           extraArgs = baseArgs // extraArgs;
+        }
+        // operandPlacement {
+          inherit availability;
+          topology = clusterConfig.cluster.topology;
+          selector = {
+            "app.kubernetes.io/name" = "vmagent";
+            "app.kubernetes.io/instance" = name;
+          };
+          replicas = config.replicaCount;
         }
         // lib.optionalAttrs (config.externalLabels != { }) {
           externalLabels = config.externalLabels;
@@ -241,6 +235,7 @@ in
               "selectAllByDefault"
               "resources"
               "extraArgs"
+              "topologySpreadConstraints"
             ];
           } baseSpec config.extraSpec;
         };

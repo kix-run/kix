@@ -4,8 +4,9 @@
 # Creates a VMCluster CR that the VM operator reconciles into vmstorage /
 # vmselect / vminsert workloads. HA is the default posture, and must be,
 # because the scorecard cannot see operator-created pods: replication
-# factor 2 over 3 vmstorage nodes, 2 vmselect + 2 vminsert, per-component
-# PDBs, and preferred hostname anti-affinity.
+# factor 2 over 3 vmstorage nodes, 2 vmselect + 2 vminsert, and, for each
+# component above one replica, topology spread at the instance's
+# availability level and a PodDisruptionBudget of one pod.
 #
 # Dedup is correctness, not tuning: with replicationFactor > 1 every
 # sample exists twice, and an HA vmagent pair ingests everything twice
@@ -74,6 +75,9 @@
 let
   release = "v1.150.0";
   name = scope.instanceName;
+  inherit (import ../victoria-metrics-operator/operand-placement.nix { inherit lib kix; })
+    operandPlacement
+    ;
   who = "victoria-metrics-cluster ${scope.namespaceName}/${name}";
 in
 {
@@ -270,7 +274,9 @@ in
         Extra fields deep-merged into the VMCluster CR spec via
         lib.recursiveUpdate. Escape hatch for fields not exposed as typed
         options (downsampling, requestsLoadBalancer, per-component
-        overrides).
+        overrides). It refuses each component's
+        `topologySpreadConstraints`, which the package derives from the
+        availability level.
       '';
     };
   };
@@ -294,23 +300,13 @@ in
           "app.kubernetes.io/instance" = name;
         };
 
-        # Build preferred anti-affinity for `component`. Operand pods are
-        # rendered by the operator, so Kix's derived spread never sees them:
-        # the CR carries the rule, and the failure-domain keys come from the
-        # cluster, never a literal.
-        antiAffinity = component: {
-          podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution = map (topologyKey: {
-            weight = 100;
-            podAffinityTerm = {
-              labelSelector.matchLabels = componentSelector component;
-              inherit topologyKey;
-            };
-          }) clusterConfig.cluster.topology.failureDomainKeys;
-        };
-
-        pdb = {
-          maxUnavailable = 1;
-        };
+        placement =
+          component: replicas:
+          operandPlacement {
+            inherit availability replicas;
+            topology = clusterConfig.cluster.topology;
+            selector = componentSelector component;
+          };
 
         # The VMCluster CR has no dedup field, so the interval travels as a
         # flag. `extraSpec` cannot reach it (kix.mergeGuarded below) and the
@@ -386,23 +382,20 @@ in
                 // lib.optionalAttrs (effectiveStorageClass != null) {
                   storageClassName = effectiveStorageClass;
                 };
-            podDisruptionBudget = pdb;
-            affinity = antiAffinity "vmstorage";
             extraArgs = componentArgs "vmstorage";
-          };
+          }
+          // placement "vmstorage" config.vmstorage.replicaCount;
 
           vmselect = {
             inherit (config.vmselect) replicaCount resources;
-            podDisruptionBudget = pdb;
-            affinity = antiAffinity "vmselect";
             extraArgs = componentArgs "vmselect";
-          };
+          }
+          // placement "vmselect" config.vmselect.replicaCount;
 
           vminsert = {
             inherit (config.vminsert) replicaCount resources;
-            podDisruptionBudget = pdb;
-            affinity = antiAffinity "vminsert";
           }
+          // placement "vminsert" config.vminsert.replicaCount
           // lib.optionalAttrs (config.vminsert.extraArgs != { }) {
             extraArgs = componentArgs "vminsert";
           };
@@ -428,7 +421,18 @@ in
               "vmselect"
               "extraArgs"
             ]
-          ];
+          ]
+          ++
+            map
+              (component: [
+                component
+                "topologySpreadConstraints"
+              ])
+              [
+                "vmstorage"
+                "vmselect"
+                "vminsert"
+              ];
         } baseSpec config.extraSpec;
 
         # vmbackupmanager runs in the vmstorage pods when extraSpec sets
