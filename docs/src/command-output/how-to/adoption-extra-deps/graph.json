@@ -9,9 +9,9 @@
   "commands": [
     {
       "command": "kix graph how-to-adoption -o tree",
-      "stdout": "├── PackageInstance.kix.run/legacy-api-contract@apps\n├── ConfigMap/legacy-api-contract@apps\n│   └── PackageInstance.kix.run/legacy-api-contract@apps\n├── PackageInstance.kix.run/legacy-api-contract@apps\n",
+      "stdout": "├── PackageInstance.kix.run/legacy-api@legacy (import)\n├── PackageInstance.kix.run/legacy-api-contract@apps\n│   ├── PackageInstance.kix.run/legacy-api@legacy (import)\n├── ConfigMap/legacy-api-contract@apps\n│   └── PackageInstance.kix.run/legacy-api-contract@apps\n│       ├── PackageInstance.kix.run/legacy-api@legacy (import)\n├── PackageInstance.kix.run/legacy-api-contract@apps\n│   ├── PackageInstance.kix.run/legacy-api@legacy (import)\n└── PackageInstance.kix.run/legacy-api@legacy (import)\n",
       "stderr": "21 resources, 39 dependencies\n",
-      "stdoutDrift": "ConfigMap/legacy-api-contract@apps\nPackageInstance.kix.run/legacy-api-contract@apps\n",
+      "stdoutDrift": "ConfigMap/legacy-api-contract@apps\nPackageInstance.kix.run/legacy-api-contract@apps\nPackageInstance.kix.run/legacy-api@legacy (import)\n",
       "stderrDrift": "21 resources, 39 dependencies\n",
       "exitCode": 0
     }
