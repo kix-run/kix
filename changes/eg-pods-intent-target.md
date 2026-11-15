@@ -2,10 +2,12 @@
 kind = "silent"
 packages = ["experimental/cilium", "experimental/ingress-nginx", "experimental/traefik"]
 +++
-A network intent can now name `to = "pods"`, which reaches every pod in the
-cluster and nothing else. `ingress-nginx` and `traefik` use it for their
-backends in place of `all-pods`, which Cilium renders as its `cluster` entity
-and which also reaches the nodes, the kubelet, and the Kubernetes API server.
-Under network policy, an Ingress or HTTPRoute whose backend runs on the host
-network, or points at a node address, no longer gets through; give such a
-backend a pod network address or a policy of its own.
+If you use `ingress-nginx` or `traefik` with `networkPolicy.enable = true` and
+an `Ingress` or `HTTPRoute` targets a host-network pod or a node address, move
+that backend onto the pod network, or add an egress policy (such as a
+`networkPolicy.platformIntents` entry) allowing `ingress-nginx` or `traefik` to
+reach it. Both packages now set `to = "pods"` instead of `to = "all-pods"` for
+backend egress. In `cilium`, egress rules in `networkPolicy.platformIntents` and
+`meta.network.intents` can now set `to = "pods"` to allow traffic only to pods.
+The existing `to = "all-pods"` target maps to Cilium's `cluster` entity, which
+also reaches cluster nodes, the kubelet, and the Kubernetes API server.
