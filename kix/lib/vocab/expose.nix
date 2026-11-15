@@ -108,9 +108,13 @@ let
       {
         inherit (chosen) scheme;
         inherit (chosen.l) port;
-        warnings =
-          lib.optional (chosen.v == "unverified")
-            "kix.expose (${name}): ${gwLabel} listener \"${chosen.l.name}\" admits routes by namespace selector, which Kix does not check. The URL assumes namespace \"${routeNs}\" matches it.";
+        warnings = lib.optional (chosen.v == "unverified") (
+          "HTTPRoute '${name}' uses ${gwLabel} listener '${chosen.l.name}', which restricts "
+          + "namespaces with a label selector (`allowedRoutes.namespaces.from = \"Selector\"`). "
+          + "Kix does not check namespace selectors, so it assumes namespace '${routeNs}' matches "
+          + "when computing the route's URL. Make sure namespace '${routeNs}' matches the "
+          + "listener's selector, or set `allowedRoutes.namespaces.from = \"All\"` on the listener."
+        );
       };
 
   # Compute the public route record `{ via; host; rawHost; scheme; url; urlOrNull; }`
@@ -548,10 +552,12 @@ rec {
         if wantsControllerEdge && useIngress && controllerSelector == null then
           [
             (
-              "kix.expose (${name}): the ingress controller does not publish `out.podSelector` "
-              + "and `out.podNamespace`, so no network policy opens the backend to it. Under "
-              + "default deny every request through this Ingress will time out. Add both to the "
-              + "controller package's root `out`."
+              "Ingress '${name}': the ingress controller does not publish `out.podSelector` "
+              + "and `out.podNamespace`, so Kix did not create a network policy allowing traffic "
+              + "from the controller to the backend pods. Under default-deny ingress, requests "
+              + "through this Ingress will time out. Set `out.podSelector` and `out.podNamespace` "
+              + "on the ingress controller's `out` (in its package `root` or `kix.mkImport`), or "
+              + "create a network policy outside Kix."
             )
           ]
         else if wantsControllerEdge && useGateway && controllerSelector == null then
@@ -560,11 +566,13 @@ rec {
           in
           [
             (
-              "kix.expose (${scope.namespaceName}/${name}): Gateway ${gw.namespace}/${gw.name} publishes "
-              + "no `out.podSelector`, so no network policy opens the backend to its data-plane pods. "
-              + "Under default deny every request through this HTTPRoute will time out. Write a policy "
-              + "outside Kix that admits the gateway's proxy pods to the backend, or use a gateway "
-              + "package that publishes its pods (traefik, envoy-gateway)."
+              "HTTPRoute ${scope.namespaceName}/${name}: Gateway ${gw.namespace}/${gw.name} does not "
+              + "publish `out.podSelector` and `out.podNamespace`, so Kix did not create a network "
+              + "policy allowing traffic from the gateway's proxy pods to the backend pods. Under "
+              + "default-deny ingress, requests through this HTTPRoute will time out. Set "
+              + "`out.podSelector` and `out.podNamespace` on the gateway's `out`, use a gateway "
+              + "package that publishes them (`traefik` or `envoy-gateway`), or create a network "
+              + "policy outside Kix."
             )
           ]
         else
@@ -579,12 +587,12 @@ rec {
       selectorlessWarnings =
         lib.optional (wantsControllerEdge && controllerSelector != null && selectorlessBackends != [ ])
           (
-            "kix.expose (${scope.namespaceName}/${name}): Service "
+            "Route ${scope.namespaceName}/${name}: no pod selector (`spec.selector`) is set on Service "
             + lib.concatMapStringsSep ", " (b: b.svc.name) selectorlessBackends
-            + " has no selector, so Kix writes no policy admitting the "
+            + ", so Kix did not create a network policy allowing traffic from the "
             + (if useGateway then "gateway's proxy pods" else "ingress controller")
-            + " to its pods. Under default deny, requests to it time out until a policy written "
-            + "outside Kix admits them."
+            + " to its endpoints. If those endpoints are pods under default-deny ingress, "
+            + "requests will time out until you create a network policy outside Kix."
           );
 
       # cert-manager answers an HTTP-01 challenge from solver pods it starts
@@ -598,12 +606,14 @@ rec {
       acmeUnknownWarnings =
         lib.optional (wantsControllerEdge && hasTls && !(clusterIssuer.out ? http01SolverSelector))
           (
-            "kix.expose (${scope.namespaceName}/${name}): the clusterIssuer dependency publishes no "
-            + "`out.http01SolverSelector`, so Kix cannot tell whether it uses an HTTP-01 solver and "
-            + "writes no policy for cert-manager's solver pods. If it does, the challenge fails under "
-            + "default deny until a policy admits the ingress controller to pods labelled "
-            + "acme.cert-manager.io/http01-solver=true on TCP 8089 in this namespace. Set "
-            + "`out.http01SolverSelector` on the import (null for a DNS-01 issuer) to silence this."
+            "Ingress ${scope.namespaceName}/${name}: the `clusterIssuer` dependency does not set "
+            + "`out.http01SolverSelector`, so Kix cannot tell whether it uses ACME HTTP-01 challenges "
+            + "and did not create a network policy for cert-manager's solver pods. Under default-deny "
+            + "ingress, HTTP-01 certificate challenges will fail unless TCP port 8089 is open from the "
+            + "ingress controller to pods with label `acme.cert-manager.io/http01-solver=true` in this "
+            + "namespace. On the `clusterIssuer` import or package, set `out.http01SolverSelector = "
+            + "{ \"acme.cert-manager.io/http01-solver\" = \"true\"; };` for an HTTP-01 issuer (so Kix "
+            + "creates that policy), or `out.http01SolverSelector = null;` otherwise."
           );
 
       # Attach the route's warnings to the route resource as `_warnings`,

@@ -292,9 +292,10 @@ in
             object = workloadObject;
             message =
               "${workloadKind} '${workloadInput.name or "?"}' supports at most "
-              + "\"${workloadCeiling}\" (availability.max on its builder call), so under availability "
-              + "\"${availability.level}\" it ${cappedConsequence}. This is a limit of the package; "
-              + "the instance's other workloads run at \"${availability.level}\".";
+              + "\"${workloadCeiling}\" availability (the package sets `availability.max` on it). "
+              + "Kix runs this workload at \"${workloadCeiling}\" instead of \"${availability.level}\", so it ${cappedConsequence}. "
+              + "Other workloads in this instance still run at \"${availability.level}\". "
+              + "To run the whole instance at \"${workloadCeiling}\" and silence this warning, set `availability = \"${workloadCeiling}\";` on the instance.";
           };
           edgeReport = edgeAnalysis.edgesFor workloadInput;
           edges = edgeReport.edges;
