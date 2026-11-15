@@ -225,7 +225,7 @@ pub(crate) async fn wait_for_import_target(
         }
         let status_msg: String = match &api {
             None => format!(
-                "API discovery does not serve {} {} yet",
+                "the API server does not serve {} kind {} yet",
                 target.api_version, target.kind
             ),
             Some(api) => match api.get_opt(&target.name).await {
@@ -425,7 +425,7 @@ async fn import_api(
                 api_version = %target.api_version,
                 kind = %target.kind,
                 error = %e,
-                "import target kind not served yet"
+                "imported kind not served yet, retrying"
             );
             return Ok(None);
         }

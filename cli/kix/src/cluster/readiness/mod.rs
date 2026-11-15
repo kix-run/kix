@@ -86,7 +86,7 @@ pub(super) async fn crd_kind_served(client: &Client, crd: &Value) -> bool {
 
 /// The status a CRD reports while it waits for discovery to serve its kind.
 pub(super) const CRD_AWAITING_DISCOVERY: &str =
-    "CRD established, waiting for API discovery to serve its kind";
+    "CRD is Established, but the API server does not serve its kind yet";
 
 /// Default timeout for readiness polling.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(180);
