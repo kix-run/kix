@@ -3,7 +3,8 @@
 //! directories. Installed versions are shell scripts that print how they were
 //! run. Needs no Nix and no network.
 
-use std::os::unix::fs::PermissionsExt;
+mod common;
+
 use std::path::{Path, PathBuf};
 
 use assert_cmd::Command;
@@ -50,8 +51,7 @@ impl Setup {
         let bin = self.data.join(version).join("bin");
         std::fs::create_dir_all(&bin).unwrap();
         let kix = bin.join("kix");
-        std::fs::write(&kix, FAKE).unwrap();
-        std::fs::set_permissions(&kix, std::fs::Permissions::from_mode(0o755)).unwrap();
+        common::write_executable(&kix, FAKE);
         kix
     }
 
@@ -139,7 +139,7 @@ fn a_chosen_kix_never_selects_again_and_says_who_chose_it() {
     s.fake("9.9.1");
     let bin = s.data.join(VERSION).join("bin");
     std::fs::create_dir_all(&bin).unwrap();
-    std::fs::copy(real_kix(), bin.join("kix")).unwrap();
+    common::copy_executable(&real_kix(), &bin.join("kix"));
 
     s.kix_at(&bin.join("kix"))
         .env("KIX_SELECTED_BY", "/opt/newer/bin/kix")
@@ -747,7 +747,7 @@ fn self_upgrade_installs_the_newest_release_and_moves_the_link() {
     publish(&s, &signer, "9.9.1", Signed::Yes);
     let bin = s.data.join(VERSION).join("bin");
     std::fs::create_dir_all(&bin).unwrap();
-    std::fs::copy(real_kix(), bin.join("kix")).unwrap();
+    common::copy_executable(&real_kix(), &bin.join("kix"));
     std::fs::write(
         s.data.join("receipt.json"),
         format!(r#"{{"installer": "script", "version": "{VERSION}"}}"#),
@@ -780,7 +780,7 @@ fn self_upgrade_moves_the_link_the_receipt_names() {
     publish(&s, &signer, "9.9.1", Signed::Yes);
     let bin = s.data.join(VERSION).join("bin");
     std::fs::create_dir_all(&bin).unwrap();
-    std::fs::copy(real_kix(), bin.join("kix")).unwrap();
+    common::copy_executable(&real_kix(), &bin.join("kix"));
     let root = s.data.parent().unwrap();
     let link = root.join("opt/bin/kix");
     std::fs::create_dir_all(link.parent().unwrap()).unwrap();
