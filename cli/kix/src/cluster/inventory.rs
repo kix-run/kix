@@ -1058,12 +1058,7 @@ mod tests {
     }
 
     fn rid(kind: &str, name: &str) -> ResourceId {
-        ResourceId {
-            group: String::new(),
-            kind: kind.into(),
-            namespace: "ns".into(),
-            name: name.into(),
-        }
+        ResourceId::new("", kind, "ns", name)
     }
 
     /// An object deployed by two clusters is kept when one cluster drops it

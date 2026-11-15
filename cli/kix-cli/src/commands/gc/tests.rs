@@ -231,12 +231,7 @@ mod delete_tests {
     use serde_json::json;
 
     fn rid(group: &str, kind: &str, name: &str) -> ResourceId {
-        ResourceId {
-            group: group.into(),
-            kind: kind.into(),
-            name: name.into(),
-            namespace: CLUSTER_SCOPED.into(),
-        }
+        ResourceId::new(group, kind, CLUSTER_SCOPED, name)
     }
 
     /// Verify that `delete_resources` skips protected kinds without issuing API

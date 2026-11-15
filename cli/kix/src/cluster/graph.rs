@@ -393,6 +393,7 @@ fn get_annotation(manifest: &serde_json::Value, key: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cluster::test_fixtures::manifest;
     use crate::manifest::types::CLUSTER_SCOPED;
     use serde_json::json;
 
@@ -404,24 +405,6 @@ mod tests {
             .flat_map(|idx| dag.neighbors_directed(idx, petgraph::Direction::Outgoing))
             .map(|dep| &dag[dep])
             .collect()
-    }
-
-    fn manifest(kind: &str, name: &str, ns: &str, id_hash: &str, deps: &str) -> serde_json::Value {
-        let mut annotations = serde_json::Map::new();
-        annotations.insert(keys::IDENTITY_HASH.into(), json!(id_hash));
-        if !deps.is_empty() {
-            annotations.insert(keys::DEPENDS_ON.into(), json!(deps));
-        }
-
-        json!({
-            "apiVersion": "v1",
-            "kind": kind,
-            "metadata": {
-                "name": name,
-                "namespace": ns,
-                "annotations": annotations,
-            }
-        })
     }
 
     #[test]
@@ -441,7 +424,7 @@ mod tests {
         assert_eq!(graph.edge_count(), 1);
 
         let deploy_id = ResourceId {
-            group: String::new(),
+            group: "apps".into(),
             kind: "Deployment".into(),
             namespace: "default".into(),
             name: "my-app".into(),
@@ -593,7 +576,7 @@ mod tests {
 
         let graph = ResourceGraph::from_manifests(&manifests).unwrap();
         let act_id = ResourceId {
-            group: String::new(),
+            group: keys::GROUP.into(),
             kind: "Activation".into(),
             namespace: CLUSTER_SCOPED.into(),
             name: "root".into(),

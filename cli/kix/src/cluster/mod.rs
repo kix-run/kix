@@ -34,6 +34,8 @@ mod state_fixtures;
 pub mod stops;
 pub mod stream;
 pub mod tenancy;
+#[cfg(test)]
+mod test_fixtures;
 pub mod topology;
 pub mod watchdog;
 

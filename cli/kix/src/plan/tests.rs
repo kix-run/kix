@@ -730,16 +730,12 @@ mod never_pruned_tests {
     use crate::manifest::types::CLUSTER_SCOPED;
 
     fn rid(kind: &str, name: &str) -> ResourceId {
-        ResourceId {
-            group: match kind {
-                "CustomResourceDefinition" => "apiextensions.k8s.io".into(),
-                "Widget" => "example.com".into(),
-                _ => String::new(),
-            },
-            kind: kind.into(),
-            name: name.into(),
-            namespace: CLUSTER_SCOPED.into(),
-        }
+        let group = match kind {
+            "CustomResourceDefinition" => "apiextensions.k8s.io",
+            "Widget" => "example.com",
+            _ => "",
+        };
+        ResourceId::new(group, kind, CLUSTER_SCOPED, name)
     }
 
     /// A CRD or Namespace dropped from the build is kept; everything else,
