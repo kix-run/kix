@@ -244,8 +244,8 @@ when a check fails or the path is not evaluated by default.
 
 ### Images and versions (I)
 
-- I1. Does a default image lack a digest? Fix: `nix run nixpkgs#crane -- digest <ref>` for the multi-arch index.
-- I2. Does `repository` omit the registry host? Fix: `docker.io/org/name`.
+- I1. Does a default image lack a digest? Fix: `nix run nixpkgs#crane -- digest <ref>` for the multi-arch index. *(lib test: `image-digests-defaults-are-pinned` for `kix.options.image` defaults, `image-digests-no-literal-images` for an image string in a package file; it cannot see images set in Helm chart values)* An image that cannot run with a digest gets an entry with its reason in `kix/packages/unpinned-images.nix`.
+- I2. Does `repository` omit the registry host? Fix: `docker.io/org/name`. *(lib test: `image-digests-defaults-name-registry`)*
 - I3. Is a default tag floating (`latest`, `stable`, `next`) or prerelease? Fix: pin a stable release.
 - I4. Is a default image from a frozen or unmaintained registry (`bitnamilegacy/*`)? Fix: official upstream image.
 - I5. Do follower images (images from the same upstream release as the main image) drift from the main tag? Fix: `config.<c>.image.tag = lib.mkDefault config.image.tag;` and `tagText`. Separately released images (CSI sidecars) keep their own tags.
