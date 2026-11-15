@@ -54,7 +54,7 @@ kix.buildCluster {
             package = packages.experimental.envoy-gateway;
             config = {
               metrics.enabled = true;
-              settings.logging.level.default = "info";
+              settings.extensionApis.enableBackend = true;
               proxySpec.logging.level.default = "warn";
             };
           };

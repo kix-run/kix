@@ -53,7 +53,8 @@ let
 
   envoyProxyOf = ms: (byName "eg" (ofKind "EnvoyProxy" ms)).spec;
   configOf =
-    ms: builtins.fromJSON (byName "eg-config" (ofKind "ConfigMap" ms)).data."envoy-gateway.yaml";
+    ms:
+    builtins.fromJSON (byName "envoy-gateway-config" (ofKind "ConfigMap" ms)).data."envoy-gateway.yaml";
   dependsOn = m: m.metadata.annotations."kix.run/depends-on" or "";
   hashOf = cluster: part: k8s.extractStoreHash cluster.instances.${ns}.eg.raw.${part}.outPath;
 in
@@ -62,7 +63,7 @@ in
   # names Envoy Gateway fixes, and a GatewayClass that names the EnvoyProxy.
   envoy-gateway-renders-controller =
     let
-      deployment = byName "eg" (ofKind "Deployment" plain);
+      deployment = byName "envoy-gateway" (ofKind "Deployment" plain);
       container = builtins.head deployment.spec.template.spec.containers;
       class = byName "eg" (ofKind "GatewayClass" plain);
       gateway = byName "eg" (ofKind "Gateway" plain);
@@ -73,6 +74,7 @@ in
     (
       byName "envoy-gateway" (ofKind "Service" plain) != null
       && byName "eg-certgen" (ofKind "Job" plain) != null
+      && byName "envoy-gateway-certgen" (ofKind "ServiceAccount" plain) != null
       &&
         byName "envoy-gateway-topology-injector.${ns}" (ofKind "MutatingWebhookConfiguration" plain) != null
       && lib.hasPrefix "docker.io/envoyproxy/gateway:v1.10.0@sha256:" container.image
@@ -100,7 +102,7 @@ in
     let
       cluster = clusterWith { };
       ms = manifests cluster;
-      deployment = byName "eg" (ofKind "Deployment" ms);
+      deployment = byName "envoy-gateway" (ofKind "Deployment" ms);
       class = byName "eg" (ofKind "GatewayClass" ms);
       gateway = byName "eg" (ofKind "Gateway" ms);
       certSecret = byName "secret-ref-eg-envoy-gateway" (ofKind "PackageInstance" ms);
@@ -250,7 +252,7 @@ in
       ) spread
       &&
         (builtins.head spread).labelSelector.matchLabels."gateway.envoyproxy.io/owning-gateway-name" == "eg"
-      && (byName "eg" (ofKind "Deployment" zoned)).spec.replicas == 2
+      && (byName "envoy-gateway" (ofKind "Deployment" zoned)).spec.replicas == 2
     )
     || throw "envoy-gateway availability: ${builtins.toJSON proxy}";
 
@@ -349,4 +351,29 @@ in
       withGatewayApi
       { instances.other.gateway-api.package = gatewayApi; }
     ]);
+
+  # A Gateway with no rendered listener is refused; HTTPS without
+  # certificateRefs is a placeholder.
+  envoy-gateway-needs-a-listener = evalFails (clusterWith {
+    config.listeners = [
+      {
+        name = "https";
+        port = 443;
+        protocol = "HTTPS";
+        tls.certificateRefs = [ ];
+      }
+    ];
+  });
+
+  # With useListenerPortAsContainerPort the proxies listen on the listener
+  # port itself, and the policy opens that port.
+  envoy-gateway-listener-port-as-container-port =
+    let
+      cnps = ofKind "CiliumNetworkPolicy" (msWith {
+        extra = netpolOn;
+        config.proxySpec.provider.kubernetes.useListenerPortAsContainerPort = true;
+      });
+      ports = lib.concatMap (r: map (p: p.port) r.ports) (byName "eg-proxy-ingress" cnps).spec.ingress;
+    in
+    builtins.elem 80 ports && !(builtins.elem 10080 ports);
 }

@@ -151,6 +151,10 @@ in
     # any namespace find it by name.
     scope = "cluster";
     k8s.minVersion = "1.26";
+    compatibleWith.gatewayApi = {
+      minVersion = "1.6.1";
+      reason = "Traefik watches TLSRoute and BackendTLSPolicy at v1, and the package is tested with Gateway API 1.6.1.";
+    };
     network.intents = {
       # HTTPRoutes name their backends at runtime, on any port, so the graph
       # cannot see Traefik's upstream connections.
@@ -318,7 +322,7 @@ in
       {
         self,
         config,
-        gatewayApi,
+        gatewayApi ? null,
         prometheus ? null,
         ...
       }:
@@ -566,7 +570,7 @@ in
 
         # Traefik's Gateway provider does not start while any watched kind
         # is missing, so the Deployment requires each CRD.
-        crds = gatewayApi.out.crds;
+        crds = import ../gateway-api/require.nix { inherit scope; } gatewayApi;
         watchedCrds = [
           crds.GatewayClass
           crds.Gateway
