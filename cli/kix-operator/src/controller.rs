@@ -484,6 +484,26 @@ async fn start_queued(
         return Ok(Action::await_change());
     }
 
+    // The operator deploys one record of a Kix cluster at a time. A record
+    // it is still deploying, or will resume after a restart, finishes first,
+    // and this one supersedes it afterwards.
+    let deploying = ctx
+        .records
+        .deploying(cluster)
+        .await
+        .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
+    if let Some(running) = deploying
+        .iter()
+        .find(|r| r.operator_driven && r.name != name)
+    {
+        tracing::info!(
+            name,
+            deploying = %running.name,
+            "Another activation of this cluster is deploying, waiting for it to finish"
+        );
+        return Ok(Action::requeue(QUEUED_REQUEUE_INTERVAL));
+    }
+
     // Supersede any older Queued activations.
     for q in &queued {
         if q.name != name {
@@ -1041,6 +1061,37 @@ mod tests {
             .await
             .unwrap();
         (result, after.data)
+    }
+
+    /// A Queued record waits while the operator still deploys another
+    /// record of the same Kix cluster, and changes nothing meanwhile.
+    #[tokio::test]
+    async fn a_queued_record_waits_for_a_deploying_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let deploying = json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": "Activation",
+            "metadata": {
+                "name": "a-old",
+                "labels": { "app.kubernetes.io/managed-by": "kix", (keys::CLUSTER_LABEL): "a" },
+            },
+            "spec": { "cluster": "a", "source": { "type": "storePath", "path": "/nonexistent" } },
+            "status": { "phase": PHASE_DEPLOYING },
+        });
+        let record = queued(dir.path(), Some(HERE), None);
+        let api = FakeApi::new(vec![kube_system(HERE), deploying, record.clone()]);
+        let (result, after) = reconcile_on(&api, record).await;
+        assert!(
+            matches!(result, Ok(ref action) if *action == Action::requeue(QUEUED_REQUEUE_INTERVAL)),
+            "{result:?}"
+        );
+        assert!(after.get("status").is_none(), "{after}");
+        let writes: Vec<String> = api
+            .requests()
+            .into_iter()
+            .filter(|r| !r.starts_with("GET"))
+            .collect();
+        assert!(writes.is_empty(), "{writes:?}");
     }
 
     /// A Queued build checked against another Kubernetes version is marked
