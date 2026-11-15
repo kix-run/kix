@@ -1,0 +1,47 @@
+name: Library tests
+
+# Runs the kix/lib evaluation test suite (kix/lib/tests), the flake check
+# `kix-lib-tests`. The suite is plain Nix and needs no Helm rendering, so it
+# runs with `nix build` rather than through the kix render loop that
+# bundle-checks.yml uses for the cluster checks.
+
+on:
+  pull_request:
+    paths:
+      - 'kix/**'
+      - 'clusters/flake.lock'
+      - 'flake.nix'
+      - 'flake.lock'
+      - '.github/workflows/lib-tests.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'kix/**'
+      - 'clusters/flake.lock'
+      - 'flake.nix'
+      - 'flake.lock'
+      - '.github/workflows/lib-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lib-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lib-tests:
+    runs-on: [self-hosted, spindle-8c-16g]
+    timeout-minutes: 30
+    env:
+      NIX_CONFIG: |
+        extra-experimental-features = nix-command flakes pipe-operators
+        accept-flake-config = true
+        access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: kix/lib tests
+        run: nix build ".#checks.x86_64-linux.kix-lib-tests" --no-link --print-build-logs
