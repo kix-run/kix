@@ -2,4 +2,4 @@
 kind = "changed"
 packages = ["secret", "secret-ref", "experimental/envoy-gateway", "experimental/smartctl-exporter"]
 +++
-`secret`, `secret-ref`, and `envoy-gateway` no longer report a version, because they deploy no upstream software of their own. Their `PackageInstance` records drop the placeholder versions `1.0.0` and `1.1.0`. `smartctl-exporter` now reports the version of the exporter it runs, `0.14.0`, rather than the version of its Helm chart, `0.16.0`.
+No configuration changes are needed. `secret` and `secret-ref` no longer report the placeholder version `1.0.0`, and `envoy-gateway` no longer reports `1.1.0`. None of those packages runs software of its own, so `kix list packages` now shows `-` for them and their `PackageInstance` records omit `spec.version`. `smartctl-exporter` now reports `0.14.0`, the exporter version it runs, and keeps the same container image. Before, it reported `0.16.0`, its Helm chart version.
