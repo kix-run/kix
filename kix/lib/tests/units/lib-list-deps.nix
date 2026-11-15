@@ -108,7 +108,7 @@ let
   consumerData = cluster: (byName "consumer" (ofKind "ConfigMap" (manifests cluster))).data;
   markerOf =
     name: cluster: (byName name (ofKind "ConfigMap" (manifests cluster))).data.marker or "absent";
-  dependsOn = m: (m.metadata.annotations or { }).${kixKeys.dependsOn} or "";
+  dependsOn = m: m.metadata.annotations.${kixKeys.dependsOn} or "";
   dependsOnPart =
     cluster: ns: inst:
     lib.hasInfix (k8s.extractStoreHash cluster.instances.${ns}.${inst}.raw.cm.outPath) (

@@ -45,17 +45,23 @@ let
   inherit (import ../../core/error.nix { inherit lib; }) fail;
   kixKeys = (import ../../core/annotations.nix).keys;
   core = import ../../core/default.nix { inherit lib; };
-  inherit (import ../../eval/edges.nix { k8s = core; }) isWorkload isServiceRef;
+  inherit
+    (import ../../eval/edges.nix {
+      inherit lib;
+      k8s = core;
+    })
+    isWorkload
+    isServiceRef
+    ;
+  inherit (import ../../core/pod-spec.nix { inherit lib; }) podSpecOf podTemplateOf;
+  inherit (import ../../core/util.nix { inherit lib; }) groupOf plain;
 
   monitoringGroup = "monitoring.coreos.com";
   vmGroup = "operator.victoriametrics.com";
-  groupOf = r: lib.head (lib.splitString "/" (r.rawManifest.apiVersion or ""));
+  apiGroupOf = r: groupOf (r.rawManifest.apiVersion or "");
   isKindOf =
     group: kind: r:
-    (r.kind or "") == kind && groupOf r == group;
-
-  # Strip string context so a value can be used in attribute and resource names.
-  plain = s: builtins.unsafeDiscardStringContext (toString s);
+    (r.kind or "") == kind && apiGroupOf r == group;
 
   # Strip string context from every string in a value.
   plainDeep =
@@ -174,11 +180,11 @@ in
       workloads = map (
         w:
         let
-          podSpec = w.rawManifest.spec.template.spec or { };
+          podSpec = podSpecOf w.rawManifest;
         in
         {
           namespace = nsOfRaw w.rawManifest;
-          podLabels = w.rawManifest.spec.template.metadata.labels or { };
+          podLabels = (podTemplateOf w.rawManifest).metadata.labels or { };
           hostNetwork = podSpec.hostNetwork or false;
           namedPorts = builtins.listToAttrs (
             builtins.concatMap (
@@ -371,7 +377,7 @@ in
           w:
           builtins.concatMap (
             c: map (e: e.value or null) (builtins.filter (e: e.name == name) (c.env or [ ]))
-          ) (w.rawManifest.spec.template.spec.containers or [ ])
+          ) ((podSpecOf w.rawManifest).containers or [ ])
         ) (builtins.filter isWorkload resources);
 
       # Return true while the VictoriaMetrics operator converts the
@@ -431,7 +437,7 @@ in
         r:
         let
           raw = r.rawManifest;
-          declared = (r.factBehavior or { }).selfScrapes or null;
+          declared = r.factBehavior.selfScrapes or null;
           namespace = plain (nsOfRaw raw);
         in
         if declared == null || !(nsResources ? ${namespace}) then
@@ -564,7 +570,7 @@ in
       candidatesOf =
         sk: table: slot:
         builtins.concatMap (objectsOf sk.slotGroup) table.${slot}
-        ++ builtins.concatMap (objectsOf monitoringGroup) ((sk.converted or { }).${slot} or [ ]);
+        ++ builtins.concatMap (objectsOf monitoringGroup) (sk.converted.${slot} or [ ]);
 
       # Return the objects `cr` selects through the slots of `table`.
       selectedBy =
@@ -600,7 +606,7 @@ in
           spec = r.rawManifest.spec or { };
           kind = r.kind or "";
         in
-        if kind == "NetworkPolicy" && groupOf r == "networking.k8s.io" then
+        if kind == "NetworkPolicy" && apiGroupOf r == "networking.k8s.io" then
           builtins.elem "Ingress" (spec.policyTypes or [ "Ingress" ])
         else
           builtins.elem kind (enforcerApi.policyKinds or [ ]) && (spec ? ingress || spec ? ingressDeny);

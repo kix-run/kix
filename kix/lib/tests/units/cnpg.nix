@@ -127,7 +127,7 @@ let
     ];
   ms = cluster: manifests cluster;
   clusterSpec = cluster: (byName "postgres" (ofKind "Cluster" (ms cluster))).spec;
-  dependsOn = m: (m.metadata.annotations or { }).${kixKeys.dependsOn} or "";
+  dependsOn = m: m.metadata.annotations.${kixKeys.dependsOn} or "";
   hashOf = r: builtins.unsafeDiscardStringContext r.out.identityHash;
 
   # The operator and a cluster `postgres` that imports from `old-db`, a
@@ -295,7 +295,7 @@ in
       all = ms cluster;
       operator = cluster.instances.cnpg-system.cnpg-operator;
       jobHash = builtins.unsafeDiscardStringContext operator.raw.webhookCheck.out.identityHash;
-      dependsOn = m: (m.metadata.annotations or { }).${kixKeys.dependsOn} or "";
+      dependsOn = m: m.metadata.annotations.${kixKeys.dependsOn} or "";
       customResources = builtins.filter (m: lib.hasPrefix "postgresql.cnpg.io/" m.apiVersion) all;
       ungated = map (m: "${m.kind}/${m.metadata.name}") (
         builtins.filter (m: !(lib.hasInfix jobHash (dependsOn m))) customResources
@@ -730,9 +730,9 @@ in
       secrets = map (m: m.metadata.name) (
         builtins.filter (m: m.metadata.namespace == "data") (ofKind "Secret" all)
       );
-      imported = builtins.filter (
-        m: (m.metadata.annotations or { }).${kixKeys.importKind} or null == "Secret"
-      ) (ofKind "PackageInstance" all);
+      imported = builtins.filter (m: m.metadata.annotations.${kixKeys.importKind} or null == "Secret") (
+        ofKind "PackageInstance" all
+      );
       roleSecret = lib.findFirst (
         m: m.metadata.annotations.${kixKeys.importName} == "data-app-db-role"
       ) null imported;

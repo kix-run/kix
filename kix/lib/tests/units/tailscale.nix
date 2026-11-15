@@ -189,8 +189,8 @@ let
   cluster = clusterWith { };
   ms = manifests cluster;
   find = kind: name: byName name (ofKind kind ms);
-  readinessOf = m: (m.metadata.annotations or { }).${kixKeys.readiness} or null;
-  dependsOn = m: lib.splitString "," ((m.metadata.annotations or { }).${kixKeys.dependsOn} or "");
+  readinessOf = m: m.metadata.annotations.${kixKeys.readiness} or null;
+  dependsOn = m: lib.splitString "," (m.metadata.annotations.${kixKeys.dependsOn} or "");
   hashOf =
     c: ns: inst: part:
     builtins.unsafeDiscardStringContext c.instances.${ns}.${inst}.raw.${part}.out.identityHash;
@@ -820,7 +820,7 @@ in
         modules = [ netpolOn ];
       });
       operandPolicies = builtins.filter (
-        m: (m.metadata.labels or { }).${kixKeys.policyType} or null == "operator-managed-workload"
+        m: m.metadata.labels.${kixKeys.policyType} or null == "operator-managed-workload"
       ) enforced;
     in
     (
@@ -897,7 +897,7 @@ in
         builtins.filter (
           m:
           m.metadata.namespace or null == "demo"
-          && (m.metadata.labels or { }).${kixKeys.policyType} or null == "external-ingress-supplement"
+          && m.metadata.labels.${kixKeys.policyType} or null == "external-ingress-supplement"
         ) (ofKind "CiliumNetworkPolicy" (manifests (lbCluster class [ netpolOn ])));
     in
     (

@@ -161,8 +161,8 @@ let
     nsName: inst: part:
     builtins.unsafeDiscardStringContext
       cluster.instances.${nsName}.${inst}.raw.${part}.out.identityHash;
-  dependsOn = m: lib.splitString "," ((m.metadata.annotations or { }).${kixKeys.dependsOn} or "");
-  readinessOf = m: (m.metadata.annotations or { }).${kixKeys.readiness} or null;
+  dependsOn = m: lib.splitString "," (m.metadata.annotations.${kixKeys.dependsOn} or "");
+  readinessOf = m: m.metadata.annotations.${kixKeys.readiness} or null;
   ready = builtins.toJSON {
     condition = {
       status = "True";
@@ -360,7 +360,7 @@ in
         monitor:
         builtins.filter (
           s:
-          lib.all (k: (s.metadata.labels or { }).${k} or null == monitor.spec.selector.matchLabels.${k}) (
+          lib.all (k: s.metadata.labels.${k} or null == monitor.spec.selector.matchLabels.${k}) (
             builtins.attrNames monitor.spec.selector.matchLabels
           )
         ) (services on);
@@ -425,7 +425,7 @@ in
         ofKind "CustomResourceDefinition" ms
       );
       unlabelled = builtins.filter (
-        c: (c.metadata.labels or { })."external-secrets.io/component" or null != "controller"
+        c: c.metadata.labels."external-secrets.io/component" or null != "controller"
       ) crds;
       certArgs =
         (builtins.head (find "Deployment" "external-secrets-cert-controller").spec.template.spec.containers)

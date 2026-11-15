@@ -138,7 +138,7 @@ let
     }:
     let
       publicDomain = clusterConfig.cluster.domain or null;
-      configHost = (config.ingress or { }).host or null;
+      configHost = config.ingress.host or null;
       candidateHost =
         if configHost != null then
           configHost
@@ -478,7 +478,7 @@ rec {
       hasTls = useIngress && clusterIssuer != null;
       tlsSecretName = "${name}-tls";
 
-      configAnnotations = (config.ingress or { }).annotations or { };
+      configAnnotations = config.ingress.annotations or { };
 
       multiPathRules =
         let

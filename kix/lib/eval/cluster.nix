@@ -33,6 +33,7 @@
 
 let
   inherit (import ../core/error.nix { inherit lib; }) fail warning;
+  inherit (import ../core/util.nix { inherit lib; }) plain namespaceOf;
 in
 {
   buildCluster =
@@ -132,7 +133,7 @@ in
               parts = lib.splitString "/" key;
               nsName = builtins.elemAt parts 0;
               instName = builtins.elemAt parts 1;
-              instCfg = (mergedInstances.${nsName} or { }).${instName} or null;
+              instCfg = mergedInstances.${nsName}.${instName} or null;
               where = if pins.file == null then "the pins attrset" else instancePinsLib.relativeFile pins.file;
             in
             if instCfg == null then
@@ -476,7 +477,7 @@ in
           inj:
           if builtins.isFunction inj.config then
             let
-              consumerCfg = (configMap.${inj.consumerNs} or { }).${inj.consumerInst} or { };
+              consumerCfg = configMap.${inj.consumerNs}.${inj.consumerInst} or { };
             in
             inj // { config = inj.config consumerCfg; }
           else
@@ -977,7 +978,6 @@ in
       # rejects the pods.
       podSecurityAssertions =
         let
-          plain = v: builtins.unsafeDiscardStringContext (toString v);
           levelOf = ns: if builtins.elem ns allNsNames then namespacePodSecurity ns else null;
           sourceOf =
             ns:
@@ -1020,7 +1020,6 @@ in
       quotaAssertions =
         let
           quotaCheck = import ../vocab/quota-use.nix { inherit lib; };
-          plain = v: builtins.unsafeDiscardStringContext (toString v);
           ofNamespace =
             nsName:
             let
@@ -1089,8 +1088,7 @@ in
       # the PackageInstance record hold no data.
       holdsDataAssertions =
         let
-          plain = v: builtins.unsafeDiscardStringContext (toString v);
-          isStateful = inst: ((inst._meta.packageMeta or { }).lifecycle or null) == "stateful";
+          isStateful = inst: (inst._meta.packageMeta.lifecycle or null) == "stateful";
           ofInstance =
             inst:
             let
@@ -1138,7 +1136,6 @@ in
       # cross-resource validation without naming the owning instances.
       sharedClusterObjectAssertions =
         let
-          plain = v: builtins.unsafeDiscardStringContext (toString v);
           owned = builtins.concatMap (
             inst:
             map
@@ -1251,11 +1248,7 @@ in
             else
               [ ];
           # Attribute names may not carry context; the namespace value does.
-          nsOf =
-            r:
-            builtins.unsafeDiscardStringContext (
-              toString (r.rawManifest.metadata.namespace or "cluster-scoped")
-            );
+          nsOf = r: plain (namespaceOf r.rawManifest);
           refsByResource = map (r: {
             ns = nsOf r;
             refs = walk r.rawManifest;

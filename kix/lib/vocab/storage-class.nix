@@ -133,7 +133,7 @@ in
       names = builtins.attrNames classes;
       namesText = builtins.concatStringsSep ", " names;
       annotated = builtins.filter (n: isAnnotatedDefault classes.${n}) names;
-      binding = (clusterConfig.cluster.roles.storageClasses or { }).binding or null;
+      binding = clusterConfig.cluster.roles.storageClasses.binding or null;
       shadowable = binding == "shadowable";
 
       # `instancePartResources` (`eval/helpers.nix`) skips keys named `root` or

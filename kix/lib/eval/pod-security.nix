@@ -21,46 +21,13 @@
 { lib }:
 
 let
-  # Helm charts can render `securityContext: null` or `volumes: null`.
-  # Nix's `or` operator only falls back when an attribute is missing.
-  attrsOr = v: if builtins.isAttrs v then v else { };
-  listOr = v: if builtins.isList v then v else [ ];
-  plain = v: builtins.unsafeDiscardStringContext (toString v);
+  inherit (import ../core/util.nix { inherit lib; }) attrsOr listOr plain;
+  workloadKinds = import ../core/workload-kinds.nix { inherit lib; };
+  podSpecReader = import ../core/pod-spec.nix { inherit lib; };
 
-  podKinds = {
-    Pod = "";
-    ReplicationController = "";
-    Deployment = "apps";
-    StatefulSet = "apps";
-    DaemonSet = "apps";
-    ReplicaSet = "apps";
-    Job = "batch";
-    CronJob = "batch";
-  };
-
-  groupOf =
-    apiVersion:
-    let
-      parts = lib.splitString "/" apiVersion;
-    in
-    if builtins.length parts > 1 then builtins.head parts else "";
-
-  # Extract the pod spec from a workload or Pod manifest, or return null.
-  podSpecOf =
-    m:
-    let
-      kind = m.kind or "";
-      spec = attrsOr (m.spec or null);
-      templateSpec = s: attrsOr ((attrsOr (s.template or null)).spec or null);
-    in
-    if !(podKinds ? ${kind}) || podKinds.${kind} != groupOf (plain (m.apiVersion or "")) then
-      null
-    else if kind == "Pod" then
-      spec
-    else if kind == "CronJob" then
-      templateSpec (attrsOr ((attrsOr (spec.jobTemplate or null)).spec or null))
-    else
-      templateSpec spec;
+  # Return the pod spec of a built-in pod kind's manifest, or null for any
+  # other manifest.
+  podSpecOf = m: if workloadKinds.isPodKind m then podSpecReader.podSpecOf m else null;
 
   baselineCapabilities = [
     "AUDIT_WRITE"
@@ -243,8 +210,6 @@ let
     );
 in
 {
-  inherit podSpecOf;
-
   # Return Pod Security Standards violations for `manifest` at `level`
   # ("privileged", "baseline", or "restricted") as `[ { where, problem } ]`.
   violations =

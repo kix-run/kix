@@ -22,10 +22,7 @@ let
   zoneKey = config.cluster.topology.zoneKey;
   hostKey = config.cluster.topology.hostKey;
 
-  spreadKinds = [
-    "Deployment"
-    "StatefulSet"
-  ];
+  inherit (import ../../core/workload-kinds.nix { inherit lib; }) spreadKinds;
 
   zones = caps.availabilityZones or null;
   multiNode = caps.multiNode or null;

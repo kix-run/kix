@@ -388,9 +388,8 @@ in
           replicas = spec.replicas or null;
           templateSpec = spec.template.spec or { };
           hardAntiAffinity =
-            lst (
-              (templateSpec.affinity or { }).podAntiAffinity.requiredDuringSchedulingIgnoredDuringExecution or [ ]
-            ) != [ ];
+            lst (templateSpec.affinity.podAntiAffinity.requiredDuringSchedulingIgnoredDuringExecution or [ ])
+            != [ ];
           hardSpread = builtins.any (c: (c.whenUnsatisfiable or "") == "DoNotSchedule") (
             lst (templateSpec.topologySpreadConstraints or [ ])
           );

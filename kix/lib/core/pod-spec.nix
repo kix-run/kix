@@ -1,5 +1,8 @@
-# Read the Secrets and ConfigMaps a pod spec references.
+# Read a workload's pod template, and the Secrets and ConfigMaps its pod
+# spec references.
 #
+# Library code reads a pod template only through `podTemplateOf` and
+# `podSpecOf`, so every check agrees on where a Pod and a CronJob keep theirs.
 # The key check (`eval/validate-keys.nix`), the Helm ordering
 # (`helm-dag.nix`), and the Job rerun hash (`core/resource.nix`) all ask which
 # objects a pod reads. They share this reader so they agree about every pod.
@@ -8,23 +11,27 @@
 { lib }:
 
 let
-  # Helm charts can render explicit nulls, which `or` does not catch.
-  safeList = v: if builtins.isList v then v else [ ];
-  safeAttrs = v: if builtins.isAttrs v then v else { };
+  inherit (import ./util.nix { inherit lib; }) listOr attrsOr;
+  workloadKinds = import ./workload-kinds.nix { inherit lib; };
 in
 rec {
-  # Return the pod spec of a workload manifest, or `{ }` when it has none.
-  podSpecOf =
+  # Return the pod template of a workload manifest, or `{ }` when it has none.
+  # A Pod is its own template, so its `metadata` and `spec` are returned.
+  podTemplateOf =
     r:
     let
-      spec = safeAttrs (r.spec or { });
-      template =
-        if (r.kind or null) == "CronJob" then
-          safeAttrs ((safeAttrs ((safeAttrs (spec.jobTemplate or { })).spec or { })).template or { })
-        else
-          safeAttrs (spec.template or { });
+      path = workloadKinds.templatePathOf (r.kind or "");
     in
-    safeAttrs (template.spec or { });
+    if path == null then
+      {
+        metadata = attrsOr (r.metadata or { });
+        spec = attrsOr (r.spec or { });
+      }
+    else
+      builtins.foldl' (acc: key: attrsOr (acc.${key} or { })) r path;
+
+  # Return the pod spec of a workload manifest, or `{ }` when it has none.
+  podSpecOf = r: attrsOr ((podTemplateOf r).spec or { });
 
   # Return one entry for each Secret or ConfigMap reference in `podSpec`:
   # `{ kind; name; key; optional; where; subPath; }`.
@@ -39,9 +46,9 @@ rec {
     podSpec:
     let
       containers =
-        safeList (podSpec.containers or [ ])
-        ++ safeList (podSpec.initContainers or [ ])
-        ++ safeList (podSpec.ephemeralContainers or [ ]);
+        listOr (podSpec.containers or [ ])
+        ++ listOr (podSpec.initContainers or [ ])
+        ++ listOr (podSpec.ephemeralContainers or [ ]);
 
       entry = kind: name: key: optional: where: {
         inherit
@@ -59,10 +66,10 @@ rec {
       sourceReads =
         kind: nameField: src: where:
         let
-          s = safeAttrs src;
+          s = attrsOr src;
           name = s.${nameField} or null;
           optional = s.optional or false;
-          keyed = builtins.filter (it: builtins.isAttrs it && it ? key) (safeList (s.items or [ ]));
+          keyed = builtins.filter (it: builtins.isAttrs it && it ? key) (listOr (s.items or [ ]));
         in
         if name == null then
           [ ]
@@ -82,8 +89,8 @@ rec {
           s:
           lib.optionals (s ? secret) (sourceReads "Secret" "name" s.secret where)
           ++ lib.optionals (s ? configMap) (sourceReads "ConfigMap" "name" s.configMap where)
-        ) (safeList ((safeAttrs (v.projected or { })).sources or [ ]))
-      ) (safeList (podSpec.volumes or [ ]));
+        ) (listOr ((attrsOr (v.projected or { })).sources or [ ]))
+      ) (listOr (podSpec.volumes or [ ]));
 
       envReads = builtins.concatMap (
         c:
@@ -91,18 +98,18 @@ rec {
           ev:
           let
             where = "env ${ev.name or "?"} of container ${c.name or "?"}";
-            vf = safeAttrs (ev.valueFrom or { });
+            vf = attrsOr (ev.valueFrom or { });
             read =
               kind: ref:
               let
-                r = safeAttrs ref;
+                r = attrsOr ref;
               in
               lib.optional (r ? name && r.name != null) (
                 entry kind r.name (r.key or null) (r.optional or false) where
               );
           in
           read "Secret" (vf.secretKeyRef or null) ++ read "ConfigMap" (vf.configMapKeyRef or null)
-        ) (safeList (c.env or [ ]))
+        ) (listOr (c.env or [ ]))
         ++ builtins.concatMap (
           ef:
           let
@@ -110,16 +117,16 @@ rec {
             read =
               kind: ref:
               let
-                r = safeAttrs ref;
+                r = attrsOr ref;
               in
               lib.optional (r ? name && r.name != null) (entry kind r.name null (r.optional or false) where);
           in
           read "Secret" (ef.secretRef or null) ++ read "ConfigMap" (ef.configMapRef or null)
-        ) (safeList (c.envFrom or [ ]))
+        ) (listOr (c.envFrom or [ ]))
       ) containers;
 
       volumesByName = builtins.listToAttrs (
-        map (v: lib.nameValuePair (v.name or "") v) (safeList (podSpec.volumes or [ ]))
+        map (v: lib.nameValuePair (v.name or "") v) (listOr (podSpec.volumes or [ ]))
       );
 
       # A subPath into a Secret or ConfigMap volume without `items` names a
@@ -131,7 +138,7 @@ rec {
           let
             v = volumesByName.${m.name or ""} or { };
             sub = m.subPath or "";
-            whole = src: safeList ((safeAttrs src).items or [ ]) == [ ];
+            whole = src: listOr ((attrsOr src).items or [ ]) == [ ];
             read =
               kind: src: name:
               entry kind name (builtins.head (lib.splitString "/" sub)) (src.optional or false
@@ -151,7 +158,7 @@ rec {
             [ (read "ConfigMap" v.configMap v.configMap.name) ]
           else
             [ ]
-        ) (safeList (c.volumeMounts or [ ]))
+        ) (listOr (c.volumeMounts or [ ]))
       ) containers;
     in
     envReads ++ volumeReads ++ subPathReads;

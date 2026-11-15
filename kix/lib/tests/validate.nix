@@ -19,6 +19,7 @@
 }:
 
 let
+  inherit (import ../core/util.nix { inherit lib; }) plain;
   # Kix's own annotation keys and API names, spelled once in
   # core/annotations.nix.
   kixAnnotations = import ../core/annotations.nix;
@@ -1310,7 +1311,6 @@ in
           instances.infra.consumer.package = markerConsumerPackage;
         }
       ];
-      plain = v: builtins.unsafeDiscardStringContext (toString v);
       packages = lib.mapAttrs (_: map plain) cluster.packageIndexContent.packages;
       provider = cluster.clusterInstances.infra.provider;
       consumer = cluster.clusterInstances.infra.consumer;
@@ -1354,7 +1354,6 @@ in
           instances.infra.alpha.package = holderPackage shared "alpha";
         }
       ];
-      plain = v: builtins.unsafeDiscardStringContext (toString v);
       packages = lib.mapAttrs (_: map plain) cluster.packageIndexContent.packages;
       listedUnder =
         path: builtins.attrNames (lib.filterAttrs (_: paths: builtins.elem path paths) packages);

@@ -6,36 +6,25 @@
 
 let
   inherit (import ./core/error.nix { inherit lib; }) fail;
-  workloadKinds = [
-    "Deployment"
-    "StatefulSet"
-    "DaemonSet"
-    "Job"
-    "CronJob"
-  ];
+  inherit (import ./core/util.nix { inherit lib; }) listOr groupOf;
+  inherit (import ./core/workload-kinds.nix { inherit lib; }) servingKinds builtKinds;
+
+  # The chart kinds whose pods Kix inspects: the kinds a package builds with a
+  # typed scope builder.
+  workloadKinds = builtKinds;
 
   isWorkloadKind = kind: builtins.elem kind workloadKinds;
 
   podSpec = import ./core/pod-spec.nix { inherit lib; };
   inherit (podSpec) podSpecOf;
 
-  podLabelsOf =
-    r:
-    if r.kind == "CronJob" then
-      ((((r.spec or { }).jobTemplate or { }).spec or { }).template.metadata or { }).labels or { }
-    else
-      (((r.spec or { }).template or { }).metadata or { }).labels or { };
+  podLabelsOf = r: (podSpec.podTemplateOf r).metadata.labels or { };
 
   # Return true when every key in selector matches labels.
   isSubsetMatch =
     selector: labels:
     selector != { }
     && builtins.all (k: labels ? ${k} && labels.${k} == selector.${k}) (builtins.attrNames selector);
-
-  # Return v when it is a list, or [ ] when a Helm chart emits explicit null
-  # for a list field (which `or` does not catch because the key exists).
-  safeList = v: if builtins.isList v then v else [ ];
-
 in
 rec {
   inherit
@@ -47,7 +36,7 @@ rec {
 
   # Return the "Kind/name" key for a raw JSON resource, which is unique within
   # a single Helm release.
-  resourceId = r: "${r.kind}/${(r.metadata or { }).name or ""}";
+  resourceId = r: "${r.kind}/${r.metadata.name or ""}";
 
   # Infer dependency edges `{ from, to, type }` between raw JSON resources
   # before wrapping. `from` depends on `to` and is deployed after it.
@@ -56,7 +45,7 @@ rec {
     let
       byKindName = builtins.listToAttrs (
         map (r: {
-          name = "${r.kind}/${(r.metadata or { }).name or ""}";
+          name = "${r.kind}/${r.metadata.name or ""}";
           value = r;
         }) resources
       );
@@ -113,13 +102,13 @@ rec {
             ]
           else
             [ ]
-        ) (safeList (r.subjects or [ ]))
+        ) (listOr (r.subjects or [ ]))
       ) (builtins.filter (r: r.kind == "RoleBinding" || r.kind == "ClusterRoleBinding") resources);
 
       serviceEdges = builtins.concatMap (
         svc:
         let
-          svcSelector = (svc.spec or { }).selector or { };
+          svcSelector = svc.spec.selector or { };
           matching = builtins.filter (w: isSubsetMatch svcSelector (podLabelsOf w)) workloads;
         in
         map (w: {
@@ -132,7 +121,7 @@ rec {
       hpaEdges = builtins.concatMap (
         r:
         let
-          targetRef = (r.spec or { }).scaleTargetRef or { };
+          targetRef = r.spec.scaleTargetRef or { };
           targetKey = "${targetRef.kind or ""}/${targetRef.name or ""}";
         in
         if targetRef != { } && byKindName ? ${targetKey} then
@@ -150,7 +139,7 @@ rec {
       pdbEdges = builtins.concatMap (
         r:
         let
-          pdbSelector = ((r.spec or { }).selector or { }).matchLabels or { };
+          pdbSelector = r.spec.selector.matchLabels or { };
           matching = builtins.filter (w: isSubsetMatch pdbSelector (podLabelsOf w)) workloads;
         in
         map (w: {
@@ -163,7 +152,7 @@ rec {
       ingressEdges = builtins.concatMap (
         r:
         let
-          defaultSvcName = ((r.spec or { }).defaultBackend.service or { }).name or null;
+          defaultSvcName = r.spec.defaultBackend.service.name or null;
           defaultEdges =
             if defaultSvcName != null && byKindName ? "Service/${defaultSvcName}" then
               [
@@ -180,7 +169,7 @@ rec {
             builtins.concatMap (
               path:
               let
-                svcName = (path.backend.service or { }).name or null;
+                svcName = path.backend.service.name or null;
               in
               if svcName != null && byKindName ? "Service/${svcName}" then
                 [
@@ -192,8 +181,8 @@ rec {
                 ]
               else
                 [ ]
-            ) (safeList ((rule.http or { }).paths or [ ]))
-          ) (safeList ((r.spec or { }).rules or [ ]));
+            ) (listOr (rule.http.paths or [ ]))
+          ) (listOr (r.spec.rules or [ ]));
         in
         defaultEdges ++ ruleEdges
       ) (builtins.filter (r: r.kind == "Ingress") resources);
@@ -218,8 +207,8 @@ rec {
               ]
             else
               [ ]
-          ) (safeList (rule.backendRefs or [ ]))
-        ) (safeList ((r.spec or { }).rules or [ ]))
+          ) (listOr (rule.backendRefs or [ ]))
+        ) (listOr (r.spec.rules or [ ]))
       ) (builtins.filter (r: r.kind == "HTTPRoute") resources);
 
       # Link custom resources to the chart's own CRD of the same group and kind
@@ -232,12 +221,6 @@ rec {
           value = crd;
         }) (builtins.filter (r: r.kind == "CustomResourceDefinition") resources)
       );
-      groupOf =
-        apiVersion:
-        let
-          parts = lib.splitString "/" apiVersion;
-        in
-        if builtins.length parts == 2 then builtins.head parts else "";
       instanceOfEdges = builtins.concatMap (
         r:
         let
@@ -258,11 +241,9 @@ rec {
       serviceMonitorEdges = builtins.concatMap (
         r:
         let
-          smSelector = ((r.spec or { }).selector or { }).matchLabels or { };
+          smSelector = r.spec.selector.matchLabels or { };
           services = builtins.filter (s: s.kind == "Service") resources;
-          matching = builtins.filter (
-            svc: isSubsetMatch smSelector ((svc.metadata or { }).labels or { })
-          ) services;
+          matching = builtins.filter (svc: isSubsetMatch smSelector (svc.metadata.labels or { })) services;
         in
         map (svc: {
           from = r;
@@ -307,11 +288,7 @@ rec {
     let
       ofKinds = kinds: builtins.filter (r: builtins.elem r.kind kinds) resources;
       services = ofKinds [ "Service" ];
-      workloads = ofKinds [
-        "Deployment"
-        "StatefulSet"
-        "DaemonSet"
-      ];
+      workloads = ofKinds servingKinds;
       names = rs: builtins.concatStringsSep ", " (map (r: "${r.kind}/${r.name}") rs);
       rootHint =
         kind: name:

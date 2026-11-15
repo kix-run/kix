@@ -51,13 +51,9 @@ rec {
 
   factPrefix = "kix-fact-";
 
-  # These workload kinds consume endpoint facts; other kinds forward them.
-  terminatorKinds = [
-    "Deployment"
-    "StatefulSet"
-    "DaemonSet"
-    "Job"
-  ];
+  # The workload kinds Kix builds consume endpoint facts. Other kinds forward
+  # them.
+  terminatorKinds = (import ./workload-kinds.nix { inherit lib; }).builtKinds;
 
   conducts = kind: !(builtins.elem kind terminatorKinds);
 

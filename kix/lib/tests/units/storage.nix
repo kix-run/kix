@@ -139,7 +139,7 @@ let
   classNamed = name: cluster: byName name (ofKind "StorageClass" (manifests cluster));
   shadowable.cluster.roles.storageClasses.binding = "shadowable";
 
-  dependsOn = m: (m.metadata.annotations or { }).${kixKeys.dependsOn} or "";
+  dependsOn = m: m.metadata.annotations.${kixKeys.dependsOn} or "";
   # The identity hash a consumer's depends-on lists for a part of an
   # instance.
   hashOf =

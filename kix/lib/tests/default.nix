@@ -418,7 +418,7 @@ let
     mods:
     let
       hasCapped = builtins.any (
-        m: builtins.isAttrs m && (((m.instances or { }).appns or { }).capped or { }) ? package
+        m: builtins.isAttrs m && (m.instances.appns.capped or { }) ? package
       ) mods;
       cluster = mkCluster (
         mods ++ lib.optional (!hasCapped) { instances.appns.capped.package = mkLevelPackage { }; }
@@ -1226,7 +1226,7 @@ let
       m: (m.metadata.name or "") == name
     ) (throw "manifest '${name}' not found") ms;
 
-  dependsOn = m: (m.metadata.annotations or { }).${kixKeys.dependsOn} or "";
+  dependsOn = m: m.metadata.annotations.${kixKeys.dependsOn} or "";
   # Identity hash of a part of the appns/app instance. rawManifests carry no
   # identity annotation (the CLI stamps it from the store path), so the
   # tests read the resource's own out.identityHash.
