@@ -43,7 +43,7 @@ does not contact the operator.
 ## How the operator runs a deploy
 
 The operator fails any resource that goes 300 seconds without progress toward
-becoming ready, regardless of `--timeout`. The deploy stops at the first
+becoming ready. The deploy stops at the first
 resource that fails.
 
 Submitting a newer deploy or rollback request does not cancel a running deploy.

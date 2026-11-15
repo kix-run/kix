@@ -67,8 +67,9 @@ const FINALIZER: &str = keys::OPERATOR_GC_FINALIZER;
 const QUEUED_REQUEUE_INTERVAL: Duration = Duration::from_secs(5);
 
 /// How long a resource may go without readiness progress before an operator
-/// deploy fails it. `kix deploy --operator` does not send its `--timeout`
-/// to the operator, so every operator deploy uses this value.
+/// deploy fails it. Every operator deploy uses this value. `kix deploy
+/// --operator` refuses `--timeout` with `[K7218]`, and that message quotes
+/// this value.
 const READINESS_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Default requeue interval after successful reconciliation.
