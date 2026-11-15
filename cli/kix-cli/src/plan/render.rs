@@ -7,7 +7,7 @@
 //! refusals, prune outcomes, unchecked resources, and object write/delete
 //! counts) and three-way drift findings.
 
-use std::fmt::Write;
+use std::fmt::{self, Write};
 
 use crate::output;
 
@@ -32,13 +32,20 @@ pub fn label_tag(labels: &[ChangeLabel]) -> String {
 
 /// Render the text plan sections that follow the package diff.
 pub fn render_text(plan: &Plan) -> String {
+    written(|out| {
+        write_stops(out, plan)?;
+        write_not_kept(out, plan)?;
+        write_drift(out, plan)?;
+        write_prune(out, plan)?;
+        write_not_checked(out, plan)?;
+        write_objects(out, plan)
+    })
+}
+
+/// Return the text that `write` writes. Writing to a `String` cannot fail.
+fn written(write: impl FnOnce(&mut String) -> fmt::Result) -> String {
     let mut out = String::new();
-    write_stops(&mut out, plan);
-    write_not_kept(&mut out, plan);
-    write_drift(&mut out, plan);
-    write_prune(&mut out, plan);
-    write_not_checked(&mut out, plan);
-    write_objects(&mut out, plan);
+    write(&mut out).expect("writing to a String cannot fail");
     out
 }
 
@@ -46,38 +53,39 @@ pub fn render_text(plan: &Plan) -> String {
 /// digest, and the count of unchanged objects written again from earlier
 /// builds. An unchanged Job that runs again only if its last run failed is
 /// not counted: the Job rerun lines name the ones that will.
-fn write_objects(out: &mut String, plan: &Plan) {
+fn write_objects(out: &mut String, plan: &Plan) -> fmt::Result {
     let (Some(objects), Some(digest)) = (&plan.objects, &plan.objects_digest) else {
-        return;
+        return Ok(());
     };
     let writes: Vec<_> = objects
         .writes
         .iter()
         .filter(|w| w.change.certain())
         .collect();
-    let _ = writeln!(out);
-    let _ = writeln!(
+    writeln!(out)?;
+    writeln!(
         out,
         "{} {} to write, {} to delete {}",
         output::bold("Objects:"),
         writes.len(),
         objects.deletes.len(),
         output::dim(&format!("({digest})")),
-    );
+    )?;
     let reapplied = writes
         .iter()
         .filter(|w| w.change == WriteChange::Reapplied)
         .count();
     if reapplied > 0 {
-        let _ = writeln!(
+        writeln!(
             out,
             "  {} {reapplied} written again unchanged from an earlier deploy (changes nothing unless edited on the cluster)",
             output::yellow("↻"),
-        );
+        )?;
     }
+    Ok(())
 }
 
-fn write_stops(out: &mut String, plan: &Plan) {
+fn write_stops(out: &mut String, plan: &Plan) -> fmt::Result {
     let conflicts = plan.conflicts.items();
     let refusals = plan.admission.items();
     let prune_refused: Vec<_> = plan
@@ -88,69 +96,70 @@ fn write_stops(out: &mut String, plan: &Plan) {
         .collect();
     let count = conflicts.len() + refusals.len() + prune_refused.len();
     if count == 0 {
-        return;
+        return Ok(());
     }
-    let _ = writeln!(out);
-    let _ = writeln!(
+    writeln!(out)?;
+    writeln!(
         out,
         "{}",
         output::red(&format!(
             "The deploy would stop on {count} write{}:",
             if count == 1 { "" } else { "s" }
         ))
-    );
+    )?;
     for c in conflicts {
-        let _ = writeln!(
+        writeln!(
             out,
             "  {} {} {}",
             output::red("✗"),
             c.resource,
             output::red("field ownership conflict"),
-        );
+        )?;
         for o in &c.owners {
-            let _ = writeln!(out, "      {} owns {}", o.manager, o.fields.join(", "));
+            writeln!(out, "      {} owns {}", o.manager, o.fields.join(", "))?;
         }
-        let _ = writeln!(
+        writeln!(
             out,
             "      {}",
             output::dim(
                 "--force-conflicts takes the fields; `ownership.cede` on the resource leaves them to the other manager"
             )
-        );
+        )?;
     }
     for r in refusals {
-        let _ = writeln!(
+        writeln!(
             out,
             "  {} {} {}",
             output::red("✗"),
             r.resource,
             output::red(&refusal_title(r)),
-        );
-        let _ = writeln!(out, "      {}", output::dim(&r.message));
+        )?;
+        writeln!(out, "      {}", output::dim(&r.message))?;
     }
     for p in prune_refused {
-        let _ = writeln!(
+        writeln!(
             out,
             "  {} {} {}",
             output::red("✗"),
             p.resource,
             output::red("prune delete refused"),
-        );
+        )?;
         if let Some(detail) = &p.detail {
-            let _ = writeln!(out, "      {}", output::dim(detail));
+            writeln!(out, "      {}", output::dim(detail))?;
         }
     }
+    Ok(())
 }
 
 /// Write the fields Kubernetes would not keep as the build sets them. The
 /// deploy goes on, so this is a warning, not a stop.
-fn write_not_kept(out: &mut String, plan: &Plan) {
+fn write_not_kept(out: &mut String, plan: &Plan) -> fmt::Result {
     if plan.not_kept.is_empty() {
-        return;
+        return Ok(());
     }
     let n = plan.not_kept.len();
-    let _ = writeln!(out);
-    let _ = writeln!(
+    writeln!(out)?;
+    writeln!(
         out,
         "{}",
         output::yellow(&format!(
@@ -158,23 +167,24 @@ fn write_not_kept(out: &mut String, plan: &Plan) {
             if n == 1 { "" } else { "s" },
             if n == 1 { "it" } else { "them" },
         ))
-    );
+    )?;
     for f in &plan.not_kept {
-        let _ = writeln!(
+        writeln!(
             out,
             "  {} {} {}",
             output::yellow("!"),
             f.resource,
             not_kept_detail(f, false),
-        );
+        )?;
     }
-    let _ = writeln!(
+    writeln!(
         out,
         "      {}",
         output::dim(
             "a CRD's schema drops a field it does not declare, and a mutating admission webhook can change a value; the deploy still applies the object"
         )
-    );
+    )?;
+    Ok(())
 }
 
 /// Describe one field Kubernetes would not keep, after its resource. In
@@ -221,39 +231,35 @@ fn refusal_title(r: &AdmissionRefusal) -> String {
 /// Render the drift section of `plan` as text, for a comparison that found no
 /// other difference.
 pub fn render_drift_text(plan: &Plan) -> String {
-    let mut out = String::new();
-    write_drift(&mut out, plan);
-    out
+    written(|out| write_drift(out, plan))
 }
 
 /// Render the drift section of `plan` as Markdown, for a comparison that found
 /// no other difference.
 pub fn render_drift_markdown(plan: &Plan) -> String {
-    let mut out = String::new();
-    write_drift_markdown(&mut out, plan);
-    out
+    written(|out| write_drift_markdown(out, plan))
 }
 
-fn write_drift(out: &mut String, plan: &Plan) {
+fn write_drift(out: &mut String, plan: &Plan) -> fmt::Result {
     match &plan.drift {
         Checked::Checked { items } if !items.is_empty() => {
-            let _ = writeln!(out);
-            let _ = writeln!(
+            writeln!(out)?;
+            writeln!(
                 out,
                 "{}",
                 output::yellow(&format!(
                     "Drift: {} field(s) on the live cluster differ from the deployed build:",
                     items.len(),
                 ))
-            );
+            )?;
             for d in items {
-                let _ = writeln!(
+                writeln!(
                     out,
                     "  {} {} {}",
                     output::yellow("↺"),
                     d.resource,
                     drift_detail(d),
-                );
+                )?;
                 let fate = match (d.reverted, conflict_with(plan, d)) {
                     (true, Some(owners)) => output::yellow(&format!(
                         "the deploy writes this object, which stops on a field ownership conflict with {owners} unless run with --force-conflicts"
@@ -272,26 +278,27 @@ fn write_drift(out: &mut String, plan: &Plan) {
                     )
                     .into_owned(),
                 };
-                let _ = writeln!(out, "      {fate}");
+                writeln!(out, "      {fate}")?;
             }
         }
         Checked::NotChecked {
             reason: NotCheckedReason::DeployedBuildUnavailable,
         } => {
-            let _ = writeln!(out);
-            let _ = writeln!(
+            writeln!(out)?;
+            writeln!(
                 out,
                 "{}",
                 output::dim(
                     "Drift not checked: the deployed build is not on this machine, so Kix cannot tell which differences come from this build and which come from edits on the cluster (the deploy applies everything in the plan)."
                 )
-            );
+            )?;
         }
         _ => {}
     }
     if let Some(line) = drift_unchecked_line(plan) {
-        let _ = writeln!(out, "{}", output::dim(&line));
+        writeln!(out, "{}", output::dim(&line))?;
     }
+    Ok(())
 }
 
 /// Return the managers an apply of `d`'s object would conflict with, joined
@@ -367,17 +374,17 @@ fn compact_pair(
     (compact(live), deployed.map(|v| compact(Some(v))))
 }
 
-fn write_drift_markdown(out: &mut String, plan: &Plan) {
+fn write_drift_markdown(out: &mut String, plan: &Plan) -> fmt::Result {
     if let Checked::Checked { items } = &plan.drift
         && !items.is_empty()
     {
-        let _ = writeln!(out, "#### Drift");
-        let _ = writeln!(out);
-        let _ = writeln!(
+        writeln!(out, "#### Drift")?;
+        writeln!(out)?;
+        writeln!(
             out,
             "Fields where the live cluster differs from the deployed build:"
-        );
-        let _ = writeln!(out);
+        )?;
+        writeln!(out)?;
         for d in items {
             let fate = match (d.reverted, conflict_with(plan, d)) {
                 (true, Some(owners)) => format!(
@@ -394,19 +401,20 @@ fn write_drift_markdown(out: &mut String, plan: &Plan) {
                         .into()
                 }
             };
-            let _ = writeln!(
+            writeln!(
                 out,
                 "- `{}` {} ({fate})",
                 d.resource,
                 drift_detail_markdown(d),
-            );
+            )?;
         }
-        let _ = writeln!(out);
+        writeln!(out)?;
     }
     if let Some(line) = drift_unchecked_line(plan) {
-        let _ = writeln!(out, "{line}");
-        let _ = writeln!(out);
+        writeln!(out, "{line}")?;
+        writeln!(out)?;
     }
+    Ok(())
 }
 
 fn drift_detail_markdown(d: &kix::plan::document::DriftChange) -> String {
@@ -459,44 +467,45 @@ fn compact(v: Option<&serde_json::Value>) -> String {
     }
 }
 
-fn write_prune(out: &mut String, plan: &Plan) {
+fn write_prune(out: &mut String, plan: &Plan) -> fmt::Result {
     let items = plan.prune.items();
     let shared: Vec<_> = items
         .iter()
         .filter(|p| matches!(p.fate, PruneFate::KeptShared | PruneFate::KeptChanged))
         .collect();
     if shared.is_empty() {
-        return;
+        return Ok(());
     }
-    let _ = writeln!(out);
-    let _ = writeln!(
+    writeln!(out)?;
+    writeln!(
         out,
         "{} {} object(s) that left the build stay on the cluster:",
         output::bold("Prune:"),
         shared.len()
-    );
+    )?;
     for p in shared {
-        let _ = writeln!(
+        writeln!(
             out,
             "  {} {} {}",
             output::yellow("="),
             p.resource,
             output::dim(p.detail.as_deref().unwrap_or("")),
-        );
+        )?;
     }
+    Ok(())
 }
 
-fn write_not_checked(out: &mut String, plan: &Plan) {
+fn write_not_checked(out: &mut String, plan: &Plan) -> fmt::Result {
     if plan.made_by == MadeBy::DryRun && !plan.not_checked.is_empty() {
-        let _ = writeln!(out);
-        let _ = writeln!(
+        writeln!(out)?;
+        writeln!(
             out,
             "{}",
             output::dim(&format!(
                 "Not checked by the dry run ({}); their changes come from comparing builds:",
                 plan.not_checked.len()
             ))
-        );
+        )?;
         let mut groups: Vec<(UncheckedReason, Vec<&str>)> = Vec::new();
         for o in &plan.not_checked {
             match groups.iter_mut().find(|(r, _)| *r == o.reason) {
@@ -525,84 +534,91 @@ fn write_not_checked(out: &mut String, plan: &Plan) {
                     "not reached by the dry run (for example, cancelled early)"
                 }
             };
-            let _ = writeln!(out, "  {} {} {}:", output::dim("?"), names.len(), why);
+            writeln!(out, "  {} {} {}:", output::dim("?"), names.len(), why)?;
             for name in names.iter().take(5) {
-                let _ = writeln!(out, "      {}", output::dim(name));
+                writeln!(out, "      {}", output::dim(name))?;
             }
             if names.len() > 5 {
-                let _ = writeln!(
+                writeln!(
                     out,
                     "      {}",
                     output::dim(&format!(
                         "and {} more (-o json lists them)",
                         names.len() - 5
                     ))
-                );
+                )?;
             }
         }
     }
     if !plan.has_changes() {
-        return;
+        return Ok(());
     }
     match plan.made_by {
         MadeBy::DryRun => {
-            let _ = writeln!(out);
-            let _ = writeln!(
+            writeln!(out)?;
+            writeln!(
                 out,
                 "{}",
                 output::dim(
                     "Not checked by any preview: whether Pods start, pull their images, and pass their readiness probes."
                 )
-            );
+            )?;
         }
         MadeBy::LiveRead => {
-            let _ = writeln!(out);
-            let _ = writeln!(
+            writeln!(out)?;
+            writeln!(
                 out,
                 "{}",
                 output::dim(
                     "Made by a read-only comparison with the cluster. Not checked: admission webhooks, admission policies, field ownership conflicts, and invalid objects; `kix plan` checks them."
                 )
-            );
+            )?;
         }
         MadeBy::Builds => {
-            let _ = writeln!(out);
-            let _ = writeln!(
+            writeln!(out)?;
+            writeln!(
                 out,
                 "{}",
                 output::dim(
                     "Made by comparing two builds, with no cluster read. Not checked: live cluster drift, admission webhooks, admission policies, field ownership conflicts, and invalid objects."
                 )
-            );
+            )?;
         }
     }
+    Ok(())
 }
 
 /// Render the Kix library's warnings for the new build as a Markdown
 /// section, or nothing when there are none.
 pub fn render_warnings_markdown(plan: &Plan) -> String {
-    let mut out = String::new();
+    written(|out| write_warnings_markdown(out, plan))
+}
+
+fn write_warnings_markdown(out: &mut String, plan: &Plan) -> fmt::Result {
     if plan.warnings.is_empty() {
-        return out;
+        return Ok(());
     }
-    let _ = writeln!(
+    writeln!(
         out,
         "#### :warning: Warnings from the Kix library ({})",
         plan.warnings.len()
-    );
-    let _ = writeln!(out);
-    let _ = writeln!(out, "```text");
+    )?;
+    writeln!(out)?;
+    writeln!(out, "```text")?;
     for w in &plan.warnings {
-        let _ = writeln!(out, "{}", w.describe("  "));
+        writeln!(out, "{}", w.describe("  "))?;
     }
-    let _ = writeln!(out, "```");
-    let _ = writeln!(out);
-    out
+    writeln!(out, "```")?;
+    writeln!(out)
 }
 
 /// Render the Markdown plan sections that follow the package diff.
 pub fn render_markdown(plan: &Plan) -> String {
-    let mut out = render_warnings_markdown(plan);
+    written(|out| write_markdown(out, plan))
+}
+
+fn write_markdown(out: &mut String, plan: &Plan) -> fmt::Result {
+    write_warnings_markdown(out, plan)?;
     let conflicts = plan.conflicts.items();
     let refusals = plan.admission.items();
     let prune_refused: Vec<_> = plan
@@ -612,60 +628,60 @@ pub fn render_markdown(plan: &Plan) -> String {
         .filter(|p| p.fate == PruneFate::DeleteRefused)
         .collect();
     if !conflicts.is_empty() || !refusals.is_empty() || !prune_refused.is_empty() {
-        let _ = writeln!(out, "#### :x: The deploy would stop on these writes");
-        let _ = writeln!(out);
+        writeln!(out, "#### :x: The deploy would stop on these writes")?;
+        writeln!(out)?;
         for c in conflicts {
             let owners: Vec<String> = c
                 .owners
                 .iter()
                 .map(|o| format!("`{}` owns `{}`", o.manager, o.fields.join("`, `")))
                 .collect();
-            let _ = writeln!(
+            writeln!(
                 out,
                 "- `{}`: field ownership conflict, {}",
                 c.resource,
                 owners.join("; ")
-            );
+            )?;
         }
         for r in refusals {
-            let _ = writeln!(out, "- `{}`: {}", r.resource, refusal_title(r));
-            let _ = writeln!(out, "  > {}", r.message.replace('\n', " "));
+            writeln!(out, "- `{}`: {}", r.resource, refusal_title(r))?;
+            writeln!(out, "  > {}", r.message.replace('\n', " "))?;
         }
         for p in prune_refused {
-            let _ = writeln!(out, "- `{}`: prune delete refused", p.resource);
+            writeln!(out, "- `{}`: prune delete refused", p.resource)?;
             if let Some(why) = &p.detail {
-                let _ = writeln!(out, "  > {}", why.replace('\n', " "));
+                writeln!(out, "  > {}", why.replace('\n', " "))?;
             }
         }
-        let _ = writeln!(out);
+        writeln!(out)?;
     }
     if !plan.not_kept.is_empty() {
-        let _ = writeln!(out, "#### :warning: Kubernetes would not keep these fields");
-        let _ = writeln!(out);
-        let _ = writeln!(
+        writeln!(out, "#### :warning: Kubernetes would not keep these fields")?;
+        writeln!(out)?;
+        writeln!(
             out,
             "The deploy still applies these objects, but the fields would not hold the build's values:"
-        );
-        let _ = writeln!(out);
+        )?;
+        writeln!(out)?;
         for f in &plan.not_kept {
-            let _ = writeln!(out, "- `{}` {}", f.resource, not_kept_detail(f, true));
+            writeln!(out, "- `{}` {}", f.resource, not_kept_detail(f, true))?;
         }
-        let _ = writeln!(out);
+        writeln!(out)?;
     }
-    write_drift_markdown(&mut out, plan);
+    write_drift_markdown(out, plan)?;
     if !plan.not_checked.is_empty() {
-        let _ = writeln!(
+        writeln!(
             out,
             "<details><summary>Not checked by the dry run ({})</summary>",
             plan.not_checked.len()
-        );
-        let _ = writeln!(out);
+        )?;
+        writeln!(out)?;
         for o in &plan.not_checked {
-            let _ = writeln!(out, "- `{}`: {}", o.resource, o.detail);
+            writeln!(out, "- `{}`: {}", o.resource, o.detail)?;
         }
-        let _ = writeln!(out);
-        let _ = writeln!(out, "</details>");
-        let _ = writeln!(out);
+        writeln!(out)?;
+        writeln!(out, "</details>")?;
+        writeln!(out)?;
     }
     let note = match plan.made_by {
         MadeBy::DryRun => {
@@ -678,35 +694,43 @@ pub fn render_markdown(plan: &Plan) -> String {
             "Made by comparing two builds, with no cluster read. Not checked: live cluster drift, admission webhooks, admission policies, field ownership conflicts, and invalid objects."
         }
     };
-    let _ = writeln!(out, "> {note}");
-    let _ = writeln!(out);
-    out
+    writeln!(out, "> {note}")?;
+    writeln!(out)
 }
 
 /// Render the result of comparing a live plan against the saved plan at `path`,
 /// for a deploy of `cluster`.
 pub fn render_comparison(c: &Comparison, reviewed: &Plan, path: &str, cluster: &str) -> String {
-    let mut out = String::new();
+    written(|out| write_comparison(out, c, reviewed, path, cluster))
+}
+
+fn write_comparison(
+    out: &mut String,
+    c: &Comparison,
+    reviewed: &Plan,
+    path: &str,
+    cluster: &str,
+) -> fmt::Result {
     let file = path;
     let path = match &c.plan_sha256 {
         Some(sha) => format!("{path}, {sha}"),
         None => path.to_string(),
     };
     if c.matches {
-        let _ = writeln!(
+        writeln!(
             out,
             "{}",
             output::green(&format!("The reviewed plan matches ({path})."))
-        );
+        )?;
     } else {
-        let _ = writeln!(
+        writeln!(
             out,
             "{}",
             output::red(&format!("The reviewed plan no longer matches ({path})."))
-        );
-        let _ = writeln!(out, "Nothing was applied to the cluster.");
-        let _ = writeln!(out);
-        let _ = writeln!(out, "  Differences since '{file}' was saved:");
+        )?;
+        writeln!(out, "Nothing was applied to the cluster.")?;
+        writeln!(out)?;
+        writeln!(out, "  Differences since '{file}' was saved:")?;
         for m in &c.mismatches {
             for (i, item) in m.items.iter().enumerate() {
                 let label = if i == 0 {
@@ -714,10 +738,10 @@ pub fn render_comparison(c: &Comparison, reviewed: &Plan, path: &str, cluster: &
                 } else {
                     String::new()
                 };
-                let _ = writeln!(out, "    {label:<20} {item}");
+                writeln!(out, "    {label:<20} {item}")?;
             }
         }
-        let _ = writeln!(out);
+        writeln!(out)?;
     }
     if !c.skipped.is_empty() {
         let what: Vec<&str> = c
@@ -735,14 +759,14 @@ pub fn render_comparison(c: &Comparison, reviewed: &Plan, path: &str, cluster: &
         } else {
             "because the reviewed plan did not check them"
         };
-        let _ = writeln!(
+        writeln!(
             out,
             "{}",
             output::dim(&format!("  Not compared, {kind}: {}.", join_list(&what)))
-        );
+        )?;
     }
     if let Some((r, f)) = &c.kix_differs {
-        let _ = writeln!(
+        writeln!(
             out,
             "{}",
             output::yellow(&format!(
@@ -750,17 +774,17 @@ pub fn render_comparison(c: &Comparison, reviewed: &Plan, path: &str, cluster: &
                  and deletes the exact objects the plan lists, so this version difference is \
                  allowed."
             ))
-        );
+        )?;
     }
     if !c.matches {
-        let _ = writeln!(out);
-        let _ = writeln!(out, "  Next:");
-        let _ = writeln!(
+        writeln!(out)?;
+        writeln!(out, "  Next:")?;
+        writeln!(
             out,
             "    Save and review a new plan with `kix plan {cluster} --out {file}`, or run `kix deploy {cluster}` without `--plan`."
-        );
+        )?;
     }
-    out
+    Ok(())
 }
 
 /// Join `items` as an English list with an Oxford comma.
