@@ -109,15 +109,8 @@ pub fn build_sbom(graph: &StoreGraph, flake_ref: &str) -> Value {
     let mut flake_input_bomrefs: Vec<String> = Vec::new();
     if let Some(path) = &flake_path
         && let Some(lock) = shared::read_flake_lock(path)
-        && let Some(nodes) = lock.get("nodes").and_then(|n| n.as_object())
     {
-        for (name, node) in nodes {
-            if name == "root" {
-                continue;
-            }
-            let Some(locked) = node.get("locked") else {
-                continue;
-            };
+        for (name, locked) in kix::flake_lock::locked_inputs(&lock) {
             let rev = locked
                 .get("rev")
                 .or_else(|| locked.get("narHash"))

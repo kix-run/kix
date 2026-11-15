@@ -206,17 +206,8 @@ fn looks_like_an_image(s: &str) -> bool {
 }
 
 fn flake_inputs(lock: &Value) -> Value {
-    let Some(nodes) = lock.get("nodes").and_then(|n| n.as_object()) else {
-        return json!([]);
-    };
     let mut inputs = Vec::new();
-    for (name, node) in nodes {
-        if name == "root" {
-            continue;
-        }
-        let Some(locked) = node.get("locked") else {
-            continue;
-        };
+    for (name, locked) in kix::flake_lock::locked_inputs(lock) {
         let mut entry = serde_json::Map::new();
         entry.insert("name".into(), json!(name));
         if let Some(r) = locked.get("rev").and_then(|v| v.as_str()) {
