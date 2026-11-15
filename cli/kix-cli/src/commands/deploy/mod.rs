@@ -1018,7 +1018,7 @@ fn refuse_ignored_by_operator(args: &DeployArgs) -> Result<()> {
         .collect::<Vec<_>>()
         .join(", ");
     Err(miette!(
-        "[{OPERATOR_FLAGS_ID}] `kix deploy --operator` does not accept {list}. The Kix operator applies the build with its own settings: a 300-second readiness timeout for each resource, stop at the first failure, prune orphans, never force field conflicts, and re-apply only what changed. The CLI prints the same progress whatever the output flags say. Nothing was applied to the cluster. Remove these flags to deploy with the operator, or remove `--operator` to use them."
+        "[{OPERATOR_FLAGS_ID}] `kix deploy --operator` does not accept {list}. Nothing was applied to the cluster. The Kix operator runs with fixed settings: it fails any resource that goes 300 seconds without readiness progress, stops at the first failure, deletes orphaned resources, never takes over fields owned by another field manager, and skips unchanged resources. Progress output in operator mode is also fixed. Remove any unsupported flags to deploy with the operator, or remove `--operator` to deploy from this machine."
     ))
 }
 
