@@ -32,8 +32,6 @@ let
 
   inherit (normalize) normalizeManifest;
 
-  # Encode colons in the filename because Nix store path names cannot contain
-  # them. Resource identity comes from the manifest itself.
   # Read the Kix version from the workspace version in cli/Cargo.toml, the
   # file a release bumps. Kix reports the same version, so Kix
   # can tell a project which program matches its library. A copy of the
@@ -45,6 +43,8 @@ let
     else
       null;
 
+  # Encode colons in the filename because Nix store path names cannot contain
+  # them. Resource identity comes from the manifest itself.
   manifestFileName =
     manifest:
     let
@@ -52,6 +52,14 @@ let
       kind = manifest.kind or "resource";
     in
     "${builtins.replaceStrings [ ":" ] [ "_" ] name}-${lib.toLower kind}.yaml";
+
+  mkManifest =
+    manifest:
+    let
+      yamlFormat = pkgs.formats.yaml { };
+      cleaned = normalizeManifest manifest;
+    in
+    yamlFormat.generate (manifestFileName manifest) cleaned;
 in
 
 {
@@ -133,13 +141,7 @@ in
 
   modules = import ../modules { inherit lib; };
 
-  mkManifest =
-    manifest:
-    let
-      yamlFormat = pkgs.formats.yaml { };
-      cleaned = normalizeManifest manifest;
-    in
-    yamlFormat.generate (manifestFileName manifest) cleaned;
+  inherit mkManifest;
 
   mkManifests =
     cluster:
@@ -148,17 +150,10 @@ in
 
       grouped = builtins.groupBy (m: m.metadata.namespace or "_cluster") manifests;
 
-      mkYaml =
-        manifest:
-        let
-          yamlFormat = pkgs.formats.yaml { };
-          cleaned = normalizeManifest manifest;
-          filename = manifestFileName manifest;
-        in
-        {
-          inherit filename;
-          drv = yamlFormat.generate filename cleaned;
-        };
+      mkYaml = manifest: {
+        filename = manifestFileName manifest;
+        drv = mkManifest manifest;
+      };
 
       nsCopyCommands = lib.concatStringsSep "\n" (
         lib.mapAttrsToList (

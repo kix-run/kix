@@ -8,9 +8,11 @@ Internals map for editing the compiler. The tree is organized by ring: the deepe
 core/     Ring 0: the artifact. Sealing, string-context machinery, and PackageInstance/Activation CRs.
 eval/     Ring 1: the pipeline. Module eval, DI, fixpoints, edge analysis, hooks, and validation.
 scope/    Ring 1: the authoring surface. Builders, validators, and labels.
-vocab/    Open vocabulary: pure helper libraries, importable without the core.
+vocab/    Open vocabulary: helper libraries for packages. They import from core/ (see below), never from eval/, scope/, or plugins/.
 plugins/  Ring 2: cross-cutting layers attached via hooks (netpol, availability).
 ```
+
+`vocab/` sits above `core/`: most vocab files import `core/error.nix` for error records, `vocab/compose.nix` also imports `core/annotations.nix`, `core/facts.nix`, `core/markers.nix`, `core/normalize.nix`, and `core/version.nix`, and `vocab/health-check.nix` imports `core/resource.nix`. `eval/` and `scope/` import vocab files in turn, so a vocab file must not import from them.
 
 Root files: `default.nix` (entry + YAML emission), `modules.nix` (option schema + hook options + plugin imports), `mkFlake.nix`, `meta.nix`, `env.nix`, `scorecard.nix`, `unsafe.nix`, `rules/`, `flavors/`, `helm.nix` + `helm-dag.nix`. The monitoring module lives outside the library, in `kix/modules/` (`kix/modules/default.nix` builds `kix.modules` with `core/levels.nix`).
 

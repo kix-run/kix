@@ -90,14 +90,14 @@ rec {
           [ autoNamespace ]
         else
           lib.unique (builtins.attrNames explicitInstances ++ fixedNs);
-      shelfPlacements = lib.mapAttrsToList (
+      catalogPlacements = lib.mapAttrsToList (
         name: e: map (ns: { ${ns} = name; }) (if e.namespace != null then [ e.namespace ] else floatingNs)
       ) normalizedAvail;
-      shelfByNs = builtins.zipAttrsWith (_: names: names) (lib.flatten shelfPlacements);
+      catalogByNs = builtins.zipAttrsWith (_: names: names) (lib.flatten catalogPlacements);
     in
     builtins.zipAttrsWith (_: lists: lib.unique (lib.flatten lists)) [
       (lib.mapAttrs (_: builtins.attrNames) explicitInstances)
-      shelfByNs
+      catalogByNs
     ];
 
   # Compute instances pulled from availablePackages to satisfy demands and the
@@ -116,7 +116,7 @@ rec {
     let
       normalizedAvail = normalizeAvailablePackages availablePackages;
 
-      shelfKeys =
+      catalogKeys =
         name:
         lib.unique (
           [ name ]
@@ -129,17 +129,17 @@ rec {
 
       # Map each key to every availablePackages entry that answers it, in
       # attrNames order. Membership tests (`?`) do not check how many packages
-      # match. Demands go through pickShelf, which rejects keys with multiple
+      # match. Demands go through pickCatalog, which rejects keys with multiple
       # matching packages.
       availableByKey = builtins.zipAttrsWith (_: names: names) (
-        builtins.concatMap (name: map (key: { ${key} = name; }) (shelfKeys name)) (
+        builtins.concatMap (name: map (key: { ${key} = name; }) (catalogKeys name)) (
           builtins.attrNames normalizedAvail
         )
       );
 
       # Map each key to the packages that `availablePackages = packages`
       # offered before they moved to experimental. Their old names are
-      # markers there, which the shelf skips.
+      # markers there, which the catalog skips.
       movedByKey = builtins.zipAttrsWith (_: names: names) (
         lib.concatLists (
           lib.mapAttrsToList (
@@ -375,7 +375,7 @@ rec {
       # Select the single availablePackages entry matching a demand. Kix does not
       # rank multiple matching packages, so reject ambiguous keys when a consumer
       # demands them rather than when they are declared in availablePackages.
-      pickShelf =
+      pickCatalog =
         item:
         let
           claimants = availableByKey.${item.depName};
@@ -402,10 +402,10 @@ rec {
             );
           };
 
-      shelfInstance =
+      catalogInstance =
         item:
         let
-          canonicalName = pickShelf item;
+          canonicalName = pickCatalog item;
           avPkg = normalizedAvail.${canonicalName};
         in
         {
@@ -438,9 +438,9 @@ rec {
 
           else if availableByKey ? ${item.depName} then
             let
-              shelf = shelfInstance item;
+              catalog = catalogInstance item;
             in
-            demandsOf { inherit (shelf.avPkg) package; } shelf.ns shelf.canonicalName
+            demandsOf { inherit (catalog.avPkg) package; } catalog.ns catalog.canonicalName
 
           else if movedByKey ? ${item.depName} then
             refuseMoved item
@@ -463,7 +463,7 @@ rec {
         item:
         if activatedBy item == null && availableByKey ? ${item.depName} then
           let
-            inherit (shelfInstance item) canonicalName avPkg ns;
+            inherit (catalogInstance item) canonicalName avPkg ns;
           in
           [
             {

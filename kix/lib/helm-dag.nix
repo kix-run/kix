@@ -276,10 +276,6 @@ rec {
       if builtins.elem depId existing then acc else acc // { ${key} = existing ++ [ depId ]; }
     ) { } edges;
 
-  # Return the resourceIds that other chart resources depend on. These are
-  # reachable through the DAG and do not need to be direct requires of the root.
-  dependedOnIds = edges: lib.unique (map (e: resourceId e.to) edges);
-
   # Return the chart's only Service, or its only Deployment, StatefulSet, or
   # DaemonSet when it has no Service. Fail when the choice is ambiguous,
   # because consumers read the root's `out.selector` and `out.fqdn`.

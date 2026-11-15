@@ -204,9 +204,9 @@ rec {
       };
       # Validate `meta.roles` here because `availablePackages` entries bypass
       # `buildRolesIndex` until instantiated.
-      shelfRoles = map (roles.assertKnownRole "meta.roles of ${context}") (packageMeta.roles or [ ]);
+      catalogRoles = map (roles.assertKnownRole "meta.roles of ${context}") (packageMeta.roles or [ ]);
     in
-    lib.unique (explicitAliases ++ shelfRoles ++ (packageMeta.defaultAliases or [ ]));
+    lib.unique (explicitAliases ++ catalogRoles ++ (packageMeta.defaultAliases or [ ]));
 
   # Return the version an instance reports on its PackageInstance and to the
   # `meta.compatibleWith` checks of its consumers. The instance's `version`

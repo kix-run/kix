@@ -75,14 +75,16 @@ in
             type = lib.types.attrsOf lib.types.anything;
             default = { };
             description = ''
-              Platform connectivity intents for non-kix-managed pods (e.g.
-              CoreDNS, local-path-provisioner in kind). Each intent declares
-              enforcer-agnostic connectivity requirements; the enforcer
-              materializes them into native policy CRs. Set by flavors.
-              Also used for a Kix workload whose egress depends on its
-              configuration, when the package's error or description asks
-              for one (infisical-operator `address`, coredns `servers`).
-              See v2_discussions/archive/92_declarative_network_policy_intents.md.
+              Allowed ingress and egress rules for pods managed outside Kix,
+              such as CoreDNS or `local-path-provisioner` in kind. Each entry
+              selects pods by label and lists the traffic they need, and the
+              cluster's network policy enforcer turns it into a policy
+              resource. Built-in flavors set entries for pre-installed
+              components. Add entries here for other external pods, or for a
+              Kix workload whose outbound traffic depends on its configuration
+              when the package's error or option description asks for one (such
+              as `infisical-operator` `address` or `coredns` `servers`). The
+              "Network policy" page of the Kix docs explains them.
             '';
           };
         };
@@ -90,17 +92,18 @@ in
     );
     default = { };
     description = ''
-      CiliumNetworkPolicy generation from DI graph. See v2_discussions/37
-      and v2_discussions/83. The enforcer that CNPs depend on is looked up
-      automatically via `meta.roles ∋ "network-policy-enforcer"` (see
-      `kix/packages/experimental/cilium`). No explicit wiring is required, but an
-      enforcer instance MUST be declared when `enable = true`. kix throws
-      at cluster eval time if no enforcer is resolved: without the
-      store-path edge to cilium, CNPs would race the operator at apply
-      time. Where the environment installs Cilium, a flavour sets
-      cluster.roles.cni.binding = "shadowable" and declares a
-      platform-cilium import, and the `cilium` instance configures or uses
-      that Cilium instead of installing one.
+      Automatic `CiliumNetworkPolicy` generation from the cluster's dependency
+      graph. Kix finds the policy enforcer automatically from the instance that
+      claims `"network-policy-enforcer"` in `meta.roles` (see
+      `kix/packages/experimental/cilium`). You do not need to wire `deps`, but
+      you must declare an enforcer instance when `enable = true` or evaluation
+      fails. Every generated policy depends on that enforcer so Kix waits for
+      Cilium and its CRDs before applying policies. When the cluster environment
+      already runs Cilium, a flavor or cluster module sets
+      `cluster.roles.cni.binding = "shadowable"` and declares a
+      `platform-cilium` import, and the `cilium` instance configures or uses
+      that Cilium instead of installing a new one. The "Network policy"
+      page of the Kix docs explains how Kix derives the policies.
     '';
   };
 

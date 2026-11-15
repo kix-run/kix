@@ -711,7 +711,7 @@ in
     ]
   );
 
-  # A selector reaches pods in its own namespace only (red team on #75).
+  # A selector reaches pods in its own namespace only.
   v04h-service-cannot-select-pods-in-another-namespace =
     onlyFailure "matches no workload pod template"
       (
