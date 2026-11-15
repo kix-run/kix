@@ -40,7 +40,7 @@ Resource kinds:
 
 Resources:
   (cluster-scoped):
-    Activation.kix.run/example-iyhn68k1j8wd
+    Activation.kix.run/example-hrjhf8vy8ynh
     ClusterRole.rbac.authorization.k8s.io/cert-manager-cainjector
     ClusterRole.rbac.authorization.k8s.io/cert-manager-cluster-view
     ClusterRole.rbac.authorization.k8s.io/cert-manager-controller-approve:cert-manager-io
