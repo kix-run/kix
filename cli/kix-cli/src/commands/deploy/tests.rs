@@ -669,3 +669,26 @@ mod stop_advice_tests {
         assert!(text.contains("--on-error continue"), "{text}");
     }
 }
+
+mod operator_timeout_tests {
+    use crate::cli::{Cli, Command};
+    use clap::Parser;
+
+    fn refusal(extra: &[&str]) -> Option<String> {
+        let argv = [&["kix", "deploy", "x"][..], extra].concat();
+        let Command::Deploy(args) = Cli::try_parse_from(argv).expect("args parse").command else {
+            unreachable!()
+        };
+        super::refuse_operator_timeout(&args)
+            .err()
+            .map(|e| e.to_string())
+    }
+
+    #[test]
+    fn the_operator_refuses_a_timeout_with_the_change_record_id() {
+        let message = refusal(&["--operator", "--timeout", "5m"]).expect("refused");
+        assert!(message.starts_with("[K7218] "), "{message}");
+        assert_eq!(refusal(&["--operator"]), None);
+        assert_eq!(refusal(&["--timeout", "5m"]), None);
+    }
+}

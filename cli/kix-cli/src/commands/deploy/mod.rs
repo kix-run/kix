@@ -45,6 +45,7 @@ pub(crate) use self::saved_plan::ComparisonResponse;
 use self::saved_plan::*;
 
 pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
+    refuse_operator_timeout(args)?;
     let saved = match &args.saved_plan {
         Some(path) => Some(load_saved_plan(
             path,
@@ -977,6 +978,20 @@ pub(super) fn operator_flags(flags: PlanFlags) -> PlanFlags {
         prune: PrunePolicy::Delete,
         ..flags
     }
+}
+
+/// The id of the change record that made `--operator --timeout` an error.
+const OPERATOR_TIMEOUT_ID: &str = "K7218";
+
+/// Refuse `--timeout` with `--operator`. The CLI does not send it to the
+/// operator, which waits with its own readiness timeout.
+fn refuse_operator_timeout(args: &DeployArgs) -> Result<()> {
+    if args.operator && args.timeout.is_some() {
+        return Err(miette!(
+            "[{OPERATOR_TIMEOUT_ID}] `kix deploy --operator` does not take `--timeout`, because the Kix operator waits for each resource with its own readiness timeout. Remove `--timeout`."
+        ));
+    }
+    Ok(())
 }
 
 fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
