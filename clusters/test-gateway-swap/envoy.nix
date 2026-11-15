@@ -7,6 +7,8 @@ kix.buildCluster {
   modules = [
     kix.flavors.kind
     (import ./consumer.nix { inherit packages; })
+    # Both implementations take the Gateway API CRDs from here.
+    { instances.gateway-api.gateway-api.package = packages.experimental.gateway-api; }
     { instances.envoy-system.envoy.package = packages.experimental.envoy-gateway; }
   ];
 }

@@ -17,14 +17,14 @@ uses Gateway API.
 
 This guide assumes:
 
-- Your cluster has the Gateway API CRDs and an Envoy Gateway controller.
+- Your cluster has a `gateway-api` instance, which installs the Gateway API
+  CRDs. [Install Envoy Gateway](/docs/how-to/package-task-guides/install-envoy-gateway/)
+  shows it.
 - You have a local package whose returned parts include a Service named
   `service`.
 
-The `envoy-gateway` Kix package used below creates the `GatewayClass` and
-`Gateway` resources. Its default controller name is
-`gateway.envoyproxy.io/gatewayclass-controller`, which must match the
-controller installed in the cluster.
+The `envoy-gateway` Kix package used below installs the Envoy Gateway
+controller and creates the `GatewayClass` and `Gateway` resources.
 
 ## Make the package exposable
 
@@ -57,9 +57,8 @@ application's public URL (`self.exposure.url`): an HTTP listener on port
 80 gives `http://<host>`. If no listener accepts the host from the
 application's namespace, evaluation fails and names each listener.
 
-If your controller uses a different controller name, set
-`config.controllerName` on this instance to the value advertised by that
-controller.
+To route through Traefik instead, give the instance
+`packages.experimental.traefik`. The application instance does not change.
 
 ## Set the application hostname
 

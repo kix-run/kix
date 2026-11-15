@@ -22,6 +22,9 @@ let
   normalize = import ../../core/normalize.nix { inherit lib; };
   rules = import ../../rules/architecture.nix { inherit lib; };
   envoyGatewayPackage = import ../../../packages/experimental/envoy-gateway;
+  # envoy-gateway needs the Gateway API CRDs. Other gateways ignore them.
+  gatewayApiInstance.instances.gatewayapi.gateway-api.package =
+    import ../../../packages/experimental/gateway-api;
 
   # A web Deployment and Service exposed through kix.expose. The Deployment
   # reads the record's `urlField` of the same instance into PUBLIC_URL.
@@ -145,6 +148,7 @@ let
           }
         )
       ]
+      ++ lib.optional (gatewayConfig != null) gatewayApiInstance
       ++ lib.optional (gatewayConfig != null) {
         instances.${gatewayNs}.gateway = {
           package = gatewayPackage;
@@ -580,6 +584,7 @@ in
         byName "gateway" (
           ofKind "Gateway" (
             manifests (mkCluster [
+              gatewayApiInstance
               {
                 instances.gwns.gateway = {
                   package = envoyGatewayPackage;

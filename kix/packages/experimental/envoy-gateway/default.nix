@@ -1,87 +1,330 @@
-# envoy-gateway: the GatewayClass and Gateway for an Envoy Gateway
-# controller that is installed outside Kix.
+# envoy-gateway: Envoy Gateway, a Gateway API implementation whose
+# controller runs Envoy proxies for each Gateway, and one GatewayClass and
+# Gateway that routes reach it through.
 #
-# This package does not install Envoy Gateway. It creates no controller, no
-# data plane, and no CRDs. Install the controller and the Gateway API CRDs
-# first, for example with upstream's Helm chart, as the how-to guide
-# "Install Envoy Gateway" shows. The package creates GatewayClass and
-# Gateway resources, an optional EnvoyProxy that tells Envoy Gateway how to
-# provision the data plane for that class, and the gateway contract that
-# kix.expose reads.
+# Installs Envoy Gateway's own CRDs (gateway.envoyproxy.io, crds/, vendored
+# from the release's envoy-gateway-crds.yaml); the controller Deployment, its
+# ServiceAccount, ConfigMap, and Service; its roles (rbac/, vendored from the
+# release's install.yaml); the certgen Job that writes the control plane's
+# certificates; the topology injector's MutatingWebhookConfiguration; and a
+# GatewayClass, an EnvoyProxy, and a Gateway named after the instance. With
+# the optional `prometheus` dependency and `metrics.enabled`, it also adds a
+# metrics Service, a ServiceMonitor for the controller, a PodMonitor for the
+# proxies, and alerts.
 #
-# Supports multiple instances (public gateway, private gateway, etc.);
-# all resource names derive from scope.instanceName.
+# Dependencies:
+#   gatewayApi (required)   the Gateway API CRDs, the role the gateway-api
+#                           package claims. The GatewayClass and Gateway are
+#                           built from its `out.crds`.
+#   prometheus (optional)   scrapes the controller and the proxies while
+#                           `metrics.enabled`.
 #
-# Resources: EnvoyProxy (optional), GatewayClass, Gateway, plus CRD refs
-# for the two Gateway API kinds and, with an EnvoyProxy, for EnvoyProxy.
-# root = Gateway, with out.gatewayRef, out.listeners, out.podSelector, and
-# out.podNamespace for kix.expose (kix.contracts.gateway).
+# Minimal instance:
 #
-# Network policy: Envoy Gateway's controller creates the proxy pods. It
-# labels them with the owning Gateway's name and namespace, or with the
-# owning GatewayClass when the EnvoyProxy sets `mergeGateways`
-# (internal/gatewayapi/helpers.go and
-# internal/infrastructure/kubernetes/proxy/resource.go at v1.9.1). By
-# default they run in the controller's namespace, which `proxyNamespace`
-# names. kix.expose reads the selector and namespace to admit the proxies to
-# each exposed backend. With another controllerName, or `proxyNamespace =
-# null`, both are null and kix.expose warns that no policy admits the
-# gateway's pods.
+#   instances.envoy-gateway-system.gateway-api.package = packages.experimental.gateway-api;
+#   instances.envoy-gateway-system.envoy-gateway.package = packages.experimental.envoy-gateway;
 #
-# Alerts: none. The package runs no program, so it has no metrics to
-# scrape. The Envoy Gateway controller and the Envoy proxies it creates
-# come from the controller's own installation, so their scrape and alerts
-# belong with that installation.
+# A cluster runs one instance (`conflictsWith`). The controller watches
+# Gateway API objects in every namespace, the CRDs are cluster-wide, and
+# Envoy Gateway fixes the names of its Service and certificate Secrets.
+#
+# The controller creates the data plane. For each Gateway it starts an
+# Envoy Deployment and a Service in the controller's namespace
+# (internal/infrastructure/kubernetes/proxy/resource.go), from the
+# EnvoyProxy the GatewayClass names. Kix renders that EnvoyProxy: the Envoy
+# image, the replica count from the availability level, a topology spread
+# and a PodDisruptionBudget when there is more than one replica, and a
+# NodePort Service when `cluster.roles.loadBalancer.binding` is "absent"
+# (the kind flavour sets that). `proxySpec` adds to it. The proxies run as
+# uid 65532 with every capability dropped, which the restricted Pod
+# Security level admits. The Gateway is ready once the controller reports
+# it Programmed, which needs a ready proxy and, for a LoadBalancer Service,
+# an address.
+#
+# The controller and the proxies talk over mutual TLS. The certgen Job
+# (`envoy-gateway certgen`) writes the CA and the certificates into the
+# Secrets envoy-gateway, envoy, envoy-rate-limit, and envoy-oidc-hmac in the
+# instance's namespace, and the CA into the topology injector's webhook.
+# It leaves existing Secrets alone, so it can run again
+# (internal/cmd/certgen.go). The certificates are valid for five years
+# (internal/crypto/certgen.go) and nothing renews them. Delete the four
+# Secrets and run the Job again to renew them.
+#
+# Leader election is on, as upstream ships it. Every replica serves xDS to
+# the proxies, and the leader writes status and the proxy Deployments. The
+# controller runs one replica at availability none and pod, and two from
+# node up. The proxies keep their last configuration while the controller
+# is down.
+#
+# The topology injector, a mutating webhook on pods/binding in the
+# controller's namespace, copies the node's zone onto each proxy pod for
+# zone-aware routing. Its failurePolicy is Ignore, so a pod binds while the
+# webhook is down.
+#
+# Network policy: the API server reaches the topology injector on TCP 9443
+# (`meta.network.intents.webhook`, which also opens that port on the
+# certgen Job's pod, where nothing listens). The rest is built from the
+# configuration: clients from outside the cluster and from every pod reach
+# the proxies on their listener ports; the proxies reach the controller's
+# xDS (18000) and Wasm (18002) ports and every pod in the cluster, because
+# HTTPRoutes name their backends at runtime. kix.expose admits the proxies
+# to each exposed backend through `out.podSelector`.
+#
+# `out` (the gateway contract, kix.contracts.gateway):
+#   out.gatewayRef    the Gateway, the parentRef of every HTTPRoute
+#                     kix.expose renders.
+#   out.listeners     the rendered listeners, from which kix.expose picks a
+#                     route's URL scheme and port.
+#   out.podSelector, out.podNamespace
+#                     the proxy pods of the Gateway, for the policy
+#                     kix.expose writes so they can reach each backend.
+#   out.version       the Envoy Gateway version `image.tag` names.
+#   out.crds.<Kind>   CRD handles for Envoy Gateway's policy kinds:
+#                     Backend, BackendTrafficPolicy, ClientTrafficPolicy,
+#                     EnvoyExtensionPolicy, EnvoyPatchPolicy, EnvoyProxy,
+#                     HTTPRouteFilter, and SecurityPolicy.
+#   out.extraImages   the Envoy and rate limit images the controller runs.
+#
+# Alerts: with a prometheus dependency and `metrics.enabled`, two
+# PrometheusRules select the metrics Service's and the PodMonitor's series.
+#   EnvoyGatewayDown (warning)        no controller replica answers a scrape.
+#                                     The proxies keep their last
+#                                     configuration, and no change to a
+#                                     Gateway or route reaches them.
+#   EnvoyGatewayConfigRejected        a proxy refused (NACKed) the
+#   (warning)                         configuration the controller sent,
+#                                     and keeps serving the previous one.
+#   EnvoyGatewayProxyApplyFailing     the controller cannot create or
+#   (warning)                         update a proxy Deployment, Service,
+#                                     or other object it owns.
+#   EnvoyProxyDown (critical)         no proxy of the Gateway answers a
+#                                     scrape, so the Gateway serves nothing.
+#   EnvoyProxyControlPlaneLost        a proxy has lost its xDS connection to
+#   (warning)                         the controller for 10 minutes.
+# Fewer ready replicas than desired is left to prometheus-default-rules,
+# and request errors and latency to the site's own objectives.
+#
+# Escape hatches: `settings` (the EnvoyGateway configuration file),
+# `proxySpec` (the EnvoyProxy spec), `listeners` and `addresses` (the
+# Gateway's), the CRD handles on `out.crds`, and the instance's
+# `partsOverlays`.
+#
+# Limits: under network policy, the proxies reach only pods in the
+# cluster. A Backend with an FQDN or IP outside it, an external
+# authorization or OIDC server, and a Wasm module fetched by URL need a
+# policy written outside Kix, as do the controller's own fetches (Wasm
+# images, extension servers). Global rate limiting needs a Redis the
+# package does not wire, and its rate limit Deployment gets no policy.
+# GatewayNamespace mode and a namespace-scoped watch are refused, because
+# the roles and the policies assume the proxies run in the controller's
+# namespace and the controller watches the whole cluster.
+#
+# Moving to another release: set `release` and the digest of `image`
+# (`crane digest docker.io/envoyproxy/gateway:<release>`), set
+# `operandImages` to the DefaultEnvoyProxyImage and DefaultRateLimitImage of
+# that release (api/v1alpha1/shared_types.go), move the tag in
+# crds/sources.txt and rbac/sources.txt, run
+# `uv run scripts/vendor-crds.py envoy-gateway`, compare the Deployment,
+# certgen Job, and webhook below with the release's charts/gateway-helm
+# templates, and check the gateway-api package's release against the
+# release's go.mod.
 
 {
   scope,
   lib,
   kix,
+  availability,
 }:
 
 let
-  # The controller name Envoy Gateway's own GatewayClass controller
-  # watches for. Spelled once: it is both the `controllerName` default
-  # and the precondition for emitting an EnvoyProxy, which is an Envoy
-  # Gateway extension and means nothing to another implementation.
-  envoyGatewayController = "gateway.envoyproxy.io/gatewayclass-controller";
+  # meta.version, image.tag, and the tag in crds/sources.txt and
+  # rbac/sources.txt.
+  release = "v1.10.0";
+  minorOf = tag: lib.versions.majorMinor (lib.removePrefix "v" tag);
+
+  name = scope.instanceName;
+  ns = scope.namespaceName;
+  who = "envoy-gateway ${ns}/${name}";
+
+  # The controller name Envoy Gateway's GatewayClass controller watches for
+  # (api/v1alpha1/envoygateway_helpers.go).
+  controllerName = "gateway.envoyproxy.io/gatewayclass-controller";
+
+  # Names Envoy Gateway fixes. The proxies dial the controller at
+  # envoy-gateway.<namespace> (internal/xds/bootstrap/bootstrap.go), certgen
+  # issues the controller's certificate for that name and writes it to the
+  # Secret envoy-gateway (internal/crypto/certgen.go,
+  # internal/provider/kubernetes/secrets.go), and patches the webhook of
+  # this name (internal/cmd/certgen.go).
+  serviceName = "envoy-gateway";
+  certSecretName = "envoy-gateway";
+  webhookName = "envoy-gateway-topology-injector.${ns}";
+
+  ports = {
+    xds = 18000;
+    rateLimitXds = 18001;
+    wasm = 18002;
+    metrics = 19001;
+    health = 8081;
+    webhook = 9443;
+  };
+  # The proxy's stats port (internal/xds/bootstrap/bootstrap.go).
+  proxyStatsPort = 19001;
+
+  controllerLabels = {
+    "app.kubernetes.io/name" = "envoy-gateway";
+    "app.kubernetes.io/instance" = name;
+    "app.kubernetes.io/component" = "controller";
+  };
+  certgenLabels = controllerLabels // {
+    "app.kubernetes.io/component" = "certgen";
+  };
+
+  # Labels Envoy Gateway puts on every proxy pod and rate limit pod it
+  # creates (internal/infrastructure/kubernetes/proxy/resource.go,
+  # internal/infrastructure/kubernetes/ratelimit/resource.go).
+  proxyLabels = {
+    "app.kubernetes.io/name" = "envoy";
+    "app.kubernetes.io/component" = "proxy";
+    "app.kubernetes.io/managed-by" = "envoy-gateway";
+  };
+  rateLimitLabels = {
+    "app.kubernetes.io/name" = "envoy-ratelimit";
+    "app.kubernetes.io/component" = "ratelimit";
+    "app.kubernetes.io/managed-by" = "envoy-gateway";
+  };
 
   gatewayListeners = import ./listeners.nix { inherit lib; };
-in
 
+  readJSON = file: builtins.fromJSON (builtins.readFile file);
+  vendored = file: (readJSON ./crds/${file}).spec;
+
+  # Options of earlier releases of this package, when it rendered only the
+  # GatewayClass and Gateway for a controller installed outside Kix.
+  removedOptions = {
+    controllerName = "The package installs Envoy Gateway, whose controller name is fixed. For another Gateway API implementation, use its own package, such as traefik.";
+    proxyNamespace = "The proxies run in the instance's namespace, where the package installs the controller.";
+    gatewayClassName = "The GatewayClass takes the instance name.";
+    gatewayName = "The Gateway takes the instance name.";
+  };
+  removedId = "K5531";
+
+  # Paths of the EnvoyGateway configuration that the package writes or that
+  # the roles and policies depend on.
+  lockedSettings = [
+    [ "gateway" ]
+    [
+      "provider"
+      "type"
+    ]
+    [
+      "provider"
+      "kubernetes"
+      "deploy"
+    ]
+    [
+      "provider"
+      "kubernetes"
+      "watch"
+    ]
+    [
+      "provider"
+      "kubernetes"
+      "shutdownManager"
+    ]
+    [
+      "provider"
+      "kubernetes"
+      "rateLimitDeployment"
+      "container"
+      "image"
+    ]
+    [ "proxyTopologyInjector" ]
+    # A default EnvoyProxy would sit beside the one the package renders;
+    # set proxySpec instead.
+    [ "envoyProxy" ]
+  ];
+in
 {
   meta = {
-    description = "GatewayClass, Gateway, and optional EnvoyProxy for Envoy Gateway. Does not install the Envoy Gateway controller or Gateway API CRDs";
+    version = lib.removePrefix "v" release;
+    description = "Envoy Gateway: the Gateway API controller, its Envoy proxies, and one GatewayClass and Gateway";
     owner = "platform";
-    defaultAliases = [ "gateway" ];
+    defaultAliases = [
+      "gateway"
+      "envoyGateway"
+    ];
+    conflictsWith = [ "cluster:envoyGateway" ];
     # One Gateway accepts HTTPRoutes from every namespace, so consumers in
     # any namespace find it by name.
     scope = "cluster";
-    k8s.minVersion = "1.26";
+    # Envoy Gateway 1.10 supports Kubernetes 1.34 to 1.37
+    # (site/content/en/news/releases/matrix.md upstream).
+    k8s.minVersion = "1.34";
+    network.intents.webhook.ingress = [
+      {
+        from = "apiserver";
+        ports = [
+          {
+            port = ports.webhook;
+            protocol = "TCP";
+          }
+        ];
+      }
+    ];
   };
 
+  assertions =
+    { config, ... }:
+    let
+      imageTag = builtins.unsafeDiscardStringContext config.image.tag;
+    in
+    lib.mapAttrsToList (option: fix: {
+      assertion = config.${option} == null;
+      id = removedId;
+      inherit option fix;
+      message = "${option} was removed when the package began to install the Envoy Gateway controller.";
+    }) removedOptions
+    ++ [
+      {
+        assertion = minorOf imageTag == minorOf release;
+        option = "image.tag";
+        message = "image.tag \"${imageTag}\" is not an Envoy Gateway ${minorOf release} release, and the CRDs and roles under kix/packages/experimental/envoy-gateway are vendored from ${release}.";
+        fix = "Set image.tag to a v${minorOf release}.x tag, or move the package to another release as its header describes.";
+      }
+    ];
+
   options = {
-    # GatewayClass controller name. Must match the controller installed in the cluster.
-    # Common values: "gateway.envoyproxy.io/gatewayclass-controller" (Envoy Gateway),
-    #                "gateway.nginx.org/nginx-gateway-controller" (nginx-gateway-fabric).
-    controllerName = lib.mkOption {
-      type = lib.types.str;
-      default = envoyGatewayController;
-      description = "Controller name for the GatewayClass. Must match the installed gateway controller.";
+    image = kix.options.image {
+      repository = "docker.io/envoyproxy/gateway";
+      tag = release;
+      digest = "sha256:c2243d43518bed91d3ed8c2db849a4b7a14ac9b96eb019f2ab104bb1ca8572b1";
+      description = "Image of the Envoy Gateway controller. The certgen Job and the shutdown manager in each proxy pod run it too. Its major.minor must be the package's release.";
     };
 
-    # Override GatewayClass name. Defaults to instance name.
-    gatewayClassName = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = null;
-      description = "GatewayClass name. Defaults to the instance name.";
+    operandImages = {
+      envoy = kix.options.image {
+        repository = "docker.io/envoyproxy/envoy";
+        tag = "distroless-v1.40.2";
+        digest = "sha256:09ca6f2140a61ad8df11779a4a30d52b48433d444466328494f9188c9c35eded";
+        description = "Image of the Envoy proxies the controller runs for each Gateway. The default is the release's DefaultEnvoyProxyImage.";
+      };
+      rateLimit = kix.options.image {
+        repository = "docker.io/envoyproxy/ratelimit";
+        tag = "5ae0682e";
+        digest = "sha256:b95206e32b1a5f824fb06062fbb85bbdfb7f5de54135e92afe8462f22c979681";
+        description = "Image of the rate limit service the controller runs when `settings.rateLimit` is set. The default is the release's DefaultRateLimitImage.";
+      };
     };
 
-    # Override Gateway name. Defaults to instance name.
-    gatewayName = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = null;
-      description = "Gateway name. Defaults to the instance name.";
+    # The release's chart values. The controller's memory grows with the
+    # number of Gateway API objects it translates.
+    resources = kix.options.resources {
+      requests = {
+        cpu = "100m";
+        memory = "256Mi";
+      };
+      limits.memory = "1024Mi";
     };
 
     listeners = lib.mkOption {
@@ -92,218 +335,806 @@ in
         with the upstream field names. An HTTPS listener with no
         `tls.certificateRefs` is a placeholder and is not rendered.
 
+        Envoy listens on each port, plus 10000 for a port below 1024, and
+        under network policy the package opens those ports to clients.
         kix.expose reads the rendered listeners: `protocol`, `hostname`,
         `port`, and `allowedRoutes.namespaces.from` decide whether an
         HTTPRoute can attach and which URL scheme and port it gets.
       '';
     };
 
-    proxyNamespace = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = "envoy-gateway-system";
-      description = ''
-        Namespace of the Envoy proxy pods. Envoy Gateway runs them in the
-        controller's namespace, `envoy-gateway-system` in its install guide.
-        Set it to the controller's namespace when it is installed elsewhere,
-        or to this instance's namespace when the controller runs in
-        GatewayNamespace mode. kix.expose admits the proxy pods in this
-        namespace to each exposed backend. Null leaves `out.podSelector`
-        null, so no policy admits them.
-      '';
-    };
-
-    # Gateway addresses (e.g. for static IP assignment).
     addresses = lib.mkOption {
-      type = lib.types.listOf lib.types.anything;
+      type = lib.types.listOf (
+        lib.types.submodule {
+          options = {
+            type = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              description = "`IPAddress` (the Gateway API default), `Hostname`, or an implementation-specific type.";
+            };
+            value = lib.mkOption { type = lib.types.str; };
+          };
+        }
+      );
       default = [ ];
-      description = "Optional static addresses for the Gateway.";
+      example = [
+        {
+          type = "IPAddress";
+          value = "192.0.2.10";
+        }
+      ];
+      description = "The Gateway's `spec.addresses`, such as a static IP for the proxy's LoadBalancer Service.";
     };
 
-    # Data-plane provisioning parameters, as an EnvoyProxy spec.
     proxySpec = lib.mkOption {
-      type = lib.types.nullOr (lib.types.attrsOf lib.types.anything);
-      default = null;
+      type = lib.types.attrsOf lib.types.anything;
+      default = { };
       example = lib.literalExpression ''
         {
-          provider = {
-            type = "Kubernetes";
-            kubernetes.envoyService.type = "NodePort";
-          };
+          provider.kubernetes.envoyService.annotations."service.beta.kubernetes.io/aws-load-balancer-type" = "nlb";
+          logging.level.default = "info";
         }
       '';
       description = ''
-        `spec` of an EnvoyProxy (gateway.envoyproxy.io/v1alpha1), verbatim.
+        Fields of the EnvoyProxy (gateway.envoyproxy.io/v1alpha1) `spec`
+        that the GatewayClass names, merged over the package's own. The
+        package sets `provider.type`, the Envoy image, the replica count
+        (`provider.kubernetes.envoyDeployment.replicas`, from the
+        availability level), the proxies' topology spread and
+        PodDisruptionBudget, and the Service type (`NodePort` when the
+        cluster has no load balancer, `LoadBalancer` otherwise). The replica
+        count and the Service type may be set here. A `provider.type` other
+        than `Kubernetes`, the Envoy image (`operandImages.envoy`), and the
+        topology spread are refused.
 
-        When set, the package emits an EnvoyProxy and points the
-        GatewayClass's `parametersRef` at it, so Envoy Gateway provisions
-        every Gateway in the class from this spec. Leave it null (the
-        default) to accept Envoy Gateway's own defaults, which include a
-        `LoadBalancer` Service for the proxy.
-
-        That default never gets an address on a cluster with no
-        LoadBalancer implementation (stock kind, for one), so the Gateway
-        stays `Programmed=False` and `kix deploy` waits for a readiness
-        that cannot arrive. Setting
-        `provider.kubernetes.envoyService.type = "NodePort"` makes Envoy
-        Gateway publish the node addresses instead, and the Gateway
-        programs.
+        `mergeGateways = true` runs one proxy fleet for every Gateway of
+        the class, and `out.podSelector` then selects by class.
       '';
     };
-  };
 
-  assertions =
-    { config, ... }:
-    [
-      {
-        assertion = config.proxySpec == null || config.controllerName == envoyGatewayController;
-        message =
-          "envoy-gateway: proxySpec configures an EnvoyProxy, an Envoy Gateway extension, "
-          + "but controllerName is \"${config.controllerName}\". Either drop proxySpec or point "
-          + "controllerName at \"${envoyGatewayController}\".";
-      }
-    ];
-
-  build =
-    {
-      self,
-      config,
-      scope,
-      ...
-    }:
-    let
-      name = scope.instanceName;
-      gatewayClassName = if config.gatewayClassName != null then config.gatewayClassName else name;
-      gatewayName = if config.gatewayName != null then config.gatewayName else name;
-
-      selectorLabels = {
-        "app.kubernetes.io/name" = "envoy-gateway";
-        "app.kubernetes.io/instance" = name;
-        "app.kubernetes.io/component" = "gateway";
-      };
-
-      activeListeners = gatewayListeners.active config.listeners;
-
-      haveProxy = config.proxySpec != null;
-
-      # Labels Envoy Gateway puts on the proxy pods it creates. A merged
-      # GatewayClass shares one proxy fleet across its Gateways.
-      proxySelector =
-        let
-          owner =
-            if haveProxy && (config.proxySpec.mergeGateways or false) then
-              { "gateway.envoyproxy.io/owning-gatewayclass" = gatewayClassName; }
-            else
-              {
-                "gateway.envoyproxy.io/owning-gateway-name" = gatewayName;
-                "gateway.envoyproxy.io/owning-gateway-namespace" = scope.namespaceName;
-              };
-        in
-        if config.controllerName != envoyGatewayController || config.proxyNamespace == null then
-          null
-        else
-          {
-            "app.kubernetes.io/name" = "envoy";
-            "app.kubernetes.io/component" = "proxy";
-            "app.kubernetes.io/managed-by" = "envoy-gateway";
-          }
-          // owner;
-
-      gatewayApiGroup = "gateway.networking.k8s.io";
-    in
-    # Envoy Gateway reads this through the GatewayClass's parametersRef and
-    # provisions the proxy Deployment/Service from it. The reference is by
-    # name and namespace, so it must exist before the class is accepted;
-    # the `self.envoyProxy.out.name` below is what buys that ordering edge.
-    # The EnvoyProxy CRD is installed with the Envoy Gateway controller.
-    lib.optionalAttrs haveProxy {
-      envoyProxyCrd = scope.mkCRDRef {
-        group = "gateway.envoyproxy.io";
-        kind = "EnvoyProxy";
-        plural = "envoyproxies";
-        version = "v1alpha1";
-        # A proxy configuration; the Gateway that uses it runs the pods.
-        usesAtLeast = _: { };
-      };
-
-      envoyProxy = scope.mkCR self.envoyProxyCrd {
-        name = "${name}-proxy";
-        labels = selectorLabels;
-        spec = config.proxySpec;
-      };
-    }
-    // {
-      # The CRDs arrive with the controller, outside Kix. The refs give each
-      # CR its CRD-before-CR edge and carry the Gateway API's readiness
-      # conditions: a GatewayClass is usable once Accepted=True, a Gateway
-      # once Programmed=True. Neither kind sets Ready or Available.
-      gatewayClassCrd = scope.mkCRDRef {
-        group = gatewayApiGroup;
-        kind = "GatewayClass";
-        plural = "gatewayclasses";
-        version = "v1";
-        crdScope = "Cluster";
-        usesAtLeast = _: { };
-        readiness.condition = {
-          type = "Accepted";
-          status = "True";
-        };
-      };
-
-      gatewayCrd = scope.mkCRDRef {
-        group = gatewayApiGroup;
-        kind = "Gateway";
-        plural = "gateways";
-        version = "v1";
-        crdScope = "Namespaced";
-        readiness.condition = {
-          type = "Programmed";
-          status = "True";
-        };
-      };
-
-      gatewayClass = self.gatewayClassCrd.out.mkCR scope {
-        name = gatewayClassName;
-        labels = selectorLabels;
-        spec = {
-          controllerName = config.controllerName;
+    settings = lib.mkOption {
+      type = lib.types.attrsOf lib.types.anything;
+      default = { };
+      example = lib.literalExpression ''
+        {
+          logging.level.default = "debug";
+          extensionApis.enableBackend = true;
         }
-        // lib.optionalAttrs haveProxy {
-          parametersRef = {
-            group = "gateway.envoyproxy.io";
-            kind = "EnvoyProxy";
-            name = self.envoyProxy.out.name;
-            namespace = scope.namespaceName;
-          };
-        };
-      };
+      '';
+      description = ''
+        Fields of the EnvoyGateway configuration file
+        (gateway.envoyproxy.io/v1alpha1 EnvoyGateway), merged over the
+        package's own. The package sets `gateway`, `provider.type`,
+        `provider.kubernetes.shutdownManager`, the rate limit image, and
+        `logging.level.default` (`info`, which may be set here).
+        `provider.kubernetes.deploy`, `provider.kubernetes.watch`,
+        `proxyTopologyInjector`, and `envoyProxy` are refused: the roles
+        and the network policy assume the default deployment mode and a
+        cluster-wide watch, and the proxies take their settings from
+        `proxySpec`.
+      '';
+    };
 
-      gateway = self.gatewayCrd.out.mkCR scope {
-        name = gatewayName;
-        labels = selectorLabels;
-        spec = {
-          gatewayClassName = self.gatewayClass.out.name;
-          listeners = activeListeners;
-        }
-        // lib.optionalAttrs (config.addresses != [ ]) {
-          addresses = config.addresses;
-        };
-      };
-
-      root = {
-        resource = self.gateway;
-        # The gateway contract (kix/contracts/stable/gateway.nix), read by
-        # kix.expose.
-        out = kix.contracts.gateway.check "envoy-gateway ${scope.namespaceName}/${name}" {
-          gatewayRef = {
-            name = self.gateway.out.name;
-            namespace = scope.namespaceName;
-          };
-          # kix.expose matches a route's host and namespace against these
-          # to pick the URL scheme and port.
-          listeners = activeListeners;
-          podSelector = proxySelector;
-          podNamespace = if proxySelector == null then null else config.proxyNamespace;
-        };
+    metrics = kix.options.monitor // {
+      nackWindow = lib.mkOption {
+        type = kix.types.promDuration;
+        default = "15m";
+        description = "How far back EnvoyGatewayConfigRejected looks for a configuration a proxy refused, as a Prometheus duration. The alert clears this long after the last refusal.";
       };
     };
+  }
+  // lib.mapAttrs (
+    _: fix:
+    lib.mkOption {
+      type = lib.types.unspecified;
+      default = null;
+      visible = false;
+      description = "Removed. ${fix}";
+    }
+  ) removedOptions;
+
+  build = [
+    (
+      {
+        self,
+        config,
+        clusterConfig,
+        gatewayApi,
+        prometheus ? null,
+        ...
+      }:
+      let
+        netpol = scope.networkPolicyEnforcer.netpol;
+        inherit (scope.rbac) mkClusterRoleSet mkRoleSet;
+        rbacRules = file: (readJSON ./rbac/${file}).rules;
+
+        activeListeners = gatewayListeners.active config.listeners;
+        # Envoy runs unprivileged, so the controller moves a listener port
+        # below 1024 up by 10000 (servicePortToContainerPort in
+        # internal/gatewayapi/listener.go).
+        containerPort = port: if port < 1024 then port + 10000 else port;
+        frontDoorPorts = lib.unique (
+          map (l: {
+            port = containerPort l.port;
+            protocol = if l.protocol == "UDP" then "UDP" else "TCP";
+          }) activeListeners
+        );
+
+        controllerReplicas = kix.availability.pick availability {
+          none = 1;
+          pod = 1;
+          node = 2;
+          zone = 2;
+        };
+
+        # The EnvoyProxy the GatewayClass names. The user's proxySpec
+        # merges over it.
+        loadBalancerAbsent =
+          ((clusterConfig.cluster.roles or { }).loadBalancer or { }).binding or null == "absent";
+        proxyBase = {
+          provider = {
+            type = "Kubernetes";
+            kubernetes = {
+              envoyDeployment = {
+                replicas = kix.availability.pick availability {
+                  none = 1;
+                  pod = 2;
+                  node = 2;
+                  zone = 2;
+                };
+                container.image = kix.image.ref config.operandImages.envoy;
+              };
+              envoyService.type = if loadBalancerAbsent then "NodePort" else "LoadBalancer";
+            };
+          };
+        };
+        # The Kubernetes provider is the only one that runs proxies in a
+        # cluster, and the roles and policies assume it.
+        proxyProviderType = config.proxySpec.provider.type or "Kubernetes";
+        proxyMerged =
+          if proxyProviderType != "Kubernetes" then
+            scope.fail {
+              option = "proxySpec.provider.type";
+              message = "proxySpec.provider.type is \"${toString proxyProviderType}\", and Envoy Gateway runs proxies in a cluster only with the Kubernetes provider.";
+              fix = "Remove proxySpec.provider.type.";
+            }
+          else
+            kix.mergeGuarded {
+              inherit who;
+              what = "proxySpec";
+              locked = [
+                [
+                  "provider"
+                  "kubernetes"
+                  "envoyDeployment"
+                  "container"
+                  "image"
+                ]
+                [
+                  "provider"
+                  "kubernetes"
+                  "envoyDeployment"
+                  "pod"
+                  "topologySpreadConstraints"
+                ]
+              ];
+            } proxyBase config.proxySpec;
+        proxyReplicas = proxyMerged.provider.kubernetes.envoyDeployment.replicas or 1;
+        mergeGateways = proxyMerged.mergeGateways or false;
+
+        # The pods of this instance's Gateway. A merged GatewayClass shares
+        # one proxy fleet across its Gateways
+        # (internal/gatewayapi/helpers.go).
+        gatewayProxySelector =
+          proxyLabels
+          // (
+            if mergeGateways then
+              { "gateway.envoyproxy.io/owning-gatewayclass" = name; }
+            else
+              {
+                "gateway.envoyproxy.io/owning-gateway-name" = name;
+                "gateway.envoyproxy.io/owning-gateway-namespace" = ns;
+              }
+          );
+
+        proxySpread = lib.optionalAttrs (proxyReplicas > 1) {
+          provider.kubernetes = {
+            envoyDeployment.pod.topologySpreadConstraints = kix.availability.spreadConstraints {
+              level = availability;
+              selector = gatewayProxySelector;
+              topology = clusterConfig.cluster.topology;
+            };
+            envoyPDB.minAvailable = 1;
+          };
+        };
+        proxySpec = lib.recursiveUpdate proxyMerged proxySpread;
+
+        configBase = {
+          gateway.controllerName = controllerName;
+          provider = {
+            type = "Kubernetes";
+            kubernetes = {
+              rateLimitDeployment.container.image = kix.image.ref config.operandImages.rateLimit;
+              shutdownManager.image = kix.image.ref config.image;
+            };
+          };
+          logging.level.default = "info";
+        };
+        envoyGatewayConfig = {
+          apiVersion = "gateway.envoyproxy.io/v1alpha1";
+          kind = "EnvoyGateway";
+        }
+        // kix.mergeGuarded {
+          inherit who;
+          what = "settings";
+          locked = lockedSettings;
+        } configBase config.settings;
+
+        fieldRef = path: { valueFrom.fieldRef.fieldPath = path; };
+        sharedEnv = {
+          ENVOY_GATEWAY_NAMESPACE = fieldRef "metadata.namespace";
+          KUBERNETES_CLUSTER_DOMAIN = clusterConfig.clusterDomain;
+        };
+
+        # The release chart's container security context, for the
+        # controller and for certgen.
+        containerSecurity = {
+          allowPrivilegeEscalation = false;
+          capabilities.drop = [ "ALL" ];
+          privileged = false;
+          readOnlyRootFilesystem = true;
+          runAsNonRoot = true;
+          runAsUser = 65532;
+          runAsGroup = 65532;
+          seccompProfile.type = "RuntimeDefault";
+        };
+        podSecurity = {
+          runAsNonRoot = true;
+          runAsUser = 65532;
+          runAsGroup = 65532;
+          fsGroup = 65532;
+          seccompProfile.type = "RuntimeDefault";
+        };
+
+        tcp = port: {
+          inherit port;
+          protocol = "TCP";
+        };
+
+        gatewayCrds = gatewayApi.out.crds;
+      in
+      {
+        crds = {
+          backends = scope.mkCRD {
+            spec = vendored "backends.gateway.envoyproxy.io.json";
+            holdsData = false;
+            usesAtLeast = _: { };
+            # The controller sets Accepted on a Backend it validated
+            # (internal/gatewayapi/backend.go).
+            readiness.condition = {
+              type = "Accepted";
+              status = "True";
+            };
+          };
+        }
+        //
+          lib.genAttrs
+            [
+              "backendtrafficpolicies"
+              "clienttrafficpolicies"
+              "envoyextensionpolicies"
+              "envoypatchpolicies"
+              "envoyproxies"
+              "httproutefilters"
+              "securitypolicies"
+            ]
+            (
+              plural:
+              # Policies and filters report status per target in
+              # status.ancestors, with no top-level conditions.
+              scope.mkCRD {
+                spec = vendored "${plural}.gateway.envoyproxy.io.json";
+                holdsData = false;
+                usesAtLeast = _: { };
+              }
+            );
+
+        serviceAccount = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ServiceAccount";
+          inherit name;
+          labels = controllerLabels;
+        };
+
+        clusterRole = mkClusterRoleSet scope {
+          subjects = [
+            {
+              kind = "ServiceAccount";
+              name = self.serviceAccount.out.name;
+              namespace = ns;
+            }
+          ];
+          labels = controllerLabels;
+          roles."${name}-${ns}" = rbacRules "clusterrole-eg-gateway-helm-envoy-gateway-role.json";
+        };
+
+        # The infra manager role lets the controller create the proxy
+        # Deployments, Services, and their companions in this namespace.
+        role = mkRoleSet scope {
+          subjects = [
+            {
+              kind = "ServiceAccount";
+              name = self.serviceAccount.out.name;
+              namespace = ns;
+            }
+          ];
+          labels = controllerLabels;
+          roles = {
+            "${name}-infra-manager" = rbacRules "role-eg-gateway-helm-infra-manager.json";
+            "${name}-leader-election" = rbacRules "role-eg-gateway-helm-leader-election-role.json";
+          };
+        };
+
+        config = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ConfigMap";
+          name = "${name}-config";
+          labels = controllerLabels;
+          data."envoy-gateway.yaml" = builtins.toJSON envoyGatewayConfig;
+        };
+
+        certgenServiceAccount = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ServiceAccount";
+          name = "${name}-certgen";
+          labels = certgenLabels;
+        };
+
+        certgenRole =
+          let
+            subjects = [
+              {
+                kind = "ServiceAccount";
+                name = self.certgenServiceAccount.out.name;
+                namespace = ns;
+              }
+            ];
+          in
+          mkRoleSet scope {
+            inherit subjects;
+            labels = certgenLabels;
+            roles."${name}-certgen" = rbacRules "role-eg-gateway-helm-certgen.json";
+          }
+          // mkClusterRoleSet scope {
+            inherit subjects;
+            labels = certgenLabels;
+            # The release manifest names the webhook of the namespace it
+            # was rendered for; the rule names this namespace's.
+            roles."${name}-certgen-${ns}" = map (
+              rule:
+              rule
+              // lib.optionalAttrs (rule ? resourceNames) {
+                resourceNames = [ webhookName ];
+              }
+            ) (rbacRules "clusterrole-eg-gateway-helm-certgen_envoy-gateway-system.json");
+          };
+
+        topologyInjector = scope.mkClusterResource {
+          apiVersion = "admissionregistration.k8s.io/v1";
+          kind = "MutatingWebhookConfiguration";
+          name = webhookName;
+          labels = controllerLabels // {
+            "app.kubernetes.io/component" = "topology-injector";
+          };
+          extra.webhooks = [
+            {
+              name = "topology.webhook.gateway.envoyproxy.io";
+              admissionReviewVersions = [ "v1" ];
+              sideEffects = "None";
+              # certgen writes caBundle; Kix never sets it. The fixed name,
+              # without the Service's context: the Service selects the
+              # Deployment's pods, and the Deployment needs certgen, which
+              # needs this configuration.
+              clientConfig.service = {
+                name = serviceName;
+                namespace = ns;
+                path = "/inject-pod-topology";
+                port = ports.webhook;
+              };
+              failurePolicy = "Ignore";
+              rules = [
+                {
+                  operations = [ "CREATE" ];
+                  apiGroups = [ "" ];
+                  apiVersions = [ "v1" ];
+                  resources = [ "pods/binding" ];
+                }
+              ];
+              namespaceSelector.matchExpressions = [
+                {
+                  key = "kubernetes.io/metadata.name";
+                  operator = "In";
+                  values = [ ns ];
+                }
+              ];
+            }
+          ];
+        };
+
+        # `envoy-gateway certgen` creates the four Secrets when they are
+        # missing, leaves existing ones alone, and writes the CA into the
+        # topology injector, so a second run changes nothing.
+        certgen = scope.mkJob {
+          name = "${name}-certgen";
+          labels = certgenLabels;
+          annotations.${kix.keys.rerun} = kix.keyValues.rerunOnChange;
+          requires = [ self.topologyInjector ] ++ builtins.attrValues self.certgenRole;
+          spec = {
+            backoffLimit = 3;
+            template = {
+              metadata.labels = certgenLabels;
+              spec = {
+                serviceAccount = self.certgenServiceAccount;
+                restartPolicy = "Never";
+                securityContext = podSecurity;
+                containers = [
+                  {
+                    name = "envoy-gateway-certgen";
+                    image = kix.image.ref config.image;
+                    imagePullPolicy = config.image.pullPolicy;
+                    command = [
+                      "envoy-gateway"
+                      "certgen"
+                    ];
+                    env = kix.mkEnvVars sharedEnv;
+                    securityContext = containerSecurity;
+                  }
+                ];
+              };
+            };
+          };
+        };
+
+        certSecret = scope.mkSecretRef {
+          name = certSecretName;
+          type = "kubernetes.io/tls";
+          keys = [
+            "ca.crt"
+            "tls.crt"
+            "tls.key"
+          ];
+          requires = [ self.certgen ];
+        };
+
+        deployment =
+          {
+            inherit name;
+            labels = controllerLabels;
+            # The controller checks at start which optional kinds have CRDs
+            # (internal/provider/kubernetes/controller.go), so every CRD comes
+            # first.
+            requires =
+              builtins.attrValues self.crds
+              ++ builtins.attrValues gatewayCrds
+              ++ builtins.attrValues self.clusterRole
+              ++ builtins.attrValues self.role;
+            spec = {
+              replicas = controllerReplicas;
+              selector.matchLabels = controllerLabels;
+              template = {
+                metadata = {
+                  labels = controllerLabels;
+                  # The controller reads its configuration file at start.
+                  annotations."checksum/config" = self.config.out.contentHash;
+                };
+                spec = {
+                  serviceAccount = self.serviceAccount;
+                  securityContext = podSecurity;
+                  # The release chart's value; the controller holds no
+                  # connection it must drain.
+                  terminationGracePeriodSeconds = 10;
+                  containers = [
+                    {
+                      name = "envoy-gateway";
+                      image = kix.image.ref config.image;
+                      imagePullPolicy = config.image.pullPolicy;
+                      args = [
+                        "server"
+                        "--config-path=/config/envoy-gateway.yaml"
+                      ];
+                      env = kix.mkEnvVars (
+                        sharedEnv
+                        // {
+                          ENVOY_GATEWAY_SERVICE_ACCOUNT = fieldRef "spec.serviceAccountName";
+                          # The prefix of the certgen ServiceAccount, which
+                          # the controller keeps proxies from using
+                          # (internal/infrastructure/kubernetes/proxy/resource_provider.go).
+                          ENVOY_GATEWAY_FULLNAME = name;
+                        }
+                      );
+                      ports = [
+                        (kix.port "grpc" ports.xds)
+                        (kix.port "ratelimit" ports.rateLimitXds)
+                        (kix.port "wasm" ports.wasm)
+                        (kix.port "metrics" ports.metrics)
+                        (kix.port "webhook" ports.webhook)
+                      ];
+                      # The release chart's probes.
+                      startupProbe = {
+                        httpGet = {
+                          path = "/healthz";
+                          port = ports.health;
+                        };
+                        failureThreshold = 30;
+                        periodSeconds = 1;
+                      };
+                      livenessProbe = {
+                        httpGet = {
+                          path = "/healthz";
+                          port = ports.health;
+                        };
+                        periodSeconds = 20;
+                      };
+                      readinessProbe = {
+                        httpGet = {
+                          path = "/readyz";
+                          port = ports.health;
+                        };
+                        periodSeconds = 10;
+                      };
+                      inherit (config) resources;
+                      securityContext = containerSecurity;
+                    }
+                  ];
+                };
+              };
+            };
+          }
+          |> kix.withMounts [
+            (kix.mount.configMap self.config {
+              name = "config";
+              mountPath = "/config";
+              readOnly = true;
+            })
+            (kix.mount.secret self.certSecret {
+              name = "certs";
+              mountPath = "/certs";
+              readOnly = true;
+            })
+            # The Wasm module cache; the root filesystem is read-only.
+            (kix.mount.emptyDir {
+              name = "wasm-cache";
+              mountPath = "/var/lib/eg/wasm";
+            })
+          ]
+          |> scope.mkDeployment;
+
+        service = scope.mkResource {
+          apiVersion = "v1";
+          kind = "Service";
+          name = serviceName;
+          labels = controllerLabels;
+          spec = {
+            selector = self.deployment.out.selector;
+            ports = map (p: p // { protocol = "TCP"; }) [
+              {
+                name = "grpc";
+                port = ports.xds;
+                targetPort = ports.xds;
+              }
+              {
+                name = "ratelimit";
+                port = ports.rateLimitXds;
+                targetPort = ports.rateLimitXds;
+              }
+              {
+                name = "wasm";
+                port = ports.wasm;
+                targetPort = ports.wasm;
+              }
+              {
+                name = "metrics";
+                port = ports.metrics;
+                targetPort = ports.metrics;
+              }
+              {
+                name = "webhook";
+                port = ports.webhook;
+                targetPort = ports.webhook;
+              }
+            ];
+          };
+        };
+
+        metricsService =
+          if config.metrics.enabled && prometheus != null then
+            self.deployment
+            |> kix.service.fromWorkload {
+              name = "${name}-metrics";
+              labels = controllerLabels // {
+                "app.kubernetes.io/component" = "metrics";
+              };
+              ports = [
+                {
+                  name = "metrics";
+                  port = ports.metrics;
+                  targetPort = "metrics";
+                }
+              ];
+            }
+            |> scope.mkResource
+          else
+            null;
+
+        proxyPodMonitor =
+          if config.metrics.enabled && prometheus != null then
+            prometheus.out.mkPodMonitor scope {
+              name = "${name}-proxy";
+              labels = controllerLabels // {
+                "app.kubernetes.io/component" = "proxy";
+              };
+              spec = {
+                selector.matchLabels = gatewayProxySelector;
+                podMetricsEndpoints = [
+                  (
+                    {
+                      portNumber = proxyStatsPort;
+                      path = "/stats/prometheus";
+                    }
+                    // lib.optionalAttrs (config.metrics.interval != null) { inherit (config.metrics) interval; }
+                  )
+                ];
+              };
+              requires = [ self.gateway ];
+            }
+          else
+            null;
+
+        # The controller admits the proxies to xDS and Wasm, and the rate
+        # limit pods to their xDS port.
+        controllerIngress = kix.operandPolicy {
+          inherit scope;
+          name = "${name}-controller-from-proxies";
+          spec = {
+            endpointSelector.matchLabels = controllerLabels;
+            ingress = [
+              (netpol.mkCallerIngressRule {
+                callerSelector = proxyLabels;
+                callerNamespace = ns;
+                ports = map tcp [
+                  ports.xds
+                  ports.wasm
+                ];
+              })
+              (netpol.mkCallerIngressRule {
+                callerSelector = rateLimitLabels;
+                callerNamespace = ns;
+                ports = [ (tcp ports.rateLimitXds) ];
+              })
+            ];
+          };
+        };
+
+        proxyIngress =
+          if frontDoorPorts == [ ] then
+            null
+          else
+            kix.operandPolicy {
+              inherit scope;
+              name = "${name}-proxy-ingress";
+              spec = {
+                endpointSelector.matchLabels = gatewayProxySelector;
+                ingress =
+                  (netpol.translateIntentRules {
+                    intents.front-door.ingress = [
+                      {
+                        from = "world";
+                        ports = frontDoorPorts;
+                      }
+                      {
+                        from = "all-pods";
+                        ports = frontDoorPorts;
+                      }
+                    ];
+                  }).ingressRules;
+              };
+            };
+
+        # HTTPRoutes name their backends at runtime, on any port, so the
+        # graph cannot see the proxies' upstream connections. All pods
+        # covers the controller's xDS and Wasm ports too.
+        proxyEgress = kix.operandPolicy {
+          inherit scope;
+          name = "${name}-proxy-egress";
+          spec = {
+            endpointSelector.matchLabels = gatewayProxySelector;
+            egress = [
+              netpol.dnsEgressRule
+            ]
+            ++ (netpol.translateIntentRules {
+              intents.backends.egress = [ { to = "all-pods"; } ];
+            }).egressRules;
+          };
+        };
+
+        envoyProxy = scope.mkCR self.crds.envoyproxies {
+          inherit name;
+          labels = controllerLabels;
+          spec = proxySpec;
+        };
+
+        gatewayClass = scope.mkCR gatewayCrds.GatewayClass {
+          inherit name;
+          labels = controllerLabels;
+          # A GatewayClass is Accepted only once the controller runs.
+          requires = [ self.deployment ];
+          spec = {
+            inherit controllerName;
+            parametersRef = {
+              group = "gateway.envoyproxy.io";
+              kind = "EnvoyProxy";
+              name = self.envoyProxy.out.name;
+              namespace = ns;
+            };
+          };
+        };
+
+        gateway = scope.mkCR gatewayCrds.Gateway {
+          inherit name;
+          labels = controllerLabels;
+          # The proxies need their network policy to become ready.
+          requires = builtins.filter (p: p != null) [
+            self.proxyIngress
+            self.proxyEgress
+            self.controllerIngress
+          ];
+          spec = {
+            gatewayClassName = self.gatewayClass.out.name;
+            listeners = activeListeners;
+          }
+          // lib.optionalAttrs (config.addresses != [ ]) {
+            addresses = map (lib.filterAttrs (_: v: v != null)) config.addresses;
+          };
+        };
+
+        # The root is the controller; the Gateway is listed so the instance
+        # is ready only once its proxies serve.
+        root = {
+          resource = self.deployment;
+          requires = [
+            self.gateway
+            self.service
+          ];
+          out = kix.contracts.gateway.check who {
+            gatewayRef = {
+              name = self.gateway.out.name;
+              namespace = ns;
+            };
+            listeners = activeListeners;
+            # Raw labels: the reader writes a policy selector from them and
+            # already depends on this instance through gatewayRef.
+            podSelector = gatewayProxySelector;
+            podNamespace = ns;
+            version = kix.image.version config.image;
+            crds = {
+              Backend = self.crds.backends;
+              BackendTrafficPolicy = self.crds.backendtrafficpolicies;
+              ClientTrafficPolicy = self.crds.clienttrafficpolicies;
+              EnvoyExtensionPolicy = self.crds.envoyextensionpolicies;
+              EnvoyPatchPolicy = self.crds.envoypatchpolicies;
+              EnvoyProxy = self.crds.envoyproxies;
+              HTTPRouteFilter = self.crds.httproutefilters;
+              SecurityPolicy = self.crds.securitypolicies;
+            };
+            extraImages = [
+              (kix.image.ref config.operandImages.envoy)
+              (kix.image.ref config.operandImages.rateLimit)
+            ];
+          };
+        };
+      }
+    )
+
+    ./alerts.nix
+  ];
 }

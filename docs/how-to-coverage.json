@@ -579,11 +579,10 @@
       "scenario": "platform",
       "status": "implemented",
       "snippets": [
-        "gatewayInstance",
-        "gatewayKindProxy"
+        "gatewayApiInstance",
+        "gatewayInstance"
       ],
       "liveCaptures": [
-        "how-to/package-envoy-gateway/controller-ready",
         "how-to/package-envoy-gateway/gateway-resources"
       ]
     },

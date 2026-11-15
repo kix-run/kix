@@ -31,6 +31,7 @@
     storageClasses.binding = lib.mkDefault "shadowable";
     loadBalancer.binding = lib.mkDefault "absent";
     snapshotController.binding = lib.mkDefault "absent";
+    gatewayApi.binding = lib.mkDefault "absent";
     metricsApi.binding = lib.mkDefault "absent";
     registryMirror.binding = lib.mkDefault "absent";
   };

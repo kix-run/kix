@@ -260,6 +260,7 @@ A package that runs several images reads the image of its main software. When th
 | --- | --- | --- |
 | `"cni"` | None | Satisfies the cluster CNI capability check. |
 | `"dns"` | `fqdn` | Provides cluster DNS resolution; workloads automatically receive a dependency and network egress rule to the DNS service. |
+| `"gatewayApi"` | `crds` | Provides the Gateway API CRDs (`gateway.networking.k8s.io`) to Gateway API implementations. |
 | `"loadBalancer"` | None | Satisfies `Service` resources of `type = "LoadBalancer"`. |
 | `"metricsApi"` | None | Satisfies consumers that call `scope.requireMetricsApi` (such as `HorizontalPodAutoscaler`). |
 | `"network-policy-enforcer"` | `netpol` | Enables cluster-wide `NetworkPolicy` enforcement when `cluster.networkPolicy.enable = true`. |

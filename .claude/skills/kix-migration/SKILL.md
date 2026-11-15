@@ -391,7 +391,7 @@ edge but NO netpol hole. Consequences when authoring:
   status field with a string (`victoria-metrics-operator/crds.nix`);
   `readiness = { condition = { type = "Bootstrapped"; status = "True"; }; }`
   looks for that entry in `status.conditions` (`stackgres-operator`,
-  `envoy-gateway`, `cilium/netpol-rules.nix`). Kix stamps the
+  `gateway-api`, `cilium/netpol-rules.nix`). Kix stamps the
   declaration on every typed-chain CR as the `kix.run/readiness`
   annotation and `kix deploy` evaluates it instead of the generic
   condition check. The CLI keeps no per-operator kind list: a new
@@ -539,7 +539,7 @@ Parameters, every callback taking `{ self, config, deps }` (`deps` is every DI p
 The script gives up once `RETRY_FOR` seconds have passed and keeps one round of checks under the round budget. It reads what it expects off resources (`self.vmAgent.out.replicas`, a structural output), never off the option that produced them. The Job carries `kix.run/rerun: on-change` (`kix/lib/core/annotations.nix`): the deploy engine recreates it when its own content changed or the last run failed. `kix.run/rerun-hash` covers the script and any Kix-built Secrets or ConfigMaps referenced in `env`, while `kix.healthCheck` adds `checksum/*` annotations on the pod template for `self.root` and each resource in `requires`. Changing any of these reruns the probe. Keep the script a file next to `default.nix` so it can be linted and run from a laptop through `kubectl proxy`. Example: `kix/packages/stable/victoria-metrics-agent/`. A probe that must log in takes the credential the same way a container does: `env = { self, ... }: { CLICKHOUSE_PASSWORD = self.credentials.out.keyRef "password"; ... }` (see `SECRETS.md`). Example: `kix/packages/experimental/clickhouse/`.
 
 **Cluster-side wiring:**
-- Gateway API: instantiate `kix/packages/experimental/traefik` or `kix/packages/experimental/envoy-gateway`, which answer the `"gateway"` alias and honour `kix.contracts.gateway` (`kix/contracts/stable/gateway.nix`)
+- Gateway API: instantiate `kix/packages/experimental/traefik` or `kix/packages/experimental/envoy-gateway`, which answer the `"gateway"` alias and honour `kix.contracts.gateway` (`kix/contracts/stable/gateway.nix`). Both take the Gateway API CRDs from the `gatewayApi` role, which `kix/packages/experimental/gateway-api` claims
 - Ingress: instantiate `kix/packages/experimental/ingress-nginx` with alias `"ingressNginx"`
 
 #### Utility helpers

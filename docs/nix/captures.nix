@@ -1685,32 +1685,6 @@
     live = [
       {
         prepare = [
-          "helm"
-          "install"
-          "eg"
-          "oci://docker.io/envoyproxy/gateway-helm"
-          "--version"
-          "v1.9.1"
-          "--namespace"
-          "envoy-gateway-system"
-          "--create-namespace"
-        ];
-        timeout = "900s";
-      }
-      {
-        capture = "controller-ready";
-        run = [
-          "kubectl"
-          "wait"
-          "--timeout=5m"
-          "--namespace"
-          "envoy-gateway-system"
-          "deployment/envoy-gateway"
-          "--for=condition=Available"
-        ];
-      }
-      {
-        prepare = [
           "kix"
           "deploy"
           "how-to-platform-gateway"

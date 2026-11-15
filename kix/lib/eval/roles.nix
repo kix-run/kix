@@ -50,6 +50,11 @@ rec {
       outContract = [ ];
     };
 
+    gatewayApi = {
+      description = "The Gateway API CRDs (gateway.networking.k8s.io), one set per cluster. Gateway API implementations build their GatewayClass and Gateway through out.crds. An environment that installs the CRDs itself binds the role exclusive, so a second, managed set is refused at eval.";
+      outContract = [ "crds" ];
+    };
+
     snapshotController = {
       description = "CSI snapshot controller and the snapshot.storage.k8s.io API, one per cluster. Consumers build VolumeSnapshotClass and VolumeSnapshot through out.crds. An environment that runs its own controller binds the role exclusive, so a second, managed controller is refused at eval.";
       outContract = [ "crds" ];

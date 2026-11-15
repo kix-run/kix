@@ -1,8 +1,8 @@
 # ingress-nginx: the NGINX Ingress controller, which serves the Ingresses of
 # its IngressClass. Deprecated: Kubernetes retired the project in March 2026
 # after v1.15.1, the release this package runs, and it gets no security
-# fixes. Route through Gateway API instead, with the traefik package or with
-# the envoy-gateway package and an Envoy Gateway controller.
+# fixes. Route through Gateway API instead, with the traefik or envoy-gateway
+# package.
 #
 # Installs the controller Deployment, its Service, ConfigMap, ServiceAccount,
 # and RBAC, an IngressClass, and a validating admission webhook whose
