@@ -38,6 +38,7 @@ use thiserror::Error;
 use kix::build_source::Build;
 use kix::cluster::activation::{Record, Records};
 use kix::cluster::binding::{self, BindingError, Connection};
+use kix::cluster::cancel::CancelToken;
 use kix::cluster::discovery;
 use kix::cluster::graph::ResourceGraph;
 use kix::cluster::kubernetes_version;
@@ -65,6 +66,11 @@ const FINALIZER: &str = keys::OPERATOR_GC_FINALIZER;
 /// Short requeue when yielding to a Queued activation.
 const QUEUED_REQUEUE_INTERVAL: Duration = Duration::from_secs(5);
 
+/// How long a resource may go without readiness progress before an operator
+/// deploy fails it. `kix deploy --operator` does not send its `--timeout`
+/// to the operator, so every operator deploy uses this value.
+const READINESS_TIMEOUT: Duration = Duration::from_secs(300);
+
 /// Default requeue interval after successful reconciliation.
 /// Override with KIX_REQUEUE_INTERVAL_SECS env var.
 fn requeue_interval() -> Duration {
@@ -85,6 +91,10 @@ pub struct Context {
     /// The required stops a Queued record must not skip, normally
     /// [`stops::required_stops`].
     pub required_stops: Vec<Version>,
+    /// Cancelled when the operator is asked to stop. A running deploy then
+    /// stops at its next step and leaves its record `Deploying`, and the
+    /// next operator start resumes it.
+    pub shutdown: CancelToken,
 }
 
 /// Errors from the operator reconcile loop.
@@ -623,12 +633,10 @@ async fn run_reconcile(
         "Live change detection complete"
     );
 
-    // TODO(operator-cancel): wire this token to a per-Activation supervisor
-    // so a newer Activation can cancel the in-flight loop.
     let config = SchedulerConfig {
-        timeout: Duration::from_secs(300),
+        timeout: READINESS_TIMEOUT,
         on_error: OnErrorPolicy::Stop,
-        cancel: kix::cluster::cancel::CancelToken::new(),
+        cancel: ctx.shutdown.clone(),
         concurrency: scheduler::CONCURRENCY,
         stall: StallPolicy::from_env(),
         // A new build is checked against the objects it leaves unchanged.
@@ -897,6 +905,7 @@ mod tests {
             client,
             records,
             required_stops: stops::required_stops(),
+            shutdown: CancelToken::new(),
         });
         let activation: DynamicObject = serde_json::from_value(queued).unwrap();
         reconcile_activation(Arc::new(activation), ctx.clone())
@@ -983,6 +992,7 @@ mod tests {
             client,
             records,
             required_stops: stops::required_stops(),
+            shutdown: CancelToken::new(),
         });
         let activation: DynamicObject = serde_json::from_value(record).unwrap();
         let err = reconcile_activation(Arc::new(activation), ctx.clone())
@@ -1021,6 +1031,7 @@ mod tests {
             client,
             records,
             required_stops,
+            shutdown: CancelToken::new(),
         });
         let name = record["metadata"]["name"].as_str().unwrap().to_string();
         let activation: DynamicObject = serde_json::from_value(record).unwrap();

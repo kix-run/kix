@@ -42,7 +42,25 @@ use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberI
 use anyhow::Context as _;
 use controller::{Context, error_policy, reconcile_activation};
 use kix::cluster::activation::Records;
+use kix::cluster::cancel::CancelToken;
 use kix::manifest::keys;
+
+/// Wait until the process gets SIGTERM, as Kubernetes sends a pod it stops,
+/// or Ctrl-C.
+async fn stop_requested() {
+    match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+        Ok(mut terminate) => {
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = terminate.recv() => {}
+            }
+        }
+        Err(e) => {
+            tracing::warn!("cannot watch SIGTERM: {e}");
+            let _ = tokio::signal::ctrl_c().await;
+        }
+    }
+}
 
 /// Filter a `DynamicObject` watch stream to emit only when
 /// `metadata.generation` changes.
@@ -145,6 +163,21 @@ async fn main() -> anyhow::Result<()> {
         client: client.clone(),
         records,
         required_stops: kix::cluster::stops::required_stops(),
+        shutdown: CancelToken::new(),
+    });
+
+    // On a stop request, cancel every running deploy and let the controller
+    // start no new reconcile. A cancelled deploy leaves its record
+    // `Deploying`, and the next operator start resumes it.
+    let (stopping_tx, stopping_rx) = tokio::sync::oneshot::channel::<()>();
+    tokio::spawn({
+        let shutdown = ctx.shutdown.clone();
+        async move {
+            stop_requested().await;
+            tracing::info!("Stopping: cancelling running deploys");
+            shutdown.cancel();
+            let _ = stopping_tx.send(());
+        }
     });
 
     // Build the watcher stream with generation-based dedup.
@@ -164,6 +197,9 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("Starting Activation controller with generation filter");
     Controller::for_stream_with(stream, reader, ar.clone())
+        .graceful_shutdown_on(async move {
+            let _ = stopping_rx.await;
+        })
         .run(reconcile_activation, error_policy, ctx)
         .for_each(|res| async move {
             match res {
