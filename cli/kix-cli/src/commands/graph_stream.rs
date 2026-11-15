@@ -74,11 +74,6 @@ impl GlyphStyle {
     }
 }
 
-#[allow(dead_code)]
-pub fn is_supported() -> bool {
-    crate::output::is_interactive()
-}
-
 #[derive(Clone)]
 pub struct GraphStreamObserver {
     tx: Sender<Msg>,
@@ -257,6 +252,17 @@ struct NodeView {
 }
 
 impl ViewState {
+    /// Return the status-line counter that a node with `verdict` counts toward.
+    fn count_for(&mut self, verdict: &Verdict) -> &mut usize {
+        match verdict {
+            Verdict::Pending => &mut self.count_pending,
+            Verdict::Running | Verdict::AwaitingInput { .. } => &mut self.count_running,
+            Verdict::Ready | Verdict::DriftDetected { .. } => &mut self.count_ready,
+            Verdict::Failed { .. } => &mut self.count_failed,
+            Verdict::Cancelled { .. } => &mut self.count_cancelled,
+        }
+    }
+
     fn new(cluster_name: String, axis: GroupAxis, glyph: GlyphStyle) -> Self {
         Self {
             cluster_name,
@@ -405,16 +411,9 @@ impl ViewState {
                     }
                 }
 
-                // Update the aggregate counts reflecting the transition.
-                adjust_counts(
-                    &old,
-                    &entry.verdict,
-                    &mut self.count_ready,
-                    &mut self.count_running,
-                    &mut self.count_pending,
-                    &mut self.count_failed,
-                    &mut self.count_cancelled,
-                );
+                let from = self.count_for(&old);
+                *from = from.saturating_sub(1);
+                *self.count_for(&verdict) += 1;
             }
             DeployEvent::CrdRediscovery => {}
             DeployEvent::PruneStart { .. } => {}
@@ -457,56 +456,6 @@ impl ViewState {
             }
         }
     }
-}
-
-fn adjust_counts(
-    from: &Verdict,
-    to: &Verdict,
-    ready: &mut usize,
-    running: &mut usize,
-    pending: &mut usize,
-    failed: &mut usize,
-    cancelled: &mut usize,
-) {
-    let bucket = |v: &Verdict| -> Bucket {
-        match v {
-            Verdict::Pending => Bucket::Pending,
-            Verdict::Running => Bucket::Running,
-            Verdict::Ready | Verdict::DriftDetected { .. } => Bucket::Ready,
-            Verdict::Failed { .. } => Bucket::Failed,
-            Verdict::Cancelled { .. } => Bucket::Cancelled,
-            Verdict::AwaitingInput { .. } => Bucket::Running,
-        }
-    };
-    let dec = |b: Bucket, c: &mut usize| {
-        if *c > 0 {
-            *c -= 1;
-        }
-        let _ = b;
-    };
-    match bucket(from) {
-        Bucket::Pending => dec(Bucket::Pending, pending),
-        Bucket::Running => dec(Bucket::Running, running),
-        Bucket::Ready => dec(Bucket::Ready, ready),
-        Bucket::Failed => dec(Bucket::Failed, failed),
-        Bucket::Cancelled => dec(Bucket::Cancelled, cancelled),
-    }
-    match bucket(to) {
-        Bucket::Pending => *pending += 1,
-        Bucket::Running => *running += 1,
-        Bucket::Ready => *ready += 1,
-        Bucket::Failed => *failed += 1,
-        Bucket::Cancelled => *cancelled += 1,
-    }
-}
-
-#[derive(Copy, Clone)]
-enum Bucket {
-    Pending,
-    Running,
-    Ready,
-    Failed,
-    Cancelled,
 }
 
 fn detail_message(detail: &Option<NodeDetail>) -> Option<String> {
