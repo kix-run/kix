@@ -130,13 +130,13 @@ in
     requires = [ self.agentCoreClusterRoleBinding ];
   };
 
-  agentCoreService =
-    self.agentCore
-    |> kix.service.fromWorkload {
+  agentCoreService = lib.pipe self.agentCore [
+    (kix.service.fromWorkload {
       name = "${name}-agent-core";
       labels = c.componentLabels "agent-core";
-    }
-    |> scope.mkResource;
+    })
+    scope.mkResource
+  ];
 
   # api-rest holds no state, so it scales with the availability level.
   apiRest =
@@ -206,13 +206,13 @@ in
       };
     };
 
-  apiRestService =
-    self.apiRest
-    |> kix.service.fromWorkload {
+  apiRestService = lib.pipe self.apiRest [
+    (kix.service.fromWorkload {
       name = "${name}-api-rest";
       labels = c.componentLabels "api-rest";
-    }
-    |> scope.mkResource;
+    })
+    scope.mkResource
+  ];
 
   # One operator: it runs no leader election.
   operatorDiskpool = scope.mkDeployment {

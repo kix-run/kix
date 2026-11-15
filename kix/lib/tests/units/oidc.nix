@@ -368,7 +368,7 @@ let
     let
       d = byName "harbor-core" (ofKind "Deployment" (manifests c));
     in
-    builtins.head d.spec.template.spec.containers |> (x: x.env);
+    (x: x.env) (builtins.head d.spec.template.spec.containers);
   harborOverwrite =
     c:
     builtins.fromJSON

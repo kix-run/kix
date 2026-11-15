@@ -511,68 +511,63 @@ in
           subjects = controllerSubjects;
           labels = selectorLabels;
           roles.${clusterName} = grant [
-            (
-              [
-                core.configmaps
-                core.endpoints
-                core.nodes
-                core.pods
-                # Ingresses in any namespace name their TLS Secrets.
-                core.secrets
-                core.namespaces
-                core.services
-                net.ingresses
-                net.ingressclasses
-                disco.endpointslices
-              ]
-              |> watch
-            )
-            (core.events |> emit)
-            (net "ingresses/status" |> allow [ "update" ])
-            (
-              coord.leases
-              |> allow [
-                "list"
-                "watch"
-              ]
-            )
+            (watch [
+              core.configmaps
+              core.endpoints
+              core.nodes
+              core.pods
+              # Ingresses in any namespace name their TLS Secrets.
+              core.secrets
+              core.namespaces
+              core.services
+              net.ingresses
+              net.ingressclasses
+              disco.endpointslices
+            ])
+            (emit core.events)
+            (allow [ "update" ] (net "ingresses/status"))
+            (allow [
+              "list"
+              "watch"
+            ] coord.leases)
           ];
         };
         controllerRbac = mkRoleSet scope {
           subjects = controllerSubjects;
           labels = selectorLabels;
           roles.${name} = grant [
-            (
-              coord.leases
-              |> restrictTo [ "${name}-leader" ]
-              |> allow [
+            (lib.pipe coord.leases [
+              (restrictTo [ "${name}-leader" ])
+              (allow [
                 "get"
                 "update"
-              ]
-            )
-            (coord.leases |> allow [ "create" ])
+              ])
+            ])
+            (allow [ "create" ] coord.leases)
           ];
         };
         admissionClusterRbac = mkClusterRoleSet scope {
           subjects = admissionSubjects;
           labels = admissionLabels;
           roles."${clusterName}-admission" = grant [
-            (
-              adm.validatingwebhookconfigurations
-              |> restrictTo [ self.admissionWebhook.out.name ]
-              |> allow [
+            (lib.pipe adm.validatingwebhookconfigurations [
+              (restrictTo [ self.admissionWebhook.out.name ])
+              (allow [
                 "get"
                 "update"
-              ]
-            )
+              ])
+            ])
           ];
         };
         admissionRbac = mkRoleSet scope {
           subjects = admissionSubjects;
           labels = admissionLabels;
           roles."${name}-admission" = grant [
-            (core.secrets |> allow [ "create" ])
-            (core.secrets |> restrictTo [ "${name}-admission" ] |> allow [ "get" ])
+            (allow [ "create" ] core.secrets)
+            (lib.pipe core.secrets [
+              (restrictTo [ "${name}-admission" ])
+              (allow [ "get" ])
+            ])
           ];
         };
 
@@ -751,19 +746,20 @@ in
 
         metricsService =
           if metricsOn then
-            self.deployment
-            |> kix.service.fromWorkload {
-              name = "${name}-metrics";
-              ports = [
-                {
-                  name = "metrics";
-                  port = 10254;
-                  targetPort = "metrics";
-                }
-              ];
-              labels = labelsFor "metrics";
-            }
-            |> scope.mkResource
+            lib.pipe self.deployment [
+              (kix.service.fromWorkload {
+                name = "${name}-metrics";
+                ports = [
+                  {
+                    name = "metrics";
+                    port = 10254;
+                    targetPort = "metrics";
+                  }
+                ];
+                labels = labelsFor "metrics";
+              })
+              scope.mkResource
+            ]
           else
             null;
 

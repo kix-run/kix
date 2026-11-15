@@ -261,71 +261,77 @@ in
       in
       {
         deployment =
-          {
-            name = name;
-            spec = {
-              replicas = 1;
-              # The database is a bolt file that one process locks; a
-              # rolling update's second pod times out waiting for it.
-              strategy.type = "Recreate";
-              selector.matchLabels = scope.selectorLabels;
-              # Kubernetes default: filebrowser documents no shutdown drain.
-              template.spec.terminationGracePeriodSeconds = 30;
-              template.spec.initContainers = lib.optional (userNames != [ ]) syncUsersContainer;
-              template.spec.containers = [
-                (
-                  {
-                    name = "filebrowser";
-                    image = kix.image.ref config.image;
-                    # The image's own user is uid 1000; stated so the kubelet
-                    # can verify it rather than trust the image.
-                    inherit securityContext;
-                    env = fbEnv;
-                    resources = config.resources;
-                    ports = [
-                      {
-                        name = "http";
-                        containerPort = 80;
-                        protocol = "TCP";
-                      }
-                    ];
-                    livenessProbe = {
-                      httpGet = {
-                        path = "/health";
-                        port = "http";
+          lib.pipe
+            {
+              name = name;
+              spec = {
+                replicas = 1;
+                # The database is a bolt file that one process locks; a
+                # rolling update's second pod times out waiting for it.
+                strategy.type = "Recreate";
+                selector.matchLabels = scope.selectorLabels;
+                # Kubernetes default: filebrowser documents no shutdown drain.
+                template.spec.terminationGracePeriodSeconds = 30;
+                template.spec.initContainers = lib.optional (userNames != [ ]) syncUsersContainer;
+                template.spec.containers = [
+                  (
+                    {
+                      name = "filebrowser";
+                      image = kix.image.ref config.image;
+                      # The image's own user is uid 1000; stated so the kubelet
+                      # can verify it rather than trust the image.
+                      inherit securityContext;
+                      env = fbEnv;
+                      resources = config.resources;
+                      ports = [
+                        {
+                          name = "http";
+                          containerPort = 80;
+                          protocol = "TCP";
+                        }
+                      ];
+                      livenessProbe = {
+                        httpGet = {
+                          path = "/health";
+                          port = "http";
+                        };
+                        periodSeconds = 30;
                       };
-                      periodSeconds = 30;
-                    };
-                    readinessProbe = {
-                      httpGet = {
-                        path = "/health";
-                        port = "http";
+                      readinessProbe = {
+                        httpGet = {
+                          path = "/health";
+                          port = "http";
+                        };
                       };
-                    };
-                  }
-                  // lib.optionalAttrs (config.image.pullPolicy != null) {
-                    imagePullPolicy = config.image.pullPolicy;
-                  }
-                )
-              ];
-            };
-          }
-          |> kix.withMounts [
-            (kix.mount.pvc storage { mountPath = "/data"; })
-            # The image's /init.sh copies settings.json into /config on
-            # start.
-            (kix.mount.emptyDir {
-              name = "config";
-              mountPath = "/config";
-            })
-            (kix.mount.emptyDir {
-              name = "tmp";
-              mountPath = "/tmp";
-            })
-          ]
-          |> scope.mkDeployment;
+                    }
+                    // lib.optionalAttrs (config.image.pullPolicy != null) {
+                      imagePullPolicy = config.image.pullPolicy;
+                    }
+                  )
+                ];
+              };
+            }
+            [
+              (kix.withMounts [
+                (kix.mount.pvc storage { mountPath = "/data"; })
+                # The image's /init.sh copies settings.json into /config on
+                # start.
+                (kix.mount.emptyDir {
+                  name = "config";
+                  mountPath = "/config";
+                })
+                (kix.mount.emptyDir {
+                  name = "tmp";
+                  mountPath = "/tmp";
+                })
+              ])
+              scope.mkDeployment
+            ];
 
-        service = self.deployment |> kix.service.fromWorkload { inherit name; } |> scope.mkResource;
+        service = lib.pipe self.deployment [
+          (kix.service.fromWorkload { inherit name; })
+          scope.mkResource
+        ];
 
         root = {
           resource = self.service;

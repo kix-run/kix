@@ -300,73 +300,79 @@ in
         };
 
         deployment =
-          {
-            inherit name;
-            spec = {
-              replicas = kix.availability.pick availability {
-                none = 1;
-                pod = 1;
-                node = 2;
-                zone = 2;
-              };
-              selector.matchLabels = scope.selectorLabels;
-              template = {
-                metadata.annotations."checksum/policy" = self.policyConfigMap.out.contentHash;
-                spec = {
-                  serviceAccount = self.serviceAccount;
-                  # SIGTERM cancels the run in progress and releases the
-                  # Lease. 30 is the Kubernetes default, written out because
-                  # the reliability.gracefulShutdown scorecard rule reports a
-                  # pod spec without the field.
-                  terminationGracePeriodSeconds = 30;
-                  securityContext = {
-                    runAsNonRoot = true;
-                    runAsUser = 1000;
-                    seccompProfile.type = "RuntimeDefault";
+          lib.pipe
+            {
+              inherit name;
+              spec = {
+                replicas = kix.availability.pick availability {
+                  none = 1;
+                  pod = 1;
+                  node = 2;
+                  zone = 2;
+                };
+                selector.matchLabels = scope.selectorLabels;
+                template = {
+                  metadata.annotations."checksum/policy" = self.policyConfigMap.out.contentHash;
+                  spec = {
+                    serviceAccount = self.serviceAccount;
+                    # SIGTERM cancels the run in progress and releases the
+                    # Lease. 30 is the Kubernetes default, written out because
+                    # the reliability.gracefulShutdown scorecard rule reports a
+                    # pod spec without the field.
+                    terminationGracePeriodSeconds = 30;
+                    securityContext = {
+                      runAsNonRoot = true;
+                      runAsUser = 1000;
+                      seccompProfile.type = "RuntimeDefault";
+                    };
+                    containers = [
+                      {
+                        name = "descheduler";
+                        image = kix.image.ref config.image;
+                        imagePullPolicy = config.image.pullPolicy;
+                        command = [ "/bin/descheduler" ];
+                        inherit args;
+                        ports = [ (kix.port "metrics" metricsPort) ];
+                        livenessProbe = {
+                          httpGet = {
+                            path = "/healthz";
+                            port = "metrics";
+                            scheme = "HTTPS";
+                          };
+                          initialDelaySeconds = 3;
+                          periodSeconds = 10;
+                        };
+                        readinessProbe = {
+                          httpGet = {
+                            path = "/healthz";
+                            port = "metrics";
+                            scheme = "HTTPS";
+                          };
+                          periodSeconds = 10;
+                        };
+                        inherit (config) resources;
+                        securityContext = {
+                          allowPrivilegeEscalation = false;
+                          readOnlyRootFilesystem = true;
+                          capabilities.drop = [ "ALL" ];
+                        };
+                      }
+                    ];
                   };
-                  containers = [
-                    {
-                      name = "descheduler";
-                      image = kix.image.ref config.image;
-                      imagePullPolicy = config.image.pullPolicy;
-                      command = [ "/bin/descheduler" ];
-                      inherit args;
-                      ports = [ (kix.port "metrics" metricsPort) ];
-                      livenessProbe = {
-                        httpGet = {
-                          path = "/healthz";
-                          port = "metrics";
-                          scheme = "HTTPS";
-                        };
-                        initialDelaySeconds = 3;
-                        periodSeconds = 10;
-                      };
-                      readinessProbe = {
-                        httpGet = {
-                          path = "/healthz";
-                          port = "metrics";
-                          scheme = "HTTPS";
-                        };
-                        periodSeconds = 10;
-                      };
-                      inherit (config) resources;
-                      securityContext = {
-                        allowPrivilegeEscalation = false;
-                        readOnlyRootFilesystem = true;
-                        capabilities.drop = [ "ALL" ];
-                      };
-                    }
-                  ];
                 };
               };
-            };
-          }
-          |> kix.withMounts [ self.policyMount ]
-          |> scope.mkDeployment;
+            }
+            [
+              (kix.withMounts [ self.policyMount ])
+              scope.mkDeployment
+            ];
 
         metricsService =
           if config.metrics.enabled && prometheus != null then
-            self.deployment |> kix.service.fromWorkload { name = "${name}-metrics"; } |> scope.mkResource
+            lib.pipe self.deployment [
+              (kix.service.fromWorkload { name = "${name}-metrics"; })
+              scope.mkResource
+            ]
           else
             null;
 
@@ -383,29 +389,30 @@ in
             # The event recorder creates and patches events.k8s.io Events
             # and never updates them, so `update` (in upstream's role) is
             # left out.
-            (events.events |> emit)
-            (
-              [
-                core.nodes
-                core.namespaces
-                core.pods
-                core.persistentvolumeclaims
-                scheduling.priorityclasses
-                policyGroup.poddisruptionbudgets
-              ]
-              |> watch
-            )
-            (core.pods |> sub "eviction" |> allow [ "create" ])
+            (emit events.events)
+            (watch [
+              core.nodes
+              core.namespaces
+              core.pods
+              core.persistentvolumeclaims
+              scheduling.priorityclasses
+              policyGroup.poddisruptionbudgets
+            ])
+            (lib.pipe core.pods [
+              (sub "eviction")
+              (allow [ "create" ])
+            ])
           ]
           ++ lib.optional (config.policy.metricsProviders != [ ]) (
-            [
-              metricsGroup.nodes
-              metricsGroup.pods
-            ]
-            |> allow [
-              "get"
-              "list"
-            ]
+            allow
+              [
+                "get"
+                "list"
+              ]
+              [
+                metricsGroup.nodes
+                metricsGroup.pods
+              ]
           )
         );
       }
@@ -413,15 +420,14 @@ in
         inherit subjects;
         labels = scope.selectorLabels;
         roles."${name}-leader-election" = grant [
-          (coordination.leases |> allow [ "create" ])
-          (
-            coordination.leases
-            |> restrictTo [ name ]
-            |> allow [
+          (allow [ "create" ] coordination.leases)
+          (lib.pipe coordination.leases [
+            (restrictTo [ name ])
+            (allow [
               "get"
               "update"
-            ]
-          )
+            ])
+          ])
         ];
       }
     )

@@ -426,20 +426,21 @@ in
       {
         ioEngineMetrics =
           if enabled then
-            self.ioEngine
-            |> kix.service.fromWorkload {
-              name = "${c.name}-io-engine-metrics";
-              labels = c.componentLabels "io-engine-metrics";
-              ports = [
-                {
-                  name = "metrics";
-                  port = 9502;
-                  targetPort = "metrics";
-                  protocol = "TCP";
-                }
-              ];
-            }
-            |> scope.mkResource
+            lib.pipe self.ioEngine [
+              (kix.service.fromWorkload {
+                name = "${c.name}-io-engine-metrics";
+                labels = c.componentLabels "io-engine-metrics";
+                ports = [
+                  {
+                    name = "metrics";
+                    port = 9502;
+                    targetPort = "metrics";
+                    protocol = "TCP";
+                  }
+                ];
+              })
+              scope.mkResource
+            ]
           else
             null;
       }

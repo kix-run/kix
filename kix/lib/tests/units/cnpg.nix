@@ -1104,7 +1104,10 @@ in
                   ];
                 };
               };
-              service = self.deployment |> kix.service.fromWorkload { name = "s3"; } |> scope.mkResource;
+              service = lib.pipe self.deployment [
+                (kix.service.fromWorkload { name = "s3"; })
+                scope.mkResource
+              ];
               root = self.service;
             };
         };

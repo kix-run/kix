@@ -242,108 +242,110 @@ in
       in
       {
         deployment =
-          {
-            inherit name;
-            spec = {
-              replicas = kix.availability.pick availability {
-                none = 1;
-                pod = 2;
-                node = 2;
-                zone = 2;
+          lib.pipe
+            {
+              inherit name;
+              spec = {
+                replicas = kix.availability.pick availability {
+                  none = 1;
+                  pod = 2;
+                  node = 2;
+                  zone = 2;
+                };
+                # Metabase migrates its schema on start, and pods of the old
+                # version fail against the migrated schema. Pods of one version
+                # may start together: Liquibase locks the application database.
+                strategy.type = "Recreate";
+                progressDeadlineSeconds = startupSeconds + 60;
+                selector.matchLabels = scope.selectorLabels;
+                # A changed database password or encryption key restarts the
+                # pods, which read both once at start. A `secret-ref` has no
+                # content hash; an External Secret rolls the pods through
+                # reloader's `withReloadOn`.
+                template.metadata.annotations = lib.filterAttrs (_: v: v != null) {
+                  "checksum/database" = database.out.credentials.out.contentHash or null;
+                  "checksum/encryption-key" = ek.out.contentHash or null;
+                };
+                template.spec = {
+                  automountServiceAccountToken = false;
+                  # Metabase reads every MB_* variable as a setting, and a
+                  # Service named mb-<x> would inject MB_<X>_SERVICE_HOST and
+                  # MB_<X>_PORT.
+                  enableServiceLinks = false;
+                  # Kubernetes default: Metabase documents no shutdown drain.
+                  terminationGracePeriodSeconds = 30;
+                  containers = [
+                    {
+                      name = "metabase";
+                      image = kix.image.ref config.image;
+                      imagePullPolicy = config.image.pullPolicy;
+                      inherit env;
+                      ports = [
+                        (kix.port "http" httpPort)
+                      ]
+                      ++ lib.optional metricsOn (kix.port "metrics" metricsPort);
+                      # /api/health answers 503 until the migrations finish.
+                      startupProbe = httpProbe "/api/health" // {
+                        periodSeconds = 10;
+                        timeoutSeconds = 5;
+                        failureThreshold = startupSeconds / 10;
+                      };
+                      # /livez does not check the database, so an outage of the
+                      # application database does not restart every pod into a
+                      # fresh start.
+                      livenessProbe = httpProbe "/livez" // {
+                        periodSeconds = 10;
+                        timeoutSeconds = 5;
+                        failureThreshold = 6;
+                      };
+                      # /readyz answers 503 while the application database is
+                      # unreachable, so the pods leave the Service.
+                      readinessProbe = httpProbe "/readyz" // {
+                        periodSeconds = 5;
+                        timeoutSeconds = 3;
+                        failureThreshold = 3;
+                      };
+                      resources = config.resources;
+                      # run_metabase.sh starts Java directly when it is already
+                      # non-root. 2000 is the uid run_metabase.sh gives its
+                      # `metabase` user when the container starts as root.
+                      securityContext = {
+                        runAsNonRoot = true;
+                        runAsUser = 2000;
+                        runAsGroup = 2000;
+                        allowPrivilegeEscalation = false;
+                        readOnlyRootFilesystem = true;
+                        capabilities.drop = [ "ALL" ];
+                      };
+                    }
+                  ];
+                };
               };
-              # Metabase migrates its schema on start, and pods of the old
-              # version fail against the migrated schema. Pods of one version
-              # may start together: Liquibase locks the application database.
-              strategy.type = "Recreate";
-              progressDeadlineSeconds = startupSeconds + 60;
-              selector.matchLabels = scope.selectorLabels;
-              # A changed database password or encryption key restarts the
-              # pods, which read both once at start. A `secret-ref` has no
-              # content hash; an External Secret rolls the pods through
-              # reloader's `withReloadOn`.
-              template.metadata.annotations = lib.filterAttrs (_: v: v != null) {
-                "checksum/database" = database.out.credentials.out.contentHash or null;
-                "checksum/encryption-key" = ek.out.contentHash or null;
-              };
-              template.spec = {
-                automountServiceAccountToken = false;
-                # Metabase reads every MB_* variable as a setting, and a
-                # Service named mb-<x> would inject MB_<X>_SERVICE_HOST and
-                # MB_<X>_PORT.
-                enableServiceLinks = false;
-                # Kubernetes default: Metabase documents no shutdown drain.
-                terminationGracePeriodSeconds = 30;
-                containers = [
-                  {
-                    name = "metabase";
-                    image = kix.image.ref config.image;
-                    imagePullPolicy = config.image.pullPolicy;
-                    inherit env;
-                    ports = [
-                      (kix.port "http" httpPort)
-                    ]
-                    ++ lib.optional metricsOn (kix.port "metrics" metricsPort);
-                    # /api/health answers 503 until the migrations finish.
-                    startupProbe = httpProbe "/api/health" // {
-                      periodSeconds = 10;
-                      timeoutSeconds = 5;
-                      failureThreshold = startupSeconds / 10;
-                    };
-                    # /livez does not check the database, so an outage of the
-                    # application database does not restart every pod into a
-                    # fresh start.
-                    livenessProbe = httpProbe "/livez" // {
-                      periodSeconds = 10;
-                      timeoutSeconds = 5;
-                      failureThreshold = 6;
-                    };
-                    # /readyz answers 503 while the application database is
-                    # unreachable, so the pods leave the Service.
-                    readinessProbe = httpProbe "/readyz" // {
-                      periodSeconds = 5;
-                      timeoutSeconds = 3;
-                      failureThreshold = 3;
-                    };
-                    resources = config.resources;
-                    # run_metabase.sh starts Java directly when it is already
-                    # non-root. 2000 is the uid run_metabase.sh gives its
-                    # `metabase` user when the container starts as root.
-                    securityContext = {
-                      runAsNonRoot = true;
-                      runAsUser = 2000;
-                      runAsGroup = 2000;
-                      allowPrivilegeEscalation = false;
-                      readOnlyRootFilesystem = true;
-                      capabilities.drop = [ "ALL" ];
-                    };
-                  }
-                ];
-              };
-            };
-          }
-          |> kix.withMounts [
-            # Metabase's plugins directory, `plugins` under the image's
-            # working directory `/`, for drivers that metabase.jar does not
-            # bundle.
-            (kix.mount.emptyDir {
-              name = "plugins";
-              mountPath = "/plugins";
-              sizeLimit = "512Mi";
-            })
-            # java.io.tmpdir, for JVM and Jetty temporary files. The kubelet
-            # evicts the pod when a volume exceeds its sizeLimit.
-            (kix.mount.emptyDir {
-              name = "tmp";
-              mountPath = "/tmp";
-              sizeLimit = "2Gi";
-            })
-          ]
-          |> scope.mkDeployment;
+            }
+            [
+              (kix.withMounts [
+                # Metabase's plugins directory, `plugins` under the image's
+                # working directory `/`, for drivers that metabase.jar does not
+                # bundle.
+                (kix.mount.emptyDir {
+                  name = "plugins";
+                  mountPath = "/plugins";
+                  sizeLimit = "512Mi";
+                })
+                # java.io.tmpdir, for JVM and Jetty temporary files. The kubelet
+                # evicts the pod when a volume exceeds its sizeLimit.
+                (kix.mount.emptyDir {
+                  name = "tmp";
+                  mountPath = "/tmp";
+                  sizeLimit = "2Gi";
+                })
+              ])
+              scope.mkDeployment
+            ];
 
         # The metrics port joins the Service only when something scrapes it.
-        service =
-          self.deployment
-          |> kix.service.fromWorkload {
+        service = lib.pipe self.deployment [
+          (kix.service.fromWorkload {
             inherit name;
             ports = [
               {
@@ -357,8 +359,9 @@ in
               port = metricsPort;
               targetPort = "metrics";
             };
-          }
-          |> scope.mkResource;
+          })
+          scope.mkResource
+        ];
 
         root = {
           resource = self.service;

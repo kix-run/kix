@@ -447,8 +447,10 @@ let
               };
             };
           };
-          service =
-            self.deployment |> kix.service.fromWorkload { name = scope.instanceName; } |> scope.mkResource;
+          service = lib.pipe self.deployment [
+            (kix.service.fromWorkload { name = scope.instanceName; })
+            scope.mkResource
+          ];
           root = self.service;
         }
       )

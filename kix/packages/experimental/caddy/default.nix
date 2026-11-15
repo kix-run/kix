@@ -256,142 +256,139 @@ in
         name = name;
       };
 
-      deployment =
-        {
-          inherit name;
-          spec = {
-            replicas = config.replicas;
-            revisionHistoryLimit = 10;
-            selector.matchLabels = scope.selectorLabels;
-            strategy = {
-              type = "RollingUpdate";
-              rollingUpdate = {
-                maxSurge = 1;
-                maxUnavailable = 0;
-              };
-            };
-            template.metadata.annotations = configAnnotations;
-            template.spec = {
-              serviceAccountName = self.serviceAccount.out.name;
-              # Caddy's `grace_period` is unbounded by default, so the
-              # Kubernetes default of 30s is what ends a drain.
-              terminationGracePeriodSeconds = 30;
-              securityContext = {
-                # Caddy listens on 80 and 443 as a non-root user. The
-                # official image sets the cap_net_bind_service file
-                # capability on /usr/bin/caddy, but the kernel ignores file
-                # capabilities when allowPrivilegeEscalation is false. The
-                # pod lowers the privileged-port floor instead (a safe
-                # sysctl since Kubernetes 1.22).
-                sysctls = [
-                  {
-                    name = "net.ipv4.ip_unprivileged_port_start";
-                    value = "0";
-                  }
-                ];
-                # Makes a `storage` claim writable by the Caddy user.
-                fsGroup = uid;
-                fsGroupChangePolicy = "OnRootMismatch";
-              };
-              containers = [
-                {
-                  name = "caddy";
-                  image = kix.image.ref config.image;
-                  imagePullPolicy = config.image.pullPolicy;
-                  args = [
-                    "caddy"
-                    "run"
-                    "--config"
-                    "/etc/caddy/Caddyfile"
-                  ];
-                  ports = [
-                    (kix.port "health" 8080)
-                    (kix.port "http" 80)
-                    (kix.port "https" 443)
-                    (kix.port "metrics" 2019)
-                  ];
-                  livenessProbe = {
-                    httpGet = {
-                      path = "/healthz";
-                      port = 8080;
-                    };
-                    periodSeconds = 10;
-                    failureThreshold = 3;
-                    successThreshold = 1;
-                    timeoutSeconds = 1;
-                  };
-                  readinessProbe = {
-                    httpGet = {
-                      path = "/healthz";
-                      port = 8080;
-                    };
-                    periodSeconds = 10;
-                    failureThreshold = 3;
-                    successThreshold = 1;
-                    timeoutSeconds = 1;
-                  };
-                  resources = config.resources;
-                  securityContext = {
-                    runAsNonRoot = true;
-                    runAsUser = uid;
-                    runAsGroup = uid;
-                    allowPrivilegeEscalation = false;
-                    privileged = false;
-                    readOnlyRootFilesystem = true;
-                  };
-                  volumeMounts = [
-                    {
-                      name = "caddy-config";
-                      mountPath = "/etc/caddy";
-                      readOnly = true;
-                    }
-                    # The official image sets XDG_DATA_HOME=/data (certificates,
-                    # OCSP staples, locks) and XDG_CONFIG_HOME=/config (autosaved
-                    # config).
-                    {
-                      name = "data";
-                      mountPath = "/data";
-                    }
-                    {
-                      name = "config";
-                      mountPath = "/config";
-                    }
-                    # The root filesystem is read-only. Caddy and its plugins
-                    # write temporary files, such as large request bodies, to
-                    # os.TempDir(), which is /tmp.
-                    {
-                      name = "tmp";
-                      mountPath = "/tmp";
-                    }
-                  ];
-                }
-              ];
-              volumes = [
-                {
-                  name = "caddy-config";
-                  secret = {
-                    secretName = caddyfileSecret.out.name;
-                    defaultMode = 420;
-                  };
-                }
-                dataVolume
-                {
-                  name = "config";
-                  emptyDir = { };
-                }
-                {
-                  name = "tmp";
-                  emptyDir = { };
-                }
-              ];
+      deployment = scope.mkDeployment {
+        inherit name;
+        spec = {
+          replicas = config.replicas;
+          revisionHistoryLimit = 10;
+          selector.matchLabels = scope.selectorLabels;
+          strategy = {
+            type = "RollingUpdate";
+            rollingUpdate = {
+              maxSurge = 1;
+              maxUnavailable = 0;
             };
           };
-        }
-        |> scope.mkDeployment;
+          template.metadata.annotations = configAnnotations;
+          template.spec = {
+            serviceAccountName = self.serviceAccount.out.name;
+            # Caddy's `grace_period` is unbounded by default, so the
+            # Kubernetes default of 30s is what ends a drain.
+            terminationGracePeriodSeconds = 30;
+            securityContext = {
+              # Caddy listens on 80 and 443 as a non-root user. The
+              # official image sets the cap_net_bind_service file
+              # capability on /usr/bin/caddy, but the kernel ignores file
+              # capabilities when allowPrivilegeEscalation is false. The
+              # pod lowers the privileged-port floor instead (a safe
+              # sysctl since Kubernetes 1.22).
+              sysctls = [
+                {
+                  name = "net.ipv4.ip_unprivileged_port_start";
+                  value = "0";
+                }
+              ];
+              # Makes a `storage` claim writable by the Caddy user.
+              fsGroup = uid;
+              fsGroupChangePolicy = "OnRootMismatch";
+            };
+            containers = [
+              {
+                name = "caddy";
+                image = kix.image.ref config.image;
+                imagePullPolicy = config.image.pullPolicy;
+                args = [
+                  "caddy"
+                  "run"
+                  "--config"
+                  "/etc/caddy/Caddyfile"
+                ];
+                ports = [
+                  (kix.port "health" 8080)
+                  (kix.port "http" 80)
+                  (kix.port "https" 443)
+                  (kix.port "metrics" 2019)
+                ];
+                livenessProbe = {
+                  httpGet = {
+                    path = "/healthz";
+                    port = 8080;
+                  };
+                  periodSeconds = 10;
+                  failureThreshold = 3;
+                  successThreshold = 1;
+                  timeoutSeconds = 1;
+                };
+                readinessProbe = {
+                  httpGet = {
+                    path = "/healthz";
+                    port = 8080;
+                  };
+                  periodSeconds = 10;
+                  failureThreshold = 3;
+                  successThreshold = 1;
+                  timeoutSeconds = 1;
+                };
+                resources = config.resources;
+                securityContext = {
+                  runAsNonRoot = true;
+                  runAsUser = uid;
+                  runAsGroup = uid;
+                  allowPrivilegeEscalation = false;
+                  privileged = false;
+                  readOnlyRootFilesystem = true;
+                };
+                volumeMounts = [
+                  {
+                    name = "caddy-config";
+                    mountPath = "/etc/caddy";
+                    readOnly = true;
+                  }
+                  # The official image sets XDG_DATA_HOME=/data (certificates,
+                  # OCSP staples, locks) and XDG_CONFIG_HOME=/config (autosaved
+                  # config).
+                  {
+                    name = "data";
+                    mountPath = "/data";
+                  }
+                  {
+                    name = "config";
+                    mountPath = "/config";
+                  }
+                  # The root filesystem is read-only. Caddy and its plugins
+                  # write temporary files, such as large request bodies, to
+                  # os.TempDir(), which is /tmp.
+                  {
+                    name = "tmp";
+                    mountPath = "/tmp";
+                  }
+                ];
+              }
+            ];
+            volumes = [
+              {
+                name = "caddy-config";
+                secret = {
+                  secretName = caddyfileSecret.out.name;
+                  defaultMode = 420;
+                };
+              }
+              dataVolume
+              {
+                name = "config";
+                emptyDir = { };
+              }
+              {
+                name = "tmp";
+                emptyDir = { };
+              }
+            ];
+          };
+        };
+      };
 
-      service =
-        self.deployment
-        |> kix.service.fromWorkload {
+      service = lib.pipe self.deployment [
+        (kix.service.fromWorkload {
           inherit name;
           type = config.service.type;
           annotations = config.service.annotations;
@@ -409,32 +406,34 @@ in
               protocol = "TCP";
             }
           ];
-        }
-        |> scope.mkResource;
+        })
+        scope.mkResource
+      ];
 
       customDomainsService =
         if config.customDomainsService.enabled then
-          self.deployment
-          |> kix.service.fromWorkload {
-            name = "${name}-custom-domains";
-            type = "LoadBalancer";
-            annotations = config.customDomainsService.annotations;
-            ports = [
-              {
-                name = "http";
-                port = 80;
-                targetPort = 80;
-                protocol = "TCP";
-              }
-              {
-                name = "https";
-                port = 443;
-                targetPort = 443;
-                protocol = "TCP";
-              }
-            ];
-          }
-          |> scope.mkResource
+          lib.pipe self.deployment [
+            (kix.service.fromWorkload {
+              name = "${name}-custom-domains";
+              type = "LoadBalancer";
+              annotations = config.customDomainsService.annotations;
+              ports = [
+                {
+                  name = "http";
+                  port = 80;
+                  targetPort = 80;
+                  protocol = "TCP";
+                }
+                {
+                  name = "https";
+                  port = 443;
+                  targetPort = 443;
+                  protocol = "TCP";
+                }
+              ];
+            })
+            scope.mkResource
+          ]
         else
           null;
 

@@ -645,51 +645,56 @@ in
         # n8n Enterprise feature, so a second main pod, even during a
         # rolling update, runs every trigger twice.
         deployment =
-          {
-            inherit name;
-            availability.max = "none";
-            spec = {
-              replicas = 1;
-              strategy.type = "Recreate";
-              selector.matchLabels = selectorFor "main";
-              template = {
-                metadata.annotations = podAnnotations;
-                spec = podSpec // {
-                  containers = [ (n8nContainer "main") ];
+          lib.pipe
+            {
+              inherit name;
+              availability.max = "none";
+              spec = {
+                replicas = 1;
+                strategy.type = "Recreate";
+                selector.matchLabels = selectorFor "main";
+                template = {
+                  metadata.annotations = podAnnotations;
+                  spec = podSpec // {
+                    containers = [ (n8nContainer "main") ];
+                  };
                 };
               };
-            };
-          }
-          |> n8nMounts
-          |> scope.mkDeployment;
+            }
+            [
+              n8nMounts
+              scope.mkDeployment
+            ];
 
         worker =
-          {
-            name = "${name}-worker";
-            spec = {
-              replicas = config.worker.replicas;
-              selector.matchLabels = selectorFor "worker";
-              template = {
-                metadata.annotations = podAnnotations;
-                spec = podSpec // {
-                  initContainers = [ tokenInit ];
-                  containers = [
-                    (n8nContainer "worker")
-                    runnersContainer
-                  ];
+          lib.pipe
+            {
+              name = "${name}-worker";
+              spec = {
+                replicas = config.worker.replicas;
+                selector.matchLabels = selectorFor "worker";
+                template = {
+                  metadata.annotations = podAnnotations;
+                  spec = podSpec // {
+                    initContainers = [ tokenInit ];
+                    containers = [
+                      (n8nContainer "worker")
+                      runnersContainer
+                    ];
+                  };
                 };
               };
-            };
-          }
-          |> kix.withMountsOn "runners-token" [ (tokenMount false) ]
-          |> kix.withMountsOn [ "n8n" "task-runners" ] [ (tokenMount true) ]
-          |> n8nMounts
-          |> runnerMounts
-          |> scope.mkDeployment;
+            }
+            [
+              (kix.withMountsOn "runners-token" [ (tokenMount false) ])
+              (kix.withMountsOn [ "n8n" "task-runners" ] [ (tokenMount true) ])
+              n8nMounts
+              runnerMounts
+              scope.mkDeployment
+            ];
 
-        service =
-          self.deployment
-          |> kix.service.fromWorkload {
+        service = lib.pipe self.deployment [
+          (kix.service.fromWorkload {
             inherit name;
             ports = [
               {
@@ -699,8 +704,9 @@ in
                 protocol = "TCP";
               }
             ];
-          }
-          |> scope.mkResource;
+          })
+          scope.mkResource
+        ];
 
         # Nothing else references the workers.
         root = {

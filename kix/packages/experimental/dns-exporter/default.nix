@@ -92,58 +92,55 @@ in
   build =
     { self, config, ... }:
     {
-      deployment =
-        {
-          name = name;
-          spec = {
-            replicas = config.replicas;
-            selector.matchLabels = scope.selectorLabels;
-            # Kubernetes default: a scrape in flight is the only work lost.
-            template.spec.terminationGracePeriodSeconds = 30;
-            template.spec.containers = [
-              {
-                name = "dns-exporter";
-                image = kix.image.ref config.image;
-                imagePullPolicy = config.image.pullPolicy;
-                # The image's `nonroot` user is uid 65532; stated so the
-                # kubelet can verify it rather than trust the image.
-                securityContext = {
-                  runAsNonRoot = true;
-                  runAsUser = 65532;
-                  runAsGroup = 65532;
-                  readOnlyRootFilesystem = true;
-                  allowPrivilegeEscalation = false;
+      deployment = scope.mkDeployment {
+        name = name;
+        spec = {
+          replicas = config.replicas;
+          selector.matchLabels = scope.selectorLabels;
+          # Kubernetes default: a scrape in flight is the only work lost.
+          template.spec.terminationGracePeriodSeconds = 30;
+          template.spec.containers = [
+            {
+              name = "dns-exporter";
+              image = kix.image.ref config.image;
+              imagePullPolicy = config.image.pullPolicy;
+              # The image's `nonroot` user is uid 65532; stated so the
+              # kubelet can verify it rather than trust the image.
+              securityContext = {
+                runAsNonRoot = true;
+                runAsUser = 65532;
+                runAsGroup = 65532;
+                readOnlyRootFilesystem = true;
+                allowPrivilegeEscalation = false;
+              };
+              ports = [
+                (kix.port "metrics" 15353)
+              ];
+              resources = config.resources;
+              # `/` is the exporter's static index page; `/query` would
+              # run a DNS lookup on every probe.
+              livenessProbe = {
+                httpGet = {
+                  path = "/";
+                  port = "metrics";
                 };
-                ports = [
-                  (kix.port "metrics" 15353)
-                ];
-                resources = config.resources;
-                # `/` is the exporter's static index page; `/query` would
-                # run a DNS lookup on every probe.
-                livenessProbe = {
-                  httpGet = {
-                    path = "/";
-                    port = "metrics";
-                  };
-                  periodSeconds = 10;
-                  failureThreshold = 3;
+                periodSeconds = 10;
+                failureThreshold = 3;
+              };
+              readinessProbe = {
+                httpGet = {
+                  path = "/";
+                  port = "metrics";
                 };
-                readinessProbe = {
-                  httpGet = {
-                    path = "/";
-                    port = "metrics";
-                  };
-                  periodSeconds = 10;
-                };
-              }
-            ];
-          };
-        }
-        |> scope.mkDeployment;
+                periodSeconds = 10;
+              };
+            }
+          ];
+        };
+      };
 
-      service =
-        self.deployment
-        |> kix.service.fromWorkload {
+      service = lib.pipe self.deployment [
+        (kix.service.fromWorkload {
           inherit name;
           ports = [
             {
@@ -153,8 +150,9 @@ in
               protocol = "TCP";
             }
           ];
-        }
-        |> scope.mkResource;
+        })
+        scope.mkResource
+      ];
 
       root = {
         resource = self.service;

@@ -538,19 +538,20 @@ in
 
         metricsService =
           if hasMetrics then
-            self.deployment
-            |> kix.service.fromWorkload {
-              name = "${name}-metrics";
-              ports = [
-                {
-                  name = "metrics";
-                  port = metricsPort;
-                  targetPort = metricsPort;
-                  protocol = "TCP";
-                }
-              ];
-            }
-            |> scope.mkResource
+            lib.pipe self.deployment [
+              (kix.service.fromWorkload {
+                name = "${name}-metrics";
+                ports = [
+                  {
+                    name = "metrics";
+                    port = metricsPort;
+                    targetPort = metricsPort;
+                    protocol = "TCP";
+                  }
+                ];
+              })
+              scope.mkResource
+            ]
           else
             null;
 

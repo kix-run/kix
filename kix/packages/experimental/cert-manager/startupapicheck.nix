@@ -38,7 +38,7 @@ let
     ];
     inherit labels;
     roles."${name}-startupapicheck:create-cert" = grant [
-      (cm.certificaterequests |> allow [ "create" ])
+      (allow [ "create" ] cm.certificaterequests)
     ];
   };
 in

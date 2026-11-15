@@ -70,7 +70,10 @@ let
                 };
               };
             };
-            service = self.deployment |> kix.service.fromWorkload { name = "web"; } |> scope.mkResource;
+            service = lib.pipe self.deployment [
+              (kix.service.fromWorkload { name = "web"; })
+              scope.mkResource
+            ];
             root = self.service;
           }
         )

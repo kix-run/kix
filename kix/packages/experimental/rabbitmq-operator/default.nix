@@ -473,20 +473,21 @@ in
 
         metricsService =
           if config.metrics.enabled && prometheus != null then
-            self.deployment
-            |> kix.service.fromWorkload {
-              name = metricsServiceName;
-              labels."app.kubernetes.io/component" = "metrics";
-              ports = [
-                {
-                  name = "metrics";
-                  port = metricsPort;
-                  targetPort = "metrics";
-                  protocol = "TCP";
-                }
-              ];
-            }
-            |> scope.mkResource
+            lib.pipe self.deployment [
+              (kix.service.fromWorkload {
+                name = metricsServiceName;
+                labels."app.kubernetes.io/component" = "metrics";
+                ports = [
+                  {
+                    name = "metrics";
+                    port = metricsPort;
+                    targetPort = "metrics";
+                    protocol = "TCP";
+                  }
+                ];
+              })
+              scope.mkResource
+            ]
           else
             null;
 
@@ -613,101 +614,104 @@ in
         };
 
         webhookCheck =
-          {
-            name = checkName;
-            labels = checkLabels;
-            # A Job's pod template is immutable, so the deploy replaces the
-            # Job when its own content changes. The checksum annotations below
-            # put the content of the webhook and of what serves it into that
-            # content, so the check runs again when any of them changes.
-            annotations.${kix.keys.rerun} = kix.keyValues.rerunOnChange;
-            requires = builtins.attrValues self.webhookCheckRole;
-            spec = {
-              # The kubelet restarts the container with a growing delay (10 s
-              # doubling to 5 min), so eight attempts span about 15 minutes.
-              backoffLimit = 8;
-              template = {
-                metadata = {
-                  labels = checkLabels;
-                  annotations = {
-                    "checksum/operator" = self.deployment.out.contentHash;
-                    "checksum/webhook-service" = self.webhookService.out.contentHash;
-                    "checksum/mutating-webhook" = self.mutatingWebhook.out.contentHash;
-                    "checksum/validating-webhook" = self.validatingWebhook.out.contentHash;
-                    "checksum/crd" = self.crds.rabbitmqClusters.out.contentHash;
+          lib.pipe
+            {
+              name = checkName;
+              labels = checkLabels;
+              # A Job's pod template is immutable, so the deploy replaces the
+              # Job when its own content changes. The checksum annotations below
+              # put the content of the webhook and of what serves it into that
+              # content, so the check runs again when any of them changes.
+              annotations.${kix.keys.rerun} = kix.keyValues.rerunOnChange;
+              requires = builtins.attrValues self.webhookCheckRole;
+              spec = {
+                # The kubelet restarts the container with a growing delay (10 s
+                # doubling to 5 min), so eight attempts span about 15 minutes.
+                backoffLimit = 8;
+                template = {
+                  metadata = {
+                    labels = checkLabels;
+                    annotations = {
+                      "checksum/operator" = self.deployment.out.contentHash;
+                      "checksum/webhook-service" = self.webhookService.out.contentHash;
+                      "checksum/mutating-webhook" = self.mutatingWebhook.out.contentHash;
+                      "checksum/validating-webhook" = self.validatingWebhook.out.contentHash;
+                      "checksum/crd" = self.crds.rabbitmqClusters.out.contentHash;
+                    };
                   };
-                };
-                spec = {
-                  restartPolicy = "OnFailure";
-                  serviceAccount = self.webhookCheckServiceAccount;
-                  enableServiceLinks = false;
-                  # The image's default user is root; kubectl needs none.
-                  securityContext = {
-                    runAsNonRoot = true;
-                    runAsUser = 65532;
-                    runAsGroup = 65532;
-                    seccompProfile.type = "RuntimeDefault";
-                  };
-                  containers = [
-                    (
+                  spec = {
+                    restartPolicy = "OnFailure";
+                    serviceAccount = self.webhookCheckServiceAccount;
+                    enableServiceLinks = false;
+                    # The image's default user is root; kubectl needs none.
+                    securityContext = {
+                      runAsNonRoot = true;
+                      runAsUser = 65532;
+                      runAsGroup = 65532;
+                      seccompProfile.type = "RuntimeDefault";
+                    };
+                    containers = [
+                      (
+                        {
+                          name = "webhook-check";
+                          image = kix.image.ref config.webhookCheck.image;
+                          args = [
+                            "create"
+                            "--dry-run=server"
+                            "--output=name"
+                            "--filename=/check/${checkFile}"
+                          ];
+                          # kubectl writes its discovery cache under $HOME.
+                          env = [
+                            {
+                              name = "HOME";
+                              value = "/tmp";
+                            }
+                          ];
+                          securityContext = {
+                            allowPrivilegeEscalation = false;
+                            capabilities.drop = [ "ALL" ];
+                            readOnlyRootFilesystem = true;
+                          };
+                          # A ResourceQuota on requests or limits refuses a pod
+                          # that does not set them, and every RabbitmqCluster
+                          # waits on this Job.
+                          resources = {
+                            requests = {
+                              cpu = "10m";
+                              memory = "32Mi";
+                            };
+                            limits = {
+                              cpu = "200m";
+                              memory = "128Mi";
+                            };
+                          };
+                          volumeMounts = [
+                            {
+                              name = "tmp";
+                              mountPath = "/tmp";
+                            }
+                          ];
+                        }
+                        // lib.optionalAttrs (config.webhookCheck.image.pullPolicy != null) {
+                          imagePullPolicy = config.webhookCheck.image.pullPolicy;
+                        }
+                      )
+                    ];
+                    volumes = [
                       {
-                        name = "webhook-check";
-                        image = kix.image.ref config.webhookCheck.image;
-                        args = [
-                          "create"
-                          "--dry-run=server"
-                          "--output=name"
-                          "--filename=/check/${checkFile}"
-                        ];
-                        # kubectl writes its discovery cache under $HOME.
-                        env = [
-                          {
-                            name = "HOME";
-                            value = "/tmp";
-                          }
-                        ];
-                        securityContext = {
-                          allowPrivilegeEscalation = false;
-                          capabilities.drop = [ "ALL" ];
-                          readOnlyRootFilesystem = true;
-                        };
-                        # A ResourceQuota on requests or limits refuses a pod
-                        # that does not set them, and every RabbitmqCluster
-                        # waits on this Job.
-                        resources = {
-                          requests = {
-                            cpu = "10m";
-                            memory = "32Mi";
-                          };
-                          limits = {
-                            cpu = "200m";
-                            memory = "128Mi";
-                          };
-                        };
-                        volumeMounts = [
-                          {
-                            name = "tmp";
-                            mountPath = "/tmp";
-                          }
-                        ];
+                        name = "tmp";
+                        emptyDir = { };
                       }
-                      // lib.optionalAttrs (config.webhookCheck.image.pullPolicy != null) {
-                        imagePullPolicy = config.webhookCheck.image.pullPolicy;
-                      }
-                    )
-                  ];
-                  volumes = [
-                    {
-                      name = "tmp";
-                      emptyDir = { };
-                    }
-                  ];
+                    ];
+                  };
                 };
               };
-            };
-          }
-          |> kix.withMounts [ self.webhookCheckMount ]
-          |> scope.mkJob;
+            }
+            [
+              (kix.withMounts [ self.webhookCheckMount ])
+              scope.mkJob
+            ];
 
         root = {
           resource = self.deployment;

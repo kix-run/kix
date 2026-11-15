@@ -2790,7 +2790,10 @@ let
                     };
                   };
                 };
-                service = self.deployment |> kix.service.fromWorkload { name = "web"; } |> scope.mkResource;
+                service = lib.pipe self.deployment [
+                  (kix.service.fromWorkload { name = "web"; })
+                  scope.mkResource
+                ];
                 root = self.service;
               }
             )
@@ -3114,8 +3117,14 @@ let
               {
                 frontDeployment = a.deployment;
                 apiDeployment = b.deployment;
-                front = a.deployment |> kix.service.fromWorkload { name = "front"; } |> scope.mkResource;
-                api = b.deployment |> kix.service.fromWorkload { name = "api"; } |> scope.mkResource;
+                front = lib.pipe a.deployment [
+                  (kix.service.fromWorkload { name = "front"; })
+                  scope.mkResource
+                ];
+                api = lib.pipe b.deployment [
+                  (kix.service.fromWorkload { name = "api"; })
+                  scope.mkResource
+                ];
                 root = {
                   resource = self.frontDeployment;
                   requires = [

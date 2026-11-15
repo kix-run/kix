@@ -441,9 +441,8 @@ in
           };
         };
 
-        registryService =
-          self.daemonset
-          |> kix.service.fromWorkload {
+        registryService = lib.pipe self.daemonset [
+          (kix.service.fromWorkload {
             name = "${name}-registry";
             type = "NodePort";
             labels."app.kubernetes.io/component" = "registry";
@@ -458,25 +457,27 @@ in
             ];
             # Keeps NodePort traffic in the caller's zone where it can.
             annotations."service.kubernetes.io/topology-mode" = "auto";
-          }
-          |> scope.mkResource;
+          })
+          scope.mkResource
+        ];
 
         metricsService =
           if config.metrics.enabled && prometheus != null then
-            self.daemonset
-            |> kix.service.fromWorkload {
-              name = "${name}-metrics";
-              labels."app.kubernetes.io/component" = "metrics";
-              ports = [
-                {
-                  name = "metrics";
-                  port = metricsPort;
-                  targetPort = "metrics";
-                  protocol = "TCP";
-                }
-              ];
-            }
-            |> scope.mkResource
+            lib.pipe self.daemonset [
+              (kix.service.fromWorkload {
+                name = "${name}-metrics";
+                labels."app.kubernetes.io/component" = "metrics";
+                ports = [
+                  {
+                    name = "metrics";
+                    port = metricsPort;
+                    targetPort = "metrics";
+                    protocol = "TCP";
+                  }
+                ];
+              })
+              scope.mkResource
+            ]
           else
             null;
 

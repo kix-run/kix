@@ -1133,20 +1133,25 @@ in
 
   # Distinct labels, or a Service in another namespace, are fine.
   v15b-job-pods-with-own-labels = clean (
-    base "a"
-    ++ base "b"
-    ++ [
-      (job "a" "hook" {
-        app = "hook";
-      })
-      (job "b" "other" {
-        app = "web";
-        role = "other";
-      })
-    ]
-    # A superset in another namespace: b's Service selects b's Job pod,
-    # so that one is a failure; take it out of the clean set.
-    |> builtins.filter (m: !(m.kind == "Job" && m.metadata.namespace == "b"))
+    lib.pipe
+      (
+        base "a"
+        ++ base "b"
+        ++ [
+          (job "a" "hook" {
+            app = "hook";
+          })
+          (job "b" "other" {
+            app = "web";
+            role = "other";
+          })
+        ]
+      )
+      [
+        # A superset in another namespace: b's Service selects b's Job pod,
+        # so that one is a failure; take it out of the clean set.
+        (builtins.filter (m: !(m.kind == "Job" && m.metadata.namespace == "b")))
+      ]
   );
 
   # --- 16. kix.run/rerun is for Jobs ---

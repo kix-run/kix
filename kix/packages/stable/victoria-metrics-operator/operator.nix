@@ -48,16 +48,13 @@ let
   # Upstream grants * on <plural>, <plural>/finalizers, <plural>/status for
   # every CRD the chart ships; mirror that shape for the kinds we ship.
   vmKindRules = lib.concatMap (r: [
-    (vmGroup r |> full)
-    (vmGroup "${r}/finalizers" |> allow [ "update" ])
-    (
-      vmGroup "${r}/status"
-      |> allow [
-        "get"
-        "patch"
-        "update"
-      ]
-    )
+    (full (vmGroup r))
+    (allow [ "update" ] (vmGroup "${r}/finalizers"))
+    (allow [
+      "get"
+      "patch"
+      "update"
+    ] (vmGroup "${r}/status"))
   ]) vmResources;
 
   # Same table as the compat CRDs (kinds.nix), for the same reason as
@@ -71,7 +68,7 @@ let
   # the table grow two entries while the ClusterRole kept the original
   # four, so the operator watched ScrapeConfig and was refused: a slow
   # crashloop with the real cause six lines deep in the log.
-  promCompatRules = map (plural: promCompat.${plural} |> full) promCompatPlurals;
+  promCompatRules = map (plural: full promCompat.${plural}) promCompatPlurals;
   apps = group "apps" [
     "daemonsets"
     "deployments"
@@ -130,72 +127,66 @@ let
           ++ promCompatRules
           ++ [
             # Core resources the operator manages for operands
-            (core.configmaps |> full)
-            (core "configmaps/finalizers" |> allow [ "update" ])
-            (core "configmaps/status" |> watch)
-            (core.endpoints |> full)
-            (core.events |> full)
-            (core.persistentvolumeclaims |> full)
-            (core "persistentvolumeclaims/finalizers" |> allow [ "update" ])
-            (core.pods |> full)
-            (core "pods/eviction" |> allow [ "create" ])
-            (core.secrets |> full)
-            (core "secrets/finalizers" |> allow [ "update" ])
-            (core.services |> full)
-            (core "services/finalizers" |> allow [ "update" ])
-            (core.serviceaccounts |> full)
-            (core "serviceaccounts/finalizers" |> allow [ "update" ])
-            (core.namespaces |> watch)
-            (core.nodes |> watch)
-            (core "nodes/metrics" |> watch)
+            (full core.configmaps)
+            (allow [ "update" ] (core "configmaps/finalizers"))
+            (watch (core "configmaps/status"))
+            (full core.endpoints)
+            (full core.events)
+            (full core.persistentvolumeclaims)
+            (allow [ "update" ] (core "persistentvolumeclaims/finalizers"))
+            (full core.pods)
+            (allow [ "create" ] (core "pods/eviction"))
+            (full core.secrets)
+            (allow [ "update" ] (core "secrets/finalizers"))
+            (full core.services)
+            (allow [ "update" ] (core "services/finalizers"))
+            (full core.serviceaccounts)
+            (allow [ "update" ] (core "serviceaccounts/finalizers"))
+            (watch core.namespaces)
+            (watch core.nodes)
+            (watch (core "nodes/metrics"))
 
             # Operand workloads
-            (apps.daemonsets |> full)
-            (apps "daemonsets/finalizers" |> allow [ "update" ])
-            (apps.deployments |> full)
-            (apps "deployments/finalizers" |> allow [ "update" ])
-            (apps.replicasets |> full)
-            (apps.statefulsets |> full)
-            (apps "statefulsets/finalizers" |> allow [ "update" ])
-            (
-              apps "statefulsets/status"
-              |> allow [
-                "get"
-                "patch"
-                "update"
-              ]
-            )
+            (full apps.daemonsets)
+            (allow [ "update" ] (apps "daemonsets/finalizers"))
+            (full apps.deployments)
+            (allow [ "update" ] (apps "deployments/finalizers"))
+            (full apps.replicasets)
+            (full apps.statefulsets)
+            (allow [ "update" ] (apps "statefulsets/finalizers"))
+            (allow [
+              "get"
+              "patch"
+              "update"
+            ] (apps "statefulsets/status"))
 
             # Per-operand RBAC (e.g. vmagent's scrape ClusterRole)
-            (rbacGroup.clusterrolebindings |> full)
-            (rbacGroup "clusterrolebindings/finalizers" |> allow [ "update" ])
-            (rbacGroup.clusterroles |> full)
-            (rbacGroup "clusterroles/finalizers" |> allow [ "update" ])
-            (rbacGroup.roles |> full)
-            (rbacGroup.rolebindings |> full)
+            (full rbacGroup.clusterrolebindings)
+            (allow [ "update" ] (rbacGroup "clusterrolebindings/finalizers"))
+            (full rbacGroup.clusterroles)
+            (allow [ "update" ] (rbacGroup "clusterroles/finalizers"))
+            (full rbacGroup.roles)
+            (full rbacGroup.rolebindings)
 
-            (policy.poddisruptionbudgets |> full)
-            (policy "poddisruptionbudgets/finalizers" |> allow [ "update" ])
-            (autoscaling.horizontalpodautoscalers |> full)
-            (net.ingresses |> full)
-            (net "ingresses/finalizers" |> allow [ "update" ])
-            (net.networkpolicies |> full)
-            (storage.storageclasses |> watch)
-            (
-              apiext.customresourcedefinitions
-              |> allow [
-                "get"
-                "list"
-              ]
-            )
-            (discovery.endpointslices |> watch)
+            (full policy.poddisruptionbudgets)
+            (allow [ "update" ] (policy "poddisruptionbudgets/finalizers"))
+            (full autoscaling.horizontalpodautoscalers)
+            (full net.ingresses)
+            (allow [ "update" ] (net "ingresses/finalizers"))
+            (full net.networkpolicies)
+            (watch storage.storageclasses)
+            (allow [
+              "get"
+              "list"
+            ] apiext.customresourcedefinitions)
+            (watch discovery.endpointslices)
 
             # See legacyExt/openshift* note above: vmagent-role grants.
-            (legacyExt.ingresses |> watch)
-            (openshiftRoute."routers/metrics" |> allow [ "get" ])
-            (openshiftRoute."registry/metrics" |> allow [ "get" ])
-            (openshiftImage."routers/metrics" |> allow [ "get" ])
-            (openshiftImage."registry/metrics" |> allow [ "get" ])
+            (watch legacyExt.ingresses)
+            (allow [ "get" ] openshiftRoute."routers/metrics")
+            (allow [ "get" ] openshiftRoute."registry/metrics")
+            (allow [ "get" ] openshiftImage."routers/metrics")
+            (allow [ "get" ] openshiftImage."registry/metrics")
           ]
         )
         # Scrape targets exposed only as raw HTTP paths (kubelet metrics);
@@ -223,14 +214,11 @@ let
     labels = labels;
     roles = {
       "${name}:leader-election" = grant [
-        (
-          coord.leases
-          |> allow [
-            "create"
-            "get"
-            "update"
-          ]
-        )
+        (allow [
+          "create"
+          "get"
+          "update"
+        ] coord.leases)
       ];
     };
   };
@@ -421,15 +409,14 @@ in
         };
       };
     in
-    {
+    scope.mkDeployment {
       name = name;
       inherit labels;
       # The operator watches every kind it ships and crashes until the API
       # server serves them.
       requires = builtins.attrValues self.crds;
       spec = lib.recursiveUpdate baseSpec config.extraSpec;
-    }
-    |> scope.mkDeployment;
+    };
 }
 // operatorClusterRoles
 // operatorLeaderElection

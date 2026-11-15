@@ -610,117 +610,120 @@ in
         ]
         {
           deployment =
-            {
-              inherit name;
-              spec = {
-                replicas = 1;
-                # One pod holds the visitors' sessions in memory, and the init
-                # container migrates the schema the old pod still reads.
-                strategy.type = "Recreate";
-                progressDeadlineSeconds = startupSeconds + 60;
-                selector.matchLabels = scope.selectorLabels;
-                # A changed password or key restarts the pod, which reads
-                # them once at start. A `secret-ref` has no content hash.
-                template.metadata.annotations = lib.filterAttrs (_: v: v != null) {
-                  "checksum/database" = pg.credentials.out.contentHash or null;
-                  "checksum/clickhouse" = ch.credentials.out.contentHash or null;
-                  "checksum/secret-key-base" = skb.out.contentHash or null;
-                  "checksum/smtp" =
-                    if relay != null && relay.credentials != null then
-                      relay.credentials.out.contentHash or null
-                    else
-                      null;
-                  "checksum/replicate" =
-                    if replicated then builtins.substring 0 16 (builtins.hashString "sha256" replicatePy) else null;
-                };
-                template.spec = {
-                  automountServiceAccountToken = false;
-                  # Plausible reads settings such as SMTP_HOST_PORT from the
-                  # environment, and a Service named smtp-host would inject
-                  # SMTP_HOST_PORT=tcp://...
-                  enableServiceLinks = false;
-                  # Kubernetes default: Plausible documents no shutdown drain.
-                  terminationGracePeriodSeconds = 30;
-                  # The image's createdb step is left out: both dependencies
-                  # create the databases, and PostgreSQL refuses CREATE
-                  # DATABASE to a role without CREATEDB even when the database
-                  # exists.
-                  initContainers = [
-                    (
-                      container
-                      // {
-                        name = "migrate";
-                      }
-                      // (
-                        if replicated then
-                          {
-                            command = [
-                              "/bin/sh"
-                              "-c"
-                              chooseAndMigrate
-                            ];
-                            env = env ++ kix.mkEnvVars { CLICKHOUSE_REPLICA_HOSTS = lib.concatStringsSep " " ch.replicaHosts; };
-                          }
-                        else
-                          {
-                            args = [
-                              "db"
-                              "migrate"
-                            ];
-                          }
+            lib.pipe
+              {
+                inherit name;
+                spec = {
+                  replicas = 1;
+                  # One pod holds the visitors' sessions in memory, and the init
+                  # container migrates the schema the old pod still reads.
+                  strategy.type = "Recreate";
+                  progressDeadlineSeconds = startupSeconds + 60;
+                  selector.matchLabels = scope.selectorLabels;
+                  # A changed password or key restarts the pod, which reads
+                  # them once at start. A `secret-ref` has no content hash.
+                  template.metadata.annotations = lib.filterAttrs (_: v: v != null) {
+                    "checksum/database" = pg.credentials.out.contentHash or null;
+                    "checksum/clickhouse" = ch.credentials.out.contentHash or null;
+                    "checksum/secret-key-base" = skb.out.contentHash or null;
+                    "checksum/smtp" =
+                      if relay != null && relay.credentials != null then
+                        relay.credentials.out.contentHash or null
+                      else
+                        null;
+                    "checksum/replicate" =
+                      if replicated then builtins.substring 0 16 (builtins.hashString "sha256" replicatePy) else null;
+                  };
+                  template.spec = {
+                    automountServiceAccountToken = false;
+                    # Plausible reads settings such as SMTP_HOST_PORT from the
+                    # environment, and a Service named smtp-host would inject
+                    # SMTP_HOST_PORT=tcp://...
+                    enableServiceLinks = false;
+                    # Kubernetes default: Plausible documents no shutdown drain.
+                    terminationGracePeriodSeconds = 30;
+                    # The image's createdb step is left out: both dependencies
+                    # create the databases, and PostgreSQL refuses CREATE
+                    # DATABASE to a role without CREATEDB even when the database
+                    # exists.
+                    initContainers = [
+                      (
+                        container
+                        // {
+                          name = "migrate";
+                        }
+                        // (
+                          if replicated then
+                            {
+                              command = [
+                                "/bin/sh"
+                                "-c"
+                                chooseAndMigrate
+                              ];
+                              env = env ++ kix.mkEnvVars { CLICKHOUSE_REPLICA_HOSTS = lib.concatStringsSep " " ch.replicaHosts; };
+                            }
+                          else
+                            {
+                              args = [
+                                "db"
+                                "migrate"
+                              ];
+                            }
+                        )
                       )
-                    )
-                  ]
-                  ++ lib.optional replicated replicateContainer;
-                  containers = [
-                    (
-                      container
-                      // {
-                        name = "plausible";
-                        ports = [ (kix.port "http" httpPort) ];
-                        # The server answers once the migrations have run, so
-                        # this covers only the release's boot.
-                        startupProbe = httpProbe "/api/system/health/live" // {
-                          periodSeconds = 5;
-                          timeoutSeconds = 3;
-                          failureThreshold = 60;
-                        };
-                        # /live checks no dependency, so a database outage does
-                        # not restart the pod and drop its sessions.
-                        livenessProbe = httpProbe "/api/system/health/live" // {
-                          periodSeconds = 10;
-                          timeoutSeconds = 5;
-                          failureThreshold = 6;
-                        };
-                        # /ready answers 500 until PostgreSQL, ClickHouse, and
-                        # the sites cache answer.
-                        readinessProbe = httpProbe "/api/system/health/ready" // {
-                          periodSeconds = 10;
-                          timeoutSeconds = 5;
-                          failureThreshold = 3;
-                        };
-                      }
-                    )
-                  ];
+                    ]
+                    ++ lib.optional replicated replicateContainer;
+                    containers = [
+                      (
+                        container
+                        // {
+                          name = "plausible";
+                          ports = [ (kix.port "http" httpPort) ];
+                          # The server answers once the migrations have run, so
+                          # this covers only the release's boot.
+                          startupProbe = httpProbe "/api/system/health/live" // {
+                            periodSeconds = 5;
+                            timeoutSeconds = 3;
+                            failureThreshold = 60;
+                          };
+                          # /live checks no dependency, so a database outage does
+                          # not restart the pod and drop its sessions.
+                          livenessProbe = httpProbe "/api/system/health/live" // {
+                            periodSeconds = 10;
+                            timeoutSeconds = 5;
+                            failureThreshold = 6;
+                          };
+                          # /ready answers 500 until PostgreSQL, ClickHouse, and
+                          # the sites cache answer.
+                          readinessProbe = httpProbe "/api/system/health/ready" // {
+                            periodSeconds = 10;
+                            timeoutSeconds = 5;
+                            failureThreshold = 3;
+                          };
+                        }
+                      )
+                    ];
+                  };
                 };
-              };
-            }
-            # migrate writes the host of the replica it migrated on to the
-            # replica volume; replicate reads that host and its script.
-            |> (
-              if replicated then
-                kix.withMountsOn "replicate" [
-                  replicateScriptMount
-                  (replicaMount true)
-                ]
-              else
-                lib.id
-            )
-            # The migrations read the same configuration and paths as the
-            # server.
-            |> kix.withMountsOn [ "migrate" "plausible" ] mounts
-            |> (if replicated then kix.withMountsOn "migrate" [ (replicaMount false) ] else lib.id)
-            |> scope.mkDeployment;
+              }
+              [
+                # migrate writes the host of the replica it migrated on to the
+                # replica volume; replicate reads that host and its script.
+                (
+                  if replicated then
+                    kix.withMountsOn "replicate" [
+                      replicateScriptMount
+                      (replicaMount true)
+                    ]
+                  else
+                    lib.id
+                )
+                # The migrations read the same configuration and paths as the
+                # server.
+                (kix.withMountsOn [ "migrate" "plausible" ] mounts)
+                (if replicated then kix.withMountsOn "migrate" [ (replicaMount false) ] else lib.id)
+                scope.mkDeployment
+              ];
 
           replicateScript =
             if replicated then
@@ -743,9 +746,8 @@ in
             selector = self.deployment.out.selector;
           };
 
-          service =
-            self.deployment
-            |> kix.service.fromWorkload {
+          service = lib.pipe self.deployment [
+            (kix.service.fromWorkload {
               inherit name;
               ports = [
                 {
@@ -754,8 +756,9 @@ in
                   targetPort = "http";
                 }
               ];
-            }
-            |> scope.mkResource;
+            })
+            scope.mkResource
+          ];
 
           root = {
             resource = self.service;

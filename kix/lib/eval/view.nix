@@ -87,8 +87,9 @@ in
     in
     builtins.seq _folderStructureChecks (
       builtins.seq _folderContentChecks (
-        mergeCollide "${ctx}: folder key collides with root.out" folders autoKeys
-        |> mergeCollide "${ctx}: package key collides with system key" system
+        mergeCollide "${ctx}: package key collides with system key" system (
+          mergeCollide "${ctx}: folder key collides with root.out" folders autoKeys
+        )
       )
     );
 }

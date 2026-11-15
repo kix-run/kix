@@ -743,79 +743,83 @@ rec {
         # reads `exposure.url`.
         ${partName} =
           if hasExposure && useGateway then
-            builtins.seq info.scheme (
-              if paths != null then
-                scope.mkCR routeCrd (
-                  httpRoute.fromPaths (
+            withRouteWarnings (
+              builtins.seq info.scheme (
+                if paths != null then
+                  scope.mkCR routeCrd (
+                    httpRoute.fromPaths (
+                      {
+                        inherit name;
+                        host = effectiveHost;
+                        parentRef = gateway.out.gatewayRef;
+                        paths = map (p: {
+                          inherit (p) path;
+                          pathType = p.pathType or "Prefix";
+                          svc = self.${p.service};
+                          port = p.port or null;
+                        }) paths;
+                      }
+                      // lib.optionalAttrs (timeouts != null) { inherit timeouts; }
+                    )
+                  )
+                else
+                  lib.pipe svc [
+                    (httpRoute.fromService (
+                      {
+                        inherit name;
+                        host = effectiveHost;
+                        parentRef = gateway.out.gatewayRef;
+                      }
+                      // lib.optionalAttrs (port != null) { inherit port; }
+                      // lib.optionalAttrs (timeouts != null) { inherit timeouts; }
+                    ))
+                    (scope.mkCR routeCrd)
+                  ]
+              )
+            )
+
+          else if hasExposure && useIngress then
+            lib.pipe
+              (
+                if paths != null then
+                  {
+                    apiVersion = "networking.k8s.io/v1";
+                    kind = "Ingress";
+                    inherit name;
+                    annotations = defaultAnnotations // configAnnotations;
+                    spec = {
+                      ingressClassName = ingressNginx.out.ingressClassName;
+                      rules = multiPathRules;
+                    }
+                    // lib.optionalAttrs hasTls {
+                      tls = [
+                        {
+                          hosts = [ effectiveHost ];
+                          secretName = tlsSecretName;
+                        }
+                      ];
+                    };
+                  }
+                else
+                  ingress.fromService (
                     {
                       inherit name;
                       host = effectiveHost;
-                      parentRef = gateway.out.gatewayRef;
-                      paths = map (p: {
-                        inherit (p) path;
-                        pathType = p.pathType or "Prefix";
-                        svc = self.${p.service};
-                        port = p.port or null;
-                      }) paths;
-                    }
-                    // lib.optionalAttrs (timeouts != null) { inherit timeouts; }
-                  )
-                )
-              else
-                svc
-                |> httpRoute.fromService (
-                  {
-                    inherit name;
-                    host = effectiveHost;
-                    parentRef = gateway.out.gatewayRef;
-                  }
-                  // lib.optionalAttrs (port != null) { inherit port; }
-                  // lib.optionalAttrs (timeouts != null) { inherit timeouts; }
-                )
-                |> scope.mkCR routeCrd
-            )
-            |> withRouteWarnings
-
-          else if hasExposure && useIngress then
-            (
-              if paths != null then
-                {
-                  apiVersion = "networking.k8s.io/v1";
-                  kind = "Ingress";
-                  inherit name;
-                  annotations = defaultAnnotations // configAnnotations;
-                  spec = {
-                    ingressClassName = ingressNginx.out.ingressClassName;
-                    rules = multiPathRules;
-                  }
-                  // lib.optionalAttrs hasTls {
-                    tls = [
-                      {
+                      className = ingressNginx.out.ingressClassName;
+                      tls = lib.optional hasTls {
                         hosts = [ effectiveHost ];
                         secretName = tlsSecretName;
-                      }
-                    ];
-                  };
-                }
-              else
-                svc
-                |> ingress.fromService (
-                  {
-                    inherit name;
-                    host = effectiveHost;
-                    className = ingressNginx.out.ingressClassName;
-                    tls = lib.optional hasTls {
-                      hosts = [ effectiveHost ];
-                      secretName = tlsSecretName;
-                    };
-                    annotations = defaultAnnotations // configAnnotations;
-                  }
-                  // lib.optionalAttrs (port != null) { inherit port; }
-                )
-            )
-            |> (if hasTls then clusterIssuer.out.withCert else lib.id)
-            |> scope.mkResource
-            |> withRouteWarnings
+                      };
+                      annotations = defaultAnnotations // configAnnotations;
+                    }
+                    // lib.optionalAttrs (port != null) { inherit port; }
+                  ) svc
+              )
+              [
+                (if hasTls then clusterIssuer.out.withCert else lib.id)
+                scope.mkResource
+                withRouteWarnings
+              ]
 
           else
             null;

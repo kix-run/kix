@@ -59,45 +59,42 @@ let
   certControllerRbac = mkClusterRoleSet scope {
     subjects = subjectsFor self.certControllerServiceAccount;
     roles."${name}-cert-controller" = grant [
-      (apiext.customresourcedefinitions |> watch)
-      (admission.validatingwebhookconfigurations |> watch)
-      (
-        admission.validatingwebhookconfigurations
-        |> restrictTo webhookConfigNames
-        |> allow [
+      (watch apiext.customresourcedefinitions)
+      (watch admission.validatingwebhookconfigurations)
+      (lib.pipe admission.validatingwebhookconfigurations [
+        (restrictTo webhookConfigNames)
+        (allow [
           "update"
           "patch"
-        ]
-      )
-      (discovery.endpointslices |> watch)
+        ])
+      ])
+      (watch discovery.endpointslices)
       # Events about the cluster-scoped webhook configurations go to
       # the default namespace.
-      (core.events |> emit)
+      (emit core.events)
     ];
   };
 
   certControllerRoles = mkRoleSet scope {
     subjects = subjectsFor self.certControllerServiceAccount;
     roles."${name}-cert-controller" = grant [
-      (
-        core.secrets
-        |> restrictTo [ self.webhookCertSecret.out.name ]
-        |> allow [
+      (lib.pipe core.secrets [
+        (restrictTo [ self.webhookCertSecret.out.name ])
+        (allow [
           "get"
           "update"
           "patch"
-        ]
-      )
-      (coord.leases |> allow [ "create" ])
-      (
-        coord.leases
-        |> restrictTo [ certControllerLeaseName ]
-        |> allow [
+        ])
+      ])
+      (allow [ "create" ] coord.leases)
+      (lib.pipe coord.leases [
+        (restrictTo [ certControllerLeaseName ])
+        (allow [
           "get"
           "update"
           "patch"
-        ]
-      )
+        ])
+      ])
     ];
   };
 
@@ -205,7 +202,7 @@ in
     keys = [ ];
   };
 
-  webhookDeployment =
+  webhookDeployment = scope.mkDeployment (
     kix.withMounts
       [
         (kix.mount.secret self.webhookCertSecret {
@@ -288,7 +285,7 @@ in
           };
         };
       }
-    |> scope.mkDeployment;
+  );
 
   # Also the webhook's metrics Service, so no second Service carries
   # the webhook's labels.
@@ -420,13 +417,12 @@ in
     subjects = subjectsFor self.webhookCheckServiceAccount;
     labels = checkLabels;
     roles.${checkName} = grant [
-      (
+      (allow [ "create" ] (
         map es [
           "externalsecrets"
           "secretstores"
         ]
-        |> allow [ "create" ]
-      )
+      ))
     ];
   };
 
@@ -438,7 +434,7 @@ in
     data = checkManifests;
   };
 
-  webhookCheck =
+  webhookCheck = scope.mkJob (
     kix.withMounts
       [
         (kix.mount.configMap self.webhookCheckManifest {
@@ -533,5 +529,5 @@ in
           };
         };
       }
-    |> scope.mkJob;
+  );
 }

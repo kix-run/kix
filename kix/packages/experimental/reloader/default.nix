@@ -6,9 +6,9 @@
 # change to a Kix-built Secret or ConfigMap through a `checksum/<name>` pod
 # annotation instead, which the deploy plan shows.
 #
-#   deployment = { name = "web"; spec = { ... }; }
-#     |> reloader.out.withReloadOn [ self.apiToken ]
-#     |> scope.mkDeployment;
+#   deployment = scope.mkDeployment (
+#     reloader.out.withReloadOn [ self.apiToken ] { name = "web"; spec = { ... }; }
+#   );
 #
 # A minimal instance is `instances.<ns>.reloader.package = packages.experimental.reloader;`.
 # It installs a ServiceAccount, the RBAC for Secrets and workloads, a
@@ -413,21 +413,21 @@ in
             };
 
         workloadRules = grant [
-          (core.secrets |> watch)
-          (
+          (watch core.secrets)
+          (allow
             [
-              apps.deployments
-              apps.daemonsets
-              apps.statefulsets
-            ]
-            |> allow [
               "list"
               "get"
               "update"
               "patch"
             ]
+            [
+              apps.deployments
+              apps.daemonsets
+              apps.statefulsets
+            ]
           )
-          (core.events |> emit)
+          (emit core.events)
         ];
         # With --namespaces, reloader starts its controllers only in the
         # listed namespaces, so a Role in each replaces the ClusterRole. The
@@ -460,76 +460,77 @@ in
           inherit name;
         };
 
-        deployment =
-          {
-            inherit name;
-            spec = {
-              # With the replay, a crash at `pod` delays a restart until the
-              # pod is back but does not lose it. A standby at `node` and
-              # `zone` takes the lease without waiting for a reschedule.
-              replicas = kix.availability.pick availability {
-                none = 1;
-                pod = 1;
-                node = 2;
-                zone = 2;
-              };
-              selector.matchLabels = scope.selectorLabels;
-              template.spec = {
-                serviceAccount = self.serviceAccount;
-                # The binary exits on SIGTERM without releasing its Lease, so
-                # a standby takes over when the Lease expires
-                # (--leader-election-lease-duration, 15s by default). 30 is the
-                # Kubernetes default, written out because the
-                # reliability.gracefulShutdown scorecard rule reports a pod
-                # spec without the field.
-                terminationGracePeriodSeconds = 30;
-                securityContext = {
-                  runAsNonRoot = true;
-                  runAsUser = 65532;
-                  runAsGroup = 65532;
-                  seccompProfile.type = "RuntimeDefault";
-                };
-                containers = [
-                  {
-                    name = "reloader";
-                    image = imageRef;
-                    imagePullPolicy = config.image.pullPolicy;
-                    inherit args env;
-                    ports = [ (kix.port "http" 9090) ];
-                    # A follower serves both endpoints too, so every replica
-                    # is Ready.
-                    livenessProbe = {
-                      httpGet = {
-                        path = "/live";
-                        port = "http";
-                      };
-                      periodSeconds = 10;
-                      failureThreshold = 5;
-                    };
-                    readinessProbe = {
-                      httpGet = {
-                        path = "/metrics";
-                        port = "http";
-                      };
-                      periodSeconds = 10;
-                      failureThreshold = 5;
-                    };
-                    inherit (config) resources;
-                    securityContext = {
-                      allowPrivilegeEscalation = false;
-                      readOnlyRootFilesystem = true;
-                      capabilities.drop = [ "ALL" ];
-                    };
-                  }
-                ];
-              };
+        deployment = scope.mkDeployment {
+          inherit name;
+          spec = {
+            # With the replay, a crash at `pod` delays a restart until the
+            # pod is back but does not lose it. A standby at `node` and
+            # `zone` takes the lease without waiting for a reschedule.
+            replicas = kix.availability.pick availability {
+              none = 1;
+              pod = 1;
+              node = 2;
+              zone = 2;
             };
-          }
-          |> scope.mkDeployment;
+            selector.matchLabels = scope.selectorLabels;
+            template.spec = {
+              serviceAccount = self.serviceAccount;
+              # The binary exits on SIGTERM without releasing its Lease, so
+              # a standby takes over when the Lease expires
+              # (--leader-election-lease-duration, 15s by default). 30 is the
+              # Kubernetes default, written out because the
+              # reliability.gracefulShutdown scorecard rule reports a pod
+              # spec without the field.
+              terminationGracePeriodSeconds = 30;
+              securityContext = {
+                runAsNonRoot = true;
+                runAsUser = 65532;
+                runAsGroup = 65532;
+                seccompProfile.type = "RuntimeDefault";
+              };
+              containers = [
+                {
+                  name = "reloader";
+                  image = imageRef;
+                  imagePullPolicy = config.image.pullPolicy;
+                  inherit args env;
+                  ports = [ (kix.port "http" 9090) ];
+                  # A follower serves both endpoints too, so every replica
+                  # is Ready.
+                  livenessProbe = {
+                    httpGet = {
+                      path = "/live";
+                      port = "http";
+                    };
+                    periodSeconds = 10;
+                    failureThreshold = 5;
+                  };
+                  readinessProbe = {
+                    httpGet = {
+                      path = "/metrics";
+                      port = "http";
+                    };
+                    periodSeconds = 10;
+                    failureThreshold = 5;
+                  };
+                  inherit (config) resources;
+                  securityContext = {
+                    allowPrivilegeEscalation = false;
+                    readOnlyRootFilesystem = true;
+                    capabilities.drop = [ "ALL" ];
+                  };
+                }
+              ];
+            };
+          };
+        };
 
         service =
           if config.metrics.enabled && prometheus != null then
-            self.deployment |> kix.service.fromWorkload { inherit name; } |> scope.mkResource
+            lib.pipe self.deployment [
+              (kix.service.fromWorkload { inherit name; })
+              scope.mkResource
+            ]
           else
             null;
 
@@ -546,16 +547,15 @@ in
         inherit subjects;
         labels = scope.selectorLabels;
         roles."${name}-leader-election" = grant [
-          (coordination.leases |> allow [ "create" ])
+          (allow [ "create" ] coordination.leases)
           # The binary names its Lease with the constant LockName.
-          (
-            coordination.leases
-            |> restrictTo [ "stakater-reloader-lock" ]
-            |> allow [
+          (lib.pipe coordination.leases [
+            (restrictTo [ "stakater-reloader-lock" ])
+            (allow [
               "get"
               "update"
-            ]
-          )
+            ])
+          ])
         ];
       }
     )

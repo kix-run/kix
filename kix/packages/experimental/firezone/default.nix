@@ -399,120 +399,122 @@ in
         };
 
         deployment =
-          {
-            name = name;
-            spec = {
-              replicas = config.replicaCount;
-              selector.matchLabels = scope.selectorLabels;
-              template.metadata.annotations = checksums;
-              template.spec = {
-                # Kubernetes default: Firezone 0.7 documents no shutdown drain.
-                terminationGracePeriodSeconds = 30;
-                initContainers = [
-                  {
-                    name = "init-sysctl";
-                    image = kix.image.ref config.init.image;
-                    imagePullPolicy = config.init.image.pullPolicy;
-                    command = [
-                      "sh"
-                      "-c"
-                      ''
-                        sysctl -w net.ipv4.ip_forward=1
-                        sysctl -w net.ipv6.conf.all.disable_ipv6=0
-                        sysctl -w net.ipv6.conf.all.forwarding=1
-                      ''
-                    ];
-                    securityContext = {
-                      privileged = true;
-                      readOnlyRootFilesystem = true;
-                    };
-                    resources = {
-                      requests = {
-                        cpu = "10m";
-                        memory = "16Mi";
-                      };
-                      limits = {
-                        cpu = "100m";
-                        memory = "32Mi";
-                      };
-                    };
-                  }
-                ];
-                containers = [
-                  {
-                    name = "firezone";
-                    image = kix.image.ref config.image;
-                    imagePullPolicy = config.image.pullPolicy;
-                    ports = [
-                      (kix.port "wireguard" wg.port // { protocol = "UDP"; })
-                      (kix.port "http" 13000)
-                    ];
-                    envFrom = [ { configMapRef.name = self.configMap.out.name; } ];
-                    env = kix.mkEnv config.env secretEnv;
-                    # Firezone 0.7 has no health endpoint; "/" redirects to
-                    # the sign-in page once the web server is up.
-                    livenessProbe = {
-                      httpGet = {
-                        path = "/";
-                        port = "http";
-                      };
-                      periodSeconds = 10;
-                      timeoutSeconds = 5;
-                      failureThreshold = 6;
-                    };
-                    readinessProbe = {
-                      httpGet = {
-                        path = "/";
-                        port = "http";
-                      };
-                      periodSeconds = 10;
-                      timeoutSeconds = 5;
-                      failureThreshold = 3;
-                    };
-                    startupProbe = {
-                      httpGet = {
-                        path = "/";
-                        port = "http";
-                      };
-                      periodSeconds = 5;
-                      failureThreshold = 60;
-                    };
-                    resources = config.resources;
-                    securityContext = {
-                      readOnlyRootFilesystem = true;
-                      capabilities.add = [
-                        "NET_ADMIN"
-                        "SYS_MODULE"
+          lib.pipe
+            {
+              name = name;
+              spec = {
+                replicas = config.replicaCount;
+                selector.matchLabels = scope.selectorLabels;
+                template.metadata.annotations = checksums;
+                template.spec = {
+                  # Kubernetes default: Firezone 0.7 documents no shutdown drain.
+                  terminationGracePeriodSeconds = 30;
+                  initContainers = [
+                    {
+                      name = "init-sysctl";
+                      image = kix.image.ref config.init.image;
+                      imagePullPolicy = config.init.image.pullPolicy;
+                      command = [
+                        "sh"
+                        "-c"
+                        ''
+                          sysctl -w net.ipv4.ip_forward=1
+                          sysctl -w net.ipv6.conf.all.disable_ipv6=0
+                          sysctl -w net.ipv6.conf.all.forwarding=1
+                        ''
                       ];
-                    };
-                  }
-                ];
+                      securityContext = {
+                        privileged = true;
+                        readOnlyRootFilesystem = true;
+                      };
+                      resources = {
+                        requests = {
+                          cpu = "10m";
+                          memory = "16Mi";
+                        };
+                        limits = {
+                          cpu = "100m";
+                          memory = "32Mi";
+                        };
+                      };
+                    }
+                  ];
+                  containers = [
+                    {
+                      name = "firezone";
+                      image = kix.image.ref config.image;
+                      imagePullPolicy = config.image.pullPolicy;
+                      ports = [
+                        (kix.port "wireguard" wg.port // { protocol = "UDP"; })
+                        (kix.port "http" 13000)
+                      ];
+                      envFrom = [ { configMapRef.name = self.configMap.out.name; } ];
+                      env = kix.mkEnv config.env secretEnv;
+                      # Firezone 0.7 has no health endpoint; "/" redirects to
+                      # the sign-in page once the web server is up.
+                      livenessProbe = {
+                        httpGet = {
+                          path = "/";
+                          port = "http";
+                        };
+                        periodSeconds = 10;
+                        timeoutSeconds = 5;
+                        failureThreshold = 6;
+                      };
+                      readinessProbe = {
+                        httpGet = {
+                          path = "/";
+                          port = "http";
+                        };
+                        periodSeconds = 10;
+                        timeoutSeconds = 5;
+                        failureThreshold = 3;
+                      };
+                      startupProbe = {
+                        httpGet = {
+                          path = "/";
+                          port = "http";
+                        };
+                        periodSeconds = 5;
+                        failureThreshold = 60;
+                      };
+                      resources = config.resources;
+                      securityContext = {
+                        readOnlyRootFilesystem = true;
+                        capabilities.add = [
+                          "NET_ADMIN"
+                          "SYS_MODULE"
+                        ];
+                      };
+                    }
+                  ];
+                };
               };
-            };
-          }
-          |> kix.withMounts [
-            self.wireguardMount
-            self.samlMount
-            (kix.mount.emptyDir {
-              name = "state";
-              mountPath = "/var/firezone";
-            })
-            # The Elixir release writes RELEASE_TMP under /app/tmp.
-            (kix.mount.emptyDir {
-              name = "release-tmp";
-              mountPath = "/app/tmp";
-            })
-            (kix.mount.emptyDir {
-              name = "tmp";
-              mountPath = "/tmp";
-            })
-          ]
-          |> withReload
-          |> scope.mkDeployment;
+            }
+            [
+              (kix.withMounts [
+                self.wireguardMount
+                self.samlMount
+                (kix.mount.emptyDir {
+                  name = "state";
+                  mountPath = "/var/firezone";
+                })
+                # The Elixir release writes RELEASE_TMP under /app/tmp.
+                (kix.mount.emptyDir {
+                  name = "release-tmp";
+                  mountPath = "/app/tmp";
+                })
+                (kix.mount.emptyDir {
+                  name = "tmp";
+                  mountPath = "/tmp";
+                })
+              ])
+              withReload
+              scope.mkDeployment
+            ];
 
-        service =
-          self.deployment
-          |> kix.service.fromWorkload {
+        service = lib.pipe self.deployment [
+          (kix.service.fromWorkload {
             name = name;
             type = config.service.type;
             annotations = config.service.annotations;
@@ -520,8 +522,9 @@ in
               httpPort = "13000";
               wireguardPort = toString wg.port;
             };
-          }
-          |> scope.mkResource;
+          })
+          scope.mkResource
+        ];
 
         root = {
           resource = self.service;

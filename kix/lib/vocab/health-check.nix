@@ -149,66 +149,69 @@ in
         };
 
         ${partName} =
-          {
-            name = "${name}-health";
-            requires = builtins.filter waitsFor required ++ lib.optional requireRoot rootRes;
-            annotations.${kixKeys.rerun} = kixAnnotations.values.rerunOnChange;
-            spec = {
-              backoffLimit = 0;
-              activeDeadlineSeconds = deadline;
-              template = {
-                metadata.labels = {
-                  "app.kubernetes.io/name" = "${name}-health";
-                  "app.kubernetes.io/component" = "health-check";
-                };
-                metadata.annotations = checksums;
-                spec = {
-                  restartPolicy = "Never";
-                  automountServiceAccountToken = false;
-                  securityContext = {
-                    runAsNonRoot = true;
-                    runAsUser = 65534;
-                    runAsGroup = 65534;
-                    seccompProfile.type = "RuntimeDefault";
+          lib.pipe
+            {
+              name = "${name}-health";
+              requires = builtins.filter waitsFor required ++ lib.optional requireRoot rootRes;
+              annotations.${kixKeys.rerun} = kixAnnotations.values.rerunOnChange;
+              spec = {
+                backoffLimit = 0;
+                activeDeadlineSeconds = deadline;
+                template = {
+                  metadata.labels = {
+                    "app.kubernetes.io/name" = "${name}-health";
+                    "app.kubernetes.io/component" = "health-check";
                   };
-                  containers = [
-                    {
-                      name = "probe";
-                      image = imageRef runtime.image;
-                      command = runtime.interpreter ++ [ "/probe/${runtime.file}" ];
-                      env = mkEnvVars (
-                        (runtime.env or { })
-                        // {
-                          RETRY_FOR = toString retry;
-                        }
-                        // userEnv
-                      );
-                      terminationMessagePolicy = "FallbackToLogsOnError";
-                      securityContext = {
-                        runAsNonRoot = true;
-                        allowPrivilegeEscalation = false;
-                        readOnlyRootFilesystem = true;
-                        capabilities.drop = [ "ALL" ];
-                      };
-                      resources = {
-                        requests = {
-                          cpu = "50m";
-                          memory = "64Mi";
+                  metadata.annotations = checksums;
+                  spec = {
+                    restartPolicy = "Never";
+                    automountServiceAccountToken = false;
+                    securityContext = {
+                      runAsNonRoot = true;
+                      runAsUser = 65534;
+                      runAsGroup = 65534;
+                      seccompProfile.type = "RuntimeDefault";
+                    };
+                    containers = [
+                      {
+                        name = "probe";
+                        image = imageRef runtime.image;
+                        command = runtime.interpreter ++ [ "/probe/${runtime.file}" ];
+                        env = mkEnvVars (
+                          (runtime.env or { })
+                          // {
+                            RETRY_FOR = toString retry;
+                          }
+                          // userEnv
+                        );
+                        terminationMessagePolicy = "FallbackToLogsOnError";
+                        securityContext = {
+                          runAsNonRoot = true;
+                          allowPrivilegeEscalation = false;
+                          readOnlyRootFilesystem = true;
+                          capabilities.drop = [ "ALL" ];
                         };
-                        limits.memory = "128Mi";
-                      };
-                    }
-                  ];
+                        resources = {
+                          requests = {
+                            cpu = "50m";
+                            memory = "64Mi";
+                          };
+                          limits.memory = "128Mi";
+                        };
+                      }
+                    ];
+                  };
                 };
               };
-            };
-          }
-          |> withMountsOn "probe" [
-            (mount.configMap self.${scriptPart} {
-              mountPath = "/probe";
-              readOnly = true;
-            })
-          ]
-          |> scope.mkJob;
+            }
+            [
+              (withMountsOn "probe" [
+                (mount.configMap self.${scriptPart} {
+                  mountPath = "/probe";
+                  readOnly = true;
+                })
+              ])
+              scope.mkJob
+            ];
       };
 }

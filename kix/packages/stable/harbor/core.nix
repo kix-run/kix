@@ -224,143 +224,146 @@ in
   };
 
   coreDeployment =
-    {
-      name = "${name}-core";
-      labels = componentSelector "core";
-      spec = {
-        replicas = config.core.replicas;
-        revisionHistoryLimit = 5;
-        selector.matchLabels = coreSelector;
-        template.metadata.annotations = {
-          "checksum/config" = self.coreConfigMap.out.contentHash;
-        }
-        // checksumOf "harbor-secrets" secrets
-        // checksumOf "ca-bundle" ca
-        // checksumOf "database-credentials" dbCredentials
-        // valkeyChecksum
-        // checksumOf "oidc-client" oidcCredentials;
-        template.spec = harborPodDefaults // {
-          containers = [
-            {
-              name = "core";
-              image = kix.image.ref config.core.image;
-              command = [ "/harbor/harbor_core" ];
-              imagePullPolicy = config.core.image.pullPolicy;
-              livenessProbe = coreProbe;
-              readinessProbe = coreProbe;
-              startupProbe = coreProbe // {
-                initialDelaySeconds = 10;
-                failureThreshold = 360;
-              };
-              envFrom = [ { configMapRef.name = self.coreConfigMap.out.name; } ];
-              env = componentEnv {
-                option = "core.env";
-                secretEnv =
-                  secrets.out.mkEnv {
-                    HARBOR_ADMIN_PASSWORD = "adminPassword";
-                    CORE_SECRET = "coreSecret";
-                    JOBSERVICE_SECRET = "jobserviceSecret";
-                    CSRF_KEY = "csrfKey";
-                    REGISTRY_CREDENTIAL_PASSWORD = "registryPassword";
-                  }
-                  ++ dbLoginEnv "POSTGRESQL_USERNAME" "POSTGRESQL_PASSWORD"
-                  ++ redisPasswordEnv
-                  ++ lib.optionals oidcOn (
-                    oidcCredentials.out.mkEnv {
-                      OIDC_CLIENT_ID = "clientId";
-                      OIDC_CLIENT_SECRET = "clientSecret";
+    lib.pipe
+      {
+        name = "${name}-core";
+        labels = componentSelector "core";
+        spec = {
+          replicas = config.core.replicas;
+          revisionHistoryLimit = 5;
+          selector.matchLabels = coreSelector;
+          template.metadata.annotations = {
+            "checksum/config" = self.coreConfigMap.out.contentHash;
+          }
+          // checksumOf "harbor-secrets" secrets
+          // checksumOf "ca-bundle" ca
+          // checksumOf "database-credentials" dbCredentials
+          // valkeyChecksum
+          // checksumOf "oidc-client" oidcCredentials;
+          template.spec = harborPodDefaults // {
+            containers = [
+              {
+                name = "core";
+                image = kix.image.ref config.core.image;
+                command = [ "/harbor/harbor_core" ];
+                imagePullPolicy = config.core.image.pullPolicy;
+                livenessProbe = coreProbe;
+                readinessProbe = coreProbe;
+                startupProbe = coreProbe // {
+                  initialDelaySeconds = 10;
+                  failureThreshold = 360;
+                };
+                envFrom = [ { configMapRef.name = self.coreConfigMap.out.name; } ];
+                env = componentEnv {
+                  option = "core.env";
+                  secretEnv =
+                    secrets.out.mkEnv {
+                      HARBOR_ADMIN_PASSWORD = "adminPassword";
+                      CORE_SECRET = "coreSecret";
+                      JOBSERVICE_SECRET = "jobserviceSecret";
+                      CSRF_KEY = "csrfKey";
+                      REGISTRY_CREDENTIAL_PASSWORD = "registryPassword";
                     }
-                  );
-                facts = builtins.attrNames coreConfigData;
-                sslmodeVar = "POSTGRESQL_SSLMODE";
-                vars = {
-                  _REDIS_URL_CORE = "${redisUrl 0}?idle_timeout_seconds=30";
-                  _REDIS_URL_REG = "${redisUrl 2}?idle_timeout_seconds=30";
-                }
-                // lib.optionalAttrs (coreSettings != { }) {
-                  CONFIG_OVERWRITE_JSON = builtins.toJSON coreSettings;
-                };
-                owned = [
-                  {
-                    names = [ "CONFIG_OVERWRITE_JSON" ];
-                    from = "core.settings and oidc";
-                    fix = "Set the configuration items in core.settings.";
+                    ++ dbLoginEnv "POSTGRESQL_USERNAME" "POSTGRESQL_PASSWORD"
+                    ++ redisPasswordEnv
+                    ++ lib.optionals oidcOn (
+                      oidcCredentials.out.mkEnv {
+                        OIDC_CLIENT_ID = "clientId";
+                        OIDC_CLIENT_SECRET = "clientSecret";
+                      }
+                    );
+                  facts = builtins.attrNames coreConfigData;
+                  sslmodeVar = "POSTGRESQL_SSLMODE";
+                  vars = {
+                    _REDIS_URL_CORE = "${redisUrl 0}?idle_timeout_seconds=30";
+                    _REDIS_URL_REG = "${redisUrl 2}?idle_timeout_seconds=30";
                   }
-                ];
-                tunables = {
-                  LOG_LEVEL = "info";
-                  PERMITTED_REGISTRY_TYPES_FOR_PROXY_CACHE = "docker-hub,harbor,azure-acr,ali-acr,aws-ecr,google-gcr,docker-registry,github-ghcr,jfrog-artifactory";
-                  REPLICATION_ADAPTER_WHITELIST = "ali-acr,aws-ecr,azure-acr,docker-hub,docker-registry,github-ghcr,google-gcr,harbor,huawei-SWR,jfrog-artifactory,tencent-tcr,volcengine-cr";
-                  POSTGRESQL_MAX_IDLE_CONNS = "100";
-                  POSTGRESQL_MAX_OPEN_CONNS = "900";
+                  // lib.optionalAttrs (coreSettings != { }) {
+                    CONFIG_OVERWRITE_JSON = builtins.toJSON coreSettings;
+                  };
+                  owned = [
+                    {
+                      names = [ "CONFIG_OVERWRITE_JSON" ];
+                      from = "core.settings and oidc";
+                      fix = "Set the configuration items in core.settings.";
+                    }
+                  ];
+                  tunables = {
+                    LOG_LEVEL = "info";
+                    PERMITTED_REGISTRY_TYPES_FOR_PROXY_CACHE = "docker-hub,harbor,azure-acr,ali-acr,aws-ecr,google-gcr,docker-registry,github-ghcr,jfrog-artifactory";
+                    REPLICATION_ADAPTER_WHITELIST = "ali-acr,aws-ecr,azure-acr,docker-hub,docker-registry,github-ghcr,google-gcr,harbor,huawei-SWR,jfrog-artifactory,tencent-tcr,volcengine-cr";
+                    POSTGRESQL_MAX_IDLE_CONNS = "100";
+                    POSTGRESQL_MAX_OPEN_CONNS = "900";
+                  };
+                  env = config.core.env;
                 };
-                env = config.core.env;
-              };
-              ports = [ (kix.port "http" 8080) ] ++ metricsContainerPort;
-              resources = config.core.resources;
-              securityContext = containerSecurityContext;
-            }
-          ];
+                ports = [ (kix.port "http" 8080) ] ++ metricsContainerPort;
+                resources = config.core.resources;
+                securityContext = containerSecurityContext;
+              }
+            ];
+          };
         };
-      };
-    }
-    |> kix.withMounts [
-      (kix.mount.configMap self.coreConfigMap {
-        name = "config";
-        mountPath = "/etc/core/app.conf";
-        subPath = "app.conf";
-        items = [
-          {
-            key = "app.conf";
-            path = "app.conf";
-          }
-        ];
-      })
-      (kix.mount.secret secrets {
-        name = "secret-key";
-        mountPath = "/etc/core/key";
-        subPath = "key";
-        items = [
-          {
-            key = "secretKey";
-            path = "key";
-          }
-        ];
-        defaultMode = 420;
-      })
-      (kix.mount.secret secrets {
-        name = "token-service-private-key";
-        mountPath = "/etc/core/private_key.pem";
-        subPath = "private_key.pem";
-        items = [
-          {
-            key = "tokenPrivateKey";
-            path = "private_key.pem";
-          }
-        ];
-        defaultMode = 420;
-      })
-      (kix.mount.emptyDir {
-        name = "ca-download";
-        mountPath = "/etc/core/ca";
-        sizeLimit = "16Mi";
-      })
-      (kix.mount.emptyDir {
-        name = "psc";
-        mountPath = "/etc/core/token";
-        sizeLimit = "16Mi";
-      })
-      (tmpMount "tmp")
-      caBundleMount
-    ]
-    |> reloadOn [
-      secrets
-      ca
-      dbCredentials
-      valkeySecret
-      oidcCredentials
-    ]
-    |> scope.mkDeployment;
+      }
+      [
+        (kix.withMounts [
+          (kix.mount.configMap self.coreConfigMap {
+            name = "config";
+            mountPath = "/etc/core/app.conf";
+            subPath = "app.conf";
+            items = [
+              {
+                key = "app.conf";
+                path = "app.conf";
+              }
+            ];
+          })
+          (kix.mount.secret secrets {
+            name = "secret-key";
+            mountPath = "/etc/core/key";
+            subPath = "key";
+            items = [
+              {
+                key = "secretKey";
+                path = "key";
+              }
+            ];
+            defaultMode = 420;
+          })
+          (kix.mount.secret secrets {
+            name = "token-service-private-key";
+            mountPath = "/etc/core/private_key.pem";
+            subPath = "private_key.pem";
+            items = [
+              {
+                key = "tokenPrivateKey";
+                path = "private_key.pem";
+              }
+            ];
+            defaultMode = 420;
+          })
+          (kix.mount.emptyDir {
+            name = "ca-download";
+            mountPath = "/etc/core/ca";
+            sizeLimit = "16Mi";
+          })
+          (kix.mount.emptyDir {
+            name = "psc";
+            mountPath = "/etc/core/token";
+            sizeLimit = "16Mi";
+          })
+          (tmpMount "tmp")
+          caBundleMount
+        ])
+        (reloadOn [
+          secrets
+          ca
+          dbCredentials
+          valkeySecret
+          oidcCredentials
+        ])
+        scope.mkDeployment
+      ];
 
   portalConfigMap = scope.mkResource {
     apiVersion = "v1";
@@ -404,9 +407,8 @@ in
     };
   };
 
-  portalService =
-    self.portalDeployment
-    |> kix.service.fromWorkload {
+  portalService = lib.pipe self.portalDeployment [
+    (kix.service.fromWorkload {
       name = svc.portal;
       labels = componentLabels "portal";
       ports = [
@@ -418,48 +420,52 @@ in
         }
       ];
       outputs.port = "80";
-    }
-    |> scope.mkResource;
+    })
+    scope.mkResource
+  ];
 
   portalDeployment =
-    {
-      name = "${name}-portal";
-      labels = componentSelector "portal";
-      spec = {
-        replicas = config.portal.replicas;
-        revisionHistoryLimit = 5;
-        selector.matchLabels = componentSelector "portal";
-        template.metadata.annotations = {
-          "checksum/config" = self.portalConfigMap.out.contentHash;
+    lib.pipe
+      {
+        name = "${name}-portal";
+        labels = componentSelector "portal";
+        spec = {
+          replicas = config.portal.replicas;
+          revisionHistoryLimit = 5;
+          selector.matchLabels = componentSelector "portal";
+          template.metadata.annotations = {
+            "checksum/config" = self.portalConfigMap.out.contentHash;
+          };
+          template.spec = harborPodDefaults // {
+            containers = [
+              {
+                name = "portal";
+                image = kix.image.ref config.portal.image;
+                imagePullPolicy = config.portal.image.pullPolicy;
+                ports = [ (kix.port "http" 8080) ];
+                livenessProbe = portalProbe // {
+                  initialDelaySeconds = 300;
+                };
+                readinessProbe = portalProbe // {
+                  initialDelaySeconds = 1;
+                };
+                resources = config.portal.resources;
+                securityContext = containerSecurityContext;
+              }
+            ];
+          };
         };
-        template.spec = harborPodDefaults // {
-          containers = [
-            {
-              name = "portal";
-              image = kix.image.ref config.portal.image;
-              imagePullPolicy = config.portal.image.pullPolicy;
-              ports = [ (kix.port "http" 8080) ];
-              livenessProbe = portalProbe // {
-                initialDelaySeconds = 300;
-              };
-              readinessProbe = portalProbe // {
-                initialDelaySeconds = 1;
-              };
-              resources = config.portal.resources;
-              securityContext = containerSecurityContext;
-            }
-          ];
-        };
-      };
-    }
-    |> kix.withMounts [
-      (kix.mount.configMap self.portalConfigMap {
-        name = "portal-config";
-        mountPath = "/etc/nginx/nginx.conf";
-        subPath = "nginx.conf";
-      })
-      # nginx.conf puts the pid file and every temp path under /tmp.
-      (tmpMount "tmp")
-    ]
-    |> scope.mkDeployment;
+      }
+      [
+        (kix.withMounts [
+          (kix.mount.configMap self.portalConfigMap {
+            name = "portal-config";
+            mountPath = "/etc/nginx/nginx.conf";
+            subPath = "nginx.conf";
+          })
+          # nginx.conf puts the pid file and every temp path under /tmp.
+          (tmpMount "tmp")
+        ])
+        scope.mkDeployment
+      ];
 }

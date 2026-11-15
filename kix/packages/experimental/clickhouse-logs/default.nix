@@ -272,37 +272,40 @@ in
         };
 
         daemonSet =
-          {
-            inherit name;
-            spec = {
-              selector.matchLabels = scope.selectorLabels;
-              template = {
-                metadata.annotations."checksum/config" = self.configMap.out.contentHash;
-                spec = vectorAgent.podSpec {
-                  inherit
-                    scope
-                    who
-                    name
-                    config
-                    self
-                    ;
+          lib.pipe
+            {
+              inherit name;
+              spec = {
+                selector.matchLabels = scope.selectorLabels;
+                template = {
+                  metadata.annotations."checksum/config" = self.configMap.out.contentHash;
+                  spec = vectorAgent.podSpec {
+                    inherit
+                      scope
+                      who
+                      name
+                      config
+                      self
+                      ;
+                  };
                 };
               };
-            };
-          }
-          |> kix.withMounts [
-            self.configMount
-            self.credentialsMount
-          ]
-          |> scope.mkDaemonSet;
+            }
+            [
+              (kix.withMounts [
+                self.configMount
+                self.credentialsMount
+              ])
+              scope.mkDaemonSet
+            ];
 
-        service =
-          self.daemonSet
-          |> kix.service.fromWorkload {
+        service = lib.pipe self.daemonSet [
+          (kix.service.fromWorkload {
             name = "${name}-metrics";
             spec.clusterIP = "None";
-          }
-          |> scope.mkResource;
+          })
+          scope.mkResource
+        ];
 
         root = {
           resource = self.service;

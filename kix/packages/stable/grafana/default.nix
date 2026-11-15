@@ -393,8 +393,8 @@ in
                 }
               ];
               roles.${name} = grant (
-                lib.optional config.sidecar.sources.configMaps (core.configmaps |> watch)
-                ++ lib.optional config.sidecar.sources.secrets (core.secrets |> watch)
+                lib.optional config.sidecar.sources.configMaps (watch core.configmaps)
+                ++ lib.optional config.sidecar.sources.secrets (watch core.secrets)
               );
             }
           else
@@ -600,9 +600,8 @@ in
           selector = self.deployment.out.selector;
         };
 
-        service =
-          self.deployment
-          |> kix.service.fromWorkload {
+        service = lib.pipe self.deployment [
+          (kix.service.fromWorkload {
             inherit name;
             ports = [
               {
@@ -612,8 +611,9 @@ in
                 protocol = "TCP";
               }
             ];
-          }
-          |> scope.mkResource;
+          })
+          scope.mkResource
+        ];
 
         root = {
           resource = self.service;

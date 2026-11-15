@@ -351,49 +351,42 @@ in
           inherit subjects;
           # From config/rbac/role.yaml at the release tag.
           roles.${name} = grant [
-            (core.configmaps |> readWrite)
-            (core.secrets |> readWrite)
-            (
-              core.pods
-              |> allow [
-                "get"
-                "list"
-              ]
-            )
-            (core.serviceaccounts |> watch)
-            (core "serviceaccounts/token" |> allow [ "create" ])
-            (
+            (readWrite core.configmaps)
+            (readWrite core.secrets)
+            (allow [
+              "get"
+              "list"
+            ] core.pods)
+            (watch core.serviceaccounts)
+            (allow [ "create" ] (core "serviceaccounts/token"))
+            (allow
               [
-                apps.daemonsets
-                apps.deployments
-                apps.statefulsets
-              ]
-              |> allow [
                 "get"
                 "list"
                 "update"
                 "watch"
               ]
-            )
-            (authn.tokenreviews |> allow [ "create" ])
-            (map infisical plurals |> full)
-            (
-              map (p: infisical "${p}/status") (builtins.filter (p: p != "clustergenerators") plurals)
-              |> allow [
-                "get"
-                "patch"
-                "update"
+              [
+                apps.daemonsets
+                apps.deployments
+                apps.statefulsets
               ]
             )
-            (
+            (allow [ "create" ] authn.tokenreviews)
+            (full (map infisical plurals))
+            (allow [
+              "get"
+              "patch"
+              "update"
+            ] (map (p: infisical "${p}/status") (builtins.filter (p: p != "clustergenerators") plurals)))
+            (finalize (
               map infisical [
                 "infisicaldynamicsecrets"
                 "infisicalpushsecrets"
                 "infisicalsecrets"
                 "infisicalstaticsecrets"
               ]
-              |> finalize
-            )
+            ))
           ];
         };
 
@@ -401,18 +394,17 @@ in
         leaderElectionRbac = mkRoleSet scope {
           inherit subjects;
           roles.${leaderElectionName} = grant [
-            (coord.leases |> allow [ "create" ])
+            (allow [ "create" ] coord.leases)
             # The lease name is the operator's compiled-in LeaderElectionID.
-            (
-              coord.leases
-              |> restrictTo [ "cf2b8c44.infisical.com" ]
-              |> allow [
+            (lib.pipe coord.leases [
+              (restrictTo [ "cf2b8c44.infisical.com" ])
+              (allow [
                 "get"
                 "update"
                 "patch"
-              ]
-            )
-            (core.events |> emit)
+              ])
+            ])
+            (emit core.events)
           ];
         };
 
@@ -689,19 +681,20 @@ in
 
         metricsService =
           if hasMetrics then
-            self.deployment
-            |> kix.service.fromWorkload {
-              name = metricsServiceName;
-              ports = [
-                {
-                  name = "metrics";
-                  port = metricsPort;
-                  targetPort = "metrics";
-                  protocol = "TCP";
-                }
-              ];
-            }
-            |> scope.mkResource
+            lib.pipe self.deployment [
+              (kix.service.fromWorkload {
+                name = metricsServiceName;
+                ports = [
+                  {
+                    name = "metrics";
+                    port = metricsPort;
+                    targetPort = "metrics";
+                    protocol = "TCP";
+                  }
+                ];
+              })
+              scope.mkResource
+            ]
           else
             null;
 

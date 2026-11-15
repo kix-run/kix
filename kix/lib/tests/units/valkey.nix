@@ -97,7 +97,10 @@ let
                 };
               };
             };
-            service = self.deployment |> kix.service.fromWorkload { name = "cache"; } |> scope.mkResource;
+            service = lib.pipe self.deployment [
+              (kix.service.fromWorkload { name = "cache"; })
+              scope.mkResource
+            ];
             root = self.service;
           }
         )

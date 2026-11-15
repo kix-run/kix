@@ -428,17 +428,16 @@ in
           inherit subjects;
           labels = scope.selectorLabels;
           roles."${name}-leader-election" = grant [
-            (coordination.leases |> allow [ "create" ])
-            (
-              coordination.leases
-              |> restrictTo [ leaseName ]
-              |> allow [
+            (allow [ "create" ] coordination.leases)
+            (lib.pipe coordination.leases [
+              (restrictTo [ leaseName ])
+              (allow [
                 "get"
                 "update"
                 "patch"
-              ]
-            )
-            (core.events |> emit)
+              ])
+            ])
+            (emit core.events)
           ];
         };
 
@@ -534,19 +533,20 @@ in
 
         metricsService =
           if config.metrics.enabled && prometheus != null then
-            self.deployment
-            |> kix.service.fromWorkload {
-              name = "${name}-metrics";
-              ports = [
-                {
-                  name = "metrics";
-                  port = metricsPort;
-                  targetPort = "metrics";
-                  protocol = "TCP";
-                }
-              ];
-            }
-            |> scope.mkResource
+            lib.pipe self.deployment [
+              (kix.service.fromWorkload {
+                name = "${name}-metrics";
+                ports = [
+                  {
+                    name = "metrics";
+                    port = metricsPort;
+                    targetPort = "metrics";
+                    protocol = "TCP";
+                  }
+                ];
+              })
+              scope.mkResource
+            ]
           else
             null;
 

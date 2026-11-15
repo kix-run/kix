@@ -155,40 +155,43 @@ in
         };
 
         daemonSet =
-          {
-            inherit name;
-            spec = {
-              selector.matchLabels = scope.selectorLabels;
-              template = {
-                metadata.annotations."checksum/config" = self.configMap.out.contentHash;
-                spec =
-                  vectorAgent.podSpec {
-                    inherit
-                      scope
-                      who
-                      name
-                      config
-                      self
-                      ;
-                  }
-                  // lib.optionalAttrs (priorityClass != null) {
-                    priorityClassName = priorityClass.out.name;
-                  };
+          lib.pipe
+            {
+              inherit name;
+              spec = {
+                selector.matchLabels = scope.selectorLabels;
+                template = {
+                  metadata.annotations."checksum/config" = self.configMap.out.contentHash;
+                  spec =
+                    vectorAgent.podSpec {
+                      inherit
+                        scope
+                        who
+                        name
+                        config
+                        self
+                        ;
+                    }
+                    // lib.optionalAttrs (priorityClass != null) {
+                      priorityClassName = priorityClass.out.name;
+                    };
+                };
               };
-            };
-          }
-          |> kix.withMounts [ self.configMount ]
-          |> scope.mkDaemonSet;
+            }
+            [
+              (kix.withMounts [ self.configMount ])
+              scope.mkDaemonSet
+            ];
 
         # Headless, so the health check reaches every agent. It is the
         # root, and renders without a prometheus dependency.
-        service =
-          self.daemonSet
-          |> kix.service.fromWorkload {
+        service = lib.pipe self.daemonSet [
+          (kix.service.fromWorkload {
             name = "${name}-metrics";
             spec.clusterIP = "None";
-          }
-          |> scope.mkResource;
+          })
+          scope.mkResource
+        ];
 
         root = {
           resource = self.service;

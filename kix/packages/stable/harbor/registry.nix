@@ -192,9 +192,8 @@ in
     };
   };
 
-  registryService =
-    self.registryDeployment
-    |> kix.service.fromWorkload {
+  registryService = lib.pipe self.registryDeployment [
+    (kix.service.fromWorkload {
       name = svc.registry;
       labels = componentLabels "registry";
       ports = [
@@ -213,8 +212,9 @@ in
       ]
       ++ metricsServicePort;
       outputs.port = "5000";
-    }
-    |> scope.mkResource;
+    })
+    scope.mkResource
+  ];
 
   registryDeployment =
     let
@@ -242,126 +242,129 @@ in
         ++ lib.optional redisAuth (redisPasswordRef "REGISTRY_REDIS_PASSWORD")
         ++ kix.mkEnvVars caTrust;
     in
-    {
-      name = "${name}-registry";
-      labels = componentSelector "registry";
-      # The filesystem driver keeps blobs and upload state on the one
-      # storage claim, which a second pod would have to share.
-      availability.max = "none";
-      spec = {
-        replicas = 1;
-        revisionHistoryLimit = 5;
-        strategy.type = "Recreate";
-        selector.matchLabels = componentSelector "registry";
-        template.metadata.annotations = {
-          "checksum/config" = self.registryConfigMap.out.contentHash;
-        }
-        // checksumOf "harbor-secrets" secrets
-        // checksumOf "ca-bundle" ca
-        // valkeyChecksum;
-        template.spec = harborPodDefaults // {
-          securityContext = harborPodDefaults.securityContext // {
-            fsGroupChangePolicy = "OnRootMismatch";
+    lib.pipe
+      {
+        name = "${name}-registry";
+        labels = componentSelector "registry";
+        # The filesystem driver keeps blobs and upload state on the one
+        # storage claim, which a second pod would have to share.
+        availability.max = "none";
+        spec = {
+          replicas = 1;
+          revisionHistoryLimit = 5;
+          strategy.type = "Recreate";
+          selector.matchLabels = componentSelector "registry";
+          template.metadata.annotations = {
+            "checksum/config" = self.registryConfigMap.out.contentHash;
+          }
+          // checksumOf "harbor-secrets" secrets
+          // checksumOf "ca-bundle" ca
+          // valkeyChecksum;
+          template.spec = harborPodDefaults // {
+            securityContext = harborPodDefaults.securityContext // {
+              fsGroupChangePolicy = "OnRootMismatch";
+            };
+            # The registry checks core's and jobservice's basic auth
+            # against a bcrypt htpasswd line. Nix has no bcrypt, and a
+            # SOPS value is not readable at evaluation, so this
+            # container computes the line from registryPassword when the
+            # pod starts. `-i` reads the password from stdin, which keeps
+            # it out of the process arguments.
+            initContainers = [
+              {
+                name = "htpasswd";
+                image = kix.image.ref config.htpasswd.image;
+                imagePullPolicy = config.htpasswd.image.pullPolicy;
+                command = [
+                  "/bin/sh"
+                  "-c"
+                  ''printf '%s' "$REGISTRY_PASSWORD" | htpasswd -niB ${registryUser} > /etc/registry-auth/passwd''
+                ];
+                env = secrets.out.mkEnv { REGISTRY_PASSWORD = "registryPassword"; };
+                resources = {
+                  requests = {
+                    cpu = "10m";
+                    memory = "16Mi";
+                  };
+                  limits = {
+                    cpu = "100m";
+                    memory = "64Mi";
+                  };
+                };
+                securityContext = containerSecurityContext;
+              }
+            ];
+            containers = [
+              {
+                name = "registry";
+                image = kix.image.ref config.registry.image;
+                command = [ "/usr/bin/registry_DO_NOT_USE_GC" ];
+                args = [
+                  "serve"
+                  "/etc/registry/config.yml"
+                ];
+                imagePullPolicy = config.registry.image.pullPolicy;
+                ports = [ (kix.port "registry" 5000) ] ++ metricsContainerPort;
+                livenessProbe = registryProbe // {
+                  initialDelaySeconds = 300;
+                };
+                readinessProbe = registryProbe // {
+                  initialDelaySeconds = 1;
+                };
+                env = registryEnv;
+                resources = config.registry.resources;
+                securityContext = containerSecurityContext;
+              }
+              {
+                name = "registryctl";
+                image = kix.image.ref config.registryctl.image;
+                command = [ "/home/harbor/harbor_registryctl" ];
+                args = [
+                  "-c"
+                  "/etc/registryctl/config.yml"
+                ];
+                imagePullPolicy = config.registryctl.image.pullPolicy;
+                ports = [ (kix.port "registryctl" 8080) ];
+                livenessProbe = registryCtlProbe // {
+                  initialDelaySeconds = 300;
+                };
+                readinessProbe = registryCtlProbe // {
+                  initialDelaySeconds = 1;
+                };
+                env =
+                  registryEnv
+                  ++ secrets.out.mkEnv {
+                    CORE_SECRET = "coreSecret";
+                    JOBSERVICE_SECRET = "jobserviceSecret";
+                  };
+                resources = config.registryctl.resources;
+                securityContext = containerSecurityContext;
+              }
+            ];
           };
-          # The registry checks core's and jobservice's basic auth
-          # against a bcrypt htpasswd line. Nix has no bcrypt, and a
-          # SOPS value is not readable at evaluation, so this
-          # container computes the line from registryPassword when the
-          # pod starts. `-i` reads the password from stdin, which keeps
-          # it out of the process arguments.
-          initContainers = [
-            {
-              name = "htpasswd";
-              image = kix.image.ref config.htpasswd.image;
-              imagePullPolicy = config.htpasswd.image.pullPolicy;
-              command = [
-                "/bin/sh"
-                "-c"
-                ''printf '%s' "$REGISTRY_PASSWORD" | htpasswd -niB ${registryUser} > /etc/registry-auth/passwd''
-              ];
-              env = secrets.out.mkEnv { REGISTRY_PASSWORD = "registryPassword"; };
-              resources = {
-                requests = {
-                  cpu = "10m";
-                  memory = "16Mi";
-                };
-                limits = {
-                  cpu = "100m";
-                  memory = "64Mi";
-                };
-              };
-              securityContext = containerSecurityContext;
-            }
-          ];
-          containers = [
-            {
-              name = "registry";
-              image = kix.image.ref config.registry.image;
-              command = [ "/usr/bin/registry_DO_NOT_USE_GC" ];
-              args = [
-                "serve"
-                "/etc/registry/config.yml"
-              ];
-              imagePullPolicy = config.registry.image.pullPolicy;
-              ports = [ (kix.port "registry" 5000) ] ++ metricsContainerPort;
-              livenessProbe = registryProbe // {
-                initialDelaySeconds = 300;
-              };
-              readinessProbe = registryProbe // {
-                initialDelaySeconds = 1;
-              };
-              env = registryEnv;
-              resources = config.registry.resources;
-              securityContext = containerSecurityContext;
-            }
-            {
-              name = "registryctl";
-              image = kix.image.ref config.registryctl.image;
-              command = [ "/home/harbor/harbor_registryctl" ];
-              args = [
-                "-c"
-                "/etc/registryctl/config.yml"
-              ];
-              imagePullPolicy = config.registryctl.image.pullPolicy;
-              ports = [ (kix.port "registryctl" 8080) ];
-              livenessProbe = registryCtlProbe // {
-                initialDelaySeconds = 300;
-              };
-              readinessProbe = registryCtlProbe // {
-                initialDelaySeconds = 1;
-              };
-              env =
-                registryEnv
-                ++ secrets.out.mkEnv {
-                  CORE_SECRET = "coreSecret";
-                  JOBSERVICE_SECRET = "jobserviceSecret";
-                };
-              resources = config.registryctl.resources;
-              securityContext = containerSecurityContext;
-            }
-          ];
         };
-      };
-    }
-    # Each call appends to the named containers' volumeMounts, so the order
-    # of the calls is the order of the mounts in each container. Changing
-    # it restarts the pod.
-    |> kix.withMountsOn [ "registry" "registryctl" ] [ configMount ]
-    |> kix.withMountsOn "registryctl" [ ctlConfigMount ]
-    |> kix.withMountsOn [ "htpasswd" "registry" ] [ authMount ]
-    |> kix.withMountsOn [ "registry" "registryctl" ] [ dataMount ]
-    |> kix.withMountsOn "registry" [
-      (tmpMount "registry-tmp")
-      caBundleMount
-    ]
-    |> kix.withMountsOn "registryctl" [
-      caBundleMount
-      (tmpMount "registryctl-tmp")
-    ]
-    |> reloadOn [
-      secrets
-      ca
-      valkeySecret
-    ]
-    |> scope.mkDeployment;
+      }
+      [
+        # Each call appends to the named containers' volumeMounts, so the order
+        # of the calls is the order of the mounts in each container. Changing
+        # it restarts the pod.
+        (kix.withMountsOn [ "registry" "registryctl" ] [ configMount ])
+        (kix.withMountsOn "registryctl" [ ctlConfigMount ])
+        (kix.withMountsOn [ "htpasswd" "registry" ] [ authMount ])
+        (kix.withMountsOn [ "registry" "registryctl" ] [ dataMount ])
+        (kix.withMountsOn "registry" [
+          (tmpMount "registry-tmp")
+          caBundleMount
+        ])
+        (kix.withMountsOn "registryctl" [
+          caBundleMount
+          (tmpMount "registryctl-tmp")
+        ])
+        (reloadOn [
+          secrets
+          ca
+          valkeySecret
+        ])
+        scope.mkDeployment
+      ];
 }

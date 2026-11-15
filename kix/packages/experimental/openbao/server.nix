@@ -370,135 +370,138 @@ in
       null;
 
   statefulSet =
-    {
-      inherit name;
-      spec = {
-        inherit replicas;
-        headlessService = self.headlessService;
-        # Pod 0 initializes the cluster and each later pod joins the
-        # pods before it, so they start one at a time.
-        podManagementPolicy = "OrderedReady";
-        updateStrategy.type = "RollingUpdate";
-        selector.matchLabels = labelsFor "server";
-        template = {
-          metadata.annotations = {
-            "checksum/config" = self.configMap.out.contentHash;
-          }
-          # A secret-ref has no contentHash. The key is read at start.
-          // lib.optionalAttrs (unseal != null && unseal.out ? contentHash) {
-            "checksum/unsealKey" = unseal.out.contentHash;
-          };
-          spec = {
-            serviceAccount = self.serviceAccount;
-            # Long enough for the active pod to hand over leadership.
-            terminationGracePeriodSeconds = 30;
-            securityContext = {
-              runAsNonRoot = true;
-              runAsUser = uid;
-              runAsGroup = gid;
-              fsGroup = gid;
-              fsGroupChangePolicy = "OnRootMismatch";
-              seccompProfile.type = "RuntimeDefault";
-            };
-            containers = [
-              {
-                name = "openbao";
-                image = kix.image.ref config.image;
-                imagePullPolicy = config.image.pullPolicy;
-                command = [
-                  "/bin/sh"
-                  "${dirs.config}/start.sh"
-                ];
-                inherit env;
-                ports = [
-                  (kix.port "api" ports.api)
-                  (kix.port "cluster" ports.cluster)
-                ]
-                ++ lib.optional metricsOn (kix.port "metrics" ports.metrics);
-                # 200 for the active pod and standbys; 429, 473, 501
-                # (not initialized), and 503 (sealed) fail.
-                readinessProbe = healthProbe "standbyok=true&perfstandbyok=true" // {
-                  periodSeconds = 5;
-                  timeoutSeconds = 3;
-                  failureThreshold = 2;
-                };
-                # Succeeds while the process answers, sealed or not, so
-                # a sealed pod waiting for its key or for a person is not
-                # restarted.
-                livenessProbe = healthProbe "standbyok=true&perfstandbyok=true&sealedcode=204&uninitcode=204" // {
-                  initialDelaySeconds = 10;
-                  periodSeconds = 10;
-                  timeoutSeconds = 5;
-                  failureThreshold = 6;
-                };
-                resources = config.resources;
-                securityContext = containerSecurity;
-                volumeMounts = [
-                  {
-                    name = "data";
-                    mountPath = dirs.data;
-                  }
-                  {
-                    name = "tls";
-                    mountPath = dirs.tls;
-                    readOnly = true;
-                  }
-                ];
-              }
-            ];
-            volumes = [
-              # A directory mount, not subPath, so a renewed
-              # certificate reaches the pod and tls_auto_reload.
-              {
-                name = "tls";
-                secret.secretName = c.tlsSecret self;
-              }
-            ];
-          };
-        };
-        volumeClaimTemplates = [
-          {
-            metadata.name = "data";
-            spec = {
-              accessModes = [ "ReadWriteOnce" ];
-              resources.requests.storage = toString config.storage.size;
+    lib.pipe
+      {
+        inherit name;
+        spec = {
+          inherit replicas;
+          headlessService = self.headlessService;
+          # Pod 0 initializes the cluster and each later pod joins the
+          # pods before it, so they start one at a time.
+          podManagementPolicy = "OrderedReady";
+          updateStrategy.type = "RollingUpdate";
+          selector.matchLabels = labelsFor "server";
+          template = {
+            metadata.annotations = {
+              "checksum/config" = self.configMap.out.contentHash;
             }
-            // lib.optionalAttrs (storageClassName != null) { inherit storageClassName; };
-          }
-        ];
-      };
-    }
-    |> kix.withMounts (
-      [
-        (kix.mount.configMap self.configMap {
-          name = "config";
-          mountPath = dirs.config;
-          readOnly = true;
-        })
-        (kix.mount.emptyDir {
-          name = "tmp";
-          mountPath = "/tmp";
-        })
-      ]
-      ++ lib.optionals selfInit [
-        (kix.mount.configMap self.initConfigMap {
-          name = "init";
-          mountPath = dirs.init;
-          readOnly = true;
-        })
-        (kix.mount.secret unseal {
-          name = "unseal";
-          mountPath = dirs.unseal;
-          items = [
+            # A secret-ref has no contentHash. The key is read at start.
+            // lib.optionalAttrs (unseal != null && unseal.out ? contentHash) {
+              "checksum/unsealKey" = unseal.out.contentHash;
+            };
+            spec = {
+              serviceAccount = self.serviceAccount;
+              # Long enough for the active pod to hand over leadership.
+              terminationGracePeriodSeconds = 30;
+              securityContext = {
+                runAsNonRoot = true;
+                runAsUser = uid;
+                runAsGroup = gid;
+                fsGroup = gid;
+                fsGroupChangePolicy = "OnRootMismatch";
+                seccompProfile.type = "RuntimeDefault";
+              };
+              containers = [
+                {
+                  name = "openbao";
+                  image = kix.image.ref config.image;
+                  imagePullPolicy = config.image.pullPolicy;
+                  command = [
+                    "/bin/sh"
+                    "${dirs.config}/start.sh"
+                  ];
+                  inherit env;
+                  ports = [
+                    (kix.port "api" ports.api)
+                    (kix.port "cluster" ports.cluster)
+                  ]
+                  ++ lib.optional metricsOn (kix.port "metrics" ports.metrics);
+                  # 200 for the active pod and standbys; 429, 473, 501
+                  # (not initialized), and 503 (sealed) fail.
+                  readinessProbe = healthProbe "standbyok=true&perfstandbyok=true" // {
+                    periodSeconds = 5;
+                    timeoutSeconds = 3;
+                    failureThreshold = 2;
+                  };
+                  # Succeeds while the process answers, sealed or not, so
+                  # a sealed pod waiting for its key or for a person is not
+                  # restarted.
+                  livenessProbe = healthProbe "standbyok=true&perfstandbyok=true&sealedcode=204&uninitcode=204" // {
+                    initialDelaySeconds = 10;
+                    periodSeconds = 10;
+                    timeoutSeconds = 5;
+                    failureThreshold = 6;
+                  };
+                  resources = config.resources;
+                  securityContext = containerSecurity;
+                  volumeMounts = [
+                    {
+                      name = "data";
+                      mountPath = dirs.data;
+                    }
+                    {
+                      name = "tls";
+                      mountPath = dirs.tls;
+                      readOnly = true;
+                    }
+                  ];
+                }
+              ];
+              volumes = [
+                # A directory mount, not subPath, so a renewed
+                # certificate reaches the pod and tls_auto_reload.
+                {
+                  name = "tls";
+                  secret.secretName = c.tlsSecret self;
+                }
+              ];
+            };
+          };
+          volumeClaimTemplates = [
             {
-              key = "key";
-              path = "key";
+              metadata.name = "data";
+              spec = {
+                accessModes = [ "ReadWriteOnce" ];
+                resources.requests.storage = toString config.storage.size;
+              }
+              // lib.optionalAttrs (storageClassName != null) { inherit storageClassName; };
             }
           ];
-        })
-      ]
-    )
-    |> scope.mkStatefulSet;
+        };
+      }
+      [
+        (kix.withMounts (
+          [
+            (kix.mount.configMap self.configMap {
+              name = "config";
+              mountPath = dirs.config;
+              readOnly = true;
+            })
+            (kix.mount.emptyDir {
+              name = "tmp";
+              mountPath = "/tmp";
+            })
+          ]
+          ++ lib.optionals selfInit [
+            (kix.mount.configMap self.initConfigMap {
+              name = "init";
+              mountPath = dirs.init;
+              readOnly = true;
+            })
+            (kix.mount.secret unseal {
+              name = "unseal";
+              mountPath = dirs.unseal;
+              items = [
+                {
+                  key = "key";
+                  path = "key";
+                }
+              ];
+            })
+          ]
+        ))
+        scope.mkStatefulSet
+      ];
 
   # The config reads this Service's `out.fqdn`, so it selects through
   # `rawSelector`; `out.selector` would recurse. Unready addresses are
@@ -529,9 +532,8 @@ in
     };
   };
 
-  service =
-    self.statefulSet
-    |> kix.service.fromWorkload {
+  service = lib.pipe self.statefulSet [
+    (kix.service.fromWorkload {
       inherit name;
       labels."app.kubernetes.io/component" = "server";
       ports = [
@@ -541,28 +543,30 @@ in
           targetPort = "api";
         }
       ];
-    }
-    |> scope.mkResource;
+    })
+    scope.mkResource
+  ];
 
   # Sealed pods fail the readiness probe, and their metrics are what
   # OpenBaoSealed reads, so the Service publishes unready addresses.
   metricsService =
     if metricsOn then
-      self.statefulSet
-      |> kix.service.fromWorkload {
-        name = metricsServiceName;
-        labels."app.kubernetes.io/component" = "metrics";
-        spec.publishNotReadyAddresses = true;
-        ports = [
-          {
-            name = "metrics";
-            port = ports.metrics;
-            targetPort = "metrics";
-            protocol = "TCP";
-          }
-        ];
-      }
-      |> scope.mkResource
+      lib.pipe self.statefulSet [
+        (kix.service.fromWorkload {
+          name = metricsServiceName;
+          labels."app.kubernetes.io/component" = "metrics";
+          spec.publishNotReadyAddresses = true;
+          ports = [
+            {
+              name = "metrics";
+              port = ports.metrics;
+              targetPort = "metrics";
+              protocol = "TCP";
+            }
+          ];
+        })
+        scope.mkResource
+      ]
     else
       null;
 }

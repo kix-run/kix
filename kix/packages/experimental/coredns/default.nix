@@ -441,7 +441,11 @@ in
           }
         ];
         roles.${scope.instanceName} = grant [
-          (
+          (allow
+            [
+              "list"
+              "watch"
+            ]
             [
               core.endpoints
               core.services
@@ -449,117 +453,115 @@ in
               core.namespaces
               discovery.endpointslices
             ]
-            |> allow [
-              "list"
-              "watch"
-            ]
           )
         ];
       }
       // {
         deployment =
-          {
-            name = scope.instanceName;
-            spec = {
-              replicas = config.replicas;
-              selector.matchLabels = scope.selectorLabels;
-              template = {
-                metadata = {
-                  # The network-policy enforcer's DNS egress rule and
-                  # NodeLocal DNSCache's upstream Service select
-                  # `k8s-app: kube-dns`.
-                  labels = scope.selectorLabels // {
-                    "k8s-app" = "kube-dns";
+          lib.pipe
+            {
+              name = scope.instanceName;
+              spec = {
+                replicas = config.replicas;
+                selector.matchLabels = scope.selectorLabels;
+                template = {
+                  metadata = {
+                    # The network-policy enforcer's DNS egress rule and
+                    # NodeLocal DNSCache's upstream Service select
+                    # `k8s-app: kube-dns`.
+                    labels = scope.selectorLabels // {
+                      "k8s-app" = "kube-dns";
+                    };
+                    # A Corefile change rolls the pods, so the deploy waits for
+                    # CoreDNS to load it. `reload` alone would keep the old
+                    # config running if the new one fails to parse.
+                    annotations."checksum/corefile" = self.configmap.out.contentHash;
                   };
-                  # A Corefile change rolls the pods, so the deploy waits for
-                  # CoreDNS to load it. `reload` alone would keep the old
-                  # config running if the new one fails to parse.
-                  annotations."checksum/corefile" = self.configmap.out.contentHash;
-                };
-                spec = {
-                  serviceAccount = self.serviceAccount;
-                  priorityClassName = "system-cluster-critical";
-                  # CoreDNS resolves upstream names through the node's
-                  # resolv.conf, not through itself.
-                  dnsPolicy = "Default";
-                  # kubeadm's tolerations: cluster DNS runs on nodes tainted
-                  # for add-ons only and on control-plane nodes.
-                  tolerations = [
-                    {
-                      key = "CriticalAddonsOnly";
-                      operator = "Exists";
-                    }
-                    {
-                      key = "node-role.kubernetes.io/control-plane";
-                      effect = "NoSchedule";
-                    }
-                  ];
-                  securityContext.seccompProfile.type = "RuntimeDefault";
-                  containers = [
-                    (
+                  spec = {
+                    serviceAccount = self.serviceAccount;
+                    priorityClassName = "system-cluster-critical";
+                    # CoreDNS resolves upstream names through the node's
+                    # resolv.conf, not through itself.
+                    dnsPolicy = "Default";
+                    # kubeadm's tolerations: cluster DNS runs on nodes tainted
+                    # for add-ons only and on control-plane nodes.
+                    tolerations = [
                       {
-                        name = "coredns";
-                        image = kix.image.ref config.image;
-                        imagePullPolicy = config.image.pullPolicy;
-                        args = [
-                          "-conf"
-                          "/etc/coredns/Corefile"
-                        ];
-                        inherit (config) resources;
-                        ports = dnsPorts ++ metricsPorts;
-                        livenessProbe = {
-                          httpGet = {
-                            path = "/health";
-                            port = facts.healthPort;
-                          };
-                          initialDelaySeconds = 60;
-                          periodSeconds = 10;
-                          timeoutSeconds = 5;
-                          failureThreshold = 5;
-                        };
-                        readinessProbe = {
-                          httpGet = {
-                            path = "/ready";
-                            port = facts.readyPort;
-                          };
-                          periodSeconds = 10;
-                        };
-                        securityContext = {
-                          allowPrivilegeEscalation = false;
-                          # The image's user is `nonroot:nonroot`, a name. The
-                          # kubelet refuses runAsNonRoot unless it can see a
-                          # numeric user, so the image's uid and gid are
-                          # stated here.
-                          runAsNonRoot = true;
-                          runAsUser = 65532;
-                          runAsGroup = 65532;
-                          capabilities = {
-                            add = [ "NET_BIND_SERVICE" ];
-                            drop = [ "ALL" ];
-                          };
-                          readOnlyRootFilesystem = true;
-                        };
+                        key = "CriticalAddonsOnly";
+                        operator = "Exists";
                       }
-                      // lib.optionalAttrs (envVars != [ ]) { env = envVars; }
-                    )
-                  ];
+                      {
+                        key = "node-role.kubernetes.io/control-plane";
+                        effect = "NoSchedule";
+                      }
+                    ];
+                    securityContext.seccompProfile.type = "RuntimeDefault";
+                    containers = [
+                      (
+                        {
+                          name = "coredns";
+                          image = kix.image.ref config.image;
+                          imagePullPolicy = config.image.pullPolicy;
+                          args = [
+                            "-conf"
+                            "/etc/coredns/Corefile"
+                          ];
+                          inherit (config) resources;
+                          ports = dnsPorts ++ metricsPorts;
+                          livenessProbe = {
+                            httpGet = {
+                              path = "/health";
+                              port = facts.healthPort;
+                            };
+                            initialDelaySeconds = 60;
+                            periodSeconds = 10;
+                            timeoutSeconds = 5;
+                            failureThreshold = 5;
+                          };
+                          readinessProbe = {
+                            httpGet = {
+                              path = "/ready";
+                              port = facts.readyPort;
+                            };
+                            periodSeconds = 10;
+                          };
+                          securityContext = {
+                            allowPrivilegeEscalation = false;
+                            # The image's user is `nonroot:nonroot`, a name. The
+                            # kubelet refuses runAsNonRoot unless it can see a
+                            # numeric user, so the image's uid and gid are
+                            # stated here.
+                            runAsNonRoot = true;
+                            runAsUser = 65532;
+                            runAsGroup = 65532;
+                            capabilities = {
+                              add = [ "NET_BIND_SERVICE" ];
+                              drop = [ "ALL" ];
+                            };
+                            readOnlyRootFilesystem = true;
+                          };
+                        }
+                        // lib.optionalAttrs (envVars != [ ]) { env = envVars; }
+                      )
+                    ];
+                  };
                 };
               };
-            };
-          }
-          # The whole ConfigMap, not a subPath, so a file-reading plugin finds
-          # the keys an overlay adds beside the Corefile.
-          |> kix.withMounts [
-            (kix.mount.configMap self.configmap {
-              mountPath = "/etc/coredns";
-              readOnly = true;
-            })
-          ]
-          |> scope.mkDeployment;
+            }
+            [
+              # The whole ConfigMap, not a subPath, so a file-reading plugin finds
+              # the keys an overlay adds beside the Corefile.
+              (kix.withMounts [
+                (kix.mount.configMap self.configmap {
+                  mountPath = "/etc/coredns";
+                  readOnly = true;
+                })
+              ])
+              scope.mkDeployment
+            ];
 
-        service =
-          self.deployment
-          |> kix.service.fromWorkload {
+        service = lib.pipe self.deployment [
+          (kix.service.fromWorkload {
             name = serviceName;
             ports = builtins.filter (p: (p.name or "") != "metrics" || scrape) (
               kix.service.extractPorts self.deployment
@@ -573,8 +575,9 @@ in
               "kubernetes.io/name" = "CoreDNS";
             };
             spec.clusterIP = config.clusterIP;
-          }
-          |> scope.mkResource;
+          })
+          scope.mkResource
+        ];
 
         root = {
           resource = self.service;

@@ -179,174 +179,177 @@ in
       in
       {
         deployment =
-          {
-            name = name;
-            spec = {
-              replicas = 1;
-              strategy.type = "Recreate";
-              selector.matchLabels = scope.selectorLabels;
-              # A changed database password restarts the pods, which read it
-              # once at start. A Secret Kix does not build has no hash.
-              template.metadata.annotations =
-                lib.optionalAttrs (database.out.credentials.out ? contentHash) {
-                  "checksum/database" = database.out.credentials.out.contentHash;
-                }
-                //
-                  lib.optionalAttrs
-                    (relay != null && relay.credentials != null && relay.credentials.out ? contentHash)
-                    {
-                      "checksum/smtp" = relay.credentials.out.contentHash;
-                    };
-              template.spec = {
-                # Kubernetes default: Rocket's own shutdown grace is a few
-                # seconds.
-                terminationGracePeriodSeconds = 30;
-                # The image defines no user. uid 1001 and the fsGroup follow
-                # the guerzon/vaultwarden chart's suggested security context;
-                # fsGroup makes the data volume writable on provisioners that
-                # honour it, and OnRootMismatch skips the recursive relabel
-                # once the volume root already has that group.
-                securityContext = {
-                  runAsNonRoot = true;
-                  runAsUser = 1001;
-                  runAsGroup = 1001;
-                  fsGroup = 1001;
-                  fsGroupChangePolicy = "OnRootMismatch";
-                };
-                ${if config.initChownData then "initContainers" else null} = lib.singleton (
-                  if nonRootFailsBuild clusterConfig then
-                    scope.fail {
-                      package = "vaultwarden";
-                      option = "initChownData";
-                      message = chownOverrideHint;
-                    }
-                  else
-                    {
-                      name = "init-chown-data";
-                      image = kix.image.ref config.init.image;
-                      command = [
-                        "chown"
-                        "-R"
-                        "1001:1001"
-                        dataMount.mountPath
-                      ];
-                      securityContext = {
-                        runAsNonRoot = false;
-                        runAsUser = 0;
-                        allowPrivilegeEscalation = false;
-                        readOnlyRootFilesystem = true;
-                        capabilities = {
-                          add = [ "CHOWN" ];
-                          drop = [ "ALL" ];
+          lib.pipe
+            {
+              name = name;
+              spec = {
+                replicas = 1;
+                strategy.type = "Recreate";
+                selector.matchLabels = scope.selectorLabels;
+                # A changed database password restarts the pods, which read it
+                # once at start. A Secret Kix does not build has no hash.
+                template.metadata.annotations =
+                  lib.optionalAttrs (database.out.credentials.out ? contentHash) {
+                    "checksum/database" = database.out.credentials.out.contentHash;
+                  }
+                  //
+                    lib.optionalAttrs
+                      (relay != null && relay.credentials != null && relay.credentials.out ? contentHash)
+                      {
+                        "checksum/smtp" = relay.credentials.out.contentHash;
+                      };
+                template.spec = {
+                  # Kubernetes default: Rocket's own shutdown grace is a few
+                  # seconds.
+                  terminationGracePeriodSeconds = 30;
+                  # The image defines no user. uid 1001 and the fsGroup follow
+                  # the guerzon/vaultwarden chart's suggested security context;
+                  # fsGroup makes the data volume writable on provisioners that
+                  # honour it, and OnRootMismatch skips the recursive relabel
+                  # once the volume root already has that group.
+                  securityContext = {
+                    runAsNonRoot = true;
+                    runAsUser = 1001;
+                    runAsGroup = 1001;
+                    fsGroup = 1001;
+                    fsGroupChangePolicy = "OnRootMismatch";
+                  };
+                  ${if config.initChownData then "initContainers" else null} = lib.singleton (
+                    if nonRootFailsBuild clusterConfig then
+                      scope.fail {
+                        package = "vaultwarden";
+                        option = "initChownData";
+                        message = chownOverrideHint;
+                      }
+                    else
+                      {
+                        name = "init-chown-data";
+                        image = kix.image.ref config.init.image;
+                        command = [
+                          "chown"
+                          "-R"
+                          "1001:1001"
+                          dataMount.mountPath
+                        ];
+                        securityContext = {
+                          runAsNonRoot = false;
+                          runAsUser = 0;
+                          allowPrivilegeEscalation = false;
+                          readOnlyRootFilesystem = true;
+                          capabilities = {
+                            add = [ "CHOWN" ];
+                            drop = [ "ALL" ];
+                          };
                         };
-                      };
-                    }
-                );
-                containers = [
-                  (
-                    {
-                      name = "vaultwarden";
-                      image = kix.image.ref config.image;
-                      ports = [ (kix.port "http" 8080) ];
-                      env =
-                        (database.out.credentials.out.mkEnv {
-                          DB_USERNAME = "username";
-                          DB_PASSWORD = "password";
-                        })
-                        ++ kix.mkEnvVars (
-                          kix.mergeEnv {
-                            who = "vaultwarden ${scope.namespaceName}/${name}";
-                            defaults = {
-                              SIGNUPS_ALLOWED = "false";
-                              INVITATIONS_ALLOWED = "true";
-                              SHOW_PASSWORD_HINT = "false";
-                            };
-                            owned = [
-                              {
-                                vars.DATABASE_URL = databaseUrl;
-                                names = [
-                                  "DB_USERNAME"
-                                  "DB_PASSWORD"
-                                ];
-                                from = "the database dependency";
-                                fix = "Wire another database through deps.database instead.";
-                              }
-                              {
-                                vars.DOMAIN = if config.domain != null then config.domain else self.exposure.url;
-                                from = "the `domain` option or the instance's route";
-                                fix = "Set `domain` instead.";
-                              }
-                              {
-                                vars.DATA_FOLDER = dataMount.mountPath;
-                                from = "the storage dependency, which the package mounts at ${dataMount.mountPath}";
-                                fix = "Remove it.";
-                              }
-                            ]
-                            ++ lib.optional (relay != null) {
-                              vars = {
-                                SMTP_HOST = relay.host;
-                                SMTP_PORT = relay.port;
-                                SMTP_SECURITY =
-                                  {
-                                    starttls = "starttls";
-                                    implicit = "force_tls";
-                                    none = "off";
-                                  }
-                                  .${relay.tls};
-                                SMTP_FROM = relay.from;
-                              }
-                              // lib.optionalAttrs (relay.credentials != null) {
-                                SMTP_USERNAME = relay.credentials.out.keyRef "username";
-                                SMTP_PASSWORD = relay.credentials.out.keyRef "password";
+                      }
+                  );
+                  containers = [
+                    (
+                      {
+                        name = "vaultwarden";
+                        image = kix.image.ref config.image;
+                        ports = [ (kix.port "http" 8080) ];
+                        env =
+                          (database.out.credentials.out.mkEnv {
+                            DB_USERNAME = "username";
+                            DB_PASSWORD = "password";
+                          })
+                          ++ kix.mkEnvVars (
+                            kix.mergeEnv {
+                              who = "vaultwarden ${scope.namespaceName}/${name}";
+                              defaults = {
+                                SIGNUPS_ALLOWED = "false";
+                                INVITATIONS_ALLOWED = "true";
+                                SHOW_PASSWORD_HINT = "false";
                               };
-                              names = [
-                                "SMTP_USERNAME"
-                                "SMTP_PASSWORD"
-                                "SMTP_USERNAME_FILE"
-                                "SMTP_PASSWORD_FILE"
-                                "USE_SENDMAIL"
-                              ];
-                              from = "the smtp dependency";
-                              fix = "Wire another SMTP instance through deps.smtp, or set mail.from.";
-                            }
-                            ++ [
-                              {
+                              owned = [
+                                {
+                                  vars.DATABASE_URL = databaseUrl;
+                                  names = [
+                                    "DB_USERNAME"
+                                    "DB_PASSWORD"
+                                  ];
+                                  from = "the database dependency";
+                                  fix = "Wire another database through deps.database instead.";
+                                }
+                                {
+                                  vars.DOMAIN = if config.domain != null then config.domain else self.exposure.url;
+                                  from = "the `domain` option or the instance's route";
+                                  fix = "Set `domain` instead.";
+                                }
+                                {
+                                  vars.DATA_FOLDER = dataMount.mountPath;
+                                  from = "the storage dependency, which the package mounts at ${dataMount.mountPath}";
+                                  fix = "Remove it.";
+                                }
+                              ]
+                              ++ lib.optional (relay != null) {
                                 vars = {
-                                  ROCKET_ADDRESS = "0.0.0.0";
-                                  ROCKET_PORT = "8080";
+                                  SMTP_HOST = relay.host;
+                                  SMTP_PORT = relay.port;
+                                  SMTP_SECURITY =
+                                    {
+                                      starttls = "starttls";
+                                      implicit = "force_tls";
+                                      none = "off";
+                                    }
+                                    .${relay.tls};
+                                  SMTP_FROM = relay.from;
+                                }
+                                // lib.optionalAttrs (relay.credentials != null) {
+                                  SMTP_USERNAME = relay.credentials.out.keyRef "username";
+                                  SMTP_PASSWORD = relay.credentials.out.keyRef "password";
                                 };
-                                from = "the package, whose probes and Service use port 8080";
-                                fix = "Remove it.";
+                                names = [
+                                  "SMTP_USERNAME"
+                                  "SMTP_PASSWORD"
+                                  "SMTP_USERNAME_FILE"
+                                  "SMTP_PASSWORD_FILE"
+                                  "USE_SENDMAIL"
+                                ];
+                                from = "the smtp dependency";
+                                fix = "Wire another SMTP instance through deps.smtp, or set mail.from.";
                               }
-                            ];
-                          } config.env
-                        );
-                      livenessProbe = healthCheck // {
-                        initialDelaySeconds = 5;
-                        failureThreshold = 10;
-                      };
-                      readinessProbe = healthCheck // {
-                        initialDelaySeconds = 5;
-                        failureThreshold = 3;
-                      };
-                      resources = config.resources;
-                      securityContext = {
-                        allowPrivilegeEscalation = false;
-                        readOnlyRootFilesystem = true;
-                      };
-                    }
-                    // lib.optionalAttrs (config.image.pullPolicy != null) {
-                      imagePullPolicy = config.image.pullPolicy;
-                    }
-                  )
-                ];
+                              ++ [
+                                {
+                                  vars = {
+                                    ROCKET_ADDRESS = "0.0.0.0";
+                                    ROCKET_PORT = "8080";
+                                  };
+                                  from = "the package, whose probes and Service use port 8080";
+                                  fix = "Remove it.";
+                                }
+                              ];
+                            } config.env
+                          );
+                        livenessProbe = healthCheck // {
+                          initialDelaySeconds = 5;
+                          failureThreshold = 10;
+                        };
+                        readinessProbe = healthCheck // {
+                          initialDelaySeconds = 5;
+                          failureThreshold = 3;
+                        };
+                        resources = config.resources;
+                        securityContext = {
+                          allowPrivilegeEscalation = false;
+                          readOnlyRootFilesystem = true;
+                        };
+                      }
+                      // lib.optionalAttrs (config.image.pullPolicy != null) {
+                        imagePullPolicy = config.image.pullPolicy;
+                      }
+                    )
+                  ];
+                };
               };
-            };
-          }
-          |> kix.withMountsOn ([ "vaultwarden" ] ++ lib.optional config.initChownData "init-chown-data") [
-            dataMount
-          ]
-          |> scope.mkDeployment;
+            }
+            [
+              (kix.withMountsOn ([ "vaultwarden" ] ++ lib.optional config.initChownData "init-chown-data") [
+                dataMount
+              ])
+              scope.mkDeployment
+            ];
 
         mailEgress = kix.contracts.smtp.helpers.egressPolicy {
           inherit scope;
@@ -355,7 +358,10 @@ in
           selector = self.deployment.out.selector;
         };
 
-        service = self.deployment |> kix.service.fromWorkload { inherit name; } |> scope.mkResource;
+        service = lib.pipe self.deployment [
+          (kix.service.fromWorkload { inherit name; })
+          scope.mkResource
+        ];
 
         root = {
           resource = self.service;

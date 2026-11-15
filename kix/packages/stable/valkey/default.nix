@@ -487,89 +487,94 @@ in
         };
 
         statefulSet =
-          {
-            inherit name;
-            spec = {
-              headlessService = self.headlessService;
-              replicas = if sentinel then config.replicas else 1;
-              # A starting pod asks the Sentinels of the pods already running
-              # for the primary. Parallel would start every pod before any
-              # Sentinel answers, and each would make itself the primary.
-              podManagementPolicy = "OrderedReady";
-              updateStrategy.type = "RollingUpdate";
-              selector.matchLabels = scope.selectorLabels;
-              template = {
-                metadata.annotations = {
-                  "checksum/configMap" = self.configMap.out.contentHash;
-                }
-                # A secret-ref has no contentHash, so a rotation of that
-                # Secret does not roll the pods.
-                // lib.optionalAttrs (password.out ? contentHash) {
-                  "checksum/valkeyPassword" = password.out.contentHash;
-                };
+          lib.pipe
+            (
+              {
+                inherit name;
                 spec = {
-                  automountServiceAccountToken = false;
-                  # The scripts read only the variables the package sets;
-                  # service links would add several for every Service in the
-                  # namespace.
-                  enableServiceLinks = false;
-                  terminationGracePeriodSeconds = 30;
-                  # The image's `valkey` user.
-                  securityContext = {
-                    runAsNonRoot = true;
-                    runAsUser = 999;
-                    runAsGroup = 999;
-                    fsGroup = 999;
-                    fsGroupChangePolicy = "OnRootMismatch";
-                    seccompProfile.type = "RuntimeDefault";
+                  headlessService = self.headlessService;
+                  replicas = if sentinel then config.replicas else 1;
+                  # A starting pod asks the Sentinels of the pods already running
+                  # for the primary. Parallel would start every pod before any
+                  # Sentinel answers, and each would make itself the primary.
+                  podManagementPolicy = "OrderedReady";
+                  updateStrategy.type = "RollingUpdate";
+                  selector.matchLabels = scope.selectorLabels;
+                  template = {
+                    metadata.annotations = {
+                      "checksum/configMap" = self.configMap.out.contentHash;
+                    }
+                    # A secret-ref has no contentHash, so a rotation of that
+                    # Secret does not roll the pods.
+                    // lib.optionalAttrs (password.out ? contentHash) {
+                      "checksum/valkeyPassword" = password.out.contentHash;
+                    };
+                    spec = {
+                      automountServiceAccountToken = false;
+                      # The scripts read only the variables the package sets;
+                      # service links would add several for every Service in the
+                      # namespace.
+                      enableServiceLinks = false;
+                      terminationGracePeriodSeconds = 30;
+                      # The image's `valkey` user.
+                      securityContext = {
+                        runAsNonRoot = true;
+                        runAsUser = 999;
+                        runAsGroup = 999;
+                        fsGroup = 999;
+                        fsGroupChangePolicy = "OnRootMismatch";
+                        seccompProfile.type = "RuntimeDefault";
+                      };
+                      containers = [
+                        valkeyContainer
+                      ]
+                      ++ lib.optional sentinel sentinelContainer
+                      ++ lib.optional scrape metricsContainer;
+                    };
                   };
-                  containers = [
-                    valkeyContainer
-                  ]
-                  ++ lib.optional sentinel sentinelContainer
-                  ++ lib.optional scrape metricsContainer;
+                  volumeClaimTemplates = [
+                    {
+                      metadata.name = "data";
+                      spec = {
+                        accessModes = [ "ReadWriteOnce" ];
+                        resources.requests.storage = toString config.storage.size;
+                      }
+                      // lib.optionalAttrs (storageClassName != null) { inherit storageClassName; };
+                    }
+                  ];
                 };
-              };
-              volumeClaimTemplates = [
-                {
-                  metadata.name = "data";
-                  spec = {
-                    accessModes = [ "ReadWriteOnce" ];
-                    resources.requests.storage = toString config.storage.size;
-                  }
-                  // lib.optionalAttrs (storageClassName != null) { inherit storageClassName; };
-                }
-              ];
-            };
-          }
-          # Standalone Valkey never runs a second pod.
-          // lib.optionalAttrs (!sentinel) { availability.max = "none"; }
-          |> kix.withMountsOn "valkey" [
-            configMount
-            # The runtime valkey.conf, which holds the password.
-            (kix.mount.emptyDir {
-              name = "run";
-              mountPath = "/run/valkey";
-              medium = "Memory";
-              sizeLimit = "1Mi";
-            })
-          ]
-          |> (
-            if sentinel then
-              kix.withMountsOn "sentinel" [
-                # sentinel.conf, which Sentinel rewrites as its state changes
-                # and which holds the password.
+              }
+              # Standalone Valkey never runs a second pod.
+              // lib.optionalAttrs (!sentinel) { availability.max = "none"; }
+            )
+            [
+              (kix.withMountsOn "valkey" [
+                configMount
+                # The runtime valkey.conf, which holds the password.
                 (kix.mount.emptyDir {
-                  name = "sentinel";
-                  mountPath = "/sentinel";
+                  name = "run";
+                  mountPath = "/run/valkey";
                   medium = "Memory";
                   sizeLimit = "1Mi";
                 })
-              ]
-            else
-              lib.id
-          )
-          |> scope.mkStatefulSet;
+              ])
+              (
+                if sentinel then
+                  kix.withMountsOn "sentinel" [
+                    # sentinel.conf, which Sentinel rewrites as its state changes
+                    # and which holds the password.
+                    (kix.mount.emptyDir {
+                      name = "sentinel";
+                      mountPath = "/sentinel";
+                      medium = "Memory";
+                      sizeLimit = "1Mi";
+                    })
+                  ]
+                else
+                  lib.id
+              )
+              scope.mkStatefulSet
+            ];
 
         # With Sentinel the start scripts read this Service's `out.fqdn`, so
         # it is applied before the StatefulSet and selects through
@@ -590,43 +595,45 @@ in
               };
             }
           else
-            self.statefulSet
-            |> kix.service.fromWorkload {
-              name = "${name}-headless";
-              labels."app.kubernetes.io/component" = "headless";
-              spec.clusterIP = "None";
-              ports = servicePorts;
-            }
-            |> scope.mkResource;
+            lib.pipe self.statefulSet [
+              (kix.service.fromWorkload {
+                name = "${name}-headless";
+                labels."app.kubernetes.io/component" = "headless";
+                spec.clusterIP = "None";
+                ports = servicePorts;
+              })
+              scope.mkResource
+            ];
 
         # Every pod, replicas included, so a writer under Sentinel asks
         # Sentinel for the primary.
-        mainService =
-          self.statefulSet
-          |> kix.service.fromWorkload {
+        mainService = lib.pipe self.statefulSet [
+          (kix.service.fromWorkload {
             inherit name;
             labels."app.kubernetes.io/component" = "server";
             ports = servicePorts;
             outputs.port = toString ports.valkey;
-          }
-          |> scope.mkResource;
+          })
+          scope.mkResource
+        ];
 
         metricsService =
           if scrape then
-            self.statefulSet
-            |> kix.service.fromWorkload {
-              name = "${name}-metrics";
-              labels."app.kubernetes.io/component" = "metrics";
-              ports = [
-                {
-                  name = "metrics";
-                  port = ports.metrics;
-                  targetPort = ports.metrics;
-                  protocol = "TCP";
-                }
-              ];
-            }
-            |> scope.mkResource
+            lib.pipe self.statefulSet [
+              (kix.service.fromWorkload {
+                name = "${name}-metrics";
+                labels."app.kubernetes.io/component" = "metrics";
+                ports = [
+                  {
+                    name = "metrics";
+                    port = ports.metrics;
+                    targetPort = ports.metrics;
+                    protocol = "TCP";
+                  }
+                ];
+              })
+              scope.mkResource
+            ]
           else
             null;
 

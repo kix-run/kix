@@ -456,146 +456,150 @@ in
               message = refusal;
             }
           else
-            {
-              inherit name;
-              spec = {
-                selector.matchLabels = scope.selectorLabels;
-                template = {
-                  metadata.annotations = {
-                    "checksum/config" = self.configMap.out.contentHash;
-                  }
-                  // lib.optionalAttrs hasRules {
-                    "checksum/rules" = self.rulesConfigMap.out.contentHash;
-                  };
-                  spec = {
-                    serviceAccount = self.serviceAccount;
-                    automountServiceAccountToken = false;
-                    # Kubernetes' default. Falco holds no state; alerts are
-                    # written as they match.
-                    terminationGracePeriodSeconds = 30;
-                    containers = [
-                      {
-                        name = "falco";
-                        image = kix.image.ref config.image;
-                        imagePullPolicy = config.image.pullPolicy;
-                        command = [ "/usr/bin/falco" ];
-                        args = [
-                          "-c"
-                          "${configDir}/${configFile}"
-                        ];
-                        env = kix.mkEnvVars (
-                          kix.mergeEnv {
-                            inherit who;
-                            owned = [
-                              {
-                                vars = {
-                                  HOST_ROOT = hostRoot;
-                                  # The `hostname` field of each alert.
-                                  FALCO_HOSTNAME.valueFrom.fieldRef.fieldPath = "spec.nodeName";
-                                };
-                                from = "the package, which mounts the host's paths under ${hostRoot} and names each alert's node";
-                                fix = "Remove it from env.";
-                              }
-                            ];
-                          } config.env
-                        );
-                        ports = [ (kix.port "http" port) ];
-                        # Allows 100 s for loading the driver and the rules.
-                        startupProbe = probe {
-                          periodSeconds = 5;
-                          failureThreshold = 20;
-                        };
-                        livenessProbe = probe { periodSeconds = 15; };
-                        readinessProbe = probe { periodSeconds = 15; };
-                        resources = config.resources;
-                        securityContext = {
-                          # Root, so the added capabilities are effective.
-                          # The runtime's default capabilities stay: Falco
-                          # reads /proc entries of processes owned by other
-                          # users through DAC_OVERRIDE.
-                          runAsUser = 0;
-                          allowPrivilegeEscalation = false;
-                          readOnlyRootFilesystem = true;
-                          # BPF and PERFMON load the driver's tracing
-                          # programs and maps, SYS_RESOURCE raises the
-                          # locked memory limit for them, and SYS_PTRACE
-                          # reads other processes' /proc entries.
-                          capabilities.add = [
-                            "BPF"
-                            "PERFMON"
-                            "SYS_RESOURCE"
-                            "SYS_PTRACE"
+            lib.pipe
+              {
+                inherit name;
+                spec = {
+                  selector.matchLabels = scope.selectorLabels;
+                  template = {
+                    metadata.annotations = {
+                      "checksum/config" = self.configMap.out.contentHash;
+                    }
+                    // lib.optionalAttrs hasRules {
+                      "checksum/rules" = self.rulesConfigMap.out.contentHash;
+                    };
+                    spec = {
+                      serviceAccount = self.serviceAccount;
+                      automountServiceAccountToken = false;
+                      # Kubernetes' default. Falco holds no state; alerts are
+                      # written as they match.
+                      terminationGracePeriodSeconds = 30;
+                      containers = [
+                        {
+                          name = "falco";
+                          image = kix.image.ref config.image;
+                          imagePullPolicy = config.image.pullPolicy;
+                          command = [ "/usr/bin/falco" ];
+                          args = [
+                            "-c"
+                            "${configDir}/${configFile}"
                           ];
-                          # containerd's default AppArmor profile allows
-                          # ptrace reads only between containers under the
-                          # same profile, which denies reading the /proc
-                          # entries of host processes.
-                          appArmorProfile.type = "Unconfined";
-                        };
-                      }
-                    ];
-                    # Every node, the control plane included.
-                    tolerations = [
-                      {
-                        operator = "Exists";
-                        effect = "NoSchedule";
-                      }
-                    ];
-                    nodeSelector."kubernetes.io/os" = "linux";
+                          env = kix.mkEnvVars (
+                            kix.mergeEnv {
+                              inherit who;
+                              owned = [
+                                {
+                                  vars = {
+                                    HOST_ROOT = hostRoot;
+                                    # The `hostname` field of each alert.
+                                    FALCO_HOSTNAME.valueFrom.fieldRef.fieldPath = "spec.nodeName";
+                                  };
+                                  from = "the package, which mounts the host's paths under ${hostRoot} and names each alert's node";
+                                  fix = "Remove it from env.";
+                                }
+                              ];
+                            } config.env
+                          );
+                          ports = [ (kix.port "http" port) ];
+                          # Allows 100 s for loading the driver and the rules.
+                          startupProbe = probe {
+                            periodSeconds = 5;
+                            failureThreshold = 20;
+                          };
+                          livenessProbe = probe { periodSeconds = 15; };
+                          readinessProbe = probe { periodSeconds = 15; };
+                          resources = config.resources;
+                          securityContext = {
+                            # Root, so the added capabilities are effective.
+                            # The runtime's default capabilities stay: Falco
+                            # reads /proc entries of processes owned by other
+                            # users through DAC_OVERRIDE.
+                            runAsUser = 0;
+                            allowPrivilegeEscalation = false;
+                            readOnlyRootFilesystem = true;
+                            # BPF and PERFMON load the driver's tracing
+                            # programs and maps, SYS_RESOURCE raises the
+                            # locked memory limit for them, and SYS_PTRACE
+                            # reads other processes' /proc entries.
+                            capabilities.add = [
+                              "BPF"
+                              "PERFMON"
+                              "SYS_RESOURCE"
+                              "SYS_PTRACE"
+                            ];
+                            # containerd's default AppArmor profile allows
+                            # ptrace reads only between containers under the
+                            # same profile, which denies reading the /proc
+                            # entries of host processes.
+                            appArmorProfile.type = "Unconfined";
+                          };
+                        }
+                      ];
+                      # Every node, the control plane included.
+                      tolerations = [
+                        {
+                          operator = "Exists";
+                          effect = "NoSchedule";
+                        }
+                      ];
+                      nodeSelector."kubernetes.io/os" = "linux";
+                    };
                   };
                 };
-              };
-            }
-            |> kix.withMounts (
+              }
               [
-                self.configMount
-                self.rulesMount
-                # The state of processes that started before Falco.
-                (kix.mount.hostPath {
-                  name = "proc";
-                  mountPath = "${hostRoot}/proc";
-                  hostPath = "/proc";
-                  type = "Directory";
-                  readOnly = true;
-                })
-                # /etc/passwd and /etc/group, for the user and group names
-                # of host processes.
-                (kix.mount.hostPath {
-                  name = "etc";
-                  mountPath = "${hostRoot}/etc";
-                  hostPath = "/etc";
-                  type = "Directory";
-                  readOnly = true;
-                })
-                # libbpf reads tracepoint ids here when it attaches the
-                # driver's syscall tracepoint programs.
-                (kix.mount.hostPath {
-                  name = "tracing";
-                  mountPath = "/sys/kernel/tracing";
-                  hostPath = "/sys/kernel/tracing";
-                  type = "Directory";
-                  readOnly = true;
-                })
-              ]
-              ++ socketMounts
-            )
-            |> scope.mkDaemonSet;
+                (kix.withMounts (
+                  [
+                    self.configMount
+                    self.rulesMount
+                    # The state of processes that started before Falco.
+                    (kix.mount.hostPath {
+                      name = "proc";
+                      mountPath = "${hostRoot}/proc";
+                      hostPath = "/proc";
+                      type = "Directory";
+                      readOnly = true;
+                    })
+                    # /etc/passwd and /etc/group, for the user and group names
+                    # of host processes.
+                    (kix.mount.hostPath {
+                      name = "etc";
+                      mountPath = "${hostRoot}/etc";
+                      hostPath = "/etc";
+                      type = "Directory";
+                      readOnly = true;
+                    })
+                    # libbpf reads tracepoint ids here when it attaches the
+                    # driver's syscall tracepoint programs.
+                    (kix.mount.hostPath {
+                      name = "tracing";
+                      mountPath = "/sys/kernel/tracing";
+                      hostPath = "/sys/kernel/tracing";
+                      type = "Directory";
+                      readOnly = true;
+                    })
+                  ]
+                  ++ socketMounts
+                ))
+                scope.mkDaemonSet
+              ];
 
         metricsService =
           if scraped then
-            self.daemonset
-            |> kix.service.fromWorkload {
-              name = "${name}-metrics";
-              ports = [
-                {
-                  name = "metrics";
-                  inherit port;
-                  targetPort = "http";
-                  protocol = "TCP";
-                }
-              ];
-            }
-            |> scope.mkResource
+            lib.pipe self.daemonset [
+              (kix.service.fromWorkload {
+                name = "${name}-metrics";
+                ports = [
+                  {
+                    name = "metrics";
+                    inherit port;
+                    targetPort = "http";
+                    protocol = "TCP";
+                  }
+                ];
+              })
+              scope.mkResource
+            ]
           else
             null;
 

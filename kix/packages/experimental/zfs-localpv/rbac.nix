@@ -59,90 +59,69 @@ mkClusterRoleSet scope {
   labels = scope.selectorLabels;
   roles."${name}-${ns}-controller" = grant (
     [
-      (
-        core.persistentvolumes
-        |> allow [
-          "get"
-          "list"
-          "watch"
-          "create"
-          "patch"
-          "delete"
-        ]
-      )
-      (
-        core.persistentvolumeclaims
-        |> allow [
-          "get"
-          "list"
-          "watch"
-          "update"
-        ]
-      )
-      (core "persistentvolumeclaims/status" |> allow [ "patch" ])
-      (core.pods |> watch)
-      (core.nodes |> watch)
-      (
-        core.events
-        |> allow [
-          "list"
-          "watch"
-          "create"
-          "update"
-          "patch"
-        ]
-      )
-      (
-        [
-          storage.storageclasses
-          storage.csinodes
-          storage.volumeattachments
-          storage.volumeattributesclasses
-        ]
-        |> watch
-      )
-      (
-        zfsAll
-        |> allow [
-          "get"
-          "list"
-          "watch"
-          "create"
-          "update"
-          "patch"
-          "delete"
-        ]
-      )
+      (allow [
+        "get"
+        "list"
+        "watch"
+        "create"
+        "patch"
+        "delete"
+      ] core.persistentvolumes)
+      (allow [
+        "get"
+        "list"
+        "watch"
+        "update"
+      ] core.persistentvolumeclaims)
+      (allow [ "patch" ] (core "persistentvolumeclaims/status"))
+      (watch core.pods)
+      (watch core.nodes)
+      (allow [
+        "list"
+        "watch"
+        "create"
+        "update"
+        "patch"
+      ] core.events)
+      (watch [
+        storage.storageclasses
+        storage.csinodes
+        storage.volumeattachments
+        storage.volumeattributesclasses
+      ])
+      (allow [
+        "get"
+        "list"
+        "watch"
+        "create"
+        "update"
+        "patch"
+        "delete"
+      ] zfsAll)
     ]
     ++ lib.optionals hasSnapshotApi [
-      (
+      (allow
+        [
+          "get"
+          "list"
+        ]
         [
           snapshots.volumesnapshots
           snapshots.volumesnapshotcontents
         ]
-        |> allow [
-          "get"
-          "list"
-        ]
       )
-      (snapshots.volumesnapshotclasses |> watch)
-      (
-        snapshots.volumesnapshotcontents
-        |> allow [
-          "get"
-          "list"
-          "watch"
-          "update"
-          "patch"
-        ]
-      )
-      (
-        snapshots "volumesnapshotcontents/status"
-        |> allow [
-          "update"
-          "patch"
-        ]
-      )
+      (watch snapshots.volumesnapshotclasses)
+      (allow [
+        "get"
+        "list"
+        "watch"
+        "update"
+        "patch"
+      ] snapshots.volumesnapshotcontents)
+      (allow [
+        "update"
+        "patch"
+      ] (snapshots "volumesnapshotcontents/status"))
     ]
   );
 }
@@ -150,56 +129,44 @@ mkClusterRoleSet scope {
   subjects = serviceAccountSubject self.nodeServiceAccount;
   labels = scope.selectorLabels;
   roles."${name}-${ns}-node" = grant [
-    (core.nodes |> watch)
-    (
-      core.events
-      |> allow [
-        "create"
-        "update"
-        "patch"
-      ]
-    )
-    (
-      zfsAll
-      |> allow [
-        "get"
-        "list"
-        "watch"
-        "create"
-        "update"
-        "patch"
-      ]
-    )
+    (watch core.nodes)
+    (allow [
+      "create"
+      "update"
+      "patch"
+    ] core.events)
+    (allow [
+      "get"
+      "list"
+      "watch"
+      "create"
+      "update"
+      "patch"
+    ] zfsAll)
   ];
 }
 // mkRoleSet scope {
   subjects = serviceAccountSubject self.controllerServiceAccount;
   labels = scope.selectorLabels;
   roles."${name}-controller" = grant [
-    (
-      coordination.leases
-      |> allow [
-        "get"
-        "watch"
-        "list"
-        "delete"
-        "update"
-        "create"
-      ]
-    )
-    (
-      storage.csistoragecapacities
-      |> allow [
-        "get"
-        "list"
-        "watch"
-        "create"
-        "update"
-        "patch"
-        "delete"
-      ]
-    )
-    (core.pods |> allow [ "get" ])
-    (apps.replicasets |> allow [ "get" ])
+    (allow [
+      "get"
+      "watch"
+      "list"
+      "delete"
+      "update"
+      "create"
+    ] coordination.leases)
+    (allow [
+      "get"
+      "list"
+      "watch"
+      "create"
+      "update"
+      "patch"
+      "delete"
+    ] storage.csistoragecapacities)
+    (allow [ "get" ] core.pods)
+    (allow [ "get" ] apps.replicasets)
   ];
 }

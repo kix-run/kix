@@ -138,19 +138,20 @@ in
 
   operatorService =
     if config.metrics.enabled then
-      self.operatorDeployment
-      |> kix.service.fromWorkload {
-        inherit name;
-        ports = [
-          {
-            name = "http-metrics";
-            port = httpPort;
-            targetPort = "http";
-            protocol = "TCP";
-          }
-        ];
-      }
-      |> scope.mkResource
+      lib.pipe self.operatorDeployment [
+        (kix.service.fromWorkload {
+          inherit name;
+          ports = [
+            {
+              name = "http-metrics";
+              port = httpPort;
+              targetPort = "http";
+              protocol = "TCP";
+            }
+          ];
+        })
+        scope.mkResource
+      ]
     else
       null;
 

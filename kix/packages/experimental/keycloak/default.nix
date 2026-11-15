@@ -421,87 +421,84 @@ in
         };
       in
       {
-        deployment =
-          {
-            inherit name;
-            spec = {
-              inherit replicas;
-              # Pods of an older minor release must not run against a
-              # schema the new release migrated; see the header.
-              strategy.type = "Recreate";
-              progressDeadlineSeconds = startupSeconds + 60;
-              selector.matchLabels = scope.selectorLabels;
-              # A changed database password restarts the pods, which read
-              # it once at start. A `secret-ref` has no content hash. The
-              # bootstrap secret has no annotation: Keycloak reads it only
-              # on the first start, so a restart for it would change nothing.
-              template.metadata.annotations = lib.filterAttrs (_: v: v != null) {
-                "checksum/database" = database.out.credentials.out.contentHash or null;
-              };
-              template.spec = {
-                automountServiceAccountToken = false;
-                # A Service named kc-<x> would inject KC_<X>_SERVICE_HOST
-                # and KC_<X>_PORT, which Keycloak reads as options.
-                enableServiceLinks = false;
-                # Kubernetes default: Keycloak's own shutdown delay and
-                # timeout are seconds long.
-                terminationGracePeriodSeconds = 30;
-                containers = [
-                  {
-                    name = "keycloak";
-                    image = kix.image.ref config.image;
-                    imagePullPolicy = config.image.pullPolicy;
-                    inherit args env;
-                    ports = [
-                      (kix.port "http" httpPort)
-                      (kix.port "management" managementPort)
-                      (kix.port "jgroups" jgroupsPort)
-                      (kix.port "jgroups-fd" jgroupsFdPort)
-                    ];
-                    # /health/started answers 503 until the build step and
-                    # the schema migration finish.
-                    startupProbe = httpProbe "/health/started" // {
-                      periodSeconds = 10;
-                      timeoutSeconds = 5;
-                      failureThreshold = startupSeconds / 10;
-                    };
-                    # /health/live does not check the database, so a
-                    # database outage does not restart every pod.
-                    livenessProbe = httpProbe "/health/live" // {
-                      periodSeconds = 10;
-                      timeoutSeconds = 5;
-                      failureThreshold = 6;
-                    };
-                    # /health/ready includes the database connection pool
-                    # check only while metrics are enabled; Keycloak ties
-                    # that check to KC_METRICS_ENABLED.
-                    readinessProbe = httpProbe "/health/ready" // {
-                      periodSeconds = 5;
-                      timeoutSeconds = 3;
-                      failureThreshold = 3;
-                    };
-                    resources = config.resources;
-                    # The root filesystem stays writable: `start` without
-                    # `--optimized` rewrites /opt/keycloak/lib/quarkus on
-                    # every boot. 1000 is the image's `keycloak` user.
-                    securityContext = {
-                      runAsNonRoot = true;
-                      runAsUser = 1000;
-                      allowPrivilegeEscalation = false;
-                      capabilities.drop = [ "ALL" ];
-                    };
-                  }
-                ];
-              };
+        deployment = scope.mkDeployment {
+          inherit name;
+          spec = {
+            inherit replicas;
+            # Pods of an older minor release must not run against a
+            # schema the new release migrated; see the header.
+            strategy.type = "Recreate";
+            progressDeadlineSeconds = startupSeconds + 60;
+            selector.matchLabels = scope.selectorLabels;
+            # A changed database password restarts the pods, which read
+            # it once at start. A `secret-ref` has no content hash. The
+            # bootstrap secret has no annotation: Keycloak reads it only
+            # on the first start, so a restart for it would change nothing.
+            template.metadata.annotations = lib.filterAttrs (_: v: v != null) {
+              "checksum/database" = database.out.credentials.out.contentHash or null;
             };
-          }
-          |> scope.mkDeployment;
+            template.spec = {
+              automountServiceAccountToken = false;
+              # A Service named kc-<x> would inject KC_<X>_SERVICE_HOST
+              # and KC_<X>_PORT, which Keycloak reads as options.
+              enableServiceLinks = false;
+              # Kubernetes default: Keycloak's own shutdown delay and
+              # timeout are seconds long.
+              terminationGracePeriodSeconds = 30;
+              containers = [
+                {
+                  name = "keycloak";
+                  image = kix.image.ref config.image;
+                  imagePullPolicy = config.image.pullPolicy;
+                  inherit args env;
+                  ports = [
+                    (kix.port "http" httpPort)
+                    (kix.port "management" managementPort)
+                    (kix.port "jgroups" jgroupsPort)
+                    (kix.port "jgroups-fd" jgroupsFdPort)
+                  ];
+                  # /health/started answers 503 until the build step and
+                  # the schema migration finish.
+                  startupProbe = httpProbe "/health/started" // {
+                    periodSeconds = 10;
+                    timeoutSeconds = 5;
+                    failureThreshold = startupSeconds / 10;
+                  };
+                  # /health/live does not check the database, so a
+                  # database outage does not restart every pod.
+                  livenessProbe = httpProbe "/health/live" // {
+                    periodSeconds = 10;
+                    timeoutSeconds = 5;
+                    failureThreshold = 6;
+                  };
+                  # /health/ready includes the database connection pool
+                  # check only while metrics are enabled; Keycloak ties
+                  # that check to KC_METRICS_ENABLED.
+                  readinessProbe = httpProbe "/health/ready" // {
+                    periodSeconds = 5;
+                    timeoutSeconds = 3;
+                    failureThreshold = 3;
+                  };
+                  resources = config.resources;
+                  # The root filesystem stays writable: `start` without
+                  # `--optimized` rewrites /opt/keycloak/lib/quarkus on
+                  # every boot. 1000 is the image's `keycloak` user.
+                  securityContext = {
+                    runAsNonRoot = true;
+                    runAsUser = 1000;
+                    allowPrivilegeEscalation = false;
+                    capabilities.drop = [ "ALL" ];
+                  };
+                }
+              ];
+            };
+          };
+        };
 
         # The management port joins the Service only when something
         # scrapes it, and the route sends only the http port.
-        service =
-          self.deployment
-          |> kix.service.fromWorkload {
+        service = lib.pipe self.deployment [
+          (kix.service.fromWorkload {
             inherit name;
             ports = [
               {
@@ -515,8 +512,9 @@ in
               port = managementPort;
               targetPort = "management";
             };
-          }
-          |> scope.mkResource;
+          })
+          scope.mkResource
+        ];
 
         # Kix derives peer rules only for a StatefulSet's pods, so this
         # policy admits the JGroups ports between the instance's own pods.

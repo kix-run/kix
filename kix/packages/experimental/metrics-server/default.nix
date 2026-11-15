@@ -207,74 +207,76 @@ in
       };
 
       deployment =
-        {
-          inherit name;
-          spec = {
-            replicas = kix.availability.pick availability {
-              none = 1;
-              pod = 2;
-              node = 2;
-              zone = 2;
-            };
-            selector.matchLabels = scope.selectorLabels;
-            template.spec = {
-              serviceAccount = self.serviceAccount;
-              # The server holds no state; 30 is the Kubernetes default,
-              # written out for the reliability.gracefulShutdown rule.
-              terminationGracePeriodSeconds = 30;
-              # HPAs stop scaling while metrics-server is preempted; upstream
-              # components.yaml sets the same class.
-              priorityClassName = "system-cluster-critical";
-              securityContext = {
-                runAsNonRoot = true;
-                runAsUser = 1000;
-                seccompProfile.type = "RuntimeDefault";
+        lib.pipe
+          {
+            inherit name;
+            spec = {
+              replicas = kix.availability.pick availability {
+                none = 1;
+                pod = 2;
+                node = 2;
+                zone = 2;
               };
-              containers = [
-                {
-                  name = "metrics-server";
-                  image = kix.image.ref config.image;
-                  imagePullPolicy = config.image.pullPolicy;
-                  inherit args;
-                  env = kix.mkEnvVars (kix.mergeEnv { inherit who; } config.env);
-                  ports = [ (kix.port "https" securePort) ];
-                  livenessProbe = {
-                    httpGet = {
-                      path = "/livez";
-                      port = "https";
-                      scheme = "HTTPS";
+              selector.matchLabels = scope.selectorLabels;
+              template.spec = {
+                serviceAccount = self.serviceAccount;
+                # The server holds no state; 30 is the Kubernetes default,
+                # written out for the reliability.gracefulShutdown rule.
+                terminationGracePeriodSeconds = 30;
+                # HPAs stop scaling while metrics-server is preempted; upstream
+                # components.yaml sets the same class.
+                priorityClassName = "system-cluster-critical";
+                securityContext = {
+                  runAsNonRoot = true;
+                  runAsUser = 1000;
+                  seccompProfile.type = "RuntimeDefault";
+                };
+                containers = [
+                  {
+                    name = "metrics-server";
+                    image = kix.image.ref config.image;
+                    imagePullPolicy = config.image.pullPolicy;
+                    inherit args;
+                    env = kix.mkEnvVars (kix.mergeEnv { inherit who; } config.env);
+                    ports = [ (kix.port "https" securePort) ];
+                    livenessProbe = {
+                      httpGet = {
+                        path = "/livez";
+                        port = "https";
+                        scheme = "HTTPS";
+                      };
+                      periodSeconds = 10;
+                      failureThreshold = 3;
                     };
-                    periodSeconds = 10;
-                    failureThreshold = 3;
-                  };
-                  # /readyz fails until the first kubelet scrape completes.
-                  readinessProbe = {
-                    httpGet = {
-                      path = "/readyz";
-                      port = "https";
-                      scheme = "HTTPS";
+                    # /readyz fails until the first kubelet scrape completes.
+                    readinessProbe = {
+                      httpGet = {
+                        path = "/readyz";
+                        port = "https";
+                        scheme = "HTTPS";
+                      };
+                      initialDelaySeconds = 20;
+                      periodSeconds = 10;
+                      failureThreshold = 3;
                     };
-                    initialDelaySeconds = 20;
-                    periodSeconds = 10;
-                    failureThreshold = 3;
-                  };
-                  inherit (config) resources;
-                  securityContext = {
-                    allowPrivilegeEscalation = false;
-                    readOnlyRootFilesystem = true;
-                    capabilities.drop = [ "ALL" ];
-                  };
-                }
-              ];
+                    inherit (config) resources;
+                    securityContext = {
+                      allowPrivilegeEscalation = false;
+                      readOnlyRootFilesystem = true;
+                      capabilities.drop = [ "ALL" ];
+                    };
+                  }
+                ];
+              };
             };
-          };
-        }
-        |> kix.withMounts [ self.tmpMount ]
-        |> scope.mkDeployment;
+          }
+          [
+            (kix.withMounts [ self.tmpMount ])
+            scope.mkDeployment
+          ];
 
-      service =
-        self.deployment
-        |> kix.service.fromWorkload {
+      service = lib.pipe self.deployment [
+        (kix.service.fromWorkload {
           inherit name;
           ports = [
             {
@@ -285,8 +287,9 @@ in
               appProtocol = "https";
             }
           ];
-        }
-        |> scope.mkResource;
+        })
+        scope.mkResource
+      ];
 
       apiService = scope.mkClusterResource {
         apiVersion = "apiregistration.k8s.io/v1";
@@ -316,13 +319,10 @@ in
           "rbac.authorization.k8s.io/aggregate-to-admin" = "true";
         };
         extra.rules = grant [
-          (
-            [
-              metrics.nodes
-              metrics.pods
-            ]
-            |> watch
-          )
+          (watch [
+            metrics.nodes
+            metrics.pods
+          ])
         ];
       };
 
@@ -376,14 +376,14 @@ in
       labels = scope.selectorLabels;
       # metrics-server v0.9.0 components.yaml, ClusterRole system:metrics-server.
       roles.${qualified} = grant [
-        (core.nodes |> sub "metrics" |> allow [ "get" ])
-        (
-          [
-            core.pods
-            core.nodes
-          ]
-          |> watch
-        )
+        (lib.pipe core.nodes [
+          (sub "metrics")
+          (allow [ "get" ])
+        ])
+        (watch [
+          core.pods
+          core.nodes
+        ])
       ];
     };
 }

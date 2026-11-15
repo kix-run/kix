@@ -279,14 +279,20 @@ in
         ];
         roles.${name} =
           grant [
-            (core.nodes |> watch)
-            (core "nodes/metrics" |> allow [ "get" ])
-            (core.services |> watch)
-            (core.endpoints |> watch)
-            (core.pods |> watch)
-            (core.configmaps |> allow [ "get" ])
-            (group "networking.k8s.io" [ "ingresses" ] |> (r: r.ingresses) |> watch)
-            (group "discovery.k8s.io" [ "endpointslices" ] |> (r: r.endpointslices) |> watch)
+            (watch core.nodes)
+            (allow [ "get" ] (core "nodes/metrics"))
+            (watch core.services)
+            (watch core.endpoints)
+            (watch core.pods)
+            (allow [ "get" ] core.configmaps)
+            (lib.pipe (group "networking.k8s.io" [ "ingresses" ]) [
+              (r: r.ingresses)
+              watch
+            ])
+            (lib.pipe (group "discovery.k8s.io" [ "endpointslices" ]) [
+              (r: r.endpointslices)
+              watch
+            ])
           ]
           ++ [
             {

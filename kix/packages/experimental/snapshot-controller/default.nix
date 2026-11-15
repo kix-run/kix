@@ -275,7 +275,10 @@ in
 
         metricsService =
           if config.metrics.enabled && prometheus != null then
-            self.deployment |> kix.service.fromWorkload { name = "${name}-metrics"; } |> scope.mkResource
+            lib.pipe self.deployment [
+              (kix.service.fromWorkload { name = "${name}-metrics"; })
+              scope.mkResource
+            ]
           else
             null;
 
@@ -297,81 +300,62 @@ in
         # deploy/kubernetes/snapshot-controller/rbac-snapshot-controller.yaml,
         # without the groupsnapshot.storage.k8s.io rules.
         roles."${name}-${scope.namespaceName}" = grant [
-          (
-            core.persistentvolumes
-            |> allow [
-              "get"
-              "list"
-              "watch"
-            ]
-          )
-          (
-            core.persistentvolumeclaims
-            |> allow [
-              "get"
-              "list"
-              "watch"
-              "update"
-            ]
-          )
-          (
-            core.events
-            |> allow [
-              "list"
-              "watch"
-              "create"
-              "update"
-              "patch"
-            ]
-          )
-          (snapshots.volumesnapshotclasses |> watch)
-          (
-            snapshots.volumesnapshotcontents
-            |> allow [
-              "create"
-              "get"
-              "list"
-              "watch"
-              "update"
-              "delete"
-              "patch"
-            ]
-          )
-          (snapshots "volumesnapshotcontents/status" |> allow [ "patch" ])
-          (
-            snapshots.volumesnapshots
-            |> allow [
-              "create"
-              "get"
-              "list"
-              "watch"
-              "update"
-              "patch"
-              "delete"
-            ]
-          )
-          (
-            snapshots "volumesnapshots/status"
-            |> allow [
-              "update"
-              "patch"
-            ]
-          )
+          (allow [
+            "get"
+            "list"
+            "watch"
+          ] core.persistentvolumes)
+          (allow [
+            "get"
+            "list"
+            "watch"
+            "update"
+          ] core.persistentvolumeclaims)
+          (allow [
+            "list"
+            "watch"
+            "create"
+            "update"
+            "patch"
+          ] core.events)
+          (watch snapshots.volumesnapshotclasses)
+          (allow [
+            "create"
+            "get"
+            "list"
+            "watch"
+            "update"
+            "delete"
+            "patch"
+          ] snapshots.volumesnapshotcontents)
+          (allow [ "patch" ] (snapshots "volumesnapshotcontents/status"))
+          (allow [
+            "create"
+            "get"
+            "list"
+            "watch"
+            "update"
+            "patch"
+            "delete"
+          ] snapshots.volumesnapshots)
+          (allow [
+            "update"
+            "patch"
+          ] (snapshots "volumesnapshots/status"))
         ];
       }
       // mkRoleSet scope {
         inherit subjects;
         labels = scope.selectorLabels;
         roles."${name}-leader-election" = grant [
-          (coordination.leases |> allow [ "create" ])
-          (
-            coordination.leases
-            |> restrictTo [ leaseName ]
-            |> allow [
+          (allow [ "create" ] coordination.leases)
+          (lib.pipe coordination.leases [
+            (restrictTo [ leaseName ])
+            (allow [
               "get"
               "update"
-            ]
-          )
+            ])
+          ])
         ];
       }
     )

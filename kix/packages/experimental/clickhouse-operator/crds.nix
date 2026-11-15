@@ -199,30 +199,33 @@ let
       version = checkedVersion def (vendored def);
     in
     scope.mkCRD (
-      scope.crd.fromKind def.kind {
-        spec.group = def.group;
-        spec.names.plural = def.plural;
-      }
-      |> scope.crd.withVersion def.version
-      |> scope.crd.withShortNames def.shortNames
-      |> scope.crd.withPrinterColumns version.additionalPrinterColumns
-      |> scope.crd.withSchema version.schema.openAPIV3Schema.properties.spec
-      |> scope.crd.withLabels labels
-      |> (
-        crd:
-        crd
-        // {
-          factBehavior = factBehaviorFor def;
-          # The installations keep their tables on their volumes. Templates
-          # and the operator configuration are settings.
-          holdsData = def.operand;
-        }
-        // lib.optionalAttrs def.operand {
-          readiness = operandReadiness;
-          usesAtLeast = usesAtLeastFor;
-        }
-        // lib.optionalAttrs (!def.operand) { usesAtLeast = _: { }; }
-      )
+      lib.pipe
+        (scope.crd.fromKind def.kind {
+          spec.group = def.group;
+          spec.names.plural = def.plural;
+        })
+        [
+          (scope.crd.withVersion def.version)
+          (scope.crd.withShortNames def.shortNames)
+          (scope.crd.withPrinterColumns version.additionalPrinterColumns)
+          (scope.crd.withSchema version.schema.openAPIV3Schema.properties.spec)
+          (scope.crd.withLabels labels)
+          (
+            crd:
+            crd
+            // {
+              factBehavior = factBehaviorFor def;
+              # The installations keep their tables on their volumes. Templates
+              # and the operator configuration are settings.
+              holdsData = def.operand;
+            }
+            // lib.optionalAttrs def.operand {
+              readiness = operandReadiness;
+              usesAtLeast = usesAtLeastFor;
+            }
+            // lib.optionalAttrs (!def.operand) { usesAtLeast = _: { }; }
+          )
+        ]
     );
 in
 {

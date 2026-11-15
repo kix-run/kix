@@ -308,9 +308,9 @@ in
       ];
       labels = scope.selectorLabels;
       roles.${"${scope.namespaceName}.${name}"} = grant [
-        (core.pods |> watch)
-        (core.namespaces |> watch)
-        (core.nodes |> watch)
+        (watch core.pods)
+        (watch core.namespaces)
+        (watch core.nodes)
       ];
     };
 

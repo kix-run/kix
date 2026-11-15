@@ -467,101 +467,103 @@ in
           };
 
           statefulSet =
-            {
-              inherit name;
-              labels."app.kubernetes.io/name" = "clickhouse";
-              spec = {
-                # By name: the headless Service is derived from this
-                # workload, so the edge runs from it to here.
-                serviceName = headlessName;
-                replicas = 1;
-                selector.matchLabels = scope.selectorLabels;
-                template = {
-                  metadata.annotations = {
-                    "checksum/config" = self.serverConfigMap.out.contentHash;
-                    "checksum/users" = self.usersConfigMap.out.contentHash;
-                  };
-                  spec = {
-                    serviceAccountName = self.serviceAccount.out.name;
-                    automountServiceAccountToken = false;
-                    # A merge in flight finishes or is abandoned cleanly.
-                    terminationGracePeriodSeconds = 120;
-                    securityContext = {
-                      runAsNonRoot = true;
-                      runAsUser = 101;
-                      runAsGroup = 101;
-                      fsGroup = 101;
-                      # Not a recursive chown of every part file on every
-                      # restart.
-                      fsGroupChangePolicy = "OnRootMismatch";
-                      seccompProfile.type = "RuntimeDefault";
+            lib.pipe
+              {
+                inherit name;
+                labels."app.kubernetes.io/name" = "clickhouse";
+                spec = {
+                  # By name: the headless Service is derived from this
+                  # workload, so the edge runs from it to here.
+                  serviceName = headlessName;
+                  replicas = 1;
+                  selector.matchLabels = scope.selectorLabels;
+                  template = {
+                    metadata.annotations = {
+                      "checksum/config" = self.serverConfigMap.out.contentHash;
+                      "checksum/users" = self.usersConfigMap.out.contentHash;
                     };
-                    containers = [
-                      {
-                        name = "clickhouse";
-                        image = kix.image.ref config.image;
-                        imagePullPolicy = config.image.pullPolicy;
-                        # The server binary directly. The image's entrypoint
-                        # exists to chown the data directory and to write
-                        # users.d from env vars; fsGroup and usersConfigMap
-                        # do both declaratively. It also sets the working
-                        # directory and turns the watchdog off, and both of
-                        # those are kept below. It would chown any disk or
-                        # filesystem cache path declared outside the data
-                        # directory too, so a serverConfig that adds one has
-                        # to mount it with the same fsGroup.
-                        command = [
-                          "/usr/bin/clickhouse-server"
-                          "--config-file=/etc/clickhouse-server/config.xml"
-                        ];
-                        workingDir = dataPath;
-                        env = kix.mkEnvVars {
-                          ${passwordEnv} = credentials.out.keyRef passwordKey;
-                          # Otherwise PID 1 is a watchdog that forks the
-                          # server, and the kubelet signals the watchdog.
-                          CLICKHOUSE_WATCHDOG_ENABLE = "0";
-                          ${keeperIdentityEnv} = "clickhouse:$(${passwordEnv})";
-                        };
-                        ports = [
-                          (kix.port "http" ports.http)
-                          (kix.port "native" ports.native)
-                          (kix.port "metrics" ports.metrics)
-                        ];
-                        livenessProbe = aliveProbe;
-                        readinessProbe = readyProbe;
-                        # Replaying a large parts directory after an unclean
-                        # stop can take minutes.
-                        startupProbe = aliveProbe // {
-                          failureThreshold = 60;
-                        };
-                        inherit (config) resources;
-                        securityContext = {
-                          runAsNonRoot = true;
-                          allowPrivilegeEscalation = false;
-                          readOnlyRootFilesystem = true;
-                          capabilities.drop = [ "ALL" ];
-                        };
-                      }
-                    ];
+                    spec = {
+                      serviceAccountName = self.serviceAccount.out.name;
+                      automountServiceAccountToken = false;
+                      # A merge in flight finishes or is abandoned cleanly.
+                      terminationGracePeriodSeconds = 120;
+                      securityContext = {
+                        runAsNonRoot = true;
+                        runAsUser = 101;
+                        runAsGroup = 101;
+                        fsGroup = 101;
+                        # Not a recursive chown of every part file on every
+                        # restart.
+                        fsGroupChangePolicy = "OnRootMismatch";
+                        seccompProfile.type = "RuntimeDefault";
+                      };
+                      containers = [
+                        {
+                          name = "clickhouse";
+                          image = kix.image.ref config.image;
+                          imagePullPolicy = config.image.pullPolicy;
+                          # The server binary directly. The image's entrypoint
+                          # exists to chown the data directory and to write
+                          # users.d from env vars; fsGroup and usersConfigMap
+                          # do both declaratively. It also sets the working
+                          # directory and turns the watchdog off, and both of
+                          # those are kept below. It would chown any disk or
+                          # filesystem cache path declared outside the data
+                          # directory too, so a serverConfig that adds one has
+                          # to mount it with the same fsGroup.
+                          command = [
+                            "/usr/bin/clickhouse-server"
+                            "--config-file=/etc/clickhouse-server/config.xml"
+                          ];
+                          workingDir = dataPath;
+                          env = kix.mkEnvVars {
+                            ${passwordEnv} = credentials.out.keyRef passwordKey;
+                            # Otherwise PID 1 is a watchdog that forks the
+                            # server, and the kubelet signals the watchdog.
+                            CLICKHOUSE_WATCHDOG_ENABLE = "0";
+                            ${keeperIdentityEnv} = "clickhouse:$(${passwordEnv})";
+                          };
+                          ports = [
+                            (kix.port "http" ports.http)
+                            (kix.port "native" ports.native)
+                            (kix.port "metrics" ports.metrics)
+                          ];
+                          livenessProbe = aliveProbe;
+                          readinessProbe = readyProbe;
+                          # Replaying a large parts directory after an unclean
+                          # stop can take minutes.
+                          startupProbe = aliveProbe // {
+                            failureThreshold = 60;
+                          };
+                          inherit (config) resources;
+                          securityContext = {
+                            runAsNonRoot = true;
+                            allowPrivilegeEscalation = false;
+                            readOnlyRootFilesystem = true;
+                            capabilities.drop = [ "ALL" ];
+                          };
+                        }
+                      ];
+                    };
                   };
                 };
-              };
-            }
-            |> kix.withMounts [
-              self.dataMount
-              self.serverConfigMount
-              self.usersConfigMount
-              self.tmpMount
-              self.preprocessedMount
-            ]
-            |> scope.mkStatefulSet;
+              }
+              [
+                (kix.withMounts [
+                  self.dataMount
+                  self.serverConfigMount
+                  self.usersConfigMount
+                  self.tmpMount
+                  self.preprocessedMount
+                ])
+                scope.mkStatefulSet
+              ];
 
           # Governs the StatefulSet's pod DNS. Nothing dials it. The two
           # Services carry different component labels so a label selector
           # (a ServiceMonitor's, say) can pick one (distinctSameKindLabels).
-          headlessService =
-            self.statefulSet
-            |> kix.service.fromWorkload {
+          headlessService = lib.pipe self.statefulSet [
+            (kix.service.fromWorkload {
               name = headlessName;
               labels."app.kubernetes.io/component" = "headless";
               ports = [
@@ -571,8 +573,8 @@ in
                   targetPort = "http";
                 }
               ];
-            }
-            |> (
+            })
+            (
               svc:
               svc
               // {
@@ -581,15 +583,16 @@ in
                 };
               }
             )
-            |> scope.mkResource;
+            scope.mkResource
+          ];
 
-          service =
-            self.statefulSet
-            |> kix.service.fromWorkload {
+          service = lib.pipe self.statefulSet [
+            (kix.service.fromWorkload {
               inherit name;
               labels."app.kubernetes.io/component" = "server";
-            }
-            |> scope.mkResource;
+            })
+            scope.mkResource
+          ];
 
           root = {
             resource = self.service;

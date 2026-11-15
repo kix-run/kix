@@ -168,81 +168,63 @@ let
   # manager_cluster_role.yaml, manager_listener_role.yaml and
   # leader_election_role.yaml of the gha-runner-scale-set-controller chart.
   clusterRules = grant [
-    (
+    (allow
+      [
+        "list"
+        "watch"
+      ]
       [
         core.pods
         core.serviceaccounts
       ]
-      |> allow [
-        "list"
-        "watch"
-      ]
     )
-    (actionResources |> full)
-    (
-      map (sub "finalizers") actionResources
-      |> allow [
-        "patch"
-        "update"
-      ]
-    )
-    (
-      map (sub "status") actionResources
-      |> allow [
-        "get"
-        "patch"
-        "update"
-      ]
-    )
-    (
-      rbacGroup.rolebindings
-      |> allow [
-        "list"
-        "watch"
-      ]
-    )
-    (
-      rbacGroup.roles
-      |> allow [
-        "list"
-        "watch"
-        "patch"
-      ]
-    )
+    (full actionResources)
+    (allow [
+      "patch"
+      "update"
+    ] (map (sub "finalizers") actionResources))
+    (allow [
+      "get"
+      "patch"
+      "update"
+    ] (map (sub "status") actionResources))
+    (allow [
+      "list"
+      "watch"
+    ] rbacGroup.rolebindings)
+    (allow [
+      "list"
+      "watch"
+      "patch"
+    ] rbacGroup.roles)
   ];
   listenerRules = grant [
-    (
-      core.pods
-      |> allow [
+    (allow [
+      "create"
+      "delete"
+      "get"
+    ] core.pods)
+    (allow [ "get" ] (core "pods/status"))
+    (allow
+      [
         "create"
         "delete"
         "get"
+        "patch"
+        "update"
       ]
-    )
-    (core "pods/status" |> allow [ "get" ])
-    (
       [
         core.secrets
         core.serviceaccounts
       ]
-      |> allow [
-        "create"
-        "delete"
-        "get"
-        "patch"
-        "update"
-      ]
     )
   ];
   leaderElectionRules = grant [
-    (coordination.leases |> full)
-    (
-      core.events
-      |> allow [
-        "create"
-        "patch"
-      ]
-    )
+    (full coordination.leases)
+    (allow [
+      "create"
+      "patch"
+    ] core.events)
   ];
 in
 {
@@ -569,19 +551,20 @@ in
 
         metricsService =
           if hasMetrics then
-            self.deployment
-            |> kix.service.fromWorkload {
-              name = "${name}-metrics";
-              ports = [
-                {
-                  name = "metrics";
-                  port = metricsPort;
-                  targetPort = metricsPort;
-                  protocol = "TCP";
-                }
-              ];
-            }
-            |> scope.mkResource
+            lib.pipe self.deployment [
+              (kix.service.fromWorkload {
+                name = "${name}-metrics";
+                ports = [
+                  {
+                    name = "metrics";
+                    port = metricsPort;
+                    targetPort = metricsPort;
+                    protocol = "TCP";
+                  }
+                ];
+              })
+              scope.mkResource
+            ]
           else
             null;
 

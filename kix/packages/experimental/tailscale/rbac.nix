@@ -81,85 +81,64 @@ in
 {
   # ClusterRole of the operator.
   cluster = grant [
-    (core.nodes |> watch)
-    (
-      [
-        core.events
-        core.services
-        (core "services/status")
-      ]
-      |> manage
-    )
-    (
-      [
-        networking.ingresses
-        (networking "ingresses/status")
-      ]
-      |> manage
-    )
-    (networking.ingressclasses |> watch)
-    (discovery.endpointslices |> watch)
-    (tailscaleKinds |> reconcile)
+    (watch core.nodes)
+    (manage [
+      core.events
+      core.services
+      (core "services/status")
+    ])
+    (manage [
+      networking.ingresses
+      (networking "ingresses/status")
+    ])
+    (watch networking.ingressclasses)
+    (watch discovery.endpointslices)
+    (reconcile tailscaleKinds)
     # The operator watches this one CRD to notice when ServiceMonitor
     # becomes available.
-    (
-      apiextensions.customresourcedefinitions
-      |> restrictTo [ "servicemonitors.monitoring.coreos.com" ]
-      |> watch
-    )
+    (watch (
+      restrictTo [ "servicemonitors.monitoring.coreos.com" ] apiextensions.customresourcedefinitions
+    ))
     # The ProxyGroupPolicy reconciler writes ValidatingAdmissionPolicies.
-    (
+    (allow
       [
-        admission.validatingadmissionpolicies
-        admission.validatingadmissionpolicybindings
-      ]
-      |> allow [
         "list"
         "create"
         "delete"
         "update"
         "get"
         "watch"
+      ]
+      [
+        admission.validatingadmissionpolicies
+        admission.validatingadmissionpolicybindings
       ]
     )
   ];
 
   # Role of the operator in its own namespace, where it creates the proxies.
   operator = grant [
-    (
+    (manage [
+      core.secrets
+      core.serviceaccounts
+      core.configmaps
+    ])
+    (reconcile core.pods)
+    (allow [ "update" ] (core "pods/status"))
+    (manage [
+      apps.statefulsets
+      apps.deployments
+    ])
+    (allow [
+      "get"
+      "list"
+      "watch"
+      "create"
+      "update"
+      "deletecollection"
+    ] discovery.endpointslices)
+    (allow
       [
-        core.secrets
-        core.serviceaccounts
-        core.configmaps
-      ]
-      |> manage
-    )
-    (core.pods |> reconcile)
-    ((core "pods/status") |> allow [ "update" ])
-    (
-      [
-        apps.statefulsets
-        apps.deployments
-      ]
-      |> manage
-    )
-    (
-      discovery.endpointslices
-      |> allow [
-        "get"
-        "list"
-        "watch"
-        "create"
-        "update"
-        "deletecollection"
-      ]
-    )
-    (
-      [
-        rbacGroup.roles
-        rbacGroup.rolebindings
-      ]
-      |> allow [
         "get"
         "create"
         "patch"
@@ -168,30 +147,28 @@ in
         "watch"
         "deletecollection"
       ]
-    )
-    (
-      monitoring.servicemonitors
-      |> allow [
-        "get"
-        "list"
-        "update"
-        "create"
-        "delete"
+      [
+        rbacGroup.roles
+        rbacGroup.rolebindings
       ]
     )
+    (allow [
+      "get"
+      "list"
+      "update"
+      "create"
+      "delete"
+    ] monitoring.servicemonitors)
   ];
 
   # Role of the `proxies` ServiceAccount, which the per-Service proxies run
   # as. They keep their tailnet state in Secrets and record events.
   proxies = grant [
-    (core.secrets |> manage)
-    (
-      core.events
-      |> allow [
-        "create"
-        "patch"
-        "get"
-      ]
-    )
+    (manage core.secrets)
+    (allow [
+      "create"
+      "patch"
+      "get"
+    ] core.events)
   ];
 }

@@ -361,92 +361,95 @@ in
         };
 
         statefulSet =
-          {
-            inherit name;
-            labels."app.kubernetes.io/name" = "loki";
-            spec = {
-              headlessService = self.headlessService;
-              replicas = 1;
-              selector.matchLabels = scope.selectorLabels;
-              template = {
-                metadata.annotations."checksum/config" = self.configMap.out.contentHash;
-                spec = {
-                  serviceAccount = self.serviceAccount;
-                  automountServiceAccountToken = false;
-                  # Enough to close the write-ahead log. In-memory chunks are
-                  # not flushed on shutdown; the next start replays them
-                  # from the log.
-                  terminationGracePeriodSeconds = 30;
-                  securityContext = {
-                    runAsNonRoot = true;
-                    runAsUser = 10001;
-                    runAsGroup = 10001;
-                    fsGroup = 10001;
-                    fsGroupChangePolicy = "OnRootMismatch";
-                    seccompProfile.type = "RuntimeDefault";
-                  };
-                  containers = [
-                    {
-                      name = "loki";
-                      image = kix.image.ref config.image;
-                      imagePullPolicy = config.image.pullPolicy;
-                      inherit args;
-                      env = kix.mkEnvVars (kix.mergeEnv { inherit who; } config.env);
-                      # gRPC (9095) stays inside the pod.
-                      ports = [ (kix.port "http" httpPort) ];
-                      readinessProbe = {
-                        httpGet = {
-                          path = "/ready";
-                          port = "http";
+          lib.pipe
+            {
+              inherit name;
+              labels."app.kubernetes.io/name" = "loki";
+              spec = {
+                headlessService = self.headlessService;
+                replicas = 1;
+                selector.matchLabels = scope.selectorLabels;
+                template = {
+                  metadata.annotations."checksum/config" = self.configMap.out.contentHash;
+                  spec = {
+                    serviceAccount = self.serviceAccount;
+                    automountServiceAccountToken = false;
+                    # Enough to close the write-ahead log. In-memory chunks are
+                    # not flushed on shutdown; the next start replays them
+                    # from the log.
+                    terminationGracePeriodSeconds = 30;
+                    securityContext = {
+                      runAsNonRoot = true;
+                      runAsUser = 10001;
+                      runAsGroup = 10001;
+                      fsGroup = 10001;
+                      fsGroupChangePolicy = "OnRootMismatch";
+                      seccompProfile.type = "RuntimeDefault";
+                    };
+                    containers = [
+                      {
+                        name = "loki";
+                        image = kix.image.ref config.image;
+                        imagePullPolicy = config.image.pullPolicy;
+                        inherit args;
+                        env = kix.mkEnvVars (kix.mergeEnv { inherit who; } config.env);
+                        # gRPC (9095) stays inside the pod.
+                        ports = [ (kix.port "http" httpPort) ];
+                        readinessProbe = {
+                          httpGet = {
+                            path = "/ready";
+                            port = "http";
+                          };
+                          initialDelaySeconds = 15;
+                          periodSeconds = 10;
                         };
-                        initialDelaySeconds = 15;
-                        periodSeconds = 10;
-                      };
-                      # /ready answers 503 while the write-ahead log replays
-                      # after a restart, which can take minutes, so liveness
-                      # only asks whether the port is open.
-                      livenessProbe = {
-                        tcpSocket.port = "http";
-                        periodSeconds = 20;
-                        failureThreshold = 6;
-                      };
-                      inherit (config) resources;
-                      securityContext = {
-                        allowPrivilegeEscalation = false;
-                        readOnlyRootFilesystem = true;
-                        capabilities.drop = [ "ALL" ];
-                      };
-                    }
-                  ];
+                        # /ready answers 503 while the write-ahead log replays
+                        # after a restart, which can take minutes, so liveness
+                        # only asks whether the port is open.
+                        livenessProbe = {
+                          tcpSocket.port = "http";
+                          periodSeconds = 20;
+                          failureThreshold = 6;
+                        };
+                        inherit (config) resources;
+                        securityContext = {
+                          allowPrivilegeEscalation = false;
+                          readOnlyRootFilesystem = true;
+                          capabilities.drop = [ "ALL" ];
+                        };
+                      }
+                    ];
+                  };
                 };
               };
-            };
-          }
-          |> kix.withMounts [
-            self.dataMount
-            self.configMount
-            self.tmpMount
-          ]
-          |> scope.mkStatefulSet;
+            }
+            [
+              (kix.withMounts [
+                self.dataMount
+                self.configMount
+                self.tmpMount
+              ])
+              scope.mkStatefulSet
+            ];
 
         # Governs the StatefulSet's pod DNS; nothing dials it. The component
         # label keeps its labels distinct from the client Service's.
-        headlessService =
-          self.statefulSet
-          |> kix.service.fromWorkload {
+        headlessService = lib.pipe self.statefulSet [
+          (kix.service.fromWorkload {
             name = "${name}-headless";
             labels."app.kubernetes.io/component" = "headless";
             spec.clusterIP = "None";
-          }
-          |> scope.mkResource;
+          })
+          scope.mkResource
+        ];
 
-        service =
-          self.statefulSet
-          |> kix.service.fromWorkload {
+        service = lib.pipe self.statefulSet [
+          (kix.service.fromWorkload {
             inherit name;
             labels."app.kubernetes.io/component" = "server";
-          }
-          |> scope.mkResource;
+          })
+          scope.mkResource
+        ];
 
         root = {
           resource = self.service;

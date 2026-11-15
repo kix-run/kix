@@ -121,67 +121,70 @@ in
     in
     {
       deployment =
-        {
-          inherit name;
-          spec = {
-            replicas = config.replicas;
-            selector.matchLabels = scope.selectorLabels;
-            template.metadata.annotations = lib.optionalAttrs kixBuilt {
-              "checksum/tunnel-token" = token.out.contentHash;
-            };
-            template.spec = {
-              # Matches cloudflared's `--grace-period` default of 30s, the
-              # time it waits for in-flight requests after SIGTERM.
-              terminationGracePeriodSeconds = 30;
-              securityContext = {
-                runAsNonRoot = true;
-                runAsUser = 65532;
-                runAsGroup = 65532;
+        lib.pipe
+          {
+            inherit name;
+            spec = {
+              replicas = config.replicas;
+              selector.matchLabels = scope.selectorLabels;
+              template.metadata.annotations = lib.optionalAttrs kixBuilt {
+                "checksum/tunnel-token" = token.out.contentHash;
               };
-              containers = [
-                {
-                  inherit name;
-                  image = kix.image.ref config.image;
-                  imagePullPolicy = config.image.pullPolicy;
-                  args = [
-                    "tunnel"
-                    "--no-autoupdate"
-                    "--metrics"
-                    "0.0.0.0:2000"
-                    "run"
-                  ];
-                  ports = [ (kix.port "metrics" 2000) ];
-                  env = token.out.mkEnv { TUNNEL_TOKEN = "token"; };
-                  resources = config.resources;
-                  securityContext = {
-                    allowPrivilegeEscalation = false;
-                    readOnlyRootFilesystem = true;
-                    capabilities.drop = [ "ALL" ];
-                  };
-                  livenessProbe = {
-                    httpGet = {
-                      path = "/ready";
-                      port = "metrics";
+              template.spec = {
+                # Matches cloudflared's `--grace-period` default of 30s, the
+                # time it waits for in-flight requests after SIGTERM.
+                terminationGracePeriodSeconds = 30;
+                securityContext = {
+                  runAsNonRoot = true;
+                  runAsUser = 65532;
+                  runAsGroup = 65532;
+                };
+                containers = [
+                  {
+                    inherit name;
+                    image = kix.image.ref config.image;
+                    imagePullPolicy = config.image.pullPolicy;
+                    args = [
+                      "tunnel"
+                      "--no-autoupdate"
+                      "--metrics"
+                      "0.0.0.0:2000"
+                      "run"
+                    ];
+                    ports = [ (kix.port "metrics" 2000) ];
+                    env = token.out.mkEnv { TUNNEL_TOKEN = "token"; };
+                    resources = config.resources;
+                    securityContext = {
+                      allowPrivilegeEscalation = false;
+                      readOnlyRootFilesystem = true;
+                      capabilities.drop = [ "ALL" ];
                     };
-                    initialDelaySeconds = 10;
-                    periodSeconds = 10;
-                    failureThreshold = 3;
-                  };
-                  readinessProbe = {
-                    httpGet = {
-                      path = "/ready";
-                      port = "metrics";
+                    livenessProbe = {
+                      httpGet = {
+                        path = "/ready";
+                        port = "metrics";
+                      };
+                      initialDelaySeconds = 10;
+                      periodSeconds = 10;
+                      failureThreshold = 3;
                     };
-                    initialDelaySeconds = 5;
-                    periodSeconds = 10;
-                  };
-                }
-              ];
+                    readinessProbe = {
+                      httpGet = {
+                        path = "/ready";
+                        port = "metrics";
+                      };
+                      initialDelaySeconds = 5;
+                      periodSeconds = 10;
+                    };
+                  }
+                ];
+              };
             };
-          };
-        }
-        |> withReload
-        |> scope.mkDeployment;
+          }
+          [
+            withReload
+            scope.mkDeployment
+          ];
 
       root = {
         resource = self.deployment;

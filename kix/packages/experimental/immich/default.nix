@@ -721,129 +721,132 @@ in
             null;
 
         deployment =
-          {
-            name = "${name}-server";
-            spec = {
-              replicas = 1;
-              # The package treats the library as ReadWriteOnce: a surge pod
-              # scheduled on another node would fail with Multi-Attach.
-              strategy.type = "Recreate";
-              selector.matchLabels = scope.selectorLabels;
-              # Immich reads its config file and credentials once at start.
-              # A secret-ref has no content hash, so a password rotated
-              # outside Kix needs reloader to restart the pod.
-              template.metadata.annotations = lib.filterAttrs (_: v: v != null) {
-                "checksum/config" = if self.configMap != null then self.configMap.out.contentHash else null;
-                "checksum/database" = dbCreds.contentHash or null;
-                "checksum/valkey-password" =
-                  if redisServer.out ? credentials then redisServer.out.credentials.out.contentHash or null else null;
-                "checksum/oidc-client" = if oidcOn then oidcCredentials.out.contentHash or null else null;
-                "checksum/smtp" = if mailLogin then relay.credentials.out.contentHash or null else null;
-              };
-              template.spec = {
-                # Kubernetes default: Immich documents no shutdown drain.
-                terminationGracePeriodSeconds = 30;
-                automountServiceAccountToken = false;
-                # uid 1000 is the image's `node` user. Immich supports any
-                # non-root uid that can write the library (docs FAQ, "run as
-                # non-root"); fsGroup grants that on provisioners that honour
-                # it. OnRootMismatch relabels the library only while its root
-                # lacks the group, not on every start.
-                securityContext = {
-                  runAsNonRoot = true;
-                  runAsUser = 1000;
-                  runAsGroup = 1000;
-                  fsGroup = 1000;
-                  fsGroupChangePolicy = "OnRootMismatch";
-                  seccompProfile.type = "RuntimeDefault";
+          lib.pipe
+            {
+              name = "${name}-server";
+              spec = {
+                replicas = 1;
+                # The package treats the library as ReadWriteOnce: a surge pod
+                # scheduled on another node would fail with Multi-Attach.
+                strategy.type = "Recreate";
+                selector.matchLabels = scope.selectorLabels;
+                # Immich reads its config file and credentials once at start.
+                # A secret-ref has no content hash, so a password rotated
+                # outside Kix needs reloader to restart the pod.
+                template.metadata.annotations = lib.filterAttrs (_: v: v != null) {
+                  "checksum/config" = if self.configMap != null then self.configMap.out.contentHash else null;
+                  "checksum/database" = dbCreds.contentHash or null;
+                  "checksum/valkey-password" =
+                    if redisServer.out ? credentials then redisServer.out.credentials.out.contentHash or null else null;
+                  "checksum/oidc-client" = if oidcOn then oidcCredentials.out.contentHash or null else null;
+                  "checksum/smtp" = if mailLogin then relay.credentials.out.contentHash or null else null;
                 };
-                ${if config.initChownData then "initContainers" else null} = lib.singleton (
-                  if nonRootFailsBuild clusterConfig then
-                    scope.fail {
-                      package = "immich";
-                      option = "initChownData";
-                      message = chownHint;
-                    }
-                  else
+                template.spec = {
+                  # Kubernetes default: Immich documents no shutdown drain.
+                  terminationGracePeriodSeconds = 30;
+                  automountServiceAccountToken = false;
+                  # uid 1000 is the image's `node` user. Immich supports any
+                  # non-root uid that can write the library (docs FAQ, "run as
+                  # non-root"); fsGroup grants that on provisioners that honour
+                  # it. OnRootMismatch relabels the library only while its root
+                  # lacks the group, not on every start.
+                  securityContext = {
+                    runAsNonRoot = true;
+                    runAsUser = 1000;
+                    runAsGroup = 1000;
+                    fsGroup = 1000;
+                    fsGroupChangePolicy = "OnRootMismatch";
+                    seccompProfile.type = "RuntimeDefault";
+                  };
+                  ${if config.initChownData then "initContainers" else null} = lib.singleton (
+                    if nonRootFailsBuild clusterConfig then
+                      scope.fail {
+                        package = "immich";
+                        option = "initChownData";
+                        message = chownHint;
+                      }
+                    else
+                      {
+                        name = "init-chown-data";
+                        # The server image carries coreutils `chown`.
+                        image = kix.image.ref config.image;
+                        imagePullPolicy = config.image.pullPolicy;
+                        command = [
+                          "chown"
+                          "-R"
+                          "1000:1000"
+                          self.libraryMount.mountPath
+                        ];
+                        resources = {
+                          requests = {
+                            cpu = "10m";
+                            memory = "32Mi";
+                          };
+                          limits = {
+                            cpu = "500m";
+                            memory = "128Mi";
+                          };
+                        };
+                        # DAC_READ_SEARCH lets root descend into directories
+                        # other uids made unreadable to it.
+                        securityContext = {
+                          runAsNonRoot = false;
+                          runAsUser = 0;
+                          allowPrivilegeEscalation = false;
+                          readOnlyRootFilesystem = true;
+                          capabilities = {
+                            add = [
+                              "CHOWN"
+                              "DAC_READ_SEARCH"
+                            ];
+                            drop = [ "ALL" ];
+                          };
+                        };
+                      }
+                  );
+                  containers = [
                     {
-                      name = "init-chown-data";
-                      # The server image carries coreutils `chown`.
+                      name = "immich-server";
                       image = kix.image.ref config.image;
                       imagePullPolicy = config.image.pullPolicy;
-                      command = [
-                        "chown"
-                        "-R"
-                        "1000:1000"
-                        self.libraryMount.mountPath
+                      # The image's entrypoint is `tini -- /bin/bash -c` with
+                      # CMD `start.sh`, so args replaces only the command string.
+                      ${if startSteps != [ ] then "args" else null} = [ startScript ];
+                      env = kix.mkEnvVars env;
+                      ports = [
+                        (kix.port "http" 2283)
+                      ]
+                      ++ lib.optionals hasMetrics [
+                        (kix.port "metrics-api" 8081)
+                        (kix.port "metrics-ms" 8082)
                       ];
-                      resources = {
-                        requests = {
-                          cpu = "10m";
-                          memory = "32Mi";
-                        };
-                        limits = {
-                          cpu = "500m";
-                          memory = "128Mi";
-                        };
+                      livenessProbe = healthCheck;
+                      readinessProbe = healthCheck;
+                      startupProbe = healthCheck // {
+                        failureThreshold = 30;
                       };
-                      # DAC_READ_SEARCH lets root descend into directories
-                      # other uids made unreadable to it.
+                      resources = config.resources;
                       securityContext = {
-                        runAsNonRoot = false;
-                        runAsUser = 0;
                         allowPrivilegeEscalation = false;
                         readOnlyRootFilesystem = true;
-                        capabilities = {
-                          add = [
-                            "CHOWN"
-                            "DAC_READ_SEARCH"
-                          ];
-                          drop = [ "ALL" ];
-                        };
+                        capabilities.drop = [ "ALL" ];
                       };
                     }
-                );
-                containers = [
-                  {
-                    name = "immich-server";
-                    image = kix.image.ref config.image;
-                    imagePullPolicy = config.image.pullPolicy;
-                    # The image's entrypoint is `tini -- /bin/bash -c` with
-                    # CMD `start.sh`, so args replaces only the command string.
-                    ${if startSteps != [ ] then "args" else null} = [ startScript ];
-                    env = kix.mkEnvVars env;
-                    ports = [
-                      (kix.port "http" 2283)
-                    ]
-                    ++ lib.optionals hasMetrics [
-                      (kix.port "metrics-api" 8081)
-                      (kix.port "metrics-ms" 8082)
-                    ];
-                    livenessProbe = healthCheck;
-                    readinessProbe = healthCheck;
-                    startupProbe = healthCheck // {
-                      failureThreshold = 30;
-                    };
-                    resources = config.resources;
-                    securityContext = {
-                      allowPrivilegeEscalation = false;
-                      readOnlyRootFilesystem = true;
-                      capabilities.drop = [ "ALL" ];
-                    };
-                  }
-                ];
+                  ];
+                };
               };
-            };
-          }
-          |> kix.withMountsOn ([ "immich-server" ] ++ lib.optional config.initChownData "init-chown-data") [
-            self.libraryMount
-          ]
-          |> kix.withMounts [
-            self.configMount
-            self.tmpMount
-            self.runtimeConfigMount
-          ]
-          |> scope.mkDeployment;
+            }
+            [
+              (kix.withMountsOn ([ "immich-server" ] ++ lib.optional config.initChownData "init-chown-data") [
+                self.libraryMount
+              ])
+              (kix.withMounts [
+                self.configMount
+                self.tmpMount
+                self.runtimeConfigMount
+              ])
+              scope.mkDeployment
+            ];
 
         mailEgress = kix.contracts.smtp.helpers.egressPolicy {
           inherit scope;
@@ -852,8 +855,10 @@ in
           selector = self.deployment.out.selector;
         };
 
-        service =
-          self.deployment |> kix.service.fromWorkload { name = "${name}-server"; } |> scope.mkResource;
+        service = lib.pipe self.deployment [
+          (kix.service.fromWorkload { name = "${name}-server"; })
+          scope.mkResource
+        ];
 
         root = {
           resource = self.service;

@@ -121,9 +121,8 @@ let
             };
           };
         };
-        service =
-          self.deployment
-          |> kix.service.fromWorkload {
+        service = lib.pipe self.deployment [
+          (kix.service.fromWorkload {
             name = "vminsert";
             ports = [
               {
@@ -132,8 +131,9 @@ let
                 targetPort = "http";
               }
             ];
-          }
-          |> scope.mkResource;
+          })
+          scope.mkResource
+        ];
         root = {
           resource = self.service;
           out = {

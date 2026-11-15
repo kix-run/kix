@@ -55,57 +55,42 @@ let
     inherit labels;
     roles = {
       "${name}-cainjector" = grant [
-        (cm.certificates |> watch)
-        (core.secrets |> watch)
-        (
-          core.events
-          |> allow [
-            "get"
-            "create"
-            "update"
-            "patch"
-          ]
-        )
-        (
-          admreg.validatingwebhookconfigurations
-          |> allow [
-            "get"
-            "list"
-            "watch"
-            "update"
-            "patch"
-          ]
-        )
-        (
-          admreg.mutatingwebhookconfigurations
-          |> allow [
-            "get"
-            "list"
-            "watch"
-            "update"
-            "patch"
-          ]
-        )
-        (
-          apireg.apiservices
-          |> allow [
-            "get"
-            "list"
-            "watch"
-            "update"
-            "patch"
-          ]
-        )
-        (
-          apiext.customresourcedefinitions
-          |> allow [
-            "get"
-            "list"
-            "watch"
-            "update"
-            "patch"
-          ]
-        )
+        (watch cm.certificates)
+        (watch core.secrets)
+        (allow [
+          "get"
+          "create"
+          "update"
+          "patch"
+        ] core.events)
+        (allow [
+          "get"
+          "list"
+          "watch"
+          "update"
+          "patch"
+        ] admreg.validatingwebhookconfigurations)
+        (allow [
+          "get"
+          "list"
+          "watch"
+          "update"
+          "patch"
+        ] admreg.mutatingwebhookconfigurations)
+        (allow [
+          "get"
+          "list"
+          "watch"
+          "update"
+          "patch"
+        ] apireg.apiservices)
+        (allow [
+          "get"
+          "list"
+          "watch"
+          "update"
+          "patch"
+        ] apiext.customresourcedefinitions)
       ];
     };
   };
@@ -116,19 +101,18 @@ let
     inherit labels;
     roles = {
       "${name}-cainjector:leaderelection" = grant [
-        (
-          coord.leases
-          |> restrictTo [
+        (lib.pipe coord.leases [
+          (restrictTo [
             "cert-manager-cainjector-leader-election"
             "cert-manager-cainjector-leader-election-core"
-          ]
-          |> allow [
+          ])
+          (allow [
             "get"
             "update"
             "patch"
-          ]
-        )
-        (coord.leases |> allow [ "create" ])
+          ])
+        ])
+        (allow [ "create" ] coord.leases)
       ];
     };
   };
@@ -167,71 +151,69 @@ in
     else
       null;
 
-  cainjectorDeployment =
-    {
-      name = "${name}-cainjector";
-      inherit labels;
-      # cainjector watches Certificates, so it starts after the definitions.
-      requires = builtins.attrValues self.crds;
-      spec = {
-        # Leader-elected: one replica serves; from `node` up a standby keeps
-        # injecting when a node is lost.
-        replicas = kix.availability.pick availability {
-          none = 1;
-          pod = 1;
-          node = 2;
-          zone = 2;
-        };
-        selector.matchLabels = labels;
-        template.spec = {
-          serviceAccount = self.cainjectorServiceAccount;
-          # Kubernetes' default, set because the scorecard asks every
-          # workload to set it.
-          terminationGracePeriodSeconds = 30;
-          enableServiceLinks = false;
-          securityContext = common.podSecurityContext;
-          containers = [
-            {
-              name = "cert-manager-cainjector";
-              image = kix.image.ref (
-                common.checkRelease who config [
-                  "cainjector"
-                  "image"
-                ]
-              );
-              imagePullPolicy = config.cainjector.image.pullPolicy;
-              args = [
-                "--v=2"
-                "--leader-election-namespace=${ns}"
-              ]
-              ++ kix.guardArgs {
-                inherit who;
-                option = "cainjector.extraArgs";
-                owned."--leader-election-namespace" =
-                  "the leader-election Role lives in the instance's namespace; remove it.";
-              } config.cainjector.extraArgs;
-              ports = [
-                {
-                  name = "http-metrics";
-                  containerPort = common.ports.metrics;
-                  protocol = "TCP";
-                }
-              ];
-              env = [
-                {
-                  name = "POD_NAMESPACE";
-                  valueFrom.fieldRef.fieldPath = "metadata.namespace";
-                }
-              ];
-              inherit (config.cainjector) resources;
-              securityContext = common.containerSecurityContext;
-            }
-          ];
-          nodeSelector."kubernetes.io/os" = "linux";
-        };
+  cainjectorDeployment = scope.mkDeployment {
+    name = "${name}-cainjector";
+    inherit labels;
+    # cainjector watches Certificates, so it starts after the definitions.
+    requires = builtins.attrValues self.crds;
+    spec = {
+      # Leader-elected: one replica serves; from `node` up a standby keeps
+      # injecting when a node is lost.
+      replicas = kix.availability.pick availability {
+        none = 1;
+        pod = 1;
+        node = 2;
+        zone = 2;
       };
-    }
-    |> scope.mkDeployment;
+      selector.matchLabels = labels;
+      template.spec = {
+        serviceAccount = self.cainjectorServiceAccount;
+        # Kubernetes' default, set because the scorecard asks every
+        # workload to set it.
+        terminationGracePeriodSeconds = 30;
+        enableServiceLinks = false;
+        securityContext = common.podSecurityContext;
+        containers = [
+          {
+            name = "cert-manager-cainjector";
+            image = kix.image.ref (
+              common.checkRelease who config [
+                "cainjector"
+                "image"
+              ]
+            );
+            imagePullPolicy = config.cainjector.image.pullPolicy;
+            args = [
+              "--v=2"
+              "--leader-election-namespace=${ns}"
+            ]
+            ++ kix.guardArgs {
+              inherit who;
+              option = "cainjector.extraArgs";
+              owned."--leader-election-namespace" =
+                "the leader-election Role lives in the instance's namespace; remove it.";
+            } config.cainjector.extraArgs;
+            ports = [
+              {
+                name = "http-metrics";
+                containerPort = common.ports.metrics;
+                protocol = "TCP";
+              }
+            ];
+            env = [
+              {
+                name = "POD_NAMESPACE";
+                valueFrom.fieldRef.fieldPath = "metadata.namespace";
+              }
+            ];
+            inherit (config.cainjector) resources;
+            securityContext = common.containerSecurityContext;
+          }
+        ];
+        nodeSelector."kubernetes.io/os" = "linux";
+      };
+    };
+  };
 }
 // cainjectorClusterRoles
 // cainjectorLeaderElection

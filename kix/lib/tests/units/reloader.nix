@@ -89,7 +89,10 @@ let
             if transform != null then
               transform p
             else
-              webArgs |> reloader.out.withReloadOn (refs p) |> scope.mkDeployment;
+              lib.pipe webArgs [
+                (reloader.out.withReloadOn (refs p))
+                scope.mkDeployment
+              ];
           root = self.deployment;
         };
     };
@@ -138,22 +141,25 @@ in
         consumer = mkConsumer {
           transform =
             p:
-            {
-              name = "web";
-              spec.selector.matchLabels = p.scope.selectorLabels;
-              spec.template.spec.containers = [
-                {
-                  name = "web";
-                  image = "nginx";
-                }
+            lib.pipe
+              {
+                name = "web";
+                spec.selector.matchLabels = p.scope.selectorLabels;
+                spec.template.spec.containers = [
+                  {
+                    name = "web";
+                    image = "nginx";
+                  }
+                ];
+              }
+              [
+                (p.reloader.out.withReloadOn [ p.external ])
+                (p.reloader.out.withReloadOn [
+                  p.self.token
+                  p.external
+                ])
+                p.scope.mkDeployment
               ];
-            }
-            |> p.reloader.out.withReloadOn [ p.external ]
-            |> p.reloader.out.withReloadOn [
-              p.self.token
-              p.external
-            ]
-            |> p.scope.mkDeployment;
         };
       });
       local = reloadAnnotationOf (clusterWith {
@@ -299,12 +305,13 @@ in
             consumer = mkConsumer {
               transform =
                 p:
-                p.scope.mkDeployment {
-                  name = "web";
-                  spec.selector.matchLabels = p.scope.selectorLabels;
-                  spec.template.spec.containers = [ container ];
-                }
-                |> p.reloader.out.withReloadOn [ p.self.token ];
+                p.reloader.out.withReloadOn [ p.self.token ] (
+                  p.scope.mkDeployment {
+                    name = "web";
+                    spec.selector.matchLabels = p.scope.selectorLabels;
+                    spec.template.spec.containers = [ container ];
+                  }
+                );
             };
           };
           good = withRefs (p: [ p.self.token ]);

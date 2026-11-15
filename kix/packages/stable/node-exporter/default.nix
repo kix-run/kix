@@ -231,9 +231,8 @@ in
           };
         };
 
-        service =
-          self.daemonset
-          |> kix.service.fromWorkload {
+        service = lib.pipe self.daemonset [
+          (kix.service.fromWorkload {
             inherit name;
             ports = [
               {
@@ -243,8 +242,9 @@ in
                 protocol = "TCP";
               }
             ];
-          }
-          |> scope.mkResource;
+          })
+          scope.mkResource
+        ];
 
         root = {
           resource = self.service;

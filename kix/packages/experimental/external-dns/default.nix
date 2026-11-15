@@ -550,7 +550,10 @@ in
 
         metricsService =
           if config.metrics.enabled && prometheus != null then
-            self.deployment |> kix.service.fromWorkload { inherit name; } |> scope.mkResource
+            lib.pipe self.deployment [
+              (kix.service.fromWorkload { inherit name; })
+              scope.mkResource
+            ]
           else
             null;
 

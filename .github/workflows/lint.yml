@@ -54,6 +54,16 @@ jobs:
           git ls-files -z '*.nix' ':!:docs/src/snippets/**' \
             | xargs -0 nix shell --inputs-from . nixpkgs#nixfmt -c nixfmt --check
 
+      # The Kix library and packages evaluate on stock Nix, which refuses
+      # `|>` unless the experimental pipe-operators feature is on. Users'
+      # own files may still use it.
+      - name: No pipe operator under kix/
+        run: |
+          if git grep -n '|>' -- 'kix/*.nix'; then
+            echo "Replace each |> above with a function call or lib.pipe." >&2
+            exit 1
+          fi
+
       - name: deadnix
         run: |
           git ls-files -z '*.nix' ':!:docs/src/snippets/**' \

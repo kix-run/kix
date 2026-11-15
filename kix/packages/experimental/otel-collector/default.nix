@@ -588,10 +588,9 @@ in
             inherit name;
           };
 
-          workload =
-            workloadBody
-            |> kix.withMounts [ self.configMount ]
-            |> (
+          workload = lib.pipe workloadBody [
+            (kix.withMounts [ self.configMount ])
+            (
               if daemonset then
                 scope.mkDaemonSet
               else
@@ -605,11 +604,11 @@ in
                     }
                   )
                 )
-            );
+            )
+          ];
 
-          service =
-            self.workload
-            |> kix.service.fromWorkload (
+          service = lib.pipe self.workload [
+            (kix.service.fromWorkload (
               {
                 inherit name;
                 ports = [
@@ -632,8 +631,9 @@ in
                 };
               }
               // lib.optionalAttrs daemonset { spec.internalTrafficPolicy = "Local"; }
-            )
-            |> scope.mkResource;
+            ))
+            scope.mkResource
+          ];
 
           root = {
             resource = self.service;
@@ -670,7 +670,7 @@ in
               }
             ];
             labels = scope.selectorLabels;
-            roles.${"${scope.namespaceName}.${name}"} = grant [ (core.events |> watch) ];
+            roles.${"${scope.namespaceName}.${name}"} = grant [ (watch core.events) ];
           }
         )
     )

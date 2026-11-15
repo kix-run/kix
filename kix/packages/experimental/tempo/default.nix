@@ -543,88 +543,90 @@ in
         };
 
         statefulSet =
-          {
-            inherit name;
-            labels."app.kubernetes.io/name" = "tempo";
-            spec = {
-              headlessService = self.headlessService;
-              replicas = 1;
-              selector.matchLabels = scope.selectorLabels;
-              template = {
-                metadata.annotations = {
-                  "checksum/config" = self.configMap.out.contentHash;
-                }
-                // lib.optionalAttrs (objectStorageOn && credentials.out ? contentHash) {
-                  "checksum/storage-credentials" = credentials.out.contentHash;
-                };
-                spec = {
-                  serviceAccount = self.serviceAccount;
-                  automountServiceAccountToken = false;
-                  terminationGracePeriodSeconds = 30;
-                  securityContext = {
-                    runAsNonRoot = true;
-                    runAsUser = 10001;
-                    runAsGroup = 10001;
-                    fsGroup = 10001;
-                    fsGroupChangePolicy = "OnRootMismatch";
-                    seccompProfile.type = "RuntimeDefault";
+          lib.pipe
+            {
+              inherit name;
+              labels."app.kubernetes.io/name" = "tempo";
+              spec = {
+                headlessService = self.headlessService;
+                replicas = 1;
+                selector.matchLabels = scope.selectorLabels;
+                template = {
+                  metadata.annotations = {
+                    "checksum/config" = self.configMap.out.contentHash;
+                  }
+                  // lib.optionalAttrs (objectStorageOn && credentials.out ? contentHash) {
+                    "checksum/storage-credentials" = credentials.out.contentHash;
                   };
-                  containers = [
-                    {
-                      name = "tempo";
-                      image = kix.image.ref config.image;
-                      imagePullPolicy = config.image.pullPolicy;
-                      inherit args;
-                      env = kix.mkEnvVars env;
-                      ports = [
-                        (kix.port "http" httpPort)
-                        (kix.port "otlp-grpc" otlpGrpcPort)
-                        (kix.port "otlp-http" otlpHttpPort)
-                      ];
-                      readinessProbe = {
-                        httpGet = {
-                          path = "/ready";
-                          port = "http";
+                  spec = {
+                    serviceAccount = self.serviceAccount;
+                    automountServiceAccountToken = false;
+                    terminationGracePeriodSeconds = 30;
+                    securityContext = {
+                      runAsNonRoot = true;
+                      runAsUser = 10001;
+                      runAsGroup = 10001;
+                      fsGroup = 10001;
+                      fsGroupChangePolicy = "OnRootMismatch";
+                      seccompProfile.type = "RuntimeDefault";
+                    };
+                    containers = [
+                      {
+                        name = "tempo";
+                        image = kix.image.ref config.image;
+                        imagePullPolicy = config.image.pullPolicy;
+                        inherit args;
+                        env = kix.mkEnvVars env;
+                        ports = [
+                          (kix.port "http" httpPort)
+                          (kix.port "otlp-grpc" otlpGrpcPort)
+                          (kix.port "otlp-http" otlpHttpPort)
+                        ];
+                        readinessProbe = {
+                          httpGet = {
+                            path = "/ready";
+                            port = "http";
+                          };
+                          initialDelaySeconds = 15;
+                          periodSeconds = 10;
                         };
-                        initialDelaySeconds = 15;
-                        periodSeconds = 10;
-                      };
-                      livenessProbe = {
-                        tcpSocket.port = "http";
-                        periodSeconds = 20;
-                        failureThreshold = 6;
-                      };
-                      inherit (config) resources;
-                      securityContext = {
-                        allowPrivilegeEscalation = false;
-                        readOnlyRootFilesystem = true;
-                        capabilities.drop = [ "ALL" ];
-                      };
-                    }
-                  ];
+                        livenessProbe = {
+                          tcpSocket.port = "http";
+                          periodSeconds = 20;
+                          failureThreshold = 6;
+                        };
+                        inherit (config) resources;
+                        securityContext = {
+                          allowPrivilegeEscalation = false;
+                          readOnlyRootFilesystem = true;
+                          capabilities.drop = [ "ALL" ];
+                        };
+                      }
+                    ];
+                  };
                 };
               };
-            };
-          }
-          |> kix.withMounts [
-            self.dataMount
-            self.configMount
-            self.tmpMount
-          ]
-          |> scope.mkStatefulSet;
+            }
+            [
+              (kix.withMounts [
+                self.dataMount
+                self.configMount
+                self.tmpMount
+              ])
+              scope.mkStatefulSet
+            ];
 
-        headlessService =
-          self.statefulSet
-          |> kix.service.fromWorkload {
+        headlessService = lib.pipe self.statefulSet [
+          (kix.service.fromWorkload {
             name = "${name}-headless";
             labels."app.kubernetes.io/component" = "headless";
             spec.clusterIP = "None";
-          }
-          |> scope.mkResource;
+          })
+          scope.mkResource
+        ];
 
-        service =
-          self.statefulSet
-          |> kix.service.fromWorkload {
+        service = lib.pipe self.statefulSet [
+          (kix.service.fromWorkload {
             inherit name;
             labels."app.kubernetes.io/component" = "query";
             ports = [
@@ -634,12 +636,12 @@ in
                 targetPort = "http";
               }
             ];
-          }
-          |> scope.mkResource;
+          })
+          scope.mkResource
+        ];
 
-        otlpService =
-          self.statefulSet
-          |> kix.service.fromWorkload {
+        otlpService = lib.pipe self.statefulSet [
+          (kix.service.fromWorkload {
             name = "${name}-otlp";
             labels."app.kubernetes.io/component" = "otlp";
             ports = [
@@ -655,8 +657,9 @@ in
                 targetPort = "otlp-http";
               }
             ];
-          }
-          |> scope.mkResource;
+          })
+          scope.mkResource
+        ];
 
         storeEgress =
           if storeWorldPort == null then

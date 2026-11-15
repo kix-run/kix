@@ -77,20 +77,21 @@ rec {
   metricsServiceFor =
     hasMetrics: workload: labels:
     if hasMetrics then
-      workload
-      |> kix.service.fromWorkload {
-        name = "${workload.out.name}-metrics";
-        inherit labels;
-        ports = [
-          {
-            name = "metrics";
-            port = ports.metrics;
-            targetPort = "metrics";
-            protocol = "TCP";
-          }
-        ];
-      }
-      |> scope.mkResource
+      lib.pipe workload [
+        (kix.service.fromWorkload {
+          name = "${workload.out.name}-metrics";
+          inherit labels;
+          ports = [
+            {
+              name = "metrics";
+              port = ports.metrics;
+              targetPort = "metrics";
+              protocol = "TCP";
+            }
+          ];
+        })
+        scope.mkResource
+      ]
     else
       null;
 

@@ -76,7 +76,13 @@ let
   ];
 
   mkVMOperatorCRD =
-    attrs: scope.mkCRD (attrs |> scope.crd.withLabels labels |> scope.crd.withAnnotations annotations);
+    attrs:
+    scope.mkCRD (
+      lib.pipe attrs [
+        (scope.crd.withLabels labels)
+        (scope.crd.withAnnotations annotations)
+      ]
+    );
 
   # The scrape objects the operator creates for an operand's own metrics
   # (`factBehavior.selfScrapes`), so the netpol scrape join opens the paths
@@ -430,13 +436,16 @@ let
       extras = kindExtras.${def.kind} or { };
       spec = vendoredSpec def;
       base =
-        scope.crd.fromKind def.kind {
-          spec.group = vmGroup;
-          spec.names.plural = def.plural;
-        }
-        |> scope.crd.withVersion def.version
-        |> scope.crd.withPrinterColumns (extras.printerColumns or ageColumn);
-      schemed = if spec == null then base else base |> scope.crd.withSchema spec;
+        lib.pipe
+          (scope.crd.fromKind def.kind {
+            spec.group = vmGroup;
+            spec.names.plural = def.plural;
+          })
+          [
+            (scope.crd.withVersion def.version)
+            (scope.crd.withPrinterColumns (extras.printerColumns or ageColumn))
+          ];
+      schemed = if spec == null then base else scope.crd.withSchema spec base;
     in
     mkVMOperatorCRD (
       schemed
@@ -468,21 +477,24 @@ let
   mkPromCompatCRD =
     def:
     mkVMOperatorCRD (
-      scope.crd.fromKind def.kind {
-        spec.group = promGroup;
-        spec.names.plural = def.plural;
-      }
-      |> scope.crd.withVersion def.version
-      |> scope.crd.withShortNames def.shortNames
-      |> scope.crd.withPrinterColumns ageColumn
-      |> (
-        crd:
-        crd
-        // {
-          holdsData = false;
-          usesAtLeast = _: { };
-        }
-      )
+      lib.pipe
+        (scope.crd.fromKind def.kind {
+          spec.group = promGroup;
+          spec.names.plural = def.plural;
+        })
+        [
+          (scope.crd.withVersion def.version)
+          (scope.crd.withShortNames def.shortNames)
+          (scope.crd.withPrinterColumns ageColumn)
+          (
+            crd:
+            crd
+            // {
+              holdsData = false;
+              usesAtLeast = _: { };
+            }
+          )
+        ]
     );
 
   # Reference an existing prometheus-operator CRD without labels,

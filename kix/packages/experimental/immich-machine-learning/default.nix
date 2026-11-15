@@ -139,99 +139,107 @@ in
           };
 
       deployment =
-        {
-          inherit name;
-          spec = {
-            replicas =
-              if cached then
-                1
-              else
-                kix.availability.pick availability {
-                  none = 1;
-                  pod = 2;
-                  node = 2;
-                  zone = 2;
+        lib.pipe
+          (
+            {
+              inherit name;
+              spec = {
+                replicas =
+                  if cached then
+                    1
+                  else
+                    kix.availability.pick availability {
+                      none = 1;
+                      pod = 2;
+                      node = 2;
+                      zone = 2;
+                    };
+                ${if cached then "strategy" else null} = {
+                  type = "Recreate";
                 };
-            ${if cached then "strategy" else null} = {
-              type = "Recreate";
-            };
-            selector.matchLabels = scope.selectorLabels;
-            template.spec = {
-              # Kubernetes default: Immich documents no shutdown drain.
-              terminationGracePeriodSeconds = 30;
-              automountServiceAccountToken = false;
-              # The image defines no user. Immich supports any non-root uid
-              # that can write /cache (docs FAQ, "run as non-root").
-              # OnRootMismatch relabels the cache only while its root lacks
-              # the group.
-              securityContext = {
-                runAsNonRoot = true;
-                runAsUser = 1000;
-                runAsGroup = 1000;
-                fsGroup = 1000;
-                fsGroupChangePolicy = "OnRootMismatch";
-                seccompProfile.type = "RuntimeDefault";
-              };
-              containers = [
-                {
-                  name = "immich-machine-learning";
-                  image = kix.image.ref config.image;
-                  imagePullPolicy = config.image.pullPolicy;
-                  # The image points TRANSFORMERS_CACHE and
-                  # MACHINE_LEARNING_CACHE_FOLDER at /cache. The root
-                  # filesystem is read-only, so the Hugging Face transfer
-                  # cache and matplotlib's config, which default to $HOME,
-                  # go there too.
-                  env = kix.mkEnvVars (
-                    kix.mergeEnv {
-                      inherit who;
-                      defaults = {
-                        HF_XET_CACHE = "/cache/huggingface-xet";
-                        MPLCONFIGDIR = "/cache/matplotlib-config";
-                      };
-                      owned = [
-                        {
-                          names = [
-                            "IMMICH_PORT"
-                            "MACHINE_LEARNING_CACHE_FOLDER"
-                          ];
-                          from = "the package";
-                          fix = "It fixes the worker's port and cache path to match its Service, probes, and /cache mount; remove the setting from env.";
-                        }
-                      ];
-                    } config.env
-                  );
-                  ports = [
-                    (kix.port "http" 3003)
-                  ];
-                  livenessProbe = healthCheck;
-                  readinessProbe = healthCheck;
-                  startupProbe = healthCheck // {
-                    failureThreshold = 60;
-                  };
-                  resources = config.resources;
+                selector.matchLabels = scope.selectorLabels;
+                template.spec = {
+                  # Kubernetes default: Immich documents no shutdown drain.
+                  terminationGracePeriodSeconds = 30;
+                  automountServiceAccountToken = false;
+                  # The image defines no user. Immich supports any non-root uid
+                  # that can write /cache (docs FAQ, "run as non-root").
+                  # OnRootMismatch relabels the cache only while its root lacks
+                  # the group.
                   securityContext = {
-                    allowPrivilegeEscalation = false;
-                    readOnlyRootFilesystem = true;
-                    capabilities.drop = [ "ALL" ];
+                    runAsNonRoot = true;
+                    runAsUser = 1000;
+                    runAsGroup = 1000;
+                    fsGroup = 1000;
+                    fsGroupChangePolicy = "OnRootMismatch";
+                    seccompProfile.type = "RuntimeDefault";
                   };
-                }
-              ];
-            };
-          };
-        }
-        // lib.optionalAttrs cached { availability.max = "none"; }
-        |> kix.withMounts [
-          self.cacheMount
-          (kix.mount.emptyDir {
-            name = "tmp";
-            mountPath = "/tmp";
-            sizeLimit = "1Gi";
-          })
-        ]
-        |> scope.mkDeployment;
+                  containers = [
+                    {
+                      name = "immich-machine-learning";
+                      image = kix.image.ref config.image;
+                      imagePullPolicy = config.image.pullPolicy;
+                      # The image points TRANSFORMERS_CACHE and
+                      # MACHINE_LEARNING_CACHE_FOLDER at /cache. The root
+                      # filesystem is read-only, so the Hugging Face transfer
+                      # cache and matplotlib's config, which default to $HOME,
+                      # go there too.
+                      env = kix.mkEnvVars (
+                        kix.mergeEnv {
+                          inherit who;
+                          defaults = {
+                            HF_XET_CACHE = "/cache/huggingface-xet";
+                            MPLCONFIGDIR = "/cache/matplotlib-config";
+                          };
+                          owned = [
+                            {
+                              names = [
+                                "IMMICH_PORT"
+                                "MACHINE_LEARNING_CACHE_FOLDER"
+                              ];
+                              from = "the package";
+                              fix = "It fixes the worker's port and cache path to match its Service, probes, and /cache mount; remove the setting from env.";
+                            }
+                          ];
+                        } config.env
+                      );
+                      ports = [
+                        (kix.port "http" 3003)
+                      ];
+                      livenessProbe = healthCheck;
+                      readinessProbe = healthCheck;
+                      startupProbe = healthCheck // {
+                        failureThreshold = 60;
+                      };
+                      resources = config.resources;
+                      securityContext = {
+                        allowPrivilegeEscalation = false;
+                        readOnlyRootFilesystem = true;
+                        capabilities.drop = [ "ALL" ];
+                      };
+                    }
+                  ];
+                };
+              };
+            }
+            // lib.optionalAttrs cached { availability.max = "none"; }
+          )
+          [
+            (kix.withMounts [
+              self.cacheMount
+              (kix.mount.emptyDir {
+                name = "tmp";
+                mountPath = "/tmp";
+                sizeLimit = "1Gi";
+              })
+            ])
+            scope.mkDeployment
+          ];
 
-      service = self.deployment |> kix.service.fromWorkload { inherit name; } |> scope.mkResource;
+      service = lib.pipe self.deployment [
+        (kix.service.fromWorkload { inherit name; })
+        scope.mkResource
+      ];
 
       root = {
         resource = self.service;

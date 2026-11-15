@@ -42,15 +42,13 @@ in
   # declares each volume once.
   lib-mounts-list-of-names =
     let
-      w =
-        deployment {
-          containers = [
-            (container "web")
-            (container "sidecar")
-            (container "other")
-          ];
-        }
-        |> withMountsOn [ "web" "sidecar" ] [ tmp ];
+      w = withMountsOn [ "web" "sidecar" ] [ tmp ] (deployment {
+        containers = [
+          (container "web")
+          (container "sidecar")
+          (container "other")
+        ];
+      });
     in
     map (m: m.mountPath) (mainMounts "web" w) == [ "/tmp" ]
     && map (m: m.mountPath) (mainMounts "sidecar" w) == [ "/tmp" ]
@@ -61,13 +59,13 @@ in
   # initContainers does not gain an empty list of them.
   lib-mounts-init-container-target =
     let
-      w =
-        deployment {
-          initContainers = [ (container "migrate") ];
-          containers = [ (container "web") ];
-        }
-        |> withMountsOn [ "migrate" "web" ] [ data ];
-      plain = deployment { containers = [ (container "web") ]; } |> withMounts [ data ];
+      w = withMountsOn [ "migrate" "web" ] [ data ] (deployment {
+        initContainers = [ (container "migrate") ];
+        containers = [ (container "web") ];
+      });
+      plain = withMounts [ data ] (deployment {
+        containers = [ (container "web") ];
+      });
     in
     map (m: m.mountPath) (initMounts "migrate" w) == [ "/data" ]
     && map (m: m.mountPath) (mainMounts "web" w) == [ "/data" ]
@@ -77,24 +75,20 @@ in
   # containers do not count.
   lib-mounts-main-container-only =
     let
-      w =
-        deployment {
-          initContainers = [ (container "migrate") ];
-          containers = [ (container "web") ];
-        }
-        |> withMounts [ tmp ];
+      w = withMounts [ tmp ] (deployment {
+        initContainers = [ (container "migrate") ];
+        containers = [ (container "web") ];
+      });
     in
     map (m: m.mountPath) (mainMounts "web" w) == [ "/tmp" ] && initMounts "migrate" w == [ ];
 
   # A CronJob's pod template is under spec.jobTemplate.
   lib-mounts-cronjob-path =
     let
-      w =
-        {
-          name = "nightly";
-          spec.jobTemplate.spec.template.spec.containers = [ (container "job") ];
-        }
-        |> withMounts [ tmp ];
+      w = withMounts [ tmp ] {
+        name = "nightly";
+        spec.jobTemplate.spec.template.spec.containers = [ (container "job") ];
+      };
       pod = w.spec.jobTemplate.spec.template.spec;
     in
     map (v: v.name) pod.volumes == [ "tmp" ]
@@ -111,18 +105,21 @@ in
         subPath = "sub";
       };
       w =
-        deployment {
-          initContainers = [ (container "migrate") ];
-          containers = [
-            (container "web")
-            (container "sidecar")
+        lib.pipe
+          (deployment {
+            initContainers = [ (container "migrate") ];
+            containers = [
+              (container "web")
+              (container "sidecar")
+            ];
+          })
+          [
+            (withMountsOn "web" [
+              data
+              sub
+            ])
+            (withMountsOn [ "migrate" "sidecar" ] [ data ])
           ];
-        }
-        |> withMountsOn "web" [
-          data
-          sub
-        ]
-        |> withMountsOn [ "migrate" "sidecar" ] [ data ];
       volumes = w.spec.template.spec.volumes;
     in
     map (v: v.name) volumes == [ (builtins.unsafeDiscardStringContext pvc.out.name) ]
@@ -143,19 +140,19 @@ in
         name = builtins.unsafeDiscardStringContext pvc.out.name;
         mountPath = "/scratch";
       };
-      twoCalls =
-        deployment { containers = [ (container "web") ]; } |> withMounts [ data ] |> withMounts [ clash ];
-      withSpec =
-        deployment {
-          containers = [ (container "web") ];
-          volumes = [
-            {
-              name = "tmp";
-              emptyDir.sizeLimit = "1Gi";
-            }
-          ];
-        }
-        |> withMounts [ tmp ];
+      twoCalls = lib.pipe (deployment { containers = [ (container "web") ]; }) [
+        (withMounts [ data ])
+        (withMounts [ clash ])
+      ];
+      withSpec = withMounts [ tmp ] (deployment {
+        containers = [ (container "web") ];
+        volumes = [
+          {
+            name = "tmp";
+            emptyDir.sizeLimit = "1Gi";
+          }
+        ];
+      });
     in
     throws twoCalls && throws withSpec;
 
@@ -171,43 +168,47 @@ in
           namespace.name = ns;
         } { mountPath = "/${ns}"; };
       twoNamespaces =
-        deployment { containers = [ (container "web") ]; }
-        |> withMounts [
-          (tls "app")
-          (tls "platform")
-        ];
+        withMounts
+          [
+            (tls "app")
+            (tls "platform")
+          ]
+          (deployment {
+            containers = [ (container "web") ];
+          });
       oneNamespace =
-        deployment { containers = [ (container "web") ]; }
-        |> withMounts [
-          (tls "app")
-          (tls "app")
-        ];
+        withMounts
+          [
+            (tls "app")
+            (tls "app")
+          ]
+          (deployment {
+            containers = [ (container "web") ];
+          });
     in
     throws twoNamespaces && volumeNames oneNamespace == [ "tls" ];
 
   # A name that matches no container fails the build.
   lib-mounts-unknown-name-throws =
     let
-      w =
-        deployment {
-          initContainers = [ (container "migrate") ];
-          containers = [ (container "web") ];
-        }
-        |> withMountsOn "wbe" [ tmp ];
-      partly =
-        deployment { containers = [ (container "web") ]; } |> withMountsOn [ "web" "typo" ] [ tmp ];
+      w = withMountsOn "wbe" [ tmp ] (deployment {
+        initContainers = [ (container "migrate") ];
+        containers = [ (container "web") ];
+      });
+      partly = withMountsOn [ "web" "typo" ] [ tmp ] (deployment {
+        containers = [ (container "web") ];
+      });
     in
     throws w && throws partly;
 
   # withMounts on a pod with several main containers fails the build.
   lib-mounts-with-mounts-several-containers-throws = throws (
-    deployment {
+    withMounts [ tmp ] (deployment {
       containers = [
         (container "web")
         (container "sidecar")
       ];
-    }
-    |> withMounts [ tmp ]
+    })
   );
 
   # emptyDir, secret, and the other constructors take readOnly, which
@@ -224,15 +225,18 @@ in
         readOnly = true;
       };
       w =
-        deployment {
-          initContainers = [ (container "init") ];
-          containers = [ (container "web") ];
-        }
-        |> withMountsOn "init" [ tmp ]
-        |> withMountsOn "web" [
-          ro
-          secret
-        ];
+        lib.pipe
+          (deployment {
+            initContainers = [ (container "init") ];
+            containers = [ (container "web") ];
+          })
+          [
+            (withMountsOn "init" [ tmp ])
+            (withMountsOn "web" [
+              ro
+              secret
+            ])
+          ];
     in
     map (m: m.readOnly or null) (mainMounts "web" w) == [
       true

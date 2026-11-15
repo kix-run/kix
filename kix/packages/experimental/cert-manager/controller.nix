@@ -83,146 +83,120 @@ let
     roles = {
 
       "${name}-controller-issuers" = grant [
-        (cm.issuers |> reconcile)
-        (core.secrets |> readWrite)
-        (core.events |> emit)
+        (reconcile cm.issuers)
+        (readWrite core.secrets)
+        (emit core.events)
       ];
 
       "${name}-controller-clusterissuers" = grant [
-        (cm.clusterissuers |> reconcile)
-        (core.secrets |> readWrite)
-        (core.events |> emit)
+        (reconcile cm.clusterissuers)
+        (readWrite core.secrets)
+        (emit core.events)
       ];
 
       "${name}-controller-certificates" = grant [
-        (cm.certificates |> reconcile)
-        (cm.certificaterequests |> reconcile)
-        (cm.certificates |> finalize)
-        (cm.certificaterequests |> finalize)
-        (cm.clusterissuers |> watch)
-        (cm.issuers |> watch)
-        (acme.orders |> own)
-        (core.secrets |> full)
-        (core.events |> emit)
+        (reconcile cm.certificates)
+        (reconcile cm.certificaterequests)
+        (finalize cm.certificates)
+        (finalize cm.certificaterequests)
+        (watch cm.clusterissuers)
+        (watch cm.issuers)
+        (own acme.orders)
+        (full core.secrets)
+        (emit core.events)
       ];
 
       "${name}-controller-orders" = grant [
-        (
-          [
-            acme.orders
-            acme.challenges
-          ]
-          |> watch
-        )
-        (
+        (watch [
           acme.orders
-          |> allow [
-            "update"
-            "patch"
-          ]
-        )
-        (
-          (acme "orders/status")
-          |> allow [
-            "update"
-            "patch"
-          ]
-        )
-        (
           acme.challenges
-          |> allow [
-            "create"
-            "delete"
-          ]
-        )
-        (acme.orders |> finalize)
-        (cm.clusterissuers |> finalize)
-        (cm.issuers |> finalize)
-        (cm.clusterissuers |> watch)
-        (cm.issuers |> watch)
-        (core.secrets |> watch)
-        (core.events |> emit)
+        ])
+        (allow [
+          "update"
+          "patch"
+        ] acme.orders)
+        (allow [
+          "update"
+          "patch"
+        ] (acme "orders/status"))
+        (allow [
+          "create"
+          "delete"
+        ] acme.challenges)
+        (finalize acme.orders)
+        (finalize cm.clusterissuers)
+        (finalize cm.issuers)
+        (watch cm.clusterissuers)
+        (watch cm.issuers)
+        (watch core.secrets)
+        (emit core.events)
       ];
 
       "${name}-controller-challenges" = grant [
-        (acme.challenges |> reconcile)
-        (acme.challenges |> finalize)
-        (cm.issuers |> watch)
-        (cm.clusterissuers |> watch)
-        (core.secrets |> watch)
-        (core.events |> emit)
-        (core.pods |> own)
-        (core.services |> own)
-        (net.ingresses |> readWrite)
-        (gw.httproutes |> readWrite)
-        (ocp "routes/custom-host" |> allow [ "create" ])
+        (reconcile acme.challenges)
+        (finalize acme.challenges)
+        (watch cm.issuers)
+        (watch cm.clusterissuers)
+        (watch core.secrets)
+        (emit core.events)
+        (own core.pods)
+        (own core.services)
+        (readWrite net.ingresses)
+        (readWrite gw.httproutes)
+        (allow [ "create" ] (ocp "routes/custom-host"))
       ];
 
       "${name}-controller-ingress-shim" = grant [
-        (
-          cm.certificates
-          |> allow [
-            "create"
-            "update"
-            "delete"
-          ]
-        )
-        (
-          cm.certificaterequests
-          |> allow [
-            "create"
-            "update"
-            "delete"
-          ]
-        )
-        (cm.certificates |> watch)
-        (cm.certificaterequests |> watch)
-        (cm.issuers |> watch)
-        (cm.clusterissuers |> watch)
-        (net.ingresses |> watchAndFinalize)
-        (gw.gateways |> watchAndFinalize)
-        (gw.httproutes |> watchAndFinalize)
-        (gw.listenersets |> watchAndFinalize)
-        (core.events |> emit)
+        (allow [
+          "create"
+          "update"
+          "delete"
+        ] cm.certificates)
+        (allow [
+          "create"
+          "update"
+          "delete"
+        ] cm.certificaterequests)
+        (watch cm.certificates)
+        (watch cm.certificaterequests)
+        (watch cm.issuers)
+        (watch cm.clusterissuers)
+        (watchAndFinalize net.ingresses)
+        (watchAndFinalize gw.gateways)
+        (watchAndFinalize gw.httproutes)
+        (watchAndFinalize gw.listenersets)
+        (emit core.events)
       ];
 
       "${name}-controller-approve:cert-manager-io" = grant [
-        (
-          cm.signers
-          |> restrictTo [
+        (lib.pipe cm.signers [
+          (restrictTo [
             "issuers.cert-manager.io/*"
             "clusterissuers.cert-manager.io/*"
-          ]
-          |> allow [ "approve" ]
-        )
+          ])
+          (allow [ "approve" ])
+        ])
       ];
 
       "${name}-controller-certificatesigningrequests" = grant [
-        (
-          certs.certificatesigningrequests
-          |> allow [
-            "get"
-            "list"
-            "watch"
-            "update"
-          ]
-        )
-        (
-          certs "certificatesigningrequests/status"
-          |> allow [
-            "update"
-            "patch"
-          ]
-        )
-        (
-          certs.signers
-          |> restrictTo [
+        (allow [
+          "get"
+          "list"
+          "watch"
+          "update"
+        ] certs.certificatesigningrequests)
+        (allow [
+          "update"
+          "patch"
+        ] (certs "certificatesigningrequests/status"))
+        (lib.pipe certs.signers [
+          (restrictTo [
             "issuers.cert-manager.io/*"
             "clusterissuers.cert-manager.io/*"
-          ]
-          |> allow [ "sign" ]
-        )
-        (authz.subjectaccessreviews |> allow [ "create" ])
+          ])
+          (allow [ "sign" ])
+        ])
+        (allow [ "create" ] authz.subjectaccessreviews)
       ];
     };
   };
@@ -232,16 +206,15 @@ let
     inherit labels;
     roles = {
       "${name}:leaderelection" = grant [
-        (
-          coord.leases
-          |> restrictTo [ "cert-manager-controller" ]
-          |> allow [
+        (lib.pipe coord.leases [
+          (restrictTo [ "cert-manager-controller" ])
+          (allow [
             "get"
             "update"
             "patch"
-          ]
-        )
-        (coord.leases |> allow [ "create" ])
+          ])
+        ])
+        (allow [ "create" ] coord.leases)
       ];
     };
   };
@@ -264,7 +237,7 @@ in
     labels = labels // {
       "rbac.authorization.k8s.io/aggregate-to-cluster-reader" = "true";
     };
-    extra.rules = grant [ (cm.clusterissuers |> watch) ];
+    extra.rules = grant [ (watch cm.clusterissuers) ];
   };
 
   viewRole = scope.mkClusterResource {
@@ -278,11 +251,11 @@ in
       "rbac.authorization.k8s.io/aggregate-to-cluster-reader" = "true";
     };
     extra.rules = grant [
-      (cm.certificates |> watch)
-      (cm.certificaterequests |> watch)
-      (cm.issuers |> watch)
-      (acme.challenges |> watch)
-      (acme.orders |> watch)
+      (watch cm.certificates)
+      (watch cm.certificaterequests)
+      (watch cm.issuers)
+      (watch acme.challenges)
+      (watch acme.orders)
     ];
   };
 
@@ -305,28 +278,22 @@ in
         "rbac.authorization.k8s.io/aggregate-to-admin" = "true";
       };
       extra.rules = grant [
-        (cm.certificates |> edit)
-        (cm.certificaterequests |> edit)
-        (cm.issuers |> edit)
-        (cm "certificates/status" |> allow [ "update" ])
+        (edit cm.certificates)
+        (edit cm.certificaterequests)
+        (edit cm.issuers)
+        (allow [ "update" ] (cm "certificates/status"))
         # The controller creates Challenges and Orders; users may only
         # clean them up or edit a Challenge.
-        (
-          acme.challenges
-          |> allow [
-            "delete"
-            "deletecollection"
-            "patch"
-            "update"
-          ]
-        )
-        (
-          acme.orders
-          |> allow [
-            "delete"
-            "deletecollection"
-          ]
-        )
+        (allow [
+          "delete"
+          "deletecollection"
+          "patch"
+          "update"
+        ] acme.challenges)
+        (allow [
+          "delete"
+          "deletecollection"
+        ] acme.orders)
       ];
     };
 
@@ -354,97 +321,95 @@ in
     else
       null;
 
-  controllerDeployment =
-    {
-      inherit name labels;
-      # The controller watches every cert-manager kind and crashes until the
-      # API server serves them.
-      requires = builtins.attrValues self.crds;
-      spec = {
-        # Leader-elected: one replica serves; from `node` up a standby takes
-        # over when a node is lost.
-        replicas = kix.availability.pick availability {
-          none = 1;
-          pod = 1;
-          node = 2;
-          zone = 2;
-        };
-        selector.matchLabels = labels;
-        template.spec = {
-          serviceAccount = self.controllerServiceAccount;
-          # Kubernetes' default, set because the scorecard asks every
-          # workload to set it.
-          terminationGracePeriodSeconds = 30;
-          enableServiceLinks = false;
-          securityContext = common.podSecurityContext;
-          containers = [
-            {
-              name = "cert-manager-controller";
-              image = kix.image.ref (common.checkRelease who config [ "image" ]);
-              imagePullPolicy = config.image.pullPolicy;
-              args = [
-                "--v=2"
-                "--cluster-resource-namespace=$(POD_NAMESPACE)"
-                "--leader-election-namespace=${ns}"
-                "--acme-http01-solver-image=${acmesolverImage}"
-              ]
-              ++ kix.guardArgs {
-                inherit who;
-                owned = {
-                  "--cluster-resource-namespace" =
-                    "the controller reads ClusterIssuer Secrets from the instance's namespace (out.clusterResourceNamespace); remove it.";
-                  "--leader-election-namespace" =
-                    "the leader-election Role lives in the instance's namespace; remove it.";
-                  "--acme-http01-solver-image" = "set operandImages.acmesolver instead.";
-                };
-              } config.extraArgs;
-              ports = [
-                {
-                  name = "http-metrics";
-                  containerPort = common.ports.metrics;
-                  protocol = "TCP";
-                }
-                {
-                  name = "http-healthz";
-                  containerPort = common.ports.controllerHealthz;
-                  protocol = "TCP";
-                }
-              ];
-              securityContext = common.containerSecurityContext;
-              # --cluster-resource-namespace expands $(POD_NAMESPACE), and
-              # Kubernetes leaves an undefined variable unexpanded.
-              env = kix.mkEnvVars (
-                kix.mergeEnv {
-                  inherit who;
-                  owned = [
-                    {
-                      vars.POD_NAMESPACE.valueFrom.fieldRef.fieldPath = "metadata.namespace";
-                      from = "the pod's namespace";
-                      fix = "Remove it; --cluster-resource-namespace reads it.";
-                    }
-                  ];
-                } config.env
-              );
-              livenessProbe = {
-                httpGet = {
-                  port = "http-healthz";
-                  path = "/livez";
-                  scheme = "HTTP";
-                };
-                initialDelaySeconds = 10;
-                periodSeconds = 10;
-                timeoutSeconds = 15;
-                successThreshold = 1;
-                failureThreshold = 8;
-              };
-              inherit (config) resources;
-            }
-          ];
-          nodeSelector."kubernetes.io/os" = "linux";
-        };
+  controllerDeployment = scope.mkDeployment {
+    inherit name labels;
+    # The controller watches every cert-manager kind and crashes until the
+    # API server serves them.
+    requires = builtins.attrValues self.crds;
+    spec = {
+      # Leader-elected: one replica serves; from `node` up a standby takes
+      # over when a node is lost.
+      replicas = kix.availability.pick availability {
+        none = 1;
+        pod = 1;
+        node = 2;
+        zone = 2;
       };
-    }
-    |> scope.mkDeployment;
+      selector.matchLabels = labels;
+      template.spec = {
+        serviceAccount = self.controllerServiceAccount;
+        # Kubernetes' default, set because the scorecard asks every
+        # workload to set it.
+        terminationGracePeriodSeconds = 30;
+        enableServiceLinks = false;
+        securityContext = common.podSecurityContext;
+        containers = [
+          {
+            name = "cert-manager-controller";
+            image = kix.image.ref (common.checkRelease who config [ "image" ]);
+            imagePullPolicy = config.image.pullPolicy;
+            args = [
+              "--v=2"
+              "--cluster-resource-namespace=$(POD_NAMESPACE)"
+              "--leader-election-namespace=${ns}"
+              "--acme-http01-solver-image=${acmesolverImage}"
+            ]
+            ++ kix.guardArgs {
+              inherit who;
+              owned = {
+                "--cluster-resource-namespace" =
+                  "the controller reads ClusterIssuer Secrets from the instance's namespace (out.clusterResourceNamespace); remove it.";
+                "--leader-election-namespace" =
+                  "the leader-election Role lives in the instance's namespace; remove it.";
+                "--acme-http01-solver-image" = "set operandImages.acmesolver instead.";
+              };
+            } config.extraArgs;
+            ports = [
+              {
+                name = "http-metrics";
+                containerPort = common.ports.metrics;
+                protocol = "TCP";
+              }
+              {
+                name = "http-healthz";
+                containerPort = common.ports.controllerHealthz;
+                protocol = "TCP";
+              }
+            ];
+            securityContext = common.containerSecurityContext;
+            # --cluster-resource-namespace expands $(POD_NAMESPACE), and
+            # Kubernetes leaves an undefined variable unexpanded.
+            env = kix.mkEnvVars (
+              kix.mergeEnv {
+                inherit who;
+                owned = [
+                  {
+                    vars.POD_NAMESPACE.valueFrom.fieldRef.fieldPath = "metadata.namespace";
+                    from = "the pod's namespace";
+                    fix = "Remove it; --cluster-resource-namespace reads it.";
+                  }
+                ];
+              } config.env
+            );
+            livenessProbe = {
+              httpGet = {
+                port = "http-healthz";
+                path = "/livez";
+                scheme = "HTTP";
+              };
+              initialDelaySeconds = 10;
+              periodSeconds = 10;
+              timeoutSeconds = 15;
+              successThreshold = 1;
+              failureThreshold = 8;
+            };
+            inherit (config) resources;
+          }
+        ];
+        nodeSelector."kubernetes.io/os" = "linux";
+      };
+    };
+  };
 }
 // controllerClusterRoles
 // controllerLeaderElection

@@ -65,31 +65,22 @@ let
     in
     grant (
       [
-        (
-          core.pods
-          |> allow [
-            "create"
-            "delete"
-            "get"
-          ]
-        )
-        (core "pods/status" |> allow [ "get" ])
-        (
-          [
-            core.secrets
-            core.serviceaccounts
-          ]
-          |> allow (createDelete ++ [ "list" ])
-        )
-        (
-          [
-            authz.rolebindings
-            authz.roles
-          ]
-          |> allow createDelete
-        )
+        (allow [
+          "create"
+          "delete"
+          "get"
+        ] core.pods)
+        (allow [ "get" ] (core "pods/status"))
+        (allow (createDelete ++ [ "list" ]) [
+          core.secrets
+          core.serviceaccounts
+        ])
+        (allow createDelete [
+          authz.rolebindings
+          authz.roles
+        ])
       ]
-      ++ lib.optional withTLS (core.configmaps |> allow [ "get" ])
+      ++ lib.optional withTLS (allow [ "get" ] core.configmaps)
     );
 in
 rec {

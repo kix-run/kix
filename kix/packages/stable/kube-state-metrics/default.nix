@@ -158,41 +158,41 @@ in
           labels = scope.selectorLabels;
           roles = {
             "${name}" = grant [
-              (core.configmaps |> watch)
-              (core.secrets |> watch)
-              (core.nodes |> watch)
-              (core.pods |> watch)
-              (core.services |> watch)
-              (core "resourcequotas" |> watch)
-              (core "replicationcontrollers" |> watch)
-              (core "limitranges" |> watch)
-              (core.persistentvolumeclaims |> watch)
-              (core.persistentvolumes |> watch)
-              (core.namespaces |> watch)
-              (core.endpoints |> watch)
-              (discovery.endpointslices |> watch)
-              (core.serviceaccounts |> watch)
-              (apps.statefulsets |> watch)
-              (apps.deployments |> watch)
-              (apps.replicasets |> watch)
-              (apps.daemonsets |> watch)
-              (batch.jobs |> watch)
-              (batch.cronjobs |> watch)
-              (autoscaling.horizontalpodautoscalers |> watch)
-              (policy.poddisruptionbudgets |> watch)
-              (certs.certificatesigningrequests |> watch)
-              (storage.storageclasses |> watch)
-              (storage.volumeattachments |> watch)
-              (admReg.mutatingwebhookconfigurations |> watch)
-              (admReg.validatingwebhookconfigurations |> watch)
-              (net.networkpolicies |> watch)
-              (net.ingresses |> watch)
-              (net.ingressclasses |> watch)
-              (coord.leases |> watch)
-              (rbacGroup.clusterroles |> watch)
-              (rbacGroup.clusterrolebindings |> watch)
-              (rbacGroup.roles |> watch)
-              (rbacGroup.rolebindings |> watch)
+              (watch core.configmaps)
+              (watch core.secrets)
+              (watch core.nodes)
+              (watch core.pods)
+              (watch core.services)
+              (watch (core "resourcequotas"))
+              (watch (core "replicationcontrollers"))
+              (watch (core "limitranges"))
+              (watch core.persistentvolumeclaims)
+              (watch core.persistentvolumes)
+              (watch core.namespaces)
+              (watch core.endpoints)
+              (watch discovery.endpointslices)
+              (watch core.serviceaccounts)
+              (watch apps.statefulsets)
+              (watch apps.deployments)
+              (watch apps.replicasets)
+              (watch apps.daemonsets)
+              (watch batch.jobs)
+              (watch batch.cronjobs)
+              (watch autoscaling.horizontalpodautoscalers)
+              (watch policy.poddisruptionbudgets)
+              (watch certs.certificatesigningrequests)
+              (watch storage.storageclasses)
+              (watch storage.volumeattachments)
+              (watch admReg.mutatingwebhookconfigurations)
+              (watch admReg.validatingwebhookconfigurations)
+              (watch net.networkpolicies)
+              (watch net.ingresses)
+              (watch net.ingressclasses)
+              (watch coord.leases)
+              (watch rbacGroup.clusterroles)
+              (watch rbacGroup.clusterrolebindings)
+              (watch rbacGroup.roles)
+              (watch rbacGroup.rolebindings)
             ];
           };
         };
@@ -245,9 +245,8 @@ in
           };
         };
 
-        service =
-          self.deployment
-          |> kix.service.fromWorkload {
+        service = lib.pipe self.deployment [
+          (kix.service.fromWorkload {
             inherit name;
             ports = [
               {
@@ -263,8 +262,9 @@ in
                 protocol = "TCP";
               }
             ];
-          }
-          |> scope.mkResource;
+          })
+          scope.mkResource
+        ];
 
         root = {
           resource = self.service;

@@ -330,18 +330,15 @@ let
         cr = group def.group [ ];
       in
       [
-        (cr def.plural |> allow def.access)
-        (cr "${def.plural}/finalizers" |> allow [ "update" ])
-        (
-          cr "${def.plural}/status"
-          |> allow [
-            "get"
-            "update"
-            "patch"
-            "create"
-            "delete"
-          ]
-        )
+        (allow def.access (cr def.plural))
+        (allow [ "update" ] (cr "${def.plural}/finalizers"))
+        (allow [
+          "get"
+          "update"
+          "patch"
+          "create"
+          "delete"
+        ] (cr "${def.plural}/status"))
       ]
     ) (import ./kinds.nix).crdDefs
   );
@@ -368,55 +365,49 @@ let
         # What an installation is made of. Secrets are in the list for the
         # ones a CR spec references, in whatever namespace the CR lives, and
         # for the operator's own from the credentials dep.
-        (core.configmaps |> full)
-        (core.services |> full)
-        (core.persistentvolumeclaims |> full)
-        (core.secrets |> full)
-        (apps.statefulsets |> full)
-        (policy.poddisruptionbudgets |> full)
+        (full core.configmaps)
+        (full core.services)
+        (full core.persistentvolumeclaims)
+        (full core.secrets)
+        (full apps.statefulsets)
+        (full policy.poddisruptionbudgets)
 
-        (core.endpoints |> watch)
-        (discovery.endpointslices |> watch)
-        (core.events |> allow [ "create" ])
+        (watch core.endpoints)
+        (watch discovery.endpointslices)
+        (allow [ "create" ] core.events)
         # The volumes behind an installation's claims.
-        (
-          core.persistentvolumes
-          |> allow [
-            "get"
-            "list"
-            "patch"
-            "update"
-            "watch"
-          ]
-        )
+        (allow [
+          "get"
+          "list"
+          "patch"
+          "update"
+          "watch"
+        ] core.persistentvolumes)
         # The operator labels operand pods and deletes one to restart a
         # host. It never creates a pod; the StatefulSets do.
-        (
-          core.pods
-          |> allow [
-            "get"
-            "list"
-            "patch"
-            "update"
-            "watch"
-            "delete"
-          ]
-        )
+        (allow [
+          "get"
+          "list"
+          "patch"
+          "update"
+          "watch"
+          "delete"
+        ] core.pods)
 
         # At startup the operator stamps its version on its own pod, the
         # ReplicaSet above it, and this Deployment. Upstream names the
         # Deployment and leaves the ReplicaSet open, since its name is not
         # known ahead of time.
-        (apps.replicasets |> manage)
-        (apps.deployments |> restrictTo [ name ] |> manage)
+        (manage apps.replicasets)
+        (lib.pipe apps.deployments [
+          (restrictTo [ name ])
+          manage
+        ])
 
-        (
-          apiext.customresourcedefinitions
-          |> allow [
-            "get"
-            "list"
-          ]
-        )
+        (allow [
+          "get"
+          "list"
+        ] apiext.customresourcedefinitions)
       ]
     );
   };
@@ -497,91 +488,94 @@ else
     );
 
     operatorDeployment =
-      {
-        inherit name labels;
-        # The operator watches every kind it ships and crashes until the API
-        # server serves them. Derived, so a new kinds.nix entry is included.
-        requires = builtins.attrValues self.crds;
-        spec = {
-          replicas = 1;
-          # The old pod is gone before the new one starts: there is no
-          # leader election, and two operators would both reconcile.
-          strategy.type = "Recreate";
-          selector.matchLabels = {
-            "app.kubernetes.io/name" = "clickhouse-operator";
-            "app.kubernetes.io/instance" = name;
-          };
-          template = {
-            metadata = {
-              inherit labels;
-              # Both binaries read the tree once, at startup.
-              annotations = {
-                "checksum/config" = self.configMap.out.contentHash;
-              }
-              // lib.listToAttrs (
-                map (
-                  f: lib.nameValuePair "checksum/${f.key}" self.fragmentConfigMaps.${f.key}.out.contentHash
-                ) fragments
-              );
+      lib.pipe
+        {
+          inherit name labels;
+          # The operator watches every kind it ships and crashes until the API
+          # server serves them. Derived, so a new kinds.nix entry is included.
+          requires = builtins.attrValues self.crds;
+          spec = {
+            replicas = 1;
+            # The old pod is gone before the new one starts: there is no
+            # leader election, and two operators would both reconcile.
+            strategy.type = "Recreate";
+            selector.matchLabels = {
+              "app.kubernetes.io/name" = "clickhouse-operator";
+              "app.kubernetes.io/instance" = name;
             };
-            spec = {
-              serviceAccountName = self.operatorServiceAccount.out.name;
-              automountServiceAccountToken = true;
-              # Long enough for a reconcile step in flight to return. What
-              # it leaves half done is picked up by the next start.
-              terminationGracePeriodSeconds = 30;
-              securityContext = {
-                runAsNonRoot = true;
-                runAsUser = 65534;
-                runAsGroup = 65534;
-                seccompProfile.type = "RuntimeDefault";
+            template = {
+              metadata = {
+                inherit labels;
+                # Both binaries read the tree once, at startup.
+                annotations = {
+                  "checksum/config" = self.configMap.out.contentHash;
+                }
+                // lib.listToAttrs (
+                  map (
+                    f: lib.nameValuePair "checksum/${f.key}" self.fragmentConfigMaps.${f.key}.out.contentHash
+                  ) fragments
+                );
               };
-              nodeSelector."kubernetes.io/os" = "linux";
-              containers = [
-                {
-                  name = "operator";
-                  image = kix.image.ref config.image;
-                  imagePullPolicy = config.image.pullPolicy;
-                  inherit env;
-                  ports = [ (kix.port "op-metrics" 9999) ];
-                  livenessProbe = portOpen "op-metrics";
-                  # The operator's own metrics, cheap to render.
-                  readinessProbe = probeTiming // {
-                    httpGet = {
-                      path = "/metrics";
-                      port = "op-metrics";
+              spec = {
+                serviceAccountName = self.operatorServiceAccount.out.name;
+                automountServiceAccountToken = true;
+                # Long enough for a reconcile step in flight to return. What
+                # it leaves half done is picked up by the next start.
+                terminationGracePeriodSeconds = 30;
+                securityContext = {
+                  runAsNonRoot = true;
+                  runAsUser = 65534;
+                  runAsGroup = 65534;
+                  seccompProfile.type = "RuntimeDefault";
+                };
+                nodeSelector."kubernetes.io/os" = "linux";
+                containers = [
+                  {
+                    name = "operator";
+                    image = kix.image.ref config.image;
+                    imagePullPolicy = config.image.pullPolicy;
+                    inherit env;
+                    ports = [ (kix.port "op-metrics" 9999) ];
+                    livenessProbe = portOpen "op-metrics";
+                    # The operator's own metrics, cheap to render.
+                    readinessProbe = probeTiming // {
+                      httpGet = {
+                        path = "/metrics";
+                        port = "op-metrics";
+                      };
                     };
-                  };
-                  inherit (config) resources;
-                  securityContext = containerSecurityContext;
-                }
-                {
-                  name = "metrics-exporter";
-                  image = kix.image.ref config.metricsExporterImage;
-                  imagePullPolicy = config.metricsExporterImage.pullPolicy;
-                  inherit env;
-                  ports = [ (kix.port "ch-metrics" 8888) ];
-                  # Not an HTTP probe: a GET on /metrics here queries every
-                  # ClickHouse host of every installation.
-                  livenessProbe = portOpen "ch-metrics";
-                  readinessProbe = portOpen "ch-metrics";
-                  resources = config.metricsExporterResources;
-                  securityContext = containerSecurityContext;
-                }
-              ];
+                    inherit (config) resources;
+                    securityContext = containerSecurityContext;
+                  }
+                  {
+                    name = "metrics-exporter";
+                    image = kix.image.ref config.metricsExporterImage;
+                    imagePullPolicy = config.metricsExporterImage.pullPolicy;
+                    inherit env;
+                    ports = [ (kix.port "ch-metrics" 8888) ];
+                    # Not an HTTP probe: a GET on /metrics here queries every
+                    # ClickHouse host of every installation.
+                    livenessProbe = portOpen "ch-metrics";
+                    readinessProbe = portOpen "ch-metrics";
+                    resources = config.metricsExporterResources;
+                    securityContext = containerSecurityContext;
+                  }
+                ];
+              };
             };
           };
-        };
-      }
-      |> kix.withMountsOn [ "operator" "metrics-exporter" ] mounts
-      |> scope.mkDeployment;
+        }
+        [
+          (kix.withMountsOn [ "operator" "metrics-exporter" ] mounts)
+          scope.mkDeployment
+        ];
 
-    operatorService =
-      self.operatorDeployment
-      |> kix.service.fromWorkload {
+    operatorService = lib.pipe self.operatorDeployment [
+      (kix.service.fromWorkload {
         name = "${name}-metrics";
         inherit labels;
-      }
-      |> scope.mkResource;
+      })
+      scope.mkResource
+    ];
   }
   // operatorClusterRoles

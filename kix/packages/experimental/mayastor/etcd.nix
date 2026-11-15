@@ -332,12 +332,12 @@ in
   };
 
   # Clients dial this Service, so they wait for Ready members.
-  etcdService =
-    self.etcd
-    |> kix.service.fromWorkload {
+  etcdService = lib.pipe self.etcd [
+    (kix.service.fromWorkload {
       name = "${name}-etcd";
       labels = c.componentLabels "etcd";
       ports = [ ports.client ];
-    }
-    |> scope.mkResource;
+    })
+    scope.mkResource
+  ];
 }

@@ -525,26 +525,27 @@ in
           # A create request carries no object name, so it cannot be limited to
           # the stackgres.io definitions.
           (allow [ "list" "create" ] apiext.customresourcedefinitions)
-          (
-            apiext.customresourcedefinitions
-            |> restrictTo sgCrdNames
-            |> allow [
+          (lib.pipe apiext.customresourcedefinitions [
+            (restrictTo sgCrdNames)
+            (allow [
               "get"
               "patch"
               "update"
-            ]
-          )
+            ])
+          ])
           # CrdWebhookInstaller updates both configurations.
-          (
+          (lib.pipe
             [
               admission.mutatingwebhookconfigurations
               admission.validatingwebhookconfigurations
             ]
-            |> map (restrictTo [ name ])
-            |> allow [
-              "get"
-              "patch"
-              "update"
+            [
+              (map (restrictTo [ name ]))
+              (allow [
+                "get"
+                "patch"
+                "update"
+              ])
             ]
           )
           # What the operator creates for each cluster, backup, and operation.
@@ -758,20 +759,21 @@ in
 
         metricsService =
           if config.metrics.enabled && prometheus != null then
-            self.operatorDeployment
-            |> kix.service.fromWorkload {
-              name = metricsServiceName;
-              labels."app.kubernetes.io/component" = "metrics";
-              ports = [
-                {
-                  name = "metrics";
-                  port = httpPort;
-                  targetPort = "http";
-                  protocol = "TCP";
-                }
-              ];
-            }
-            |> scope.mkResource
+            lib.pipe self.operatorDeployment [
+              (kix.service.fromWorkload {
+                name = metricsServiceName;
+                labels."app.kubernetes.io/component" = "metrics";
+                ports = [
+                  {
+                    name = "metrics";
+                    port = httpPort;
+                    targetPort = "http";
+                    protocol = "TCP";
+                  }
+                ];
+              })
+              scope.mkResource
+            ]
           else
             null;
 
@@ -800,13 +802,15 @@ in
           subjects = checkSubjects;
           labels = checkLabels;
           roles.${checkName} = grant [
-            (
+            (lib.pipe
               [
                 admission.mutatingwebhookconfigurations
                 admission.validatingwebhookconfigurations
               ]
-              |> map (restrictTo [ name ])
-              |> allow [ "get" ]
+              [
+                (map (restrictTo [ name ]))
+                (allow [ "get" ])
+              ]
             )
           ];
         };

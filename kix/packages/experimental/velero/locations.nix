@@ -116,37 +116,39 @@ in
     if !metricsOn then
       null
     else
-      self.deployment
-      |> kix.service.fromWorkload {
-        inherit name;
-        labels = componentLabels "server";
-        ports = [
-          {
-            name = "http-monitoring";
-            port = metricsPort;
-            targetPort = "http-monitoring";
-          }
-        ];
-      }
-      |> scope.mkResource;
+      lib.pipe self.deployment [
+        (kix.service.fromWorkload {
+          inherit name;
+          labels = componentLabels "server";
+          ports = [
+            {
+              name = "http-monitoring";
+              port = metricsPort;
+              targetPort = "http-monitoring";
+            }
+          ];
+        })
+        scope.mkResource
+      ];
 
   nodeAgentService =
     if !(metricsOn && config.nodeAgent.enabled) then
       null
     else
-      self.nodeAgent
-      |> kix.service.fromWorkload {
-        name = "${name}-node-agent";
-        labels = componentLabels "node-agent";
-        ports = [
-          {
-            name = "http-monitoring";
-            port = metricsPort;
-            targetPort = "http-monitoring";
-          }
-        ];
-      }
-      |> scope.mkResource;
+      lib.pipe self.nodeAgent [
+        (kix.service.fromWorkload {
+          name = "${name}-node-agent";
+          labels = componentLabels "node-agent";
+          ports = [
+            {
+              name = "http-monitoring";
+              port = metricsPort;
+              targetPort = "http-monitoring";
+            }
+          ];
+        })
+        scope.mkResource
+      ];
 
   backupStorageLocation = self.crds.backupStorageLocations.out.mkCR scope {
     name = "default";

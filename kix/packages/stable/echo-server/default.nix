@@ -136,94 +136,91 @@ in
         };
       };
 
-      deployment =
-        {
-          inherit name;
-          spec = {
-            replicas = config.replicas;
-            selector.matchLabels = scope.selectorLabels;
-            # nginx reads its config only at start, so a changed ConfigMap
-            # must roll the pods.
-            template.metadata.annotations."checksum/config" = self.configmap.out.contentHash;
-            template.spec = {
-              # nginx drains open connections on the image's SIGQUIT stop
-              # signal; the Kubernetes default bounds that wait.
-              terminationGracePeriodSeconds = 30;
-              containers = [
-                {
-                  name = "nginx";
-                  image = kix.image.ref config.image;
-                  imagePullPolicy = config.image.pullPolicy;
-                  # nginx-unprivileged runs as uid 101 and listens on 8080.
-                  securityContext = {
-                    runAsNonRoot = true;
-                    readOnlyRootFilesystem = true;
-                    allowPrivilegeEscalation = false;
-                    capabilities.drop = [ "ALL" ];
-                    seccompProfile.type = "RuntimeDefault";
+      deployment = scope.mkDeployment {
+        inherit name;
+        spec = {
+          replicas = config.replicas;
+          selector.matchLabels = scope.selectorLabels;
+          # nginx reads its config only at start, so a changed ConfigMap
+          # must roll the pods.
+          template.metadata.annotations."checksum/config" = self.configmap.out.contentHash;
+          template.spec = {
+            # nginx drains open connections on the image's SIGQUIT stop
+            # signal; the Kubernetes default bounds that wait.
+            terminationGracePeriodSeconds = 30;
+            containers = [
+              {
+                name = "nginx";
+                image = kix.image.ref config.image;
+                imagePullPolicy = config.image.pullPolicy;
+                # nginx-unprivileged runs as uid 101 and listens on 8080.
+                securityContext = {
+                  runAsNonRoot = true;
+                  readOnlyRootFilesystem = true;
+                  allowPrivilegeEscalation = false;
+                  capabilities.drop = [ "ALL" ];
+                  seccompProfile.type = "RuntimeDefault";
+                };
+                ports = [
+                  (kix.port "http" 8080)
+                ];
+                livenessProbe = {
+                  httpGet = {
+                    path = "/healthz";
+                    port = 8080;
                   };
-                  ports = [
-                    (kix.port "http" 8080)
-                  ];
-                  livenessProbe = {
-                    httpGet = {
-                      path = "/healthz";
-                      port = 8080;
-                    };
-                    periodSeconds = 10;
-                    failureThreshold = 3;
+                  periodSeconds = 10;
+                  failureThreshold = 3;
+                };
+                readinessProbe = {
+                  httpGet = {
+                    path = "/healthz";
+                    port = 8080;
                   };
-                  readinessProbe = {
-                    httpGet = {
-                      path = "/healthz";
-                      port = 8080;
-                    };
-                    periodSeconds = 5;
-                    failureThreshold = 1;
+                  periodSeconds = 5;
+                  failureThreshold = 1;
+                };
+                volumeMounts = [
+                  {
+                    name = "config";
+                    mountPath = "/etc/nginx/conf.d";
+                    readOnly = true;
+                  }
+                  # nginx-unprivileged keeps its pid file and temp paths
+                  # under /tmp.
+                  {
+                    name = "tmp";
+                    mountPath = "/tmp";
+                  }
+                ];
+                resources = {
+                  requests = {
+                    cpu = "50m";
+                    memory = "32Mi";
                   };
-                  volumeMounts = [
-                    {
-                      name = "config";
-                      mountPath = "/etc/nginx/conf.d";
-                      readOnly = true;
-                    }
-                    # nginx-unprivileged keeps its pid file and temp paths
-                    # under /tmp.
-                    {
-                      name = "tmp";
-                      mountPath = "/tmp";
-                    }
-                  ];
-                  resources = {
-                    requests = {
-                      cpu = "50m";
-                      memory = "32Mi";
-                    };
-                    limits = {
-                      cpu = "100m";
-                      memory = "64Mi";
-                    };
+                  limits = {
+                    cpu = "100m";
+                    memory = "64Mi";
                   };
-                }
-              ];
-              volumes = [
-                {
-                  name = "config";
-                  configMap.name = self.configmap.out.name;
-                }
-                {
-                  name = "tmp";
-                  emptyDir = { };
-                }
-              ];
-            };
+                };
+              }
+            ];
+            volumes = [
+              {
+                name = "config";
+                configMap.name = self.configmap.out.name;
+              }
+              {
+                name = "tmp";
+                emptyDir = { };
+              }
+            ];
           };
-        }
-        |> scope.mkDeployment;
+        };
+      };
 
-      service =
-        self.deployment
-        |> kix.service.fromWorkload {
+      service = lib.pipe self.deployment [
+        (kix.service.fromWorkload {
           inherit name;
           type = config.service.type;
           ports = [
@@ -234,8 +231,9 @@ in
               protocol = "TCP";
             }
           ];
-        }
-        |> scope.mkResource;
+        })
+        scope.mkResource
+      ];
 
       root = {
         resource = self.service;

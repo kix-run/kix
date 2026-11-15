@@ -157,93 +157,96 @@ in
 
   reconcile =
     if selfInit then
-      {
-        name = "${name}-reconcile";
-        labels = labelsFor "reconcile";
-        annotations.${kix.keys.rerun} = kix.keyValues.rerunOnChange;
-        requires = [ self.statefulSet ];
-        spec = {
-          # The container restarts with the kubelet's back-off, so six
-          # restarts cover a few minutes of an OpenBao that is still
-          # electing a leader.
-          backoffLimit = 6;
-          template = {
-            metadata.labels = labelsFor "reconcile";
-            spec = {
-              restartPolicy = "OnFailure";
-              serviceAccount = self.reconcileServiceAccount;
-              securityContext = {
-                runAsNonRoot = true;
-                runAsUser = uid;
-                runAsGroup = gid;
-                seccompProfile.type = "RuntimeDefault";
-              };
-              containers = [
-                {
-                  name = "reconcile";
-                  image = kix.image.ref config.image;
-                  imagePullPolicy = config.image.pullPolicy;
-                  command = [
-                    "/bin/sh"
-                    "/reconcile/reconcile.sh"
-                  ];
-                  workingDir = "/reconcile";
-                  env = kix.mkEnvVars {
-                    BAO_ADDR = serviceUrl;
-                    BAO_CACERT = "${dirs.tls}/ca.crt";
-                    RECONCILE_ROLE = reconcileRole;
-                    HOME = "/tmp";
-                  };
-                  resources = {
-                    requests = {
-                      cpu = "10m";
-                      memory = "32Mi";
+      lib.pipe
+        {
+          name = "${name}-reconcile";
+          labels = labelsFor "reconcile";
+          annotations.${kix.keys.rerun} = kix.keyValues.rerunOnChange;
+          requires = [ self.statefulSet ];
+          spec = {
+            # The container restarts with the kubelet's back-off, so six
+            # restarts cover a few minutes of an OpenBao that is still
+            # electing a leader.
+            backoffLimit = 6;
+            template = {
+              metadata.labels = labelsFor "reconcile";
+              spec = {
+                restartPolicy = "OnFailure";
+                serviceAccount = self.reconcileServiceAccount;
+                securityContext = {
+                  runAsNonRoot = true;
+                  runAsUser = uid;
+                  runAsGroup = gid;
+                  seccompProfile.type = "RuntimeDefault";
+                };
+                containers = [
+                  {
+                    name = "reconcile";
+                    image = kix.image.ref config.image;
+                    imagePullPolicy = config.image.pullPolicy;
+                    command = [
+                      "/bin/sh"
+                      "/reconcile/reconcile.sh"
+                    ];
+                    workingDir = "/reconcile";
+                    env = kix.mkEnvVars {
+                      BAO_ADDR = serviceUrl;
+                      BAO_CACERT = "${dirs.tls}/ca.crt";
+                      RECONCILE_ROLE = reconcileRole;
+                      HOME = "/tmp";
                     };
-                    limits = {
-                      cpu = "200m";
-                      memory = "128Mi";
+                    resources = {
+                      requests = {
+                        cpu = "10m";
+                        memory = "32Mi";
+                      };
+                      limits = {
+                        cpu = "200m";
+                        memory = "128Mi";
+                      };
                     };
-                  };
-                  securityContext = containerSecurity;
-                  volumeMounts = [
-                    {
-                      name = "ca";
-                      mountPath = dirs.tls;
-                      readOnly = true;
-                    }
-                  ];
-                }
-              ];
-              volumes = [
-                {
-                  name = "ca";
-                  secret = {
-                    secretName = tlsSecret;
-                    items = [
+                    securityContext = containerSecurity;
+                    volumeMounts = [
                       {
-                        key = "ca.crt";
-                        path = "ca.crt";
+                        name = "ca";
+                        mountPath = dirs.tls;
+                        readOnly = true;
                       }
                     ];
-                  };
-                }
-              ];
+                  }
+                ];
+                volumes = [
+                  {
+                    name = "ca";
+                    secret = {
+                      secretName = tlsSecret;
+                      items = [
+                        {
+                          key = "ca.crt";
+                          path = "ca.crt";
+                        }
+                      ];
+                    };
+                  }
+                ];
+              };
             };
           };
-        };
-      }
-      |> kix.withMounts [
-        (kix.mount.configMap self.reconcileConfigMap {
-          name = "reconcile";
-          mountPath = "/reconcile";
-          readOnly = true;
-        })
-        (kix.mount.emptyDir {
-          name = "tmp";
-          mountPath = "/tmp";
-        })
-      ]
-      |> scope.mkJob
+        }
+        [
+          (kix.withMounts [
+            (kix.mount.configMap self.reconcileConfigMap {
+              name = "reconcile";
+              mountPath = "/reconcile";
+              readOnly = true;
+            })
+            (kix.mount.emptyDir {
+              name = "tmp";
+              mountPath = "/tmp";
+            })
+          ])
+          scope.mkJob
+        ]
     else
       null;
 

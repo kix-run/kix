@@ -96,155 +96,123 @@ let
     };
 
   agentCore = roleSet mkClusterRoleSet "agentCoreServiceAccount" "agent-core" [
-    (core.namespaces |> restrictTo [ "kube-system" ] |> allow [ "get" ])
+    (lib.pipe core.namespaces [
+      (restrictTo [ "kube-system" ])
+      (allow [ "get" ])
+    ])
   ];
 
   operatorCluster = roleSet mkClusterRoleSet "operatorDiskpoolServiceAccount" "operator-diskpool" [
     # A create request carries no object name, so it cannot be limited to
     # these CRDs.
-    (apiext.customresourcedefinitions |> allow [ "create" ])
-    (
-      apiext.customresourcedefinitions
-      |> restrictTo operatorCrds
-      |> allow [
+    (allow [ "create" ] apiext.customresourcedefinitions)
+    (lib.pipe apiext.customresourcedefinitions [
+      (restrictTo operatorCrds)
+      (allow [
         "get"
         "update"
         "patch"
-      ]
-    )
-    (
-      sub "status" apiext.customresourcedefinitions
-      |> restrictTo operatorCrds
-      |> allow [
+      ])
+    ])
+    (lib.pipe (sub "status" apiext.customresourcedefinitions) [
+      (restrictTo operatorCrds)
+      (allow [
         "get"
         "update"
         "patch"
-      ]
-    )
+      ])
+    ])
   ];
 
   operatorNamespace = roleSet mkRoleSet "operatorDiskpoolServiceAccount" "operator-diskpool" [
-    (
-      openebs.diskpools
-      |> allow [
+    (allow [
+      "get"
+      "list"
+      "watch"
+      "create"
+      "update"
+      "patch"
+    ] openebs.diskpools)
+    (allow [
+      "update"
+      "patch"
+    ] (sub "status" openebs.diskpools))
+    (allow [
+      "get"
+      "list"
+      "patch"
+      "delete"
+      "deletecollection"
+    ] openebs.mayastorpools)
+    (allow [
+      "create"
+      "patch"
+    ] core.events)
+  ];
+
+  csiController = roleSet mkClusterRoleSet "csiControllerServiceAccount" "csi-controller" (
+    [
+      (allow [
         "get"
         "list"
         "watch"
         "create"
         "update"
         "patch"
-      ]
-    )
-    (
-      sub "status" openebs.diskpools
-      |> allow [
-        "update"
-        "patch"
-      ]
-    )
-    (
-      openebs.mayastorpools
-      |> allow [
+        "delete"
+      ] core.persistentvolumes)
+      (allow [
         "get"
         "list"
+        "watch"
+        "update"
         "patch"
-        "delete"
-        "deletecollection"
-      ]
-    )
-    (
-      core.events
-      |> allow [
+      ] core.persistentvolumeclaims)
+      (allow [ "patch" ] (sub "status" core.persistentvolumeclaims))
+      (watch storage.storageclasses)
+      (watch storage.csinodes)
+      (watch core.nodes)
+      (watch core.pods)
+      (allow [
+        "list"
+        "watch"
         "create"
+        "update"
         "patch"
-      ]
-    )
-  ];
-
-  csiController = roleSet mkClusterRoleSet "csiControllerServiceAccount" "csi-controller" (
-    [
-      (
-        core.persistentvolumes
-        |> allow [
-          "get"
-          "list"
-          "watch"
-          "create"
-          "update"
-          "patch"
-          "delete"
-        ]
-      )
-      (
-        core.persistentvolumeclaims
-        |> allow [
-          "get"
-          "list"
-          "watch"
-          "update"
-          "patch"
-        ]
-      )
-      (sub "status" core.persistentvolumeclaims |> allow [ "patch" ])
-      (storage.storageclasses |> watch)
-      (storage.csinodes |> watch)
-      (core.nodes |> watch)
-      (core.pods |> watch)
-      (
-        core.events
-        |> allow [
-          "list"
-          "watch"
-          "create"
-          "update"
-          "patch"
-        ]
-      )
-      (
-        storage.volumeattachments
-        |> allow [
-          "get"
-          "list"
-          "watch"
-          "update"
-          "patch"
-        ]
-      )
-      (sub "status" storage.volumeattachments |> allow [ "patch" ])
+      ] core.events)
+      (allow [
+        "get"
+        "list"
+        "watch"
+        "update"
+        "patch"
+      ] storage.volumeattachments)
+      (allow [ "patch" ] (sub "status" storage.volumeattachments))
     ]
     # csi-snapshotter's own rules, and the reads csi-provisioner makes to
     # restore a claim from a snapshot.
     ++ lib.optionals (snapshotController != null) [
-      (snapshot.volumesnapshotclasses |> watch)
-      (
-        snapshot.volumesnapshotcontents
-        |> allow [
-          "get"
-          "list"
-          "watch"
-          "update"
-          "patch"
-        ]
-      )
-      (
-        sub "status" snapshot.volumesnapshotcontents
-        |> allow [
-          "update"
-          "patch"
-        ]
-      )
-      (
-        snapshot.volumesnapshots
-        |> allow [
-          "get"
-          "list"
-        ]
-      )
+      (watch snapshot.volumesnapshotclasses)
+      (allow [
+        "get"
+        "list"
+        "watch"
+        "update"
+        "patch"
+      ] snapshot.volumesnapshotcontents)
+      (allow [
+        "update"
+        "patch"
+      ] (sub "status" snapshot.volumesnapshotcontents))
+      (allow [
+        "get"
+        "list"
+      ] snapshot.volumesnapshots)
     ]
   );
 
   csiNode = roleSet mkClusterRoleSet "csiNodeServiceAccount" "csi-node" [
-    (core.nodes |> allow [ "patch" ])
+    (allow [ "patch" ] core.nodes)
   ];
 
   # Read access to the pool key Secret alone, for a component that reads it.
@@ -257,7 +225,10 @@ let
       }
     else
       roleSet mkRoleSet saPart "${component}-pool-key" [
-        (core.secrets |> restrictTo [ key.out.name ] |> allow [ "get" ])
+        (lib.pipe core.secrets [
+          (restrictTo [ key.out.name ])
+          (allow [ "get" ])
+        ])
       ];
 
   operatorKey = keyReader "operatorDiskpoolServiceAccount" "operator-diskpool";

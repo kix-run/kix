@@ -525,36 +525,26 @@ in
           ];
           labels = selectorLabels;
           roles.${clusterName} = grant [
-            (
-              core.namespaces
-              |> allow [
-                "list"
-                "watch"
-              ]
-            )
+            (allow [
+              "list"
+              "watch"
+            ] core.namespaces)
             # A listener's certificateRefs and a BackendTLSPolicy's CA may
             # name Secrets and ConfigMaps in any namespace a ReferenceGrant
             # admits.
-            (
-              [
-                core.services
-                core.secrets
-                core.configmaps
-              ]
-              |> watch
-            )
-            (
-              disco.endpointslices
-              |> allow [
-                "list"
-                "watch"
-              ]
-            )
-            (map (k: gwApi.${k}) watchedKinds |> watch)
-            (
+            (watch [
+              core.services
+              core.secrets
+              core.configmaps
+            ])
+            (allow [
+              "list"
+              "watch"
+            ] disco.endpointslices)
+            (watch (map (k: gwApi.${k}) watchedKinds))
+            (allow [ "update" ] (
               map (k: gwApi "${k}/status") (builtins.filter (k: k != "referencegrants") watchedKinds)
-              |> allow [ "update" ]
-            )
+            ))
           ];
         };
 
@@ -704,21 +694,22 @@ in
 
           metricsService =
             if metricsOn then
-              self.deployment
-              |> kix.service.fromWorkload {
-                name = "${name}-metrics";
-                ports = [
-                  {
-                    name = "metrics";
-                    port = internalPort;
-                    targetPort = "traefik";
-                  }
-                ];
-                labels = selectorLabels // {
-                  "app.kubernetes.io/component" = "metrics";
-                };
-              }
-              |> scope.mkResource
+              lib.pipe self.deployment [
+                (kix.service.fromWorkload {
+                  name = "${name}-metrics";
+                  ports = [
+                    {
+                      name = "metrics";
+                      port = internalPort;
+                      targetPort = "traefik";
+                    }
+                  ];
+                  labels = selectorLabels // {
+                    "app.kubernetes.io/component" = "metrics";
+                  };
+                })
+                scope.mkResource
+              ]
             else
               null;
 

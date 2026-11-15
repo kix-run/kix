@@ -97,44 +97,47 @@ let
   controllerRbac = mkClusterRoleSet scope {
     subjects = subjectsFor self.serviceAccount;
     roles."${name}-controller" = grant [
-      (
+      (full (
         map es [
           "externalsecrets"
           "pushsecrets"
         ]
-        |> full
-      )
-      (
-        map es [
-          "clusterexternalsecrets"
-          "clusterpushsecrets"
-          "clustersecretstores"
-          "secretstores"
-        ]
-        |> allow [
+      ))
+      (allow
+        [
           "get"
           "list"
           "watch"
           "update"
           "patch"
         ]
+        (
+          map es [
+            "clusterexternalsecrets"
+            "clusterpushsecrets"
+            "clustersecretstores"
+            "secretstores"
+          ]
+        )
       )
-      (
-        map (p: es "${p}/status") [
-          "clusterexternalsecrets"
-          "clusterpushsecrets"
-          "clustersecretstores"
-          "externalsecrets"
-          "pushsecrets"
-          "secretstores"
-        ]
-        |> allow [
+      (allow
+        [
           "get"
           "update"
           "patch"
         ]
+        (
+          map (p: es "${p}/status") [
+            "clusterexternalsecrets"
+            "clusterpushsecrets"
+            "clustersecretstores"
+            "externalsecrets"
+            "pushsecrets"
+            "secretstores"
+          ]
+        )
       )
-      (
+      (finalize (
         map es [
           "clusterexternalsecrets"
           "clusterpushsecrets"
@@ -143,63 +146,51 @@ let
           "pushsecrets"
           "secretstores"
         ]
-        |> finalize
-      )
-      (
-        generators "generatorstates"
-        |> allow [
-          "get"
-          "list"
-          "watch"
-          "create"
-          "update"
-          "patch"
-          "delete"
-          "deletecollection"
-        ]
-      )
-      (
+      ))
+      (allow [
+        "get"
+        "list"
+        "watch"
+        "create"
+        "update"
+        "patch"
+        "delete"
+        "deletecollection"
+      ] (generators "generatorstates"))
+      (watch (
         map (s: generators (pluralOf s)) (
           builtins.filter (s: isGenerator s && kindOf s != "GeneratorState") crdSpecs
         )
-        |> watch
-      )
-      (
-        [
-          core.serviceaccounts
-          core.configmaps
-        ]
-        |> watch
-      )
-      (
-        core.namespaces
-        |> allow [
-          "get"
-          "list"
-          "watch"
-          "update"
-          "patch"
-        ]
-      )
-      (core.secrets |> full)
-      (core "serviceaccounts/token" |> allow [ "create" ])
-      (core.events |> emit)
+      ))
+      (watch [
+        core.serviceaccounts
+        core.configmaps
+      ])
+      (allow [
+        "get"
+        "list"
+        "watch"
+        "update"
+        "patch"
+      ] core.namespaces)
+      (full core.secrets)
+      (allow [ "create" ] (core "serviceaccounts/token"))
+      (emit core.events)
     ];
   };
 
   controllerLeaderRbac = mkRoleSet scope {
     subjects = subjectsFor self.serviceAccount;
     roles."${name}-leader-election" = grant [
-      (coord.leases |> allow [ "create" ])
-      (
-        coord.leases
-        |> restrictTo [ controllerLeaseName ]
-        |> allow [
+      (allow [ "create" ] coord.leases)
+      (lib.pipe coord.leases [
+        (restrictTo [ controllerLeaseName ])
+        (allow [
           "get"
           "update"
           "patch"
-        ]
-      )
+        ])
+      ])
     ];
   };
 in

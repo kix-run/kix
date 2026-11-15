@@ -504,78 +504,81 @@ in
         };
 
         bootstrapJob =
-          {
-            name = "${serverSideName}-bootstrap";
-            inherit labels;
-            annotations.${kix.keys.rerun} = kix.keyValues.rerunOnChange;
-            spec = {
-              backoffLimit = 10;
-              template = {
-                metadata = {
-                  inherit labels;
-                  # The deploy reruns the Job when its content or the content
-                  # of a Kix-built Secret or ConfigMap it reads changes. The
-                  # server is reached over the network, so its checksum
-                  # annotation reruns the Job when the server changes. An
-                  # imported server has no content hash.
-                  annotations = lib.filterAttrs (_: v: v != null) {
-                    "checksum/server" = server.contentHash or null;
+          lib.pipe
+            {
+              name = "${serverSideName}-bootstrap";
+              inherit labels;
+              annotations.${kix.keys.rerun} = kix.keyValues.rerunOnChange;
+              spec = {
+                backoffLimit = 10;
+                template = {
+                  metadata = {
+                    inherit labels;
+                    # The deploy reruns the Job when its content or the content
+                    # of a Kix-built Secret or ConfigMap it reads changes. The
+                    # server is reached over the network, so its checksum
+                    # annotation reruns the Job when the server changes. An
+                    # imported server has no content hash.
+                    annotations = lib.filterAttrs (_: v: v != null) {
+                      "checksum/server" = server.contentHash or null;
+                    };
                   };
-                };
-                spec = {
-                  restartPolicy = "OnFailure";
-                  automountServiceAccountToken = false;
-                  securityContext = {
-                    runAsNonRoot = true;
-                    runAsUser = 101;
-                    runAsGroup = 101;
-                    seccompProfile.type = "RuntimeDefault";
+                  spec = {
+                    restartPolicy = "OnFailure";
+                    automountServiceAccountToken = false;
+                    securityContext = {
+                      runAsNonRoot = true;
+                      runAsUser = 101;
+                      runAsGroup = 101;
+                      seccompProfile.type = "RuntimeDefault";
+                    };
+                    containers = [
+                      {
+                        name = "bootstrap";
+                        image = kix.image.ref config.image;
+                        imagePullPolicy = config.image.pullPolicy;
+                        command = [
+                          "/bin/sh"
+                          "/bootstrap/bootstrap.sh"
+                        ];
+                        env = kix.mkEnvVars {
+                          HOME = "/home/clickhouse";
+                          CH_HOST = server.host;
+                          CH_PORT = server.ports.native;
+                          CH_ADMIN_USER = server.username;
+                          CH_ADMIN_PASSWORD = server.credentials.out.keyRef "password";
+                          NEW_PASSWORD = self.bootstrapPassword.out.keyRef "password";
+                        };
+                        resources = {
+                          requests = {
+                            cpu = "50m";
+                            memory = "128Mi";
+                          };
+                          limits = {
+                            cpu = "500m";
+                            memory = "256Mi";
+                          };
+                        };
+                        securityContext = {
+                          runAsNonRoot = true;
+                          allowPrivilegeEscalation = false;
+                          readOnlyRootFilesystem = true;
+                          capabilities.drop = [ "ALL" ];
+                        };
+                      }
+                    ];
                   };
-                  containers = [
-                    {
-                      name = "bootstrap";
-                      image = kix.image.ref config.image;
-                      imagePullPolicy = config.image.pullPolicy;
-                      command = [
-                        "/bin/sh"
-                        "/bootstrap/bootstrap.sh"
-                      ];
-                      env = kix.mkEnvVars {
-                        HOME = "/home/clickhouse";
-                        CH_HOST = server.host;
-                        CH_PORT = server.ports.native;
-                        CH_ADMIN_USER = server.username;
-                        CH_ADMIN_PASSWORD = server.credentials.out.keyRef "password";
-                        NEW_PASSWORD = self.bootstrapPassword.out.keyRef "password";
-                      };
-                      resources = {
-                        requests = {
-                          cpu = "50m";
-                          memory = "128Mi";
-                        };
-                        limits = {
-                          cpu = "500m";
-                          memory = "256Mi";
-                        };
-                      };
-                      securityContext = {
-                        runAsNonRoot = true;
-                        allowPrivilegeEscalation = false;
-                        readOnlyRootFilesystem = true;
-                        capabilities.drop = [ "ALL" ];
-                      };
-                    }
-                  ];
                 };
               };
-            };
-          }
-          |> kix.withMounts [
-            self.bootstrapMount
-            self.schemaMount
-            self.homeMount
-          ]
-          |> backendScope.mkJob;
+            }
+            [
+              (kix.withMounts [
+                self.bootstrapMount
+                self.schemaMount
+                self.homeMount
+              ])
+              backendScope.mkJob
+            ];
 
         # The server's outputs with the bootstrap Job riding on every address,
         # so whoever reads `out.host` waits for the database to exist.
