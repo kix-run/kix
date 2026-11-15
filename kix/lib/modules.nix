@@ -169,8 +169,7 @@ in
 
                   For multi-instance disambiguation prefer `deps.<argName>
                   = ref.<ns>.<inst>` at the consumer site. Aliases are
-                  not the right tool for that case.  See BEST-PRACTICES
-                  §8.4.
+                  not the right tool for that case.
                 '';
               };
               config = lib.mkOption {
@@ -776,13 +775,13 @@ in
               control plane, org-convention metadata). Exempted from the
               architecture.annotationDomainOwnership lint alongside the
               reserved Kubernetes domains and domains declared by in-cluster
-              packages via meta.annotationDomains (v2_discussions/128).
+              packages via meta.annotationDomains.
             '';
           };
         };
       };
       default = { };
-      description = "Scorecard policy evaluation. See v2_discussions/60_scorecard_rules_design.md.";
+      description = "Scorecard policy evaluation. See https://kix.run/docs/reference/scorecard-and-rules/.";
     };
 
     consumers = lib.mkOption {

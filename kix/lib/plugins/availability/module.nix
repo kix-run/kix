@@ -96,7 +96,8 @@ in
           compiler derives topology spread and a PodDisruptionBudget for
           every workload above one replica. A level the substrate cannot
           honour is an error. Per-instance override:
-          instances.<ns>.<inst>.availability. See v2_discussions/145.
+          instances.<ns>.<inst>.availability. See
+          https://kix.run/docs/explanation/availability-levels/.
         '';
       };
       substrate = lib.mkOption {

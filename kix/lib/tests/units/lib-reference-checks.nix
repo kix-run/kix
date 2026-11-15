@@ -767,7 +767,7 @@ in
     (whoOf ms == "managed" && importMarker ms == null)
     || throw "activated optional: ${whoOf ms}, import marker ${builtins.toJSON (importMarker ms)}";
 
-  # A shelf package pulled for another dependency also answers `x`. The
+  # A catalog package pulled for another dependency also answers `x`. The
   # managed, auto-instantiated instance wins over the import.
   lib-reference-checks-auto-instantiated-leaves-import-inactive =
     let

@@ -1,6 +1,6 @@
-# Tests for auto-instantiating a shelf package that runs once per cluster
+# Tests for auto-instantiating a catalog package that runs once per cluster
 # (a `cluster:<own key>` meta.conflictsWith entry, or a meta.roles claim).
-# Auto-instantiation needs a namespace for it (the shelf entry's
+# Auto-instantiation needs a namespace for it (the catalog entry's
 # `namespace`, or `autoNamespace`), refuses to place it beside its only
 # consumer (eval/auto.nix besideConsumerRefusals), and refuses a cluster
 # that would place it in more than one namespace (spreadRefusals). A declared instance that answers the dependency serves
@@ -30,7 +30,7 @@ let
     out.who = "op";
   };
 
-  # The same package without the marker: a plain shelf dependency, placed
+  # The same package without the marker: a plain catalog dependency, placed
   # once per requesting namespace.
   plain = mkCmPackage {
     name = "op";
@@ -62,7 +62,7 @@ let
 
   consumer = mkConsumer "consumer";
 
-  # A plain shelf package that requires `op`. Each namespace that demands
+  # A plain catalog package that requires `op`. Each namespace that demands
   # `mid` gets its own copy, which then demands `op`.
   middle = {
     meta = {
@@ -119,7 +119,7 @@ let
       builtins.filter (m: m.metadata.name == "consumer") (ofKind "ConfigMap" ms)
     )).data.who or "missing";
 
-  shelfWith = package: { availablePackages.op.package = package; };
+  catalogWith = package: { availablePackages.op.package = package; };
 
   # A package that ships one CRD, with `metaExtra` merged into its meta. It
   # answers `op`, so `consumer` can depend on it.
@@ -160,20 +160,20 @@ let
 in
 {
   # A singleton that would land beside its only consumer is refused. A
-  # plain shelf package, autoNamespace, or a catalog namespace are not.
+  # plain catalog package, autoNamespace, or a catalog namespace are not.
   # tryEval drops the message, which starts with the change record id.
   singleton-auto-beside-consumer-refused =
     (
       fails (mkCluster [
-        (shelfWith singleton)
+        (catalogWith singleton)
         { instances.a.consumer.package = consumer; }
       ])
       && !fails (mkCluster [
-        (shelfWith plain)
+        (catalogWith plain)
         { instances.a.consumer.package = consumer; }
       ])
       && !fails (mkCluster [
-        (shelfWith singleton)
+        (catalogWith singleton)
         {
           autoNamespace = "ops";
           instances.a.consumer.package = consumer;
@@ -192,7 +192,7 @@ in
     || throw "beside-consumer refusal: a singleton beside its consumer evaluated, or a control failed";
 
   # With no instance anywhere, two consumers in one namespace pull the
-  # singleton into the shelf entry's namespace once, and both share it.
+  # singleton into the catalog entry's namespace once, and both share it.
   singleton-auto-one-namespace-instantiates =
     let
       ms = manifests (mkCluster [
@@ -213,7 +213,7 @@ in
   # place op in both namespaces, so the cluster is refused.
   singleton-auto-two-namespaces-fail =
     fails (mkCluster [
-      (shelfWith singleton)
+      (catalogWith singleton)
       {
         instances.a.consumer.package = consumer;
         instances.b.consumer.package = consumer;
@@ -221,7 +221,7 @@ in
     ])
     || throw "a singleton demanded from two namespaces evaluated";
 
-  # A meta.roles claim makes a shelf package one per cluster too, also when
+  # A meta.roles claim makes a catalog package one per cluster too, also when
   # the demand names the package rather than the role.
   singleton-auto-role-claimer-two-namespaces-fail =
     let
@@ -235,13 +235,13 @@ in
       };
     in
     fails (mkCluster [
-      (shelfWith claimer)
+      (catalogWith claimer)
       {
         instances.a.consumer.package = consumer;
         instances.b.consumer.package = consumer;
       }
     ])
-    || throw "a role-claiming shelf package demanded from two namespaces evaluated";
+    || throw "a role-claiming catalog package demanded from two namespaces evaluated";
 
   # mid floats into a and b and requires op in each, which would place op
   # twice.
@@ -281,7 +281,7 @@ in
   # entry refuses the cluster.
   singleton-auto-declared-instance-not-answering-fails =
     fails (mkCluster [
-      (shelfWith singleton)
+      (catalogWith singleton)
       {
         instances.ops.myop = {
           package = singleton;
@@ -357,7 +357,7 @@ in
   # cluster is refused.
   singleton-auto-bound-consumer-refused =
     fails (mkCluster [
-      (shelfWith singleton)
+      (catalogWith singleton)
       (
         { ref, ... }:
         {
@@ -375,7 +375,7 @@ in
   singleton-auto-declared-instance-serves-every-namespace =
     let
       ms = manifests (mkCluster [
-        (shelfWith singleton)
+        (catalogWith singleton)
         {
           instances.ops.op.package = singleton;
           instances.a.consumer.package = consumer;
@@ -386,9 +386,9 @@ in
     (opNamespaces ms == [ "ops" ] && whoIn "a" ms == "ops/op" && whoIn "b" ms == "ops/op")
     || throw "declared singleton not shared: ${builtins.toJSON (opNamespaces ms)}";
 
-  # A shelf entry with a fixed namespace places the singleton once whoever
+  # A catalog entry with a fixed namespace places the singleton once whoever
   # demands it.
-  singleton-auto-fixed-shelf-namespace-builds =
+  singleton-auto-fixed-catalog-namespace-builds =
     let
       ms = manifests (mkCluster [
         {
@@ -405,11 +405,11 @@ in
     || throw "fixed-namespace singleton placed in ${builtins.toJSON (opNamespaces ms)}";
 
   # Each namespace's optional instance answers its own consumer, even though
-  # the shelf entry for `op` runs once per cluster; the shelf is not used.
+  # the catalog entry for `op` runs once per cluster; the catalog is not used.
   singleton-auto-optional-per-namespace-selection =
     let
       ms = manifests (mkCluster [
-        (shelfWith singleton)
+        (catalogWith singleton)
         {
           instances.a.op = {
             package = plain;
@@ -431,7 +431,7 @@ in
   singleton-auto-plain-package-placed-per-namespace =
     let
       ms = manifests (mkCluster [
-        (shelfWith plain)
+        (catalogWith plain)
         {
           instances.a.consumer.package = consumer;
           instances.b.consumer.package = consumer;
@@ -442,7 +442,7 @@ in
       "a"
       "b"
     ]
-    || throw "plain shelf package placed in ${builtins.toJSON (opNamespaces ms)}";
+    || throw "plain catalog package placed in ${builtins.toJSON (opNamespaces ms)}";
 
   # One instance of a CRD owner evaluates without any conflictsWith entry;
   # two in different namespaces render the same CRD and fail.
@@ -465,7 +465,7 @@ in
   # requesting namespace.
   singleton-auto-shared-crd-from-auto-instantiation-fails =
     fails (mkCluster [
-      (shelfWith (mkCrdOwner { }))
+      (catalogWith (mkCrdOwner { }))
       {
         instances.a.consumer.package = mkConsumer "consumer";
         instances.b.consumer.package = mkConsumer "consumer";

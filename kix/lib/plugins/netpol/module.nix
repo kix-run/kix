@@ -82,7 +82,7 @@ in
               Also used for a Kix workload whose egress depends on its
               configuration, when the package's error or description asks
               for one (infisical-operator `address`, coredns `servers`).
-              See v2_discussions/archive/92_declarative_network_policy_intents.md.
+              See https://kix.run/docs/explanation/network-policy/.
             '';
           };
         };
@@ -90,9 +90,9 @@ in
     );
     default = { };
     description = ''
-      CiliumNetworkPolicy generation from DI graph. See v2_discussions/37
-      and v2_discussions/83. The enforcer that CNPs depend on is looked up
-      automatically via `meta.roles ∋ "network-policy-enforcer"` (see
+      CiliumNetworkPolicy generation from the dependency graph. See
+      https://kix.run/docs/explanation/network-policy/. The enforcer that
+      CNPs depend on is looked up automatically via `meta.roles ∋ "network-policy-enforcer"` (see
       `kix/packages/experimental/cilium`). No explicit wiring is required, but an
       enforcer instance MUST be declared when `enable = true`. kix throws
       at cluster eval time if no enforcer is resolved: without the

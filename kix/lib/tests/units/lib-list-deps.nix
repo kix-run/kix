@@ -158,15 +158,15 @@ in
     )
     || throw "single ref: ${builtins.toJSON data}";
 
-  # An element naming a shelf package that nothing auto-instantiated fails
+  # An element naming a catalog package that nothing auto-instantiated fails
   # the build, and the message names the requester, the dependency, and the
   # element.
   lib-list-deps-missing-element-fails =
     let
       fails = evalFails (
-        clusterWith { availablePackages.shelf.package = target { name = "shelf"; }; } (ref: [
+        clusterWith { availablePackages.catalog.package = target { name = "catalog"; }; } (ref: [
           ref.infra.a
-          ref.appns.shelf
+          ref.appns.catalog
         ])
       );
       message =
@@ -180,7 +180,7 @@ in
             {
               _type = "kix-ref";
               namespace = "appns";
-              instanceName = "shelf";
+              instanceName = "catalog";
             }
           ];
           mergedInstances.infra.a = { };
@@ -188,7 +188,7 @@ in
     in
     (
       fails
-      && lib.hasInfix "appns/consumer: deps.logins lists ref.appns.shelf, which is not a declared instance" message
+      && lib.hasInfix "appns/consumer: deps.logins lists ref.appns.catalog, which is not a declared instance" message
     )
     || throw "missing element: fails=${builtins.toJSON fails} message=${message}";
 
