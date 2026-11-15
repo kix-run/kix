@@ -5,6 +5,7 @@ mod client;
 mod commands;
 mod dispatch;
 mod exit;
+mod interrupt;
 mod output;
 mod plan;
 mod plugin;

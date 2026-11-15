@@ -262,7 +262,7 @@ pub(crate) async fn dry_run_of(
         names_flags,
     );
     let cancel = config.cancel.clone();
-    cancel.cancel_on_interrupt();
+    crate::interrupt::cancel_on_interrupt(&cancel);
 
     // Count the writes the plan's `objects` lists, so the progress line
     // and the plan's object count agree.
