@@ -21,8 +21,7 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
-use yaml_rust2::parser::{Event, Parser, Tag};
-use yaml_rust2::scanner::TScalarStyle;
+use granit_parser::{Event, Parser, ScalarStyle, Tag};
 
 /// A YAML stream that Kix cannot convert to JSON.
 #[derive(Debug, thiserror::Error)]
@@ -69,15 +68,13 @@ pub fn to_json(yaml: &str) -> Result<String, YamlError> {
     let mut stack: Vec<Frame> = Vec::new();
     let mut anchors: HashMap<usize, (Node, Option<String>)> = HashMap::new();
 
-    loop {
-        let (event, mark) = parser
-            .next_token()
-            .map_err(|e| YamlError(format!("the chart's output is not valid YAML: {e}")))?;
-        let at = || format!("line {} column {}", mark.line(), mark.col() + 1);
+    while let Some(next) = parser.next_event() {
+        let (event, span) =
+            next.map_err(|e| YamlError(format!("the chart's output is not valid YAML: {e}")))?;
+        let at = || format!("line {} column {}", span.start.line(), span.start.col() + 1);
         let (node, key_text) = match event {
             Event::StreamEnd => break,
-            Event::Nothing | Event::StreamStart => continue,
-            Event::DocumentStart => {
+            Event::DocumentStart(..) => {
                 root = None;
                 continue;
             }
@@ -86,9 +83,10 @@ pub fn to_json(yaml: &str) -> Result<String, YamlError> {
                 continue;
             }
             Event::Scalar(value, style, anchor, tag) => {
-                let node = scalar(&value, style, tag.as_ref())
+                let node = scalar(&value, style, tag.as_deref())
                     .map_err(|e| YamlError(format!("{e} at {}", at())))?;
-                let merge = style == TScalarStyle::Plain && tag.is_none() && value == "<<";
+                let merge = style == ScalarStyle::Plain && tag.is_none() && value == "<<";
+                let value = value.into_owned();
                 if anchor > 0 {
                     anchors.insert(anchor, (node.clone(), Some(value.clone())));
                 }
@@ -108,14 +106,14 @@ pub fn to_json(yaml: &str) -> Result<String, YamlError> {
                     .ok_or_else(|| YamlError(format!("an alias names no anchor at {}", at())))?;
                 (node, text.map(KeyText::Name))
             }
-            Event::SequenceStart(anchor, _) => {
+            Event::SequenceStart(_, anchor, _) => {
                 stack.push(Frame::Seq {
                     anchor,
                     items: Vec::new(),
                 });
                 continue;
             }
-            Event::MappingStart(anchor, _) => {
+            Event::MappingStart(_, anchor, _) => {
                 stack.push(Frame::Map {
                     anchor,
                     entries: Vec::new(),
@@ -136,6 +134,9 @@ pub fn to_json(yaml: &str) -> Result<String, YamlError> {
                 }
                 (node, None)
             }
+            // The stream start, and the comment and anchor events the
+            // parser emits only when asked to.
+            _ => continue,
         };
         match stack.last_mut() {
             None => root = Some(node),
@@ -192,11 +193,11 @@ fn merge(entries: &mut Vec<(String, Node)>, value: Node) {
 }
 
 /// Return the node a scalar becomes, typed as yq types it.
-fn scalar(value: &str, style: TScalarStyle, tag: Option<&Tag>) -> Result<Node, String> {
+fn scalar(value: &str, style: ScalarStyle, tag: Option<&Tag>) -> Result<Node, String> {
     if let Some(tag) = tag
-        && tag.handle == "tag:yaml.org,2002:"
+        && tag.handle() == "tag:yaml.org,2002:"
     {
-        return match tag.suffix.as_str() {
+        return match tag.suffix() {
             "null" => Ok(Node::Null),
             "bool" => Ok(Node::Bool(matches!(
                 value.to_ascii_lowercase().as_str(),
@@ -207,7 +208,7 @@ fn scalar(value: &str, style: TScalarStyle, tag: Option<&Tag>) -> Result<Node, S
             _ => Ok(Node::Str(value.to_string())),
         };
     }
-    if style != TScalarStyle::Plain {
+    if style != ScalarStyle::Plain {
         return Ok(Node::Str(value.to_string()));
     }
     plain(value)
