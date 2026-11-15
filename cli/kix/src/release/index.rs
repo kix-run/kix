@@ -84,8 +84,8 @@ struct RawRelease {
 
 impl Index {
     /// Parse the index, or say why it cannot be read.
-    pub fn parse(bytes: &[u8]) -> Result<Self, String> {
-        let raw: RawIndex = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+    pub fn parse(bytes: &[u8]) -> Result<Self, serde_json::Error> {
+        let raw: RawIndex = serde_json::from_slice(bytes)?;
         let releases = raw
             .releases
             .into_iter()

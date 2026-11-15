@@ -44,6 +44,15 @@ pub enum KixEvalError {
     #[error("could not read the built resources and their dependencies: {message}")]
     StoreGraphError { message: String },
 
+    #[error(
+        "could not read the built resources and their dependencies: failed to read the build at {}: {reason}",
+        .location.display()
+    )]
+    UnreadableBuild {
+        location: std::path::PathBuf,
+        reason: super::build_files::BuildFilesError,
+    },
+
     /// A check that only a bug in Kix (or, with `library`, in the Kix
     /// library) can fail. `detail` is for the maintainers.
     #[error(
