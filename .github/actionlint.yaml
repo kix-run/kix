@@ -1,0 +1,12 @@
+# Labels of the self-hosted runners the workflows use, so actionlint can
+# check `runs-on`. Spindle names a VM shape per label (spindle-smoke.yml),
+# and the kix-* runners are VMs on the Mac Studio.
+self-hosted-runner:
+  labels:
+    - spindle-2c-4g
+    - spindle-8c-16g
+    - spindle-8c-16g-100d
+    - kix-linux-nix
+    - kix-linux-nonix
+    - kix-macos-nix
+    - kix-macos-nonix

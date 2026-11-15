@@ -1,9 +1,9 @@
 name: CLI tests
 
-# Nothing ran `cargo test` in CI until 2026-09-20. Four snapshot tests had
-# been failing on main for days and the only way to find out was to run the
-# suite by hand, which told whoever did that they had broken something they
-# had not.
+# Runs the CLI's `cargo test` suite, formatting, clippy, and a security
+# audit of its dependencies on every pull request that can change what the
+# CLI does or prints. On main, the same workflow also builds, signs, and
+# publishes a release when cli/Cargo.toml names a version with no tag yet.
 #
 # The tests cannot run inside a Nix build: the crane package sets
 # `doCheck = false` because the integration tests need a writable Nix store

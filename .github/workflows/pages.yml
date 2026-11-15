@@ -21,8 +21,7 @@ name: Deploy site to Cloudflare Pages
 # `.md` twin of a docs page to clients sending `Accept: text/markdown`.
 # See docs/README.md § Agent-facing surface.
 #
-# The site also carries what an installed Kix and the install script fetch
-# (v2_discussions/163_cli_install_versions_and_upgrades.md § 2):
+# The site also carries what an installed Kix and the install script fetch:
 #
 #   kix.run/install                       ← web/public/install
 #   kix.run/releases/index.json           ← web/scripts/release-index.mjs
@@ -34,16 +33,14 @@ name: Deploy site to Cloudflare Pages
 # run started by the release merge, which fetches before the release exists,
 # is followed by one that lists it.
 #
-# kix-examples is a separate private repo (kix-run/kix-examples) used
-# by the snippet pipeline. CI checks it out with a PAT and overrides
-# the flake input at build time, so the docs flake's local file://
-# input stays untouched for dev workflow.
+# kix-examples is a separate private repository (kix-run/kix-examples) that
+# the snippet pipeline reads. CI checks it out with the KIX_EXAMPLES_TOKEN
+# secret and overrides the docs flake's input with that checkout, so the
+# input itself keeps pointing at a local folder for development.
 #
-# Deploys go to Cloudflare Pages, not GitHub Pages: kixpkgs is a
-# private repo in a Free-plan org, and GitHub Pages only serves
-# public repos on that plan. Cloudflare Pages direct upload has no
-# such restriction. Needs two repo secrets: CLOUDFLARE_API_TOKEN
-# (scoped to "Cloudflare Pages: Edit") and CLOUDFLARE_ACCOUNT_ID.
+# The site is deployed to Cloudflare Pages by direct upload. It needs two
+# repository secrets: CLOUDFLARE_API_TOKEN (scoped to "Cloudflare Pages:
+# Edit") and CLOUDFLARE_ACCOUNT_ID.
 
 on:
   push:
@@ -82,27 +79,23 @@ jobs:
       # configuration into /etc/nix/nix.conf. Every `nix` call in the job
       # reads NIX_CONFIG instead.
       #
-      # GITHUB_TOKEN lets Nix fetch this private repo as a flake input. It
-      # is sufficient ONLY because `--override-input kix-examples` below
-      # bypasses the one fetch it cannot cover (kix-run/kix-examples is a
-      # different repository).
-      # `extra-` matters: the bare `experimental-features` REPLACES whatever
-      # /etc/nix/nix.conf enabled, and the Spindle image now enables
-      # `configurable-impure-env` there to carry a crates.io User-Agent
-      # workaround. Replacing the list dropped that feature while leaving the
-      # `impure-env` setting that needs it in place, which Nix rejects
-      # outright ("experimental Nix feature 'configurable-impure-env' is
-      # disabled"). Every monorepo workflow uses the additive form for the
-      # same reason.
+      # GITHUB_TOKEN lets Nix fetch this repository as a flake input. It
+      # cannot read kix-run/kix-examples, which `--override-input
+      # kix-examples` below replaces with a checkout.
+      #
+      # `extra-experimental-features` adds to what /etc/nix/nix.conf
+      # enables. The image enables `configurable-impure-env` there for its
+      # `impure-env` setting, and Nix refuses to start if a bare
+      # `experimental-features` list drops it.
       NIX_CONFIG: |
         extra-experimental-features = nix-command flakes pipe-operators
         accept-flake-config = true
         access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
     steps:
-      - name: Checkout kixpkgs
+      - name: Checkout kix
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
-          path: kixpkgs
+          path: kix
           # Nix's git fetcher needs the full history to resolve refs/revs
           # cleanly. Default fetch-depth=1 (shallow) breaks things.
           fetch-depth: 0
@@ -111,7 +104,7 @@ jobs:
       # index. A tag whose release is not published yet, or was published
       # without a signature, has no file to fetch and is left out.
       - name: Fetch release sums
-        working-directory: kixpkgs
+        working-directory: kix
         run: |
           base=https://github.com/kix-run/kix-releases/releases/download
           mkdir -p ../releases-src
@@ -142,15 +135,14 @@ jobs:
       # is free to collect paths the live system is using. The image's
       # substituters cover the same ground more safely: cache.nixos.org
       # plus the Lithus read-through cache at nix-cache.example.com, both
-      # already configured in the image. Only kixpkgs' own derivations
-      # rebuild each run.
+      # already configured in the image. Only this repository's own
+      # derivations rebuild each run.
       # No actions/setup-node step: it downloads an official Node tarball
       # dynamically linked against glibc's loader, which does not exist on
       # NixOS, so every later `node` call would die with "No such file or
       # directory". The image provides Node 24 and npm on PATH instead.
-      # That is a version bump from the 22 this workflow used to pin.
       - name: Build landing page
-        working-directory: kixpkgs/web
+        working-directory: kix/web
         run: |
           npm ci
           npm run build
@@ -165,7 +157,7 @@ jobs:
       # by the list of tags, since a tag's docs never change.
       - name: Plan docs builds
         id: docs
-        working-directory: kixpkgs
+        working-directory: kix
         run: |
           releases=$(git tag -l 'v[0-9]*' --sort=-v:refname | grep -v -- - || true)
           latest=$(head -n1 <<<"$releases")
@@ -183,8 +175,9 @@ jobs:
           # built, and the files that prepare-release-docs.sh copies into each
           # release. It is hashed here because `hashFiles()` starts a Node 20
           # the Spindle image does not have.
+          mapfile -t copied < <(docs/scripts/prepare-release-docs.sh --list)
           workflow=$(cat .github/workflows/pages.yml docs/scripts/prepare-release-docs.sh \
-            $(docs/scripts/prepare-release-docs.sh --list) | sha256sum | cut -c1-16)
+            "${copied[@]}" | sha256sum | cut -c1-16)
           echo "key=docs-releases-$(sha256sum <<<"$latest $archived" | cut -c1-16)-$workflow" >> "$GITHUB_OUTPUT"
           echo "Latest release: ${latest:-none}. Older minor releases: ${archived:-none}."
 
@@ -203,18 +196,18 @@ jobs:
       # (docs/scripts/prepare-release-docs.sh).
       - name: Build release docs
         if: steps.docs.outputs.latest != '' && steps.release-docs.outputs.cache-hit != 'true'
-        working-directory: kixpkgs
+        working-directory: kix
         env:
           LATEST: ${{ steps.docs.outputs.latest }}
           ARCHIVED: ${{ steps.docs.outputs.archived }}
         run: |
           build_release_docs() {
             local tag="$1" output="$2" dest="$3"
-            git worktree add "../kixpkgs-$tag" "$tag"
-            docs/scripts/prepare-release-docs.sh "../kixpkgs-$tag"
-            rev=$(nix run --inputs-from . nixpkgs#jq -- -r '.nodes["kix-examples"].locked.rev' "../kixpkgs-$tag/docs/flake.lock")
+            git worktree add "../kix-$tag" "$tag"
+            docs/scripts/prepare-release-docs.sh "../kix-$tag"
+            rev=$(nix run --inputs-from . nixpkgs#jq -- -r '.nodes["kix-examples"].locked.rev' "../kix-$tag/docs/flake.lock")
             git -C ../kix-examples worktree add "../kix-examples-$tag" "$rev"
-            nix build "../kixpkgs-$tag/docs#$output" \
+            nix build "../kix-$tag/docs#$output" \
               --override-input kix-examples "git+file://${{ github.workspace }}/kix-examples-$tag" \
               --out-link "../docs-$tag" \
               --print-build-logs
@@ -228,13 +221,13 @@ jobs:
 
       # main is built against the kix-examples checkout above, so in-PR
       # changes there show up. Its own docs/flake.lock is not consulted, and
-      # its kixpkgs input follows ours (docs/flake.nix), so there is no
+      # its Kix input follows ours (docs/flake.nix), so there is no
       # second copy to fetch; a lock that resolves one needs git credentials
       # this runner does not have. The captures sidecars are read from the
       # source tree. Before the first release, main is the only version and
       # is built as /docs.
       - name: Build main docs
-        working-directory: kixpkgs
+        working-directory: kix
         env:
           OUTPUT: ${{ steps.docs.outputs.latest != '' && 'site-main' || 'site' }}
         run: |
@@ -249,16 +242,16 @@ jobs:
           ARCHIVED: ${{ steps.docs.outputs.archived }}
         run: |
           mkdir -p _site
-          cp -r kixpkgs/web/dist/. _site/
-          node kixpkgs/web/scripts/release-index.mjs releases-src _site
+          cp -r kix/web/dist/. _site/
+          node kix/web/scripts/release-index.mjs releases-src _site
           mkdir -p _site/docs
           if [ -z "$LATEST" ]; then
-            cp -r --no-preserve=mode kixpkgs/result/. _site/docs/
+            cp -r --no-preserve=mode kix/result/. _site/docs/
             echo '[]' > _site/docs/versions.json
           else
             cp -r docs-releases/latest/. _site/docs/
             mkdir -p _site/docs/main
-            cp -r --no-preserve=mode kixpkgs/result/. _site/docs/main/
+            cp -r --no-preserve=mode kix/result/. _site/docs/main/
             # The version picker's list (docs/src/components/VersionSelect.astro),
             # newest first. Labels match each build's own.
             minor=$(cut -d. -f1-2 <<<"$LATEST")
@@ -273,7 +266,7 @@ jobs:
               done
               echo "]"
             } > _site/docs/versions.json
-            nix run --inputs-from ./kixpkgs nixpkgs#jq -- . _site/docs/versions.json
+            nix run --inputs-from ./kix nixpkgs#jq -- . _site/docs/versions.json
           fi
           # The docs come out of the Nix store read-only; wrangler needs
           # to read every file it uploads.

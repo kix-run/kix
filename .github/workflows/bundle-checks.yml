@@ -73,6 +73,8 @@ jobs:
       # spending 7+ minutes in single-threaded codegen.
       - name: Fuzz
         run: |
+          # The single quotes pass the script to the inner bash unexpanded.
+          # shellcheck disable=SC2016
           nix develop --command nix shell --inputs-from . \
             nixpkgs#cargo-fuzz nixpkgs#zstd nixpkgs#python3 --command bash -c '
             set -euo pipefail
