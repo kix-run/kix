@@ -80,8 +80,9 @@ in
 
   options = {
     image = kix.options.image {
-      repository = "victoriametrics/operator";
+      repository = "docker.io/victoriametrics/operator";
       tag = "v0.74.1";
+      digest = "sha256:7310c4a80b94f530c5f0b1fcf6d6eaf933f39cc5704e983900d9cfd6b31f9dc1";
     };
     replicas = lib.mkOption {
       type = lib.types.int;

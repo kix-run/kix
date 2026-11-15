@@ -104,8 +104,9 @@ in
 
   options = {
     image = kix.options.image {
-      repository = "victoriametrics/vmalert";
+      repository = "docker.io/victoriametrics/vmalert";
       tag = "v1.150.0";
+      digest = "sha256:c6e6c1ef6e43c09510dd0aff264bf0ea319c1bdfced1ccc79dad1545950a7989";
       pullPolicy = null;
     };
     replicaCount = lib.mkOption {

@@ -1,0 +1,175 @@
+# Tests that every default image a package Kix ships is pinned by digest.
+# A tag can move to other content on the registry, so a default without a
+# digest deploys whatever the tag points at on the day of the pull. The
+# check reads each package's option declarations and finds the image
+# options that `kix.options.image` builds, at any depth. An image option
+# with a default repository and tag must also carry a default digest, and
+# its repository must name the registry host.
+# `kix/packages/unpinned-images.nix` lists the images that cannot take a
+# digest. A container image written as a string literal in a package file
+# escapes the option walk, so a second check refuses those.
+
+{
+  lib,
+  kixlib,
+  ...
+}:
+
+let
+  packagesByLevel = import ../../../packages/by-level.nix { inherit lib; };
+  unpinnedAllowed = import ../../../packages/unpinned-images.nix;
+
+  # A scope with the values option declarations read for their defaults.
+  stubScope = {
+    instanceName = "inst";
+    namespaceName = "ns";
+  };
+
+  optionsOf =
+    package:
+    let
+      fnArgs = builtins.functionArgs package;
+      result = package (
+        {
+          scope = stubScope;
+          inherit lib;
+        }
+        // lib.optionalAttrs (fnArgs ? kix) { kix = kixlib; }
+        // lib.optionalAttrs (fnArgs ? availability) { availability = "none"; }
+      );
+    in
+    result.options or { };
+
+  # The options a submodule declares, under any `nullOr`, `listOf`, or
+  # `attrsOf`, or `{ }` for any other type.
+  subOptionsOf =
+    t:
+    if t == null then
+      { }
+    else if
+      builtins.elem t.name [
+        "nullOr"
+        "listOf"
+        "attrsOf"
+        "lazyAttrsOf"
+      ]
+    then
+      subOptionsOf (t.nestedTypes.elemType or null)
+    else if t.name == "submodule" then
+      removeAttrs (t.getSubOptions [ ]) [ "_module" ]
+    else
+      { };
+
+  isImageOption =
+    v:
+    let
+      subs = subOptionsOf (v.type or null);
+    in
+    subs ? repository && subs ? tag && subs ? digest && subs ? pullPolicy;
+
+  # Return `[ { path; default; } ]` for every image option under `opts`.
+  imagesIn =
+    prefix: opts:
+    lib.concatLists (
+      lib.mapAttrsToList (
+        name: v:
+        let
+          path = if prefix == "" then name else "${prefix}.${name}";
+        in
+        if (v._type or null) == "option" then
+          if isImageOption v then
+            [
+              {
+                inherit path;
+                default = v.default or { };
+              }
+            ]
+          else
+            imagesIn path (subOptionsOf (v.type or null))
+        else if builtins.isAttrs v && !(v ? _type) then
+          imagesIn path v
+        else
+          [ ]
+      ) opts
+    );
+
+  hasDefaultImage = d: (d.repository or null) != null && (d.tag or null) != null;
+  isDigest = d: d != null && builtins.match "sha256:[0-9a-f]{64}" d != null;
+  # The first path segment names a registry host when it holds a dot or a
+  # port, or is `localhost`.
+  hasRegistryHost =
+    repo:
+    let
+      first = builtins.head (lib.splitString "/" repo);
+    in
+    lib.hasInfix "/" repo && (lib.hasInfix "." first || lib.hasInfix ":" first || first == "localhost");
+
+  allPackages = packagesByLevel.stable // packagesByLevel.experimental;
+  images = lib.concatLists (
+    lib.mapAttrsToList (
+      pkgName: package:
+      map (i: i // { name = "${pkgName}.${i.path}"; }) (
+        builtins.filter (i: hasDefaultImage i.default) (imagesIn "" (optionsOf package))
+      )
+    ) allPackages
+  );
+
+  unpinned = map (i: "${i.name} (${i.default.repository}:${i.default.tag})") (
+    builtins.filter (i: !(unpinnedAllowed ? ${i.name}) && !(isDigest (i.default.digest or null))) images
+  );
+  stale = builtins.filter (k: !(builtins.any (i: i.name == k) images)) (
+    builtins.attrNames unpinnedAllowed
+  );
+
+  # Every .nix file under kix/packages, as a path.
+  nixFiles =
+    dir:
+    lib.concatLists (
+      lib.mapAttrsToList (
+        name: type:
+        if type == "directory" then
+          nixFiles (dir + "/${name}")
+        else
+          lib.optional (lib.hasSuffix ".nix" name) (dir + "/${name}")
+      ) (builtins.readDir dir)
+    );
+  packagesDir = ../../../packages;
+  # Lines that set a container image to a string literal, such as
+  # `image = "docker.io/library/busybox:1.38.0";`.
+  literalImages = lib.concatMap (
+    file:
+    map (line: "${lib.removePrefix "${toString packagesDir}/" (toString file)}: ${lib.trim line}") (
+      builtins.filter (line: builtins.match "[[:space:]]*image = \"[^\"$]*\";.*" line != null) (
+        lib.splitString "\n" (builtins.readFile file)
+      )
+    )
+  ) (nixFiles packagesDir);
+  noHost = map (i: "${i.name} (${i.default.repository})") (
+    builtins.filter (i: !(hasRegistryHost i.default.repository)) images
+  );
+in
+{
+  # Guard the walk itself: it must find the images of a package known to
+  # have several, or the two tests below pass by finding nothing.
+  image-digests-walk-finds-images =
+    builtins.length (builtins.filter (i: lib.hasPrefix "cert-manager." i.name) images) >= 3
+    || throw "image-digests: the option walk found fewer than 3 image options in cert-manager: ${
+      builtins.toJSON (map (i: i.name) images)
+    }";
+
+  image-digests-defaults-are-pinned =
+    unpinned == [ ]
+    || throw "These package image options have a default tag and no default digest: ${lib.concatStringsSep ", " unpinned}. Resolve the multi-arch index digest of the tag (`nix run nixpkgs#crane -- digest <repository>:<tag>`) and pass it as `digest` to kix.options.image. When the image cannot run with a digest, add it to kix/packages/unpinned-images.nix with the reason.";
+
+  image-digests-allowlist-is-current =
+    stale == [ ]
+    || throw "kix/packages/unpinned-images.nix lists image options that no package has: ${lib.concatStringsSep ", " stale}. Remove them.";
+
+  image-digests-no-literal-images =
+    literalImages == [ ]
+    || throw "These package files set a container image to a string literal: ${lib.concatStringsSep "; " literalImages}. Declare the image with kix.options.image, with its registry host and digest, and render it with kix.image.ref.";
+
+  image-digests-defaults-name-registry =
+    noHost == [ ]
+    || throw "These package image options have a default repository with no registry host: ${lib.concatStringsSep ", " noHost}. Write the host in full, such as docker.io/<org>/<name>.";
+}

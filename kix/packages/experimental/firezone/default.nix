@@ -106,8 +106,15 @@ in
 
   options = {
     image = kix.options.image {
-      repository = "firezone/firezone";
+      repository = "docker.io/firezone/firezone";
       tag = "0.7.26";
+      digest = "sha256:e8faaf176a2ca77d2da1ce6812ef3b5e7d5195672a762ad78b5d6afea98219af";
+    };
+    init.image = kix.options.image {
+      repository = "docker.io/library/busybox";
+      tag = "1.36";
+      digest = "sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662";
+      description = "Image of the init-sysctl container, which sets the kernel's forwarding settings. It needs `sysctl`.";
     };
 
     replicaCount = lib.mkOption {
@@ -398,7 +405,8 @@ in
                 initContainers = [
                   {
                     name = "init-sysctl";
-                    image = "busybox:1.36";
+                    image = kix.image.ref config.init.image;
+                    imagePullPolicy = config.init.image.pullPolicy;
                     command = [
                       "sh"
                       "-c"

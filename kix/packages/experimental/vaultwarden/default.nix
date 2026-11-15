@@ -89,9 +89,17 @@ in
 
   options = {
     image = kix.options.image {
-      repository = "vaultwarden/server";
+      repository = "docker.io/vaultwarden/server";
       tag = "1.36.0-alpine";
+      digest = "sha256:d3531610b486905943706b235e97159331801c6856e1367a93a5905e2b40f204";
       pullPolicy = null;
+    };
+    init.image = kix.options.image {
+      repository = "docker.io/library/busybox";
+      tag = "1.38.0";
+      digest = "sha256:a46257e06c82ad85242d0d38077d0a52d9896389ca60a1a59d3463db586e5fa4";
+      pullPolicy = null;
+      description = "Image of the init-chown-data container, which runs while `initChownData` is true. It needs `chown`.";
     };
     domain = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
@@ -214,7 +222,7 @@ in
                   else
                     {
                       name = "init-chown-data";
-                      image = "docker.io/library/busybox:1.38.0";
+                      image = kix.image.ref config.init.image;
                       command = [
                         "chown"
                         "-R"

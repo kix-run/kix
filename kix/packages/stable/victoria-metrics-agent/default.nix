@@ -83,8 +83,9 @@ in
 
   options = {
     image = kix.options.image {
-      repository = "victoriametrics/vmagent";
+      repository = "docker.io/victoriametrics/vmagent";
       tag = "v1.150.0";
+      digest = "sha256:3eff5874d59292714878dcb6aee14f048bf19b7312b727860ba5e7d29e2e0c07";
       pullPolicy = null;
     };
     replicaCount = lib.mkOption {
