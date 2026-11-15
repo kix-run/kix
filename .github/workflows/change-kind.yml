@@ -74,6 +74,8 @@ jobs:
 
       - name: Change kind
         run: |
+          # The single quotes pass the script to the inner bash unexpanded.
+          # shellcheck disable=SC2016
           nix develop --command bash -c '
             set -euo pipefail
             # The base builds into its own target directory. When the two
