@@ -499,7 +499,7 @@ async fn start_queued(
         tracing::info!(
             name,
             deploying = %running.name,
-            "Another activation of this cluster is deploying, waiting for it to finish"
+            "Waiting for in-progress deploy of this cluster to finish"
         );
         return Ok(Action::requeue(QUEUED_REQUEUE_INTERVAL));
     }
