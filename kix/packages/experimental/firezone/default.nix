@@ -75,12 +75,13 @@
 }:
 
 let
+  release = "0.7.26";
   name = scope.instanceName;
   who = "firezone ${scope.namespaceName}/${name}";
 in
 {
   meta = {
-    version = "0.7.26";
+    version = release;
     description = "Firezone: self-hosted WireGuard VPN";
     owner = "app-team";
     # One process owns the WireGuard interface and its peer state, so
@@ -107,7 +108,7 @@ in
   options = {
     image = kix.options.image {
       repository = "docker.io/firezone/firezone";
-      tag = "0.7.26";
+      tag = release;
       digest = "sha256:e8faaf176a2ca77d2da1ce6812ef3b5e7d5195672a762ad78b5d6afea98219af";
     };
     init.image = kix.options.image {

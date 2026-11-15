@@ -58,6 +58,7 @@
 }:
 
 let
+  release = "1.36.0";
   name = scope.instanceName;
 
   # init-chown-data runs as root. When security.nonRoot would fail the
@@ -75,7 +76,7 @@ let
 in
 {
   meta = {
-    version = "1.36.0";
+    version = release;
     description = "Vaultwarden: Bitwarden-compatible password manager";
     owner = "app-team";
   };
@@ -90,7 +91,7 @@ in
   options = {
     image = kix.options.image {
       repository = "docker.io/vaultwarden/server";
-      tag = "1.36.0-alpine";
+      tag = "${release}-alpine";
       digest = "sha256:d3531610b486905943706b235e97159331801c6856e1367a93a5905e2b40f204";
       pullPolicy = null;
     };

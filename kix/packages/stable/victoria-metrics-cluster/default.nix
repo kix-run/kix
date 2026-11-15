@@ -72,12 +72,13 @@
   availability,
 }:
 let
+  release = "v1.150.0";
   name = scope.instanceName;
   who = "victoria-metrics-cluster ${scope.namespaceName}/${name}";
 in
 {
   meta = {
-    version = "1.150.0";
+    version = lib.removePrefix "v" release;
     description = "VictoriaMetrics cluster: vmstorage, vmselect and vminsert through a VMCluster CR";
     owner = "platform";
     defaultAliases = [
@@ -95,7 +96,7 @@ in
   options = {
     clusterVersion = lib.mkOption {
       type = lib.types.str;
-      default = "v1.150.0-cluster";
+      default = "${release}-cluster";
       description = ''
         Image tag for all three components (spec.clusterVersion, used
         verbatim by the operator). Cluster-mode images carry the

@@ -28,11 +28,12 @@
 }:
 
 let
+  release = "v1.2.3";
   name = scope.instanceName;
 in
 {
   meta = {
-    version = "1.2.3";
+    version = lib.removePrefix "v" release;
     description = "dns_exporter, a Prometheus exporter that runs DNS queries and reports the results as metrics";
     owner = "platform";
   };
@@ -49,7 +50,7 @@ in
   options = {
     image = kix.options.image {
       repository = "docker.io/tykling/dns_exporter";
-      tag = "v1.2.3";
+      tag = release;
       digest = "sha256:cd6d650c01c159cf34675615b553316f648dce8e76deabd3eeccab1e8cdd9b42";
     };
     # Declared only so that setting the removed name fails with the new one.

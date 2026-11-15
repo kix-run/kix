@@ -74,6 +74,7 @@
   availability,
 }:
 let
+  release = "v1.150.0";
   name = scope.instanceName;
   ns = scope.namespaceName;
   who = "victoria-metrics-alert ${ns}/${name}";
@@ -95,7 +96,7 @@ let
 in
 {
   meta = {
-    version = "1.150.0";
+    version = lib.removePrefix "v" release;
     description = "VictoriaMetrics alerting: VMAlert and VMAlertmanager";
     owner = "platform";
     defaultAliases = [ "vmAlert" ];
@@ -105,7 +106,7 @@ in
   options = {
     image = kix.options.image {
       repository = "docker.io/victoriametrics/vmalert";
-      tag = "v1.150.0";
+      tag = release;
       digest = "sha256:c6e6c1ef6e43c09510dd0aff264bf0ea319c1bdfced1ccc79dad1545950a7989";
       pullPolicy = null;
     };
