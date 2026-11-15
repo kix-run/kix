@@ -245,11 +245,11 @@ ID_IN_SOURCE_RE = re.compile(r'\[(K\d{4})\]|\bid\s*=\s*"\[?(K\d{4})\]?"')
 
 
 def ids_in_source(root: pathlib.Path) -> set[str]:
-    """Return every id an error carries in Nix and Rust files under kix/ and cli/."""
+    """Return every id an error carries in Nix, Rust, and TOML files under kix/ and cli/."""
     found: set[str] = set()
     for top in ("kix", "cli"):
         for path in (root / top).rglob("*"):
-            if path.suffix not in (".nix", ".rs") or not path.is_file():
+            if path.suffix not in (".nix", ".rs", ".toml") or not path.is_file():
                 continue
             try:
                 for bracketed, field in ID_IN_SOURCE_RE.findall(path.read_text()):
@@ -257,6 +257,14 @@ def ids_in_source(root: pathlib.Path) -> set[str]:
             except (OSError, UnicodeDecodeError):
                 continue
     return found
+
+
+def removed_packages(packages_dir: pathlib.Path) -> set[str]:
+    """Return the packages `kix/packages/removed.toml` names, as a record names them."""
+    path = packages_dir / "removed.toml"
+    if not path.is_file():
+        return set()
+    return set(tomllib.loads(path.read_text()))
 
 
 def load(root: pathlib.Path) -> tuple[list[Record], list[str]]:
@@ -279,10 +287,13 @@ def load(root: pathlib.Path) -> tuple[list[Record], list[str]]:
             problems.append(f"{rel}: {e}")
     packages_dir = root / "kix" / "packages"
     if packages_dir.is_dir():
+        removed = removed_packages(packages_dir)
         for record in records:
             if record.version is not None:
                 continue
             for name in record.packages:
+                if name in removed:
+                    continue
                 level, folder = (
                     ("experimental", name.removeprefix(EXPERIMENTAL_PACKAGE))
                     if name.startswith(EXPERIMENTAL_PACKAGE)

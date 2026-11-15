@@ -845,9 +845,9 @@ in
                         Secrets present in this namespace for the consumer to
                         use. Only on an exact name. The interface lists them
                         by name, keys, and type. Kix does not create them:
-                        this cluster's own instances do, for example the
-                        reflector package, or a package that mints a
-                        credential per consumer.
+                        this cluster's own instances do, for example a
+                        packages.secret instance in that namespace, or a
+                        package that mints a credential per consumer.
                       '';
                     };
                   };

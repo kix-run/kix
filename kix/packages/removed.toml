@@ -1,0 +1,15 @@
+# Experimental packages that were removed, keyed as a change record names
+# them. A cluster that names one, such as `packages.experimental.reflector`,
+# fails with the message and the fix. scripts/change-records.py accepts these
+# names in a record's `packages`. Remove an entry once its refusal has been
+# in a minor release.
+
+["experimental/reflector"]
+id = "K9332"
+message = "`packages.experimental.reflector` was removed, so Kix stopped evaluation. Its `out.reflectSecret` helper copied a Secret into every namespace by default."
+fix = "Remove `packages.experimental.reflector` from your cluster definition and remove any `out.reflectSecret` calls. Create a Secret in each namespace that needs it, for example with `packages.secret` from a SOPS file, or with `packages.experimental.external-secret` and `packages.experimental.external-secrets`."
+
+["experimental/secret-echo"]
+id = "K9332"
+message = "`packages.experimental.secret-echo` was removed, so Kix stopped evaluation. It was a test fixture that served Secret credentials in plain text over HTTP."
+fix = "Remove `packages.experimental.secret-echo` from your cluster definition."
