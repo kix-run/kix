@@ -489,9 +489,9 @@ in
 
         activeListeners = gatewayListeners.active config.listeners;
         # Envoy runs unprivileged, so the controller moves a listener port
-        # below 1024 up by 10000 (servicePortToContainerPort in
+        # below 1024 up by 10000, unless proxySpec sets
+        # useListenerPortAsContainerPort (servicePortToContainerPort in
         # internal/gatewayapi/listener.go).
-        # proxySpec can turn the shift off.
         listenerPortIsContainerPort =
           proxyMerged.provider.kubernetes.useListenerPortAsContainerPort or false;
         containerPort = port: if port < 1024 && !listenerPortIsContainerPort then port + 10000 else port;

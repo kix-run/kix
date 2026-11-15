@@ -15,7 +15,8 @@ let
   controller = "Envoy Gateway ${ns}/${name}";
   sel = ''namespace="${ns}",service="${name}-metrics"'';
   proxySel = ''namespace="${ns}",job="${ns}/${name}-proxy"'';
-  deployment = "the Deployment ${name} in ${ns}";
+  # The controller's Deployment has the name Envoy Gateway looks it up by.
+  deployment = "the Deployment envoy-gateway in ${ns}";
 in
 (kix.monitor {
   service = "metricsService";
