@@ -15,7 +15,7 @@
 }:
 
 let
-  readinessOf = m: builtins.fromJSON ((m.metadata.annotations or { }).${kixKeys.readiness} or "null");
+  readinessOf = m: builtins.fromJSON (m.metadata.annotations.${kixKeys.readiness} or "null");
   ms = manifests (mkCluster [
     {
       instances.monitoring.vm-operator.package = import ../../../packages/stable/victoria-metrics-operator;

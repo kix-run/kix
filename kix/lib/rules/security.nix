@@ -6,14 +6,11 @@
 let
   kixKeys = (import ../core/annotations.nix).keys;
 
-  listOr = v: if v == null then [ ] else v;
+  inherit (import ../core/util.nix { inherit lib; }) listOr attrsOr;
+  inherit (import ../core/pod-spec.nix { inherit lib; }) podSpecOf;
+  workloadKinds = import ../core/workload-kinds.nix { inherit lib; };
 
-  getPodSpec =
-    resource:
-    if (resource.kind or "") == "CronJob" then
-      resource.spec.jobTemplate.spec.template.spec or { }
-    else
-      resource.spec.template.spec or { };
+  getPodSpec = podSpecOf;
 
   getContainers =
     resource:
@@ -51,24 +48,14 @@ let
   # Return true when the package declares `grant` in `meta.unsafe`.
   holdsGrant = meta: grant: builtins.elem grant (meta.unsafe or [ ]);
 
-  isWorkload =
-    resource:
-    builtins.elem (resource.kind or "") [
-      "Deployment"
-      "StatefulSet"
-      "DaemonSet"
-      "Job"
-      "CronJob"
-    ];
+  isWorkload = resource: builtins.elem (resource.kind or "") workloadKinds.builtKinds;
 
   # Return true when `resource` is an import marker produced by `scope.mkSecretRef`.
   isSecretRefMarker =
     resource:
     (resource.kind or "") == "PackageInstance"
-    && (resource.metadata.annotations or { }).${kixKeys.mode} or null == "import"
-    && (resource.metadata.annotations or { }).${kixKeys.importKind} or null == "Secret";
-
-  attrsOr = v: if builtins.isAttrs v then v else { };
+    && resource.metadata.annotations.${kixKeys.mode} or null == "import"
+    && resource.metadata.annotations.${kixKeys.importKind} or null == "Secret";
 
   # Return `{ <key> = <source>; }` for each key in a Secret. Keys present in
   # `data` or `stringData` are always treated as `inline` (or `plain` when
@@ -441,14 +428,7 @@ in
         ...
       }:
       let
-        hasWorkload = builtins.any (
-          r:
-          builtins.elem (r.kind or "") [
-            "Deployment"
-            "StatefulSet"
-            "DaemonSet"
-          ]
-        ) resources;
+        hasWorkload = builtins.any (r: builtins.elem (r.kind or "") workloadKinds.servingKinds) resources;
         hasNetpol = builtins.any (r: builtins.elem (r.kind or "") networkPolicyKinds) resources;
       in
       if hasWorkload && !hasNetpol then

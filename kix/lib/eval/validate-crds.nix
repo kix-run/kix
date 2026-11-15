@@ -75,16 +75,7 @@ let
     kixAnnotations.group
   ];
 
-  safeList = v: if builtins.isList v then v else [ ];
-
-  splitList = s: builtins.filter (x: x != "") (map lib.trim (lib.splitString "," (toString s)));
-
-  groupOf =
-    apiVersion:
-    let
-      parts = lib.splitString "/" apiVersion;
-    in
-    if builtins.length parts == 2 then builtins.head parts else "";
+  inherit (import ../core/util.nix { inherit lib; }) listOr splitList groupOf;
 
   versionOf =
     apiVersion:
@@ -119,7 +110,7 @@ in
               group = e.r.spec.group or "";
               kind = e.r.spec.names.kind or "";
               served = map (v: v.name) (
-                builtins.filter (v: v.served or true) (safeList (e.r.spec.versions or [ ]))
+                builtins.filter (v: v.served or true) (listOr (e.r.spec.versions or [ ]))
               );
               scope = e.r.spec.scope or "Namespaced";
               text = "CustomResourceDefinition ${e.r.metadata.name or "unnamed"}";

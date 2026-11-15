@@ -531,7 +531,7 @@ in
       ms = manifests cluster;
       secrets = map (m: "${m.metadata.namespace}/${m.metadata.name}") (ofKind "Secret" ms);
       imported = map (m: "${m.metadata.namespace}/${m.metadata.annotations.${kixKeys.importName}}") (
-        builtins.filter (m: (m.metadata.annotations or { }).${kixKeys.importKind} or null == "Secret") (
+        builtins.filter (m: m.metadata.annotations.${kixKeys.importKind} or null == "Secret") (
           ofKind "PackageInstance" ms
         )
       );

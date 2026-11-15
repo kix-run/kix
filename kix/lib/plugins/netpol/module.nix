@@ -121,7 +121,7 @@ in
           wSelector = ctx.selector;
           inherit enforced;
           networkPolicyEnforcer = resolveEnforcerOut { inherit (ctx) cluster instanceName namespaceName; };
-          packageIntents = (ctx.packageMeta.network or { }).intents or { };
+          packageIntents = ctx.packageMeta.network.intents or { };
         };
       in
       {

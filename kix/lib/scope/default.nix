@@ -80,7 +80,7 @@ rec {
       roleStatus =
         role:
         let
-          binding = (((clusterCtx.config or { }).cluster or { }).roles or { }).${role}.binding or null;
+          binding = clusterCtx.config.cluster.roles.${role}.binding or null;
           provider = (clusterCtx.findRoleProvider or (_: null)) role;
         in
         if provider != null then

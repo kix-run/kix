@@ -145,7 +145,7 @@ in
         modules = [ netpolOn ];
       });
       operandPolicies = builtins.filter (
-        m: (m.metadata.labels or { }).${kixKeys.policyType} or null == "operator-managed-workload"
+        m: m.metadata.labels.${kixKeys.policyType} or null == "operator-managed-workload"
       ) enforced;
     in
     (

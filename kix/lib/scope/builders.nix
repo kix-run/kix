@@ -5,6 +5,7 @@ let
   kixAnnotations = import ../core/annotations.nix;
   kixKeys = kixAnnotations.keys;
   availabilityLib = import ../core/availability.nix { inherit lib; };
+  workloadKinds = import ../core/workload-kinds.nix { inherit lib; };
   inherit (k8s) clusterScoped;
 in
 {
@@ -38,26 +39,13 @@ in
       # Workload kinds must use their typed builders so pod validation, edge
       # analysis, and workload interceptors run before sealing. sealWorkload
       # calls sealResource after that processing.
-      workloadKinds = [
-        "Deployment"
-        "StatefulSet"
-        "DaemonSet"
-        "Job"
-        "CronJob"
-      ];
-      builderFor = {
-        Deployment = "scope.mkDeployment";
-        StatefulSet = "scope.mkStatefulSet";
-        DaemonSet = "scope.mkDaemonSet";
-        Job = "scope.mkJob";
-        CronJob = "scope.mkCronJob";
-      };
+      inherit (workloadKinds) builderFor;
       checkNotRawWorkload =
         args:
         let
           kind = args.kind or "";
         in
-        if builtins.elem kind workloadKinds then
+        if builderFor ? ${kind} then
           fail {
             instance = builtBy;
             message =

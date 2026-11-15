@@ -15,7 +15,7 @@ let
   scorecard = import ../scorecard.nix { inherit lib; };
   validate = import ./validate.nix { inherit lib; };
   helpers = import ./helpers.nix { inherit lib; };
-  edgeAnalysis = import ./edges.nix { inherit k8s; };
+  edgeAnalysis = import ./edges.nix { inherit lib k8s; };
   roles = import ./roles.nix { inherit lib; };
   hooks = import ./hooks.nix { inherit lib roles; };
   view = import ./view.nix { inherit lib helpers; };

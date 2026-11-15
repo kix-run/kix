@@ -10,16 +10,12 @@ let
   kixAnnotations = import ../core/annotations.nix;
   kixKeys = kixAnnotations.keys;
   unsafe = import ../unsafe.nix { inherit lib; };
+  kinds = import ../core/workload-kinds.nix { inherit lib; };
+  inherit (import ../core/pod-spec.nix { inherit lib; }) podSpecOf podTemplateOf;
+  inherit (import ../core/util.nix { inherit lib; }) listOr;
 
-  workloadKinds = [
-    "Deployment"
-    "StatefulSet"
-    "DaemonSet"
-    "Job"
-    "CronJob"
-    "Pod"
-    "ReplicaSet"
-  ];
+  # Every built-in kind that creates pods.
+  workloadKinds = kinds.podKinds;
 
   # Recursively collect every string value reachable under `v`.
   # Runs pre-JSON so string context is intact.
@@ -171,11 +167,7 @@ in
         ...
       }:
       let
-        controllerKinds = [
-          "Deployment"
-          "StatefulSet"
-          "DaemonSet"
-        ];
+        controllerKinds = kinds.servingKinds;
         crds = builtins.filter (
           r: (r.kind or "") == "CustomResourceDefinition" && r ? outPath
         ) resourceObjects;
@@ -189,7 +181,7 @@ in
           r:
           map (e: lib.last (lib.splitString ":" e)) (
             builtins.filter (e: e != "") (
-              lib.splitString "," ((r.rawManifest.metadata.annotations or { }).${kixKeys.dependsOn} or "")
+              lib.splitString "," (r.rawManifest.metadata.annotations.${kixKeys.dependsOn} or "")
             )
           );
         dependsOnCrd = r: builtins.any (h: builtins.elem h crdHashes) (depHashes r);
@@ -287,21 +279,11 @@ in
     check =
       { resources, ... }:
       let
-        selectorKinds = [
-          "Deployment"
-          "StatefulSet"
-          "DaemonSet"
-          "Job"
-        ];
+        inherit (kinds) selectorKinds;
         # CronJob pods can match another workload's selector, but a CronJob has
         # no selector with which to claim other pods.
-        targetKinds = selectorKinds ++ [ "CronJob" ];
-        podLabels =
-          r:
-          if (r.kind or "") == "CronJob" then
-            r.spec.jobTemplate.spec.template.metadata.labels or { }
-          else
-            r.spec.template.metadata.labels or { };
+        targetKinds = kinds.builtKinds;
+        podLabels = r: (podTemplateOf r).metadata.labels or { };
         subsetOf =
           needle: hay: builtins.all (k: (hay.${k} or null) == needle.${k}) (builtins.attrNames needle);
         rid = r: "${r.kind or "?"}/${r.metadata.name or "?"}";
@@ -344,14 +326,7 @@ in
     check =
       { resources, ... }:
       let
-        podSpec =
-          r:
-          if (r.kind or "") == "CronJob" then
-            r.spec.jobTemplate.spec.template.spec or { }
-          else if (r.kind or "") == "Pod" then
-            r.spec or { }
-          else
-            r.spec.template.spec or { };
+        podSpec = podSpecOf;
         rid = r: "${r.kind or "?"}/${r.metadata.name or "?"}";
         workloads = builtins.filter (r: builtins.elem (r.kind or "") workloadKinds) resources;
         # Return `{ name, containerPort, owner }` for each named port in a workload.
@@ -359,7 +334,6 @@ in
           r:
           let
             spec = podSpec r;
-            listOr = v: if v == null then [ ] else v;
             containers = listOr (spec.containers or [ ]) ++ listOr (spec.initContainers or [ ]);
           in
           builtins.concatMap (
@@ -651,7 +625,7 @@ in
             candidates = builtins.filter (svc: builtins.elem (svc.metadata.namespace or null) targets) services;
             matched = builtins.filter (svc: subsetOf matchLabels (svc.metadata.labels or { })) candidates;
             scraped = builtins.filter (scrapesService mon) matched;
-            external = ((mon.metadata.annotations or { }).${kixKeys.monitorsExternalService} or "") == "true";
+            external = (mon.metadata.annotations.${kixKeys.monitorsExternalService} or "") == "true";
             skip = external || sel ? matchExpressions || matchLabels == { } || !allTargetsManaged;
             monId = "${mon.kind or "?"}/${mon.metadata.name or "?"}";
             svcId = svc: "${svc.metadata.namespace or "?"}/${svc.metadata.name or "?"}";
@@ -737,7 +711,7 @@ in
         "ServiceMonitor"
         "VMServiceScrape"
       ]
-      && ((resource.metadata.annotations or { }).${kixKeys.monitorsExternalService} or "") == "true";
+      && (resource.metadata.annotations.${kixKeys.monitorsExternalService} or "") == "true";
     check =
       { resource, ... }:
       [

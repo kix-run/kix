@@ -255,7 +255,7 @@ in
       && dataVolume.hostPath.path == "/var/lib/vector/logs.loki-logs"
       && byName "logs.loki-logs" (ofKind "ClusterRole" ms) != null
       && !(ds.spec.template.spec ? priorityClassName)
-      && (ds.metadata.labels or { })."app.kubernetes.io/name" or "loki-logs" == "loki-logs"
+      && ds.metadata.labels."app.kubernetes.io/name" or "loki-logs" == "loki-logs"
     )
     || throw "loki-logs default: ${builtins.toJSON { inherit settings container dataVolume; }}";
 

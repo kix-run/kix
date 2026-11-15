@@ -80,7 +80,7 @@ in
         availability = availabilityLib.resolve {
           capabilities = clusterConfig.cluster.capabilities or { };
           clusterDefault =
-            ((clusterConfig.cluster or { }).availability or { }).default
+            clusterConfig.cluster.availability.default
               or (availabilityLib.substrate (clusterConfig.cluster.capabilities or { })).level;
           instanceOverride = instCfg.availability or null;
           ceiling = availabilityLib.ceilingOfMeta {
@@ -149,7 +149,7 @@ in
 
         # The netpol plugin declares networkPolicy.enable, so clusters without
         # the plugin default to false.
-        _netpolEnabled = (clusterConfig.networkPolicy or { }).enable or false;
+        _netpolEnabled = clusterConfig.networkPolicy.enable or false;
 
         _networkPolicyEnforcer =
           if !_netpolEnabled || _enforcerProvider == null || _isSelfEnforcer then
@@ -243,7 +243,7 @@ in
             requesterName = instanceName;
             requesterNamespace = namespaceName;
             hasDefault = depSpec.optional or false;
-            renamedFrom = (depsEnrichment.${argName} or { }).renamedFrom or null;
+            renamedFrom = depsEnrichment.${argName}.renamedFrom or null;
           }
         ) discoveredDeps;
 
@@ -634,7 +634,7 @@ in
                 ruleDefaults = scorecardConfig.ruleDefaults or { };
                 ruleOverrides = scorecardConfig.ruleOverrides or { };
                 maxSeverity = scorecardConfig.maxSeverity or "error";
-                acceptedSecretSources = ((clusterConfig.cluster or { }).secrets or { }).accept or null;
+                acceptedSecretSources = clusterConfig.cluster.secrets.accept or null;
               }
             ) (builtins.filter (r: r ? kind) (map (r: r.rawManifest or { }) shippedResources))
           else

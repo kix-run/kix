@@ -159,7 +159,7 @@ let
     nsName: inst: part:
     builtins.unsafeDiscardStringContext
       cluster.instances.${nsName}.${inst}.raw.${part}.out.identityHash;
-  dependsOn = m: lib.splitString "," ((m.metadata.annotations or { }).${kixKeys.dependsOn} or "");
+  dependsOn = m: lib.splitString "," (m.metadata.annotations.${kixKeys.dependsOn} or "");
 
   # The package's assertions read only `config` and `lib`.
   assertionsOf =

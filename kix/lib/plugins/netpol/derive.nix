@@ -6,12 +6,17 @@ let
   kixKeys = kixAnnotations.keys;
   core = import ../../core/default.nix { inherit lib; };
 
-  inherit (import ../../eval/edges.nix { k8s = core; })
+  inherit
+    (import ../../eval/edges.nix {
+      inherit lib;
+      k8s = core;
+    })
     isWorkload
     getWorkloadSelector
     isService
     ;
   inherit (import ../../core/markers.nix { inherit lib; }) isProvidedLoadBalancerClass;
+  inherit (import ../../core/pod-spec.nix { inherit lib; }) podSpecOf;
 in
 {
   buildWorkloadCnps =
@@ -177,7 +182,7 @@ in
       workloads = builtins.filter isWorkload allPartResources;
 
       hostNetworkWorkloads = builtins.filter (
-        w: w.rawManifest.spec.template.spec.hostNetwork or false
+        w: (podSpecOf w.rawManifest).hostNetwork or false
       ) workloads;
 
       bindings = builtins.filter (
@@ -212,7 +217,7 @@ in
       workloadNeedsApiserver =
         w:
         let
-          saName = w.rawManifest.spec.template.spec.serviceAccountName or "default";
+          saName = (podSpecOf w.rawManifest).serviceAccountName or "default";
           wNs = w.rawManifest.metadata.namespace or null;
         in
         wNs != null && builtins.elem "${wNs}/${saName}" boundSAKeys;
@@ -236,7 +241,7 @@ in
             w:
             let
               wSelector = getWorkloadSelector w;
-              isHostNet = w.rawManifest.spec.template.spec.hostNetwork or false;
+              isHostNet = (podSpecOf w.rawManifest).hostNetwork or false;
             in
             if isHostNet || !(workloadNeedsApiserver w) then
               [ ]
@@ -268,7 +273,7 @@ in
             w:
             let
               wSelector = getWorkloadSelector w;
-              isHostNet = w.rawManifest.spec.template.spec.hostNetwork or false;
+              isHostNet = (podSpecOf w.rawManifest).hostNetwork or false;
             in
             if isHostNet then
               [ ]

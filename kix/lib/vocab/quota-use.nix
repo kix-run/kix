@@ -26,9 +26,8 @@ let
   inherit (import ../core/error.nix { inherit lib; }) fail;
   quantity = import ./quantity.nix { inherit lib; };
 
-  listOr = v: if v == null then [ ] else v;
-
-  plain = v: builtins.unsafeDiscardStringContext (toString v);
+  inherit (import ../core/util.nix { inherit lib; }) listOr plain;
+  workloadKinds = import ../core/workload-kinds.nix { inherit lib; };
 
   isCpu = name: name == "cpu" || lib.hasSuffix ".cpu" name;
 
@@ -127,16 +126,7 @@ let
   # Built-in kinds that create pods. DaemonSets and CronJobs are listed so
   # `refusals` can report them as uncounted; their minimum pod count is not
   # known statically.
-  podKinds = [
-    "Pod"
-    "Deployment"
-    "ReplicaSet"
-    "StatefulSet"
-    "ReplicationController"
-    "Job"
-    "CronJob"
-    "DaemonSet"
-  ];
+  inherit (workloadKinds) podKinds;
 in
 rec {
   inherit ofPodSpec sum podKinds;
@@ -171,21 +161,14 @@ rec {
     let
       kind = plain (manifest.kind or "");
       spec = manifest.spec or { };
-      template = (spec.template or { }).spec or { };
+      template = spec.template.spec or { };
       parallelism = intOr 1 (spec.parallelism or null);
     in
     if declared != null then
       normalize (declared manifest)
     else if kind == "Pod" then
       ofPodSpec spec
-    else if
-      builtins.elem kind [
-        "Deployment"
-        "ReplicaSet"
-        "StatefulSet"
-        "ReplicationController"
-      ]
-    then
+    else if builtins.elem kind workloadKinds.replicaKinds then
       ofPods (if minReplicas != null then minReplicas else intOr 1 (spec.replicas or null)) template
     else if kind == "Job" && (spec.suspend or false) == true then
       ofPods 0 template

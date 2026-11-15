@@ -3,13 +3,9 @@
 { lib }:
 
 let
-  isWorkload =
-    resource:
-    builtins.elem (resource.kind or "") [
-      "Deployment"
-      "StatefulSet"
-      "DaemonSet"
-    ];
+  workloadKinds = import ../core/workload-kinds.nix { inherit lib; };
+
+  isWorkload = resource: builtins.elem (resource.kind or "") workloadKinds.servingKinds;
 in
 {
   hasOwner = {

@@ -12,15 +12,15 @@ let
   # missing attributes.
   attrNamesOf = v: if builtins.isAttrs v then builtins.attrNames v else [ ];
 
-  splitList = s: builtins.filter (x: x != "") (map lib.trim (lib.splitString "," (toString s)));
-
-  nsOf = r: r.metadata.namespace or "cluster-scoped";
+  util = import ../core/util.nix { inherit lib; };
+  inherit (util) splitList;
+  nsOf = util.namespaceOf;
 
   cedesData =
     r:
     builtins.any (
       p: lib.hasPrefix "data" p || lib.hasPrefix "binaryData" p || lib.hasPrefix "stringData" p
-    ) (splitList ((r.metadata.annotations or { }).${kixKeys.cedeFields} or ""));
+    ) (splitList (r.metadata.annotations.${kixKeys.cedeFields} or ""));
 in
 {
   # Validate that env vars, volume `items`, and `subPath` mounts reference keys

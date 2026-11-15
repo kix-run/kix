@@ -295,7 +295,7 @@ in
       cnps = ofKind "CiliumNetworkPolicy" ms;
       egress = byName "velero-backupstoragelocation-default-egress" cnps;
       ingress = byName "velero-backupstoragelocation-default-to-db-ingress" cnps;
-      dependsOn = m: (m.metadata.annotations or { }).${kixKeys.dependsOn} or "";
+      dependsOn = m: m.metadata.annotations.${kixKeys.dependsOn} or "";
     in
     (
       egress != null

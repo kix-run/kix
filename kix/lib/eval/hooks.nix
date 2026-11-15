@@ -157,8 +157,8 @@ rec {
       candidates = roleCandidates { inherit role rolesIndex; };
       managed = builtins.filter (c: !c.isImport) candidates;
       imports = builtins.filter (c: c.isImport) candidates;
-      binding = (clusterRoles.${role} or { }).binding or null;
-      envProvider = (clusterRoles.${role} or { }).provider or null;
+      binding = clusterRoles.${role}.binding or null;
+      envProvider = clusterRoles.${role}.provider or null;
       fmt =
         cs:
         builtins.concatStringsSep ", " (
@@ -265,7 +265,7 @@ rec {
           else
             result;
 
-      registered = lib.mapAttrsToList normalize ((config.hooks or { }).${channel} or { });
+      registered = lib.mapAttrsToList normalize (config.hooks.${channel} or { });
       sorted = lib.sort (
         a: b: if a.priority != b.priority then a.priority < b.priority else a.name < b.name
       ) registered;
