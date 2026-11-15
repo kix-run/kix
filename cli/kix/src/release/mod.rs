@@ -228,7 +228,7 @@ pub fn install(
     source: &Source,
     starting: &dyn Fn(&Version),
 ) -> Result<Installed, InstallError> {
-    let keys = verify::trusted_keys(source, std::env::var(verify::TEST_KEY_VAR).ok().as_deref());
+    let keys = verify::trusted_keys(source, verify::test_key().as_deref());
     if keys.is_empty() {
         return Err(InstallError::NoKeys);
     }
@@ -372,7 +372,7 @@ pub fn changes(
     source: &Source,
     release: &index::Release,
 ) -> Result<Option<crate::changes::Document>, InstallError> {
-    let keys = verify::trusted_keys(source, std::env::var(verify::TEST_KEY_VAR).ok().as_deref());
+    let keys = verify::trusted_keys(source, verify::test_key().as_deref());
     if keys.is_empty() {
         return Err(InstallError::NoKeys);
     }

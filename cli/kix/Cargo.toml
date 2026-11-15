@@ -67,6 +67,9 @@ tracing.workspace = true
 
 [features]
 test-util = ["kix-core/test-util"]
+# Trust the release key in `KIX_RELEASE_TEST_KEY`, so tests can sign their
+# own releases. Only dev-dependencies enable it.
+test-release-key = []
 
 [dev-dependencies]
 # Reads `written.toml` in the cluster state fixtures.

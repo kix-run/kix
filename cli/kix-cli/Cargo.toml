@@ -44,7 +44,7 @@ features = ["latest"]
 
 [dev-dependencies]
 # The in-memory apiserver, `kix::cluster::fake_api`.
-kix-lib = { workspace = true, features = ["test-util"] }
+kix-lib = { workspace = true, features = ["test-util", "test-release-key"] }
 # Paused-clock tests (start_paused).
 tokio = { workspace = true, features = ["test-util"] }
 assert_cmd.workspace = true
