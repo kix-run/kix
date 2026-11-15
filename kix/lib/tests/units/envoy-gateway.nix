@@ -256,7 +256,7 @@ in
     errorsWith { } traefikKinds != [ ]
     && says "GRPCRoute" (errorsWith { } traefikKinds)
     && errorsWith { } [ "Gateway" ] == [ ]
-    && says "declares no readiness" (errorsWith { readiness = false; } [ "Gateway" ])
+    && says "has no readiness condition" (errorsWith { readiness = false; } [ "Gateway" ])
     && says "provides Gateway API 1.5.1" (errorsWith { version = "1.5.1"; } [ "Gateway" ])
     && says "out.version is missing" (errorsWith { version = null; } [ "Gateway" ])
     && evalFails (mkCluster [

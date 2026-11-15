@@ -25,7 +25,7 @@ let
     };
     version = {
       required = true;
-      shape = "the Gateway API release of the CRDs, such as \"1.6.1\"";
+      shape = "a Gateway API version string such as \"1.6.1\"";
       test = v: builtins.isString v && builtins.match "v?[0-9]+(\\.[0-9]+)*" v != null;
     };
   };
@@ -100,33 +100,44 @@ mkContract {
       if gatewayApi == null then
         error {
           id = "K5531";
-          message = "this instance requires the Kubernetes Gateway API CRDs (gateway.networking.k8s.io), and nothing in the cluster provides the 'gatewayApi' role.";
+          message = "this instance requires the Kubernetes Gateway API CRDs (gateway.networking.k8s.io), but nothing in the cluster provides the 'gatewayApi' role.";
           fix =
             "Add a `gateway-api` instance to your cluster definition:\n"
             + "  instances.gateway-system.gateway-api.package = packages.experimental.gateway-api;\n"
-            + "If your Kubernetes provider already installs the Gateway API CRDs, set `cluster.roles.gatewayApi.binding = \"exclusive\";` and declare them with a `kix.mkImport` that sets `roles = [ \"gatewayApi\" ]`, `out.version`, and a `crds` entry for each of: ${lib.concatStringsSep ", " kinds}.";
+            + "If your Kubernetes provider already installs these CRDs, set `cluster.roles.gatewayApi.binding = \"exclusive\";` and declare them with `kix.mkImport`, setting `roles = [ \"gatewayApi\" ]`, `out.version`, and `crds` entries for ${lib.concatStringsSep ", " kinds}.";
         }
       else if problems != [ ] then
         error {
-          message = "${provider} answers the gatewayApi role, but ${lib.concatStringsSep "; " problems}.";
-          fix = "Set them on that instance's out. A kix.mkImport sets `out.version` and lists the CRDs in `crds`.";
+          message = "${provider} provides the gatewayApi role, but ${lib.concatStringsSep "; " problems}.";
+          fix = "In a `kix.mkImport`, set `out.version` (for example, `out.version = \"${minVersion}\";`) and declare the CRDs in `crds`. In a package, publish `out.version` and `out.crds` on `root`.";
         }
       else if missingKinds != [ ] then
         error {
-          message = "${provider} declares no CRD for ${lib.concatStringsSep ", " missingKinds}, which this instance builds or watches.";
-          fix = "Add a `crds` entry for each of them to the kix.mkImport that claims the gatewayApi role, with the group gateway.networking.k8s.io and the version the CRD serves.";
+          message = "${provider} does not declare the ${lib.concatStringsSep ", " missingKinds} CRD${
+            lib.optionalString (builtins.length missingKinds != 1) "s"
+          } required by this instance.";
+          fix = "Add ${
+            if builtins.length missingKinds == 1 then
+              "a `crds` entry for ${builtins.head missingKinds}"
+            else
+              "`crds` entries for ${lib.concatStringsSep ", " missingKinds}"
+          } to ${provider} with `group = \"gateway.networking.k8s.io\"` and `version` set to the served API version (such as `\"v1\"`).";
         }
       else if lib.versionOlder version minVersion then
         error {
-          message = "${provider} provides Gateway API ${version}, and this instance needs ${minVersion} or later.";
-          fix = "Install Gateway API ${minVersion} or later, and set `out.version` on the provider to match.";
+          message = "${provider} provides Gateway API ${version}, but this instance requires ${minVersion} or later.";
+          fix = "Upgrade the cluster's Gateway API CRDs to ${minVersion} or later, then update `out.version` on ${provider} to match.";
         }
       else if unready != [ ] then
         error {
-          message = "the ${lib.concatStringsSep " and " unready} CRD from ${provider} declares no readiness, so the deploy would not wait for the controller to accept or program it.";
+          message =
+            if builtins.length unready == 1 then
+              "the ${builtins.head unready} CRD entry in ${provider} has no readiness condition, so `kix deploy` would not wait for the ${builtins.head unready} to become ready."
+            else
+              "the ${lib.concatStringsSep " and " unready} CRD entries in ${provider} have no readiness conditions, so `kix deploy` would not wait for them to become ready.";
           fix = lib.concatMapStringsSep " " (
             k:
-            "Add `readiness.condition = { type = \"${readinessOf.${k}}\"; status = \"True\"; };` to the ${k} entry of the import's `crds`."
+            "Set `readiness.condition = { type = \"${readinessOf.${k}}\"; status = \"True\"; };` on the ${k} entry in ${provider}'s `crds`."
           ) unready;
         }
       else

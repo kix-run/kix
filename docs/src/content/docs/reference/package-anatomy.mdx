@@ -342,7 +342,7 @@ meta.network = {
 };
 ```
 
-- `intents.<partName>.egress`: list of rules where `to` is `"world"`, `"pods"`, `"all-pods"`, `"apiserver"`, `"dns"`, or `{ entities = [ ... ]; }`, with optional `ports = [ { port; protocol ? "TCP"; } ]`. `"pods"` reaches every pod in the cluster and nothing else. `"all-pods"` also reaches the nodes and the Kubernetes API server, because Cilium renders it as its `cluster` entity.
+- `intents.<partName>.egress`: list of rules where `to` is `"world"`, `"pods"`, `"all-pods"`, `"apiserver"`, `"dns"`, or `{ entities = [ ... ]; }`, with optional `ports = [ { port; protocol ? "TCP"; } ]`. `"pods"` allows traffic only to pods. `"all-pods"` maps to Cilium's `cluster` entity, which also includes cluster nodes and the Kubernetes API server.
 - `intents.<partName>.ingress`: list of rules where `from` is `"world"`, `"all-pods"`, or `{ entities = [ ... ]; }`, with optional `ports`.
 - `externalIngressEntities`: list of Cilium entity names (such as `["world"]` or `["remote-node"]`) used when this package acts as a cluster ingress controller.
 

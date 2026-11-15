@@ -297,7 +297,8 @@ let
               else
                 failWith {
                   package = "cilium";
-                  message = "Unknown egress intent target '${toString target}'. The targets are apiserver, world, dns, pods, and all-pods.";
+                  message = "unknown egress intent target '${toString target}'.";
+                  fix = "Set `to` to \"apiserver\", \"world\", \"dns\", \"pods\", or \"all-pods\".";
                 };
           in
           if target == "dns" then

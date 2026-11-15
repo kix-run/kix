@@ -394,7 +394,7 @@ in
             };
             value = lib.mkOption {
               type = lib.types.str;
-              description = "The address: an IP address for `IPAddress`, a DNS name for `Hostname`.";
+              description = "Address value, such as an IP address for `IPAddress` or a DNS name for `Hostname`.";
             };
           };
         }

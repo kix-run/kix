@@ -33,20 +33,18 @@ set of Gateway API CRDs. Every Gateway API controller in the cluster, such as
 If your Kubernetes provider already installs compatible Gateway API CRDs, do
 not add `gateway-api`. Instead, set
 `cluster.roles.gatewayApi.binding = "exclusive"` and declare the CRDs with
-[`kix.mkImport`](/docs/reference/helm-and-imports/#mkimport). The import
-sets `roles = [ "gatewayApi" ]`, `out.version` to the Gateway API release the
-provider installs, and one `crds` entry per kind that the controller uses:
+[`kix.mkImport`](/docs/reference/helm-and-imports/#mkimport). In the import,
+set `roles = [ "gatewayApi" ]`, set `out.version` to the installed Gateway API
+version, and add a `crds` entry for each kind your controller uses:
 
-- `envoy-gateway` needs Gateway API 1.6 or later, and `GatewayClass`,
-  `Gateway`, `HTTPRoute`, and `ReferenceGrant`.
-- `traefik` needs Gateway API 1.6.1 or later, and those kinds plus
+- `envoy-gateway` requires Gateway API 1.6 or later and the `GatewayClass`,
+  `Gateway`, `HTTPRoute`, and `ReferenceGrant` CRDs.
+- `traefik` requires Gateway API 1.6.1 or later and those four CRDs, plus
   `GRPCRoute`, `TLSRoute`, and `BackendTLSPolicy`.
 
-The `GatewayClass` entry must declare
-`readiness.condition = { type = "Accepted"; status = "True"; }` and the
-`Gateway` entry `readiness.condition = { type = "Programmed"; status = "True"; }`,
-so that a deploy waits until the controller accepts the class and programs
-the Gateway:
+Include `readiness.condition` on `GatewayClass` (`type = "Accepted"`) and
+`Gateway` (`type = "Programmed"`), both with `status = "True"`, so `kix deploy`
+waits until the controller accepts the class and programs the Gateway:
 
 ```nix
 cluster.roles.gatewayApi.binding = "exclusive";
@@ -75,8 +73,8 @@ instances.gateway-system.platform-gateway-api.package = kix.mkImport {
 };
 ```
 
-`envoy-gateway` and `traefik` refuse an import that lacks a kind, a
-readiness declaration, or `out.version`, and name what is missing.
+If the import is missing a required CRD, a readiness condition, or a supported
+`out.version`, evaluation fails and names what to fix.
 
 ## Add Envoy Gateway
 
@@ -146,21 +144,21 @@ Earlier versions of `envoy-gateway` created only the `GatewayClass` and
 `Gateway` and expected you to install the controller with Envoy Gateway's
 Helm chart. Because two controllers must not reconcile the same
 `GatewayClass`, uninstall the Helm release before deploying the upgraded
-package. The commands below assume the release is named `eg` in
-`envoy-gateway-system`, as in Envoy Gateway's install guide.
+package. The commands below assume the Helm release is named `eg` in the
+`envoy-gateway-system` namespace, matching Envoy Gateway's install guide.
 
-Envoy Gateway's chart installs the experimental channel of the Gateway API
-CRDs, and the `gateway-api` package installs the standard channel. Check
-your routes and Gateways before you upgrade:
+Envoy Gateway's Helm chart installs the experimental Gateway API CRDs, while
+`gateway-api` installs the standard channel. Check your routes and Gateways
+before upgrading:
 
-- Fields that only the experimental channel defines are dropped from stored
-  objects, because the standard CRDs do not have them. Remove such fields
-  from your routes and Gateways, or keep them out of this cluster.
+- Applying the standard CRDs drops experimental-only fields from existing
+  routes and Gateways. Remove any experimental fields before you deploy
+  `gateway-api`.
 - The experimental-only CRDs (`xbackends`, `xbackendtrafficpolicies`, and
-  `xmeshes` in `gateway.networking.x-k8s.io`) stay installed. Delete them
-  once nothing uses them.
+  `xmeshes` in `gateway.networking.x-k8s.io`) remain in the cluster. Delete
+  them once nothing uses them.
 
-Uninstall the release:
+Uninstall the Helm release:
 
 <Command
   commands={[
@@ -170,11 +168,10 @@ Uninstall the release:
 
 Uninstalling the Helm release leaves the CRDs in place, and the existing
 Envoy proxy pods continue serving traffic with their last configuration.
-It also leaves the chart's certificate hook objects, because Helm does not
-delete hooks: the `eg-gateway-helm-certgen` ServiceAccount, Role,
-RoleBinding, ClusterRole, ClusterRoleBinding, and Job, and the topology
-injector webhook. The certgen Role still allows writing Secrets. Delete
-them:
+Helm does not delete hook resources on uninstall, so it also leaves behind the
+`eg-gateway-helm-certgen` ServiceAccount, Role (which still grants write access
+to Secrets), RoleBinding, ClusterRole, ClusterRoleBinding, and Job, along with
+the topology injector webhook. Delete them:
 
 <Command
   commands={[
@@ -206,23 +203,25 @@ Subsequent deploys do not need `--force-conflicts`.
 Envoy Gateway starts proxy pods in the `envoy-gateway` instance's namespace.
 If your `envoy-gateway` instance is not in the namespace Helm used (such as
 `envoy-gateway-system`), the controller creates a new proxy `Deployment` and
-`Service` in the instance's namespace, and the old ones keep running.
+`Service` in the instance's namespace while the old ones keep running.
 
-On a cloud load balancer, the new `Service` receives a new IP address.
-Either point DNS at the new address and then delete the old proxies, or keep
-the old address with `config.addresses`. The old proxy `Service` still holds
-that address, so the new one cannot get it until you delete the old proxies,
-and the Gateway serves no traffic between that delete and the new `Service`
-getting the address. Delete the old proxies with:
+On a cloud load balancer, the new `Service` receives a new IP address:
+
+- **Use the new IP address:** Point DNS at the new address, then delete the old
+  proxy resources with the command below.
+- **Keep the old IP address with `config.addresses`:** Delete the old proxy
+  resources *before* running `kix deploy` so `kix deploy` can wait for the
+  Gateway to become `Programmed` on that IP. Because the old `Service` holds
+  the IP until you delete it, the Gateway serves no traffic between the
+  deletion and the new `Service` claiming the address.
+
+Delete the old proxy resources from Helm's namespace:
 
 <Command
   commands={[
     "kubectl delete deployment,service,serviceaccount,configmap,hpa,pdb --namespace envoy-gateway-system --selector app.kubernetes.io/managed-by=envoy-gateway",
   ]}
 />
-
-When you keep the address, run this before the deploy, so the deploy can
-wait for the Gateway to become `Programmed` on it.
 
 :::tip[Use it in a task]
 Continue with [Expose a service with Gateway API](/docs/how-to/platform-capabilities/expose-a-service-with-gateway-api/)
