@@ -168,6 +168,24 @@ pub enum ApplyAction {
     Skipped,
 }
 
+impl ApplyAction {
+    /// Return the action's name, spelled as the deploy log serializes it.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ApplyAction::Created => "created",
+            ApplyAction::Configured => "configured",
+            ApplyAction::Unchanged => "unchanged",
+            ApplyAction::Skipped => "skipped",
+        }
+    }
+}
+
+impl std::fmt::Display for ApplyAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Record this activation on a resource the deploy did NOT apply.
 ///
 /// An unchanged resource is still part of the current activation. Add the
