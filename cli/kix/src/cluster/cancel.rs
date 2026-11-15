@@ -2,7 +2,7 @@
 //!
 //! A thin wrapper over `tokio_util::sync::CancellationToken`. The engine's
 //! supervisor loop selects on `CancelToken::cancelled` so a cancel from the
-//! caller (Ctrl-C or operator supersession) or from the progress watchdog is
+//! caller (the CLI cancels it on Ctrl-C) or from the progress watchdog is
 //! observed even while every node is in flight. Readiness loops also check
 //! the flag between polls.
 //!
