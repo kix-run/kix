@@ -162,11 +162,11 @@ pub enum PlanError {
     #[error("{0}")]
     Unshown(objects::Unshown),
     #[error(
-        "[K8031] {} moves to another API group that Kubernetes serves as the same object. \
-         A deploy would write the object through the new group and then delete it \
-         through the old one, which deletes what it just wrote. Nothing was planned \
-         or applied to the cluster. Next: keep the object's apiVersion, or deploy a \
-         build without the object first and then a build with it in the new group.",
+        "[K8031] cannot move {}: Kubernetes stores both API groups as the same object, \
+         so applying the new group and deleting from the old group deletes that object \
+         from the cluster. Nothing was planned or applied to the cluster. \
+         Next: keep the current apiVersion, or first deploy a build without the object \
+         using `kix deploy --prune` and then deploy a build with the new apiVersion.",
         .0.join(", ")
     )]
     AliasedMove(Vec<String>),

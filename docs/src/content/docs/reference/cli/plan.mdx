@@ -184,7 +184,7 @@ Each checked section is one of:
 | `deployed_build_unavailable` | The deployed build's manifests are not on this machine, so a change the commit makes cannot be told apart from drift. |
 | `not_previewable` | No preview can tell. |
 
-Resource identifiers have the form `Kind.group/name@namespace`, such as `Deployment.apps/web@shop`. A kind in the core API group has no `.group`, and a cluster-scoped object has no `@namespace`.
+Resource identifiers have the form `Kind.group/name@namespace`, such as `Deployment.apps/web@shop`. Core `v1` kinds omit `.group` (`Service/web@shop`), and cluster-scoped objects omit `@namespace` (`Namespace/shop`).
 
 ## Field change labels
 

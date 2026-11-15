@@ -72,13 +72,12 @@ output has four parts:
 2. Each namespace with its resource count. Cluster-scoped resources are
    listed as `(cluster-scoped)`.
 3. A table of resource kinds, most frequent first.
-4. Every resource as `Kind.group/name` (`Kind/name` for the core API group), grouped by namespace and sorted by kind,
-   then name.
+4. Every resource as `Kind.group/name` (or `Kind/name` for core `v1` kinds), grouped by namespace and sorted by kind, group, and name.
 
 JSON and YAML output is an object with `cluster`, `totalResources`,
-`namespaces` (each `{ name, resources: [{ kind, group, name }] }`, with
-`group` left out for the core API group), and `kindCounts` (`Kind.group`, or
-`Kind` for the core group, to count). Cluster-scoped resources are under the
+`namespaces` (each `{ name, resources: [{ kind, group, name }] }`, omitting
+`group` for core `v1` kinds), and `kindCounts` (counts keyed by `Kind.group`,
+or `Kind` for core `v1` kinds). Cluster-scoped resources are under the
 namespace name `_cluster`.
 
 `kix list resources` reports rendered resources only. To see dependency

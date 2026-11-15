@@ -190,14 +190,14 @@ Each entry of `resources[]`:
 | Field | Meaning |
 | --- | --- |
 | `kind`, `namespace`, `name` | The object. `namespace` is `null` for a cluster-scoped object. `kind` is `Unknown` when Kix cannot name a missing object. |
-| `group` | The kind's API group, such as `apps`. Left out for the core group. |
+| `group` | The kind's API group, such as `apps`. Omitted for core `v1` kinds. |
 | `identity_hash` | The object's `kix.run/identity-hash`. |
 | `named` | `false` when Kix could not name a missing object. |
-| `present` | `yes`, `no`, `external` (an import marker for an object Kix does not manage), `unknown` (the account may not list the kind), or `ambiguous` (the deploy record does not say the object's API group, more than one group on the cluster serves its kind, and the object is not on the cluster under its identity hash). |
+| `present` | `yes`, `no`, `external` (an import marker for an object Kix does not manage), `unknown` (the account may not list the kind), or `ambiguous` (no live object matches its identity hash, multiple API groups serve its kind, and an older deploy record lacks its API group; run `kix deploy <cluster> --reconcile` to record it). |
 | `drift` | `null` when the drift check did not run or the object is gone. Otherwise `verdict` (`in_sync`, `changed`, `unstamped`, or `no_fieldset`), `foreign_owners` (other field managers, each with `manager`, `operation`, `subresource`, `time`, `paths`, and `unshared_paths`; `unshared_paths` lists the paths Kix does not co-own, which can conflict on deploy), and `unrecorded_scale` (a replica count changed through `/scale` that Kubernetes recorded no owner for). |
 | `ready` | `true` or `false`. `null` when the readiness check did not run, the kind has no readiness (such as a ConfigMap), or the object is gone. |
 | `not_ready_reason` | Why the object is not ready, such as `0/1 ready, 0/1 updated`. |
-| `needed_by` | For a missing object, the objects that depend on it, as `Kind.group namespace/name` (`Kind namespace/name` for the core group). |
+| `needed_by` | For a missing object, the objects that depend on it, as `Kind.group namespace/name` (or `Kind namespace/name` for core `v1` kinds). |
 | `problems` | `missing`, `changed`, and `not_ready`. Empty when the object is fine. |
 | `not_checked` | Whether a selected check could not run on the object. |
 

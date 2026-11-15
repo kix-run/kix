@@ -38,9 +38,9 @@ After the graph, a line on stderr gives the resource and dependency counts;
 | --- | --- |
 | `tree` | Each root is a resource with no dependencies. Beneath each resource are the resources that depend on it, so a resource with several dependencies appears under each of them. A repeated path is marked `(circular ref)`. A cluster with no resources prints `(no resources)`. |
 | `dot` | A `digraph` with one box per resource. Edges point from the dependent resource to its dependency. Import PackageInstances are dashed and grey. |
-| `json` | `{ "nodes": [...], "edges": [...] }`. Each node has `id`, `kind`, `group` (left out for the core API group), `name`, `namespace`, `identityHash`, and `isImport`. Each edge has `from` (the dependent) and `to` (the dependency), both node `id`s. |
+| `json` | `{ "nodes": [...], "edges": [...] }`. Each node has `id`, `kind`, `group` (omitted for core `v1` kinds), `name`, `namespace`, `identityHash`, and `isImport`. Each edge has `from` (the dependent) and `to` (the dependency), both node `id`s. |
 
-Resource ids have the form `Kind.group/name@namespace`, such as `Deployment.apps/web@shop`. A kind in the core API group has no `.group`, as in `Service/web@shop`, and a cluster-scoped object has no `@namespace`. The PackageInstance that
+Resource IDs have the form `Kind.group/name@namespace`, such as `Deployment.apps/web@shop`. Core `v1` kinds omit `.group` (`Service/web@shop`), and cluster-scoped objects omit `@namespace` (`Namespace/shop`). The PackageInstance that
 stands for an
 [import](/docs/how-to/adopt-existing-resources/import-an-existing-service-with-kix-mkimport/)
 is labelled `(import)` in the tree and DOT output and has `isImport: true` in

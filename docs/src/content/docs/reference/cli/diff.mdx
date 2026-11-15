@@ -156,7 +156,7 @@ annotations read `(hash, not shown)` or `(hash, changed, not shown)`. A
 field value larger than 16 KiB, or a manifest larger than 3 MiB (the apiserver's limit on a request), reads
 `(N bytes, not shown)`.
 
-Resource identifiers have the form `Kind.group/name@namespace`, such as `Deployment.apps/web@shop`. A kind in the core API group has no `.group`, and a cluster-scoped object has no `@namespace`. Package keys have
+Resource identifiers have the form `Kind.group/name@namespace`, such as `Deployment.apps/web@shop`. Core `v1` kinds omit `.group` (`Service/web@shop`), and cluster-scoped objects omit `@namespace` (`Namespace/shop`). Package keys have
 the form `namespace/name`.
 
 ### Markdown
