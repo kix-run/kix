@@ -4,5 +4,5 @@
 # cannot run with a digest, and say what breaks.
 {
   "victoria-metrics-alert.alertmanager.image" =
-    "The VictoriaMetrics operator parses the VMAlertmanager tag as a semantic version to choose Alertmanager feature flags, and a tag with a digest fails that parse (victoria-metrics-operator/cr-image.nix).";
+    "VMAlertmanager has no separate digest field, and the VictoriaMetrics operator reads `spec.image.tag` as a version number to set Alertmanager flags. Putting a digest in `spec.image.tag` breaks that check and drops `--enable-feature=utf8-strict-mode` (victoria-metrics-operator/cr-image.nix).";
 }

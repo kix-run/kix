@@ -153,23 +153,23 @@ in
   # have several, or the two tests below pass by finding nothing.
   image-digests-walk-finds-images =
     builtins.length (builtins.filter (i: lib.hasPrefix "cert-manager." i.name) images) >= 3
-    || throw "image-digests: the option walk found fewer than 3 image options in cert-manager: ${
+    || throw "image-digests: expected at least 3 default image options in cert-manager, found options across all packages: ${
       builtins.toJSON (map (i: i.name) images)
-    }";
+    }. Update imagesIn or isImageOption in kix/lib/tests/units/image-digests.nix if kix.options.image changed.";
 
   image-digests-defaults-are-pinned =
     unpinned == [ ]
-    || throw "These package image options have a default tag and no default digest: ${lib.concatStringsSep ", " unpinned}. Resolve the multi-arch index digest of the tag (`nix run nixpkgs#crane -- digest <repository>:<tag>`) and pass it as `digest` to kix.options.image. When the image cannot run with a digest, add it to kix/packages/unpinned-images.nix with the reason.";
+    || throw "Package image options with a default tag are missing a valid sha256 digest: ${lib.concatStringsSep ", " unpinned}. Look up the tag's multi-arch digest with `nix run nixpkgs#crane -- digest <repository>:<tag>` and pass it as `digest` to `kix.options.image`. If an image cannot run with a digest, add the option to `kix/packages/unpinned-images.nix` with the reason.";
 
   image-digests-allowlist-is-current =
     stale == [ ]
-    || throw "kix/packages/unpinned-images.nix lists image options that no package has: ${lib.concatStringsSep ", " stale}. Remove them.";
+    || throw "kix/packages/unpinned-images.nix lists options that no package declares with a default image: ${lib.concatStringsSep ", " stale}. Remove them from kix/packages/unpinned-images.nix.";
 
   image-digests-no-literal-images =
     literalImages == [ ]
-    || throw "These package files set a container image to a string literal: ${lib.concatStringsSep "; " literalImages}. Declare the image with kix.options.image, with its registry host and digest, and render it with kix.image.ref.";
+    || throw "Package files under kix/packages set `image` to a hardcoded string: ${lib.concatStringsSep "; " literalImages}. Declare an option with `kix.options.image` (including the registry host and `digest`) and render it with `kix.image.ref`.";
 
   image-digests-defaults-name-registry =
     noHost == [ ]
-    || throw "These package image options have a default repository with no registry host: ${lib.concatStringsSep ", " noHost}. Write the host in full, such as docker.io/<org>/<name>.";
+    || throw "Package image options omit the registry host in their default `repository`: ${lib.concatStringsSep ", " noHost}. Include the registry host in `repository`, such as `docker.io/<org>/<name>` or `docker.io/library/<name>`.";
 }
