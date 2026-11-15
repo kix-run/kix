@@ -6,7 +6,8 @@
 #   kind gives Services no LoadBalancer addresses.
 # - `services` runs the default sources.
 # - `public` and `private` read Gateway API routes and share a namespace;
-#   each declares its own CRD reference markers.
+#   each declares its own CRD reference markers, and the gateway-api
+#   instance installs the CRDs.
 # - The `other` namespace holds a secret-ref aliased `providerCredentials`.
 #   It serves only its own namespace, so the instances above build without
 #   credentials.
@@ -15,7 +16,6 @@
 #   rules of `nodes`.
 #
 # Bring up:  kind create cluster --name external-dns
-#            kubectl apply --server-side -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.2/standard-install.yaml
 #            kubectl create namespace other
 #            kubectl -n other create secret generic other-dns-token --from-literal=x=unused
 # Deploy:    kix deploy external-dns --context kind-external-dns -y
@@ -27,6 +27,8 @@ kix.buildCluster {
     kix.flavors.kind
 
     {
+      instances.gateway-api.gateway-api.package = packages.experimental.gateway-api;
+
       instances.external-dns.nodes = {
         package = packages.experimental.external-dns;
         config = {

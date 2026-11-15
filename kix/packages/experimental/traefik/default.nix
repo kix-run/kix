@@ -8,10 +8,10 @@
 # `metrics.enabled` turns on Traefik's Prometheus metrics; with the optional
 # `prometheus` dep it also adds Service <name>-metrics and a ServiceMonitor.
 #
-# The Gateway API standard-channel CRDs (v1.6.1 or later) arrive outside Kix,
-# as for envoy-gateway. The package references every kind Traefik watches,
-# so the Deployment starts only after those CRDs are Established; with a
-# kind missing, Traefik's Gateway provider never starts.
+# The Gateway API CRDs come from the `gatewayApi` dependency, the role the
+# gateway-api package claims. The Deployment requires every kind Traefik
+# watches, so it starts only after those CRDs are Established; with a kind
+# missing, Traefik's Gateway provider never starts.
 #
 # Each listener port becomes a Traefik entrypoint, a container port, and a
 # Service port of the same number, because Traefik attaches a Gateway
@@ -27,8 +27,13 @@
 # Gateway take the instance name, and GatewayClass names are cluster-scoped,
 # so instances in two namespaces need different names.
 #
-# No dependency or option is required:
+# Dependencies:
+#   gatewayApi (required)   the Gateway API CRDs (v1.6.1 or later, standard
+#                           channel), from the gateway-api package or a
+#                           platform import.
+#   prometheus (optional)   scrapes Traefik while `metrics.enabled`.
 #
+#   instances.gateway-system.gateway-api.package = packages.experimental.gateway-api;
 #   instances.gateway-system.traefik.package = packages.experimental.traefik;
 #
 # Exposes (the gateway contract, kix.contracts.gateway):
@@ -145,11 +150,12 @@ in
     # One Gateway accepts HTTPRoutes from every namespace, so consumers in
     # any namespace find it by name.
     scope = "cluster";
-    k8s.minVersion = "1.26";
+    # The gateway-api package's minimum, whose CRDs Traefik needs.
+    k8s.minVersion = "1.32";
     network.intents = {
       # HTTPRoutes name their backends at runtime, on any port, so the graph
       # cannot see Traefik's upstream connections.
-      backends.egress = [ { to = "all-pods"; } ];
+      backends.egress = [ { to = "pods"; } ];
       # Clients outside the cluster, plus in-cluster clients and NodePort
       # traffic that arrives SNATed from a node.
       front-door.ingress = [
@@ -313,6 +319,7 @@ in
       {
         self,
         config,
+        gatewayApi ? null,
         prometheus ? null,
         ...
       }:
@@ -558,17 +565,33 @@ in
           ];
         };
 
-        # The CRD refs give the Deployment its CRD-before-pod edge: Traefik's
-        # Gateway provider does not start while any watched kind is missing.
-        crdRef =
-          kind: plural: version: extra:
-          scope.mkCRDRef (
-            {
-              group = gatewayApiGroup;
-              inherit kind plural version;
-            }
-            // extra
-          );
+        # Traefik's Gateway provider does not start while any watched kind
+        # is missing, so the Deployment requires each CRD.
+        crds = kix.contracts.experimental.gatewayApi.helpers.crdsFor {
+          who = "${scope.namespaceName}/${name}";
+          inherit gatewayApi;
+          kinds = [
+            "GatewayClass"
+            "Gateway"
+            "HTTPRoute"
+            "GRPCRoute"
+            "TLSRoute"
+            "ReferenceGrant"
+            "BackendTLSPolicy"
+          ];
+          # Traefik watches TLSRoute and BackendTLSPolicy at v1; the package
+          # is tested with Gateway API 1.6.1.
+          minVersion = "1.6.1";
+        };
+        watchedCrds = [
+          crds.GatewayClass
+          crds.Gateway
+          crds.HTTPRoute
+          crds.GRPCRoute
+          crds.TLSRoute
+          crds.ReferenceGrant
+          crds.BackendTLSPolicy
+        ];
       in
       if listenerProblems != [ ] then
         scope.fail (
@@ -581,32 +604,6 @@ in
         scope.fail argProblems
       else
         {
-          # Routes, grants, policies, and the class run no pods; a Gateway
-          # may, through its controller.
-          # The same markers envoy-gateway and kix.expose emit, with the
-          # Gateway API's readiness: a GatewayClass is usable once
-          # Accepted=True, a Gateway once Programmed=True.
-          gatewayClassCrd = crdRef "GatewayClass" "gatewayclasses" "v1" {
-            crdScope = "Cluster";
-            usesAtLeast = _: { };
-            readiness.condition = {
-              type = "Accepted";
-              status = "True";
-            };
-          };
-          gatewayCrd = crdRef "Gateway" "gateways" "v1" {
-            crdScope = "Namespaced";
-            readiness.condition = {
-              type = "Programmed";
-              status = "True";
-            };
-          };
-          httpRouteCrd = crdRef "HTTPRoute" "httproutes" "v1" { usesAtLeast = _: { }; };
-          grpcRouteCrd = crdRef "GRPCRoute" "grpcroutes" "v1" { usesAtLeast = _: { }; };
-          tlsRouteCrd = crdRef "TLSRoute" "tlsroutes" "v1" { usesAtLeast = _: { }; };
-          referenceGrantCrd = crdRef "ReferenceGrant" "referencegrants" "v1beta1" { usesAtLeast = _: { }; };
-          backendTlsPolicyCrd = crdRef "BackendTLSPolicy" "backendtlspolicies" "v1" { usesAtLeast = _: { }; };
-
           serviceAccount = scope.mkResource {
             apiVersion = "v1";
             kind = "ServiceAccount";
@@ -625,14 +622,8 @@ in
             requires = [
               self.clusterRole
               self.clusterRoleBinding
-              self.gatewayClassCrd
-              self.gatewayCrd
-              self.httpRouteCrd
-              self.grpcRouteCrd
-              self.tlsRouteCrd
-              self.referenceGrantCrd
-              self.backendTlsPolicyCrd
-            ];
+            ]
+            ++ watchedCrds;
             spec = {
               inherit (config) replicas;
               selector.matchLabels = selectorLabels;
@@ -722,13 +713,13 @@ in
             else
               null;
 
-          gatewayClass = self.gatewayClassCrd.out.mkCR scope {
+          gatewayClass = scope.mkCR crds.GatewayClass {
             inherit name;
             labels = selectorLabels;
             spec.controllerName = controllerName;
           };
 
-          gateway = self.gatewayCrd.out.mkCR scope {
+          gateway = scope.mkCR crds.Gateway {
             inherit name;
             labels = selectorLabels;
             spec = {

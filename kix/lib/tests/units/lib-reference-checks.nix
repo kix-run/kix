@@ -1633,6 +1633,7 @@ in
           { ref, ... }:
           {
             cluster.domain = "example.test";
+            instances.gwns.gateway-api.package = import ../../../packages/experimental/gateway-api;
             instances.gwns.gateway = {
               package = import ../../../packages/experimental/envoy-gateway;
               config.listeners = [

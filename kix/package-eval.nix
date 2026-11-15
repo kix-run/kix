@@ -251,6 +251,8 @@ let
       config.clusterIP = "10.96.0.53";
       instances.prometheus-operator.package = packages.prometheus-operator;
     };
+    # A Gateway API implementation needs the Gateway API CRDs.
+    envoy-gateway.instances.gateway-api.package = packages.gateway-api;
     external-dns = {
       config = {
         provider = "cloudflare";
@@ -501,7 +503,6 @@ let
     # are built.
     rabbitmq-operator.instances.prometheus-operator.package = packages.prometheus-operator;
     secret.config.stringData.password = "password";
-    secret-echo.instances = { inherit credentials; };
     secret-ref.config.keys = [ "password" ];
     service-ref.config = {
       selector."app.kubernetes.io/name" = "old-db";
@@ -578,6 +579,7 @@ let
       };
     };
     # A Prometheus provider, so the ServiceMonitor is built.
+    traefik.instances.gateway-api.package = packages.gateway-api;
     tempo.instances = {
       inherit storage;
       prometheus-operator.package = packages.prometheus-operator;

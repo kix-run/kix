@@ -112,6 +112,7 @@
           otel-collector = ./clusters/test-otel-collector.nix;
           falco = ./clusters/test-falco.nix;
           traefik = ./clusters/test-traefik.nix;
+          envoy-gateway = ./clusters/test-envoy-gateway.nix;
           tempo = ./clusters/test-tempo.nix;
           tempo-generator = ./clusters/test-tempo-generator.nix;
           monitoring-native = ./clusters/test-monitoring-native.nix;
@@ -350,9 +351,8 @@
       # except for the HTTPRoute's parentRef, which names each implementation's
       # Gateway (envoy-system/envoy, traefik-system/traefik), and Kix's
       # dependency bookkeeping. Network policy is off in both builds because
-      # only traefik publishes its data-plane pods, so enabling policy would
-      # emit an ingress rule in the traefik build that the envoy-gateway build
-      # lacks.
+      # the rule that admits each implementation's proxies to the backend
+      # names that implementation's pod labels.
       gatewaySwap = lib.genAttrs systems (system: {
         gateway-swap =
           let

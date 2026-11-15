@@ -1,0 +1,3 @@
+# 2026-11-15 · `kix/lib/plugins/netpol/derive.nix` · Package network intents apply to every workload, although the docs key them by part name.
+
+`docs/src/content/docs/reference/package-anatomy.mdx` documents `meta.network.intents.<partName>`, but `buildWorkloadCnps` translates every intent of the package for each workload, whatever the key. So envoy-gateway's `webhook` intent opens TCP 9443 from the API server on the certgen Job's pod too, and traefik's and ingress-nginx's `front-door` and `backends` keys are labels only. Either the lib should apply `intents.<partName>` to that part's workload, or the docs should say the key is a label and the rules apply to every workload of the package (package-review item N2 already assumes the latter).

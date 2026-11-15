@@ -260,6 +260,7 @@ A package that runs several images reads the image of its main software. When th
 | --- | --- | --- |
 | `"cni"` | None | Satisfies the cluster CNI capability check. |
 | `"dns"` | `fqdn` | Provides cluster DNS resolution; workloads automatically receive a dependency and network egress rule to the DNS service. |
+| `"gatewayApi"` | `crds` | Provides the `gateway.networking.k8s.io` CRD family to Gateway API controllers (`envoy-gateway`, `traefik`). |
 | `"loadBalancer"` | None | Satisfies `Service` resources of `type = "LoadBalancer"`. |
 | `"metricsApi"` | None | Satisfies consumers that call `scope.requireMetricsApi` (such as `HorizontalPodAutoscaler`). |
 | `"network-policy-enforcer"` | `netpol` | Enables cluster-wide `NetworkPolicy` enforcement when `cluster.networkPolicy.enable = true`. |
@@ -341,7 +342,7 @@ meta.network = {
 };
 ```
 
-- `intents.<partName>.egress`: list of rules where `to` is `"world"`, `"all-pods"`, `"apiserver"`, `"dns"`, or `{ entities = [ ... ]; }`, with optional `ports = [ { port; protocol ? "TCP"; } ]`.
+- `intents.<partName>.egress`: list of rules where `to` is `"world"`, `"pods"`, `"all-pods"`, `"apiserver"`, `"dns"`, or `{ entities = [ ... ]; }`, with optional `ports = [ { port; protocol ? "TCP"; } ]`. `"pods"` allows traffic only to pods. `"all-pods"` maps to Cilium's `cluster` entity, which also includes cluster nodes and the Kubernetes API server.
 - `intents.<partName>.ingress`: list of rules where `from` is `"world"`, `"all-pods"`, or `{ entities = [ ... ]; }`, with optional `ports`.
 - `externalIngressEntities`: list of Cilium entity names (such as `["world"]` or `["remote-node"]`) used when this package acts as a cluster ingress controller.
 

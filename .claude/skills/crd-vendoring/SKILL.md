@@ -59,10 +59,16 @@ under `rbac/`, the named roles), sort, write. CI runs `--check` on every pull re
    snapshot-controller) or the apiserver refuses it.
 5. If a CRD only matters while an optional component runs, gate it on that
    component's `enabled` option. Upstream umbrella charts condition each
-   driver's subchart the same way. A shared cluster-wide group
-   (`snapshot.storage.k8s.io`) gets its own package claiming a registry
-   role, and environments that ship it provide the role with an import
-   (`kix.mkImport { crds }`).
+   driver's subchart the same way. Put a shared cluster-wide API group
+   (`snapshot.storage.k8s.io`, `gateway.networking.k8s.io`) in its own
+   package (`snapshot-controller`, `gateway-api`) that claims a role in
+   `kix/lib/eval/roles.nix` (`snapshotController`, `gatewayApi`). Environments
+   that pre-install the group provide that role with
+   `kix.mkImport { roles = [ ... ]; crds = [ ... ]; }`. Controllers that serve
+   the group take the role as a dependency and build custom resources from its
+   `out.crds`. Do not vendor a second copy of those CRDs in a controller
+   package, even when upstream's install bundle includes them (as Envoy
+   Gateway's `install.yaml` does).
 6. Add the new kinds to the package's RBAC tables, or, for a package with
    `rbac/sources.txt`, take the operator's roles from the same bundle. Run the package's kind
    smoke (`scripts/kind-operators.sh` for the operator set).

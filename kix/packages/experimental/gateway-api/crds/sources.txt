@@ -1,0 +1,4 @@
+# The Gateway API standard-channel bundle at the tag `release` in
+# default.nix names. The script keeps the CustomResourceDefinitions; the
+# package renders the bundle's ValidatingAdmissionPolicy itself.
+https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.1/standard-install.yaml
