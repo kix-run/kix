@@ -83,8 +83,8 @@ in
               components. Add entries here for other external pods, or for a
               Kix workload whose outbound traffic depends on its configuration
               when the package's error or option description asks for one (such
-              as `infisical-operator` `address` or `coredns` `servers`). See
-              https://kix.run/docs/explanation/network-policy/.
+              as `infisical-operator` `address` or `coredns` `servers`). The
+              "Network policy" page of the Kix docs explains them.
             '';
           };
         };
@@ -102,8 +102,8 @@ in
       already runs Cilium, a flavor or cluster module sets
       `cluster.roles.cni.binding = "shadowable"` and declares a
       `platform-cilium` import, and the `cilium` instance configures or uses
-      that Cilium instead of installing a new one. See
-      https://kix.run/docs/explanation/network-policy/.
+      that Cilium instead of installing a new one. The "Network policy"
+      page of the Kix docs explains how Kix derives the policies.
     '';
   };
 

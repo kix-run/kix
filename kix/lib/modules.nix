@@ -779,7 +779,7 @@ in
         };
       };
       default = { };
-      description = "Build-time policy rules and severity settings for the cluster. See https://kix.run/docs/reference/scorecard-and-rules/.";
+      description = "Build-time policy rules and severity settings for the cluster. The \"Scorecard and rules\" page of the Kix docs lists the rules.";
     };
 
     consumers = lib.mkOption {
