@@ -38,6 +38,14 @@ Flags that control the local engine have no effect in operator mode:
 plan. `--dry-run` runs [`kix plan`](/docs/reference/cli/plan/) locally and
 does not contact the operator.
 
+## How the operator runs a deploy
+
+The operator gives each resource 300 seconds without readiness progress,
+whatever `--timeout` the CLI was given, and stops at the first resource that
+fails. Once a deploy has started, nothing stops it early: a newer request
+waits, and stopping the operator leaves the record `Deploying`. When the
+operator starts again, it resumes every `Deploying` record it wrote.
+
 ## Waiting for the operator
 
 The CLI polls the Activation record every 2 seconds and prints progress as

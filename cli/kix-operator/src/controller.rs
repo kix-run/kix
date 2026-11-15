@@ -65,6 +65,11 @@ const FINALIZER: &str = keys::OPERATOR_GC_FINALIZER;
 /// Short requeue when yielding to a Queued activation.
 const QUEUED_REQUEUE_INTERVAL: Duration = Duration::from_secs(5);
 
+/// How long a resource may go without readiness progress before an operator
+/// deploy fails it. `kix deploy --operator` does not send its `--timeout`
+/// to the operator, so every operator deploy uses this value.
+const READINESS_TIMEOUT: Duration = Duration::from_secs(300);
+
 /// Default requeue interval after successful reconciliation.
 /// Override with KIX_REQUEUE_INTERVAL_SECS env var.
 fn requeue_interval() -> Duration {
@@ -623,11 +628,12 @@ async fn run_reconcile(
         "Live change detection complete"
     );
 
-    // TODO(operator-cancel): wire this token to a per-Activation supervisor
-    // so a newer Activation can cancel the in-flight loop.
     let config = SchedulerConfig {
-        timeout: Duration::from_secs(300),
+        timeout: READINESS_TIMEOUT,
         on_error: OnErrorPolicy::Stop,
+        // Nothing cancels an operator deploy once it starts. When the
+        // operator restarts, it resumes a `Deploying` record. A cancelled run
+        // would mark the record `Failed`, which the operator does not resume.
         cancel: kix::cluster::cancel::CancelToken::new(),
         concurrency: scheduler::CONCURRENCY,
         stall: StallPolicy::from_env(),
