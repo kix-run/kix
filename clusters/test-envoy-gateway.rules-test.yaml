@@ -1,0 +1,115 @@
+# promtool unit tests for the envoy-gateway alert rules test-envoy-gateway.nix
+# renders. The rules-cluster-envoy-gateway check runs them from the rendered
+# rules, so each rule_files entry is <namespace>/<file> in the cluster's
+# manifests. The controller's series come through its metrics Service; the
+# proxies' through the PodMonitor, whose job is <namespace>/<PodMonitor name>.
+rule_files:
+  - envoy-gateway-system/envoy-gateway-alerts-prometheusrule.yaml
+  - envoy-gateway-system/envoy-gateway-proxy-alerts-prometheusrule.yaml
+evaluation_interval: 1m
+tests:
+  # The only controller replica stops answering.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="envoy-gateway-system",service="envoy-gateway-metrics",pod="envoy-gateway-0",instance="10.0.0.1:19001"}'
+        values: '1 1 0x15'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: EnvoyGatewayDown
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "envoy-gateway-system"
+              service: "envoy-gateway-metrics"
+            exp_annotations:
+              summary: "The Envoy Gateway controller is down."
+              description: "No replica of Envoy Gateway envoy-gateway-system/envoy-gateway has answered a scrape for 10 minutes. The proxies keep serving their last configuration, and no change to a Gateway, route, or policy reaches them. Check the Deployment envoy-gateway in envoy-gateway-system and its pods' events."
+  # A healthy controller fires nothing.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="envoy-gateway-system",service="envoy-gateway-metrics",pod="envoy-gateway-0",instance="10.0.0.1:19001"}'
+        values: '1x20'
+      - series: 'xds_nack_total{namespace="envoy-gateway-system",service="envoy-gateway-metrics",pod="envoy-gateway-0",instance="10.0.0.1:19001",nodeID="envoy-0",typeURL="type.googleapis.com/envoy.config.listener.v3.Listener"}'
+        values: '2x20'
+      - series: 'resource_apply_total{namespace="envoy-gateway-system",service="envoy-gateway-metrics",pod="envoy-gateway-0",instance="10.0.0.1:19001",kind="Deployment",exported_namespace="envoy-gateway-system",name="envoy-a",status="failure"}'
+        values: '1x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: EnvoyGatewayDown
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: EnvoyGatewayConfigRejected
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: EnvoyGatewayProxyApplyFailing
+        exp_alerts: []
+  # A proxy refuses three updates.
+  - interval: 1m
+    input_series:
+      - series: 'xds_nack_total{namespace="envoy-gateway-system",service="envoy-gateway-metrics",pod="envoy-gateway-0",instance="10.0.0.1:19001",nodeID="envoy-0",typeURL="type.googleapis.com/envoy.config.listener.v3.Listener"}'
+        values: '0 0 1 2 3 3 3 3 3 3'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: EnvoyGatewayConfigRejected
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "envoy-gateway-system"
+              service: "envoy-gateway-metrics"
+            exp_annotations:
+              summary: "An Envoy proxy refused its configuration."
+              description: "Proxies of Envoy Gateway envoy-gateway-system/envoy-gateway refused 3 configuration updates in the last 15m. A proxy that refuses an update keeps serving the previous configuration, so recent changes to Gateways, routes, or policies are not in effect. Read the controller's log for the rejected resource, and the status of the routes and policies changed last."
+  # The controller keeps failing to update a proxy Deployment.
+  - interval: 1m
+    input_series:
+      - series: 'resource_apply_total{namespace="envoy-gateway-system",service="envoy-gateway-metrics",pod="envoy-gateway-0",instance="10.0.0.1:19001",kind="Deployment",exported_namespace="envoy-gateway-system",name="envoy-a",status="failure"}'
+        values: '0+1x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: EnvoyGatewayProxyApplyFailing
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "envoy-gateway-system"
+              service: "envoy-gateway-metrics"
+            exp_annotations:
+              summary: "Envoy Gateway cannot update the proxies' Kubernetes objects."
+              description: "Envoy Gateway envoy-gateway-system/envoy-gateway failed to create or update a proxy Deployment, Service, or other object it owns 15 times in the last 15 minutes. A new Gateway gets no proxy, and a changed EnvoyProxy does not reach the running proxies. Read the controller's log for the API error."
+  # No proxy is scraped at all: absent() keeps namespace and job.
+  - interval: 1m
+    input_series: []
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: EnvoyProxyDown
+        exp_alerts:
+          - exp_labels:
+              severity: "critical"
+              namespace: "envoy-gateway-system"
+              job: "envoy-gateway-system/envoy-gateway-proxy"
+            exp_annotations:
+              summary: "No Envoy proxy of a Gateway answers."
+              description: "No proxy pod of the Gateway envoy-gateway-system/envoy-gateway has answered a scrape for 5 minutes, so requests to its listeners get no answer. Check the proxy Deployment the controller created in envoy-gateway-system (label gateway.envoyproxy.io/owning-gateway-name=envoy-gateway) and the controller's log."
+  # A proxy loses its xDS stream; the other proxy keeps it and fires nothing.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="envoy-gateway-system",job="envoy-gateway-system/envoy-gateway-proxy",pod="envoy-a",instance="10.0.0.2:19001"}'
+        values: '1x20'
+      - series: 'envoy_control_plane_connected_state{namespace="envoy-gateway-system",job="envoy-gateway-system/envoy-gateway-proxy",pod="envoy-a",instance="10.0.0.2:19001"}'
+        values: '1 1 0x18'
+      - series: 'envoy_control_plane_connected_state{namespace="envoy-gateway-system",job="envoy-gateway-system/envoy-gateway-proxy",pod="envoy-b",instance="10.0.0.3:19001"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: EnvoyProxyDown
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: EnvoyProxyControlPlaneLost
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "envoy-gateway-system"
+              job: "envoy-gateway-system/envoy-gateway-proxy"
+              pod: "envoy-a"
+            exp_annotations:
+              summary: "An Envoy proxy has lost its controller."
+              description: "Proxy envoy-a of the Gateway envoy-gateway-system/envoy-gateway has had no xDS connection to the controller for 10 minutes. It serves its last configuration, and new routes and certificates do not reach it. Check that Envoy Gateway envoy-gateway-system/envoy-gateway runs and that the proxy can reach the Service envoy-gateway on port 18000."

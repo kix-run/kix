@@ -501,7 +501,6 @@ let
     # are built.
     rabbitmq-operator.instances.prometheus-operator.package = packages.prometheus-operator;
     secret.config.stringData.password = "password";
-    secret-echo.instances = { inherit credentials; };
     secret-ref.config.keys = [ "password" ];
     service-ref.config = {
       selector."app.kubernetes.io/name" = "old-db";
