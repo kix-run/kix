@@ -12,7 +12,7 @@
 # no service map on the Prometheus datasource's uid.
 # Everything runs under Cilium default deny.
 #
-# Build:  nix build ./clusters#cluster-tempo-generator --extra-experimental-features pipe-operators
+# Build:  kix build tempo-generator
 
 { kix, packages }:
 

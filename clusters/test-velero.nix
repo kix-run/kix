@@ -13,8 +13,8 @@
 # rules render; test-velero.rules-test.yaml tests them with promtool. The
 # `weekly` schedule gives VeleroBackupMissing its timestamp form.
 #
-# Build:  nix build .#cluster-velero --extra-experimental-features pipe-operators
-# Rules:  nix build ./clusters#checks.x86_64-linux.rules-cluster-velero --extra-experimental-features pipe-operators
+# Build:  kix build velero
+# Rules:  scripts/cluster-checks.sh . velero clusters/test-velero.rules-test.yaml
 # Deploy: scripts/kind-velero.sh
 
 { kix, packages }:

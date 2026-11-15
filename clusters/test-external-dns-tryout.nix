@@ -7,7 +7,7 @@
 # records it writes.
 #
 # Bring up:  kind create cluster --name external-dns
-# Deploy:    kix deploy external-dns-tryout --flake ./clusters --context kind-external-dns -y
+# Deploy:    kix deploy external-dns-tryout --context kind-external-dns -y
 { kix, packages }:
 
 kix.buildCluster {

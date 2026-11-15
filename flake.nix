@@ -23,58 +23,108 @@
 
       clusterOutputs = mkFlake {
         inherit inputs;
-        # Matches clusters/flake.nix: a finding from an error-severity
-        # scorecard rule fails the build.
+        # A finding from an error-severity scorecard rule fails the build in
+        # this repository. Every cluster otherwise runs the shipped default
+        # rule set.
         clusterModules = [ { scorecard.maxSeverity = "error"; } ];
+
+        # Every cluster the repository builds, keyed by the name commands
+        # take: `kix build <key>`, `kix check <key>`, `kix deploy <key>`.
+        # The key is also the cluster's name unless the definition passes
+        # `name` to `buildCluster`. clusters/README.md says what each group
+        # is for.
         clusters = {
-          # Test clusters
-          minimal = ./clusters/test-minimal.nix;
+          # Examples: start with example-hello.
+          example-hello = ./clusters/example-hello.nix;
           example = ./clusters/example.nix;
+          example-import = ./clusters/example-import.nix;
+          example-multi-env-dev = ./clusters/example-multi-env/dev.nix;
+          example-multi-env-prod = ./clusters/example-multi-env/prod.nix;
+
+          # The smoke test: the full homelab service set on kind, and the same
+          # cluster moved to Gateway API for scripts/kix-rollback-check.sh.
+          homelab-kind = ./clusters/homelab/cluster-kind.nix;
+          homelab-kind-gateway-migrate = ./clusters/homelab/cluster-kind-gateway-migrate.nix;
+
+          # Library features: dependency resolution, composition, pins, bundles.
+          minimal = ./clusters/test-minimal.nix;
           full = ./clusters/test-full.nix;
           helm = ./clusters/test-helm.nix;
-          example-import = ./clusters/example-import.nix;
           auto = ./clusters/test-auto.nix;
           auto2 = ./clusters/test-auto2.nix;
-          immich = ./clusters/test-immich.nix;
-          clickhouse = ./clusters/test-clickhouse.nix;
-          clickhouse-operator = ./clusters/test-clickhouse-operator.nix;
+          fragments = ./clusters/test-fragments.nix;
+          multi-env = ./clusters/test-multi-env.nix;
+          pins = ./clusters/test-pins.nix;
+          secrets = ./clusters/test-secrets.nix;
+          bundle-alias = ./clusters/test-bundle-alias.nix;
+          consumers-platform = ./clusters/test-consumers/platform.nix;
+          consumers-acme = ./clusters/test-consumers/acme.nix;
+          doc-how-tos = ./clusters/test-doc-how-tos.nix;
+          spread = ./clusters/test-spread.nix;
+          rke2-cilium = ./clusters/test-rke2-cilium.nix;
+
+          # The CLI's kind integration tests deploy kind, then kind-v2 or kind-port
+          # over it. All three share the cluster name "kind".
+          kind = ./clusters/test-kind.nix;
+          kind-v2 = ./clusters/test-kind-v2.nix;
+          kind-port = ./clusters/test-kind-port.nix;
+          kind-probe = ./clusters/test-kind-probe.nix;
+
+          # Swap fixtures: two builds of one cluster that move a consumer from one
+          # provider package to another. Each pair shares a cluster name.
           clickhouse-swap-bare = ./clusters/test-clickhouse-swap/bare.nix;
           clickhouse-swap-replicated = ./clusters/test-clickhouse-swap/replicated.nix;
-          cnpg = ./clusters/test-cnpg.nix;
-          rabbitmq = ./clusters/test-rabbitmq.nix;
           postgres-swap-stackgres = ./clusters/test-postgres-swap/stackgres.nix;
           postgres-swap-cnpg = ./clusters/test-postgres-swap/cnpg.nix;
           gateway-swap-envoy = ./clusters/test-gateway-swap/envoy.nix;
           gateway-swap-traefik = ./clusters/test-gateway-swap/traefik.nix;
-          kind = ./clusters/test-kind.nix;
-          kind-v2 = ./clusters/test-kind-v2.nix;
-          kind-port = ./clusters/test-kind-port.nix;
+
+          # One package, or a small group, each on kind unless its file says
+          # otherwise.
+          immich = ./clusters/test-immich.nix;
+          n8n = ./clusters/test-n8n.nix;
+          clickhouse = ./clusters/test-clickhouse.nix;
+          clickhouse-operator = ./clusters/test-clickhouse-operator.nix;
+          cnpg = ./clusters/test-cnpg.nix;
+          rabbitmq = ./clusters/test-rabbitmq.nix;
+          harbor = ./clusters/test-harbor.nix;
+          operators = ./clusters/test-operators.nix;
+          sealed-jobs = ./clusters/test-sealed-jobs.nix;
+          ingress-netpol = ./clusters/test-ingress-netpol.nix;
+          external-dns = ./clusters/test-external-dns.nix;
+          external-dns-tryout = ./clusters/test-external-dns-tryout.nix;
+          external-secrets = ./clusters/test-external-secrets.nix;
+          openbao = ./clusters/test-openbao.nix;
+          velero = ./clusters/test-velero.nix;
+          reloader = ./clusters/test-reloader/kind.nix;
+          tailscale = ./clusters/test-tailscale/cluster.nix;
+          mayastor = ./clusters/test-mayastor.nix;
+          virtualization = ./clusters/test-virtualization.nix;
+          metabase = ./clusters/test-metabase.nix;
+          plausible = ./clusters/test-plausible.nix;
+          plausible-replicated = ./clusters/test-plausible-replicated.nix;
           metrics-server = ./clusters/test-metrics-server.nix;
           spegel = ./clusters/test-spegel.nix;
           volsync = ./clusters/test-volsync.nix;
+          keycloak = ./clusters/test-keycloak.nix;
+          keycloak-oidc = ./clusters/test-keycloak-oidc.nix;
           otel-collector = ./clusters/test-otel-collector.nix;
           falco = ./clusters/test-falco.nix;
+          traefik = ./clusters/test-traefik.nix;
+          tempo = ./clusters/test-tempo.nix;
+          tempo-generator = ./clusters/test-tempo-generator.nix;
           monitoring-native = ./clusters/test-monitoring-native.nix;
           monitoring-loki = ./clusters/test-monitoring-loki.nix;
+          monitoring-netpol = ./clusters/test-monitoring-netpol.nix;
           victoria-metrics = ./clusters/test-victoria-metrics.nix;
           victoria-metrics-crd-ref = ./clusters/test-victoria-metrics-crd-ref.nix;
-          external-secrets = ./clusters/test-external-secrets.nix;
-          openbao = ./clusters/test-openbao.nix;
-          doc-how-tos = ./clusters/test-doc-how-tos.nix;
-          bundle-alias = ./clusters/test-bundle-alias.nix;
-          consumers-platform = ./clusters/test-consumers/platform.nix;
-          consumers-acme = ./clusters/test-consumers/acme.nix;
-
-          # Register documented examples so routine builds catch evaluation
-          # errors in them.
-          example-multi-env-dev = ./clusters/example-multi-env/dev.nix;
-          example-multi-env-prod = ./clusters/example-multi-env/prod.nix;
-
-          # Smoke test: the full homelab service set on kind, and the same
-          # cluster moved to Gateway API for scripts/kix-rollback-check.sh.
-          homelab-kind = ./clusters/homelab/cluster-kind.nix;
-          homelab-kind-gateway-migrate = ./clusters/homelab/cluster-kind-gateway-migrate.nix;
         };
+
+        # region:pinFile
+        # A cluster function that takes a `pins` argument gets this file
+        # already loaded, so no cluster definition names the path.
+        pins = ./clusters/pins.json;
+        # endregion:pinFile
       };
 
       # Kix CLI package (built with crane)

@@ -7,7 +7,7 @@
 # Forcing `rawManifests` forces the cluster's diagnostics and cross-resource
 # checks first (`eval/cluster.nix`), the PackageInstance wiring is validated
 # as `mkFlake` validates a real cluster's, and `scorecard.maxSeverity = "error"`
-# matches the cap `clusters/flake.nix` and the root `flake.nix` set. Nothing is
+# matches the cap the repository's `flake.nix` sets. Nothing is
 # built. Only `kix` renders the charts that chart packages read, so plain
 # `nix flake check` stops at the first one. The kix-cli test
 # `flake_checks_evaluate_with_helm` evaluates this check through `kix`.

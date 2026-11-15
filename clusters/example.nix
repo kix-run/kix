@@ -2,7 +2,7 @@
 #
 # Namespace-scoped instances with DI resolution.
 #
-# Build:  nix build .#cluster-example
+# Build:  kix build example
 
 { kix, packages }:
 

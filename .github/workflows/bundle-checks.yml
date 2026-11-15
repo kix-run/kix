@@ -34,6 +34,8 @@ on:
       - 'cli/kix-cli/src/commands/bundle.rs'
       - 'cli/kix-cli/tests/commands_test.rs'
       - 'cli/fuzz/**'
+      - 'clusters/**'
+      - 'flake.nix'
       - 'cli/Cargo.toml'
       - 'cli/Cargo.lock'
       - '.github/workflows/bundle-checks.yml'

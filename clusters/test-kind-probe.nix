@@ -7,7 +7,7 @@
 # the web instance and the same probe must time out.
 #
 # Bring up:  kind create cluster --name kix-probe --config <disableDefaultCNI>
-# Deploy:    kix --flake ./clusters --context kind-kix-probe deploy kind-probe -y
+# Deploy:    kix deploy kind-probe --context kind-kix-probe -y
 #
 { kix, packages }:
 

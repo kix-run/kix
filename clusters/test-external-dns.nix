@@ -18,7 +18,7 @@
 #            kubectl apply --server-side -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.2/standard-install.yaml
 #            kubectl create namespace other
 #            kubectl -n other create secret generic other-dns-token --from-literal=x=unused
-# Deploy:    kix deploy external-dns --flake ./clusters --context kind-external-dns -y
+# Deploy:    kix deploy external-dns --context kind-external-dns -y
 { kix, packages }:
 
 kix.buildCluster {

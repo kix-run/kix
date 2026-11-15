@@ -13,8 +13,8 @@
 # With metabase-pg it renders every alert of the package, which
 # test-metabase.rules-test.yaml tests.
 #
-# Build:  nix build .#cluster-metabase --extra-experimental-features pipe-operators
-# Deploy: kix deploy metabase --flake ./clusters --context <kind context> --timeout 35m
+# Build:  kix build metabase
+# Deploy: kix deploy metabase --context <kind context> --timeout 35m
 #         on a kind cluster created with `disableDefaultCNI: true`. The
 #         first start migrates the schema, hence the timeout.
 

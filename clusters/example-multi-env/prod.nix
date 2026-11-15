@@ -6,8 +6,8 @@
 # - Scorecard enforcement (errors block the build)
 # - Network policies enabled
 #
-# Build:  nix build .#cluster-prod
-# Deploy: kix deploy prod
+# Build:  kix build example-multi-env-prod
+# Deploy: kix deploy example-multi-env-prod
 
 { kix, packages }:
 

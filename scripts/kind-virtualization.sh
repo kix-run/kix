@@ -93,7 +93,7 @@ k() { kubectl --context "$CTX" "$@"; }
 
 # The CLI from this checkout. The deploy installs Cilium first, so the nodes
 # become Ready while it runs.
-$NIX run .#kix -- deploy virtualization --flake ./clusters --context "$CTX" -y --timeout 30m \
+$NIX run .#kix -- deploy virtualization --context "$CTX" -y --timeout 30m \
   > "$OUT/deploy-1.log" 2>&1 &
 deploy_pid=$!
 echo "deploy log: $OUT/deploy-1.log"
@@ -211,7 +211,7 @@ spec:
   template: { spec: { domain: { devices: {}, resources: { requests: { memory: 64Mi } } } } }
 EOF
 
-if $NIX run .#kix -- deploy virtualization --flake ./clusters --context "$CTX" -y --timeout 10m > "$OUT/deploy-2.log" 2>&1; then
+if $NIX run .#kix -- deploy virtualization --context "$CTX" -y --timeout 10m > "$OUT/deploy-2.log" 2>&1; then
   echo "ok:   a second deploy with no change succeeds"
 else
   echo "FAIL: a second deploy with no change; see $OUT/deploy-2.log"

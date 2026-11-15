@@ -24,7 +24,7 @@
 # Cilium in kube-proxy mode serves the hostPort that containerd reaches the
 # local Spegel pod through only with portmap chaining.
 #
-# Build:  nix build .#cluster-spegel --extra-experimental-features pipe-operators
+# Build:  kix build spegel
 
 { kix, packages }:
 

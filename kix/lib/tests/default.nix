@@ -19,13 +19,13 @@
 # feature there as `units/<topic>.nix`, with test names `<topic>-<what>`.
 
 {
-  # Default: the exact nixpkgs the clusters flake pins (read from its lock
-  # file, fetched by narHash: pure, no registry/channel needed).
+  # Default: the exact nixpkgs the repository flake pins, read from its lock
+  # file and fetched by narHash, so no registry or channel is needed.
   lib ? (
     let
-      lock = builtins.fromJSON (builtins.readFile ../../../clusters/flake.lock);
+      lock = builtins.fromJSON (builtins.readFile ../../../flake.lock);
     in
-    import (builtins.fetchTree lock.nodes.nixpkgs.locked + "/lib")
+    import (builtins.fetchTree lock.nodes.${lock.nodes.root.inputs.nixpkgs}.locked + "/lib")
   ),
 }:
 

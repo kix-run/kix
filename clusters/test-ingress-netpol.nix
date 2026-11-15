@@ -7,7 +7,7 @@
 # request through the Ingress returns 504. filebrowser is the backend because
 # it is one Deployment, one Service, and one `kix.expose`.
 #
-# Build:  nix build .#cluster-ingress-netpol --extra-experimental-features pipe-operators
+# Build:  kix build ingress-netpol
 #
 # Target clusters must already run Cilium. This fixture omits a flavor because
 # flavors declare platform instances in `kube-system`, and enabling default-deny

@@ -46,7 +46,7 @@ fi
 
 # The CLI from this checkout. A deploy that returns has already waited for
 # the location, the Schedules and the smoke Backup.
-$NIX run .#kix -- deploy velero --flake ./clusters --context "$CTX" -y --timeout 20m
+$NIX run .#kix -- deploy velero --context "$CTX" -y --timeout 20m
 
 k() { kubectl --context "$CTX" "$@"; }
 v() { k -n velero exec deploy/velero -c velero -- /velero --namespace velero "$@"; }

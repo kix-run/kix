@@ -5,7 +5,7 @@
 # base module (giving each environment its own activation and deploy), `mkEnv`
 # places all environments in one cluster so they deploy together.
 #
-# Build:  nix build .#cluster-multi-env --extra-experimental-features pipe-operators
+# Build:  kix build multi-env
 
 { kix, packages }:
 

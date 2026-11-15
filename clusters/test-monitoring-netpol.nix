@@ -11,7 +11,7 @@
 #
 # Bring up: kind create cluster --name kix-monitoring-netpol --config <config>
 #           where the config sets networking.disableDefaultCNI = true
-# Deploy:   kix --flake ./clusters --context kind-kix-monitoring-netpol deploy monitoring-netpol -y
+# Deploy:   kix deploy monitoring-netpol --context kind-kix-monitoring-netpol -y
 
 { kix, packages }:
 

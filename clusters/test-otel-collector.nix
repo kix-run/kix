@@ -9,7 +9,7 @@
 #   `out.otlpGrpcUrl`, so the agent's egress to the gateway is derived.
 # prometheus-operator gives both a metrics port and a ServiceMonitor.
 #
-# Build:  nix build ./clusters#cluster-otel-collector --extra-experimental-features pipe-operators
+# Build:  kix build otel-collector
 
 { kix, packages }:
 

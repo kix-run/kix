@@ -12,7 +12,7 @@
 # smartctl-exporter runs beside it. test-operators.rules-test.yaml tests
 # the rules of arc, coredns, infisical-operator, and smartctl-exporter.
 #
-# Build:  nix build .#cluster-operators --extra-experimental-features pipe-operators
+# Build:  kix build operators
 # Deploy: scripts/kind-operators.sh
 
 { kix, packages }:

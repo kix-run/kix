@@ -1,12 +1,12 @@
-# clusters/test-auto2.nix: Test auto-instantiation and optional instances.
+# clusters/test-auto2.nix: the second build of test-auto.nix, without the
+# needs-coredns instance.
 #
-# Exercises:
-# 1. Auto-instantiation of valkey (required dep of test-app)
-# 2. Optional instance activation
-# 3. Transitive auto-instantiation (test-app → valkey)
-# 4. Inactive optional not deployed
+# It keeps the cluster name "test-auto", so a deploy or diff of this build
+# over test-auto shows what happens when the last consumer of an optional
+# instance goes: the optional coredns instance is no longer activated and
+# its resources are removed.
 #
-# Build:  nix build .#cluster-auto
+# Build:  kix build auto2
 
 { kix, packages }:
 
@@ -51,29 +51,6 @@ let
         root = self.configMap;
       };
   };
-
-  # A package that requires coredns, used to test optional activation.
-  # No instance uses this yet.
-  # deadnix: skip
-  needsCorednsPackage = {
-    meta.version = "0.0.0";
-    build =
-      {
-        self,
-        scope,
-        coredns,
-        ...
-      }:
-      {
-        configMap = scope.mkResource {
-          apiVersion = "v1";
-          kind = "ConfigMap";
-          name = "needs-coredns";
-          data.DNS_SERVICE = coredns.out.fqdn;
-        };
-        root = self.configMap;
-      };
-  };
 in
 kix.buildCluster {
   name = "test-auto";
@@ -107,7 +84,8 @@ kix.buildCluster {
         };
       };
 
-      # Optional coredns in infra ns, activated by needs-coredns.
+      # Optional coredns in infra. Nothing here needs it, so it stays
+      # inactive.
       instances.infra = {
         coredns = {
           package = packages.experimental.coredns;

@@ -9,7 +9,7 @@
 # Alertmanager run several replicas with spread constraints and disruption
 # budgets.
 #
-# Build: nix build ./clusters#cluster-monitoring-native --extra-experimental-features pipe-operators
+# Build: kix build monitoring-native
 
 { kix, packages }:
 

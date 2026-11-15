@@ -3,7 +3,7 @@
 # Demonstrates mkImport: valkey and postgres are not managed by kix but exist
 # in the cluster. Each import's `out` gives immich the connection details.
 #
-# Build:  nix build .#cluster-example-import
+# Build:  kix build example-import
 
 { kix, packages }:
 

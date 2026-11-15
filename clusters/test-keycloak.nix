@@ -8,8 +8,8 @@
 # Keycloak connects with `sslmode=require`. kind offers availability `none`,
 # so one Keycloak replica runs and no `keycloak-jgroups` policy renders.
 #
-# Build:  nix build ./clusters#cluster-keycloak --extra-experimental-features pipe-operators
-# Deploy: kix deploy keycloak --flake ./clusters --context <kind context> --timeout 20m
+# Build:  kix build keycloak
+# Deploy: kix deploy keycloak --context <kind context> --timeout 20m
 #         on a kind cluster created with `disableDefaultCNI: true`. Every
 #         start runs Keycloak's build step, hence the timeout.
 

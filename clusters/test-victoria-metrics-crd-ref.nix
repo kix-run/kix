@@ -22,7 +22,7 @@
 #    crd-ref-victoria-metrics-operator-alertmanagerconfigs-monitoring-coreos-com
 #    (75 characters; a marker name is a DNS-1123 subdomain, up to 253).
 #
-# Build:  nix build .#cluster-victoria-metrics-crd-ref --extra-experimental-features pipe-operators
+# Build:  kix build victoria-metrics-crd-ref
 
 { kix, packages }:
 

@@ -3,7 +3,7 @@
 #
 # `kix bundle` must write and read back a build like this.
 #
-# Build:  nix build .#cluster-bundle-alias
+# Build:  kix build bundle-alias
 
 { kix, packages }:
 

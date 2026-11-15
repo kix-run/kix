@@ -22,8 +22,8 @@
 #    the operator's pods, and the scrape join's paths from vmagent to every
 #    scrape object it selects, the operator's own VMServiceScrapes included.
 #
-# Build:  nix build ./clusters#cluster-victoria-metrics --extra-experimental-features pipe-operators
-# Deploy: kix deploy victoria-metrics --flake ./clusters --context <kind context> --timeout 20m
+# Build:  kix build victoria-metrics
+# Deploy: kix deploy victoria-metrics --context <kind context> --timeout 20m
 #         on a kind cluster created with `disableDefaultCNI: true`.
 
 { kix, packages }:

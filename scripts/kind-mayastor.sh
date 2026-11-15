@@ -113,7 +113,7 @@ EOF
 }
 
 deploy() {
-  $NIX run .#kix -- deploy mayastor --flake ./clusters --context "$CTX" -y --timeout 30m --log-format line 2>&1 | tee "$H/deploy-1.log"
+  $NIX run .#kix -- deploy mayastor --context "$CTX" -y --timeout 30m --log-format line 2>&1 | tee "$H/deploy-1.log"
 }
 
 # Prints the api-rest answer for a path, through a port-forward.
