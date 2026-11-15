@@ -200,6 +200,30 @@ meta = {
 
 ### `meta.version`
 
+Set `meta.version` to the software version the package deploys by default, such as `"1.30.5"` for nginx 1.30.5. Define the version once in a local `release` variable and reuse it for the default image tag so the two stay in sync. Keep `meta.version` without a leading `v` so it matches `kix.image.version`. When the image tag starts with `v`, strip it with `lib.removePrefix "v" release`:
+
+```nix
+let
+  release = "v1.12.1";
+in
+{
+  meta = {
+    version = lib.removePrefix "v" release;
+    ...
+  };
+
+  options.image = kix.options.image {
+    repository = "quay.io/prometheus/node-exporter";
+    tag = release;
+    digest = "sha256:1b4e4438faca4dd7e001dd445d161a4a2091b0fededa84093b3a8dfeae1f1be0";
+  };
+
+  ...
+}
+```
+
+Omit `meta.version` when the package runs no software of its own, such as a package that only creates Secrets or custom resources for a separate controller. Without `meta.version`, `kix list packages` shows `-`, and the instance's `PackageInstance` record omits `spec.version` unless `out.version` or the instance's `version` option is set.
+
 Version strings must match `<digits>(.<digits>)*` with an optional leading `v` or `V`, an optional `-<suffix>`, and an optional `+<build>` (for example, `"1.28.2"`, `"v2.4.0-rc1"`, `"1.31.2-gke.1209000"`, or `"1.31.2+rke2r1"`).
 
 When comparing versions in `compatibleWith` and `k8s`:

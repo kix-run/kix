@@ -68,11 +68,12 @@
 }:
 
 let
+  release = "v2.63.18";
   name = scope.instanceName;
 in
 {
   meta = {
-    version = "2.63.18";
+    version = lib.removePrefix "v" release;
     description = "Filebrowser: web-based file manager";
     owner = "app-team";
   };
@@ -80,7 +81,7 @@ in
   options = {
     image = kix.options.image {
       repository = "docker.io/filebrowser/filebrowser";
-      tag = "v2.63.18";
+      tag = release;
       digest = "sha256:c4c627f687668c5a02ab410d8473712c77be7f1f0ea4f8d624d2a1392c495e76";
       pullPolicy = null;
     };

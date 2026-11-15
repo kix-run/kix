@@ -47,12 +47,13 @@
 }:
 
 let
+  release = "2026.9.3";
   name = scope.instanceName;
   who = "cloudflared ${scope.namespaceName}/${name}";
 in
 {
   meta = {
-    version = "2026.9.3";
+    version = release;
     description = "Cloudflare Tunnel connector (cloudflared)";
     owner = "platform";
     lifecycle = "stateless";
@@ -62,7 +63,7 @@ in
   options = {
     image = kix.options.image {
       repository = "docker.io/cloudflare/cloudflared";
-      tag = "2026.9.3";
+      tag = release;
       digest = "sha256:072c067d25ccbe61d46e18f0d0723255f2bb5304f7317caa95b27031520ff92c";
     };
     replicas = lib.mkOption {

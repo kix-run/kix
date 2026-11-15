@@ -52,13 +52,14 @@
   availability,
 }:
 let
+  release = "v1.150.0";
   name = scope.instanceName;
 
   inherit (import ../victoria-metrics-operator/cr-image.nix { inherit lib kix; }) crImage;
 in
 {
   meta = {
-    version = "1.150.0";
+    version = lib.removePrefix "v" release;
     description = "VictoriaMetrics agent: a metrics scraper run through a VMAgent CR";
     owner = "platform";
     defaultAliases = [ "vmAgent" ];
@@ -84,7 +85,7 @@ in
   options = {
     image = kix.options.image {
       repository = "docker.io/victoriametrics/vmagent";
-      tag = "v1.150.0";
+      tag = release;
       digest = "sha256:3eff5874d59292714878dcb6aee14f048bf19b7312b727860ba5e7d29e2e0c07";
       pullPolicy = null;
     };

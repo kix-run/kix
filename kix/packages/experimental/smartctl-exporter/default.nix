@@ -54,6 +54,10 @@ let
     hash = "sha256-YVZTmmCuNnRYeDDBLQNWib4+FBo4mjMCqM5EKyd/Gss=";
   };
 
+  # The exporter release the chart's image runs. The chart has its own
+  # version above.
+  release = "v0.14.0";
+
   # The chart names its objects `<release>-<chart>` (_helpers.tpl).
   releaseName = "smartctl-exporter";
   serviceName = "${releaseName}-prometheus-smartctl-exporter";
@@ -63,7 +67,7 @@ let
       repository = "quay.io/prometheuscommunity/smartctl-exporter";
       # The chart renders `repository:tag` and has no digest value, so the
       # digest goes in the tag.
-      tag = "v0.14.0@sha256:cfe22c36d7d2fac48ebf619707305acb65eb0fb670656eb80f356e606d782bc1";
+      tag = "${release}@sha256:cfe22c36d7d2fac48ebf619707305acb65eb0fb670656eb80f356e606d782bc1";
     };
 
     resources = {
@@ -95,7 +99,7 @@ let
   device = "{{ $labels.device }} on the node of pod {{ $labels.pod }}";
 in
 {
-  meta.version = "0.16.0";
+  meta.version = lib.removePrefix "v" release;
   meta.description = "smartctl_exporter from the upstream Helm chart, a privileged DaemonSet that exports SMART disk health metrics to Prometheus";
   meta.owner = "platform";
   # smartctl reads SMART data from the node's block devices, which needs a

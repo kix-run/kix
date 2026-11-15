@@ -50,7 +50,6 @@ in
 
 {
   meta = {
-    version = "1.1.0";
     description = "Gateway API resources (GatewayClass + Gateway)";
     owner = "platform";
     defaultAliases = [ "gateway" ];

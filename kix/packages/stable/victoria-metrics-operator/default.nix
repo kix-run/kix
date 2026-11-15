@@ -40,6 +40,7 @@
 }:
 
 let
+  release = "v0.74.1";
   inherit (import ./kinds.nix) promCompatDefs;
 
   # Removed options and what replaces each. They stay declared, hidden, so
@@ -54,7 +55,7 @@ in
 
 {
   meta = {
-    version = "0.74.1";
+    version = lib.removePrefix "v" release;
     description = "VictoriaMetrics Operator: operator.victoriametrics.com CRD controller";
     owner = "platform";
     defaultAliases = [
@@ -81,7 +82,7 @@ in
   options = {
     image = kix.options.image {
       repository = "docker.io/victoriametrics/operator";
-      tag = "v0.74.1";
+      tag = release;
       digest = "sha256:7310c4a80b94f530c5f0b1fcf6d6eaf933f39cc5704e983900d9cfd6b31f9dc1";
     };
     replicas = lib.mkOption {
