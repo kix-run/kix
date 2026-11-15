@@ -669,3 +669,57 @@ mod stop_advice_tests {
         assert!(text.contains("--on-error continue"), "{text}");
     }
 }
+
+mod operator_flag_tests {
+    use crate::cli::{Cli, Command};
+    use clap::Parser;
+
+    fn refusal(extra: &[&str]) -> Option<String> {
+        let argv = [&["kix", "deploy", "x"][..], extra].concat();
+        let Command::Deploy(args) = Cli::try_parse_from(argv).expect("args parse").command else {
+            unreachable!()
+        };
+        super::refuse_ignored_by_operator(&args)
+            .err()
+            .map(|e| e.to_string())
+    }
+
+    /// Each flag the operator would not carry out is refused, and the
+    /// message names every one given.
+    #[test]
+    fn the_operator_refuses_the_flags_it_does_not_carry_out() {
+        for flag in [
+            &["--timeout", "5m"][..],
+            &["--on-error", "continue"],
+            &["--reconcile"],
+            &["--skip-orphan-check"],
+            &["--force-conflicts"],
+            &["--log-format", "json"],
+            &["--group-by", "namespace"],
+        ] {
+            let argv = [&["--operator"][..], flag].concat();
+            let message = refusal(&argv).unwrap_or_else(|| panic!("{flag:?} not refused"));
+            assert!(message.starts_with("[K7218] "), "{message}");
+            assert!(message.contains(&format!("`{}", flag[0])), "{message}");
+        }
+        let both = refusal(&["--operator", "--timeout", "5m", "--reconcile"]).unwrap();
+        assert!(both.contains("`--timeout`, `--reconcile`"), "{both}");
+    }
+
+    /// Flags the operator mode carries out, and the defaults, pass.
+    #[test]
+    fn the_operator_accepts_what_it_carries_out() {
+        for extra in [
+            &[][..],
+            &["--prune"],
+            &["--yes"],
+            &["--accept-migrations"],
+            &["--offline"],
+            &["--on-error", "stop"],
+            &["--log-format", "pretty"],
+        ] {
+            let argv = [&["--operator"][..], extra].concat();
+            assert_eq!(refusal(&argv), None, "{extra:?}");
+        }
+    }
+}

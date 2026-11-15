@@ -60,6 +60,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
         };
     }
     if args.operator {
+        refuse_ignored_by_operator(args)?;
         return run_operator(args, ctx);
     }
 
@@ -977,6 +978,48 @@ pub(super) fn operator_flags(flags: PlanFlags) -> PlanFlags {
         prune: PrunePolicy::Delete,
         ..flags
     }
+}
+
+/// The id of the change record that made `kix deploy --operator` refuse the
+/// flags the operator does not carry out.
+const OPERATOR_FLAGS_ID: &str = "K7218";
+
+/// Return the flags in `args` that the operator would not carry out. The CLI
+/// sends the operator only the build, so it applies with its own fixed
+/// readiness timeout, stops at the first failure, prunes, does not force
+/// conflicts, and re-applies only what changed. The CLI prints the same
+/// progress whatever `--log-format` and `--group-by` say. `--prune` asks for
+/// what the operator does anyway, so it is not listed.
+fn ignored_by_operator(args: &DeployArgs) -> Vec<&'static str> {
+    [
+        (args.timeout.is_some(), "--timeout"),
+        (args.on_error == OnError::Continue, "--on-error continue"),
+        (args.plan.reconcile, "--reconcile"),
+        (args.plan.skip_orphan_check, "--skip-orphan-check"),
+        (args.plan.force_conflicts, "--force-conflicts"),
+        (args.log_format != LogFormat::Pretty, "--log-format"),
+        (args.group_by != GroupBy::Package, "--group-by"),
+    ]
+    .into_iter()
+    .filter_map(|(given, flag)| given.then_some(flag))
+    .collect()
+}
+
+/// Refuse `kix deploy --operator` with a flag the operator would not carry
+/// out, naming every such flag given.
+fn refuse_ignored_by_operator(args: &DeployArgs) -> Result<()> {
+    let flags = ignored_by_operator(args);
+    if flags.is_empty() {
+        return Ok(());
+    }
+    let list = flags
+        .iter()
+        .map(|f| format!("`{f}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(miette!(
+        "[{OPERATOR_FLAGS_ID}] `kix deploy --operator` does not accept {list}. Nothing was applied to the cluster. The Kix operator runs with fixed settings: it fails any resource that goes 300 seconds without readiness progress, stops at the first failure, deletes orphaned resources, never takes over fields owned by another field manager, and skips unchanged resources. Progress output in operator mode is also fixed. Remove any unsupported flags to deploy with the operator, or remove `--operator` to deploy from this machine."
+    ))
 }
 
 fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
