@@ -61,7 +61,9 @@ let
   defaultValues = {
     image = {
       repository = "quay.io/prometheuscommunity/smartctl-exporter";
-      tag = "v0.14.0";
+      # The chart renders `repository:tag` and has no digest value, so the
+      # digest goes in the tag.
+      tag = "v0.14.0@sha256:cfe22c36d7d2fac48ebf619707305acb65eb0fb670656eb80f356e606d782bc1";
     };
 
     resources = {

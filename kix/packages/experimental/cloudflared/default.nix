@@ -61,8 +61,9 @@ in
 
   options = {
     image = kix.options.image {
-      repository = "cloudflare/cloudflared";
+      repository = "docker.io/cloudflare/cloudflared";
       tag = "2026.9.3";
+      digest = "sha256:072c067d25ccbe61d46e18f0d0723255f2bb5304f7317caa95b27031520ff92c";
     };
     replicas = lib.mkOption {
       type = lib.types.int;

@@ -79,8 +79,9 @@ in
 
   options = {
     image = kix.options.image {
-      repository = "filebrowser/filebrowser";
+      repository = "docker.io/filebrowser/filebrowser";
       tag = "v2.63.18";
+      digest = "sha256:c4c627f687668c5a02ab410d8473712c77be7f1f0ea4f8d624d2a1392c495e76";
       pullPolicy = null;
     };
     # Upstream publishes no chart or resource guidance. An idle instance

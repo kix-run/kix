@@ -48,8 +48,9 @@ in
 
   options = {
     image = kix.options.image {
-      repository = "tykling/dns_exporter";
+      repository = "docker.io/tykling/dns_exporter";
       tag = "v1.2.3";
+      digest = "sha256:cd6d650c01c159cf34675615b553316f648dce8e76deabd3eeccab1e8cdd9b42";
     };
     # Declared only so that setting the removed name fails with the new one.
     replicaCount = lib.mkOption {
