@@ -51,7 +51,7 @@ does not affect incoming traffic to these Pods.
 :::
 
 `to` and `from` accept fixed values rather than arbitrary selectors. `to`
-accepts `dns`, `world`, `apiserver`, and `all-pods`; `from` accepts
+accepts `dns`, `world`, `apiserver`, `pods` (every pod, and no node or API server), and `all-pods` (pods, nodes, and the API server); `from` accepts
 `all-pods`, `world`, and `apiserver`, which admits the Kubernetes API server calling an admission
 webhook or an aggregated API in the selected Pods. Anything else fails
 evaluation with `unknown egress intent target` or `unknown ingress intent

@@ -10,6 +10,8 @@
   lib,
   k8s,
   kixKeys,
+  kixlib,
+  eval,
   mkCluster,
   manifests,
   ofKind,
@@ -27,6 +29,47 @@ let
   envoyGateway = import ../../../packages/experimental/envoy-gateway;
   gatewayApi = import ../../../packages/experimental/gateway-api;
   ns = "envoy-gateway-system";
+  contract = kixlib.contracts.experimental.gatewayApi;
+
+  # A platform import that claims the gatewayApi role with the kinds
+  # envoy-gateway needs. `readiness = false` drops the conditions, and
+  # `version = null` drops out.version.
+  importApi =
+    {
+      readiness ? true,
+      version ? "1.6.1",
+    }:
+    let
+      entry =
+        kind: plural: extra:
+        {
+          group = "gateway.networking.k8s.io";
+          inherit kind plural;
+          version = "v1";
+        }
+        // extra;
+      ready =
+        type:
+        lib.optionalAttrs readiness {
+          readiness.condition = {
+            inherit type;
+            status = "True";
+          };
+        };
+    in
+    {
+      cluster.roles.gatewayApi.binding = "exclusive";
+      instances.gatewayapi.platform-gateway-api.package = eval.mkImport {
+        roles = [ "gatewayApi" ];
+        out = lib.optionalAttrs (version != null) { inherit version; };
+        crds = [
+          (entry "GatewayClass" "gatewayclasses" ({ crdScope = "Cluster"; } // ready "Accepted"))
+          (entry "Gateway" "gateways" (ready "Programmed"))
+          (entry "HTTPRoute" "httproutes" { })
+          (entry "ReferenceGrant" "referencegrants" { })
+        ];
+      };
+    };
 
   withGatewayApi = {
     instances.${ns}.gateway-api.package = gatewayApi;
@@ -120,24 +163,110 @@ in
     )
     || throw "envoy-gateway ordering: deployment depends-on '${dependsOn deployment}'";
 
-  # Without the Gateway API CRDs the instance does not evaluate; the
-  # control has them.
+  # Without the Gateway API CRDs the instance does not evaluate, and the
+  # refusal is the contract's, with the change record id; the control has
+  # them.
   envoy-gateway-needs-gateway-api =
+    let
+      errors = contract.helpers.errorsFor {
+        who = "${ns}/eg";
+        gatewayApi = null;
+        kinds = [ "Gateway" ];
+        minVersion = "1.6";
+      };
+    in
     evalFails (mkCluster [
       {
         instances.${ns}.eg.package = envoyGateway;
       }
     ])
+    && builtins.length errors == 1
+    && (builtins.head errors).id == "K5531"
+    && lib.hasInfix "packages.experimental.gateway-api" (builtins.head errors).fix
     && (builtins.tryEval (builtins.deepSeq plain true)).success;
 
-  # A second instance is refused; one evaluates (the control above).
-  envoy-gateway-one-per-cluster = evalFails (mkCluster [
-    withGatewayApi
-    {
-      instances.${ns}.eg.package = envoyGateway;
-      instances.other.eg2.package = envoyGateway;
-    }
-  ]);
+  # A second instance is refused. The guard is the cluster-wide conflict on
+  # the package's own alias; one instance evaluates (the control above).
+  envoy-gateway-one-per-cluster =
+    let
+      meta =
+        (envoyGateway {
+          scope = { };
+          inherit lib;
+          kix = { };
+          availability = "none";
+        }).meta;
+    in
+    builtins.elem "cluster:envoyGateway" meta.conflictsWith
+    && builtins.elem "envoyGateway" meta.defaultAliases
+    && evalFails (mkCluster [
+      withGatewayApi
+      {
+        instances.${ns}.eg.package = envoyGateway;
+        instances.other.eg2.package = envoyGateway;
+      }
+    ]);
+
+  # A platform import answers the gatewayApi role when it declares the kinds
+  # a consumer needs, the readiness of GatewayClass and Gateway, and a
+  # version. envoy-gateway's Gateway then carries the readiness the deploy
+  # waits on.
+  envoy-gateway-gateway-api-import =
+    let
+      ms = manifests (mkCluster [
+        (importApi { })
+        {
+          instances.${ns}.eg.package = envoyGateway;
+        }
+      ]);
+      gw = byName "eg" (ofKind "Gateway" ms);
+    in
+    builtins.fromJSON gw.metadata.annotations.${kixKeys.readiness} == {
+      condition = {
+        type = "Programmed";
+        status = "True";
+      };
+    };
+
+  # An import that leaves out a kind, the readiness, or the version, or that
+  # is too old, is refused by the contract with a message that names it.
+  envoy-gateway-gateway-api-import-refused =
+    let
+      importOut =
+        args:
+        let
+          c = mkCluster [ (importApi args) ];
+        in
+        c.instances.gatewayapi.platform-gateway-api;
+      errorsWith =
+        args: kinds:
+        contract.helpers.errorsFor {
+          who = "${ns}/eg";
+          gatewayApi = importOut args;
+          inherit kinds;
+          minVersion = "1.6";
+        };
+      says = text: errors: errors != [ ] && lib.hasInfix text (builtins.head errors).message;
+      traefikKinds = [
+        "GatewayClass"
+        "Gateway"
+        "GRPCRoute"
+      ];
+    in
+    errorsWith { } traefikKinds != [ ]
+    && says "GRPCRoute" (errorsWith { } traefikKinds)
+    && errorsWith { } [ "Gateway" ] == [ ]
+    && says "declares no readiness" (errorsWith { readiness = false; } [ "Gateway" ])
+    && says "provides Gateway API 1.5.1" (errorsWith { version = "1.5.1"; } [ "Gateway" ])
+    && says "out.version is missing" (errorsWith { version = null; } [ "Gateway" ])
+    && evalFails (mkCluster [
+      (importApi { })
+      { instances.${ns}.traefik.package = import ../../../packages/experimental/traefik; }
+    ])
+    && evalFails (mkCluster [
+      (importApi { readiness = false; })
+      { instances.${ns}.eg.package = envoyGateway; }
+    ]);
 
   # The options of the package that rendered only the GatewayClass and
   # Gateway fail with the change record's id.
@@ -377,4 +506,49 @@ in
       ports = lib.concatMap (r: map (p: p.port) r.ports) (byName "eg-proxy-ingress" cnps).spec.ingress;
     in
     builtins.elem 80 ports && !(builtins.elem 10080 ports);
+
+  # The proxies' egress, and that of the other Gateway and Ingress
+  # controllers, reaches pods only. Cilium renders the `pods` target as an
+  # endpoint selector over every namespace, with no entity, so the nodes,
+  # the kubelet, and the API server stay closed.
+  envoy-gateway-proxy-egress-reaches-pods-only =
+    let
+      cilium = import ../../../packages/experimental/cilium/netpol-rules.nix { inherit lib; };
+      rendered =
+        (cilium.translateIntentRules { intents.backends.egress = [ { to = "pods"; } ]; }).egressRules;
+      cnps = ofKind "CiliumNetworkPolicy" (msWith {
+        extra = netpolOn;
+      });
+      proxyOut = (byName "eg-proxy-egress" cnps).spec.egress;
+      intentTargets = builtins.concatMap (r: lib.optional (r ? to) r.to) proxyOut;
+      metaOf =
+        pkg:
+        (pkg {
+          scope = { };
+          inherit lib;
+          kix = { };
+          availability = "none";
+        }).meta;
+      backendsOf = pkg: (metaOf pkg).network.intents.backends.egress;
+    in
+    (
+      lib.all (r: !(r ? toEntities) && r ? toEndpoints) rendered
+      && intentTargets == [ "pods" ]
+      && backendsOf (import ../../../packages/experimental/traefik) == [ { to = "pods"; } ]
+      && backendsOf (import ../../../packages/experimental/ingress-nginx) == [ { to = "pods"; } ]
+    )
+    || throw "proxy egress: ${builtins.toJSON { inherit rendered proxyOut; }}";
+
+  # A PodDisruptionBudget set in proxySpec replaces the package's, so the
+  # EnvoyProxy never carries both minAvailable and maxUnavailable.
+  envoy-gateway-proxy-pdb-replaced =
+    let
+      pdb =
+        (envoyProxyOf (msWith {
+          availability = "node";
+          extra = multiZone;
+          config.proxySpec.provider.kubernetes.envoyPDB.maxUnavailable = 1;
+        })).provider.kubernetes.envoyPDB;
+    in
+    pdb == { maxUnavailable = 1; } || throw "envoy-gateway PDB: ${builtins.toJSON pdb}";
 }

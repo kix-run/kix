@@ -584,7 +584,8 @@
       ],
       "liveCaptures": [
         "how-to/package-envoy-gateway/gateway-resources"
-      ]
+      ],
+      "unverifiedNixBlocks": 1
     },
     {
       "page": "package-task-guides/install-ingress-nginx",

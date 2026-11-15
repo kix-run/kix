@@ -67,6 +67,8 @@ let
       {
         inherit (upstream) spec;
         inherit (upstream.metadata) annotations;
+        # No holdsData: Kix treats gateway.networking.k8s.io as a built-in
+        # group, decides from each object's shape, and refuses the setting.
       }
       // extra
     );
@@ -100,9 +102,10 @@ in
     # The role admits one managed claimant per cluster, which keeps a
     # second copy of the cluster-scoped CRDs out.
     roles = [ "gatewayApi" ];
-    # The safe-upgrades policy is admissionregistration.k8s.io/v1, served
-    # from Kubernetes 1.30.
-    k8s.minVersion = "1.30";
+    # The oldest Kubernetes the release tests its CRDs' CEL validation on
+    # (.github/workflows/crd-validation.yml upstream); TLSRoute uses CEL's
+    # isIP and BackendTLSPolicy the format library.
+    k8s.minVersion = "1.32";
   };
 
   build =
@@ -171,21 +174,24 @@ in
       root = {
         resource = self.crds.gateways;
         requires = builtins.attrValues self.crds ++ [ self.safeUpgradesBinding ];
-        out = {
-          version = lib.removePrefix "v" release;
-          crds = {
-            GatewayClass = self.crds.gatewayClasses;
-            Gateway = self.crds.gateways;
-            ListenerSet = self.crds.listenerSets;
-            HTTPRoute = self.crds.httpRoutes;
-            GRPCRoute = self.crds.grpcRoutes;
-            TLSRoute = self.crds.tlsRoutes;
-            TCPRoute = self.crds.tcpRoutes;
-            UDPRoute = self.crds.udpRoutes;
-            ReferenceGrant = self.crds.referenceGrants;
-            BackendTLSPolicy = self.crds.backendTlsPolicies;
-          };
-        };
+        out =
+          kix.contracts.experimental.gatewayApi.check
+            "gateway-api ${scope.namespaceName}/${scope.instanceName}"
+            {
+              version = lib.removePrefix "v" release;
+              crds = {
+                GatewayClass = self.crds.gatewayClasses;
+                Gateway = self.crds.gateways;
+                ListenerSet = self.crds.listenerSets;
+                HTTPRoute = self.crds.httpRoutes;
+                GRPCRoute = self.crds.grpcRoutes;
+                TLSRoute = self.crds.tlsRoutes;
+                TCPRoute = self.crds.tcpRoutes;
+                UDPRoute = self.crds.udpRoutes;
+                ReferenceGrant = self.crds.referenceGrants;
+                BackendTLSPolicy = self.crds.backendTlsPolicies;
+              };
+            };
       };
     };
 }

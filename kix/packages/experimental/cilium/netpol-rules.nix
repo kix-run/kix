@@ -274,12 +274,30 @@ let
                 mkExternalEgressRule { entities = rule.entities or [ "world" ]; }
               else if target == "dns" then
                 dnsEgressRule
+              # Cilium's `cluster` entity: every pod, and also the nodes
+              # (host, remote-node) and the API server on them.
               else if target == "all-pods" then
                 { toEntities = [ "cluster" ]; }
+              # Pods only: an endpoint selector that matches any namespace.
+              # Host-network pods and the nodes carry no namespace label, so
+              # it leaves out the API server, the kubelet, and NodePorts.
+              else if target == "pods" then
+                {
+                  toEndpoints = [
+                    {
+                      matchExpressions = [
+                        {
+                          key = "k8s:io.kubernetes.pod.namespace";
+                          operator = "Exists";
+                        }
+                      ];
+                    }
+                  ];
+                }
               else
                 failWith {
                   package = "cilium";
-                  message = "Unknown egress intent target '${toString target}'. The targets are apiserver, world, dns, and all-pods.";
+                  message = "Unknown egress intent target '${toString target}'. The targets are apiserver, world, dns, pods, and all-pods.";
                 };
           in
           if target == "dns" then

@@ -115,7 +115,7 @@ in
     network.intents = {
       # Ingress objects name their backends at runtime, on any port, so the
       # graph cannot see the controller's upstream connections.
-      backends.egress = [ { to = "all-pods"; } ];
+      backends.egress = [ { to = "pods"; } ];
       # Clients outside the cluster, plus in-cluster clients and NodePort
       # traffic that arrives SNATed from a node.
       front-door.ingress = [

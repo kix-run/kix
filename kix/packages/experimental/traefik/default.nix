@@ -150,15 +150,12 @@ in
     # One Gateway accepts HTTPRoutes from every namespace, so consumers in
     # any namespace find it by name.
     scope = "cluster";
-    k8s.minVersion = "1.26";
-    compatibleWith.gatewayApi = {
-      minVersion = "1.6.1";
-      reason = "Traefik watches gateway.networking.k8s.io/v1 TLSRoute and BackendTLSPolicy resources, and this package is tested against Gateway API 1.6.1.";
-    };
+    # The gateway-api package's minimum, whose CRDs Traefik needs.
+    k8s.minVersion = "1.32";
     network.intents = {
       # HTTPRoutes name their backends at runtime, on any port, so the graph
       # cannot see Traefik's upstream connections.
-      backends.egress = [ { to = "all-pods"; } ];
+      backends.egress = [ { to = "pods"; } ];
       # Clients outside the cluster, plus in-cluster clients and NodePort
       # traffic that arrives SNATed from a node.
       front-door.ingress = [
@@ -570,7 +567,22 @@ in
 
         # Traefik's Gateway provider does not start while any watched kind
         # is missing, so the Deployment requires each CRD.
-        crds = import ../gateway-api/require.nix { inherit scope; } gatewayApi;
+        crds = kix.contracts.experimental.gatewayApi.helpers.crdsFor {
+          who = "${scope.namespaceName}/${name}";
+          inherit gatewayApi;
+          kinds = [
+            "GatewayClass"
+            "Gateway"
+            "HTTPRoute"
+            "GRPCRoute"
+            "TLSRoute"
+            "ReferenceGrant"
+            "BackendTLSPolicy"
+          ];
+          # Traefik watches TLSRoute and BackendTLSPolicy at v1; the package
+          # is tested with Gateway API 1.6.1.
+          minVersion = "1.6.1";
+        };
         watchedCrds = [
           crds.GatewayClass
           crds.Gateway

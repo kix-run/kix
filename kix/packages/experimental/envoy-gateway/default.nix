@@ -131,10 +131,14 @@
 # `kix gc` and pruning leave them behind.
 #
 # Upgrades: from a release of this package that left the controller to
-# Helm, uninstall the Helm release first and deploy once with
-# `--force-conflicts`, because Helm keeps owning fields of the CRDs it
-# installed. Proxies that ran in Helm's namespace are left running; delete
-# them once the Gateway's new address serves.
+# Helm, uninstall the Helm release first, delete the certgen hook objects
+# and the topology injector webhook that Helm leaves behind, and deploy
+# once with `--force-conflicts`, because Helm keeps owning fields of the
+# CRDs it installed. Helm installed the experimental Gateway API channel:
+# experimental-only fields are dropped from stored objects, and the
+# experimental-only CRDs stay until deleted. Proxies that ran in Helm's
+# namespace are left running; delete them once the Gateway's new address
+# serves, or before the deploy when `addresses` keeps the old one.
 #
 # Moving to another release: set `release` and the digest of `image`
 # (`crane digest docker.io/envoyproxy/gateway:<release>`), set
@@ -278,12 +282,6 @@ in
       "envoyGateway"
     ];
     conflictsWith = [ "cluster:envoyGateway" ];
-    # The Gateway API release the controller is built against (go.mod and
-    # site/content/en/news/releases/matrix.md upstream).
-    compatibleWith.gatewayApi = {
-      minVersion = "1.6";
-      reason = "Envoy Gateway 1.10 is built against Gateway API 1.6.";
-    };
     # One Gateway accepts HTTPRoutes from every namespace, so consumers in
     # any namespace find it by name.
     scope = "cluster";
@@ -394,7 +392,10 @@ in
               default = null;
               description = "`IPAddress` (the Gateway API default), `Hostname`, or an implementation-specific type.";
             };
-            value = lib.mkOption { type = lib.types.str; };
+            value = lib.mkOption {
+              type = lib.types.str;
+              description = "The address: an IP address for `IPAddress`, a DNS name for `Hostname`.";
+            };
           };
         }
       );
@@ -602,6 +603,10 @@ in
               selector = gatewayProxySelector;
               topology = clusterConfig.cluster.topology;
             };
+          }
+          # A PodDisruptionBudget the user sets in proxySpec replaces this one,
+          # since one cannot hold both minAvailable and maxUnavailable.
+          // lib.optionalAttrs (!(proxyMerged.provider.kubernetes ? envoyPDB)) {
             envoyPDB.minAvailable = 1;
           };
         };
@@ -658,7 +663,20 @@ in
           protocol = "TCP";
         };
 
-        gatewayCrds = import ../gateway-api/require.nix { inherit scope; } gatewayApi;
+        gatewayCrds = kix.contracts.experimental.gatewayApi.helpers.crdsFor {
+          who = "${ns}/${name}";
+          inherit gatewayApi;
+          # The controller needs these; it detects the other kinds at start.
+          kinds = [
+            "GatewayClass"
+            "Gateway"
+            "HTTPRoute"
+            "ReferenceGrant"
+          ];
+          # The Gateway API release Envoy Gateway 1.10 is built against
+          # (go.mod and site/content/en/news/releases/matrix.md upstream).
+          minVersion = "1.6";
+        };
       in
       {
         crds = {
@@ -1098,8 +1116,9 @@ in
             };
 
         # HTTPRoutes name their backends at runtime, on any port, so the
-        # graph cannot see the proxies' upstream connections. All pods
-        # covers the controller's xDS and Wasm ports too.
+        # graph cannot see the proxies' upstream connections. The `pods`
+        # target reaches every pod, including the controller's xDS and Wasm
+        # ports, and leaves out the nodes and the API server.
         proxyEgress = kix.operandPolicy {
           inherit scope;
           name = "${name}-proxy-egress";
@@ -1109,7 +1128,7 @@ in
               netpol.dnsEgressRule
             ]
             ++ (netpol.translateIntentRules {
-              intents.backends.egress = [ { to = "all-pods"; } ];
+              intents.backends.egress = [ { to = "pods"; } ];
             }).egressRules;
           };
         };
