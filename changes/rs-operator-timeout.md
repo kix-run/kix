@@ -1,6 +1,6 @@
 +++
 kind = "error"
-cli = ["kix deploy --operator --timeout"]
+cli = ["kix deploy --operator --timeout", "kix deploy --operator --on-error continue", "kix deploy --operator --reconcile", "kix deploy --operator --skip-orphan-check", "kix deploy --operator --force-conflicts", "kix deploy --operator --log-format", "kix deploy --operator --group-by"]
 id = "K7218"
 +++
-Remove `--timeout` from `kix deploy --operator` commands. Passing `--timeout` with `--operator` now stops before building or changing the cluster. Previously, Kix accepted `--timeout` with `--operator` and ignored it. The Kix operator uses a fixed 300-second readiness timeout for each resource, and `--timeout` applies only when deploying without `--operator`.
+`kix deploy --operator` now refuses the flags the Kix operator does not carry out: `--timeout`, `--on-error continue`, `--reconcile`, `--skip-orphan-check`, `--force-conflicts`, and a `--log-format` or `--group-by` other than the default. Before, Kix accepted them and ignored them. Remove them from `kix deploy --operator` commands.

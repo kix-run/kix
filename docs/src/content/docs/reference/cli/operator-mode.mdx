@@ -31,20 +31,22 @@ This page is hand-maintained. Check `cli/kix-cli/src/commands/operator.rs`,
 flag. It reads the cluster's current Activation record the same way whoever
 applied it, and does not need the operator to be running.
 
-`kix deploy --operator` does not accept `--timeout` (`[K7218]`). The Kix
-operator uses a fixed 300-second readiness timeout for each resource. Flags
-that control how a direct deploy applies changes or prints progress have no
-effect with `--operator`: `--on-error`, `--prune`, `--skip-orphan-check`,
-`--reconcile`, `--force-conflicts`, `--group-by`, and `--log-format`. `--yes`,
-`--offline`, and `--accept-migrations` still apply to the local
-plan. `--dry-run` runs [`kix plan`](/docs/reference/cli/plan/) locally and
+`kix deploy --operator` refuses the flags the operator does not carry out,
+and names them in an error with the id `[K7218]`: `--timeout`,
+`--on-error continue`, `--reconcile`, `--skip-orphan-check`,
+`--force-conflicts`, and a `--log-format` or `--group-by` other than the
+default. The operator applies with its own settings (see below), and the CLI
+prints the same progress while it waits whatever the output flags say.
+`--prune` is accepted, because the operator always prunes. `--yes`,
+`--offline`, and `--accept-migrations` still apply to the local plan. `--dry-run` runs [`kix plan`](/docs/reference/cli/plan/) locally and
 does not contact the operator.
 
 ## How the operator runs a deploy
 
 The operator fails any resource that goes 300 seconds without progress toward
-becoming ready. The deploy stops at the first
-resource that fails.
+becoming ready. The deploy stops at the first resource that fails. It deletes
+orphans, never takes over fields that another field manager owns, and
+re-applies only the resources that changed.
 
 Submitting a newer deploy or rollback request does not cancel a running deploy.
 The operator runs one deploy per cluster at a time, so the new request waits

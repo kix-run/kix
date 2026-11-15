@@ -45,7 +45,6 @@ pub(crate) use self::saved_plan::ComparisonResponse;
 use self::saved_plan::*;
 
 pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
-    refuse_operator_timeout(args)?;
     let saved = match &args.saved_plan {
         Some(path) => Some(load_saved_plan(
             path,
@@ -61,6 +60,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
         };
     }
     if args.operator {
+        refuse_ignored_by_operator(args)?;
         return run_operator(args, ctx);
     }
 
@@ -980,18 +980,46 @@ pub(super) fn operator_flags(flags: PlanFlags) -> PlanFlags {
     }
 }
 
-/// The id of the change record that made `--operator --timeout` an error.
-const OPERATOR_TIMEOUT_ID: &str = "K7218";
+/// The id of the change record that made `kix deploy --operator` refuse the
+/// flags the operator does not carry out.
+const OPERATOR_FLAGS_ID: &str = "K7218";
 
-/// Refuse `--timeout` with `--operator`. The CLI does not send it to the
-/// operator, which waits with its own readiness timeout.
-fn refuse_operator_timeout(args: &DeployArgs) -> Result<()> {
-    if args.operator && args.timeout.is_some() {
-        return Err(miette!(
-            "[{OPERATOR_TIMEOUT_ID}] `kix deploy --operator` does not accept `--timeout`. The Kix operator uses a fixed 300-second readiness timeout for each resource. Nothing was applied to the cluster. Remove `--timeout` to deploy with the operator, or remove `--operator` to use `--timeout`."
-        ));
+/// Return the flags in `args` that the operator would not carry out. The CLI
+/// sends the operator only the build, so it applies with its own fixed
+/// readiness timeout, stops at the first failure, prunes, does not force
+/// conflicts, and re-applies only what changed. The CLI prints the same
+/// progress whatever `--log-format` and `--group-by` say. `--prune` asks for
+/// what the operator does anyway, so it is not listed.
+fn ignored_by_operator(args: &DeployArgs) -> Vec<&'static str> {
+    [
+        (args.timeout.is_some(), "--timeout"),
+        (args.on_error == OnError::Continue, "--on-error continue"),
+        (args.plan.reconcile, "--reconcile"),
+        (args.plan.skip_orphan_check, "--skip-orphan-check"),
+        (args.plan.force_conflicts, "--force-conflicts"),
+        (args.log_format != LogFormat::Pretty, "--log-format"),
+        (args.group_by != GroupBy::Package, "--group-by"),
+    ]
+    .into_iter()
+    .filter_map(|(given, flag)| given.then_some(flag))
+    .collect()
+}
+
+/// Refuse `kix deploy --operator` with a flag the operator would not carry
+/// out, naming every such flag given.
+fn refuse_ignored_by_operator(args: &DeployArgs) -> Result<()> {
+    let flags = ignored_by_operator(args);
+    if flags.is_empty() {
+        return Ok(());
     }
-    Ok(())
+    let list = flags
+        .iter()
+        .map(|f| format!("`{f}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(miette!(
+        "[{OPERATOR_FLAGS_ID}] `kix deploy --operator` does not accept {list}. The Kix operator applies the build with its own settings: a 300-second readiness timeout for each resource, stop at the first failure, prune orphans, never force field conflicts, and re-apply only what changed. The CLI prints the same progress whatever the output flags say. Nothing was applied to the cluster. Remove these flags to deploy with the operator, or remove `--operator` to use them."
+    ))
 }
 
 fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
