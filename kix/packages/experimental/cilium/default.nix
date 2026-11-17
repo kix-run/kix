@@ -123,7 +123,14 @@ in
       "cni"
       "network-policy-enforcer"
     ];
-    k8s.minVersion = "1.27";
+    # The Kubernetes versions Cilium tests this release on, from its
+    # requirements page (docs/network/kubernetes/requirements.rst). Move
+    # both bounds with `release`.
+    k8s = {
+      minVersion = "1.33";
+      maxVersion = "1.36";
+      reason = "[K8720] Cilium ${release} supports Kubernetes 1.33 to 1.36. Deploy a Kix release with an older cilium package, or move the cluster to a supported Kubernetes version first";
+    };
   };
 
   options = {

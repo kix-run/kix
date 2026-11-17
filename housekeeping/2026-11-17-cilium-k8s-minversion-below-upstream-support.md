@@ -1,3 +1,0 @@
-# 2026-11-17 · `kix/packages/experimental/cilium` · The package accepts Kubernetes 1.27, but Cilium 1.20 supports only 1.33 to 1.36.
-
-`meta.k8s.minVersion` is "1.27", so Kix builds the package for a cluster on Kubernetes 1.27 to 1.32 without a warning. Cilium's requirements page for 1.20 lists 1.33, 1.34, 1.35, and 1.36 as tested and says older versions "do not have Cilium support". It listed 1.31 to 1.34 for 1.19, so the bound was already below upstream before the 1.20 bump. The chart itself only refuses below 1.21. Raising the bound is an `error` change for anyone on an older cluster, so it needs a decision, not a version bump.
