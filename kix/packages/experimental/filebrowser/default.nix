@@ -68,7 +68,7 @@
 }:
 
 let
-  release = "v2.63.18";
+  release = "v2.63.23";
   name = scope.instanceName;
 in
 {
@@ -82,7 +82,7 @@ in
     image = kix.options.image {
       repository = "docker.io/filebrowser/filebrowser";
       tag = release;
-      digest = "sha256:c4c627f687668c5a02ab410d8473712c77be7f1f0ea4f8d624d2a1392c495e76";
+      digest = "sha256:a469ea076d4a1b4b1d86a41d130f2f536cd9da996a2b1fb39c0d7635f9d89b9a";
       pullPolicy = null;
     };
     # Upstream publishes no chart or resource guidance. An idle instance
