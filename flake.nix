@@ -85,6 +85,7 @@
           # otherwise.
           immich = ./clusters/test-immich.nix;
           n8n = ./clusters/test-n8n.nix;
+          valkey = ./clusters/test-valkey.nix;
           clickhouse = ./clusters/test-clickhouse.nix;
           clickhouse-operator = ./clusters/test-clickhouse-operator.nix;
           cnpg = ./clusters/test-cnpg.nix;
