@@ -81,6 +81,16 @@
 # `out`: Service `name`, `fqdn`, and `port` (80), and `version`, the Grafana
 # version `image.tag` names.
 # Limits: single replica (`availability.max = "none"` on the Deployment).
+#
+# Upgrades: Grafana migrates its database when the new version starts, so
+# an upgrade restarts the pod and keeps the data. Grafana 13.3.1 started on
+# the SQLite database that 13.1.8 left, with dashboards, folders, users, and
+# annotations intact. Upstream says upgrades are backward compatible and
+# says nothing about going back. Grafana 13.1.8 started on a copy of a
+# database that 13.3.1 had migrated and served all of it. To go back, copy
+# `grafana.db` from the claim before the upgrade, deploy the old package
+# version, and restore the copy if the old version refuses the database.
+# For PostgreSQL or MySQL, use that database's own backup tool.
 
 {
   scope,
