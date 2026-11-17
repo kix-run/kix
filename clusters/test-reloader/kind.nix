@@ -50,7 +50,7 @@ let
                   containers = [
                     {
                       name = "web";
-                      image = "docker.io/nginxinc/nginx-unprivileged:1.30-alpine@sha256:ed04ec1ff34502c339ee5c3ae3f855442398edc1d05591e2b98981dcbbd20b1e";
+                      image = "docker.io/nginxinc/nginx-unprivileged:1.30-alpine@sha256:f5116ed4606f3eb015dd4a8e28cb9b351476dc0ad4bc6e9f93b19cec130cdf03";
                       ports = [ (kix.port "http" 8080) ];
                       env = self.token.out.mkEnv { TOKEN = "token"; };
                       livenessProbe.httpGet = {
