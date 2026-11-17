@@ -5,7 +5,7 @@
     "labels": {
       "app.kubernetes.io/component": "controller",
       "app.kubernetes.io/name": "prometheus-operator",
-      "app.kubernetes.io/version": "0.92.1"
+      "app.kubernetes.io/version": "0.95.2"
     },
     "name": "prometheus-operator"
   },
@@ -17,30 +17,74 @@
       "resources": [
         "alertmanagers",
         "alertmanagers/finalizers",
-        "alertmanagers/status",
-        "alertmanagerconfigs",
-        "prometheuses",
-        "prometheuses/finalizers",
-        "prometheuses/status",
         "prometheusagents",
         "prometheusagents/finalizers",
-        "prometheusagents/status",
+        "prometheuses",
+        "prometheuses/finalizers",
         "thanosrulers",
-        "thanosrulers/finalizers",
-        "thanosrulers/status",
-        "scrapeconfigs",
-        "scrapeconfigs/status",
-        "servicemonitors",
-        "servicemonitors/status",
-        "podmonitors",
-        "podmonitors/status",
-        "probes",
-        "probes/status",
-        "prometheusrules",
-        "prometheusrules/status"
+        "thanosrulers/finalizers"
       ],
       "verbs": [
-        "*"
+        "patch"
+      ]
+    },
+    {
+      "apiGroups": [
+        "monitoring.coreos.com"
+      ],
+      "resources": [
+        "alertmanagers/finalizers",
+        "prometheusagents/finalizers",
+        "prometheuses/finalizers",
+        "thanosrulers/finalizers"
+      ],
+      "verbs": [
+        "update"
+      ]
+    },
+    {
+      "apiGroups": [
+        "monitoring.coreos.com"
+      ],
+      "resources": [
+        "alertmanagers/status",
+        "alertmanagerconfigs/status",
+        "podmonitors/status",
+        "probes/status",
+        "prometheuses/status",
+        "prometheusagents/status",
+        "prometheusrules/status",
+        "scrapeconfigs/status",
+        "servicemonitors/status",
+        "thanosrulers/status"
+      ],
+      "verbs": [
+        "create",
+        "update",
+        "patch",
+        "delete"
+      ]
+    },
+    {
+      "apiGroups": [
+        "monitoring.coreos.com"
+      ],
+      "resources": [
+        "alertmanagers",
+        "alertmanagerconfigs",
+        "podmonitors",
+        "probes",
+        "prometheusagents",
+        "prometheuses",
+        "prometheusrules",
+        "servicemonitors",
+        "scrapeconfigs",
+        "thanosrulers"
+      ],
+      "verbs": [
+        "get",
+        "list",
+        "watch"
       ]
     },
     {
@@ -51,7 +95,13 @@
         "statefulsets"
       ],
       "verbs": [
-        "*"
+        "get",
+        "list",
+        "watch",
+        "create",
+        "update",
+        "patch",
+        "delete"
       ]
     },
     {
@@ -63,7 +113,12 @@
         "secrets"
       ],
       "verbs": [
-        "*"
+        "get",
+        "list",
+        "watch",
+        "create",
+        "update",
+        "delete"
       ]
     },
     {
@@ -74,8 +129,7 @@
         "pods"
       ],
       "verbs": [
-        "list",
-        "delete"
+        "list"
       ]
     },
     {
@@ -91,18 +145,6 @@
         "create",
         "update",
         "delete"
-      ]
-    },
-    {
-      "apiGroups": [
-        ""
-      ],
-      "resources": [
-        "nodes"
-      ],
-      "verbs": [
-        "list",
-        "watch"
       ]
     },
     {
@@ -152,6 +194,18 @@
       ],
       "verbs": [
         "get"
+      ]
+    },
+    {
+      "apiGroups": [
+        ""
+      ],
+      "resources": [
+        "nodes"
+      ],
+      "verbs": [
+        "list",
+        "watch"
       ]
     },
     {

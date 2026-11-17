@@ -7,6 +7,7 @@
 
 {
   lib,
+  kixlib,
   mkCluster,
   baseInstances,
   netpolOn,
@@ -97,10 +98,10 @@ in
   monitoring-stack-operator-tag-minor-refused =
     (
       !(evalFails (clusterWith {
-        instances.prometheus-operator.config.image.tag = "v0.92.9";
+        instances.prometheus-operator.config.image.tag = "v0.95.9";
       }))
       && evalFails (clusterWith {
-        instances.prometheus-operator.config.image.tag = "v0.93.0";
+        instances.prometheus-operator.config.image.tag = "v0.96.0";
       })
     )
     || throw "the image.tag minor refusal did not fire";
@@ -878,4 +879,47 @@ in
       && evalFails (withArgs [ "--collector.textfile.directory=/tmp" ])
     )
     || throw "the node-exporter flag refusal did not fire";
+
+  # A cluster that declares a Kubernetes version prometheus-operator does
+  # not support is refused with the change record's id. The meta check is
+  # called directly, because a failed meta assertion fails the cluster
+  # before its messages can be read.
+  monitoring-stack-operator-k8s-range =
+    let
+      metaLib = import ../../meta.nix { inherit lib; };
+      meta =
+        (import ../../../packages/experimental/prometheus-operator {
+          inherit lib;
+          kix = kixlib;
+          scope = {
+            instanceName = "prometheus-operator";
+            namespaceName = "monitoring";
+          };
+        }).meta;
+      refusals =
+        k8sVersion:
+        map (a: a.message) (
+          builtins.filter (a: !a.assertion) (
+            (metaLib.checkMetaStatic {
+              packageMeta = meta;
+              instanceName = "prometheus-operator";
+              namespaceName = "monitoring";
+              clusterConfig = { inherit k8sVersion; };
+              resolvedDepMeta = { };
+              resolutionIndex.byKey = { };
+            }).assertions
+          )
+        );
+      refused = v: builtins.any (lib.hasInfix "[K2247]") (refusals v);
+      tooOld = "1.24";
+      tooNew = "1.38.0";
+    in
+    (
+      refused tooOld
+      && refused tooNew
+      && refusals "1.37.2" == [ ]
+      && refusals "1.25" == [ ]
+      && refusals null == [ ]
+    )
+    || throw "prometheus-operator k8s range: 1.24 ${show (refusals "1.24")}, 1.38.0 ${show (refusals "1.38.0")}, 1.37.2 ${show (refusals "1.37.2")}";
 }

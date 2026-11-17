@@ -3,8 +3,8 @@
   "kind": "CustomResourceDefinition",
   "metadata": {
     "annotations": {
-      "controller-gen.kubebuilder.io/version": "v0.21.0",
-      "operator.prometheus.io/version": "0.92.1"
+      "controller-gen.kubebuilder.io/version": "v0.23.0",
+      "operator.prometheus.io/version": "0.95.2"
     },
     "name": "alertmanagerconfigs.monitoring.coreos.com"
   },
@@ -5541,6 +5541,9 @@
                               "titleLink": {
                                 "type": "string"
                               },
+                              "updateMessage": {
+                                "type": "boolean"
+                              },
                               "username": {
                                 "minLength": 1,
                                 "type": "string"
@@ -6181,6 +6184,9 @@
                               "topicARN": {
                                 "minLength": 1,
                                 "type": "string"
+                              },
+                              "useAWSHTTPClient": {
+                                "type": "boolean"
                               }
                             },
                             "type": "object"
@@ -7943,7 +7949,13 @@
                             "required": [
                               "roomID"
                             ],
-                            "type": "object"
+                            "type": "object",
+                            "x-kubernetes-validations": [
+                              {
+                                "message": "httpConfig.authorization or httpConfig.bearerTokenSecret is required",
+                                "rule": "has(self.httpConfig) && (has(self.httpConfig.authorization) || has(self.httpConfig.bearerTokenSecret))"
+                              }
+                            ]
                           },
                           "type": "array",
                           "x-kubernetes-list-type": "atomic"
@@ -9160,6 +9172,29 @@
                         "minLength": 1,
                         "pattern": "^(0|(([0-9]+)y)?(([0-9]+)w)?(([0-9]+)d)?(([0-9]+)h)?(([0-9]+)m)?(([0-9]+)s)?(([0-9]+)ms)?)$",
                         "type": "string"
+                      },
+                      "labels": {
+                        "items": {
+                          "properties": {
+                            "key": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "value": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "key",
+                            "value"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array",
+                        "x-kubernetes-list-map-keys": [
+                          "key"
+                        ],
+                        "x-kubernetes-list-type": "map"
                       },
                       "matchers": {
                         "items": {

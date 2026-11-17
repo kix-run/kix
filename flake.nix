@@ -121,6 +121,7 @@
           monitoring-loki = ./clusters/test-monitoring-loki.nix;
           grafana-upgrade = ./clusters/test-grafana-upgrade.nix;
           monitoring-netpol = ./clusters/test-monitoring-netpol.nix;
+          prometheus-operator = ./clusters/test-prometheus-operator.nix;
           victoria-metrics = ./clusters/test-victoria-metrics.nix;
           victoria-metrics-crd-ref = ./clusters/test-victoria-metrics-crd-ref.nix;
         };
