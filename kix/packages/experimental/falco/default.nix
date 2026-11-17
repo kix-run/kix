@@ -51,6 +51,14 @@
 # true`. On a node without one of the socket directories, the kubelet
 # creates it empty. Falco's HTTP, program, and file outputs and
 # falcosidekick are not supported.
+#
+# Upgrades: Falco keeps no state, so a pod on the new release starts from
+# nothing the old one left. The config, the default rules, and the engine
+# version are the same in 0.45.0 and 0.45.2, so the upgrade changes only the
+# image, and each pod is replaced once. On Linux 6.18.59, the 0.45.0 image
+# fails to load the modern eBPF probe and its pods crash-loop, while 0.45.2
+# loads it. To go back, deploy the previous version of this package. On such
+# a kernel, the previous version does not run.
 
 {
   scope,
