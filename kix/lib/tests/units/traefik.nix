@@ -44,11 +44,11 @@ in
   # can be read.
   traefik-k8s-range =
     (
-      refused "1.33"
+      refused "1.34"
       && refused "1.38.0"
-      && refusals "1.34.3" == [ ]
+      && refusals "1.35.2" == [ ]
       && refusals "1.37" == [ ]
       && refusals null == [ ]
     )
-    || throw "traefik k8s range: 1.33 ${builtins.toJSON (refusals "1.33")}, 1.38.0 ${builtins.toJSON (refusals "1.38.0")}, 1.34.3 ${builtins.toJSON (refusals "1.34.3")}";
+    || throw "traefik k8s range: 1.34 ${builtins.toJSON (refusals "1.34")}, 1.38.0 ${builtins.toJSON (refusals "1.38.0")}, 1.35.2 ${builtins.toJSON (refusals "1.35.2")}";
 }

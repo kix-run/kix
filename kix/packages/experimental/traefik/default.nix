@@ -159,15 +159,13 @@ in
     scope = "cluster";
     # The Kubernetes versions Traefik supports, from the Kubernetes support
     # policy in its docs (docs/content/includes/kubernetes-requirements.md),
-    # which says Traefik supports at least the latest three minor versions,
-    # and from its CI, which runs the integration tests on k3s v1.34
-    # (integration/integration_test.go). Kubernetes v1.37 is the newest minor
-    # release at this Traefik release, so it is the upper bound. Move both
-    # bounds with `release`.
+    # which says Traefik supports the latest three minor versions. Kubernetes
+    # v1.37 is the newest minor release at this Traefik release, so it is the
+    # upper bound. Move both bounds with `release`.
     k8s = {
-      minVersion = "1.34";
+      minVersion = "1.35";
       maxVersion = "1.37";
-      reason = "[K1871] Traefik ${release} supports Kubernetes 1.34 to 1.37. Deploy a Kix release with an older traefik package, or move the cluster to a supported Kubernetes version first";
+      reason = "[K1871] Traefik ${release} supports Kubernetes 1.35 to 1.37. Deploy a Kix release with an older traefik package, or move the cluster to a supported Kubernetes version first";
     };
     network.intents = {
       # HTTPRoutes name their backends at runtime, on any port, so the graph
