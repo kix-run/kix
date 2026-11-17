@@ -58,7 +58,7 @@
   kix,
 }:
 let
-  release = "0.45.0";
+  release = "0.45.2";
   name = scope.instanceName;
   ns = scope.namespaceName;
   who = "falco ${ns}/${name}";
@@ -133,7 +133,7 @@ in
     image = kix.options.image {
       repository = "docker.io/falcosecurity/falco";
       tag = release;
-      digest = "sha256:788f1129c542171813083d4afc61b16730a47dde8c23d9c39370acef996349b6";
+      digest = "sha256:1562a643953f938e02f47319b5214d93a235f11f646d60e9b8a516fd5a64698e";
     };
 
     # The driver's ring buffers take memory per group of CPUs
