@@ -7,7 +7,7 @@ let
 
   # The upstream release. meta.version and every image tag default read it,
   # and crds/sources.txt fetches the CRDs of the same tag.
-  release = "v1.21.2";
+  release = "v1.21.3";
 
   minorOf = tag: builtins.match "v?([0-9]+)\\.([0-9]+)([^0-9].*)?" tag;
   releaseMinor = lib.take 2 (minorOf release);
