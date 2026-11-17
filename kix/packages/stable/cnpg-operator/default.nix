@@ -106,6 +106,14 @@
 # webhook configurations, then run the
 # kix-lib test cnpg-operator-sources-match-release and
 # every-package-evaluates.
+#
+# Upgrades: a patch release such as 1.30.2 upgrades directly from the
+# previous patch. The deploy restarts the operator, then the operator rolls
+# each PostgreSQL cluster to the new instance manager, and each rollout ends
+# with a switchover unless `primaryUpdateStrategy` is supervised. Going back
+# needs no data step: deploy the old package over the new one. Upstream
+# documents neither path. The operator from 1.30.1 to 1.30.2 and back was
+# tested on kind with a one-instance and a two-instance cluster.
 
 {
   scope,
