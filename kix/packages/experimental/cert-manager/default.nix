@@ -30,6 +30,15 @@
 # One instance per cluster: the CRDs, webhook configurations, and
 # ClusterRoles are cluster-scoped (`meta.conflictsWith`).
 #
+# Upgrades: a deploy moves a cluster from v1.21.2 to v1.21.3 in place, with
+# no step before it. The CRDs gain the optional `status.acme.ari.certID`
+# field, which objects written by v1.21.2 do not carry. The new images do
+# not trust the emSign ECC Root CA - G3 root, so an issuer whose server
+# chains to it fails after the upgrade. Going back to v1.21.2 is a deploy
+# of the old package over the new one: the CRDs drop the field and the
+# Certificates issued by v1.21.3 keep their Secrets. Checked on kind only;
+# upstream does not document downgrades for this release.
+#
 # Dependencies:
 #   prometheus (optional)  metrics Services, three ServiceMonitors, and the
 #                          alerts.
