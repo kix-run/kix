@@ -50,7 +50,7 @@
 # crds/sources.txt, run `uv run scripts/vendor-crds.py gateway-api`,
 # compare the policy below with the bundle's
 # config/crd/standard/gateway.networking.k8s.io_vap_safeupgrades.yaml, and
-# set `k8s.minVersion` from the release's crd-validation.yml.
+# set both `k8s` bounds from the release's crd-validation.yml.
 
 {
   scope,
@@ -113,10 +113,14 @@ in
     # The role admits one managed claimant per cluster, which keeps a
     # second copy of the cluster-scoped CRDs out.
     roles = [ "gatewayApi" ];
-    # The oldest Kubernetes the release tests its CRDs' CEL validation on
-    # (.github/workflows/crd-validation.yml upstream); TLSRoute uses CEL's
+    # The Kubernetes versions the release tests its CRDs' CEL validation on
+    # (.github/workflows/crd-validation.yml upstream). TLSRoute uses CEL's
     # isIP and BackendTLSPolicy the format library.
-    k8s.minVersion = "1.33";
+    k8s = {
+      minVersion = "1.33";
+      maxVersion = "1.37";
+      reason = "Gateway API ${release} is tested on Kubernetes 1.33 to 1.37";
+    };
   };
 
   build =
