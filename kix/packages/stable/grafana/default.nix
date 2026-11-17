@@ -88,7 +88,7 @@
   kix,
 }:
 let
-  release = "13.1.8";
+  release = "13.3.1";
   name = scope.instanceName;
   ns = scope.namespaceName;
   who = "grafana ${ns}/${name}";
@@ -492,10 +492,6 @@ in
                   inherit env;
                   ports = [ (kix.port "grafana" httpPort) ];
                   resources = config.resources;
-                  # Grafana 13 deletes bundled copies of zipkin and
-                  # elasticsearch under plugins-bundled at startup, so
-                  # plugins-bundled is mounted as an emptyDir on a read-only
-                  # root filesystem.
                   inherit securityContext;
                   livenessProbe = httpProbe // {
                     initialDelaySeconds = 60;
@@ -507,14 +503,14 @@ in
                     periodSeconds = 10;
                     failureThreshold = 3;
                   };
+                  # Grafana loads its core plugins, such as the Prometheus,
+                  # Loki, and Tempo data sources and the canvas panel, from
+                  # /usr/share/grafana/data/plugins-bundled in the image. A
+                  # volume over that directory hides them.
                   volumeMounts = [
                     {
                       name = "tmp";
                       mountPath = "/tmp";
-                    }
-                    {
-                      name = "plugins-bundled";
-                      mountPath = "/usr/share/grafana/data/plugins-bundled";
                     }
                     {
                       name = "config";
@@ -549,10 +545,6 @@ in
               volumes = [
                 {
                   name = "tmp";
-                  emptyDir = { };
-                }
-                {
-                  name = "plugins-bundled";
                   emptyDir = { };
                 }
                 {
