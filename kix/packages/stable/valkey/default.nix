@@ -23,10 +23,13 @@
 # that older replicas read, so pods of the two versions replicate during
 # the restart. Valkey 9 writes its RDB and AOF files in format version 80,
 # and Valkey 8.1 refuses to start on them. A replica writes such a file as
-# soon as it syncs from a Valkey 9 primary. To go back to 8.1, set
-# `settings.rdb-version-check = "relaxed"` with the older image. Valkey 8.1
-# then loads the files, unless a hash has fields with their own expiry
-# (set with HSETEX or HEXPIRE), which 8.1 cannot read.
+# soon as it syncs from a Valkey 9 primary. To go back to 8.1, run
+# BGREWRITEAOF on every pod, then deploy the older image with
+# `settings.rdb-version-check = "relaxed"`. Valkey 8.1 then loads the
+# files, unless a hash has fields with their own expiry (set with HSETEX
+# or HEXPIRE), which 8.1 cannot read. The rewrite matters because a pod
+# whose AOF logged such a command since its last rewrite fails to start on
+# 8.1, even when the key is gone.
 
 {
   scope,

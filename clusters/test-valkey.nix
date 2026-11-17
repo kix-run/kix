@@ -6,7 +6,7 @@
 # primary and two replicas, each with a Sentinel sidecar. A rolling update
 # of `sentinel` moves the primary between pods of two versions. Both have a
 # volume from kind's `standard` StorageClass and the redis_exporter sidecar,
-# which prometheus-operator scrapes.
+# which the prometheus-operator instance turns on.
 #
 # In `automation`, n8n in queue mode is the dependent. It reads its own
 # standalone valkey, `redis`, and a PostgreSQL database on a one-instance
