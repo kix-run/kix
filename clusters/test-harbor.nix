@@ -92,7 +92,6 @@ kix.buildCluster {
               secretKey = "0123456789abcdef";
               coreSecret = "dev-core-secret";
               jobserviceSecret = "dev-jobservice-secret";
-              csrfKey = "0123456789abcdef0123456789abcdef";
               registryHttpSecret = "dev-registry-http-secret";
               registryPassword = "dev-registry-password";
               tokenPrivateKey = ''

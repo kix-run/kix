@@ -130,6 +130,19 @@
 # registry keeps blobs on the storage claim with the filesystem driver, so
 # it runs one pod.
 #
+# Upgrades: core migrates the database when it starts, so a new version reads
+# the data an older one wrote. From 2.15.2, 2.16.0 applies schema 181 and 190.
+# The registry's blobs on the storage claim need no migration. Upstream
+# supports no downgrade, and an older core exits at start against a migrated
+# database: 2.15.2 fails with "no migration found for version 190". To go
+# back, scale core, jobservice, and the exporter to zero, restore the database
+# from a backup taken before the upgrade, then deploy the older version.
+# Upstream's upgrade guide covers upgrades from 2.14.0 or later.
+#
+# Core rejects a browser write whose Origin does not match the Host it
+# receives, port included. The route must pass the client's Host unchanged,
+# as ingress-nginx and Envoy Gateway do.
+#
 # Escape hatches: core.env, jobservice.env, and exporter.env over the
 # tunable environment; registry.settings and jobservice.settings over the
 # two config.yml files; the instance's partsOverlays and each resource's
