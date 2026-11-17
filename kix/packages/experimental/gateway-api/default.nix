@@ -8,7 +8,7 @@
 # BackendTLSPolicy. It also installs the bundle's ValidatingAdmissionPolicy
 # safe-upgrades.gateway.networking.k8s.io and its binding, which refuse an
 # experimental-channel CRD over a standard one and a bundle older than
-# v1.5.0. The package runs no workload. A Gateway API implementation, such
+# v1.7.0. The package runs no workload. A Gateway API implementation, such
 # as envoy-gateway or traefik, takes it as a dependency and builds its
 # GatewayClass and Gateway from `out.crds`.
 #
@@ -36,10 +36,21 @@
 # XMesh, and the experimental fields of the standard kinds) is not
 # installed. The safe-upgrades policy refuses it while the policy exists.
 #
+# Upgrades: v1.7.0 applies over the v1.6.1 CRDs in place. The stored and
+# served versions do not change, and existing Gateways and routes keep
+# working. The v1.7.0 safe-upgrades policy refuses any bundle older than
+# v1.7.0, so a deploy of an older package stops at its dry run. To go
+# back, delete the ValidatingAdmissionPolicyBinding
+# safe-upgrades.gateway.networking.k8s.io, then deploy the older package,
+# which installs its own binding again. The older CRDs hide fields that
+# only v1.7.0 serves, such as an HTTPRoute rule's `retry`, until the
+# cluster moves forward again.
+#
 # Moving to another release: set `release`, move the tag in
-# crds/sources.txt, run `uv run scripts/vendor-crds.py gateway-api`, and
+# crds/sources.txt, run `uv run scripts/vendor-crds.py gateway-api`,
 # compare the policy below with the bundle's
-# config/crd/standard/gateway.networking.k8s.io_vap_safeupgrades.yaml.
+# config/crd/standard/gateway.networking.k8s.io_vap_safeupgrades.yaml, and
+# set both `k8s` bounds from the release's crd-validation.yml.
 
 {
   scope,
@@ -50,7 +61,7 @@
 let
   # meta.version and out.version read this; crds/sources.txt names the same
   # tag.
-  release = "v1.6.1";
+  release = "v1.7.0";
 
   vendored = file: builtins.fromJSON (builtins.readFile ./crds/${file});
 
@@ -102,10 +113,14 @@ in
     # The role admits one managed claimant per cluster, which keeps a
     # second copy of the cluster-scoped CRDs out.
     roles = [ "gatewayApi" ];
-    # The oldest Kubernetes the release tests its CRDs' CEL validation on
-    # (.github/workflows/crd-validation.yml upstream); TLSRoute uses CEL's
+    # The Kubernetes versions the release tests its CRDs' CEL validation on
+    # (.github/workflows/crd-validation.yml upstream). TLSRoute uses CEL's
     # isIP and BackendTLSPolicy the format library.
-    k8s.minVersion = "1.32";
+    k8s = {
+      minVersion = "1.33";
+      maxVersion = "1.37";
+      reason = "Gateway API ${release} is tested on Kubernetes 1.33 to 1.37";
+    };
   };
 
   build =
@@ -151,8 +166,8 @@ in
               reason = "Invalid";
             }
             {
-              expression = "object.spec.group != 'gateway.networking.k8s.io' || (has(object.metadata.annotations) && object.metadata.annotations.exists(k, k == 'gateway.networking.k8s.io/bundle-version') && ( matches(object.metadata.annotations['gateway.networking.k8s.io/bundle-version'], '-(rc)') || ( !matches(object.metadata.annotations['gateway.networking.k8s.io/bundle-version'], 'v1.[0-5].\\\\d+') && !matches(object.metadata.annotations['gateway.networking.k8s.io/bundle-version'], 'v0') ) ))";
-              message = "Installing CRDs with version before v1.5.0 is prohibited by default. Uninstall ValidatingAdmissionPolicy safe-upgrades.gateway.networking.k8s.io to install older versions.";
+              expression = "object.spec.group != 'gateway.networking.k8s.io' || (has(object.metadata.annotations) && object.metadata.annotations.exists(k, k == 'gateway.networking.k8s.io/bundle-version') && !matches(object.metadata.annotations['gateway.networking.k8s.io/bundle-version'], 'v1.[0-6].\\\\d+') && !matches(object.metadata.annotations['gateway.networking.k8s.io/bundle-version'], 'v0'))";
+              message = "Installing CRDs with version before v1.7.0 is prohibited by default. Uninstall ValidatingAdmissionPolicy safe-upgrades.gateway.networking.k8s.io to install older versions.";
               reason = "Invalid";
             }
           ];
