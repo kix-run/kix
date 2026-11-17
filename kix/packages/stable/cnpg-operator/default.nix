@@ -103,9 +103,17 @@
 # monitoring/configmap-cnpg-default-monitoring.json with the manifest's
 # ConfigMap cnpg-default-monitoring (the script vendors only definitions
 # and roles), compare the webhook entries below with the release manifest's
-# webhook configurations, then run the
+# webhook configurations, set the Kubernetes range in `meta.k8s`, then run the
 # kix-lib test cnpg-operator-sources-match-release and
 # every-package-evaluates.
+#
+# Upgrades: a patch release such as 1.30.2 upgrades directly from the
+# previous patch. The deploy restarts the operator, then the operator rolls
+# each PostgreSQL cluster to the new instance manager, and each rollout ends
+# with a switchover unless `primaryUpdateStrategy` is supervised. Going back
+# needs no data step: deploy the old package over the new one. Upstream
+# documents neither path. The operator from 1.30.1 to 1.30.2 and back was
+# tested on kind with a one-instance and a two-instance cluster.
 
 {
   scope,
@@ -117,7 +125,7 @@
 let
   # meta.version, the default image.tag, and the tag in crds/sources.txt and
   # rbac/sources.txt.
-  release = "1.30.1";
+  release = "1.30.2";
   minorOf = lib.versions.majorMinor;
 
   name = scope.instanceName;
@@ -198,10 +206,16 @@ in
     # The operator reads cnpg.io annotations on Clusters and their objects,
     # and on the Services that register plugins.
     annotationDomains = [ "cnpg.io" ];
-    # The release's supported Kubernetes versions start at 1.31
-    # (docs/src/supported_releases.md upstream); the definitions use CEL
-    # validation rules.
-    k8s.minVersion = "1.31";
+    # The Kubernetes versions upstream supports for the 1.30.x series, from
+    # the support status table on its supported releases page
+    # (https://cloudnative-pg.io/docs/1.30/supported_releases/). Versions
+    # upstream only tests are not supported, so they are refused. Move both
+    # bounds with `release`.
+    k8s = {
+      minVersion = "1.34";
+      maxVersion = "1.36";
+      reason = "[K4963] CloudNativePG ${release} supports Kubernetes 1.34 to 1.36. Move the cluster to a Kubernetes version in that range, or use a Kix release whose cnpg-operator package still accepts it";
+    };
     network.intents.webhooks.ingress = [
       {
         from = "apiserver";
@@ -231,7 +245,7 @@ in
     image = kix.options.image {
       repository = "ghcr.io/cloudnative-pg/cloudnative-pg";
       tag = release;
-      digest = "sha256:923c267ec29636db3bee20f993d0ec4973fa22998e1adad37da79e4d32b5bc07";
+      digest = "sha256:f96f6be3d81ec93819b443c665c575c609342fca840df90d4d87dae314a5b913";
       description = "Operator image. Its major.minor must be the package's release. The operator also runs it as the init container of every PostgreSQL pod (OPERATOR_IMAGE_NAME).";
     };
 
