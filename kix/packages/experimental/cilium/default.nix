@@ -52,6 +52,15 @@
 # Escape hatch: `values`, Helm values merged over the delivery's defaults.
 # The none delivery writes no Cilium configuration and refuses them.
 #
+# Upgrades: Cilium tests upgrades and rollbacks one minor release at a time,
+# so each bump of `release` moves at most one minor. The agent keeps its
+# state in the CRDs it installs and in BPF maps on each node, and a new
+# minor reads what the previous one left. Before a minor upgrade, read
+# Cilium's upgrade notes for policies the new release refuses or treats
+# differently. To go back, deploy the previous package version. The chart
+# then rolls the agent, envoy, and operator back to the old images, and
+# the old agent keeps the identities and endpoints the new one wrote.
+#
 # Known limits:
 # - Cilium as an enforcer beside another CNI (chaining) is not supported;
 #   the package always claims `cni`.
@@ -78,13 +87,13 @@
 let
   rules = import ./netpol-rules.nix { inherit lib; };
 
-  release = "1.19.10";
+  release = "1.20.5";
 
   chart = scope.helm.fetchHelmChart {
     repo = "https://helm.cilium.io/";
     name = "cilium";
     version = release;
-    hash = "sha256-tyUq/KNBOjPiuYfJVOUkQelpeeQR4UlezGrv6M0liGM=";
+    hash = "sha256-DHWS63UXns9G3T7CIUWRbwFkxEASFOoVr7WyMLHRGiE=";
   };
 in
 {
