@@ -119,6 +119,7 @@
           tempo-generator = ./clusters/test-tempo-generator.nix;
           monitoring-native = ./clusters/test-monitoring-native.nix;
           monitoring-loki = ./clusters/test-monitoring-loki.nix;
+          grafana-upgrade = ./clusters/test-grafana-upgrade.nix;
           monitoring-netpol = ./clusters/test-monitoring-netpol.nix;
           victoria-metrics = ./clusters/test-victoria-metrics.nix;
           victoria-metrics-crd-ref = ./clusters/test-victoria-metrics-crd-ref.nix;
