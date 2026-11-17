@@ -42,6 +42,15 @@
 # `partsOverlays` add files to `configmap` for the `file` and `hosts`
 # plugins, change `service`, or place `deployment`.
 #
+# Upgrades: CoreDNS keeps no data, so a deploy replaces the pods one at a
+# time and every replica reads the same Corefile. The default Corefile
+# works unchanged on CoreDNS 1.13 to 1.15. Since 1.14.7 the `forward` plugin
+# stops after twice as many connection attempts as it has upstreams; set
+# `max_connect_attempts 0` in its block for the old behaviour. To go back,
+# deploy an older Kix release or set `image.tag` and `image.digest` to the
+# older image. CoreDNS starts on the same Corefile, and nothing else needs
+# undoing.
+#
 # Known limits: the network intents allow DNS on port 53 only, in from every
 # pod and out to resolvers outside the cluster; the `servers` description
 # names the route for other traffic. Under `networkPolicy.enable` the
@@ -61,7 +70,7 @@
 let
   corefile = import ./corefile.nix { inherit lib; };
 
-  release = "1.13.1";
+  release = "1.15.0";
 
   # The Service name, also the `service` label its scraped series carry.
   serviceName = scope.instanceName;
@@ -205,7 +214,7 @@ in
     image = kix.options.image {
       repository = "docker.io/coredns/coredns";
       tag = release;
-      digest = "sha256:9b9128672209474da07c91439bf15ed704ae05ad918dd6454e5b6ae14e35fee6";
+      digest = "sha256:0a9d8c8ddf34347eb59aad9a8784f0710de88d6d112726d11d271f9bc6daca26";
     };
 
     clusterIP = lib.mkOption {
@@ -526,10 +535,11 @@ in
                         };
                         securityContext = {
                           allowPrivilegeEscalation = false;
-                          # The image's user is `nonroot:nonroot`, a name. The
-                          # kubelet refuses runAsNonRoot unless it can see a
-                          # numeric user, so the image's uid and gid are
-                          # stated here.
+                          # The image runs as 65532:65532. Images before
+                          # 1.14.7 name the user `nonroot`, and the kubelet
+                          # refuses runAsNonRoot unless it can see a numeric
+                          # user, so the uid and gid are stated here for an
+                          # older `image.tag`.
                           runAsNonRoot = true;
                           runAsUser = 65532;
                           runAsGroup = 65532;
