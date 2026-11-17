@@ -208,7 +208,7 @@ in
   # follower's own tag.
   cert-manager-release-check =
     let
-      cluster = clusterWith { config.image.tag = "v1.21.3"; };
+      cluster = clusterWith { config.image.tag = "v1.21.2"; };
       images = map (c: c.image) (
         builtins.concatMap (m: m.spec.template.spec.containers) (
           ofKind "Deployment" (manifests cluster) ++ ofKind "Job" (manifests cluster)
@@ -218,17 +218,17 @@ in
     in
     (
       builtins.length images == 4
-      && builtins.all (i: lib.hasSuffix ":v1.21.3" i) images
-      && builtins.elem "--acme-http01-solver-image=quay.io/jetstack/cert-manager-acmesolver:v1.21.3" controllerArgs
+      && builtins.all (i: lib.hasSuffix ":v1.21.2" i) images
+      && builtins.elem "--acme-http01-solver-image=quay.io/jetstack/cert-manager-acmesolver:v1.21.2" controllerArgs
       && evalFails (clusterWith {
         config.image.tag = "v1.22.0";
       })
       && evalFails (clusterWith {
         config.image.tag = "latest";
       })
-      && builtins.elem "quay.io/jetstack/cert-manager-webhook:v1.21.3" (
+      && builtins.elem "quay.io/jetstack/cert-manager-webhook:v1.21.2" (
         map (c: c.image) (
-          deploymentOfAll (clusterWith { config.webhook.image.tag = "v1.21.3"; }) "cert-manager-webhook"
+          deploymentOfAll (clusterWith { config.webhook.image.tag = "v1.21.2"; }) "cert-manager-webhook"
         )
       )
       && evalFails (clusterWith {
