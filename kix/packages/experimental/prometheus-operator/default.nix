@@ -58,6 +58,19 @@
 # operator not ready. Its TargetDown covers the operator not answering a
 # scrape, so the operator's alerts need that package.
 #
+# Upgrades: v0.95.2 takes over directly from v0.92.1. It reconciles the
+# Prometheus and Alertmanager resources the old operator left, and they stay
+# Available. Both get the new config-reloader image, so the operator restarts
+# every Prometheus and Alertmanager pod once. Data on their claims survives
+# the restart. Going back works too. `kix rollback`, or deploying the v0.92.1
+# package, puts the old operator and CRDs back. The old operator reconciles
+# the same resources and restarts the pods once more. Upstream gives no
+# upgrade or downgrade policy beyond the CHANGE entries in its release notes.
+# From v0.93.0 the CRDs refuse negative values in fields such as
+# `sampleLimit`, `labelLimit`, and `modulus`. From v0.93.0 a Thanos sidecar
+# that uploads to object storage no longer turns off local compaction
+# (`spec.disableCompaction: true` restores that).
+#
 # Limits: one replica (`meta.availability.max = "none"`); the operator has no
 # leader election. The operator watches every namespace; `--namespaces` in
 # `extraArgs` narrows what it reconciles but not its ClusterRole. Two
