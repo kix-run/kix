@@ -260,7 +260,6 @@ in
                     HARBOR_ADMIN_PASSWORD = "adminPassword";
                     CORE_SECRET = "coreSecret";
                     JOBSERVICE_SECRET = "jobserviceSecret";
-                    CSRF_KEY = "csrfKey";
                     REGISTRY_CREDENTIAL_PASSWORD = "registryPassword";
                   }
                   ++ dbLoginEnv "POSTGRESQL_USERNAME" "POSTGRESQL_PASSWORD"

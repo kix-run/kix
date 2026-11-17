@@ -44,7 +44,7 @@
 #       config = {
 #         source = ./harbor.sops.yaml;
 #         keys = [ "adminPassword" "secretKey" "coreSecret" "jobserviceSecret"
-#                  "csrfKey" "registryHttpSecret" "registryPassword" "tokenPrivateKey" ];
+#                  "registryHttpSecret" "registryPassword" "tokenPrivateKey" ];
 #       };
 #     };
 #     harbor-registry = {
@@ -73,7 +73,6 @@
 # A SOPS secret lists its keys in `keys`, because Kix cannot read the
 # encrypted file during evaluation. Generate the values with:
 #   secretKey        openssl rand -hex 8    (exactly 16 characters)
-#   csrfKey          openssl rand -hex 16   (exactly 32 characters)
 #   tokenPrivateKey  openssl genrsa 4096
 #   the others       openssl rand -hex 16
 #
@@ -298,7 +297,7 @@ in
       image = kix.options.image {
         repository = "docker.io/goharbor/harbor-core";
         inherit tag;
-        digest = "sha256:d7b780d23721a000f0fb8e181add6675eafa336de5d033b77fd7da0c171ff7f7";
+        digest = "sha256:0cf4b2269955cb88b0617518573426383705cc9ed54af2801a0a26afc95a3a71";
         description = "Image of Harbor core. The other Harbor images follow its tag.";
       };
       replicas = replicasOption "core" "Core is a stateless API; its state lives in the database and valkey.";
@@ -344,7 +343,7 @@ in
     };
 
     portal = {
-      image = harborImage "harbor-portal" "sha256:b811b67f7a7f6f1614e4bdf7478b207d13e8aa3f815ff6ad84f216a5098d213d";
+      image = harborImage "harbor-portal" "sha256:58f6b3f0e2a1ba17c1305e76a817421647fba10671030b8b5aa1cf7819d5eecd";
       replicas = replicasOption "portal" "The portal serves a static web UI.";
       resources = kix.options.resources {
         requests = {
@@ -359,7 +358,7 @@ in
     };
 
     registry = {
-      image = harborImage "registry-photon" "sha256:c4ebef61ceb50a3d8bc21d149bc280422db20a1e69df317b64b74098c3615855";
+      image = harborImage "registry-photon" "sha256:e345b0283d520a567c2fdaf91497d8928e0453f2880c14541e13330e6ba16c9a";
       resources = kix.options.resources {
         requests = {
           cpu = "20m";
@@ -390,7 +389,7 @@ in
     };
 
     registryctl = {
-      image = harborImage "harbor-registryctl" "sha256:223d5cb49d5dbf0ba4ae022e7dd9775fa459904112dc12084d3aaa36c1408362";
+      image = harborImage "harbor-registryctl" "sha256:6763c946ced0434b3c98f051003a25ed38724c8187a46a3917e1ded6826d3c12";
       resources = kix.options.resources {
         requests = {
           cpu = "10m";
@@ -404,7 +403,7 @@ in
     };
 
     jobservice = {
-      image = harborImage "harbor-jobservice" "sha256:f71a4452a095bcd2a8f0683648a3ae28415432df87ccfb00ec7625f3e340a598";
+      image = harborImage "harbor-jobservice" "sha256:72f2ea2daf9f4279be54775090d2dcb6834e111ac635df8f6a88d13536785f60";
       replicas = replicasOption "jobservice" "Job logs live in the database, so any pod can serve any job's log.";
       resources = kix.options.resources {
         requests = {
@@ -436,7 +435,7 @@ in
     };
 
     exporter = {
-      image = harborImage "harbor-exporter" "sha256:e1b0a248f61aad5084c5d1612d5f1da89f99c23ce743eaf8cba913d6d00c0547";
+      image = harborImage "harbor-exporter" "sha256:e3445a81c0a13a18f8b9a73ff11f0e83ab7e08474f7cac80b419abef4e782f4d";
       resources = kix.options.resources {
         requests = {
           cpu = "10m";

@@ -1,0 +1,5 @@
++++
+kind = "note"
+packages = ["harbor"]
++++
+`harbor` now runs Harbor 2.16.0, up from 2.15.2. The first deploy restarts every Harbor pod, and core migrates the database when it starts. Harbor does not support going back to an older version: Harbor 2.15.2 does not start on a database that 2.16.0 has migrated. To go back, restore a database backup taken before the upgrade. Harbor no longer reads `csrfKey`, so the `harborSecrets` Secret no longer needs that key, and you can remove it. Harbor now rejects a write from the web UI when the browser's `Origin` does not match the `Host` header that core receives, port included. Ingress-nginx and Envoy Gateway pass the client's `Host` unchanged. If another proxy in front of Harbor rewrites `Host`, configure it to pass the original `Host` header. This upgrade fixes the security advisories published for Harbor 2.15.2, including privilege escalation through robot accounts and path traversal in registry endpoints. Every Harbor image now runs on arm64 nodes as well as amd64.

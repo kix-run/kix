@@ -299,7 +299,6 @@ let
               "secretKey"
               "coreSecret"
               "jobserviceSecret"
-              "csrfKey"
               "registryHttpSecret"
               "registryPassword"
               "tokenPrivateKey"

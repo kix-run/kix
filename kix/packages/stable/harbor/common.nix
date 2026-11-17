@@ -10,7 +10,7 @@ rec {
   name = scope.instanceName;
   ns = scope.namespaceName;
   who = "harbor ${ns}/${name}";
-  release = "2.15.2";
+  release = "2.16.0";
   tag = "v${release}";
 
   # Every component serves /metrics on this port when metrics are on.
@@ -31,7 +31,6 @@ rec {
     "secretKey" # 16 characters, encrypts credentials Harbor stores in the database
     "coreSecret" # CORE_SECRET: core, jobservice, and registryctl authenticate each other
     "jobserviceSecret" # JOBSERVICE_SECRET
-    "csrfKey" # CSRF_KEY, 32 characters
     "registryHttpSecret" # REGISTRY_HTTP_SECRET, signs the registry's upload state
     "registryPassword" # core and jobservice log in to the registry with it
     "tokenPrivateKey" # RSA private key (PEM) that signs registry bearer tokens
