@@ -200,7 +200,7 @@ meta = {
 
 ### `meta.version`
 
-Set `meta.version` to the software version the package deploys by default, such as `"1.30.5"` for nginx 1.30.5. Define the version once in a local `release` variable and reuse it for the default image tag so the two stay in sync. Keep `meta.version` without a leading `v` so it matches `kix.image.version`. When the image tag starts with `v`, strip it with `lib.removePrefix "v" release`:
+Set `meta.version` to the software version the package deploys by default, such as `"1.30.6"` for nginx 1.30.6. Define the version once in a local `release` variable and reuse it for the default image tag so the two stay in sync. Keep `meta.version` without a leading `v` so it matches `kix.image.version`. When the image tag starts with `v`, strip it with `lib.removePrefix "v" release`:
 
 ```nix
 let
