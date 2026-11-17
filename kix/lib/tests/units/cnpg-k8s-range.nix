@@ -36,9 +36,16 @@ let
   refused = v: builtins.any (lib.hasInfix "[K4963]") (refusals v);
 in
 {
-  # Below the range (1.30) and above it (1.38) are refused with the record's
-  # id. Inside it (1.34.3) is accepted, and so is a cluster with no version.
+  # Tested-only versions (1.33, 1.37) and any version outside the supported
+  # range are refused with the record's id. The supported versions (1.34,
+  # 1.36) are accepted, and so is a cluster with no version.
   cnpg-k8s-range =
-    (refused "1.30" && refused "1.38.0" && refusals "1.34.3" == [ ] && refusals null == [ ])
-    || throw "cnpg-k8s-range: 1.30 ${builtins.toJSON (refusals "1.30")}, 1.38.0 ${builtins.toJSON (refusals "1.38.0")}, 1.34.3 ${builtins.toJSON (refusals "1.34.3")}";
+    (
+      refused "1.33"
+      && refused "1.37"
+      && refusals "1.34" == [ ]
+      && refusals "1.36" == [ ]
+      && refusals null == [ ]
+    )
+    || throw "cnpg-k8s-range: 1.33 ${builtins.toJSON (refusals "1.33")}, 1.37 ${builtins.toJSON (refusals "1.37")}, 1.34 ${builtins.toJSON (refusals "1.34")}, 1.36 ${builtins.toJSON (refusals "1.36")}";
 }
