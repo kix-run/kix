@@ -97,10 +97,10 @@ in
   monitoring-stack-operator-tag-minor-refused =
     (
       !(evalFails (clusterWith {
-        instances.prometheus-operator.config.image.tag = "v0.92.9";
+        instances.prometheus-operator.config.image.tag = "v0.95.9";
       }))
       && evalFails (clusterWith {
-        instances.prometheus-operator.config.image.tag = "v0.93.0";
+        instances.prometheus-operator.config.image.tag = "v0.96.0";
       })
     )
     || throw "the image.tag minor refusal did not fire";

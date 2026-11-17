@@ -72,7 +72,7 @@
 let
   # The operator, its config-reloader, and the vendored CRDs and ClusterRole
   # come from one upstream release.
-  release = "v0.92.1";
+  release = "v0.95.2";
   minorOf =
     tag: lib.mapNullable (m: "v${builtins.head m}") (builtins.match "v([0-9]+\\.[0-9]+)(\\..*)?" tag);
 
@@ -144,13 +144,13 @@ in
     image = kix.options.image {
       repository = "quay.io/prometheus-operator/prometheus-operator";
       tag = release;
-      digest = "sha256:7d9247d2351480fc74587e24681578f815f387bafb2ee7b86a852a94c4cd3774";
+      digest = "sha256:7986c2afa118c9dea07d01c5e1a29555824582e92f6ee8607591d1a7178acf29";
     };
     operandImages.prometheus-config-reloader = kix.options.image {
       repository = "quay.io/prometheus-operator/prometheus-config-reloader";
       tag = release;
       tagText = "config.image.tag";
-      digest = "sha256:74550ba3e8bf93f47bc574231090d340ae9c01d25cd11ff74799e65f9fdb9a48";
+      digest = "sha256:cc74ddedad4ab1c49446971f6d51302ad4303d8660a2018af925c7f62c114304";
       pullPolicy = null;
       description = "Image the operator injects as the config-reloader sidecar into Prometheus and Alertmanager pods. Its pull policy comes from the Prometheus or Alertmanager resource, so `pullPolicy` must stay null.";
     };
