@@ -124,4 +124,39 @@ in
       && rulesOf { config.metrics.enabled = false; } == null
     )
     || throw "loki alerts: ${builtins.toJSON (builtins.attrNames on)}";
+
+  # A cluster below the minimum Kubernetes version upstream supports is
+  # refused with the change record's id. Upstream sets no maximum, so only
+  # the lower bound is checked. The meta check is called directly, because a
+  # failed meta assertion fails the cluster before its messages can be read.
+  loki-k8s-range =
+    let
+      metaLib = import ../../meta.nix { inherit lib; };
+      meta =
+        (lokiPackage {
+          inherit lib;
+          kix = kixlib;
+          scope = {
+            instanceName = "loki";
+            namespaceName = "logs";
+          };
+        }).meta;
+      refusals =
+        k8sVersion:
+        map (a: a.message) (
+          builtins.filter (a: !a.assertion) (
+            (metaLib.checkMetaStatic {
+              packageMeta = meta;
+              instanceName = "loki";
+              namespaceName = "logs";
+              clusterConfig = { inherit k8sVersion; };
+              resolvedDepMeta = { };
+              resolutionIndex.byKey = { };
+            }).assertions
+          )
+        );
+      refused = v: builtins.any (lib.hasInfix "[K0459]") (refusals v);
+    in
+    (refused "1.24" && refusals "1.25" == [ ] && refusals "1.37.0" == [ ] && refusals null == [ ])
+    || throw "loki k8s range: 1.24 ${builtins.toJSON (refusals "1.24")}, 1.25 ${builtins.toJSON (refusals "1.25")}, 1.37.0 ${builtins.toJSON (refusals "1.37.0")}";
 }
