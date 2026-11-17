@@ -21,6 +21,11 @@
 # Escape hatches: `extraArgs` for kube-state-metrics flags, and the
 # instance's `partsOverlays`.
 #
+# Upgrades: kube-state-metrics keeps no data, so any version replaces any
+# other, and going back is deploying the older package. From 2.20,
+# `kube_pod_status_reason` has a series only for the reason a pod has, not a
+# zero-valued series for every other reason.
+#
 # Limits: one replica at every availability level (`availability.max =
 # "none"` on the Deployment), because a second unsharded replica duplicates
 # every series. The package ships no alerts; prometheus-default-rules does.
@@ -31,7 +36,7 @@
   kix,
 }:
 let
-  release = "v2.19.1";
+  release = "v2.20.0";
   name = scope.instanceName;
   who = "kube-state-metrics ${scope.namespaceName}/${name}";
   metricsPort = 8080;
@@ -43,14 +48,21 @@ in
     description = "kube-state-metrics: Kubernetes object state exporter";
     owner = "platform";
     defaultAliases = [ "kubeStateMetrics" ];
-    k8s.minVersion = "1.25";
+    # Upstream supports the Kubernetes version of the client-go it builds
+    # with, and only that one (README "Kubernetes Version" and the
+    # compatibility matrix in data.yaml). Move both bounds with `release`.
+    k8s = {
+      minVersion = "1.36";
+      maxVersion = "1.36";
+      reason = "[K9973] kube-state-metrics ${release} supports Kubernetes 1.36 only. Deploy a Kix release with an older kube-state-metrics package, or move the cluster to Kubernetes 1.36 first";
+    };
   };
 
   options = {
     image = kix.options.image {
       repository = "registry.k8s.io/kube-state-metrics/kube-state-metrics";
       tag = release;
-      digest = "sha256:85108987d044b18a098126732f98602df408888c0f7d456241f5abefb9744bc1";
+      digest = "sha256:42cfe3723a5f058171c627537fb57a3ea0f26e4380fa18555a95cb1a1b4cfc5b";
     };
     resources = kix.options.resources {
       requests = {
@@ -129,7 +141,11 @@ in
           "volumeattachments"
         ];
         admReg = group "admissionregistration.k8s.io" [
+          "mutatingadmissionpolicies"
+          "mutatingadmissionpolicybindings"
           "mutatingwebhookconfigurations"
+          "validatingadmissionpolicies"
+          "validatingadmissionpolicybindings"
           "validatingwebhookconfigurations"
         ];
         net = group "networking.k8s.io" [
@@ -183,7 +199,11 @@ in
               (certs.certificatesigningrequests |> watch)
               (storage.storageclasses |> watch)
               (storage.volumeattachments |> watch)
+              (admReg.mutatingadmissionpolicies |> watch)
+              (admReg.mutatingadmissionpolicybindings |> watch)
               (admReg.mutatingwebhookconfigurations |> watch)
+              (admReg.validatingadmissionpolicies |> watch)
+              (admReg.validatingadmissionpolicybindings |> watch)
               (admReg.validatingwebhookconfigurations |> watch)
               (net.networkpolicies |> watch)
               (net.ingresses |> watch)
