@@ -65,6 +65,13 @@
 # replicas than desired is left to prometheus-default-rules, and latency and
 # other error rates to the site's own objectives.
 #
+# Upgrades: Traefik keeps no state of its own. It reads the Gateway API
+# objects and writes their status, so a new version serves the Gateways and
+# routes that the previous one left behind. Going back is a deploy of the
+# previous package version. Both directions were tested on kind with an
+# HTTPRoute serving traffic: the Gateway stayed Programmed, and the route
+# returned 200 after each deploy.
+#
 # Escape hatches: `extraArgs`, `env`, `service.spec`, `service.annotations`,
 # and the instance's `partsOverlays`.
 #
