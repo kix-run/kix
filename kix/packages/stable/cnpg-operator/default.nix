@@ -117,7 +117,7 @@
 let
   # meta.version, the default image.tag, and the tag in crds/sources.txt and
   # rbac/sources.txt.
-  release = "1.30.2";
+  release = "1.30.1";
   minorOf = lib.versions.majorMinor;
 
   name = scope.instanceName;
@@ -231,7 +231,7 @@ in
     image = kix.options.image {
       repository = "ghcr.io/cloudnative-pg/cloudnative-pg";
       tag = release;
-      digest = "sha256:f96f6be3d81ec93819b443c665c575c609342fca840df90d4d87dae314a5b913";
+      digest = "sha256:923c267ec29636db3bee20f993d0ec4973fa22998e1adad37da79e4d32b5bc07";
       description = "Operator image. Its major.minor must be the package's release. The operator also runs it as the init container of every PostgreSQL pod (OPERATOR_IMAGE_NAME).";
     };
 
