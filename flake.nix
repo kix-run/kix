@@ -49,6 +49,7 @@
 
           # Library features: dependency resolution, composition, pins, bundles.
           minimal = ./clusters/test-minimal.nix;
+          cert-manager = ./clusters/test-cert-manager.nix;
           full = ./clusters/test-full.nix;
           helm = ./clusters/test-helm.nix;
           auto = ./clusters/test-auto.nix;
