@@ -65,6 +65,13 @@
 # replicas than desired is left to prometheus-default-rules, and latency and
 # other error rates to the site's own objectives.
 #
+# Upgrades: Traefik keeps no state of its own. It reads the Gateway API
+# objects and writes their status, so a new version serves the Gateways and
+# routes that the previous one left behind. Going back is a deploy of the
+# previous package version. Both directions were tested on kind with an
+# HTTPRoute serving traffic: the Gateway stayed Programmed, and the route
+# returned 200 after each deploy.
+#
 # Escape hatches: `extraArgs`, `env`, `service.spec`, `service.annotations`,
 # and the instance's `partsOverlays`.
 #
@@ -85,7 +92,7 @@
 }:
 
 let
-  release = "v3.7.13";
+  release = "v3.7.17";
 
   # Traefik's GatewayClass controller, pkg/provider/kubernetes/gateway/kubernetes.go.
   controllerName = "traefik.io/gateway-controller";
@@ -150,8 +157,16 @@ in
     # One Gateway accepts HTTPRoutes from every namespace, so consumers in
     # any namespace find it by name.
     scope = "cluster";
-    # The gateway-api package's minimum, whose CRDs Traefik needs.
-    k8s.minVersion = "1.32";
+    # The Kubernetes versions Traefik supports, from the Kubernetes support
+    # policy in its docs (docs/content/includes/kubernetes-requirements.md),
+    # which says Traefik supports the latest three minor versions. Kubernetes
+    # v1.37 is the newest minor release at this Traefik release, so it is the
+    # upper bound. Move both bounds with `release`.
+    k8s = {
+      minVersion = "1.35";
+      maxVersion = "1.37";
+      reason = "[K1871] Traefik ${release} supports Kubernetes 1.35 to 1.37. Deploy a Kix release with an older traefik package, or move the cluster to a supported Kubernetes version first";
+    };
     network.intents = {
       # HTTPRoutes name their backends at runtime, on any port, so the graph
       # cannot see Traefik's upstream connections.
@@ -175,7 +190,7 @@ in
     image = kix.options.image {
       repository = "docker.io/library/traefik";
       tag = release;
-      digest = "sha256:24841fe2de7304c149343d877d2923b4c8800a38ba015dea9174c23b20e344a0";
+      digest = "sha256:f4bb143d1135a579b630ed491e17ec50f6f7c9c6a30585ff3d385471d2a86f5a";
       description = "Image of Traefik.";
     };
     replicas = lib.mkOption {
