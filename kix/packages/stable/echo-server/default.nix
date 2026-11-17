@@ -22,6 +22,11 @@
 #
 # Limits: the message is served as plain text, and the server serves
 # nothing else.
+#
+# Upgrades: nginx 1.30.6 reads the same config as 1.30.5 and keeps no data,
+# so a plain deploy upgrades an existing install. Going back to 1.30.5 also
+# works with a plain deploy of the older version. No operator step is needed
+# in either direction.
 
 {
   scope,
@@ -32,7 +37,7 @@
 
 let
   name = scope.instanceName;
-  release = "1.30.5";
+  release = "1.30.6";
 in
 {
   meta = {
@@ -54,7 +59,7 @@ in
     image = kix.options.image {
       repository = "docker.io/nginxinc/nginx-unprivileged";
       tag = "${release}-alpine";
-      digest = "sha256:ed04ec1ff34502c339ee5c3ae3f855442398edc1d05591e2b98981dcbbd20b1e";
+      digest = "sha256:f5116ed4606f3eb015dd4a8e28cb9b351476dc0ad4bc6e9f93b19cec130cdf03";
     };
     # Declared only so that setting the removed name fails with the new one.
     replicaCount = lib.mkOption {
