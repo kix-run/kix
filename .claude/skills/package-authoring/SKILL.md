@@ -454,8 +454,8 @@ The only place in this skill with package line numbers. `pkg:N` is
 | Contracts: consumer `assertions`, provider `check` | metabase:112; stackgres-database:554; keycloak:537; tempo:631 |
 | `pick` as an option default with `defaultText` | `cnpg-cluster/options.nix`:12-18 |
 | `pick` inline, header names the instance override (O19) | keycloak:234, header 74-76 |
-| `atLeast` | valkey:107 |
-| Ceilings: package-wide, per builder | tempo:276; valkey:546, `harbor/registry.nix`:245, `harbor/jobservice.nix`:338 |
+| `atLeast` | valkey:119 |
+| Ceilings: package-wide, per builder | tempo:276; valkey:558, `harbor/registry.nix`:245, `harbor/jobservice.nix`:338 |
 | `kix.expose`, `exposure.urlOrNull` | metabase:172-175, 367 |
 | Metrics toggle that does not restart the workload | metabase:152-157; keycloak header 30-35 |
 | `kix.monitor` with alerts | openbao:393; clickhouse:626-636 and `alerts.nix` |
