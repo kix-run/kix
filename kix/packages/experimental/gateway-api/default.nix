@@ -8,7 +8,7 @@
 # BackendTLSPolicy. It also installs the bundle's ValidatingAdmissionPolicy
 # safe-upgrades.gateway.networking.k8s.io and its binding, which refuse an
 # experimental-channel CRD over a standard one and a bundle older than
-# v1.5.0. The package runs no workload. A Gateway API implementation, such
+# v1.7.0. The package runs no workload. A Gateway API implementation, such
 # as envoy-gateway or traefik, takes it as a dependency and builds its
 # GatewayClass and Gateway from `out.crds`.
 #
@@ -36,6 +36,13 @@
 # XMesh, and the experimental fields of the standard kinds) is not
 # installed. The safe-upgrades policy refuses it while the policy exists.
 #
+# Upgrades: v1.7.0 applies over the v1.6.1 CRDs in place. The stored
+# versions and the served versions do not change, and existing Gateways
+# and routes keep working. The v1.7.0 safe-upgrades policy refuses any
+# bundle older than v1.7.0, so to go back an operator deletes the
+# ValidatingAdmissionPolicyBinding safe-upgrades.gateway.networking.k8s.io
+# first and then deploys the older package.
+#
 # Moving to another release: set `release`, move the tag in
 # crds/sources.txt, run `uv run scripts/vendor-crds.py gateway-api`, and
 # compare the policy below with the bundle's
@@ -50,7 +57,7 @@
 let
   # meta.version and out.version read this; crds/sources.txt names the same
   # tag.
-  release = "v1.6.1";
+  release = "v1.7.0";
 
   vendored = file: builtins.fromJSON (builtins.readFile ./crds/${file});
 
@@ -105,7 +112,7 @@ in
     # The oldest Kubernetes the release tests its CRDs' CEL validation on
     # (.github/workflows/crd-validation.yml upstream); TLSRoute uses CEL's
     # isIP and BackendTLSPolicy the format library.
-    k8s.minVersion = "1.32";
+    k8s.minVersion = "1.33";
   };
 
   build =
@@ -151,8 +158,8 @@ in
               reason = "Invalid";
             }
             {
-              expression = "object.spec.group != 'gateway.networking.k8s.io' || (has(object.metadata.annotations) && object.metadata.annotations.exists(k, k == 'gateway.networking.k8s.io/bundle-version') && ( matches(object.metadata.annotations['gateway.networking.k8s.io/bundle-version'], '-(rc)') || ( !matches(object.metadata.annotations['gateway.networking.k8s.io/bundle-version'], 'v1.[0-5].\\\\d+') && !matches(object.metadata.annotations['gateway.networking.k8s.io/bundle-version'], 'v0') ) ))";
-              message = "Installing CRDs with version before v1.5.0 is prohibited by default. Uninstall ValidatingAdmissionPolicy safe-upgrades.gateway.networking.k8s.io to install older versions.";
+              expression = "object.spec.group != 'gateway.networking.k8s.io' || (has(object.metadata.annotations) && object.metadata.annotations.exists(k, k == 'gateway.networking.k8s.io/bundle-version') && !matches(object.metadata.annotations['gateway.networking.k8s.io/bundle-version'], 'v1.[0-6].\\\\d+') && !matches(object.metadata.annotations['gateway.networking.k8s.io/bundle-version'], 'v0'))";
+              message = "Installing CRDs with version before v1.7.0 is prohibited by default. Uninstall ValidatingAdmissionPolicy safe-upgrades.gateway.networking.k8s.io to install older versions.";
               reason = "Invalid";
             }
           ];
