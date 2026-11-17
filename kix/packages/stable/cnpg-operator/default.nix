@@ -103,7 +103,7 @@
 # monitoring/configmap-cnpg-default-monitoring.json with the manifest's
 # ConfigMap cnpg-default-monitoring (the script vendors only definitions
 # and roles), compare the webhook entries below with the release manifest's
-# webhook configurations, then run the
+# webhook configurations, set the Kubernetes range in `meta.k8s`, then run the
 # kix-lib test cnpg-operator-sources-match-release and
 # every-package-evaluates.
 #
@@ -206,10 +206,16 @@ in
     # The operator reads cnpg.io annotations on Clusters and their objects,
     # and on the Services that register plugins.
     annotationDomains = [ "cnpg.io" ];
-    # The release's supported Kubernetes versions start at 1.31
-    # (docs/src/supported_releases.md upstream); the definitions use CEL
-    # validation rules.
-    k8s.minVersion = "1.31";
+    # The Kubernetes versions upstream tests for the 1.30.x series, from the
+    # support status table on its supported releases page
+    # (https://cloudnative-pg.io/docs/1.30/supported_releases/). Upstream
+    # supports 1.34 to 1.36 and tests 1.31 to 1.37, so the range covers both.
+    # Move both bounds with `release`.
+    k8s = {
+      minVersion = "1.31";
+      maxVersion = "1.37";
+      reason = "[K4963] CloudNativePG ${release} supports Kubernetes 1.34 to 1.36 and is tested on 1.31 to 1.37. Move the cluster to a Kubernetes version in that range, or use a Kix release whose cnpg-operator package still accepts it";
+    };
     network.intents.webhooks.ingress = [
       {
         from = "apiserver";
