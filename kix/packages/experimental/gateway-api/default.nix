@@ -36,17 +36,21 @@
 # XMesh, and the experimental fields of the standard kinds) is not
 # installed. The safe-upgrades policy refuses it while the policy exists.
 #
-# Upgrades: v1.7.0 applies over the v1.6.1 CRDs in place. The stored
-# versions and the served versions do not change, and existing Gateways
-# and routes keep working. The v1.7.0 safe-upgrades policy refuses any
-# bundle older than v1.7.0, so to go back an operator deletes the
-# ValidatingAdmissionPolicyBinding safe-upgrades.gateway.networking.k8s.io
-# first and then deploys the older package.
+# Upgrades: v1.7.0 applies over the v1.6.1 CRDs in place. The stored and
+# served versions do not change, and existing Gateways and routes keep
+# working. The v1.7.0 safe-upgrades policy refuses any bundle older than
+# v1.7.0, so a deploy of an older package stops at its dry run. To go
+# back, delete the ValidatingAdmissionPolicyBinding
+# safe-upgrades.gateway.networking.k8s.io, then deploy the older package,
+# which installs its own binding again. The older CRDs hide fields that
+# only v1.7.0 serves, such as an HTTPRoute rule's `retry`, until the
+# cluster moves forward again.
 #
 # Moving to another release: set `release`, move the tag in
-# crds/sources.txt, run `uv run scripts/vendor-crds.py gateway-api`, and
+# crds/sources.txt, run `uv run scripts/vendor-crds.py gateway-api`,
 # compare the policy below with the bundle's
-# config/crd/standard/gateway.networking.k8s.io_vap_safeupgrades.yaml.
+# config/crd/standard/gateway.networking.k8s.io_vap_safeupgrades.yaml, and
+# set `k8s.minVersion` from the release's crd-validation.yml.
 
 {
   scope,
