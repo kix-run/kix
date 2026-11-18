@@ -2,4 +2,4 @@
 # default.nix (also the tag in rbac/sources.txt). It carries the CDI CRD;
 # cdi-operator installs the rest at runtime. cdi-operator drops v1alpha1 at
 # runtime; default.nix cedes `spec.versions`.
-https://github.com/kubevirt/containerized-data-importer/releases/download/v1.62.0/cdi-operator.yaml cdis.cdi.kubevirt.io
+https://github.com/kubevirt/containerized-data-importer/releases/download/v1.66.1/cdi-operator.yaml cdis.cdi.kubevirt.io
