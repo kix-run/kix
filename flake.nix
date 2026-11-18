@@ -93,6 +93,7 @@
           rabbitmq = ./clusters/test-rabbitmq.nix;
           harbor = ./clusters/test-harbor.nix;
           operators = ./clusters/test-operators.nix;
+          zfs-localpv = ./clusters/test-zfs-localpv.nix;
           sealed-jobs = ./clusters/test-sealed-jobs.nix;
           ingress-netpol = ./clusters/test-ingress-netpol.nix;
           external-dns = ./clusters/test-external-dns.nix;
