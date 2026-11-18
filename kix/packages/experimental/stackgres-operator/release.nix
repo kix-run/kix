@@ -20,7 +20,7 @@
 
 let
   inherit (import ../../../lib/core/error.nix { inherit lib; }) fail;
-  release = "1.19.2";
+  release = "1.19.5";
 
   text = builtins.readFile ./versions.properties;
   # A trailing backslash continues the value on the next line.
