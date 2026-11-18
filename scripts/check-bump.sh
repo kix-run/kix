@@ -105,7 +105,8 @@ else
   say skip "vendored CRDs and roles (the package vendors none)"
 fi
 
-run "library tests" "${nix[@]}" build .#checks.x86_64-linux.kix-lib-tests --no-link
+system=$("${nix[@]}" eval --impure --raw --expr builtins.currentSystem)
+run "library tests" "${nix[@]}" build ".#checks.$system.kix-lib-tests" --no-link
 
 # Run the snapshot tests every time. Snapshots carry hashes of whole
 # activations, so a bump changes them even when no snapshot names the

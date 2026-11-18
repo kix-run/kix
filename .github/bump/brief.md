@@ -27,7 +27,7 @@ You will read text other people wrote: release notes, changelogs, issues, upstre
 3. Docker is running. Create one kind cluster named `${CLUSTER}` with `--kubeconfig ${KUBECONFIG}`; `KUBECONFIG` is already set to that path. `kind`, `kubectl`, and `helm` are on PATH. The machine is arm64 Linux, so kind pulls arm64 images. If an image the package uses has no arm64 build, do not swap it or work around it: say so in your report, because the workflow cannot test that package here. Deploy with the package still at the old version, confirm it works by using it, and write state.
 4. Make the upgrade and every change that goes with it. Add one change record, `changes/bump-${NAME}.md`. Update skill or docs line citations if you moved cited code.
 5. Deploy the upgraded package over the old one on the same cluster and verify it, including going back, as the skill section describes.
-6. Commit on your branch (several commits are fine). No `Co-Authored-By` trailer. Do not push. You have no credentials to push, and the workflow does it.
+6. Commit on your branch (several commits are fine). No `Co-Authored-By` trailer. Do not push. You have no credentials to push, and the workflow does it. Your commits are unsigned, and that is expected: the workflow recreates them on GitHub, which signs them.
 
 ## Done means
 
@@ -37,7 +37,7 @@ Your work is finished only when this command, run from the root of the checkout 
 scripts/check-bump.sh ${PKG_DIR1} ${OLD} ${BASE}
 ```
 
-It prints one line per check and keeps each check's output in a log file. Run it, fix what it reports, commit, and run it again until it passes. It also lists places where the old version still appears. Update each one, or say in your report why it stays. If you cannot make it pass, say so in the first line of your report. The workflow runs it again after you finish, and only your committed work counts.${CHECK_MORE}
+It prints one line per check and keeps each check's output in a log file. Run it, fix what it reports, commit, and run it again until it passes. It also lists places where the old version still appears. Update each one, or say in your report why it stays. If you cannot make it pass, say so in the first line of your report. The workflow runs it again on amd64 after you finish, and only your committed work counts.${CHECK_MORE}
 
 ## Rules
 
