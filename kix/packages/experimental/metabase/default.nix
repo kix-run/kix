@@ -65,7 +65,8 @@
 # database that a newer one migrated ("Downgrade detected") and never
 # becomes ready. To go back, scale the Deployment to zero, run the newer
 # image once with the argument `migrate down` and the same database
-# variables, then deploy the older package version. Upstream recommends a
+# variables, then deploy the older package version. Metabase 0.63.19 then
+# started and kept a question created on 0.65.5. Upstream recommends a
 # backup of the application database before every upgrade, and restoring
 # it is the other way back.
 #
