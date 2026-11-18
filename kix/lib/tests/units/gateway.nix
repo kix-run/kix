@@ -292,6 +292,164 @@ in
     )
     || throw "envoy-gateway edge: ${builtins.toJSON plain}";
 
+  # In Gateway mode the instance's annotations, further hostnames, and
+  # timeouts reach the HTTPRoute, and the package's filters and extra rules
+  # do too, the extra rules first. With an Ingress the hostnames each get a
+  # rule, and a package that adds filters is refused.
+  gateway-expose-route-options =
+    let
+      redirect = {
+        matches = [
+          {
+            path = {
+              type = "Exact";
+              value = "/";
+            };
+          }
+        ];
+        filters = [
+          {
+            type = "RequestRedirect";
+            requestRedirect = {
+              hostname = "auth.example.com";
+              path = {
+                type = "ReplaceFullPath";
+                replaceFullPath = "/admin/web/console/";
+              };
+            };
+          }
+        ];
+      };
+      header = {
+        type = "ResponseHeaderModifier";
+        responseHeaderModifier.set = [
+          {
+            name = "X-Frame-Options";
+            value = "DENY";
+          }
+        ];
+      };
+      app = exposeArgs: {
+        meta.version = "test";
+        options.ingress = kixlib.options.ingress;
+        build = [
+          (builtins.head backend.build)
+          (kixlib.expose ({ service = "service"; } // exposeArgs))
+        ];
+      };
+      config.ingress = {
+        host = "web.test.local";
+        extraHosts = [ "www.test.local" ];
+        annotations."external-dns.alpha.kubernetes.io/target" = "edge.test.local";
+        timeouts.request = "0s";
+      };
+      viaGateway =
+        exposeArgs:
+        mkCluster [
+          {
+            cluster.domain = "test.local";
+            instances.gatewayapi.gateway-api.package = import ../../../packages/experimental/gateway-api;
+            instances.gwns.envoy-gateway-controller.package = import ../../../packages/experimental/envoy-gateway-controller;
+            instances.gwns.gw.package = envoyGateway;
+            instances.appns.web = {
+              package = app exposeArgs;
+              inherit config;
+            };
+          }
+        ];
+      viaIngress =
+        exposeArgs:
+        mkCluster [
+          {
+            cluster.domain = "test.local";
+            instances.ingressns.ingress-nginx.package = import ../../../packages/experimental/ingress-nginx;
+            instances.appns.web = {
+              package = app exposeArgs;
+              inherit config;
+            };
+          }
+        ];
+      route = byName "web" (
+        ofKind "HTTPRoute" (
+          manifests (viaGateway {
+            timeouts.request = "30s";
+            filters = [ header ];
+            extraRules = [ redirect ];
+          })
+        )
+      );
+      ingress = byName "web" (ofKind "Ingress" (manifests (viaIngress { })));
+    in
+    (
+      route.spec.hostnames == [
+        "web.test.local"
+        "www.test.local"
+      ]
+      && route.metadata.annotations."external-dns.alpha.kubernetes.io/target" == "edge.test.local"
+      && builtins.length route.spec.rules == 2
+      && builtins.head route.spec.rules == redirect
+      && (builtins.elemAt route.spec.rules 1).filters == [ header ]
+      # The instance's timeouts replace the package's.
+      && (builtins.elemAt route.spec.rules 1).timeouts == { request = "0s"; }
+      &&
+        map (rule: rule.host) ingress.spec.rules == [
+          "web.test.local"
+          "www.test.local"
+        ]
+      && evalFails (viaIngress {
+        filters = [ header ];
+      })
+    )
+    || throw "expose route options: ${builtins.toJSON route}";
+
+  # A listener that admits namespaces by the label every namespace carries
+  # with its own name is checked at evaluation: a route from an admitted
+  # namespace attaches with no warning, and one from another namespace
+  # fails the build. A selector on any other label is not checked.
+  gateway-expose-checks-namespace-selector =
+    let
+      listenerFor = selector: [
+        {
+          name = "http";
+          port = 80;
+          protocol = "HTTP";
+          allowedRoutes.namespaces = {
+            from = "Selector";
+            inherit selector;
+          };
+        }
+      ];
+      via =
+        selector:
+        exposedVia {
+          package = envoyGateway;
+          config.listeners = listenerFor selector;
+        } { };
+      warningsOf = cluster: map (w: w.message or w) cluster.instances.appns.web._diagnostics.warnings;
+      admitted = via { matchLabels."kubernetes.io/metadata.name" = "appns"; };
+      byExpression = via {
+        matchExpressions = [
+          {
+            key = "kubernetes.io/metadata.name";
+            operator = "In";
+            values = [
+              "other"
+              "appns"
+            ];
+          }
+        ];
+      };
+      otherLabel = via { matchLabels.tenant = "a"; };
+      selectorWarning = lib.any (lib.hasInfix "label selector");
+    in
+    (builtins.tryEval (builtins.deepSeq (manifests admitted) true)).success
+    && !(selectorWarning (warningsOf admitted))
+    && !(selectorWarning (warningsOf byExpression))
+    && selectorWarning (warningsOf otherLabel)
+    && evalFails (via {
+      matchLabels."kubernetes.io/metadata.name" = "tenant-a";
+    });
+
   # Two Gateways that both answer `gateway` are refused when a package
   # routes through the alias, so a forgotten `aliases = [ ]` cannot send a
   # private application to the public Gateway. With the alias left to one

@@ -25,9 +25,11 @@ let
   #
   # Matches HTTP and HTTPS listeners whose `hostname` is unset, exact, or a
   # matching `*.` wildcard, and whose `allowedRoutes.namespaces.from` admits
-  # the route namespace (`Same` when unset). Listeners using `Selector` cannot
-  # be verified statically and are ranked below verified listeners with a
-  # warning. Throws when no listener accepts the route.
+  # the route namespace (`Same` when unset). A `Selector` on the label
+  # `kubernetes.io/metadata.name`, which every namespace carries with its own
+  # name, is checked against the route namespace. Any other selector cannot
+  # be verified statically, so its listener is ranked below verified
+  # listeners with a warning. Throws when no listener accepts the route.
   gatewayListener =
     {
       name,
@@ -43,6 +45,29 @@ let
 
       hostnameOf = l: l.hostname or null;
       fromOf = l: l.allowedRoutes.namespaces.from or null;
+
+      # The namespaces a selector admits by name, or null when it selects
+      # by anything else.
+      nameLabel = "kubernetes.io/metadata.name";
+      namesAdmitted =
+        l:
+        let
+          selector = l.allowedRoutes.namespaces.selector or { };
+          labels = selector.matchLabels or { };
+          expressions = selector.matchExpressions or [ ];
+          byLabel = labels == { ${nameLabel} = labels.${nameLabel} or null; } && expressions == [ ];
+          byExpression =
+            labels == { }
+            && builtins.length expressions == 1
+            && (builtins.head expressions).key or null == nameLabel
+            && (builtins.head expressions).operator or null == "In";
+        in
+        if byLabel then
+          [ labels.${nameLabel} ]
+        else if byExpression then
+          (builtins.head expressions).values or [ ]
+        else
+          null;
 
       hostMatches =
         l:
@@ -69,7 +94,14 @@ let
         else if from == "All" then
           "verified"
         else if from == "Selector" then
-          "unverified"
+          if namesAdmitted l == null then
+            "unverified"
+          else if builtins.elem routeNs (namesAdmitted l) then
+            "verified"
+          else
+            "allowedRoutes.namespaces.selector admits only ${
+              lib.concatMapStringsSep ", " (n: "\"${n}\"") (namesAdmitted l)
+            }"
         else if gwRef.namespace == routeNs then
           "verified"
         else
@@ -102,7 +134,7 @@ let
         message = "kix.expose (${name}): ${gwLabel} has no HTTP or HTTPS listener that accepts host \"${host}\" from namespace \"${routeNs}\", so the HTTPRoute would not attach. Checked: ${
           if judged == [ ] then "no listeners" else checked
         }.";
-        fix = "Add a listener for this host with allowedRoutes.namespaces.from = \"All\" to the gateway instance, or set ingress.host to a name one of its listeners accepts.";
+        fix = "Add a listener for this host that admits namespace \"${routeNs}\" to the gateway instance, or set ingress.host to a name one of its listeners accepts.";
       }
     else
       {
@@ -111,7 +143,7 @@ let
         warnings = lib.optional (chosen.v == "unverified") (
           "HTTPRoute '${name}' uses ${gwLabel} listener '${chosen.l.name}', which restricts "
           + "namespaces with a label selector (`allowedRoutes.namespaces.from = \"Selector\"`). "
-          + "Kix does not check namespace selectors, so it assumes namespace '${routeNs}' matches "
+          + "Kix checks only selectors on the label `kubernetes.io/metadata.name`, so it assumes namespace '${routeNs}' matches "
           + "when computing the route's URL. Make sure namespace '${routeNs}' matches the "
           + "listener's selector, or set `allowedRoutes.namespaces.from = \"All\"` on the listener."
         );
@@ -317,6 +349,11 @@ rec {
         # `{ request = "0s"; backendRequest = "0s"; }` to disable timeouts for
         # streaming backends. Null omits the field.
         timeouts ? null,
+        # Further hostnames after `host`, filters added to the rule, and
+        # whole rules placed before it.
+        extraHosts ? [ ],
+        filters ? [ ],
+        extraRules ? [ ],
         ...
       }@cfg:
       svc:
@@ -330,6 +367,9 @@ rec {
           "pathType"
           "port"
           "timeouts"
+          "extraHosts"
+          "filters"
+          "extraRules"
         ];
       in
       {
@@ -345,8 +385,8 @@ rec {
               // lib.optionalAttrs (parentRef ? namespace) { namespace = parentRef.namespace; }
             )
           ];
-          hostnames = [ host ];
-          rules = [
+          hostnames = [ host ] ++ extraHosts;
+          rules = extraRules ++ [
             (
               {
                 matches = [
@@ -365,6 +405,7 @@ rec {
                 ];
               }
               // lib.optionalAttrs (timeouts != null) { inherit timeouts; }
+              // lib.optionalAttrs (filters != [ ]) { inherit filters; }
             )
           ];
         };
@@ -378,13 +419,17 @@ rec {
         host,
         parentRef,
         timeouts ? null,
+        extraHosts ? [ ],
+        filters ? [ ],
+        extraRules ? [ ],
+        annotations ? { },
         # List of `{ path; pathType ? "Prefix"; svc; port ? null; }`.
         paths,
       }:
       {
         apiVersion = "gateway.networking.k8s.io/v1";
         kind = "HTTPRoute";
-        inherit name;
+        inherit name annotations;
         spec = {
           parentRefs = [
             (
@@ -394,27 +439,30 @@ rec {
               // lib.optionalAttrs (parentRef ? namespace) { namespace = parentRef.namespace; }
             )
           ];
-          hostnames = [ host ];
-          rules = map (
-            p:
-            {
-              matches = [
-                {
-                  path = {
-                    type = gatewayPathType "httpRoute.fromPaths (${name})" (p.pathType or "Prefix");
-                    value = p.path;
-                  };
-                }
-              ];
-              backendRefs = [
-                {
-                  name = p.svc.out.name;
-                  port = resolveServicePort "httpRoute.fromPaths (${name})" (p.port or null) p.svc;
-                }
-              ];
-            }
-            // lib.optionalAttrs (timeouts != null) { inherit timeouts; }
-          ) paths;
+          hostnames = [ host ] ++ extraHosts;
+          rules =
+            extraRules
+            ++ map (
+              p:
+              {
+                matches = [
+                  {
+                    path = {
+                      type = gatewayPathType "httpRoute.fromPaths (${name})" (p.pathType or "Prefix");
+                      value = p.path;
+                    };
+                  }
+                ];
+                backendRefs = [
+                  {
+                    name = p.svc.out.name;
+                    port = resolveServicePort "httpRoute.fromPaths (${name})" (p.port or null) p.svc;
+                  }
+                ];
+              }
+              // lib.optionalAttrs (timeouts != null) { inherit timeouts; }
+              // lib.optionalAttrs (filters != [ ]) { inherit filters; }
+            ) paths;
         };
       };
   };
@@ -432,7 +480,14 @@ rec {
       defaultAnnotations ? { },
       port ? null,
       # Per-rule HTTPRoute timeouts in Gateway mode. Ignored in Ingress mode.
+      # The instance's `ingress.timeouts` replaces them.
       timeouts ? null,
+      # Gateway API HTTPRouteFilter entries added to every rule the route
+      # builds, and whole HTTPRouteRule entries placed before them, such as
+      # a redirect on one exact path. Both need a Gateway: with an Ingress
+      # the build fails, because an Ingress has neither.
+      filters ? [ ],
+      extraRules ? [ ],
       # When false, require an explicit `config.ingress.host` instead of
       # falling back to `<instance>.<cluster.domain>`.
       deriveHost ? true,
@@ -482,6 +537,47 @@ rec {
       tlsSecretName = "${name}-tls";
 
       configAnnotations = config.ingress.annotations or { };
+      routeAnnotations = defaultAnnotations // configAnnotations;
+      extraHosts = config.ingress.extraHosts or [ ];
+      hosts = [ effectiveHost ] ++ extraHosts;
+      instanceTimeouts = config.ingress.timeouts or null;
+      effectiveTimeouts =
+        if instanceTimeouts == null then timeouts else lib.filterAttrs (_: v: v != null) instanceTimeouts;
+
+      # Every further hostname must attach to a listener too.
+      extraHostListeners =
+        if useGateway then
+          map (
+            host:
+            gatewayListener {
+              inherit name host scope;
+              gateway = gatewayContract.require "kix.expose (${scope.namespaceName}/${name})" gateway;
+            }
+          ) extraHosts
+        else
+          [ ];
+      extraHostWarnings = lib.concatMap (l: if l == null then [ ] else l.warnings) extraHostListeners;
+
+      _ingressCheck =
+        if useIngress && (filters != [ ] || extraRules != [ ]) then
+          fail {
+            message = "kix.expose (${scope.namespaceName}/${name}): the package adds HTTPRoute ${
+              if filters != [ ] then "filters" else "rules"
+            } to its route, and this instance is routed through an Ingress, which has none.";
+            fix = "Route the instance through a Gateway: wire a gateway dependency in place of ingressNginx.";
+          }
+        else
+          null;
+
+      # The Gateway-mode additions every route builder takes.
+      routeExtras =
+        lib.optionalAttrs (effectiveTimeouts != null && effectiveTimeouts != { }) {
+          timeouts = effectiveTimeouts;
+        }
+        // lib.optionalAttrs (extraHosts != [ ]) { inherit extraHosts; }
+        // lib.optionalAttrs (filters != [ ]) { inherit filters; }
+        // lib.optionalAttrs (extraRules != [ ]) { inherit extraRules; }
+        // lib.optionalAttrs (routeAnnotations != { }) { annotations = routeAnnotations; };
 
       multiPathRules =
         let
@@ -508,12 +604,10 @@ rec {
               };
             };
         in
-        [
-          {
-            host = effectiveHost;
-            http.paths = map buildPath paths;
-          }
-        ];
+        map (host: {
+          inherit host;
+          http.paths = map buildPath paths;
+        }) hosts;
 
       # Under default-deny network policy, allow the ingress controller or
       # gateway data plane to reach each exposed backend on its target pod port.
@@ -625,6 +719,7 @@ rec {
           _warnings =
             (route._warnings or [ ])
             ++ info.warnings
+            ++ extraHostWarnings
             ++ controllerEdgeWarnings
             ++ selectorlessWarnings
             ++ acmeUnknownWarnings;
@@ -720,7 +815,7 @@ rec {
             "${partName}-netpol-acme-solver" = acmeSolverEdge;
           };
     in
-    builtins.seq _modeCheck (
+    builtins.seq _modeCheck (builtins.seq _ingressCheck) (
       controllerEdgeParts
       // lib.optionalAttrs (hasExposure && useGateway) {
         "${partName}Crd" = routeCrd;
@@ -743,7 +838,7 @@ rec {
         # reads `exposure.url`.
         ${partName} =
           if hasExposure && useGateway then
-            builtins.seq info.scheme (
+            builtins.seq info.scheme (builtins.deepSeq (map (l: l.scheme or null) extraHostListeners)) (
               if paths != null then
                 scope.mkCR routeCrd (
                   httpRoute.fromPaths (
@@ -758,7 +853,7 @@ rec {
                         port = p.port or null;
                       }) paths;
                     }
-                    // lib.optionalAttrs (timeouts != null) { inherit timeouts; }
+                    // routeExtras
                   )
                 )
               else
@@ -770,7 +865,7 @@ rec {
                     parentRef = gateway.out.gatewayRef;
                   }
                   // lib.optionalAttrs (port != null) { inherit port; }
-                  // lib.optionalAttrs (timeouts != null) { inherit timeouts; }
+                  // routeExtras
                 )
                 |> scope.mkCR routeCrd
             )
@@ -783,7 +878,7 @@ rec {
                   apiVersion = "networking.k8s.io/v1";
                   kind = "Ingress";
                   inherit name;
-                  annotations = defaultAnnotations // configAnnotations;
+                  annotations = routeAnnotations;
                   spec = {
                     ingressClassName = ingressNginx.out.ingressClassName;
                     rules = multiPathRules;
@@ -791,7 +886,7 @@ rec {
                   // lib.optionalAttrs hasTls {
                     tls = [
                       {
-                        hosts = [ effectiveHost ];
+                        inherit hosts;
                         secretName = tlsSecretName;
                       }
                     ];
@@ -805,12 +900,22 @@ rec {
                     host = effectiveHost;
                     className = ingressNginx.out.ingressClassName;
                     tls = lib.optional hasTls {
-                      hosts = [ effectiveHost ];
+                      inherit hosts;
                       secretName = tlsSecretName;
                     };
-                    annotations = defaultAnnotations // configAnnotations;
+                    annotations = routeAnnotations;
                   }
                   // lib.optionalAttrs (port != null) { inherit port; }
+                )
+                # One rule per hostname, each with the same paths.
+                |> (
+                  ing:
+                  ing
+                  // {
+                    spec = ing.spec // {
+                      rules = lib.concatMap (host: map (rule: rule // { inherit host; }) ing.spec.rules) hosts;
+                    };
+                  }
                 )
             )
             |> (if hasTls then clusterIssuer.out.withCert else lib.id)
