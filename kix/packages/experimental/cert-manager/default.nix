@@ -109,14 +109,16 @@ in
     # cluster-issuer instance and that instance on this package, and the
     # annotation-ownership rule follows that chain.
     annotationDomains = [ "cert-manager.io" ];
-    # The Kubernetes versions cert-manager v1.21 supports, from the Supported
-    # Releases page (cert-manager.io/docs/releases). The CI kind images in
-    # make/kind_images.sh cover the same versions. Move both bounds with
-    # `release`.
-    k8s = {
+    # cert-manager v1.21 states support for Kubernetes 1.33 to 1.36 on its
+    # Supported Releases page (cert-manager.io/docs/releases), and its CI kind
+    # images (make/kind_images.sh) cover the same versions. The package uses
+    # only v1 APIs, and the one CEL rule in the CRDs uses only `has`, which
+    # Kubernetes has served since before 1.33. No version is known to fail,
+    # so none is refused. Move `supported` with `release`.
+    k8s.supported = {
       minVersion = "1.33";
       maxVersion = "1.36";
-      reason = "[K3530] cert-manager ${release} supports Kubernetes 1.33 to 1.36. Deploy a Kix release with an older cert-manager package, or move the cluster to a supported Kubernetes version first";
+      source = "cert-manager's Supported Releases page";
     };
     network.intents = {
       # Issuer endpoints are runtime data in Issuer specs: ACME directories

@@ -214,14 +214,15 @@ in
     # Workloads opt in to restarts on secret change with
     # secrets.infisical.com/auto-reload.
     annotationDomains = [ "secrets.infisical.com" ];
-    # The Kubernetes minor releases upstream states support for, from the
-    # supported-versions list on its Kubernetes documentation page (1.29
-    # through 1.33). Its CI tests 1.30 through 1.33 only, which does not
-    # narrow that list.
-    k8s = {
+    # Upstream states support for Kubernetes 1.29 through 1.33 in the
+    # supported-versions list on its Kubernetes documentation page. Its CI
+    # tests 1.30 through 1.33 only, which does not narrow that list. The CRDs
+    # carry no validation rules and the manifests use only v1 APIs, so no
+    # hard range is set.
+    k8s.supported = {
       minVersion = "1.29";
       maxVersion = "1.33";
-      reason = "[K6591] infisical-operator ${release} supports Kubernetes 1.29 to 1.33. Deploy a Kix release with an older infisical-operator package, or move the cluster to a supported Kubernetes version first";
+      source = "the supported-versions list in Infisical's Kubernetes operator documentation";
     };
     # Infisical Cloud serves its API on TCP 443. meta is static, so this
     # intent cannot follow `address`; under egress enforcement the build

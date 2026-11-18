@@ -1,6 +1,5 @@
 +++
-kind = "error"
-id = "K6643"
+kind = "changed"
 packages = ["experimental/cdi"]
 +++
-`cdi` now refuses a cluster whose `k8sVersion` is outside the Kubernetes versions CDI v1.66.1 is tested on, 1.35 and 1.36. It accepted every version before. If your cluster sets an older or newer `k8sVersion`, move Kubernetes into that range first, or stay on a Kix release with an older `cdi` package. A cluster that sets no `k8sVersion` is not checked.
+`cdi` now warns when the cluster's `k8sVersion` is outside the Kubernetes versions CDI v1.66.1 is tested on, 1.35 and 1.36. The build still passes, because CDI states no supported versions and no version is known to fail. A cluster that sets no `k8sVersion` is not checked.

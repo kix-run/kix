@@ -345,40 +345,4 @@ in
         withProm = count "Service" withProm;
       }
     }";
-
-  # A cluster that declares a Kubernetes version cert-manager does not support
-  # is refused with the change record's id. The meta check is called directly,
-  # because a failed meta assertion fails the cluster before its messages can
-  # be read.
-  cert-manager-k8s-range =
-    let
-      metaLib = import ../../meta.nix { inherit lib; };
-      meta =
-        (certManagerPackage {
-          inherit lib;
-          kix = kixlib;
-          scope = {
-            instanceName = "cert-manager";
-            namespaceName = "cert-manager";
-          };
-          availability = "none";
-        }).meta;
-      refusals =
-        k8sVersion:
-        map (a: a.message) (
-          builtins.filter (a: !a.assertion) (
-            (metaLib.checkMetaStatic {
-              packageMeta = meta;
-              instanceName = "cert-manager";
-              namespaceName = "cert-manager";
-              clusterConfig = { inherit k8sVersion; };
-              resolvedDepMeta = { };
-              resolutionIndex.byKey = { };
-            }).assertions
-          )
-        );
-      refused = v: builtins.any (lib.hasInfix "[K3530]") (refusals v);
-    in
-    (refused "1.32" && refused "1.37" && refusals "1.33" == [ ] && refusals "1.36" == [ ])
-    || throw "cert-manager k8s range: refusals 1.32 ${builtins.toJSON (refusals "1.32")}, 1.33 ${builtins.toJSON (refusals "1.33")}, 1.36 ${builtins.toJSON (refusals "1.36")}, 1.37 ${builtins.toJSON (refusals "1.37")}";
 }

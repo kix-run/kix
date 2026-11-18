@@ -48,13 +48,20 @@ in
     description = "kube-state-metrics: Kubernetes object state exporter";
     owner = "platform";
     defaultAliases = [ "kubeStateMetrics" ];
-    # Upstream supports the Kubernetes version of the client-go it builds
-    # with, and only that one (README "Kubernetes Version" and the
-    # compatibility matrix in data.yaml). Move both bounds with `release`.
+    # The mutatingadmissionpolicies and mutatingadmissionpolicybindings
+    # collectors are on by default (pkg/options/resource.go upstream) and
+    # read admissionregistration.k8s.io/v1. Kubernetes serves those kinds in
+    # v1 from 1.36, and as v1beta1 before that. Upstream states support for
+    # the Kubernetes version of the client-go it builds with (README
+    # "Kubernetes Version" and data.yaml). Move `supported` with `release`.
     k8s = {
       minVersion = "1.36";
-      maxVersion = "1.36";
-      reason = "[K9973] kube-state-metrics ${release} supports Kubernetes 1.36 only. Deploy a Kix release with an older kube-state-metrics package, or move the cluster to Kubernetes 1.36 first";
+      reason = "[K9973] kube-state-metrics ${release} reads MutatingAdmissionPolicy objects through admissionregistration.k8s.io/v1, which Kubernetes serves from 1.36. Deploy a Kix release with an older kube-state-metrics package, or move the cluster to Kubernetes 1.36 first";
+      supported = {
+        minVersion = "1.36";
+        maxVersion = "1.36";
+        source = "the compatibility matrix in kube-state-metrics' README";
+      };
     };
   };
 

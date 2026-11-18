@@ -866,47 +866,6 @@ in
     )
     || throw "the kube-state-metrics flag refusal did not fire";
 
-  # A cluster that declares a Kubernetes version kube-state-metrics does not
-  # support is refused with the change record's id. The meta check is called
-  # directly, because a failed meta assertion fails the cluster before its
-  # messages can be read.
-  monitoring-stack-kube-state-metrics-k8s-range =
-    let
-      metaLib = import ../../meta.nix { inherit lib; };
-      meta =
-        (pkg "kube-state-metrics" {
-          inherit lib;
-          kix = kixlib;
-          scope = {
-            instanceName = "kube-state-metrics";
-            namespaceName = "monitoring";
-          };
-        }).meta;
-      refusals =
-        k8sVersion:
-        map (a: a.message) (
-          builtins.filter (a: !a.assertion) (
-            (metaLib.checkMetaStatic {
-              packageMeta = meta;
-              instanceName = "kube-state-metrics";
-              namespaceName = "monitoring";
-              clusterConfig = { inherit k8sVersion; };
-              resolvedDepMeta = { };
-              resolutionIndex.byKey = { };
-            }).assertions
-          )
-        );
-      refused = v: builtins.any (lib.hasInfix "[K9973]") (refusals v);
-    in
-    (
-      refused "1.35"
-      && refused "1.37.0"
-      && refusals "1.36" == [ ]
-      && refusals "1.36.4" == [ ]
-      && refusals null == [ ]
-    )
-    || throw "kube-state-metrics k8s range: 1.35 ${show (refusals "1.35")}, 1.37.0 ${show (refusals "1.37.0")}, 1.36.4 ${show (refusals "1.36.4")}";
-
   # node-exporter refuses the flags its probes, Service, and host mounts
   # read.
   monitoring-stack-node-exporter-owned-flags =

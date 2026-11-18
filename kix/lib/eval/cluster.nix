@@ -34,6 +34,8 @@
 let
   inherit (import ../core/error.nix { inherit lib; }) fail warning;
   inherit (import ../core/util.nix { inherit lib; }) plain namespaceOf;
+  versions = import ../core/version.nix { inherit lib; };
+  kubernetes = import ../core/kubernetes.nix;
 in
 {
   buildCluster =
@@ -901,7 +903,22 @@ in
       # because it shows Nix's trace output only when an evaluation fails.
       # The scorecard report carries the scorecard's own warnings.
       libraryWarnings =
-        clusterDiagnostics.warnings ++ map (warning null) (clusterHookWarnings ++ dnsWarnings);
+        clusterDiagnostics.warnings
+        ++ map (warning null) (clusterHookWarnings ++ dnsWarnings ++ windowWarnings);
+
+      # Report a `k8sVersion` outside the versions this Kix release supports.
+      # A package refuses the cluster only where its own range says so.
+      windowWarnings =
+        let
+          inherit (kubernetes) window;
+          inside =
+            versions.atLeast cfg.k8sVersion window.minVersion != false
+            && versions.atMost cfg.k8sVersion window.maxVersion != false;
+        in
+        lib.optional (cfg.k8sVersion != null && !inside) {
+          message = "cluster '${name}' targets Kubernetes ${cfg.k8sVersion}. This Kix release supports Kubernetes ${window.minVersion} to ${window.maxVersion}, and its packages are tested on those versions only.";
+          fix = "Move the cluster to Kubernetes ${window.minVersion} or ${window.maxVersion}, or use the Kix release whose packages support ${cfg.k8sVersion}.";
+        };
 
       # Report missing DNS once for the cluster, however many instances
       # lack it.

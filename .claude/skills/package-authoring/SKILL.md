@@ -686,22 +686,36 @@ prints `check-bump: PASS` and the upgrade deploy below has run.
   what you learned from its source or from testing.
 - Find the Kubernetes versions upstream supports for the target, and name
   the source. Upstream's stated support (a support matrix, a requirements
-  page, a support policy) wins. Versions upstream only tests do not widen
-  or narrow a stated range. Use tested versions (its CI or e2e matrix) only
-  when upstream states no support, and `go.mod`'s client-go version only as
-  a last resort.
+  page, a support policy) comes first. Use the versions upstream tests (its
+  CI or e2e matrix) when it states no support, and `go.mod`'s client-go
+  version only as a last resort. This is the `supported` range, which
+  warns.
+- Find what fails outside it, if anything. Evidence is an API version the
+  operand reads or the package emits that an older Kubernetes does not
+  serve, a CRD validation feature with the Kubernetes version it arrived
+  in, a startup check in the operand's source, or an upstream issue that
+  shows a break. A support table is not evidence. This is the hard range,
+  which refuses.
 
 ### The edit
 
-- Encode that range in `meta.k8s` as `minVersion` and `maxVersion`, with a
-  `reason` that names the release and the range, so Kix refuses a cluster
-  that declares a version upstream does not support. For an open range
-  ("1.25 and later") set only `minVersion`. When upstream states no range,
-  leave `meta.k8s` as it is and say so in the pull request. A range that
-  refuses a version the package accepted before needs an `error` change
-  record: put its id at the start of `reason` as `[Kxxxx]`, and add a unit
-  test in `kix/lib/tests/units/` that refuses a version on each side and
-  accepts one inside (`cilium-k8s-range` in `cilium.nix` has the shape).
+- Put upstream's range in `meta.k8s.supported` as `minVersion`,
+  `maxVersion`, and a `source` that names where upstream states it. For an
+  open range ("1.25 and later") set only `minVersion`. When upstream states
+  no range and tests none, leave `supported` out and say so in the pull
+  request.
+- Put a bound at the top level of `meta.k8s` only with the evidence above,
+  and say what fails in `reason`. A hard bound that refuses a version the
+  package accepted before needs an `error` change record: put its id at
+  the start of `reason` as `[Kxxxx]`.
+- Add a row for the package to `ranges` in
+  `kix/lib/tests/units/k8s-window.nix`, with a version it refuses, one it
+  warns on, and one it accepts.
+- A stable package must accept every Kubernetes version in the release
+  window (`kix/lib/core/kubernetes.nix`). The test
+  `k8s-window-stable-packages-cover-it` fails a bump that does not. Make
+  the package work across the window or hold the bump. Moving the window
+  is a decision about the release, so ask first.
 
 - List every image the package renders, including images an operator is
   told to deploy, and decide for each whether it moves.

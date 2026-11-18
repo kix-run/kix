@@ -1,6 +1,5 @@
 +++
-kind = "error"
-id = "K6360"
+kind = "changed"
 packages = ["experimental/openbao"]
 +++
-`openbao` now refuses a cluster whose `k8sVersion` is outside the Kubernetes versions OpenBao 2.7.2 supports, 1.35 to 1.37. It accepted every Kubernetes version before. If your cluster sets one of those versions, upgrade Kubernetes first, or stay on a Kix release with an older `openbao` package. A cluster that sets no `k8sVersion` is not checked.
+`openbao` now warns when the cluster's `k8sVersion` is outside the Kubernetes versions OpenBao 2.7.2 states support for, 1.35 to 1.37. The build still passes, because no version is known to fail. A cluster that sets no `k8sVersion` is not checked.

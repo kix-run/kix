@@ -659,34 +659,6 @@ in
     )
     || throw "singleton: ${builtins.toJSON got}";
 
-  # A cluster that declares a Kubernetes version KubeVirt does not support
-  # is refused with the change record's id.
-  kubevirt-k8s-range =
-    let
-      refusals =
-        k8sVersion:
-        map (a: a.message) (
-          builtins.filter (a: !a.assertion)
-            (metaLib.checkMetaStatic {
-              packageMeta = metaOf kubevirtPackage;
-              instanceName = "kubevirt";
-              namespaceName = "kubevirt";
-              clusterConfig = { inherit k8sVersion; };
-              resolvedDepMeta = { };
-              resolutionIndex.byKey = { };
-            }).assertions
-        );
-      refused = v: builtins.any (lib.hasInfix "[K0297]") (refusals v);
-    in
-    (
-      refused "1.33"
-      && refused "1.37.0"
-      && refusals "1.34" == [ ]
-      && refusals "1.36.4" == [ ]
-      && refusals null == [ ]
-    )
-    || throw "kubevirt k8s range: 1.33 ${builtins.toJSON (refusals "1.33")}, 1.37.0 ${builtins.toJSON (refusals "1.37.0")}, 1.36.4 ${builtins.toJSON (refusals "1.36.4")}";
-
   # The tags in crds/sources.txt and rbac/sources.txt are the package's
   # release, so the vendored CRD and roles match the default images.
   kubevirt-cdi-sources-match-release =
