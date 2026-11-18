@@ -6,6 +6,7 @@ self-hosted-runner:
     - spindle-2c-4g
     - spindle-8c-16g
     - spindle-8c-16g-100d
+    - spindle-4c-8g-50d
     - access=isolated
     - kix-linux-nix
     - kix-linux-nonix
