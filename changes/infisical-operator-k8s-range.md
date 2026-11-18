@@ -2,4 +2,4 @@
 kind = "changed"
 packages = ["experimental/infisical-operator"]
 +++
-`infisical-operator` now warns when the cluster's `k8sVersion` is outside the Kubernetes versions Infisical states support for, 1.29 to 1.33. The build still passes, because no version is known to fail. A cluster that sets no `k8sVersion` is not checked.
+`infisical-operator` now warns when `k8sVersion` is outside Kubernetes 1.29 to 1.33, the versions Infisical's operator documentation lists as supported. The build still succeeds because no version is known to fail. Clusters that leave `k8sVersion` unset are not checked.

@@ -2,4 +2,4 @@
 kind = "changed"
 packages = ["experimental/cdi"]
 +++
-`cdi` now warns when the cluster's `k8sVersion` is outside the Kubernetes versions CDI v1.66.1 is tested on, 1.35 and 1.36. The build still passes, because CDI states no supported versions and no version is known to fail. A cluster that sets no `k8sVersion` is not checked.
+`cdi` now warns when `k8sVersion` is outside Kubernetes 1.35 to 1.36, the versions CDI v1.66.1 tests in end-to-end CI. The build still succeeds: CDI publishes no Kubernetes support policy, and no version is known to fail. Clusters that leave `k8sVersion` unset are not checked.

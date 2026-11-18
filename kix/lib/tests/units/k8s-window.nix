@@ -317,7 +317,7 @@ lib.mapAttrs' (
     in
     (
       about (messagesOn "1.36") == [ ]
-      && has "upstream states support for Kubernetes 1.36 only" (messagesOn "1.37")
+      && has "the upstream project supports or tests Kubernetes 1.36 only" (messagesOn "1.37")
       && !(has "This Kix release supports" (messagesOn "1.37"))
       && has "This Kix release supports Kubernetes ${window.minVersion} to ${window.maxVersion}" (
         messagesOn "1.38"

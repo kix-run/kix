@@ -140,11 +140,11 @@ in
     # `supported` with `release`.
     k8s = {
       minVersion = "1.34";
-      reason = "[K8826] Spegel ${release} sets `trafficDistribution: PreferSameNode` on its registry Service, which Kubernetes 1.33 and older do not accept. Move the cluster to Kubernetes 1.34 or newer, or deploy a Kix release with an older spegel package first";
+      reason = "[K8826] Spegel ${release} sets `trafficDistribution: PreferSameNode` on its registry Service, which Kubernetes 1.33 and older reject. Upgrade the cluster to Kubernetes 1.34 or newer and update k8sVersion, or stay on an older version of Kix.";
       supported = {
         minVersion = "1.35";
         maxVersion = "1.37";
-        source = "Spegel's support policy (the latest three Kubernetes minors) and its integration tests";
+        source = "Spegel's support policy (the three latest Kubernetes minor versions) and integration tests";
       };
     };
     # The registry container reads the containerd socket and content store,

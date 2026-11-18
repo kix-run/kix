@@ -56,7 +56,7 @@ in
     # "Kubernetes Version" and data.yaml). Move `supported` with `release`.
     k8s = {
       minVersion = "1.36";
-      reason = "[K9973] kube-state-metrics ${release} reads MutatingAdmissionPolicy objects through admissionregistration.k8s.io/v1, which Kubernetes serves from 1.36. Deploy a Kix release with an older kube-state-metrics package, or move the cluster to Kubernetes 1.36 first";
+      reason = "[K9973] kube-state-metrics ${release} reads MutatingAdmissionPolicy resources from admissionregistration.k8s.io/v1, which Kubernetes added in 1.36. Upgrade the cluster to Kubernetes 1.36 or newer and update k8sVersion, or stay on an older version of Kix.";
       supported = {
         minVersion = "1.36";
         maxVersion = "1.36";

@@ -268,8 +268,9 @@ rec {
         warnWhenNull = false;
         describeFailure =
           _: _:
-          "upstream states support for Kubernetes ${supportedRange}, and the cluster targets ${clusterK8s}. Kix knows of no failure on ${clusterK8s}"
-          + lib.optionalString (supportedSource != null) ". Source: ${supportedSource}";
+          "the cluster sets k8sVersion to ${clusterK8s}, while the upstream project supports or tests Kubernetes ${supportedRange}. Kix knows of no failure on Kubernetes ${clusterK8s}, so the build continues."
+          + lib.optionalString (supportedSource != null) " Source: ${supportedSource}."
+          + " To stay on a supported Kubernetes version, move the cluster to one and update k8sVersion.";
       };
       supportedIsMalformed = builtins.any (
         b: k8sSupported ? ${b} && !(versions.isVersion k8sSupported.${b})

@@ -684,38 +684,42 @@ prints `check-bump: PASS` and the upgrade deploy below has run.
 - Write down what upstream says about which versions can upgrade directly
   to which, and about going back. Upstream often says nothing. Then say
   what you learned from its source or from testing.
-- Find the Kubernetes versions upstream supports for the target, and name
-  the source. Upstream's stated support (a support matrix, a requirements
-  page, a support policy) comes first. Use the versions upstream tests (its
-  CI or e2e matrix) when it states no support, and `go.mod`'s client-go
-  version only as a last resort. This is the `supported` range, which
-  warns.
-- Find what fails outside it, if anything. Evidence is an API version the
-  operand reads or the package emits that an older Kubernetes does not
-  serve, a CRD validation feature with the Kubernetes version it arrived
-  in, a startup check in the operand's source, or an upstream issue that
-  shows a break. A support table is not evidence. This is the hard range,
-  which refuses.
+- Find the Kubernetes versions the upstream project supports for the target
+  release, and note where it states them. Prefer an explicit support policy,
+  compatibility matrix, or requirements page. Fall back to the versions
+  upstream tests in CI or end-to-end runs only when it states no support
+  range, and use `go.mod`'s `client-go` version only as a last resort. This
+  range goes in `meta.k8s.supported`, which warns when `k8sVersion` falls
+  outside it.
+- Check whether anything fails outside that range. Count only concrete
+  incompatibilities: an API version the package emits or the workload reads
+  that older Kubernetes releases do not serve, a CRD validation rule added in
+  a specific Kubernetes version, a startup version check in the upstream code,
+  or a confirmed upstream failure report. Do not treat a support table alone
+  as proof that other versions fail. Confirmed failure bounds go at the top
+  level of `meta.k8s`, which fails the build.
 
 ### The edit
 
-- Put upstream's range in `meta.k8s.supported` as `minVersion`,
-  `maxVersion`, and a `source` that names where upstream states it. For an
-  open range ("1.25 and later") set only `minVersion`. When upstream states
-  no range and tests none, leave `supported` out and say so in the pull
-  request.
-- Put a bound at the top level of `meta.k8s` only with the evidence above,
-  and say what fails in `reason`. A hard bound that refuses a version the
-  package accepted before needs an `error` change record: put its id at
-  the start of `reason` as `[Kxxxx]`.
-- Add a row for the package to `ranges` in
-  `kix/lib/tests/units/k8s-window.nix`, with a version it refuses, one it
-  warns on, and one it accepts.
-- A stable package must accept every Kubernetes version in the release
-  window (`kix/lib/core/kubernetes.nix`). The test
-  `k8s-window-stable-packages-cover-it` fails a bump that does not. Make
-  the package work across the window or hold the bump. Moving the window
-  is a decision about the release, so ask first.
+- Record upstream's supported or tested versions in `meta.k8s.supported`
+  using `minVersion`, `maxVersion`, and a `source` naming the document or
+  workflow. For an open-ended range ("1.25 and later"), set only `minVersion`
+  (or only `maxVersion`). When upstream neither states nor tests a Kubernetes
+  version range, omit `supported` and note that in the pull request.
+- Set top-level `meta.k8s.minVersion` or `meta.k8s.maxVersion` only when you
+  have concrete evidence that versions outside that bound fail, and explain
+  what fails and how to fix it in `reason`. If a new bound rejects a version
+  the package previously accepted, add an `error` change record and start
+  `reason` with its ID in brackets (`[Kxxxx]`).
+- Add or update the package's entry in `ranges` in
+  `kix/lib/tests/units/k8s-window.nix`, listing versions for `accepts`,
+  `warns`, and (when top-level `meta.k8s` sets a bound) `refuses` and any
+  `[Kxxxx]` `id`.
+- Every stable package must accept all Kubernetes versions in the release
+  window (`kix/lib/core/kubernetes.nix`), enforced by the
+  `k8s-window-stable-packages-cover-it` test. If an upstream upgrade drops a
+  version in that window, keep the package working across the window or hold
+  the upgrade. Moving the release window is a release decision, so ask first.
 
 - List every image the package renders, including images an operator is
   told to deploy, and decide for each whether it moves.

@@ -2,4 +2,4 @@
 kind = "changed"
 packages = ["experimental/descheduler"]
 +++
-`descheduler` now warns when the cluster's `k8sVersion` is outside the Kubernetes versions descheduler 0.37 is tested against, 1.35 to 1.37. The build still passes, because descheduler has no hard dependency on a Kubernetes release and no version is known to fail. A cluster that sets no `k8sVersion` is not checked.
+`descheduler` now warns when `k8sVersion` is outside Kubernetes 1.35 to 1.37, the versions descheduler 0.37 is tested against. The build still succeeds: descheduler has no hard dependency on a specific Kubernetes release, and no version is known to fail. Clusters that leave `k8sVersion` unset are not checked.

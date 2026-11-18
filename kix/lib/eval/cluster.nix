@@ -916,8 +916,8 @@ in
             && versions.atMost cfg.k8sVersion window.maxVersion != false;
         in
         lib.optional (cfg.k8sVersion != null && !inside) {
-          message = "cluster '${name}' targets Kubernetes ${cfg.k8sVersion}. This Kix release supports Kubernetes ${window.minVersion} to ${window.maxVersion}, and its packages are tested on those versions only.";
-          fix = "Move the cluster to Kubernetes ${window.minVersion} or ${window.maxVersion}, or use the Kix release whose packages support ${cfg.k8sVersion}.";
+          message = "cluster '${name}' sets k8sVersion to ${cfg.k8sVersion}. This Kix release supports Kubernetes ${window.minVersion} to ${window.maxVersion}, and every stable package accepts those versions. Outside that range, a package may refuse the cluster or warn. Kix still builds the cluster and checks each package's declared version bounds.";
+          fix = "Move the cluster to Kubernetes ${window.minVersion} to ${window.maxVersion} and update k8sVersion, or use a version of Kix that supports Kubernetes ${cfg.k8sVersion}.";
         };
 
       # Report missing DNS once for the cluster, however many instances

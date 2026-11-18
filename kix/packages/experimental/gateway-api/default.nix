@@ -122,11 +122,11 @@ in
     # (.github/workflows/crd-validation.yml). Move `supported` with `release`.
     k8s = {
       minVersion = "1.32";
-      reason = "The Gateway API ${release} CRDs validate with the CEL format library, which Kubernetes provides from 1.32. Deploy a Kix release with an older gateway-api package, or move the cluster to Kubernetes 1.32 first";
+      reason = "The Gateway API ${release} CRDs use CEL validation rules from the format library added in Kubernetes 1.32, so older API servers reject them. Upgrade the cluster to Kubernetes 1.32 or newer and update k8sVersion, or stay on an older version of Kix.";
       supported = {
         minVersion = "1.33";
         maxVersion = "1.37";
-        source = "the CRD validation workflow in the Gateway API repository";
+        source = "Gateway API's CRD validation CI workflow";
       };
     };
   };

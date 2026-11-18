@@ -207,7 +207,7 @@ in
     k8s.supported = {
       minVersion = "1.31";
       maxVersion = "1.34";
-      source = "Keycloak's supported configurations page (OpenShift 4.18 to 4.21)";
+      source = "Keycloak's supported configurations page, which lists OpenShift 4.18 to 4.21 (Kubernetes 1.31 to 1.34)";
     };
   };
 
