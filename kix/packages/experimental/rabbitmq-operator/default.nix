@@ -79,6 +79,15 @@
 #
 # root = the operator Deployment; the webhook check runs after it.
 #
+# Upgrades: the 2.23.3 operator runs on the RabbitmqClusters and pods that
+# 2.23.0 left behind. Its CRD adds the /scale subresource and some schema
+# fields, and no RabbitMQ pod restarted in the kind test. Upstream states no
+# upgrade path between patch releases, so the direct step from 2.23.0 was
+# tested only on kind. Going back also works in that test: the 2.23.0
+# package applied over 2.23.3 kept the data and the clusters ready, and the
+# CRD lost the /scale subresource. To go back, deploy a Kix release whose
+# rabbitmq-operator package pins 2.23.0.
+#
 # Moving to another release: set `release` and the digest of `image`
 # (`crane digest ghcr.io/rabbitmq/cluster-operator:<release>`), move the tag
 # in crds/sources.txt and rbac/sources.txt, run
