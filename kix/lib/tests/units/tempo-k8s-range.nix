@@ -39,11 +39,6 @@ in
   # upper bound, so 1.24 is refused and 1.25, 1.37, and a cluster with no
   # version are accepted.
   tempo-k8s-range =
-    (
-      refused "1.24"
-      && refusals "1.25" == [ ]
-      && refusals "1.37" == [ ]
-      && refusals null == [ ]
-    )
+    (refused "1.24" && refusals "1.25" == [ ] && refusals "1.37" == [ ] && refusals null == [ ])
     || throw "tempo-k8s-range: 1.24 ${builtins.toJSON (refusals "1.24")}, 1.25 ${builtins.toJSON (refusals "1.25")}, 1.37 ${builtins.toJSON (refusals "1.37")}";
 }
