@@ -62,9 +62,9 @@ kix.buildCluster {
           package = packages.secret;
           aliases = [ "applicationSecrets" ];
           config.stringData = {
-            GUARDIAN_SECRET_KEY = "test-guardian-secret-key-0123456789abcdef";
-            SECRET_KEY_BASE = "test-secret-key-base-0123456789abcdef0123456789abcdef";
-            DATABASE_ENCRYPTION_KEY = "test-database-encryption-key-0123456789abcdef";
+            GUARDIAN_SECRET_KEY = "F7UV+h8tWfNUxvRi9kFGi9sl1Z0Nr54eT1LMLsMXQBusGBLShbOSwklpwqfzR95x";
+            SECRET_KEY_BASE = "LO/lLsn+KMdpxKAxIxLTkZluLLsbDSo3E2t40wiUc4tB9q53fQyEJwGssJbVY8/nG5jK3g9qzb8C4LzkIhMHNg==";
+            DATABASE_ENCRYPTION_KEY = "xLWlQWJORGLJu0EJtFTcMP7HZEDPuzwVSvyYk1ZsDio=";
           };
         };
         firezone-admin = {
