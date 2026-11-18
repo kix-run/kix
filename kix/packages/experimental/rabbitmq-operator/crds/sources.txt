@@ -1,4 +1,4 @@
 # The RabbitMQ Cluster Operator release manifest at `release` in default.nix
 # (also the tag in rbac/sources.txt). The operator installs no definitions
 # of its own, so the package applies the RabbitmqCluster definition from it.
-https://github.com/rabbitmq/cluster-operator/releases/download/v2.23.0/cluster-operator.yml
+https://github.com/rabbitmq/cluster-operator/releases/download/v2.23.3/cluster-operator.yml
