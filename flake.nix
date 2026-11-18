@@ -96,6 +96,7 @@
           operators = ./clusters/test-operators.nix;
           zfs-localpv = ./clusters/test-zfs-localpv.nix;
           arc-runner-set = ./clusters/test-arc-runner-set.nix;
+          arc = ./clusters/test-arc.nix;
           sealed-jobs = ./clusters/test-sealed-jobs.nix;
           ingress-netpol = ./clusters/test-ingress-netpol.nix;
           external-dns = ./clusters/test-external-dns.nix;
