@@ -131,8 +131,9 @@ other way (`stackgres-operator` already picks its kubectl image from
 ### 5.1 A release states its Kubernetes window
 
 Each Kix release names the Kubernetes minors it supports, as data in the
-library. A reasonable default is the minors the Kubernetes project
-maintains on the release date, three at a time. Today that is 1.34 to 1.36.
+library. Decided on 2026-11-18: the window is the two most recent minors,
+which today are 1.36 and 1.37. It may grow to three later. A new Kubernetes
+minor moves the window in a Kix minor release, with a change record.
 
 A cluster whose `k8sVersion` is outside the window gets a warning that
 names the window. Packages' hard ranges still decide refusal.
@@ -142,8 +143,8 @@ names the window. Packages' hard ranges still decide refusal.
 ```nix
 meta.k8s = {
   # Refuses. Each bound needs evidence of a failure.
-  minVersion = "1.30";
-  reason = "[K....] the validatingadmissionpolicies collector reads admissionregistration.k8s.io/v1, served from 1.30";
+  minVersion = "1.36";
+  reason = "[K....] the mutatingadmissionpolicies collector reads admissionregistration.k8s.io/v1, served from 1.36";
 
   # Warns. Upstream's statement, with its source.
   supported = { minVersion = "1.36"; maxVersion = "1.36"; };
@@ -167,8 +168,9 @@ A test fails when a stable package's hard range does not cover the release
 window. The bump that narrows a range is the one that fails, in the pull
 request that makes it, where someone can act:
 
-- make the package work across the window (kube-state-metrics leaves the
-  two MutatingAdmissionPolicy collectors out of `--resources` below 1.36),
+- make the package work across the window (with a three-minor window,
+  kube-state-metrics would leave the two MutatingAdmissionPolicy collectors
+  out of `--resources` below 1.36),
 - hold the bump, or
 - narrow the window in the same pull request, with an `error` change
   record, as a visible decision about the release.
@@ -200,12 +202,14 @@ work. No change here; this doc only confirms it.
 
 | Package | Hard range | Supported (warns outside) |
 |---|---|---|
-| `kube-state-metrics` 2.20.0 | 1.30 and later, with the two collectors conditional below 1.36 | 1.36 |
+| `kube-state-metrics` 2.20.0 | 1.36 and later, because two default collectors read an API that 1.35 does not serve | 1.36 |
 | `keycloak` 26.8.2 | none known | 1.31 to 1.34 |
 | `external-secrets` | to be established from its API use | 1.37 |
 | `stackgres-operator` | upstream's range, since doc 155 shows it is a real break | same |
 
 A cluster on 1.36 with monitoring and Keycloak builds, with one warning.
+On 1.37 it builds with two, because kube-state-metrics 2.20.0 states
+support for 1.36 only.
 
 ## 7. Alternatives considered
 
@@ -233,9 +237,8 @@ A cluster on 1.36 with monitoring and Keycloak builds, with one warning.
 
 ## 9. Open questions
 
-1. **The window's size and source.** The minors Kubernetes maintains (three),
-   or wider to include what managed providers still run under extended
-   support?
+1. **When the window moves.** At the first Kix minor release after a new
+   Kubernetes minor, or only once kind and the managed providers offer it?
 2. **How warnings outside `supported` are shown.** One summary line in
    `kix check` with detail on request, or one line for each package?
 3. **Does `supported` gate anything by default**, or only through the
