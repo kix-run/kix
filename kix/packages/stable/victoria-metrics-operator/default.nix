@@ -75,14 +75,8 @@ in
     # One operator watches every namespace, so consumers in any namespace
     # find it by name.
     scope = "cluster";
-    # Upstream's FAQ supports Kubernetes 1.25 and later and names no upper
-    # bound. The release is built against client-go 0.37 and its tests run
-    # against Kubernetes 1.37, so the range stops there.
-    k8s = {
-      minVersion = "1.25";
-      maxVersion = "1.37";
-      reason = "[K1442] VictoriaMetrics operator ${release} supports Kubernetes 1.25 and later and is tested up to 1.37. Deploy a Kix release with an older victoria-metrics-operator package, or move the cluster to a supported Kubernetes version first";
-    };
+    # Upstream's FAQ supports Kubernetes 1.25 and later, with no upper bound.
+    k8s.minVersion = "1.25";
     # This package owns the operator.victoriametrics.com annotation domain
     # (it stamps its CRDs with it); declared for the
     # architecture.annotationDomainOwnership lint.
