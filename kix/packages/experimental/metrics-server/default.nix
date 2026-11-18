@@ -53,6 +53,12 @@
 # (`kubectl top` and HorizontalPodAutoscalers report missing metrics), and
 # no rule catches that.
 #
+# Upgrades: metrics-server keeps no state, and its RBAC, Service, and
+# APIService are the same in 0.9.0 and 0.9.1, so 0.9.1 runs on what 0.9.0
+# left behind. Upstream documents no upgrade or downgrade path. Going back
+# means deploying an older package, such as 0.9.0, over this one. The pods
+# restart.
+#
 # Escape hatches: `extraArgs` (the secure port, certificate directory, bind
 # address, and kubelet port flags are refused), `env`, and `partsOverlays`.
 #
