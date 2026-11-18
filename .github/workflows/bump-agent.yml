@@ -340,5 +340,11 @@ jobs:
             echo
             echo "🤖 Generated with [Claude Code](https://claude.com/claude-code)"
           } > "$RUNNER_TEMP/body.md"
-          gh pr create --base main --head "$BRANCH" \
-            --title "Update $PACKAGE to $TARGET" --body-file "$RUNNER_TEMP/body.md"
+          # Spindle's image has curl and jq but no gh.
+          jq -n --arg title "Update $PACKAGE to $TARGET" --arg head "$BRANCH" \
+            --rawfile body "$RUNNER_TEMP/body.md" \
+            '{title: $title, head: $head, base: "main", body: $body}' \
+            | curl -sS --fail-with-body -X POST -H "Authorization: Bearer $GH_TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/pulls" --data-binary @- \
+            | jq -r '"Opened \(.html_url)"'
