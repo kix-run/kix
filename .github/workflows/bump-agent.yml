@@ -1,0 +1,319 @@
+name: Bump agent
+
+# Update the version one package pins, with an AI agent doing the package
+# change, and open a pull request when the change passes the checks.
+#
+# The jobs are split by what each one must be trusted with:
+#
+#   agent    runs Claude Code on text from upstream (release notes, source),
+#            which can carry instructions aimed at the agent. It holds no
+#            secret and cannot push. It reaches the Claude API through
+#            workload identity federation, which accepts only runs on main.
+#   verify   applies the agent's commits and runs the checks. It runs code
+#            the agent wrote, so it holds no secret either.
+#   publish  holds the GitHub App key. It runs nothing from the agent's
+#            commits: it checks which files they touch, pushes them, and
+#            opens the pull request. The app has no permission to change
+#            workflow files.
+#
+# The agent and verify jobs run on isolated Spindle VMs, which have no
+# Google identity and no shared cache to reach.
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: Name used in the branch, report, and change record, such as reloader
+        required: true
+      dirs:
+        description: Package folders, separated by spaces, such as kix/packages/experimental/reloader
+        required: true
+      pinned:
+        description: Version the package pins now, such as 1.4.22
+        required: true
+      target:
+        description: Version to move to, such as 1.4.24
+        required: true
+      tag:
+        description: Upstream release tag of the target, such as v1.4.24
+        required: true
+      git:
+        description: Upstream git repository URL
+        required: true
+      model:
+        description: Model the agent runs
+        type: choice
+        options: [haiku, sonnet, opus]
+        default: sonnet
+      extra:
+        description: Extra instruction for the agent (optional)
+        required: false
+        default: ''
+      minutes:
+        description: Time limit for the agent, in minutes
+        required: false
+        default: '60'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bump-agent-${{ inputs.package }}
+  cancel-in-progress: false
+
+env:
+  PACKAGE: ${{ inputs.package }}
+  DIRS: ${{ inputs.dirs }}
+  PINNED: ${{ inputs.pinned }}
+  TARGET: ${{ inputs.target }}
+  TAG: ${{ inputs.tag }}
+  GIT_URL: ${{ inputs.git }}
+  MODEL: ${{ inputs.model }}
+  EXTRA: ${{ inputs.extra }}
+  MINUTES: ${{ inputs.minutes }}
+  BRANCH: bump/${{ inputs.package }}-${{ inputs.target }}
+
+jobs:
+  agent:
+    runs-on: [self-hosted, spindle-8c-16g-100d, access=isolated]
+    timeout-minutes: 150
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      base: ${{ steps.base.outputs.sha }}
+    env:
+      ANTHROPIC_FEDERATION_RULE_ID: fdrl_012Fr9FtgpmcQ7UAF2EqNAHE
+      ANTHROPIC_ORGANIZATION_ID: 084c7f85-8473-42ae-a166-c8f6dfcd5570
+      ANTHROPIC_SERVICE_ACCOUNT_ID: svac_012BzeTv2wUtTweaAMpJPq8e
+      ANTHROPIC_WORKSPACE_ID: wrkspc_01KQt9F2CcKaetf64vS2fP2S
+      NIX_CONFIG: |
+        extra-experimental-features = nix-command flakes pipe-operators
+        accept-flake-config = true
+    steps:
+      - name: Check the inputs
+        run: |
+          fail() { echo "::error::$1"; exit 1; }
+          [[ "$PACKAGE" =~ ^[a-z0-9][a-z0-9.-]*$ ]] || fail "package '$PACKAGE' is not a lowercase name"
+          for v in "$PINNED" "$TARGET" "$TAG"; do
+            [[ "$v" =~ ^[A-Za-z0-9][A-Za-z0-9._+@-]*$ ]] || fail "'$v' is not a version or tag"
+          done
+          [[ "$GIT_URL" =~ ^https://[A-Za-z0-9.-]+/[A-Za-z0-9._/-]+$ ]] || fail "'$GIT_URL' is not an https git URL"
+          [[ "$MINUTES" =~ ^[0-9]+$ && "$MINUTES" -ge 10 && "$MINUTES" -le 120 ]] || fail "minutes must be 10 to 120"
+          for d in $DIRS; do
+            [[ "$d" =~ ^kix/packages/(stable|experimental)/[a-z0-9-]+$ ]] || fail "'$d' is not a package folder"
+          done
+
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Prepare the branch
+        id: base
+        run: |
+          for d in $DIRS; do [ -d "$d" ] || { echo "::error::$d does not exist on main"; exit 1; }; done
+          git config user.name "kix-bump agent"
+          git config user.email "kix-bump@users.noreply.github.com"
+          git switch -c "$BRANCH"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Start Docker
+        run: sudo systemctl start docker.service && docker info --format '{{.ServerVersion}}'
+
+      - name: Install Claude Code
+        # The VM runs NixOS, where npm's prebuilt Claude Code binary does not
+        # run, so take the nixpkgs build. It is unfree, hence the variable.
+        env:
+          NIXPKGS_ALLOW_UNFREE: '1'
+        run: |
+          out=$(nix build --impure --no-link --print-out-paths github:NixOS/nixpkgs/nixpkgs-unstable#claude-code)
+          echo "$out/bin" >> "$GITHUB_PATH"
+          "$out/bin/claude" --version
+
+      - name: Write the brief
+        env:
+          BASE: ${{ steps.base.outputs.sha }}
+        run: |
+          read -ra dirs <<<"$DIRS"
+          export PKG_DIR1="${dirs[0]}" OLD="$PINNED" NAME="$PACKAGE"
+          # The backticks and the brief's placeholders are literal text.
+          # shellcheck disable=SC2016
+          PKG_DIRS=$(printf '`%s` ' "${dirs[@]}")
+          export CLUSTER="bump-$PACKAGE" KUBECONFIG="$RUNNER_TEMP/kubeconfig" REPORT="$RUNNER_TEMP/report.md"
+          CHECK_MORE=""
+          for d in "${dirs[@]:1}"; do
+            CHECK_MORE+=$'\n\nRun it for each other package folder too, and make each pass: `scripts/check-bump.sh '"$d $PINNED $BASE"'`'
+          done
+          [ -n "$EXTRA" ] || EXTRA="No extra instructions for this package."
+          export PKG_DIRS CHECK_MORE EXTRA
+          brief=$(<.github/bump/brief.md)
+          for v in PKG_DIRS PKG_DIR1 OLD TARGET TAG GIT_URL EXTRA BRANCH BASE CLUSTER KUBECONFIG REPORT NAME MINUTES CHECK_MORE; do
+            brief=${brief//"\${$v}"/${!v}}
+          done
+          printf '%s\n' "$brief" > "$RUNNER_TEMP/brief.md"
+          # shellcheck disable=SC2016
+          if grep -n '\${[A-Z_0-9]*}' "$RUNNER_TEMP/brief.md"; then
+            echo "::error::the brief has a placeholder with no value"; exit 1
+          fi
+          echo "KUBECONFIG=$KUBECONFIG" >> "$GITHUB_ENV"
+
+      - name: Run the agent
+        run: |
+          # Each GitHub identity token lasts about five minutes. Claude Code
+          # rereads this file whenever it exchanges it for a new Claude API
+          # token, so keep a fresh one in it for the whole run.
+          export ANTHROPIC_IDENTITY_TOKEN_FILE="$RUNNER_TEMP/gha-jwt"
+          fetch() {
+            curl -sSf -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://api.anthropic.com" \
+              | jq -r .value > "$ANTHROPIC_IDENTITY_TOKEN_FILE.new" \
+              && mv "$ANTHROPIC_IDENTITY_TOKEN_FILE.new" "$ANTHROPIC_IDENTITY_TOKEN_FILE"
+          }
+          fetch
+          ( while sleep 120; do fetch || true; done ) &
+          refresher=$!
+          set +e
+          timeout --kill-after=60 "${MINUTES}m" \
+            claude -p --model "$MODEL" --dangerously-skip-permissions \
+              --output-format stream-json --verbose \
+              < "$RUNNER_TEMP/brief.md" > "$RUNNER_TEMP/transcript.jsonl"
+          status=$?
+          kill "$refresher"
+          echo "Claude Code exited with $status"
+          tail -n1 "$RUNNER_TEMP/transcript.jsonl" | jq -r '"cost: $\(.total_cost_usd // "unknown"), turns: \(.num_turns // "unknown")"' || true
+
+      - name: Collect the commits and the report
+        if: always() && steps.base.outputs.sha
+        env:
+          BASE: ${{ steps.base.outputs.sha }}
+        run: |
+          out="$RUNNER_TEMP/out"
+          mkdir -p "$out"
+          git format-patch -q "$BASE..HEAD" -o "$out/patches"
+          echo "$(git rev-list --count "$BASE..HEAD") commit(s)"
+          cp "$RUNNER_TEMP/brief.md" "$out/"
+          [ -f "$RUNNER_TEMP/transcript.jsonl" ] && cp "$RUNNER_TEMP/transcript.jsonl" "$out/"
+          if [ -f "$RUNNER_TEMP/report.md" ]; then
+            cp "$RUNNER_TEMP/report.md" "$out/report.md"
+          else
+            echo "The agent wrote no report." > "$out/report.md"
+          fi
+          tail -n1 "$RUNNER_TEMP/transcript.jsonl" 2>/dev/null \
+            | jq '{cost: .total_cost_usd, turns: .num_turns, result: .subtype}' > "$out/usage.json" || echo '{}' > "$out/usage.json"
+          cat "$out/report.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: bump-agent
+          path: ${{ runner.temp }}/out
+          retention-days: 14
+
+  verify:
+    needs: agent
+    runs-on: [self-hosted, spindle-8c-16g-100d, access=isolated]
+    timeout-minutes: 60
+    env:
+      BASE: ${{ needs.agent.outputs.base }}
+      NIX_CONFIG: |
+        extra-experimental-features = nix-command flakes pipe-operators
+        accept-flake-config = true
+    steps:
+      - name: Checkout the base commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ needs.agent.outputs.base }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: bump-agent
+          path: ${{ runner.temp }}/in
+
+      - name: Apply the agent's commits
+        run: |
+          cp .github/bump/check-paths.sh "$RUNNER_TEMP/check-paths.sh"
+          shopt -s nullglob
+          patches=("$RUNNER_TEMP"/in/patches/*.patch)
+          [ "${#patches[@]}" -gt 0 ] || { echo "::error::the agent made no commits"; exit 1; }
+          git config user.name "kix-bump agent"
+          git config user.email "kix-bump@users.noreply.github.com"
+          git switch -c "$BRANCH"
+          git am --keep-cr "${patches[@]}"
+
+      - name: Check which files changed
+        run: |
+          read -ra dirs <<<"$DIRS"
+          "$RUNNER_TEMP/check-paths.sh" "$BASE" "${dirs[@]}"
+
+      - name: Check the bump is complete
+        run: |
+          fail=0
+          read -ra dirs <<<"$DIRS"
+          for d in "${dirs[@]}"; do
+            scripts/check-bump.sh "$d" "$PINNED" "$BASE" || fail=1
+          done
+          exit "$fail"
+
+  publish:
+    needs: [agent, verify]
+    runs-on: [self-hosted, spindle-2c-4g, access=isolated]
+    timeout-minutes: 15
+    env:
+      BASE: ${{ needs.agent.outputs.base }}
+    steps:
+      - name: Get a token for the bump app
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.BUMP_APP_ID }}
+          private-key: ${{ secrets.BUMP_APP_PRIVATE_KEY }}
+
+      - name: Checkout the base commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ needs.agent.outputs.base }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: bump-agent
+          path: ${{ runner.temp }}/in
+
+      - name: Apply the agent's commits and check which files changed
+        run: |
+          cp .github/bump/check-paths.sh "$RUNNER_TEMP/check-paths.sh"
+          git config user.name "kix-bump agent"
+          git config user.email "kix-bump@users.noreply.github.com"
+          git switch -c "$BRANCH"
+          git am --keep-cr "$RUNNER_TEMP"/in/patches/*.patch
+          read -ra dirs <<<"$DIRS"
+          "$RUNNER_TEMP/check-paths.sh" "$BASE" "${dirs[@]}"
+
+      - name: Push the branch and open the pull request
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$BRANCH"
+          cost=$(jq -r '.cost // "unknown"' "$RUNNER_TEMP/in/usage.json")
+          # The report is agent-written text. Break each @ so that no name in
+          # it notifies anyone on GitHub.
+          report=$(sed 's/@/@\xe2\x80\x8b/g' "$RUNNER_TEMP/in/report.md" | head -c 50000)
+          {
+            echo "Updates \`$PACKAGE\` from \`$PINNED\` to \`$TARGET\` (upstream tag \`$TAG\`)."
+            echo
+            echo "An agent ($MODEL, \$$cost) wrote this change in [this workflow run]($RUN_URL). The workflow ran \`scripts/check-bump.sh\` on it again and it passed, and every changed file is in a place a version bump may touch. Review it like any other pull request."
+            echo
+            echo "## The agent's report"
+            echo
+            echo "$report"
+            echo
+            echo "🤖 Generated with [Claude Code](https://claude.com/claude-code)"
+          } > "$RUNNER_TEMP/body.md"
+          gh pr create --base main --head "$BRANCH" \
+            --title "Update $PACKAGE to $TARGET" --body-file "$RUNNER_TEMP/body.md"
