@@ -6,19 +6,20 @@ description: "Install the Gateway API CRDs, the Envoy Gateway controller, and a 
 import Command from '/src/components/Command.astro';
 import Snippet from '/src/components/Snippet.astro';
 import gatewayApiInstance from '/src/snippets/how-to/platform/gateway-cluster/gatewayApiInstance.json';
+import gatewayControllerInstance from '/src/snippets/how-to/platform/gateway-cluster/gatewayControllerInstance.json';
 import gatewayInstance from '/src/snippets/how-to/platform/gateway-cluster/gatewayInstance.json';
 import gatewayResources from '/src/command-output/how-to/package-envoy-gateway/gateway-resources.json';
 
-Install Envoy Gateway with two experimental Kix packages: `gateway-api`
-installs the Kubernetes Gateway API CRDs, and `envoy-gateway` installs the
-Envoy Gateway controller, its own CRDs, a `GatewayClass`, and a `Gateway`
-for application routes. Once running, the controller deploys Envoy proxy
-pods for the Gateway.
+Install Envoy Gateway with three experimental Kix packages. `gateway-api`
+installs the Kubernetes Gateway API CRDs. `envoy-gateway-controller` installs
+the Envoy Gateway controller, its own CRDs, and a `GatewayClass`.
+`envoy-gateway` adds a `Gateway` for application routes. Once running, the
+controller deploys Envoy proxy pods for each Gateway.
 
 Check the
 [Envoy Gateway compatibility matrix](https://gateway.envoyproxy.io/docs/install/version-compatibility/)
 to confirm your cluster's Kubernetes version is supported by the Envoy
-Gateway release in `envoy-gateway`.
+Gateway release in `envoy-gateway-controller`.
 
 ## Add the Gateway API CRDs
 
@@ -28,7 +29,7 @@ Add a `gateway-api` instance to your cluster definition:
 
 This instance claims the `gatewayApi` role so the cluster installs only one
 set of Gateway API CRDs. Every Gateway API controller in the cluster, such as
-`envoy-gateway` or `traefik`, shares them.
+`envoy-gateway-controller` or `traefik`, shares them.
 
 If your Kubernetes provider already installs compatible Gateway API CRDs, do
 not add `gateway-api`. Instead, set
@@ -37,8 +38,8 @@ not add `gateway-api`. Instead, set
 set `roles = [ "gatewayApi" ]`, set `out.version` to the installed Gateway API
 version, and add a `crds` entry for each kind your controller uses:
 
-- `envoy-gateway` requires Gateway API 1.6 or later and the `GatewayClass`,
-  `Gateway`, `HTTPRoute`, and `ReferenceGrant` CRDs.
+- `envoy-gateway-controller` requires Gateway API 1.6 or later and the
+  `GatewayClass`, `Gateway`, `HTTPRoute`, and `ReferenceGrant` CRDs.
 - `traefik` requires Gateway API 1.6.1 or later and those four CRDs, plus
   `GRPCRoute`, `TLSRoute`, and `BackendTLSPolicy`.
 
@@ -76,14 +77,30 @@ instances.gateway-system.platform-gateway-api.package = kix.mkImport {
 If the import is missing a required CRD, a readiness condition, or a supported
 `out.version`, evaluation fails and names what to fix.
 
-## Add Envoy Gateway
+## Add the controller
 
-Add an `envoy-gateway` instance with the listeners your applications need:
+Add an `envoy-gateway-controller` instance:
+
+<Snippet {...gatewayControllerInstance} />
+
+Kix allows one `envoy-gateway-controller` instance per cluster. Both the
+controller and the Envoy proxy pods it creates run in this instance's
+namespace.
+
+## Add a Gateway
+
+Add an `envoy-gateway` instance, in the controller's namespace, with the
+listeners your applications need:
 
 <Snippet {...gatewayInstance} />
 
-Kix allows one `envoy-gateway` instance per cluster. Both the controller and
-the Envoy proxy pods it creates run in this instance's namespace.
+Each `envoy-gateway` instance is one `Gateway` with its own Envoy proxies and
+Service, so a cluster can run several, such as a public Gateway and a private
+one. Every instance answers the `gateway` alias that `kix.expose` routes
+through. When you add a second Gateway, give it another alias, such as
+`aliases = [ "privateGateway" ];`, and set
+`deps.gateway = ref.<namespace>.<instance>;` on each application that should
+use it.
 
 `listeners` takes Gateway API `Listener` fields with their upstream names
 (`name`, `port`, `protocol`, `hostname`, `tls`, `allowedRoutes`); a
@@ -98,8 +115,8 @@ By default, the Envoy proxies get a `LoadBalancer` Service. On clusters
 without a load balancer (`cluster.roles.loadBalancer.binding = "absent"`,
 which `kix.flavors.kind` sets), the package switches to a `NodePort` Service
 so the Gateway can still become ready. Use `config.proxySpec` (an Envoy
-Gateway `EnvoyProxy` `spec`) to customize the proxy Service, replica count,
-or pod settings.
+Gateway `EnvoyProxy` `spec`) to customize this Gateway's proxy Service,
+replica count, or pod settings.
 
 When `networkPolicy.enable = true`, the package allows incoming traffic to
 the proxy pods on the listener ports, and `kix.expose` allows the proxy pods
@@ -132,7 +149,7 @@ logs:
 
 <Command
   commands={[
-    "kubectl describe gatewayclass gateway",
+    "kubectl describe gatewayclass envoy-gateway-controller",
     "kubectl describe gateway gateway -n gateway-system",
     "kubectl logs -n gateway-system deployment/envoy-gateway --since=10m",
   ]}
@@ -140,9 +157,8 @@ logs:
 
 ## Migrate from a Helm installation
 
-Earlier versions of `envoy-gateway` created only the `GatewayClass` and
-`Gateway` and expected you to install the controller with Envoy Gateway's
-Helm chart. Because two controllers must not reconcile the same
+Earlier versions of `envoy-gateway` created the `GatewayClass` and `Gateway`
+and expected you to install the controller with Envoy Gateway's Helm chart. Because two controllers must not reconcile the same
 `GatewayClass`, uninstall the Helm release before deploying the upgraded
 package. The commands below assume the Helm release is named `eg` in the
 `envoy-gateway-system` namespace, matching Envoy Gateway's install guide.
@@ -183,6 +199,9 @@ the topology injector webhook. Delete them:
 Next, update your cluster definition:
 
 - Add the `gateway-api` instance shown in [Add the Gateway API CRDs](#add-the-gateway-api-crds).
+- Add the `envoy-gateway-controller` instance shown in
+  [Add the controller](#add-the-controller), in the namespace of the
+  `envoy-gateway` instance.
 - Remove `controllerName`, `proxyNamespace`, `gatewayClassName`, and
   `gatewayName` from the `envoy-gateway` instance. Setting any of them now
   fails evaluation.
@@ -200,8 +219,8 @@ with a server-side apply conflict. Run `kix deploy` once with
 
 Subsequent deploys do not need `--force-conflicts`.
 
-Envoy Gateway starts proxy pods in the `envoy-gateway` instance's namespace.
-If your `envoy-gateway` instance is not in the namespace Helm used (such as
+Envoy Gateway starts proxy pods in the `envoy-gateway-controller` instance's
+namespace. If that is not the namespace Helm used (such as
 `envoy-gateway-system`), the controller creates a new proxy `Deployment` and
 `Service` in the instance's namespace while the old ones keep running.
 
