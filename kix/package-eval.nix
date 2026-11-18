@@ -251,8 +251,13 @@ let
       config.clusterIP = "10.96.0.53";
       instances.prometheus-operator.package = packages.prometheus-operator;
     };
+    # A Gateway needs the Gateway API CRDs and the controller that serves it.
+    envoy-gateway.instances = {
+      gateway-api.package = packages.gateway-api;
+      envoy-gateway-controller.package = packages.envoy-gateway-controller;
+    };
     # A Gateway API implementation needs the Gateway API CRDs.
-    envoy-gateway.instances.gateway-api.package = packages.gateway-api;
+    envoy-gateway-controller.instances.gateway-api.package = packages.gateway-api;
     external-dns = {
       config = {
         provider = "cloudflare";

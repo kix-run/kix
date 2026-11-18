@@ -104,8 +104,10 @@ let
       extra
       {
         cluster.domain = "test.local";
-        # envoy-gateway and traefik need the Gateway API CRDs.
+        # envoy-gateway and traefik need the Gateway API CRDs, and
+        # envoy-gateway its controller.
         instances.gatewayapi.gateway-api.package = import ../../../packages/experimental/gateway-api;
+        instances.gwns.envoy-gateway-controller.package = import ../../../packages/experimental/envoy-gateway-controller;
         instances.gwns.gw = gateway;
         instances.appns.web.package = backend;
       }
@@ -258,7 +260,6 @@ in
 
   # envoy-gateway publishes the labels Envoy Gateway puts on the proxy pods
   # of its Gateway, in its own namespace, so the backend admits the proxies.
-  # A merged GatewayClass selects by class.
   gateway-envoy-opens-backend =
     let
       edgeWith =
@@ -275,9 +276,6 @@ in
         );
       rule = edge: builtins.head edge.spec.ingress;
       plain = rule (edgeWith { });
-      merged = rule (edgeWith {
-        proxySpec.mergeGateways = true;
-      });
     in
     (
       plain.callerNamespace == "gwns"
@@ -290,8 +288,6 @@ in
           "gateway.envoyproxy.io/owning-gateway-namespace" = "gwns";
         }
       && (builtins.head plain.ports).port == 8080
-      && merged.callerSelector."gateway.envoyproxy.io/owning-gatewayclass" == "gw"
-      && !(merged.callerSelector ? "gateway.envoyproxy.io/owning-gateway-name")
     )
     || throw "envoy-gateway edge: ${builtins.toJSON plain}";
 
