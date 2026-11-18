@@ -279,7 +279,7 @@ the defaults fails there.
   are new, so a new consumer finding gaps in them is expected.
 - Test a contract change three ways: `every-package-evaluates` (every provider
   and consumer re-evaluates); the contract's swap check (`clickhouse-swap`,
-  `postgres-swap`, `gateway-swap`; `flake.nix:199, 235, 278`, fixtures under
+  `postgres-swap`, `gateway-swap`; `flake.nix:240, 275, 317`, fixtures under
   `clusters/test-*-swap/`); a lib unit test when a vocab file changed. A new
   consumer that reads fields which differ between implementations gets a swap
   fixture (`clusters/test-clickhouse-swap/consumer.nix`).
@@ -498,7 +498,9 @@ Mandatory:
    deploy commands in the header (`clusters/test-clickhouse.nix:13-21`,
    `clusters/test-keycloak.nix:1-15`). A dependency from an unmerged change
    is a `kix.mkImport` stand-in; note the merge order.
-4. `flake.nix`: add the cluster to `clusters`.
+4. Nothing in `flake.nix`: `clusters/test-<pkg>.nix` registers itself under
+   the key `<pkg>`. A cluster kept in a directory, such as
+   `clusters/test-<pkg>/kind.nix`, needs a line under `clusters` there.
 5. `kix/lib/tests/units/<pkg>.nix`: names `<topic>-<what>`, helpers as in
    `kix/lib/tests/units/keycloak.nix:8-19`. Each `evalFails` has a positive
    control (T2). Two instances in two namespaces (Na2, Na10) and each

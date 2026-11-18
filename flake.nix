@@ -34,111 +34,53 @@
         # The key is also the cluster's name unless the definition passes
         # `name` to `buildCluster`. clusters/README.md says what each group
         # is for.
-        clusters = {
-          # Examples: start with example-hello.
-          example-hello = ./clusters/example-hello.nix;
-          example = ./clusters/example.nix;
-          example-import = ./clusters/example-import.nix;
-          example-multi-env-dev = ./clusters/example-multi-env/dev.nix;
-          example-multi-env-prod = ./clusters/example-multi-env/prod.nix;
+        #
+        # Each file clusters/test-<key>.nix is registered under <key> with no
+        # line here, so adding a test cluster never edits this file. The set
+        # below lists the clusters that live anywhere else.
+        clusters =
+          lib.mapAttrs'
+            (
+              file: _:
+              lib.nameValuePair (lib.removeSuffix ".nix" (lib.removePrefix "test-" file)) (
+                ./clusters + "/${file}"
+              )
+            )
+            (
+              lib.filterAttrs (
+                file: type: type == "regular" && lib.hasPrefix "test-" file && lib.hasSuffix ".nix" file
+              ) (builtins.readDir ./clusters)
+            )
+          // {
+            # Examples: start with example-hello.
+            example-hello = ./clusters/example-hello.nix;
+            example = ./clusters/example.nix;
+            example-import = ./clusters/example-import.nix;
+            example-multi-env-dev = ./clusters/example-multi-env/dev.nix;
+            example-multi-env-prod = ./clusters/example-multi-env/prod.nix;
 
-          # The smoke test: the full homelab service set on kind, and the same
-          # cluster moved to Gateway API for scripts/kix-rollback-check.sh.
-          homelab-kind = ./clusters/homelab/cluster-kind.nix;
-          homelab-kind-gateway-migrate = ./clusters/homelab/cluster-kind-gateway-migrate.nix;
+            # The smoke test: the full homelab service set on kind, and the same
+            # cluster moved to Gateway API for scripts/kix-rollback-check.sh.
+            homelab-kind = ./clusters/homelab/cluster-kind.nix;
+            homelab-kind-gateway-migrate = ./clusters/homelab/cluster-kind-gateway-migrate.nix;
 
-          # Library features: dependency resolution, composition, pins, bundles.
-          minimal = ./clusters/test-minimal.nix;
-          cert-manager = ./clusters/test-cert-manager.nix;
-          infisical-operator = ./clusters/test-infisical-operator.nix;
-          full = ./clusters/test-full.nix;
-          helm = ./clusters/test-helm.nix;
-          auto = ./clusters/test-auto.nix;
-          auto2 = ./clusters/test-auto2.nix;
-          fragments = ./clusters/test-fragments.nix;
-          multi-env = ./clusters/test-multi-env.nix;
-          pins = ./clusters/test-pins.nix;
-          secrets = ./clusters/test-secrets.nix;
-          bundle-alias = ./clusters/test-bundle-alias.nix;
-          consumers-platform = ./clusters/test-consumers/platform.nix;
-          consumers-acme = ./clusters/test-consumers/acme.nix;
-          doc-how-tos = ./clusters/test-doc-how-tos.nix;
-          spread = ./clusters/test-spread.nix;
-          rke2-cilium = ./clusters/test-rke2-cilium.nix;
+            # Library features: two consumers of one platform.
+            consumers-platform = ./clusters/test-consumers/platform.nix;
+            consumers-acme = ./clusters/test-consumers/acme.nix;
 
-          # The CLI's kind integration tests deploy kind, then kind-v2 or kind-port
-          # over it. All three share the cluster name "kind".
-          kind = ./clusters/test-kind.nix;
-          kind-v2 = ./clusters/test-kind-v2.nix;
-          kind-port = ./clusters/test-kind-port.nix;
-          kind-probe = ./clusters/test-kind-probe.nix;
+            # Swap fixtures: two builds of one cluster that move a consumer from one
+            # provider package to another. Each pair shares a cluster name.
+            clickhouse-swap-bare = ./clusters/test-clickhouse-swap/bare.nix;
+            clickhouse-swap-replicated = ./clusters/test-clickhouse-swap/replicated.nix;
+            postgres-swap-stackgres = ./clusters/test-postgres-swap/stackgres.nix;
+            postgres-swap-cnpg = ./clusters/test-postgres-swap/cnpg.nix;
+            gateway-swap-envoy = ./clusters/test-gateway-swap/envoy.nix;
+            gateway-swap-traefik = ./clusters/test-gateway-swap/traefik.nix;
 
-          # Swap fixtures: two builds of one cluster that move a consumer from one
-          # provider package to another. Each pair shares a cluster name.
-          clickhouse-swap-bare = ./clusters/test-clickhouse-swap/bare.nix;
-          clickhouse-swap-replicated = ./clusters/test-clickhouse-swap/replicated.nix;
-          postgres-swap-stackgres = ./clusters/test-postgres-swap/stackgres.nix;
-          postgres-swap-cnpg = ./clusters/test-postgres-swap/cnpg.nix;
-          gateway-swap-envoy = ./clusters/test-gateway-swap/envoy.nix;
-          gateway-swap-traefik = ./clusters/test-gateway-swap/traefik.nix;
-
-          # One package, or a small group, each on kind unless its file says
-          # otherwise.
-          immich = ./clusters/test-immich.nix;
-          immich-upgrade = ./clusters/test-immich-upgrade.nix;
-          n8n = ./clusters/test-n8n.nix;
-          valkey = ./clusters/test-valkey.nix;
-          clickhouse = ./clusters/test-clickhouse.nix;
-          clickhouse-operator = ./clusters/test-clickhouse-operator.nix;
-          clickhouse-operator-upgrade = ./clusters/test-clickhouse-operator-upgrade.nix;
-          log-agents = ./clusters/test-log-agents.nix;
-          cnpg = ./clusters/test-cnpg.nix;
-          rabbitmq = ./clusters/test-rabbitmq.nix;
-          harbor = ./clusters/test-harbor.nix;
-          operators = ./clusters/test-operators.nix;
-          zfs-localpv = ./clusters/test-zfs-localpv.nix;
-          arc = ./clusters/test-arc.nix;
-          sealed-jobs = ./clusters/test-sealed-jobs.nix;
-          ingress-netpol = ./clusters/test-ingress-netpol.nix;
-          external-dns = ./clusters/test-external-dns.nix;
-          external-dns-tryout = ./clusters/test-external-dns-tryout.nix;
-          external-dns-upgrade = ./clusters/test-external-dns-upgrade.nix;
-          external-secrets = ./clusters/test-external-secrets.nix;
-          openbao = ./clusters/test-openbao.nix;
-          velero = ./clusters/test-velero.nix;
-          reloader = ./clusters/test-reloader/kind.nix;
-          tailscale = ./clusters/test-tailscale/cluster.nix;
-          mayastor = ./clusters/test-mayastor.nix;
-          virtualization = ./clusters/test-virtualization.nix;
-          metabase = ./clusters/test-metabase.nix;
-          stackgres-operator = ./clusters/test-stackgres-operator.nix;
-          plausible = ./clusters/test-plausible.nix;
-          plausible-replicated = ./clusters/test-plausible-replicated.nix;
-          metrics-server = ./clusters/test-metrics-server.nix;
-          coredns = ./clusters/test-coredns.nix;
-          spegel = ./clusters/test-spegel.nix;
-          volsync = ./clusters/test-volsync.nix;
-          keycloak = ./clusters/test-keycloak.nix;
-          keycloak-oidc = ./clusters/test-keycloak-oidc.nix;
-          otel-collector = ./clusters/test-otel-collector.nix;
-          falco = ./clusters/test-falco.nix;
-          traefik = ./clusters/test-traefik.nix;
-          envoy-gateway = ./clusters/test-envoy-gateway.nix;
-          filebrowser = ./clusters/test-filebrowser.nix;
-          vaultwarden = ./clusters/test-vaultwarden.nix;
-          caddy = ./clusters/test-caddy.nix;
-          cloudflared = ./clusters/test-cloudflared.nix;
-          smartctl-exporter = ./clusters/test-smartctl-exporter.nix;
-          tempo = ./clusters/test-tempo.nix;
-          tempo-generator = ./clusters/test-tempo-generator.nix;
-          monitoring-native = ./clusters/test-monitoring-native.nix;
-          monitoring-loki = ./clusters/test-monitoring-loki.nix;
-          grafana-upgrade = ./clusters/test-grafana-upgrade.nix;
-          monitoring-netpol = ./clusters/test-monitoring-netpol.nix;
-          prometheus-operator = ./clusters/test-prometheus-operator.nix;
-          victoria-metrics = ./clusters/test-victoria-metrics.nix;
-          victoria-metrics-crd-ref = ./clusters/test-victoria-metrics-crd-ref.nix;
-        };
+            # Package tests kept in a directory with their fixtures.
+            reloader = ./clusters/test-reloader/kind.nix;
+            tailscale = ./clusters/test-tailscale/cluster.nix;
+          };
 
         # region:pinFile
         # A cluster function that takes a `pins` argument gets this file
