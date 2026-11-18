@@ -83,6 +83,21 @@
 # `restic.moverSecurityContext`, and the rest of the restic spec), and the
 # instance's `partsOverlays`.
 #
+# Rsync over SSH: from VolSync 0.17 the rsync mover (`spec.rsync`) runs
+# only in a namespace with the annotation
+# `volsync.backube/privileged-movers: "true"`, set through the cluster's
+# `namespaces.<name>.annotations`. Without it the resource reports
+# "rsync-ssh mover requires privileged mode" and never syncs. rsync-tls
+# needs no annotation.
+#
+# Upgrades: 0.17 reads the restic repositories and the custom resources
+# 0.16 wrote. The first sync after the upgrade continues from the last
+# 0.16 snapshot. To go back, deploy a Kix release whose volsync package
+# pins 0.16. The 0.16 CRDs drop the fields 0.17 added (moverTolerations,
+# restic.enableSparseRestore, restic.exclude, and the restic.retain
+# within* keys), and the 0.16 restic mover keeps writing to the
+# repositories 0.17 wrote.
+#
 # Limits: mkReplicationSource writes restic to S3 only. Movers run in the
 # image's user unless `restic.moverSecurityContext` sets the application's.
 #
@@ -114,7 +129,7 @@
 let
   # meta.version and image.tag read this; crds/sources.txt and
   # rbac/sources.txt name the tag v<release>.
-  release = "0.16.0";
+  release = "0.17.0";
 
   name = scope.instanceName;
   ns = scope.namespaceName;
@@ -177,9 +192,13 @@ in
     defaultAliases = [ "volsync" ];
     # One instance per cluster; see the header.
     conflictsWith = [ "cluster:volsync" ];
-    # The mover policies select pods by the batch.kubernetes.io/job-name
-    # label, which the Job controller sets from 1.27.
-    k8s.minVersion = "1.27";
+    # Upstream's chart states 1.20 and later. The mover policies select
+    # pods by the batch.kubernetes.io/job-name label, which the Job
+    # controller sets from 1.27, so Kix asks for 1.27.
+    k8s = {
+      minVersion = "1.27";
+      reason = "VolSync ${release} supports Kubernetes 1.20 or later, and Kix's mover network policies need the batch.kubernetes.io/job-name label that Kubernetes 1.27 adds";
+    };
   };
 
   assertions =
@@ -198,7 +217,7 @@ in
     image = kix.options.image {
       repository = "quay.io/backube/volsync";
       tag = release;
-      digest = "sha256:0d03a6aad57569eba2c0eaa0848cf4a908d9744b372ff2224bb291a320f36d76";
+      digest = "sha256:bbc884d4fa108534260025bf1255a1010ebb6bb8dac9ba4f4a77f437ca7f8fbd";
       description = "Image of the operator and of every mover it starts. Its major.minor must match the vendored CRDs and ClusterRole.";
     };
 
