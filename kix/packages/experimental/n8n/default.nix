@@ -110,11 +110,14 @@
 # through `partsOverlays` so that it mounts a file of your own at that path
 # in the `task-runners` container.
 #
-# Upgrades: the main instance runs n8n's database migrations when it
-# starts, before it listens. The Recreate strategy
-# stops the old main pod first, so the old and new versions never run
-# migrations side by side. Upstream documents no way back to an older
-# version.
+# Upgrades: n8n migrates its database when a pod starts, and every pod
+# takes a lock in the database first, so only one pod migrates. The
+# Recreate strategy stops the old main pod before the new one starts.
+# Upstream documents no way back to an older version. n8n 2.41.5 started
+# on a database that 2.48.5 had migrated and read its workflows,
+# credentials, and executions, so going back from 2.48.5 is deploying the
+# previous package. For a larger step back, restore a database backup
+# taken before the upgrade.
 
 {
   scope,
