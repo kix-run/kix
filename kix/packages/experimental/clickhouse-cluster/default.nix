@@ -33,10 +33,11 @@
 # version, and use no new feature until then either. That includes
 # lightweight UPDATE: 26.8 writes its patch parts in a format a 26.3
 # replica cannot read. Upstream's advice for a rolling upgrade is to set
-# patch_parts_version to v1 until every replica runs 26.8. Going back to
-# 26.3 is blocked by clickhouse-keeper, whose 26.8 snapshots 26.3 cannot
-# read (see its header). Keep clickhouse-keeper on the same LTS line as the
-# servers. On amd64 nodes, 26.6 and later need a CPU with AVX2.
+# patch_parts_version to v1 until every replica runs 26.8. Going back
+# works the same way, by deploying the older package version, and only
+# while no feature of the newer version has been used. Going back to 26.3
+# can need a manual step for clickhouse-keeper (see its header). Keep
+# clickhouse-keeper on the same LTS line as the servers. On amd64 nodes, 26.6 and later need a CPU with AVX2.
 #
 # Object storage is not modelled. A serverConfig that adds an S3 disk, and
 # especially one that turns on allow_remote_fs_zero_copy_replication (off

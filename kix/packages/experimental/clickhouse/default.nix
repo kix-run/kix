@@ -30,12 +30,16 @@
 # Upgrades: stay on an LTS line (the March and August releases).
 # ClickHouse supports moving between two versions released less than a
 # year apart, which covers one LTS to the next, and reads the data files
-# the older one wrote. Going back from 26.8 to 26.3 does not work. The
-# embedded Keeper of 26.8 writes a snapshot as soon as it starts, in
-# snapshot format 8, and 26.3 refuses to start on it. Keeper's coordination
-# setting write_snapshot_version = 6 makes 26.8 write a format 26.3 reads.
-# 26.8 also writes lightweight UPDATE patch parts in a format 26.3 cannot
-# read. On amd64 nodes, 26.6 and later need a CPU with AVX2.
+# the older one wrote. The embedded Keeper of 26.3 cannot read snapshot
+# format 8, the default of 26.8, so this package keeps 26.8 on format 6
+# (see write_snapshot_version below). To go back, deploy the older package
+# version over the same volume. If the server then fails with
+# "Unsupported snapshot version 8", the 26.8 server reloaded the older
+# config before it stopped. Move the newest file out of
+# /var/lib/clickhouse/coordination/snapshots and delete the pod. Going
+# back works only while no feature of 26.8 has been used, and 26.8 writes
+# lightweight UPDATE patch parts in a format 26.3 cannot read. On amd64
+# nodes, 26.6 and later need a CPU with AVX2.
 #
 # Dependencies:
 #   storage (required)      a persistent-volume-claim instance, mounted at

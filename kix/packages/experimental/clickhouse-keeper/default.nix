@@ -57,10 +57,16 @@
 # changes the CHK's settings, so the operator restarts each replica once.
 # A new image restarts each replica once too, one at a time, and the
 # quorum holds while each one restarts. Keeper reads the raft log and
-# snapshots the previous LTS line wrote. Going back does not work: Keeper
-# 26.8 writes a snapshot as soon as it starts, in snapshot format 8, and
-# Keeper 26.3 refuses to start on it. Keeper's coordination setting
-# write_snapshot_version = 6 makes 26.8 write a format 26.3 reads. Move
+# snapshots the previous LTS line wrote. Keeper 26.3 cannot read
+# snapshot format 8, the default of 26.8, so this package keeps 26.8 on
+# format 6 (see write_snapshot_version below). Going back to 26.3 needs a
+# manual step. The operator writes the older settings into the replicas'
+# shared config before it restarts them, and a 26.8 replica still running
+# reloads them and writes its next snapshot in format 8. Keeper 26.3 then
+# refuses to start on that replica with "Unsupported snapshot version 8".
+# Move that replica's newest snapshot out of
+# /var/lib/clickhouse-keeper/coordination/snapshots and delete the pod.
+# Keeper then loads the older format 6 snapshot and replays its log. Move
 # Keeper and clickhouse-cluster to a new LTS line together.
 #
 # `out`:
