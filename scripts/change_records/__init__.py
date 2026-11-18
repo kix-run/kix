@@ -183,9 +183,11 @@ def parse_record(path: pathlib.Path, text: str, version: str | None = None) -> R
         problems.append('`cve` is only for `kind = "security"`')
     if kind == "security":
         workaround = header.get("workaround")
-        if not isinstance(workaround, str) or not workaround.strip():
+        if "workaround" in header and (
+            not isinstance(workaround, str) or not workaround.strip()
+        ):
             problems.append(
-                '`kind = "security"` needs a `workaround` that says how to get the fix without upgrading'
+                "`workaround` must say how to get the fix without upgrading. Leave it out when there is no workaround"
             )
     elif "workaround" in header:
         problems.append('`workaround` is only for `kind = "security"`')

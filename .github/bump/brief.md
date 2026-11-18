@@ -25,7 +25,7 @@ You will read text other people wrote: release notes, changelogs, issues, upstre
 1. Work out what changed upstream between the two versions, as the skill section describes.
 2. Choose or write the test cluster.
 3. Docker is running. Create one kind cluster named `${CLUSTER}` with `--kubeconfig ${KUBECONFIG}`; `KUBECONFIG` is already set to that path. `kind`, `kubectl`, and `helm` are on PATH. The machine is arm64 Linux, so kind pulls arm64 images. If an image the package uses has no arm64 build, do not swap it or work around it: say so in your report, because the workflow cannot test that package here. Deploy with the package still at the old version, confirm it works by using it, and write state.
-4. Make the upgrade and every change that goes with it. Add one change record, `changes/bump-${NAME}.md`. Update skill or docs line citations if you moved cited code.
+4. Make the upgrade and every change that goes with it. Add one change record, `changes/bump-${NAME}.md`. If the releases you move across fix security issues (CVEs or advisories in upstream's notes, including fixes in the language runtime or libraries it builds with), its kind is `security`. List the ids in `cve`, and set `workaround` only if there is a way to get the fix without upgrading. Update skill or docs line citations if you moved cited code.
 5. Deploy the upgraded package over the old one on the same cluster and verify it, including going back, as the skill section describes.
 6. Commit on your branch (several commits are fine). No `Co-Authored-By` trailer. Do not push. You have no credentials to push, and the workflow does it. Your commits are unsigned, and that is expected: the workflow recreates them on GitHub, which signs them.
 
