@@ -36,13 +36,15 @@
 # `sgConfig` keeps its old value there; set it explicitly instead.
 #
 # Upgrades: upstream allows an upgrade to a release at most two minor
-# versions newer than the installed one (its Helm upgrade page), so the
-# move from 1.19.2 to 1.19.5 is one deploy. The operator reinstalls the
-# CRDs and webhook entries when it starts, and it applies the webhook
-# operations of 1.19.5, which drop DELETE from them. Upstream says nothing
-# about going back to an older release. Each SGCluster reports
-# PendingUpgrade until a securityUpgrade SGDbOps runs, because only that
-# rewrites its resources with the new cluster-controller image.
+# versions newer than the installed one (its Helm upgrade page), so 1.19.2
+# to 1.19.5 is one deploy. The operator reinstalls its CRDs and webhook
+# entries when it starts. It updates the StatefulSet of each SGCluster at
+# once, but it does not restart the Pods: each SGCluster reports
+# PendingRestart until a restart or a securityUpgrade SGDbOps moves its Pods
+# to the new images. Upstream says nothing about going back to an older
+# release. Deploying 1.19.2 over 1.19.5 works: the older operator reads the
+# cluster state and the data the newer one wrote, and the Pods keep the
+# newer images until they restart.
 #
 # Minimal instance:
 #
