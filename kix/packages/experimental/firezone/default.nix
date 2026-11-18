@@ -4,6 +4,14 @@
 # Firezone Legacy and stopped updating on 31 January 2024. Firezone 1.x is
 # a different product that upstream does not support self-hosting.
 #
+# Upgrades: 0.7.36 is the last 0.7 release, and it moves only the image.
+# Upstream adds no database migration between 0.7.26 and 0.7.36, so a
+# 0.7.36 instance works with the database 0.7.26 wrote. Going back to
+# 0.7.26 also works: deploy the older package on the same database, and
+# the pod starts and serves its sign-in page. Each start logs that it
+# created the WireGuard interface, but no VPN client connected. Upstream
+# states no Kubernetes version range for 0.7, so the package declares none.
+#
 # Based on BeanVPN/firezone-helm-chart. Every credential is a secret
 # dependency, so the package renders no Secret of its own and the site
 # chooses where each value comes from (a SOPS file, a secrets operator, or
@@ -79,7 +87,7 @@
 }:
 
 let
-  release = "0.7.26";
+  release = "0.7.36";
   name = scope.instanceName;
   who = "firezone ${scope.namespaceName}/${name}";
 in
@@ -114,7 +122,7 @@ in
     image = kix.options.image {
       repository = "docker.io/firezone/firezone";
       tag = release;
-      digest = "sha256:e8faaf176a2ca77d2da1ce6812ef3b5e7d5195672a762ad78b5d6afea98219af";
+      digest = "sha256:6e65ebab1ddbdc8dfe8c6aa10defda1ea9b2b48e0f2b54772338f3e735be8a6f";
     };
     init.image = kix.options.image {
       repository = "docker.io/library/busybox";
