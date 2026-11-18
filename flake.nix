@@ -85,6 +85,7 @@
           # One package, or a small group, each on kind unless its file says
           # otherwise.
           immich = ./clusters/test-immich.nix;
+          immich-upgrade = ./clusters/test-immich-upgrade.nix;
           n8n = ./clusters/test-n8n.nix;
           valkey = ./clusters/test-valkey.nix;
           clickhouse = ./clusters/test-clickhouse.nix;

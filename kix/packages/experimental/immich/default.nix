@@ -95,6 +95,15 @@
 # every rollout stops it briefly. A database or valkey password, an OIDC
 # client secret, or a mail login from a secret-ref has no content hash, so
 # rotating it restarts the server only with reloader.
+#
+# Upgrades: the server migrates its database when it starts, and the
+# Recreate rollout stops the old pod first, so two releases never write the
+# database at once. Immich keeps breaking changes to major releases, and
+# it refuses to go back: a server older than the database's newest
+# migration stops at start with "Migration ... was already applied to this database
+# but is not in this version of Immich", and Immich's docs say downgrading
+# is not supported, even within a minor release. To go back, restore a
+# database backup taken before the upgrade and deploy the older release.
 
 {
   scope,
