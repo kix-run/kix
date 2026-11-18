@@ -258,7 +258,7 @@ in
             public.package = envoyGateway;
             private = {
               package = envoyGateway;
-              aliases = [ "privateGateway" ];
+              aliases = [ ];
               config.proxySpec.provider.kubernetes.envoyService.type = "ClusterIP";
             };
           };

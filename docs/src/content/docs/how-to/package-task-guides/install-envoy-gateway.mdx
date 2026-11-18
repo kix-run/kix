@@ -10,11 +10,13 @@ import gatewayControllerInstance from '/src/snippets/how-to/platform/gateway-clu
 import gatewayInstance from '/src/snippets/how-to/platform/gateway-cluster/gatewayInstance.json';
 import gatewayResources from '/src/command-output/how-to/package-envoy-gateway/gateway-resources.json';
 
-Install Envoy Gateway with three experimental Kix packages. `gateway-api`
-installs the Kubernetes Gateway API CRDs. `envoy-gateway-controller` installs
-the Envoy Gateway controller, Envoy Gateway's CRDs, and a `GatewayClass`.
-`envoy-gateway` creates a `Gateway` for application routes, and the controller
-deploys Envoy proxy pods for each `Gateway`.
+Install Envoy Gateway with three experimental Kix packages:
+
+- `gateway-api` installs the Kubernetes Gateway API CRDs.
+- `envoy-gateway-controller` installs the Envoy Gateway controller, its CRDs,
+  and a `GatewayClass`.
+- `envoy-gateway` creates a `Gateway` for application routes. Once running, the
+  controller deploys Envoy proxy pods for each `Gateway`.
 
 Check the
 [Envoy Gateway compatibility matrix](https://gateway.envoyproxy.io/docs/install/version-compatibility/)
@@ -96,12 +98,11 @@ listeners your applications need:
 
 Each `envoy-gateway` instance creates one `Gateway` with its own Envoy proxies
 and `Service`, so a cluster can run several Gateways (such as a public Gateway
-and a private one). By default, `envoy-gateway` uses the `gateway` alias that
-`kix.expose` routes applications to. If you add a second `envoy-gateway`
-instance, override its `aliases` (for example, `aliases = [ "privateGateway" ];`)
-so only one instance keeps the default `gateway` alias, and set
-`deps.gateway = ref.<namespace>.<instance>;` on each application that should
-use the second Gateway.
+and a private one). By default, `envoy-gateway` claims the `gateway` alias that
+`kix.expose` routes applications through. To add a second `envoy-gateway`
+instance, set `aliases = [ ];` on it so only one instance keeps the default
+`gateway` alias, then set `deps.gateway = ref.<namespace>.<instance>;` on each
+application that should route through the second Gateway.
 
 `listeners` takes Gateway API `Listener` fields with their upstream names
 (`name`, `port`, `protocol`, `hostname`, `tls`, `allowedRoutes`); a
@@ -220,8 +221,7 @@ with a server-side apply conflict. Run `kix deploy` once with
 Subsequent deploys do not need `--force-conflicts`.
 
 Envoy Gateway starts proxy pods in the `envoy-gateway-controller` instance's
-namespace. If your `envoy-gateway-controller` instance uses a different
-namespace than Helm did (such as
+namespace. If that instance is not in the namespace Helm used (such as
 `envoy-gateway-system`), the controller creates a new proxy `Deployment` and
 `Service` in the instance's namespace while the old ones keep running.
 
