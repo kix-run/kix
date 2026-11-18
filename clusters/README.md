@@ -2,8 +2,9 @@
 
 This directory holds the repository's example and test cluster definitions.
 Each definition configures a cluster's namespaces, package instances, and
-platform settings. [`flake.nix`](../flake.nix) maps each cluster key under
-`clusters` to its `.nix` file. Pass that key to `kix check`, `kix build`, and
+platform settings. Each file `test-<key>.nix` is the cluster `<key>`.
+[`flake.nix`](../flake.nix) maps the other keys under `clusters` to their
+`.nix` files. Pass that key to `kix check`, `kix build`, and
 `kix deploy`.
 
 ## Read these first
@@ -40,7 +41,7 @@ Two scripts inspect or validate built manifests:
 Files and directories starting with `test-` define test clusters (except
 `test-secrets/`, which holds encrypted test data). Each cluster file opens with
 a comment explaining what it tests and how to build or deploy it.
-[`flake.nix`](../flake.nix) groups them into four categories:
+They fall into four categories:
 
 - **Library features**: dependency resolution, fragments, image pins, secrets,
   bundles, and multi-environment composition.
@@ -70,12 +71,13 @@ Supporting files in this directory:
 1. Create the `.nix` file under `clusters/`. Start it with a header comment
    stating what the cluster tests or demonstrates, followed by its `kix build`
    and `kix deploy` commands.
-2. Add the file under `clusters` in [`flake.nix`](../flake.nix).
+2. Name the file `test-<key>.nix` and it registers itself under `<key>`. A
+   file anywhere else, such as in a directory with fixtures, needs a line
+   under `clusters` in [`flake.nix`](../flake.nix).
 3. Stage the file with `git add`. Nix ignores untracked files in a git
    checkout.
 4. Run `nix run .#kix -- check <key>`.
 
 On pull requests that change `clusters/` or `flake.nix`, the `Bundle checks`
 workflow runs `every_test_cluster_bundles`
-(`cli/kix-cli/tests/commands_test.rs`) to build and bundle every cluster in
-`flake.nix`.
+(`cli/kix-cli/tests/commands_test.rs`) to build and bundle every cluster.

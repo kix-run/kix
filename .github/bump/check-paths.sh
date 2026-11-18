@@ -18,6 +18,7 @@ shift
 
 allowed=(
   'changes/*'
+  'clusters/test-*'
   'kix/lib/tests/*'
   'cli/kix-cli/tests/snapshots/*'
   'docs/src/content/docs/*'
