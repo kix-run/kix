@@ -9,7 +9,7 @@
 rec {
   # The upstream release: meta.version, the default image.tag, and the CRD
   # tag in crds/sources.txt (kix-lib test external-secrets-sources-match-release).
-  release = "v2.11.0";
+  release = "v2.15.0";
 
   name = scope.instanceName;
   ns = scope.namespaceName;
@@ -134,7 +134,7 @@ rec {
   partOf = kind: pluralOf (lib.findFirst (s: kindOf s == kind) null crdSpecs);
   crdOf = self: kind: self.crds.${partOf kind};
 
-  # "v2.11.0" -> [ "2" "11" ".0" ]; null when the tag is not a version.
+  # "v2.15.0" -> [ "2" "15" ".0" ]; null when the tag is not a version.
   versionParts = tag: builtins.match "v?([0-9]+)\\.([0-9]+)(\\..*)?" tag;
   releaseMinor = lib.take 2 (versionParts release);
   releaseMinorText = lib.concatStringsSep "." releaseMinor;
