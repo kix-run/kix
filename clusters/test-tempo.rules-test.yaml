@@ -430,7 +430,7 @@ tests:
             exp_annotations:
               summary: "Tempo's backend jobs keep failing."
               description: "Tempo tracing/tempo's compaction jobs have failed more than twice in the last hour and are still failing. Failed compaction slows queries; failed retention lets the volume fill. Check the pod's log for the backend worker's errors."
-              runbook_url: "https://github.com/grafana/tempo/blob/v3.1.0/operations/tempo-mixin/runbook.md#tempobackendschedulerjobsfailureratehigh"
+              runbook_url: "https://github.com/grafana/tempo/blob/v3.1.1/operations/tempo-mixin/runbook.md#tempobackendschedulerjobsfailureratehigh"
       - eval_time: 30m
         alertname: TempoRetentionFailing
         exp_alerts:
@@ -451,7 +451,7 @@ tests:
             exp_annotations:
               summary: Tempo fails to list its blocks.
               description: "Tempo tracing/tempo has failed to poll its block list more than twice in the last hour and is still failing, so new blocks are not queryable and compaction works from a stale list. Check the volume and the pod's log."
-              runbook_url: "https://github.com/grafana/tempo/blob/v3.1.0/operations/tempo-mixin/runbook.md#tempopollsfailing"
+              runbook_url: "https://github.com/grafana/tempo/blob/v3.1.1/operations/tempo-mixin/runbook.md#tempopollsfailing"
   # Two failures in an hour stay under the threshold of more than two.
   - interval: 1m
     input_series:
@@ -480,7 +480,7 @@ tests:
             exp_annotations:
               summary: "Tempo's compaction is falling behind."
               description: "Tempo tracing/tempo has had 150 blocks waiting for compaction for 6 hours. Queries read more blocks and slow down. Raise resources.limits.cpu, or check TempoBackendJobsFailing."
-              runbook_url: "https://github.com/grafana/tempo/blob/v3.1.0/operations/tempo-mixin/runbook.md#tempocompactiontoomanyoutstandingblocks"
+              runbook_url: "https://github.com/grafana/tempo/blob/v3.1.1/operations/tempo-mixin/runbook.md#tempocompactiontoomanyoutstandingblocks"
   # 20% of searches fail.
   - interval: 1m
     input_series:
