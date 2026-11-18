@@ -14,6 +14,12 @@
 # every ServiceMonitor / PodMonitor) in the cluster is scraped, matching
 # the prometheus package's posture.
 #
+# Upgrades: vmagent keeps its remote-write queue in an emptyDir, so the pod
+# of a new version starts with an empty queue and reads nothing the old
+# version wrote. Samples still queued when the old pod stops are lost.
+# To go back, deploy the previous Kix release. The operator then restarts
+# vmagent with the older image.
+#
 # Dependencies:
 #   vmOperator (required)   provides the VMAgent CRD + mkVMAgent
 #   vmCluster (required)    out.remoteWriteUrl (remote-write target),
@@ -52,7 +58,7 @@
   availability,
 }:
 let
-  release = "v1.150.0";
+  release = "v1.156.0";
   name = scope.instanceName;
 
   inherit (import ../victoria-metrics-operator/cr-image.nix { inherit lib kix; }) crImage;
@@ -89,7 +95,7 @@ in
     image = kix.options.image {
       repository = "docker.io/victoriametrics/vmagent";
       tag = release;
-      digest = "sha256:3eff5874d59292714878dcb6aee14f048bf19b7312b727860ba5e7d29e2e0c07";
+      digest = "sha256:d3229ab469c54ae5266e86246932266bad29b06668b5371acbd6d3de1b3035e7";
       pullPolicy = null;
     };
     replicaCount = lib.mkOption {

@@ -1,0 +1,5 @@
++++
+kind = "silent"
+packages = ["victoria-metrics-agent", "victoria-metrics-alert", "victoria-metrics-cluster"]
++++
+`victoria-metrics-agent`, `victoria-metrics-alert`, and `victoria-metrics-cluster` now run VictoriaMetrics 1.156.0, up from 1.150.0. The release fixes security issues listed in VictoriaMetrics 1.151.0 to 1.155.0, among them a way around the `-httpAuth.*` login on some request paths. One change can give a different result with no error. A request to vmselect's `/admin/tenants` without `start` and `end` now returns only the tenants that wrote data today, where it returned every tenant before. To list every tenant, set `start` and `end` to cover the whole retention period. `vmctl` sends this request when it copies data between two VictoriaMetrics installations, so pass it both `--vm-native-filter-time-start` and `--vm-native-filter-time-end`. The first deploy restarts each VictoriaMetrics pod once and keeps the stored data. Samples that vmagent has queued but not yet sent when its pod restarts are lost. To go back, deploy the previous Kix release: VictoriaMetrics 1.150.0 reads the data that 1.156.0 wrote.

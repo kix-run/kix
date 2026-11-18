@@ -17,6 +17,13 @@
 # fallback is 1ms: enough for replication twins, useless for HA-pair
 # duplicates, which land with distinct timestamps.)
 #
+# Upgrades: VictoriaMetrics says a move to a newer release is safe, also
+# across several releases, and so is a move back, unless the release notes
+# say otherwise. From 1.150 to 1.156 they say neither. vmstorage keeps the
+# data 1.150 wrote, and 1.150 reads the data 1.156 wrote. To go back, deploy
+# the previous Kix release. The operator then restarts each component with
+# the older image.
+#
 # Dependencies:
 #   vmOperator (required)        provides the VMCluster CRD + mkVMCluster
 #   storageClasses (optional)    supplies vmstorage's storageClassName when
@@ -73,7 +80,7 @@
   availability,
 }:
 let
-  release = "v1.150.0";
+  release = "v1.156.0";
   name = scope.instanceName;
   inherit (import ../victoria-metrics-operator/operand-placement.nix { inherit lib kix; })
     operandPlacement

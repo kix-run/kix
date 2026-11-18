@@ -18,6 +18,11 @@
 # package writes the network policy for it (`operandPolicies`), as
 # victoria-metrics-cluster does for the traffic between its components.
 #
+# Upgrades: vmalert keeps no data of its own. It restores alert state from
+# the store through remoteRead after a restart. To go back, deploy the
+# previous Kix release. The operator then restarts vmalert with the older
+# image. The Alertmanager image does not follow the VictoriaMetrics release.
+#
 # Dependencies:
 #   vmOperator (required)   VMAlert/VMAlertmanager CRDs + builders
 #   vmCluster (required)    out.serviceUrl (datasource + remoteRead),
@@ -74,7 +79,7 @@
   availability,
 }:
 let
-  release = "v1.150.0";
+  release = "v1.156.0";
   name = scope.instanceName;
   ns = scope.namespaceName;
   who = "victoria-metrics-alert ${ns}/${name}";
@@ -110,7 +115,7 @@ in
     image = kix.options.image {
       repository = "docker.io/victoriametrics/vmalert";
       tag = release;
-      digest = "sha256:c6e6c1ef6e43c09510dd0aff264bf0ea319c1bdfced1ccc79dad1545950a7989";
+      digest = "sha256:4fea7d1a888d4db4ff18804434ef0f3ca8eb6482e289c50d32001c2db218287c";
       pullPolicy = null;
     };
     replicaCount = lib.mkOption {
