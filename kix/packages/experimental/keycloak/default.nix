@@ -93,6 +93,19 @@
 # which kind of change a deploy carries, so a deploy makes Keycloak
 # unavailable until a new pod is ready.
 #
+# Upgrades: 26.8.2 is a patch release of 26.8. Its first pod migrates each
+# realm in place: `MigrateTo26_8_2` adds the `kc-admin-api` client scope and
+# three client registration policies, two of them `default-roles`.
+# Keycloak's update-compatibility check reports a recreate for any version
+# change, which matches `Recreate` above.
+#
+# Going back to 26.8.0 on a migrated database starts the pod and serves its
+# realms, and the log says "Possibly incorrect state of migration". Anonymous
+# client registration then fails with 403 until an operator deletes both
+# `default-roles` policy components in the admin API, and the next policy
+# decides the request. Upstream describes no way back, so restore a database
+# backup taken before the upgrade when client registration matters.
+#
 # Each instance needs its own database. Two instances on one database share
 # realms and the JGroups discovery table, and nothing in the build refuses
 # that wiring.
@@ -157,7 +170,7 @@
 }:
 
 let
-  release = "26.8.0";
+  release = "26.8.2";
   name = scope.instanceName;
   who = "keycloak ${scope.namespaceName}/${name}";
 
@@ -186,6 +199,15 @@ in
     version = release;
     description = "Keycloak, an identity and access management server, with its database on PostgreSQL";
     owner = "platform";
+    # Upstream's supported configurations page
+    # (docs/guides/server/supported-configurations.adoc) names OpenShift 4.18
+    # to 4.21, which corresponds to Kubernetes API 1.31 to 1.34. It states no
+    # other range. Move both bounds with `release`.
+    k8s = {
+      minVersion = "1.31";
+      maxVersion = "1.34";
+      reason = "[K4417] keycloak ${release} supports Kubernetes 1.31 to 1.34 (OpenShift 4.18 to 4.21). Deploy a Kix release with an older keycloak package, or move the cluster to a supported Kubernetes version first";
+    };
   };
 
   deps.database.assertions = dep: kix.contracts.postgresDatabase.assertions who dep;
@@ -194,7 +216,7 @@ in
     image = kix.options.image {
       repository = "quay.io/keycloak/keycloak";
       tag = release;
-      digest = "sha256:b0f60d489d51c5d113390bdf5461d4c06e6051be026c05549f2e1e10ec352bcc";
+      digest = "sha256:c68e286cacd87b942ac1939a0a1481461109d6acd3a57dc496969a319a76bbf0";
     };
     # Upstream's sizing guide starts at 1250 MB of memory per pod. The JVM
     # takes 70% of the memory limit as heap (JAVA_OPTS_KC_HEAP in kc.sh).

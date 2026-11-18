@@ -447,13 +447,13 @@ The only place in this skill with package line numbers. `pkg:N` is
 | `mergeEnv` defaults and owned groups | metabase:168-232 |
 | Discrete database variables through `keyRef`, owned `_FILE` twins | metabase:187-203 |
 | URL-shaped credential through `$(VAR)` | vaultwarden:143-147, 212-233 |
-| `guardArgs`, owned flags from owned env groups | keycloak:376 |
+| `guardArgs`, owned flags from owned env groups | keycloak:398 |
 | `mergeGuarded` on `settings` or `extraSpec` | tempo:386; cnpg-cluster:323, 430, 514 |
 | Migrations at start: Recreate, deadline from `startupSeconds`, probes | metabase:94-97, 252-256, 284-304 |
 | Config injection into a dependency | metabase:109-112; stackgres-database:120-125; cnpg-database:94-115 |
-| Contracts: consumer `assertions`, provider `check` | metabase:112; stackgres-database:554; keycloak:537; tempo:631 |
+| Contracts: consumer `assertions`, provider `check` | metabase:112; stackgres-database:554; keycloak:559; tempo:631 |
 | `pick` as an option default with `defaultText` | `cnpg-cluster/options.nix`:12-18 |
-| `pick` inline, header names the instance override (O19) | keycloak:234, header 74-76 |
+| `pick` inline, header names the instance override (O19) | keycloak:256, header 74-76 |
 | `atLeast` | valkey:122 |
 | Ceilings: package-wide, per builder | tempo:276; valkey:561, `harbor/registry.nix`:245, `harbor/jobservice.nix`:338 |
 | `kix.expose`, `exposure.urlOrNull` | metabase:172-175, 367 |
@@ -490,7 +490,7 @@ Mandatory:
 
 1. `kix/packages/experimental/<pkg>/default.nix`.
 2. `kix/package-eval.nix`: a `settings` entry when the package needs deps or
-   config to evaluate at `none` and `zone` (`:105`; keycloak at `:290-308`).
+   config to evaluate at `none` and `zone` (`:105`; keycloak at `:312-330`).
 3. `clusters/test-<pkg>.nix`: every toggle on, each optional dependency
    present at least once, a `cilium` instance and `networkPolicy.enable = true`
    so the kind deploy runs under default deny, and the bring-up, build, and
@@ -499,7 +499,7 @@ Mandatory:
    is a `kix.mkImport` stand-in; note the merge order.
 4. `flake.nix`: add the cluster to `clusters`.
 5. `kix/lib/tests/units/<pkg>.nix`: names `<topic>-<what>`, helpers as in
-   `kix/lib/tests/units/keycloak.nix:8-18`. Each `evalFails` has a positive
+   `kix/lib/tests/units/keycloak.nix:8-19`. Each `evalFails` has a positive
    control (T2). Two instances in two namespaces (Na2, Na10) and each
    optional dependency absent (D15) are evaluated here with `mkCluster`, so
    they are committed, not a scratch run.
