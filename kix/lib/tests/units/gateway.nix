@@ -40,6 +40,7 @@ let
     ];
     podSelector."app.kubernetes.io/name" = "proxy";
     podNamespace = "gwns";
+    public = true;
   };
 
   depOf = out: {

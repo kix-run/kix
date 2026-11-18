@@ -15,6 +15,11 @@
 #   gatewayApi (required)    the Gateway API CRDs, the role the gateway-api
 #                            package claims. The Gateway is built from its
 #                            `out.crds`.
+#   clusterIssuer (optional) one cluster-issuer instance, or a list of them
+#                            (`deps.clusterIssuer = [ ref... ]`). Each
+#                            HTTPS listener that sets no
+#                            `tls.certificateRefs` gets a Certificate from
+#                            one of them, chosen by `listenerIssuers`.
 #   prometheus (optional)    scrapes the proxies while `metrics.enabled`.
 #
 # Minimal instance, beside gateway-api and envoy-gateway-controller:
@@ -43,8 +48,42 @@
 # which needs an available proxy and, for a LoadBalancer Service, an
 # address (internal/gatewayapi/status/gateway.go).
 #
-# Network policy: clients from outside the cluster and from every pod
-# reach the proxies on their listener ports. The proxies reach every pod in
+# Listener certificates: with a clusterIssuer dependency, the package
+# writes a cert-manager Certificate `<instance>-<listener>` in this
+# namespace for the `hostname` of every HTTPS listener that names no
+# Secret, and the listener serves its Secret. The Gateway waits for the
+# Certificate. An ACME issuer needs a dns01 solver, because the package
+# does not route HTTP-01 challenges through the Gateway.
+#
+# Tenants: give each domain its own HTTPS listener and admit only that
+# tenant's namespaces, with the Gateway API's own fields:
+#   allowedRoutes.namespaces = {
+#     from = "Selector";
+#     selector.matchLabels."kubernetes.io/metadata.name" = "tenant-a";
+#   };
+# A route from another namespace then cannot attach to the listener.
+#
+# Policies: `clientTrafficPolicy` and `securityPolicy` are the specs of an
+# Envoy Gateway ClientTrafficPolicy and SecurityPolicy that the package
+# targets at the Gateway. The first holds the TLS minimum version, whose
+# X-Forwarded-For the Gateway believes, HTTP/2, and headers added to every
+# response, such as Strict-Transport-Security. The second holds a
+# source-address allow-list. `httpsRedirect` answers every request on the
+# HTTP listeners with a redirect to HTTPS. Access logs go to the proxies'
+# stdout as JSON unless `proxySpec.telemetry.accessLog` says otherwise.
+#
+# The proxy Service: `proxySpec.provider.kubernetes.envoyService` sets its
+# `type`, `labels`, and `annotations`, which is where a load balancer's
+# address pool and pinned address go. Envoy Gateway sets
+# `externalTrafficPolicy: Local` unless it is set there, so a node with no
+# proxy drops the traffic a load balancer sends it; set `Cluster` where one
+# node answers for the address, or run a proxy on every such node. With
+# `type = "ClusterIP"`, the first of the Gateway's `addresses` becomes the
+# Service's cluster IP (internal/infrastructure/kubernetes/proxy/resource_provider.go).
+#
+# Network policy: the clients in `clientSources`, by default every address
+# outside the cluster and every pod, reach the proxies on their listener
+# ports. The proxies reach every pod in
 # the cluster, because HTTPRoutes name their backends at runtime, which
 # includes the controller's xDS and Wasm ports. kix.expose admits the
 # proxies to each exposed backend through `out.podSelector`.
@@ -57,6 +96,9 @@
 #   out.podSelector, out.podNamespace
 #                     the proxy pods of the Gateway, for the policy
 #                     kix.expose writes so they can reach each backend.
+#   out.public        false when the proxy Service is a ClusterIP, so the
+#                     Gateway cannot be reached from outside the cluster,
+#                     and true otherwise.
 #   out.version       the Envoy Gateway version the controller runs.
 #   out.crds.<Kind>   the envoy-gateway-controller instance's CRD handles for Envoy
 #                     Gateway's policy kinds.
@@ -71,9 +113,10 @@
 # and request errors and latency to the site's own objectives. The
 # controller's alerts are the envoy-gateway-controller package's.
 #
-# Escape hatches: `proxySpec` (the EnvoyProxy spec), `listeners` and
-# `addresses` (the Gateway's), the CRD handles on `out.crds`, and the
-# instance's `partsOverlays`.
+# Escape hatches: `proxySpec` (the EnvoyProxy spec), `clientTrafficPolicy`
+# and `securityPolicy` (the policies' specs), `listeners` and `addresses`
+# (the Gateway's), the CRD handles on `out.crds`, and the instance's
+# `partsOverlays`.
 #
 # Limits: under network policy, the proxies reach only pods in the
 # cluster. A Backend with an FQDN or IP outside the cluster, and an
@@ -208,6 +251,117 @@ in
       '';
     };
 
+    listenerIssuers = lib.mkOption {
+      type = lib.types.attrsOf lib.types.str;
+      default = { };
+      example = {
+        example-com = "letsencrypt-example-com";
+      };
+      description = ''
+        The ClusterIssuer that signs each HTTPS listener's certificate, as
+        listener name to ClusterIssuer name. Each name must be a
+        ClusterIssuer wired as the `clusterIssuer` dependency. A listener
+        left out uses the wired issuer when there is only one.
+
+        The package creates a cert-manager Certificate for every HTTPS
+        listener that sets no `tls.certificateRefs`, for the listener's
+        `hostname`, and points the listener at its Secret.
+      '';
+    };
+
+    clientTrafficPolicy = lib.mkOption {
+      type = lib.types.attrsOf lib.types.anything;
+      default = { };
+      example = lib.literalExpression ''
+        {
+          clientIPDetection.xForwardedFor.trustedCIDRs = [ "192.0.2.0/24" ];
+          tls.minVersion = "1.3";
+          headers.lateResponseHeaders.set = [
+            {
+              name = "Strict-Transport-Security";
+              value = "max-age=31536000; includeSubDomains";
+            }
+          ];
+        }
+      '';
+      description = ''
+        ClientTrafficPolicy `spec` fields (`gateway.envoyproxy.io/v1alpha1`)
+        for this Gateway: how the proxies treat client connections on every
+        listener. When set, the package creates the policy and targets it at
+        the Gateway. Kix rejects `targetRef`, `targetRefs`, and
+        `targetSelectors`.
+
+        `clientIPDetection.xForwardedFor.trustedCIDRs` names the proxies in
+        front of the Gateway (a CDN's ranges) whose `X-Forwarded-For` the
+        Gateway believes. `tls.minVersion` is `"1.2"` when unset.
+        `tls.alpnProtocols = [ "http/1.1" ]` turns HTTP/2 off.
+        `headers.lateResponseHeaders` adds a header to every response,
+        including those of routes that Kix does not render.
+      '';
+    };
+
+    securityPolicy = lib.mkOption {
+      type = lib.types.attrsOf lib.types.anything;
+      default = { };
+      example = lib.literalExpression ''
+        {
+          authorization = {
+            defaultAction = "Deny";
+            rules = [
+              {
+                action = "Allow";
+                principal.clientCIDRs = [ "10.0.0.0/8" ];
+              }
+            ];
+          };
+        }
+      '';
+      description = ''
+        SecurityPolicy `spec` fields (`gateway.envoyproxy.io/v1alpha1`) for
+        this Gateway, applied to every route on it unless a route has a
+        policy of its own. When set, the package creates the policy and
+        targets it at the Gateway. Kix rejects `targetRef`, `targetRefs`,
+        and `targetSelectors`.
+
+        `authorization` with `principal.clientCIDRs` admits only the listed
+        source addresses. The client address is the connection's, or the one
+        `clientTrafficPolicy.clientIPDetection` takes from a trusted proxy.
+      '';
+    };
+
+    httpsRedirect = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Redirect every request on the Gateway's HTTP listeners to HTTPS with
+        a 301. The package attaches a redirect HTTPRoute to each HTTP
+        listener and sets the listener's `allowedRoutes.namespaces.from` to
+        `"Same"`, so application routes attach to the HTTPS listeners only
+        and cannot be served over HTTP. The Gateway needs an HTTPS listener.
+      '';
+    };
+
+    clientSources = lib.mkOption {
+      type = lib.types.listOf (
+        lib.types.enum [
+          "world"
+          "all-pods"
+        ]
+      );
+      default = [
+        "world"
+        "all-pods"
+      ];
+      example = [ "all-pods" ];
+      description = ''
+        Who the network policy admits to the proxies' listener ports:
+        `"world"` is every address outside the cluster, and `"all-pods"` is
+        every pod in the cluster, which includes traffic that arrives
+        through a node. A private Gateway leaves out `"world"`. A
+        `securityPolicy` allow-list is checked after this policy.
+      '';
+    };
+
     metrics = kix.options.monitor;
   }
   // lib.mapAttrs (
@@ -228,6 +382,7 @@ in
         clusterConfig,
         envoyGateway ? null,
         gatewayApi ? null,
+        clusterIssuer ? null,
         prometheus ? null,
         ...
       }:
@@ -267,7 +422,155 @@ in
               fix = "Add `instances.${ns}.envoy-gateway-controller.package = packages.experimental.envoy-gateway-controller;` and remove the `envoyGateway` alias from any other instance. If Envoy Gateway is installed outside Kix, replace this `envoy-gateway` instance with a `kix.mkImport { out.gatewayRef = { name = \"<gateway>\"; namespace = \"<namespace>\"; }; }` instance with `aliases = [ \"gateway\" ];`.";
             };
 
-        activeListeners = gatewayListeners.active config.listeners;
+        # The wired issuers, by ClusterIssuer name. deps.clusterIssuer takes
+        # one instance or a list.
+        issuers =
+          let
+            wired =
+              if clusterIssuer == null then
+                [ ]
+              else if builtins.isList clusterIssuer then
+                clusterIssuer
+              else
+                [ clusterIssuer ];
+            nameOf =
+              issuer:
+              if (issuer.out or { }) ? mkCertificate && (issuer.out or { }) ? name then
+                builtins.unsafeDiscardStringContext issuer.out.name
+              else
+                scope.fail {
+                  dependency = "clusterIssuer";
+                  message = "a 'clusterIssuer' dependency publishes no out.mkCertificate, such as a kix.mkImport. This package builds each listener's Certificate with it.";
+                  fix = "Wire instances of the cluster-issuer package, or set tls.certificateRefs on every HTTPS listener and remove deps.clusterIssuer.";
+                };
+          in
+          lib.listToAttrs (map (issuer: lib.nameValuePair (nameOf issuer) issuer) wired);
+        issuerNames = builtins.attrNames issuers;
+
+        needsCertificate =
+          l:
+          l.protocol == "HTTPS"
+          && (l.tls == null || l.tls.certificateRefs == null || l.tls.certificateRefs == [ ]);
+        certificateName = l: "${name}-${l.name}";
+
+        # The issuer of a listener's certificate, or the reason it has none.
+        issuerFor =
+          l:
+          let
+            chosen = config.listenerIssuers.${l.name} or null;
+            wildcard = lib.hasPrefix "*." l.hostname;
+            issuer = if chosen != null then issuers.${chosen} or null else issuers.${builtins.head issuerNames};
+          in
+          if l.hostname == null then
+            {
+              error = "listener \"${l.name}\" has no hostname, so its certificate would name nothing. Set hostname on the listener, or set tls.certificateRefs to a Secret you provide.";
+            }
+          else if chosen == null && builtins.length issuerNames != 1 then
+            {
+              error = "listener \"${l.name}\" needs a certificate, and ${toString (builtins.length issuerNames)} ClusterIssuers are wired (${lib.concatStringsSep ", " issuerNames}). Set listenerIssuers.${l.name} to one of them.";
+            }
+          else if issuer == null then
+            {
+              error = "listenerIssuers.${l.name} is \"${chosen}\", which is not a wired ClusterIssuer. The wired ones are: ${
+                if issuerNames == [ ] then "none" else lib.concatStringsSep ", " issuerNames
+              }. Add it to deps.clusterIssuer.";
+            }
+          else if issuer.out.needsHttp01 or false then
+            {
+              error = "listener \"${l.name}\" would take its certificate from ClusterIssuer \"${issuer.out.name}\", an ACME issuer with no dns01 solver. This package does not route ACME HTTP-01 challenges through the Gateway${lib.optionalString wildcard ", and a wildcard name such as \"${l.hostname}\" cannot be issued that way"}. Use an issuer with a dns01 solver, or set tls.certificateRefs to a Secret you provide.";
+            }
+          else
+            { inherit issuer; };
+
+        certificateListeners =
+          if issuers == { } then [ ] else builtins.filter needsCertificate config.listeners;
+        unknownListenerIssuers = builtins.filter (
+          n: !(builtins.any (l: l.name == n) certificateListeners)
+        ) (builtins.attrNames config.listenerIssuers);
+        certificateErrors =
+          lib.concatMap (
+            l:
+            let
+              found = issuerFor l;
+            in
+            lib.optional (found ? error) found.error
+          ) certificateListeners
+          ++ map (
+            n:
+            "listenerIssuers.${n} names no HTTPS listener that needs a certificate. The listeners that do are: ${
+              if certificateListeners == [ ] then
+                "none"
+              else
+                lib.concatMapStringsSep ", " (l: l.name) certificateListeners
+            }."
+          ) unknownListenerIssuers;
+
+        # Listeners with the certificate filled in, and, with httpsRedirect,
+        # the HTTP ones closed to routes of other namespaces.
+        withCertificate =
+          l:
+          if issuers != { } && needsCertificate l then
+            l
+            // {
+              tls = (if l.tls == null then { } else l.tls) // {
+                mode = "Terminate";
+                certificateRefs = [
+                  {
+                    group = "";
+                    kind = "Secret";
+                    name = self.certificates.${l.name}.out.name;
+                  }
+                ];
+              };
+            }
+          else
+            l;
+        withRedirect =
+          l:
+          if config.httpsRedirect && l.protocol == "HTTP" then
+            l // { allowedRoutes.namespaces.from = "Same"; }
+          else
+            l;
+        # Raised by whichever of the listeners and the Certificates is read
+        # first.
+        certificatesChecked =
+          if certificateErrors == [ ] then
+            true
+          else
+            scope.fail (
+              map (message: {
+                option = "listeners";
+                inherit message;
+              }) certificateErrors
+            );
+        activeListeners = builtins.seq certificatesChecked gatewayListeners.active (
+          map (l: withRedirect (withCertificate l)) config.listeners
+        );
+        httpListeners = builtins.filter (l: l.protocol == "HTTP") activeListeners;
+        hasHttps = builtins.any (l: l.protocol == "HTTPS") activeListeners;
+
+        # A policy's spec, with the target the package owns.
+        policySpec =
+          what: spec:
+          kix.mergeGuarded
+            {
+              inherit who what;
+              locked = [
+                [ "targetRef" ]
+                [ "targetRefs" ]
+                [ "targetSelectors" ]
+              ];
+            }
+            {
+              targetRefs = [
+                {
+                  group = "gateway.networking.k8s.io";
+                  kind = "Gateway";
+                  inherit name;
+                }
+              ];
+            }
+            spec;
         # Envoy runs unprivileged, so the controller moves a listener port
         # below 1024 up by 10000, unless proxySpec sets
         # useListenerPortAsContainerPort (servicePortToContainerPort in
@@ -367,7 +670,10 @@ in
         gatewayCrds = kix.contracts.experimental.gatewayApi.helpers.crdsFor {
           who = "${ns}/${name}";
           inherit gatewayApi;
-          kinds = [ "Gateway" ];
+          kinds = [
+            "Gateway"
+            "HTTPRoute"
+          ];
           # The Gateway API release Envoy Gateway 1.10 is built against
           # (go.mod and site/content/en/news/releases/matrix.md upstream).
           minVersion = "1.6";
@@ -411,7 +717,7 @@ in
             null;
 
         proxyIngress =
-          if frontDoorPorts == [ ] then
+          if frontDoorPorts == [ ] || config.clientSources == [ ] then
             null
           else
             kix.operandPolicy {
@@ -421,16 +727,10 @@ in
                 endpointSelector.matchLabels = proxySelector;
                 ingress =
                   (netpol.translateIntentRules {
-                    intents.front-door.ingress = [
-                      {
-                        from = "world";
-                        ports = frontDoorPorts;
-                      }
-                      {
-                        from = "all-pods";
-                        ports = frontDoorPorts;
-                      }
-                    ];
+                    intents.front-door.ingress = map (from: {
+                      inherit from;
+                      ports = frontDoorPorts;
+                    }) config.clientSources;
                   }).ingressRules;
               };
             };
@@ -452,6 +752,77 @@ in
             }).egressRules;
           };
         };
+
+        # One Certificate per HTTPS listener that names no Secret of its own.
+        certificates = builtins.seq certificatesChecked lib.listToAttrs (
+          map (
+            l:
+            lib.nameValuePair l.name (
+              (issuerFor l).issuer.out.mkCertificate scope {
+                name = certificateName l;
+                dnsNames = [ l.hostname ];
+              }
+            )
+          ) certificateListeners
+        );
+
+        clientTrafficPolicy =
+          if config.clientTrafficPolicy == { } then
+            null
+          else
+            scope.mkCR controller.crds.ClientTrafficPolicy {
+              inherit name;
+              labels = scope.selectorLabels;
+              spec = policySpec "clientTrafficPolicy" config.clientTrafficPolicy;
+            };
+
+        securityPolicy =
+          if config.securityPolicy == { } then
+            null
+          else
+            scope.mkCR controller.crds.SecurityPolicy {
+              inherit name;
+              labels = scope.selectorLabels;
+              spec = policySpec "securityPolicy" config.securityPolicy;
+            };
+
+        # Attached to the HTTP listeners by name, which admit routes of this
+        # namespace only, so no application route competes with it.
+        httpsRedirect =
+          if !config.httpsRedirect then
+            null
+          else if httpListeners == [ ] || !hasHttps then
+            scope.fail {
+              option = "httpsRedirect";
+              message = "httpsRedirect is on, and the Gateway has ${
+                if hasHttps then "no HTTP listener to redirect from" else "no HTTPS listener to redirect to"
+              }. An HTTPS listener is rendered once it has a certificate, from tls.certificateRefs or a clusterIssuer dependency.";
+              fix = "Add the missing listener, or turn httpsRedirect off.";
+            }
+          else
+            scope.mkCR gatewayCrds.HTTPRoute {
+              name = "${name}-https-redirect";
+              labels = scope.selectorLabels;
+              spec = {
+                parentRefs = map (l: {
+                  name = self.gateway.out.name;
+                  sectionName = l.name;
+                }) httpListeners;
+                rules = [
+                  {
+                    filters = [
+                      {
+                        type = "RequestRedirect";
+                        requestRedirect = {
+                          scheme = "https";
+                          statusCode = 301;
+                        };
+                      }
+                    ];
+                  }
+                ];
+              };
+            };
 
         envoyProxy =
           scope.mkCR controller.crds.EnvoyProxy {
@@ -480,11 +851,17 @@ in
               labels = scope.selectorLabels;
               # The controller needs the Role to create the proxies, and the
               # proxies need their network policy to become ready.
+              # The policies come first, so the Gateway never serves without
+              # an allow-list or a TLS floor it was given. Each listener
+              # names its Certificate's Secret, which already makes the
+              # Gateway wait for the Certificate.
               requires =
                 builtins.attrValues self.infraRole
                 ++ builtins.filter (p: p != null) [
                   self.proxyIngress
                   self.proxyEgress
+                  self.clientTrafficPolicy
+                  self.securityPolicy
                 ];
               spec = {
                 # The class name carries the envoy-gateway-controller instance's
@@ -504,6 +881,7 @@ in
 
         root = {
           resource = self.gateway;
+          requires = builtins.filter (p: p != null) [ self.httpsRedirect ];
           out = kix.contracts.gateway.check who {
             gatewayRef = {
               name = self.gateway.out.name;
@@ -514,6 +892,10 @@ in
             # already depends on this instance through gatewayRef.
             podSelector = proxySelector;
             podNamespace = ns;
+            # A ClusterIP Service is reachable from inside the cluster
+            # only. Any other type may be reachable from the internet,
+            # whatever allow-list the Gateway carries.
+            public = proxyServiceType != "ClusterIP";
             inherit (controller) version crds;
           };
         };

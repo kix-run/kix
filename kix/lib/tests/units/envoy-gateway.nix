@@ -732,4 +732,272 @@ in
         })).provider.kubernetes.envoyPDB;
     in
     pdb == { maxUnavailable = 1; } || throw "envoy-gateway PDB: ${builtins.toJSON pdb}";
+
+  # With cluster issuers wired, every HTTPS listener that names no Secret
+  # gets a Certificate from the issuer chosen for it, in the Gateway's
+  # namespace, and the Gateway waits for it. The refusals: two issuers and
+  # no choice, a choice that is not wired, an issuer with no dns01 solver, a
+  # listener with no hostname, and a choice for a listener that needs none.
+  envoy-gateway-listener-certificates =
+    let
+      acme = solver: {
+        acme = {
+          server = "https://acme.example.test/directory";
+          email = "platform@example.test";
+          solvers = [ solver ];
+        };
+      };
+      dns01.dns01.cloudflare.apiTokenSecretRef.key = "api-token";
+      http01.http01.ingress.ingressClassName = "nginx";
+      issuerInstance = spec: {
+        package = import ../../../packages/experimental/cluster-issuer;
+        config.spec = spec;
+      };
+      https = name: hostname: {
+        inherit name hostname;
+        port = 443;
+        protocol = "HTTPS";
+        allowedRoutes.namespaces.from = "All";
+      };
+      listenersAB = [
+        (https "a" "*.a.example.com")
+        (https "b" "*.b.example.com")
+      ];
+      withIssuers =
+        {
+          wired,
+          config,
+        }:
+        mkCluster [
+          withGatewayApi
+          (
+            { ref, ... }:
+            {
+              instances.cert-manager = {
+                cert-manager.package = import ../../../packages/experimental/cert-manager;
+                cf-token = {
+                  package = import ../../../packages/stable/secret-ref;
+                  aliases = [ "issuerCredentials" ];
+                  config.keys = [ "api-token" ];
+                };
+                issuer-a = issuerInstance (acme dns01);
+                issuer-b = issuerInstance (acme dns01);
+                issuer-http = issuerInstance (acme http01);
+              };
+              instances.${ns}.eg.package = envoyGatewayController;
+              instances.edge.gw = {
+                package = envoyGateway;
+                inherit config;
+                deps.clusterIssuer = map (n: ref.cert-manager.${n}) wired;
+              };
+            }
+          )
+        ];
+      two = withIssuers {
+        wired = [
+          "issuer-a"
+          "issuer-b"
+        ];
+        config = {
+          listeners = listenersAB;
+          listenerIssuers = {
+            a = "issuer-a";
+            b = "issuer-b";
+          };
+        };
+      };
+      ms = manifests two;
+      certs = builtins.filter (m: m.metadata.namespace == "edge") (ofKind "Certificate" ms);
+      certB = byName "gw-b" certs;
+      gateway = byName "gw" (ofKind "Gateway" ms);
+      listenerB = lib.findFirst (l: l.name == "b") null gateway.spec.listeners;
+      one = withIssuers {
+        wired = [ "issuer-a" ];
+        config.listeners = listenersAB;
+      };
+      fails = args: evalFails (withIssuers args);
+    in
+    (
+      builtins.length certs == 2
+      && certB.spec.dnsNames == [ "*.b.example.com" ]
+      && certB.spec.secretName == "gw-b"
+      &&
+        certB.spec.issuerRef == {
+          group = "cert-manager.io";
+          kind = "ClusterIssuer";
+          name = "issuer-b";
+        }
+      &&
+        listenerB.tls.certificateRefs == [
+          {
+            group = "";
+            kind = "Secret";
+            name = "gw-b";
+          }
+        ]
+      && lib.hasInfix (k8s.extractStoreHash two.instances.edge.gw.raw.certificates.b.outPath) (
+        dependsOn gateway
+      )
+      && (byName "gw-a" (ofKind "Certificate" (manifests one))).spec.issuerRef.name == "issuer-a"
+      && fails {
+        wired = [
+          "issuer-a"
+          "issuer-b"
+        ];
+        config.listeners = listenersAB;
+      }
+      && fails {
+        wired = [ "issuer-a" ];
+        config = {
+          listeners = listenersAB;
+          listenerIssuers.a = "issuer-b";
+        };
+      }
+      && fails {
+        wired = [ "issuer-http" ];
+        config.listeners = listenersAB;
+      }
+      && fails {
+        wired = [ "issuer-a" ];
+        config.listeners = [ (https "a" null) ];
+      }
+      && fails {
+        wired = [ "issuer-a" ];
+        config = {
+          listeners = listenersAB;
+          listenerIssuers.http = "issuer-a";
+        };
+      }
+    )
+    || throw "envoy-gateway listener certificates: ${builtins.toJSON (map (m: m.spec) certs)}";
+
+  # clientTrafficPolicy and securityPolicy each render a policy that
+  # targets the Gateway, which waits for them. Neither renders when unset,
+  # and a target of the user's own is refused.
+  envoy-gateway-policies-target-the-gateway =
+    let
+      cluster = clusterWith {
+        config = {
+          clientTrafficPolicy = {
+            clientIPDetection.xForwardedFor.trustedCIDRs = [ "192.0.2.0/24" ];
+            tls.minVersion = "1.3";
+          };
+          securityPolicy.authorization = {
+            defaultAction = "Deny";
+            rules = [
+              {
+                action = "Allow";
+                principal.clientCIDRs = [ "10.0.0.0/8" ];
+              }
+            ];
+          };
+        };
+      };
+      ms = manifests cluster;
+      ctp = byName "gw" (ofKind "ClientTrafficPolicy" ms);
+      sp = byName "gw" (ofKind "SecurityPolicy" ms);
+      target = [
+        {
+          group = "gateway.networking.k8s.io";
+          kind = "Gateway";
+          name = "gw";
+        }
+      ];
+      gateway = byName "gw" (ofKind "Gateway" ms);
+    in
+    (
+      ctp.spec.targetRefs == target
+      && ctp.spec.tls.minVersion == "1.3"
+      && ctp.spec.clientIPDetection.xForwardedFor.trustedCIDRs == [ "192.0.2.0/24" ]
+      && sp.spec.targetRefs == target
+      && sp.spec.authorization.defaultAction == "Deny"
+      && lib.hasInfix (gatewayHashOf cluster "securityPolicy") (dependsOn gateway)
+      && lib.hasInfix (gatewayHashOf cluster "clientTrafficPolicy") (dependsOn gateway)
+      && ofKind "ClientTrafficPolicy" plain == [ ]
+      && ofKind "SecurityPolicy" plain == [ ]
+      && evalFails (clusterWith {
+        config.securityPolicy.targetRefs = [ ];
+      })
+      && evalFails (clusterWith {
+        config.clientTrafficPolicy.targetSelectors = [ ];
+      })
+    )
+    || throw "envoy-gateway policies: ${builtins.toJSON { inherit ctp sp; }}";
+
+  # httpsRedirect attaches a redirect route to the HTTP listener by name
+  # and closes that listener to routes of other namespaces. It is refused
+  # on a Gateway with no HTTPS listener; the control has one.
+  envoy-gateway-https-redirect =
+    let
+      listeners = [
+        {
+          name = "http";
+          port = 80;
+          protocol = "HTTP";
+          allowedRoutes.namespaces.from = "All";
+        }
+        {
+          name = "https";
+          port = 443;
+          protocol = "HTTPS";
+          hostname = "*.example.com";
+          tls.certificateRefs = [ { name = "wildcard"; } ];
+          allowedRoutes.namespaces.from = "All";
+        }
+      ];
+      ms = msWith {
+        config = {
+          inherit listeners;
+          httpsRedirect = true;
+        };
+      };
+      route = byName "gw-https-redirect" (ofKind "HTTPRoute" ms);
+      gateway = byName "gw" (ofKind "Gateway" ms);
+      listener = n: lib.findFirst (l: l.name == n) null gateway.spec.listeners;
+    in
+    (
+      route.spec.parentRefs == [
+        {
+          name = "gw";
+          sectionName = "http";
+        }
+      ]
+      &&
+        (builtins.head (builtins.head route.spec.rules).filters).requestRedirect == {
+          scheme = "https";
+          statusCode = 301;
+        }
+      && (listener "http").allowedRoutes.namespaces.from == "Same"
+      && (listener "https").allowedRoutes.namespaces.from == "All"
+      && ofKind "HTTPRoute" plain == [ ]
+      && evalFails (clusterWith {
+        config.httpsRedirect = true;
+      })
+    )
+    || throw "envoy-gateway redirect: ${builtins.toJSON route}";
+
+  # clientSources chooses who the policy admits to the listener ports: a
+  # private Gateway leaves the world out. out.public follows the Service
+  # type, and is false only for ClusterIP.
+  envoy-gateway-private-gateway =
+    let
+      sourcesOf =
+        config:
+        let
+          cnps = ofKind "CiliumNetworkPolicy" (msWith {
+            extra = netpolOn;
+            inherit config;
+          });
+        in
+        builtins.toJSON (byName "gw-proxy-ingress" cnps).spec.ingress;
+      publicOf = config: (clusterWith { inherit config; }).instances.${ns}.gw.out.public;
+    in
+    lib.hasInfix "world" (sourcesOf { })
+    && lib.hasInfix "all-pods" (sourcesOf { })
+    && !(lib.hasInfix "world" (sourcesOf {
+      clientSources = [ "all-pods" ];
+    }))
+    && publicOf { }
+    && publicOf { proxySpec.provider.kubernetes.envoyService.type = "NodePort"; }
+    && !(publicOf { proxySpec.provider.kubernetes.envoyService.type = "ClusterIP"; });
 }

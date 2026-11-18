@@ -63,6 +63,15 @@
 #   out.http01SolverSelector
 #                  the labels of cert-manager's HTTP-01 solver pods when a
 #                  solver uses `http01`, else null.
+#   out.needsHttp01
+#                  true for an ACME issuer with no `dns01` solver, which can
+#                  prove a name only by answering an HTTP request for it. It
+#                  cannot issue a wildcard name.
+#   out.mkCertificate
+#                  `scope: { name; dnsNames; secretName ? name; }` builds a
+#                  cert-manager Certificate in the caller's namespace that
+#                  this issuer signs. A Gateway package calls it for a
+#                  listener's certificate.
 
 {
   scope,
@@ -466,6 +475,30 @@ in
             cmOut.operandSelectors.acmesolver
           else
             null;
+        out.name = self.issuer.out.name;
+        out.needsHttp01 =
+          config.spec ? acme
+          && !(builtins.any (s: builtins.isAttrs s.solver && (s.solver.dns01 or null) != null) (
+            solversOf config.spec
+          ));
+        out.mkCertificate =
+          callerScope:
+          {
+            name,
+            dnsNames,
+            secretName ? name,
+          }:
+          callerScope.mkCR cmOut.crds.Certificate {
+            inherit name;
+            spec = {
+              inherit secretName dnsNames;
+              issuerRef = {
+                group = "cert-manager.io";
+                kind = "ClusterIssuer";
+                name = self.issuer.out.name;
+              };
+            };
+          };
         out.withCert =
           args:
           args
