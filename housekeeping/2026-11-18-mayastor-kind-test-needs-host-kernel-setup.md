@@ -1,0 +1,3 @@
+# 2026-11-18 · `clusters/test-mayastor.nix` · A bump cannot run the data-plane test on a host without nvme_tcp and hugepages.
+
+`scripts/kind-mayastor.sh preflight` refuses to run unless the host has the `nvme_tcp` module loaded, 2048 free 2 MiB hugepages, and `/run/udev`. Those are host-wide settings, so a version-bump agent that shares a machine with other kind clusters cannot set them for itself. On the bump-slot-4 host, `nvme_tcp` was not loaded and `HugePages_Total` was 0, so the upgrade deploy of `mayastor` could not run and the bump was checked by evaluation only. Look for a test that runs the control plane without io-engine, or a way for a bump to borrow a host set up once for the whole machine.

@@ -10,7 +10,7 @@
 rec {
   # meta.version, the version check on image.tag, and the DiskPool CRD
   # version and RBAC in this package are written for this release.
-  release = "2.12.1";
+  release = "2.12.2";
 
   name = scope.instanceName;
   ns = scope.namespaceName;
