@@ -112,7 +112,6 @@
           virtualization = ./clusters/test-virtualization.nix;
           metabase = ./clusters/test-metabase.nix;
           stackgres-operator = ./clusters/test-stackgres-operator.nix;
-          firezone = ./clusters/test-firezone.nix;
           plausible = ./clusters/test-plausible.nix;
           plausible-replicated = ./clusters/test-plausible-replicated.nix;
           metrics-server = ./clusters/test-metrics-server.nix;
