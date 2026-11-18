@@ -70,7 +70,10 @@ kix.buildCluster {
           logs-db-password = {
             package = packages.secret;
             aliases = [ "password" ];
-            config.stringData.password = "logs-writer-dev-password";
+            config.stringData = {
+              username = "logs_writer";
+              password = "logs-writer-dev-password";
+            };
           };
         };
 
