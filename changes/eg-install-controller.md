@@ -7,17 +7,26 @@ Add `instances.<namespace>.gateway-api.package = packages.experimental.gateway-a
 to clusters that use `envoy-gateway` or `traefik`, and remove any `kubectl` or
 Helm step you used to install the Gateway API CRDs. Both packages now read the
 Gateway API CRDs from the `gatewayApi` role instead of expecting them to be
-installed outside Kix. Clusters that use `envoy-gateway` also add
+installed outside Kix. In clusters that use `envoy-gateway`, also add
 `instances.<namespace>.envoy-gateway-controller.package =
-packages.experimental.envoy-gateway-controller;` in the namespace of the
-`envoy-gateway` instance. The new `envoy-gateway-controller` package deploys
-Envoy Gateway v1.10.0 itself (controller, CRDs, RBAC, certificate Job, and
-`GatewayClass`), one per cluster. Each `envoy-gateway` instance is now one
-`Gateway` on that controller, with its own Envoy proxies, Service, and proxy
-network policies, so a cluster can run several, such as a public and a private
-Gateway. On `envoy-gateway` instances, remove the deleted options
-`controllerName`, `proxyNamespace`, `gatewayClassName`, and `gatewayName`, and
-remove `proxySpec.mergeGateways` if you set it.
+packages.experimental.envoy-gateway-controller;` in the same namespace as
+`envoy-gateway`, and remove `controllerName`, `proxyNamespace`,
+`gatewayClassName`, `gatewayName`, and `proxySpec.mergeGateways` from your
+`envoy-gateway` instances. The new `envoy-gateway-controller` package deploys
+one Envoy Gateway v1.10.0 controller per cluster, along with its CRDs, RBAC,
+certificate Job, and `GatewayClass`. Each `envoy-gateway` instance now creates
+one `Gateway` on that controller with its own Envoy proxies, `Service`, and
+proxy network policies, so a cluster can run several Gateways (for example, one
+public and one private).
+
+If your cluster already runs the controller from an earlier 0.10 release
+candidate of `envoy-gateway`, delete the controller Deployment first with
+`kubectl delete deployment envoy-gateway --namespace <namespace>`, then deploy
+with `kix deploy <cluster> --prune`. Moving the controller to
+`envoy-gateway-controller` changes the Deployment's label selector, which
+Kubernetes cannot update in place, and `--prune` removes the old
+`GatewayClass`, RBAC resources, and network policies. Existing Envoy proxy pods
+keep serving traffic while the new controller starts.
 
 Before deploying this upgrade to a cluster where Helm installed Envoy Gateway,
 remove any experimental-only Gateway API fields from your routes and Gateways.

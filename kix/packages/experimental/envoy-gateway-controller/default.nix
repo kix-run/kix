@@ -114,7 +114,16 @@
 # kix.expose. The certgen Job writes Secrets Kix does not track, so
 # `kix gc` and pruning leave them behind.
 #
-# Upgrades: from an Envoy Gateway that Helm installed, uninstall the Helm
+# Upgrades: from a release of the envoy-gateway package that ran the
+# controller itself, delete the Deployment envoy-gateway in the instance's
+# namespace before the deploy. Its selector carries the instance's name,
+# which changes with the package, and Kubernetes does not let a selector
+# change. The proxies keep serving while the controller is away: on kind
+# the same proxy pod answered every request across the deploy. The Gateway
+# keeps its name and moves to the new GatewayClass, and `--prune` removes
+# the old class, roles, and policies.
+#
+# From an Envoy Gateway that Helm installed, uninstall the Helm
 # release first, delete the certgen hook objects and the topology injector
 # webhook that Helm leaves behind, and deploy once with
 # `--force-conflicts`, because Helm keeps owning fields of the CRDs it
@@ -247,7 +256,7 @@ in
 {
   meta = {
     version = lib.removePrefix "v" release;
-    description = "Envoy Gateway controller and its GatewayClass; each Gateway is an envoy-gateway instance";
+    description = "Envoy Gateway controller, CRDs, and GatewayClass for envoy-gateway instances";
     owner = "platform";
     defaultAliases = [ "envoyGateway" ];
     conflictsWith = [ "cluster:envoyGateway" ];
@@ -350,7 +359,7 @@ in
         `provider.kubernetes.shutdownManager`,
         `provider.kubernetes.rateLimitDeployment.container.image` (set
         `operandImages.rateLimit` instead), `proxyTopologyInjector`, and
-        `envoyProxy` (set `proxySpec` on the envoy-gateway instance instead).
+        `envoyProxy` (set `proxySpec` on each `envoy-gateway` instance instead).
       '';
     };
 

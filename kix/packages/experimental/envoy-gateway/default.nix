@@ -103,9 +103,9 @@ let
   # Options of earlier releases of this package, when it also named the
   # controller, which Helm installed outside Kix.
   removedOptions = {
-    controllerName = "Remove `controllerName`. The envoy-gateway-controller package runs Envoy Gateway, and this Gateway uses its GatewayClass. For another implementation, switch `package` to its Gateway API package, such as `packages.experimental.traefik`.";
-    proxyNamespace = "Remove `proxyNamespace`. Envoy proxy pods always run in the envoy-gateway-controller instance's namespace, which is this instance's.";
-    gatewayClassName = "Remove `gatewayClassName`. The Gateway uses the GatewayClass of the envoy-gateway-controller instance.";
+    controllerName = "Remove `controllerName` and add an `envoy-gateway-controller` instance in this namespace to use Envoy Gateway, or set `package` to another Gateway API package such as `packages.experimental.traefik`.";
+    proxyNamespace = "Remove `proxyNamespace`. Envoy proxy pods always run in the same namespace as `envoy-gateway-controller` and this instance.";
+    gatewayClassName = "Remove `gatewayClassName`. The Gateway uses the `GatewayClass` created by `envoy-gateway-controller`.";
     gatewayName = "Remove `gatewayName`. The Gateway always uses the instance name.";
   };
 in
@@ -125,7 +125,7 @@ in
       assertion = config.${option} == null;
       id = "K5531";
       inherit option fix;
-      message = "option '${option}' was removed; Kix now installs the Envoy Gateway controller itself, with the envoy-gateway-controller package.";
+      message = "option '${option}' was removed. Kix now deploys the Envoy Gateway controller through the envoy-gateway-controller package.";
     }) removedOptions;
 
   options = {
@@ -185,11 +185,11 @@ in
       '';
       description = ''
         EnvoyProxy `spec` fields (`gateway.envoyproxy.io/v1alpha1`) merged
-        into the `EnvoyProxy` resource of this Gateway.
+        into this Gateway's `EnvoyProxy` resource.
 
         By default, the package sets `provider.type = "Kubernetes"`, the
-        Envoy image the envoy-gateway-controller instance pins, the replica count from
-        the cluster's availability level
+        Envoy image from `envoy-gateway-controller` (`operandImages.envoy`), the
+        replica count from the cluster's availability level
         (`provider.kubernetes.envoyDeployment.replicas`), pod topology spread
         constraints and a `PodDisruptionBudget` when running multiple
         replicas, and the proxy Service type (`NodePort` when
@@ -200,7 +200,7 @@ in
         `EnvoyProxy` fields here. Kix rejects overrides to `provider.type`
         (must be `"Kubernetes"`),
         `provider.kubernetes.envoyDeployment.container.image` (set
-        `operandImages.envoy` on the envoy-gateway-controller instance instead),
+        `operandImages.envoy` on `envoy-gateway-controller` instead),
         `provider.kubernetes.envoyDeployment.pod.topologySpreadConstraints`,
         and `mergeGateways`.
       '';
@@ -244,8 +244,8 @@ in
           else
             scope.fail {
               dependency = "envoyGateway";
-              message = "deps.envoyGateway resolved to an instance whose out has no gatewayClassName, proxyImage, proxyLabels, or crds.EnvoyProxy, such as a kix.mkImport. This package needs the envoy-gateway-controller package, which runs the controller.";
-              fix = "Add instances.${ns}.envoy-gateway-controller.package = packages.experimental.envoy-gateway-controller; For an Envoy Gateway installed outside Kix, declare its existing Gateway as a kix.mkImport { out.gatewayRef = { name; namespace; }; } instance with aliases = [ \"gateway\" ] instead.";
+              message = "the 'envoyGateway' dependency did not resolve to an envoy-gateway-controller instance (missing out.gatewayClassName, out.proxyImage, out.proxyLabels, or out.crds.EnvoyProxy). This package requires envoy-gateway-controller and cannot use a controller declared with kix.mkImport.";
+              fix = "Add `instances.${ns}.envoy-gateway-controller.package = packages.experimental.envoy-gateway-controller;` and remove any `envoyGateway` alias from other instances. If Envoy Gateway is installed outside Kix, replace this `envoy-gateway` instance with `kix.mkImport { out.gatewayRef = { name = \"<gateway>\"; namespace = \"<namespace>\"; }; }` and `aliases = [ \"gateway\" ];`.";
             };
 
         inControllerNamespace =
@@ -253,7 +253,7 @@ in
             true
           else
             scope.fail {
-              message = "this instance is in namespace \"${ns}\", and the envoy-gateway-controller instance it uses is in \"${controller.namespace}\". Envoy Gateway starts every Gateway's proxies in the controller's namespace, and the network policy for them is written there.";
+              message = "this instance is in namespace \"${ns}\", but envoy-gateway-controller is in \"${controller.namespace}\". Both must be in the same namespace because Envoy Gateway deploys all proxy pods in the controller's namespace, where Kix creates this Gateway's proxy network policies and PodMonitor.";
               fix = "Move this instance to namespace \"${controller.namespace}\".";
             };
 
@@ -304,7 +304,7 @@ in
           else if config.proxySpec ? mergeGateways then
             scope.fail {
               option = "proxySpec.mergeGateways";
-              message = "proxySpec.mergeGateways is set, which this package does not support. It shares one proxy Deployment across every Gateway of a GatewayClass, and each instance of this package runs its own proxies.";
+              message = "envoy-gateway does not support proxySpec.mergeGateways. mergeGateways shares one proxy Deployment across an entire GatewayClass, whereas each envoy-gateway instance runs dedicated proxy pods, a Service, and network policies for a single Gateway.";
               fix = "Remove proxySpec.mergeGateways.";
             }
           else
