@@ -551,7 +551,7 @@ in
         minor = refusedWith releaseMessage "kubevirt" { image.tag = "v1.6.0"; };
         latest = refusedWith releaseMessage "kubevirt" { image.tag = "latest"; };
         noV = refusedWith releaseMessage "kubevirt" { image.tag = "1.5.0"; };
-        cdiMinor = refusedWith "is not a v1.62 release" "cdi" { image.tag = "v1.63.0"; };
+        cdiMinor = refusedWith "is not a v1.66 release" "cdi" { image.tag = "v1.67.0"; };
         operandPullPolicy = refusedWith "operandImages.cdi-importer.pullPolicy" "cdi" {
           operandImages.cdi-importer.pullPolicy = "Always";
         };
@@ -561,7 +561,7 @@ in
     (
       builtins.length (builtins.attrNames kvOperands) == 9
       && lib.all pinned (builtins.attrValues kvOperands)
-      && lib.all (lib.hasInfix ":v1.62.0@sha256:") (builtins.attrValues (imageVars cdiEnv))
+      && lib.all (lib.hasInfix ":v1.66.1@sha256:") (builtins.attrValues (imageVars cdiEnv))
       && builtins.length extraImages == 15
       && lib.all (lib.hasInfix "@sha256:") extraImages
       &&
