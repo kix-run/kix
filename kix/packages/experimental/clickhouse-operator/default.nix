@@ -63,10 +63,15 @@
 #   out.version
 #       The operator version `image.tag` names.
 #
-# Upgrades: a patch release of the operator takes over the installations
-# the previous one created, and restarts no ClickHouse or Keeper pod. Going
-# back to the previous patch release works the same way: deploy the older
-# package, and the older operator reconciles the same installations.
+# Upgrades: 0.27.4 takes over the installations 0.27.3 created. It keeps
+# the ClickHouse pods and replaces each Keeper pod once, one at a time, so
+# the quorum holds. Until it has reconciled each installation, about a
+# minute, it cannot log in to the servers, because their config still
+# allows the old operator pod's address only. To go back, deploy the older
+# package. 0.27.3 then recreates every StatefulSet of both kinds, because
+# their volumeClaimTemplates differ and cannot be updated in place, so
+# every ClickHouse and Keeper pod restarts once. The volumes and their data
+# stay.
 #
 # root = the operator Deployment.
 
