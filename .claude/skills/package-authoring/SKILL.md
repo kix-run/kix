@@ -725,8 +725,9 @@ still appears. Update each place, or say why it stays.
   cluster. The snapshots hold hashes that change too, so regenerate them
   instead of editing them directly. From `cli/`: `nix develop .. -c env
   INSTA_UPDATE=always cargo test -p kix-cli --test snapshot_test`.
-- Not `docs/src/command-output/`. A version bump leaves the docs'
-  captured command output alone, and the release regenerates it.
+- `docs/src/command-output/`: leave these files alone. Each Kix release
+  regenerates the captured command output in the docs, so
+  `scripts/check-bump.sh` skips them.
 - `kix/lib/tests/units/`: a test that names the next version as one the
   package must refuse fails after the bump. Move it up.
 - `ROADMAP.md`, where the package's entry cites its release.

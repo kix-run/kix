@@ -106,13 +106,12 @@ same unreleased records, with the version taken from the prerelease.
 2. The lockfiles: run `cargo update --workspace` in `cli/` and
    `cargo update -p kix-lib -p kix-bundle -p kix-container` in `cli/fuzz/`.
    Check that the diff changes only the `version` lines of Kix's own crates.
-3. The docs' captured command output. Package version bumps leave it
-   alone, so the release regenerates all of it:
-   `nix run ./docs#regen-captures-offline -- --apply`. Run this after step
-   1, since some captures show `kix --version` and the Nix store path of
-   the `kix` package. Revert a file in which only a timestamp changed.
-   Read the rest of the diff: each change should come from a package
-   version or a change record of this release. Without this step, the
+3. `docs/src/command-output/`: after steps 1 and 2, regenerate the captured
+   command output with `nix run ./docs#regen-captures-offline -- --apply`.
+   Package version bumps leave these files alone until a release. Revert any
+   file where only a timestamp changed. Check the remaining diff: every
+   change should come from the new Kix version (such as `kix --version`), a
+   package bump, or a change record in this release. Without this step, the
    Documentation captures check fails on the release pull request.
 4. The change records. First read the section they make:
    `scripts/change-records.py changelog`. If a bullet reads wrongly, fix
