@@ -8,17 +8,19 @@
 # Service <name>-bootstrap that the pods find each other through, and the
 # NodePort Service <name>-registry. Each pod's init container writes a
 # `hosts.toml` for every mirrored registry into containerd's registry
-# config directory on its node, naming two mirrors: this node's pod
-# through hostPort 30020 and any pod through NodePort 30021. containerd
-# falls back to the upstream registry when neither answers. The registry
-# container reads layers from containerd's content store through its
-# socket and serves them to containerd and to its peers. With a
+# config directory on its node, naming one mirror: NodePort 30021 on the
+# node's own address. The Service's `trafficDistribution: PreferSameNode`
+# sends that traffic to the node's own pod, and to a pod on another node
+# when the node has no ready pod. containerd falls back to the upstream
+# registry when the mirror does not answer. The registry container reads
+# layers from containerd's content store through its socket and serves
+# them to containerd and to its peers. With a
 # `prometheus` dependency and `metrics.enabled`, it also renders Service
 # <name>-metrics and a ServiceMonitor.
 #
 # The instance claims the `registryMirror` role, so a cluster runs one. The
-# hostPort, the NodePort, and the files under the registry config directory
-# are per node as well.
+# NodePort and the files under the registry config directory are per node
+# as well.
 #
 # Dependencies:
 #   prometheus (optional)  metrics Service and ServiceMonitor.
@@ -29,7 +31,11 @@
 #
 # Node prerequisites, which Kix cannot apply. The package reads them from
 # the cluster definition and refuses a cluster that cannot serve:
-#   - containerd, with a registry `config_path`. The socket, the config
+#   - Kubernetes 1.35 to 1.37 (meta.k8s), the versions Spegel supports.
+#     `trafficDistribution: PreferSameNode` needs 1.34 or later.
+#   - containerd 2.2 or later, with a registry `config_path`. The registry
+#     container exits with an error on an older containerd. Kix has no
+#     fact for the containerd version, so it cannot refuse one. The socket, the config
 #     directory, and the content store come from `cluster.containerd`,
 #     which the flavours set (Talos and GKE move the config directory).
 #   - `discard_unpacked_layers = false` in containerd's CRI config. kind,
@@ -40,14 +46,16 @@
 #   - Two or more nodes. A pod is ready only once it has a peer, so on one
 #     node the DaemonSet never becomes ready. `cluster.capabilities.multiNode
 #     = false` (the kind flavour's default) is refused; null warns.
-#   - hostPort support in the CNI (kindnet and the portmap plugin have it).
+#   - A Service proxy that honours `trafficDistribution` (kube-proxy
+#     does). Without it, containerd still reaches a pod through the
+#     NodePort, but often one on another node.
 # k3s and RKE2 embed Spegel behind `embedded-registry: true`; a cluster
 # that turns it on binds the role exclusive, and this package is then
 # refused. Their flavours set the containerd paths under /var/lib/rancher.
 #
 # Network policy: the package's intents admit the node itself and the
 # other nodes (Cilium's `host` and `remote-node`) to the registry port,
-# where containerd connects through the hostPort and the NodePort. The pods
+# where containerd connects through the NodePort. The pods
 # reach each other through the bootstrap Service, which lists the registry
 # and router ports, so their peer traffic is derived from it.
 #
@@ -74,6 +82,18 @@
 # One node's pod down is left to prometheus-default-rules (TargetDown,
 # KubeDaemonSetRolloutStuck). A mirror miss falls back the same way, so
 # hit and miss counts (`spegel_mirror_requests_total`) are for dashboards.
+#
+# Upgrades: Spegel keeps no data the version reads. Each node holds the
+# pod's libp2p key in /var/lib/spegel and the `hosts.toml` files the init
+# container writes. Spegel 0.8 reads the key 0.7 wrote, and its init
+# container rewrites each `hosts.toml` to name only the NodePort. During
+# the rolling update, a node that still runs 0.7 names hostPort 30020
+# first, and falls back to the NodePort, which stays at 30021 for that
+# reason. Spegel 0.8 replaces the metrics `spegel_advertised_images`,
+# `spegel_advertised_image_tags`, and `spegel_advertised_image_digests`
+# with `spegel_advertised_keys`. Upstream says nothing about going back. To
+# go back, deploy the previous Kix version: Spegel 0.7 reads the same key,
+# and its init container writes the two-mirror `hosts.toml` again.
 
 {
   scope,
@@ -82,7 +102,7 @@
 }:
 let
   # meta.version and image.tag read this.
-  release = "v0.7.4";
+  release = "v0.8.1";
 
   name = scope.instanceName;
   ns = scope.namespaceName;
@@ -91,9 +111,10 @@ let
   registryPort = 5000;
   routerPort = 5001;
   metricsPort = 9090;
-  # Fixed by upstream's chart, and written into every node's containerd
-  # configuration, so one instance per cluster owns them.
-  hostPort = 30020;
+  # Written into every node's containerd configuration, so one instance
+  # per cluster owns it. Upstream's chart moved to 30020 in 0.8, the
+  # hostPort that 0.7 pods hold while a rolling update runs, so the
+  # package keeps 30021.
   nodePort = 30021;
   # Where each node keeps the pod's libp2p identity across restarts.
   dataDir = "/var/lib/spegel";
@@ -109,11 +130,18 @@ in
     description = "Spegel, a peer-to-peer OCI registry mirror that serves image layers from the nodes that already hold them";
     owner = "platform";
     roles = [ "registryMirror" ];
+    # Upstream's release page states support for the latest three
+    # Kubernetes minors at release time, and the 0.8 release notes set 1.35
+    # as the minimum. Move both bounds with `release`.
+    k8s = {
+      minVersion = "1.35";
+      maxVersion = "1.37";
+      reason = "[K8826] Spegel ${release} supports Kubernetes 1.35 to 1.37. Deploy a Kix release with an older spegel package, or move the cluster to a supported Kubernetes version first";
+    };
     # The registry container reads the containerd socket and content store,
     # which root owns on the host.
     unsafe = [ "run-as-root" ];
-    # hostPath mounts and a hostPort, which the baseline Pod Security level
-    # forbids.
+    # hostPath mounts, which the baseline Pod Security level forbids.
     podSecurity = "privileged";
     network.intents.containerd.ingress = [
       {
@@ -131,7 +159,7 @@ in
     image = kix.options.image {
       repository = "ghcr.io/spegel-org/spegel";
       tag = release;
-      digest = "sha256:26c60b05e08ac738e8442bc389c5780bff0e1d8153956e45d810a2f1008cf56f";
+      digest = "sha256:bdc1d14e4ab76e9a74520d331f485d09a596110118bd1a7706fa0411f17b3703";
     };
 
     # Memory as upstream's chart sets it, a request equal to the limit;
@@ -161,7 +189,7 @@ in
       type = lib.types.listOf lib.types.str;
       default = [ ];
       example = [ "--registry-filters=:latest$" ];
-      description = "Flags appended to the registry command's own. The address flags (`--registry-addr`, `--router-addr`, `--metrics-addr`), the bootstrap flags (`--bootstrap-kind`, `--dns-bootstrap-domain`, `--http-bootstrap-addr`, `--http-bootstrap-peer`, `--static-bootstrap-peers`), the containerd flags, `--mirrored-registries`, and `--data-dir` are refused. The debug web page is off; `--debug-web-enabled=true` turns it on.";
+      description = "Flags appended to the registry command's own. The address flags (`--registry-addr`, `--router-addr`, `--metrics-addr`), the bootstrap flags (`--bootstrap-kind`, `--dns-bootstrap-domain`, `--http-bootstrap-url`, `--http-bootstrap-cert-dir`, `--static-bootstrap-peers`), the containerd flags, `--mirrored-registries`, and `--data-dir` are refused. The debug web page is off; `--debug-web-enabled=true` turns it on.";
     };
 
     metrics = kix.options.monitor;
@@ -212,6 +240,9 @@ in
           "--metrics-addr=:${toString metricsPort}"
           "--containerd-sock=${containerd.socket}"
           "--containerd-content-path=${containerd.contentPath}"
+          # Spegel compares it with the path containerd 2.4 and later
+          # reports, and refuses to start when they differ.
+          "--containerd-registry-config-path=${containerd.registryConfigPath}"
           "--bootstrap-kind=dns"
           "--dns-bootstrap-domain=${self.bootstrap.out.fqdn}"
           "--data-dir=${dataDir}"
@@ -224,17 +255,19 @@ in
           inherit who;
           owned = {
             "--registry-addr" =
-              "the hostPort, the NodePort, the probes, and the network policy use ${toString registryPort}; remove it.";
+              "the NodePort, the probes, and the network policy use ${toString registryPort}; remove it.";
             "--router-addr" = "the peers reach each other on ${toString routerPort}; remove it.";
             "--metrics-addr" = "the metrics Service uses ${toString metricsPort}; remove it.";
             "--containerd-sock" = "the package mounts cluster.containerd.socket; set that instead.";
             "--containerd-content-path" =
               "the package mounts cluster.containerd.contentPath; set that instead.";
             "--containerd-namespace" = "kubelet pulls into containerd's k8s.io namespace; remove it.";
+            "--containerd-registry-config-path" =
+              "the init container writes cluster.containerd.registryConfigPath; set that instead.";
             "--bootstrap-kind" = "the pods find each other through the bootstrap Service; remove it.";
             "--dns-bootstrap-domain" = "the package names the bootstrap Service; remove it.";
-            "--http-bootstrap-addr" = "the pods find each other through the bootstrap Service; remove it.";
-            "--http-bootstrap-peer" = "the pods find each other through the bootstrap Service; remove it.";
+            "--http-bootstrap-url" = "the pods find each other through the bootstrap Service; remove it.";
+            "--http-bootstrap-cert-dir" = "the pods find each other through the bootstrap Service; remove it.";
             "--static-bootstrap-peers" = "the pods find each other through the bootstrap Service; remove it.";
             "--mirrored-registries" =
               "the init container writes the mirror configuration from it as well; set mirroredRegistries instead.";
@@ -297,7 +330,6 @@ in
                   )
                   ++ [
                     "--mirror-targets"
-                    "http://$(NODE_IP):${toString hostPort}"
                     "http://$(NODE_IP):${toString nodePort}"
                   ];
                   env = [ nodeIp ];
@@ -328,7 +360,7 @@ in
                     };
                   };
                   ports = [
-                    ((kix.port "registry" registryPort) // { inherit hostPort; })
+                    (kix.port "registry" registryPort)
                     (kix.port "router-tcp" routerPort)
                     (
                       (kix.port "router-quic" routerPort)
@@ -456,8 +488,9 @@ in
                 protocol = "TCP";
               }
             ];
-            # Keeps NodePort traffic in the caller's zone where it can.
-            annotations."service.kubernetes.io/topology-mode" = "auto";
+            # containerd on each node reaches its own pod, and another node's
+            # pod when its own is not ready.
+            spec.trafficDistribution = "PreferSameNode";
           }
           |> scope.mkResource;
 

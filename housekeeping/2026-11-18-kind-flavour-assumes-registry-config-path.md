@@ -1,0 +1,3 @@
+# 2026-11-18 · `kix/lib/flavors/kind.nix` · The kind flavour assumes a registry `config_path` that kind 0.33 node images leave empty.
+
+The flavour keeps the default `cluster.containerd.registryConfigPath = "/etc/containerd/certs.d"`, but the kind 0.33 node image for Kubernetes 1.37 (`kindest/node:v1.37.0`, containerd 2.3.4) sets `config_path = ''`. containerd then ignores every `hosts.toml`, so Spegel deploys, reports ready, and serves no pull, with no error anywhere. `clusters/test-spegel.nix` now patches `config_path` in its kind config. The flavour has no fact for "no registry config directory", so a package that writes mirror configuration cannot refuse such a cluster.
