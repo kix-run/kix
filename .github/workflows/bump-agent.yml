@@ -170,6 +170,11 @@ jobs:
           echo "KUBECONFIG=$KUBECONFIG" >> "$GITHUB_ENV"
 
       - name: Run the agent
+        env:
+          # Spindle runs the job as root, and Claude Code refuses to skip its
+          # permission prompts as root unless told it is in a sandbox. The VM
+          # is thrown away after the job and holds no secrets.
+          IS_SANDBOX: '1'
         run: |
           # Each GitHub identity token lasts about five minutes. Claude Code
           # rereads this file whenever it exchanges it for a new Claude API
@@ -193,6 +198,7 @@ jobs:
           kill "$refresher"
           echo "Claude Code exited with $status"
           tail -n1 "$RUNNER_TEMP/transcript.jsonl" | jq -r '"cost: $\(.total_cost_usd // "unknown"), turns: \(.num_turns // "unknown")"' || true
+          exit "$status"
 
       - name: Collect the commits and the report
         if: always() && steps.base.outputs.sha
