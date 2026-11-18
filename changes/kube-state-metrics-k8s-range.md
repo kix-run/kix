@@ -1,6 +1,5 @@
 +++
-kind = "error"
-id = "K9973"
+kind = "changed"
 packages = ["kube-state-metrics"]
 +++
-If your cluster uses `kube-state-metrics` and sets `k8sVersion` below 1.36, upgrade the cluster to Kubernetes 1.36 or newer and update `k8sVersion` before upgrading Kix, or stay on an older version of Kix. `kube-state-metrics` previously accepted Kubernetes 1.25 and newer, and now fails the build below 1.36 because kube-state-metrics 2.20.0 reads `MutatingAdmissionPolicy` resources from `admissionregistration.k8s.io/v1`, which Kubernetes added in 1.36. On a `k8sVersion` newer than 1.36, the build succeeds with a warning because the upstream project lists support for 1.36 only. Clusters that leave `k8sVersion` unset are not checked.
+`kube-state-metrics` now chooses its collectors from the cluster's `k8sVersion`. kube-state-metrics 2.20.0 reads MutatingAdmissionPolicy and ValidatingAdmissionPolicy objects through `admissionregistration.k8s.io/v1`, which Kubernetes serves from 1.36 and 1.30. On an older `k8sVersion` the package leaves those collectors out of `--resources` and their kinds out of its ClusterRole, so the series for them are absent. It also warns when `k8sVersion` is not 1.36, the one version kube-state-metrics 2.20.0 states support for. A cluster that sets no `k8sVersion` keeps every collector, and `--resources` in `extraArgs` replaces the package's choice.

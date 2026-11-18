@@ -45,9 +45,11 @@ let
   # upstream's stated support, and `accepts` versions inside both.
   ranges = {
     "stable/kube-state-metrics" = {
-      refuses = [ "1.35" ];
-      id = "K9973";
-      warns = [ "1.37.0" ];
+      refuses = [ "1.24" ];
+      warns = [
+        "1.35"
+        "1.37.0"
+      ];
       accepts = [ "1.36.4" ];
     };
     "stable/cnpg-operator" = {
@@ -322,9 +324,54 @@ lib.mapAttrs' (
       && has "This Kix release supports Kubernetes ${window.minVersion} to ${window.maxVersion}" (
         messagesOn "1.38"
       )
-      && evalFails (clusterOn "1.35")
+      && has "upstream project supports or tests Kubernetes 1.36 only" (messagesOn "1.35")
+      && evalFails (clusterOn "1.24")
     )
     || throw "k8s-window-cluster-warnings: 1.36 ${builtins.toJSON (messagesOn "1.36")}, 1.37 ${builtins.toJSON (messagesOn "1.37")}, 1.38 ${builtins.toJSON (messagesOn "1.38")}";
+
+  # kube-state-metrics turns off the collectors whose API the cluster's
+  # Kubernetes does not serve, and its ClusterRole drops the same kinds. On
+  # a version that serves them all, and with no version, it passes no
+  # `--resources` and keeps upstream's default.
+  k8s-window-kube-state-metrics-collectors =
+    let
+      objectsOn =
+        k8sVersion:
+        (mkCluster [
+          {
+            inherit k8sVersion;
+            instances.monitoring.kube-state-metrics.package = import ../../../packages/stable/kube-state-metrics;
+          }
+        ]).rawManifests;
+      only = kind: ms: builtins.head (builtins.filter (m: m.kind == kind) ms);
+      resourcesFlag =
+        v:
+        let
+          args = (builtins.head (only "Deployment" (objectsOn v)).spec.template.spec.containers).args;
+          flags = builtins.filter (lib.hasPrefix "--resources=") args;
+        in
+        if flags == [ ] then
+          null
+        else
+          lib.splitString "," (lib.removePrefix "--resources=" (builtins.head flags));
+      granted = v: builtins.concatMap (r: r.resources or [ ]) (only "ClusterRole" (objectsOn v)).rules;
+      mutating = "mutatingadmissionpolicies";
+      validating = "validatingadmissionpolicies";
+    in
+    (
+      resourcesFlag "1.36" == null
+      && resourcesFlag null == null
+      && builtins.elem mutating (granted "1.36")
+      && builtins.elem mutating (granted null)
+      && !(builtins.elem mutating (resourcesFlag "1.35"))
+      && builtins.elem validating (resourcesFlag "1.35")
+      && builtins.elem "pods" (resourcesFlag "1.35")
+      && !(builtins.elem mutating (granted "1.35"))
+      && builtins.elem validating (granted "1.35")
+      && !(builtins.elem validating (resourcesFlag "1.29"))
+      && !(builtins.elem validating (granted "1.29"))
+    )
+    || throw "kube-state-metrics collectors: 1.35 ${builtins.toJSON (resourcesFlag "1.35")}, 1.29 ${builtins.toJSON (resourcesFlag "1.29")}, 1.36 ${builtins.toJSON (resourcesFlag "1.36")}, role on 1.35 ${builtins.toJSON (granted "1.35")}";
 
   # A `supported` bound that is not a version is the author's error.
   k8s-supported-range-malformed-fails =

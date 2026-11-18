@@ -352,6 +352,21 @@ Kix models cluster availability across four ordered levels: `"none"` < `"pod"` <
 
 ## Image and pin helpers
 
+### `kix.version.atLeast` and `kix.version.atMost`
+
+Compare a version string, such as `clusterConfig.k8sVersion`, with a bound. A package uses them to leave out something that the cluster's Kubernetes version does not serve.
+
+| Function | Signature | Result |
+|---|---|---|
+| `kix.version.atLeast` | `version -> bound -> bool or null` | `true` when `version` is `bound` or newer. |
+| `kix.version.atMost` | `version -> bound -> bool or null` | `true` when `version` is `bound` or older. |
+
+Both compare only as many segments as `bound` has, so `atLeast "1.36.2" "1.36"` is `true`. Both return `null` when `version` has fewer segments than `bound`. `clusterConfig.k8sVersion` is `null` when the cluster sets none, so check for that first.
+
+```nix
+served = k8sVersion == null || kix.version.atLeast k8sVersion "1.36" != false;
+```
+
 ### `kix.image.ref`, `kix.image.version`, and `kix.image.isPinned`
 
 Pair `kix.options.image` in `options` with `kix.image.ref` in container specs:

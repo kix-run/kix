@@ -26,6 +26,12 @@
 # `kube_pod_status_reason` has a series only for the reason a pod has, not a
 # zero-valued series for every other reason.
 #
+# Kubernetes versions: when the cluster sets `k8sVersion`, the package
+# leaves out the collectors whose API that version does not serve, and
+# their kinds from the ClusterRole. Those are the MutatingAdmissionPolicy
+# collectors before 1.36 and the ValidatingAdmissionPolicy collectors
+# before 1.30. `--resources` in `extraArgs` replaces that choice.
+#
 # Limits: one replica at every availability level (`availability.max =
 # "none"` on the Deployment), because a second unsharded replica duplicates
 # every series. The package ships no alerts; prometheus-default-rules does.
@@ -48,15 +54,13 @@ in
     description = "kube-state-metrics: Kubernetes object state exporter";
     owner = "platform";
     defaultAliases = [ "kubeStateMetrics" ];
-    # The mutatingadmissionpolicies and mutatingadmissionpolicybindings
-    # collectors are on by default (pkg/options/resource.go upstream) and
-    # read admissionregistration.k8s.io/v1. Kubernetes serves those kinds in
-    # v1 from 1.36, and as v1beta1 before that. Upstream states support for
-    # the Kubernetes version of the client-go it builds with (README
-    # "Kubernetes Version" and data.yaml). Move `supported` with `release`.
+    # Upstream states support for the Kubernetes version of the client-go
+    # it builds with (README "Kubernetes Version" and data.yaml). On an
+    # older cluster the package leaves out the collectors whose API that
+    # cluster does not serve (`collectorsSince`), so nothing is known to
+    # fail from 1.25. Move `supported` with `release`.
     k8s = {
-      minVersion = "1.36";
-      reason = "[K9973] kube-state-metrics ${release} reads MutatingAdmissionPolicy resources from admissionregistration.k8s.io/v1, which Kubernetes added in 1.36. Upgrade the cluster to Kubernetes 1.36 or newer and update k8sVersion, or stay on an older version of Kix.";
+      minVersion = "1.25";
       supported = {
         minVersion = "1.36";
         maxVersion = "1.36";
@@ -95,13 +99,76 @@ in
       {
         self,
         config,
+        clusterConfig,
         ...
       }:
       let
+        k8sVersion = clusterConfig.k8sVersion or null;
+
+        # Name the first Kubernetes version that serves the API a collector
+        # reads, for the collectors that read admissionregistration.k8s.io/v1
+        # kinds newer than the package's minimum. Kubernetes 1.34 and 1.35
+        # serve MutatingAdmissionPolicy as v1beta1 only.
+        collectorsSince = {
+          mutatingadmissionpolicies = "1.36";
+          mutatingadmissionpolicybindings = "1.36";
+          validatingadmissionpolicies = "1.30";
+          validatingadmissionpolicybindings = "1.30";
+        };
+        # A cluster with no `k8sVersion` keeps every collector.
+        served =
+          collector:
+          !(collectorsSince ? ${collector})
+          || k8sVersion == null
+          || kix.version.atLeast k8sVersion collectorsSince.${collector} != false;
+
+        # Upstream's default collectors (DefaultResources in
+        # pkg/options/resource.go). Move the list with `release`.
+        defaultCollectors = [
+          "certificatesigningrequests"
+          "configmaps"
+          "cronjobs"
+          "daemonsets"
+          "deployments"
+          "endpointslices"
+          "horizontalpodautoscalers"
+          "ingresses"
+          "jobs"
+          "leases"
+          "limitranges"
+          "mutatingadmissionpolicies"
+          "mutatingadmissionpolicybindings"
+          "mutatingwebhookconfigurations"
+          "namespaces"
+          "networkpolicies"
+          "nodes"
+          "persistentvolumes"
+          "persistentvolumeclaims"
+          "poddisruptionbudgets"
+          "pods"
+          "replicasets"
+          "replicationcontrollers"
+          "resourcequotas"
+          "secrets"
+          "services"
+          "statefulsets"
+          "storageclasses"
+          "validatingadmissionpolicies"
+          "validatingadmissionpolicybindings"
+          "validatingwebhookconfigurations"
+          "volumeattachments"
+        ];
+        servedCollectors = builtins.filter served defaultCollectors;
+        # `--resources` in `extraArgs` replaces the package's choice.
+        choosesCollectors = builtins.any (lib.hasPrefix "--resources") config.extraArgs;
+
         args = [
           "--port=${toString metricsPort}"
           "--telemetry-port=${toString telemetryPort}"
         ]
+        ++ lib.optional (
+          !choosesCollectors && servedCollectors != defaultCollectors
+        ) "--resources=${lib.concatStringsSep "," servedCollectors}"
         ++ kix.guardArgs {
           inherit who;
           owned = {
@@ -180,47 +247,52 @@ in
           ];
           labels = scope.selectorLabels;
           roles = {
-            "${name}" = grant [
-              (core.configmaps |> watch)
-              (core.secrets |> watch)
-              (core.nodes |> watch)
-              (core.pods |> watch)
-              (core.services |> watch)
-              (core "resourcequotas" |> watch)
-              (core "replicationcontrollers" |> watch)
-              (core "limitranges" |> watch)
-              (core.persistentvolumeclaims |> watch)
-              (core.persistentvolumes |> watch)
-              (core.namespaces |> watch)
-              (core.endpoints |> watch)
-              (discovery.endpointslices |> watch)
-              (core.serviceaccounts |> watch)
-              (apps.statefulsets |> watch)
-              (apps.deployments |> watch)
-              (apps.replicasets |> watch)
-              (apps.daemonsets |> watch)
-              (batch.jobs |> watch)
-              (batch.cronjobs |> watch)
-              (autoscaling.horizontalpodautoscalers |> watch)
-              (policy.poddisruptionbudgets |> watch)
-              (certs.certificatesigningrequests |> watch)
-              (storage.storageclasses |> watch)
-              (storage.volumeattachments |> watch)
-              (admReg.mutatingadmissionpolicies |> watch)
-              (admReg.mutatingadmissionpolicybindings |> watch)
-              (admReg.mutatingwebhookconfigurations |> watch)
-              (admReg.validatingadmissionpolicies |> watch)
-              (admReg.validatingadmissionpolicybindings |> watch)
-              (admReg.validatingwebhookconfigurations |> watch)
-              (net.networkpolicies |> watch)
-              (net.ingresses |> watch)
-              (net.ingressclasses |> watch)
-              (coord.leases |> watch)
-              (rbacGroup.clusterroles |> watch)
-              (rbacGroup.clusterrolebindings |> watch)
-              (rbacGroup.roles |> watch)
-              (rbacGroup.rolebindings |> watch)
-            ];
+            "${name}" = grant (
+              [
+                (core.configmaps |> watch)
+                (core.secrets |> watch)
+                (core.nodes |> watch)
+                (core.pods |> watch)
+                (core.services |> watch)
+                (core "resourcequotas" |> watch)
+                (core "replicationcontrollers" |> watch)
+                (core "limitranges" |> watch)
+                (core.persistentvolumeclaims |> watch)
+                (core.persistentvolumes |> watch)
+                (core.namespaces |> watch)
+                (core.endpoints |> watch)
+                (discovery.endpointslices |> watch)
+                (core.serviceaccounts |> watch)
+                (apps.statefulsets |> watch)
+                (apps.deployments |> watch)
+                (apps.replicasets |> watch)
+                (apps.daemonsets |> watch)
+                (batch.jobs |> watch)
+                (batch.cronjobs |> watch)
+                (autoscaling.horizontalpodautoscalers |> watch)
+                (policy.poddisruptionbudgets |> watch)
+                (certs.certificatesigningrequests |> watch)
+                (storage.storageclasses |> watch)
+                (storage.volumeattachments |> watch)
+                (admReg.mutatingwebhookconfigurations |> watch)
+              ]
+              # Grant the admission policy kinds only where a collector reads
+              # them.
+              ++ map (collector: admReg.${collector} |> watch) (
+                builtins.filter served (builtins.attrNames collectorsSince)
+              )
+              ++ [
+                (admReg.validatingwebhookconfigurations |> watch)
+                (net.networkpolicies |> watch)
+                (net.ingresses |> watch)
+                (net.ingressclasses |> watch)
+                (coord.leases |> watch)
+                (rbacGroup.clusterroles |> watch)
+                (rbacGroup.clusterrolebindings |> watch)
+                (rbacGroup.roles |> watch)
+                (rbacGroup.rolebindings |> watch)
+              ]
+            );
           };
         };
 
