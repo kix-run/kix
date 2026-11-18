@@ -121,6 +121,7 @@
           traefik = ./clusters/test-traefik.nix;
           envoy-gateway = ./clusters/test-envoy-gateway.nix;
           filebrowser = ./clusters/test-filebrowser.nix;
+          caddy = ./clusters/test-caddy.nix;
           tempo = ./clusters/test-tempo.nix;
           tempo-generator = ./clusters/test-tempo-generator.nix;
           monitoring-native = ./clusters/test-monitoring-native.nix;
