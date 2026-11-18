@@ -23,19 +23,19 @@ on:
   workflow_dispatch:
     inputs:
       package:
-        description: Name used in the branch, report, and change record, such as reloader
+        description: Name used in the branch, report, and change record, such as cert-manager
         required: true
       dirs:
-        description: Package folders, separated by spaces, such as kix/packages/experimental/reloader
+        description: Package folders, separated by spaces, such as kix/packages/stable/cert-manager
         required: true
       pinned:
-        description: Version the package pins now, such as 1.4.22
+        description: Version the package pins now, such as 1.2.3
         required: true
       target:
-        description: Version to move to, such as 1.4.24
+        description: Version to move to, such as 1.3.0
         required: true
       tag:
-        description: Upstream release tag of the target, such as v1.4.24
+        description: Upstream release tag of the target, such as v1.3.0
         required: true
       git:
         description: Upstream git repository URL
