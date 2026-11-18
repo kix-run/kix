@@ -218,13 +218,10 @@ let
     };
 
   vmReadiness =
-    strategy: readinessOf (find (mkVirtCluster { vms = vmWith strategy; }) "VirtualMachine" "vm");
-  printable =
-    status:
-    builtins.toJSON {
-      path = "/status/printableStatus";
-      equals = status;
-    };
+    strategy:
+    builtins.fromJSON (
+      readinessOf (find (mkVirtCluster { vms = vmWith strategy; }) "VirtualMachine" "vm")
+    );
 
   diskTemplate = {
     metadata.name = "disk";
@@ -312,8 +309,10 @@ in
     )
     || throw "kix.operandPolicy directions: ingress ${builtins.toJSON ingressOnly}, egress ${builtins.toJSON egressOnly}, dropped ${builtins.toJSON dropped}";
 
-  # runStrategy Always and running = true wait for Running; Halted and
-  # running = false for Stopped. The caller's annotations stay.
+  # runStrategy Always and running = true wait for Running, read the
+  # generation from status.desiredGeneration, and report RestartRequired as
+  # a pending restart. Halted and running = false wait for Stopped and read
+  # no generation. The caller's annotations stay.
   kubevirt-cdi-vm-readiness =
     let
       got = {
@@ -322,18 +321,36 @@ in
         halted = vmReadiness { runStrategy = "Halted"; };
         stopped = vmReadiness { running = false; };
       };
-      want = {
-        always = printable "Running";
-        running = printable "Running";
-        halted = printable "Stopped";
-        stopped = printable "Stopped";
-      };
+      runningOk =
+        r:
+        r.path == "/status/printableStatus"
+        && r.equals == "Running"
+        && r.observedGeneration == "/status/desiredGeneration"
+        &&
+          r.pendingRestart.condition == {
+            type = "RestartRequired";
+            status = "True";
+          }
+        && lib.hasInfix "virtctl restart vm -n vms" r.pendingRestart.hint;
+      stoppedOk =
+        r:
+        r == {
+          path = "/status/printableStatus";
+          equals = "Stopped";
+          observedGeneration = false;
+        };
       note =
         (annotationsOf (
           find (mkVirtCluster { vms = vmWith { runStrategy = "Halted"; }; }) "VirtualMachine" "vm"
         )).note or null;
     in
-    (got == want && note == "kept")
+    (
+      runningOk got.always
+      && runningOk got.running
+      && stoppedOk got.halted
+      && stoppedOk got.stopped
+      && note == "kept"
+    )
     || throw "mkVirtualMachine readiness: got ${builtins.toJSON got}, caller annotation ${builtins.toJSON note}";
 
   # A run strategy whose outcome depends on a user or the guest, an

@@ -471,17 +471,19 @@ in
           // {
             annotations = (args.annotations or { }) // {
               "cdi.kubevirt.io/storage.bind.immediate.requested" = "true";
-              ${kix.keys.readiness} = builtins.toJSON {
-                path = "/status/phase";
-                equals = "Succeeded";
-                failed = [
-                  {
-                    path = "/status/phase";
-                    equals = "Failed";
-                    hint = "The claim behind the DataVolume was lost. Recreate the DataVolume.";
-                  }
-                ];
-              };
+            };
+            # DataVolumeStatus has no generation field, so the deploy reads
+            # the phase as current.
+            readiness = {
+              path = "/status/phase";
+              equals = "Succeeded";
+              failed = [
+                {
+                  path = "/status/phase";
+                  equals = "Failed";
+                  hint = "The claim behind the DataVolume was lost. Recreate the DataVolume.";
+                }
+              ];
             };
           }
         );

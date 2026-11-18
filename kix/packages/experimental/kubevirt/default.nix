@@ -30,9 +30,9 @@
 # The package accepts those minors because the vendored CRD and roles of
 # v1.9.1 hold every field and rule the older releases use. After each
 # upgrade, the new virt-controller rewrites every existing VirtualMachine
-# and raises its generation, and a running VM reports the generation it
-# started from until it restarts. A later deploy that changes such a VM
-# waits on it until `virtctl restart` or the deploy timeout. Going back
+# and raises its generation. out.mkVirtualMachine reads the generation from
+# status.desiredGeneration, so the deploy does not wait for a restart.
+# Going back
 # does not work: an older virt-operator cannot install its CRDs over the
 # storage versions a newer one recorded, and stays Degraded.
 #
@@ -86,7 +86,10 @@
 #   out.mkVirtualMachine scope { name; spec; annotations ? { }; requires ? [ ]; ... }
 #       A VirtualMachine the deploy waits on: until printableStatus is
 #       Running for runStrategy "Always" or running = true, and Stopped for
-#       "Halted" or running = false. Any other run strategy is refused,
+#       "Halted" or running = false. A running VM counts as current once
+#       status.desiredGeneration reaches its generation. When KubeVirt sets
+#       RestartRequired, the deploy reports the VM as ready with a restart
+#       pending and goes on. Any other run strategy is refused,
 #       because the VM's state then depends on a user or the guest. With
 #       `dataVolumeTemplates`, the VM also waits for the DataVolume CRD of
 #       the cluster's `cdi` instance, and is refused without one.
@@ -465,12 +468,36 @@ in
           args
           // {
             requires = (args.requires or [ ]) ++ dataVolumeCrd;
-            annotations = (args.annotations or { }) // {
-              ${kix.keys.readiness} = builtins.toJSON {
-                path = "/status/printableStatus";
-                equals = printableStatus;
-              };
-            };
+            readiness = {
+              path = "/status/printableStatus";
+              equals = printableStatus;
+            }
+            // (
+              if printableStatus == "Running" then
+                {
+                  # status.observedGeneration is the generation the running
+                  # VMI started from, and stays behind after an edit until
+                  # the VM restarts. virt-controller sets desiredGeneration
+                  # to the generation it has processed whenever a VMI exists
+                  # (pkg/virt-controller/watch/vm/vm.go, syncGenerationInfo).
+                  observedGeneration = "/status/desiredGeneration";
+                  pendingRestart = {
+                    condition = {
+                      type = "RestartRequired";
+                      status = "True";
+                    };
+                    hint = "Restart the VM to apply the change: virtctl restart ${vmName} -n ${
+                      consumerScope.namespaceName or "<namespace>"
+                    }.";
+                  };
+                }
+              else
+                {
+                  # A stopped VM has no VMI, so virt-controller updates
+                  # neither generation field.
+                  observedGeneration = false;
+                }
+            );
           }
         );
     in
