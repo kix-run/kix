@@ -481,7 +481,7 @@ in
       cdiSpec = (find merged "CDI" "cdi").spec;
       refused = {
         kvReplicas = mkVirtCluster { kubevirt.config.extraSpec.infra.replicas = 3; };
-        kvTag = mkVirtCluster { kubevirt.config.extraSpec.imageTag = "v1.5.1"; };
+        kvTag = mkVirtCluster { kubevirt.config.extraSpec.imageTag = "v1.9.2"; };
         kvPullPolicy = mkVirtCluster { kubevirt.config.extraSpec.imagePullPolicy = "Always"; };
         cdiReplicas = mkVirtCluster { cdi.config.extraSpec.infra.apiServerReplicas = 3; };
         cdiInfraNull = mkVirtCluster { cdi.config.extraSpec.infra = null; };
@@ -520,17 +520,19 @@ in
         ]
       && subjects == [ "kubevirt-operator" ]
       && admin.metadata.labels."rbac.authorization.k8s.io/aggregate-to-admin" or null == "true"
-      && builtins.length clusterRole.rules == 115
+      && builtins.length clusterRole.rules == 139
     )
     || throw "kubevirt RBAC: bindings ${builtins.toJSON refs}, subjects ${builtins.toJSON subjects}";
 
   # Default images carry the release tag and digest everywhere, except
-  # VIRT_OPERATOR_IMAGE, which is repo@digest. Another patch tag drops every
-  # digest; another minor release fails. A moved repository moves the
+  # VIRT_OPERATOR_IMAGE, which is repo@digest, and the virt-template images,
+  # which carry virt-template's own tag. Another patch tag drops every
+  # digest that follows image.tag. An older minor on upstream's update path
+  # is accepted, and a minor outside it fails. A moved repository moves the
   # operands and keeps their digests.
   kubevirt-cdi-images =
     let
-      pinned = lib.hasInfix ":v1.5.0@sha256:";
+      pinned = lib.hasInfix ":v1.9.1@sha256:";
       defaults = mkVirtCluster { };
       kvEnv = envOf defaults "kubevirt-operator";
       cdiEnv = envOf defaults "cdi-operator";
@@ -538,19 +540,26 @@ in
       kvOperands = removeAttrs (imageVars kvEnv) [ "VIRT_OPERATOR_IMAGE" ];
       extraImages = (outOf defaults "kubevirt").extraImages ++ (outOf defaults "cdi").extraImages;
 
-      patch = mkVirtCluster { kubevirt.config.image.tag = "v1.5.1"; };
+      patch = mkVirtCluster { kubevirt.config.image.tag = "v1.9.2"; };
       patchEnv = envOf patch "kubevirt-operator";
+      # An older step of upstream's update path is accepted for walking up.
+      walkUpEnv = envOf (mkVirtCluster { kubevirt.config.image.tag = "v1.6.6"; }) "kubevirt-operator";
+      templateVars = [
+        "VIRT_TEMPLATE_APISERVER_IMAGE"
+        "VIRT_TEMPLATE_CONTROLLER_IMAGE"
+      ];
 
       moved = mkVirtCluster {
         kubevirt.config.image.repository = "registry.example/mirror/virt-operator";
       };
       movedEnv = envOf moved "kubevirt-operator";
 
-      releaseMessage = "kubevirt/{crds,rbac} are vendored from v1.5.0";
+      releaseMessage = "kubevirt/{crds,rbac} are vendored from v1.9.1";
       refused = {
-        minor = refusedWith releaseMessage "kubevirt" { image.tag = "v1.6.0"; };
+        older = refusedWith releaseMessage "kubevirt" { image.tag = "v1.4.1"; };
+        newer = refusedWith releaseMessage "kubevirt" { image.tag = "v1.10.0"; };
         latest = refusedWith releaseMessage "kubevirt" { image.tag = "latest"; };
-        noV = refusedWith releaseMessage "kubevirt" { image.tag = "1.5.0"; };
+        noV = refusedWith releaseMessage "kubevirt" { image.tag = "1.9.1"; };
         cdiMinor = refusedWith "is not a v1.66 release" "cdi" { image.tag = "v1.67.0"; };
         operandPullPolicy = refusedWith "operandImages.cdi-importer.pullPolicy" "cdi" {
           operandImages.cdi-importer.pullPolicy = "Always";
@@ -559,20 +568,25 @@ in
       notFailing = builtins.attrNames (lib.filterAttrs (_: ok: !ok) refused);
     in
     (
-      builtins.length (builtins.attrNames kvOperands) == 9
-      && lib.all pinned (builtins.attrValues kvOperands)
+      builtins.length (builtins.attrNames kvOperands) == 12
+      && lib.all pinned (builtins.attrValues (removeAttrs kvOperands templateVars))
+      && lib.all (lib.hasInfix ":v0.2.3@sha256:") (map (n: kvOperands.${n}) templateVars)
       && lib.all (lib.hasInfix ":v1.66.1@sha256:") (builtins.attrValues (imageVars cdiEnv))
-      && builtins.length extraImages == 15
+      && builtins.length extraImages == 18
       && lib.all (lib.hasInfix "@sha256:") extraImages
       &&
         kvEnv.VIRT_OPERATOR_IMAGE
-        == "quay.io/kubevirt/virt-operator@sha256:1591b45d3f35b857cb13921429b83e8da4e21a35aa54e1c88290baf996c05a2d"
-      && patchEnv.VIRT_OPERATOR_IMAGE == "quay.io/kubevirt/virt-operator:v1.5.1"
-      && patchEnv.VIRT_API_IMAGE == "quay.io/kubevirt/virt-api:v1.5.1"
-      && lib.all (v: !(lib.hasInfix "@" v)) (builtins.attrValues (imageVars patchEnv))
+        == "quay.io/kubevirt/virt-operator@sha256:a8adf7b772e9ce0bf7e2ce889910fc41ebadf552c9dbe843e9b86641e34f5df9"
+      && patchEnv.VIRT_OPERATOR_IMAGE == "quay.io/kubevirt/virt-operator:v1.9.2"
+      && patchEnv.VIRT_API_IMAGE == "quay.io/kubevirt/virt-api:v1.9.2"
+      && lib.all (v: !(lib.hasInfix "@" v)) (
+        builtins.attrValues (removeAttrs (imageVars patchEnv) templateVars)
+      )
+      && walkUpEnv.VIRT_OPERATOR_IMAGE == "quay.io/kubevirt/virt-operator:v1.6.6"
+      && walkUpEnv.KUBEVIRT_VERSION == "v1.6.6"
       &&
         movedEnv.VIRT_HANDLER_IMAGE
-        == "registry.example/mirror/virt-handler:v1.5.0@sha256:70605363b54f4cc982a80dfdabd01462920bb2c64b028ab3b0c368ddb04e6370"
+        == "registry.example/mirror/virt-handler:v1.9.1@sha256:c23b635ea4aff7f0779c6c061c431da0469c7796255e6de90a5970236b5ea61b"
       && notFailing == [ ]
     )
     || throw "images: kubevirt ${builtins.toJSON kvEnv}, v1.5.1 ${builtins.toJSON patchEnv}, moved ${builtins.toJSON movedEnv}, accepted ${builtins.toJSON notFailing}";
@@ -627,6 +641,34 @@ in
       && evalFails cdi2
     )
     || throw "singleton: ${builtins.toJSON got}";
+
+  # A cluster that declares a Kubernetes version KubeVirt does not support
+  # is refused with the change record's id.
+  kubevirt-k8s-range =
+    let
+      refusals =
+        k8sVersion:
+        map (a: a.message) (
+          builtins.filter (a: !a.assertion)
+            (metaLib.checkMetaStatic {
+              packageMeta = metaOf kubevirtPackage;
+              instanceName = "kubevirt";
+              namespaceName = "kubevirt";
+              clusterConfig = { inherit k8sVersion; };
+              resolvedDepMeta = { };
+              resolutionIndex.byKey = { };
+            }).assertions
+        );
+      refused = v: builtins.any (lib.hasInfix "[K0297]") (refusals v);
+    in
+    (
+      refused "1.33"
+      && refused "1.37.0"
+      && refusals "1.34" == [ ]
+      && refusals "1.36.4" == [ ]
+      && refusals null == [ ]
+    )
+    || throw "kubevirt k8s range: 1.33 ${builtins.toJSON (refusals "1.33")}, 1.37.0 ${builtins.toJSON (refusals "1.37.0")}, 1.36.4 ${builtins.toJSON (refusals "1.36.4")}";
 
   # The tags in crds/sources.txt and rbac/sources.txt are the package's
   # release, so the vendored CRD and roles match the default images.
@@ -895,7 +937,8 @@ in
     || throw "CDI priorityClass: ${builtins.toJSON (spec (withClass { }))}";
 
   # With an enforcer, each operand gets its policy; without one, none
-  # renders. virt-exportproxy gets one only with the VMExport gate.
+  # renders. The virt-template pods get theirs unless the Template gate is
+  # disabled.
   kubevirt-cdi-operand-policies =
     let
       names = [
@@ -903,14 +946,23 @@ in
         "kubevirt-virt-controller"
         "kubevirt-virt-handler"
         "kubevirt-strategy-dumper"
+        "kubevirt-virt-exportproxy"
+        "kubevirt-virt-template-apiserver"
+        "kubevirt-virt-template-controller"
         "cdi-cdi-apiserver"
         "cdi-cdi-deployment"
         "cdi-cdi-uploadproxy"
       ];
       on = mkVirtCluster { modules = [ netpolOn ]; };
       off = mkVirtCluster { };
-      exportGate = mkVirtCluster {
-        kubevirt.config.extraSpec.configuration.developerConfiguration.featureGates = [ "VMExport" ];
+      noTemplate = mkVirtCluster {
+        kubevirt.config.extraSpec.configuration.developerConfiguration.disabledFeatureGates = [
+          "Template"
+        ];
+        modules = [ netpolOn ];
+      };
+      templateOff = mkVirtCluster {
+        kubevirt.config.extraSpec.configuration.virtTemplateDeployment.enabled = false;
         modules = [ netpolOn ];
       };
       # The test enforcer's mkEndpointSelector writes `matchLabels` at the
@@ -922,8 +974,14 @@ in
     (
       missing == [ ]
       && present == [ ]
-      && find on "CiliumNetworkPolicy" "kubevirt-virt-exportproxy" == null
-      && selectorOf exportGate "kubevirt-virt-exportproxy" == { "kubevirt.io" = "virt-exportproxy"; }
+      && selectorOf on "kubevirt-virt-exportproxy" == { "kubevirt.io" = "virt-exportproxy"; }
+      &&
+        selectorOf on "kubevirt-virt-template-apiserver" == {
+          "app.kubernetes.io/name" = "virt-template";
+          control-plane = "apiserver";
+        }
+      && find noTemplate "CiliumNetworkPolicy" "kubevirt-virt-template-apiserver" == null
+      && find templateOff "CiliumNetworkPolicy" "kubevirt-virt-template-controller" == null
       && selectorOf on "kubevirt-virt-handler" == { "kubevirt.io" = "virt-handler"; }
       &&
         selectorOf on "cdi-cdi-deployment" == {
