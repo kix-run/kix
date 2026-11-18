@@ -1,6 +1,7 @@
 # Tests for kix/packages/experimental/clickhouse-keeper, clickhouse-cluster, and
 # clickhouse: the contract's replicas and replicaHosts fields, the refusals of an even Keeper
-# quorum and of a cluster with no memory limit, the health check's
+# quorum, of a cluster with no memory limit, and of a user field in the
+# operator's removed k8s_secret_ syntax, the health check's
 # addresses for each replica, Keeper's metrics endpoint, and the alert
 # rules of the operator, Keeper, and both server packages and what each
 # rule is gated on, and clickhouse-database's refusal of the removed
@@ -211,6 +212,35 @@ in
       })
     )
     || throw "clickhouse-cluster: a cluster with no memory limit rendered, or the default was refused";
+
+  # A user field in the k8s_secret_ syntax, flat or nested, is refused.
+  # The same user with valueFrom.secretKeyRef renders.
+  clickhouse-operator-removed-secret-ref =
+    let
+      withUsers =
+        users:
+        replicated {
+          clusterConfig.extraSpec.configuration.users = users;
+        };
+    in
+    (
+      evalFails (withUsers {
+        "alice/k8s_secret_password" = "alice-secret/password";
+      })
+      && evalFails (withUsers {
+        alice.k8s_secret_env_password = "alice-secret/password";
+      })
+      &&
+        ofKind "ClickHouseInstallation" (
+          manifests (withUsers {
+            "alice/password".valueFrom.secretKeyRef = {
+              name = "alice-secret";
+              key = "password";
+            };
+          })
+        ) != [ ]
+    )
+    || throw "clickhouse-operator: a k8s_secret_ user field rendered, or valueFrom was refused";
 
   # The health check reaches each replica through the operator's
   # per-replica Service, and extraSpec may not rename those Services.

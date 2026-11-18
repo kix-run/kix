@@ -53,7 +53,8 @@
 #       CR builders. The CR waits for its CRD and for the operator
 #       Deployment, carries the readiness convention
 #       (status.status == "Completed"), and carries the operand pod selector
-#       netpol needs.
+#       netpol needs. The installation builder refuses a user field in the
+#       `k8s_secret_` syntax, which the operator no longer reads.
 #   out.operandSelector.<kind> <crName>
 #       The labels the operator stamps on that installation's pods, from
 #       kinds.nix, for the policies the CR packages write over them.
@@ -61,6 +62,11 @@
 #       The operator's own pods, with dependency context.
 #   out.version
 #       The operator version `image.tag` names.
+#
+# Upgrades: a patch release of the operator takes over the installations
+# the previous one created, and restarts no ClickHouse or Keeper pod. Going
+# back to the previous patch release works the same way: deploy the older
+# package, and the older operator reconciles the same installations.
 #
 # root = the operator Deployment.
 
@@ -74,7 +80,7 @@ let
   # The operator and its metrics exporter are released in lockstep under
   # one version. Both declared tags come from this binding, so the exporter
   # keeps its default digest until the instance moves `image.tag`.
-  release = "0.27.3";
+  release = "0.27.4";
   credentialKeys = [
     "username"
     "password"
@@ -88,7 +94,10 @@ in
     # One operator watches every namespace, so consumers in any namespace
     # find it by name.
     scope = "cluster";
-    k8s.minVersion = "1.25";
+    k8s = {
+      minVersion = "1.25";
+      reason = "Altinity clickhouse-operator ${release} supports Kubernetes 1.25 and later. Move the cluster to a supported Kubernetes version first";
+    };
   };
 
   deps = {
@@ -110,7 +119,7 @@ in
     image = kix.options.image {
       repository = "docker.io/altinity/clickhouse-operator";
       tag = release;
-      digest = "sha256:251c4fda281854c3adba6710098c637d076361282bf6ea4fc6a402dd93ef0e08";
+      digest = "sha256:c60c872fedd85017f843167dfdd2b900bb06b668a3deaf02b21782e59af859e3";
     };
 
     # Second container of the operator pod. It serves the ClickHouse metrics
@@ -121,7 +130,7 @@ in
       repository = "docker.io/altinity/metrics-exporter";
       tag = release;
       tagText = "config.image.tag";
-      digest = "sha256:6831ce244b81b9639740941a0fe8f0cfc534c4860b22ff0eb668307b6c1a3116";
+      digest = "sha256:d257a72e6a6a9e1a9768b7a5a231b56901ea6dee668e41c7243b78bd298f631a";
     };
 
     operatorConfig = lib.mkOption {
@@ -215,6 +224,47 @@ in
               requires = (args.requires or [ ]) ++ [ self.operatorDeployment ];
             }
           );
+
+        # Return the `spec.configuration.users` fields that use the
+        # `k8s_secret_` or `k8s_secret_env_` syntax. The operator dropped
+        # it in 0.27.4 and aborts the reconcile of an installation that
+        # still has it, so the build refuses it first. A user's fields are
+        # written flat ("alice/k8s_secret_password") or nested, and the
+        # first path segment is the user's name.
+        removedSecretRefs =
+          spec:
+          let
+            paths =
+              prefix: attrs:
+              lib.concatLists (
+                lib.mapAttrsToList (
+                  key: value:
+                  let
+                    path = prefix ++ lib.splitString "/" key;
+                  in
+                  if builtins.isAttrs value then paths path value else [ path ]
+                ) attrs
+              );
+          in
+          map (lib.concatStringsSep "/") (
+            builtins.filter (path: builtins.any (lib.hasPrefix "k8s_secret_") (lib.drop 1 path)) (
+              paths [ ] (spec.configuration.users or { })
+            )
+          );
+
+        mkClickHouseInstallation =
+          consumerScope: args:
+          let
+            removed = removedSecretRefs (args.spec or { });
+          in
+          if removed != [ ] then
+            consumerScope.fail {
+              id = "K7577";
+              message = "ClickHouseInstallation ${args.name} sets ${lib.concatStringsSep ", " removed} in spec.configuration.users. clickhouse-operator ${release} no longer reads the k8s_secret_ and k8s_secret_env_ syntax, and it stops reconciling an installation that uses it.";
+              fix = "Replace each field with the same field without the prefix, set to `valueFrom.secretKeyRef = { name = <Secret>; key = <key>; }`. The Secret must be in the installation's namespace. For example, replace \"alice/k8s_secret_password\" = \"alice-secret/password\" with \"alice/password\".valueFrom.secretKeyRef = { name = \"alice-secret\"; key = \"password\"; }.";
+            }
+          else
+            mkOperand "clickHouseInstallations" consumerScope args;
       in
       {
         root = {
@@ -223,7 +273,7 @@ in
 
           out = {
             version = kix.image.version config.image;
-            mkClickHouseInstallation = mkOperand "clickHouseInstallations";
+            inherit mkClickHouseInstallation;
             mkKeeperInstallation = mkOperand "clickHouseKeeperInstallations";
             # The pods of an installation, by the label kinds.nix says the
             # operator stamps, so the CR packages and crds.nix's

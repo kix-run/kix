@@ -30,7 +30,7 @@ import sys
 import urllib.request
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
-PKG = REPO / "kix" / "packages" / "clickhouse-operator"
+PKG = REPO / "kix" / "packages" / "experimental" / "clickhouse-operator"
 SCHEMAS = PKG / "schemas"
 CRD_DIR = "deploy/helm/clickhouse-operator/crds"
 RAW = (
@@ -39,14 +39,11 @@ RAW = (
 
 
 def pinned_version() -> str:
-    """The operator image tag the package pins, e.g. 0.27.3."""
+    """The operator release the package pins, e.g. 0.27.4."""
     text = (PKG / "default.nix").read_text()
-    match = re.search(
-        r'repository = "docker.io/altinity/clickhouse-operator";\s*\n\s*tag = "([^"]+)"',
-        text,
-    )
+    match = re.search(r'^\s*release = "([^"]+)";', text, re.MULTILINE)
     if not match:
-        sys.exit("could not find the operator image tag in default.nix")
+        sys.exit("could not find `release = \"...\";` in default.nix")
     return match.group(1)
 
 
