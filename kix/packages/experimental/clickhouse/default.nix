@@ -27,6 +27,15 @@
 # `builtinServerConfig` below; a cluster overrides a value by naming the same
 # fragment and path, or adds a fragment of its own.
 #
+# Upgrades: stay on an LTS line (the March and August releases).
+# ClickHouse supports moving between two versions released less than a
+# year apart, which covers one LTS to the next, and reads the data files
+# the older one wrote. Going back to the older version works only while no
+# feature of the newer one has been used. 26.8 writes lightweight UPDATE
+# patch parts in a format 26.3 cannot read, so an UPDATE run on 26.8 ends
+# the way back. To go back, deploy the older package version over the same
+# volume. On amd64 nodes, 26.4 and later need a CPU with AVX2.
+#
 # Dependencies:
 #   storage (required)      a persistent-volume-claim instance, mounted at
 #                           /var/lib/clickhouse
@@ -79,7 +88,7 @@
 }:
 let
   # ClickHouse versions have four parts, and the image tag is the version.
-  release = "26.3.33.24";
+  release = "26.8.39.19";
 
   name = scope.instanceName;
 
@@ -145,7 +154,7 @@ in
     image = kix.options.image {
       repository = "docker.io/clickhouse/clickhouse-server";
       tag = release;
-      digest = "sha256:810861a2e2d0188744f5f23b2d3ec9ff95812bcb9ddbb8fed13a377a7f305893";
+      digest = "sha256:a42be7a55bbbe15a062afb72759564be70c92bf020265bf8d8011af73c95b98c";
     };
 
     clusterName = lib.mkOption {

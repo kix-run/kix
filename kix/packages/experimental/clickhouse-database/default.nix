@@ -261,8 +261,8 @@ in
 
     image = kix.options.image {
       repository = "docker.io/clickhouse/clickhouse-server";
-      tag = "26.3.33.24";
-      digest = "sha256:810861a2e2d0188744f5f23b2d3ec9ff95812bcb9ddbb8fed13a377a7f305893";
+      tag = "26.8.39.19";
+      digest = "sha256:a42be7a55bbbe15a062afb72759564be70c92bf020265bf8d8011af73c95b98c";
     };
   };
 

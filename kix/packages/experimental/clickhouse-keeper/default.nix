@@ -55,6 +55,11 @@
 #
 # Upgrades: a version of this package that adds the metrics endpoint
 # changes the CHK's settings, so the operator restarts each replica once.
+# A new image restarts each replica once too, one at a time, and the
+# quorum holds while each one restarts. Keeper reads the raft log and
+# snapshots the previous LTS line wrote, and going back by deploying the
+# older package version works the same way. Move Keeper and
+# clickhouse-cluster to a new LTS line together.
 #
 # `out`:
 #   out.host    "keeper-<name>.<ns>.svc..." (the operator's Service)
@@ -70,7 +75,7 @@
 }:
 let
   # ClickHouse versions have four parts, and the image tag is the version.
-  release = "26.3.32.14";
+  release = "26.8.39.19";
 
   name = scope.instanceName;
   clientPort = 2181;
@@ -91,7 +96,7 @@ in
     image = kix.options.image {
       repository = "docker.io/clickhouse/clickhouse-keeper";
       tag = release;
-      digest = "sha256:8dd3ed81719ae9467ad659d86b7af53a9ec5be6b50320f9ca84cf9c31dc7ccc8";
+      digest = "sha256:a519ceef9b4d9a340d33ca18885cd3a1643b30e9d2006aabbb8d067bb9179874";
     };
 
     replicas = lib.mkOption {
