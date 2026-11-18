@@ -56,7 +56,7 @@ let
     # outside the cluster, so a reader treats null as true.
     public = {
       required = false;
-      shape = "true when the Gateway may be reachable from outside the cluster, false when it is not, or null when the provider cannot tell";
+      shape = "a boolean indicating whether the Gateway may be reachable from outside the cluster, or null when unknown";
       test = v: v == null || builtins.isBool v;
     };
   };

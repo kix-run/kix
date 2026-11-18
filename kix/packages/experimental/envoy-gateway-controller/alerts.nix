@@ -11,7 +11,7 @@
 let
   name = scope.instanceName;
   ns = scope.namespaceName;
-  controller = "Envoy Gateway ${ns}/${name}";
+  controller = "Envoy Gateway controller ${ns}/${name}";
   sel = ''namespace="${ns}",service="${name}-metrics"'';
   # The controller's Deployment has the name Envoy Gateway looks it up by.
   deployment = "Deployment ${ns}/envoy-gateway";
@@ -25,7 +25,7 @@ kix.monitor {
       "for" = "10m";
       severity = "warning";
       summary = "Envoy Gateway controller is down.";
-      description = "No replica of ${controller} has responded to metrics scrapes for 10 minutes. Running Envoy proxies continue serving their last configuration, so changes to Gateways, routes, and policies do not take effect. Check ${deployment} and its pod events.";
+      description = "No replica of ${controller} has responded to metrics scrapes for 10 minutes. Running Envoy proxies continue serving their last configuration, but changes to Gateways, routes, and policies do not take effect. Check ${deployment} and its pod events.";
     };
     # xds_nack_total counts each configuration a proxy refused, by node
     # and resource type (internal/xds/cache/snapshotcache.go).

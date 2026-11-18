@@ -1,0 +1,3 @@
+# 2026-11-18 · `kix/lib/plugins/netpol` · A package cannot admit clients by address range in its network policy.
+
+The ingress intent sources are `all-pods`, `world`, and `apiserver`. A private Gateway wants to admit the cluster's pods and a few address ranges, such as the range VPN clients arrive from, and nothing else outside the cluster. `envoy-gateway`'s `clientSources` can only choose between `world` and `all-pods`, so the range must be opened with a policy written outside Kix, or `world` stays open and the SecurityPolicy allow-list is the only guard. A `cidr` source on the intent vocabulary, which each enforcer translates, would close this.

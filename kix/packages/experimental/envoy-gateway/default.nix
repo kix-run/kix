@@ -258,14 +258,15 @@ in
         example-com = "letsencrypt-example-com";
       };
       description = ''
-        The ClusterIssuer that signs each HTTPS listener's certificate, as
-        listener name to ClusterIssuer name. Each name must be a
-        ClusterIssuer wired as the `clusterIssuer` dependency. A listener
-        left out uses the wired issuer when there is only one.
+        Map of HTTPS listener name to `ClusterIssuer` name for automatic TLS
+        certificates. Each value must match a `cluster-issuer` instance wired
+        to `clusterIssuer`. When only one issuer is wired, HTTPS listeners
+        omitted here use it automatically.
 
-        The package creates a cert-manager Certificate for every HTTPS
-        listener that sets no `tls.certificateRefs`, for the listener's
-        `hostname`, and points the listener at its Secret.
+        When a `clusterIssuer` dependency is present, the package creates a
+        cert-manager `Certificate` for each HTTPS listener without
+        `tls.certificateRefs` (using the listener's `hostname`) and attaches
+        the generated `Secret` to the listener.
       '';
     };
 
@@ -285,18 +286,18 @@ in
         }
       '';
       description = ''
-        ClientTrafficPolicy `spec` fields (`gateway.envoyproxy.io/v1alpha1`)
-        for this Gateway: how the proxies treat client connections on every
-        listener. When set, the package creates the policy and targets it at
-        the Gateway. Kix rejects `targetRef`, `targetRefs`, and
-        `targetSelectors`.
+        Envoy Gateway `ClientTrafficPolicy` `spec` fields
+        (`gateway.envoyproxy.io/v1alpha1`) configuring how the proxies handle
+        client connections across all listeners. When non-empty, the package
+        creates a `ClientTrafficPolicy` attached to this `Gateway`. Kix rejects
+        `targetRef`, `targetRefs`, and `targetSelectors`.
 
-        `clientIPDetection.xForwardedFor.trustedCIDRs` names the proxies in
-        front of the Gateway (a CDN's ranges) whose `X-Forwarded-For` the
-        Gateway believes. `tls.minVersion` is `"1.2"` when unset.
-        `tls.alpnProtocols = [ "http/1.1" ]` turns HTTP/2 off.
-        `headers.lateResponseHeaders` adds a header to every response,
-        including those of routes that Kix does not render.
+        Common settings: `clientIPDetection.xForwardedFor.trustedCIDRs` lists
+        upstream proxy or CDN IP ranges whose `X-Forwarded-For` header the
+        Gateway trusts; `tls.minVersion` sets the minimum TLS version (defaults
+        to `"1.2"`); `tls.alpnProtocols = [ "http/1.1" ]` disables HTTP/2; and
+        `headers.lateResponseHeaders` adds response headers across all routes on
+        the Gateway.
       '';
     };
 
@@ -317,15 +318,16 @@ in
         }
       '';
       description = ''
-        SecurityPolicy `spec` fields (`gateway.envoyproxy.io/v1alpha1`) for
-        this Gateway, applied to every route on it unless a route has a
-        policy of its own. When set, the package creates the policy and
-        targets it at the Gateway. Kix rejects `targetRef`, `targetRefs`,
-        and `targetSelectors`.
+        Envoy Gateway `SecurityPolicy` `spec` fields
+        (`gateway.envoyproxy.io/v1alpha1`) applied to every route on this
+        `Gateway` unless overridden by a route-level policy. When non-empty,
+        the package creates a `SecurityPolicy` attached to this `Gateway`. Kix
+        rejects `targetRef`, `targetRefs`, and `targetSelectors`.
 
-        `authorization` with `principal.clientCIDRs` admits only the listed
-        source addresses. The client address is the connection's, or the one
-        `clientTrafficPolicy.clientIPDetection` takes from a trusted proxy.
+        Use `authorization` with `principal.clientCIDRs` to restrict access by
+        client IP range. Envoy Gateway evaluates the connection's source IP, or
+        the client IP extracted via `clientTrafficPolicy.clientIPDetection`
+        from a trusted proxy.
       '';
     };
 
@@ -333,11 +335,12 @@ in
       type = lib.types.bool;
       default = false;
       description = ''
-        Redirect every request on the Gateway's HTTP listeners to HTTPS with
-        a 301. The package attaches a redirect HTTPRoute to each HTTP
-        listener and sets the listener's `allowedRoutes.namespaces.from` to
-        `"Same"`, so application routes attach to the HTTPS listeners only
-        and cannot be served over HTTP. The Gateway needs an HTTPS listener.
+        Redirect all requests on the Gateway's HTTP listeners to HTTPS with a
+        301 status code. The package attaches a redirect `HTTPRoute` to each
+        HTTP listener and sets `allowedRoutes.namespaces.from = "Same"` on
+        HTTP listeners so routes from other namespaces attach only to HTTPS
+        listeners. Requires at least one HTTP listener and one active HTTPS
+        listener.
       '';
     };
 
@@ -354,11 +357,15 @@ in
       ];
       example = [ "all-pods" ];
       description = ''
-        Who the network policy admits to the proxies' listener ports:
-        `"world"` is every address outside the cluster, and `"all-pods"` is
-        every pod in the cluster, which includes traffic that arrives
-        through a node. A private Gateway leaves out `"world"`. A
-        `securityPolicy` allow-list is checked after this policy.
+        Traffic sources that the network policy allows to reach the proxies'
+        listener ports: `"world"` allows external IP addresses outside the
+        cluster, and `"all-pods"` allows all pods and cluster nodes. Omit
+        `"world"` (for example, `[ "all-pods" ]`) on an internal Gateway. Any
+        `securityPolicy` IP allowlist runs after the network policy.
+
+        Clients need `"world"` when they reach the Gateway through a router
+        that rewrites their source to an address other than a pod or node
+        IP, as some VPN subnet routers do.
       '';
     };
 
@@ -440,8 +447,8 @@ in
               else
                 scope.fail {
                   dependency = "clusterIssuer";
-                  message = "a 'clusterIssuer' dependency publishes no out.mkCertificate, such as a kix.mkImport. This package builds each listener's Certificate with it.";
-                  fix = "Wire instances of the cluster-issuer package, or set tls.certificateRefs on every HTTPS listener and remove deps.clusterIssuer.";
+                  message = "the 'clusterIssuer' dependency does not provide `out.mkCertificate` (for example, because it uses `kix.mkImport`), so `envoy-gateway` cannot create listener `Certificate` resources from it.";
+                  fix = "Use `packages.experimental.cluster-issuer` for `clusterIssuer`, or set `tls.certificateRefs` on every HTTPS listener and remove `deps.clusterIssuer`.";
                 };
           in
           lib.listToAttrs (map (issuer: lib.nameValuePair (nameOf issuer) issuer) wired);
@@ -463,21 +470,21 @@ in
           in
           if l.hostname == null then
             {
-              error = "listener \"${l.name}\" has no hostname, so its certificate would name nothing. Set hostname on the listener, or set tls.certificateRefs to a Secret you provide.";
+              error = "HTTPS listener \"${l.name}\" has no `hostname`, so Kix cannot request a TLS certificate for it. Set `hostname` on the listener, or set `tls.certificateRefs` to an existing TLS Secret.";
             }
           else if chosen == null && builtins.length issuerNames != 1 then
             {
-              error = "listener \"${l.name}\" needs a certificate, and ${toString (builtins.length issuerNames)} ClusterIssuers are wired (${lib.concatStringsSep ", " issuerNames}). Set listenerIssuers.${l.name} to one of them.";
+              error = "HTTPS listener \"${l.name}\" needs a certificate, but ${toString (builtins.length issuerNames)} ClusterIssuers are wired (${lib.concatStringsSep ", " issuerNames}) and none is selected for this listener. Set `listenerIssuers.${l.name}` to one of them.";
             }
           else if issuer == null then
             {
-              error = "listenerIssuers.${l.name} is \"${chosen}\", which is not a wired ClusterIssuer. The wired ones are: ${
+              error = "`listenerIssuers.${l.name}` is set to \"${chosen}\", which is not in `deps.clusterIssuer` (wired issuers: ${
                 if issuerNames == [ ] then "none" else lib.concatStringsSep ", " issuerNames
-              }. Add it to deps.clusterIssuer.";
+              }). Add that `cluster-issuer` instance to `deps.clusterIssuer`, or change `listenerIssuers` to a wired issuer.";
             }
           else if issuer.out.needsHttp01 or false then
             {
-              error = "listener \"${l.name}\" would take its certificate from ClusterIssuer \"${issuer.out.name}\", an ACME issuer with no dns01 solver. This package does not route ACME HTTP-01 challenges through the Gateway${lib.optionalString wildcard ", and a wildcard name such as \"${l.hostname}\" cannot be issued that way"}. Use an issuer with a dns01 solver, or set tls.certificateRefs to a Secret you provide.";
+              error = "HTTPS listener \"${l.name}\" uses ClusterIssuer \"${issuer.out.name}\", which is an ACME issuer without a `dns01` solver. `envoy-gateway` does not route ACME HTTP-01 challenges through the Gateway${lib.optionalString wildcard ", and a wildcard name such as \"${l.hostname}\" cannot be issued that way"}. Switch to a ClusterIssuer with a `dns01` solver, or set `tls.certificateRefs` to an existing TLS Secret.";
             }
           else
             { inherit issuer; };
@@ -497,12 +504,12 @@ in
           ) certificateListeners
           ++ map (
             n:
-            "listenerIssuers.${n} names no HTTPS listener that needs a certificate. The listeners that do are: ${
+            "`listenerIssuers.${n}` does not match an HTTPS listener that needs a managed certificate (matching listeners: ${
               if certificateListeners == [ ] then
                 "none"
               else
                 lib.concatMapStringsSep ", " (l: l.name) certificateListeners
-            }."
+            }). Remove that entry from `listenerIssuers`, or ensure the listener uses `protocol = \"HTTPS\"` without `tls.certificateRefs` and that `clusterIssuer` is wired."
           ) unknownListenerIssuers;
 
         # Listeners with the certificate filled in, and, with httpsRedirect,
@@ -794,10 +801,10 @@ in
           else if httpListeners == [ ] || !hasHttps then
             scope.fail {
               option = "httpsRedirect";
-              message = "httpsRedirect is on, and the Gateway has ${
+              message = "`httpsRedirect` is `true`, but this Gateway has ${
                 if hasHttps then "no HTTP listener to redirect from" else "no HTTPS listener to redirect to"
-              }. An HTTPS listener is rendered once it has a certificate, from tls.certificateRefs or a clusterIssuer dependency.";
-              fix = "Add the missing listener, or turn httpsRedirect off.";
+              }. Kix omits HTTPS listeners that have neither `tls.certificateRefs` nor a `clusterIssuer` dependency.";
+              fix = "Configure an HTTP listener and an HTTPS listener with a certificate (`tls.certificateRefs` or `deps.clusterIssuer`), or set `httpsRedirect = false`.";
             }
           else
             scope.mkCR gatewayCrds.HTTPRoute {

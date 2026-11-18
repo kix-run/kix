@@ -354,6 +354,8 @@ in
 
         By default, the package sets `logging.level.default = "info"` (which
         you can override here) and configures `gateway`, `provider.type`,
+        `provider.kubernetes.deploy`,
+        `provider.kubernetes.proxyTopologyInjector`,
         `provider.kubernetes.shutdownManager`, and the rate-limit container
         image (`operandImages.rateLimit`).
 
@@ -361,8 +363,9 @@ in
         `provider.kubernetes.deploy`, `provider.kubernetes.watch`,
         `provider.kubernetes.shutdownManager`,
         `provider.kubernetes.rateLimitDeployment.container.image` (set
-        `operandImages.rateLimit` instead), `proxyTopologyInjector`, and
-        `envoyProxy` (set `proxySpec` on each `envoy-gateway` instance instead).
+        `operandImages.rateLimit` instead),
+        `provider.kubernetes.proxyTopologyInjector`, and `envoyProxy` (set
+        `proxySpec` on each `envoy-gateway` instance instead).
       '';
     };
 

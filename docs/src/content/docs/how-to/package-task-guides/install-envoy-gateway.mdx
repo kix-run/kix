@@ -85,25 +85,25 @@ Add an `envoy-gateway-controller` instance:
 
 <Snippet {...gatewayControllerInstance} />
 
-Kix allows one `envoy-gateway-controller` instance per cluster. It serves the
-Gateways of every namespace.
+Kix allows one `envoy-gateway-controller` instance per cluster. It reconciles
+`Gateway` resources across all namespaces.
 
 ## Add a Gateway
 
 Add an `envoy-gateway` instance with the listeners your applications need. It
-can share the controller's namespace or have a namespace of its own:
+can share the controller's namespace or use its own:
 
 <Snippet {...gatewayInstance} />
 
-Each `envoy-gateway` instance creates one `Gateway`. The controller runs that
-Gateway's Envoy proxies and `Service` in the instance's namespace, and the
-instance grants the controller a `Role` there to do so. A cluster can run
-several Gateways (such as a public Gateway and a private one), each in its own
-namespace. By default, `envoy-gateway` claims the `gateway` alias that
-`kix.expose` routes applications through. To add a second `envoy-gateway`
-instance, set `aliases = [ ];` on it so only one instance keeps the default
-`gateway` alias, then set `deps.gateway = ref.<namespace>.<instance>;` on each
-application that should route through the second Gateway.
+Each `envoy-gateway` instance creates one `Gateway` and grants the controller
+permission to deploy Envoy proxy pods and a `Service` in that namespace. A
+cluster can run multiple Gateways (such as a public Gateway and a private one),
+each in its own namespace. By default, `envoy-gateway` claims the `gateway`
+alias that `kix.expose` routes applications through. To add more
+`envoy-gateway` instances, set `aliases = [ ];` on the extra instances so only
+one keeps the default `gateway` alias, then set
+`deps.gateway = ref.<namespace>.<instance>;` on each application that should
+use another Gateway.
 
 `listeners` takes Gateway API `Listener` fields with their upstream names
 (`name`, `port`, `protocol`, `hostname`, `tls`, `allowedRoutes`); a
@@ -221,11 +221,11 @@ with a server-side apply conflict. Run `kix deploy` once with
 
 Subsequent deploys do not need `--force-conflicts`.
 
-Envoy Gateway now starts each Gateway's proxy pods in the `envoy-gateway`
-instance's namespace, with a `Deployment` and `Service` named after the
-Gateway. Helm ran them in its own namespace (such as `envoy-gateway-system`)
-under generated names, so the controller creates a new proxy `Deployment` and
-`Service` while the old ones keep running.
+Envoy Gateway now deploys each Gateway's proxy pods in the `envoy-gateway`
+instance's namespace, using a `Deployment` and `Service` named after the
+Gateway. Because the Helm-installed controller created them under generated
+names in Helm's namespace (such as `envoy-gateway-system`), the new controller
+creates a new proxy `Deployment` and `Service` while the old ones keep running.
 
 On a cloud load balancer, the new `Service` receives a new IP address:
 

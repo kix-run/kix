@@ -99,7 +99,7 @@ let
           else if builtins.elem routeNs (namesAdmitted l) then
             "verified"
           else
-            "allowedRoutes.namespaces.selector admits only ${
+            "allowedRoutes.namespaces.selector allows only ${
               lib.concatMapStringsSep ", " (n: "\"${n}\"") (namesAdmitted l)
             }"
         else if gwRef.namespace == routeNs then
@@ -130,12 +130,21 @@ let
     if listeners == null then
       null
     else if candidates == [ ] then
-      fail {
-        message = "kix.expose (${name}): ${gwLabel} has no HTTP or HTTPS listener that accepts host \"${host}\" from namespace \"${routeNs}\", so the HTTPRoute would not attach. Checked: ${
-          if judged == [ ] then "no listeners" else checked
-        }.";
-        fix = "Add a listener for this host that admits namespace \"${routeNs}\" to the gateway instance, or set ingress.host to a name one of its listeners accepts.";
-      }
+      fail (
+        {
+          message = "kix.expose (${name}): ${gwLabel} has no HTTP or HTTPS listener that accepts host \"${host}\" from namespace \"${routeNs}\", so the HTTPRoute would not attach. Checked: ${
+            if judged == [ ] then "no listeners" else checked
+          }.";
+          fix = "Allow namespace \"${routeNs}\" on a matching listener of the Gateway instance, or set ingress.host (or ingress.extraHosts) to a hostname an existing listener accepts.";
+        }
+        # A selector on the namespace's name passed with a warning in
+        # earlier releases, so its refusal carries the change record's id.
+        //
+          lib.optionalAttrs (builtins.any (j: lib.hasPrefix "allowedRoutes.namespaces.selector" j.v) judged)
+            {
+              id = "K6232";
+            }
+      )
     else
       {
         inherit (chosen) scheme;
@@ -143,7 +152,7 @@ let
         warnings = lib.optional (chosen.v == "unverified") (
           "HTTPRoute '${name}' uses ${gwLabel} listener '${chosen.l.name}', which restricts "
           + "namespaces with a label selector (`allowedRoutes.namespaces.from = \"Selector\"`). "
-          + "Kix checks only selectors on the label `kubernetes.io/metadata.name`, so it assumes namespace '${routeNs}' matches "
+          + "Kix only checks selectors on the `kubernetes.io/metadata.name` label, so it assumes namespace '${routeNs}' matches "
           + "when computing the route's URL. Make sure namespace '${routeNs}' matches the "
           + "listener's selector, or set `allowedRoutes.namespaces.from = \"All\"` on the listener."
         );
@@ -561,10 +570,10 @@ rec {
       _ingressCheck =
         if useIngress && (filters != [ ] || extraRules != [ ]) then
           fail {
-            message = "kix.expose (${scope.namespaceName}/${name}): the package adds HTTPRoute ${
+            message = "kix.expose (${scope.namespaceName}/${name}): this package configures HTTPRoute ${
               if filters != [ ] then "filters" else "rules"
-            } to its route, and this instance is routed through an Ingress, which has none.";
-            fix = "Route the instance through a Gateway: wire a gateway dependency in place of ingressNginx.";
+            }, which Kubernetes Ingress resources do not support, and this instance is routed through ingressNginx.";
+            fix = "Route this instance through a Gateway API package (such as `envoy-gateway` or `traefik`) instead of `ingress-nginx`, or wire `deps.gateway` in place of `deps.ingressNginx`.";
           }
         else
           null;

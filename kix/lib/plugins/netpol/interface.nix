@@ -24,7 +24,7 @@ let
 
     mkSelfRules = "{ selector } -> { egress, ingress }. peer-to-peer for StatefulSets";
 
-    mkCallerIngressRule = "{ callerSelector, callerNamespace, ports } -> rule. ingress from a specific caller; a null callerNamespace selects the caller in any namespace";
+    mkCallerIngressRule = "{ callerSelector, callerNamespace, ports } -> rule. ingress from pods matching callerSelector in callerNamespace (or any namespace when callerNamespace is null)";
 
     portsToCilium = "[svc-port] -> [enforcer-port-spec]. convert K8s Service ports";
 

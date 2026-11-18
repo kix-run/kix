@@ -274,12 +274,12 @@ in
       type = lib.types.listOf lib.types.str;
       default = [ ];
       example = [ "www.example.com" ];
-      description = "Further hostnames the route answers, beside `host`. Each needs a Gateway listener that accepts it, or the build fails. The instance's public URL uses `host`.";
+      description = "Additional hostnames added to the Ingress or HTTPRoute alongside `host`. In Gateway mode, a listener must accept each hostname or evaluation fails. The instance's public URL (`self.exposure.url`) still uses `host`.";
     };
     annotations = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;
       default = { };
-      description = "Extra annotations on the Ingress or HTTPRoute, such as the ones a DNS controller selects routes by.";
+      description = "Annotations added to the generated Ingress or HTTPRoute (for example, external-dns annotations). Keys set here override package defaults.";
     };
     timeouts = lib.mkOption {
       type = lib.types.nullOr (
@@ -288,12 +288,12 @@ in
             request = lib.mkOption {
               type = lib.types.nullOr lib.types.str;
               default = null;
-              description = "The whole request, as a Gateway API duration such as `30s`. `0s` means no timeout.";
+              description = "Maximum duration for the entire client request, as a Gateway API duration string such as `30s`. Set `0s` to disable the timeout.";
             };
             backendRequest = lib.mkOption {
               type = lib.types.nullOr lib.types.str;
               default = null;
-              description = "One attempt to the backend, as a Gateway API duration.";
+              description = "Maximum duration for a single request from the Gateway to a backend, as a Gateway API duration string such as `10s`.";
             };
           };
         }
@@ -302,7 +302,7 @@ in
       example = {
         request = "0s";
       };
-      description = "HTTPRoute rule `timeouts` for this instance's route, in place of the package's own. Null keeps the package's. Not used when the route is an Ingress.";
+      description = "Gateway API HTTPRoute rule `timeouts` for this instance. When set, replaces any default `timeouts` set by the package; `null` keeps the package defaults. Ignored in Ingress mode.";
     };
   };
 
