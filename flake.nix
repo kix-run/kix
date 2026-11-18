@@ -129,6 +129,7 @@
           vaultwarden = ./clusters/test-vaultwarden.nix;
           caddy = ./clusters/test-caddy.nix;
           cloudflared = ./clusters/test-cloudflared.nix;
+          smartctl-exporter = ./clusters/test-smartctl-exporter.nix;
           tempo = ./clusters/test-tempo.nix;
           tempo-generator = ./clusters/test-tempo-generator.nix;
           monitoring-native = ./clusters/test-monitoring-native.nix;
