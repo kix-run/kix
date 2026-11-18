@@ -2,12 +2,13 @@
 #
 # The smallest kind cluster that exercises the scrape policies of the netpol
 # plugin (kix/lib/plugins/netpol/scrape.nix): the monitoring module's
-# Prometheus, Alertmanager, kube-state-metrics, and node-exporter (on the host
-# network) in `monitoring-system`, reloader in `reloader`, and a one-instance
+# Prometheus, Alertmanager, kube-state-metrics, node-exporter (on the host
+# network), and the default rules in `monitoring-system`, reloader in `reloader`, and a one-instance
 # StackGres cluster in `data`, whose PodMonitor scrapes the exporter sidecar
 # of operator-created pods on port 9187 (`portNumber`). Cilium is
 # installed by Kix with `networkPolicy.enable`. Every target in Prometheus's
-# `/api/v1/targets` should be up, and Alertmanager should be discovered.
+# `/api/v1/targets` should be up, Alertmanager should be discovered, and the
+# kube-state-metrics rules of the default rules should evaluate with no error.
 #
 # Bring up: kind create cluster --name kix-monitoring-netpol --config <config>
 #           where the config sets networking.disableDefaultCNI = true
@@ -35,6 +36,7 @@ kix.buildCluster {
 
       monitoring.enabled = true;
       monitoring.grafana.enabled = false;
+      monitoring.defaultRules.enabled = true;
 
       instances.reloader.reloader.package = packages.experimental.reloader;
 
