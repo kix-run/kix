@@ -80,7 +80,9 @@
 # time (docs/introduction/stability-support.md) and names no release that
 # needs a migration step. Going back works. Deploying the v2.11.0 package
 # restores the old CRDs and controller, which read the objects v2.15.0 left
-# behind.
+# behind. The API server then drops fields that only the v2.15.0 CRDs
+# define, such as the Password generator's `prefix`, from the objects that
+# set them.
 #
 # Escape hatches: `extraArgs` and `env` for the controller;
 # `webhookCheck.image`; `partsOverlays` on any part.
