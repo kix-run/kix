@@ -12,6 +12,14 @@
 # Limits: one replica (`availability.max = "none"`), filesystem storage only
 # (no object store), and a single tenant.
 #
+# Upgrades: upstream asks users to upgrade one release at a time where
+# possible and allows skipping releases after a test in a development
+# environment. Upgrading from 3.7.8 to 3.7.10 in one deploy, which skips
+# 3.7.9, kept the logs and the index, and Grafana's Loki data source stayed
+# healthy. Upstream documents no way back. In a test, 3.7.8 started on a
+# claim that 3.7.10 had written, reported ready, and read its logs. To go
+# back, deploy the previous package version.
+#
 # Beside a workload whose own `storage` dependency is optional (Grafana),
 # give Loki's claim another instance name and `aliases`, and wire
 # `deps.storage = ref.<ns>.<claim>` as kix.modules.experimental.monitoring does.
