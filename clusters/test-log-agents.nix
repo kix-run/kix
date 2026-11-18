@@ -79,7 +79,13 @@ kix.buildCluster {
         };
 
         instances.lokilogs = {
-          loki.package = packages.experimental.loki;
+          loki = {
+            package = packages.experimental.loki;
+            # kind's local-path claims live on the host's disk, so Loki
+            # measures the host's usage and refuses every push once a busy
+            # development machine passes the 90% default. 0 turns the check off.
+            config.settings.ingester.wal.disk_full_threshold = 0;
+          };
           loki-data = {
             package = packages.persistent-volume-claim;
             aliases = [ "storage" ];
