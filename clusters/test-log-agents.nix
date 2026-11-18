@@ -13,7 +13,8 @@
 #   networking: { disableDefaultCNI: true, podSubnet: "10.244.0.0/16" }
 #   nodes: [ { role: control-plane }, { role: worker } ]
 #   EOF
-# Deploy:  kix deploy log-agents --context kind-kix-log-agents -y
+# Deploy:  SOPS_AGE_KEY_FILE=clusters/dev-secrets/age-key.txt \
+#          kix deploy log-agents --context kind-kix-log-agents -y
 #
 { kix, packages }:
 
@@ -70,9 +71,9 @@ kix.buildCluster {
           logs-db-password = {
             package = packages.secret;
             aliases = [ "password" ];
-            config.stringData = {
-              username = "logs_writer";
-              password = "logs-writer-dev-password";
+            config = {
+              source = ./dev-secrets/clickhouse-logs-writer.sops.yaml;
+              keys = [ "password" ];
             };
           };
         };
