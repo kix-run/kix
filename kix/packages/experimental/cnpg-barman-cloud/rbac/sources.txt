@@ -1,4 +1,4 @@
 # The plugin's ClusterRole and leader-election Role from the same release
 # manifest as crds/sources.txt. default.nix binds them to the plugin's
 # ServiceAccount.
-https://github.com/cloudnative-pg/plugin-barman-cloud/releases/download/v0.15.1/manifest.yaml ClusterRole/plugin-barman-cloud Role/barman-plugin-leader-election-role
+https://github.com/cloudnative-pg/plugin-barman-cloud/releases/download/v0.16.0/manifest.yaml ClusterRole/plugin-barman-cloud Role/barman-plugin-leader-election-role

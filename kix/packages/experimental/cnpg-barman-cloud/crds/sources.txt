@@ -1,4 +1,4 @@
 # The plugin-barman-cloud release manifest at `release` in default.nix (also
 # the tag in rbac/sources.txt). The plugin installs no definitions of its
 # own, so the package applies the ObjectStore definition from it.
-https://github.com/cloudnative-pg/plugin-barman-cloud/releases/download/v0.15.1/manifest.yaml
+https://github.com/cloudnative-pg/plugin-barman-cloud/releases/download/v0.16.0/manifest.yaml
