@@ -27,7 +27,7 @@ You will read text other people wrote: release notes, changelogs, issues, upstre
 3. Docker is running. Create one kind cluster named `${CLUSTER}` with `--kubeconfig ${KUBECONFIG}`; `KUBECONFIG` is already set to that path. `kind`, `kubectl`, and `helm` are on PATH. The machine is arm64 Linux, so kind pulls arm64 images. If an image the package uses has no arm64 build, do not swap it or work around it: say so in your report, because the workflow cannot test that package here. Deploy with the package still at the old version, confirm it works by using it, and write state.
 4. Make the upgrade and every change that goes with it. Add one change record, `changes/bump-${NAME}.md`. Update skill or docs line citations if you moved cited code.
 5. Deploy the upgraded package over the old one on the same cluster and verify it, including going back, as the skill section describes.
-6. Commit on your branch (several commits are fine). No `Co-Authored-By` trailer. Do not push, and do not run `scripts/copy-pass`. You have no credentials to push, and the workflow does it.
+6. Commit on your branch (several commits are fine). No `Co-Authored-By` trailer. Do not push. You have no credentials to push, and the workflow does it.
 
 ## Done means
 
@@ -43,6 +43,7 @@ It prints one line per check and keeps each check's output in a log file. Run it
 
 - Change only the package folder(s) and the files a bump touches: `changes/`, `kix/lib/tests/`, `cli/kix-cli/tests/snapshots/`, docs pages under `docs/src/content/docs/`, `ROADMAP.md`, `housekeeping/`, and line citations in `.claude/skills/`. The workflow refuses a change anywhere else, such as `.github/`, `scripts/`, `flake.nix`, `flake.lock`, or `cli/` outside the snapshots. If the bump needs such a change, stop and say so in your report.
 - Fix a problem at its cause. If the only fix you can find is a special case, a retry, a timing workaround, or bending the package to suit kind, do not build it. Stop and describe the options in your report.
+- Bump pull requests get no copy pass, even though you write new prose such as change records. Do not run `scripts/copy-pass`, and do not mention the copy pass or its checkbox in your report.
 - If you notice a problem you do not fix, add a file under `housekeeping/` as `CLAUDE.housekeeping.md` describes, and commit it.
 - If something breaks badly and you cannot recover in a few attempts, stop and report. Do not guess at results.
 - Never end your turn or go idle to wait for a deploy, a build, or a background task: nothing will wake you. Wait with a blocking command that has a timeout (`kubectl wait --timeout=...`, `timeout 900 tail --pid=<pid> -f /dev/null`). Your final reply is your report, and you give it only once you are finished.
