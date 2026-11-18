@@ -360,6 +360,11 @@ in
               server_id = 1;
               log_storage_path = "${dataPath}/coordination/log";
               snapshot_storage_path = "${dataPath}/coordination/snapshots";
+              # Keeper 26.8 writes snapshot format 8 by default, and Keeper
+              # 26.3 refuses to start on it. Format 6 keeps the way back to
+              # 26.3. Remove this at the next LTS bump, when no supported
+              # version predates format 8.
+              coordination_settings.write_snapshot_version = 6;
               raft_configuration.server = {
                 id = 1;
                 hostname = "localhost";

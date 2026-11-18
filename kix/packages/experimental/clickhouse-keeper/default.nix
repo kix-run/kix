@@ -182,6 +182,12 @@ in
             "prometheus/metrics" = "true";
             "prometheus/events" = "true";
             "prometheus/asynchronous_metrics" = "true";
+            # Keeper 26.8 writes snapshot format 8 by default, and Keeper
+            # 26.3 refuses to start on it. Format 6 lets a 26.3 follower
+            # take a snapshot from a 26.8 leader during the rolling upgrade,
+            # and keeps the way back to 26.3. Remove this at the next LTS
+            # bump, when no supported version predates format 8.
+            "keeper_server/coordination_settings/write_snapshot_version" = "6";
           };
           defaults.templates = {
             podTemplate = "keeper";
