@@ -131,8 +131,7 @@ in
     defaultAliases = [ "reloader" ];
     # One instance per cluster; see the header.
     conflictsWith = [ "cluster:reloader" ];
-    # The README's Compatibility section, the same in v1.4.22 and v1.4.24,
-    # states an open range.
+    # The README's Compatibility section states an open range.
     k8s = {
       minVersion = "1.19";
       reason = "[K8986] reloader ${release} supports Kubernetes 1.19 or later. Move the cluster to Kubernetes 1.19 or later, or use a Kix release whose reloader package still accepts it";
