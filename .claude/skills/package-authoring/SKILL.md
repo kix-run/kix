@@ -682,8 +682,24 @@ prints `check-bump: PASS` and the upgrade deploy below has run.
 - Write down what upstream says about which versions can upgrade directly
   to which, and about going back. Upstream often says nothing. Then say
   what you learned from its source or from testing.
+- Find the Kubernetes versions upstream supports for the target, and name
+  the source. Upstream's stated support (a support matrix, a requirements
+  page, a support policy) wins. Versions upstream only tests do not widen
+  or narrow a stated range. Use tested versions (its CI or e2e matrix) only
+  when upstream states no support, and `go.mod`'s client-go version only as
+  a last resort.
 
 ### The edit
+
+- Encode that range in `meta.k8s` as `minVersion` and `maxVersion`, with a
+  `reason` that names the release and the range, so Kix refuses a cluster
+  that declares a version upstream does not support. For an open range
+  ("1.25 and later") set only `minVersion`. When upstream states no range,
+  leave `meta.k8s` as it is and say so in the pull request. A range that
+  refuses a version the package accepted before needs an `error` change
+  record: put its id at the start of `reason` as `[Kxxxx]`, and add a unit
+  test in `kix/lib/tests/units/` that refuses a version on each side and
+  accepts one inside (`cilium-k8s-range` in `cilium.nix` has the shape).
 
 - List every image the package renders, including images an operator is
   told to deploy, and decide for each whether it moves.

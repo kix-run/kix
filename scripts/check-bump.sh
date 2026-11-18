@@ -107,19 +107,11 @@ fi
 
 run "library tests" "${nix[@]}" build .#checks.x86_64-linux.kix-lib-tests --no-link
 
-# The snapshot tests need a Rust build, so they run only when a snapshot
-# named this package's old version or one of its old digests.
-snapshots=cli/kix-cli/tests/snapshots
-cited=0
-for needle in "$old" $old_digests; do
-  if git grep -qF "$needle" "$base" -- "$snapshots"; then cited=1; fi
-done
-if [ "$cited" = 1 ]; then
-  run "CLI snapshot tests" bash -c \
-    "cd cli && nix --extra-experimental-features 'nix-command flakes pipe-operators' develop .. -c cargo test -p kix-cli --test snapshot_test"
-else
-  say skip "CLI snapshot tests (no snapshot names this package's old version)"
-fi
+# Run the snapshot tests every time. Snapshots carry hashes of whole
+# activations, so a bump changes them even when no snapshot names the
+# package's version or digests.
+run "CLI snapshot tests" bash -c \
+  "cd cli && nix --extra-experimental-features 'nix-command flakes pipe-operators' develop .. -c cargo test -p kix-cli --test snapshot_test"
 
 # List the places that still name the old version. Each needs a decision,
 # so the list does not fail the check. Lock files and vendored CRDs name
