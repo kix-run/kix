@@ -328,7 +328,7 @@ in
       spread = zone.override.statefulSet.spec.template.spec.topologySpreadConstraints;
     in
     (
-      lib.hasPrefix "docker.io/library/rabbitmq:4.3.6-management@sha256:" one.spec.image
+      lib.hasPrefix "docker.io/library/rabbitmq:4.4.1-management@sha256:" one.spec.image
       && one.spec.replicas == 1
       && one.spec.persistence.storage == "10Gi"
       &&

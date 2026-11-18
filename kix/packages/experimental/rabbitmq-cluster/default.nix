@@ -34,10 +34,24 @@
 #                                `metrics.enabled`.
 #
 # Defaults: `replicas` from the availability level (1 at none, 3 from pod
-# up), RabbitMQ 4.3 from the official image, the definition's default
+# up), RabbitMQ 4.4 from the official image, the definition's default
 # resources (1 CPU requested, 2 CPU limit, 2Gi), and 10Gi volumes. Quorum
 # queues need a majority of the nodes, so an even replica count is
 # refused.
+#
+# Upgrades: RabbitMQ supports a rolling upgrade from 4.3.x to 4.4.x when
+# every stable feature flag is enabled first. The operator enables all
+# flags when it creates a cluster, so a cluster created by this package
+# meets that. A deploy rolls the pods to 4.4.1 one at a time, and queues,
+# messages, users, and policies stay. The operator enables no flag after an
+# upgrade, so the 4.4 flag `rabbitmq_4.4.0` stays disabled. Run
+# `rabbitmqctl enable_feature_flag all` in a pod before the next minor
+# upgrade. Going back to 4.3 does not work. Upstream supports no
+# downgrade, and says a node that holds classic queue files in the 4.4
+# format cannot go back to 4.3. Deployed over a cluster that 4.4.1 had
+# run, 4.3.6 pods stop at boot after five minutes with `{error,timeout}`
+# and restart in a loop. Deploying 4.4.1 again recovers the cluster with
+# its data.
 #
 # Placement: with more than one replica, the pods spread over nodes and
 # zones as the availability level asks, and a PodDisruptionBudget lets one
@@ -105,8 +119,8 @@
 # from the first boot. Evaluation warns about such a `storage.size`.
 # The rules derive from the cluster-operator 2.23.3 rules in
 # observability/prometheus/rules/rabbitmq, rewritten to select the instance.
-# Left out: the file descriptor alarm rule, whose metric RabbitMQ 4.3.6 no
-# longer reports; queues without consumers, growing queues, unroutable
+# Left out: the file descriptor alarm rule, whose metric RabbitMQ 4.4.1
+# does not report; queues without consumers, growing queues, unroutable
 # messages, and connection churn, which need per-queue metrics or depend on
 # the application; and nodes not ready, full volumes, and crash
 # loops, which prometheus-default-rules reports
@@ -158,7 +172,7 @@ let
 
   # meta.version and the default image tag: the RabbitMQ release the
   # cluster runs.
-  release = "4.3.6";
+  release = "4.4.1";
 
   # The RabbitmqCluster fields this package writes are those of the
   # operator's 2.23 release.
@@ -340,7 +354,7 @@ in
     image = kix.options.image {
       repository = "docker.io/library/rabbitmq";
       tag = "${release}-management";
-      digest = "sha256:316ffd2a847e59112eee2c65f04bbd0989d93aaf1486c07b721f8d22d863b968";
+      digest = "sha256:61f90c401a5b5ed2486771973ea92ad66046471eacab9c9149f1a6e091c91677";
       description = "RabbitMQ image (`spec.image`). The operator enables the management, Prometheus, and Kubernetes peer discovery plugins, which the official image ships.";
     };
 
