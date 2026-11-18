@@ -125,12 +125,22 @@ jobs:
       - name: Install Claude Code
         # The VM runs NixOS, where npm's prebuilt Claude Code binary does not
         # run, so take the nixpkgs build. It is unfree, hence the variable.
+        # nixpkgs master gets each Claude Code release within a day or so,
+        # while the nixpkgs-unstable channel waits for a full Hydra
+        # evaluation and runs further behind. The federated sign-in was
+        # tested with 2.1.326, so refuse anything older.
         env:
           NIXPKGS_ALLOW_UNFREE: '1'
+          MIN_VERSION: 2.1.326
         run: |
-          out=$(nix build --impure --no-link --print-out-paths github:NixOS/nixpkgs/nixpkgs-unstable#claude-code)
+          out=$(nix build --impure --no-link --print-out-paths github:NixOS/nixpkgs/master#claude-code)
           echo "$out/bin" >> "$GITHUB_PATH"
-          "$out/bin/claude" --version
+          version=$("$out/bin/claude" --version | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+')
+          echo "Claude Code $version"
+          if [ "$(printf '%s\n' "$MIN_VERSION" "$version" | sort -V | head -1)" != "$MIN_VERSION" ]; then
+            echo "::error::Claude Code $version is older than $MIN_VERSION"
+            exit 1
+          fi
 
       - name: Write the brief
         env:
