@@ -1,5 +1,6 @@
 # Tests for kix/packages/stable/victoria-metrics-operator: the readiness rules its
-# custom resources carry, and the options it removed.
+# custom resources carry, the options it removed, and the Kubernetes range
+# it declares.
 
 {
   lib,
@@ -24,10 +25,10 @@ let
   ]);
 in
 {
-  # The operator writes updateStatus on a VMServiceScrape only from a VMAgent
-  # or VMSingle that selects it, so the operator's own scrape is ready unless
-  # a consumer rejects it. The VMCluster, which the operator reconciles
-  # itself, must report operational.
+  # A VMServiceScrape is ready unless its updateStatus reads `failed`, so
+  # the operator's own scrape is ready with no VMAgent selecting it. The
+  # VMCluster, which the operator reconciles itself, must report
+  # operational.
   victoria-metrics-operator-config-kinds-ready-without-consumer =
     let
       scrapes = ofKind "VMServiceScrape" ms;
@@ -124,4 +125,47 @@ in
       && !(builtins.elem "--zap-log-level=info" args)
     )
     || throw "VM operator removed options: ${builtins.toJSON { inherit got args; }}";
+
+  # A cluster that declares a Kubernetes version outside 1.25 to 1.37 is
+  # refused with the change record's id. The meta check is called directly,
+  # because a failed meta assertion fails the cluster before its messages
+  # can be read.
+  victoria-metrics-operator-k8s-range =
+    let
+      metaLib = import ../../meta.nix { inherit lib; };
+      meta =
+        (import ../../../packages/stable/victoria-metrics-operator {
+          inherit lib;
+          kix = kixlib;
+          scope = {
+            instanceName = "vm-operator";
+            namespaceName = "monitoring";
+          };
+          availability = "none";
+        }).meta;
+      refusals =
+        k8sVersion:
+        map (a: a.message) (
+          builtins.filter (a: !a.assertion) (
+            (metaLib.checkMetaStatic {
+              packageMeta = meta;
+              instanceName = "vm-operator";
+              namespaceName = "monitoring";
+              clusterConfig = { inherit k8sVersion; };
+              resolvedDepMeta = { };
+              resolutionIndex.byKey = { };
+            }).assertions
+          )
+        );
+      refused = v: builtins.any (lib.hasInfix "[K1442]") (refusals v);
+      got = lib.genAttrs [ "1.24" "1.25" "1.37" "1.38" ] refusals;
+    in
+    (
+      refused "1.24"
+      && refused "1.38"
+      && refusals "1.25" == [ ]
+      && refusals "1.37" == [ ]
+      && refusals null == [ ]
+    )
+    || throw "victoria-metrics-operator-k8s-range: ${builtins.toJSON got}";
 }

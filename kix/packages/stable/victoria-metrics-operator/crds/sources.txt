@@ -2,4 +2,4 @@
 # bundle holds the whole CRD set; only the kinds with a kix consumer surface
 # (consumer = true in kinds.nix) carry the real schema, the rest are stubs
 # derived from that table.
-https://raw.githubusercontent.com/VictoriaMetrics/operator/v0.74.1/config/crd/overlay/crd.yaml vmagents.operator.victoriametrics.com vmalertmanagers.operator.victoriametrics.com vmalerts.operator.victoriametrics.com vmclusters.operator.victoriametrics.com vmpodscrapes.operator.victoriametrics.com vmprobes.operator.victoriametrics.com vmrules.operator.victoriametrics.com vmservicescrapes.operator.victoriametrics.com
+https://raw.githubusercontent.com/VictoriaMetrics/operator/v0.75.2/config/crd/overlay/crd.yaml vmagents.operator.victoriametrics.com vmalertmanagers.operator.victoriametrics.com vmalerts.operator.victoriametrics.com vmclusters.operator.victoriametrics.com vmpodscrapes.operator.victoriametrics.com vmprobes.operator.victoriametrics.com vmrules.operator.victoriametrics.com vmservicescrapes.operator.victoriametrics.com
