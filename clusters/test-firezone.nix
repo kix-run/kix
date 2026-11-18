@@ -73,7 +73,7 @@ kix.buildCluster {
         firezone-admin = {
           package = packages.secret;
           aliases = [ "adminPassword" ];
-          config.stringData.password = "changeme";
+          config.stringData.password = "changeme-dev-admin";
         };
         firezone-wireguard = {
           package = packages.secret;
