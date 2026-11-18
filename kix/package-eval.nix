@@ -288,36 +288,6 @@ let
       instances.prometheus-operator.package = packages.prometheus-operator;
     };
     filebrowser.instances = { inherit storage; };
-    firezone = {
-      config = {
-        domain = "firezone.example.com";
-        admin.email = "admin@example.com";
-      };
-      instances = {
-        database.package = packages.stackgres-database;
-        database-password = dbPassword;
-        # The three salts are optional; clusters/test-immich.nix sets them.
-        application-secrets = {
-          package = packages.secret;
-          aliases = [ "applicationSecrets" ];
-          config.stringData = {
-            GUARDIAN_SECRET_KEY = "guardian";
-            SECRET_KEY_BASE = "base";
-            DATABASE_ENCRYPTION_KEY = "encryption";
-          };
-        };
-        admin-password = {
-          package = packages.secret;
-          aliases = [ "adminPassword" ];
-          config.stringData.password = "password";
-        };
-        wireguard-key = {
-          package = packages.secret;
-          aliases = [ "wireguardKey" ];
-          config.stringData.private_key = "key";
-        };
-      };
-    };
     # The administrator's login, and a Prometheus provider, so the
     # ServiceMonitor is built.
     grafana.instances = {

@@ -112,7 +112,12 @@ in
 rec {
   peekPackageMeta =
     { package, kixlib }:
-    if (package._type or "") == "kix-moved" then
+    if
+      builtins.elem (package._type or "") [
+        "kix-moved"
+        "kix-removed"
+      ]
+    then
       errors.fail package.error
     else if builtins.isAttrs package && package ? build then
       package.meta or { }

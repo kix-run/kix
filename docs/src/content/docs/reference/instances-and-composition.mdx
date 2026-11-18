@@ -70,6 +70,7 @@ instances.apps.photos.package = packages.experimental.immich;
 - **`packages.experimental.<name>`**: An experimental package. Writing `packages.<name>` for an experimental package fails with `[K0549]` and gives `packages.experimental.<name>`. `kix list packages` shows it as `experimental.<name>`.
 - **Reserved names**: No package can be named `stable` or `experimental`.
 - **A package that becomes stable**: `packages.experimental.<name>` then fails with the error "`packages.experimental.<name>` is stable now. Write `packages.<name>`."
+- **A removed package**: `packages.experimental.<name>` and `packages.<name>` fail with an error that gives the change record's id and what to do instead.
 - **A shared name**: An experimental package may have the same name as a stable package. It is then a rework of that package, and replaces it in a minor release.
 - **Contracts**: A stable package reads only stable [dependency contracts](/docs/reference/dependency-contracts/#shared-contract-attributes-and-methods). An experimental package may read both stable and experimental contracts.
 - **Modules**: The monitoring module is experimental and is written `kix.modules.experimental.monitoring` (`kix/modules/experimental/monitoring.nix`). `kix.modules.monitoring` fails with `[K0549]`.

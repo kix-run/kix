@@ -180,8 +180,8 @@ is a finding from the upstream source, not a default.
    concurrent-safe (then Recreate, keycloak:83-88); session affinity (a
    Service setting, not a ceiling); cron or queue singletons (a ceiling on that
    workload only, or upstream's "run the scheduler in one pod" flag); one RWO
-   volume as the state (immich:157-159); one owner of an OS resource
-   (firezone:85-87). For each piece of in-memory state, also note what a
+   volume as the state (immich:157-159); one owner of an OS resource,
+   such as a network interface. For each piece of in-memory state, also note what a
    restart loses (sessions, buffered events), since Recreate and a singleton
    make every deploy a restart; the header's `Limits:` says it.
 3. If it replicates with configuration, configure it (keycloak's jdbc-ping,

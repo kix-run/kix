@@ -1,6 +1,6 @@
 # Experimental packages that were removed, keyed as a change record names
-# them. A cluster that names one, such as `packages.experimental.reflector`,
-# fails with the message and the fix. scripts/change-records.py accepts these
+# them. A cluster that names one, as `packages.experimental.reflector` or
+# `packages.reflector`, fails with the message and the fix. scripts/change-records.py accepts these
 # names in a record's `packages`. Remove an entry once its refusal has been
 # in a minor release.
 
@@ -13,3 +13,8 @@ fix = "Remove `packages.experimental.reflector` from your cluster definition and
 id = "K9332"
 message = "`packages.experimental.secret-echo` was removed, so Kix stopped evaluation. It was a test fixture that served Secret credentials in plain text over HTTP."
 fix = "Remove `packages.experimental.secret-echo` from your cluster definition."
+
+["experimental/firezone"]
+id = "K1728"
+message = "The firezone package was removed, so Kix stopped evaluation. It ran the Firezone 0.7 server, which upstream stopped updating in 2023. Firezone 1.x does not support self-hosting its control plane."
+fix = "Remove `packages.experimental.firezone` (or `packages.firezone`) and its instances from your cluster definition. To run the Firezone gateway, follow upstream's instructions. The package's source is in the Kix git history, under kix/packages/experimental/firezone."

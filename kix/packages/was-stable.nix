@@ -31,7 +31,6 @@
     "external-secrets"
     "falco"
     "filebrowser"
-    "firezone"
     "immich"
     "immich-machine-learning"
     "infisical-operator"

@@ -6,6 +6,7 @@ let
   errors = import ./core/error.nix { inherit lib; };
 
   isMoved = package: (package._type or "") == "kix-moved";
+  isRemoved = package: (package._type or "") == "kix-removed";
 
   # Return the name and the spelling of every package that moved to
   # experimental and that an instance names by an old spelling, read from the raw definitions so
@@ -137,12 +138,14 @@ in
             options = {
               package = lib.mkOption {
                 type = lib.types.raw;
-                # A package that moved to experimental leaves a marker under
-                # its old name, which carries the error to show.
+                # A package that moved to experimental or was removed leaves
+                # a marker under its old name, which carries the error to show.
                 apply =
                   package:
                   if isMoved package then
                     errors.fail (movedMessage package)
+                  else if isRemoved package then
+                    errors.fail package.error
                   else if builtins.isPath package then
                     errors.fail {
                       message = "An instance's `package` is set to the path ${toString package} without `import`.";
