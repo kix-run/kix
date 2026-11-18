@@ -350,22 +350,29 @@ Kix models cluster availability across four ordered levels: `"none"` < `"pod"` <
 
 ---
 
-## Image and pin helpers
+## Version helpers
+
+Packages can read `clusterConfig.k8sVersion` in `build` and compare it against a version bound to omit flags, collectors, or RBAC rules that older Kubernetes releases do not support.
 
 ### `kix.version.atLeast` and `kix.version.atMost`
 
-Compare a version string, such as `clusterConfig.k8sVersion`, with a bound. A package uses them to leave out something that the cluster's Kubernetes version does not serve.
+| Function | Signature | Behavior |
+| --- | --- | --- |
+| `kix.version.atLeast` | `version -> bound -> bool or null` | Returns `true` when `version` is `bound` or newer, `false` when older, or `null` when `version` is too imprecise to tell. |
+| `kix.version.atMost` | `version -> bound -> bool or null` | Returns `true` when `version` is `bound` or older, `false` when newer, or `null` when `version` is too imprecise to tell. |
 
-| Function | Signature | Result |
-|---|---|---|
-| `kix.version.atLeast` | `version -> bound -> bool or null` | `true` when `version` is `bound` or newer. |
-| `kix.version.atMost` | `version -> bound -> bool or null` | `true` when `version` is `bound` or older. |
+Both functions compare up to the segment precision of `bound` (using the [version rules](/docs/reference/package-anatomy/#metaversion)), so `kix.version.atLeast "1.36.2" "1.36"` and `kix.version.atMost "1.36.2" "1.36"` both return `true`. When `version` has fewer numeric segments than `bound` and matches its prefix (such as `"1.36"` against `"1.36.2"`), both return `null`; if an earlier segment already differs (such as `"1.35"` against `"1.36.2"`), they still return `true` or `false`.
 
-Both compare only as many segments as `bound` has, so `atLeast "1.36.2" "1.36"` is `true`. Both return `null` when `version` has fewer segments than `bound`. `clusterConfig.k8sVersion` is `null` when the cluster sets none, so check for that first.
+Passing `null` or a non-version string throws an evaluation error. Because `clusterConfig.k8sVersion` is `null` when the cluster leaves it unset, check for `null` first. Comparing with `!= false` keeps the feature enabled when `k8sVersion` is unset or less precise than `bound`:
 
 ```nix
+k8sVersion = clusterConfig.k8sVersion or null;
 served = k8sVersion == null || kix.version.atLeast k8sVersion "1.36" != false;
 ```
+
+---
+
+## Image and pin helpers
 
 ### `kix.image.ref`, `kix.image.version`, and `kix.image.isPinned`
 

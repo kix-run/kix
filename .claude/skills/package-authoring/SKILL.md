@@ -711,12 +711,13 @@ prints `check-bump: PASS` and the upgrade deploy below has run.
   what fails and how to fix it in `reason`. If a new bound rejects a version
   the package previously accepted, add an `error` change record and start
   `reason` with its ID in brackets (`[Kxxxx]`).
-- Before you set a hard bound, check whether the package can leave out the
-  one feature that fails. `clusterConfig.k8sVersion` is available in `build`,
-  and `kix.version.atLeast` compares it. `kube-state-metrics` turns off the
-  collectors whose API the cluster does not serve and drops their kinds from
-  its ClusterRole, so it refuses nothing. A cluster with no `k8sVersion`
-  keeps upstream's default.
+- Before setting a hard bound, check whether the package can disable just the
+  incompatible feature on older clusters. Read `clusterConfig.k8sVersion` in
+  `build` and compare it with `kix.version.atLeast` or `kix.version.atMost`
+  (leaving upstream's defaults enabled when `k8sVersion` is `null`). For
+  example, `kube-state-metrics` disables collectors whose APIs the cluster
+  does not serve and omits their resource types from its ClusterRole, so it
+  keeps `minVersion = "1.25"` instead of requiring Kubernetes 1.36.
 - Add or update the package's entry in `ranges` in
   `kix/lib/tests/units/k8s-window.nix`, listing versions for `accepts`,
   `warns`, and (when top-level `meta.k8s` sets a bound) `refuses` and any

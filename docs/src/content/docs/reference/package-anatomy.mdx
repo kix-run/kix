@@ -299,7 +299,7 @@ Bounds are inclusive (`minVersion <= actual <= maxVersion`) and compare only up 
 
 `meta.k8s` holds two ranges:
 
-- Top-level `minVersion` and `maxVersion` fail the build when `k8sVersion` falls outside them. Set these bounds only when the package is known to fail beyond them, such as when a workload reads an API version that older Kubernetes releases do not serve or a CRD uses a validation rule added in a newer Kubernetes release. Explain what fails in `reason`.
+- Top-level `minVersion` and `maxVersion` fail the build when `k8sVersion` falls outside them. Set these bounds only when the package is known to fail beyond them, such as when a workload reads an API version that older Kubernetes releases do not serve or a CRD uses a validation rule added in a newer Kubernetes release, and explain what fails in `reason`. When a package can disable just the unsupported feature on older clusters, compare `clusterConfig.k8sVersion` with [`kix.version.atLeast`](/docs/reference/composition-helpers/#version-helpers) in `build` instead of setting a hard bound.
 - `supported` records the Kubernetes versions the upstream project lists as supported or tests in CI, and `source` names where upstream states that range. When `k8sVersion` falls outside `supported`, the build continues and emits a warning with the range and its source.
 
 When a cluster leaves `k8sVersion` unset, Kix skips both checks without warning.

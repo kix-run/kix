@@ -140,7 +140,7 @@ in
     # `supported` with `release`.
     k8s = {
       minVersion = "1.34";
-      reason = "[K8826] Spegel ${release} sets `trafficDistribution: PreferSameNode` on its registry Service, which Kubernetes 1.33 and older reject. Upgrade the cluster to Kubernetes 1.34 or newer and update k8sVersion, or stay on an older version of Kix.";
+      reason = "[K8826] Spegel ${release} sets trafficDistribution: PreferSameNode on its registry Service, which Kubernetes 1.33 and older reject. Upgrade the cluster to Kubernetes 1.34 or newer and update k8sVersion, or stay on an older version of Kix.";
       supported = {
         minVersion = "1.35";
         maxVersion = "1.37";

@@ -916,7 +916,7 @@ in
             && versions.atMost cfg.k8sVersion window.maxVersion != false;
         in
         lib.optional (cfg.k8sVersion != null && !inside) {
-          message = "cluster '${name}' sets k8sVersion to ${cfg.k8sVersion}. This Kix release supports Kubernetes ${window.minVersion} to ${window.maxVersion}, and every stable package accepts those versions. Outside that range, a package may refuse the cluster or warn. Kix still builds the cluster and checks each package's declared version bounds.";
+          message = "cluster '${name}' sets k8sVersion to ${cfg.k8sVersion}. This Kix release supports Kubernetes ${window.minVersion} to ${window.maxVersion}. The build continues and still checks each package's Kubernetes version bounds.";
           fix = "Move the cluster to Kubernetes ${window.minVersion} to ${window.maxVersion} and update k8sVersion, or use a version of Kix that supports Kubernetes ${cfg.k8sVersion}.";
         };
 
