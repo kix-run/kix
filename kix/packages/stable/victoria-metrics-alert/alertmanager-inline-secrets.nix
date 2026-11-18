@@ -1,9 +1,12 @@
 # Refuses credentials written inline in an Alertmanager configuration.
 # `settings` lands in a Secret that Kix renders, so an inline value is
 # stored in the Nix store and in the rendered manifests. Every key below is
-# a secret in Alertmanager v0.33.1 (config/config.go, config/notifiers.go,
-# and the http_config of prometheus/common) and, except sigv4's, has a
-# `_file` twin that reads it from a mounted file instead.
+# a secret in Alertmanager v0.33.1 and v0.35.0 (config/config.go, the
+# integrations' configuration in config/notifiers.go up to v0.33.1 and in
+# notify/<integration>/config.go from v0.35.0, and the http_config of
+# prometheus/common) and, except sigv4's, has a `_file` twin that reads it
+# from a mounted file instead. The victoria-metrics-alert package runs
+# v0.33.1 and the alertmanager package runs v0.35.0, and both use this list.
 #
 # Returns `settings` unchanged, or fails listing every inline credential.
 #
