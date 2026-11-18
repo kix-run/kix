@@ -96,6 +96,7 @@
           ingress-netpol = ./clusters/test-ingress-netpol.nix;
           external-dns = ./clusters/test-external-dns.nix;
           external-dns-tryout = ./clusters/test-external-dns-tryout.nix;
+          external-dns-upgrade = ./clusters/test-external-dns-upgrade.nix;
           external-secrets = ./clusters/test-external-secrets.nix;
           openbao = ./clusters/test-openbao.nix;
           velero = ./clusters/test-velero.nix;
