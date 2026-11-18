@@ -14,8 +14,9 @@
 #
 # Bring up: kind create cluster --name <name> --config <config>
 #           where the config sets networking.disableDefaultCNI = true and
-#           lists a control-plane and a worker node, so the two
-#           alertmanager-ha replicas spread over two nodes.
+#           lists a control-plane and a worker node. Availability `pod`
+#           needs `cluster.capabilities.multiNode`, which the second node
+#           makes true.
 # Deploy:   kix deploy prometheus-operator --context kind-<name> -y
 
 { kix, packages }:

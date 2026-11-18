@@ -74,6 +74,18 @@
 # `alertmanagerConfig` dependency opens no receiver ports either, since Kix
 # cannot read it; add a `networkPolicy.platformIntents` entry for the pods.
 #
+# Upgrades: v0.35.0 takes over directly from v0.33.1. The operator rolls the
+# StatefulSet one pod at a time, and the new pods read the silences and the
+# notification log the old ones left on their claims. Replicas of the two
+# versions gossip with each other during the roll. Going back works too.
+# Deploying the v0.33.1 package restarts the pods on v0.33.1, which read the
+# files v0.35.0 wrote. Upstream gives no upgrade or downgrade policy beyond
+# the CHANGE entries in its release notes. From v0.34.2 the API sends no CORS
+# headers, so a browser page served from another origin cannot call it.
+# Restore them with `extraSpec.additionalArgs = [ { name =
+# "web.cors.origin"; value = "<origin regex>"; } ]`. From v0.35.0 each
+# event recorder output needs a `name`.
+#
 # Escape hatches: `settings` for alertmanager.yaml, `extraSpec` for the
 # Alertmanager resource's spec, and the instance's `partsOverlays`.
 
@@ -84,7 +96,7 @@
   availability,
 }:
 let
-  release = "v0.33.1";
+  release = "v0.35.0";
   name = scope.instanceName;
   ns = scope.namespaceName;
   who = "alertmanager ${ns}/${name}";
@@ -129,7 +141,7 @@ in
     image = kix.options.image {
       repository = "quay.io/prometheus/alertmanager";
       tag = release;
-      digest = "sha256:9e082985f56f4c8c9f724e18f2288c6708f472e56a5286b8863d080434ea065d";
+      digest = "sha256:5f6e66c01bd610aef6dd671642a52eee775fd3a89bd8788ebada33efaf373d10";
       pullPolicy = null;
     };
     resources = kix.options.resources {
