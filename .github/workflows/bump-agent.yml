@@ -16,8 +16,12 @@ name: Bump agent
 #            opens the pull request. The app has no permission to change
 #            workflow files.
 #
-# The agent and verify jobs run on isolated Spindle VMs, which have no
-# Google identity and no shared cache to reach.
+#   escalate when a run with Haiku or Sonnet fails, starts the workflow
+#            again with Opus.
+#
+# The agent job runs on a throwaway Linux VM on the Mac Studio. The verify
+# and publish jobs run on isolated Spindle VMs, which have no Google
+# identity and no shared cache to reach.
 
 on:
   workflow_dispatch:
@@ -41,10 +45,10 @@ on:
         description: Upstream git repository URL
         required: true
       model:
-        description: Model the agent runs
+        description: Model the agent runs. auto picks Opus for a hard bump and Haiku otherwise
         type: choice
-        options: [haiku, sonnet, opus]
-        default: sonnet
+        options: [auto, haiku, sonnet, opus]
+        default: auto
       extra:
         description: Extra instruction for the agent (optional)
         required: false
@@ -87,6 +91,7 @@ jobs:
     outputs:
       base: ${{ steps.base.outputs.sha }}
       outcome: ${{ steps.collect.outputs.outcome }}
+      model: ${{ steps.model.outputs.model }}
     env:
       ANTHROPIC_FEDERATION_RULE_ID: fdrl_012Fr9FtgpmcQ7UAF2EqNAHE
       ANTHROPIC_ORGANIZATION_ID: 084c7f85-8473-42ae-a166-c8f6dfcd5570
@@ -123,6 +128,44 @@ jobs:
           git config user.email "kix-bump@users.noreply.github.com"
           git switch -c "$BRANCH"
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      # Haiku handles a plain image bump well and stalls on hard ones, so a
+      # bump that looks hard gets Opus from the start. The signals: the
+      # package vendors CRDs, keeps data, or jumps a major version or more
+      # than one minor, or upstream's release notes in between mention a
+      # breaking change or a migration.
+      - name: Choose the model
+        id: model
+        run: |
+          choose() {
+            echo "Model: $1 ($2)"
+            echo "model=$1" >> "$GITHUB_OUTPUT"
+            echo "MODEL=$1" >> "$GITHUB_ENV"
+          }
+          if [ "$MODEL" != auto ]; then choose "$MODEL" "chosen when the run started"; exit 0; fi
+          read -ra dirs <<<"$DIRS"
+          for d in "${dirs[@]}"; do
+            if [ -d "$d/crds" ]; then choose opus "$d vendors CRDs"; exit 0; fi
+            if grep -rqiE 'volumeClaimTemplates|PersistentVolumeClaim|touches-data|contracts(\.stable|\.experimental)?\.(postgres|mysql|clickhouse|redis|valkey)' "$d"; then
+              choose opus "$d keeps data"; exit 0
+            fi
+          done
+          IFS=. read -r old_major old_minor _ <<<"${PINNED#v}"
+          IFS=. read -r new_major new_minor _ <<<"${TARGET#v}"
+          if [[ "$old_major$old_minor$new_major$new_minor" =~ ^[0-9]+$ ]] \
+            && { [ "$new_major" != "$old_major" ] || [ $((new_minor - old_minor)) -gt 1 ]; }; then
+            choose opus "$PINNED to $TARGET crosses a major or more than one minor"; exit 0
+          fi
+          if [[ "$GIT_URL" =~ ^https://github\.com/([^/]+/[^/.]+) ]]; then
+            notes=$(curl -sS "https://api.github.com/repos/${BASH_REMATCH[1]}/releases?per_page=50" \
+              | jq -r --arg old "${PINNED#v}" --arg new "${TARGET#v}" '
+                  def v: ltrimstr("v") | split("-")[0] | split(".") | map(tonumber? // 0);
+                  .[] | select(.tag_name | v > ($old | v) and v <= ($new | v)) | .body // ""' 2>/dev/null || true)
+            if grep -qiE 'breaking|migration|deprecat|removed' <<<"$notes"; then
+              choose opus "upstream's release notes mention a breaking change or a migration"; exit 0
+            fi
+          fi
+          choose haiku "no sign of a hard bump"
 
       - name: Start Docker
         run: |
@@ -309,6 +352,7 @@ jobs:
     env:
       BASE: ${{ needs.agent.outputs.base }}
       OUTCOME: ${{ needs.agent.outputs.outcome }}
+      MODEL: ${{ needs.agent.outputs.model }}
     steps:
       - name: Get a token for the bump app
         id: app
@@ -411,3 +455,34 @@ jobs:
           if [ "$OUTCOME" != upgraded ]; then
             jq -n --arg label "$LABEL" '{labels: [$label]}' | api POST "issues/$number/labels" > /dev/null
           fi
+
+  escalate:
+    needs: [agent, verify, publish]
+    # A failed or stalled run with a smaller model gets one more try with
+    # Opus. A run that ended with an outcome other than "upgraded" is not a
+    # failure, and a failure while publishing is not the agent's.
+    if: >-
+      always()
+      && needs.agent.outputs.model != 'opus'
+      && (needs.agent.result == 'failure'
+          || needs.agent.outputs.outcome == 'invalid'
+          || needs.verify.result == 'failure')
+    runs-on: [self-hosted, spindle-2c-4g, access=isolated]
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Start the workflow again with Opus
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          workflow=$(basename "${WORKFLOW_REF%@*}")
+          jq -n --arg package "$PACKAGE" --arg dirs "$DIRS" --arg pinned "$PINNED" \
+              --arg target "$TARGET" --arg tag "$TAG" --arg git "$GIT_URL" --arg extra "$EXTRA" \
+            '{ref: "main", inputs: {package: $package, dirs: $dirs, pinned: $pinned, target: $target,
+              tag: $tag, git: $git, extra: $extra, model: "opus", minutes: "120"}}' \
+            | curl -sS --fail-with-body -X POST -H "Authorization: Bearer $GH_TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/workflows/$workflow/dispatches" --data-binary @-
+          echo "Started the workflow again for $PACKAGE $TARGET with Opus."
