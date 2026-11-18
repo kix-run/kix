@@ -32,6 +32,17 @@
 # package does not scrape. A claim that cannot be provisioned stays
 # Pending with an Event on it, and pool health is left to the node's own
 # monitoring, such as node-exporter's ZFS collector.
+#
+# Upgrades: 2.11.2 takes over directly from 2.11.1. Upstream's 2.11.2 release
+# notes say its upgrade testing started from 2.11.1. The CRDs, RBAC, sidecar
+# images, and StorageClass parameters are the same in both releases, so the
+# new pods run on what 2.11.1 left behind. A deploy replaces the controller
+# and node pods once. Backup and restore transfers now report `Failed` when
+# either side fails. Upstream documents no downgrade for the 2.x line.
+# Going back works in the kind test: the 2.11.1 package deployed over 2.11.2
+# ran 2.11.1 pods, and the PackageInstance read 2.11.1. The kind test created
+# no ZFS volume, because kind nodes have no pool, so the data path is not
+# tested in either direction.
 
 {
   scope,
