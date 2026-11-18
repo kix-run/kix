@@ -40,6 +40,16 @@
 #   out.provisioner, out.storageClasses, out.storageClassName,
 #   out.volumeSnapshotClasses, out.diskPools, and out.crds.DiskPool.
 #   out.version is the Mayastor version `image.tag` names.
+#
+# Upgrades: 2.12.2 is a patch release. Its control-plane and io-engine source
+# is identical to 2.12.1, and its chart changes only the Loki and MinIO
+# images, which this package does not render. Its CRD chart changes only its
+# version, so the DiskPool CRD and the RBAC here need no change. A plain
+# deploy upgrades a 2.12.1 install. The control-plane pods restart on the new
+# images. io-engine is an OnDelete DaemonSet, so its pods keep the 2.12.1
+# image until an operator deletes each one, and the CLI reports them as
+# pending a restart. Upstream does not document going back to 2.12.1, and
+# this package has not tested it.
 
 {
   scope,
