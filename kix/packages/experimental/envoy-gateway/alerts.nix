@@ -8,7 +8,7 @@
   scope,
   lib,
   kix,
-  envoyGateway,
+  envoyGateway ? null,
   prometheus ? null,
   ...
 }@args:
@@ -16,7 +16,7 @@ let
   name = scope.instanceName;
   ns = scope.namespaceName;
   proxySel = ''namespace="${ns}",job="${ns}/${name}-proxy"'';
-  controllerNs = envoyGateway.out.namespace or ns;
+  controllerNs = (envoyGateway.out or { }).namespace or ns;
   # The controller's Deployment has the name Envoy Gateway looks it up by.
   deployment = "Deployment ${controllerNs}/envoy-gateway";
 in

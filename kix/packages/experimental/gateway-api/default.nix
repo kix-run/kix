@@ -10,7 +10,8 @@
 # experimental-channel CRD over a standard one and a bundle older than
 # v1.7.0. The package runs no workload. A Gateway API implementation, such
 # as envoy-gateway-controller or traefik, takes it as a dependency and
-# builds its GatewayClass and Gateway from `out.crds`.
+# builds its GatewayClass from `out.crds`, and a Gateway package builds its
+# Gateway from it.
 #
 # The instance claims the `gatewayApi` role, so a cluster runs one.
 # An environment that installs the CRDs itself (some managed

@@ -224,7 +224,7 @@ in
         self,
         config,
         clusterConfig,
-        envoyGateway,
+        envoyGateway ? null,
         gatewayApi ? null,
         prometheus ? null,
         ...
@@ -232,20 +232,35 @@ in
       let
         netpol = scope.networkPolicyEnforcer.netpol;
 
-        # A `kix.mkImport` answering envoyGateway has none of these.
+        # Without an instance, the refusal carries the change record's id,
+        # because every cluster that used this package before the
+        # controller moved out of it arrives here. A `kix.mkImport`
+        # answering envoyGateway has none of the fields.
         controller =
           let
             out = envoyGateway.out or { };
           in
-          if
-            out ? gatewayClassName && out ? proxyImage && out ? proxyLabels && (out.crds or { }) ? EnvoyProxy
+          if envoyGateway == null then
+            scope.fail {
+              id = "K5531";
+              dependency = "envoyGateway";
+              message = "no envoy-gateway-controller instance answers the 'envoyGateway' dependency. The envoy-gateway package is now one Gateway, and the envoy-gateway-controller package runs the Envoy Gateway controller that serves it.";
+              fix = "Add `instances.${ns}.envoy-gateway-controller.package = packages.experimental.envoy-gateway-controller;`.";
+            }
+          else if
+            out ? gatewayClassName
+            && out ? namespace
+            && out ? proxyImage
+            && out ? proxyLabels
+            && out ? version
+            && (out.crds or { }) ? EnvoyProxy
           then
             out
           else
             scope.fail {
               dependency = "envoyGateway";
-              message = "the 'envoyGateway' dependency did not resolve to an envoy-gateway-controller instance (missing out.gatewayClassName, out.proxyImage, out.proxyLabels, or out.crds.EnvoyProxy). This package requires envoy-gateway-controller and cannot use a controller declared with kix.mkImport.";
-              fix = "Add `instances.${ns}.envoy-gateway-controller.package = packages.experimental.envoy-gateway-controller;` and remove any `envoyGateway` alias from other instances. If Envoy Gateway is installed outside Kix, replace this `envoy-gateway` instance with `kix.mkImport { out.gatewayRef = { name = \"<gateway>\"; namespace = \"<namespace>\"; }; }` and `aliases = [ \"gateway\" ];`.";
+              message = "the 'envoyGateway' dependency did not resolve to an envoy-gateway-controller instance (missing out.gatewayClassName, out.namespace, out.proxyImage, out.proxyLabels, out.version, or out.crds.EnvoyProxy). This package requires envoy-gateway-controller and cannot use a kix.mkImport in its place.";
+              fix = "Add `instances.${ns}.envoy-gateway-controller.package = packages.experimental.envoy-gateway-controller;` and remove any `envoyGateway` alias from other instances. If Envoy Gateway is installed outside Kix, replace this `envoy-gateway` instance with a `kix.mkImport { out.gatewayRef = { name; namespace; }; }` instance that has `aliases = [ \"gateway\" ];`.";
             };
 
         inControllerNamespace =
@@ -303,6 +318,7 @@ in
             }
           else if config.proxySpec ? mergeGateways then
             scope.fail {
+              id = "K5531";
               option = "proxySpec.mergeGateways";
               message = "envoy-gateway does not support proxySpec.mergeGateways. mergeGateways shares one proxy Deployment across an entire GatewayClass, whereas each envoy-gateway instance runs dedicated proxy pods, a Service, and network policies for a single Gateway.";
               fix = "Remove proxySpec.mergeGateways.";

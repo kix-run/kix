@@ -174,6 +174,7 @@ in
   envoy-gateway-ordering =
     let
       cluster = clusterWith { };
+      netpolCluster = clusterWith { extra = netpolOn; };
       ms = manifests cluster;
       deployment = byName "envoy-gateway" (ofKind "Deployment" ms);
       class = byName "eg" (ofKind "GatewayClass" ms);
@@ -185,6 +186,10 @@ in
       && lib.hasInfix (hashOf cluster "certSecret") (dependsOn deployment)
       && lib.hasInfix (hashOf cluster "deployment") (dependsOn class)
       && lib.hasInfix (hashOf cluster "envoyProxy") (dependsOn class)
+      && lib.hasInfix (hashOf cluster "service") (dependsOn class)
+      && lib.hasInfix (hashOf netpolCluster "controllerIngress") (
+        dependsOn (byName "eg" (ofKind "GatewayClass" (manifests netpolCluster)))
+      )
       && lib.hasInfix (hashOf cluster "gatewayClass") (dependsOn gateway)
       && lib.hasInfix (gatewayHashOf cluster "envoyProxy") (dependsOn gateway)
       && lib.hasInfix (hashOf cluster "topologyInjector") (
@@ -201,7 +206,12 @@ in
       errors = contract.helpers.errorsFor {
         who = "${ns}/eg";
         gatewayApi = null;
-        kinds = [ "Gateway" ];
+        kinds = [
+          "GatewayClass"
+          "Gateway"
+          "HTTPRoute"
+          "ReferenceGrant"
+        ];
         minVersion = "1.6";
       };
     in
@@ -242,6 +252,7 @@ in
         withGatewayApi
         netpolOn
         {
+          instances.monitoring.prometheus.package = prometheusStub;
           instances.${ns} = {
             eg.package = envoyGatewayController;
             public.package = envoyGateway;
@@ -268,15 +279,23 @@ in
       && ownerOf "private" == "private"
       && byName "public-proxy-ingress" cnps != null
       && byName "private-proxy-egress" cnps != null
+      && byName "public-proxy" (ofKind "PodMonitor" ms) != null
+      && byName "private-proxy" (ofKind "PodMonitor" ms) != null
+      && alertRulesOf "PrometheusRule" "public-proxy" ms != null
+      && alertRulesOf "PrometheusRule" "private-proxy" ms != null
       && builtins.length (ofKind "GatewayClass" ms) == 1
     )
     || throw "envoy-gateway several gateways: ${builtins.toJSON (map (m: m.metadata.name) cnps)}";
 
-  # A Gateway outside the controller's namespace is refused, and so is a
-  # controller that is a kix.mkImport, which names no GatewayClass. The
-  # control is the default cluster.
+  # A Gateway with no controller is refused, as is one outside the
+  # controller's namespace and one whose controller is a kix.mkImport, which
+  # names no GatewayClass. The control is the default cluster.
   envoy-gateway-needs-the-controller =
     evalFails (mkCluster [
+      withGatewayApi
+      { instances.${ns}.gw.package = envoyGateway; }
+    ])
+    && evalFails (mkCluster [
       withGatewayApi
       {
         instances.${ns}.eg.package = envoyGatewayController;

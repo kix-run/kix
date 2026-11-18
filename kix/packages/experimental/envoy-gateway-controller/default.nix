@@ -850,7 +850,7 @@ in
 
         # The class's EnvoyProxy, for a Gateway that names none of its own,
         # such as one a Helm chart writes. It pins the Envoy image. A
-        # Gateway of the envoy-gateway-gateway package names its own.
+        # Gateway of the envoy-gateway package names its own.
         envoyProxy =
           scope.mkCR self.crds.envoyproxies {
             inherit name;
@@ -871,8 +871,15 @@ in
         gatewayClass = scope.mkCR gatewayCrds.GatewayClass {
           inherit name;
           labels = controllerLabels;
-          # A GatewayClass is Accepted only once the controller runs.
-          requires = [ self.deployment ];
+          # A GatewayClass is Accepted only once the controller runs. A
+          # Gateway waits for the class, so the class also waits for what
+          # the Gateway's proxies need to reach the controller: its Service
+          # and, under an enforcer, the policy that admits them.
+          requires = builtins.filter (p: p != null) [
+            self.deployment
+            self.service
+            self.controllerIngress
+          ];
           spec = {
             inherit controllerName;
             parametersRef = {
