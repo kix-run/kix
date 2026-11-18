@@ -49,7 +49,7 @@ Most `kix.run/*` metadata is stamped automatically by resource builders (`scope.
 | Annotation | Set via | Meaning |
 | --- | --- | --- |
 | `kix.run/depends-on` | Nix string context, `requires`, `extraDeps` | Comma-separated dependency entries (`<hash>`, `requires:<hash>`, `extra:<hash>`) that define the deployment dependency graph. |
-| `kix.run/readiness` | `readiness` on `scope.mkCRD` / `scope.mkCRDRef` | JSON readiness rule evaluated by `kix deploy` for custom resources. See [`kix.run/readiness`](#kixrunreadiness). |
+| `kix.run/readiness` | `readiness` on `scope.mkCRD` / `scope.mkCRDRef`, or on `scope.mkCR` for one resource | JSON readiness rule evaluated by `kix deploy` for custom resources. See [`kix.run/readiness`](#kixrunreadiness). |
 | `kix.run/rerun` | `kix.healthCheck` or `kix.keyValues.rerunOnChange` | `"on-change"` on a `Job` resource. Instructs `kix deploy`, `kix rollback`, and the operator to delete and recreate the Job when its `kix.run/rerun-hash` changes. `kix deploy` and `kix rollback` also recreate it when its previous run failed. A change that leaves the Job's own manifest alone, such as a new label on its namespace, updates the Job in place without running it again. |
 | `kix.run/rerun-hash` | `scope.mkResource`, on every resource that carries `kix.run/rerun` | Hash of the content that triggers a rerun. Combines the resource's `out.contentHash` with the `out.contentHash` of each Kix-built Secret and ConfigMap that its pod reads through a volume, `env`, or `envFrom` (or equals `out.contentHash` when the pod reads none). Excludes `kix.run/*` metadata and other dependencies. Pod template `checksum/*` annotations are part of the Job's own manifest, so changing one (such as an annotation set to another resource's `out.contentHash`) also reruns the Job. Jobs deployed before Kix added this annotation run once more on the first deploy after upgrading. |
 | `kix.run/cede-fields` | `ownership.cede` on `scope.mkResource` / `scope.mkCRD` | Comma-separated field paths another controller may take over after creation. See [`kix.run/cede-fields`](#kixruncede-fields). |
@@ -57,7 +57,7 @@ Most `kix.run/*` metadata is stamped automatically by resource builders (`scope.
 
 #### `kix.run/readiness`
 
-Stamped on custom resources built via `scope.mkCR` when the CRD or CRD reference declares `readiness`:
+Stamped on custom resources built via `scope.mkCR` when the CRD or CRD reference declares `readiness`, or when `scope.mkCR` receives its own `readiness`, which replaces the kind's:
 
 | CRD `readiness` declaration | Stamped JSON value | When `kix deploy` considers the resource ready |
 | --- | --- | --- |
@@ -67,6 +67,13 @@ Stamped on custom resources built via `scope.mkCR` when the CRD or CRD reference
 | `{ condition = { type = "Valid"; status = "True"; }; failed = [ { condition = { type = "Valid"; status = "False"; }; } ]; }` | `{"condition":{"status":"True","type":"Valid"},"failed":[{"condition":{"status":"False","type":"Valid"}}]}` | Ready as in the row above. When a `failed` entry matches instead, `kix deploy` stops waiting and fails the resource with the controller's message. |
 
 A `failed` entry is `{ condition = { type; status; reason ? ...; }; }` (the reason is matched only when declared) or `{ path; equals; rejected ? false; hint ? ...; message ? ...; }`, where `rejected = true` makes the message say to change the object (the default for conditions), `hint` is the next step for a runtime outcome, and `message` is a JSON pointer, or a list of them, whose values the message quotes (stamped as a list). A match counts once the condition's `observedGeneration`, or `status.observedGeneration`, has reached `metadata.generation`; without a generation, once the condition's `lastTransitionTime` is later than this deploy's apply of the object (an earlier one is not reported); and with neither field, once the match has held for ten seconds of polling. A version of Kix that predates `failed` ignores the key and waits as before.
+
+Two more keys can sit beside the ready rule:
+
+- `observedGeneration` names the status field where the controller reports the generation it has acted on, as a JSON pointer such as `"/status/desiredGeneration"`, or is `false` when the kind reports none. Without it, Kix reads `status.observedGeneration`. The ready rule, the `failed` entries, and `pendingRestart` wait until that field has reached `metadata.generation`. A declared field that is absent counts as not reached yet, while an absent `status.observedGeneration` imposes no wait. A condition's own `observedGeneration` still comes first. A value that is neither a JSON pointer nor `false` makes Kix ignore the whole annotation.
+- `pendingRestart` is `{ condition = { type; status; reason ? ...; }; hint ? ...; }` or `{ path; equals; hint ? ...; message ? ...; }`. It names the state in which the controller has accepted the spec and the running workload keeps the previous one until it restarts. When it matches on a ready resource whose status is current, `kix deploy` reports the resource as ready with a restart pending, quoting the controller's message and the hint. Without a generation, a condition that last changed before this deploy applied the resource is not reported. The JSON deploy log reports it as an `awaiting_restart` detail with the message.
+
+A version of Kix that predates these keys ignores them, waits on `status.observedGeneration`, and reports plain ready.
 
 :::tip[Use it in a task]
 See [Declare readiness for custom resources](/docs/how-to/author-packages-and-clusters/declare-readiness-for-custom-resources/) for examples of custom resource readiness rules.

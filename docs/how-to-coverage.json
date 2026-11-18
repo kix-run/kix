@@ -273,7 +273,9 @@
       "scenario": "application",
       "status": "implemented",
       "snippets": [
-        "customResourceReadiness"
+        "customResourceReadiness",
+        "customResourceGenerationField",
+        "customResourceOwnReadiness"
       ],
       "offlineCaptures": [
         "how-to/application-custom-resource-readiness/widget"

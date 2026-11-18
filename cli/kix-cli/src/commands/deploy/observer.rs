@@ -182,14 +182,12 @@ impl StreamCliObserver {
                         output::yellow(&format!("ran again ({reason})")),
                     );
                 }
-                Some(NodeDetail::PendingRestart { stale, message }) => {
+                Some(NodeDetail::PendingRestart { message, .. }) => {
                     println!(
                         "  {} {} {} {}",
                         output::yellow("✔"),
                         label,
-                        output::yellow(&format!(
-                            "ready, {stale} pods pending manual restart (OnDelete):"
-                        )),
+                        output::yellow("ready, restart pending:"),
                         output::dim(message),
                     );
                 }

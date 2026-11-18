@@ -242,9 +242,16 @@ pub enum Detail {
     SecretHydrationFailed(String),
     RecreatedInPlace(String),
     Rerun(String),
-    /// `stale` pods run the previous template until someone deletes them.
+    /// An `OnDelete` DaemonSet is ready, and `stale` of its pods run the
+    /// previous template until someone deletes them. `message` says why.
     PendingRestart {
         stale: i64,
+        message: String,
+    },
+    /// A custom resource is ready, and its controller reports the state its
+    /// package declared as `pendingRestart`: the running workload keeps the
+    /// previous spec until someone restarts it. `message` says why.
+    AwaitingRestart {
         message: String,
     },
 }
@@ -466,8 +473,17 @@ impl Detail {
             NodeDetail::SecretHydrationFailed(msg) => Detail::SecretHydrationFailed(msg.clone()),
             NodeDetail::RecreatedInPlace { reason } => Detail::RecreatedInPlace(reason.clone()),
             NodeDetail::Rerun { reason } => Detail::Rerun(reason.clone()),
-            NodeDetail::PendingRestart { stale, message } => Detail::PendingRestart {
+            NodeDetail::PendingRestart {
+                stale: Some(stale),
+                message,
+            } => Detail::PendingRestart {
                 stale: *stale,
+                message: message.clone(),
+            },
+            NodeDetail::PendingRestart {
+                stale: None,
+                message,
+            } => Detail::AwaitingRestart {
                 message: message.clone(),
             },
         })

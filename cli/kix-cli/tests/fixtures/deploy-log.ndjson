@@ -6,6 +6,7 @@
 {"detail":{"rerun":"its last run failed"},"elapsed_ms":7,"id":{"kind":"Job","name":"probe","namespace":"app"},"kind":"recreate","schema_version":"2026-11-15","type":"node","verdict":{"state":"ready"}}
 {"detail":{"recreated_in_place":"spec.selector is immutable"},"elapsed_ms":7,"id":{"kind":"StatefulSet","name":"db","namespace":"app"},"kind":"migrate","schema_version":"2026-11-15","type":"node","verdict":{"state":"ready"}}
 {"detail":{"pending_restart":{"message":"OnDelete","stale":2}},"elapsed_ms":7,"id":{"kind":"DaemonSet","name":"agent","namespace":"app"},"kind":"apply","schema_version":"2026-11-15","type":"node","verdict":{"state":"ready"}}
+{"detail":{"awaiting_restart":{"message":"its controller set RestartRequired=True"}},"elapsed_ms":7,"id":{"kind":"VirtualMachine","name":"demo","namespace":"app"},"kind":"apply","schema_version":"2026-11-15","type":"node","verdict":{"state":"ready"}}
 {"detail":{"secret_hydrated":3},"elapsed_ms":7,"id":{"kind":"Secret","name":"creds","namespace":"app"},"kind":"apply","schema_version":"2026-11-15","type":"node","verdict":{"state":"running"}}
 {"detail":{"secret_hydration_failed":"no key"},"elapsed_ms":7,"id":{"kind":"Secret","name":"creds","namespace":"app"},"kind":"apply","schema_version":"2026-11-15","type":"node","verdict":{"message":"cannot decrypt","state":"failed"}}
 {"detail":{"apply_failed":"field is immutable"},"elapsed_ms":7,"id":{"kind":"Service","name":"web","namespace":"app"},"kind":"apply","schema_version":"2026-11-15","type":"node","verdict":{"message":"refused","state":"failed"}}

@@ -197,7 +197,7 @@ template, `kix deploy` reports the DaemonSet ready with the number of pods
 still on the previous template:
 
 ```text
-✔ DaemonSet.apps/mayastor-io-engine@mayastor ready, 2 pods pending manual restart (OnDelete): the DaemonSet replaces a pod with the current template only when the pod is deleted
+✔ DaemonSet.apps/mayastor-io-engine@mayastor ready, restart pending: 2 pods still run the previous pod template, and the DaemonSet replaces a pod only when someone deletes it
 ```
 
 Restart the pods one node at a time, so that every volume keeps a replica
