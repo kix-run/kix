@@ -75,7 +75,11 @@ env:
 
 jobs:
   agent:
-    runs-on: [self-hosted, spindle-4c-8g-50d, access=isolated]
+    # A fresh arm64 Linux VM on the Mac Studio for each job, cut off from the
+    # local network. Agent runs are long, and this keeps them off the cloud
+    # bill and safe from spot preemption. The verify job checks the result
+    # again on amd64.
+    runs-on: kix-linux-nix
     timeout-minutes: 150
     permissions:
       contents: read
@@ -120,11 +124,12 @@ jobs:
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Start Docker
-        run: sudo systemctl start docker.service && docker info --format '{{.ServerVersion}}'
+        run: |
+          docker info --format '{{.ServerVersion}} {{.Architecture}}' 2>/dev/null \
+            || { sudo systemctl start docker.service && docker info --format '{{.ServerVersion}} {{.Architecture}}'; }
 
-      - name: Install Claude Code
-        # The VM runs NixOS, where npm's prebuilt Claude Code binary does not
-        # run, so take the nixpkgs build. It is unfree, hence the variable.
+      - name: Install Claude Code, kind, kubectl, and Helm
+        # Claude Code comes from nixpkgs, which needs the unfree variable.
         # nixpkgs master gets each Claude Code release within a day or so,
         # while the nixpkgs-unstable channel waits for a full Hydra
         # evaluation and runs further behind. The federated sign-in was
@@ -133,6 +138,9 @@ jobs:
           NIXPKGS_ALLOW_UNFREE: '1'
           MIN_VERSION: 2.1.326
         run: |
+          for tool in kind kubectl kubernetes-helm; do
+            echo "$(nix build --no-link --print-out-paths "nixpkgs#$tool")/bin" >> "$GITHUB_PATH"
+          done
           out=$(nix build --impure --no-link --print-out-paths github:NixOS/nixpkgs/master#claude-code)
           echo "$out/bin" >> "$GITHUB_PATH"
           version=$("$out/bin/claude" --version | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+')
@@ -171,9 +179,9 @@ jobs:
 
       - name: Run the agent
         env:
-          # Spindle runs the job as root, and Claude Code refuses to skip its
-          # permission prompts as root unless told it is in a sandbox. The VM
-          # is thrown away after the job and holds no secrets.
+          # Claude Code refuses to skip its permission prompts as root unless
+          # told it is in a sandbox, and some runners (Spindle) run jobs as
+          # root. The VM is thrown away after the job and holds no secrets.
           IS_SANDBOX: '1'
         run: |
           # Each GitHub identity token lasts about five minutes. Claude Code
