@@ -20,8 +20,7 @@
         "list",
         "watch",
         "patch",
-        "update",
-        "patch"
+        "update"
       ]
     },
     {
@@ -260,6 +259,69 @@
     },
     {
       "apiGroups": [
+        "template.kubevirt.io"
+      ],
+      "resources": [
+        "virtualmachinetemplates",
+        "virtualmachinetemplaterequests"
+      ],
+      "verbs": [
+        "create",
+        "delete",
+        "deletecollection",
+        "get",
+        "list",
+        "patch",
+        "update",
+        "watch"
+      ]
+    },
+    {
+      "apiGroups": [
+        "template.kubevirt.io"
+      ],
+      "resources": [
+        "virtualmachinetemplates/status",
+        "virtualmachinetemplaterequests/status"
+      ],
+      "verbs": [
+        "get",
+        "patch"
+      ]
+    },
+    {
+      "apiGroups": [
+        "template.kubevirt.io"
+      ],
+      "resources": [
+        "virtualmachinetemplates/finalizers",
+        "virtualmachinetemplaterequests/finalizers"
+      ],
+      "verbs": [
+        "update"
+      ]
+    },
+    {
+      "apiGroups": [
+        "template.kubevirt.io"
+      ],
+      "resources": [
+        "virtualmachinetemplaterequests/source"
+      ],
+      "verbs": [
+        "create"
+      ]
+    },
+    {
+      "nonResourceURLs": [
+        "/metrics"
+      ],
+      "verbs": [
+        "get"
+      ]
+    },
+    {
+      "apiGroups": [
         ""
       ],
       "resources": [
@@ -296,7 +358,8 @@
         "persistentvolumeclaims"
       ],
       "verbs": [
-        "get"
+        "get",
+        "list"
       ]
     },
     {
@@ -405,6 +468,32 @@
     },
     {
       "apiGroups": [
+        "backup.kubevirt.io"
+      ],
+      "resources": [
+        "virtualmachinebackups"
+      ],
+      "verbs": [
+        "get",
+        "list",
+        "watch"
+      ]
+    },
+    {
+      "apiGroups": [
+        "backup.kubevirt.io"
+      ],
+      "resources": [
+        "virtualmachinebackuptrackers"
+      ],
+      "verbs": [
+        "get",
+        "list",
+        "watch"
+      ]
+    },
+    {
+      "apiGroups": [
         "cdi.kubevirt.io"
       ],
       "resources": [
@@ -469,6 +558,17 @@
       "verbs": [
         "create",
         "list",
+        "get"
+      ]
+    },
+    {
+      "apiGroups": [
+        ""
+      ],
+      "resources": [
+        "nodes"
+      ],
+      "verbs": [
         "get"
       ]
     },
@@ -683,6 +783,56 @@
     },
     {
       "apiGroups": [
+        "backup.kubevirt.io"
+      ],
+      "resources": [
+        "virtualmachinebackups",
+        "virtualmachinebackups/status",
+        "virtualmachinebackups/finalizers"
+      ],
+      "verbs": [
+        "get",
+        "list",
+        "watch",
+        "create",
+        "update",
+        "delete",
+        "patch"
+      ]
+    },
+    {
+      "apiGroups": [
+        "backup.kubevirt.io"
+      ],
+      "resources": [
+        "virtualmachinebackuptrackers",
+        "virtualmachinebackuptrackers/status"
+      ],
+      "verbs": [
+        "get",
+        "list",
+        "watch",
+        "create",
+        "update",
+        "delete",
+        "patch"
+      ]
+    },
+    {
+      "apiGroups": [
+        "template.kubevirt.io"
+      ],
+      "resources": [
+        "virtualmachinetemplates"
+      ],
+      "verbs": [
+        "get",
+        "list",
+        "watch"
+      ]
+    },
+    {
+      "apiGroups": [
         "pool.kubevirt.io"
       ],
       "resources": [
@@ -732,6 +882,8 @@
         "virtualmachines/stop",
         "virtualmachineinstances/addvolume",
         "virtualmachineinstances/removevolume",
+        "virtualmachineinstances/backup",
+        "virtualmachineinstances/redefine-checkpoint",
         "virtualmachineinstances/freeze",
         "virtualmachineinstances/unfreeze",
         "virtualmachineinstances/reset",
@@ -752,17 +904,6 @@
       ],
       "verbs": [
         "*"
-      ]
-    },
-    {
-      "apiGroups": [
-        "k8s.cni.cncf.io"
-      ],
-      "resources": [
-        "network-attachment-definitions"
-      ],
-      "verbs": [
-        "get"
       ]
     },
     {
@@ -916,6 +1057,31 @@
     },
     {
       "apiGroups": [
+        "resource.k8s.io"
+      ],
+      "resources": [
+        "resourceslices",
+        "resourceclaims"
+      ],
+      "verbs": [
+        "list",
+        "watch",
+        "get"
+      ]
+    },
+    {
+      "apiGroups": [
+        "k8s.cni.cncf.io"
+      ],
+      "resources": [
+        "network-attachment-definitions"
+      ],
+      "verbs": [
+        "get"
+      ]
+    },
+    {
+      "apiGroups": [
         "kubevirt.io"
       ],
       "resources": [
@@ -1007,6 +1173,33 @@
     },
     {
       "apiGroups": [
+        "backup.kubevirt.io"
+      ],
+      "resources": [
+        "virtualmachinebackuptrackers",
+        "virtualmachinebackuptrackers/status"
+      ],
+      "verbs": [
+        "list",
+        "watch",
+        "patch"
+      ]
+    },
+    {
+      "apiGroups": [
+        "plugin.kubevirt.io"
+      ],
+      "resources": [
+        "plugins"
+      ],
+      "verbs": [
+        "get",
+        "list",
+        "watch"
+      ]
+    },
+    {
+      "apiGroups": [
         "export.kubevirt.io"
       ],
       "resources": [
@@ -1026,6 +1219,75 @@
         "kubevirts"
       ],
       "verbs": [
+        "list",
+        "watch"
+      ]
+    },
+    {
+      "apiGroups": [
+        "kubevirt.io"
+      ],
+      "resources": [
+        "virtualmachineinstances"
+      ],
+      "verbs": [
+        "get",
+        "list",
+        "watch",
+        "update",
+        "patch"
+      ]
+    },
+    {
+      "apiGroups": [
+        "kubevirt.io"
+      ],
+      "resources": [
+        "virtualmachineinstancemigrations"
+      ],
+      "verbs": [
+        "get",
+        "list",
+        "watch",
+        "patch",
+        "delete"
+      ]
+    },
+    {
+      "apiGroups": [
+        "kubevirt.io"
+      ],
+      "resources": [
+        "kubevirts"
+      ],
+      "verbs": [
+        "get",
+        "list",
+        "watch"
+      ]
+    },
+    {
+      "apiGroups": [
+        ""
+      ],
+      "resources": [
+        "events"
+      ],
+      "verbs": [
+        "update",
+        "create",
+        "patch"
+      ]
+    },
+    {
+      "apiGroups": [
+        "apiextensions.k8s.io"
+      ],
+      "resources": [
+        "customresourcedefinitions"
+      ],
+      "verbs": [
+        "get",
         "list",
         "watch"
       ]
@@ -1069,7 +1331,9 @@
         "virtualmachineinstances/userlist",
         "virtualmachineinstances/sev/fetchcertchain",
         "virtualmachineinstances/sev/querylaunchmeasurement",
-        "virtualmachineinstances/usbredir"
+        "virtualmachineinstances/usbredir",
+        "virtualmachines/objectgraph",
+        "virtualmachineinstances/objectgraph"
       ],
       "verbs": [
         "get"
@@ -1089,7 +1353,8 @@
         "virtualmachineinstances/softreboot",
         "virtualmachineinstances/reset",
         "virtualmachineinstances/sev/setupsession",
-        "virtualmachineinstances/sev/injectlaunchsecret"
+        "virtualmachineinstances/sev/injectlaunchsecret",
+        "virtualmachineinstances/evacuate/cancel"
       ],
       "verbs": [
         "update"
@@ -1117,7 +1382,8 @@
         "virtualmachines/restart",
         "virtualmachines/addvolume",
         "virtualmachines/removevolume",
-        "virtualmachines/memorydump"
+        "virtualmachines/memorydump",
+        "virtualmachines/evacuate/cancel"
       ],
       "verbs": [
         "update"
@@ -1176,6 +1442,43 @@
         "virtualmachinesnapshots",
         "virtualmachinesnapshotcontents",
         "virtualmachinerestores"
+      ],
+      "verbs": [
+        "get",
+        "delete",
+        "create",
+        "update",
+        "patch",
+        "list",
+        "watch",
+        "deletecollection"
+      ]
+    },
+    {
+      "apiGroups": [
+        "backup.kubevirt.io"
+      ],
+      "resources": [
+        "virtualmachinebackups",
+        "virtualmachinebackuptrackers"
+      ],
+      "verbs": [
+        "get",
+        "delete",
+        "create",
+        "update",
+        "patch",
+        "list",
+        "watch",
+        "deletecollection"
+      ]
+    },
+    {
+      "apiGroups": [
+        "plugin.kubevirt.io"
+      ],
+      "resources": [
+        "plugins"
       ],
       "verbs": [
         "get",
@@ -1283,14 +1586,15 @@
       "resources": [
         "virtualmachineinstances/console",
         "virtualmachineinstances/vnc",
-        "virtualmachineinstances/vnc/screenshot",
         "virtualmachineinstances/portforward",
         "virtualmachineinstances/guestosinfo",
         "virtualmachineinstances/filesystemlist",
         "virtualmachineinstances/userlist",
         "virtualmachineinstances/sev/fetchcertchain",
         "virtualmachineinstances/sev/querylaunchmeasurement",
-        "virtualmachineinstances/usbredir"
+        "virtualmachineinstances/usbredir",
+        "virtualmachines/objectgraph",
+        "virtualmachineinstances/objectgraph"
       ],
       "verbs": [
         "get"
@@ -1310,7 +1614,8 @@
         "virtualmachineinstances/softreboot",
         "virtualmachineinstances/reset",
         "virtualmachineinstances/sev/setupsession",
-        "virtualmachineinstances/sev/injectlaunchsecret"
+        "virtualmachineinstances/sev/injectlaunchsecret",
+        "virtualmachineinstances/evacuate/cancel"
       ],
       "verbs": [
         "update"
@@ -1338,7 +1643,8 @@
         "virtualmachines/restart",
         "virtualmachines/addvolume",
         "virtualmachines/removevolume",
-        "virtualmachines/memorydump"
+        "virtualmachines/memorydump",
+        "virtualmachines/evacuate/cancel"
       ],
       "verbs": [
         "update"
@@ -1396,6 +1702,24 @@
         "virtualmachinesnapshots",
         "virtualmachinesnapshotcontents",
         "virtualmachinerestores"
+      ],
+      "verbs": [
+        "get",
+        "delete",
+        "create",
+        "update",
+        "patch",
+        "list",
+        "watch"
+      ]
+    },
+    {
+      "apiGroups": [
+        "backup.kubevirt.io"
+      ],
+      "resources": [
+        "virtualmachinebackups",
+        "virtualmachinebackuptrackers"
       ],
       "verbs": [
         "get",
@@ -1525,7 +1849,9 @@
         "virtualmachineinstances/filesystemlist",
         "virtualmachineinstances/userlist",
         "virtualmachineinstances/sev/fetchcertchain",
-        "virtualmachineinstances/sev/querylaunchmeasurement"
+        "virtualmachineinstances/sev/querylaunchmeasurement",
+        "virtualmachines/objectgraph",
+        "virtualmachineinstances/objectgraph"
       ],
       "verbs": [
         "get"
@@ -1576,6 +1902,20 @@
     },
     {
       "apiGroups": [
+        "backup.kubevirt.io"
+      ],
+      "resources": [
+        "virtualmachinebackups",
+        "virtualmachinebackuptrackers"
+      ],
+      "verbs": [
+        "get",
+        "list",
+        "watch"
+      ]
+    },
+    {
+      "apiGroups": [
         "export.kubevirt.io"
       ],
       "resources": [
@@ -1635,6 +1975,19 @@
       ],
       "resources": [
         "migrationpolicies"
+      ],
+      "verbs": [
+        "get",
+        "list",
+        "watch"
+      ]
+    },
+    {
+      "apiGroups": [
+        "plugin.kubevirt.io"
+      ],
+      "resources": [
+        "plugins"
       ],
       "verbs": [
         "get",

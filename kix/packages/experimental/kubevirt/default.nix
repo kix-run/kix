@@ -20,6 +20,22 @@
 # virtual machines stay ErrorUnschedulable and a deploy that builds one
 # waits until it times out.
 #
+# Upgrades: virt-operator moves the operands to its own version once its
+# Deployment changes. Running virtual machines keep their old virt-launcher
+# pods until they restart or migrate. KubeVirt supports updating only from
+# the latest patch of one minor to the latest patch of the next. This
+# package moved from v1.5.0 to v1.9.1 in one step, which skips that path.
+# To follow it instead, set `image.tag` to each step in turn and deploy
+# once per step (v1.5.3, v1.6.6, v1.7.4, v1.8.4), then remove the setting.
+# The package accepts those minors because the vendored CRD and roles of
+# v1.9.1 hold every field and rule the older releases use. After each
+# upgrade, the new virt-controller rewrites every existing VirtualMachine
+# and raises its generation. out.mkVirtualMachine reads the generation from
+# status.desiredGeneration, so the deploy does not wait for a restart.
+# Going back
+# does not work: an older virt-operator cannot install its CRDs over the
+# storage versions a newer one recorded, and stays Degraded.
+#
 # Minimal instance:
 #
 #   instances.kubevirt.kubevirt.package = packages.experimental.kubevirt;
@@ -44,11 +60,16 @@
 # virt-handler pods reach each other for live migration, and every operand
 # and virt-operator's install strategy Job reach DNS and the API server.
 # virt-launcher pods run in the virtual machine's namespace and are the
-# consumer's to allow (out.operandSelectors.virtLauncher). With the VMExport
-# feature gate in `extraSpec`, virt-operator also runs virt-exportproxy,
-# which gets DNS, the API server, ingress from any pod on 8443, and egress
-# to any pod on 8443, where the export server pods in the VirtualMachine
+# consumer's to allow (out.operandSelectors.virtLauncher). virt-exportproxy
+# gets DNS, the API server, ingress from any pod on 8443, and egress to any
+# pod on 8443, where the export server pods in the VirtualMachine
 # namespaces listen. Those export server pods are the consumer's to allow.
+# virt-template-apiserver (an aggregated API) and virt-template-controller
+# (admission webhooks) get DNS, the API server, and ingress from the API
+# server on 9443. virt-operator runs them unless `extraSpec` turns the
+# Template feature gate off. The package writes no policy for
+# virt-synchronization-controller, which runs only with the alpha
+# DecentralizedLiveMigration gate and talks to other clusters.
 #
 # Monitoring: virt-operator creates its own ServiceMonitor and
 # PrometheusRule when the prometheus-operator CRDs exist, in
@@ -65,7 +86,10 @@
 #   out.mkVirtualMachine scope { name; spec; annotations ? { }; requires ? [ ]; ... }
 #       A VirtualMachine the deploy waits on: until printableStatus is
 #       Running for runStrategy "Always" or running = true, and Stopped for
-#       "Halted" or running = false. Any other run strategy is refused,
+#       "Halted" or running = false. A running VM counts as current once
+#       status.desiredGeneration reaches its generation. When KubeVirt sets
+#       RestartRequired, the deploy reports the VM as ready with a restart
+#       pending and goes on. Any other run strategy is refused,
 #       because the VM's state then depends on a user or the guest. With
 #       `dataVolumeTemplates`, the VM also waits for the DataVolume CRD of
 #       the cluster's `cdi` instance, and is refused without one.
@@ -89,12 +113,24 @@ let
   # The upstream release: meta.version, the default image.tag, and the tag
   # in crds/sources.txt and rbac/sources.txt (kix-lib test
   # kubevirt-cdi-sources-match-release).
-  release = "v1.5.0";
+  release = "v1.9.1";
 
-  # "v1.5.0" -> "v1.5"; null for a tag that is not a vX.Y release.
+  # "v1.9.1" -> "v1.9"; null for a tag that is not a vX.Y release.
   # Upstream tags every release with the leading v.
   minorOf =
     tag: lib.mapNullable (m: "v${builtins.head m}") (builtins.match "v([0-9]+\\.[0-9]+)(\\..*)?" tag);
+
+  # Minors image.tag may name: the release's own, and the older steps of
+  # upstream's update path, so that a cluster can walk up one minor per
+  # deploy. A minor belongs here only while the vendored CRD and roles hold
+  # every field and rule it uses. Check that when `release` moves.
+  acceptedMinors = [
+    "v1.5"
+    "v1.6"
+    "v1.7"
+    "v1.8"
+    (minorOf release)
+  ];
 
   name = scope.instanceName;
   ns = scope.namespaceName;
@@ -107,49 +143,70 @@ let
   # is passed in, and what runs it.
   operands = {
     virt-api = {
-      digest = "sha256:f9dd496df05456d47815f0b5861c6764b10c23657a48db886d8219acf5b44e86";
+      digest = "sha256:d341c751dbe632d183989cce78203a888293e0e2a32719f32461bd6273322485";
       env = "VIRT_API_IMAGE";
       what = "virt-api";
     };
     virt-controller = {
-      digest = "sha256:c09a2c9b12a6a8657b02c557d5e169f8fbe3fb4339e64e6ce913ccf6c92714ab";
+      digest = "sha256:75c94c787eec15458729848e00fe0b421ca8998c6219de8c2d3cae72ff0bd287";
       env = "VIRT_CONTROLLER_IMAGE";
       what = "virt-controller";
     };
     virt-handler = {
-      digest = "sha256:70605363b54f4cc982a80dfdabd01462920bb2c64b028ab3b0c368ddb04e6370";
+      digest = "sha256:c23b635ea4aff7f0779c6c061c431da0469c7796255e6de90a5970236b5ea61b";
       env = "VIRT_HANDLER_IMAGE";
       what = "virt-handler on every node";
     };
     virt-launcher = {
-      digest = "sha256:d03a08135f821c4dfc73502b6fc1831a9342a2c97b0dcd5a1d865d2e23b05d49";
+      digest = "sha256:53e6d12197761cda653201f82e295ac6098d689a58bc2c68df0970c248d61fa6";
       env = "VIRT_LAUNCHER_IMAGE";
       what = "the pod of each virtual machine";
     };
     virt-exportproxy = {
-      digest = "sha256:1017c0e7097bf309e7a2e8542656f76c3ee1365ff03d01f563dbe108a98153b1";
+      digest = "sha256:fe9a0a297e7b407c3a322c6f5fccba5313c668907c30cb0b80b8c51bcdea640a";
       env = "VIRT_EXPORTPROXY_IMAGE";
       what = "virt-exportproxy, with the VMExport feature gate";
     };
     virt-exportserver = {
-      digest = "sha256:10d35daa56ec1981bbbcf898f5200909e044b3ae34a3f790ca82fedc906c52d9";
+      digest = "sha256:76c01dca74921eb5fd74d00b82e77a60d58e8213c72d84cc66a3bc92679690b8";
       env = "VIRT_EXPORTSERVER_IMAGE";
       what = "a VirtualMachineExport's server pod";
     };
     libguestfs-tools = {
-      digest = "sha256:360ae79853f55195e9dd1571d8903b6d78a4f5612d6a85d42d8d59d852dc12eb";
+      digest = "sha256:08df144de2a77ad8259f93df3dca7e13e73669651ce8fbe63f58c23e4fdd6427";
       env = "GS_IMAGE";
       what = "`virtctl guestfs` pods, on demand";
     };
     pr-helper = {
-      digest = "sha256:924b86dbb9a4e8d05bbd98a3acb79df642c51a19c6f57a557abff98b03db544c";
+      digest = "sha256:c7724681efa3297091d0ce0edf4fda52c062455fb83b76484499a46ae261f61d";
       env = "PR_HELPER_IMAGE";
       what = "the persistent reservation helper, with the PersistentReservation feature gate";
     };
     sidecar-shim = {
-      digest = "sha256:3741dc9c9619be64313c5d0f0d6bd4f1453871ed0910165e209ef9aaa3f273f6";
+      digest = "sha256:d48c6af64305c28de7e9a5509a11737b115cc0193f57f2a0f42faff85bebe5cd";
       env = "SIDECAR_SHIM_IMAGE";
       what = "hook sidecars, on demand";
+    };
+    virt-synchronization-controller = {
+      digest = "sha256:5f3da789a7b7a4febb1ece9f4a085ceb73aabcd468af84563ea7b6809341eb10";
+      env = "VIRT_SYNCHRONIZATIONCONTROLLER_IMAGE";
+      what = "virt-synchronization-controller, with the DecentralizedLiveMigration feature gate";
+    };
+    # virt-template has its own releases. virt-operator runs the version its
+    # embedded bundle names (pkg/virt-operator/resource/generate/components/
+    # data/virt-template/install-virt-operator.yaml at the release), and
+    # takes these variables as whole image references.
+    virt-template-apiserver = {
+      tag = "v0.2.3";
+      digest = "sha256:27defde24b4a4705d6096a86d134df0dc324243b56be8f0c057e1882c6da338b";
+      env = "VIRT_TEMPLATE_APISERVER_IMAGE";
+      what = "virt-template-apiserver, unless the Template feature gate is off";
+    };
+    virt-template-controller = {
+      tag = "v0.2.3";
+      digest = "sha256:b45ac55de5fc9dbbee14974b45718c41eaed4d4979f92677dab3500598e33d22";
+      env = "VIRT_TEMPLATE_CONTROLLER_IMAGE";
+      what = "virt-template-controller, unless the Template feature gate is off";
     };
   };
 
@@ -171,6 +228,14 @@ in
     defaultAliases = [ "kubevirt" ];
     # One instance per cluster; see the header.
     conflictsWith = [ "cluster:kubevirt" ];
+    # KubeVirt's support matrix (kubevirt/sig-release,
+    # releases/k8s-support-matrix.md) lists the Kubernetes versions each
+    # minor release supports. Move both bounds with `release`.
+    k8s = {
+      minVersion = "1.34";
+      maxVersion = "1.36";
+      reason = "[K0297] KubeVirt ${release} supports Kubernetes 1.34 to 1.36 only. Move the cluster to a Kubernetes version in that range, or use a Kix release whose kubevirt package supports it";
+    };
     # virt-operator runs virt-handler on every node, privileged, as root, in
     # the host PID namespace. Upstream labels its namespace the same way.
     podSecurity = "privileged";
@@ -191,8 +256,8 @@ in
     in
     [
       {
-        assertion = minorOf imageTag == minorOf release;
-        message = "image.tag \"${imageTag}\" is not a ${minorOf release} release (upstream tags look like ${release}), and the CRD and roles under kix/packages/experimental/kubevirt/{crds,rbac} are vendored from ${release}. Remove image.tag or set a ${minorOf release} tag. To move to another release, change release in kix/packages/experimental/kubevirt/default.nix and the tag in crds/sources.txt and rbac/sources.txt, then run uv run scripts/vendor-crds.py kubevirt.";
+        assertion = builtins.elem (minorOf imageTag) acceptedMinors;
+        message = "image.tag \"${imageTag}\" is not a ${lib.concatStringsSep ", " acceptedMinors} release (upstream tags look like ${release}), and the CRD and roles under kix/packages/experimental/kubevirt/{crds,rbac} are vendored from ${release}. Remove image.tag or set a tag of one of those minors. To move to another release, change release in kix/packages/experimental/kubevirt/default.nix and the tag in crds/sources.txt and rbac/sources.txt, then run uv run scripts/vendor-crds.py kubevirt.";
       }
     ]
     ++ map (n: {
@@ -206,19 +271,21 @@ in
     image = kix.options.image {
       repository = "quay.io/kubevirt/virt-operator";
       tag = release;
-      digest = "sha256:1591b45d3f35b857cb13921429b83e8da4e21a35aa54e1c88290baf996c05a2d";
-      description = "Image of virt-operator. Its major.minor must match the vendored CRD and roles. Each operand image defaults to this repository's registry and path with its own name (quay.io/kubevirt/<name>) and to this tag, and every operand uses this image's pullPolicy.";
+      digest = "sha256:a8adf7b772e9ce0bf7e2ce889910fc41ebadf552c9dbe843e9b86641e34f5df9";
+      description = "Image of virt-operator. Its minor must be the release's, or an older step of upstream's update path (v1.5 to v1.8) while walking up one minor per deploy. Each operand image defaults to this repository's registry and path with its own name (quay.io/kubevirt/<name>) and to this tag, and every operand uses this image's pullPolicy.";
     };
 
     operandImages = lib.mapAttrs (
       n: operand:
       kix.options.image {
         repository = "quay.io/kubevirt/${n}";
-        tag = release;
+        tag = operand.tag or release;
         inherit (operand) digest;
-        tagText = "config.image.tag";
+        tagText = if operand ? tag then null else "config.image.tag";
         pullPolicy = null;
-        description = "Image virt-operator uses for ${operand.what} (${operand.env}). Listed in out.extraImages. Its repository follows image.repository and its tag image.tag; the KubeVirt resource's imagePullPolicy applies, so pullPolicy must stay null.";
+        description = "Image virt-operator uses for ${operand.what} (${operand.env}). Listed in out.extraImages. Its repository follows image.repository and its tag ${
+          if operand ? tag then "is virt-template's own release" else "follows image.tag"
+        }. The KubeVirt resource's imagePullPolicy applies, so pullPolicy must stay null.";
       }
     ) operands;
 
@@ -245,10 +312,13 @@ in
   config =
     { config, ... }:
     {
-      operandImages = lib.genAttrs (builtins.attrNames operands) (n: {
-        repository = lib.mkDefault "${dirOf config.image.repository}/${n}";
-        tag = lib.mkDefault config.image.tag;
-      });
+      operandImages = lib.mapAttrs (
+        n: operand:
+        {
+          repository = lib.mkDefault "${dirOf config.image.repository}/${n}";
+        }
+        // lib.optionalAttrs (!(operand ? tag)) { tag = lib.mkDefault config.image.tag; }
+      ) operands;
     };
 
   build =
@@ -314,22 +384,35 @@ in
       ];
       consoleServer = [ (tcp 8186) ];
 
-      # virt-operator runs virt-exportproxy only while this gate is in the
-      # KubeVirt resource (pkg/virt-operator/resource/apply/reconcile.go,
-      # exportProxyEnabled).
-      exportEnabled =
+      # virt-operator runs virt-template unless the Template feature gate is
+      # disabled or configuration.virtTemplateDeployment.enabled is false
+      # (pkg/virt-operator/resource/apply/reconcile.go,
+      # virtTemplateDeploymentEnabled). The gate is Beta, so it is on by
+      # default.
+      templateEnabled =
         let
-          gates =
+          disabled =
             lib.attrByPath
               [
                 "configuration"
                 "developerConfiguration"
-                "featureGates"
+                "disabledFeatureGates"
               ]
               [ ]
               config.extraSpec;
+          enabled = lib.attrByPath [
+            "configuration"
+            "virtTemplateDeployment"
+            "enabled"
+          ] null config.extraSpec;
         in
-        builtins.isList gates && builtins.elem "VMExport" gates;
+        !(builtins.isList disabled && builtins.elem "Template" disabled) && enabled != false;
+
+      # Labels of the virt-template pods (the embedded virt-template bundle).
+      templateLabels = component: {
+        "app.kubernetes.io/name" = "virt-template";
+        control-plane = component;
+      };
 
       mkVirtualMachine =
         consumerScope: args:
@@ -385,12 +468,36 @@ in
           args
           // {
             requires = (args.requires or [ ]) ++ dataVolumeCrd;
-            annotations = (args.annotations or { }) // {
-              ${kix.keys.readiness} = builtins.toJSON {
-                path = "/status/printableStatus";
-                equals = printableStatus;
-              };
-            };
+            readiness = {
+              path = "/status/printableStatus";
+              equals = printableStatus;
+            }
+            // (
+              if printableStatus == "Running" then
+                {
+                  # status.observedGeneration is the generation the running
+                  # VMI started from, and stays behind after an edit until
+                  # the VM restarts. virt-controller sets desiredGeneration
+                  # to the generation it has processed whenever a VMI exists
+                  # (pkg/virt-controller/watch/vm/vm.go, syncGenerationInfo).
+                  observedGeneration = "/status/desiredGeneration";
+                  pendingRestart = {
+                    condition = {
+                      type = "RestartRequired";
+                      status = "True";
+                    };
+                    hint = "Restart the VM to apply the change: virtctl restart ${vmName} -n ${
+                      consumerScope.namespaceName or "<namespace>"
+                    }.";
+                  };
+                }
+              else
+                {
+                  # A stopped VM has no VMI, so virt-controller updates
+                  # neither generation field.
+                  observedGeneration = false;
+                }
+            );
           }
         );
     in
@@ -527,9 +634,8 @@ in
                     (kix.port "metrics" 8443)
                     (kix.port "webhooks" 8444)
                   ];
-                  # kubevirt-operator.yaml has this readiness probe only;
-                  # virt-operator serves no other health endpoint, so the
-                  # liveness probe uses the same one.
+                  # Both probes as kubevirt-operator.yaml has them.
+                  # virt-operator serves no other health endpoint.
                   readinessProbe = {
                     httpGet = {
                       path = "/metrics";
@@ -546,10 +652,11 @@ in
                       port = 8443;
                       scheme = "HTTPS";
                     };
-                    initialDelaySeconds = 15;
+                    initialDelaySeconds = 5;
                     periodSeconds = 10;
                     timeoutSeconds = 10;
                   };
+                  terminationMessagePolicy = "FallbackToLogsOnError";
                   resources = config.resources;
                   securityContext = {
                     allowPrivilegeEscalation = false;
@@ -712,22 +819,52 @@ in
         # Clients reach the proxy through its Service on 8443; the proxy
         # forwards to export server pods in the VirtualMachines' namespaces
         # on 8443.
-        exportProxy =
-          if exportEnabled then
-            operandPolicy "virt-exportproxy" (podLabels "virt-exportproxy") {
+        exportProxy = operandPolicy "virt-exportproxy" (podLabels "virt-exportproxy") {
+          intents = {
+            ingress = [
+              {
+                from = "all-pods";
+                ports = [ (tcp 8443) ];
+              }
+            ];
+            egress = clusterAccess ++ [
+              {
+                to = "all-pods";
+                ports = [ (tcp 8443) ];
+              }
+            ];
+          };
+        };
+        # The API server reaches virt-template-apiserver's aggregated API on
+        # 9443.
+        templateApiserver =
+          if templateEnabled then
+            operandPolicy "virt-template-apiserver" (templateLabels "apiserver") {
               intents = {
                 ingress = [
                   {
-                    from = "all-pods";
-                    ports = [ (tcp 8443) ];
+                    from = "apiserver";
+                    ports = [ (tcp 9443) ];
                   }
                 ];
-                egress = clusterAccess ++ [
+                egress = clusterAccess;
+              };
+            }
+          else
+            null;
+        # The API server reaches virt-template-controller's admission
+        # webhooks on 9443.
+        templateController =
+          if templateEnabled then
+            operandPolicy "virt-template-controller" (templateLabels "controller-manager") {
+              intents = {
+                ingress = [
                   {
-                    to = "all-pods";
-                    ports = [ (tcp 8443) ];
+                    from = "apiserver";
+                    ports = [ (tcp 9443) ];
                   }
                 ];
+                egress = clusterAccess;
               };
             }
           else
