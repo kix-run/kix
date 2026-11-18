@@ -424,6 +424,8 @@ jobs:
               ;;
           esac
           {
+            # bump-refresh.yml reads the package folders from this line.
+            echo "<!-- bump-dirs: $DIRS -->"
             echo "\`$PACKAGE\` pins \`$PINNED\`. Upstream's newest release is \`$TARGET\` (tag \`$TAG\`)."
             echo
             echo "$summary"
