@@ -53,6 +53,16 @@
 # `extraSpec.additionalAlertManagerConfigs`. The netpol plugin warns about
 # each.
 #
+# Upgrades: Prometheus promises a stable data model, rules, and HTTP API
+# within major version 3, and reads the data files an older 3.x release
+# wrote. A deploy moves a server from 3.13.5 to 3.16.0 in place, and the
+# operator restarts each pod on the new image. Upstream promises nothing
+# about going back. On kind, 3.13.5 read the data that 3.16.0 had written,
+# with no error. To go back, deploy the previous package version. Data
+# written with a feature flag or a setting that changes the file format,
+# such as `storage.tsdb.chunk_encoding.floats: xor2`, may not be readable by
+# an older release.
+#
 # Escape hatches: `extraSpec` for the Prometheus resource's spec, and the
 # instance's `partsOverlays`.
 
@@ -63,7 +73,7 @@
   availability,
 }:
 let
-  release = "v3.13.5";
+  release = "v3.16.0";
   name = scope.instanceName;
   ns = scope.namespaceName;
   who = "prometheus ${ns}/${name}";
@@ -83,6 +93,8 @@ in
     description = "Prometheus time-series database";
     owner = "platform";
     defaultAliases = [ "prometheusServer" ];
+    # Prometheus states no range of supported Kubernetes versions. The
+    # floor is the operator's, whose CRDs need Kubernetes 1.25 or later.
     k8s.minVersion = "1.25";
     # Historical metrics are expendable; a fresh start is acceptable on
     # storage backend swaps.
@@ -93,7 +105,7 @@ in
     image = kix.options.image {
       repository = "quay.io/prometheus/prometheus";
       tag = release;
-      digest = "sha256:aafa9d694e6a883c02db516d9f6e5b84e14195f49a2a6456a4cca815edda72b9";
+      digest = "sha256:9332054523223e2ddc18d8101799d54a4a8d823b030c53216f063a6c117773cd";
       pullPolicy = null;
     };
     resources = kix.options.resources {
