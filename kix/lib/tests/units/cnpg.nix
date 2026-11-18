@@ -1410,13 +1410,13 @@ in
           namespaceName = "cnpg-system";
           inherit config;
         };
-      oldImage = messages { image.tag = "v0.14.0"; };
-      oldSidecar = messages { sidecar.image.tag = "v0.14.0"; };
-      fine = messages { image.tag = "v0.15.0"; };
+      oldImage = messages { image.tag = "v0.15.1"; };
+      oldSidecar = messages { sidecar.image.tag = "v0.15.1"; };
+      fine = messages { image.tag = "v0.16.0"; };
     in
     (
-      says ''image.tag "v0.14.0" is not a plugin-barman-cloud 0.15 release'' oldImage
-      && says ''sidecar.image.tag "v0.14.0" is not a plugin-barman-cloud 0.15 release'' oldSidecar
+      says ''image.tag "v0.15.1" is not a plugin-barman-cloud 0.16 release'' oldImage
+      && says ''sidecar.image.tag "v0.15.1" is not a plugin-barman-cloud 0.16 release'' oldSidecar
       && fine == [ ]
       && evalFails (backups {
         pluginConfig.extraArgs = [ "--server-address=:9091" ];
@@ -1451,6 +1451,7 @@ in
           };
           inherit lib;
           kix = kixlib;
+          availability = "none";
         }).meta.version;
       dir = ../../../packages/experimental/cnpg-barman-cloud;
       stray = builtins.filter (u: !(lib.hasInfix "/v${release}/" u)) (
@@ -1458,6 +1459,70 @@ in
       );
     in
     stray == [ ] || throw "sources.txt URLs not at ${release}: ${builtins.toJSON stray}";
+
+  # The plugin runs one pod at `none` and two above it, since every pod
+  # serves the operator's calls.
+  cnpg-barman-cloud-replicas-follow-level =
+    let
+      replicasAt =
+        level:
+        (byName "cnpg-barman-cloud" (
+          ofKind "Deployment" (
+            ms (backups {
+              modules = [
+                {
+                  cluster.capabilities.multiNode = true;
+                  instances.cnpg-system.cnpg-barman-cloud.availability = level;
+                }
+              ];
+            })
+          )
+        )).spec.replicas;
+    in
+    (replicasAt "none" == 1 && replicasAt "pod" == 2 && replicasAt "node" == 2)
+    || throw "cnpg-barman-cloud replicas: none ${toString (replicasAt "none")}, node ${toString (replicasAt "node")}";
+
+  # A cluster that declares a Kubernetes version below the plugin's minimum
+  # is refused. Upstream states no maximum, so a later version passes. The
+  # meta check is called directly, because a failed meta assertion fails the
+  # cluster before its messages can be read.
+  cnpg-barman-cloud-k8s-range =
+    let
+      metaLib = import ../../meta.nix { inherit lib; };
+      meta =
+        (barmanPackage {
+          inherit lib;
+          kix = kixlib;
+          scope = {
+            instanceName = "cnpg-barman-cloud";
+            namespaceName = "cnpg-system";
+          };
+          availability = "none";
+        }).meta;
+      refusals =
+        k8sVersion:
+        map (a: a.message) (
+          builtins.filter (a: !a.assertion) (
+            (metaLib.checkMetaStatic {
+              packageMeta = meta;
+              instanceName = "cnpg-barman-cloud";
+              namespaceName = "cnpg-system";
+              clusterConfig = { inherit k8sVersion; };
+              resolvedDepMeta = { };
+              resolutionIndex.byKey = { };
+            }).assertions
+          )
+        );
+      refused = v: says "supports Kubernetes 1.31 and later" (refusals v);
+    in
+    (
+      refused "1.30.4"
+      && refusals "1.31" == [ ]
+      && refusals "1.36.2" == [ ]
+      && refusals "1.40" == [ ]
+      && refusals null == [ ]
+    )
+    || throw "cnpg-barman-cloud k8s range: 1.30.4 ${builtins.toJSON (refusals "1.30.4")}, 1.31 ${builtins.toJSON (refusals "1.31")}, 1.40 ${builtins.toJSON (refusals "1.40")}";
 
   # A cnpg-database on a pooler creates its role and database on the
   # pooler's Cluster and hands consumers the pooler's Service. The Pooler
