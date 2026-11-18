@@ -24,7 +24,7 @@ You will read text other people wrote: release notes, changelogs, issues, upstre
 
 1. Work out what changed upstream between the two versions, as the skill section describes.
 2. Choose or write the test cluster.
-3. Docker is running. Create one kind cluster named `${CLUSTER}` with `--kubeconfig ${KUBECONFIG}`; `KUBECONFIG` is already set to that path. `kind`, `kubectl`, and `helm` are on PATH. The machine is arm64 Linux, so kind pulls arm64 images. If an image the package uses has no arm64 build, do not swap it or work around it: say so in your report, because the workflow cannot test that package here. Deploy with the package still at the old version, confirm it works by using it, and write state.
+3. Docker is running. Create one kind cluster named `${CLUSTER}` with `--kubeconfig ${KUBECONFIG}`; `KUBECONFIG` is already set to that path. `kind`, `kubectl`, and `helm` are on PATH. The machine is arm64 Linux, so kind pulls arm64 images. If an image the package uses has no arm64 build, do not swap it or work around it. Your outcome is then `needs-decision`, because the workflow cannot test that package here. Deploy with the package still at the old version, confirm it works by using it, and write state.
 4. Make the upgrade and every change that goes with it. Add a change record for each change a user can see, since a record has one kind: `changes/bump-${NAME}.md` for the version move, and another file for each separate change of another kind, such as a breaking change next to a security fix. If the releases you move across fix security issues (CVEs or advisories in upstream's notes, including fixes in the language runtime or libraries it builds with), its kind is `security`. List the ids in `cve`, and set `workaround` only if there is a way to get the fix without upgrading. Update skill or docs line citations if you moved cited code.
 5. Deploy the upgraded package over the old one on the same cluster and verify it, including going back, as the skill section describes.
 6. Commit on your branch (several commits are fine). No `Co-Authored-By` trailer. Do not push. You have no credentials to push, and the workflow does it. Your commits are unsigned, and that is expected: the workflow recreates them on GitHub, which signs them.
@@ -37,7 +37,29 @@ Your work is finished only when this command, run from the root of the checkout 
 scripts/check-bump.sh ${PKG_DIR1} ${OLD} ${BASE}
 ```
 
-It prints one line per check and keeps each check's output in a log file. Run it, fix what it reports, commit, and run it again until it passes. It also lists places where the old version still appears. Update each one, or say in your report why it stays. If you cannot make it pass, say so in the first line of your report. The workflow runs it again on amd64 after you finish, and only your committed work counts.${CHECK_MORE}
+It prints one line per check and keeps each check's output in a log file. Run it, fix what it reports, commit, and run it again until it passes. It also lists places where the old version still appears. Update each one, or say in your report why it stays. If you cannot make it pass, your outcome is not `upgraded`. The workflow runs it again on amd64 after you finish, and only your committed work counts.${CHECK_MORE}
+
+## Change record kinds
+
+Choose each record's kind from what a user who upgrades gets. Agents most often choose `note` for a change a user can see. Check that first.
+
+- `note`: only one-off effects of the upgrade itself, such as pods restarting once or the first deploy applying objects again. Nothing lasts, and the user does nothing.
+- `changed`: a lasting difference a user can see, in the deployed objects or in how the software behaves, such as a new default, a new flag, or changed upstream behaviour.
+- `fixed`: the main effect is that a bug users hit goes away.
+- `security`: the releases fix security issues (see step 4).
+- `silent`: the user must act, or going back no longer works. A data migration that the old version cannot read is `silent`, with `touches-data = true`. Its text tells users to back up before they upgrade and how to restore, and quotes what upstream says about going back.
+- `error`: Kix now refuses something it accepted, such as a narrower Kubernetes range. It needs an id and a unit test (see the task).
+
+## Outcome
+
+Write exactly one of these words to `${OUTCOME}`, and give the same word as the first line of your report:
+
+- `upgraded`: the package is at the target, or at the newest release upstream supports directly from `${OLD}`, it is tested, and `check-bump` passes. If the upgrade migrates data in a way the old version cannot read, you also tested going back the way the record says: the old image against the migrated data, or a restore of a backup.
+- `held`: you chose not to move, because the target is broken, withdrawn, a pre-release, or has a regression that affects users (say which issue). Commit nothing but housekeeping entries.
+- `needs-decision`: a person must choose, such as between two versions, chaining through releases or jumping, accepting a range that refuses many clusters, a data migration you could not test going back from, or an image with no arm64 build. Give the options, what each costs, and your recommendation. Commit the work you have.
+- `blocked-on-kix`: Kix itself must change first, such as a missing feature or a bug in the library. Add a housekeeping entry that says what, and stop. Do not work around it in the package.
+
+Only `upgraded` opens a normal pull request. Every other outcome goes to a person, with whatever you committed.
 
 ## Rules
 
@@ -53,7 +75,7 @@ It prints one line per check and keeps each check's output in a log file. Run it
 
 Write your report to `${REPORT}`, and also give it as your final reply. Keep it under 80 lines, with these sections:
 
-1. **Outcome**: first line is one of `upgraded and tested`, `upgraded but not fully tested`, `not upgraded`. Then the version you reached, the BASE hash, and your final commit hash.
+1. **Outcome**: first line is the outcome word. Then the version you reached, the BASE hash, and your final commit hash. For `needs-decision`, the options and your recommendation go here.
 2. **Upstream changes**: what you found, what you acted on, and what upstream says about the upgrade path and about going back.
 3. **What you changed**: files with a one-line reason each, each image and whether it moved, and the change record kind with the reason.
 4. **Tests**: each command and its real result. Mark any step you did not run. Paste the final `check-bump` output.

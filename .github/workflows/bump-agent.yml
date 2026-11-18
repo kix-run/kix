@@ -86,6 +86,7 @@ jobs:
       id-token: write
     outputs:
       base: ${{ steps.base.outputs.sha }}
+      outcome: ${{ steps.collect.outputs.outcome }}
     env:
       ANTHROPIC_FEDERATION_RULE_ID: fdrl_012Fr9FtgpmcQ7UAF2EqNAHE
       ANTHROPIC_ORGANIZATION_ID: 084c7f85-8473-42ae-a166-c8f6dfcd5570
@@ -159,7 +160,7 @@ jobs:
           # The backticks and the brief's placeholders are literal text.
           # shellcheck disable=SC2016
           PKG_DIRS=$(printf '`%s` ' "${dirs[@]}")
-          export CLUSTER="bump-$PACKAGE" KUBECONFIG="$RUNNER_TEMP/kubeconfig" REPORT="$RUNNER_TEMP/report.md"
+          export CLUSTER="bump-$PACKAGE" KUBECONFIG="$RUNNER_TEMP/kubeconfig" REPORT="$RUNNER_TEMP/report.md" OUTCOME="$RUNNER_TEMP/outcome"
           CHECK_MORE=""
           for d in "${dirs[@]:1}"; do
             CHECK_MORE+=$'\n\nRun it for each other package folder too, and make each pass: `scripts/check-bump.sh '"$d $PINNED $BASE"'`'
@@ -167,7 +168,7 @@ jobs:
           [ -n "$EXTRA" ] || EXTRA="No extra instructions for this package."
           export PKG_DIRS CHECK_MORE EXTRA
           brief=$(<.github/bump/brief.md)
-          for v in PKG_DIRS PKG_DIR1 OLD TARGET TAG GIT_URL EXTRA BRANCH BASE CLUSTER KUBECONFIG REPORT NAME MINUTES CHECK_MORE; do
+          for v in PKG_DIRS PKG_DIR1 OLD TARGET TAG GIT_URL EXTRA BRANCH BASE CLUSTER KUBECONFIG REPORT OUTCOME NAME MINUTES CHECK_MORE; do
             brief=${brief//"\${$v}"/${!v}}
           done
           printf '%s\n' "$brief" > "$RUNNER_TEMP/brief.md"
@@ -209,6 +210,7 @@ jobs:
           exit "$status"
 
       - name: Collect the commits and the report
+        id: collect
         if: always() && steps.base.outputs.sha
         env:
           BASE: ${{ steps.base.outputs.sha }}
@@ -227,6 +229,16 @@ jobs:
           tail -n1 "$RUNNER_TEMP/transcript.jsonl" 2>/dev/null \
             | jq '{cost: .total_cost_usd, turns: .num_turns, result: .subtype}' > "$out/usage.json" || echo '{}' > "$out/usage.json"
           cat "$out/report.md" >> "$GITHUB_STEP_SUMMARY"
+          outcome=$(tr -d '[:space:]' < "$RUNNER_TEMP/outcome" 2>/dev/null || true)
+          case "$outcome" in
+            upgraded|held|needs-decision|blocked-on-kix) ;;
+            *)
+              echo "::error::the agent gave no valid outcome (got '$outcome')"
+              outcome=invalid
+              ;;
+          esac
+          echo "$outcome" > "$out/outcome"
+          echo "outcome=$outcome" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
@@ -237,10 +249,12 @@ jobs:
 
   verify:
     needs: agent
+    if: needs.agent.outputs.outcome != 'invalid'
     runs-on: [self-hosted, spindle-4c-8g-50d, access=isolated]
     timeout-minutes: 60
     env:
       BASE: ${{ needs.agent.outputs.base }}
+      OUTCOME: ${{ needs.agent.outputs.outcome }}
       NIX_CONFIG: |
         extra-experimental-features = nix-command flakes pipe-operators
         accept-flake-config = true
@@ -262,7 +276,10 @@ jobs:
           cp .github/bump/check-paths.sh "$RUNNER_TEMP/check-paths.sh"
           shopt -s nullglob
           patches=("$RUNNER_TEMP"/in/patches/*.patch)
-          [ "${#patches[@]}" -gt 0 ] || { echo "::error::the agent made no commits"; exit 1; }
+          if [ "${#patches[@]}" -eq 0 ]; then
+            [ "$OUTCOME" != upgraded ] || { echo "::error::the agent says it upgraded but made no commits"; exit 1; }
+            exit 0
+          fi
           git config user.name "kix-bump agent"
           git config user.email "kix-bump@users.noreply.github.com"
           git switch -c "$BRANCH"
@@ -273,7 +290,10 @@ jobs:
           read -ra dirs <<<"$DIRS"
           "$RUNNER_TEMP/check-paths.sh" "$BASE" "${dirs[@]}"
 
+      # Only an upgrade must be complete. Any other outcome goes to a person
+      # with whatever work the agent committed.
       - name: Check the bump is complete
+        if: env.OUTCOME == 'upgraded'
         run: |
           fail=0
           read -ra dirs <<<"$DIRS"
@@ -288,6 +308,7 @@ jobs:
     timeout-minutes: 15
     env:
       BASE: ${{ needs.agent.outputs.base }}
+      OUTCOME: ${{ needs.agent.outputs.outcome }}
     steps:
       - name: Get a token for the bump app
         id: app
@@ -314,25 +335,54 @@ jobs:
           git config user.name "kix-bump agent"
           git config user.email "kix-bump@users.noreply.github.com"
           git switch -c "$BRANCH"
-          git am --keep-cr "$RUNNER_TEMP"/in/patches/*.patch
+          shopt -s nullglob
+          patches=("$RUNNER_TEMP"/in/patches/*.patch)
+          [ "${#patches[@]}" -eq 0 ] || git am --keep-cr "${patches[@]}"
           read -ra dirs <<<"$DIRS"
           "$RUNNER_TEMP/check-paths.sh" "$BASE" "${dirs[@]}"
 
-      - name: Create the branch and open the pull request
+      # An upgrade opens a normal pull request. Any other outcome needs a
+      # person: a draft pull request when the agent committed work, so it is
+      # not lost, or an issue when it did not. Both carry the label
+      # bump:needs-person.
+      - name: Hand the result over
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          LABEL: 'bump:needs-person'
         run: |
-          # Create the commits through the API, so GitHub signs them.
-          python3 "$RUNNER_TEMP/push-signed.py" "$GITHUB_REPOSITORY" "$BRANCH" "$BASE"
+          api() {
+            curl -sS --fail-with-body -X "$1" -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/$2" --data-binary @-
+          }
           cost=$(jq -r '.cost // "unknown"' "$RUNNER_TEMP/in/usage.json")
+          commits=$(git rev-list --count "$BASE..HEAD")
           # The report is agent-written text. Break each @ so that no name in
           # it notifies anyone on GitHub.
           report=$(sed 's/@/@\xe2\x80\x8b/g' "$RUNNER_TEMP/in/report.md" | head -c 50000)
+          case "$OUTCOME" in
+            upgraded)
+              title="Update $PACKAGE to $TARGET"
+              summary="An agent ($MODEL, \$$cost) wrote this change in [this workflow run]($RUN_URL). The workflow ran \`scripts/check-bump.sh\` on it again and it passed, and every changed file is in a place a version bump may touch. Review it like any other pull request."
+              ;;
+            held)
+              title="Held: $PACKAGE stays below $TARGET"
+              summary="An agent ($MODEL, \$$cost) chose not to move to this version, in [this workflow run]($RUN_URL). Its report says why. Close this once you agree, or start the workflow again with other instructions."
+              ;;
+            needs-decision)
+              title="Decide: $PACKAGE $TARGET"
+              summary="An agent ($MODEL, \$$cost) stopped at a choice a person must make, in [this workflow run]($RUN_URL). Its report gives the options and a recommendation."
+              ;;
+            blocked-on-kix)
+              title="Blocked on Kix: $PACKAGE $TARGET"
+              summary="An agent ($MODEL, \$$cost) found that Kix itself must change before this upgrade, in [this workflow run]($RUN_URL). Its report and housekeeping entry say what."
+              ;;
+          esac
           {
-            echo "Updates \`$PACKAGE\` from \`$PINNED\` to \`$TARGET\` (upstream tag \`$TAG\`)."
+            echo "\`$PACKAGE\` pins \`$PINNED\`. Upstream's newest release is \`$TARGET\` (tag \`$TAG\`)."
             echo
-            echo "An agent ($MODEL, \$$cost) wrote this change in [this workflow run]($RUN_URL). The workflow ran \`scripts/check-bump.sh\` on it again and it passed, and every changed file is in a place a version bump may touch. Review it like any other pull request."
+            echo "$summary"
             echo
             echo "## The agent's report"
             echo
@@ -340,11 +390,24 @@ jobs:
             echo
             echo "🤖 Generated with [Claude Code](https://claude.com/claude-code)"
           } > "$RUNNER_TEMP/body.md"
-          # Spindle's image has curl and jq but no gh.
-          jq -n --arg title "Update $PACKAGE to $TARGET" --arg head "$BRANCH" \
-            --rawfile body "$RUNNER_TEMP/body.md" \
-            '{title: $title, head: $head, base: "main", body: $body}' \
-            | curl -sS --fail-with-body -X POST -H "Authorization: Bearer $GH_TOKEN" \
-                -H "Accept: application/vnd.github+json" \
-                "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/pulls" --data-binary @- \
-            | jq -r '"Opened \(.html_url)"'
+
+          if [ "$commits" -gt 0 ]; then
+            # Create the commits through the API, so GitHub signs them.
+            python3 "$RUNNER_TEMP/push-signed.py" "$GITHUB_REPOSITORY" "$BRANCH" "$BASE"
+            draft=false
+            [ "$OUTCOME" = upgraded ] || draft=true
+            number=$(jq -n --arg title "$title" --arg head "$BRANCH" --argjson draft "$draft" \
+                --rawfile body "$RUNNER_TEMP/body.md" \
+                '{title: $title, head: $head, base: "main", body: $body, draft: $draft}' \
+              | api POST pulls | jq -r '.number')
+          elif [ "$OUTCOME" = upgraded ]; then
+            echo "::error::the agent says it upgraded but made no commits"
+            exit 1
+          else
+            number=$(jq -n --arg title "$title" --rawfile body "$RUNNER_TEMP/body.md" \
+                '{title: $title, body: $body}' | api POST issues | jq -r '.number')
+          fi
+          echo "Opened $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/issues/$number"
+          if [ "$OUTCOME" != upgraded ]; then
+            jq -n --arg label "$LABEL" '{labels: [$label]}' | api POST "issues/$number/labels" > /dev/null
+          fi
