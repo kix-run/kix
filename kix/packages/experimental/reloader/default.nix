@@ -44,7 +44,7 @@
   availability,
 }:
 let
-  release = "v1.4.22";
+  release = "v1.4.24";
   name = scope.instanceName;
   who = "reloader ${scope.namespaceName}/${name}";
   reloadAnnotation = "secret.reloader.stakater.com/reload";
@@ -123,6 +123,12 @@ in
     defaultAliases = [ "reloader" ];
     # One instance per cluster; see the header.
     conflictsWith = [ "cluster:reloader" ];
+    # The README's Compatibility section, the same in v1.4.22 and v1.4.24,
+    # states an open range.
+    k8s = {
+      minVersion = "1.19";
+      reason = "[K8986] reloader ${release} supports Kubernetes 1.19 or later. Move the cluster to Kubernetes 1.19 or later, or use a Kix release whose reloader package still accepts it";
+    };
     # The domains of the annotations this configuration reads. The index
     # matches a domain exactly, so each subdomain is listed.
     annotationDomains = [
@@ -137,7 +143,7 @@ in
     image = kix.options.image {
       repository = "ghcr.io/stakater/reloader";
       tag = release;
-      digest = "sha256:def2480040adc164b3a57340e77674eadfd88fb7f0593df25e93297f29c7fd7c";
+      digest = "sha256:3ab43d3eb96c59798644bf826b0444a846c0197d22ab4b6c101c4da3e1d6ef23";
     };
 
     # The informer caches every Secret in the watched namespaces.
