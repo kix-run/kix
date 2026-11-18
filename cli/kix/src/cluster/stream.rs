@@ -211,8 +211,9 @@ pub enum NodeDetail {
     /// A resource carrying `kix.run/rerun` was deleted and created again
     /// under the rerun rule (its own content changed, or its last run failed).
     Rerun { reason: String },
-    /// An `OnDelete` DaemonSet is ready, and `stale` of its pods run the
-    /// previous pod template until someone deletes them.
+    /// The resource is ready, and `stale` of its workloads run the previous
+    /// spec until someone restarts them: pods of an `OnDelete` DaemonSet, or
+    /// one for a custom resource in its declared `pendingRestart` state.
     PendingRestart { stale: i64, message: String },
 }
 

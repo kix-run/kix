@@ -43,30 +43,83 @@ pub fn is_immediate_kind(kind: GroupKind<'_>) -> bool {
 /// changes.
 ///
 /// The JSON carries the ready rule at the top level, in one of the
-/// [`ReadyRule`] shapes, and an optional `"failed"` list of [`FailedRule`]
-/// entries: `{"condition": {"type": "Valid", "status": "False", "reason":
-/// "<optional>"}}` or `{"path": "/status/phase", "equals": "Failed"}`.
-/// Annotations written before the `failed` key existed parse with an empty
-/// list, and an older CLI reads only the ready rule.
+/// [`ReadyRule`] shapes, and three optional keys:
+///
+/// * `"failed"`, a list of [`FailedRule`] entries: `{"condition": {"type":
+///   "Valid", "status": "False", "reason": "<optional>"}}` or `{"path":
+///   "/status/phase", "equals": "Failed"}`.
+/// * `"observedGeneration"`, the JSON pointer of the status field that holds
+///   the generation the controller has acted on, or `false` when the kind
+///   reports none ([`GenerationField`]).
+/// * `"pendingRestart"`, one [`PendingRestartRule`].
+///
+/// Annotations written before these keys existed parse with the defaults, and
+/// an older CLI reads only the keys it knows.
 pub(super) struct DeclaredReadiness {
     pub ready: ReadyRule,
     pub failed: Vec<FailedRule>,
+    pub generation: GenerationField,
+    pub pending_restart: Option<PendingRestartRule>,
+}
+
+/// Where a custom resource's status reports the generation its controller
+/// has acted on. The Kubernetes API conventions name the field
+/// `status.observedGeneration`. Some controllers give it another meaning,
+/// such as KubeVirt, whose VirtualMachine reports there the generation its
+/// running instance started from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum GenerationField {
+    /// The JSON pointer of the field.
+    Pointer(String),
+    /// The kind reports no generation, so no status counts as stale.
+    None,
+}
+
+impl Default for GenerationField {
+    fn default() -> Self {
+        Self::Pointer("/status/observedGeneration".to_string())
+    }
+}
+
+/// A state in which the controller has accepted the current spec and the
+/// running workload still runs the previous one until it restarts. It has the
+/// two shapes of a [`FailedRule`]: a condition that matches on type and
+/// status, and on reason when one is declared, or the scalar at `path`. `hint`
+/// says how to restart the workload, and `message` lists the JSON pointers
+/// whose values the report quotes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PendingRestartRule {
+    pub state: PendingState,
+    pub hint: Option<String>,
+    pub message: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum PendingState {
+    Condition {
+        condition_type: String,
+        status: String,
+        reason: Option<String>,
+    },
+    Path {
+        path: String,
+        equals: String,
+    },
 }
 
 /// The rule that means a custom resource is ready.
 ///
 /// * `{"path": "/status/...", "equals": "<value>"}` is ready when the string,
 ///   boolean, or number at `path` formats to `equals` (`true` matches `"true"`,
-///   `3` matches `"3"`, and `1.0` matches `"1.0"`), and
-///   `status.observedGeneration` (when present) has reached
-///   `metadata.generation`.
+///   `3` matches `"3"`, and `1.0` matches `"1.0"`), and the declared
+///   [`GenerationField`] (when present) has reached `metadata.generation`.
 /// * `{"path": "/status/...", "notEquals": "<value>"}` is ready when the value
 ///   at `path` is absent or does not match `notEquals` under the same
 ///   generation guard. This is used when status is written only by a consumer
 ///   that may not exist.
 /// * `{"condition": {"type": "<Type>", "status": "True"}}` is ready when
 ///   `status.conditions` contains a matching entry whose `observedGeneration`
-///   (or `status.observedGeneration` if the condition omits its own) has
+///   (or the declared [`GenerationField`] if the condition omits its own) has
 ///   reached `metadata.generation`. If neither generation field is present, no
 ///   generation guard applies.
 pub(super) enum ReadyRule {
@@ -132,7 +185,8 @@ pub fn declared_rule(obj: &DynamicObject) -> Option<&str> {
 /// resource with no recognized readiness rule uses `check_generic_ready`, which
 /// treats an empty status as ready. A `failed` entry that does not parse is
 /// dropped on its own, so a shape this CLI does not know can only make the
-/// deploy wait longer, never fail it.
+/// deploy wait longer, never fail it. A malformed `observedGeneration` or
+/// `pendingRestart` falls back to the default in the same way.
 pub(super) fn declared_readiness(obj: &DynamicObject) -> Option<DeclaredReadiness> {
     let raw = declared_rule(obj)?;
     let v: Value = serde_json::from_str(raw).ok()?;
@@ -142,7 +196,20 @@ pub(super) fn declared_readiness(obj: &DynamicObject) -> Option<DeclaredReadines
         .and_then(Value::as_array)
         .map(|entries| entries.iter().filter_map(parse_failed_rule).collect())
         .unwrap_or_default();
-    Some(DeclaredReadiness { ready, failed })
+    let generation = match v.get("observedGeneration") {
+        Some(Value::Bool(false)) => GenerationField::None,
+        Some(Value::String(pointer)) if pointer.starts_with('/') => {
+            GenerationField::Pointer(pointer.clone())
+        }
+        _ => GenerationField::default(),
+    };
+    let pending_restart = v.get("pendingRestart").and_then(parse_pending_restart);
+    Some(DeclaredReadiness {
+        ready,
+        failed,
+        generation,
+        pending_restart,
+    })
 }
 
 fn parse_ready_rule(v: &Value) -> Option<ReadyRule> {
@@ -167,35 +234,74 @@ fn parse_ready_rule(v: &Value) -> Option<ReadyRule> {
 
 fn parse_failed_rule(v: &Value) -> Option<FailedRule> {
     if let Some(condition) = v.get("condition") {
-        let reason = match condition.get("reason") {
-            None | Some(Value::Null) => None,
-            Some(reason) => Some(reason.as_str()?.to_string()),
-        };
+        let (condition_type, status, reason) = parse_condition(condition)?;
         return Some(FailedRule::Condition {
-            condition_type: condition.get("type")?.as_str()?.to_string(),
-            status: condition.get("status")?.as_str()?.to_string(),
+            condition_type,
+            status,
             reason,
         });
     }
-    let message = match v.get("message") {
-        None | Some(Value::Null) => Vec::new(),
-        Some(Value::String(pointer)) => vec![pointer.clone()],
-        Some(Value::Array(pointers)) => pointers
-            .iter()
-            .map(|p| p.as_str().map(str::to_string))
-            .collect::<Option<Vec<_>>>()?,
-        Some(_) => return None,
-    };
     Some(FailedRule::Path {
         path: v.get("path")?.as_str()?.to_string(),
         equals: v.get("equals")?.as_str()?.to_string(),
         rejected: v.get("rejected").and_then(Value::as_bool).unwrap_or(false),
-        hint: match v.get("hint") {
-            None | Some(Value::Null) => None,
-            Some(hint) => Some(hint.as_str()?.to_string()),
-        },
-        message,
+        hint: optional_string(v, "hint")?,
+        message: message_pointers(v)?,
     })
+}
+
+fn parse_pending_restart(v: &Value) -> Option<PendingRestartRule> {
+    let state = match v.get("condition") {
+        Some(condition) => {
+            let (condition_type, status, reason) = parse_condition(condition)?;
+            PendingState::Condition {
+                condition_type,
+                status,
+                reason,
+            }
+        }
+        None => PendingState::Path {
+            path: v.get("path")?.as_str()?.to_string(),
+            equals: v.get("equals")?.as_str()?.to_string(),
+        },
+    };
+    Some(PendingRestartRule {
+        state,
+        hint: optional_string(v, "hint")?,
+        message: message_pointers(v)?,
+    })
+}
+
+/// Parse a `{"type", "status", "reason"?}` condition match.
+fn parse_condition(condition: &Value) -> Option<(String, String, Option<String>)> {
+    Some((
+        condition.get("type")?.as_str()?.to_string(),
+        condition.get("status")?.as_str()?.to_string(),
+        optional_string(condition, "reason")?,
+    ))
+}
+
+/// Read an optional string key. The outer `None` means the key holds
+/// something other than a string or null.
+fn optional_string(v: &Value, key: &str) -> Option<Option<String>> {
+    match v.get(key) {
+        None | Some(Value::Null) => Some(None),
+        Some(Value::String(s)) => Some(Some(s.clone())),
+        Some(_) => None,
+    }
+}
+
+/// Read the `message` key: one JSON pointer or a list of them.
+fn message_pointers(v: &Value) -> Option<Vec<String>> {
+    match v.get("message") {
+        None | Some(Value::Null) => Some(Vec::new()),
+        Some(Value::String(pointer)) => Some(vec![pointer.clone()]),
+        Some(Value::Array(pointers)) => pointers
+            .iter()
+            .map(|p| p.as_str().map(str::to_string))
+            .collect(),
+        Some(_) => None,
+    }
 }
 
 /// A declared failure state the live object currently reports.
@@ -204,8 +310,8 @@ pub(super) struct DeclaredFailure {
     /// The message `kix deploy` prints when the failure ends the wait.
     pub message: String,
     /// Whether the status that reports the failure is known to describe the
-    /// current spec: the condition's `observedGeneration` (or
-    /// `status.observedGeneration`) has reached `metadata.generation`, or the
+    /// current spec: the condition's `observedGeneration` (or the declared
+    /// [`GenerationField`]) has reached `metadata.generation`, or the
     /// condition's `lastTransitionTime` is later than this deploy's apply of
     /// the object. When the status carries neither, the caller decides after
     /// the failure has held for a grace period, because the status may still
@@ -224,10 +330,11 @@ pub(super) fn declared_failure(
     kind: GroupKind<'_>,
     applied_at: Option<DateTime<Utc>>,
 ) -> Option<DeclaredFailure> {
-    let rules = declared_readiness(obj)?.failed;
+    let declared = declared_readiness(obj)?;
+    let field = &declared.generation;
     let generation = obj.metadata.generation;
     let data = &obj.data;
-    rules.iter().find_map(|rule| match rule {
+    declared.failed.iter().find_map(|rule| match rule {
         FailedRule::Condition {
             condition_type,
             status,
@@ -241,7 +348,7 @@ pub(super) fn declared_failure(
             {
                 return None;
             }
-            let observed = condition_observed_generation(data, c);
+            let observed = observed_generation(data, field, Some(c));
             if !generation_observed(generation, observed) {
                 return None;
             }
@@ -254,15 +361,8 @@ pub(super) fn declared_failure(
                     (None, _) => false,
                 }
             };
-            let reported = match actual_reason {
-                Some(r) if !r.is_empty() => format!("{condition_type}={actual_status} ({r})"),
-                _ => format!("{condition_type}={actual_status}"),
-            };
-            let detail = c
-                .get("message")
-                .and_then(Value::as_str)
-                .filter(|m| !m.is_empty())
-                .map(|m| format!(": {}", m.trim_end_matches('.')));
+            let reported = reported_condition(condition_type, actual_status, actual_reason);
+            let detail = condition_message(c).map(|m| format!(": {m}"));
             Some(DeclaredFailure {
                 message: rejected_message(kind.kind, &reported, detail.as_deref()),
                 confirmed,
@@ -279,7 +379,7 @@ pub(super) fn declared_failure(
             if text != *equals {
                 return None;
             }
-            let observed = data.pointer("/status/observedGeneration");
+            let observed = observed_generation(data, field, None);
             if !generation_observed(generation, observed) {
                 return None;
             }
@@ -297,6 +397,83 @@ pub(super) fn declared_failure(
             })
         }
     })
+}
+
+/// Format a matched condition as `<Type>=<Status> (<reason>)`.
+fn reported_condition(condition_type: &str, status: &str, reason: Option<&str>) -> String {
+    match reason {
+        Some(r) if !r.is_empty() => format!("{condition_type}={status} ({r})"),
+        _ => format!("{condition_type}={status}"),
+    }
+}
+
+/// Return a condition's `message` without its closing period, or `None` when
+/// it is absent or empty.
+fn condition_message(condition: &Value) -> Option<&str> {
+    condition
+        .get("message")
+        .and_then(Value::as_str)
+        .map(|m| m.trim_end_matches('.'))
+        .filter(|m| !m.is_empty())
+}
+
+/// Return the report for a declared pending-restart state the object is in,
+/// or `None`. The caller asks only once the ready rule holds. A match whose
+/// generation is behind `metadata.generation` is not reported, because the
+/// controller has not judged the current spec yet.
+pub(super) fn declared_pending_restart(obj: &DynamicObject) -> Option<String> {
+    let declared = declared_readiness(obj)?;
+    let rule = declared.pending_restart?;
+    let data = &obj.data;
+    let (reported, condition) = match &rule.state {
+        PendingState::Condition {
+            condition_type,
+            status,
+            reason,
+        } => {
+            let c = find_condition(data, condition_type)?;
+            let actual_status = c.get("status").and_then(Value::as_str)?;
+            let actual_reason = c.get("reason").and_then(Value::as_str);
+            if actual_status != status
+                || reason.as_deref().is_some_and(|r| actual_reason != Some(r))
+            {
+                return None;
+            }
+            let reported = reported_condition(condition_type, actual_status, actual_reason);
+            (reported, Some(c))
+        }
+        PendingState::Path { path, equals } => {
+            let text = data.pointer(path).and_then(scalar_text)?;
+            if text != *equals {
+                return None;
+            }
+            (format!("{}={text}", dotted_path(path)), None)
+        }
+    };
+    let observed = observed_generation(data, &declared.generation, condition);
+    if !generation_observed(obj.metadata.generation, observed) {
+        return None;
+    }
+    let quoted = match condition {
+        Some(c) => condition_message(c).map(str::to_string),
+        None => quoted_status(data, &rule.message),
+    };
+    Some(pending_restart_message(
+        &reported,
+        quoted.as_deref(),
+        rule.hint.as_deref(),
+    ))
+}
+
+/// Build the report for a resource that is ready and runs its previous spec:
+/// the state the controller reported, its message, and the package's hint or
+/// a generic next step.
+fn pending_restart_message(reported: &str, quoted: Option<&str>, hint: Option<&str>) -> String {
+    let quoted = quoted.map(|q| format!(" ({q})")).unwrap_or_default();
+    let next = hint.unwrap_or("Restart it to apply the change.");
+    format!(
+        "its controller set {reported}{quoted}, so the running workload keeps the previous spec until it restarts. {next}"
+    )
 }
 
 /// Return a condition's `lastTransitionTime`, rounded up to the next whole
@@ -423,26 +600,24 @@ pub fn check_readiness(obj: &DynamicObject, kind: GroupKind<'_>) -> bool {
     // the `kix.run/readiness` annotation. The match below covers only kinds
     // whose readiness the Kubernetes API defines directly.
     if let Some(rule) = declared_readiness(obj) {
+        let field = &rule.generation;
+        let generation = obj.metadata.generation;
         return match rule.ready {
             ReadyRule::Path { path, equals } => {
-                generation_observed(
-                    obj.metadata.generation,
-                    obj.data.pointer("/status/observedGeneration"),
-                ) && obj
-                    .data
-                    .pointer(&path)
-                    .and_then(scalar_text)
-                    .is_some_and(|t| t == equals)
+                generation_observed(generation, observed_generation(&obj.data, field, None))
+                    && obj
+                        .data
+                        .pointer(&path)
+                        .and_then(scalar_text)
+                        .is_some_and(|t| t == equals)
             }
             ReadyRule::PathNot { path, not_equals } => {
-                generation_observed(
-                    obj.metadata.generation,
-                    obj.data.pointer("/status/observedGeneration"),
-                ) && obj
-                    .data
-                    .pointer(&path)
-                    .and_then(scalar_text)
-                    .is_none_or(|t| t != not_equals)
+                generation_observed(generation, observed_generation(&obj.data, field, None))
+                    && obj
+                        .data
+                        .pointer(&path)
+                        .and_then(scalar_text)
+                        .is_none_or(|t| t != not_equals)
             }
             ReadyRule::Condition {
                 condition_type,
@@ -450,8 +625,8 @@ pub fn check_readiness(obj: &DynamicObject, kind: GroupKind<'_>) -> bool {
             } => find_condition(&obj.data, &condition_type).is_some_and(|c| {
                 c.get("status").and_then(Value::as_str) == Some(status.as_str())
                     && generation_observed(
-                        obj.metadata.generation,
-                        condition_observed_generation(&obj.data, c),
+                        generation,
+                        observed_generation(&obj.data, field, Some(c)),
                     )
             }),
         };
@@ -687,13 +862,31 @@ fn generation_observed(generation: Option<i64>, observed: Option<&Value>) -> boo
     }
 }
 
-/// Return the generation a condition describes: its own `observedGeneration`,
-/// or `status.observedGeneration` when the operator stamps only the top-level
-/// status.
-fn condition_observed_generation<'a>(data: &'a Value, condition: &'a Value) -> Option<&'a Value> {
+/// Return the generation that a custom resource's status describes, to
+/// compare with `metadata.generation`. A matched `condition`'s own
+/// `observedGeneration` comes first, then the declared `field`. `None` means
+/// the status names no generation, so no wait applies.
+fn observed_generation<'a>(
+    data: &'a Value,
+    field: &GenerationField,
+    condition: Option<&'a Value>,
+) -> Option<&'a Value> {
     condition
-        .get("observedGeneration")
-        .or_else(|| data.pointer("/status/observedGeneration"))
+        .and_then(|c| c.get("observedGeneration"))
+        .or_else(|| match field {
+            GenerationField::Pointer(pointer) => data.pointer(pointer),
+            GenerationField::None => None,
+        })
+}
+
+/// Return the generation that `obj`'s status describes: the field its
+/// declared readiness names, or `status.observedGeneration` for an object
+/// with no declaration.
+pub(super) fn status_observed_generation(obj: &DynamicObject) -> Option<&Value> {
+    let field = declared_readiness(obj)
+        .map(|rule| rule.generation)
+        .unwrap_or_default();
+    observed_generation(&obj.data, &field, None)
 }
 
 /// Format the suffix appended to a readiness message when `observed` predates
@@ -727,6 +920,8 @@ pub(super) fn readiness_message(obj: &DynamicObject, kind: GroupKind<'_>) -> Str
 /// [`readiness_message`].
 pub fn not_ready_reason(obj: &DynamicObject, kind: GroupKind<'_>) -> String {
     if let Some(rule) = declared_readiness(obj) {
+        let field = &rule.generation;
+        let generation = obj.metadata.generation;
         return match rule.ready {
             ReadyRule::Path { path, equals } => {
                 // Distinguish an absent path from a value of a type declared
@@ -741,10 +936,7 @@ pub fn not_ready_reason(obj: &DynamicObject, kind: GroupKind<'_>) -> String {
                         )
                     }
                 };
-                let stale = stale_note(
-                    obj.metadata.generation,
-                    obj.data.pointer("/status/observedGeneration"),
-                );
+                let stale = stale_note(generation, observed_generation(&obj.data, field, None));
                 format!("declared readiness {path}=\"{equals}\", currently {current}{stale}")
             }
             ReadyRule::PathNot { path, not_equals } => {
@@ -752,10 +944,7 @@ pub fn not_ready_reason(obj: &DynamicObject, kind: GroupKind<'_>) -> String {
                     None => "<absent>".to_string(),
                     Some(v) => v.to_string(),
                 };
-                let stale = stale_note(
-                    obj.metadata.generation,
-                    obj.data.pointer("/status/observedGeneration"),
-                );
+                let stale = stale_note(generation, observed_generation(&obj.data, field, None));
                 format!("declared readiness {path}!=\"{not_equals}\", currently {current}{stale}")
             }
             ReadyRule::Condition {
@@ -766,10 +955,8 @@ pub fn not_ready_reason(obj: &DynamicObject, kind: GroupKind<'_>) -> String {
                     None => format!("no {condition_type} condition yet"),
                     Some(c) => {
                         let actual = c.get("status").and_then(Value::as_str).unwrap_or("?");
-                        let stale = stale_note(
-                            obj.metadata.generation,
-                            condition_observed_generation(&obj.data, c),
-                        );
+                        let stale =
+                            stale_note(generation, observed_generation(&obj.data, field, Some(c)));
                         match c.get("message").and_then(Value::as_str) {
                             Some(msg) if !msg.is_empty() => {
                                 format!("{condition_type}={actual} ({msg}){stale}")

@@ -55,8 +55,8 @@ pub(super) enum NodeOutcome {
         apply_action: ApplyAction,
         reason: String,
     },
-    /// Ready, with `stale` pods of an `OnDelete` DaemonSet still running the
-    /// previous pod template.
+    /// Ready, with `stale` workloads still running the previous spec (see
+    /// `ReadinessResult::ReadyPendingRestart`).
     PendingRestart {
         apply_action: ApplyAction,
         stale: i64,

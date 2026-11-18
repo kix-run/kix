@@ -2253,3 +2253,347 @@ mod discovery_waits {
         );
     }
 }
+
+/// The declaration a running KubeVirt VirtualMachine carries: KubeVirt
+/// reports in `status.observedGeneration` the generation the running
+/// instance started from, and in `status.desiredGeneration` the generation
+/// virt-controller has processed.
+const RUNNING_VM_RULE: &str = r#"{"path":"/status/printableStatus","equals":"Running","observedGeneration":"/status/desiredGeneration","pendingRestart":{"condition":{"type":"RestartRequired","status":"True"},"hint":"Restart the VM with `virtctl restart <name>` to apply the change."}}"#;
+
+const RESTART_REQUIRED_MESSAGE: &str =
+    "a non-live-updatable field was changed in the template spec";
+
+fn running_vm(generation: i64, desired: i64, conditions: Value) -> DynamicObject {
+    with_generation(
+        make_annotated_obj(
+            RUNNING_VM_RULE,
+            json!({"status": {
+                "printableStatus": "Running",
+                "observedGeneration": 1,
+                "desiredGeneration": desired,
+                "conditions": conditions,
+            }}),
+        ),
+        generation,
+    )
+}
+
+fn restart_required() -> Value {
+    json!([{
+        "type": "RestartRequired",
+        "status": "True",
+        "message": RESTART_REQUIRED_MESSAGE,
+    }])
+}
+
+// The two new keys parse, and an annotation without them reads the
+// conventional field and declares no restart state.
+#[test]
+fn declared_readiness_parses_generation_field_and_pending_restart() {
+    let parsed =
+        declared_readiness(&make_annotated_obj(RUNNING_VM_RULE, json!({}))).expect("parses");
+    assert_eq!(
+        parsed.generation,
+        GenerationField::Pointer("/status/desiredGeneration".into())
+    );
+    assert_eq!(
+        parsed.pending_restart,
+        Some(PendingRestartRule {
+            state: PendingState::Condition {
+                condition_type: "RestartRequired".into(),
+                status: "True".into(),
+                reason: None,
+            },
+            hint: Some("Restart the VM with `virtctl restart <name>` to apply the change.".into()),
+            message: Vec::new(),
+        })
+    );
+
+    let none =
+        r#"{"path":"/status/printableStatus","equals":"Stopped","observedGeneration":false}"#;
+    let parsed = declared_readiness(&make_annotated_obj(none, json!({}))).expect("parses");
+    assert_eq!(parsed.generation, GenerationField::None);
+
+    let parsed = declared_readiness(&make_annotated_obj(VM_RULE, json!({}))).expect("parses");
+    assert_eq!(parsed.generation, GenerationField::default());
+    assert_eq!(parsed.pending_restart, None);
+}
+
+// A malformed key falls back to the default on its own, so version skew can
+// only make the deploy wait as it did before.
+#[test]
+fn declared_readiness_malformed_generation_keys_fall_back() {
+    for bad in [
+        r#"{"path":"/status/x","equals":"y","observedGeneration":true}"#,
+        r#"{"path":"/status/x","equals":"y","observedGeneration":"status.gen"}"#,
+        r#"{"path":"/status/x","equals":"y","observedGeneration":3}"#,
+    ] {
+        let parsed = declared_readiness(&make_annotated_obj(bad, json!({}))).expect("parses");
+        assert_eq!(parsed.generation, GenerationField::default(), "{bad}");
+    }
+    for bad in [
+        r#"{"path":"/status/x","equals":"y","pendingRestart":"RestartRequired"}"#,
+        r#"{"path":"/status/x","equals":"y","pendingRestart":{"condition":{"type":"RestartRequired"}}}"#,
+        r#"{"path":"/status/x","equals":"y","pendingRestart":{"path":"/status/x"}}"#,
+        r#"{"path":"/status/x","equals":"y","pendingRestart":{"path":"/status/x","equals":"z","hint":1}}"#,
+    ] {
+        let parsed = declared_readiness(&make_annotated_obj(bad, json!({}))).expect("parses");
+        assert_eq!(parsed.pending_restart, None, "{bad}");
+        assert!(matches!(parsed.ready, ReadyRule::Path { .. }));
+    }
+}
+
+// A rule that names another field waits on that field and ignores
+// status.observedGeneration. This is the VM shape seen on kind after an
+// edit of a running VM: generation 3, observedGeneration 1 (the generation
+// the running instance started from), desiredGeneration 3.
+#[test]
+fn declared_generation_field_replaces_observed_generation() {
+    let current = running_vm(3, 3, json!([]));
+    assert!(check_readiness(&current, gk("VirtualMachine")));
+    assert!(!readiness_message(&current, gk("VirtualMachine")).contains("observed generation"));
+
+    let behind = running_vm(3, 2, json!([]));
+    assert!(!check_readiness(&behind, gk("VirtualMachine")));
+    let msg = readiness_message(&behind, gk("VirtualMachine"));
+    assert!(msg.ends_with("observed generation 2 of 3"), "got: {msg}");
+
+    // The same object under the default field waits on observedGeneration 1.
+    let default = with_generation(
+        make_annotated_obj(
+            r#"{"path":"/status/printableStatus","equals":"Running"}"#,
+            json!({"status": {"printableStatus": "Running", "observedGeneration": 1, "desiredGeneration": 3}}),
+        ),
+        3,
+    );
+    assert!(!check_readiness(&default, gk("VirtualMachine")));
+}
+
+// `false` says the kind reports no generation, so no status is stale. A
+// stopped VM keeps the generations from when it last ran.
+#[test]
+fn declared_generation_field_false_imposes_no_wait() {
+    let rule =
+        r#"{"path":"/status/printableStatus","equals":"Stopped","observedGeneration":false}"#;
+    let stopped = with_generation(
+        make_annotated_obj(
+            rule,
+            json!({"status": {"printableStatus": "Stopped", "observedGeneration": 1, "desiredGeneration": 2}}),
+        ),
+        5,
+    );
+    assert!(check_readiness(&stopped, gk("VirtualMachine")));
+    assert!(!readiness_message(&stopped, gk("VirtualMachine")).contains("observed generation"));
+    assert!(declared_pending_restart(&stopped).is_none());
+
+    // The not-equals and condition forms follow the same field.
+    let not_equals = r#"{"path":"/status/phase","notEquals":"Failed","observedGeneration":false}"#;
+    let obj = with_generation(
+        make_annotated_obj(not_equals, json!({"status": {"observedGeneration": 1}})),
+        2,
+    );
+    assert!(check_readiness(&obj, gk("Widget")));
+
+    let condition = r#"{"condition":{"type":"Ready","status":"True"},"observedGeneration":false}"#;
+    let obj = with_generation(
+        make_annotated_obj(
+            condition,
+            json!({"status": {"observedGeneration": 1, "conditions": [{"type": "Ready", "status": "True"}]}}),
+        ),
+        2,
+    );
+    assert!(check_readiness(&obj, gk("Widget")));
+
+    // A condition's own observedGeneration still comes first.
+    let own = with_generation(
+        make_annotated_obj(
+            condition,
+            json!({"status": {"conditions": [{"type": "Ready", "status": "True", "observedGeneration": 1}]}}),
+        ),
+        2,
+    );
+    assert!(!check_readiness(&own, gk("Widget")));
+}
+
+// RestartRequired=True on a running VM whose status is current gives the
+// pending-restart report with KubeVirt's message and the package's hint.
+#[test]
+fn declared_pending_restart_reports_on_a_current_ready_resource() {
+    let vm = running_vm(3, 3, restart_required());
+    assert!(check_readiness(&vm, gk("VirtualMachine")));
+    assert_eq!(
+        declared_pending_restart(&vm).as_deref(),
+        Some(
+            "its controller set RestartRequired=True (a non-live-updatable field was changed in the template spec), so the running workload keeps the previous spec until it restarts. Restart the VM with `virtctl restart <name>` to apply the change."
+        )
+    );
+
+    // No condition, or the condition in another state, is plain ready.
+    assert!(declared_pending_restart(&running_vm(3, 3, json!([]))).is_none());
+    let cleared = running_vm(
+        3,
+        3,
+        json!([{"type": "RestartRequired", "status": "False"}]),
+    );
+    assert!(declared_pending_restart(&cleared).is_none());
+}
+
+// With a stale desiredGeneration, virt-controller has not processed the
+// spec, so the VM is not ready and no restart is reported yet.
+#[test]
+fn declared_pending_restart_waits_for_a_stale_status() {
+    let vm = running_vm(3, 2, restart_required());
+    assert!(!check_readiness(&vm, gk("VirtualMachine")));
+    assert!(declared_pending_restart(&vm).is_none());
+}
+
+// The path form quotes the values at its message pointers, and the report
+// ends with a generic next step when the package gives no hint.
+#[test]
+fn declared_pending_restart_path_form() {
+    let rule = r#"{"path":"/status/phase","equals":"Ready","pendingRestart":{"path":"/status/restartPending","equals":"true","message":["/status/restartReason"]}}"#;
+    let obj = with_generation(
+        make_annotated_obj(
+            rule,
+            json!({"status": {"phase": "Ready", "observedGeneration": 4, "restartPending": true, "restartReason": "config changed."}}),
+        ),
+        4,
+    );
+    assert!(check_readiness(&obj, gk("Widget")));
+    assert_eq!(
+        declared_pending_restart(&obj).as_deref(),
+        Some(
+            "its controller set status.restartPending=true (config changed), so the running workload keeps the previous spec until it restarts. Restart it to apply the change."
+        )
+    );
+}
+
+// A failed entry is confirmed by the declared field.
+#[test]
+fn declared_failure_follows_the_generation_field() {
+    let rule = r#"{"path":"/status/printableStatus","equals":"Running","observedGeneration":"/status/desiredGeneration","failed":[{"path":"/status/printableStatus","equals":"ErrorUnschedulable"}]}"#;
+    let obj = |desired: i64| {
+        with_generation(
+            make_annotated_obj(
+                rule,
+                json!({"status": {"printableStatus": "ErrorUnschedulable", "observedGeneration": 1, "desiredGeneration": desired}}),
+            ),
+            3,
+        )
+    };
+    let failure = declared_failure(&obj(3), gk("VirtualMachine"), None).expect("matches");
+    assert!(failure.confirmed);
+    assert!(declared_failure(&obj(2), gk("VirtualMachine"), None).is_none());
+}
+
+// The progress fingerprint tracks the declared field, so a controller that
+// catches up counts as progress.
+#[test]
+fn progress_fingerprint_follows_the_generation_field() {
+    let behind = running_vm(3, 2, json!([]));
+    let current = running_vm(3, 3, json!([]));
+    let fp = |obj: &DynamicObject| progress_fingerprint(obj, gk("VirtualMachine"), &[]);
+    assert!(fp(&behind).contains("og=2"), "got: {}", fp(&behind));
+    assert!(fp(&current).contains("og=3"));
+}
+
+mod pending_restart_waits {
+    use super::*;
+    use crate::cluster::fake_api::{FakeApi, TWO_VERSION_GROUP};
+
+    /// A Gizmo that Kix wrote, with the running-VM declaration and the given
+    /// status.
+    fn gizmo(generation: i64, status: Value) -> Value {
+        json!({
+            "apiVersion": format!("{TWO_VERSION_GROUP}/v1"),
+            "kind": "Gizmo",
+            "metadata": {
+                "name": "demo",
+                "namespace": "default",
+                "generation": generation,
+                "annotations": { keys::READINESS: RUNNING_VM_RULE },
+                "managedFields": [{
+                    "manager": crate::cluster::fieldsv1::KIX_FIELD_MANAGER,
+                    "operation": "Apply",
+                }],
+            },
+            "status": status,
+        })
+    }
+
+    async fn wait(api: &FakeApi) -> ReadinessResult {
+        let ar = ApiResource {
+            group: TWO_VERSION_GROUP.into(),
+            version: "v1".into(),
+            api_version: format!("{TWO_VERSION_GROUP}/v1"),
+            kind: "Gizmo".into(),
+            plural: "gizmos".into(),
+        };
+        let rid = ResourceId {
+            group: TWO_VERSION_GROUP.into(),
+            kind: "Gizmo".into(),
+            namespace: "default".into(),
+            name: "demo".into(),
+        };
+        wait_for_ready(
+            &api.client(),
+            &ar,
+            &Scope::Namespaced,
+            &rid,
+            None,
+            Duration::from_secs(1),
+            &CancelToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap()
+    }
+
+    // The deploy ends with a pending restart for a current resource in the
+    // declared state, where it used to wait on observedGeneration until it
+    // timed out.
+    #[tokio::test(start_paused = true)]
+    async fn a_declared_pending_restart_ends_the_wait() {
+        let api = FakeApi::new([gizmo(
+            3,
+            json!({
+                "printableStatus": "Running",
+                "observedGeneration": 1,
+                "desiredGeneration": 3,
+                "conditions": restart_required(),
+            }),
+        )]);
+        let ReadinessResult::ReadyPendingRestart { stale, message } = wait(&api).await else {
+            panic!("expected a pending restart");
+        };
+        assert_eq!(stale, 1);
+        assert!(message.contains(RESTART_REQUIRED_MESSAGE), "{message}");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_current_resource_without_the_state_is_ready() {
+        let api = FakeApi::new([gizmo(
+            3,
+            json!({"printableStatus": "Running", "observedGeneration": 1, "desiredGeneration": 3}),
+        )]);
+        assert_eq!(wait(&api).await, ReadinessResult::Ready);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_stale_resource_keeps_waiting() {
+        let api = FakeApi::new([gizmo(
+            3,
+            json!({
+                "printableStatus": "Running",
+                "observedGeneration": 1,
+                "desiredGeneration": 2,
+                "conditions": restart_required(),
+            }),
+        )]);
+        let result = wait(&api).await;
+        let ReadinessResult::TimedOut { message, .. } = &result else {
+            panic!("expected a timeout, got {result:?}");
+        };
+        assert!(message.contains("observed generation 2 of 3"), "{message}");
+    }
+}

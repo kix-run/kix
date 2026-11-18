@@ -7,7 +7,7 @@ use kube::{
 };
 use serde_json::Value;
 
-use super::declared::readiness_message;
+use super::declared::{readiness_message, status_observed_generation};
 use crate::manifest::kinds::{self, GroupKind};
 
 /// Number of container restarts required before CrashLoopBackOff is treated
@@ -685,8 +685,9 @@ pub(super) async fn scan_terminal(
 /// forward progress and resets the idle timer. Kix declares a no-progress
 /// timeout only if the fingerprint remains unchanged for the full idle budget.
 ///
-/// Includes the readiness message (which encodes per-kind counters),
-/// `observedGeneration`, and aggregated pod state: phase counts, total restart
+/// Includes the readiness message (which encodes per-kind counters), the
+/// observed generation (`status.observedGeneration`, or the field a declared
+/// readiness names), and aggregated pod state: phase counts, total restart
 /// count, and distinct waiting reasons. Excludes timestamps and other
 /// frequently changing fields so controller reconcile loops do not register as
 /// forward progress on their own.
@@ -700,11 +701,7 @@ pub(super) fn progress_fingerprint(
     let mut parts: Vec<String> = Vec::with_capacity(4);
     parts.push(readiness_message(obj, kind));
 
-    if let Some(g) = obj
-        .data
-        .pointer("/status/observedGeneration")
-        .and_then(Value::as_i64)
-    {
+    if let Some(g) = status_observed_generation(obj).and_then(Value::as_i64) {
         parts.push(format!("og={g}"));
     }
 

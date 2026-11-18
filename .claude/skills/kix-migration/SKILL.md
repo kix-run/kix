@@ -302,7 +302,7 @@ Workload constructors (`mkDeployment`, `mkStatefulSet`, `mkDaemonSet`, `mkJob`) 
 
 `ownership.cede = [ "spec.versions" "webhooks[*].rules" ]` names fields an operator takes over after creation (also on `scope.mkCRD`): deploy applies without them when a 409 is confined to those paths, and fails any other conflict. cdi uses it; never reach for `--force-conflicts` in a package. When the operator writes every entry of an object (StackGres's webhook configurations), render the object as metadata only and order the operator after it instead of ceding.
 
-A CRD an operator installs at runtime is a `scope.mkCRDRef { group; kind; plural; version = "<served version>"; installedBy = self.operatorDeployment; }`; CRs of that kind are built with `scope.mkCR self.thatRef { ... }` (mayastor DiskPool). Read the served version off the operator's CRD (`kubectl get crd <plural>.<group> -o jsonpath='{.spec.versions[?(@.served==true)].name}'`); there is no default, and a missing `version` fails the build. Every CR must depend on its declaration; `scope.mkCR` adds it, and a raw `scope.mkResource` with a custom `apiVersion` fails cross-resource check 21. When a CR's readiness depends on its spec (a VirtualMachine is Running or Stopped by its runStrategy), declare no readiness on the marker and stamp `kix.keys.readiness` per CR in an `out.mk<Kind>` builder that refuses specs a deploy cannot wait on (kubevirt `out.mkVirtualMachine`, cdi `out.mkDataVolume`).
+A CRD an operator installs at runtime is a `scope.mkCRDRef { group; kind; plural; version = "<served version>"; installedBy = self.operatorDeployment; }`; CRs of that kind are built with `scope.mkCR self.thatRef { ... }` (mayastor DiskPool). Read the served version off the operator's CRD (`kubectl get crd <plural>.<group> -o jsonpath='{.spec.versions[?(@.served==true)].name}'`); there is no default, and a missing `version` fails the build. Every CR must depend on its declaration; `scope.mkCR` adds it, and a raw `scope.mkResource` with a custom `apiVersion` fails cross-resource check 21. When a CR's readiness depends on its spec (a VirtualMachine is Running or Stopped by its runStrategy), declare no readiness on the marker and pass `readiness` to `scope.mkCR` per CR in an `out.mk<Kind>` builder that refuses specs a deploy cannot wait on (kubevirt `out.mkVirtualMachine`, cdi `out.mkDataVolume`). The CR's `readiness` replaces the kind's and is validated like it.
 
 | Field | Description |
 |-------|-------------|
@@ -422,7 +422,22 @@ edge but NO netpol hole. Consequences when authoring:
   condition has none, as with RabbitMQ's `AllReplicasReady`), to reach
   `metadata.generation` when the operator reports it. An operator that reports neither (CloudNativePG's
   Cluster) can still read as ready from its previous status right after
-  a spec change.
+  a spec change. When the operator reports the generation it has acted
+  on in another field, or gives `status.observedGeneration` another
+  meaning, name the field: `observedGeneration =
+  "/status/desiredGeneration"` beside the ready rule (KubeVirt's
+  VirtualMachine reports in `status.observedGeneration` the generation its
+  running guest started from, which lags after every edit until a
+  restart). `observedGeneration = false` says the kind reports none. The
+  ready rule, `failed`, and `pendingRestart` all use the declared field.
+
+  When the operator accepts a spec change but keeps the running workload
+  on the previous spec until a restart, and reports that, declare the
+  state in `pendingRestart`: `{ condition = { type = "RestartRequired";
+  status = "True"; }; hint = "<how to restart>"; }`, or `{ path; equals;
+  hint ?; message ?; }`. Once the resource is ready and current, `kix
+  deploy` reports it as ready with a restart pending and goes on, as it
+  does for an `OnDelete` DaemonSet.
 
   When the operator reports that it rejects a resource, and that verdict
   stands until the spec changes, list the state in `failed` beside the
@@ -439,7 +454,7 @@ edge but NO netpol hole. Consequences when authoring:
   external-secrets) or a `Pending` is not one, and neither is a phase with
   no generation and no timestamp that a restarting controller may leave
   stale (ARC `Outdated`). The CLI trusts the match once the condition's `observedGeneration`
-  (or `status.observedGeneration`) has reached `metadata.generation`;
+  (or the declared generation field) has reached `metadata.generation`;
   without a generation, once the condition's `lastTransitionTime` is later
   than this deploy's apply of the object (Cilium writes neither generation,
   so this is the check its policies get); and with neither field, once the

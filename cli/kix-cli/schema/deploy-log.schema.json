@@ -222,7 +222,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "`stale` pods run the previous template until someone deletes them.",
+          "description": "The resource is ready, and `stale` of its workloads run the previous\nspec until someone restarts them: pods of an `OnDelete` DaemonSet, or\none for a custom resource in its declared `pendingRestart` state.\n`message` says why.",
           "properties": {
             "pending_restart": {
               "properties": {

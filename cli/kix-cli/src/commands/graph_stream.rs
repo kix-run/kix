@@ -471,9 +471,7 @@ fn detail_message(detail: &Option<NodeDetail>) -> Option<String> {
             Some("recreated (immutable-field conflict)".to_string())
         }
         NodeDetail::Rerun { reason } => Some(format!("ran again ({reason})")),
-        NodeDetail::PendingRestart { stale, .. } => {
-            Some(format!("{stale} pods pending manual restart (OnDelete)"))
-        }
+        NodeDetail::PendingRestart { .. } => Some("restart pending".to_string()),
     }
 }
 

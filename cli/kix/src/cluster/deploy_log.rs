@@ -242,7 +242,10 @@ pub enum Detail {
     SecretHydrationFailed(String),
     RecreatedInPlace(String),
     Rerun(String),
-    /// `stale` pods run the previous template until someone deletes them.
+    /// The resource is ready, and `stale` of its workloads run the previous
+    /// spec until someone restarts them: pods of an `OnDelete` DaemonSet, or
+    /// one for a custom resource in its declared `pendingRestart` state.
+    /// `message` says why.
     PendingRestart {
         stale: i64,
         message: String,

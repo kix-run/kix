@@ -1,7 +1,8 @@
 //! Readiness polling for Kubernetes resources.
 //!
-//! Provides per-kind readiness checks with `observedGeneration` guards for workloads,
-//! used by `kix deploy` to wait for resources to become ready after apply.
+//! Provides per-kind readiness checks with generation guards for workloads and
+//! custom resources, used by `kix deploy` to wait for resources to become ready
+//! after apply.
 //!
 //! Also handles import marker `PackageInstance` resources whose readiness is
 //! defined as the external resource existing on the cluster and passing
@@ -45,8 +46,8 @@ pub(crate) use terminal::termination_output;
 
 #[cfg(test)]
 use declared::{
-    DECLARED_FAILURE_GRACE, DeclaredFailure, FailedRule, ReadyRule, declared_readiness,
-    served_crd_versions, unserved_crd_versions,
+    DECLARED_FAILURE_GRACE, DeclaredFailure, FailedRule, GenerationField, PendingRestartRule,
+    PendingState, ReadyRule, declared_readiness, served_crd_versions, unserved_crd_versions,
 };
 #[cfg(test)]
 use imports::{check_secret_keys, expectations, split_api_version};
@@ -56,7 +57,10 @@ use terminal::{
     rollout_observed, workload_label_selector,
 };
 
-use declared::{FailureWatch, declared_failure, is_wait_for_first_consumer, readiness_message};
+use declared::{
+    FailureWatch, declared_failure, declared_pending_restart, is_wait_for_first_consumer,
+    readiness_message,
+};
 use terminal::{progress_fingerprint, scan_terminal};
 
 /// Return whether API discovery serves the kind that `crd` defines.
@@ -108,9 +112,11 @@ pub(crate) enum ReadinessError {
 pub(crate) enum ReadinessResult {
     /// Resource is ready.
     Ready,
-    /// An `OnDelete` DaemonSet is ready, but `stale` of its pods still run
-    /// the previous pod template. The controller replaces a pod only when it
-    /// is deleted, so the deploy reports this instead of waiting.
+    /// The resource is ready, and `stale` of its workloads still run the
+    /// previous spec until someone restarts them, so the deploy reports this
+    /// instead of waiting. An `OnDelete` DaemonSet counts its pods that run
+    /// the previous template. A custom resource whose declared
+    /// `pendingRestart` state matches counts as one. `message` says why.
     ReadyPendingRestart { stale: i64, message: String },
     /// Timed out waiting for readiness.
     TimedOut { elapsed: Duration, message: String },
@@ -167,6 +173,10 @@ const HARD_CEILING: Duration = Duration::from_secs(5 * 60);
 /// than `applied_at`, the time this deploy changed the object (`None` when it
 /// left the object unchanged); with neither field, the state must hold for
 /// [`DECLARED_FAILURE_GRACE`] first.
+///
+/// A ready custom resource whose declared `pendingRestart` state matches for
+/// the current spec returns `ReadyPendingRestart`, as an `OnDelete` DaemonSet
+/// with pods on the previous template does ([`declared_pending_restart`]).
 ///
 /// Returns `Ready` on success, `Failed` on a terminal signal, `TimedOut` when
 /// either timeout budget elapses, or `Cancelled` if `cancel` is triggered.
@@ -250,10 +260,20 @@ pub(crate) async fn wait_for_ready(
             if kind == kinds::DAEMON_SET
                 && let Some(stale) = daemonset_pending_restart(&obj.data)
             {
+                let pods = if stale == 1 {
+                    "pod still runs"
+                } else {
+                    "pods still run"
+                };
                 return Ok(ReadinessResult::ReadyPendingRestart {
                     stale,
-                    message: "the DaemonSet replaces a pod with the current template only when the pod is deleted".into(),
+                    message: format!(
+                        "{stale} {pods} the previous pod template, and the DaemonSet replaces a pod only when someone deletes it"
+                    ),
                 });
+            }
+            if let Some(message) = declared_pending_restart(&obj) {
+                return Ok(ReadinessResult::ReadyPendingRestart { stale: 1, message });
             }
             if kind != kinds::CUSTOM_RESOURCE_DEFINITION || crd_kind_served(client, &obj.data).await
             {

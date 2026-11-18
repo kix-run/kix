@@ -68,6 +68,8 @@ configMap = scope.mkResource {
   - Field equality: `{ path = "/status/phase"; equals = "Running"; }`
   - Field non-equality: `{ path = "/status/currentRevision"; notEquals = ""; }`
 
+  The optional keys `failed`, `observedGeneration`, and `pendingRestart` sit beside the rule (see [`kix.run/readiness`](/docs/reference/annotations-crds-and-receipts/#kixrunreadiness)). A custom resource whose ready state depends on its own spec passes `readiness` to `scope.mkCR`, which replaces the kind's rule for that resource and is validated the same way.
+
 ---
 
 ## Workloads

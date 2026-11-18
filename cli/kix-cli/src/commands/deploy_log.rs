@@ -64,10 +64,8 @@ impl DeployObserver for LineObserver {
                         Some(NodeDetail::Rerun { reason }) => {
                             println!("{label}> rerun: {reason}");
                         }
-                        Some(NodeDetail::PendingRestart { stale, message }) => {
-                            println!(
-                                "{label}> ready, {stale} pods pending manual restart (OnDelete): {message}"
-                            );
+                        Some(NodeDetail::PendingRestart { message, .. }) => {
+                            println!("{label}> ready, restart pending: {message}");
                         }
                         _ => {
                             println!("{label}> ready");

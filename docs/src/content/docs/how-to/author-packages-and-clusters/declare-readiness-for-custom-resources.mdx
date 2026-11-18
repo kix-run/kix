@@ -37,7 +37,8 @@ Gateway), which never set `Ready` or `Available`.
 
 Keep this declaration in the package that owns or imports the CRD. Every custom
 resource created through `widgetCrd.out.mkCR` then receives the same readiness
-rule, along with its dependency on the CRD.
+rule, along with its dependency on the CRD. A resource can replace the rule
+with its own (see [Give one resource its own rule](#give-one-resource-its-own-rule)).
 
 ## Declare the states that mean failure
 
@@ -97,7 +98,8 @@ failed = [
 
 Kix trusts such a state once it knows the controller has seen the current
 spec. It checks, in this order: the condition's `observedGeneration` (or
-`status.observedGeneration`) has reached `metadata.generation`; or, when the
+the field that [`observedGeneration`](#name-the-field-that-reports-the-generation)
+names) has reached `metadata.generation`; or, when the
 controller reports no generation, the condition's `lastTransitionTime` is
 later than the moment this deploy applied the object (a state that changed
 before the apply is the verdict on the previous spec, and Kix keeps waiting
@@ -109,6 +111,90 @@ old transition time, because the condition did not change. Kix then waits
 until the readiness timeout, and the timeout message still shows the current
 reason. The failure message quotes the controller's condition, reason, and
 message, or the status fields the entry names, and ends with what to do next.
+
+## Name the field that reports the generation
+
+Right after `kix deploy` changes a custom resource, its status still describes
+the previous spec until the controller acts on the change. Kix tells the two
+apart by comparing `metadata.generation` with the generation the controller
+reports it has acted on, and waits until that has caught up. The Kubernetes API
+conventions name that field `status.observedGeneration`, and Kix reads it by
+default.
+
+Some controllers report it in another field, or give
+`status.observedGeneration` another meaning. Check the field's description in
+the CRD and the controller code that sets it. When it is not the generation the
+controller has acted on, name the right field in `observedGeneration`:
+
+```nix
+readiness = {
+  path = "/status/printableStatus";
+  equals = "Running";
+  observedGeneration = "/status/desiredGeneration";
+};
+```
+
+KubeVirt is such a controller. On a VirtualMachine, `status.observedGeneration`
+is the generation the running guest started from, so it stays behind after any
+edit until the guest restarts, and `status.desiredGeneration` is the generation
+the controller has processed.
+
+Set `observedGeneration = false` when the kind reports no such generation. Kix
+then reads the status as current. A condition's own `observedGeneration`, when
+the controller sets one, still comes first. The `failed` and `pendingRestart`
+entries use the same field.
+
+## Report a restart the workload needs
+
+Some controllers accept a change to the spec but keep the running workload on
+the previous spec until someone restarts it. KubeVirt does this for a change
+that it cannot apply to a running guest, and sets `RestartRequired=True`. Name
+that state in `pendingRestart`, with a `hint` that says how to restart:
+
+```nix
+readiness = {
+  path = "/status/printableStatus";
+  equals = "Running";
+  observedGeneration = "/status/desiredGeneration";
+  pendingRestart = {
+    condition = {
+      type = "RestartRequired";
+      status = "True";
+    };
+    hint = "Restart the VM with `virtctl restart <name>` to apply the change.";
+  };
+};
+```
+
+`pendingRestart` takes the two shapes of a `failed` entry: a condition (`type`,
+`status`, and an optional `reason`) or a status field (`path`, `equals`, and an
+optional `message` that names the status fields to quote). Kix reads it only
+once the resource is ready and its status describes the current spec. The
+deploy then reports the resource as ready with a restart pending, quotes the
+controller's message and the hint, and goes on. Restarting the workload is left
+to you, because it interrupts what runs in it.
+
+## Give one resource its own rule
+
+When the ready state depends on the resource's own spec, pass `readiness` to
+`scope.mkCR`. It replaces the kind's rule for that resource, and Kix checks it
+the same way:
+
+```nix
+vm = scope.mkCR kubevirt.out.crds.VirtualMachine {
+  name = "halted";
+  spec = { runStrategy = "Halted"; /* ... */ };
+  readiness = {
+    path = "/status/printableStatus";
+    equals = "Stopped";
+    observedGeneration = false;
+  };
+};
+```
+
+A stopped VirtualMachine has no running guest, so KubeVirt stops updating its
+generation fields, and `observedGeneration = false` keeps Kix from waiting on
+them.
 
 ## Check the generated custom resource
 
