@@ -1,3 +1,0 @@
-# 2026-11-15 · `kix/packages/experimental/envoy-gateway` · A cluster can have only one Envoy Gateway Gateway that kix.expose routes through.
-
-The package installs the controller and one Gateway, and it is one per cluster (`conflictsWith`), so a cluster cannot add a second Gateway (a private one beside a public one) that consumers reach through the gateway contract. Envoy Gateway serves several GatewayClasses and Gateways from one controller. Options: an `out.mkGateway` builder that a small Gateway-only package uses to publish its own gateway contract and proxy policy, or a split into a controller package and a Gateway package, as cnpg-operator and cnpg-cluster are split. traefik allows several instances because each runs its own proxies.

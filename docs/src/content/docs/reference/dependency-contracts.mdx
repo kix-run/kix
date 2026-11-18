@@ -252,6 +252,7 @@ When the external identity provider has a single issuer URL, declare a `kix.mkIm
 | `listeners` | No (required on provider `check` and when reading `exposure.url`) | `list` of `{ name; port; protocol; }` | Gateway listener definitions (`port` is an integer, `protocol` is `"HTTP"` or `"HTTPS"`). |
 | `podSelector` | No (required on provider `check`) | non-empty attrset of `str`, or `null` | Labels of the gateway data-plane pods so `kix.expose` can generate an ingress `NetworkPolicy` on exposed backends. Must be set together with `podNamespace` (or both must be `null`). |
 | `podNamespace` | No (required on provider `check`) | `str` or `null` | Namespace of the gateway data-plane pods. Must be set together with `podSelector` (or both must be `null`). |
+| `public` | No (required on provider `check`) | `bool` or `null` | Whether the Gateway may be reachable from outside the cluster: `false` when its `Service` is `ClusterIP`, `true` for other `Service` types, or `null` when unknown. Consumers that refuse public exposure should treat `null` as `true`. |
 
 ### `gateway` helper functions
 

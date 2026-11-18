@@ -1,0 +1,3 @@
+# 2026-11-18 · `docs/src/command-output/how-to/application-export-audit/` · Two docs captures list files in an order that changes between runs.
+
+`nix run ./docs#regen-captures-offline -- --apply` rewrote `annotations.json` and `internal-crs.json` with the same lines in another order (`PackageInstance-preview.yaml` before `PackageInstance-production.yaml`, and the reverse in the committed file). Nothing in the change being regenerated touched that example. The commands behind the captures print files in directory order, which the file system does not fix, so every regeneration can rewrite the two files. The author has to notice and revert them by hand. Sorting the output in the capture's command would make the captures stable.

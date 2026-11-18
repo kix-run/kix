@@ -1634,6 +1634,7 @@ in
           {
             cluster.domain = "example.test";
             instances.gwns.gateway-api.package = import ../../../packages/experimental/gateway-api;
+            instances.gwns.envoy-gateway-controller.package = import ../../../packages/experimental/envoy-gateway-controller;
             instances.gwns.gateway = {
               package = import ../../../packages/experimental/envoy-gateway;
               config.listeners = [

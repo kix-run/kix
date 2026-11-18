@@ -245,7 +245,7 @@ Role names come from the closed registry in `kix/lib/eval/roles.nix`. Every role
 | `loadBalancer` | none | none (environment role) | Checked by `scope.mkResource` on `Service` objects with `type: LoadBalancer` (unless `loadBalancerClass` comes from `kix.providedLoadBalancerClass`). |
 | `metricsApi` | none | `metrics-server` | Checked on `HorizontalPodAutoscaler` resources reading `metrics.k8s.io` and packages calling `scope.requireMetricsApi`. |
 | `registryMirror` | none | `spegel` | Prevents running a second node-local OCI mirror when `embedded-registry` is enabled on k3s or RKE2 (`exclusive`). |
-| `gatewayApi` | `crds` (`GatewayClass`, `Gateway`, `HTTPRoute`, and the other standard Gateway API kinds) | `gateway-api` | Provides Gateway API CRD handles to controllers such as `envoy-gateway` and `traefik`. |
+| `gatewayApi` | `crds` (`GatewayClass`, `Gateway`, `HTTPRoute`, and the other standard Gateway API kinds) | `gateway-api` | Provides Gateway API CRD handles to packages such as `envoy-gateway-controller`, `envoy-gateway`, and `traefik`. |
 | `snapshotController` | `crds` (`VolumeSnapshot`, `VolumeSnapshotClass`, `VolumeSnapshotContent`) | `snapshot-controller` | Provides volume snapshot CRD handles to storage drivers and backup packages. |
 
 To replace a distribution's bundled component with a Kix-managed package, disable the component in the distribution and set the role binding to `"absent"`:

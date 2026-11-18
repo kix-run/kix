@@ -179,9 +179,15 @@ build = [
 | `port` | int, string, or `null` | `null` | Explicit Service port name or number used when `service` is set (defaults to `service.out.port`). |
 | `partName` | string | `"route"` | Part name for the generated `HTTPRoute` or `Ingress` resource. In Gateway mode, `"${partName}Crd"` holds the `HTTPRoute` CRD reference (`scope.mkCRDRef` for `gateway.networking.k8s.io/v1` `HTTPRoute`). |
 | `exposurePart` | string | `"exposure"` | Attribute name in `self` where resolved exposure metadata (`self.exposure`) is published. |
-| `defaultAnnotations` | attrset | `{ }` | Default annotations merged under `config.ingress.annotations` when generating an `Ingress`. |
-| `timeouts` | `{ request?; backendRequest?; }` or `null` | `null` | Optional Gateway API `HTTPRoute` rule timeouts (for example, `{ request = "60s"; }`). Ignored in Ingress mode. |
+| `defaultAnnotations` | attrset | `{ }` | Default annotations for the generated `Ingress` or `HTTPRoute`. Keys in `config.ingress.annotations` override them. |
+| `timeouts` | `{ request?; backendRequest?; }` or `null` | `null` | Optional Gateway API `HTTPRoute` rule timeouts (for example, `{ request = "60s"; }`). Overridden when the instance sets `config.ingress.timeouts`. Ignored in Ingress mode. |
+| `filters` | list of Gateway API `HTTPRouteFilter` | `[ ]` | Gateway API `HTTPRouteFilter` entries (such as `ResponseHeaderModifier`) added to every generated backend rule. Supported only in Gateway mode; fails evaluation in Ingress mode. |
+| `extraRules` | list of Gateway API `HTTPRouteRule` | `[ ]` | Complete `HTTPRouteRule` entries prepended before the generated backend rules (for example, a `RequestRedirect` on an exact path). Supported only in Gateway mode; fails evaluation in Ingress mode. |
 | `deriveHost` | bool | `true` | When `true`, falls back to `"${scope.instanceName}.${clusterConfig.cluster.domain}"` if `config.ingress.host` is `null`. When `false`, a route is emitted only when `config.ingress.host` is explicitly set. |
+
+`kix.expose` reads `config.ingress` (defined by `kix.options.ingress`): `host`, `extraHosts`, and `annotations` apply in both Gateway and Ingress modes, while `timeouts` applies only in Gateway mode.
+
+In Gateway mode, `kix.expose` checks during evaluation that at least one Gateway listener accepts each hostname (`host` and every entry in `extraHosts`) from the instance's namespace, and fails evaluation if none does. When a listener sets `allowedRoutes.namespaces.from = "Selector"`, Kix checks selectors that match only the `kubernetes.io/metadata.name` label; selectors on other labels cannot be checked during evaluation and emit a warning.
 
 ### `self.exposure` metadata
 

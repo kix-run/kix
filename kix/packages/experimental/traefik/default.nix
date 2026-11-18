@@ -760,6 +760,9 @@ in
               # already depends on this instance through gatewayRef.
               podSelector = selectorLabels;
               podNamespace = scope.namespaceName;
+              # A ClusterIP Service is reachable from inside the cluster
+              # only.
+              public = serviceType != "ClusterIP";
               version = kix.image.version config.image;
             };
           };

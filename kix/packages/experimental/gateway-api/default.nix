@@ -9,8 +9,9 @@
 # safe-upgrades.gateway.networking.k8s.io and its binding, which refuse an
 # experimental-channel CRD over a standard one and a bundle older than
 # v1.7.0. The package runs no workload. A Gateway API implementation, such
-# as envoy-gateway or traefik, takes it as a dependency and builds its
-# GatewayClass and Gateway from `out.crds`.
+# as envoy-gateway-controller or traefik, takes it as a dependency and
+# builds its GatewayClass from `out.crds`, and a Gateway package builds its
+# Gateway from it.
 #
 # The instance claims the `gatewayApi` role, so a cluster runs one.
 # An environment that installs the CRDs itself (some managed
