@@ -34,7 +34,7 @@
 #                                `metrics.enabled`.
 #
 # Defaults: `replicas` from the availability level (1 at none, 3 from pod
-# up), RabbitMQ 4.3 from the official image, the definition's default
+# up), RabbitMQ 4.4 from the official image, the definition's default
 # resources (1 CPU requested, 2 CPU limit, 2Gi), and 10Gi volumes. Quorum
 # queues need a majority of the nodes, so an even replica count is
 # refused.
@@ -158,7 +158,7 @@ let
 
   # meta.version and the default image tag: the RabbitMQ release the
   # cluster runs.
-  release = "4.3.6";
+  release = "4.4.1";
 
   # The RabbitmqCluster fields this package writes are those of the
   # operator's 2.23 release.
@@ -340,7 +340,7 @@ in
     image = kix.options.image {
       repository = "docker.io/library/rabbitmq";
       tag = "${release}-management";
-      digest = "sha256:316ffd2a847e59112eee2c65f04bbd0989d93aaf1486c07b721f8d22d863b968";
+      digest = "sha256:61f90c401a5b5ed2486771973ea92ad66046471eacab9c9149f1a6e091c91677";
       description = "RabbitMQ image (`spec.image`). The operator enables the management, Prometheus, and Kubernetes peer discovery plugins, which the official image ships.";
     };
 
