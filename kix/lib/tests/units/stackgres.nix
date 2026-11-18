@@ -701,7 +701,7 @@ in
     in
     (
       pg16.minor == "16.15"
-      && pg16.images.patroni == "quay.io/ongres/patroni:v4.1.5-pg16.15-build-6.56"
+      && pg16.images.patroni == "quay.io/ongres/patroni:v4.1.5-pg16.15-build-6.57"
       && (resolve "17.6").images.postgresUtil == "quay.io/ongres/postgres-util:v17.6-build-6.44"
       && fails "latest"
       && fails "19"
@@ -722,9 +722,9 @@ in
         };
     in
     (
-      images "1.34" == [ "quay.io/ongres/kubectl:v1.33.13-build-6.56" ]
-      && images "v1.37.2-gke.100" == [ "quay.io/ongres/kubectl:v1.37.1-build-6.56" ]
-      && images "1.10" == [ "quay.io/ongres/kubectl:v1.37.1-build-6.56" ]
+      images "1.34" == [ "quay.io/ongres/kubectl:v1.33.13-build-6.57" ]
+      && images "v1.37.2-gke.100" == [ "quay.io/ongres/kubectl:v1.37.2-build-6.57" ]
+      && images "1.10" == [ "quay.io/ongres/kubectl:v1.37.2-build-6.57" ]
       && builtins.length (images null) == 8
     )
     || throw "kubectlImages: ${builtins.toJSON (images "1.34")}";
