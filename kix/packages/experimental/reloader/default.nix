@@ -36,6 +36,14 @@
 #
 # Escape hatches: `extraArgs` and `env` (the flags and variables the package
 # sets are refused), and `partsOverlays` on `deployment` for placement.
+#
+# Upgrades: the flags, RBAC rules, Lease name, probe paths, and port are the
+# same in 1.4.22 and 1.4.24, so the first deploy restarts the reloader pods
+# once, and the new leader takes over the Lease about 15 to 20 seconds later.
+# Reloader 1.4.24 no longer serves `/debug/pprof` on port 9090. The
+# `--enable-pprof` flag serves it on port 6060 of each pod instead. To go
+# back, deploy the previous Kix version: reloader 1.4.22 takes the Lease from
+# 1.4.24 and restarts a workload when its Secret changes.
 
 {
   scope,
