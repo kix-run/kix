@@ -7,7 +7,8 @@ use kube::{
 };
 use serde_json::Value;
 
-use super::declared::readiness_message;
+use super::declared::{readiness_message, status_observed_generation};
+use crate::manifest::kinds::{self, GroupKind};
 
 /// Number of container restarts required before CrashLoopBackOff is treated
 /// as terminal. Allows a couple of flapping-startup cycles (InitContainer
@@ -235,9 +236,12 @@ pub fn transient_pull_error(pod: &Value) -> Option<String> {
 
 /// Classify workload-level terminal failures that don't require pod inspection.
 /// Currently covers Deployment progress deadline and Job backoff limit.
-pub fn classify_workload_terminal(obj: &Value, kind: &str) -> Option<(TerminalReason, String)> {
+pub fn classify_workload_terminal(
+    obj: &Value,
+    kind: GroupKind<'_>,
+) -> Option<(TerminalReason, String)> {
     match kind {
-        "Deployment" => {
+        kinds::DEPLOYMENT => {
             // conditions[?(@.type=='Progressing' && @.status=='False' && @.reason=='ProgressDeadlineExceeded')]
             let conditions = obj
                 .pointer("/status/conditions")
@@ -259,7 +263,7 @@ pub fn classify_workload_terminal(obj: &Value, kind: &str) -> Option<(TerminalRe
             }
             None
         }
-        "Job" => {
+        kinds::JOB => {
             let failed = obj
                 .pointer("/status/failed")
                 .and_then(Value::as_i64)
@@ -320,8 +324,11 @@ pub(super) fn workload_label_selector(obj: &Value) -> Option<String> {
 /// describe the previous template. A deploy that restores an earlier template
 /// would otherwise be judged by the pods of the template it is replacing.
 /// Kinds without a rollout controller always count as observed.
-pub(super) fn rollout_observed(obj: &DynamicObject, kind: &str) -> bool {
-    if !matches!(kind, "Deployment" | "StatefulSet" | "DaemonSet") {
+pub(super) fn rollout_observed(obj: &DynamicObject, kind: GroupKind<'_>) -> bool {
+    if !matches!(
+        kind,
+        kinds::DEPLOYMENT | kinds::STATEFUL_SET | kinds::DAEMON_SET
+    ) {
         return true;
     }
     let Some(generation) = obj.metadata.generation else {
@@ -446,14 +453,14 @@ async fn list_apps_objects(
 async fn current_revision_pods(
     client: &Client,
     obj: &DynamicObject,
-    kind: &str,
+    kind: GroupKind<'_>,
     namespace: &str,
     selector: &str,
 ) -> RevisionPods {
     match kind {
         // The StatefulSet controller publishes the current revision in
         // `status.updateRevision` and stamps it on each pod.
-        "StatefulSet" => match obj
+        kinds::STATEFUL_SET => match obj
             .data
             .pointer("/status/updateRevision")
             .and_then(Value::as_str)
@@ -461,7 +468,7 @@ async fn current_revision_pods(
             Some(rev) => RevisionPods::Matching(format!("controller-revision-hash={rev}")),
             None => RevisionPods::NotCreated,
         },
-        "Deployment" => {
+        kinds::DEPLOYMENT => {
             let Some(replicasets) =
                 list_apps_objects(client, namespace, "ReplicaSet", "replicasets", selector).await
             else {
@@ -475,7 +482,7 @@ async fn current_revision_pods(
                 None => RevisionPods::NotCreated,
             }
         }
-        "DaemonSet" => {
+        kinds::DAEMON_SET => {
             let Some(revisions) = list_apps_objects(
                 client,
                 namespace,
@@ -535,10 +542,14 @@ async fn list_pods_for_workload(
 
 /// Return true if `kind` creates pods that can be inspected for terminal
 /// container failures.
-fn has_pods(kind: &str) -> bool {
+fn has_pods(kind: GroupKind<'_>) -> bool {
     matches!(
         kind,
-        "Deployment" | "StatefulSet" | "DaemonSet" | "Job" | "ReplicaSet"
+        kinds::DEPLOYMENT
+            | kinds::STATEFUL_SET
+            | kinds::DAEMON_SET
+            | kinds::JOB
+            | kinds::REPLICA_SET
     )
 }
 
@@ -623,7 +634,7 @@ pub(crate) const TERMINATION_OUTPUT_LINES: usize = 20;
 pub(super) async fn scan_terminal(
     client: &Client,
     obj: &DynamicObject,
-    kind: &str,
+    kind: GroupKind<'_>,
     namespace: &str,
 ) -> ScanResult {
     let nothing = || ScanResult {
@@ -636,7 +647,9 @@ pub(super) async fn scan_terminal(
     }
     if let Some(hit) = classify_workload_terminal(&obj.data, kind) {
         let pods = match (kind, workload_label_selector(&obj.data)) {
-            ("Job", Some(selector)) => list_pods_for_workload(client, namespace, &selector).await,
+            (kinds::JOB, Some(selector)) => {
+                list_pods_for_workload(client, namespace, &selector).await
+            }
             _ => Vec::new(),
         };
         return ScanResult {
@@ -672,22 +685,23 @@ pub(super) async fn scan_terminal(
 /// forward progress and resets the idle timer. Kix declares a no-progress
 /// timeout only if the fingerprint remains unchanged for the full idle budget.
 ///
-/// Includes the readiness message (which encodes per-kind counters),
-/// `observedGeneration`, and aggregated pod state: phase counts, total restart
+/// Includes the readiness message (which encodes per-kind counters), the
+/// observed generation (`status.observedGeneration`, or the field a declared
+/// readiness names), and aggregated pod state: phase counts, total restart
 /// count, and distinct waiting reasons. Excludes timestamps and other
 /// frequently changing fields so controller reconcile loops do not register as
 /// forward progress on their own.
-pub(super) fn progress_fingerprint(obj: &DynamicObject, kind: &str, pods: &[Value]) -> String {
+pub(super) fn progress_fingerprint(
+    obj: &DynamicObject,
+    kind: GroupKind<'_>,
+    pods: &[Value],
+) -> String {
     use std::collections::BTreeMap;
 
     let mut parts: Vec<String> = Vec::with_capacity(4);
     parts.push(readiness_message(obj, kind));
 
-    if let Some(g) = obj
-        .data
-        .pointer("/status/observedGeneration")
-        .and_then(Value::as_i64)
-    {
+    if let Some(g) = status_observed_generation(obj) {
         parts.push(format!("og={g}"));
     }
 

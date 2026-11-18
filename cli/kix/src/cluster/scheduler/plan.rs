@@ -5,10 +5,11 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use serde_json::Value;
 
 use crate::manifest::keys;
+use crate::manifest::kinds;
 use crate::manifest::lifecycle;
 use crate::manifest::types::{CLUSTER_SCOPED, ResourceId};
 
-use super::super::apply::{ChangeAction, changed, wants_rerun};
+use super::super::apply::{ChangeAction, Deployed, changed, wants_rerun};
 use super::super::graph::ResourceGraph;
 use super::super::readiness::{self, ImportTarget};
 use super::super::stream::{NodeId, NodeMeta, PlanNode, TransitionKind};
@@ -30,9 +31,22 @@ pub struct PlanNodeEntry {
     /// `Skip` tag, and an unchanged one still runs a task that reports a
     /// failed last run.
     pub rerun: Option<Value>,
-    /// The manifest's `apiVersion`. With the kind it finds the object's API
-    /// in discovery, because [`ResourceId`] carries no group.
-    pub api_version: String,
+}
+
+/// What reading the last runs of a plan's Jobs found
+/// ([`DeployPlan::read_last_runs`]). Only that read makes one, so code that
+/// needs the answer cannot run before the plan has read the cluster.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LastRuns {
+    /// Kix read every Job. `failed` lists the Jobs the plan leaves unchanged
+    /// whose last run failed. They do not run again, and the run reports
+    /// them as failed. A Job under `kix.run/rerun` whose last run failed is
+    /// not listed, because the plan now runs it again.
+    Read { failed: Vec<ResourceId> },
+    /// Kix could not read at least one Job. The run reads it itself, because
+    /// the scheduler runs a task for every rerun Job and reads every
+    /// unchanged Job (see `skip_reads_live`).
+    Unreadable,
 }
 
 /// The planner's output, consumed by `run_deploy`. Constructed
@@ -59,17 +73,14 @@ impl DeployPlan {
         graph: &ResourceGraph,
         changes: &[ChangeAction],
     ) -> Result<Self, readiness::MalformedMarker> {
-        let mut by_id: HashMap<String, &ChangeAction> = HashMap::new();
+        let mut by_id: HashMap<ResourceId, &ChangeAction> = HashMap::new();
         for action in changes {
             let rid = match action {
                 ChangeAction::Apply(m) | ChangeAction::Recreate(m, _) => ResourceId::from_value(m),
                 ChangeAction::Skip(rid) => rid.clone(),
                 ChangeAction::Orphan(_) => continue,
             };
-            by_id.insert(
-                format!("{}/{}/{}", rid.kind, rid.namespace, rid.name),
-                action,
-            );
+            by_id.insert(rid, action);
         }
 
         // Consumer clusters do not apply Kix's own CRDs because the platform
@@ -98,12 +109,10 @@ impl DeployPlan {
                         )),
                     },
                     rerun: None,
-                    api_version: api_version(&node.manifest),
                 });
                 continue;
             }
-            let k8s_id = format!("{}/{}/{}", node.id.kind, node.id.namespace, node.id.name);
-            let action = match by_id.get(&k8s_id) {
+            let action = match by_id.get(&node.id) {
                 Some(action @ (ChangeAction::Apply(_) | ChangeAction::Recreate(..))) => {
                     (*action).clone()
                 }
@@ -131,7 +140,6 @@ impl DeployPlan {
                 action,
                 meta,
                 rerun,
-                api_version: api_version(&node.manifest),
             });
         }
 
@@ -159,32 +167,29 @@ impl DeployPlan {
 
     /// Read the live object of every Job whose last run decides what the
     /// plan does with it, and apply [`DeployPlan::rerun_failed`] to the Jobs
-    /// whose last run failed. Return the unchanged Jobs that failed and do
-    /// not run again, or `None` when Kix could not read one of the Jobs. The
-    /// run reads that Job again, because the scheduler runs a task for every
-    /// rerun Job and reads every unchanged Job (see `skip_reads_live`).
+    /// whose last run failed. A plan with no such Job reads nothing.
     pub(crate) async fn read_last_runs(
         &mut self,
         client: &kube::Client,
         discovery: &[(kube::discovery::ApiResource, kube::discovery::Scope)],
-    ) -> Option<Vec<ResourceId>> {
+    ) -> LastRuns {
         let mut failed = HashSet::new();
         let mut all_read = true;
         for entry in self.nodes.iter().filter(|e| reads_last_run(e)) {
             let NodeId::Resource(rid) = &entry.id else {
                 continue;
             };
-            let Some((ar, scope)) =
-                super::super::discovery::find(discovery, &entry.api_version, &rid.kind)
+            let Some((ar, scope)) = super::super::discovery::find(discovery, &rid.group, &rid.kind)
             else {
-                tracing::debug!(resource = %rid, api_version = %entry.api_version, "no API serves a Job's kind");
+                tracing::debug!(resource = %rid, group = %rid.group, "no API serves a Job's kind");
                 all_read = false;
                 continue;
             };
             let api = super::super::discovery::api_for(client, ar, scope, rid);
             match api.get_opt(&rid.name).await {
                 Ok(Some(live))
-                    if readiness::classify_workload_terminal(&live.data, &rid.kind).is_some() =>
+                    if readiness::classify_workload_terminal(&live.data, rid.group_kind())
+                        .is_some() =>
                 {
                     failed.insert(rid.clone());
                 }
@@ -196,7 +201,11 @@ impl DeployPlan {
             }
         }
         let reported = self.rerun_failed(&failed);
-        all_read.then_some(reported)
+        if all_read {
+            LastRuns::Read { failed: reported }
+        } else {
+            LastRuns::Unreadable
+        }
     }
 
     /// Recreate every Job under `kix.run/rerun` in `failed`, the Jobs whose
@@ -215,7 +224,7 @@ impl DeployPlan {
             match &node.rerun {
                 Some(rerun) => {
                     let manifest = node.action.written().unwrap_or(rerun).clone();
-                    node.action = changed(&manifest, None, true);
+                    node.action = changed(&manifest, Deployed::RerunHash(None), true);
                     node.kind = TransitionKind::Recreate;
                 }
                 None if matches!(node.action, ChangeAction::Skip(_)) => {
@@ -237,8 +246,10 @@ impl DeployPlan {
     #[cfg(any(test, feature = "test-util"))]
     pub fn applying(manifests: &[Value]) -> Self {
         let graph = ResourceGraph::from_manifests(manifests).expect("a test plan's graph");
-        let changes: Vec<ChangeAction> =
-            manifests.iter().map(|m| changed(m, None, false)).collect();
+        let changes: Vec<ChangeAction> = manifests
+            .iter()
+            .map(|m| changed(m, Deployed::Nothing, false))
+            .collect();
         Self::from_graph_and_changes(&graph, &changes).expect("a test plan's markers")
     }
 
@@ -424,14 +435,6 @@ impl SchedulerState {
     }
 }
 
-fn api_version(manifest: &Value) -> String {
-    manifest
-        .get("apiVersion")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string()
-}
-
 /// Return whether the plan reads the live object of `entry` to learn whether
 /// its last run failed: a Job under `kix.run/rerun`, which then runs again,
 /// or a Job the plan leaves unchanged, which is then reported.
@@ -445,11 +448,12 @@ fn reads_last_run(entry: &PlanNodeEntry) -> bool {
 /// and reconcile. The run reports such a Job as failed. The plan recreates a
 /// Job carrying `kix.run/rerun` whose last run it saw fail
 /// ([`DeployPlan::rerun_failed`]), so only one that failed after the plan, or
-/// one an operator's plan left, is reported here.
+/// one left by a plan that did not read last runs (the operator's repair or
+/// resume of a running build), is reported here.
 pub(super) fn skip_reads_live(entry: &PlanNodeEntry) -> bool {
     match (&entry.action, &entry.rerun) {
         (ChangeAction::Skip(_), Some(_)) => true,
-        (ChangeAction::Skip(rid), None) => rid.kind == "Job",
+        (ChangeAction::Skip(rid), None) => rid.group_kind() == kinds::JOB,
         _ => false,
     }
 }
@@ -495,11 +499,11 @@ fn checked_unchanged(
 
 pub(super) fn is_crd_like(entry: &PlanNodeEntry) -> bool {
     match &entry.id {
-        NodeId::Resource(rid) if rid.kind == "CustomResourceDefinition" => true,
+        NodeId::Resource(rid) if rid.group_kind() == kinds::CUSTOM_RESOURCE_DEFINITION => true,
         _ => entry
             .meta
             .import_target
             .as_ref()
-            .is_some_and(|t| t.kind == "CustomResourceDefinition"),
+            .is_some_and(|t| t.group_kind() == kinds::CUSTOM_RESOURCE_DEFINITION),
     }
 }

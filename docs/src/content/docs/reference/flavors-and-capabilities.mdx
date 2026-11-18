@@ -80,20 +80,20 @@ Each flavor sets defaults under [`cluster.capabilities`](/docs/reference/cluster
 
 Each flavor configures [`cluster.roles.<role>.binding`](/docs/reference/cluster-configuration/#cluster-roles). No flavor binds `network-policy-enforcer`; declare an enforcer package such as `packages.experimental.cilium` when enabling `networkPolicy.enable`.
 
-| Flavor | `cni` | `dns` | `storageClasses` | `loadBalancer` | `metricsApi` | `snapshotController` | `registryMirror` |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `aks` | `exclusive` (`azure-cni`) | `shadowable` | `shadowable` | `shadowable` (`azure-lb`) | `exclusive` | `null` | `null` |
-| `eks` | `exclusive` (`aws-vpc-cni`) | `shadowable` | `absent` | `shadowable` (`aws-cloud-provider`) | `absent` | `null` | `null` |
-| `gke` | `exclusive` (`gke-native`) | `shadowable` | `shadowable` | `shadowable` (`gcp-network-lb`) | `exclusive` | `null` | `null` |
-| `gke-autopilot` | `exclusive` (`gke-native`) | `shadowable` | `shadowable` | `exclusive` (`gcp-network-lb`) | `exclusive` | `null` | `null` |
-| `k3s` | `exclusive` (`flannel`) | `shadowable` | `shadowable` | `exclusive` (`servicelb`) | `exclusive` | `null` | `null` |
-| `kind` | `exclusive` (`kindnet`) | `shadowable` | `shadowable` | `absent` | `absent` | `absent` | `absent` |
-| `kubeadm` | `absent` | `shadowable` | `absent` | `absent` | `absent` | `null` | `null` |
-| `openshift` | `exclusive` (`ovn-kubernetes`) | `shadowable` | `absent` | `absent` | `exclusive` (`openshift-monitoring`) | `null` | `null` |
-| `ovh` | `exclusive` (`canal`) | `shadowable` | `shadowable` | `shadowable` (`ovh-loadbalancer`) | `null` | `null` | `null` |
-| `rke2` | via `rke2.cni` (default `exclusive` `canal`) | `shadowable` | `absent` | `absent` | `exclusive` (`rke2-metrics-server`) | `exclusive` (`rke2-snapshot-controller`) | `null` |
-| `scaleway` | `exclusive` (`cilium`) | `shadowable` | `shadowable` | `shadowable` (`scaleway-lb`) | `null` | `null` | `null` |
-| `talos` | `exclusive` (`flannel`) | `shadowable` | `absent` | `absent` | `absent` | `null` | `null` |
+| Flavor | `cni` | `dns` | `storageClasses` | `loadBalancer` | `metricsApi` | `snapshotController` | `gatewayApi` | `registryMirror` |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `aks` | `exclusive` (`azure-cni`) | `shadowable` | `shadowable` | `shadowable` (`azure-lb`) | `exclusive` | `null` | `null` | `null` |
+| `eks` | `exclusive` (`aws-vpc-cni`) | `shadowable` | `absent` | `shadowable` (`aws-cloud-provider`) | `absent` | `null` | `null` | `null` |
+| `gke` | `exclusive` (`gke-native`) | `shadowable` | `shadowable` | `shadowable` (`gcp-network-lb`) | `exclusive` | `null` | `null` | `null` |
+| `gke-autopilot` | `exclusive` (`gke-native`) | `shadowable` | `shadowable` | `exclusive` (`gcp-network-lb`) | `exclusive` | `null` | `null` | `null` |
+| `k3s` | `exclusive` (`flannel`) | `shadowable` | `shadowable` | `exclusive` (`servicelb`) | `exclusive` | `null` | `null` | `null` |
+| `kind` | `exclusive` (`kindnet`) | `shadowable` | `shadowable` | `absent` | `absent` | `absent` | `absent` | `absent` |
+| `kubeadm` | `absent` | `shadowable` | `absent` | `absent` | `absent` | `null` | `null` | `null` |
+| `openshift` | `exclusive` (`ovn-kubernetes`) | `shadowable` | `absent` | `absent` | `exclusive` (`openshift-monitoring`) | `null` | `null` | `null` |
+| `ovh` | `exclusive` (`canal`) | `shadowable` | `shadowable` | `shadowable` (`ovh-loadbalancer`) | `null` | `null` | `null` | `null` |
+| `rke2` | via `rke2.cni` (default `exclusive` `canal`) | `shadowable` | `absent` | `absent` | `exclusive` (`rke2-metrics-server`) | `exclusive` (`rke2-snapshot-controller`) | `null` | `null` |
+| `scaleway` | `exclusive` (`cilium`) | `shadowable` | `shadowable` | `shadowable` (`scaleway-lb`) | `null` | `null` | `null` | `null` |
+| `talos` | `exclusive` (`flannel`) | `shadowable` | `absent` | `absent` | `absent` | `null` | `null` | `null` |
 
 ## Platform imports
 

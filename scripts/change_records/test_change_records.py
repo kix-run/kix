@@ -179,8 +179,16 @@ class ValidationTest(RepoTest):
             record('kind = "fixed"\ncve = ["CVE-1"]'), "`cve` is only for"
         )
 
-    def test_security_needs_workaround(self):
-        self.assertProblem(record('kind = "security"'), "needs a `workaround`")
+    def test_security_without_workaround(self):
+        self.repo.write(
+            "changes/x.md", record('kind = "security"\ncve = ["CVE-2026-1"]')
+        )
+        self.assertEqual(self.problems(), [])
+
+    def test_empty_workaround(self):
+        self.assertProblem(
+            record('kind = "security"\nworkaround = " "'), "Leave it out"
+        )
 
     def test_workaround_only_with_security(self):
         self.assertProblem(
@@ -512,6 +520,18 @@ class PullRequestTest(RepoTest):
         self.assertEqual(code, 1)
         self.assertIn("`cady` in `packages` is not a folder", err)
         self.assertNotIn("`caddy` in", err)
+
+    def test_a_removed_package_is_accepted(self):
+        self.repo.write(
+            "kix/packages/removed.toml",
+            '["experimental/gone"]\nid = "K0008"\nmessage = "[K0008] gone"\n',
+        )
+        self.repo.write(
+            "changes/x.md",
+            record('kind = "error"\nid = "K0008"\npackages = ["experimental/gone"]'),
+        )
+        code, _, err = self.repo.run("check")
+        self.assertEqual(code, 0, err)
 
     def test_an_error_record_needs_its_id_in_an_error_message(self):
         self.repo.write("kix/packages/stable/caddy/default.nix", "{}\n")

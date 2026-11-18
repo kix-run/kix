@@ -19,6 +19,7 @@
 }:
 
 let
+  inherit (import ../core/util.nix { inherit lib; }) plain;
   # Kix's own annotation keys and API names, spelled once in
   # core/annotations.nix.
   kixAnnotations = import ../core/annotations.nix;
@@ -494,7 +495,7 @@ in
       );
 
   # A namespaced lookup must not be satisfied by a cluster-scoped object of
-  # the same kind and name (kixpkgs#71 item 5). ConfigMap is namespaced in
+  # the same kind and name. ConfigMap is namespaced in
   # Kubernetes; the cluster-scoped one here is synthetic, which is the point:
   # the checker must not guess. Check 18 also refuses the synthetic object.
   v03b-cluster-scoped-namesake-does-not-satisfy-namespaced-lookup =
@@ -710,7 +711,7 @@ in
     ]
   );
 
-  # A selector reaches pods in its own namespace only (red team on #75).
+  # A selector reaches pods in its own namespace only.
   v04h-service-cannot-select-pods-in-another-namespace =
     onlyFailure "matches no workload pod template"
       (
@@ -1310,7 +1311,6 @@ in
           instances.infra.consumer.package = markerConsumerPackage;
         }
       ];
-      plain = v: builtins.unsafeDiscardStringContext (toString v);
       packages = lib.mapAttrs (_: map plain) cluster.packageIndexContent.packages;
       provider = cluster.clusterInstances.infra.provider;
       consumer = cluster.clusterInstances.infra.consumer;
@@ -1354,7 +1354,6 @@ in
           instances.infra.alpha.package = holderPackage shared "alpha";
         }
       ];
-      plain = v: builtins.unsafeDiscardStringContext (toString v);
       packages = lib.mapAttrs (_: map plain) cluster.packageIndexContent.packages;
       listedUnder =
         path: builtins.attrNames (lib.filterAttrs (_: paths: builtins.elem path paths) packages);

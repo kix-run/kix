@@ -18,6 +18,7 @@
   alertRulesOf,
   allSelect,
   prometheusStub,
+  kixlib,
   ...
 }:
 
@@ -26,7 +27,7 @@ let
   secretPackage = import ../../../packages/stable/secret;
   inherit (import ../../vocab { inherit lib; }) untrackedRef providedLoadBalancerClass;
 
-  nameserverDigest = "sha256:3676e2277ad16da948caee7952b2a27859a66b905edd981e1bb58b2626bc92a4";
+  nameserverDigest = "sha256:9b0685a4dd89742043084affa56fbda04f56b348d6cd9a8a23105a24ed3ebb39";
 
   # A backend Deployment with two Services on the tailnet: one behind
   # out.mkIngress and one LoadBalancer with out.loadBalancerClass. Also a
@@ -189,8 +190,8 @@ let
   cluster = clusterWith { };
   ms = manifests cluster;
   find = kind: name: byName name (ofKind kind ms);
-  readinessOf = m: (m.metadata.annotations or { }).${kixKeys.readiness} or null;
-  dependsOn = m: lib.splitString "," ((m.metadata.annotations or { }).${kixKeys.dependsOn} or "");
+  readinessOf = m: m.metadata.annotations.${kixKeys.readiness} or null;
+  dependsOn = m: lib.splitString "," (m.metadata.annotations.${kixKeys.dependsOn} or "");
   hashOf =
     c: ns: inst: part:
     builtins.unsafeDiscardStringContext c.instances.${ns}.${inst}.raw.${part}.out.identityHash;
@@ -339,7 +340,7 @@ in
           };
         };
         loginServer443 = clusterWith { config.env.OPERATOR_LOGIN_SERVER = "https://hs.example"; };
-        samePatch = clusterWith { config.image.tag = "v1.102.3"; };
+        samePatch = clusterWith { config.image.tag = "v1.104.6"; };
       };
       notFailing = builtins.attrNames (lib.filterAttrs (_: c: !(evalFails c)) cases);
       notPassing = builtins.attrNames (lib.filterAttrs (_: c: evalFails c) passing);
@@ -528,7 +529,7 @@ in
         ]
       &&
         env.PROXY_IMAGE
-        == "docker.io/tailscale/tailscale:v1.102.4@sha256:2667499ed87ae29218f292556ba062918402dd5e92e93637af14867e4df12dd3"
+        == "docker.io/tailscale/tailscale:v1.104.7@sha256:72c1e19e0aedca96b8533bbb0b4368564410ff20b17e53b804eb6c1f04a31be4"
       && env.OPERATOR_INGRESS_CLASS_NAME == "tailscale"
       && !(env ? PROXY_DEFAULT_CLASS)
       && find "IngressClass" "tailscale" != null
@@ -578,17 +579,17 @@ in
   tailscale-dnsconfig =
     let
       imageOf = c: (byName "ts-dns" (ofKind "DNSConfig" (manifests c))).spec.nameserver.image;
-      moved = clusterWith { config.operandImages.k8s-nameserver.tag = "v1.102.3"; };
+      moved = clusterWith { config.operandImages.k8s-nameserver.tag = "v1.104.6"; };
     in
     (
       imageOf cluster == {
         repo = "docker.io/tailscale/k8s-nameserver";
-        tag = "v1.102.4@${nameserverDigest}";
+        tag = "v1.104.7@${nameserverDigest}";
       }
       &&
         imageOf moved == {
           repo = "docker.io/tailscale/k8s-nameserver";
-          tag = "v1.102.3";
+          tag = "v1.104.6";
         }
     )
     || throw "tailscale dnsconfig: ${builtins.toJSON (imageOf cluster)}, moved ${builtins.toJSON (imageOf moved)}";
@@ -787,7 +788,7 @@ in
     in
     (
       untracked.spec.statefulSet.pod.container == {
-        image = "docker.io/tailscale/tsrecorder:v1.102.4@sha256:47b602ddee9e97d2060fb017496f7758551e7e619ebfd984e94fb8541f581aea";
+        image = "docker.io/tailscale/tsrecorder:v1.104.7@sha256:2d141b9088627d111bcae66c500d4e1afea46715f3dd40c007d1d8353a4afcc3";
         imagePullPolicy = "IfNotPresent";
       }
       && untracked.spec.storage.s3.credentials.secret.name == "s3"
@@ -820,7 +821,7 @@ in
         modules = [ netpolOn ];
       });
       operandPolicies = builtins.filter (
-        m: (m.metadata.labels or { }).${kixKeys.policyType} or null == "operator-managed-workload"
+        m: m.metadata.labels.${kixKeys.policyType} or null == "operator-managed-workload"
       ) enforced;
     in
     (
@@ -897,7 +898,7 @@ in
         builtins.filter (
           m:
           m.metadata.namespace or null == "demo"
-          && (m.metadata.labels or { }).${kixKeys.policyType} or null == "external-ingress-supplement"
+          && m.metadata.labels.${kixKeys.policyType} or null == "external-ingress-supplement"
         ) (ofKind "CiliumNetworkPolicy" (manifests (lbCluster class [ netpolOn ])));
     in
     (
@@ -938,4 +939,39 @@ in
       && rulesOf { config.metrics.enabled = false; } == null
     )
     || throw "tailscale alerts: ${builtins.toJSON (builtins.attrNames rules)}";
+
+  # A cluster that declares a Kubernetes version below the package's floor
+  # is refused with the reason, and the range has no upper bound. The meta
+  # check is called directly, because a failed meta assertion fails the
+  # cluster before its messages can be read.
+  tailscale-k8s-range =
+    let
+      metaLib = import ../../meta.nix { inherit lib; };
+      meta =
+        (tailscalePackage {
+          inherit lib;
+          kix = kixlib;
+          scope = {
+            instanceName = "tailscale";
+            namespaceName = "tailscale";
+          };
+        }).meta;
+      refusals =
+        k8sVersion:
+        map (a: a.message) (
+          builtins.filter (a: !a.assertion) (
+            (metaLib.checkMetaStatic {
+              packageMeta = meta;
+              instanceName = "tailscale";
+              namespaceName = "tailscale";
+              clusterConfig = { inherit k8sVersion; };
+              resolvedDepMeta = { };
+              resolutionIndex.byKey = { };
+            }).assertions
+          )
+        );
+      refused = v: builtins.any (lib.hasInfix "need Kubernetes 1.25") (refusals v);
+    in
+    (refused "1.24" && refusals "1.25" == [ ] && refusals "1.40.2" == [ ] && refusals null == [ ])
+    || throw "tailscale k8s range: 1.24 ${builtins.toJSON (refusals "1.24")}, 1.25 ${builtins.toJSON (refusals "1.25")}, 1.40.2 ${builtins.toJSON (refusals "1.40.2")}";
 }

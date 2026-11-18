@@ -58,7 +58,7 @@ let
 
   issuerOf = name: cluster: byName name (ofKind "ClusterIssuer" (manifests cluster));
   specOf = name: cluster: (issuerOf name cluster).spec;
-  dependsOn = m: lib.splitString "," ((m.metadata.annotations or { }).${kixKeys.dependsOn} or "");
+  dependsOn = m: lib.splitString "," (m.metadata.annotations.${kixKeys.dependsOn} or "");
 
   # DNS-01 through a secret-ref in cert-manager's namespace.
   wiredCluster =
@@ -98,7 +98,8 @@ let
 
   warningsOf =
     modules:
-    (mkCluster ([ certManager ] ++ modules)).instances.cert-manager.solver._diagnostics.warnings;
+    map (w: w.message)
+      (mkCluster ([ certManager ] ++ modules)).instances.cert-manager.solver._diagnostics.warnings;
   http01Issuer = issuer "cert-manager" "solver" (acmeSpec [
     { http01.ingress.ingressClassName = "nginx"; }
   ]) { aliases = [ "clusterIssuer" ]; };

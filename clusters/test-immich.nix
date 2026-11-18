@@ -10,7 +10,7 @@
 # the database, which forwards them to its postgres cluster, and the
 # operator installs them on the postgres image.
 #
-# Build:  nix build .#cluster-immich --extra-experimental-features pipe-operators
+# Build:  kix build immich
 
 { kix, packages }:
 
@@ -46,9 +46,8 @@ kix.buildCluster {
           };
         };
 
-        # Per-app postgres cluster, declared so the database in this
-        # namespace does not resolve to firezone's postgres. It sets no
-        # `extensions`: immich's arrive through immich-db.
+        # Per-app postgres cluster. It sets no `extensions`, because
+        # immich's arrive through immich-db.
         immich-pg = {
           package = packages.experimental.stackgres-cluster;
           aliases = [ "postgres" ];
@@ -80,56 +79,6 @@ kix.buildCluster {
           package = packages.secret;
           aliases = [ "valkeyPassword" ];
           config.stringData.password = "valkey-dev-password";
-        };
-      };
-
-      # Firezone VPN, with its own postgres cluster. Test values only: a
-      # real cluster gives each secret a SOPS `source` or a `secret-ref`.
-      instances.firezone = {
-        firezone-pg = {
-          package = packages.experimental.stackgres-cluster;
-          aliases = [ "postgres" ];
-        };
-        firezone-db = {
-          package = packages.experimental.stackgres-database;
-        };
-        firezone-db-password = {
-          package = packages.secret;
-          aliases = [ "password" ];
-          config = {
-            source = ./dev-secrets/firezone-db.sops.yaml;
-            keys = [ "password" ];
-          };
-        };
-
-        firezone = {
-          package = packages.experimental.firezone;
-          config = {
-            domain = "vpn.example.com";
-            admin.email = "admin@example.com";
-          };
-        };
-        firezone-secrets = {
-          package = packages.secret;
-          aliases = [ "applicationSecrets" ];
-          config.stringData = {
-            GUARDIAN_SECRET_KEY = "PLACEHOLDER_CHANGE_ME_guardian";
-            SECRET_KEY_BASE = "PLACEHOLDER_CHANGE_ME_secret_key_base";
-            DATABASE_ENCRYPTION_KEY = "PLACEHOLDER_CHANGE_ME_db_enc_key";
-            LIVE_VIEW_SIGNING_SALT = "PLACEHOLDER_CHANGE_ME_lv_salt";
-            COOKIE_SIGNING_SALT = "PLACEHOLDER_CHANGE_ME_cookie_salt";
-            COOKIE_ENCRYPTION_SALT = "PLACEHOLDER_CHANGE_ME_cookie_enc_salt";
-          };
-        };
-        firezone-admin = {
-          package = packages.secret;
-          aliases = [ "adminPassword" ];
-          config.stringData.password = "changeme";
-        };
-        firezone-wireguard = {
-          package = packages.secret;
-          aliases = [ "wireguardKey" ];
-          config.stringData.private_key = "PLACEHOLDER_GENERATE_WITH_wg_genkey";
         };
       };
     }

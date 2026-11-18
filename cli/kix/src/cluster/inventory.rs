@@ -304,7 +304,7 @@ pub fn partition_sweep(objects: Vec<DynamicObject>) -> ManagedSweep {
     let stamped_services: HashSet<(String, String)> = managed
         .iter()
         .chain(&copies)
-        .filter(|o| object_kind(o) == "Service")
+        .filter(|o| super::drift::resource_id(o).group_kind() == crate::manifest::kinds::SERVICE)
         .map(|o| (namespace_of(o), o.metadata.name.clone().unwrap_or_default()))
         .collect();
     let unstamped = rest
@@ -415,7 +415,7 @@ fn split_by_lookup<'a>(
     let mut prune = Vec::new();
     let mut shared = Vec::new();
     for rid in orphans {
-        if never_pruned(&rid.kind) {
+        if never_pruned(rid.group_kind()) {
             prune.push(rid);
             continue;
         }
@@ -454,7 +454,7 @@ pub(crate) async fn split_shared_orphans_live(
         .collect();
     let gets = orphans
         .iter()
-        .filter(|rid| !never_pruned(&rid.kind))
+        .filter(|rid| !never_pruned(rid.group_kind()))
         .filter_map(|rid| {
             let (ar, scope) = ar_by_kind.get(rid.kind.as_str())?;
             let api = api_for(client, ar, scope, rid);
@@ -1058,11 +1058,7 @@ mod tests {
     }
 
     fn rid(kind: &str, name: &str) -> ResourceId {
-        ResourceId {
-            kind: kind.into(),
-            namespace: "ns".into(),
-            name: name.into(),
-        }
+        ResourceId::new("", kind, "ns", name)
     }
 
     /// An object deployed by two clusters is kept when one cluster drops it

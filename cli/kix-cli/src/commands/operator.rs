@@ -56,6 +56,42 @@ async fn open_records(client: &Client) -> Result<Records> {
     Ok(records)
 }
 
+/// Refuse to hand the operator a request when it has not published that it
+/// handles requests (`kix.run/operator-features` on the Activation CRD). An
+/// operator from before requests would ignore it, and the command would wait
+/// for an answer that never comes.
+pub async fn require_requests(client: &Client) -> Result<()> {
+    use kix::cluster::activation::features;
+    let version = kix::version::running();
+    let found = features::read(client).await.map_err(|e| {
+        miette!(
+            "could not read CustomResourceDefinition `{crd}` to check the Kix operator's features\n  \
+             Nothing was applied to the cluster.\n\n  \
+             Kubernetes API error:\n    \
+             {e}\n\n  \
+             Next:\n    \
+             Check that your Kubernetes account has permission to read CustomResourceDefinition `{crd}`, then run the command again.",
+            crd = kix::manifest::keys::ACTIVATIONS_CRD,
+        )
+    })?;
+    if found.handles(features::REQUESTS) {
+        return Ok(());
+    }
+    Err(miette!(
+        "the Kix operator on this cluster has not reported support for deployment requests\n  \
+         Nothing was applied to the cluster.\n\n  \
+         Why:\n    \
+         CustomResourceDefinition `{crd}` does not list `{feature}` in its `{key}` annotation. \
+         Kix {version} sends each `--operator` run through `spec.request` on the deployment record, which an older operator ignores. \
+         The operator writes `{key}` when it starts, so it is either older than Kix {version}, still starting, or missing permission to patch `{crd}`.\n\n  \
+         Next:\n    \
+         Upgrade the Kix operator to Kix {version} or later, grant its Kubernetes account permission to patch CustomResourceDefinition `{crd}`, and restart it so it writes `{key}`. Then run the command again.",
+        key = kix::manifest::keys::OPERATOR_FEATURES,
+        crd = kix::manifest::keys::ACTIVATIONS_CRD,
+        feature = features::REQUESTS,
+    ))
+}
+
 /// Create or update an Activation CR to trigger operator reconciliation.
 ///
 /// The CR is created without a phase. The operator treats it as Queued and
@@ -71,7 +107,8 @@ pub async fn apply_activation(
     kubernetes_uid: Option<&str>,
     receipt: Option<&Value>,
     package_index: &RecordPackageIndex,
-) -> Result<()> {
+) -> Result<String> {
+    let request = kix::cluster::activation::new_request();
     records
         .submit(
             activation_name,
@@ -79,6 +116,7 @@ pub async fn apply_activation(
             source_path,
             identity_hash,
             kubernetes_uid,
+            &request,
         )
         .await
         .map_err(|e| miette!("{e}"))?;
@@ -98,7 +136,7 @@ pub async fn apply_activation(
         .write_package_index(activation_name, package_index)
         .await;
 
-    Ok(())
+    Ok(request)
 }
 
 /// Terminal outcome of an operator-reconciled Activation.
@@ -148,14 +186,19 @@ impl Progress {
     }
 }
 
-/// Watch an Activation CR's status until it reaches Active phase or fails.
+/// Watch an Activation CR's status until the operator has run `request` on
+/// it.
 ///
-/// Polls the Activation status periodically, printing wave progress as it happens.
-/// Returns when `status.phase` is `Active` or `Degraded`; `Failed`,
+/// Waits until the operator starts the request, so a phase the record had
+/// before (such as Active for the build already deployed) is not taken for
+/// the answer. Polls the Activation status periodically, printing wave
+/// progress as it happens. Returns when the operator has finished the
+/// request and `status.phase` is `Active` or `Degraded`; `Failed`,
 /// `Superseded`, and a 10 minute timeout are errors.
 pub async fn watch_activation_progress(
     records: &Records,
     activation_name: &str,
+    request: &str,
 ) -> Result<Reconciled> {
     let poll_interval = Duration::from_secs(2);
     let timeout = Duration::from_secs(600);
@@ -176,6 +219,10 @@ pub async fn watch_activation_progress(
             .await
             .map_err(|e| miette!("{e}"))?
             .ok_or_else(|| miette!("Activation '{activation_name}' no longer exists"))?;
+        if act.started_request.as_deref() != Some(request) {
+            tokio::time::sleep(poll_interval).await;
+            continue;
+        }
         let phase = act.phase.as_str();
         for line in progress.lines(&act) {
             crate::say!("{line}");
@@ -183,7 +230,8 @@ pub async fn watch_activation_progress(
 
         // Completion: phase is Active or Degraded (deploy finished, possibly
         // with failures; Activation status contains the failed-resource list.)
-        if phase == PHASE_ACTIVE || phase == PHASE_DEGRADED {
+        let finished = act.finished_request.as_deref() == Some(request);
+        if finished && (phase == PHASE_ACTIVE || phase == PHASE_DEGRADED) {
             let phase_colored = if phase == PHASE_ACTIVE {
                 output::green(phase)
             } else {
@@ -273,7 +321,8 @@ mod tests {
             "apiVersion": keys::API_VERSION,
             "kind": RECORD_KIND,
             "metadata": { "name": name },
-            "status": { "phase": phase },
+            "spec": { "request": "r1" },
+            "status": { "phase": phase, "startedRequest": "r1", "finishedRequest": "r1" },
         })
     }
 
@@ -281,7 +330,55 @@ mod tests {
         let api = FakeApi::new([record("rec", phase)]);
         let client = api.client();
         let records = open_records(&client).await.unwrap();
-        watch_activation_progress(&records, "rec").await
+        watch_activation_progress(&records, "rec", "r1").await
+    }
+
+    /// A record that is already Active, as when `kix deploy --operator`
+    /// submits the build already deployed, is not the answer until the
+    /// operator has started and finished the request.
+    #[tokio::test(start_paused = true)]
+    async fn the_watch_waits_for_its_own_request() {
+        let mut active = record("rec", "Active");
+        active["status"]["startedRequest"] = json!("r0");
+        active["status"]["finishedRequest"] = json!("r0");
+        let api = FakeApi::new([active]);
+        api.after_get("rec", |rec| {
+            rec["status"]["startedRequest"] = json!("r1");
+            rec["status"]["phase"] = json!("Active");
+        });
+        let records = open_records(&api.client()).await.unwrap();
+        let watched =
+            tokio::spawn(async move { watch_activation_progress(&records, "rec", "r1").await });
+        // Started but not finished: the watch keeps polling.
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        assert!(!watched.is_finished());
+        api.after_get("rec", |rec| {
+            rec["status"]["finishedRequest"] = json!("r1");
+            rec["status"]["phase"] = json!("Degraded");
+        });
+        assert_eq!(watched.await.unwrap().unwrap(), Reconciled::Degraded);
+    }
+
+    /// A command refuses before it writes a request when the operator has
+    /// not published that it handles requests, and goes on once it has.
+    #[tokio::test]
+    async fn an_operator_that_does_not_take_requests_is_refused_up_front() {
+        let crd = |annotations: Value| {
+            json!({
+                "apiVersion": "apiextensions.k8s.io/v1",
+                "kind": "CustomResourceDefinition",
+                "metadata": { "name": keys::ACTIVATIONS_CRD, "annotations": annotations },
+            })
+        };
+        let old = FakeApi::new([crd(json!({}))]);
+        assert!(require_requests(&old.client()).await.is_err());
+        assert!(
+            !old.requests().iter().any(|r| r.starts_with("PATCH")),
+            "{:?}",
+            old.requests()
+        );
+        let new = FakeApi::new([crd(json!({ (keys::OPERATOR_FEATURES): "requests" }))]);
+        assert!(require_requests(&new.client()).await.is_ok());
     }
 
     /// Verify that operator mode requires API discovery and rejects unmigrated clusters.
@@ -347,7 +444,7 @@ mod tests {
     async fn a_record_that_vanishes_is_named() {
         let api = FakeApi::new([]);
         let records = open_records(&api.client()).await.unwrap();
-        let err = watch_activation_progress(&records, "rec")
+        let err = watch_activation_progress(&records, "rec", "r1")
             .await
             .unwrap_err()
             .to_string();
@@ -362,7 +459,7 @@ mod tests {
             json!({ "reason": "cancelled", "at": "2026-10-09T00:00:00Z" });
         let api = FakeApi::new([failed]);
         let records = open_records(&api.client()).await.unwrap();
-        let err = watch_activation_progress(&records, "rec")
+        let err = watch_activation_progress(&records, "rec", "r1")
             .await
             .unwrap_err()
             .to_string();

@@ -4,10 +4,13 @@
 # The kind flavour declares one node and containerd's discard of unpacked
 # layers, both of which the spegel package refuses, so this cluster
 # declares the kind cluster it runs on. Create it with a worker, without
-# the default CNI, and with the CRI patch Spegel needs. The node image's
+# the default CNI, and with the CRI patches Spegel needs. The node image's
 # containerd config is version 2 and sets discard_unpacked_layers in the
 # `io.containerd.grpc.v1.cri` table, which containerd 2 copies over the
-# `io.containerd.cri.v1.images` table, so the patch must use the old table:
+# `io.containerd.cri.v1.images` table, so the patch must use the old table.
+# The kind 0.33 node image for Kubernetes 1.37 leaves the registry
+# `config_path` empty, so containerd reads no `hosts.toml` until the patch
+# sets it:
 #
 #   kind: Cluster
 #   apiVersion: kind.x-k8s.io/v1alpha4
@@ -17,14 +20,16 @@
 #     - |-
 #       [plugins."io.containerd.grpc.v1.cri".containerd]
 #         discard_unpacked_layers = false
+#       [plugins."io.containerd.grpc.v1.cri".registry]
+#         config_path = "/etc/containerd/certs.d"
 #   nodes:
 #     - role: control-plane
 #     - role: worker
 #
-# Cilium in kube-proxy mode serves the hostPort that containerd reaches the
-# local Spegel pod through only with portmap chaining.
+# Cilium runs in kube-proxy mode, so kube-proxy serves the registry
+# NodePort and its `trafficDistribution: PreferSameNode`.
 #
-# Build:  nix build .#cluster-spegel --extra-experimental-features pipe-operators
+# Build:  kix build spegel
 
 { kix, packages }:
 
@@ -55,7 +60,6 @@ kix.buildCluster {
           package = packages.experimental.cilium;
           config.values = {
             kubeProxyReplacement = false;
-            cni.chainingMode = "portmap";
             prometheus.enabled = false;
             ipam.operator.clusterPoolIPv4PodCIDRList = [ "10.244.0.0/16" ];
           };

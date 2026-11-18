@@ -185,8 +185,21 @@ spec:
         String::from_utf8_lossy(&result.stderr)
     );
 
-    // Wait for CRDs to establish
-    thread::sleep(Duration::from_secs(2));
+    let result = kubectl(
+        context,
+        &[
+            "wait",
+            "--for=condition=Established",
+            "--timeout=60s",
+            "crd/activations.kix.run",
+            "crd/packageinstances.kix.run",
+        ],
+    );
+    assert!(
+        result.status.success(),
+        "CRDs should become Established: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
 }
 
 /// Create an Activation CR pointing to a store path.
@@ -280,9 +293,8 @@ fn operator_reconcile_and_gc() {
     let operator = start_operator(KUBE_CTX);
     guard.operator = Some(operator);
 
-    // Give operator time to start watching
-    thread::sleep(Duration::from_secs(3));
-
+    // The operator lists Activations when it starts, so one created before
+    // its watch begins is still reconciled.
     // Create Activation CR
     create_activation(KUBE_CTX, "test-activation", &result_dir, KIX_CLUSTER);
     eprintln!("Activation CR created");

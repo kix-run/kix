@@ -164,7 +164,7 @@ in
   image = kix.options.image {
     repository = "docker.io/openebs/mayastor-io-engine";
     inherit tag;
-    digest = "sha256:bbe5e87b69afe8e5711e1259ad91bdac7fea6f79486c8d0b318f33adcf60fece";
+    digest = "sha256:0161a3e6f902bc3766eb651abe11ed28b826e8bdcd8be063f73e8173462dc561";
     description = "Image of io-engine. Every Mayastor component image follows its tag, and its major.minor must be ${lib.versions.majorMinor release}.";
   };
 
@@ -203,7 +203,7 @@ in
 
   agentCore = {
     image =
-      mayastorImage "agent-core" "sha256:6c4d5a9b445bb7f9cf8596cac07fe7b01903426e730cb5a8c510a27719270897"
+      mayastorImage "agent-core" "sha256:00429e4874788eeb15e1c2e3233046a3cac1dc1745ca8a09bd05e442dc23012d"
         "Image of agent-core.";
     resources =
       resourcesOption "agent-core"
@@ -222,7 +222,7 @@ in
   agentHaCluster = {
     image =
       mayastorImage "agent-ha-cluster"
-        "sha256:e00ff76f8fc522ce53cfc22461ec56fec83d0deb148025f19ba03d4cf6d8dcdc"
+        "sha256:cb2fa3bfc1f8c7812a6f33dc63240be4ce2c5aadf070cd1e1373e7a08d0dcb1a"
         "Image of agent-ha-cluster, which runs in the agent-core pod.";
     resources =
       resourcesOption "agent-ha-cluster"
@@ -240,7 +240,7 @@ in
 
   apiRest = {
     image =
-      mayastorImage "api-rest" "sha256:2579357ed8127aea15dc8ccefdfbf3de09b154c0c5c0732d1639ef63c0cb654a"
+      mayastorImage "api-rest" "sha256:0c646268cd8c62777153dc52cf1e767712dc35c185747cc97e8758bc1358e87b"
         "Image of api-rest.";
     resources =
       resourcesOption "api-rest"
@@ -259,7 +259,7 @@ in
   operatorDiskpool = {
     image =
       mayastorImage "operator-diskpool"
-        "sha256:19739f0ed7277bfafd6a80724171d23a3dbbc1c5c7afc90897cce0af118ed98f"
+        "sha256:7cd50e41324c58b39154ed401b5495d98c4debda6e234637b1b75b7ae8c4fd57"
         "Image of operator-diskpool.";
     resources =
       resourcesOption "operator-diskpool"
@@ -278,7 +278,7 @@ in
   csiController = {
     image =
       mayastorImage "csi-controller"
-        "sha256:97b21a6229f1bab446ff5a2565696858099292ead9bcfbe2e7194ff609dc3719"
+        "sha256:38a82f29f77770d824887696e68ded236a275957d8dfad28048e984f8f55834d"
         "Image of the CSI controller plugin.";
     resources =
       resourcesOption "the CSI controller plugin"
@@ -296,7 +296,7 @@ in
 
   csiNode = {
     image =
-      mayastorImage "csi-node" "sha256:483219d1bdc645ae63113224b8b6a341add7f03ad0f6194e9ac91527cd039f2b"
+      mayastorImage "csi-node" "sha256:cbf8343037356c690e79f61c9e6f260e9f796670c2bb00db98b2c1c72b449053"
         "Image of the CSI node plugin.";
     resources =
       resourcesOption "the CSI node plugin"
@@ -334,7 +334,7 @@ in
   agentHaNode = {
     image =
       mayastorImage "agent-ha-node"
-        "sha256:547f60e1667fe018415c6dd21c1eae4015c6075272f0a188cdae687759e84c6b"
+        "sha256:964cbb43c5e5bf6ae715b73c555cb921a85b87b0b637134fdd13f3a7b5cc18ab"
         "Image of agent-ha-node, placed with the CSI node plugin.";
     resources =
       resourcesOption "agent-ha-node"
@@ -353,7 +353,7 @@ in
   metricsExporter = {
     image =
       mayastorImage "metrics-exporter-io-engine"
-        "sha256:ff563da470cdb8a46d8dac5a0f4fc65bfedd09d835252510084973ffcddc0d1b"
+        "sha256:a57c47d3e624650403fbaab94f5d2859cbe3c94c3106895647d2791eb92e8e71"
         "Image of the io-engine metrics exporter, which runs in every io-engine pod.";
     resources = kix.options.resources {
       requests = {

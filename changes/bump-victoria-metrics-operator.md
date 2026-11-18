@@ -1,0 +1,5 @@
++++
+kind = "changed"
+packages = ["victoria-metrics-operator"]
++++
+`victoria-metrics-operator` now runs operator v0.75.2 (was v0.74.1), with the CRD schemas from that release. It adds the `VTAgent` CRD and lets the operator manage it, because the operator now stops when that CRD is missing. The first deploy restarts the operator. The operator then restarts each VMAlertmanager pod once, and each VMAgent and VMAlert pod that watches a config folder, because it adds a flag to their config-reloader container. On VMRule, VMServiceScrape, and the other configuration kinds, `status.updateStatus` now reads `operational` unless the operator cannot parse the object. Each VMAgent or VMAlert reports its own result in `status.conditions`. A VMCluster or VMAlertmanager whose `serviceSpec` sets `useAsDefault: true` and a `spec.type` now gets a Service with a cluster IP in place of a headless one. Add `clusterIP: None` to keep it headless. To go back, run `kix rollback` or deploy the previous Kix version.

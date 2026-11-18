@@ -122,10 +122,40 @@
     },
     {
       "apiGroups": [
+        "admissionregistration.k8s.io"
+      ],
+      "resourceNames": [
+        "cdi-api-dataimportcron-mutate"
+      ],
+      "resources": [
+        "mutatingwebhookconfigurations"
+      ],
+      "verbs": [
+        "delete"
+      ]
+    },
+    {
+      "apiGroups": [
         "apiregistration.k8s.io"
       ],
       "resources": [
         "apiservices"
+      ],
+      "verbs": [
+        "get",
+        "list",
+        "watch",
+        "create",
+        "update",
+        "delete"
+      ]
+    },
+    {
+      "apiGroups": [
+        "populator.storage.k8s.io"
+      ],
+      "resources": [
+        "volumepopulators"
       ],
       "verbs": [
         "get",
@@ -318,7 +348,10 @@
       ],
       "verbs": [
         "create",
-        "patch"
+        "patch",
+        "get",
+        "list",
+        "watch"
       ]
     },
     {
@@ -386,6 +419,19 @@
         ""
       ],
       "resources": [
+        "namespaces"
+      ],
+      "verbs": [
+        "get",
+        "list",
+        "watch"
+      ]
+    },
+    {
+      "apiGroups": [
+        ""
+      ],
+      "resources": [
         "configmaps"
       ],
       "verbs": [
@@ -434,7 +480,8 @@
     },
     {
       "apiGroups": [
-        "cdi.kubevirt.io"
+        "cdi.kubevirt.io",
+        "forklift.cdi.kubevirt.io"
       ],
       "resources": [
         "*"
@@ -535,16 +582,24 @@
     },
     {
       "apiGroups": [
-        "forklift.cdi.kubevirt.io"
+        "authentication.k8s.io"
       ],
       "resources": [
-        "ovirtvolumepopulators",
-        "openstackvolumepopulators"
+        "tokenreviews"
       ],
       "verbs": [
-        "get",
-        "list",
-        "watch"
+        "create"
+      ]
+    },
+    {
+      "apiGroups": [
+        "authorization.k8s.io"
+      ],
+      "resources": [
+        "subjectaccessreviews"
+      ],
+      "verbs": [
+        "create"
       ]
     },
     {
@@ -568,7 +623,25 @@
       "verbs": [
         "get",
         "list",
-        "update"
+        "update",
+        "patch"
+      ]
+    },
+    {
+      "nonResourceURLs": [
+        "/metrics"
+      ],
+      "verbs": [
+        "get"
+      ]
+    },
+    {
+      "nonResourceURLs": [
+        "/debug/pprof",
+        "/debug/pprof/*"
+      ],
+      "verbs": [
+        "get"
       ]
     }
   ]

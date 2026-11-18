@@ -52,7 +52,7 @@ use kix::plan::fixtures::{
 use kix::plan::{CLUSTER_LEVEL_KEY, ManifestIndex, PlanError};
 use kix_bundle::{Bundle, BundleError, BundleFile, Contents, INDEX_NAME, Provenance};
 
-/// Honest bundles: the kix-enterprise-test build, and kixpkgs'
+/// Honest bundles: the kix-enterprise-test build, and this repository's
 /// `bundle-alias` and `immich` test clusters, the second with import
 /// markers several packages list.
 const SEEDS: &[(&str, &[u8])] = &[
@@ -1217,7 +1217,9 @@ fn plan_and_check(
     };
     let checked = match plan(&baseline, new, flags) {
         Ok(checked) => checked,
-        Err(PlanError::Graph(_) | PlanError::Marker(_)) => return Ok(Outcome::PlanningRefused),
+        Err(PlanError::Graph(_) | PlanError::Marker(_) | PlanError::AliasedMove(_)) => {
+            return Ok(Outcome::PlanningRefused);
+        }
         Err(PlanError::Unshown(_)) => return Ok(Outcome::ObjectsRefused),
         Err(e) => return Err(format!("the plan failed: {e}")),
     };
@@ -1289,6 +1291,7 @@ fn plan_and_check(
         .deletes
         .iter()
         .map(|d| ResourceId {
+            group: d.group.clone(),
             kind: d.kind.clone(),
             namespace: d.namespace.clone(),
             name: d.name.clone(),
@@ -1332,11 +1335,7 @@ fn plan_and_check(
             .find(|m| ResourceId::from_value(m) == *id)
     };
     for ((kind, namespace, name, hash), manifest) in &written {
-        let id = ResourceId {
-            kind: kind.clone(),
-            namespace: namespace.clone(),
-            name: name.clone(),
-        };
+        let id = ResourceId::from_value(manifest);
         let shown_id = id.display_id();
         let (package, change) =
             listed[&(kind.clone(), namespace.clone(), name.clone(), hash.clone())];
@@ -1352,10 +1351,12 @@ fn plan_and_check(
             .map(|s| s.package.as_str());
         let shows = || shown_new.as_ref() == Some(&expected) && shown_under == Some(package);
         let ok = match change {
-            WriteChange::Reapplied => active_manifests.iter().any(|m| {
-                ResourceId::from_value(m) == id
-                    && keys::get(m, keys::IDENTITY_HASH) == Some(hash.as_str())
-            }),
+            WriteChange::Reapplied | WriteChange::IfLastRunFailed => {
+                active_manifests.iter().any(|m| {
+                    ResourceId::from_value(m) == id
+                        && keys::get(m, keys::IDENTITY_HASH) == Some(hash.as_str())
+                })
+            }
             _ if lifecycle::is_record_kind(kind) => {
                 package == CLUSTER_LEVEL_KEY
                     && doc.activation.as_ref().and_then(|a| a.new.as_deref()) == Some(name.as_str())
@@ -1498,4 +1499,30 @@ fn a_changed_bundle_is_refused_or_deploys_what_its_plan_shows() {
         counts[4] * 10 >= counts.iter().sum::<usize>(),
         "under a tenth of the cases reached the check: {counts:?}"
     );
+}
+
+/// A field change that moves the `landing` Deployment out of the `apps`
+/// group, keeping its kind, namespace, and name. The plan shows the delete
+/// and the write as two objects, and the deploy does what it shows.
+#[test]
+fn a_deployment_moved_to_the_core_group_deploys_what_its_plan_shows() {
+    let honest: Vec<(Contents, StoreGraph)> = SEEDS
+        .iter()
+        .map(|(_, bytes)| {
+            let (mut bundle, graph) = Bundle::read(Cursor::new(*bytes)).unwrap();
+            (bundle.contents().unwrap(), graph)
+        })
+        .collect();
+    let case = Case {
+        seed: 0,
+        changes: vec![Change::SetField {
+            file: 826970914687456496,
+            field: 15257103688815975303,
+            value: 1170401294027661380,
+        }],
+        reorder: None,
+        old: OldSide::Deployed,
+        flags: 0,
+    };
+    assert_eq!(run(&case, &honest), Ok(Outcome::Checked));
 }

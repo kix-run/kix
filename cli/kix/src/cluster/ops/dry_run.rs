@@ -70,7 +70,7 @@ impl ResourceIo for DryRun {
         let rid = ResourceId::from_value(manifest);
         // A dry run creates no CRD, so discovery cannot gain a kind during
         // one and a cache miss is final.
-        let Some((ar, scope)) = self.resources.cached_kind(&rid.kind).await else {
+        let Some((ar, scope)) = self.resources.cached(&rid).await else {
             let e = ApplyError::UnknownKind {
                 kind: rid.kind.clone(),
             };
@@ -240,6 +240,7 @@ mod tests {
         })]);
         let dry = dry_run(&api).await;
         let rid = |kind: &str| ResourceId {
+            group: "rbac.authorization.k8s.io".into(),
             kind: kind.into(),
             namespace: CLUSTER_SCOPED.into(),
             name: "old".into(),

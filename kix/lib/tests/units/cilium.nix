@@ -8,6 +8,7 @@
   lib,
   k8s,
   eval,
+  kixlib,
   mkCluster,
   manifests,
   ofKind,
@@ -655,4 +656,40 @@ in
         }
     )
     || throw "rke2 platform intents, missing ${builtins.toJSON missing}: ${builtins.toJSON cnps}";
+
+  # A cluster that declares a Kubernetes version Cilium does not support is
+  # refused with the change record's id. The meta check is called directly,
+  # because a failed meta assertion fails the cluster before its messages
+  # can be read.
+  cilium-k8s-range =
+    let
+      metaLib = import ../../meta.nix { inherit lib; };
+      meta =
+        (ciliumPackage {
+          inherit lib;
+          kix = kixlib;
+          scope = {
+            instanceName = "cilium";
+            namespaceName = "kube-system";
+          };
+          availability = "none";
+        }).meta;
+      refusals =
+        k8sVersion:
+        map (a: a.message) (
+          builtins.filter (a: !a.assertion) (
+            (metaLib.checkMetaStatic {
+              packageMeta = meta;
+              instanceName = "cilium";
+              namespaceName = "kube-system";
+              clusterConfig = { inherit k8sVersion; };
+              resolvedDepMeta = { };
+              resolutionIndex.byKey = { };
+            }).assertions
+          )
+        );
+      refused = v: builtins.any (lib.hasInfix "[K8720]") (refusals v);
+    in
+    (refused "1.32" && refused "1.37.0" && refusals "1.34.3" == [ ] && refusals null == [ ])
+    || throw "cilium k8s range: 1.32 ${builtins.toJSON (refusals "1.32")}, 1.37.0 ${builtins.toJSON (refusals "1.37.0")}, 1.34.3 ${builtins.toJSON (refusals "1.34.3")}";
 }

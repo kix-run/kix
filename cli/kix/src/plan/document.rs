@@ -32,7 +32,7 @@ use super::{ManifestIndex, PackageChangeDiff, PackageDiff, PackageInfo, Side};
 /// Version of the document's shape: the date, `YYYY-MM-DD`, of its last
 /// change that was not backward compatible. Readers should refuse a version
 /// they do not know.
-pub const SCHEMA_VERSION: &str = "2026-11-13";
+pub const SCHEMA_VERSION: &str = "2026-11-15";
 
 /// What a deploy of a build would change, or how two things differ.
 ///
@@ -97,6 +97,11 @@ pub struct Plan {
     /// Whether Pods start, pull their images, and pass their probes. No
     /// preview can tell, so this is always `not_checked`.
     pub readiness: Checked<String>,
+    /// The Kix library's warnings for the new build, when the command
+    /// evaluated it. A build read from a bundle has none. Left out when
+    /// there are none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<crate::eval::library_record::LibraryRecord>,
 }
 
 fn is_zero(n: &usize) -> bool {
@@ -205,6 +210,8 @@ impl DeployedBuild {
 pub struct PlanFlags {
     /// What the deploy does with orphans: `delete` with `--prune`, `skip`
     /// with `--skip-orphan-check`, and `warn_only` otherwise.
+    #[serde(with = "prune_field")]
+    #[schemars(with = "PruneField")]
     pub prune: PrunePolicy,
     pub reconcile: bool,
     pub force_conflicts: bool,
@@ -229,6 +236,48 @@ impl PlanFlags {
             PrunePolicy::Skip => Some("--skip-orphan-check"),
             PrunePolicy::WarnOnly => None,
         }
+    }
+}
+
+// The JSON of `PlanFlags::prune`, which a saved plan file keeps. The
+// scheduler's `PrunePolicy` maps to it in `prune_field`, so a change to the
+// scheduler cannot change the file format without a change here. Its doc
+// comment is the schema's description.
+
+/// Policy for handling orphaned resources after all plan nodes terminate.
+/// A saved plan records it as `flags.prune`.
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[schemars(rename = "PrunePolicy")]
+enum PruneField {
+    /// Do not look for orphans at all (`--skip-orphan-check`).
+    Skip,
+    /// Report orphans and keep them, recorded on the new Activation for a
+    /// later `--prune` or `kix gc` (the default).
+    WarnOnly,
+    /// Delete orphans in reverse-topological order (`--prune`).
+    Delete,
+}
+
+mod prune_field {
+    use super::{PruneField, PrunePolicy};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(policy: &PrunePolicy, s: S) -> Result<S::Ok, S::Error> {
+        match policy {
+            PrunePolicy::Skip => PruneField::Skip,
+            PrunePolicy::WarnOnly => PruneField::WarnOnly,
+            PrunePolicy::Delete => PruneField::Delete,
+        }
+        .serialize(s)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<PrunePolicy, D::Error> {
+        Ok(match PruneField::deserialize(d)? {
+            PruneField::Skip => PrunePolicy::Skip,
+            PruneField::WarnOnly => PrunePolicy::WarnOnly,
+            PruneField::Delete => PrunePolicy::Delete,
+        })
     }
 }
 
@@ -414,8 +463,8 @@ pub struct Objects {
     pub deletes: Vec<ObjectDelete>,
 }
 
-/// An object the deploy applies, or may create again (a probe Job under the
-/// rerun rule).
+/// An object the deploy applies, or may create again (an unchanged Job under
+/// the rerun rule, [`WriteChange::IfLastRunFailed`]).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 pub struct ObjectWrite {
     pub kind: String,
@@ -430,6 +479,22 @@ pub struct ObjectWrite {
     /// Activation record.
     pub package: String,
     pub change: WriteChange,
+    /// The API group. Left out for the core group, so a plan written before
+    /// the field existed reads as the core group.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub group: String,
+}
+
+impl ObjectWrite {
+    /// Return the id of the object written.
+    pub fn resource_id(&self) -> ResourceId {
+        ResourceId {
+            group: self.group.clone(),
+            kind: self.kind.clone(),
+            namespace: self.namespace.clone(),
+            name: self.name.clone(),
+        }
+    }
 }
 
 /// How `packages` shows a write.
@@ -449,6 +514,18 @@ pub enum WriteChange {
     /// object. `--reconcile` writes such objects again, as does a deploy that
     /// repairs what a stopped deploy changed.
     Reapplied,
+    /// An unchanged Job under the rerun rule. The deploy reads its last run
+    /// and creates it again only if that run failed, so the plan cannot
+    /// count it as a write.
+    IfLastRunFailed,
+}
+
+impl WriteChange {
+    /// Return whether the deploy writes the object whatever it finds on the
+    /// cluster.
+    pub fn certain(self) -> bool {
+        self != WriteChange::IfLastRunFailed
+    }
 }
 
 /// An object the deploy's prune deletes.
@@ -457,6 +534,10 @@ pub struct ObjectDelete {
     pub kind: String,
     pub namespace: String,
     pub name: String,
+    /// The API group. Left out for the core group, so a plan written before
+    /// the field existed reads as the core group.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub group: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -493,15 +574,6 @@ pub struct AdmissionRefusal {
     pub message: String,
 }
 
-impl AdmissionRefusal {
-    /// Return true when the write stopped because the apiserver could not
-    /// reach an admission webhook's backend. Such a refusal is the only one
-    /// that names a webhook under [`RefusalReason::Other`].
-    pub fn webhook_unreachable(&self) -> bool {
-        self.reason == RefusalReason::Other && self.webhook.is_some()
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RefusalReason {
@@ -526,6 +598,10 @@ pub enum RefusalReason {
     /// The deploy refuses it before sending, or the apiserver gave another
     /// error.
     Other,
+    /// The apiserver could not reach the Service behind an admission
+    /// webhook, so the webhook did not answer. This deploy does not write
+    /// that Service or the package that serves it.
+    WebhookUnreachable,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -669,6 +745,7 @@ impl Plan {
             prune: Checked::not_checked(reason),
             not_checked: Vec::new(),
             readiness: Checked::not_checked(NotCheckedReason::NotPreviewable),
+            warnings: Vec::new(),
         }
     }
 
@@ -853,7 +930,10 @@ impl ChangedPackage {
                                 .iter()
                                 .enumerate()
                                 .map(|(i, d)| {
-                                    let mut change = FieldChange::of(c.secrets.contains(id), d);
+                                    let mut change = FieldChange::of(
+                                        id.group_kind() == crate::manifest::kinds::SECRET,
+                                        d,
+                                    );
                                     change.labels = resource_labels.map(|l| {
                                         l.and_then(|l| l.get(i)).cloned().unwrap_or_default()
                                     });

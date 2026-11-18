@@ -11,8 +11,9 @@
 //!    check that refuses a write or delete the diff does not show
 //!    ([`super::objects::of`]).
 //!
-//! A rollback runs [`Planner::plan`], the last two steps, over the baseline
-//! of the record it returns to ([`Baseline::of_record`]). The planner prints
+//! A rollback runs [`Planner::rollback`], the last two steps, over the
+//! baseline of the record it returns to ([`Baseline::of_record`]), and gets
+//! the same [`Planned`] a deploy does. The planner prints
 //! nothing: it reports what it finds through a [`PlanEvent`] callback.
 //!
 //! [`Planned`] is plain data: the build, its manifests, the baseline, and the
@@ -30,6 +31,7 @@
 //! which plans from a sweep of the live objects it makes itself without
 //! holding the plan to a package diff.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use kube::client::Client;
@@ -37,13 +39,13 @@ use kube::discovery::{ApiResource, Scope};
 use serde_json::Value;
 
 use super::baseline::Baseline;
-use super::document::{DriftChange, Objects, PlanFlags};
+use super::document::{DriftChange, Objects, PlanFlags, WriteChange};
 use super::objects;
 use super::server::Overlay;
 use super::{PackageDiff, PlanError, PlanEvent, diff_graphs};
 use crate::build_source::InstallableBuild;
 use crate::build_source::SopsSources;
-use crate::cluster::activation::{KeptOrphanSource, KeptOrphans, Records};
+use crate::cluster::activation::{KeptOrphanSource, KeptOrphans, OpenedRecords, Record, Records};
 use crate::cluster::apply::ChangeAction;
 use crate::cluster::binding;
 use crate::cluster::client::{self, ResiliencePolicy};
@@ -56,8 +58,10 @@ use crate::cluster::kubernetes_version;
 use crate::cluster::migrate::{MigrationPair, detect_migration_pairs};
 use crate::cluster::ops::{Cluster, DryRun, KubeResources, RecordConfig};
 use crate::cluster::preview::DryRunAnswer;
-use crate::cluster::scheduler::{self, DeployError, DeployPlan, PrunePolicy, SchedulerConfig};
-use crate::cluster::stream::{DeployObserver, DeployResult};
+use crate::cluster::scheduler::{
+    self, DeployError, DeployPlan, LastRuns, PrunePolicy, SchedulerConfig,
+};
+use crate::cluster::stream::{DeployObserver, DeployResult, NodeId};
 use crate::eval::package_index::RecordPackageIndex;
 use crate::eval::store_graph::StoreGraph;
 use crate::manifest::types::ResourceId;
@@ -154,11 +158,54 @@ pub struct CheckedPlan {
     /// What the checks a run makes when it connects after the plan
     /// (`--offline`) read from the new build.
     target_checks: TargetChecks,
-    /// The Jobs the plan leaves unchanged whose last run failed, which the
-    /// run reports as failed. `None` until the plan reads them from the
-    /// cluster ([`CheckedPlan::read_last_runs`]), and when it could not read
-    /// one of them.
-    failed_jobs: Option<Vec<ResourceId>>,
+}
+
+/// What a run of a [`CheckedPlan`] would do ([`CheckedPlan::work`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Work {
+    /// It writes nothing, prunes nothing, and no Job's last run failed.
+    Nothing,
+    /// It writes and prunes nothing, but it reports Jobs whose last run
+    /// failed, or reads Jobs the plan could not read.
+    JobsOnly,
+    /// It writes or prunes.
+    Changes,
+}
+
+/// Whether a run of a [`CheckedPlan`] starts ([`CheckedPlan::start`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Start {
+    /// No run starts. `superseded` counts the failed records the plan
+    /// folded in that are now marked Superseded.
+    Nothing {
+        superseded: usize,
+    },
+    Run,
+}
+
+/// Mark the Activation records named in `names` Superseded, and return how
+/// many were marked.
+async fn supersede(client: &Client, names: &[String]) -> usize {
+    if names.is_empty() {
+        return 0;
+    }
+    let Ok(discovery) = discovery::discover_resources(client).await else {
+        return 0;
+    };
+    let Some(records) = Records::open(client, &discovery)
+        .ok()
+        .and_then(OpenedRecords::into_records)
+    else {
+        return 0;
+    };
+    let mut done = 0;
+    for name in names {
+        match records.supersede(name).await {
+            Ok(()) => done += 1,
+            Err(e) => tracing::warn!(activation = %name, error = %e, "could not supersede"),
+        }
+    }
+    done
 }
 
 /// What the checks a command makes when it connects read from the new
@@ -278,46 +325,72 @@ impl CheckedPlan {
         &self.target_checks
     }
 
-    /// Return the Jobs the plan leaves unchanged whose last run failed, or
-    /// `None` when the plan has not read them all from the cluster. A Job under
-    /// `kix.run/rerun` whose last run failed is not among them, because the
-    /// plan runs it again.
-    pub fn failed_jobs(&self) -> Option<&[ResourceId]> {
-        self.failed_jobs.as_deref()
+    /// Return what a run of the plan would do, given what reading its Jobs'
+    /// last runs found. Only [`CheckedPlan::read_last_runs`] gives a
+    /// [`LastRuns`], so this cannot be asked before the plan has read the
+    /// cluster.
+    pub fn work(&self, last_runs: &LastRuns) -> Work {
+        let writes = self
+            .plan
+            .nodes()
+            .iter()
+            .any(|n| n.action.written().is_some());
+        if writes || !self.orphans.is_empty() {
+            return Work::Changes;
+        }
+        match last_runs {
+            LastRuns::Read { failed } if failed.is_empty() => Work::Nothing,
+            _ => Work::JobsOnly,
+        }
     }
 
-    /// Return whether a run of the plan would change nothing and report no
-    /// failure. It writes nothing, prunes nothing, and every Job whose last
-    /// run matters was read and has not failed.
-    pub fn nothing_to_do(&self) -> bool {
-        let jobs_known_good = match &self.failed_jobs {
-            Some(failed) => failed.is_empty(),
-            None => !self.plan.reads_last_runs(),
-        };
-        jobs_known_good
-            && self.orphans.is_empty()
-            && !self
-                .plan
-                .nodes()
-                .iter()
-                .any(|n| n.action.written().is_some())
+    /// Decide whether a run of the plan starts, given what reading its Jobs'
+    /// last runs found. A run that finalizes supersedes the failed records
+    /// the plan folded in. When there is nothing to do, no run starts, so
+    /// this supersedes them through `client` itself. A record it cannot
+    /// supersede is logged and folded in again by the next deploy.
+    pub async fn start(&self, client: &Client, last_runs: &LastRuns) -> Start {
+        match self.work(last_runs) {
+            Work::Nothing => Start::Nothing {
+                superseded: supersede(client, &self.consumed_failed).await,
+            },
+            Work::JobsOnly | Work::Changes => Start::Run,
+        }
     }
 
     /// Read the last runs of the plan's Jobs on the cluster behind `client`.
     /// A Job under `kix.run/rerun` whose last run failed runs again, and an
-    /// unchanged Job without it is listed in [`CheckedPlan::failed_jobs`]. A
-    /// plan made with a client has read them already; one made without
-    /// (`--offline`) reads them here once the run connects.
-    pub async fn read_last_runs(&mut self, client: &Client) -> Result<(), PlanError> {
-        self.failed_jobs = if self.plan.reads_last_runs() {
+    /// unchanged Job without it is listed in [`LastRuns::Read`]. Every
+    /// command that runs a plan calls this once it has a client, before it
+    /// prints the plan's reruns or decides whether to start.
+    pub async fn read_last_runs(&mut self, client: &Client) -> Result<LastRuns, PlanError> {
+        let last_runs = if self.plan.reads_last_runs() {
             let discovery = discovery::discover_resources(client)
                 .await
                 .map_err(|e| PlanError::Discovery(Box::new(e)))?;
             self.plan.read_last_runs(client, &discovery).await
         } else {
-            Some(Vec::new())
+            LastRuns::Read { failed: Vec::new() }
         };
-        Ok(())
+        // A Job whose failed last run makes it run again is now a certain
+        // write. The digest leaves out how a write is shown, so it stays the
+        // same.
+        let recreated: HashSet<&ResourceId> = self
+            .plan
+            .nodes()
+            .iter()
+            .filter(|n| matches!(n.action, ChangeAction::Recreate(..)))
+            .filter_map(|n| match &n.id {
+                NodeId::Resource(rid) => Some(rid),
+                _ => None,
+            })
+            .collect();
+        for w in &mut self.objects.writes {
+            if w.change == WriteChange::IfLastRunFailed && recreated.contains(&w.resource_id()) {
+                w.change = WriteChange::Reapplied;
+            }
+        }
+        Ok(last_runs)
     }
 
     /// Return the failed Activation records whose leftovers the plan folded
@@ -432,14 +505,26 @@ pub struct Planned {
     // only way to change it.
     new_manifests: Vec<Value>,
     /// `None` under [`OldSide::LocalCache`], which plans without connecting.
-    pub client: Option<Client>,
+    pub connected: Option<Connected>,
     pub baseline: Baseline,
     /// Against the Active closure only.
     pub migration_pairs: Vec<MigrationPair>,
     pub checked: CheckedPlan,
 }
 
+/// What a plan made while connected to the cluster read there.
+pub struct Connected {
+    pub client: Client,
+    pub last_runs: LastRuns,
+}
+
 impl Planned {
+    /// Return the client of a plan made while connected, or `None` for one
+    /// made from the local cache.
+    pub fn client(&self) -> Option<&Client> {
+        self.connected.as_ref().map(|c| &c.client)
+    }
+
     /// Return [`crate::build_source::Build::sops_sources`] for the new build.
     pub fn sops_sources(&mut self, placeholders: bool) -> Result<SopsSources, String> {
         self.build.sops_sources(placeholders)
@@ -562,11 +647,40 @@ impl<'a> Planner<'a> {
             Some(client) => Baseline::of_cluster(client, &build, self.report).await?,
             None => Baseline::of_cache(&new_graph.cluster_name, self.report),
         };
+        self.planned(build, baseline, client).await
+    }
+
+    /// Plan a rollback of Kix cluster `cluster` from its current record
+    /// `current` to `build`, the build of an earlier record, through `client`.
+    /// The baseline is [`Baseline::of_record`]. The rollback command makes
+    /// its own target checks before this, because a rollback must not be
+    /// refused for a Kubernetes upgrade during an incident.
+    pub async fn rollback(
+        &self,
+        build: InstallableBuild,
+        records: &Records,
+        current: &Record,
+        client: Client,
+    ) -> Result<Planned, PlanError> {
+        let cluster = build.graph().cluster_name.clone();
+        let baseline = Baseline::of_record(records, &cluster, current, self.report).await;
+        self.planned(build, baseline, Some(client)).await
+    }
+
+    /// Plan `build` against `baseline`, and with a client read the last runs
+    /// of the plan's Jobs.
+    async fn planned(
+        &self,
+        build: InstallableBuild,
+        baseline: Baseline,
+        client: Option<Client>,
+    ) -> Result<Planned, PlanError> {
+        let new_graph = build.graph();
         let new_manifests = manifests_of(new_graph);
         // A half-applied closure is not a previous intended state, so
         // pairing against it would invent migrations nobody declared.
         let migration_pairs = detect_migration_pairs(&new_manifests, &baseline.active_manifests);
-        let checked = self
+        let mut checked = self
             .check(
                 new_graph,
                 &new_manifests,
@@ -575,10 +689,17 @@ impl<'a> Planner<'a> {
                 client.as_ref(),
             )
             .await?;
+        let connected = match client {
+            Some(client) => Some(Connected {
+                last_runs: checked.read_last_runs(&client).await?,
+                client,
+            }),
+            None => None,
+        };
         Ok(Planned {
             build,
             new_manifests,
-            client,
+            connected,
             baseline,
             migration_pairs,
             checked,
@@ -591,7 +712,8 @@ impl<'a> Planner<'a> {
     /// the Kix cluster whose records the baseline came from. With a `client`,
     /// orphans that another Kix cluster still deploys are kept and the plan's
     /// prune section lists every other orphan; without one, `kix deploy`
-    /// checks the orphans once it connects.
+    /// checks the orphans once it connects. The caller reads the last runs
+    /// of the plan's Jobs ([`CheckedPlan::read_last_runs`]).
     pub async fn plan(
         &self,
         new_graph: &StoreGraph,
@@ -656,6 +778,10 @@ impl<'a> Planner<'a> {
 
         let mut pkg_diff = diff_graphs(&baseline.diff_side(new_graph), new_graph);
         pkg_diff.keep_shared(&shared_orphans);
+        let aliased = pkg_diff.aliased_moves();
+        if !aliased.is_empty() {
+            return Err(PlanError::AliasedMove(aliased));
+        }
 
         let listed_deletes: &[ResourceId] = match client {
             Some(_) => &orphans,
@@ -671,7 +797,7 @@ impl<'a> Planner<'a> {
         )
         .map_err(PlanError::Unshown)?;
 
-        let mut checked = CheckedPlan {
+        Ok(CheckedPlan {
             flags: self.flags,
             plan,
             orphans,
@@ -687,12 +813,7 @@ impl<'a> Planner<'a> {
             old_manifests: baseline.manifests(),
             package_index: RecordPackageIndex::of(new_graph),
             target_checks: TargetChecks::of(new_graph),
-            failed_jobs: None,
-        };
-        if let Some(client) = client {
-            checked.read_last_runs(client).await?;
-        }
-        Ok(checked)
+        })
     }
 }
 
@@ -712,7 +833,7 @@ pub(crate) fn deletes_of(prune: PrunePolicy, orphans: &[ResourceId]) -> Vec<Reso
     }
     orphans
         .iter()
-        .filter(|rid| !lifecycle::never_pruned(&rid.kind))
+        .filter(|rid| !lifecycle::never_pruned(rid.group_kind()))
         .cloned()
         .collect()
 }
@@ -749,7 +870,7 @@ pub async fn keep_shared(
 mod tests {
     use super::*;
     use crate::cluster::fake_api::FakeApi;
-    use crate::manifest::lifecycle::PHASE_ACTIVE;
+    use crate::manifest::lifecycle::{PHASE_ACTIVE, PHASE_SUPERSEDED};
     use crate::manifest::types::CLUSTER_SCOPED;
     use serde_json::json;
 
@@ -767,11 +888,7 @@ mod tests {
     }
 
     fn rid(kind: &str, ns: &str, name: &str) -> ResourceId {
-        ResourceId {
-            kind: kind.into(),
-            namespace: ns.into(),
-            name: name.into(),
-        }
+        ResourceId::new("", kind, ns, name)
     }
 
     /// Kix cluster `a` drops a ClusterRole and a ConfigMap that `b` still
@@ -817,6 +934,84 @@ mod tests {
         assert_eq!(kept, vec!["shared", "shared-cm"]);
     }
 
+    fn failed_record(name: &str) -> Value {
+        json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": "Activation",
+            "metadata": {
+                "name": name,
+                "labels": { (keys::CLUSTER_LABEL): "kix-enterprise-test" },
+                "annotations": { (keys::IDENTITY_HASH): "f1" },
+            },
+            "status": { "phase": crate::manifest::lifecycle::PHASE_FAILED },
+        })
+    }
+
+    async fn phase(client: &Client, name: &str) -> String {
+        let discovery = discovery::discover_resources(client).await.unwrap();
+        let records = Records::open(client, &discovery)
+            .unwrap()
+            .into_records()
+            .unwrap();
+        let api = kube::Api::<kube::api::DynamicObject>::all_with(
+            client.clone(),
+            records.watch_resource(),
+        );
+        let record = api.get(name).await.unwrap();
+        record.data["status"]["phase"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string()
+    }
+
+    /// Plan a redeploy of the `kix-enterprise-test` build over itself, with
+    /// the failed record `rec-failed` folded in.
+    fn unchanged_plan() -> CheckedPlan {
+        let build = crate::plan::fixtures::kix_enterprise_test();
+        let mut baseline = crate::plan::fixtures::deployed(Some(&build));
+        baseline.failed.consumed = vec!["rec-failed".to_string()];
+        crate::plan::fixtures::plan(&baseline, &build, crate::plan::fixtures::flags(&[])).unwrap()
+    }
+
+    /// A plan with nothing to do starts no run, so no finalize supersedes
+    /// the failed records it folded in. `start` supersedes them, as it does
+    /// for `kix deploy` and `kix rollback` alike.
+    #[tokio::test]
+    async fn nothing_to_do_supersedes_the_failed_records_the_plan_folded_in() {
+        let checked = unchanged_plan();
+        let read = LastRuns::Read { failed: vec![] };
+        assert_eq!(checked.work(&read), Work::Nothing);
+
+        let api = FakeApi::new([failed_record("rec-failed")]);
+        let client = api.client();
+        assert_eq!(
+            checked.start(&client, &read).await,
+            Start::Nothing { superseded: 1 }
+        );
+        assert_eq!(phase(&client, "rec-failed").await, PHASE_SUPERSEDED);
+    }
+
+    /// A Job whose last run failed, or a Job Kix could not read, gives the
+    /// run work to do. The run starts and its finalize supersedes the failed
+    /// records, so `start` leaves them alone.
+    #[tokio::test]
+    async fn jobs_to_report_or_read_start_the_run() {
+        let checked = unchanged_plan();
+        let failed = LastRuns::Read {
+            failed: vec![rid("Job", "app", "migrate")],
+        };
+        for last_runs in [failed, LastRuns::Unreadable] {
+            assert_eq!(checked.work(&last_runs), Work::JobsOnly);
+            let api = FakeApi::new([failed_record("rec-failed")]);
+            let client = api.client();
+            assert_eq!(checked.start(&client, &last_runs).await, Start::Run);
+            assert_eq!(
+                phase(&client, "rec-failed").await,
+                crate::manifest::lifecycle::PHASE_FAILED
+            );
+        }
+    }
+
     /// Build a [`Planned`] for the `kix-enterprise-test` fixture as a first
     /// deploy without connecting.
     fn planned() -> Planned {
@@ -860,7 +1055,7 @@ mod tests {
         Planned {
             build,
             new_manifests,
-            client: None,
+            connected: None,
             baseline,
             migration_pairs: Vec::new(),
             checked,

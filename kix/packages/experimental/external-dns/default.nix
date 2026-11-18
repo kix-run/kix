@@ -67,6 +67,15 @@
 # (domain filters, TXT prefix, provider endpoints), `env`, and the
 # instance's `partsOverlays` for pod labels, placement, and extra RBAC rules.
 #
+# Upgrades: the Deployment keeps no state in the cluster. Records and their
+# TXT ownership records live in the provider, and v0.24.0 reads and adopts
+# what v0.23.0 wrote. Going back is a deploy of the previous package version,
+# which adopts the same records. Upstream asks for a first run with
+# `--dry-run=true` in `extraArgs` and says nothing about going back. With the
+# `gateway-httproute` or `gateway-grpcroute` source, a hostname from an
+# annotation or `--fqdn-template` now replaces the listener's hostname, so
+# `policy = "sync"` deletes the records that came from the listener.
+#
 # `out`: root is the Deployment, and `out` adds `version`, the external-dns
 # version `image.tag` names.
 
@@ -77,7 +86,7 @@
 }:
 
 let
-  release = "0.23.0";
+  release = "0.24.0";
   metricsPort = 7979;
 
   providers = import ./providers.nix;
@@ -91,7 +100,7 @@ let
   # from this variable when the flag is not on the command line.
   flagEnvVar = flag: "EXTERNAL_DNS_" + lib.toUpper (builtins.replaceStrings [ "-" ] [ "_" ] flag);
 
-  # Upstream flags at v0.23.0 whose value is a credential.
+  # Upstream flags at v0.24.0 whose value is a credential.
   secretFlags = [
     "pdns-api-key"
     "godaddy-api-key"
@@ -191,6 +200,13 @@ in
     # external-dns has no leader election: a second replica writes the same
     # records concurrently.
     availability.max = "none";
+    # Upstream's README ("Kubernetes version compatibility") supports
+    # Kubernetes 1.21 and every later version for external-dns 0.18 and
+    # later, and states no upper bound.
+    k8s = {
+      minVersion = "1.21";
+      reason = "[K3140] external-dns ${release} supports Kubernetes 1.21 and later. Move the cluster to a supported Kubernetes version first";
+    };
     network.intents.providerApi.egress = [
       {
         to = "world";
@@ -208,7 +224,7 @@ in
     image = kix.options.image {
       repository = "registry.k8s.io/external-dns/external-dns";
       tag = "v${release}";
-      digest = "sha256:1854499e2b08cee47c40a08e356bff20dcb192dbcfde8378fc3f900f12cad5a3";
+      digest = "sha256:a80a146d2540fa138565e404f0625157271071a06093021f27ae19d8316d10f9";
     };
 
     provider = lib.mkOption {

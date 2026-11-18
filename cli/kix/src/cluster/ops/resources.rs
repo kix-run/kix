@@ -16,6 +16,7 @@ use serde_json::Value;
 use tokio::sync::RwLock;
 
 use crate::legacy_domain::LegacyDomainError;
+use crate::manifest::kinds::{self, GroupKind};
 use crate::manifest::types::ResourceId;
 
 use super::super::activation::{OpenedRecords, Records};
@@ -51,10 +52,10 @@ const EXPECTS_TIMEOUT: Duration = Duration::from_secs(180);
 /// Return the kind-aware propagation policy for in-place recreate. Jobs use
 /// `Foreground` so old pods are gone before re-applying, StatefulSets use
 /// `Orphan` so PVCs are retained, and all other kinds use `Background`.
-fn delete_propagation_for(kind: &str) -> kube::api::PropagationPolicy {
+fn delete_propagation_for(kind: GroupKind<'_>) -> kube::api::PropagationPolicy {
     match kind {
-        "Job" => kube::api::PropagationPolicy::Foreground,
-        "StatefulSet" => kube::api::PropagationPolicy::Orphan,
+        kinds::JOB => kube::api::PropagationPolicy::Foreground,
+        kinds::STATEFUL_SET => kube::api::PropagationPolicy::Orphan,
         _ => kube::api::PropagationPolicy::Background,
     }
 }
@@ -188,15 +189,15 @@ impl KubeResources {
         self.opened().await.map(OpenedRecords::into_records)
     }
 
-    /// Look up `kind` in the discovery cache without refreshing.
-    pub(super) async fn cached_kind(&self, kind: &str) -> Option<(ApiResource, Scope)> {
+    /// Look up `rid`'s group and kind in the discovery cache without
+    /// refreshing.
+    pub(super) async fn cached(&self, rid: &ResourceId) -> Option<(ApiResource, Scope)> {
         let d = self.discovery.read().await;
-        d.iter()
-            .find(|(ar, _)| ar.kind == kind)
-            .map(|(ar, s)| (ar.clone(), s.clone()))
+        discovery::find(&d, &rid.group, &rid.kind).cloned()
     }
 
-    /// Look up `manifest`'s kind in discovery, refreshing on a cache miss.
+    /// Look up `manifest`'s group and kind in discovery, refreshing on a
+    /// cache miss.
     ///
     /// Dependents of a CRD do not run until the CRD is Ready and discovery
     /// has been refreshed, so the kind is normally in the cache. HA
@@ -204,57 +205,43 @@ impl KubeResources {
     /// hundred ms of skew, so [`Self::refresh_until_found`] retries before
     /// failing the node.
     async fn resolve_kind(&self, manifest: &Value) -> Result<(ApiResource, Scope), ApplyError> {
-        let kind = manifest.get("kind").and_then(Value::as_str).unwrap_or("");
-        let group = manifest
-            .get("apiVersion")
-            .and_then(Value::as_str)
-            .map(|av| av.split_once('/').map_or("", |(g, _)| g));
-        self.refresh_until_found(kind, group)
+        let rid = ResourceId::from_value(manifest);
+        self.refresh_until_found(&rid)
             .await
-            .ok_or_else(|| ApplyError::UnknownKind {
-                kind: kind.to_string(),
-            })
+            .ok_or(ApplyError::UnknownKind { kind: rid.kind })
     }
 
-    /// Look up `kind` in the cache, refreshing discovery on a miss up to
-    /// `REFRESH_ATTEMPTS` times with backoff (under 4 s of waiting between
-    /// requests). When `group` is provided, each refresh fetches that group
-    /// alone and falls back to a full walk only when the group fetch fails.
-    /// Without `group`, each refresh performs a single-pass full walk
-    /// ([`discovery::discover_resources_once`]) so an unrelated group version
-    /// answering 404 does not add [`discovery::DISCOVERY_SETTLE`] to each
-    /// attempt. Refreshes merge into the cache.
-    async fn refresh_until_found(
-        &self,
-        kind: &str,
-        group: Option<&str>,
-    ) -> Option<(ApiResource, Scope)> {
+    /// Look up `rid`'s group and kind in the cache, refreshing discovery on a
+    /// miss up to `REFRESH_ATTEMPTS` times with backoff (under 4 s of waiting
+    /// between requests). Each refresh fetches the group alone, so an
+    /// unrelated group version answering 404 does not add
+    /// [`discovery::DISCOVERY_SETTLE`] to each attempt. It falls back to a
+    /// single-pass full walk ([`discovery::discover_resources_once`]) only
+    /// when the group fetch fails. Refreshes merge into the cache.
+    async fn refresh_until_found(&self, rid: &ResourceId) -> Option<(ApiResource, Scope)> {
         const REFRESH_ATTEMPTS: u32 = 5;
         const BACKOFF_START: Duration = Duration::from_millis(250);
         const BACKOFF_MAX: Duration = Duration::from_secs(2);
-        if let Some(found) = self.cached_kind(kind).await {
+        if let Some(found) = self.cached(rid).await {
             return Some(found);
         }
         let mut delay = BACKOFF_START;
         for attempt in 1..=REFRESH_ATTEMPTS {
             tracing::debug!(
-                kind,
+                group = %rid.group,
+                kind = %rid.kind,
                 attempt,
                 "kind missing from discovery cache, refreshing"
             );
-            let targeted = match group {
-                Some(g) => discovery::discover_group(&self.client, g).await.ok(),
-                None => None,
-            };
-            let fresh = match targeted {
-                Some(new) => Some(new),
-                None => discovery::discover_resources_once(&self.client).await.ok(),
+            let fresh = match discovery::discover_group(&self.client, &rid.group).await {
+                Ok(new) => Some(new),
+                Err(_) => discovery::discover_resources_once(&self.client).await.ok(),
             };
             if let Some(new) = fresh {
                 let mut d = self.discovery.write().await;
                 *d = discovery::merge_discovery(&d, new);
             }
-            if let Some(found) = self.cached_kind(kind).await {
+            if let Some(found) = self.cached(rid).await {
                 return Some(found);
             }
             if attempt < REFRESH_ATTEMPTS {
@@ -299,13 +286,10 @@ impl KubeResources {
         &self,
         rid: &ResourceId,
     ) -> Result<(ApiResource, Scope, Api<DynamicObject>, bool), RecreateError> {
-        let (ar, scope) = self
-            .cached_kind(&rid.kind)
-            .await
-            .ok_or_else(|| not_discovered(rid))?;
+        let (ar, scope) = self.cached(rid).await.ok_or_else(|| not_discovered(rid))?;
         let api = self.api_for(&ar, &scope, rid);
         let dp = DeleteParams {
-            propagation_policy: Some(delete_propagation_for(&rid.kind)),
+            propagation_policy: Some(delete_propagation_for(rid.group_kind())),
             dry_run: self.dry(),
             ..Default::default()
         };
@@ -321,10 +305,7 @@ impl KubeResources {
 #[async_trait]
 impl ResourceIo for KubeResources {
     async fn prune(&self, rid: &ResourceId) -> Result<Pruned, DeleteError> {
-        let (ar, scope) = self
-            .cached_kind(&rid.kind)
-            .await
-            .ok_or_else(|| not_discovered(rid))?;
+        let (ar, scope) = self.cached(rid).await.ok_or_else(|| not_discovered(rid))?;
         // The guard reads the other clusters' records, so a cluster the
         // domain gate refuses has no guard and nothing is deleted.
         let guard = self
@@ -369,9 +350,8 @@ impl ResourceIo for KubeResources {
 
     async fn get_live(&self, rid: &ResourceId) -> Result<Option<Value>, ReadError> {
         // Refresh on a cache miss in case discovery lags behind a CRD apply.
-        // Because `ResourceId` carries no API group, each refresh is a full walk.
         let (ar, scope) = self
-            .refresh_until_found(&rid.kind, None)
+            .refresh_until_found(rid)
             .await
             .ok_or_else(|| not_discovered(rid))?;
         let api = self.api_for(&ar, &scope, rid);
@@ -439,7 +419,7 @@ impl ResourceIo for KubeResources {
             )
             .await;
         }
-        let (ar, scope) = match self.cached_kind(&rid.kind).await {
+        let (ar, scope) = match self.cached(rid).await {
             Some(found) => found,
             // The object was just applied, so its kind should be in the cache.
             // If it is missing, report it as a readiness failure.
@@ -523,6 +503,7 @@ mod prune_tests {
         let discovery = discovery::discover_resources(&client).await.unwrap();
         let ops = KubeResources::new(client, discovery, "a".into(), None, false);
         let rid = |name: &str| ResourceId {
+            group: "rbac.authorization.k8s.io".into(),
             kind: "ClusterRole".into(),
             namespace: CLUSTER_SCOPED.into(),
             name: name.into(),
@@ -550,6 +531,7 @@ mod prune_tests {
         let discovery = discovery::discover_resources(&client).await.unwrap();
         let ops = KubeResources::new(client, discovery, "a".into(), None, false);
         let rid = ResourceId {
+            group: "rbac.authorization.k8s.io".into(),
             kind: "ClusterRole".into(),
             namespace: CLUSTER_SCOPED.into(),
             name: "mine".into(),
@@ -557,6 +539,49 @@ mod prune_tests {
         let err = ops.prune(&rid).await.unwrap_err().to_string();
         assert!(err.contains("kix migrate domain"), "{err}");
         assert_eq!(api.names("ClusterRole"), vec!["mine"]);
+    }
+}
+
+#[cfg(test)]
+mod group_tests {
+    use super::*;
+    use crate::cluster::fake_api::{FakeApi, OTHER_JOB_GROUP};
+    use crate::manifest::keys;
+    use serde_json::json;
+
+    fn job(api_version: &str, note: &str) -> Value {
+        json!({
+            "apiVersion": api_version,
+            "kind": "Job",
+            "metadata": {
+                "name": "x",
+                "namespace": "app",
+                "annotations": { (keys::ACTIVATIONS): "a1" },
+            },
+            "spec": { "note": note },
+        })
+    }
+
+    /// Two kinds named `Job` in two groups are read and pruned through each
+    /// one's own API, though `/apis` lists the other group before `batch`.
+    #[tokio::test]
+    async fn reads_and_prunes_go_through_the_api_of_the_ids_group() {
+        let other_version = format!("{OTHER_JOB_GROUP}/v1alpha1");
+        let api = FakeApi::new([job("batch/v1", "batch"), job(&other_version, "other")]);
+        let client = api.client();
+        let discovery = discovery::discover_resources(&client).await.unwrap();
+        let ops = KubeResources::new(client, discovery, "a".into(), None, false);
+        let rid = |group: &str| ResourceId::from_value(&job(group, ""));
+
+        let note = |live: Option<Value>| live.unwrap()["spec"]["note"].clone();
+        let batch = ops.get_live(&rid("batch/v1")).await.unwrap();
+        assert_eq!(note(batch), json!("batch"));
+        let other = ops.get_live(&rid(&other_version)).await.unwrap();
+        assert_eq!(note(other), json!("other"));
+
+        assert_eq!(ops.prune(&rid("batch/v1")).await.unwrap(), Pruned::Deleted);
+        assert!(api.names_of("batch/v1", "Job").is_empty());
+        assert_eq!(api.names_of(&other_version, "Job"), vec!["x"]);
     }
 }
 
@@ -575,8 +600,14 @@ mod discovery_tests {
         KubeResources::new(api.client(), Vec::new(), String::new(), None, false)
     }
 
-    async fn cached(ops: &KubeResources, kind: &str) -> bool {
-        ops.cached_kind(kind).await.is_some()
+    async fn cached(ops: &KubeResources, group: &str, kind: &str) -> bool {
+        let rid = ResourceId {
+            group: group.into(),
+            kind: kind.into(),
+            namespace: CLUSTER_SCOPED.into(),
+            name: String::new(),
+        };
+        ops.cached(&rid).await.is_some()
     }
 
     /// The CRD barrier's refresh succeeds when a listed group version
@@ -587,7 +618,7 @@ mod discovery_tests {
         api.fail_next(RBAC_V1, 3, 404);
         let ops = ops(&api);
         ops.rediscover().await.unwrap();
-        assert!(cached(&ops, "ClusterRole").await);
+        assert!(cached(&ops, "rbac.authorization.k8s.io", "ClusterRole").await);
     }
 
     /// A group version that keeps answering 404 fails the refresh, and the
@@ -621,6 +652,7 @@ mod discovery_tests {
         let api = FakeApi::new([]);
         api.fail_next(RBAC_V1, 2, 404);
         let rid = ResourceId {
+            group: "rbac.authorization.k8s.io".into(),
             kind: "ClusterRole".into(),
             namespace: CLUSTER_SCOPED.into(),
             name: "absent".into(),
@@ -639,6 +671,7 @@ mod discovery_tests {
             404,
         );
         let rid = ResourceId {
+            group: "rbac.authorization.k8s.io".into(),
             kind: "ClusterRole".into(),
             namespace: CLUSTER_SCOPED.into(),
             name: "absent".into(),

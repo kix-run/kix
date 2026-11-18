@@ -8,3 +8,4 @@ Seen on 2026-11-13 with up to eleven agents, each with its own worktree and kind
 - `crane auth login` writes to the shared `~/.docker/config.json`.
 
 The `package-authoring` skill's kind steps mention none of this.
+- Hit again 2026-11-14: agents started in one session share one scratchpad directory, so two agents that each wrote `copypass.log` and `pr.md` there overwrote each other's files. One agent then read another's copy pass report as its own.

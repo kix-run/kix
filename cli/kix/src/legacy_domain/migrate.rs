@@ -11,10 +11,9 @@
 //!
 //! # Operation order
 //!
-//! `ResourceId` has no API group field and kind lookup in discovery is
-//! first-wins. While `activations.<retired>` and `activations.<current>` both
-//! exist, `Activation/_cluster/<name>` is ambiguous, so the migration deletes
-//! the retired CRDs in the same run that creates the new ones.
+//! While the retired group still serves records, [`super::check_discovery`]
+//! refuses every command that reads them, so the migration deletes the
+//! retired CRDs in the same run that creates the new ones.
 //!
 //! `PackageInstance` records are not copied because every activation includes
 //! them in its manifest set and the next deploy re-creates them.

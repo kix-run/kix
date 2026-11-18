@@ -189,7 +189,8 @@ pub fn pin_then_upgrade(current: Option<&str>) -> String {
 /// pins Kix `locked`. `kix upgrade` only moves a project to a newer version,
 /// so an older `asked` gets the two ways out that do not need it.
 pub fn moved_tag_next_step(locked: &Version, asked: &Version) -> String {
-    if asked > locked {
+    use crate::version::policy::{UpgradeVerdict, judge_upgrade};
+    if judge_upgrade(locked, locked, asked) == UpgradeVerdict::Proceed {
         return format!("Run `kix upgrade --to {}`.", asked.release());
     }
     let (locked, asked) = (locked.release(), asked.release());
@@ -239,12 +240,7 @@ fn locked_kix(dir: &Path) -> Result<ProjectKix, LockError> {
         path: path.clone(),
         message,
     };
-    let text = match std::fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(LockError::Missing),
-        Err(e) => return Err(unreadable(e.to_string())),
-    };
-    let lock: Value = serde_json::from_str(&text).map_err(|e| unreadable(e.to_string()))?;
+    let lock = read(dir)?;
     let original = kix_input(&lock).map_err(|e| match e {
         InputError::Malformed(message) => unreadable(message.to_string()),
         e => LockError::Input(e),
@@ -261,6 +257,40 @@ fn locked_kix(dir: &Path) -> Result<ProjectKix, LockError> {
         });
     }
     Ok(kix)
+}
+
+/// Read and parse the `flake.lock` in `dir`.
+pub fn read(dir: &Path) -> Result<Value, LockError> {
+    let path = dir.join(FILE);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(LockError::Missing),
+        Err(e) => {
+            return Err(LockError::Unreadable {
+                path,
+                message: e.to_string(),
+            });
+        }
+    };
+    serde_json::from_str(&text).map_err(|e| LockError::Unreadable {
+        path,
+        message: e.to_string(),
+    })
+}
+
+/// Return each input node of `lock` that has `locked` attributes, as its
+/// node name and those attributes. The root node is the project's own flake,
+/// so it is left out.
+pub fn locked_inputs(
+    lock: &Value,
+) -> impl Iterator<Item = (&str, &serde_json::Map<String, Value>)> {
+    let root = lock["root"].as_str().unwrap_or("root");
+    lock["nodes"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter(move |(name, _)| name.as_str() != root)
+        .filter_map(|(name, node)| Some((name.as_str(), node["locked"].as_object()?)))
 }
 
 /// Return the `original` of the root's `kix` input in `lock`: the input as
@@ -372,6 +402,31 @@ mod tests {
 
     fn v(s: &str) -> Version {
         s.parse().unwrap()
+    }
+
+    #[test]
+    fn locked_inputs_skip_the_root_and_unlocked_nodes() {
+        let lock = json!({
+            "root": "self",
+            "nodes": {
+                "self": { "inputs": { "kix": "kix" }, "locked": { "type": "path" } },
+                "kix": { "locked": { "rev": "abc" } },
+                "pending": { "original": {} },
+            },
+        });
+        let names: Vec<&str> = locked_inputs(&lock).map(|(name, _)| name).collect();
+        assert_eq!(names, ["kix"]);
+    }
+
+    #[test]
+    fn read_tells_a_missing_lock_from_a_broken_one() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(read(dir.path()), Err(LockError::Missing));
+        std::fs::write(dir.path().join(FILE), "{").unwrap();
+        assert!(matches!(
+            read(dir.path()),
+            Err(LockError::Unreadable { .. })
+        ));
     }
 
     fn from_lock(lock: &Value) -> Result<ProjectKix, LockError> {

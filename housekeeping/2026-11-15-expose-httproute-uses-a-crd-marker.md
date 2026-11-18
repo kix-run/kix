@@ -1,0 +1,3 @@
+# 2026-11-15 · `kix/lib/vocab/expose.nix` · kix.expose builds HTTPRoutes from a CRD marker although the gatewayApi role now owns the CRD.
+
+`kix.expose` declares the HTTPRoute CRD with `scope.mkCRDRef` (`expose.nix:672`), as if it were installed outside Kix. Since the `gateway-api` package installs it, the route reaches the real CRD only indirectly: the marker waits at deploy, and the route depends on the Gateway, which depends on the CRDs. The gateway contract could publish the HTTPRoute handle (or kix.expose could take the `gatewayApi` role), so the route is built with `scope.mkCR` from the CRD that installs it and one declaration of the kind remains.

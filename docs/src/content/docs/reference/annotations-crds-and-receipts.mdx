@@ -49,15 +49,15 @@ Most `kix.run/*` metadata is stamped automatically by resource builders (`scope.
 | Annotation | Set via | Meaning |
 | --- | --- | --- |
 | `kix.run/depends-on` | Nix string context, `requires`, `extraDeps` | Comma-separated dependency entries (`<hash>`, `requires:<hash>`, `extra:<hash>`) that define the deployment dependency graph. |
-| `kix.run/readiness` | `readiness` on `scope.mkCRD` / `scope.mkCRDRef` | JSON readiness rule evaluated by `kix deploy` for custom resources. See [`kix.run/readiness`](#kixrunreadiness). |
+| `kix.run/readiness` | `readiness` on `scope.mkCRD` / `scope.mkCRDRef`, or on `scope.mkCR` for one resource | JSON readiness rule evaluated by `kix deploy` for custom resources. See [`kix.run/readiness`](#kixrunreadiness). |
 | `kix.run/rerun` | `kix.healthCheck` or `kix.keyValues.rerunOnChange` | `"on-change"` on a `Job` resource. Instructs `kix deploy`, `kix rollback`, and the operator to delete and recreate the Job when its `kix.run/rerun-hash` changes. `kix deploy` and `kix rollback` also recreate it when its previous run failed. A change that leaves the Job's own manifest alone, such as a new label on its namespace, updates the Job in place without running it again. |
-| `kix.run/rerun-hash` | `scope.mkResource`, on every resource that carries `kix.run/rerun` | The resource's `out.contentHash`: a hash of its own manifest without `kix.run/*` keys and without what it depends on. The `checksum/*` annotations on the Job's pod template are part of it, so a Job reruns when a Secret or ConfigMap it reads through one of them changes. A Job deployed before Kix wrote this annotation runs once more on the first deploy after the upgrade. |
+| `kix.run/rerun-hash` | `scope.mkResource`, on every resource that carries `kix.run/rerun` | Hash of the content that triggers a rerun. Combines the resource's `out.contentHash` with the `out.contentHash` of each Kix-built Secret and ConfigMap that its pod reads through a volume, `env`, or `envFrom` (or equals `out.contentHash` when the pod reads none). Excludes `kix.run/*` metadata and other dependencies. Pod template `checksum/*` annotations are part of the Job's own manifest, so changing one (such as an annotation set to another resource's `out.contentHash`) also reruns the Job. Jobs deployed before Kix added this annotation run once more on the first deploy after upgrading. |
 | `kix.run/cede-fields` | `ownership.cede` on `scope.mkResource` / `scope.mkCRD` | Comma-separated field paths another controller may take over after creation. See [`kix.run/cede-fields`](#kixruncede-fields). |
 | `kix.run/expects` | `kix.untrackedRef { kind; name; by?; }` | Comma-separated `apiVersion\|Kind\|name` entries that `kix deploy` waits to exist before applying the resource. See [`kix.run/expects`](#kixrunexpects). |
 
 #### `kix.run/readiness`
 
-Stamped on custom resources built via `scope.mkCR` when the CRD or CRD reference declares `readiness`:
+Stamped on custom resources built via `scope.mkCR` when the CRD or CRD reference declares `readiness`, or when `scope.mkCR` receives its own `readiness`, which replaces the kind's:
 
 | CRD `readiness` declaration | Stamped JSON value | When `kix deploy` considers the resource ready |
 | --- | --- | --- |
@@ -67,6 +67,13 @@ Stamped on custom resources built via `scope.mkCR` when the CRD or CRD reference
 | `{ condition = { type = "Valid"; status = "True"; }; failed = [ { condition = { type = "Valid"; status = "False"; }; } ]; }` | `{"condition":{"status":"True","type":"Valid"},"failed":[{"condition":{"status":"False","type":"Valid"}}]}` | Ready as in the row above. When a `failed` entry matches instead, `kix deploy` stops waiting and fails the resource with the controller's message. |
 
 A `failed` entry is `{ condition = { type; status; reason ? ...; }; }` (the reason is matched only when declared) or `{ path; equals; rejected ? false; hint ? ...; message ? ...; }`, where `rejected = true` makes the message say to change the object (the default for conditions), `hint` is the next step for a runtime outcome, and `message` is a JSON pointer, or a list of them, whose values the message quotes (stamped as a list). A match counts once the condition's `observedGeneration`, or `status.observedGeneration`, has reached `metadata.generation`; without a generation, once the condition's `lastTransitionTime` is later than this deploy's apply of the object (an earlier one is not reported); and with neither field, once the match has held for ten seconds of polling. A version of Kix that predates `failed` ignores the key and waits as before.
+
+Two more keys can sit beside the ready rule:
+
+- `observedGeneration` names the status field where the controller reports the generation it has acted on, as a JSON pointer such as `"/status/desiredGeneration"`, or is `false` when the kind reports none. Without it, Kix reads `status.observedGeneration`. The ready rule, the `failed` entries, and `pendingRestart` wait until that field has reached `metadata.generation`. A declared field that is absent counts as not reached yet, while an absent `status.observedGeneration` imposes no wait. A condition's own `observedGeneration` still comes first. A value that is neither a JSON pointer nor `false` makes Kix ignore the whole annotation.
+- `pendingRestart` is `{ condition = { type; status; reason ? ...; }; hint ? ...; }` or `{ path; equals; hint ? ...; message ? ...; }`. It names the state in which the controller has accepted the spec and the running workload keeps the previous one until it restarts. When it matches on a ready resource whose status is current, `kix deploy` reports the resource as ready with a restart pending, quoting the controller's message and the hint. Without a generation, a condition that last changed before this deploy applied the resource is not reported. The JSON deploy log reports it as an `awaiting_restart` detail with the message.
+
+A version of Kix that predates these keys ignores them, waits on `status.observedGeneration`, and reports plain ready.
 
 :::tip[Use it in a task]
 See [Declare readiness for custom resources](/docs/how-to/author-packages-and-clusters/declare-readiness-for-custom-resources/) for examples of custom resource readiness rules.
@@ -135,7 +142,11 @@ spec:
 | `spec.instances` | `object` (`{ <namespace>: { <instance>: string } }`) | Nested map from namespace and instance name to the `PackageInstance` resource name for every active instance in the build. |
 | `spec.consumers` | `object` (optional) | Hosted consumer clusters (`{ <consumer>: { interface, sha256 } }`) declared by a platform cluster. |
 | `spec.interfaces` | `object` (optional) | Platform interfaces (`{ <platform>: { consumer, path, sha256 } }`) that a consumer cluster was built against. |
+| `spec.source` | `object` (optional) | Build location for the Kix operator (`{ type: "storePath", path }`). Written only by `kix deploy --operator` and `kix rollback --operator`. |
+| `spec.request` | `string` (optional) | Random token written on each run of `kix deploy --operator` or `kix rollback --operator` to ask the Kix operator to deploy this record. Compared by equality with `status.startedRequest` and `status.finishedRequest`, so clock differences between machines do not matter. Commands without `--operator` never set it. |
 | `status.phase` | `string` | Lifecycle state: `Queued`, `Deploying`, `Active`, `Degraded`, `Failed`, or `Superseded`. |
+| `status.startedRequest` | `string` (optional) | Most recent `spec.request` token the Kix operator has started processing. When `spec.request` has a different value, that request is still waiting to start. |
+| `status.finishedRequest` | `string` (optional) | Most recent `spec.request` token the Kix operator has finished applying. `kix deploy --operator` and `kix rollback --operator` wait until this matches `spec.request` (or the record enters `Failed` or `Superseded`). |
 | `status.receipt` | `object` | Provenance record written by `kix deploy` (see [Deploy receipt schema](#deploy-receipt-schema)). |
 | `status.packageIndex` | `object` (optional) | Map of package instances and cluster-level resources to their manifest identity hashes (`format` + per-package hash lists), written when a deploy begins. From Kix 0.10 it also carries `names`. See [The package index](#the-package-index). |
 | `status.orphansKeptFrom` | `array of string` (optional) | Previous activation build paths whose orphaned resources were kept because `--prune` was not passed, preserved so a later `kix deploy --prune` or `kix gc` can clean them up. |
@@ -153,6 +164,7 @@ objects by package and to find objects that are gone from the cluster.
 | `packages` | `object` | Map from `namespace/instance` to `{ instance, resources }`: the identity hash of the package's `PackageInstance`, and the identity hashes of its resources. |
 | `clusterLevel` | `array of string` | Identity hashes of the resources no package lists, such as Namespaces. |
 | `names` | `object` (optional) | Map from each object's identity hash to `[kind, namespace, name]`. `namespace` is `""` for a cluster-scoped object. |
+| `groups` | `object` (optional) | Map from each object's identity hash to its API group (such as `apps` or `kix.run`) for objects in `names` outside the core `v1` API group. Kix treats any object in `names` without a `groups` entry as part of the core `v1` API group, including in indexes written by earlier versions. |
 
 ```yaml
 status:
@@ -167,6 +179,8 @@ status:
       1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: [PackageInstance, default, web]
       3aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: [ConfigMap, default, web-config]
       4aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: [Namespace, "", default]
+    groups:
+      1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: kix.run
 ```
 
 Deploys from Kix 0.10 write `names`, so a later `kix status` can name an
@@ -180,6 +194,8 @@ Kix does not write it, and the deploy goes on.
 ### Activation lifecycle and operator finalizer
 
 - **`Queued` -> `Deploying` -> `Active` | `Degraded` | `Failed` -> `Superseded`**: `kix deploy` creates or updates the `Activation` record before applying the first wave. `Active` means every resource applied and became ready. `Degraded` means the deploy completed but one or more resources failed readiness; it remains the cluster's current activation. `Failed` means the deploy aborted before completion; the next deploy uses the previous `Active` or `Degraded` activation as its primary diff baseline while also sweeping changes from the `Failed` run.
+- **Operator requests (`--operator`)**: Each run of `kix deploy --operator` or `kix rollback --operator` writes a new token to `spec.request`, and the Kix operator copies it to `status.startedRequest` when work begins. If the record is `Superseded` or `Failed` (such as during `kix rollback --operator` or a retry of a failed deploy), the operator sets `status.phase` back to `Queued`, deploys the build, and marks the previous current record `Superseded`. If the record is already `Active` or `Degraded` (when `kix deploy --operator` redeploys the current build), it keeps that phase while the operator applies the build again. Once per request, when the deploy starts, the operator reruns any Job marked `kix.run/rerun` whose last run failed. When the deploy finishes, the operator writes the token to `status.finishedRequest`.
+- **Operator features (`kix.run/operator-features`)**: On startup, the Kix operator patches the `activations.kix.run` CustomResourceDefinition to set `kix.run/operator-features` to a comma-separated list of supported features (currently `requests`, for `spec.request` handling). `kix deploy --operator` and `kix rollback --operator` read this annotation before changing the cluster and stop if `requests` is missing, because an older operator ignores `spec.request`.
 - **In-cluster operator (`--operator`)**: When managed by `kix-operator`, the record carries the finalizer `kix.run/operator-gc`. Deleting an `Active`, `Deploying`, or `Degraded` `Activation` causes the operator to delete all resources owned by that activation except `Namespace` and `CustomResourceDefinition` objects. Deleting a `Superseded` record (for example, during `kix gc --operator`) simply removes the finalizer.
 
 ## PackageInstance

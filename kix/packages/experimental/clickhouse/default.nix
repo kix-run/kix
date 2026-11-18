@@ -27,6 +27,20 @@
 # `builtinServerConfig` below; a cluster overrides a value by naming the same
 # fragment and path, or adds a fragment of its own.
 #
+# Upgrades: stay on an LTS line (the March and August releases).
+# ClickHouse supports moving between two versions released less than a
+# year apart, which covers one LTS to the next, and reads the data files
+# the older one wrote. The embedded Keeper of 26.3 cannot read snapshot
+# format 8, the default of 26.8, so this package keeps 26.8 on format 6
+# (see write_snapshot_version below). To go back, deploy the older package
+# version over the same volume. If the server then fails with
+# "Unsupported snapshot version 8", the 26.8 server reloaded the older
+# config before it stopped. Move the newest file out of
+# /var/lib/clickhouse/coordination/snapshots and delete the pod. Going
+# back works only while no feature of 26.8 has been used, and 26.8 writes
+# lightweight UPDATE patch parts in a format 26.3 cannot read. On amd64
+# nodes, 26.6 and later need a CPU with AVX2.
+#
 # Dependencies:
 #   storage (required)      a persistent-volume-claim instance, mounted at
 #                           /var/lib/clickhouse
@@ -79,7 +93,7 @@
 }:
 let
   # ClickHouse versions have four parts, and the image tag is the version.
-  release = "26.3.33.24";
+  release = "26.8.39.19";
 
   name = scope.instanceName;
 
@@ -145,7 +159,7 @@ in
     image = kix.options.image {
       repository = "docker.io/clickhouse/clickhouse-server";
       tag = release;
-      digest = "sha256:810861a2e2d0188744f5f23b2d3ec9ff95812bcb9ddbb8fed13a377a7f305893";
+      digest = "sha256:a42be7a55bbbe15a062afb72759564be70c92bf020265bf8d8011af73c95b98c";
     };
 
     clusterName = lib.mkOption {
@@ -350,6 +364,11 @@ in
               server_id = 1;
               log_storage_path = "${dataPath}/coordination/log";
               snapshot_storage_path = "${dataPath}/coordination/snapshots";
+              # Keeper 26.8 writes snapshot format 8 by default, and Keeper
+              # 26.3 refuses to start on it. Format 6 keeps the way back to
+              # 26.3. Remove this at the next LTS bump, when no supported
+              # version predates format 8.
+              coordination_settings.write_snapshot_version = 6;
               raft_configuration.server = {
                 id = 1;
                 hostname = "localhost";

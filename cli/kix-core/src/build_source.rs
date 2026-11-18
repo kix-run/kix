@@ -42,6 +42,8 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::eval::KixEvalError;
+use crate::eval::build_files::BuildFiles;
+use crate::eval::library_record::{LibraryRecord, read_warnings};
 use crate::eval::nix::eval_activation_index;
 use crate::eval::stamp::stamp_annotations;
 use crate::eval::store_graph::{StoreGraph, store_hash};
@@ -90,6 +92,9 @@ pub struct Provenance {
 pub struct Build {
     graph: StoreGraph,
     origin: Origin,
+    /// The Kix library's warnings for this build. A carried build has
+    /// none, because the command that made it showed them.
+    warnings: Vec<LibraryRecord>,
     /// Retired-domain error recorded when the raw build was loaded, if any.
     legacy_domain: Option<LegacyDomainError>,
 }
@@ -153,7 +158,8 @@ impl Build {
     /// Nix store. Its Secrets read SOPS files from the local filesystem.
     pub fn local(built_via: &Path, status: &dyn Fn(&str)) -> Result<Build, KixEvalError> {
         let graph = StoreGraph::from_local(built_via, status)?;
-        Ok(Build::stamped(graph, Origin::Local))
+        let warnings = read_warnings(BuildFiles::read(built_via)?.warnings.as_ref());
+        Ok(Build::stamped(graph, Origin::Local, warnings))
     }
 
     /// Load the build that `read` constructs from `bytes`, verifying that it
@@ -180,19 +186,26 @@ impl Build {
             source: Box::new(source),
             sha256,
         };
-        Ok(Build::stamped(graph, origin))
+        Ok(Build::stamped(graph, origin, Vec::new()))
     }
 
     /// Check the loaded `graph` for a retired domain, then stamp its annotations.
-    fn stamped(mut graph: StoreGraph, origin: Origin) -> Build {
+    fn stamped(mut graph: StoreGraph, origin: Origin, warnings: Vec<LibraryRecord>) -> Build {
         let legacy_domain =
             legacy_domain::check_build(graph.resources.values().map(|r| &r.manifest)).err();
         stamp_annotations(&mut graph);
         Build {
             graph,
             origin,
+            warnings,
             legacy_domain,
         }
+    }
+
+    /// Return the Kix library's warnings for the build, which every command
+    /// that evaluates a build shows. A carried build has none.
+    pub fn warnings(&self) -> &[LibraryRecord] {
+        &self.warnings
     }
 
     /// Return the build's stamped graph.
@@ -218,6 +231,20 @@ impl Build {
             Some(e) => Err(e),
             None => Ok(InstallableBuild(self)),
         }
+    }
+
+    /// Convert a build that a deploy record of the cluster names, which a
+    /// rollback applies again, into an [`InstallableBuild`].
+    ///
+    /// Unlike [`Build::installable`], this does not refuse a build that
+    /// renders Kix's own CRDs under a retired group. That refusal diagnoses a
+    /// new build evaluated against a library from before the domain moved. A
+    /// recorded build was valid when the cluster ran it, and loading it
+    /// stamped its Kix keys and Kix's own CRDs into the current group
+    /// (`legacy_domain::upgrade_manifest`), so installing it creates no
+    /// retired CRD.
+    pub fn installable_as_deployed(self) -> InstallableBuild {
+        InstallableBuild(self)
     }
 
     /// Return whether the build lives in the local Nix store.
@@ -476,6 +503,33 @@ mod tests {
                 .unwrap()
                 .installable()
                 .is_ok()
+        );
+    }
+
+    /// A build a deploy record names is installable although it predates
+    /// the domain move, and what it installs is the stamped graph in the
+    /// current domain.
+    #[test]
+    fn a_deployed_build_from_before_the_domain_move_is_installable() {
+        let mut graph = fixture();
+        let record = graph
+            .resources
+            .values_mut()
+            .find(|r| crate::manifest::lifecycle::is_record(&r.manifest))
+            .unwrap();
+        let version = record.manifest["apiVersion"].as_str().unwrap();
+        let legacy = version.replace(keys::GROUP, legacy_domain::DOMAINS[0]);
+        record.manifest["apiVersion"] = Value::String(legacy);
+        let deployed = carried(&graph, &fixture())
+            .unwrap()
+            .installable_as_deployed();
+        assert!(
+            deployed
+                .graph()
+                .resources
+                .values()
+                .filter_map(|r| r.manifest["apiVersion"].as_str())
+                .all(|v| !v.starts_with(legacy_domain::DOMAINS[0]))
         );
     }
 

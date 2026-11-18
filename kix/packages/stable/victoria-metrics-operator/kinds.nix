@@ -6,15 +6,15 @@
 # two reasons:
 #   1. At startup it unconditionally registers status-condition field
 #      indexers for every kind in ChildConditionIndexedKinds
-#      (k8stools/child_condition_index.go @ v0.74.1) and the manager
+#      (factory/k8stools/child_condition_index.go @ v0.75.2) and the manager
 #      crashes immediately ("cannot register status condition indexers")
 #      if any of those CRDs is absent.
 #   2. It then starts informer watches for every controller; a watch on a
 #      missing kind dies ~3 minutes in with "failed to wait for ... caches
 #      to sync" (for example *v1.VLAgent) and takes the manager down: a
 #      slow crashloop.
-# So this table mirrors the chart's crd.yaml bundle for the pinned
-# operator version (25 kinds @ 0.67.3 / v0.74.1), plurals verbatim;
+# So this table mirrors upstream's CRD bundle (config/crd/overlay/crd.yaml)
+# for the pinned operator version (26 kinds @ v0.75.2), plurals verbatim;
 # note the irregulars (vmanomalies, vmdistributed, vldistributed).
 # crds.nix throws at eval time if the table stops covering
 # `indexedKinds`, so a "trim the CRDs" edit fails at compile time
@@ -244,9 +244,14 @@
       plural = "vtsingles";
       version = "v1";
     };
+    vtAgents = {
+      kind = "VTAgent";
+      plural = "vtagents";
+      version = "v1";
+    };
   };
 
-  # ChildConditionIndexedKinds @ v0.74.1: the hard floor. Update alongside
+  # ChildConditionIndexedKinds @ v0.75.2: the hard floor. Update alongside
   # operator version bumps.
   indexedKinds = [
     "VMRule"

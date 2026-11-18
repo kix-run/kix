@@ -670,7 +670,7 @@ in
 
   # The reference-mode VM operator names every monitoring.coreos.com kind it
   # converts, at the version upstream serves. The AlertmanagerConfig marker
-  # is the longest CRD ref marker name in kixpkgs.
+  # is the longest CRD ref marker name in this repository.
   lib-reference-checks-victoria-metrics-operator-refs =
     let
       ms = manifests (mkCluster [
@@ -767,7 +767,7 @@ in
     (whoOf ms == "managed" && importMarker ms == null)
     || throw "activated optional: ${whoOf ms}, import marker ${builtins.toJSON (importMarker ms)}";
 
-  # A shelf package pulled for another dependency also answers `x`. The
+  # A catalog package pulled for another dependency also answers `x`. The
   # managed, auto-instantiated instance wins over the import.
   lib-reference-checks-auto-instantiated-leaves-import-inactive =
     let
@@ -1633,6 +1633,7 @@ in
           { ref, ... }:
           {
             cluster.domain = "example.test";
+            instances.gwns.gateway-api.package = import ../../../packages/experimental/gateway-api;
             instances.gwns.gateway = {
               package = import ../../../packages/experimental/envoy-gateway;
               config.listeners = [

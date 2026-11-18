@@ -124,11 +124,7 @@ pub(crate) struct HydrationResult {
 
 /// Check if a manifest is a Secret that needs SOPS hydration.
 pub(crate) fn needs_hydration(manifest: &Value) -> bool {
-    let kind = manifest
-        .pointer("/kind")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    if kind != "Secret" {
+    if !crate::manifest::types::is_secret(manifest) {
         return false;
     }
     manifest
@@ -785,6 +781,13 @@ mod tests {
             }
         });
         assert!(needs_hydration(&manifest));
+
+        let mut custom = manifest;
+        custom["apiVersion"] = json!("example.com/v1");
+        assert!(
+            !needs_hydration(&custom),
+            "a custom kind named Secret gets no decrypted values"
+        );
     }
 
     #[test]

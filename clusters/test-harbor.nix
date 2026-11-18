@@ -7,7 +7,7 @@
 # Network policy and the full scorecard rule set are on so the package is
 # held to the same bar homelab-kind holds its packages to.
 #
-# Build:  nix build .#cluster-harbor --extra-experimental-features pipe-operators
+# Build:  kix build harbor
 
 { kix, packages }:
 
@@ -32,7 +32,7 @@ kix.buildCluster {
         cluster.domain = "localhost";
         networkPolicy.enable = true;
         # The full built-in rule set at its own severities, with no
-        # override, is the default now, and clusters/flake.nix raises the
+        # override, is the default now, and the repository's flake.nix raises the
         # cap to error: a rule that disagrees with what the builders
         # produce fails this build. cilium's host network and privileged
         # mount are declared in its own meta.unsafe, not downgraded here.

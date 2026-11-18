@@ -8,7 +8,7 @@
           "type": "string"
         },
         "findings": {
-          "description": "The scorecard's findings on the scorecard row. On the eval row, the\nKix library's errors when the evaluation failed, which its details\nalready show as text, or its warnings when it passed. A warning has\n`severity` and `message`. An error has `message`, and may have `id`,\n`instance`, `package`, and `fix`. It names what to change in one of\nthree fields: `option` is a path in the instance's `config`,\n`dependency` is the name of one of the instance's `deps`, and\n`clusterOption` is a path in the cluster definition.",
+          "description": "The scorecard's findings on the scorecard row. On the eval row, the\nKix library's errors when the evaluation failed, which its details\nalready show as text, or its warnings when it passed. Errors and\nwarnings have the same fields, and a warning also has `severity`.\nEach has `message`, and may have `id`, `instance`, `package`,\n`object`, and `fix`. `object` is the Kubernetes object it is about,\nwith `kind`, `name`, and an optional `namespace`. It names what to\nchange in one of three fields: `option` is a path in the instance's\n`config`, `dependency` is the name of one of the instance's `deps`,\nand `clusterOption` is a path in the cluster definition.",
           "items": true,
           "type": "array"
         },

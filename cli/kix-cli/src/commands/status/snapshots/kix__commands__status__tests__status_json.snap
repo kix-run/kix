@@ -3,7 +3,7 @@ source: kix-cli/src/commands/status/tests.rs
 expression: "serde_json::to_string_pretty(&doc).unwrap()"
 ---
 {
-  "schema_version": "2026-11-13",
+  "schema_version": "2026-11-15",
   "kubernetes": {
     "context": "prod",
     "uid": "4d7b1c2e",

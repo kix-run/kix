@@ -44,7 +44,7 @@ impl DeployObserver for LineObserver {
                     Verdict::Pending => {}
                     Verdict::Running => match detail {
                         Some(NodeDetail::Applied(action)) => {
-                            println!("{label}> {tag}{}", apply_label(action));
+                            println!("{label}> {tag}{action}");
                         }
                         Some(NodeDetail::SecretHydrated { keys }) => {
                             println!("{label}> hydrated {keys} keys from SOPS");
@@ -64,10 +64,8 @@ impl DeployObserver for LineObserver {
                         Some(NodeDetail::Rerun { reason }) => {
                             println!("{label}> rerun: {reason}");
                         }
-                        Some(NodeDetail::PendingRestart { stale, message }) => {
-                            println!(
-                                "{label}> ready, {stale} pods pending manual restart (OnDelete): {message}"
-                            );
+                        Some(NodeDetail::PendingRestart { message, .. }) => {
+                            println!("{label}> ready, restart pending: {message}");
                         }
                         _ => {
                             println!("{label}> ready");
@@ -249,15 +247,6 @@ fn prune_lines(resources: &[ResourceId], kept: &[ResourceId], delete: bool) -> V
     lines
 }
 
-fn apply_label(action: &ApplyAction) -> &'static str {
-    match action {
-        ApplyAction::Created => "created",
-        ApplyAction::Configured => "configured",
-        ApplyAction::Unchanged => "unchanged",
-        ApplyAction::Skipped => "skipped",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -266,6 +255,7 @@ mod tests {
 
     fn rid(kind: &str, name: &str) -> ResourceId {
         ResourceId {
+            group: String::new(),
             kind: kind.into(),
             name: name.into(),
             namespace: "app".into(),
@@ -297,6 +287,7 @@ mod tests {
         use kix::cluster::stream::{InFlight, NodeMeta, Phase, PlanNode};
         use std::time::Duration;
         let crd = NodeId::Resource(ResourceId {
+            group: "apiextensions.k8s.io".into(),
             kind: "CustomResourceDefinition".into(),
             name: "things.example.com".into(),
             namespace: kix::manifest::types::CLUSTER_SCOPED.into(),
@@ -407,8 +398,17 @@ mod tests {
                 TransitionKind::Apply,
                 Verdict::Ready,
                 Some(NodeDetail::PendingRestart {
-                    stale: 2,
+                    stale: Some(2),
                     message: "OnDelete".into(),
+                }),
+            ),
+            state(
+                node("VirtualMachine", "demo"),
+                TransitionKind::Apply,
+                Verdict::Ready,
+                Some(NodeDetail::PendingRestart {
+                    stale: None,
+                    message: "its controller set RestartRequired=True".into(),
                 }),
             ),
             state(

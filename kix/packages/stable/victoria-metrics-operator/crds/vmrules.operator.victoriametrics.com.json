@@ -2,9 +2,6 @@
   "apiVersion": "apiextensions.k8s.io/v1",
   "kind": "CustomResourceDefinition",
   "metadata": {
-    "annotations": {
-      "controller-gen.kubebuilder.io/version": "v0.21.0"
-    },
     "name": "vmrules.operator.victoriametrics.com"
   },
   "spec": {
@@ -119,12 +116,11 @@
                           "type": "object"
                         },
                         "rules": {
-                          "description": "Rules list of alert rules.\nRules are merged by record and alert fields.",
+                          "description": "Rules list of alert rules.",
                           "items": {
                             "description": "Rule describes an alerting or recording rule.",
                             "properties": {
                               "alert": {
-                                "default": "",
                                 "description": "Alert is a name for alert",
                                 "type": "string"
                               },
@@ -159,7 +155,6 @@
                                 "type": "object"
                               },
                               "record": {
-                                "default": "",
                                 "description": "Record represents a query, that will be recorded to dataSource",
                                 "type": "string"
                               },
@@ -177,7 +172,7 @@
                           "type": "string"
                         },
                         "type": {
-                          "description": "Type defines datasource type for enterprise version of vmalert\npossible values - prometheus,graphite,vlogs",
+                          "description": "Type defines datasource type for vmalert\npossible values:\n- prometheus\n- graphite\n- vlogs",
                           "type": "string"
                         }
                       },
@@ -200,7 +195,7 @@
                 "type": "object"
               },
               "status": {
-                "description": "VMRuleStatus defines the observed state of VMRule",
+                "description": "VMRuleStatus defines the observed state of VMRule\n\n`updateStatus` is set to `operational` unless the operator cannot parse the spec,\nin which case it is set to `failed`. It never reports whether the applications\nselecting this object accepted its content - `conditions` carries that.\nSee https://github.com/VictoriaMetrics/operator/issues/2649",
                 "properties": {
                   "conditions": {
                     "description": "Known .status.conditions.type are: \"Available\", \"Progressing\", and \"Degraded\"",

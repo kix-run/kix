@@ -472,10 +472,7 @@ fn check_library(
     }
     let facts = library_facts(flake_path, input_overrides)?;
     crate::project::check_agreement(runtime::builder(), &origin, facts.builder.as_deref())?;
-    let library = match facts.version.as_deref() {
-        Some(text) => LibraryVersion::parse(text),
-        None => LibraryVersion::Older,
-    };
+    let library = facts.library_version();
     if let Ok(crate::flake_lock::ProjectKix::Release(pinned)) = pinned
         && let LibraryVersion::Known(library) = &library
     {
@@ -496,6 +493,26 @@ struct LibraryFacts {
     /// (`kixLibrary.projectRoot`).
     #[serde(default)]
     project_root: Option<String>,
+}
+
+impl LibraryFacts {
+    /// Return the library's version. A library that publishes none is older
+    /// than the version output.
+    fn library_version(&self) -> LibraryVersion {
+        match self.version.as_deref() {
+            Some(text) => LibraryVersion::parse(text),
+            None => LibraryVersion::Older,
+        }
+    }
+}
+
+/// Evaluate the version of the Kix library the flake at `flake_path` uses.
+/// This is the one place Kix reads it.
+pub(crate) fn library_version(
+    flake_path: &Path,
+    input_overrides: &[(String, String)],
+) -> Result<LibraryVersion, KixEvalError> {
+    library_facts(flake_path, input_overrides).map(|facts| facts.library_version())
 }
 
 /// The project root the Kix library published in this run, once

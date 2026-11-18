@@ -5,6 +5,7 @@ mod client;
 mod commands;
 mod dispatch;
 mod exit;
+mod interrupt;
 mod output;
 mod plan;
 mod plugin;
@@ -105,11 +106,15 @@ fn check_format(cli: &Cli, matches: &clap::ArgMatches) -> miette::Result<()> {
         words.push(name);
         leaf = sub;
     }
+    let mode = cli.command.format_mode();
+    if let Some(flags) = mode.and_then(dispatch::FormatMode::flags) {
+        words.push(flags);
+    }
     Err(output::unsupported_format(
-        &(words.join(" ") + cli.command.format_flags()),
+        &words.join(" "),
         asked,
         formats,
-        cli.command.format_hint().as_deref(),
+        mode.and_then(dispatch::FormatMode::hint).as_deref(),
     ))
 }
 

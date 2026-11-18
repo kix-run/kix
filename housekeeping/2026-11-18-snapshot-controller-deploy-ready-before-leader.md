@@ -1,0 +1,3 @@
+# 2026-11-18 · `kix/packages/experimental/snapshot-controller` · A deploy reports the controller ready up to a minute before it takes the lease and starts work.
+
+The readiness probe is `/healthz/leader-election`, which a standby passes. The old pod exits without releasing the Lease (upstream's `ReleaseLeaderElectionOnExit` gate is alpha and off), so the new pod waits for the Lease to expire. On kind on 2026-11-18 the deploy finished and the new pod took the Lease 55s later, at v8.6.0 and at v8.7.0 alike. During that gap no controller handles VolumeSnapshots, and a check right after a deploy sees a ready controller that does nothing.

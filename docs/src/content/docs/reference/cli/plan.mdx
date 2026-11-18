@@ -75,6 +75,7 @@ needs only `get` and `list`.
 | Stateful migrations | Objects that hold data that the change removes from a stateful package and adds in their place. A deploy stops on them unless run with `--accept-migrations`. |
 | Drift | Fields where the live object differs from the deployed build, the managers that own them live, and whether the deploy puts the deployed value back. |
 | Not checked | Objects the dry run could not check. See [Objects not checked](#objects-not-checked). |
+| Library warnings | The Kix library's warnings about the build, the same ones [`kix check`](/docs/reference/cli/check/#library-warnings) lists. Text output prints them to stderr while the cluster builds. |
 
 Every refusal shows, not only the first. The dry run carries on past a
 refused write and still tries the objects that depend on it, since nothing a
@@ -97,7 +98,7 @@ say:
   apiserver's message.
 - `Drift:`, one line per drifted field with its live and deployed values,
   the managers that set it, and whether the deploy reverts it.
-- `Prune:`, objects that left the build and stay running on the cluster
+- `Prune:`, objects that left the build and stay on the cluster
   because another Kix cluster deploys them or they changed since they were
   read.
 - `Not checked by the dry run (N)`, grouped by reason, five names per group.
@@ -107,8 +108,8 @@ say:
 ### Markdown
 
 GitHub-flavoured Markdown for pull request comments: the package plan, then
-the writes the deploy would stop on, and the objects the dry run did not
-check in a `<details>` block.
+the Kix library's warnings, the writes the deploy would stop on, and the
+objects the dry run did not check in a `<details>` block.
 
 ## Plan file
 
@@ -152,7 +153,7 @@ Its JSON Schema is `cli/kix-cli/schema/plan.schema.json`.
 
 | Key | Content |
 | --- | --- |
-| `schema_version` | A date string, `YYYY-MM-DD`, currently `"2026-11-13"`. It changes only when the document changes in a way that is not backward compatible. |
+| `schema_version` | A date string, `YYYY-MM-DD`, currently `"2026-11-15"`. It changes only when the document changes in a way that is not backward compatible. |
 | `made_by` | `dry_run` from `kix plan`; `builds` from `kix plan --offline` or `kix diff --from <build>`; `live_read` from `kix plan --read-only` or `kix diff --from <snapshot>`. |
 | `kix` | `{ version, store_path }` of the Kix that made the plan. `store_path` is the store path of the binary, or `null` for a binary built outside the store. |
 | `cluster` | The name the build gives the Kix cluster. |
@@ -166,6 +167,7 @@ Its JSON Schema is `cli/kix-cli/schema/plan.schema.json`.
 | `drift` | Checked section of `{ resource, path, live, deployed, managers, reverted }`. A plan lists the drift on the objects the deploy applies, so `reverted` is always true; `kix plan --read-only` also lists drift the deploy leaves alone, with `reverted` false. |
 | `prune` | Checked section of `{ resource, fate, detail }`. See [Prune fates](#prune-fates). |
 | `readiness` | Always `{ "status": "not_checked", "reason": "not_previewable" }`. |
+| `warnings` | The Kix library's warnings for the build, each with the fields [`kix check`](/docs/reference/cli/check/#library-warnings) gives a warning, without `severity`. Left out when there are none, and for a build read from a bundle. |
 | `not_checked` | Array of `{ resource, reason, because, detail }`. `because` names the Namespace, CustomResourceDefinition, or Service that this deploy changes and that the answer depends on, when Kix knows which. Empty unless `made_by` is `dry_run`. |
 
 Each checked section is one of:
@@ -182,7 +184,7 @@ Each checked section is one of:
 | `deployed_build_unavailable` | The deployed build's manifests are not on this machine, so a change the commit makes cannot be told apart from drift. |
 | `not_previewable` | No preview can tell. |
 
-Resource identifiers have the form `Kind/name@namespace`.
+Resource identifiers have the form `Kind.group/name@namespace`, such as `Deployment.apps/web@shop`. Core `v1` kinds omit `.group` (`Service/web@shop`), and cluster-scoped objects omit `@namespace` (`Namespace/shop`).
 
 ## Field change labels
 
@@ -212,6 +214,7 @@ plan reports it as an ownership conflict naming the manager. With
 | `reason` | Meaning |
 | --- | --- |
 | `webhook_denied` | An admission webhook denied the write. `webhook` names it when the apiserver did. |
+| `webhook_unreachable` | The apiserver could not reach the Service behind an admission webhook, and this deploy does not write that Service or any other object in its package. `webhook` names the webhook when the apiserver reported it. See [Objects not checked](#objects-not-checked). |
 | `policy_denied` | A ValidatingAdmissionPolicy denied the write. `webhook` names the policy. |
 | `invalid` | The object fails validation against the schema or a CRD's rules. |
 | `immutable_field` | A changed field cannot be modified; the object must be deleted and created again. |
@@ -219,7 +222,7 @@ plan reports it as an ownership conflict naming the manager. With
 | `namespace_missing` | The namespace does not exist and the build does not create it. |
 | `unknown_kind` | The apiserver does not serve the kind and the build has no CRD for it. |
 | `decryption` | A SOPS Secret could not be decrypted. |
-| `other` | The deploy refuses the object before sending it, or the apiserver gave another error. When `webhook` is set, an admission webhook could not reach its Service and this deploy does not repair it. See [Objects not checked](#objects-not-checked). |
+| `other` | Kix refused the object before sending it, the dry-run write failed without a response, or the apiserver returned another error. |
 
 ## Prune fates
 
@@ -244,7 +247,7 @@ An admission webhook that cannot reach its Service is not checked only when
 this deploy writes that Service or another object of its package. Otherwise
 nothing in the deploy repairs the webhook, so the deploy would fail at the
 first object the webhook checks. The plan lists the object as a refusal with
-reason `other`, and the deploy stops before it writes anything. Get the
+reason `webhook_unreachable`, and the deploy stops before it writes anything. Get the
 webhook's backend running again. If someone deleted the Service, or scaled
 the workload behind it to 0 replicas, run `kix deploy <cluster> --reconcile`
 to restore what the build defines.

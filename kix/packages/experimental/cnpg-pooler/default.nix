@@ -41,7 +41,7 @@
 #                            9127) while `metrics.enabled`.
 #
 # Defaults: `instances` from the availability level (1 at none, 2 above),
-# session pooling (`pgbouncer.poolMode`), PgBouncer 1.25.2, 100m CPU and
+# session pooling (`pgbouncer.poolMode`), PgBouncer 1.26.1, 100m CPU and
 # 128Mi requested per pod.
 #
 # Placement: with more than one instance, the pods spread over nodes and
@@ -76,6 +76,14 @@
 #   out.extraImages               the PgBouncer image.
 #   out.version                   the PgBouncer version `image.tag` names.
 #
+# Upgrades: PgBouncer keeps no data, so a new image only rolls out a new
+# revision of the pooler Deployment. Client connections on a replaced pod
+# drop and must reconnect. PgBouncer 1.26 tracks every parameter PostgreSQL
+# reports, so in transaction pooling a client's `SET search_path`
+# (PostgreSQL 18) or `SET default_transaction_read_only` no longer leaks to
+# other clients. Going back to 1.25.2 is the same rollout: set `image.tag`
+# and `image.digest`, or deploy the earlier Kix release.
+#
 # Limits: one pooler type, `rw`, which sends every connection to the
 # primary. The package ships no alerts.
 #
@@ -90,7 +98,7 @@
 
 let
   # meta.version and the default image.tag.
-  release = "1.25.2";
+  release = "1.26.1";
 
   name = scope.instanceName;
   ns = scope.namespaceName;
@@ -161,8 +169,8 @@ in
     image = kix.options.image {
       repository = "ghcr.io/cloudnative-pg/pgbouncer";
       tag = release;
-      digest = "sha256:b15c428057d1ffbc19fb70496911a5f1a47066dcc1315bf794f4e85ade29e2e5";
-      description = "PgBouncer image, the operator's default for CloudNativePG 1.30 (DefaultPgbouncerImage in pkg/versions/versions.go upstream).";
+      digest = "sha256:6c91fd7383b8b098bc0c3b71dba4e98bd568c0d301b9fc66027fbc23259c6a7d";
+      description = "PgBouncer image, the operator's default for CloudNativePG 1.30.2 (DefaultPgbouncerImage in pkg/versions/versions.go upstream).";
     };
 
     resources = kix.options.resources {

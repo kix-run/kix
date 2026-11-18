@@ -14,10 +14,14 @@ use std::collections::{HashMap, HashSet};
 
 use serde_json::Value;
 
+use kube::discovery::{ApiResource, Scope};
+
 use crate::cluster::apply::ChangeAction;
+use crate::cluster::discovery;
 use crate::cluster::readiness;
 use crate::cluster::scheduler::DeployPlan;
 use crate::manifest::keys;
+use crate::manifest::kinds::{self, GroupKind};
 use crate::manifest::types::{CLUSTER_SCOPED, ResourceId};
 use crate::plan::document::UncheckedReason;
 use crate::plan::server::comparable;
@@ -52,8 +56,8 @@ pub struct DeployScope<'a> {
     pub build: &'a [Value],
     /// The deploy's plan. Its apply nodes are what the deploy writes.
     pub plan: &'a DeployPlan,
-    /// Kinds the apiserver serves.
-    pub served_kinds: &'a HashSet<String>,
+    /// The APIs the apiserver serves, as discovery lists them.
+    pub served: &'a [(ApiResource, Scope)],
 }
 
 /// Return the verdict for each object the dry run answered for, in the order
@@ -105,7 +109,7 @@ impl<'a> Context<'a> {
         let namespaces = scope
             .build
             .iter()
-            .filter(|m| m.get("kind").and_then(Value::as_str) == Some("Namespace"))
+            .filter(|m| GroupKind::of_manifest(m) == kinds::NAMESPACE)
             .filter_map(|m| m.pointer("/metadata/name").and_then(Value::as_str))
             .collect();
         let applied: Vec<&Value> = scope
@@ -154,7 +158,8 @@ impl<'a> Context<'a> {
                 }
             }
             Refusal::UnknownKind { kind }
-                if !self.scope.served_kinds.contains(kind) && self.crds.brings(manifest) =>
+                if discovery::find(self.scope.served, &rid.group, &rid.kind).is_none()
+                    && self.crds.brings(manifest) =>
             {
                 Verdict::NotChecked {
                     reason: UncheckedReason::CrdCreatedByThisDeploy,
@@ -168,6 +173,7 @@ impl<'a> Context<'a> {
                 Verdict::NotChecked {
                     reason: UncheckedReason::NamespaceCreatedByThisDeploy,
                     because: Some(ResourceId {
+                        group: String::new(),
                         kind: "Namespace".into(),
                         namespace: CLUSTER_SCOPED.into(),
                         name: namespace.clone(),
@@ -247,6 +253,7 @@ fn defined_by(crd: &Value) -> Option<(String, String)> {
 
 fn crd_id(name: &str) -> ResourceId {
     ResourceId {
+        group: "apiextensions.k8s.io".into(),
         kind: "CustomResourceDefinition".into(),
         namespace: CLUSTER_SCOPED.into(),
         name: name.into(),
@@ -264,7 +271,7 @@ impl ChangedCrds {
     pub fn of(answers: &[DryRunAnswer]) -> Self {
         let changed = answers
             .iter()
-            .filter(|a| a.rid.kind == "CustomResourceDefinition")
+            .filter(|a| a.rid.group_kind() == kinds::CUSTOM_RESOURCE_DEFINITION)
             .filter_map(|a| match &a.outcome {
                 DryRunOutcome::Applied(p) => {
                     let unchanged = p
@@ -298,14 +305,14 @@ impl BuildCrds {
     fn of(manifests: &[Value]) -> Self {
         let kinds = manifests
             .iter()
-            .filter(|m| m.get("kind").and_then(Value::as_str) == Some("CustomResourceDefinition"))
+            .filter(|m| GroupKind::of_manifest(m) == kinds::CUSTOM_RESOURCE_DEFINITION)
             .filter_map(|m| Some((defined_by(m)?, ResourceId::from_value(m))))
             .collect();
         let mut groups: HashMap<String, Vec<ResourceId>> = HashMap::new();
         for target in manifests
             .iter()
             .filter_map(|m| readiness::import_target_from_manifest(m).ok().flatten())
-            .filter(|t| t.kind == "CustomResourceDefinition")
+            .filter(|t| t.group_kind() == kinds::CUSTOM_RESOURCE_DEFINITION)
         {
             if let Some((_, group)) = target.name.split_once('.') {
                 groups
@@ -408,12 +415,17 @@ mod tests {
             .collect();
         let graph = crate::cluster::graph::ResourceGraph::from_manifests(build).unwrap();
         let plan = DeployPlan::from_graph_and_changes(&graph, &changes).unwrap();
-        let served = HashSet::from(["Deployment".to_string(), "Service".to_string()]);
+        let served = ["apps/v1/Deployment", "v1/Service"].map(|gvk| {
+            let (api_version, kind) = gvk.rsplit_once('/').unwrap();
+            let (group, version) = api_version.rsplit_once('/').unwrap_or(("", api_version));
+            let gvk = kube::api::GroupVersionKind::gvk(group, version, kind);
+            (ApiResource::from_gvk(&gvk), Scope::Namespaced)
+        });
         let scope = DeployScope {
             cluster: CLUSTER,
             build,
             plan: &plan,
-            served_kinds: &served,
+            served: &served,
         };
         classify(answers, &scope)
             .into_iter()

@@ -5,29 +5,18 @@
 //! No Nix build is required because the target activation's manifests are already
 //! in the local Nix store.
 
-use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::io::Write;
-use std::sync::Arc;
 
 use miette::{IntoDiagnostic, Result, miette};
-use serde_json::Value;
 
 use crate::client;
-use kix::build_source::SopsSources;
 use kix::cluster::activation::{Record, Records};
 use kix::cluster::binding;
-use kix::cluster::classify::{DeployScope, Verdict as DryRunVerdict, classify};
 use kix::cluster::discovery;
-use kix::cluster::preview::Refusal;
-use kix::cluster::readiness;
-use kix::cluster::scheduler::{self, OnErrorPolicy, SchedulerConfig};
-use kix::cluster::stream::{DeployObserver, DeployResult, NullObserver};
-use kix::cluster::watchdog::StallPolicy;
-use kix::manifest::types::ResourceId;
-use kix::plan::baseline::{self, Baseline};
+use kix::plan::baseline;
 use kix::plan::document::PlanFlags;
-use kix::plan::{CheckedPlan, PlanEvent, Planner, Target};
+use kix::plan::{PlanEvent, Planned, Planner};
 
 use crate::cli::{HistoryArgs, RollbackArgs};
 use crate::exit::Exit;
@@ -35,6 +24,7 @@ use crate::output::{self, CommandResponse};
 use crate::plan;
 
 use super::CommandContext;
+use super::deploy::{Command, Previous, RunOptions, Runner};
 
 pub fn run(args: &RollbackArgs, ctx: &mut CommandContext) -> Result<Exit> {
     let cluster = ctx.cluster_identity(&args.cluster, super::Lookup::Mutating)?;
@@ -43,7 +33,7 @@ pub fn run(args: &RollbackArgs, ctx: &mut CommandContext) -> Result<Exit> {
             .runtime()?
             .block_on(run_operator_async(args, &cluster, ctx));
     }
-    ctx.runtime()?.block_on(run_async(args, &cluster, ctx))
+    run_direct(args, &cluster, ctx)
 }
 
 /// Run `kix history`: list the deploys `kix rollback` can go back to.
@@ -269,153 +259,68 @@ impl CommandResponse for HistoryResponse {
     }
 }
 
-async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> Result<Exit> {
-    crate::say!("Connecting to cluster...");
+/// Roll `cluster` back by deploying an earlier record's build, through the
+/// steps `kix deploy` takes once it has a plan (see `super::deploy`).
+fn run_direct(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> Result<Exit> {
+    let (current, target, mut p) = ctx.runtime()?.block_on(async {
+        crate::say!("Connecting to cluster...");
+        let client = client::make_client(ctx.global.context.as_deref())
+            .await
+            .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
+        let discovery = discovery::discover_resources(&client)
+            .await
+            .map_err(|e| miette!("{e}"))?;
+        let records = Records::open_installed(&client, &discovery).map_err(|e| miette!("{e}"))?;
+        let current = records
+            .active(cluster)
+            .await
+            .map_err(|e| miette!("{e}"))?
+            .ok_or_else(|| super::no_active_record(cluster))?;
+        print_current(&current);
 
-    let client = client::make_client(ctx.global.context.as_deref())
-        .await
-        .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
+        // A rollback writes to the cluster with this Kix, so it must not skip
+        // a required stop either. With `--operator`, the operator checks
+        // instead.
+        super::deploy::stops::check(
+            cluster,
+            current.deployed_with.as_deref(),
+            super::deploy::stops::Writer::Rollback,
+        )?;
 
-    let target = Target::connect(client.clone(), SopsSources::Local)
-        .await
-        .map_err(|e| miette!("{e}"))?;
-
-    let records =
-        Records::open_installed(&client, target.discovery()).map_err(|e| miette!("{e}"))?;
-
-    let current = records
-        .active(cluster)
-        .await
-        .map_err(|e| miette!("{e}"))?
-        .ok_or_else(|| super::no_active_record(cluster))?;
-
-    print_current(&current);
-
-    // A rollback writes to the cluster with this Kix, so it must not skip a
-    // required stop either. With `--operator`, the operator checks instead.
-    super::deploy::stops::check(
-        cluster,
-        current.deployed_with.as_deref(),
-        super::deploy::stops::Writer::Rollback,
-    )?;
-
-    let superseded = records
-        .rollback_targets(cluster)
-        .await
-        .map_err(|e| miette!("{e}"))?;
-
-    if superseded.is_empty() {
-        return Err(miette!(
-            "cannot roll back: no earlier deployment records are available to roll back to. Nothing was applied to the cluster. Next: check out the git commit you want to restore and run `kix deploy {cluster}`."
-        ));
-    }
-
-    let selected = if args.yes || !output::is_interactive() {
-        &superseded[0]
-    } else {
-        println!();
-        println!("Earlier deployments you can roll back to:");
-        let mut list = String::new();
-        write_earlier_deploys(&mut list, &earlier_deploys(cluster, superseded.clone()));
-        print!("{list}");
-
-        print!("\nSelect deployment to restore [1]: ");
-        std::io::stdout().flush().into_diagnostic()?;
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input).into_diagnostic()?;
-        let input = input.trim();
-
-        let idx = if input.is_empty() {
-            0
-        } else {
-            input
-                .parse::<usize>()
-                .map_err(|_| {
-                    miette!(
-                        "'{}' is not a valid selection. Nothing was applied to the cluster. Next: enter a number from the list.",
-                        input
-                    )
-                })?
-                .checked_sub(1)
-                .ok_or_else(|| {
-                    miette!(
-                        "enter a number from the list, starting at 1. Nothing was applied to the cluster."
-                    )
-                })?
-        };
-
-        if idx >= superseded.len() {
-            return Err(miette!(
-                "selection {} is out of range (1-{max}). Nothing was applied to the cluster. Next: enter a number between 1 and {max}.",
-                idx + 1,
-                max = superseded.len()
-            ));
-        }
-
-        &superseded[idx]
-    };
-
-    let target_name = selected.name.clone();
-    let target_hash = selected.identity_hash.as_ref().ok_or_else(|| {
-        miette!(
-            "rollback target {name} has no build hash on its deployment record\n  \
-             Nothing was applied to the cluster.\n\n  \
-             Why:\n    \
-             Deployment record {name} has no build hash, so Kix cannot look for its build in Kix's local store.\n\n  \
-             Next (choose one):\n    \
-             - Run `kix rollback {cluster}` interactively and pick another deployment record marked `[available]`.\n    \
-             - Check out the git commit you want to restore and run `kix deploy {cluster}`.",
-            name = target_name,
+        let superseded = records
+            .rollback_targets(cluster)
+            .await
+            .map_err(|e| miette!("{e}"))?;
+        let selected = select_target(args, cluster, &superseded)?;
+        let target_hash = target_hash(cluster, selected)?;
+        crate::say!(
+            "Rollback target:    {} (build {}...)",
+            output::bold(&selected.name),
+            &target_hash[..8.min(target_hash.len())],
+        );
+        let p = plan_rollback(
+            &client,
+            ctx.global.context.as_deref(),
+            &records,
+            cluster,
+            &current,
+            selected,
+            flags(args.prune, args.force_conflicts, args.accept_migrations),
         )
+        .await?;
+        Ok::<_, miette::Report>((current, selected.name.clone(), p))
     })?;
 
-    crate::say!(
-        "Rollback target:    {} (build {}...)",
-        output::bold(&target_name),
-        &target_hash[..8.min(target_hash.len())],
-    );
-
-    let planned = plan_rollback(
-        &client,
-        ctx.global.context.as_deref(),
-        &records,
-        cluster,
-        &current,
-        selected,
-        flags(args.prune, args.force_conflicts),
-    )
-    .await?;
+    if !super::deploy::migration_gate(&p, Command::Rollback, Runner::Cli) {
+        return Ok(Exit::Failure);
+    }
     if !output::quiet() {
-        planned.print(cluster, &target_name, args.prune, ctx.global.verbose > 0);
+        print_header(cluster, &target);
     }
-    let RollbackPlan {
-        target_result_dir,
-        build,
-        checked,
-    } = planned;
-
-    let refused = refused_writes(&client, cluster, &build, &checked).await?;
-    if !refused.is_empty() {
-        print_refused(&refused);
-        let next = if args.force_conflicts {
-            String::new()
-        } else {
-            format!(
-                " Run `kix rollback {cluster} --force-conflicts` to take fields another manager owns."
-            )
-        };
-        return Err(miette!(
-            "the rollback would stop on {} write(s), so Kix did not start it. Nothing was applied to the cluster.{next}",
-            refused.len()
-        ));
+    let doc = super::deploy::preview(&mut p, ctx)?;
+    if super::deploy::refused(&doc, Command::Rollback) {
+        return Ok(Exit::Failure);
     }
-
-    let total_apply = checked
-        .plan()
-        .nodes()
-        .iter()
-        .filter(|n| n.action.written().is_some())
-        .count();
 
     if args.dry_run {
         crate::say!();
@@ -426,99 +331,108 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
         return Ok(Exit::Success);
     }
 
-    if checked.nothing_to_do() {
+    if let Some(connected) = &p.connected
+        && !ctx.runtime()?.block_on(super::deploy::start(
+            &connected.client,
+            &p.checked,
+            &connected.last_runs,
+        ))
+    {
         crate::say!(
             "Nothing to change. The cluster already matches the target deployment. Nothing was applied to the cluster."
         );
         return Ok(Exit::Success);
     }
-    if total_apply == 0 && checked.orphans().is_empty() {
-        super::deploy::say_failed_jobs(checked.failed_jobs());
+
+    if !super::deploy::confirm(Command::Rollback, cluster, args.yes)? {
+        return Ok(Exit::Success);
     }
 
-    if !args.yes {
-        if !output::is_interactive() {
-            return Err(output::refuse_unconfirmed(
-                output::Unconfirmed::Rollback,
-                cluster,
-            ));
-        }
-        print!("\nProceed with rollback? [y/N] ");
-        std::io::stdout().flush().into_diagnostic()?;
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input).into_diagnostic()?;
-        let input = input.trim().to_lowercase();
-        if input != "y" && input != "yes" {
-            println!("Rollback cancelled. Nothing was applied to the cluster.");
-            return Ok(Exit::Success);
-        }
-    }
-
-    super::deploy::refuse_before_writing(&checked, Some(&records), target.discovery()).await?;
-
-    let config = SchedulerConfig {
-        timeout: readiness::DEFAULT_TIMEOUT,
-        on_error: OnErrorPolicy::Stop,
-        cancel: kix::cluster::cancel::CancelToken::new(),
-        concurrency: scheduler::CONCURRENCY,
-        stall: StallPolicy::from_env(),
-        check_unchanged: true,
-        // Rollback has no --on-error flag, so messages must not suggest it.
-        names_flags: false,
-    };
-
-    let observer: Arc<dyn DeployObserver> = if !output::is_interactive() {
-        Arc::new(super::deploy_log::LineObserver {
-            verbose: ctx.global.verbose > 0,
-        })
-    } else {
-        Arc::new(super::deploy::StreamCliObserver {
-            verbose: ctx.global.verbose > 0,
-        })
-    };
-
-    // Forward SIGINT and SIGTERM to the engine so the Activation record is not
-    // left in Deploying if the process is interrupted.
-    config.cancel.cancel_on_interrupt();
-
-    // Pass `None` for the receipt so the rollback preserves the receipt
-    // originally written when the target activation was deployed.
-    let (result, kept) = checked.run(target, None, config, observer).await;
-
-    if let Some(recorded) = kept {
-        kix::plan::baseline::sync_kept_roots(cluster, &recorded);
-    }
-
-    // Save activation path for next deploy's diff, once the target's record
-    // is current again.
-    let end = super::deploy::RunEnd::of(&result);
-    if end.current
-        && let Err(e) = kix::eval::store::save_activation_path(cluster, &target_result_dir)
-    {
-        tracing::warn!(
-            "could not save the local build path; later commands may be unable to find this deployment: {e}"
-        );
-    }
-
-    match &result {
-        Ok(r) => {
-            println!();
-            print_summary(r, end.succeeded);
-        }
-        Err(e) => {
-            print_summary(e.partial(), end.succeeded);
-            // The event stream already reports failed nodes and cancellation.
-            if !matches!(
-                e,
-                scheduler::DeployError::NodesFailed { .. }
-                    | scheduler::DeployError::Cancelled { .. }
-            ) {
-                eprintln!("{} {e}", output::red("error:"));
-            }
-        }
-    }
-    // A prune delete that fails leaves `result` `Ok` with `failed > 0`.
+    let sops = p.sops_sources(false).map_err(|e| miette!("{e}"))?;
+    // A rollback passes no receipt, so the target record keeps the receipt
+    // its own deploy wrote.
+    let end = super::deploy::run_planned(
+        ctx,
+        Command::Rollback,
+        p,
+        &RunOptions::rollback(),
+        None,
+        sops,
+        Previous::Active(current.name),
+        None,
+    )?;
     Ok(Exit::failure_if(!end.succeeded))
+}
+
+/// Return the record the user picks from `superseded`, or the most recent
+/// one under `--yes` or with no one to ask.
+fn select_target<'a>(
+    args: &RollbackArgs,
+    cluster: &str,
+    superseded: &'a [Record],
+) -> Result<&'a Record> {
+    if superseded.is_empty() {
+        return Err(miette!(
+            "cannot roll back: no earlier deployment records are available to roll back to. Nothing was applied to the cluster. Next: check out the git commit you want to restore and run `kix deploy {cluster}`."
+        ));
+    }
+    if args.yes || !output::is_interactive() {
+        return Ok(&superseded[0]);
+    }
+    println!();
+    println!("Earlier deployments you can roll back to:");
+    let mut list = String::new();
+    write_earlier_deploys(&mut list, &earlier_deploys(cluster, superseded.to_vec()));
+    print!("{list}");
+
+    print!("\nSelect deployment to restore [1]: ");
+    std::io::stdout().flush().into_diagnostic()?;
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input).into_diagnostic()?;
+    let input = input.trim();
+
+    let idx = if input.is_empty() {
+        0
+    } else {
+        input
+            .parse::<usize>()
+            .map_err(|_| {
+                miette!(
+                    "'{}' is not a valid selection. Nothing was applied to the cluster. Next: enter a number from the list.",
+                    input
+                )
+            })?
+            .checked_sub(1)
+            .ok_or_else(|| {
+                miette!(
+                    "enter a number from the list, starting at 1. Nothing was applied to the cluster."
+                )
+            })?
+    };
+    superseded.get(idx).ok_or_else(|| {
+        miette!(
+            "selection {} is out of range (1-{max}). Nothing was applied to the cluster. Next: enter a number between 1 and {max}.",
+            idx + 1,
+            max = superseded.len()
+        )
+    })
+}
+
+/// Return the identity hash of rollback target `selected`, which names the
+/// build to look for.
+fn target_hash<'a>(cluster: &str, selected: &'a Record) -> Result<&'a str> {
+    selected.identity_hash.as_deref().ok_or_else(|| {
+        miette!(
+            "rollback target {name} has no build hash on its deployment record\n  \
+             Nothing was applied to the cluster.\n\n  \
+             Why:\n    \
+             Deployment record {name} has no build hash, so Kix cannot look for its build in Kix's local store.\n\n  \
+             Next (choose one):\n    \
+             - Run `kix rollback {cluster}` interactively and pick another deployment record marked `[available]`.\n    \
+             - Check out the git commit you want to restore and run `kix deploy {cluster}`.",
+            name = selected.name,
+        )
+    })
 }
 
 async fn run_operator_async(
@@ -528,6 +442,7 @@ async fn run_operator_async(
 ) -> Result<Exit> {
     let (client, records) =
         super::operator::connect_and_verify(ctx.global.context.as_deref()).await?;
+    super::operator::require_requests(&client).await?;
 
     let current = records
         .active(cluster)
@@ -548,50 +463,7 @@ async fn run_operator_async(
         ));
     }
 
-    let selected = if args.yes || !output::is_interactive() {
-        &superseded[0]
-    } else {
-        println!();
-        println!("Earlier deployments you can roll back to:");
-        let mut list = String::new();
-        write_earlier_deploys(&mut list, &earlier_deploys(cluster, superseded.clone()));
-        print!("{list}");
-
-        print!("\nSelect deployment to restore [1]: ");
-        std::io::Write::flush(&mut std::io::stdout()).into_diagnostic()?;
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input).into_diagnostic()?;
-        let input = input.trim();
-
-        let idx = if input.is_empty() {
-            0
-        } else {
-            input
-                .parse::<usize>()
-                .map_err(|_| {
-                    miette!(
-                        "'{}' is not a valid selection. Nothing was applied to the cluster. Next: enter a number from the list.",
-                        input
-                    )
-                })?
-                .checked_sub(1)
-                .ok_or_else(|| {
-                    miette!(
-                        "enter a number from the list, starting at 1. Nothing was applied to the cluster."
-                    )
-                })?
-        };
-
-        if idx >= superseded.len() {
-            return Err(miette!(
-                "selection {} is out of range (1-{max}). Nothing was applied to the cluster. Next: enter a number between 1 and {max}.",
-                idx + 1,
-                max = superseded.len()
-            ));
-        }
-
-        &superseded[idx]
-    };
+    let selected = select_target(args, cluster, &superseded)?;
 
     let target_name = selected.name.clone();
     let target_hash = selected.identity_hash.clone();
@@ -610,13 +482,21 @@ async fn run_operator_async(
         cluster,
         &current,
         selected,
-        flags(true, false),
+        flags(true, false, args.accept_migrations),
     )
     .await?;
     if !output::quiet() {
-        planned.print(cluster, &target_name, true, ctx.global.verbose > 0);
+        print_header(cluster, &target_name);
+        let fate = plan::orphans_fate(planned.checked.flags(), true, cluster);
+        plan::print_checked(&planned.checked, &fate, ctx.global.verbose > 0);
+        plan::print_shared(planned.checked.shared_orphans());
     }
-    let target_source_path = planned.target_result_dir.display().to_string();
+    // Enforce `--accept-migrations` on the CLI before delegating to the
+    // non-interactive operator.
+    if !super::deploy::migration_gate(&planned, Command::Rollback, Runner::Operator) {
+        return Ok(Exit::Failure);
+    }
+    let target_source_path = planned.build.graph().built_via.display().to_string();
 
     if args.dry_run {
         crate::say!();
@@ -645,31 +525,34 @@ async fn run_operator_async(
         }
     }
 
+    // The request queues the target record again. The operator then deploys
+    // it as a new record and supersedes the current one, as a direct
+    // rollback does.
     crate::say!(
-        "Updating deployment record '{}' to point to rollback target...",
-        output::bold(&current.name),
+        "Asking the Kix operator to restore deployment '{}'...",
+        output::bold(&target_name),
     );
-
-    super::operator::apply_activation(
+    let request = super::operator::apply_activation(
         &records,
-        &current.name,
+        &target_name,
         cluster,
         &target_source_path,
         target_hash.as_deref(),
         planned.checked.kubernetes_uid(),
-        // A rollback re-applies a build from an earlier deploy, which wrote
-        // its own receipt. See the non-operator path in this file.
+        // A rollback passes no receipt, so the target record keeps the
+        // receipt its own deploy wrote.
         None,
         planned.checked.package_index(),
     )
     .await?;
 
     crate::say!(
-        "  {} Deployment record updated. Waiting for the Kix operator...",
+        "  {} Request sent. Waiting for the Kix operator...",
         output::green("✓"),
     );
 
-    let reconciled = super::operator::watch_activation_progress(&records, &current.name).await?;
+    let reconciled =
+        super::operator::watch_activation_progress(&records, &target_name, &request).await?;
 
     println!();
     match reconciled {
@@ -680,15 +563,14 @@ async fn run_operator_async(
         ),
         super::operator::Reconciled::Degraded => {
             println!(
-                "Rollback via operator {}: deployment record '{current}' was updated to restore '{}', and '{current}' is {}.",
+                "Rollback via operator {}: deployment '{target}' is now current, with status {} (one or more resources failed).",
                 output::red("failed"),
-                output::bold(&target_name),
                 output::yellow("Degraded"),
-                current = current.name,
+                target = target_name,
             );
             println!(
-                "  Inspect deployment record '{}' on the cluster to see which resources failed to reconcile.",
-                current.name
+                "  Run `kubectl describe {}/{target_name}` to see which resources failed.",
+                kix::manifest::keys::ACTIVATIONS_CRD,
             );
         }
     }
@@ -712,49 +594,28 @@ fn print_current(current: &Record) {
     );
 }
 
-/// Planned rollback from the current baseline to a target activation's store
-/// path.
-struct RollbackPlan {
-    target_result_dir: std::path::PathBuf,
-    /// Every manifest of the target build.
-    build: Vec<Value>,
-    checked: CheckedPlan,
-}
-
-impl RollbackPlan {
-    fn print(&self, cluster: &str, target_name: &str, prune: bool, verbose: bool) {
-        println!();
-        println!(
-            "{} restoring cluster '{}' to deployment '{}'",
-            output::bold("Rollback:"),
-            output::bold(cluster),
-            output::bold(target_name),
-        );
-        plan::print_package_plan(self.checked.pkg_diff(), verbose);
-        plan::print_plan_summary(self.checked.pkg_diff());
-        let fate = if prune {
-            "to be deleted after the apply (`--prune`)".to_string()
-        } else {
-            plan::kept_orphans_fate(cluster)
-        };
-        print!(
-            "{}",
-            plan::render_plan_orphans(self.checked.orphans(), &fate)
-        );
-        plan::print_shared(self.checked.shared_orphans());
-    }
+/// Print the line that heads a rollback's plan.
+fn print_header(cluster: &str, target: &str) {
+    println!();
+    println!(
+        "{} restoring cluster '{}' to deployment '{}'",
+        output::bold("Rollback:"),
+        output::bold(cluster),
+        output::bold(target),
+    );
 }
 
 /// Build [`PlanFlags`] for a rollback.
 ///
 /// A rollback takes conflicting fields only under `--force-conflicts`, and
-/// never accepts stateful migrations.
-fn flags(prune: bool, force_conflicts: bool) -> PlanFlags {
+/// replaces an object that holds data only under `--accept-migrations`, as a
+/// deploy does.
+fn flags(prune: bool, force_conflicts: bool, accept_migrations: bool) -> PlanFlags {
     PlanFlags {
         prune: PlanFlags::prune_policy_of(prune, false),
         reconcile: false,
         force_conflicts,
-        accept_migrations: false,
+        accept_migrations,
     }
 }
 
@@ -777,32 +638,17 @@ async fn plan_rollback(
     current: &Record,
     selected: &Record,
     flags: PlanFlags,
-) -> Result<RollbackPlan> {
-    // Load the target activation's build from its recorded path or local store
-    // hash. Pre-migration builds are allowed here because stamping upgrades
-    // their metadata and CRD group names to the current API domain.
-    let target_hash = selected.identity_hash.as_deref().ok_or_else(|| {
-        miette!(
-            "rollback target {name} has no build hash on its deployment record\n  \
-             Nothing was applied to the cluster.\n\n  \
-             Why:\n    \
-             Deployment record {name} has no build hash, so Kix cannot look for its build in Kix's local store.\n\n  \
-             Next (choose one):\n    \
-             - Run `kix rollback {cluster}` interactively and pick another deployment record marked `[available]`.\n    \
-             - Check out the git commit you want to restore and run `kix deploy {cluster}`.",
-            name = selected.name,
-        )
-    })?;
-    let target_graph = baseline::target_build(
+) -> Result<Planned> {
+    let build = baseline::target_build(
         cluster,
         &selected.name,
-        target_hash,
+        target_hash(cluster, selected)?,
         selected.built_via.as_deref(),
     )
     .map_err(|e| miette!("{e}"))?;
-    let target_result_dir = target_graph.built_via.clone();
-    same_cluster(&selected.name, &target_graph.cluster_name, cluster)?;
-    if let Some(declared) = target_graph.kubernetes_uid.as_deref() {
+    let graph = build.graph();
+    same_cluster(&selected.name, &graph.cluster_name, cluster)?;
+    if let Some(declared) = graph.kubernetes_uid.as_deref() {
         binding::check_declared(
             client,
             &binding::Connection::of_context(context),
@@ -817,7 +663,7 @@ async fn plan_rollback(
         client,
         &binding::Connection::of_context(context),
         cluster,
-        target_graph.kubernetes_version.as_deref(),
+        graph.kubernetes_version.as_deref(),
     )
     .await
     {
@@ -825,102 +671,10 @@ async fn plan_rollback(
     }
 
     let report = |event: PlanEvent<'_>| plan::progress::print(event);
-    let baseline = Baseline::of_record(records, cluster, current, &report).await;
-    let checked = Planner::new(flags, &report)
-        .plan(&target_graph, cluster, &baseline, Some(client))
+    Planner::new(flags, &report)
+        .rollback(build, records, current, client.clone())
         .await
-        .map_err(|e| miette!("{e}"))?;
-    Ok(RollbackPlan {
-        target_result_dir,
-        build: target_graph
-            .resources
-            .values()
-            .map(|r| r.manifest.clone())
-            .collect(),
-        checked,
-    })
-}
-
-/// Send the rollback's writes to the apiserver as a dry run, and return each
-/// write it refuses with the reason. A rollback that stops halfway leaves the
-/// cluster between two builds, so a refusal stops it before any write. The
-/// answers are sorted by [`classify`], as `kix plan` sorts them, so a write
-/// that is not checked does not stop the rollback.
-async fn refused_writes(
-    client: &kube::Client,
-    cluster: &str,
-    build: &[Value],
-    checked: &CheckedPlan,
-) -> Result<Vec<(ResourceId, String)>> {
-    let target = Target::connect(client.clone(), SopsSources::Local)
-        .await
-        .map_err(|e| miette!("{e}"))?;
-    let served_kinds: HashSet<String> = target
-        .discovery()
-        .iter()
-        .map(|(ar, _)| ar.kind.clone())
-        .collect();
-    let config = SchedulerConfig {
-        timeout: readiness::DEFAULT_TIMEOUT,
-        on_error: OnErrorPolicy::Continue,
-        cancel: kix::cluster::cancel::CancelToken::new(),
-        concurrency: scheduler::CONCURRENCY,
-        stall: StallPolicy::from_env(),
-        check_unchanged: true,
-        names_flags: false,
-    };
-    let (result, answers) = checked
-        .dry_run(target, config, Arc::new(NullObserver))
-        .await;
-    if let Err(e) = &result
-        && !matches!(e, scheduler::DeployError::NodesFailed { .. })
-    {
-        return Err(miette!(
-            "the rollback's dry run stopped: {e}. Nothing was applied to the cluster."
-        ));
-    }
-    let scope = DeployScope {
-        cluster,
-        build,
-        plan: checked.plan(),
-        served_kinds: &served_kinds,
-    };
-    let mut refused = Vec::new();
-    for (rid, verdict) in classify(&answers, &scope) {
-        match verdict {
-            DryRunVerdict::Accepted => {}
-            DryRunVerdict::NotChecked { detail, .. } => {
-                if !output::quiet() {
-                    eprintln!("  {} {rid}: not checked, {detail}", output::dim("?"));
-                }
-            }
-            DryRunVerdict::Refused(r) => refused.push((rid, describe_refusal(&r))),
-        }
-    }
-    Ok(refused)
-}
-
-/// Return one line for a refused write: who owns which fields for a
-/// conflict, or the apiserver's message.
-fn describe_refusal(refusal: &Refusal) -> String {
-    match refusal {
-        Refusal::Conflict { owners, .. } if !owners.is_empty() => {
-            let owned: Vec<String> = owners
-                .iter()
-                .map(|o| format!("{} owns {}", o.manager, o.fields.join(", ")))
-                .collect();
-            format!("field ownership conflict: {}", owned.join("; "))
-        }
-        other => other.message(),
-    }
-}
-
-fn print_refused(refused: &[(ResourceId, String)]) {
-    eprintln!();
-    eprintln!("The rollback would stop on {} write(s):", refused.len());
-    for (rid, why) in refused {
-        eprintln!("  {} {rid}: {why}", output::red("✗"));
-    }
+        .map_err(|e| miette!("{e}"))
 }
 
 /// Reject a rollback target whose build belongs to a different Kix cluster
@@ -932,26 +686,6 @@ fn same_cluster(record: &str, build_cluster: &str, cluster: &str) -> Result<()> 
     Err(miette!(
         "activation '{record}' is a build of Kix cluster '{build_cluster}', not '{cluster}'. Nothing was applied."
     ))
-}
-
-/// Print the text that closes a rollback: its counts, and when it did not
-/// succeed, what was applied and what to run next.
-fn print_summary(r: &DeployResult, succeeded: bool) {
-    if succeeded {
-        println!("Rollback complete: {}", super::deploy::counts(r, false));
-    } else if r.failed > 0 {
-        println!("Rollback failed: {}", super::deploy::counts(r, true));
-        println!(
-            "  {} created and {} configured object(s) were applied before the rollback failed; fix the error(s) above and run `kix rollback` again.",
-            r.created, r.configured
-        );
-    } else {
-        println!("Rollback stopped: {}", super::deploy::counts(r, true));
-        println!(
-            "  {} created and {} configured object(s) finished before the rollback stopped, and {} object(s) did not finish; run `kix rollback` again to finish restoring the target build.",
-            r.created, r.configured, r.cancelled
-        );
-    }
 }
 
 #[cfg(test)]
@@ -967,6 +701,14 @@ mod tests {
             .to_string();
         assert!(err.contains("'staging'") && err.contains("'prod'"), "{err}");
         assert!(err.contains("Nothing was applied"), "{err}");
+    }
+
+    /// A rollback plans with `--accept-migrations` only when the user
+    /// passes it, so the gate deploy uses stops it otherwise.
+    #[test]
+    fn a_rollback_accepts_migrations_only_when_asked() {
+        assert!(!flags(false, false, false).accept_migrations);
+        assert!(flags(false, false, true).accept_migrations);
     }
 
     fn record(name: &str, hash: Option<&str>, built_via: Option<&str>) -> Record {

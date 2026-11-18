@@ -131,6 +131,15 @@
 # registry keeps blobs on the storage claim with the filesystem driver, so
 # it runs one pod.
 #
+# Upgrades: core migrates the database when it starts, so a new version
+# reads the data an older one wrote. From 2.15.2, 2.15.5 applies schema 181,
+# which widens three columns to bigint. The registry's blobs on the storage
+# claim need no migration. An older core does not start on a migrated
+# database: it exits with "no migration found for version 181". Upstream
+# supports no downgrade. To go back, scale core, jobservice, and the
+# exporter to zero, restore the database from a backup taken before the
+# upgrade, and deploy the older version.
+#
 # Escape hatches: core.env, jobservice.env, and exporter.env over the
 # tunable environment; registry.settings and jobservice.settings over the
 # two config.yml files; the instance's partsOverlays and each resource's
@@ -199,6 +208,13 @@ in
     version = release;
     description = "Harbor: OCI container registry";
     owner = "platform";
+    # Upstream's Helm chart README states Kubernetes 1.20 or later and
+    # names no newest version. Its compatibility matrix lists only the
+    # versions upstream tests, so it sets no upper bound.
+    k8s = {
+      minVersion = "1.20";
+      reason = "[K5312] Harbor ${release} supports Kubernetes 1.20 or later";
+    };
     # Replication, proxy-cache, and OIDC reach external registries and
     # identity providers over HTTPS. Intents apply to every workload in the
     # package.
@@ -298,7 +314,7 @@ in
       image = kix.options.image {
         repository = "docker.io/goharbor/harbor-core";
         inherit tag;
-        digest = "sha256:d7b780d23721a000f0fb8e181add6675eafa336de5d033b77fd7da0c171ff7f7";
+        digest = "sha256:f7c0ad9b8bae40d4a6460e80be88b6c7d624eebdfbb5690b5b7ae13b4c1bd862";
         description = "Image of Harbor core. The other Harbor images follow its tag.";
       };
       replicas = replicasOption "core" "Core is a stateless API; its state lives in the database and valkey.";
@@ -344,7 +360,7 @@ in
     };
 
     portal = {
-      image = harborImage "harbor-portal" "sha256:b811b67f7a7f6f1614e4bdf7478b207d13e8aa3f815ff6ad84f216a5098d213d";
+      image = harborImage "harbor-portal" "sha256:2c05137a69a8f1cd51ce238b81f70d774396ff3a92494351857ced142d03253d";
       replicas = replicasOption "portal" "The portal serves a static web UI.";
       resources = kix.options.resources {
         requests = {
@@ -359,7 +375,7 @@ in
     };
 
     registry = {
-      image = harborImage "registry-photon" "sha256:c4ebef61ceb50a3d8bc21d149bc280422db20a1e69df317b64b74098c3615855";
+      image = harborImage "registry-photon" "sha256:6f9670a13d7f0ba2f896c571543343c1fcd9a36f585e30fe0f8c4edc9a0f8aa9";
       resources = kix.options.resources {
         requests = {
           cpu = "20m";
@@ -390,7 +406,7 @@ in
     };
 
     registryctl = {
-      image = harborImage "harbor-registryctl" "sha256:223d5cb49d5dbf0ba4ae022e7dd9775fa459904112dc12084d3aaa36c1408362";
+      image = harborImage "harbor-registryctl" "sha256:e3c64071cf72f47566f27a16d8a57c6a71ec710e72ba9190168d24103eb57925";
       resources = kix.options.resources {
         requests = {
           cpu = "10m";
@@ -404,7 +420,7 @@ in
     };
 
     jobservice = {
-      image = harborImage "harbor-jobservice" "sha256:f71a4452a095bcd2a8f0683648a3ae28415432df87ccfb00ec7625f3e340a598";
+      image = harborImage "harbor-jobservice" "sha256:aafa49237fef5ce8be2990caf7dcd4c9ff8d921d77c129bd36e4a5c510868a7c";
       replicas = replicasOption "jobservice" "Job logs live in the database, so any pod can serve any job's log.";
       resources = kix.options.resources {
         requests = {
@@ -436,7 +452,7 @@ in
     };
 
     exporter = {
-      image = harborImage "harbor-exporter" "sha256:e1b0a248f61aad5084c5d1612d5f1da89f99c23ce743eaf8cba913d6d00c0547";
+      image = harborImage "harbor-exporter" "sha256:d1fa474567b6b1efb5325570f523de457efec4d2ba871691c2982835f76b87ac";
       resources = kix.options.resources {
         requests = {
           cpu = "10m";

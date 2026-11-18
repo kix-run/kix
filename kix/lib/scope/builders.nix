@@ -5,6 +5,7 @@ let
   kixAnnotations = import ../core/annotations.nix;
   kixKeys = kixAnnotations.keys;
   availabilityLib = import ../core/availability.nix { inherit lib; };
+  workloadKinds = import ../core/workload-kinds.nix { inherit lib; };
   inherit (k8s) clusterScoped;
 in
 {
@@ -38,26 +39,13 @@ in
       # Workload kinds must use their typed builders so pod validation, edge
       # analysis, and workload interceptors run before sealing. sealWorkload
       # calls sealResource after that processing.
-      workloadKinds = [
-        "Deployment"
-        "StatefulSet"
-        "DaemonSet"
-        "Job"
-        "CronJob"
-      ];
-      builderFor = {
-        Deployment = "scope.mkDeployment";
-        StatefulSet = "scope.mkStatefulSet";
-        DaemonSet = "scope.mkDaemonSet";
-        Job = "scope.mkJob";
-        CronJob = "scope.mkCronJob";
-      };
+      inherit (workloadKinds) builderFor;
       checkNotRawWorkload =
         args:
         let
           kind = args.kind or "";
         in
-        if builtins.elem kind workloadKinds then
+        if builderFor ? ${kind} then
           fail {
             instance = builtBy;
             message =
@@ -96,12 +84,14 @@ in
           dnsRequires = lib.optional (
             behavior != null && behavior.endpoint == "terminate" && edgeAnalysis.dnsRoot != null
           ) edgeAnalysis.dnsRoot;
+          loadBalancerWarnings = validators.checkLoadBalancer args;
+          metricsApiWarnings = validators.checkHorizontalPodAutoscaler args;
         in
         builtins.seq (checkNoHoldsData args) (
           builtins.seq (validators.checkResourceName args) (
             builtins.seq (validators.checkRawPvc args) (
-              builtins.seq (validators.checkLoadBalancer args) (
-                builtins.seq (validators.checkHorizontalPodAutoscaler args) (
+              builtins.seq loadBalancerWarnings (
+                builtins.seq metricsApiWarnings (
                   k8s.mkResource (
                     removeAttrs args [ "labels" ]
                     // {
@@ -115,6 +105,10 @@ in
                   // {
                     packageLabels = labels;
                     _builtBy = builtBy;
+                    # Warnings raised while building the resource, outside the
+                    # manifest. `eval/instance.nix` collects them from the
+                    # instance's parts into its warnings.
+                    _warnings = loadBalancerWarnings ++ metricsApiWarnings;
                   }
                 )
               )
@@ -278,12 +272,19 @@ in
               node = "does not survive the loss of a zone";
             }
             .${workloadCeiling} or "";
-          ceilingWarnings = lib.optional capped (
-            "[${namespaceName}/${instanceName}] ${workloadKind} '${workloadInput.name or "?"}' supports at most "
-            + "\"${workloadCeiling}\" (availability.max on its builder call), so under availability "
-            + "\"${availability.level}\" it ${cappedConsequence}. This is a limit of the package; "
-            + "the instance's other workloads run at \"${availability.level}\"."
-          );
+          workloadObject = {
+            kind = workloadKind;
+            name = builtins.unsafeDiscardStringContext (workloadInput.name or "?");
+          };
+          ceilingWarnings = lib.optional capped {
+            object = workloadObject;
+            message =
+              "${workloadKind} '${workloadInput.name or "?"}' supports at most "
+              + "\"${workloadCeiling}\" availability (the package sets `availability.max` on it). "
+              + "Kix runs this workload at \"${workloadCeiling}\" instead of \"${availability.level}\", so it ${cappedConsequence}. "
+              + "Other workloads in this instance still run at \"${availability.level}\". "
+              + "To run the whole instance at \"${workloadCeiling}\" and silence this warning, set `availability = \"${workloadCeiling}\";` on the instance.";
+          };
           edgeReport = edgeAnalysis.edgesFor workloadInput;
           edges = edgeReport.edges;
           # Use conservative connection evidence for DNS ordering so Helm
@@ -344,16 +345,21 @@ in
             }
           );
         in
-        # Attach warnings to outPath so reading rawSelector does not force edge
-        # analysis. Edge analysis may traverse a dependency whose Service
-        # selector reads this workload's rawSelector, causing recursion.
+        # Keep the warnings in their own attribute so reading rawSelector does
+        # not force edge analysis. Edge analysis may traverse a dependency
+        # whose Service selector reads this workload's rawSelector, causing
+        # recursion. The instance reads `_warnings` after the parts fixpoint,
+        # as it reads `_injectedResources`.
         workload
         // {
-          outPath = builtins.foldl' (acc: warning: builtins.trace warning acc) workload.outPath (
-            interceptorWarnings
+          _warnings =
+            (workload._warnings or [ ])
+            ++ interceptorWarnings
             ++ ceilingWarnings
-            ++ map (w: "[${namespaceName}/${instanceName}] ${w}") edgeReport.warnings
-          );
+            ++ map (message: {
+              object = workloadObject;
+              inherit message;
+            }) edgeReport.warnings;
           _injectedResources = interceptorResources;
           rawSelector = selector;
           # Resolved level used by instance processors after sealing.
@@ -401,12 +407,15 @@ in
       # Force pod validation through outPath so rawSelector remains available
       # without sealing the workload. Validation can traverse ConfigMap and
       # Service references that lead back to rawSelector. Every emitted
-      # resource forces outPath, so each check still runs.
+      # resource forces outPath, so each check still runs. A check that
+      # returns a list returns warnings, which join the resource's `_warnings`.
       withChecks =
         checks: res:
         res
         // {
           outPath = builtins.foldl' (acc: c: builtins.seq c acc) res.outPath checks;
+          _warnings =
+            (res._warnings or [ ]) ++ builtins.concatMap (c: if builtins.isList c then c else [ ]) checks;
         };
 
       mkWorkload =
@@ -656,28 +665,36 @@ in
           workloadInput = attrs // {
             inherit apiVersion kind;
           };
+          daemonSetWarnings = validators.checkDaemonSet kind;
+          spreadWarnings = validators.checkSpreadFeasible {
+            inherit kind;
+            name = attrs.name or attrs.metadata.name or "?";
+            spec = rawSpec;
+          };
+          privilegedWarnings = validators.checkPrivileged templateSpec;
+          withWarnings =
+            res:
+            res
+            // {
+              _warnings = (res._warnings or [ ]) ++ daemonSetWarnings ++ spreadWarnings ++ privilegedWarnings;
+            };
         in
-        builtins.seq (validators.checkDaemonSet kind) (
-          builtins.seq
-            (validators.checkSpreadFeasible {
-              inherit kind;
-              name = attrs.name or attrs.metadata.name or "?";
-              spec = rawSpec;
-            })
-            (
-              builtins.seq (validators.checkPrivileged templateSpec) (
-                builtins.seq
-                  (
-                    if rawSpec ? selector.matchLabels && templateMeta ? labels then
-                      validators.checkSelectorSubset selector templateMeta.labels kind
-                    else
-                      null
-                  )
-                  (
-                    builtins.seq (validators.checkNamedPorts templateSpec) (
-                      builtins.seq (validators.checkContainerResources templateSpec) (
-                        builtins.seq (validators.checkDuplicateNamesChart templateSpec) (
-                          builtins.seq (validators.checkFieldRefs templateSpec) (sealWorkload {
+        builtins.seq daemonSetWarnings (
+          builtins.seq spreadWarnings (
+            builtins.seq privilegedWarnings (
+              builtins.seq
+                (
+                  if rawSpec ? selector.matchLabels && templateMeta ? labels then
+                    validators.checkSelectorSubset selector templateMeta.labels kind
+                  else
+                    null
+                )
+                (
+                  builtins.seq (validators.checkNamedPorts templateSpec) (
+                    builtins.seq (validators.checkContainerResources templateSpec) (
+                      builtins.seq (validators.checkDuplicateNamesChart templateSpec) (
+                        builtins.seq (validators.checkFieldRefs templateSpec) (
+                          withWarnings (sealWorkload {
                             inherit workloadInput selector hostNetwork;
                             workloadKind = kind;
                           })
@@ -685,8 +702,9 @@ in
                       )
                     )
                   )
-              )
+                )
             )
+          )
         );
 
       mkOptional =

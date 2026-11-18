@@ -126,6 +126,10 @@ fn record_view(r: &Record) -> Value {
         "failedAt": r.failed_at,
         "createdAt": r.created_at.map(|t| t.to_rfc3339()),
         "operatorDriven": r.operator_driven,
+        "request": r.request,
+        "startedRequest": r.started_request,
+        "finishedRequest": r.finished_request,
+        "pendingRequest": r.pending_request(),
         "orphansKeptFrom": r.orphans_kept_from,
         "packageIndex": r.package_index.as_ref().map(|i| i.to_value()),
         "waves": r.waves.iter().map(|w| json!({

@@ -31,7 +31,7 @@ let
   kixAnnotations = import ../core/annotations.nix;
   consumerLabel = kixAnnotations.keys.consumerLabel;
 
-  plain = v: builtins.unsafeDiscardStringContext (toString v);
+  inherit (import ../core/util.nix { inherit lib; }) plain groupOf;
 
   # Hash the normalized JSON of an interface file so reformatted copies match
   # the file written by the platform build. Both Activation records store this
@@ -42,13 +42,6 @@ let
 
   isDnsLabel =
     s: builtins.stringLength s <= 63 && builtins.match "[a-z0-9]([-a-z0-9]*[a-z0-9])?" s != null;
-
-  groupOf =
-    apiVersion:
-    let
-      parts = lib.splitString "/" apiVersion;
-    in
-    if builtins.length parts > 1 then builtins.head parts else "";
 
   isGlob = p: p != "*" && lib.hasSuffix "*" p;
   prefixOf = lib.removeSuffix "*";
@@ -248,7 +241,7 @@ in
           parts = lib.splitString "/" key;
           ns = builtins.head parts;
           inst = lib.last parts;
-          instCfg = (mergedInstances.${ns} or { }).${inst} or null;
+          instCfg = mergedInstances.${ns}.${inst} or null;
         in
         if builtins.length parts != 2 || instCfg == null then
           fail {

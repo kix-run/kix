@@ -1,7 +1,8 @@
 //! Readiness polling for Kubernetes resources.
 //!
-//! Provides per-kind readiness checks with `observedGeneration` guards for workloads,
-//! used by `kix deploy` to wait for resources to become ready after apply.
+//! Provides per-kind readiness checks with generation guards for workloads and
+//! custom resources, used by `kix deploy` to wait for resources to become ready
+//! after apply.
 //!
 //! Also handles import marker `PackageInstance` resources whose readiness is
 //! defined as the external resource existing on the cluster and passing
@@ -29,6 +30,7 @@ use thiserror::Error;
 
 use super::cancel::CancelToken;
 use super::discovery;
+use crate::manifest::kinds;
 use crate::manifest::types::ResourceId;
 
 pub use declared::{check_readiness, declared_rule, is_immediate_kind, not_ready_reason};
@@ -44,8 +46,8 @@ pub(crate) use terminal::termination_output;
 
 #[cfg(test)]
 use declared::{
-    DECLARED_FAILURE_GRACE, DeclaredFailure, FailedRule, ReadyRule, declared_readiness,
-    served_crd_versions, unserved_crd_versions,
+    DECLARED_FAILURE_GRACE, DeclaredFailure, FailedRule, GenerationField, PendingRestartRule,
+    PendingState, ReadyRule, declared_readiness, served_crd_versions, unserved_crd_versions,
 };
 #[cfg(test)]
 use imports::{check_secret_keys, expectations, split_api_version};
@@ -55,47 +57,40 @@ use terminal::{
     rollout_observed, workload_label_selector,
 };
 
-use declared::{FailureWatch, declared_failure, is_wait_for_first_consumer, readiness_message};
+use declared::{
+    FailureWatch, declared_failure, declared_pending_restart, is_wait_for_first_consumer,
+    readiness_message,
+};
 use terminal::{progress_fingerprint, scan_terminal};
 
-/// After a CRD reaches `Established=True`, the API server's discovery endpoint
-/// (and replicas behind an HA load balancer) may still lag by a few hundred
-/// milliseconds before the new group/version/kind appears. Dependents that race in
-/// during that window would hit "no matches for kind" on apply. Poll
-/// discovery for up to this budget after `Established=True`.
-const CRD_DISCOVERY_PROBE_BUDGET: Duration = Duration::from_secs(5);
-const CRD_DISCOVERY_PROBE_INTERVAL: Duration = Duration::from_millis(300);
-
-/// Run a bounded discovery probe until the CRD's group/version/kind appears.
-/// Called after a newly applied CRD reports `Established=True`. Returns
-/// `true` if the kind was observed in discovery, or `false` if the budget
-/// elapsed before it appeared (the deploy still proceeds, and retry-on-miss
-/// in the scheduler absorbs any remaining skew).
-pub(super) async fn probe_crd_discovery(client: &Client, crd: &Value) -> bool {
-    let Some(group) = crd.pointer("/spec/group").and_then(Value::as_str) else {
+/// Return whether API discovery serves the kind that `crd` defines.
+///
+/// The apiserver can report a CRD `Established=True` a moment before its
+/// discovery endpoint lists the new kind, and longer behind an HA load
+/// balancer. A dependent applied in that window fails with "no matches for
+/// kind", so a CRD counts as ready only once discovery serves its kind. The
+/// query asks for the CRD's group alone, so an unrelated group version that
+/// answers 404 cannot hold it up. A CRD without a group or kind is left to
+/// the apiserver to refuse.
+pub(super) async fn crd_kind_served(client: &Client, crd: &Value) -> bool {
+    let (Some(group), Some(kind)) = (
+        crd.pointer("/spec/group").and_then(Value::as_str),
+        crd.pointer("/spec/names/kind").and_then(Value::as_str),
+    ) else {
         return true;
     };
-    let Some(kind) = crd.pointer("/spec/names/kind").and_then(Value::as_str) else {
-        return true;
-    };
-    let deadline = Instant::now() + CRD_DISCOVERY_PROBE_BUDGET;
-    loop {
-        // Query only the target group rather than walking all API groups, which
-        // would wait on any unrelated group version that returns 404.
-        if let Ok(walk) = discovery::discover_group(client, group).await
-            && walk
-                .resources
-                .iter()
-                .any(|(ar, _)| ar.group == group && ar.kind == kind)
-        {
-            return true;
+    match discovery::discover_group(client, group).await {
+        Ok(walk) => discovery::find(&walk.resources, group, kind).is_some(),
+        Err(e) => {
+            tracing::debug!(group, kind, error = %e, "CRD group discovery failed, retrying");
+            false
         }
-        if Instant::now() >= deadline {
-            return false;
-        }
-        tokio::time::sleep(CRD_DISCOVERY_PROBE_INTERVAL).await;
     }
 }
+
+/// The status a CRD reports while it waits for discovery to serve its kind.
+pub(super) const CRD_AWAITING_DISCOVERY: &str =
+    "CRD is Established, but the API server does not serve its kind yet";
 
 /// Default timeout for readiness polling.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(180);
@@ -117,10 +112,12 @@ pub(crate) enum ReadinessError {
 pub(crate) enum ReadinessResult {
     /// Resource is ready.
     Ready,
-    /// An `OnDelete` DaemonSet is ready, but `stale` of its pods still run
-    /// the previous pod template. The controller replaces a pod only when it
-    /// is deleted, so the deploy reports this instead of waiting.
-    ReadyPendingRestart { stale: i64, message: String },
+    /// The resource is ready, and its running workload keeps the previous
+    /// spec until someone restarts it, so the deploy reports this instead of
+    /// waiting. `message` says why. For an `OnDelete` DaemonSet, `stale` is
+    /// how many of its pods run the previous template. A custom resource
+    /// whose declared `pendingRestart` state matches has no count.
+    ReadyPendingRestart { stale: Option<i64>, message: String },
     /// Timed out waiting for readiness.
     TimedOut { elapsed: Duration, message: String },
     /// The poll loop observed a cancellation request and bailed before
@@ -177,6 +174,10 @@ const HARD_CEILING: Duration = Duration::from_secs(5 * 60);
 /// left the object unchanged); with neither field, the state must hold for
 /// [`DECLARED_FAILURE_GRACE`] first.
 ///
+/// A ready custom resource whose declared `pendingRestart` state matches for
+/// the current spec returns `ReadyPendingRestart`, as an `OnDelete` DaemonSet
+/// with pods on the previous template does ([`declared_pending_restart`]).
+///
 /// Returns `Ready` on success, `Failed` on a terminal signal, `TimedOut` when
 /// either timeout budget elapses, or `Cancelled` if `cancel` is triggered.
 #[allow(clippy::too_many_arguments)]
@@ -190,7 +191,7 @@ pub(crate) async fn wait_for_ready(
     cancel: &CancelToken,
     on_status: impl Fn(&str),
 ) -> Result<ReadinessResult, ReadinessError> {
-    let (name, kind) = (rid.name.as_str(), rid.kind.as_str());
+    let (name, kind) = (rid.name.as_str(), rid.group_kind());
     if is_immediate_kind(kind) {
         return Ok(ReadinessResult::Ready);
     }
@@ -217,7 +218,7 @@ pub(crate) async fn wait_for_ready(
         // PVCs with WaitForFirstConsumer storage classes stay Pending until a pod
         // mounts them. Treat these as ready so downstream pods can be created,
         // which will then trigger the actual binding.
-        if kind == "PersistentVolumeClaim" {
+        if kind == kinds::PERSISTENT_VOLUME_CLAIM {
             let phase = obj
                 .data
                 .pointer("/status/phase")
@@ -254,24 +255,34 @@ pub(crate) async fn wait_for_ready(
             });
         }
 
+        let mut message = readiness_message(&obj, kind);
         if check_readiness(&obj, kind) {
-            if kind == "DaemonSet"
+            if kind == kinds::DAEMON_SET
                 && let Some(stale) = daemonset_pending_restart(&obj.data)
             {
+                let pods = if stale == 1 {
+                    "pod still runs"
+                } else {
+                    "pods still run"
+                };
                 return Ok(ReadinessResult::ReadyPendingRestart {
-                    stale,
-                    message: "the DaemonSet replaces a pod with the current template only when the pod is deleted".into(),
+                    stale: Some(stale),
+                    message: format!(
+                        "{stale} {pods} the previous pod template, and the DaemonSet replaces a pod only when someone deletes it"
+                    ),
                 });
             }
-            // A CRD that reports Established=True can still be invisible to
-            // the apiserver's discovery endpoint for a few hundred ms (and
-            // longer across HA replicas). Probe discovery before declaring
-            // the CRD ready so dependents don't race.
-            if kind == "CustomResourceDefinition" {
-                on_status("CRD Established, probing discovery");
-                let _ = probe_crd_discovery(client, &obj.data).await;
+            if let Some(message) = declared_pending_restart(&obj, applied_at) {
+                return Ok(ReadinessResult::ReadyPendingRestart {
+                    stale: None,
+                    message,
+                });
             }
-            return Ok(ReadinessResult::Ready);
+            if kind != kinds::CUSTOM_RESOURCE_DEFINITION || crd_kind_served(client, &obj.data).await
+            {
+                return Ok(ReadinessResult::Ready);
+            }
+            message = CRD_AWAITING_DISCOVERY.to_string();
         }
 
         // Compute progress fingerprint and reset the idle timer on any change.
@@ -281,7 +292,6 @@ pub(crate) async fn wait_for_ready(
             last_progress_at = Instant::now();
         }
 
-        let mut message = readiness_message(&obj, kind);
         let idle = last_progress_at.elapsed();
         let total = start.elapsed();
         if scan.pull_retrying.is_some() {

@@ -79,6 +79,15 @@
 #
 # root = the operator Deployment; the webhook check runs after it.
 #
+# Upgrades: the 2.23.3 operator runs on the RabbitmqClusters and pods that
+# 2.23.0 left behind. Its CRD adds the /scale subresource and some schema
+# fields, and no RabbitMQ pod restarted in the kind test. Upstream states no
+# upgrade path between patch releases, so the direct step from 2.23.0 was
+# tested only on kind. Going back also works in that test: the 2.23.0
+# package applied over 2.23.3 kept the data and the clusters ready, and the
+# CRD lost the /scale subresource. To go back, deploy a Kix release whose
+# rabbitmq-operator package pins 2.23.0.
+#
 # Moving to another release: set `release` and the digest of `image`
 # (`crane digest ghcr.io/rabbitmq/cluster-operator:<release>`), move the tag
 # in crds/sources.txt and rbac/sources.txt, run
@@ -97,7 +106,7 @@
 let
   # meta.version, the default image.tag, and the tag in crds/sources.txt and
   # rbac/sources.txt.
-  release = "2.23.0";
+  release = "2.23.3";
   minorOf = lib.versions.majorMinor;
 
   name = scope.instanceName;
@@ -148,9 +157,12 @@ in
     # The operator reads rabbitmq.com annotations on RabbitmqClusters
     # (api/v1beta1/rabbitmqcluster_types.go upstream).
     annotationDomains = [ "rabbitmq.com" ];
-    # The definition carries a CEL validation rule, which the API server
-    # enforces by default from 1.25.
-    k8s.minVersion = "1.25";
+    # The README's Compatibility section requires Kubernetes 1.31 or later
+    # and states no upper bound.
+    k8s = {
+      minVersion = "1.31";
+      reason = "[K5618] RabbitMQ Cluster Operator ${release} requires Kubernetes 1.31 or later. Move the cluster to Kubernetes 1.31 or later, or use a Kix release whose rabbitmq-operator package still accepts it";
+    };
     network.intents.webhooks.ingress = [
       {
         from = "apiserver";
@@ -180,7 +192,7 @@ in
     image = kix.options.image {
       repository = "ghcr.io/rabbitmq/cluster-operator";
       tag = release;
-      digest = "sha256:9236fb4f559bb6c4a04605fdf9aa1c03d00573df2d4da43c71e11b296e0a1886";
+      digest = "sha256:487c7566e5341f00d17e5c2fd079b76a49869dd6d51081371c396f32dbbf5c6a";
       description = "Operator image. Its major.minor must be the package's release.";
     };
 
@@ -630,7 +642,6 @@ in
                 metadata = {
                   labels = checkLabels;
                   annotations = {
-                    "checksum/manifest" = self.webhookCheckManifest.out.contentHash;
                     "checksum/operator" = self.deployment.out.contentHash;
                     "checksum/webhook-service" = self.webhookService.out.contentHash;
                     "checksum/mutating-webhook" = self.mutatingWebhook.out.contentHash;

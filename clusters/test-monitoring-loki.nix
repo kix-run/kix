@@ -7,7 +7,7 @@
 # fails the build when Grafana mounts a claim or when any workload other
 # than Loki mounts `loki-storage`.
 #
-# Build: nix build ./clusters#cluster-monitoring-loki --extra-experimental-features pipe-operators
+# Build: kix build monitoring-loki
 
 { kix, packages }:
 

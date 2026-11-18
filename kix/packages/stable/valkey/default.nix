@@ -15,6 +15,21 @@
 # also reaches replicas, so a client that writes asks Sentinel for the
 # primary, without AUTH. It also carries `version`, the Valkey version
 # `image.tag` names.
+#
+# Upgrades: Valkey 9 reads the data files of 8.1, so a deploy from 8.1
+# restarts the pods and keeps the data. With Sentinel the pods restart from
+# the highest ordinal down, and the preStop hook moves the primary to a pod
+# that has already restarted. Upstream sends replication data in a format
+# that older replicas read, so pods of the two versions replicate during
+# the restart. Valkey 9 writes its RDB and AOF files in format version 80,
+# and Valkey 8.1 refuses to start on them. A replica writes such a file as
+# soon as it syncs from a Valkey 9 primary. To go back to 8.1, run
+# BGREWRITEAOF on every pod, then deploy the older image with
+# `settings.rdb-version-check = "relaxed"`. Valkey 8.1 then loads the
+# files, unless a hash has fields with their own expiry (set with HSETEX
+# or HEXPIRE), which 8.1 cannot read. The rewrite matters because a pod
+# whose AOF logged such a command since its last rewrite fails to start on
+# 8.1, even when the key is gone.
 
 {
   scope,
@@ -24,7 +39,7 @@
 }:
 
 let
-  release = "8.1.10";
+  release = "9.1.3";
 
   name = scope.instanceName;
   who = "valkey ${scope.namespaceName}/${name}";
@@ -91,7 +106,7 @@ in
     image = kix.options.image {
       repository = "docker.io/valkey/valkey";
       tag = release;
-      digest = "sha256:640c5e62cea04b6d6f2084232651d0cc70362d31f4f805e7be94dbed6855e8f2";
+      digest = "sha256:3add1a336a920ea54770a001ab6feb3da5fceea96a40373a3a2cd469b815f0b7";
       description = "Image of valkey-server and the Sentinel sidecar.";
     };
 

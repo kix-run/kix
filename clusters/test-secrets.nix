@@ -4,8 +4,8 @@
 #   1. A standalone SOPS-encrypted secret (credentials)
 #   2. A pod that reads credentials from the secret via env vars
 #
-# Build:  kix build test-secrets
-# Deploy: kix deploy test-secrets --yes
+# Build:  kix build secrets
+# Deploy: kix deploy secrets --yes
 
 { kix, packages }:
 
@@ -38,7 +38,7 @@ kix.buildCluster {
 
           # Echo server that proves secrets were injected.
           secret-echo = {
-            package = packages.experimental.secret-echo;
+            package = import ./secret-echo.nix;
           };
         };
       };

@@ -60,7 +60,27 @@
 # class and orders the CDI resource after it.
 #
 # Monitoring: cdi-operator creates its own ServiceMonitor and PrometheusRule
-# in this namespace when the prometheus-operator CRDs exist.
+# in this namespace when the prometheus-operator CRDs exist. cdi-operator and
+# cdi-deployment serve metrics over TLS on 8443. A scraper must present a
+# bearer token that may get the /metrics URL. cdi-operator creates the
+# cdi-metrics-reader ServiceAccount and ClusterRole for that.
+#
+# Upgrades: cdi-operator upgrades the operands, CRDs, and webhooks it
+# installs when the deploy moves image.tag to a newer release. Existing
+# DataVolumes and their claims stay as they are. Upstream documents no
+# limit on skipping minor releases, and its upgrade lane moves through
+# v1.35.0, v1.37.0, v1.40.0, and v1.49.0 to the release, skipping many. A
+# deploy from v1.62.0 to v1.66.1 succeeded on kind. The CDI resource keeps phase
+# Deployed from the old release until the new cdi-operator starts the
+# upgrade, so the deploy can finish before the operands move. Read
+# `status.observedVersion` to see when they have. cdi-operator refuses to
+# go back: an older operator logs "operator downgraded, will not reconcile"
+# and leaves the CDI resource and the operands as the newer release wrote
+# them. Upstream offers no downgrade. The only way back is to uninstall CDI
+# and install the older release. Uninstalling deletes the DataVolumes
+# unless the CDI resource sets `uninstallStrategy =
+# "BlockUninstallIfWorkloadsExist"`, which refuses the deletion while any
+# exist.
 #
 # Escape hatches: `extraSpec`, deep-merged into the CDI resource's spec;
 # `partsOverlays`; `scope.mkCR cdi.out.crds.DataVolume` for a DataVolume the
@@ -112,9 +132,9 @@ let
   # The upstream release: meta.version, the default image.tag, and the tag
   # in crds/sources.txt and rbac/sources.txt (kix-lib test
   # kubevirt-cdi-sources-match-release).
-  release = "v1.62.0";
+  release = "v1.66.1";
 
-  # "v1.62.0" -> "v1.62"; null for a tag that is not a vX.Y release.
+  # "v1.66.1" -> "v1.66"; null for a tag that is not a vX.Y release.
   # Upstream tags every release with the leading v.
   minorOf =
     tag: lib.mapNullable (m: "v${builtins.head m}") (builtins.match "v([0-9]+\\.[0-9]+)(\\..*)?" tag);
@@ -131,30 +151,30 @@ let
   # upstream's bundle sets it.
   operands = {
     cdi-apiserver = {
-      digest = "sha256:aa5c2e16c67545f449086b4e49a25f9b304a17174985b841d82e8ff618fb809e";
+      digest = "sha256:98b71040e0e8de9397b57b4998641d4d3ea248fc300253b23085838990c4d241";
       env = [ "APISERVER_IMAGE" ];
     };
     cdi-cloner = {
-      digest = "sha256:ece16cb37976eb1a075b9b276b9d42d9a5c349dc9f29d1b7d08f0b985e119f07";
+      digest = "sha256:febbe8b265bb6fcf7ab743b780069fbae4a0531119933026de59545ad1bfc7a3";
       env = [ "CLONER_IMAGE" ];
     };
     cdi-controller = {
-      digest = "sha256:c4c35dce67ecbca97d3eb854d5468b6e60b06cd90e140fec83bb58ec566abb43";
+      digest = "sha256:0cbf467d04febc5d63b7682524e87be7d775b488cb8b5963706d2ebc3465a72f";
       env = [ "CONTROLLER_IMAGE" ];
     };
     cdi-importer = {
-      digest = "sha256:df76770eef8bfc218a6423dea41a0d597b80821cd0434528aaa84951d2242abc";
+      digest = "sha256:e22b63872cd04da43c62ad8ebb73cac46958b6e759fcc347752ec2ace1df75f4";
       env = [
         "IMPORTER_IMAGE"
         "OVIRT_POPULATOR_IMAGE"
       ];
     };
     cdi-uploadproxy = {
-      digest = "sha256:28d70e20ca6b1435470a7c7dd2bc28d394705b730c7d760ef827addb768ab5b1";
+      digest = "sha256:f2493c0b33140167135110561ff415b8344f33dd53e20b9c8fbdb288e43326c9";
       env = [ "UPLOAD_PROXY_IMAGE" ];
     };
     cdi-uploadserver = {
-      digest = "sha256:de0e6e49f7086c1fc526e339d435dc92c51d51e416e90ae4b988271bf5fafe42";
+      digest = "sha256:d3a6b735efcc914a0c9679fa8f64ab3dda764f7997d53bcafa6e2944f123420a";
       env = [ "UPLOAD_SERVER_IMAGE" ];
     };
   };
@@ -163,7 +183,7 @@ let
   # (pkg/operator/resources/namespaced, pkg/controller/import-controller.go,
   # upload-controller.go, and clone-controller.go at the release).
   # cdi-operator labels each operand pod with `cdi.kubevirt.io=<deployment
-  # name>`, read from a running v1.62.0 install.
+  # name>`, read from a running v1.66.1 install.
   operandSelectors = {
     importer = {
       app = "containerized-data-importer";
@@ -198,6 +218,14 @@ in
     defaultAliases = [ "cdi" ];
     # One instance per cluster; see the header.
     conflictsWith = [ "cluster:cdi" ];
+    # CDI states no supported Kubernetes versions. These are the versions
+    # its end-to-end lanes run at the release (automation/*.sh, TARGET).
+    # Move both bounds with `release`.
+    k8s = {
+      minVersion = "1.35";
+      maxVersion = "1.36";
+      reason = "[K6643] CDI ${release} is tested on Kubernetes 1.35 and 1.36 only. Move the cluster to a Kubernetes version in that range, or use a Kix release whose cdi package still accepts it";
+    };
   };
 
   assertions =
@@ -222,7 +250,7 @@ in
     image = kix.options.image {
       repository = "quay.io/kubevirt/cdi-operator";
       tag = release;
-      digest = "sha256:21fe82706f57bc5378ba17be79d6831b223605ecf1ea6f43f533b1bccae68c50";
+      digest = "sha256:470b2997b87c152b2573cdb4a3feb2a7925f60602e16c052de94e8d765b97357";
       description = "Image of cdi-operator. Its major.minor must match the vendored CRD and roles. Each operand image defaults to this repository's registry and path with its own name (quay.io/kubevirt/<name>) and to this tag, and every operand uses this image's pullPolicy.";
     };
 
@@ -443,17 +471,19 @@ in
           // {
             annotations = (args.annotations or { }) // {
               "cdi.kubevirt.io/storage.bind.immediate.requested" = "true";
-              ${kix.keys.readiness} = builtins.toJSON {
-                path = "/status/phase";
-                equals = "Succeeded";
-                failed = [
-                  {
-                    path = "/status/phase";
-                    equals = "Failed";
-                    hint = "The claim behind the DataVolume was lost. Recreate the DataVolume.";
-                  }
-                ];
-              };
+            };
+            # DataVolumeStatus has no generation field, so the deploy reads
+            # the phase as current.
+            readiness = {
+              path = "/status/phase";
+              equals = "Succeeded";
+              failed = [
+                {
+                  path = "/status/phase";
+                  equals = "Failed";
+                  hint = "The claim behind the DataVolume was lost. Recreate the DataVolume.";
+                }
+              ];
             };
           }
         );
@@ -521,12 +551,6 @@ in
               terminationGracePeriodSeconds = 30;
               securityContext.runAsNonRoot = true;
               nodeSelector."kubernetes.io/os" = "linux";
-              tolerations = [
-                {
-                  key = "CriticalAddonsOnly";
-                  operator = "Exists";
-                }
-              ];
               containers = [
                 {
                   name = "cdi-operator";
@@ -551,13 +575,17 @@ in
                     name = "PULL_POLICY";
                     value = config.image.pullPolicy;
                   };
-                  ports = [ (kix.port "metrics" 8080) ];
-                  # cdi-operator.yaml sets no probes and the operator serves
-                  # no health endpoint, so both probes read its metrics.
+                  # The metrics port serves TLS and requires a bearer token,
+                  # so the probes read the plain-HTTP health port, as
+                  # cdi-operator.yaml does.
+                  ports = [
+                    (kix.port "metrics" 8443)
+                    (kix.port "health" 8444)
+                  ];
                   readinessProbe = {
                     httpGet = {
-                      path = "/metrics";
-                      port = "metrics";
+                      path = "/readyz";
+                      port = "health";
                     };
                     initialDelaySeconds = 5;
                     periodSeconds = 10;
@@ -565,13 +593,14 @@ in
                   };
                   livenessProbe = {
                     httpGet = {
-                      path = "/metrics";
-                      port = "metrics";
+                      path = "/healthz";
+                      port = "health";
                     };
-                    initialDelaySeconds = 15;
+                    initialDelaySeconds = 5;
                     periodSeconds = 10;
                     timeoutSeconds = 10;
                   };
+                  terminationMessagePolicy = "FallbackToLogsOnError";
                   resources = config.resources;
                   securityContext = {
                     allowPrivilegeEscalation = false;

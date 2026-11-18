@@ -1,24 +1,8 @@
 use super::*;
 use crate::cluster::apply::RerunReason;
+use crate::cluster::test_fixtures::manifest;
 use crate::manifest::types::CLUSTER_SCOPED;
 use serde_json::json;
-
-fn manifest(kind: &str, name: &str, ns: &str, id_hash: &str, deps: &str) -> Value {
-    let mut annotations = serde_json::Map::new();
-    annotations.insert(keys::IDENTITY_HASH.into(), json!(id_hash));
-    if !deps.is_empty() {
-        annotations.insert(keys::DEPENDS_ON.into(), json!(deps));
-    }
-    json!({
-        "apiVersion": "v1",
-        "kind": kind,
-        "metadata": {
-            "name": name,
-            "namespace": ns,
-            "annotations": annotations,
-        }
-    })
-}
 
 #[test]
 fn plan_from_linear_chain_has_expected_edges() {
@@ -217,7 +201,11 @@ fn plan_ignores_rerun_on_non_jobs() {
     let graph = ResourceGraph::from_manifests(&manifests).unwrap();
     let plan = DeployPlan::from_graph_and_changes(
         &graph,
-        &[crate::cluster::apply::changed(&deploy, None, false)],
+        &[crate::cluster::apply::changed(
+            &deploy,
+            crate::cluster::apply::Deployed::Nothing,
+            false,
+        )],
     )
     .unwrap();
     assert!(matches!(plan.nodes[0].kind, TransitionKind::Apply));

@@ -1,6 +1,6 @@
 # The `spec.image` field of a VictoriaMetrics operator CR, built from a
 # `kix.options.image` value. The field takes repository, tag, and pullPolicy.
-# Operator v0.74.1 renders the container image as `repository:tag`, or as
+# Operator v0.75.2 renders the container image as `repository:tag`, or as
 # `repository@tag` when the tag is a bare `sha256:` digest (Image.Reference in
 # api/operator/v1beta1/vmextra_types.go).
 { lib, kix }:

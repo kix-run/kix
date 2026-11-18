@@ -14,7 +14,9 @@
 //! The index also names each object (`names`), so `kix status` can say which
 //! object is missing on a machine that does not have the build. Records
 //! written before 0.10 have no `names`, and readers before 0.10 skip the
-//! field.
+//! field. The API group of each named object outside the core group is in
+//! `groups`, a separate field so that readers which do not know it still
+//! read `names`.
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -56,6 +58,21 @@ pub struct RecordPackageIndex {
     /// store with its names.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub names: BTreeMap<String, ObjectName>,
+    /// The API group of each named object outside the core group, keyed by
+    /// identity hash. `None` in an index written before the field existed,
+    /// whose names do not say their group, and in an index without names.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub groups: Option<BTreeMap<String, String>>,
+}
+
+/// The name an index gives one object.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IndexedName {
+    /// The index says the object's group.
+    Named(ResourceId),
+    /// The index was written before it recorded groups, so the group of the
+    /// object is not known.
+    GroupUnknown(ObjectName),
 }
 
 /// The kind, namespace, and name of one object, stored as a JSON array of
@@ -74,9 +91,10 @@ impl ObjectName {
         ObjectName(rid.kind.clone(), namespace, rid.name.clone())
     }
 
-    /// Return the object's [`ResourceId`].
-    pub fn resource_id(&self) -> ResourceId {
+    /// Return the object's [`ResourceId`] in API group `group`.
+    pub fn resource_id(&self, group: &str) -> ResourceId {
         ResourceId {
+            group: group.to_string(),
             kind: self.0.clone(),
             namespace: if self.1.is_empty() {
                 CLUSTER_SCOPED.to_string()
@@ -120,21 +138,22 @@ impl RecordPackageIndex {
             .map(|p| store_hash(p))
             .collect();
         cluster_level.sort();
-        let names = graph
-            .resources
-            .iter()
-            .map(|(path, node)| {
-                (
-                    store_hash(path),
-                    ObjectName::of(&ResourceId::from_value(&node.manifest)),
-                )
-            })
-            .collect();
+        let mut names = BTreeMap::new();
+        let mut groups = BTreeMap::new();
+        for (path, node) in &graph.resources {
+            let rid = ResourceId::from_value(&node.manifest);
+            let hash = store_hash(path);
+            if !rid.group.is_empty() {
+                groups.insert(hash.clone(), rid.group.clone());
+            }
+            names.insert(hash, ObjectName::of(&rid));
+        }
         RecordPackageIndex {
             format: FORMAT,
             packages,
             cluster_level,
             names,
+            groups: Some(groups),
         }
     }
 
@@ -142,14 +161,21 @@ impl RecordPackageIndex {
     pub fn without_names(&self) -> RecordPackageIndex {
         RecordPackageIndex {
             names: BTreeMap::new(),
+            groups: None,
             ..self.clone()
         }
     }
 
     /// Return the name of the object with identity hash `hash`, when the
     /// index has names.
-    pub fn name_of(&self, hash: &str) -> Option<ResourceId> {
-        self.names.get(hash).map(ObjectName::resource_id)
+    pub fn name_of(&self, hash: &str) -> Option<IndexedName> {
+        let name = self.names.get(hash)?;
+        Some(match &self.groups {
+            Some(groups) => {
+                IndexedName::Named(name.resource_id(groups.get(hash).map_or("", String::as_str)))
+            }
+            None => IndexedName::GroupUnknown(name.clone()),
+        })
     }
 
     /// Return the identity hash of every resource the index lists: each
@@ -269,12 +295,20 @@ mod tests {
                     a("3"): ["ConfigMap", "default", "b"],
                     a("4"): ["Namespace", "", "default"],
                 },
+                "groups": { a("1"): crate::manifest::keys::GROUP },
             })
         );
         assert_eq!(
             RecordPackageIndex::from_value(&index.to_value()),
             Some(index)
         );
+    }
+
+    fn named_str(index: &RecordPackageIndex, hash: &str) -> Option<String> {
+        match index.name_of(hash)? {
+            IndexedName::Named(rid) => Some(rid.to_string()),
+            IndexedName::GroupUnknown(name) => panic!("{name:?}"),
+        }
     }
 
     #[test]
@@ -295,11 +329,11 @@ mod tests {
         let index = RecordPackageIndex::of(&graph());
         let a = |c: &str| format!("{c:a>32}");
         assert_eq!(
-            index.name_of(&a("4")).map(|r| r.to_string()).as_deref(),
+            named_str(&index, &a("4")).as_deref(),
             Some("Namespace/default")
         );
         assert_eq!(
-            index.name_of(&a("2")).map(|r| r.to_string()).as_deref(),
+            named_str(&index, &a("2")).as_deref(),
             Some("ConfigMap/a@default")
         );
         let old = index.without_names();
@@ -307,6 +341,33 @@ mod tests {
         let read = RecordPackageIndex::from_value(&old.to_value()).unwrap();
         assert_eq!(read.name_of(&a("2")), None);
         assert_eq!(read.hashes(), index.hashes());
+    }
+
+    /// A named object outside the core group keeps its group, and an index
+    /// written before `groups` existed does not say any object's group.
+    #[test]
+    fn names_carry_the_api_group() {
+        let index = RecordPackageIndex::of(&graph());
+        let a = |c: &str| format!("{c:a>32}");
+        let named = |hash: &str| match index.name_of(hash) {
+            Some(IndexedName::Named(rid)) => rid,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(named(&a("1")).group, crate::manifest::keys::GROUP);
+        assert_eq!(named(&a("1")).kind, "PackageInstance");
+        assert_eq!(named(&a("2")).group, "");
+
+        let mut value = index.to_value();
+        value.as_object_mut().unwrap().remove("groups");
+        let read = RecordPackageIndex::from_value(&value).unwrap();
+        assert_eq!(
+            read.name_of(&a("1")),
+            Some(IndexedName::GroupUnknown(ObjectName(
+                "PackageInstance".into(),
+                "default".into(),
+                "web".into()
+            )))
+        );
     }
 
     /// An index in a format this release does not know, or with no format,

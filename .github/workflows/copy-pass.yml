@@ -1,0 +1,54 @@
+name: Copy pass
+
+# User-facing text in Kix (errors, warnings, and log lines in the CLI and the
+# Nix library, the docs, the skills, and the changelog) is rewritten by
+# Antigravity, running Gemini 4 Carbon, through scripts/copy-pass.
+# A pull request asks for the pass by putting a `Copy pass` checkbox in
+# its description. When `scripts/copy-pass --list` names any file the
+# pull request changes, an unticked box fails the check and a ticked box
+# passes it. A description with no box passes, because changes such as a
+# version bump touch these files without changing the writing. Editing the
+# description runs the check again. Rules: CLAUDE.md § User-facing text.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: copy-pass-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  copy-pass:
+    if: github.event.pull_request.draft != true
+    runs-on: [self-hosted, spindle-2c-4g]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+
+      - name: Copy pass ticked
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          files=$(scripts/copy-pass --list --base "origin/$BASE_REF")
+          if [ -z "$files" ]; then
+            echo "This pull request changes no user-facing text."
+            exit 0
+          fi
+          printf 'Files with user-facing text:\n%s\n\n' "$files"
+          if grep -qiE -- '^\s*[-*] \[x\] ([a-z]+ )?copy pass' <<<"$PR_BODY"; then
+            echo "The description says the copy pass ran."
+            exit 0
+          fi
+          if grep -qiE -- '^\s*[-*] \[ \] ([a-z]+ )?copy pass' <<<"$PR_BODY"; then
+            echo "The description asks for a copy pass, but the box is not ticked."
+            echo "Run scripts/copy-pass on the branch, review and commit its edits, then tick '- [x] Copy pass'."
+            exit 1
+          fi
+          echo "::notice title=Copy pass::This pull request changes files with user-facing text, and its description has no Copy pass box. If the writing changed, run scripts/copy-pass and add '- [x] Copy pass' to the description."

@@ -1,11 +1,12 @@
 # Tests for kix/packages/experimental/cert-manager: the flag and env guards, the release
-# check, the gated CRD handles, the metrics gate, and the `apiserver` ingress
+# check, the Kubernetes version range, the gated CRD handles, the metrics gate, and the `apiserver` ingress
 # intent source in the cilium package. cert-manager runs as instance
 # `cert-manager` in namespace `cert-manager`.
 
 {
   lib,
   eval,
+  kixlib,
   kixKeys,
   mkCluster,
   manifests,
@@ -208,7 +209,7 @@ in
   # follower's own tag.
   cert-manager-release-check =
     let
-      cluster = clusterWith { config.image.tag = "v1.21.3"; };
+      cluster = clusterWith { config.image.tag = "v1.21.2"; };
       images = map (c: c.image) (
         builtins.concatMap (m: m.spec.template.spec.containers) (
           ofKind "Deployment" (manifests cluster) ++ ofKind "Job" (manifests cluster)
@@ -218,17 +219,17 @@ in
     in
     (
       builtins.length images == 4
-      && builtins.all (i: lib.hasSuffix ":v1.21.3" i) images
-      && builtins.elem "--acme-http01-solver-image=quay.io/jetstack/cert-manager-acmesolver:v1.21.3" controllerArgs
+      && builtins.all (i: lib.hasSuffix ":v1.21.2" i) images
+      && builtins.elem "--acme-http01-solver-image=quay.io/jetstack/cert-manager-acmesolver:v1.21.2" controllerArgs
       && evalFails (clusterWith {
         config.image.tag = "v1.22.0";
       })
       && evalFails (clusterWith {
         config.image.tag = "latest";
       })
-      && builtins.elem "quay.io/jetstack/cert-manager-webhook:v1.21.3" (
+      && builtins.elem "quay.io/jetstack/cert-manager-webhook:v1.21.2" (
         map (c: c.image) (
-          deploymentOfAll (clusterWith { config.webhook.image.tag = "v1.21.3"; }) "cert-manager-webhook"
+          deploymentOfAll (clusterWith { config.webhook.image.tag = "v1.21.2"; }) "cert-manager-webhook"
         )
       )
       && evalFails (clusterWith {
@@ -344,4 +345,40 @@ in
         withProm = count "Service" withProm;
       }
     }";
+
+  # A cluster that declares a Kubernetes version cert-manager does not support
+  # is refused with the change record's id. The meta check is called directly,
+  # because a failed meta assertion fails the cluster before its messages can
+  # be read.
+  cert-manager-k8s-range =
+    let
+      metaLib = import ../../meta.nix { inherit lib; };
+      meta =
+        (certManagerPackage {
+          inherit lib;
+          kix = kixlib;
+          scope = {
+            instanceName = "cert-manager";
+            namespaceName = "cert-manager";
+          };
+          availability = "none";
+        }).meta;
+      refusals =
+        k8sVersion:
+        map (a: a.message) (
+          builtins.filter (a: !a.assertion) (
+            (metaLib.checkMetaStatic {
+              packageMeta = meta;
+              instanceName = "cert-manager";
+              namespaceName = "cert-manager";
+              clusterConfig = { inherit k8sVersion; };
+              resolvedDepMeta = { };
+              resolutionIndex.byKey = { };
+            }).assertions
+          )
+        );
+      refused = v: builtins.any (lib.hasInfix "[K3530]") (refusals v);
+    in
+    (refused "1.32" && refused "1.37" && refusals "1.33" == [ ] && refusals "1.36" == [ ])
+    || throw "cert-manager k8s range: refusals 1.32 ${builtins.toJSON (refusals "1.32")}, 1.33 ${builtins.toJSON (refusals "1.33")}, 1.36 ${builtins.toJSON (refusals "1.36")}, 1.37 ${builtins.toJSON (refusals "1.37")}";
 }

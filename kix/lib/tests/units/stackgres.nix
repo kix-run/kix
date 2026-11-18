@@ -417,7 +417,7 @@ in
       ms = manifests cluster;
       operator = cluster.instances.stackgres-system.stackgres-operator;
       jobHash = builtins.unsafeDiscardStringContext operator.raw.webhookCheck.out.identityHash;
-      dependsOn = m: (m.metadata.annotations or { }).${kixKeys.dependsOn} or "";
+      dependsOn = m: m.metadata.annotations.${kixKeys.dependsOn} or "";
       customResources = builtins.filter (
         m: lib.hasPrefix "stackgres.io/" m.apiVersion && m.kind != "SGConfig"
       ) ms;
@@ -569,7 +569,7 @@ in
     || throw "stackgres-database password: ${builtins.toJSON (secretIn "app-db-credentials")}";
 
   # The bootstrap Job keeps one name and carries the rerun annotation. A
-  # new SOPS file for the password changes the Job's identity hash, so the
+  # new SOPS file for the password changes the Job's rerun hash, so the
   # deploy runs it again without renaming it. A rename would be reported as
   # a stateful replacement.
   stackgres-database-bootstrap-reruns-on-new-password =
@@ -597,9 +597,7 @@ in
             };
         };
       jobOf = cluster: byName "app-db-apps-bootstrap" (ofKind "Job" (manifests cluster));
-      hashOf =
-        cluster:
-        builtins.unsafeDiscardStringContext cluster.instances.apps.app-db.raw.bootstrapJob.out.identityHash;
+      hashOf = cluster: (jobOf cluster).metadata.annotations.${kixKeys.rerunHash} or null;
       before = withSource ./stackgres.nix;
       after = withSource ./clickhouse.nix;
       job = jobOf before;
@@ -608,6 +606,7 @@ in
       job != null
       && jobOf after != null
       && job.metadata.annotations.${kixKeys.rerun} or null == kixlib.keyValues.rerunOnChange
+      && hashOf before != null
       && hashOf before != hashOf after
     )
     || throw "stackgres-database bootstrap rerun: ${
@@ -652,7 +651,7 @@ in
         builtins.filter (m: m.metadata.namespace != "stackgres-system") (ofKind "Secret" ms)
       );
       imported = map (m: "${m.metadata.namespace}/${m.metadata.annotations.${kixKeys.importName}}") (
-        builtins.filter (m: (m.metadata.annotations or { }).${kixKeys.importKind} or null == "Secret") (
+        builtins.filter (m: m.metadata.annotations.${kixKeys.importKind} or null == "Secret") (
           ofKind "PackageInstance" ms
         )
       );
@@ -702,7 +701,7 @@ in
     in
     (
       pg16.minor == "16.15"
-      && pg16.images.patroni == "quay.io/ongres/patroni:v4.1.5-pg16.15-build-6.56"
+      && pg16.images.patroni == "quay.io/ongres/patroni:v4.1.5-pg16.15-build-6.57"
       && (resolve "17.6").images.postgresUtil == "quay.io/ongres/postgres-util:v17.6-build-6.44"
       && fails "latest"
       && fails "19"
@@ -723,9 +722,9 @@ in
         };
     in
     (
-      images "1.34" == [ "quay.io/ongres/kubectl:v1.33.13-build-6.56" ]
-      && images "v1.37.2-gke.100" == [ "quay.io/ongres/kubectl:v1.37.1-build-6.56" ]
-      && images "1.10" == [ "quay.io/ongres/kubectl:v1.37.1-build-6.56" ]
+      images "1.34" == [ "quay.io/ongres/kubectl:v1.33.13-build-6.57" ]
+      && images "v1.37.2-gke.100" == [ "quay.io/ongres/kubectl:v1.37.2-build-6.57" ]
+      && images "1.10" == [ "quay.io/ongres/kubectl:v1.37.2-build-6.57" ]
       && builtins.length (images null) == 8
     )
     || throw "kubectlImages: ${builtins.toJSON (images "1.34")}";

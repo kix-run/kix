@@ -19,17 +19,17 @@ use miette::miette;
 
 use kix::cluster::apply::{ChangeAction, RerunReason};
 use kix::cluster::inventory::SharedOrphan;
-use kix::cluster::scheduler::DeployPlan;
+use kix::cluster::scheduler::{DeployPlan, PrunePolicy};
 use kix::cluster::stream::NodeId;
 use kix::eval::store_graph::StoreGraph;
 use kix::manifest::diff::DiffConfig;
 use kix::manifest::diff::display::format_diffs;
 use kix::manifest::types::ResourceId;
-use kix::plan::document::Plan;
+use kix::plan::document::{Plan, PlanFlags};
 use kix::plan::file;
 use kix::plan::{
-    CLUSTER_LEVEL_KEY, PackageChangeDiff, PackageDiff, PackageInfo, split_never_pruned,
-    without_secrets,
+    CLUSTER_LEVEL_KEY, CheckedPlan, PackageChangeDiff, PackageDiff, PackageInfo,
+    split_never_pruned, without_secrets,
 };
 
 use crate::output;
@@ -448,7 +448,10 @@ pub fn render_package_plan(diff: &PackageDiff, verbose: bool) -> String {
                             );
                             let labels = diff.labels.get(id);
                             for (i, d) in diffs.iter().enumerate() {
-                                let shown = without_secrets(change.secrets.contains(id), d);
+                                let shown = without_secrets(
+                                    id.group_kind() == kix::manifest::kinds::SECRET,
+                                    d,
+                                );
                                 let formatted = format_diffs(
                                     std::slice::from_ref(&shown),
                                     &config,
@@ -553,11 +556,41 @@ pub fn kix_build() -> kix::plan::document::KixBuild {
     kix::plan::document::KixBuild::current(&kix::version::running().to_string())
 }
 
+/// Print the plan every command that deploys shows for `checked`: the
+/// package plan and its summary, the Jobs that run again, and the orphans,
+/// with what happens to them (`fate`).
+pub fn print_checked(checked: &CheckedPlan, fate: &str, verbose: bool) {
+    print_package_plan(checked.pkg_diff(), verbose);
+    print_plan_summary(checked.pkg_diff());
+    print_reruns(
+        checked.plan(),
+        &[RerunReason::Changed, RerunReason::LastRunFailed],
+    );
+    output::progress_text(&render_plan_orphans(checked.orphans(), fate));
+}
+
+/// Return what a run of a plan made with `flags` does with the orphans of
+/// `cluster`. `connected` says whether the plan has read the cluster.
+pub fn orphans_fate(flags: PlanFlags, connected: bool, cluster: &str) -> String {
+    match flags.prune {
+        PrunePolicy::Skip => {
+            "still on the cluster (`--skip-orphan-check`, not deleted)".to_string()
+        }
+        // A plan that has not read the cluster cannot yet tell which orphans
+        // another Kix cluster deploys.
+        PrunePolicy::Delete if !connected => "to be deleted after the apply (`--prune`) except \
+            any still deployed by another Kix cluster (checked once connected)"
+            .to_string(),
+        PrunePolicy::Delete => "to be deleted after the apply (`--prune`)".to_string(),
+        PrunePolicy::WarnOnly => kept_orphans_fate(cluster),
+    }
+}
+
 /// Return the fate of orphans a deploy of `cluster` keeps without `--prune`.
 /// The new Activation records them under `status.orphansKeptFrom`.
 pub fn kept_orphans_fate(cluster: &str) -> String {
     format!(
-        "still running on the cluster; `kix deploy {cluster} --prune` or `kix gc {cluster}` deletes them"
+        "still on the cluster; `kix deploy {cluster} --prune` or `kix gc {cluster}` deletes them"
     )
 }
 
@@ -722,7 +755,7 @@ mod render_tests {
         assert!(text.contains("~ web 1.0.0 (1 kept)"), "{text}");
         assert!(
             text.contains(
-                "! CustomResourceDefinition/widgets.example.com (kept; never deleted automatically)"
+                "! CustomResourceDefinition.apiextensions.k8s.io/widgets.example.com (kept; never deleted automatically)"
             ),
             "{text}"
         );
@@ -744,7 +777,7 @@ mod render_tests {
         assert!(md.contains("(1 kept)"), "{md}");
         assert!(!md.contains("**Removed resources:**"), "{md}");
         assert!(
-            md.contains("**Left the build, never deleted automatically:**\n\n- `CustomResourceDefinition/widgets.example.com`"),
+            md.contains("**Left the build, never deleted automatically:**\n\n- `CustomResourceDefinition.apiextensions.k8s.io/widgets.example.com`"),
             "{md}"
         );
 
@@ -753,7 +786,7 @@ mod render_tests {
         assert_eq!(web["removed_resources"], json!([]));
         assert_eq!(
             web["kept_resources"],
-            json!(["CustomResourceDefinition/widgets.example.com"])
+            json!(["CustomResourceDefinition.apiextensions.k8s.io/widgets.example.com"])
         );
     }
 
@@ -781,20 +814,20 @@ mod render_tests {
                 "{text}"
             );
             assert!(
-                text.contains("! CustomResourceDefinition/widgets.example.com (kept; never deleted automatically)"),
+                text.contains("! CustomResourceDefinition.apiextensions.k8s.io/widgets.example.com (kept; never deleted automatically)"),
                 "{text}"
             );
             let md = render_package_diff_markdown(&d);
             assert!(
                 md.contains(&format!(
-                    "({removed} removed, 1 kept)\n  - kept, never deleted automatically: `CustomResourceDefinition/widgets.example.com`"
+                    "({removed} removed, 1 kept)\n  - kept, never deleted automatically: `CustomResourceDefinition.apiextensions.k8s.io/widgets.example.com`"
                 )),
                 "{md}"
             );
             let json = packages_json(&d, Detail::Plain);
             assert_eq!(
                 json["removed"][0]["kept_resources"],
-                json!(["CustomResourceDefinition/widgets.example.com"])
+                json!(["CustomResourceDefinition.apiextensions.k8s.io/widgets.example.com"])
             );
             assert_eq!(json["removed"][0]["resources"], json!(removed + 1));
         }
@@ -885,11 +918,13 @@ mod render_tests {
     fn plan_orphans_list_a_namespace_as_kept() {
         let orphans = [
             ResourceId {
+                group: String::new(),
                 kind: "ConfigMap".into(),
                 name: "old".into(),
                 namespace: "app".into(),
             },
             ResourceId {
+                group: String::new(),
                 kind: "Namespace".into(),
                 name: "gone".into(),
                 namespace: kix::manifest::types::CLUSTER_SCOPED.into(),

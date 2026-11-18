@@ -23,25 +23,48 @@ This page is hand-maintained. Check `cli/kix-cli/src/commands/operator.rs`,
 
 | Command | With `--operator` |
 | --- | --- |
-| `kix deploy <CLUSTER> --operator` | Builds, shows the plan, confirms, then creates the Activation record with the build's store path and the deploy receipt. Waits until the record is `Active` or `Degraded`. |
-| `kix rollback <CLUSTER> --operator` | Selects a Superseded activation, then points the current Activation record at the target's store path. Waits for the operator to apply it. |
+| `kix deploy <CLUSTER> --operator` | Builds, shows the plan, asks for confirmation, and writes the Activation record with the build's store path, the deploy receipt, and a request token (`spec.request`). Waits for the operator to finish that request. If the build is already deployed, the operator redeploys it and keeps the record current. |
+| `kix rollback <CLUSTER> --operator` | Selects a `Superseded` Activation record, shows the plan, asks for confirmation, and writes a request token (`spec.request`) to that record. The operator restores it as the current deployment and marks the previous record `Superseded`, matching `kix rollback`. Waits for the operator to finish that request. |
 | `kix gc <CLUSTER> --operator` | Deletes the Activation records that retention retires. The operator's finalizer deletes each record's resources; the CLI waits up to 300 seconds per record. |
 
 [`kix status <CLUSTER>`](/docs/reference/cli/status/) takes no `--operator`
 flag. It reads the cluster's current Activation record the same way whoever
 applied it, and does not need the operator to be running.
 
-Flags that control the local engine have no effect in operator mode:
-`--timeout`, `--on-error`, `--prune`, `--skip-orphan-check`, `--reconcile`,
-`--force-conflicts`, `--group-by`, and `--log-format`. `--yes`,
-`--offline`, and `--accept-migrations` still apply to the local
-plan. `--dry-run` runs [`kix plan`](/docs/reference/cli/plan/) locally and
+`kix deploy --operator` fails with `[K7218]` if you pass flags that operator
+mode does not support: `--timeout`, `--on-error continue`, `--reconcile`,
+`--skip-orphan-check`, `--force-conflicts`, `--log-format` (other than
+`pretty`), or `--group-by` (other than `package`). The operator uses fixed
+deploy settings (see below), and `kix deploy --operator` prints a fixed
+progress view while waiting. `--prune` is accepted because the operator always
+deletes orphaned resources. `--yes`,
+`--offline`, and `--accept-migrations` still apply to the local plan. `--dry-run` runs [`kix plan`](/docs/reference/cli/plan/) locally and
 does not contact the operator.
+
+## How the operator runs a deploy
+
+The operator fails any resource that goes 300 seconds without progress toward
+becoming ready, and stops the deploy at the first failure. It deletes orphaned
+resources, never takes over fields owned by another field manager, and skips
+unchanged resources.
+
+Submitting a newer deploy or rollback request does not cancel a running deploy.
+The operator runs one deploy per cluster at a time, so the new request waits
+until the running deploy finishes.
+
+When the operator receives `SIGTERM` (such as when Kubernetes stops its pod) or
+`Ctrl-C`, it cancels any running deploy, starts no new ones, and exits. An
+interrupted deploy leaves its Activation record `Deploying`. When the operator
+starts again, it resumes every `Deploying` record started in operator mode.
 
 ## Waiting for the operator
 
 The CLI polls the Activation record every 2 seconds and prints progress as
-the operator reports it.
+the operator reports it. It ignores the record's phase until
+`status.startedRequest` matches `spec.request`, and treats `Active` or
+`Degraded` as complete only after `status.finishedRequest` matches
+`spec.request` too. That prevents an earlier phase (such as `Active` when
+redeploying the current build) from ending the wait early.
 
 | Record phase | CLI result |
 | --- | --- |
@@ -58,6 +81,12 @@ A timeout ends the CLI only. The operator keeps working on the record.
 - The Activation CRD is installed, and the account can list Activation
   records. The `--operator` commands check this before changing anything.
 - The operator is running and watches the `kix.run` API group.
+- The operator runs a matching or newer version of Kix, its Kubernetes account
+  can patch CustomResourceDefinition `activations.kix.run`, and your account
+  can read that CRD. On startup, the operator writes `requests` to the
+  `kix.run/operator-features` annotation on `activations.kix.run`.
+  `kix deploy --operator` and `kix rollback --operator` check that annotation
+  before changing anything and stop if `requests` is missing.
 - The operator can read the store path the CLI wrote. It loads manifests from
   `spec.source.path`, so the build must be present in the store the operator
   reads, not only on the machine that ran the CLI.

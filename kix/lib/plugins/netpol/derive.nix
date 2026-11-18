@@ -6,12 +6,17 @@ let
   kixKeys = kixAnnotations.keys;
   core = import ../../core/default.nix { inherit lib; };
 
-  inherit (import ../../eval/edges.nix { k8s = core; })
+  inherit
+    (import ../../eval/edges.nix {
+      inherit lib;
+      k8s = core;
+    })
     isWorkload
     getWorkloadSelector
     isService
     ;
   inherit (import ../../core/markers.nix { inherit lib; }) isProvidedLoadBalancerClass;
+  inherit (import ../../core/pod-spec.nix { inherit lib; }) podSpecOf;
 in
 {
   buildWorkloadCnps =
@@ -177,7 +182,7 @@ in
       workloads = builtins.filter isWorkload allPartResources;
 
       hostNetworkWorkloads = builtins.filter (
-        w: w.rawManifest.spec.template.spec.hostNetwork or false
+        w: (podSpecOf w.rawManifest).hostNetwork or false
       ) workloads;
 
       bindings = builtins.filter (
@@ -212,7 +217,7 @@ in
       workloadNeedsApiserver =
         w:
         let
-          saName = w.rawManifest.spec.template.spec.serviceAccountName or "default";
+          saName = (podSpecOf w.rawManifest).serviceAccountName or "default";
           wNs = w.rawManifest.metadata.namespace or null;
         in
         wNs != null && builtins.elem "${wNs}/${saName}" boundSAKeys;
@@ -236,7 +241,7 @@ in
             w:
             let
               wSelector = getWorkloadSelector w;
-              isHostNet = w.rawManifest.spec.template.spec.hostNetwork or false;
+              isHostNet = (podSpecOf w.rawManifest).hostNetwork or false;
             in
             if isHostNet || !(workloadNeedsApiserver w) then
               [ ]
@@ -268,7 +273,7 @@ in
             w:
             let
               wSelector = getWorkloadSelector w;
-              isHostNet = w.rawManifest.spec.template.spec.hostNetwork or false;
+              isHostNet = (podSpecOf w.rawManifest).hostNetwork or false;
             in
             if isHostNet then
               [ ]
@@ -411,10 +416,11 @@ in
       ) terminatingCrs;
 
       warnings =
-        map (
-          w:
-          "workload '${w.kind}/${w.name}' uses hostNetwork, so CiliumNetworkPolicy does not control its traffic. Review network access on the host"
-        ) hostNetworkWorkloads
+        map (w: {
+          object = { inherit (w) kind name; };
+          message = "${w.kind}/${w.name} uses hostNetwork, so CiliumNetworkPolicy does not filter its traffic.";
+          fix = "Restrict access to its ports on the node's host network.";
+        }) hostNetworkWorkloads
         ++
           lib.optional (packageMeta.isHelm or false)
             "Kix may not detect every connection between workloads in this Helm chart. Review the generated network policies and add any missing rules";

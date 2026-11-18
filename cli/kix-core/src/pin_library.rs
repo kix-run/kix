@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::eval::nix::{NixCommandError, command, current_system, output};
+use crate::eval::nix::{NixCommandError, command, output};
 use crate::flake_lock::{InputError, bare_ref, kix_input};
 use crate::runtime::Tool;
 use crate::version::Version;
@@ -496,32 +496,6 @@ fn retag_flake(flake: &str, original: &Value, tag: &str, git_ref: &str) -> Resul
     }
 }
 
-/// Evaluate the version of the Kix library the flake in `dir` uses, without
-/// writing `flake.lock`. Return [`LibraryVersion::Older`] for a library
-/// without the version output, and the Nix error when the evaluation fails
-/// for another reason.
-fn eval_version(dir: &Path) -> Result<LibraryVersion, NixCommandError> {
-    let mut cmd = command(Tool::Nix)?;
-    cmd.args(["eval", "--json", "--no-write-lock-file"])
-        .arg(format!(
-            ".#legacyPackages.{}.kixLibrary.version",
-            current_system()
-        ))
-        .args([
-            "--extra-experimental-features",
-            "nix-command flakes pipe-operators",
-        ])
-        .current_dir(dir);
-    match output(&mut cmd) {
-        Ok(out) => Ok(match serde_json::from_slice::<Value>(&out) {
-            Ok(Value::String(v)) => LibraryVersion::parse(&v),
-            _ => LibraryVersion::Unknown,
-        }),
-        Err(e) if e.missing_attribute() => Ok(LibraryVersion::Older),
-        Err(e) => Err(e),
-    }
-}
-
 /// The contents of a file before Kix changed it, `None` when it did not
 /// exist.
 struct Saved(PathBuf, Option<Vec<u8>>);
@@ -618,7 +592,7 @@ impl Plan {
     fn check(&self) -> Result<(), String> {
         let kix = self.version.release();
         let tag = format!("v{kix}");
-        let found = match eval_version(&self.dir) {
+        let found = match crate::eval::nix::library_version(&self.dir, &[]) {
             Ok(LibraryVersion::Known(v)) => v,
             Ok(LibraryVersion::Older) => {
                 return Err(format!(
@@ -629,7 +603,7 @@ impl Plan {
             Ok(LibraryVersion::Unknown) => {
                 return Err("Kix could not read the version of the project's Kix library.".into());
             }
-            Err(e) => {
+            Err(crate::eval::error::KixEvalError::Nix(e)) => {
                 let detail = e.stderr.trim();
                 let last = detail
                     .lines()
@@ -639,6 +613,11 @@ impl Plan {
                     .trim();
                 return Err(format!(
                     "Kix could not read the version of the project's Kix library: {last}"
+                ));
+            }
+            Err(e) => {
+                return Err(format!(
+                    "Kix could not read the version of the project's Kix library: {e}"
                 ));
             }
         };
@@ -742,13 +721,13 @@ mod tests {
             ),
             "kix.url = \"git+file:///src/kix?dir=kix&ref=refs/tags/v0.10.0\";"
         );
-        let mirror = json!({ "type": "git", "url": "ssh://git@git.example:30232/org/kixpkgs.git", "ref": "v0.9.1" });
+        let mirror = json!({ "type": "git", "url": "ssh://git@git.example:30232/org/kix.git", "ref": "v0.9.1" });
         assert_eq!(
             new_flake(
                 mirror,
-                "url = \"git+ssh://git@git.example:30232/org/kixpkgs.git?ref=v0.9.1&shallow=1\";"
+                "url = \"git+ssh://git@git.example:30232/org/kix.git?ref=v0.9.1&shallow=1\";"
             ),
-            "url = \"git+ssh://git@git.example:30232/org/kixpkgs.git?shallow=1&ref=refs/tags/v0.10.0\";"
+            "url = \"git+ssh://git@git.example:30232/org/kix.git?shallow=1&ref=refs/tags/v0.10.0\";"
         );
     }
 
@@ -765,13 +744,13 @@ mod tests {
 
     #[test]
     fn two_urls_of_the_repository_are_left_to_a_person() {
-        let url = "git+ssh://git@git.example:30232/org/kixpkgs.git?ref=refs/tags/v0.8.0-rc.1";
+        let url = "git+ssh://git@git.example:30232/org/kix.git?ref=refs/tags/v0.8.0-rc.1";
         let flake = format!(
             "inputs = {{\n  kix = {{\n    url = \"{url}\";\n  }};\n  image-kix = {{\n    url = \"{url}\";\n  }};\n}};\n"
         );
         let original = json!({
             "type": "git",
-            "url": "ssh://git@git.example:30232/org/kixpkgs.git",
+            "url": "ssh://git@git.example:30232/org/kix.git",
             "ref": "refs/tags/v0.8.0-rc.1"
         });
         let Err(PinLibraryError::Edit(edit)) = plan_for(&lock_with(original), &flake) else {
@@ -779,7 +758,7 @@ mod tests {
         };
         assert_eq!(
             edit.to_url,
-            "git+ssh://git@git.example:30232/org/kixpkgs.git?ref=refs/tags/v0.10.0"
+            "git+ssh://git@git.example:30232/org/kix.git?ref=refs/tags/v0.10.0"
         );
         let numbers: Vec<usize> = edit.lines.iter().map(|(n, _)| *n).collect();
         assert_eq!(numbers, [3, 6]);

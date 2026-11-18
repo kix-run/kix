@@ -10,8 +10,7 @@ pub const CLUSTER_SCOPED: &str = "_cluster";
 /// Kix redacts secret values based on this check. Custom resources in other API
 /// groups whose kind happens to be `Secret` are not redacted.
 pub fn is_secret(manifest: &serde_json::Value) -> bool {
-    manifest.get("apiVersion").and_then(|v| v.as_str()) == Some("v1")
-        && manifest.get("kind").and_then(|v| v.as_str()) == Some("Secret")
+    super::kinds::GroupKind::of_manifest(manifest) == super::kinds::SECRET
 }
 
 /// Return whether the manifest's API group is one whose kinds Kix knows: the
@@ -43,7 +42,28 @@ pub const BUILTIN_GROUPS: &[&str] = &["apps", "batch", "policy", "autoscaling"];
 /// Suffixes of API groups whose kinds Kix treats as built-in.
 pub const BUILTIN_GROUP_SUFFIXES: &[&str] = &[".k8s.io"];
 
+/// Return the API group of `api_version`: `"apps"` for `apps/v1`, and `""`
+/// for the core group's `v1`.
+pub fn api_group(api_version: &str) -> &str {
+    api_version.split_once('/').map_or("", |(group, _)| group)
+}
+
+/// Return `kind` with API group `group`, as `kubectl` writes it:
+/// `"Job.batch"`, or `"ConfigMap"` for the core group.
+pub fn qualified_kind(group: &str, kind: &str) -> String {
+    if group.is_empty() {
+        kind.to_string()
+    } else {
+        format!("{kind}.{group}")
+    }
+}
+
 /// Unique identifier for a K8s resource.
+///
+/// The API group is part of the identity, because two groups can serve a
+/// kind of one name (`Job` in `batch` and in `batch.volcano.sh`).
+// `group` is the last field so that ids sort by kind, namespace, and name
+// first.
 #[derive(
     Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema,
 )]
@@ -51,12 +71,34 @@ pub struct ResourceId {
     pub kind: String,
     pub namespace: String, // "_cluster" for cluster-scoped
     pub name: String,
+    /// The API group, `""` for the core group. JSON leaves out the core
+    /// group, so JSON written before the id carried a group reads as it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub group: String,
 }
 
 impl ResourceId {
+    /// Return the id of the object `name` of `kind` in API group `group`
+    /// (`""` for the core group) and `namespace` ([`CLUSTER_SCOPED`] for a
+    /// cluster-scoped object).
+    pub fn new(group: &str, kind: &str, namespace: &str, name: &str) -> Self {
+        ResourceId {
+            group: group.to_string(),
+            kind: kind.to_string(),
+            namespace: namespace.to_string(),
+            name: name.to_string(),
+        }
+    }
+
     /// Extract a ResourceId from a manifest JSON value.
     pub fn from_value(doc: &serde_json::Value) -> Self {
         ResourceId {
+            group: api_group(
+                doc.pointer("/apiVersion")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(""),
+            )
+            .to_string(),
             kind: doc
                 .pointer("/kind")
                 .and_then(|v| v.as_str())
@@ -86,6 +128,7 @@ impl ResourceId {
             return None;
         }
         Some(ResourceId {
+            group: String::new(),
             kind: kind.to_string(),
             namespace: namespace.to_string(),
             name: name.to_string(),
@@ -100,29 +143,44 @@ impl ResourceId {
             return None;
         }
         Some(ResourceId {
+            group: String::new(),
             kind: kind.to_string(),
             namespace: ns_dir.to_string(),
             name: name.to_string(),
         })
     }
 
-    /// Return `"Kind/name@namespace"` (or `"Kind/name"` when cluster-scoped)
-    /// without escaping control characters. Use `Display` for user-facing output.
+    /// Return the id's API group and kind.
+    pub fn group_kind(&self) -> super::kinds::GroupKind<'_> {
+        super::kinds::GroupKind::new(&self.group, &self.kind)
+    }
+
+    /// Return `"Kind.group/name@namespace"` without escaping control
+    /// characters. The group is left out for the core group (`"ConfigMap/name@namespace"`)
+    /// and the namespace for a cluster-scoped object (`"Kind.group/name"`), so
+    /// two different ids never give one string. Use `Display` for
+    /// user-facing output.
     pub fn display_id(&self) -> String {
+        let kind = qualified_kind(&self.group, &self.kind);
         if self.namespace == CLUSTER_SCOPED {
-            format!("{}/{}", self.kind, self.name)
+            format!("{kind}/{}", self.name)
         } else {
-            format!("{}/{}@{}", self.kind, self.name, self.namespace)
+            format!("{kind}/{}@{}", self.name, self.namespace)
         }
     }
 }
 
-/// Format `"Kind/name@namespace"` for user-facing output, passing each segment
+/// Format the id as [`ResourceId::display_id`] does, passing each segment
 /// through [`crate::text::printable`].
 impl std::fmt::Display for ResourceId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use crate::text::printable;
-        write!(f, "{}/{}", printable(&self.kind), printable(&self.name))?;
+        write!(
+            f,
+            "{}/{}",
+            printable(&qualified_kind(&self.group, &self.kind)),
+            printable(&self.name)
+        )?;
         if self.namespace != CLUSTER_SCOPED {
             write!(f, "@{}", printable(&self.namespace))?;
         }
@@ -162,6 +220,7 @@ mod tests {
     #[test]
     fn display_namespaced() {
         let rid = ResourceId {
+            group: String::new(),
             kind: "deployment".into(),
             namespace: "kube-system".into(),
             name: "coredns".into(),
@@ -173,12 +232,45 @@ mod tests {
     #[test]
     fn display_flags_hidden_characters() {
         let rid = ResourceId {
+            group: String::new(),
             kind: "ClusterRoleBinding".into(),
             namespace: CLUSTER_SCOPED.into(),
             name: "cluster-admin\u{200b}".into(),
         };
         assert_eq!(rid.to_string(), "ClusterRoleBinding/cluster-admin⟨U+200B⟩");
         assert_eq!(rid.display_id(), "ClusterRoleBinding/cluster-admin\u{200b}");
+    }
+
+    /// The id takes its group from `apiVersion`, and two groups that serve
+    /// one kind name give two ids.
+    #[test]
+    fn from_value_takes_the_group_from_the_api_version() {
+        let job = |api_version: &str| {
+            ResourceId::from_value(&serde_json::json!({
+                "apiVersion": api_version,
+                "kind": "Job",
+                "metadata": { "name": "x", "namespace": "app" },
+            }))
+        };
+        assert_eq!(job("batch/v1").group, "batch");
+        assert_eq!(job("v1").group, "");
+        assert_ne!(job("batch/v1"), job("batch.volcano.sh/v1alpha1"));
+        assert_eq!(job("batch/v1"), job("batch/v2"));
+    }
+
+    /// JSON leaves out the core group, and JSON without a group, as written
+    /// before ids carried one, reads as the core group.
+    #[test]
+    fn json_leaves_out_the_core_group() {
+        let core = serde_json::json!({ "kind": "ConfigMap", "namespace": "app", "name": "c" });
+        let rid: ResourceId = serde_json::from_value(core.clone()).unwrap();
+        assert_eq!(rid.group, "");
+        assert_eq!(serde_json::to_value(&rid).unwrap(), core);
+        let job = ResourceId {
+            group: "batch".into(),
+            ..rid
+        };
+        assert_eq!(serde_json::to_value(&job).unwrap()["group"], "batch");
     }
 
     #[test]

@@ -18,11 +18,11 @@
 # 4. Every converter is on, so the two v1alpha1 kinds (ScrapeConfig,
 #    AlertmanagerConfig) are referenced too. With the instance named
 #    victoria-metrics-operator, the AlertmanagerConfig marker is the longest
-#    CRD ref marker name in kixpkgs:
+#    CRD ref marker name in this repository:
 #    crd-ref-victoria-metrics-operator-alertmanagerconfigs-monitoring-coreos-com
 #    (75 characters; a marker name is a DNS-1123 subdomain, up to 253).
 #
-# Build:  nix build .#cluster-victoria-metrics-crd-ref --extra-experimental-features pipe-operators
+# Build:  kix build victoria-metrics-crd-ref
 
 { kix, packages }:
 

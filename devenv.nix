@@ -8,7 +8,7 @@
 
 let
   # A stable, readable name for this checkout: the directory name plus a
-  # short digest of its absolute path, so two worktrees of kixpkgs never
+  # short digest of its absolute path, so two worktrees of this repository never
   # collide and neither name is a mystery when you look in ~/.cache.
   targetDirKey =
     "${builtins.baseNameOf config.devenv.root}-"
@@ -76,14 +76,14 @@ in
 
   # Cluster diff tooling: dump live cluster and compare against kix output.
   scripts.kix-check.exec = ''
-    cluster="''${1:?Usage: kix-check <cluster-name> [--context <ctx>]}"
+    cluster="''${1:?Usage: kix-check <cluster-name> [<context>]}"
     context="''${2:-}"
     echo "Building kix manifests for $cluster..."
-    nix build ".#cluster-$cluster" --extra-experimental-features pipe-operators
+    ./scripts/kix-manifests.sh . "$cluster" ./result
     dump_dir="/tmp/kix-dump-$cluster"
     rm -rf "$dump_dir"
     ./scripts/kix-dump.py --match-kix ./result ''${context:+--context "$context"} "$dump_dir"
-    ./scripts/kix-diff.py ./result "$dump_dir"
+    ./scripts/compare-cluster-dump.py ./result "$dump_dir"
   '';
 
   # kind: create/delete local cluster and deploy kix manifests.

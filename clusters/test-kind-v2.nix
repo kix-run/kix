@@ -1,8 +1,8 @@
-# clusters/test-kind-v2.nix: Updated kind cluster for demo (v2).
+# clusters/test-kind-v2.nix: the second build of test-kind.nix, with
+# another message and two replicas.
 #
-# Changes from v1: different message, 2 replicas.
-# The kind integration tests in cli/kix-cli deploy it over kind to simulate a
-# cluster config change.
+# It keeps the cluster name "kind". The kind integration tests in cli/kix-cli
+# deploy it over test-kind.nix to check a change to a deployed cluster.
 #
 # Build:  kix build kind-v2
 

@@ -1,6 +1,7 @@
 //! An in-memory apiserver for tests of code that takes a `kube::Client`.
 //!
 //! It serves discovery for a fixed set of kinds (ConfigMap, Secret, Namespace,
+//! CustomResourceDefinition,
 //! Job, ClusterRole, Kix's Activation, and two kinds of a group served at two
 //! versions), and GET, LIST (with an equality or existence label
 //! selector), PATCH (as a JSON merge patch, on the object or its `status`),
@@ -36,6 +37,17 @@ const KINDS: &[(&str, &str, &str, &str, bool)] = &[
     ("", "v1", "ConfigMap", "configmaps", true),
     ("", "v1", "Secret", "secrets", true),
     ("", "v1", "Namespace", "namespaces", false),
+    (
+        "apiextensions.k8s.io",
+        "v1",
+        "CustomResourceDefinition",
+        "customresourcedefinitions",
+        false,
+    ),
+    // A second `Job` kind, in a group that `/apis` lists before `batch`, so
+    // a lookup by kind alone finds it first. It is cluster-scoped, so a
+    // lookup that finds the wrong one also gets the wrong scope.
+    (OTHER_JOB_GROUP, "v1alpha1", "Job", "jobs", false),
     ("batch", "v1", "Job", "jobs", true),
     (
         "rbac.authorization.k8s.io",
@@ -66,6 +78,9 @@ const RETIRED_RECORDS: (&str, &str, &str, &str, bool) = (
 /// The group [`KINDS`] serves at two versions. Its preferred version is
 /// `v1`, the first listed.
 pub(crate) const TWO_VERSION_GROUP: &str = "example.kix.test";
+
+/// A group that serves a kind named `Job`, as `batch.volcano.sh` does.
+pub const OTHER_JOB_GROUP: &str = "batch.example.kix.test";
 
 type Hook = Box<dyn FnOnce(&mut Value) + Send>;
 
@@ -185,13 +200,22 @@ impl FakeApi {
         }));
     }
 
-    /// Return the sorted names of held objects of `kind`.
+    /// Return the sorted names of held objects of `kind`, in any group.
     pub fn names(&self, kind: &str) -> Vec<String> {
+        self.names_where(|o| o["kind"] == kind)
+    }
+
+    /// Return the sorted names of held objects of `api_version` and `kind`.
+    pub fn names_of(&self, api_version: &str, kind: &str) -> Vec<String> {
+        self.names_where(|o| o["apiVersion"] == api_version && o["kind"] == kind)
+    }
+
+    fn names_where(&self, keep: impl Fn(&Value) -> bool) -> Vec<String> {
         let st = self.state.lock().unwrap();
         let mut v: Vec<String> = st
             .objects
             .iter()
-            .filter(|o| o["kind"] == kind)
+            .filter(|o| keep(o))
             .filter_map(|o| o["metadata"]["name"].as_str().map(str::to_string))
             .collect();
         v.sort();

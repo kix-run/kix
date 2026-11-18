@@ -282,16 +282,25 @@ rec {
       else if hasDefault then
         {
           found = false;
-          warnings = lib.optional (nameable != [ ]) (
-            "optional dependency '${argName}' has no instance in namespace '${requesterNamespace}', so Kix skipped it. "
-            + (
-              if builtins.length nameable == 1 then
-                "${labels nameable} matches in another namespace.\nFix: To use it, add this line to ${consumerPath}:"
-              else
-                "${labels nameable} match in other namespaces.\nFix: To use one, add one of these lines to ${consumerPath}:"
-            )
-            + "\n${depLines nameable}"
-          );
+          warnings = lib.optional (nameable != [ ]) {
+            dependency = argName;
+            message =
+              "optional dependency '${argName}' has no instance in namespace '${requesterNamespace}', so Kix skipped it. "
+              + (
+                if builtins.length nameable == 1 then
+                  "${labels nameable} matches in another namespace."
+                else
+                  "${labels nameable} match in other namespaces."
+              );
+            fix =
+              (
+                if builtins.length nameable == 1 then
+                  "To use it, add this line to ${consumerPath}:"
+                else
+                  "To use one, add one of these lines to ${consumerPath}:"
+              )
+              + "\n${depLines nameable}";
+          };
         }
 
       else if builtins.length nameable == 1 then
@@ -617,7 +626,7 @@ rec {
             requester
             requesterName
             ;
-          renamedFrom = (depsEnrichment.${argName} or { }).renamedFrom or null;
+          renamedFrom = depsEnrichment.${argName}.renamedFrom or null;
           requesterNamespace = namespace;
           hasDefault = isOptional;
         };
@@ -661,7 +670,7 @@ rec {
             requester
             requesterName
             ;
-          renamedFrom = (depsEnrichment.${argName} or { }).renamedFrom or null;
+          renamedFrom = depsEnrichment.${argName}.renamedFrom or null;
           requesterNamespace = namespace;
           hasDefault = isOptional;
         };
@@ -721,7 +730,7 @@ rec {
     builtins.foldl' (
       acc: e:
       let
-        existing = (acc.${e.targetNs} or { }).${e.targetInst} or [ ];
+        existing = acc.${e.targetNs}.${e.targetInst} or [ ];
       in
       acc
       // {

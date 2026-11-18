@@ -161,8 +161,8 @@ let
     nsName: inst: part:
     builtins.unsafeDiscardStringContext
       cluster.instances.${nsName}.${inst}.raw.${part}.out.identityHash;
-  dependsOn = m: lib.splitString "," ((m.metadata.annotations or { }).${kixKeys.dependsOn} or "");
-  readinessOf = m: (m.metadata.annotations or { }).${kixKeys.readiness} or null;
+  dependsOn = m: lib.splitString "," (m.metadata.annotations.${kixKeys.dependsOn} or "");
+  readinessOf = m: m.metadata.annotations.${kixKeys.readiness} or null;
   ready = builtins.toJSON {
     condition = {
       status = "True";
@@ -186,7 +186,7 @@ let
       })
     );
   defaultConfig = {
-    image.tag = "v2.11.0";
+    image.tag = "v2.15.0";
     extraArgs = [ ];
   };
 in
@@ -360,7 +360,7 @@ in
         monitor:
         builtins.filter (
           s:
-          lib.all (k: (s.metadata.labels or { }).${k} or null == monitor.spec.selector.matchLabels.${k}) (
+          lib.all (k: s.metadata.labels.${k} or null == monitor.spec.selector.matchLabels.${k}) (
             builtins.attrNames monitor.spec.selector.matchLabels
           )
         ) (services on);
@@ -425,7 +425,7 @@ in
         ofKind "CustomResourceDefinition" ms
       );
       unlabelled = builtins.filter (
-        c: (c.metadata.labels or { })."external-secrets.io/component" or null != "controller"
+        c: c.metadata.labels."external-secrets.io/component" or null != "controller"
       ) crds;
       certArgs =
         (builtins.head (find "Deployment" "external-secrets-cert-controller").spec.template.spec.containers)
@@ -477,10 +477,10 @@ in
     in
     (
       failedAssertions defaultConfig == [ ]
-      && failedAssertions (defaultConfig // { image.tag = "v2.11.3"; }) == [ ]
+      && failedAssertions (defaultConfig // { image.tag = "v2.15.3"; }) == [ ]
       && builtins.length latest == 1
-      && lib.hasPrefix "image.tag \"latest\" is not a v2.11 release" (builtins.head latest)
-      && lib.hasInfix "Remove image.tag or set a v2.11.x tag." (builtins.head latest)
+      && lib.hasPrefix "image.tag \"latest\" is not a v2.15 release" (builtins.head latest)
+      && lib.hasInfix "Remove image.tag or set a v2.15.x tag." (builtins.head latest)
       && builtins.length generic == 1
       && lib.hasInfix "--unsafe-allow-generic-targets" (builtins.head generic)
       &&
@@ -645,12 +645,46 @@ in
           good = clusterWith { config.extraArgs = [ "--unsafe-allow-generic-targets=false" ]; };
         };
         otherMinor = {
-          bad = clusterWith { config.image.tag = "v2.12.0"; };
-          good = clusterWith { config.image.tag = "v2.11.1"; };
+          bad = clusterWith { config.image.tag = "v2.16.0"; };
+          good = clusterWith { config.image.tag = "v2.15.1"; };
         };
       };
       wrong = builtins.attrNames (lib.filterAttrs (_: c: !(evalFails c.bad) || evalFails c.good) cases);
     in
     wrong == [ ]
     || throw "external-secrets refusals: bad case built or good case failed: ${builtins.toJSON wrong}";
+
+  # meta.k8s refuses a cluster that declares a Kubernetes version outside the
+  # range upstream supports for the pinned release.
+  external-secrets-k8s-range =
+    let
+      metaLib = import ../../meta.nix { inherit lib; };
+      meta =
+        (operatorPackage {
+          inherit lib;
+          kix = kixlib;
+          scope = {
+            instanceName = "external-secrets";
+            namespaceName = "external-secrets";
+          };
+          availability = "none";
+        }).meta;
+      refusals =
+        k8sVersion:
+        map (a: a.message) (
+          builtins.filter (a: !a.assertion) (
+            (metaLib.checkMetaStatic {
+              packageMeta = meta;
+              instanceName = "external-secrets";
+              namespaceName = "external-secrets";
+              clusterConfig = { inherit k8sVersion; };
+              resolvedDepMeta = { };
+              resolutionIndex.byKey = { };
+            }).assertions
+          )
+        );
+      refused = v: builtins.any (lib.hasInfix "[K6770]") (refusals v);
+    in
+    (refused "1.36" && refused "1.38.0" && refusals "1.37.2" == [ ] && refusals null == [ ])
+    || throw "external-secrets k8s range: 1.36 ${builtins.toJSON (refusals "1.36")}, 1.38.0 ${builtins.toJSON (refusals "1.38.0")}, 1.37.2 ${builtins.toJSON (refusals "1.37.2")}";
 }

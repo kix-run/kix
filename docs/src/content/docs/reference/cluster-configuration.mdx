@@ -245,6 +245,7 @@ Role names come from the closed registry in `kix/lib/eval/roles.nix`. Every role
 | `loadBalancer` | none | none (environment role) | Checked by `scope.mkResource` on `Service` objects with `type: LoadBalancer` (unless `loadBalancerClass` comes from `kix.providedLoadBalancerClass`). |
 | `metricsApi` | none | `metrics-server` | Checked on `HorizontalPodAutoscaler` resources reading `metrics.k8s.io` and packages calling `scope.requireMetricsApi`. |
 | `registryMirror` | none | `spegel` | Prevents running a second node-local OCI mirror when `embedded-registry` is enabled on k3s or RKE2 (`exclusive`). |
+| `gatewayApi` | `crds` (`GatewayClass`, `Gateway`, `HTTPRoute`, and the other standard Gateway API kinds) | `gateway-api` | Provides Gateway API CRD handles to controllers such as `envoy-gateway` and `traefik`. |
 | `snapshotController` | `crds` (`VolumeSnapshot`, `VolumeSnapshotClass`, `VolumeSnapshotContent`) | `snapshot-controller` | Provides volume snapshot CRD handles to storage drivers and backup packages. |
 
 To replace a distribution's bundled component with a Kix-managed package, disable the component in the distribution and set the role binding to `"absent"`:
@@ -403,7 +404,7 @@ Each `networkPolicy.platformIntents.<name>` entry supports:
 | `targetNamespace` | `nullOr str` | Optional `io.kubernetes.pod.namespace` filter on a clusterwide policy's endpoint selector. |
 | `podSelector` | `attrsOf str` | Pod labels selected by the policy. |
 | `ingress` | `listOf attrs` | Ingress rules (`{ from = "world" \| "all-pods" \| "apiserver"; ports?; entities?; }`). |
-| `egress` | `listOf attrs` | Egress rules (`{ to = "world" \| "all-pods" \| "apiserver" \| "dns"; ports?; entities?; }`). |
+| `egress` | `listOf attrs` | Egress rules (`{ to = "world" \| "pods" \| "all-pods" \| "apiserver" \| "dns"; ports?; entities?; }`). |
 
 :::note[Explanation]
 See [Network policy derivation from the graph](/docs/explanation/network-policy/) for how Kix discovers traffic paths and synthesizes policies.

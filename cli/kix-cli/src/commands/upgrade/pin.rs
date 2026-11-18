@@ -127,3 +127,32 @@ pub fn pin(
         }
     })
 }
+
+/// Return the text of the stop for an edit a person must make in
+/// `flake.nix`. `state` says what Kix left as it was, and `command` runs
+/// after the edit.
+pub(super) fn edit_message(
+    edit: &kix::pin_library::HandEdit,
+    state: &str,
+    command: &str,
+) -> String {
+    let count = match edit.lines.len() {
+        2 => "two".to_string(),
+        3 => "three".to_string(),
+        n => n.to_string(),
+    };
+    let mut text = format!(
+        "Cannot update flake.nix automatically: {count} inputs use the Kix library's repository:\n"
+    );
+    for (n, line) in &edit.lines {
+        text.push_str(&format!("  flake.nix:{n}:   {line}\n"));
+    }
+    text.push('\n');
+    text.push_str(state);
+    text.push('\n');
+    text.push_str(&format!(
+        "Next: change the url of the Kix library input to {} in flake.nix, leave the\nother inputs as they are, then run `{command}` again.",
+        edit.to_url
+    ));
+    text
+}

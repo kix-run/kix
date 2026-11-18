@@ -19,16 +19,16 @@
 # file is passed as `pins`. Removing that entry returns the instance to its
 # package's default; no Nix changes either way.
 #
-# Promote:  kix --flake ./clusters pin set web --tag 1.27-alpine
-#           kix --flake ./clusters pin set kix-pins/web-next --tag 1.29-alpine
-# Verify:   kix --flake ./clusters pin check
-# Build:    nix build ./clusters#cluster-pins --extra-experimental-features pipe-operators
-# Deploy:   kix --flake ./clusters --context kind-kix-pins deploy pins -y
+# Promote:  kix pin set web --tag 1.27-alpine --pins-file clusters/pins.json
+#           kix pin set kix-pins/web-next --tag 1.29-alpine --pins-file clusters/pins.json
+# Verify:   kix pin check --pins-file clusters/pins.json
+# Build:    kix build pins
+# Deploy:   kix deploy pins --context kind-kix-pins -y
 #
 # `pins` is the committed record of what each image reference resolved to,
-# already loaded. The path to it is declared once, in `clusters/flake.nix`,
-# so this file never names it and neither does the command line. A missing
-# key throws here, at evaluation, naming the command that adds it.
+# already loaded. The path to it is declared once, in the repository's
+# `flake.nix`, so this file never names it. A missing key throws here, at
+# evaluation, naming the command that adds it.
 {
   kix,
   packages,

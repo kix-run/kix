@@ -46,7 +46,7 @@ kubectl --context "$CTX" wait --for=condition=Ready nodes --all --timeout=180s
 
 # The CLI from this checkout. It builds the cluster, applies in dependency
 # order and waits for readiness, so a deploy that returns is the first check.
-$NIX run .#kix -- deploy "$NAME" --flake ./clusters --context "$CTX" -y --timeout 20m
+$NIX run .#kix -- deploy "$NAME" --context "$CTX" -y --timeout 20m
 
 k() { kubectl --context "$CTX" "$@"; }
 zone_of() { k get node "$1" -o jsonpath='{.metadata.labels.topology\.kubernetes\.io/zone}'; }

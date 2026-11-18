@@ -7,11 +7,27 @@ let
 in
 rec {
 
+  # Return the entries of a `requires` or `extraDeps` list that are
+  # resources. Kix skips the other entries, such as strings.
+  resourcesIn = builtins.filter (dep: builtins.isAttrs dep && dep ? outPath);
+
   facts = import ./facts.nix { inherit lib; };
 
   markers = import ./markers.nix { inherit lib; };
 
   normalize = import ./normalize.nix { inherit lib; };
+
+  podSpecReader = import ./pod-spec.nix { inherit lib; };
+  workloadKinds = import ./workload-kinds.nix { inherit lib; };
+  util = import ./util.nix { inherit lib; };
+
+  # Return the name of the store file that holds a resource's sealed
+  # manifest. `podReadContentHashes` finds a Kix-built object by this name in
+  # the string context of a reference to it.
+  identityFilePrefix = kind: "k8s-${kind}-";
+  identityFileName =
+    kind: nsKey: name:
+    "${identityFilePrefix kind}${nsKey}-${name}";
 
   clusterScoped = {
     _type = "k8s-cluster-scoped";
@@ -94,6 +110,45 @@ rec {
     builtins.hashString "sha256" (
       builtins.unsafeDiscardStringContext (builtins.toJSON (manifest // { metadata = ownMetadata; }))
     );
+
+  # Return the own content hash of each Kix-built Secret and ConfigMap that
+  # `podSpec` reads, keyed by `<kind>/<name>`. A reference names a Kix-built
+  # object when its string context carries that object's identity file, which
+  # holds the object's sealed manifest. A Secret from `mkSecretRef` carries an
+  # import marker instead, and a plain string carries no context, so Kix does
+  # not know their content and leaves them out.
+  podReadContentHashes =
+    podSpec:
+    builtins.listToAttrs (
+      builtins.concatMap (
+        read:
+        let
+          plainName = builtins.unsafeDiscardStringContext read.name;
+          files = builtins.filter (p: lib.hasPrefix (identityFilePrefix read.kind) (markers.pathName p)) (
+            builtins.attrNames (builtins.getContext read.name)
+          );
+          manifests = builtins.filter (
+            m:
+            (m.apiVersion or null) == "v1"
+            && (m.kind or null) == read.kind
+            && (m.metadata.name or null) == plainName
+          ) (map (p: builtins.fromJSON (builtins.unsafeDiscardStringContext (builtins.readFile p))) files);
+        in
+        map (m: lib.nameValuePair "${read.kind}/${plainName}" (contentHashOf m)) manifests
+      ) (builtins.filter (read: builtins.isString read.name) (podSpecReader.reads podSpec))
+    );
+
+  # Return the `kix.run/rerun-hash` of a manifest. It is the manifest's own
+  # content hash, folded with the content hashes of the Kix-built Secrets and
+  # ConfigMaps its pod reads, so a Job reruns when any of them changes. A
+  # manifest whose pod reads none of them keeps its own content hash.
+  rerunHashOf =
+    manifest:
+    let
+      own = contentHashOf manifest;
+      reads = podReadContentHashes (podSpecReader.podSpecOf manifest);
+    in
+    if reads == { } then own else builtins.hashString "sha256" (builtins.toJSON { inherit own reads; });
 
   # Return whether a manifest holds data, as `kix.run/holds-data` records it:
   # `declared` (the kind's `holdsData`) when it is set, true for a
@@ -361,10 +416,10 @@ rec {
       ) (builtins.attrNames (builtins.getContext manifestJson));
       implicitEntries = map extractStoreHash implicitCtxPaths;
 
-      requiresResources = builtins.filter (dep: builtins.isAttrs dep && dep ? outPath) requires;
+      requiresResources = resourcesIn requires;
       requiresEntries = map (dep: "requires:${extractStoreHash dep}") requiresResources;
 
-      extraResources = builtins.filter (dep: builtins.isAttrs dep && dep ? outPath) extraDeps;
+      extraResources = resourcesIn extraDeps;
       extraEntries = map (dep: "extra:${extractStoreHash dep}") extraResources;
 
       depEntries = implicitEntries ++ requiresEntries ++ extraEntries;
@@ -391,29 +446,10 @@ rec {
       # creates itself. Names passed as args or env values are not checked.
       _selfRequiredCheck =
         let
-          lst = x: if builtins.isList x then x else [ ];
+          lst = util.listOr;
           required =
             obj: field: if obj.${field} or null == null || obj.optional or false then [ ] else [ obj.${field} ];
-          workloadKinds = {
-            v1 = [ "Pod" ];
-            "apps/v1" = [
-              "Deployment"
-              "StatefulSet"
-              "DaemonSet"
-              "ReplicaSet"
-            ];
-            "batch/v1" = [
-              "Job"
-              "CronJob"
-            ];
-          };
-          podSpec =
-            if kind == "Pod" then
-              rawManifest.spec or { }
-            else if kind == "CronJob" then
-              rawManifest.spec.jobTemplate.spec.template.spec or { }
-            else
-              rawManifest.spec.template.spec or { };
+          podSpec = podSpecReader.podSpecOf rawManifest;
           containers = lst (podSpec.containers or [ ]) ++ lst (podSpec.initContainers or [ ]);
           volumeRefs = builtins.concatMap (
             v:
@@ -438,7 +474,7 @@ rec {
           refs = volumeRefs ++ envRefs ++ required podSpec "serviceAccountName";
           selfRequired = builtins.concatMap markers.selfCreatedNames (builtins.filter builtins.isString refs);
         in
-        if !(builtins.elem kind (workloadKinds.${apiVersion} or [ ])) || selfRequired == [ ] then
+        if !(workloadKinds.isPodKind { inherit apiVersion kind; }) || selfRequired == [ ] then
           null
         else
           fail {
@@ -468,7 +504,7 @@ rec {
           ${kixKeys.expects} = builtins.concatStringsSep "," expectEntries;
         }
         // lib.optionalAttrs ((rawManifest.metadata.annotations or { }) ? ${kixKeys.rerun}) {
-          ${kixKeys.rerunHash} = contentHashOf rawManifest;
+          ${kixKeys.rerunHash} = rerunHashOf rawManifest;
         };
 
       rawManifestStamped =
@@ -546,7 +582,9 @@ rec {
       sanitizedName = builtins.unsafeDiscardStringContext (builtins.replaceStrings [ ":" ] [ "_" ] name);
       sanitizedNsKey = builtins.unsafeDiscardStringContext (toString nsKey);
 
-      _identityPath = builtins.toFile "k8s-${kind}-${sanitizedNsKey}-${sanitizedName}" manifestJsonSealed;
+      _identityPath = builtins.toFile (identityFileName kind sanitizedNsKey
+        sanitizedName
+      ) manifestJsonSealed;
 
       _identityPathPlain = builtins.unsafeDiscardStringContext _identityPath;
 
@@ -812,17 +850,33 @@ rec {
   resourceId = r: "${r.kind}/${r.name}@${nsOf r}";
 
   # Validate a readiness declaration, allowing null to omit it. The ready
-  # rule is { path; equals; }, { path; notEquals; }, or { condition; }. An
-  # optional `failed` list beside it names the states that mean the custom
-  # resource will not become ready until its spec changes, so `kix deploy`
-  # stops waiting as soon as one matches. mkCRD/mkCRDRef force this at
-  # declaration time so malformed declarations fail even when the package
-  # builds no custom resources of that kind.
+  # rule is { path; equals; }, { path; notEquals; }, or { condition; }. Three
+  # optional keys sit beside it:
+  # - `failed` lists the states that mean the custom resource will not become
+  #   ready until its spec changes, so `kix deploy` stops waiting as soon as
+  #   one matches.
+  # - `observedGeneration` is the JSON pointer of the status field where the
+  #   controller reports the generation it has acted on, or false when the
+  #   kind reports none. The deploy reads `/status/observedGeneration` when it
+  #   is absent.
+  # - `pendingRestart` names the state in which the controller has accepted
+  #   the spec and the running workload still runs the previous one. The
+  #   deploy then reports the resource as ready with a restart pending.
+  # mkCRD/mkCRDRef force this at declaration time so malformed declarations
+  # fail even when the package builds no custom resources of that kind.
   validateReadiness =
     context: groupKind: readiness:
     let
-      ready = if builtins.isAttrs readiness then removeAttrs readiness [ "failed" ] else readiness;
+      extraKeys = [
+        "failed"
+        "observedGeneration"
+        "pendingRestart"
+      ];
+      ready = if builtins.isAttrs readiness then removeAttrs readiness extraKeys else readiness;
       failed = if builtins.isAttrs readiness then readiness.failed or null else null;
+      observedGeneration =
+        if builtins.isAttrs readiness then readiness.observedGeneration or null else null;
+      pendingRestart = if builtins.isAttrs readiness then readiness.pendingRestart or null else null;
       isPointer = p: builtins.isString p && lib.hasPrefix "/" p;
       isPathForm =
         builtins.isAttrs ready
@@ -902,6 +956,30 @@ rec {
       failedOk =
         failed == null
         || (builtins.isList failed && builtins.all (e: isFailedCondition e || isFailedPath e) failed);
+      # `false` says the kind reports no generation. Null means "not set"
+      # elsewhere in the library, so it cannot carry that meaning here.
+      observedGenerationOk =
+        observedGeneration == null || observedGeneration == false || isPointer observedGeneration;
+      # A pending-restart state is a condition or a path value, as a failed
+      # entry is. Either may add `hint` with how to restart the workload, and
+      # the path form `message` pointers whose values the deploy quotes.
+      isOptionalString = v: v == null || builtins.isString v;
+      isPendingCondition =
+        e:
+        builtins.isAttrs e
+        && e ? condition
+        && builtins.all (
+          k:
+          builtins.elem k [
+            "condition"
+            "hint"
+          ]
+        ) (builtins.attrNames e)
+        && isFailedCondition { inherit (e) condition; }
+        && isOptionalString (e.hint or null);
+      isPendingPath = e: isFailedPath e && !(e ? rejected);
+      pendingRestartOk =
+        pendingRestart == null || isPendingCondition pendingRestart || isPendingPath pendingRestart;
       # Drop a null reason, hint, or message, a false `rejected`, and wrap a
       # single message pointer in a list, so the annotation carries only the
       # keys the deploy reads.
@@ -914,6 +992,12 @@ rec {
             e // lib.optionalAttrs (builtins.isString (e.message or null)) { message = [ e.message ]; }
           );
       normalizedFailed = map normalizeFailed failed;
+      normalizedPendingRestart =
+        if pendingRestart ? condition then
+          normalizeFailed { inherit (pendingRestart) condition; }
+          // lib.optionalAttrs (pendingRestart.hint or null != null) { inherit (pendingRestart) hint; }
+        else
+          normalizeFailed pendingRestart;
     in
     if readiness == null then
       null
@@ -926,7 +1010,8 @@ rec {
         (path: a JSON pointer string starting with "/"; every value a string,
         and equals = "true" or "3" also matches a JSON true or 3 at the path;
         notEquals is ready while the path is absent or holds another value;
-        no other keys except an optional `failed` list)
+        no other keys except the optional `failed`, `observedGeneration`, and
+        `pendingRestart`)
       ''
     else if !failedOk then
       fail ''
@@ -941,8 +1026,32 @@ rec {
         its own.
         Got: ${builtins.toJSON failed}
       ''
+    else if !observedGenerationOk then
+      fail ''
+        ${context}: readiness.observedGeneration for ${groupKind} must be a JSON
+        pointer string starting with "/", such as "/status/desiredGeneration", that
+        names the status field where the controller reports the generation it has
+        acted on. Set it to false when the kind reports no such field, and leave it
+        out when the field is "/status/observedGeneration".
+        Got: ${builtins.toJSON observedGeneration}
+      ''
+    else if !pendingRestartOk then
+      fail ''
+        ${context}: readiness.pendingRestart for ${groupKind} must be one of
+          { condition = { type = "<Type>"; status = "True"; reason = "<Reason>"; }; hint = "<text>"; }
+          { path = "/status/..."; equals = "<value>"; hint = "<text>"; message = "/status/..."; }
+        (reason, hint, and message are optional: hint says how to restart the
+        workload, and message is a JSON pointer, or a list of them, whose values
+        the deploy quotes; no other keys). It names the state in which the
+        controller has accepted the spec and the running workload still runs the
+        previous one.
+        Got: ${builtins.toJSON pendingRestart}
+      ''
     else
-      ready // lib.optionalAttrs (failed != null && failed != [ ]) { failed = normalizedFailed; };
+      ready
+      // lib.optionalAttrs (failed != null && failed != [ ]) { failed = normalizedFailed; }
+      // lib.optionalAttrs (observedGeneration != null) { inherit observedGeneration; }
+      // lib.optionalAttrs (pendingRestart != null) { pendingRestart = normalizedPendingRestart; };
 
   mkCRDBuilders =
     {
@@ -979,7 +1088,9 @@ rec {
       # Readiness check stamped as `kix.run/readiness` on each CR (`{ path; equals; }`,
       # `{ path; notEquals; }`, or `{ condition = { type; status; }; }`) for
       # operators that do not use standard `Ready` or `Available` conditions,
-      # with an optional `failed` list of the states that end the wait early.
+      # with the optional `failed`, `observedGeneration`, and `pendingRestart`
+      # keys that `validateReadiness` describes. A CR's own `readiness`
+      # argument replaces it.
       readiness ? null,
     }:
     let
@@ -1024,9 +1135,29 @@ rec {
               + lib.optionalString (unservedFix != null) " ${unservedFix}";
           };
 
+      # A custom resource may pass its own `readiness`, which replaces the
+      # kind's rule for that resource. A kind whose ready state depends on the
+      # resource's spec, such as a VirtualMachine that should run or stay
+      # stopped, needs one. It goes through the same validation as the kind's.
+      readinessFor =
+        consumer: args:
+        if args.readiness or null == null then
+          _validatedReadiness
+        else
+          validateReadiness (
+            "${crKind} ${builtins.toJSON (args.name or null)}"
+            + lib.optionalString (consumer != null) " in ${consumer}"
+          ) "${group}/${kind}" args.readiness;
+
       crFor =
         consumer: args:
-        removeAttrs args [ "version" ]
+        let
+          readiness = readinessFor consumer args;
+        in
+        removeAttrs args [
+          "version"
+          "readiness"
+        ]
         // {
           apiVersion = "${group}/${checkServed consumer args (args.version or version)}";
           kind = crKind;
@@ -1040,9 +1171,9 @@ rec {
             holdsData = _validatedHoldsData;
           };
         }
-        // lib.optionalAttrs (_validatedReadiness != null) {
+        // lib.optionalAttrs (readiness != null) {
           annotations = (args.annotations or { }) // {
-            ${kixKeys.readiness} = builtins.toJSON _validatedReadiness;
+            ${kixKeys.readiness} = builtins.toJSON readiness;
           };
         };
 

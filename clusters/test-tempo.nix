@@ -15,9 +15,9 @@
 # and when Tempo's config does not name the store's Service. The metrics
 # generator is evaluated in ./test-tempo-generator.nix.
 #
-# Build:  nix build ./clusters#cluster-tempo --extra-experimental-features pipe-operators
-# Rules:  nix build ./clusters#checks.x86_64-linux.rules-cluster-tempo --extra-experimental-features pipe-operators
-# Deploy: kix deploy tempo --flake ./clusters --context <kind context>
+# Build:  kix build tempo
+# Rules:  scripts/cluster-checks.sh . tempo clusters/test-tempo.rules-test.yaml
+# Deploy: kix deploy tempo --context <kind context>
 #         on a kind cluster created with `disableDefaultCNI: true`.
 
 { kix, packages }:

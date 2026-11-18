@@ -20,9 +20,10 @@ settings:
 let
   global = settings.global or { };
 
-  # Keys and defaults from config/config.go and config/notifiers.go of
-  # Alertmanager v0.33.1 (`Config.UnmarshalYAML` fills receivers from
-  # `global`). `default = null`: Alertmanager has no built-in address and
+  # Keys and defaults from config/config.go and the integrations'
+  # configuration (config/notifiers.go in Alertmanager v0.33.1,
+  # notify/<integration>/config.go in v0.35.0), which are the same in both
+  # versions. `Config.UnmarshalYAML` fills receivers from `global`. `default = null`: Alertmanager has no built-in address and
   # refuses the receiver.
   integrations = {
     discord_configs = {

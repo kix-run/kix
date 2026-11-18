@@ -207,8 +207,8 @@ fn derive_reason(source: &Value, target: &Value) -> String {
 /// For each removed stateful resource that may hold data (see
 /// [`may_hold_data`]), looks in `new_manifests` for an added stateful
 /// resource in the same slot that may hold data and is absent from
-/// `old_manifests` under the same K8s identity. A candidate of the same kind
-/// wins. When one is found, emits a `MigrationPair`.
+/// `old_manifests` under the same K8s identity. A candidate of the same group
+/// and kind wins. When one is found, emits a `MigrationPair`.
 ///
 /// This detector runs independently of `detect_changes`, and callers combine
 /// their outputs.
@@ -217,21 +217,15 @@ pub fn detect_migration_pairs(
     old_manifests: &[Value],
 ) -> Vec<MigrationPair> {
     // Index new manifests by K8s identity for "is this removed?" lookups.
-    let new_by_k8s_id: HashMap<String, &Value> = new_manifests
+    let new_by_k8s_id: HashMap<ResourceId, &Value> = new_manifests
         .iter()
-        .map(|m| {
-            let rid = ResourceId::from_value(m);
-            (format!("{}/{}/{}", rid.kind, rid.namespace, rid.name), m)
-        })
+        .map(|m| (ResourceId::from_value(m), m))
         .collect();
 
     // Index old manifests by K8s identity for "is this new?" lookups.
-    let old_by_k8s_id: HashMap<String, &Value> = old_manifests
+    let old_by_k8s_id: HashMap<ResourceId, &Value> = old_manifests
         .iter()
-        .map(|m| {
-            let rid = ResourceId::from_value(m);
-            (format!("{}/{}/{}", rid.kind, rid.namespace, rid.name), m)
-        })
+        .map(|m| (ResourceId::from_value(m), m))
         .collect();
 
     // Bucket added stateful manifests by slot.
@@ -241,8 +235,7 @@ pub fn detect_migration_pairs(
             continue;
         }
         let rid = ResourceId::from_value(manifest);
-        let k8s_id = format!("{}/{}/{}", rid.kind, rid.namespace, rid.name);
-        if old_by_k8s_id.contains_key(&k8s_id) {
+        if old_by_k8s_id.contains_key(&rid) {
             // An unchanged Kubernetes identity means the resource is patched in
             // place rather than replaced.
             continue;
@@ -256,15 +249,14 @@ pub fn detect_migration_pairs(
     // Walk removed stateful manifests, match by slot.
     let mut pairs: Vec<MigrationPair> = Vec::new();
     // Track which added entries we've consumed so we don't double-pair.
-    let mut consumed: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut consumed: std::collections::HashSet<&ResourceId> = std::collections::HashSet::new();
 
     for manifest in old_manifests {
         if !is_stateful(manifest) || !may_hold_data(manifest) {
             continue;
         }
         let rid = ResourceId::from_value(manifest);
-        let k8s_id = format!("{}/{}/{}", rid.kind, rid.namespace, rid.name);
-        if new_by_k8s_id.contains_key(&k8s_id) {
+        if new_by_k8s_id.contains_key(&rid) {
             continue;
         }
         let Some(slot) = slot_of(manifest) else {
@@ -275,20 +267,18 @@ pub fn detect_migration_pairs(
             continue;
         };
 
-        let unclaimed = |(target_rid, m): &&(ResourceId, &Value)| {
-            !consumed.contains(&candidate_key(target_rid, m))
-        };
+        let unclaimed = |(target_rid, _): &&(ResourceId, &Value)| !consumed.contains(target_rid);
         let chosen = candidates
             .iter()
             .filter(unclaimed)
-            .find(|(target_rid, _)| target_rid.kind == rid.kind)
+            .find(|(target_rid, _)| target_rid.group == rid.group && target_rid.kind == rid.kind)
             .or_else(|| candidates.iter().find(|c| unclaimed(c)));
 
         let Some((target_rid, target_manifest)) = chosen else {
             continue;
         };
 
-        consumed.insert(candidate_key(target_rid, target_manifest));
+        consumed.insert(target_rid);
 
         let reason = derive_reason(manifest, target_manifest);
         pairs.push(MigrationPair {
@@ -300,10 +290,6 @@ pub fn detect_migration_pairs(
     }
 
     pairs
-}
-
-fn candidate_key(rid: &ResourceId, _m: &Value) -> String {
-    format!("{}/{}/{}", rid.kind, rid.namespace, rid.name)
 }
 
 #[cfg(test)]

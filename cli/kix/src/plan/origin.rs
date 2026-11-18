@@ -650,7 +650,7 @@ mod tests {
         assert_eq!(
             found,
             vec![super::super::document::DriftChange {
-                resource: "Deployment/web@app".into(),
+                resource: "Deployment.apps/web@app".into(),
                 path: "$.spec.template.spec.containers[web].image".into(),
                 deployed: Some(json!("web:1")),
                 live: Some(json!("web:2")),

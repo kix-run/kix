@@ -88,7 +88,7 @@ let
   classOf = cluster: builtins.head (ofKind "PriorityClass" (manifests cluster));
 
   deploymentOf = cluster: builtins.head (ofKind "Deployment" (manifests cluster));
-  dependsOn = m: (m.metadata.annotations or { }).${kixKeys.dependsOn} or "";
+  dependsOn = m: m.metadata.annotations.${kixKeys.dependsOn} or "";
   classHash = cluster: k8s.extractStoreHash cluster.instances.platform.high.raw.priorityClass.outPath;
 in
 {

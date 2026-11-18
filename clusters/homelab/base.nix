@@ -129,7 +129,7 @@
   };
 
   # The full rule set, at built-in severities, with the cap raised to
-  # error by the root flake.nix. What is downgraded is downgraded here, by
+  # error by the repository's flake.nix. What is downgraded is downgraded here, by
   # name, with the reason.
   scorecard = {
     # prometheus.io scrape annotations are a by-convention contract emitted

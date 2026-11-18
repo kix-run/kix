@@ -21,6 +21,10 @@
     },
     "InspectResource": {
       "properties": {
+        "group": {
+          "description": "The kind's API group. Left out for the core group.",
+          "type": "string"
+        },
         "kind": {
           "type": "string"
         },
@@ -47,7 +51,7 @@
         "minimum": 0,
         "type": "integer"
       },
-      "description": "The number of resources of each kind.",
+      "description": "The number of resources of each kind, keyed `Kind.group`, or `Kind`\nfor the core group.",
       "type": "object"
     },
     "namespaces": {

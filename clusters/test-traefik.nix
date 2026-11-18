@@ -9,11 +9,9 @@
 # ServiceMonitor, and alert rules, which test-traefik.rules-test.yaml tests.
 # No Prometheus server runs.
 #
-# The Gateway API standard-channel CRDs (v1.6.1 or later) must be installed
-# before deploy:
-#   kubectl apply --server-side -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.1/standard-install.yaml
+# gateway-api installs the Gateway API CRDs.
 #
-# Build:  nix build ./clusters#cluster-traefik --extra-experimental-features pipe-operators
+# Build:  kix build traefik
 
 { kix, packages }:
 
@@ -43,6 +41,8 @@ kix.buildCluster {
         };
 
         monitoring.prometheus-operator.package = packages.experimental.prometheus-operator;
+
+        gateway-system.gateway-api.package = packages.experimental.gateway-api;
 
         gateway-system.traefik = {
           package = packages.experimental.traefik;

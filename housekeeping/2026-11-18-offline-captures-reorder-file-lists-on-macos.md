@@ -1,0 +1,3 @@
+# 2026-11-18 · `docs/nix/captures.nix` · Regenerating the offline captures on macOS rewrites three captures that did not change.
+
+`nix run ./docs#regen-captures-offline -- --apply` on aarch64-darwin rewrote `how-to/application-export-audit/annotations.json`, `how-to/application-export-audit/internal-crs.json`, and `how-to/policy-provenance/attest.json` on a branch that changed none of their output. The two export captures list files in the order the file system returns them, which differs between macOS and the Linux runner that wrote the committed files. The attest capture holds a timestamp. Each regeneration on a Mac needs these three reverted by hand. Sorting the file lists in the capture commands and redacting the timestamp would stop it.

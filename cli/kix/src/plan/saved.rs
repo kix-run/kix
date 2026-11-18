@@ -405,7 +405,12 @@ fn objects_differ(reviewed: &Plan, fresh: &Plan) -> Vec<String> {
             w.package
         )
     };
-    let delete = |d: &super::document::ObjectDelete| object_id(&d.kind, &d.namespace, &d.name);
+    // The digest covers a delete's group, so two deletes that differ only in
+    // their group must read differently here.
+    let delete = |d: &super::document::ObjectDelete| {
+        let kind = crate::manifest::types::qualified_kind(&d.group, &d.kind);
+        object_id(&kind, &d.namespace, &d.name)
+    };
     let sets = |p: &super::document::Objects| -> (BTreeSet<String>, BTreeSet<String>) {
         (
             p.writes.iter().map(write).collect(),
@@ -442,6 +447,7 @@ fn objects_differ(reviewed: &Plan, fresh: &Plan) -> Vec<String> {
 /// Format an object's display ID with build-supplied text escaped.
 fn object_id(kind: &str, namespace: &str, name: &str) -> String {
     let id = crate::manifest::types::ResourceId {
+        group: String::new(),
         kind: kind.to_string(),
         namespace: namespace.to_string(),
         name: name.to_string(),
@@ -545,11 +551,13 @@ mod tests {
                 store_hash: "a".repeat(32),
                 package: "app/web".into(),
                 change: WriteChange::Added,
+                group: String::new(),
             }],
             deletes: vec![ObjectDelete {
                 kind: "ConfigMap".into(),
                 namespace: "app".into(),
                 name: "old".into(),
+                group: String::new(),
             }],
         }
     }
@@ -858,6 +866,7 @@ mod tests {
             store_hash: "b".repeat(32),
             package: "app/web".into(),
             change: WriteChange::Added,
+            group: String::new(),
         });
         let c = compare(&plan(), &with_objects(plan(), more));
         assert_eq!(rules(&c), vec![Rule::Objects]);

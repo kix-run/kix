@@ -28,7 +28,9 @@ use crate::cluster::inventory;
 use crate::cluster::inventory::SharedOrphan;
 use crate::cluster::ops::{Cluster, KubeResources, RecordConfig};
 use crate::cluster::readiness::MalformedMarker;
-use crate::cluster::scheduler::{self, DeployError, DeployPlan, PrunePolicy, SchedulerConfig};
+use crate::cluster::scheduler::{
+    self, DeployError, DeployPlan, LastRuns, PrunePolicy, SchedulerConfig,
+};
 use crate::cluster::stream::{DeployObserver, DeployResult};
 use crate::cluster::tenancy::Tenancy;
 use crate::legacy_domain::LegacyDomainError;
@@ -81,8 +83,8 @@ pub struct LivePlan {
     shared_orphans: Vec<SharedOrphan>,
     /// The live objects, which order the prune.
     live: Vec<Value>,
-    applies: usize,
-    unchanged: usize,
+    /// The number of desired and live objects the plan compared.
+    compared: usize,
     foreign: BTreeMap<String, usize>,
     unattributed: usize,
 }
@@ -93,10 +95,9 @@ impl LivePlan {
     /// A record that names no cluster sweeps under the empty name, under
     /// which no record counts as this cluster's own.
     ///
-    /// The plan does not read the last runs of Jobs, so a Job under
-    /// `kix.run/rerun` whose last run failed does not run again, and the run
-    /// reports it as failed. The operator requeues every 30 seconds, and
-    /// would otherwise delete and recreate a failing Job in a loop.
+    /// The plan has not read the last runs of its Jobs. Until
+    /// [`LivePlan::read_last_runs`] does, a Job under `kix.run/rerun` whose
+    /// last run failed does not run again, and the run reports it as failed.
     pub async fn sweep(
         client: &Client,
         activation: &DynamicObject,
@@ -130,14 +131,6 @@ impl LivePlan {
         let graph = ResourceGraph::from_manifests(desired).map_err(LivePlanError::Graph)?;
         let plan =
             DeployPlan::from_graph_and_changes(&graph, &actions).map_err(LivePlanError::Marker)?;
-        // Counted on the plan, which applies none of the objects a consumer
-        // leaves to its platform.
-        let applies = plan
-            .nodes()
-            .iter()
-            .filter(|n| n.action.written().is_some())
-            .count();
-        let unchanged = actions.len() - applies - orphans.len();
 
         Ok(LivePlan {
             client: client.clone(),
@@ -148,21 +141,41 @@ impl LivePlan {
             orphans,
             shared_orphans,
             live: sweep.managed.into_iter().map(|obj| obj.data).collect(),
-            applies,
-            unchanged,
+            compared: actions.len(),
             foreign: sweep.foreign,
             unattributed: sweep.unattributed.len(),
         })
     }
 
-    /// Return the number of objects the build applies.
+    /// Read the last runs of the plan's Jobs, as a deploy from the CLI does
+    /// ([`crate::plan::CheckedPlan::read_last_runs`]). A Job under
+    /// `kix.run/rerun` whose last run failed then runs again.
+    ///
+    /// The operator calls this only when it starts a deploy of a Queued
+    /// record, so a failed Job runs again once for each deploy someone
+    /// submits, as it does for each `kix deploy`. A repair of a running build
+    /// or a resumed deploy must not call it: the operator retries those, and
+    /// would delete and recreate a failing Job on every retry.
+    pub async fn read_last_runs(&mut self) -> LastRuns {
+        self.plan
+            .read_last_runs(&self.client, &self.discovery)
+            .await
+    }
+
+    /// Return the number of objects the build applies. It is counted on the
+    /// plan, which applies none of the objects a consumer leaves to its
+    /// platform.
     pub fn applies(&self) -> usize {
-        self.applies
+        self.plan
+            .nodes()
+            .iter()
+            .filter(|n| n.action.written().is_some())
+            .count()
     }
 
     /// Return the number of objects the build leaves unchanged.
     pub fn unchanged(&self) -> usize {
-        self.unchanged
+        self.compared - self.applies() - self.orphans.len()
     }
 
     /// Return the orphans that pruning may delete.
@@ -281,6 +294,7 @@ fn live_changes(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cluster::apply::RerunReason;
     use crate::manifest::lifecycle::PHASE_ACTIVE;
     use serde_json::json;
 
@@ -388,6 +402,84 @@ mod tests {
         let desired = [annotated("ConfigMap", "a-web", "h-web", "")];
         let (actions, _) = live_changes(&desired, &sweep.managed, &tenancy);
         assert_eq!(orphans(&actions), vec!["leftover"]);
+    }
+
+    fn rerun_job(hash: &str) -> Value {
+        let mut job = annotated("Job", "migrate", hash, "a2");
+        job["apiVersion"] = json!("batch/v1");
+        job["metadata"]["annotations"][keys::RERUN] = json!("on-change");
+        job
+    }
+
+    fn failed(mut job: Value) -> Value {
+        job["metadata"]["managedFields"] = json!([{ "manager": "kix", "operation": "Apply" }]);
+        job["spec"] = json!({ "backoffLimit": 0 });
+        job["status"] = json!({ "failed": 1 });
+        job
+    }
+
+    fn rerun_reasons(plan: &DeployPlan) -> Vec<RerunReason> {
+        plan.nodes()
+            .iter()
+            .filter_map(|n| match &n.action {
+                ChangeAction::Recreate(_, reason) => Some(*reason),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// An unchanged Job under `kix.run/rerun` whose last run failed runs
+    /// again when a deploy starts, whether the CLI or the operator runs it.
+    /// Both read the Job through the same decision, and give the same
+    /// reason.
+    #[tokio::test]
+    async fn the_cli_and_the_operator_both_rerun_a_failed_job() {
+        let api = crate::cluster::fake_api::FakeApi::new([failed(rerun_job("h-job"))]);
+        let client = api.client();
+
+        // The operator: the live Job carries the build's hash, so the sweep
+        // leaves it unchanged until the plan reads its last run.
+        let live_job: DynamicObject = serde_json::from_value(failed(rerun_job("h-job"))).unwrap();
+        let tenancy = Tenancy::fixture(&[record("a", "a2")], "a");
+        let desired = [rerun_job("h-job")];
+        let (actions, _) = live_changes(&desired, std::slice::from_ref(&live_job), &tenancy);
+        let graph = ResourceGraph::from_manifests(&desired).unwrap();
+        let mut operator = LivePlan {
+            client: client.clone(),
+            discovery: discovery::discover_resources(&client).await.unwrap(),
+            cluster: "a".into(),
+            record: Record::default(),
+            plan: DeployPlan::from_graph_and_changes(&graph, &actions).unwrap(),
+            orphans: Vec::new(),
+            shared_orphans: Vec::new(),
+            live: Vec::new(),
+            compared: actions.len(),
+            foreign: BTreeMap::new(),
+            unattributed: 0,
+        };
+        assert_eq!(operator.applies(), 0);
+        assert_eq!(
+            operator.read_last_runs().await,
+            LastRuns::Read { failed: vec![] }
+        );
+        assert_eq!(rerun_reasons(&operator.plan), [RerunReason::LastRunFailed]);
+        assert_eq!((operator.applies(), operator.unchanged()), (1, 0));
+
+        // The CLI: a redeploy of the same build.
+        let built = crate::eval::store_graph::StoreGraph::synthesize(
+            &desired,
+            &crate::eval::store_graph::StoreGraph::empty("a"),
+        );
+        let mut checked = crate::plan::fixtures::plan(
+            &crate::plan::fixtures::deployed(Some(&built)),
+            &built,
+            crate::plan::fixtures::flags(&[]),
+        )
+        .unwrap();
+        assert!(rerun_reasons(checked.plan()).is_empty());
+        let last_runs = checked.read_last_runs(&client).await.unwrap();
+        assert_eq!(last_runs, LastRuns::Read { failed: vec![] });
+        assert_eq!(rerun_reasons(checked.plan()), [RerunReason::LastRunFailed]);
     }
 
     /// A record's cluster comes from its label before `spec.cluster`, and

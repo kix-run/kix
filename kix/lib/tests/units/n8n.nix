@@ -1,6 +1,7 @@
 # Tests for the n8n package: the variables `env` and `runners.env` may not
 # set, the password of an imported valkey, the request body limit, the
-# refusal of a Sentinel valkey import, and the metrics variables.
+# refusal of a Sentinel valkey import, the metrics variables, and the
+# Kubernetes versions the package accepts.
 #
 # tryEval drops the message of a throw, so the refusal tests check that the
 # build fails with the setting and builds without it. The messages were
@@ -331,4 +332,30 @@ in
       && ofKind "ServiceMonitor" (manifests on) == [ ]
     )
     || throw "n8n metrics env ${builtins.toJSON mainEnv}";
+
+  # A cluster that declares a Kubernetes version older than upstream
+  # supports is refused with the change record's id. The meta check is
+  # called directly, because a failed meta assertion fails the cluster
+  # before its messages can be read.
+  n8n-k8s-range =
+    let
+      metaLib = import ../../meta.nix { inherit lib; };
+      refusals =
+        k8sVersion:
+        map (a: a.message) (
+          builtins.filter (a: !a.assertion) (
+            (metaLib.checkMetaStatic {
+              packageMeta = n8nAttrs.meta;
+              instanceName = "n8n";
+              namespaceName = "n8n";
+              clusterConfig = { inherit k8sVersion; };
+              resolvedDepMeta = { };
+              resolutionIndex.byKey = { };
+            }).assertions
+          )
+        );
+      refused = v: builtins.any (lib.hasInfix "[K1269]") (refusals v);
+    in
+    (refused "1.24" && refusals "1.25.0" == [ ] && refusals "1.40" == [ ] && refusals null == [ ])
+    || throw "n8n k8s range: 1.24 ${builtins.toJSON (refusals "1.24")}, 1.25.0 ${builtins.toJSON (refusals "1.25.0")}, 1.40 ${builtins.toJSON (refusals "1.40")}";
 }

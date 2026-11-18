@@ -18,6 +18,11 @@
 # package writes the network policy for it (`operandPolicies`), as
 # victoria-metrics-cluster does for the traffic between its components.
 #
+# Upgrades: vmalert keeps no data of its own. It restores alert state from
+# the store through remoteRead after a restart. To go back, deploy the
+# previous Kix release. The operator then restarts vmalert with the older
+# image. The Alertmanager image does not follow the VictoriaMetrics release.
+#
 # Dependencies:
 #   vmOperator (required)   VMAlert/VMAlertmanager CRDs + builders
 #   vmCluster (required)    out.serviceUrl (datasource + remoteRead),
@@ -74,6 +79,7 @@
   availability,
 }:
 let
+  release = "v1.156.0";
   name = scope.instanceName;
   ns = scope.namespaceName;
   who = "victoria-metrics-alert ${ns}/${name}";
@@ -81,6 +87,9 @@ let
   inherit (import ../victoria-metrics-operator/cr-image.nix { inherit lib kix; })
     crImage
     crImageVersionTag
+    ;
+  inherit (import ../victoria-metrics-operator/operand-placement.nix { inherit lib kix; })
+    operandPlacement
     ;
 
   defaultAlertmanagerSettings = import ./alertmanager-default-settings.nix;
@@ -95,7 +104,7 @@ let
 in
 {
   meta = {
-    version = "1.150.0";
+    version = lib.removePrefix "v" release;
     description = "VictoriaMetrics alerting: VMAlert and VMAlertmanager";
     owner = "platform";
     defaultAliases = [ "vmAlert" ];
@@ -104,8 +113,9 @@ in
 
   options = {
     image = kix.options.image {
-      repository = "victoriametrics/vmalert";
-      tag = "v1.150.0";
+      repository = "docker.io/victoriametrics/vmalert";
+      tag = release;
+      digest = "sha256:4fea7d1a888d4db4ff18804434ef0f3ca8eb6482e289c50d32001c2db218287c";
       pullPolicy = null;
     };
     replicaCount = lib.mkOption {
@@ -151,7 +161,7 @@ in
     extraSpec = lib.mkOption {
       type = lib.types.attrsOf lib.types.anything;
       default = { };
-      description = "Extra fields deep-merged into the VMAlert CR spec. The package refuses `datasource.url`, `remoteWrite.url`, `remoteRead.url`, and `notifiers`, which come from the vmCluster dependency and the alertmanager this package runs, and `image`, `replicaCount`, `evaluationInterval`, `selectAllByDefault`, `resources`, and `extraArgs`, which have options of their own.";
+      description = "Extra fields deep-merged into the VMAlert CR spec. The package refuses `datasource.url`, `remoteWrite.url`, `remoteRead.url`, and `notifiers`, which come from the vmCluster dependency and the alertmanager this package runs, and `image`, `replicaCount`, `evaluationInterval`, `selectAllByDefault`, `resources`, and `extraArgs`, which have options of their own. Setting `topologySpreadConstraints` here replaces the default pod spread constraints set from the availability level.";
     };
 
     alertmanager = {
@@ -223,7 +233,7 @@ in
       extraSpec = lib.mkOption {
         type = lib.types.attrsOf lib.types.anything;
         default = { };
-        description = "Extra fields deep-merged into the VMAlertmanager CR spec. The package refuses `configSecret` and `configRawYaml`, which the configuration options and the `alertmanagerConfig` dependency decide, and `image`, `replicaCount`, `retention`, `storage`, `secrets`, `configMaps`, and `resources`, which have options of their own.";
+        description = "Extra fields deep-merged into the VMAlertmanager CR spec. The package refuses `configSecret` and `configRawYaml`, which the configuration options and the `alertmanagerConfig` dependency decide, and `image`, `replicaCount`, `retention`, `storage`, `secrets`, `configMaps`, and `resources`, which have options of their own. Setting `topologySpreadConstraints` here replaces the default pod spread constraints set from the availability level.";
       };
     };
     # The operator scrapes vmalert and Alertmanager whatever this says;
@@ -282,33 +292,24 @@ in
             );
         renderedConfig = if amSettings == null then null else builtins.toJSON amSettings;
         configInCr = am.configRawYaml != null;
-        # Build preferred anti-affinity for `component`. Operand pods are
-        # rendered by the operator, so Kix's derived spread never sees them:
-        # the CR carries the rule, and the failure-domain keys come from the
-        # cluster, never a literal.
-        antiAffinity = component: {
-          podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution = map (topologyKey: {
-            weight = 100;
-            podAffinityTerm = {
-              labelSelector.matchLabels = {
-                "app.kubernetes.io/name" = component;
-                "app.kubernetes.io/instance" = name;
-              };
-              inherit topologyKey;
+        placement =
+          component: replicas:
+          operandPlacement {
+            inherit availability replicas;
+            topology = clusterConfig.cluster.topology;
+            selector = {
+              "app.kubernetes.io/name" = component;
+              "app.kubernetes.io/instance" = name;
             };
-          }) clusterConfig.cluster.topology.failureDomainKeys;
-        };
+          };
 
         alertmanagerBaseSpec = {
           replicaCount = config.alertmanager.replicaCount;
           image = crImageVersionTag scope.fail "alertmanager.image" config.alertmanager.image;
           retention = config.alertmanager.retention;
-          podDisruptionBudget = {
-            maxUnavailable = 1;
-          };
-          affinity = antiAffinity "vmalertmanager";
           resources = config.alertmanager.resources;
         }
+        // placement "vmalertmanager" config.alertmanager.replicaCount
         // lib.optionalAttrs configInCr { configRawYaml = renderedConfig; }
         // lib.optionalAttrs (configDep != null) { configSecret = configDep.out.name; }
         # out.name carries the store-path edge to the config Secret.
@@ -344,12 +345,9 @@ in
           ];
           evaluationInterval = config.evaluationInterval;
           selectAllByDefault = config.selectAllByDefault;
-          podDisruptionBudget = {
-            maxUnavailable = 1;
-          };
-          affinity = antiAffinity "vmalert";
           resources = config.resources;
         }
+        // placement "vmalert" config.replicaCount
         // lib.optionalAttrs (config.extraArgs != { }) {
           extraArgs = config.extraArgs;
         };

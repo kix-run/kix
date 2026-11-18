@@ -1,0 +1,5 @@
+# A library never ends the process: the CLI and the operator both embed it,
+# and only a binary's `main` decides how its process exits.
+disallowed-methods = [
+    { path = "std::process::exit", reason = "return an error or a result and let the binary decide how to exit" },
+]

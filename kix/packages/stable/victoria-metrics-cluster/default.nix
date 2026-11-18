@@ -4,8 +4,9 @@
 # Creates a VMCluster CR that the VM operator reconciles into vmstorage /
 # vmselect / vminsert workloads. HA is the default posture, and must be,
 # because the scorecard cannot see operator-created pods: replication
-# factor 2 over 3 vmstorage nodes, 2 vmselect + 2 vminsert, per-component
-# PDBs, and preferred hostname anti-affinity.
+# factor 2 over 3 vmstorage nodes, 2 vmselect + 2 vminsert, and, for each
+# component above one replica, topology spread at the instance's
+# availability level and a PodDisruptionBudget of one pod.
 #
 # Dedup is correctness, not tuning: with replicationFactor > 1 every
 # sample exists twice, and an HA vmagent pair ingests everything twice
@@ -15,6 +16,13 @@
 # package reads it back via `out.scrapeInterval`. (The operator's own
 # fallback is 1ms: enough for replication twins, useless for HA-pair
 # duplicates, which land with distinct timestamps.)
+#
+# Upgrades: VictoriaMetrics says a move to a newer release is safe, also
+# across several releases, and so is a move back, unless the release notes
+# say otherwise. From 1.150 to 1.156 they say neither. vmstorage keeps the
+# data 1.150 wrote, and 1.150 reads the data 1.156 wrote. To go back, deploy
+# the previous Kix release. The operator then restarts each component with
+# the older image.
 #
 # Dependencies:
 #   vmOperator (required)        provides the VMCluster CRD + mkVMCluster
@@ -72,12 +80,16 @@
   availability,
 }:
 let
+  release = "v1.156.0";
   name = scope.instanceName;
+  inherit (import ../victoria-metrics-operator/operand-placement.nix { inherit lib kix; })
+    operandPlacement
+    ;
   who = "victoria-metrics-cluster ${scope.namespaceName}/${name}";
 in
 {
   meta = {
-    version = "1.150.0";
+    version = lib.removePrefix "v" release;
     description = "VictoriaMetrics cluster: vmstorage, vmselect and vminsert through a VMCluster CR";
     owner = "platform";
     defaultAliases = [
@@ -95,7 +107,7 @@ in
   options = {
     clusterVersion = lib.mkOption {
       type = lib.types.str;
-      default = "v1.150.0-cluster";
+      default = "${release}-cluster";
       description = ''
         Image tag for all three components (spec.clusterVersion, used
         verbatim by the operator). Cluster-mode images carry the
@@ -269,7 +281,9 @@ in
         Extra fields deep-merged into the VMCluster CR spec via
         lib.recursiveUpdate. Escape hatch for fields not exposed as typed
         options (downsampling, requestsLoadBalancer, per-component
-        overrides).
+        overrides). Setting `topologySpreadConstraints` on `vmstorage`,
+        `vmselect`, or `vminsert` here replaces the default pod spread
+        constraints set from the availability level.
       '';
     };
   };
@@ -293,23 +307,13 @@ in
           "app.kubernetes.io/instance" = name;
         };
 
-        # Build preferred anti-affinity for `component`. Operand pods are
-        # rendered by the operator, so Kix's derived spread never sees them:
-        # the CR carries the rule, and the failure-domain keys come from the
-        # cluster, never a literal.
-        antiAffinity = component: {
-          podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution = map (topologyKey: {
-            weight = 100;
-            podAffinityTerm = {
-              labelSelector.matchLabels = componentSelector component;
-              inherit topologyKey;
-            };
-          }) clusterConfig.cluster.topology.failureDomainKeys;
-        };
-
-        pdb = {
-          maxUnavailable = 1;
-        };
+        placement =
+          component: replicas:
+          operandPlacement {
+            inherit availability replicas;
+            topology = clusterConfig.cluster.topology;
+            selector = componentSelector component;
+          };
 
         # The VMCluster CR has no dedup field, so the interval travels as a
         # flag. `extraSpec` cannot reach it (kix.mergeGuarded below) and the
@@ -385,23 +389,20 @@ in
                 // lib.optionalAttrs (effectiveStorageClass != null) {
                   storageClassName = effectiveStorageClass;
                 };
-            podDisruptionBudget = pdb;
-            affinity = antiAffinity "vmstorage";
             extraArgs = componentArgs "vmstorage";
-          };
+          }
+          // placement "vmstorage" config.vmstorage.replicaCount;
 
           vmselect = {
             inherit (config.vmselect) replicaCount resources;
-            podDisruptionBudget = pdb;
-            affinity = antiAffinity "vmselect";
             extraArgs = componentArgs "vmselect";
-          };
+          }
+          // placement "vmselect" config.vmselect.replicaCount;
 
           vminsert = {
             inherit (config.vminsert) replicaCount resources;
-            podDisruptionBudget = pdb;
-            affinity = antiAffinity "vminsert";
           }
+          // placement "vminsert" config.vminsert.replicaCount
           // lib.optionalAttrs (config.vminsert.extraArgs != { }) {
             extraArgs = componentArgs "vminsert";
           };
@@ -618,7 +619,7 @@ in
         ns = scope.namespaceName;
         # The operator's VMServiceScrape for each component sets `job` to
         # the component's Service name, such as vmstorage-<CR name>
-        # (factory/vmscrapes/servicescrape.go at operator v0.74.1). The
+        # (factory/vmscrapes/servicescrape.go at operator v0.75.2). The
         # `service` label is the same, but vmstorage's vmbackupmanager
         # endpoint shares that Service under job
         # `vmstorage-<name>-vmbackupmanager`, so only `job` picks out the

@@ -6,28 +6,21 @@ let
   kixAnnotations = import ../core/annotations.nix;
   kixKeys = kixAnnotations.keys;
 
-  safeList = v: if builtins.isList v then v else [ ];
+  podSpec = import ../core/pod-spec.nix { inherit lib; };
 
   # Helm charts can render `data: null`, whereas Nix's `or` only handles
   # missing attributes.
   attrNamesOf = v: if builtins.isAttrs v then builtins.attrNames v else [ ];
 
-  splitList = s: builtins.filter (x: x != "") (map lib.trim (lib.splitString "," (toString s)));
-
-  nsOf = r: r.metadata.namespace or "cluster-scoped";
-
-  getPodSpec =
-    r:
-    if r.kind == "CronJob" then
-      r.spec.jobTemplate.spec.template.spec or { }
-    else
-      r.spec.template.spec or { };
+  util = import ../core/util.nix { inherit lib; };
+  inherit (util) splitList;
+  nsOf = util.namespaceOf;
 
   cedesData =
     r:
     builtins.any (
       p: lib.hasPrefix "data" p || lib.hasPrefix "binaryData" p || lib.hasPrefix "stringData" p
-    ) (splitList ((r.metadata.annotations or { }).${kixKeys.cedeFields} or ""));
+    ) (splitList (r.metadata.annotations.${kixKeys.cedeFields} or ""));
 in
 {
   # Validate that env vars, volume `items`, and `subPath` mounts reference keys
@@ -76,126 +69,11 @@ in
 
       keyReadsOf =
         w:
-        let
-          ps = getPodSpec w;
-          containers = safeList (ps.containers or [ ]) ++ safeList (ps.initContainers or [ ]);
-          volumes = safeList (ps.volumes or [ ]);
-          volumesByName = builtins.listToAttrs (
-            map (v: {
-              name = v.name or "";
-              value = v;
-            }) volumes
-          );
-          itemReads =
-            objKind: obj: items: where:
-            map (it: {
-              inherit objKind obj where;
-              key = it.key;
-              subPath = null;
-            }) (builtins.filter (it: it ? key) (safeList items));
-
-          envReads = builtins.concatMap (
-            c:
-            builtins.concatMap (
-              ev:
-              let
-                read =
-                  objKind: ref:
-                  if ref == null || (ref.optional or false) || !(ref ? name) || !(ref ? key) then
-                    [ ]
-                  else
-                    [
-                      {
-                        inherit objKind;
-                        obj = ref.name;
-                        key = ref.key;
-                        where = "env ${ev.name or "?"} of container ${c.name or "?"}";
-                        subPath = null;
-                      }
-                    ];
-              in
-              read "Secret" (ev.valueFrom.secretKeyRef or null)
-              ++ read "ConfigMap" (ev.valueFrom.configMapKeyRef or null)
-            ) (safeList (c.env or [ ]))
-          ) containers;
-
-          volumeReads = builtins.concatMap (
-            v:
-            let
-              where = "volume ${v.name or "?"} items";
-              sec = v.secret or null;
-              cm = v.configMap or null;
-              sources = safeList ((v.projected or { }).sources or [ ]);
-            in
-            (
-              if sec != null && !(sec.optional or false) && sec ? secretName then
-                itemReads "Secret" sec.secretName (sec.items or [ ]) where
-              else
-                [ ]
-            )
-            ++ (
-              if cm != null && !(cm.optional or false) && cm ? name then
-                itemReads "ConfigMap" cm.name (cm.items or [ ]) where
-              else
-                [ ]
-            )
-            ++ builtins.concatMap (
-              s:
-              let
-                ps' = s.secret or null;
-                pc = s.configMap or null;
-              in
-              (
-                if ps' != null && !(ps'.optional or false) && ps' ? name then
-                  itemReads "Secret" ps'.name (ps'.items or [ ]) where
-                else
-                  [ ]
-              )
-              ++ (
-                if pc != null && !(pc.optional or false) && pc ? name then
-                  itemReads "ConfigMap" pc.name (pc.items or [ ]) where
-                else
-                  [ ]
-              )
-            ) sources
-          ) volumes;
-
-          # A subPath into a Secret or ConfigMap volume without `items`
-          # names a key by its first path segment.
-          subPathReads = builtins.concatMap (
-            c:
-            builtins.concatMap (
-              m:
-              let
-                v = volumesByName.${m.name or ""} or { };
-                sub = m.subPath or "";
-                key = builtins.head (lib.splitString "/" sub);
-                read = objKind: obj: {
-                  inherit objKind obj key;
-                  where = "container ${c.name or "?"}";
-                  subPath = {
-                    inherit sub;
-                    mountPath = m.mountPath or "?";
-                  };
-                };
-                noItems = src: safeList (src.items or [ ]) == [ ];
-              in
-              if sub == "" then
-                [ ]
-              else if
-                v ? secret && !(v.secret.optional or false) && v.secret ? secretName && noItems v.secret
-              then
-                [ (read "Secret" v.secret.secretName) ]
-              else if
-                v ? configMap && !(v.configMap.optional or false) && v.configMap ? name && noItems v.configMap
-              then
-                [ (read "ConfigMap" v.configMap.name) ]
-              else
-                [ ]
-            ) (safeList (c.volumeMounts or [ ]))
-          ) containers;
-        in
-        envReads ++ volumeReads ++ subPathReads;
+        map (r: {
+          objKind = r.kind;
+          obj = r.name;
+          inherit (r) key where subPath;
+        }) (builtins.filter (r: r.key != null && !r.optional) (podSpec.reads (podSpec.podSpecOf w)));
     in
     builtins.concatMap (
       w:

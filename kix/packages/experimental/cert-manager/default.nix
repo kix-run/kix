@@ -30,6 +30,15 @@
 # One instance per cluster: the CRDs, webhook configurations, and
 # ClusterRoles are cluster-scoped (`meta.conflictsWith`).
 #
+# Upgrades: a deploy moves a cluster from v1.21.2 to v1.21.3 in place, with
+# no step before it. The CRDs gain the optional `status.acme.ari.certID`
+# field, which objects written by v1.21.2 do not carry. The new images do
+# not trust the emSign ECC Root CA - G3 root, so an issuer whose server
+# chains to it fails after the upgrade. Going back to v1.21.2 is a deploy
+# of the old package over the new one: the CRDs drop the field and the
+# Certificates issued by v1.21.3 keep their Secrets. Checked on kind only;
+# upstream does not document downgrades for this release.
+#
 # Dependencies:
 #   prometheus (optional)  metrics Services, three ServiceMonitors, and the
 #                          alerts.
@@ -100,8 +109,15 @@ in
     # cluster-issuer instance and that instance on this package, and the
     # annotation-ownership rule follows that chain.
     annotationDomains = [ "cert-manager.io" ];
-    # The lowest Kubernetes release cert-manager v1.21 supports.
-    k8s.minVersion = "1.33";
+    # The Kubernetes versions cert-manager v1.21 supports, from the Supported
+    # Releases page (cert-manager.io/docs/releases). The CI kind images in
+    # make/kind_images.sh cover the same versions. Move both bounds with
+    # `release`.
+    k8s = {
+      minVersion = "1.33";
+      maxVersion = "1.36";
+      reason = "[K3530] cert-manager ${release} supports Kubernetes 1.33 to 1.36. Deploy a Kix release with an older cert-manager package, or move the cluster to a supported Kubernetes version first";
+    };
     network.intents = {
       # Issuer endpoints are runtime data in Issuer specs: ACME directories
       # and DNS provider APIs on 443, HTTP-01 self-checks on 80, and DNS-01
@@ -140,7 +156,7 @@ in
     image = kix.options.image {
       repository = "quay.io/jetstack/cert-manager-controller";
       tag = release;
-      digest = "sha256:70f532fd9cfde0b09d55687200942399d89838bc2d5d5b45152eb799a15912b8";
+      digest = "sha256:9f4f96a33c7774cef24466fcd85031997531a03a8d117f151126baa8d1290dcc";
       description = "Image of the controller. Its major.minor must match the vendored CRDs and RBAC; the other images follow its tag.";
     };
     # Each component held under 30 MiB on an idle kind cluster. The
@@ -182,7 +198,7 @@ in
       image = kix.options.image {
         repository = "quay.io/jetstack/cert-manager-webhook";
         tag = release;
-        digest = "sha256:a60e2dac46dbb8a7f3df95c54ce941012f54c2fe022f0ee55aaa1ab40ed957ae";
+        digest = "sha256:055ac8e9de6a0ba6763794838fe38944acc650f68ebe1b01dd8be079e580f458";
         tagText = "config.image.tag";
         description = "Image of the admission webhook.";
       };
@@ -216,7 +232,7 @@ in
       image = kix.options.image {
         repository = "quay.io/jetstack/cert-manager-cainjector";
         tag = release;
-        digest = "sha256:c85268c64f2e0e76684bf5fe8906caff34b82523561c6affe0fae3546bd87562";
+        digest = "sha256:083d0e906f8eb44e255fe4ff817ae54e49f9ed82e22f1011bb4e9e4f4b8a641f";
         tagText = "config.image.tag";
         description = "Image of the CA injector.";
       };
@@ -244,7 +260,7 @@ in
     startupapicheck.image = kix.options.image {
       repository = "quay.io/jetstack/cert-manager-startupapicheck";
       tag = release;
-      digest = "sha256:46e75b6866359ffb5d82624f41e3ed1c70b2994982702ced547ce5edb418a8f5";
+      digest = "sha256:1c519d4afca1413d1e4ccd78bdc756184418ab55a34569a3b3de39d32f9974e1";
       tagText = "config.image.tag";
       description = "Image of the API-check Job. Its pull policy follows the controller's.";
     };
@@ -252,7 +268,7 @@ in
     operandImages.acmesolver = kix.options.image {
       repository = "quay.io/jetstack/cert-manager-acmesolver";
       tag = release;
-      digest = "sha256:699b40d622211ab7accad8a21b04c5fbaa1841ef7a12621e8de492dbe27b2503";
+      digest = "sha256:c8c1225bb2fe8ab37a330b77f0d8c2ee6a41210fcb54fc07ca606ab9a022b8b7";
       tagText = "config.image.tag";
       description = "Image of the ACME HTTP-01 solver pods the controller launches (`--acme-http01-solver-image`).";
     };

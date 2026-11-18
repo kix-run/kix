@@ -7,16 +7,18 @@ name: Documentation captures
 # longer matches what the command produces, which is what a compiler change
 # that moved the rendered output looks like.
 #
-# It used to run inside the Pages deploy job. That put a documentation
-# check on the critical path of publishing the site: from 2026-09-19 the
-# step failed on three capture groups and kix.run stopped redeploying,
-# while GitHub's build artifacts expire after about a day. Drift in the
-# docs should stop a merge, not a deploy, so it runs here on pull requests
-# instead and the deploy job only builds.
+# It runs on pull requests so that drift in the docs stops a merge. The
+# Pages deploy job only builds the site, so a stale capture never stops
+# kix.run from deploying.
 #
 # The fix when this fails is to run
 # `nix run ./docs#regen-captures-offline -- --apply` locally and commit
 # the result.
+#
+# The captures need the private kix-run/kix-examples repository, which
+# only the KIX_EXAMPLES_TOKEN secret can read. GitHub gives no secrets to a
+# pull request from a fork or from Dependabot, so the job skips its steps
+# there and says so in a notice.
 
 on:
   pull_request:
@@ -44,24 +46,38 @@ jobs:
         accept-flake-config = true
         access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
     steps:
-      - name: Checkout kixpkgs
-        uses: actions/checkout@v6
+      - name: Check for the kix-examples token
+        id: token
+        env:
+          TOKEN: ${{ secrets.KIX_EXAMPLES_TOKEN }}
+        run: |
+          if [ -n "$TOKEN" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice title=Documentation captures skipped::This run has no KIX_EXAMPLES_TOKEN secret, which pull requests from forks and from Dependabot never get. The captures need the private kix-examples repository, so they did not run. A maintainer can run this workflow on the branch."
+          fi
+
+      - name: Checkout kix
+        if: steps.token.outputs.present == 'true'
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
-          path: kixpkgs
+          path: kix
           fetch-depth: 0
 
       # The captures must match the kix-examples revision docs/flake.lock
       # pins, which can be ahead of kix-examples' default branch while a
       # paired kix-examples PR is open.
       - name: Read the pinned kix-examples revision
+        if: steps.token.outputs.present == 'true'
         id: examples-rev
-        run: echo "rev=$(nix eval --raw --impure --expr '(builtins.fromJSON (builtins.readFile ./kixpkgs/docs/flake.lock)).nodes.kix-examples.locked.rev')" >> "$GITHUB_OUTPUT"
+        run: echo "rev=$(nix eval --raw --impure --expr '(builtins.fromJSON (builtins.readFile ./kix/docs/flake.lock)).nodes.kix-examples.locked.rev')" >> "$GITHUB_OUTPUT"
 
-      # kix-examples is a separate private repo in another org, which the
-      # job's GITHUB_TOKEN cannot reach, so it is checked out with its own
-      # token and the flake input is overridden to point at it.
+      # kix-examples is a separate private repository, which the job's
+      # GITHUB_TOKEN cannot read, so it is checked out with its own token
+      # and the flake input is overridden to point at it.
       - name: Checkout kix-examples
-        uses: actions/checkout@v6
+        if: steps.token.outputs.present == 'true'
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           repository: kix-run/kix-examples
           ref: ${{ steps.examples-rev.outputs.rev }}
@@ -70,7 +86,8 @@ jobs:
           fetch-depth: 0
 
       - name: Offline captures are fresh
-        working-directory: kixpkgs
+        if: steps.token.outputs.present == 'true'
+        working-directory: kix
         run: |
           nix run ./docs#regen-captures-offline \
             --override-input kix-examples "git+file://${{ github.workspace }}/kix-examples" \

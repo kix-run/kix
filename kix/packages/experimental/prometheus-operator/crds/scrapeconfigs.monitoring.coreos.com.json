@@ -3,8 +3,8 @@
   "kind": "CustomResourceDefinition",
   "metadata": {
     "annotations": {
-      "controller-gen.kubebuilder.io/version": "v0.21.0",
-      "operator.prometheus.io/version": "0.92.1"
+      "controller-gen.kubebuilder.io/version": "v0.23.0",
+      "operator.prometheus.io/version": "0.95.2"
     },
     "name": "scrapeconfigs.monitoring.coreos.com"
   },
@@ -1113,6 +1113,7 @@
                         },
                         "services": {
                           "items": {
+                            "minLength": 1,
                             "type": "string"
                           },
                           "type": "array",
@@ -1124,6 +1125,7 @@
                         },
                         "tags": {
                           "items": {
+                            "minLength": 1,
                             "type": "string"
                           },
                           "type": "array",
@@ -1920,7 +1922,6 @@
                           "type": "boolean"
                         },
                         "host": {
-                          "minLength": 1,
                           "pattern": "^[a-zA-Z][a-zA-Z0-9+.-]*://.+$",
                           "type": "string"
                         },
@@ -3742,6 +3743,9 @@
                     },
                     "type": "array"
                   },
+                  "extraScrapeMetrics": {
+                    "type": "boolean"
+                  },
                   "fallbackScrapeProtocol": {
                     "enum": [
                       "PrometheusProto",
@@ -4203,9 +4207,7 @@
                         },
                         "role": {
                           "enum": [
-                            "hcloud",
                             "Hcloud",
-                            "robot",
                             "Robot"
                           ],
                           "type": "string"
@@ -5374,6 +5376,7 @@
                   },
                   "keepDroppedTargets": {
                     "format": "int64",
+                    "minimum": 0,
                     "type": "integer"
                   },
                   "kubernetesSDConfigs": {
@@ -5471,6 +5474,7 @@
                           "properties": {
                             "names": {
                               "items": {
+                                "minLength": 1,
                                 "type": "string"
                               },
                               "type": "array",
@@ -6496,14 +6500,17 @@
                   },
                   "labelLimit": {
                     "format": "int64",
+                    "minimum": 0,
                     "type": "integer"
                   },
                   "labelNameLengthLimit": {
                     "format": "int64",
+                    "minimum": 0,
                     "type": "integer"
                   },
                   "labelValueLengthLimit": {
                     "format": "int64",
+                    "minimum": 0,
                     "type": "integer"
                   },
                   "lightSailSDConfigs": {
@@ -7598,6 +7605,7 @@
                         },
                         "modulus": {
                           "format": "int64",
+                          "minimum": 0,
                           "type": "integer"
                         },
                         "regex": {
@@ -7646,6 +7654,7 @@
                   },
                   "nativeHistogramBucketLimit": {
                     "format": "int64",
+                    "minimum": 0,
                     "type": "integer"
                   },
                   "nativeHistogramMinBucketFactor": {
@@ -8495,11 +8504,8 @@
                         "availability": {
                           "enum": [
                             "Public",
-                            "public",
                             "Admin",
-                            "admin",
-                            "Internal",
-                            "internal"
+                            "Internal"
                           ],
                           "type": "string"
                         },
@@ -9399,6 +9405,7 @@
                         },
                         "modulus": {
                           "format": "int64",
+                          "minimum": 0,
                           "type": "integer"
                         },
                         "regex": {
@@ -9427,6 +9434,7 @@
                   },
                   "sampleLimit": {
                     "format": "int64",
+                    "minimum": 0,
                     "type": "integer"
                   },
                   "scalewaySDConfigs": {
@@ -9755,6 +9763,7 @@
                   },
                   "targetLimit": {
                     "format": "int64",
+                    "minimum": 0,
                     "type": "integer"
                   },
                   "tlsConfig": {

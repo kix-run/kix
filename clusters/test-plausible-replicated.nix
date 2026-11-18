@@ -15,8 +15,8 @@
 #   networking: { disableDefaultCNI: true, podSubnet: "10.244.0.0/16" }
 #   nodes: [ { role: control-plane }, { role: worker }, { role: worker }, { role: worker } ]
 #   EOF
-# Build:   nix build ./clusters#cluster-plausible-replicated --extra-experimental-features pipe-operators
-# Deploy:  nix run .#kix -- deploy plausible-replicated --flake ./clusters --context kind-kix-plausible-ha -y --timeout 30m
+# Build:   kix build plausible-replicated
+# Deploy:  kix deploy plausible-replicated --context kind-kix-plausible-ha -y --timeout 30m
 
 { kix, packages }:
 

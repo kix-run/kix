@@ -46,9 +46,19 @@
 # to copy than the deploy waits for the Cluster to be ready. Run the deploy
 # again once the Cluster is ready.
 #
+# Upgrades: PostgreSQL 18.7 upgrades directly from 18.6 with no dump and
+# restore. Upstream says minor releases never change the storage format and
+# are compatible with earlier and later minor releases of the same major.
+# The operator upgrades the replicas first, then restarts the primary in
+# place, so a one-instance cluster is down while its pod restarts. Going
+# back is deploying the 18.6 package over this one. Both directions ran on
+# kind with one- and two-instance clusters, keeping the data from before
+# each step. 18.6 has the bugs that 18.7 fixes, so index corruption can
+# happen again while the cluster runs 18.6.
+#
 # Exposes (`root.out`, `root` = the `Cluster`):
 #   out.name, out.fqdn, out.port  The `-rw` Service (port 5432).
-#   out.version                   The PostgreSQL version `image.tag` names, such as "18.6".
+#   out.version                   The PostgreSQL version `image.tag` names, such as "18.7".
 #   out.clusterName               The Cluster's name.
 #   out.selector                  Instance pod labels.
 #   out.tls                       true (PostgreSQL always serves TLS).
@@ -157,7 +167,7 @@ in
             imageTag = builtins.unsafeDiscardStringContext config.image.tag;
           in
           builtins.match "[0-9]+(\\.[0-9]+)?([-_].*)?" imageTag != null;
-        message = "image.tag \"${builtins.unsafeDiscardStringContext config.image.tag}\" does not start with a PostgreSQL version. CloudNativePG reads the version from the tag and refuses `latest`; use a tag such as \"18.6-standard-trixie\".";
+        message = "image.tag \"${builtins.unsafeDiscardStringContext config.image.tag}\" does not start with a PostgreSQL version. CloudNativePG reads the version from the tag and refuses `latest`; use a tag such as \"18.7-standard-trixie\".";
       }
       {
         assertion =

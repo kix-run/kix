@@ -1,0 +1,3 @@
+# 2026-11-18 · `cli/kix/src/cluster/readiness/imports.rs` · A Service import that times out says the Service was "not found" when it exists and has no ready endpoints.
+
+The poll loop knows the Service exists and records "Service exists, waiting for ready endpoints", but the timeout message is always `import target Service/<name> (apiVersion v1) not found on the cluster before the timeout expired.` (around line 339). Seen when RabbitMQ pods crash-looped after a deploy of an older rabbitmq-cluster: the Service `rabbitmq` was there, and the message sent the reader looking for a missing object instead of at the pods. The timeout message should use the last status.

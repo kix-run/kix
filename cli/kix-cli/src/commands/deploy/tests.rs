@@ -8,11 +8,13 @@ mod prune_start_and_timeout_tests {
     fn orphans() -> Vec<ResourceId> {
         vec![
             ResourceId {
+                group: String::new(),
                 kind: "ConfigMap".into(),
                 name: "old".into(),
                 namespace: "app".into(),
             },
             ResourceId {
+                group: String::new(),
                 kind: "Namespace".into(),
                 name: "gone".into(),
                 namespace: kix::manifest::types::CLUSTER_SCOPED.into(),
@@ -104,6 +106,7 @@ mod prune_flag_tests {
 
 mod cached_baseline_tests {
     use super::*;
+    use kix::cluster::discovery;
     use kix::cluster::fake_api::FakeApi;
     use kix::manifest::keys;
     use kix::manifest::lifecycle;
@@ -201,6 +204,7 @@ mod run_end_tests {
     use kix::cluster::scheduler::{DeployPlan, PrunePolicy};
     use kix::cluster::scripted::{ApplyFailure, Behaviour, NodeScript, ScriptedOps};
     use kix::cluster::stream::NullObserver;
+    use kix::cluster::watchdog::StallPolicy;
     use kix::manifest::keys;
     use serde_json::json;
 
@@ -220,6 +224,7 @@ mod run_end_tests {
 
     fn deployment_id(name: &str) -> ResourceId {
         ResourceId {
+            group: "apps".into(),
             kind: "Deployment".into(),
             namespace: "default".into(),
             name: name.into(),
@@ -389,13 +394,13 @@ mod run_end_tests {
             cancelled: 3,
             ..DeployResult::default()
         };
-        let line = summary_line(&counts, false, false);
+        let line = summary_line(&counts, Command::Deploy, false);
         assert!(line.starts_with("Deploy failed: "), "{line}");
         assert!(line.contains("2 failed"), "{line}");
-        let stopped = summary_line(&DeployResult::default(), false, false);
+        let stopped = summary_line(&DeployResult::default(), Command::Deploy, false);
         assert!(stopped.starts_with("Deploy stopped: "), "{stopped}");
-        let ok = summary_line(&DeployResult::default(), true, true);
-        assert!(ok.starts_with("Dry run complete: "), "{ok}");
+        let ok = summary_line(&DeployResult::default(), Command::Rollback, true);
+        assert!(ok.starts_with("Rollback complete: "), "{ok}");
     }
 
     /// A failed deploy closes with the failed resources, the records, and a
@@ -409,6 +414,7 @@ mod run_end_tests {
             cancelled: 4,
             failures: vec![kix::cluster::stream::NodeFailure {
                 node: NodeId::Resource(ResourceId {
+                    group: "apps".into(),
                     kind: "Deployment".into(),
                     namespace: "app".into(),
                     name: "api".into(),
@@ -418,6 +424,7 @@ mod run_end_tests {
             ..DeployResult::default()
         };
         let closing = |previous, interrupted| Closing {
+            command: Command::Deploy,
             cluster: "prod",
             record: Some("prod-8a1f3c20"),
             previous,
@@ -431,7 +438,7 @@ mod run_end_tests {
         );
         assert!(text.starts_with("Deploy of 'prod' failed: "), "{text}");
         assert!(
-            text.contains("    - Deployment/api@app: ImagePullBackOff\n"),
+            text.contains("    - Deployment.apps/api@app: ImagePullBackOff\n"),
             "{text}"
         );
         assert!(
@@ -465,6 +472,7 @@ mod run_end_tests {
             ..DeployResult::default()
         };
         let closing = Closing {
+            command: Command::Deploy,
             cluster: "prod",
             record: Some("prod-4be1c09a"),
             previous: Previous::Active("prod-4be1c09a".into()),
@@ -547,7 +555,7 @@ mod stop_advice_tests {
 
     fn conflict() -> Conflict {
         Conflict {
-            resource: "Deployment/web@app".into(),
+            resource: "Deployment.apps/web@app".into(),
             owners: Vec::new(),
             message: "conflict".into(),
         }
@@ -564,7 +572,11 @@ mod stop_advice_tests {
 
     #[test]
     fn a_conflict_stop_points_to_force_conflicts_and_cede() {
-        let text = super::super::stop_advice(&plan(vec![conflict()], Vec::new())).join("\n");
+        let text = super::super::stop_advice(
+            &plan(vec![conflict()], Vec::new()),
+            super::super::Command::Deploy,
+        )
+        .join("\n");
         assert!(text.contains("--force-conflicts"), "{text}");
         assert!(text.contains("`ownership.cede`"), "{text}");
         assert!(!text.contains("--on-error continue"), "{text}");
@@ -572,17 +584,142 @@ mod stop_advice_tests {
 
     #[test]
     fn a_webhook_stop_points_to_the_backend() {
-        let unreachable = refusal(RefusalReason::Other, Some("cert-manager-webhook"));
-        let text = super::super::stop_advice(&plan(Vec::new(), vec![unreachable])).join("\n");
+        let unreachable = refusal(
+            RefusalReason::WebhookUnreachable,
+            Some("cert-manager-webhook"),
+        );
+        let text = super::super::stop_advice(
+            &plan(Vec::new(), vec![unreachable]),
+            super::super::Command::Deploy,
+        )
+        .join("\n");
         assert!(text.contains("get its backend running again"), "{text}");
         assert!(!text.contains("--on-error continue"), "{text}");
+    }
+
+    /// The reason of a refused write says what stopped it. A webhook that
+    /// could not be reached has its own reason, so a refusal that only
+    /// names a webhook is not taken for one.
+    #[test]
+    fn a_refusal_keeps_the_reason_it_was_classified_with() {
+        use crate::commands::plan::admission_reason;
+        use kix::cluster::preview::Refusal;
+        use kix::manifest::types::ResourceId;
+
+        let service = ResourceId {
+            group: String::new(),
+            kind: "Service".into(),
+            namespace: "cert-manager".into(),
+            name: "cert-manager-webhook".into(),
+        };
+        let unreachable = Refusal::WebhookUnreachable {
+            webhook: Some("webhook.cert-manager.io".into()),
+            service,
+            message: "no endpoints".into(),
+        };
+        assert_eq!(
+            admission_reason(&unreachable),
+            (
+                RefusalReason::WebhookUnreachable,
+                Some("webhook.cert-manager.io".into())
+            )
+        );
+        let denied = Refusal::WebhookDenied {
+            webhook: Some("policy.example.com".into()),
+            message: "denied".into(),
+        };
+        assert_eq!(admission_reason(&denied).0, RefusalReason::WebhookDenied);
+        let other = Refusal::Other {
+            message: "boom".into(),
+        };
+        assert_eq!(admission_reason(&other), (RefusalReason::Other, None));
+
+        let named_but_other = refusal(RefusalReason::Other, Some("policy.example.com"));
+        let text = super::super::stop_advice(
+            &plan(Vec::new(), vec![named_but_other]),
+            super::super::Command::Deploy,
+        )
+        .join("\n");
+        assert!(!text.contains("get its backend running again"), "{text}");
+    }
+
+    /// `kix rollback` has no `--on-error` flag, so its advice never offers
+    /// it, and it says to roll back again.
+    #[test]
+    fn a_rollback_stop_never_offers_on_error_continue() {
+        let invalid = refusal(RefusalReason::Invalid, None);
+        let text = super::super::stop_advice(
+            &plan(Vec::new(), vec![invalid]),
+            super::super::Command::Rollback,
+        )
+        .join("\n");
+        assert!(text.contains("Then roll back again."), "{text}");
+        assert!(!text.contains("--on-error"), "{text}");
     }
 
     #[test]
     fn a_refused_write_still_offers_on_error_continue() {
         let invalid = refusal(RefusalReason::Invalid, None);
-        let text = super::super::stop_advice(&plan(Vec::new(), vec![invalid])).join("\n");
+        let text = super::super::stop_advice(
+            &plan(Vec::new(), vec![invalid]),
+            super::super::Command::Deploy,
+        )
+        .join("\n");
         assert!(text.contains("Fix the refused writes."), "{text}");
         assert!(text.contains("--on-error continue"), "{text}");
+    }
+}
+
+mod operator_flag_tests {
+    use crate::cli::{Cli, Command};
+    use clap::Parser;
+
+    fn refusal(extra: &[&str]) -> Option<String> {
+        let argv = [&["kix", "deploy", "x"][..], extra].concat();
+        let Command::Deploy(args) = Cli::try_parse_from(argv).expect("args parse").command else {
+            unreachable!()
+        };
+        super::refuse_ignored_by_operator(&args)
+            .err()
+            .map(|e| e.to_string())
+    }
+
+    /// Each flag the operator would not carry out is refused, and the
+    /// message names every one given.
+    #[test]
+    fn the_operator_refuses_the_flags_it_does_not_carry_out() {
+        for flag in [
+            &["--timeout", "5m"][..],
+            &["--on-error", "continue"],
+            &["--reconcile"],
+            &["--skip-orphan-check"],
+            &["--force-conflicts"],
+            &["--log-format", "json"],
+            &["--group-by", "namespace"],
+        ] {
+            let argv = [&["--operator"][..], flag].concat();
+            let message = refusal(&argv).unwrap_or_else(|| panic!("{flag:?} not refused"));
+            assert!(message.starts_with("[K7218] "), "{message}");
+            assert!(message.contains(&format!("`{}", flag[0])), "{message}");
+        }
+        let both = refusal(&["--operator", "--timeout", "5m", "--reconcile"]).unwrap();
+        assert!(both.contains("`--timeout`, `--reconcile`"), "{both}");
+    }
+
+    /// Flags the operator mode carries out, and the defaults, pass.
+    #[test]
+    fn the_operator_accepts_what_it_carries_out() {
+        for extra in [
+            &[][..],
+            &["--prune"],
+            &["--yes"],
+            &["--accept-migrations"],
+            &["--offline"],
+            &["--on-error", "stop"],
+            &["--log-format", "pretty"],
+        ] {
+            let argv = [&["--operator"][..], extra].concat();
+            assert_eq!(refusal(&argv), None, "{extra:?}");
+        }
     }
 }

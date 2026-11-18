@@ -22,7 +22,19 @@
 # The CRDs carry CEL validation rules (x-kubernetes-validations), which
 # replace the validating webhook of releases before v8; no webhook is
 # deployed. Group snapshots (groupsnapshot.storage.k8s.io) stay off: their
-# CRDs are not installed and the feature gate keeps its default.
+# CRDs are not installed, and the package passes
+# `--feature-gates=CSIVolumeGroupSnapshot=false`. Since v8.7 the gate is on
+# by default, and a controller with the gate on waits up to 30s at every
+# start for the group snapshot CRDs before it logs a warning and goes on
+# without them. Upstream plans to remove the gate in a later release, and the
+# controller refuses a gate it does not know.
+#
+# Upgrades: the controller keeps no data of its own. Its state is the
+# VolumeSnapshot objects, and v8.6 and v8.7 serve the same CRD schema
+# (snapshot.storage.k8s.io/v1), so a deploy replaces the pod and the new
+# controller picks up the snapshots and contents the old one left. To go
+# back, deploy the previous Kix release. The v8.6 controller reads the same
+# objects, and nothing needs undoing.
 #
 # out.crds.<Kind>: handles for VolumeSnapshotClass, VolumeSnapshotContent,
 #   and VolumeSnapshot, passed to `scope.mkCR`. out.version: the
@@ -50,7 +62,7 @@
 }:
 let
   # meta.version and image.tag read this; crds/sources.txt names the same tag.
-  release = "8.6.0";
+  release = "8.7.0";
 
   name = scope.instanceName;
   ns = scope.namespaceName;
@@ -101,15 +113,19 @@ in
     # The role admits one managed claimant per cluster, which also keeps a
     # second set of the cluster-scoped CRDs out.
     roles = [ "snapshotController" ];
-    # The CRDs' x-kubernetes-validations rules need CEL.
-    k8s.minVersion = "1.25";
+    # The CRDs' x-kubernetes-validations rules need CEL. Upstream states
+    # no maximum.
+    k8s = {
+      minVersion = "1.25";
+      reason = "external-snapshotter v${release} supports Kubernetes 1.25 and later";
+    };
   };
 
   options = {
     image = kix.options.image {
       repository = "registry.k8s.io/sig-storage/snapshot-controller";
       tag = "v${release}";
-      digest = "sha256:81e79f205083f105e573ba2ebfe5964ede7f69a154e8627f53ebbbccd3ed9f70";
+      digest = "sha256:8511f417d0072efcd937aedd7cc79a937d5066e64ee17beb6097301c92742f19";
       description = "Image of the snapshot controller. Its major.minor must match the vendored CRDs.";
     };
 
@@ -177,6 +193,7 @@ in
           "--v=2"
           "--leader-election=true"
           "--http-endpoint=:${toString httpPort}"
+          "--feature-gates=CSIVolumeGroupSnapshot=false"
         ]
         ++ kix.guardArgs {
           inherit who;
@@ -293,7 +310,7 @@ in
       // mkClusterRoleSet scope {
         inherit subjects;
         labels = scope.selectorLabels;
-        # external-snapshotter v8.6.0
+        # external-snapshotter v8.7.0
         # deploy/kubernetes/snapshot-controller/rbac-snapshot-controller.yaml,
         # without the groupsnapshot.storage.k8s.io rules.
         roles."${name}-${scope.namespaceName}" = grant [

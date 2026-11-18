@@ -5,8 +5,8 @@
 # - Latest image tags
 # - Relaxed security (scorecard warnings instead of errors)
 #
-# Build:  nix build .#cluster-dev
-# Deploy: kix deploy dev
+# Build:  kix build example-multi-env-dev
+# Deploy: kix deploy example-multi-env-dev
 
 { kix, packages }:
 

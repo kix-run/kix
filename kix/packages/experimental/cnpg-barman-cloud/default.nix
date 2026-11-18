@@ -38,9 +38,25 @@
 #   certManager (required)   the cert-manager instance whose Issuer and
 #                            Certificate handles the package builds from.
 #
-# Replicas: one (`availability.max = "none"`). The plugin serves its gRPC
-# port only on the pod that holds the leader lease, so a second pod would
-# never be ready.
+# Replicas: from the cluster's availability level, one at `none` and two
+# above it. Every pod serves the gRPC port, and the Service spreads the
+# operator's calls across them. Only the pod that holds the leader lease
+# reconciles ObjectStores. There is no `replicas` option. Set the
+# instance's `availability` to change the count. The Deployment keeps
+# upstream's Recreate strategy, so every deploy that changes the pod stops
+# the plugin briefly, whatever the count. While no plugin pod is ready, the
+# operator cannot reconcile a Cluster that uses it or create its instance
+# pods. WAL archiving runs in the sidecar and goes on.
+#
+# Upgrades: 0.16 reads the ObjectStores, base backups, and WAL that 0.15
+# wrote. Upstream needs no step to upgrade between these releases
+# (web/docs/upgrades.mdx) and says nothing about going back. Going back to
+# 0.15 works for an ObjectStore that uses no field 0.16 added: the plugin
+# and the sidecars restart on 0.15, and archiving and backups go on. The
+# 0.15 definition rejects `zstd` base backup compression, and it does not
+# know `s3AddressingStyle` or `s3Credentials.sseCustomerKey`, so the API
+# server rejects or drops them. Remove those fields from every ObjectStore
+# before going back.
 #
 # Escape hatches: `extraArgs` (the operator subcommand's flags, such as
 # `--log-level`), `env`, and the instance's `partsOverlays`.
@@ -76,12 +92,13 @@
   scope,
   lib,
   kix,
+  availability,
 }:
 
 let
   # meta.version, the default image tags, and the tag in crds/sources.txt
   # and rbac/sources.txt.
-  release = "v0.15.1";
+  release = "v0.16.0";
   # builtins.splitVersion would read the `v` as a component of its own.
   minorOf = v: lib.versions.majorMinor (lib.removePrefix "v" v);
 
@@ -138,9 +155,15 @@ in
     owner = "platform";
     defaultAliases = [ "barmanCloud" ];
     conflictsWith = [ "cluster:barmanCloud" ];
-    # CloudNativePG 1.30, which the plugin serves, supports Kubernetes from
-    # 1.31; the ObjectStore definition uses CEL validation rules.
-    k8s.minVersion = "1.31";
+    # The plugin states only a minimum: `minKubeVersion` in the
+    # ClusterServiceVersion of its OLM bundle
+    # (config/olm/bases/plugin-barman-cloud.clusterserviceversion.yaml
+    # upstream). The cnpgOperator dependency carries CloudNativePG's own,
+    # narrower range. Move the bound with `release`.
+    k8s = {
+      minVersion = "1.31";
+      reason = "plugin-barman-cloud ${release} supports Kubernetes 1.31 and later";
+    };
   };
 
   assertions =
@@ -164,14 +187,14 @@ in
     image = kix.options.image {
       repository = "ghcr.io/cloudnative-pg/plugin-barman-cloud";
       tag = release;
-      digest = "sha256:c75acad19a36e8176cfe2885761ff1b836c6ef977d7257e298c99a28b5c302ef";
+      digest = "sha256:6404a416718bd7aad943c67a25a7bb20d0558b43edfeab0bf167f013ca435882";
       description = "Plugin image. Its major.minor must be the package's release.";
     };
 
     sidecar.image = kix.options.image {
       repository = "ghcr.io/cloudnative-pg/plugin-barman-cloud-sidecar";
       tag = release;
-      digest = "sha256:2287a793a804db751edd0d07d44cd549e357677e98a800eb12e2cf7c0d53f9b0";
+      digest = "sha256:c669259e20ed1e11fad821f735c396c19d929985aa05b9544b13ecc8b5a386d0";
       tagText = "config.image.tag";
       description = "Image of the sidecar the plugin adds to each instance pod of a Cluster that uses it (SIDECAR_IMAGE). Its major.minor must be the package's release.";
     };
@@ -423,13 +446,20 @@ in
 
       deployment = scope.mkDeployment {
         inherit name;
-        availability.max = "none";
         requires = [ self.crds.objectStores ] ++ builtins.attrValues self.clusterRole;
         spec = {
-          replicas = 1;
-          # The gRPC server starts only on the pod holding the leader lease,
-          # and readiness probes that port, so a rolling update's new pod
-          # never becomes ready while the old one holds the lease.
+          # The operator calls the plugin each time it reconciles a Cluster
+          # that uses it, and to add the sidecar to each new instance pod.
+          # One lost pod stalls both, so `pod` is two.
+          replicas = kix.availability.pick availability {
+            none = 1;
+            pod = 2;
+            node = 2;
+            zone = 2;
+          };
+          # Upstream's strategy. A rolling update would run two plugin
+          # releases side by side, and upstream does not promise that the
+          # operator can talk to both.
           strategy.type = "Recreate";
           selector.matchLabels = scope.selectorLabels;
           template = {

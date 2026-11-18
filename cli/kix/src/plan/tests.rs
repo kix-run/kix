@@ -454,7 +454,7 @@ mod diff_graph_tests {
         assert_eq!(by_path("$.type")["new"], json!("kubernetes.io/basic-auth"));
 
         let changes = json_changes(&d, "Deployment/web@app");
-        assert!(changes.to_string().contains(SECRET_NOT_SHOWN), "{changes}");
+        assert!(changes.to_string().contains(HASH_NOT_SHOWN), "{changes}");
     }
 
     /// A value too large to show is replaced by its size.
@@ -563,7 +563,7 @@ mod diff_graph_tests {
             json!("b")
         );
         assert!(
-            api["manifests"]["PackageInstance/api@app"]
+            api["manifests"][format!("PackageInstance.{}/api@app", keys::GROUP).as_str()]
                 .get("new")
                 .is_some(),
             "{api}"
@@ -629,12 +629,12 @@ mod diff_graph_tests {
         );
         assert_eq!(
             secret["new"]["metadata"]["annotations"][keys::CONTENT_HASH],
-            json!(SECRET_NOT_SHOWN)
+            json!(HASH_NOT_SHOWN)
         );
         let dep = &json["changed"][0]["manifests"]["Deployment/web@app"];
         assert_eq!(
             dep["new"]["spec"]["template"]["metadata"]["annotations"]["checksum/secret"],
-            json!(SECRET_NOT_SHOWN)
+            json!(HASH_NOT_SHOWN)
         );
     }
 
@@ -678,6 +678,7 @@ mod diff_graph_tests {
         let (old_graph, new_graph) = graphs_of(&baseline(), &baseline());
         let mut index = ManifestIndex::new(&old_graph, &new_graph);
         let rid = ResourceId {
+            group: String::new(),
             kind: "Secret".into(),
             namespace: "app".into(),
             name: "s".into(),
@@ -729,11 +730,12 @@ mod never_pruned_tests {
     use crate::manifest::types::CLUSTER_SCOPED;
 
     fn rid(kind: &str, name: &str) -> ResourceId {
-        ResourceId {
-            kind: kind.into(),
-            name: name.into(),
-            namespace: CLUSTER_SCOPED.into(),
-        }
+        let group = match kind {
+            "CustomResourceDefinition" => "apiextensions.k8s.io",
+            "Widget" => "example.com",
+            _ => "",
+        };
+        ResourceId::new(group, kind, CLUSTER_SCOPED, name)
     }
 
     /// A CRD or Namespace dropped from the build is kept; everything else,

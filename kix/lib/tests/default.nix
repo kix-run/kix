@@ -19,13 +19,13 @@
 # feature there as `units/<topic>.nix`, with test names `<topic>-<what>`.
 
 {
-  # Default: the exact nixpkgs the clusters flake pins (read from its lock
-  # file, fetched by narHash: pure, no registry/channel needed).
+  # Default: the exact nixpkgs the repository flake pins, read from its lock
+  # file and fetched by narHash, so no registry or channel is needed.
   lib ? (
     let
-      lock = builtins.fromJSON (builtins.readFile ../../../clusters/flake.lock);
+      lock = builtins.fromJSON (builtins.readFile ../../../flake.lock);
     in
-    import (builtins.fetchTree lock.nodes.nixpkgs.locked + "/lib")
+    import (builtins.fetchTree lock.nodes.${lock.nodes.root.inputs.nixpkgs}.locked + "/lib")
   ),
 }:
 
@@ -44,10 +44,9 @@ let
   kixlib = import ../vocab { inherit lib; };
 
   # The *public* surface, as a consuming flake sees it through `mkFlake`.
-  # The rest of this matrix imports subtrees directly, which is how
-  # `mergeFragments` managed to be implemented, documented and unreachable
-  # all at once: no test ever looked at what `kix/lib/default.nix` exports.
-  # `pkgs` is forced only by the manifest-writing attributes, so a stub
+  # The rest of this matrix imports subtrees directly, so the tests that
+  # read `publicKix` are the ones that check what `kix/lib/default.nix`
+  # exports. `pkgs` is forced only by the manifest-writing attributes, so a stub
   # keeps this eval-only like the rest of the file.
   publicKix = import ../default.nix {
     inherit lib;
@@ -130,8 +129,8 @@ let
 
   # NOTE: all fixtures follow the production convention `root = self.<part>`.
   # A resource living ONLY at `parts.root` is dropped from the manifest set
-  # (collectResources excludes the `root` key). See the latent-quirk note
-  # in architecture.md.
+  # (collectResources excludes the `root` key). See "`parts.root` aliases a
+  # named part" in architecture.md.
   dnsPackage = {
     meta = {
       version = "test";
@@ -253,7 +252,7 @@ let
         };
     };
 
-  # v2_discussions/143/145 fixtures: a dep-free multi-replica Deployment, with
+  # Availability fixtures: a dep-free multi-replica Deployment, with
   # optional pod-spec extras (explicit placement rules) and an optional
   # author-written PDB over the same selector.
   mkReplicatedPackage =
@@ -346,7 +345,7 @@ let
 
   # The derived constraints of the fixture's Deployment, or [ ] when none.
   # A package that takes the level as an argument and maps it, the way
-  # every replica-shaped option is expected to (145 §5). Also emits the
+  # every replica-shaped option is expected to. Also emits the
   # level it saw into a ConfigMap so a test can read it.
   mkLevelPackage =
     {
@@ -418,7 +417,7 @@ let
     mods:
     let
       hasCapped = builtins.any (
-        m: builtins.isAttrs m && (((m.instances or { }).appns or { }).capped or { }) ? package
+        m: builtins.isAttrs m && (m.instances.appns.capped or { }) ? package
       ) mods;
       cluster = mkCluster (
         mods ++ lib.optional (!hasCapped) { instances.appns.capped.package = mkLevelPackage { }; }
@@ -852,8 +851,7 @@ let
         };
       in
       {
-        # Named part: `root` may only alias a named part (kixpkgs#25). Before
-        # this the whole netpol matrix failed on that check, unnoticed.
+        # Named part: `root` may only alias a named part.
         inherit crdRef;
         root = {
           resource = crdRef;
@@ -953,7 +951,7 @@ let
         };
     };
 
-  # v2_discussions/128 fixtures: a package hand-rolling a PVC, and a package
+  # Capability-ownership fixtures: a package writing its own PVC, and a package
   # writing annotations under a given domain (optionally linking the
   # `operator` dep; dep args are discovered from literal functionArgs, so
   # the with-dep variant hardcodes the arg name).
@@ -1082,7 +1080,7 @@ let
       };
   };
 
-  # Stock-catalog fixtures: a role-claiming shelf package and two consumers
+  # Stock-catalog fixtures: a role-claiming catalog package and two consumers
   # that write the class they resolved into ConfigMap `sc-consumer`, one
   # with an OPTIONAL storageClasses dep (like persistent-volume-claim) and
   # one with a REQUIRED one.
@@ -1132,12 +1130,12 @@ let
       };
   };
 
-  # Contested-alias fixtures: shelf packages answering `x`, and a consumer
+  # Contested-alias fixtures: catalog packages answering `x`, and a consumer
   # requiring `x` that records which one it got.
-  shelfX =
+  catalogX =
     who:
     mkCmPackage {
-      name = "shelf-${who}";
+      name = "catalog-${who}";
       metaExtra.defaultAliases = [ "x" ];
       out = { inherit who; };
     };
@@ -1226,7 +1224,7 @@ let
       m: (m.metadata.name or "") == name
     ) (throw "manifest '${name}' not found") ms;
 
-  dependsOn = m: (m.metadata.annotations or { }).${kixKeys.dependsOn} or "";
+  dependsOn = m: m.metadata.annotations.${kixKeys.dependsOn} or "";
   # Identity hash of a part of the appns/app instance. rawManifests carry no
   # identity annotation (the CLI stamps it from the store path), so the
   # tests read the resource's own out.identityHash.
@@ -1274,33 +1272,12 @@ let
       (cluster.scorecardReport or { findings = [ ]; }).findings
     );
 
-  # The real kix/packages/experimental/envoy-gateway, not a synthetic stand-in: its
-  # EnvoyProxy/GatewayClass/Gateway wiring is what decides whether a
-  # Gateway can program on a cluster with no LoadBalancer, so the tests
-  # want the shipped package, field names and all.
-  envoyGatewayPackage = import ../../packages/experimental/envoy-gateway;
-
-  # What a kind scenario opts into. Envoy Gateway's own default is a
-  # LoadBalancer Service for the proxy, which stock kind never gives an
-  # address; NodePort makes the controller publish node addresses
-  # instead, and the Gateway reaches Programmed=True.
-  kindProxySpec = {
-    provider = {
-      type = "Kubernetes";
-      kubernetes.envoyService.type = "NodePort";
-    };
+  # A gateway-api and an envoy-gateway instance in `gwns`; the Gateway is
+  # gwns/gateway.
+  envoyGatewayInstances.instances.gwns = {
+    gateway-api.package = import ../../packages/experimental/gateway-api;
+    gateway.package = import ../../packages/experimental/envoy-gateway;
   };
-
-  mkGatewayCluster =
-    config:
-    mkCluster [
-      {
-        instances.gwns.gateway = {
-          package = envoyGatewayPackage;
-          inherit config;
-        };
-      }
-    ];
 
   # ------------------------------------------------------------------- tests
 
@@ -1611,7 +1588,7 @@ let
       (!(hasName "_cluster" (ofKind "Namespace" ms)) && hasName "enforcer-probe" (ofKind "ConfigMap" ms))
       || throw "sentinel namespace emitted a Namespace resource";
 
-    # --- role model (v2_discussions/127) ---
+    # --- role model ---
 
     # A typo'd role name throws at eval instead of silently never matching.
     t14-unknown-role-throws = evalFails (mkCluster [
@@ -1692,10 +1669,11 @@ let
       (probe != null && probe.data.sc == "stub-sc")
       || throw "role-as-alias resolution failed: ${builtins.toJSON probe}";
 
-    # --- stock catalogs (doc 127 §5) ---
+    # --- stock catalogs ---
 
     # An optional dependency places no demand, even on a role name: the
-    # role provider on the shelf stays there and the dependency is null.
+    # role provider in the catalog is not instantiated, and the dependency
+    # is null.
     t20-optional-role-dep-does-not-pull-stock =
       let
         ms = manifests (mkCluster [
@@ -1710,7 +1688,7 @@ let
       (!(hasName "stock-sc" (ofKind "ConfigMap" ms)) && probe != null && probe.data.sc == "missing")
       || throw "optional role dependency pulled stock: ${builtins.toJSON probe}";
 
-    # No demand → the catalog entry stays on the shelf (demand-rooted
+    # No demand → the catalog entry is not instantiated (demand-rooted
     # closure: nothing is installed because a flavor bundled it).
     t21-no-demand-no-stock =
       let
@@ -1723,7 +1701,7 @@ let
 
     # An optional dependency on a role resolves to a platform import that
     # provides it, as the kind flavour's platform-storage import does for
-    # homelab-kind, and the shelf provider is not pulled. An optional import
+    # homelab-kind, and the catalog provider is not pulled. An optional import
     # that nothing demands stays inactive and answers nothing.
     t22-optional-role-dep-resolves-import =
       let
@@ -1751,7 +1729,7 @@ let
       (sc false == "import-sc" && sc true == "missing")
       || throw "optional role dependency: active import ${sc false}, inactive import ${sc true}";
 
-    # --- capability-ownership decomposition (v2_discussions/128) ---
+    # --- capability ownership ---
 
     # A raw PersistentVolumeClaim from a package build is an eval error.
     t25-raw-pvc-throws = evalFails (mkCluster [
@@ -1996,7 +1974,7 @@ let
       )
       || throw "unknown-domain lint wrong: unknown=${builtins.toJSON unknownFindings} known=${builtins.toJSON knownFindings}";
 
-    # --- role demand wiring (PR 29 review findings 2-5) ---
+    # --- role demand wiring ---
 
     # Role providers are cluster-scoped: demand from two namespaces shares
     # ONE stock instance instead of instantiating two strong providers of
@@ -2037,7 +2015,7 @@ let
           baseInstances
           {
             instances.storage.provider.package = stockStorage;
-            instances.shelf.spare = {
+            instances.catalog.spare = {
               package = stockStorage;
               optional = true;
             };
@@ -2050,14 +2028,14 @@ let
       (builtins.length stockCms == 1 && probe != null && probe.data.sc == "stock-sc-name")
       || throw "inactive optional treated as role conflict: stock=${toString (builtins.length stockCms)} probe=${builtins.toJSON probe}";
 
-    # A typo'd role on a shelf entry throws (same closed vocabulary as
-    # instantiated meta.roles) instead of silently never matching. The shelf
+    # A typo'd role on a catalog entry throws (same closed vocabulary as
+    # instantiated meta.roles) instead of silently never matching. The catalog
     # is read only when something demands from it, so the consumer's
     # storageClasses dependency is required, and stock-storage answers it
     # once the typo'd entry is gone.
     t37-catalog-role-typo-throws =
       let
-        shelf = extra: [
+        catalog = extra: [
           baseInstances
           {
             availablePackages = {
@@ -2072,9 +2050,9 @@ let
         ];
       in
       (
-        builtins.length (manifests (mkCluster (shelf { }))) > 0
+        builtins.length (manifests (mkCluster (catalog { }))) > 0
         && evalFails (
-          mkCluster (shelf {
+          mkCluster (catalog {
             bad-storage.package = mkCmPackage {
               name = "bad";
               metaExtra.roles = [ "storageClases" ];
@@ -2082,7 +2060,7 @@ let
           })
         )
       )
-      || throw "a typo'd role on a shelf entry did not throw, or the control cluster failed";
+      || throw "a typo'd role on a catalog entry did not throw, or the control cluster failed";
 
     # Directly wired deps (deps.operator = ref...) count as linking against
     # the declarer. The domain lint must not false-warn on explicit wiring.
@@ -2286,7 +2264,7 @@ let
       || throw "untracked-ref marker ${markerHash} leaked into depends-on: '${annot}'";
 
     # ------------------------------------------------------------------
-    # Collapse-rule normalization + kix.keep (kixpkgs#9).
+    # Collapse-rule normalization + kix.keep.
 
     # A literal `{ }`/`[ ]` is an intentional Kubernetes value (emptyDir
     # volume source, select-everything selector, default-deny rule list)
@@ -2642,12 +2620,12 @@ let
       )
       || throw "fromWorkload targetPorts: named=${builtins.toJSON targets} extracted=${builtins.toJSON extracted}";
 
-    # BEST-PRACTICES §7.3 offers `workload.rawSelector` as the escape from a
+    # `workload.rawSelector` is the escape from a
     # Service/workload cycle, and the cycle it escapes from usually runs
     # through the manifest: the pod mounts a ConfigMap that names the
     # Service, so sealing the workload walks to the Service, which is
     # waiting for this selector. The escape therefore has to be readable
-    # without sealing the workload (housekeeping 2026-09-18). A regression
+    # without sealing the workload. A regression
     # here is an infinite recursion, which aborts the whole matrix rather
     # than failing this one test.
     t89-raw-selector-readable-through-a-manifest-cycle =
@@ -2729,7 +2707,7 @@ let
     # An Ingress routes but opens nothing, and under default deny the
     # backend refuses the controller like any other pod in any other
     # namespace: every request through it times out, and no amount of
-    # evaluation sees it (housekeeping 2026-09-18). `kix.expose` holds
+    # evaluation sees it. `kix.expose` holds
     # both ends of that edge, so it writes the rule, on the pod port the
     # Service routes to.
     t90-expose-opens-the-ingress-controller-edge =
@@ -2833,8 +2811,8 @@ let
       || throw "no ingress-controller edge; CNPs: ${builtins.toJSON (namesOf cnps)}";
 
     # A ServiceRef's out.fqdn has the same form as a rendered Service's:
-    # `<name>.<ns>.svc.<clusterDomain>`. It used to stop at `.svc`, which
-    # only resolves through the pod's DNS search path.
+    # `<name>.<ns>.svc.<clusterDomain>`. A name that stops at `.svc` only
+    # resolves through the pod's DNS search path.
     # The declarer two hops away satisfies the lint. cert-manager declares
     # cert-manager.io, the cluster-issuer depends on cert-manager, and the
     # Ingress that carries the annotation depends on the cluster-issuer:
@@ -3144,12 +3122,9 @@ let
         ms = manifests (mkCluster [
           {
             cluster.domain = "test.local";
-            instances.gwns.gateway = {
-              package = envoyGatewayPackage;
-              config.proxySpec = kindProxySpec;
-            };
             instances.appns.web.package = backend;
           }
+          envoyGatewayInstances
         ]);
         route = byName "web" (ofKind "HTTPRoute" ms);
         rules = route.spec.rules;
@@ -3708,7 +3683,7 @@ let
       || throw "ref fqdn: default=${dflt} custom=${custom}";
     # Two same-named Services are a name collision, not a label question:
     # the rule must say so instead of prescribing a label fix that cannot
-    # converge (kixpkgs#71 item 14).
+    # converge.
     # The velero shape: a Deployment selecting on the instance labels alone
     # while a DaemonSet's pod template carries those plus its own name. The
     # Deployment's selector matches both pod sets, so `kix deploy` judged it
@@ -3796,9 +3771,9 @@ let
       )
       || throw "expected one collision finding, got: ${msg}";
 
-    # A chart-rendered workload gets the pod-spec validators (kixpkgs#71
-    # item 13): a probe naming a port the container does not declare fails
-    # the eval; the same workload without it builds.
+    # A chart-rendered workload gets the pod-spec validators: a probe naming
+    # a port the container does not declare fails the eval, and the same
+    # workload without it builds.
     t56-helm-workload-runs-validators =
       let
         chartWorkload = probe: {
@@ -3846,11 +3821,10 @@ let
       (bad && builtins.any (m: (m.metadata.name or "") == "chart-web") good)
       || throw "helm workload validators: bad=${toString bad}";
 
-    # Shapes valid Kubernetes charts really render must pass the validators
-    # (red team on #75): null list fields from an unset toYaml value, a
-    # duplicate env name (the API server warns, last wins), and a fieldRef
-    # into a label (the allow clause used to throw "invalid regular
-    # expression" on exactly that path).
+    # Shapes valid Kubernetes charts really render must pass the validators:
+    # null list fields from an unset toYaml value, a duplicate env name (the
+    # API server warns, last wins), and a fieldRef into a label (a path the
+    # allow clause must match without an "invalid regular expression" error).
     t58-helm-workload-accepts-real-chart-shapes =
       let
         chartPackage = {
@@ -4712,71 +4686,6 @@ let
       builtins.length stock == 1
       || throw "expected one shared role provider, got ${toString (builtins.length stock)}";
 
-    # ── envoy-gateway: data-plane parameters ───────────────────────────
-    # Real clusters keep Envoy Gateway's defaults, so an instance that
-    # says nothing about the proxy must emit no EnvoyProxy and hang no
-    # parametersRef off the class.
-    t83-envoy-gateway-default-emits-no-proxy =
-      let
-        ms = manifests (mkGatewayCluster { });
-        gc = byName "gateway" (ofKind "GatewayClass" ms);
-      in
-      (ofKind "EnvoyProxy" ms == [ ] && gc != null && !(gc.spec ? parametersRef))
-      || throw "default envoy-gateway instance leaked proxy parameters: ${
-        builtins.toJSON (gc.spec or null)
-      }";
-
-    # Opting in emits the EnvoyProxy verbatim and points the class at it
-    # by group/kind/name/namespace, the four fields Envoy Gateway's
-    # processGatewayClassParamsRef resolves.
-    t84-envoy-gateway-proxyspec-wires-parametersref =
-      let
-        ms = manifests (mkGatewayCluster {
-          proxySpec = kindProxySpec;
-        });
-        ep = byName "gateway-proxy" (ofKind "EnvoyProxy" ms);
-        gc = byName "gateway" (ofKind "GatewayClass" ms);
-      in
-      (
-        ep != null
-        && ep.apiVersion == "gateway.envoyproxy.io/v1alpha1"
-        && ep.metadata.namespace == "gwns"
-        && ep.spec == kindProxySpec
-        &&
-          gc.spec.parametersRef == {
-            group = "gateway.envoyproxy.io";
-            kind = "EnvoyProxy";
-            name = "gateway-proxy";
-            namespace = "gwns";
-          }
-      )
-      || throw "unexpected EnvoyProxy wiring: proxy=${builtins.toJSON ep} class=${builtins.toJSON gc}";
-
-    # The parametersRef is resolved by name at admission time, so the
-    # EnvoyProxy has to land first. Referencing it through out.name is
-    # what buys that edge; this asserts the edge exists rather than
-    # trusting the reference style.
-    t85-envoy-gateway-proxy-orders-before-class =
-      let
-        cluster = mkGatewayCluster { proxySpec = kindProxySpec; };
-        ms = manifests cluster;
-        raw = cluster.instances.gwns.gateway.raw;
-        proxyHash = k8s.extractStoreHash raw.envoyProxy.outPath;
-        classHash = k8s.extractStoreHash raw.gatewayClass.outPath;
-        gc = byName "gateway" (ofKind "GatewayClass" ms);
-        gw = byName "gateway" (ofKind "Gateway" ms);
-      in
-      (lib.hasInfix proxyHash (dependsOn gc) && lib.hasInfix classHash (dependsOn gw))
-      || throw "ordering edges missing: class depends-on '${dependsOn gc}', gateway depends-on '${dependsOn gw}'";
-
-    # EnvoyProxy is an Envoy Gateway extension. Pointing a class at
-    # another implementation's controller and still handing it a
-    # proxySpec is a silent no-op in the cluster, so it fails eval.
-    t86-envoy-gateway-proxyspec-needs-envoy-controller = evalFails (mkGatewayCluster {
-      controllerName = "gateway.nginx.org/nginx-gateway-controller";
-      proxySpec = kindProxySpec;
-    });
-
     # A workload kind through raw scope.mkResource never reaches sealWorkload
     # (no validators, no derived spread, no netpol edges), so it is refused.
     t87-raw-workload-kind-throws = evalFails (mkCluster [
@@ -4784,8 +4693,8 @@ let
       { instances.appns.raw.package = mkRawDeploymentPackage; }
     ]);
 
-    # A CronJob used to slip past the refusal list, so its pods got no
-    # pod-spec validators, no DNS ordering and no network-policy edges.
+    # A raw CronJob is refused too. Through mkResource its pods would get no
+    # pod-spec validators, no DNS ordering, and no network-policy edges.
     t87b-raw-cronjob-kind-throws = evalFails (mkCluster [
       baseInstances
       {
@@ -4805,11 +4714,11 @@ let
       }
     ]);
 
-    # ---------------------------------------------------- v2_discussions/145
+    # ---------------------------------------------------- availability
     # The availability level: derived from the substrate, overridable per
     # instance, capped by the package, refused above the substrate. Spread
     # strictness is a lowering of the level; constraints and the PDB are
-    # derived for every workload above one replica (mechanism from 143).
+    # derived for every workload above one replica.
 
     # Two or more zones derive "zone": hard on the zone key, best effort on
     # hostname.
@@ -5390,8 +5299,8 @@ let
 
     # Two instances answer the dep's name from two namespaces, and the
     # consumer in a third names the one it wants. The first resolution
-    # pass cannot see explicit wiring and used to throw "ambiguous" before
-    # the pass that can got a turn.
+    # pass cannot see explicit wiring, so it must not throw "ambiguous"
+    # before the pass that can.
     t98-explicit-dep-wins-over-ambiguous-name =
       let
         cluster = mkCluster [
@@ -5607,14 +5516,14 @@ let
       builtins.all lib.id (builtins.attrValues cases)
       || throw "options.image digest default wrong: ${builtins.toJSON cases}";
 
-    # --- contested shelf keys (v2_discussions/151) ---
+    # --- contested catalog keys ---
 
     t105-uncontested-alias-pulls-its-claimant =
       let
         ms = manifests (mkCluster [
           baseInstances
           {
-            availablePackages.a.package = shelfX "a";
+            availablePackages.a.package = catalogX "a";
             instances.appns.consumer.package = xConsumer;
           }
         ]);
@@ -5626,49 +5535,49 @@ let
         ms = manifests (mkCluster [
           baseInstances
           {
-            availablePackages.a.package = shelfX "a";
-            availablePackages.b.package = shelfX "b";
+            availablePackages.a.package = catalogX "a";
+            availablePackages.b.package = catalogX "b";
           }
         ]);
       in
-      !(hasName "shelf-a" ms || hasName "shelf-b" ms)
-      || throw "contested shelf key instantiated without demand";
+      !(hasName "catalog-a" ms || hasName "catalog-b" ms)
+      || throw "contested catalog key instantiated without demand";
 
     t107-contested-alias-with-demand-throws = evalFails (mkCluster [
       baseInstances
       {
-        availablePackages.a.package = shelfX "a";
-        availablePackages.b.package = shelfX "b";
+        availablePackages.a.package = catalogX "a";
+        availablePackages.b.package = catalogX "b";
         instances.appns.consumer.package = xConsumer;
       }
     ]);
 
     # An optional instance answering the key is the selection: it is
-    # activated and neither shelf claimant is instantiated.
+    # activated and neither catalog claimant is instantiated.
     t108-optional-instance-selects-contested-alias =
       let
         ms = manifests (mkCluster [
           baseInstances
           {
-            availablePackages.a.package = shelfX "a";
-            availablePackages.b.package = shelfX "b";
+            availablePackages.a.package = catalogX "a";
+            availablePackages.b.package = catalogX "b";
             instances.infra.x = {
-              package = shelfX "chosen";
+              package = catalogX "chosen";
               optional = true;
             };
             instances.appns.consumer.package = xConsumer;
           }
         ]);
       in
-      (whoOf ms == "chosen" && !(hasName "shelf-a" ms || hasName "shelf-b" ms))
+      (whoOf ms == "chosen" && !(hasName "catalog-a" ms || hasName "catalog-b" ms))
       || throw "optional instance did not select the contested alias: ${whoOf ms}";
 
     # A package named `x` gets no priority over a package aliased `x`.
     t109-package-name-does-not-outrank-alias = evalFails (mkCluster [
       baseInstances
       {
-        availablePackages.x.package = shelfX "named";
-        availablePackages.b.package = shelfX "b";
+        availablePackages.x.package = catalogX "named";
+        availablePackages.b.package = catalogX "b";
         instances.appns.consumer.package = xConsumer;
       }
     ]);
@@ -5677,11 +5586,11 @@ let
       baseInstances
       {
         instances.infra.x = {
-          package = shelfX "one";
+          package = catalogX "one";
           optional = true;
         };
         instances.other.x = {
-          package = shelfX "two";
+          package = catalogX "two";
           optional = true;
         };
         instances.appns.consumer.package = xConsumer;
@@ -5700,7 +5609,7 @@ let
               optional = true;
             };
             instances.infra.x = {
-              package = shelfX "managed";
+              package = catalogX "managed";
               optional = true;
             };
             instances.appns.consumer.package = xConsumer;
@@ -5710,16 +5619,16 @@ let
       whoOf ms == "managed" || throw "managed optional did not outrank the import: ${whoOf ms}";
 
     # `deps.x = ref...` wires the dependency, so the consumer places no
-    # demand on the shelf, contested or not.
-    t114-explicit-deps-wiring-places-no-shelf-demand =
+    # demand on the catalog entries, contested or not.
+    t114-explicit-deps-wiring-places-no-catalog-demand =
       let
         ms = manifests (mkCluster [
           baseInstances
           (
             { ref, ... }:
             {
-              availablePackages.a.package = shelfX "a";
-              availablePackages.b.package = shelfX "b";
+              availablePackages.a.package = catalogX "a";
+              availablePackages.b.package = catalogX "b";
               instances.infra.wired.package = mkCmPackage {
                 name = "wired";
                 out.who = "wired";
@@ -5732,8 +5641,8 @@ let
           )
         ]);
       in
-      (whoOf ms == "wired" && !(hasName "shelf-a" ms || hasName "shelf-b" ms))
-      || throw "explicitly wired dep still demanded the shelf: ${whoOf ms}";
+      (whoOf ms == "wired" && !(hasName "catalog-a" ms || hasName "catalog-b" ms))
+      || throw "explicitly wired dep still demanded the catalog: ${whoOf ms}";
 
     # `deps.x = ref...` to an optional instance activates it, and the
     # activated instance's own demands are walked.
@@ -5792,12 +5701,12 @@ let
       || throw "explicit ref to another name did not activate it: ${whoOf ms}";
 
     # `deps.x = null` leaves the dependency to normal resolution.
-    t121-null-deps-entry-keeps-shelf-demand =
+    t121-null-deps-entry-keeps-catalog-demand =
       let
         ms = manifests (mkCluster [
           baseInstances
           {
-            availablePackages.a.package = shelfX "a";
+            availablePackages.a.package = catalogX "a";
             instances.appns.consumer = {
               package = xConsumer;
               deps.x = null;
@@ -5805,7 +5714,7 @@ let
           }
         ]);
       in
-      whoOf ms == "a" || throw "deps.x = null suppressed the shelf demand: ${whoOf ms}";
+      whoOf ms == "a" || throw "deps.x = null suppressed the catalog demand: ${whoOf ms}";
 
     # Optional instances follow resolveArg's ladder: the one in the
     # requester's namespace wins over one elsewhere.
@@ -5815,18 +5724,18 @@ let
           baseInstances
           {
             instances.appns.x = {
-              package = shelfX "near";
+              package = catalogX "near";
               optional = true;
             };
             instances.infra.x = {
-              package = shelfX "far";
+              package = catalogX "far";
               optional = true;
             };
             instances.appns.consumer.package = xConsumer;
           }
         ]);
       in
-      (whoOf ms == "near" && !(hasName "shelf-far" ms))
+      (whoOf ms == "near" && !(hasName "catalog-far" ms))
       || throw "same-namespace optional did not win: ${whoOf ms}";
 
     # A `deps` entry under `mkIf false` is absent.
@@ -5837,7 +5746,7 @@ let
           (
             { ref, ... }:
             {
-              availablePackages.a.package = shelfX "a";
+              availablePackages.a.package = catalogX "a";
               instances.infra.wired.package = mkCmPackage {
                 name = "wired";
                 out.who = "wired";
@@ -5854,12 +5763,12 @@ let
 
     # `ref` covers every name auto-instantiation could create; a ref to one
     # it did not create is refused with a Kix error.
-    t124-ref-to-uncreated-shelf-name-throws = evalFails (mkCluster [
+    t124-ref-to-uncreated-catalog-name-throws = evalFails (mkCluster [
       baseInstances
       (
         { ref, ... }:
         {
-          availablePackages.a.package = shelfX "a";
+          availablePackages.a.package = catalogX "a";
           instances.appns.consumer = {
             package = xConsumer;
             deps.x = ref.appns.a;
@@ -6177,11 +6086,11 @@ let
           follows =
             jobImage {
               image = {
-                tag = "v1.21.3";
+                tag = "v1.21.2";
                 pullPolicy = "Always";
               };
             } == {
-              image = "quay.io/jetstack/cert-manager-startupapicheck:v1.21.3";
+              image = "quay.io/jetstack/cert-manager-startupapicheck:v1.21.2";
               imagePullPolicy = "Always";
             };
           own =
@@ -6293,7 +6202,7 @@ in
       mkProbedPackage
       partHash
       manifests
-      shelfX
+      catalogX
       xConsumer
       stockStorage
       optionalScConsumer

@@ -1,6 +1,7 @@
 # Tests for kix/packages/experimental/clickhouse-keeper, clickhouse-cluster, and
 # clickhouse: the contract's replicas and replicaHosts fields, the refusals of an even Keeper
-# quorum and of a cluster with no memory limit, the health check's
+# quorum, of a cluster with no memory limit, and of a user field in the
+# operator's removed k8s_secret_ syntax, the health check's
 # addresses for each replica, Keeper's metrics endpoint, and the alert
 # rules of the operator, Keeper, and both server packages and what each
 # rule is gated on, and clickhouse-database's refusal of the removed
@@ -18,6 +19,7 @@
   byName,
   evalFails,
   kixKeys,
+  kixlib,
   alertRulesOf,
   allSelect,
   prometheusStub,
@@ -210,6 +212,35 @@ in
       })
     )
     || throw "clickhouse-cluster: a cluster with no memory limit rendered, or the default was refused";
+
+  # A user field in the k8s_secret_ syntax, flat or nested, is refused.
+  # The same user with valueFrom.secretKeyRef renders.
+  clickhouse-operator-removed-secret-ref =
+    let
+      withUsers =
+        users:
+        replicated {
+          clusterConfig.extraSpec.configuration.users = users;
+        };
+    in
+    (
+      evalFails (withUsers {
+        "alice/k8s_secret_password" = "alice-secret/password";
+      })
+      && evalFails (withUsers {
+        alice.k8s_secret_env_password = "alice-secret/password";
+      })
+      &&
+        ofKind "ClickHouseInstallation" (
+          manifests (withUsers {
+            "alice/password".valueFrom.secretKeyRef = {
+              name = "alice-secret";
+              key = "password";
+            };
+          })
+        ) != [ ]
+    )
+    || throw "clickhouse-operator: a k8s_secret_ user field rendered, or valueFrom was refused";
 
   # The health check reaches each replica through the operator's
   # per-replica Service, and extraSpec may not rename those Services.
@@ -473,6 +504,41 @@ in
     )
     || throw "clickhouse-database password: ${builtins.toJSON (secretIn "app-db-credentials")}";
 
+  # The bootstrap Job keeps one name and carries the rerun annotation. A
+  # new SOPS file for the password changes the Job's rerun hash, so the
+  # deploy runs it again without renaming it.
+  clickhouse-database-bootstrap-reruns-on-new-password =
+    let
+      withSource =
+        source:
+        withDatabase {
+          password = {
+            package = secretPackage;
+            config = {
+              inherit source;
+              keys = [ "password" ];
+            };
+          };
+        };
+      jobOf = cluster: byName "app-db-apps-bootstrap" (ofKind "Job" (manifests cluster));
+      hashOf = cluster: (jobOf cluster).metadata.annotations.${kixKeys.rerunHash} or null;
+      before = withSource ./clickhouse.nix;
+      after = withSource ./stackgres.nix;
+      job = jobOf before;
+    in
+    (
+      job != null
+      && job.metadata.annotations.${kixKeys.rerun} or null == kixlib.keyValues.rerunOnChange
+      && hashOf before != null
+      && hashOf before != hashOf after
+    )
+    || throw "clickhouse-database bootstrap rerun: ${
+      builtins.toJSON {
+        name = job.metadata.name or null;
+        annotations = job.metadata.annotations or null;
+      }
+    }";
+
   # A password from a secret-ref holding `username` and `password` is the
   # credentials Secret. The package renders no Secret of its own, and the
   # Job reads the password from `<instance>-<namespace>-bootstrap-password`
@@ -495,7 +561,7 @@ in
       ms = manifests cluster;
       secrets = map (m: "${m.metadata.namespace}/${m.metadata.name}") (ofKind "Secret" ms);
       imported = map (m: "${m.metadata.namespace}/${m.metadata.annotations.${kixKeys.importName}}") (
-        builtins.filter (m: (m.metadata.annotations or { }).${kixKeys.importKind} or null == "Secret") (
+        builtins.filter (m: m.metadata.annotations.${kixKeys.importKind} or null == "Secret") (
           ofKind "PackageInstance" ms
         )
       );

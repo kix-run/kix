@@ -29,6 +29,7 @@ tokio.workspace = true
 tempfile.workspace = true
 petgraph.workspace = true
 chrono.workspace = true
+uuid.workspace = true
 # Reads back the kix.toml `kix upgrade` writes.
 toml.workspace = true
 blake3.workspace = true
@@ -43,7 +44,9 @@ features = ["latest"]
 
 [dev-dependencies]
 # The in-memory apiserver, `kix::cluster::fake_api`.
-kix-lib = { workspace = true, features = ["test-util"] }
+kix-lib = { workspace = true, features = ["test-util", "test-release-key"] }
+# Paused-clock tests (start_paused).
+tokio = { workspace = true, features = ["test-util"] }
 assert_cmd.workspace = true
 insta.workspace = true
 predicates.workspace = true

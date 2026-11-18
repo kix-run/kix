@@ -56,6 +56,13 @@ pub struct ForeignOwner {
     /// Field paths the manager owns, e.g.
     /// `spec.template.spec.containers[name=web].image`.
     pub paths: Vec<String>,
+    /// The paths in `paths` that Kix's `Apply` entry does not also own.
+    ///
+    /// Only these can stop a deploy on a field ownership conflict. A field
+    /// Kix also owns holds the value Kix applied, because the API server
+    /// moves ownership to whoever changes a value, so applying it again
+    /// changes nothing.
+    pub unshared_paths: Vec<String>,
 }
 
 /// A replicas change Kix can prove although no managedFields entry records
@@ -208,6 +215,7 @@ fn serves_scale(obj: &DynamicObject) -> bool {
 /// manager already owned `spec.replicas`. [`UnrecordedScale`] covers the other
 /// cases.
 pub(crate) fn foreign_owners(obj: &DynamicObject) -> Vec<ForeignOwner> {
+    let kix_owned = kix_owned_leaves(obj);
     let Some(entries) = obj.metadata.managed_fields.as_deref() else {
         return Vec::new();
     };
@@ -215,22 +223,38 @@ pub(crate) fn foreign_owners(obj: &DynamicObject) -> Vec<ForeignOwner> {
         .iter()
         .filter(|e| e.manager.as_deref() != Some(KIX_FIELD_MANAGER))
         .filter(|e| e.subresource.as_deref() != Some("status"))
-        .map(|e| ForeignOwner {
-            manager: e.manager.clone().unwrap_or_else(|| "unknown".to_string()),
-            operation: e.operation.clone().unwrap_or_else(|| "?".to_string()),
-            subresource: e.subresource.clone(),
-            time: e
-                .time
-                .as_ref()
-                .and_then(crate::cluster::chrono_time)
-                .map(|t| t.to_rfc3339()),
-            paths: e
+        .map(|e| {
+            let leaves = e
                 .fields_v1
                 .as_ref()
-                .map(|f| flatten_paths(&f.0))
-                .unwrap_or_default(),
+                .map(|f| leaves(&f.0))
+                .unwrap_or_default();
+            let unshared_paths = leaves
+                .iter()
+                .filter(|(_, keys)| !kix_owned.contains(keys))
+                .map(|(path, _)| path.clone())
+                .collect();
+            ForeignOwner {
+                manager: e.manager.clone().unwrap_or_else(|| "unknown".to_string()),
+                operation: e.operation.clone().unwrap_or_else(|| "?".to_string()),
+                subresource: e.subresource.clone(),
+                time: e
+                    .time
+                    .as_ref()
+                    .and_then(crate::cluster::chrono_time)
+                    .map(|t| t.to_rfc3339()),
+                paths: leaves.into_iter().map(|(path, _)| path).collect(),
+                unshared_paths,
+            }
         })
         .collect()
+}
+
+/// Return the fieldsV1 key chain of each leaf that Kix's `Apply` entry owns.
+fn kix_owned_leaves(obj: &DynamicObject) -> std::collections::HashSet<Vec<String>> {
+    fieldsv1::kix_fieldset(obj)
+        .map(|f| leaves(&f).into_iter().map(|(_, keys)| keys).collect())
+        .unwrap_or_default()
 }
 
 /// Flatten a fieldsV1 tree into human-readable field paths.
@@ -352,9 +376,7 @@ impl ForeignField {
 /// moves ownership to whoever changes a value. So the fields returned are the
 /// ones another manager changed or took over since Kix applied the object.
 pub fn foreign_fields(obj: &DynamicObject) -> Vec<ForeignField> {
-    let kix_owned: std::collections::HashSet<Vec<String>> = fieldsv1::kix_fieldset(obj)
-        .map(|f| leaves(&f).into_iter().map(|(_, keys)| keys).collect())
-        .unwrap_or_default();
+    let kix_owned = kix_owned_leaves(obj);
     let Some(entries) = obj.metadata.managed_fields.as_deref() else {
         return Vec::new();
     };
@@ -395,10 +417,17 @@ fn format_list_key(key_json: &str) -> String {
     }
 }
 
-/// Build a `ResourceId` from typed metadata + the kind that
+/// Build a `ResourceId` from typed metadata + the kind and apiVersion that
 /// `fetch_managed_resources` injects into raw data.
-pub(crate) fn resource_id(obj: &DynamicObject) -> ResourceId {
+pub fn resource_id(obj: &DynamicObject) -> ResourceId {
+    let api_version = obj
+        .data
+        .get("apiVersion")
+        .and_then(Value::as_str)
+        .or_else(|| obj.types.as_ref().map(|t| t.api_version.as_str()))
+        .unwrap_or("");
     ResourceId {
+        group: crate::manifest::types::api_group(api_version).to_string(),
         kind: resource_id_kind(obj).to_string(),
         namespace: obj
             .metadata
@@ -421,6 +450,46 @@ fn resource_id_kind(obj: &DynamicObject) -> &str {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// A manager's fields that Kix also owns are shared, so only the others
+    /// can conflict with a deploy.
+    #[test]
+    fn foreign_owners_mark_the_fields_kix_does_not_share() {
+        let entry = |manager: &str, operation: &str, fields: Value| {
+            json!({
+                "manager": manager,
+                "operation": operation,
+                "fieldsType": "FieldsV1",
+                "fieldsV1": fields,
+            })
+        };
+        let obj: DynamicObject = serde_json::from_value(json!({
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {
+                "name": "coredns",
+                "namespace": "kube-system",
+                "managedFields": [
+                    entry("kix", "Apply", json!({"f:data": {"f:Corefile": {}}})),
+                    entry("kubeadm", "Update", json!({"f:data": {"f:Corefile": {}}})),
+                    entry("kubectl-patch", "Update", json!({"f:data": {"f:hosts": {}}})),
+                ],
+            },
+            "data": {"Corefile": ".:53 {}", "hosts": "10.0.0.1 a"},
+        }))
+        .unwrap();
+        let unshared: Vec<(String, Vec<String>)> = foreign_owners(&obj)
+            .into_iter()
+            .map(|o| (o.manager, o.unshared_paths))
+            .collect();
+        assert_eq!(
+            unshared,
+            [
+                ("kubeadm".to_string(), vec![]),
+                ("kubectl-patch".to_string(), vec!["data.hosts".to_string()]),
+            ]
+        );
+    }
 
     #[test]
     fn flatten_nested_paths() {

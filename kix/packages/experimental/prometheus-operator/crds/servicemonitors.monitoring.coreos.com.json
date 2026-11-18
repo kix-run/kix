@@ -3,8 +3,8 @@
   "kind": "CustomResourceDefinition",
   "metadata": {
     "annotations": {
-      "controller-gen.kubebuilder.io/version": "v0.21.0",
-      "operator.prometheus.io/version": "0.92.1"
+      "controller-gen.kubebuilder.io/version": "v0.23.0",
+      "operator.prometheus.io/version": "0.95.2"
     },
     "name": "servicemonitors.monitoring.coreos.com"
   },
@@ -202,6 +202,7 @@
                               },
                               "modulus": {
                                 "format": "int64",
+                                "minimum": 0,
                                 "type": "integer"
                               },
                               "regex": {
@@ -569,6 +570,7 @@
                               },
                               "modulus": {
                                 "format": "int64",
+                                "minimum": 0,
                                 "type": "integer"
                               },
                               "regex": {
@@ -769,6 +771,9 @@
                     },
                     "type": "array"
                   },
+                  "extraScrapeMetrics": {
+                    "type": "boolean"
+                  },
                   "fallbackScrapeProtocol": {
                     "enum": [
                       "PrometheusProto",
@@ -784,18 +789,22 @@
                   },
                   "keepDroppedTargets": {
                     "format": "int64",
+                    "minimum": 0,
                     "type": "integer"
                   },
                   "labelLimit": {
                     "format": "int64",
+                    "minimum": 0,
                     "type": "integer"
                   },
                   "labelNameLengthLimit": {
                     "format": "int64",
+                    "minimum": 0,
                     "type": "integer"
                   },
                   "labelValueLengthLimit": {
                     "format": "int64",
+                    "minimum": 0,
                     "type": "integer"
                   },
                   "namespaceSelector": {
@@ -814,6 +823,7 @@
                   },
                   "nativeHistogramBucketLimit": {
                     "format": "int64",
+                    "minimum": 0,
                     "type": "integer"
                   },
                   "nativeHistogramMinBucketFactor": {
@@ -836,6 +846,7 @@
                   },
                   "sampleLimit": {
                     "format": "int64",
+                    "minimum": 0,
                     "type": "integer"
                   },
                   "scrapeClass": {
@@ -922,6 +933,7 @@
                   },
                   "targetLimit": {
                     "format": "int64",
+                    "minimum": 0,
                     "type": "integer"
                   }
                 },

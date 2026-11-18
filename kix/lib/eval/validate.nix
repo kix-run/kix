@@ -23,6 +23,14 @@ let
   validateCrds = import ./validate-crds.nix { inherit lib; };
   validateKeys = import ./validate-keys.nix { inherit lib; };
   kixKeys = kixAnnotations.keys;
+  inherit (import ../core/util.nix { inherit lib; })
+    listOr
+    groupOf
+    namespaceOf
+    splitList
+    ;
+  workloadKinds = import ../core/workload-kinds.nix { inherit lib; };
+  podSpecReader = import ../core/pod-spec.nix { inherit lib; };
 in
 rec {
   # Return a failure of `crossResourceFailures` as one text, for tests.
@@ -66,14 +74,12 @@ rec {
 
       instanceClause = owner: if owner == null then "" else " (instance ${owner})";
 
-      splitList = s: builtins.filter (x: x != "") (map lib.trim (lib.splitString "," (toString s)));
-
       # Map each resource hash to the dependency hashes in `kix.run/depends-on`,
       # stripping `requires:` and `extra:` prefixes.
       depHashesByHash = lib.mapAttrs (
         _: e:
         map (d: lib.removePrefix "extra:" (lib.removePrefix "requires:" d)) (
-          splitList ((e.r.metadata.annotations or { }).${kixKeys.dependsOn} or "")
+          splitList (e.r.metadata.annotations.${kixKeys.dependsOn} or "")
         )
       ) byHash;
 
@@ -106,7 +112,11 @@ rec {
         in
         "${r.kind}/${ns}/${name}";
 
-      byId = builtins.foldl' (acc: r: acc // { "${resourceId r}" = r; }) { } resources;
+      # The last of several resources with one id wins, as the duplicate
+      # check reports them separately.
+      byId = builtins.listToAttrs (
+        map (r: lib.nameValuePair (resourceId r) r) (lib.reverseList resources)
+      );
 
       # Collect import markers (`PackageInstance` resources with
       # `kix.run/import-kind` and `kix.run/import-name`) that represent
@@ -183,38 +193,16 @@ rec {
         ns: selector:
         builtins.any (w: w.ns == ns && selectorMatchesLabels selector w.labels) refPodSelectors;
 
-      workloadKinds = [
-        "Deployment"
-        "StatefulSet"
-        "DaemonSet"
-        "Job"
-        "CronJob"
-      ];
-      workloads = builtins.filter (r: builtins.elem r.kind workloadKinds) resources;
-      nsOf = r: r.metadata.namespace or "cluster-scoped";
+      workloads = builtins.filter (r: builtins.elem r.kind workloadKinds.builtKinds) resources;
+      nsOf = namespaceOf;
 
       # Check whether `selector` matches any workload pod template in namespace `ns`.
       selectsPodsIn =
         ns: selector:
         builtins.any (w: nsOf w == ns && selectorMatchesLabels selector (getPodLabels w)) workloads;
 
-      getPodSpec =
-        r:
-        let
-          template =
-            if r.kind == "CronJob" then
-              r.spec.jobTemplate.spec.template.spec or { }
-            else
-              r.spec.template.spec or { };
-        in
-        template;
-
-      getPodLabels =
-        r:
-        if r.kind == "CronJob" then
-          r.spec.jobTemplate.spec.template.metadata.labels or { }
-        else
-          r.spec.template.metadata.labels or { };
+      getPodSpec = podSpecReader.podSpecOf;
+      getPodLabels = r: (podSpecReader.podTemplateOf r).metadata.labels or { };
 
       selectorMatchesLabels =
         selector: labels: builtins.all (k: (labels.${k} or null) == selector.${k}) (lib.attrNames selector);
@@ -241,12 +229,6 @@ rec {
       # `kix.run/operand-of = "<group>/<Kind>/<name>"` to reference the custom
       # resource in the same namespace whose operand pods they select.
       operandOfAnnotation = kixKeys.operandOf;
-      groupOf =
-        apiVersion:
-        let
-          parts = lib.splitString "/" apiVersion;
-        in
-        if builtins.length parts == 2 then builtins.head parts else "";
       crIds = builtins.listToAttrs (
         map (r: {
           name = "${groupOf (r.apiVersion or "")}/${r.kind}/${
@@ -255,7 +237,7 @@ rec {
           value = true;
         }) resources
       );
-      operandOf = svc: (svc.metadata.annotations or { }).${operandOfAnnotation} or null;
+      operandOf = svc: svc.metadata.annotations.${operandOfAnnotation} or null;
       operandCrPresent =
         svc:
         let
@@ -472,17 +454,12 @@ rec {
 
       # --- 7. No duplicate (kind, namespace, name) tuples ---
 
-      resourceIds = map resourceId resources;
-      uniqueIds = lib.unique resourceIds;
       duplicateFailures =
-        if builtins.length resourceIds == builtins.length uniqueIds then
-          [ ]
-        else
-          let
-            counts = builtins.foldl' (acc: id: acc // { ${id} = (acc.${id} or 0) + 1; }) { } resourceIds;
-            dups = lib.filterAttrs (_: c: c > 1) counts;
-          in
-          map (id: "Duplicate resource: ${id}") (lib.attrNames dups);
+        let
+          counts = lib.mapAttrs (_: builtins.length) (builtins.groupBy resourceId resources);
+          dups = lib.filterAttrs (_: c: c > 1) counts;
+        in
+        map (id: "Duplicate resource: ${id}") (lib.attrNames dups);
 
       # --- 8. managed-by label ---
 
@@ -498,35 +475,22 @@ rec {
       # A workload's spec.selector.matchLabels must be a subset of its
       # pod template labels, otherwise the workload will never match its pods.
 
-      selectorConsistencyFailures =
-        builtins.concatMap
-          (
-            w:
-            let
-              selectorLabels = w.spec.selector.matchLabels or { };
-              templateLabels = w.spec.template.metadata.labels or { };
-              ns = w.metadata.namespace or "cluster-scoped";
-            in
-            if selectorLabels == { } then
-              [ ]
-            else if selectorMatchesLabels selectorLabels templateLabels then
-              [ ]
-            else
-              [
-                "${w.kind} ${ns}/${w.metadata.name} selector ${builtins.toJSON selectorLabels} does not match pod template labels ${builtins.toJSON templateLabels}"
-              ]
-          )
-          (
-            builtins.filter (
-              r:
-              builtins.elem r.kind [
-                "Deployment"
-                "StatefulSet"
-                "DaemonSet"
-                "Job"
-              ]
-            ) resources
-          );
+      selectorConsistencyFailures = builtins.concatMap (
+        w:
+        let
+          selectorLabels = w.spec.selector.matchLabels or { };
+          templateLabels = w.spec.template.metadata.labels or { };
+          ns = w.metadata.namespace or "cluster-scoped";
+        in
+        if selectorLabels == { } then
+          [ ]
+        else if selectorMatchesLabels selectorLabels templateLabels then
+          [ ]
+        else
+          [
+            "${w.kind} ${ns}/${w.metadata.name} selector ${builtins.toJSON selectorLabels} does not match pod template labels ${builtins.toJSON templateLabels}"
+          ]
+      ) (builtins.filter (r: builtins.elem r.kind workloadKinds.selectorKinds) resources);
 
       # --- 10. Ingress backend Service references ---
       # Every Ingress backend must reference a Service that exists in the same namespace.
@@ -748,7 +712,7 @@ rec {
         r:
         let
           ns = r.metadata.namespace or "cluster-scoped";
-          value = (r.metadata.annotations or { }).${kixKeys.rerun} or null;
+          value = r.metadata.annotations.${kixKeys.rerun} or null;
         in
         if value == null then
           [ ]
@@ -814,8 +778,6 @@ rec {
       # --- 19. PersistentVolumeClaim references ---
       # A pod that mounts a claim that does not exist stays Pending.
 
-      safeList = v: if builtins.isList v then v else [ ];
-
       claimFailures = builtins.concatMap (
         w:
         let
@@ -837,7 +799,7 @@ rec {
                   + "\nIf an operator or the environment creates '${claim}', wrap the name in kix.untrackedRef \"${claim}\" (with by = <creator> when a resource in this build creates it) or declare a kix.mkImport instance.";
               }
             ]
-        ) (safeList ((getPodSpec w).volumes or [ ]))
+        ) (listOr ((getPodSpec w).volumes or [ ]))
       ) workloads;
 
       # --- 20. StorageClass references ---
@@ -899,7 +861,7 @@ rec {
               "StatefulSet ${nsOf sts}/${sts.metadata.name} volumeClaimTemplate '${t.metadata.name or "unnamed"}'"
               (nsOf sts)
               (t.spec.storageClassName or null)
-          ) (safeList (sts.spec.volumeClaimTemplates or [ ]))
+          ) (listOr (sts.spec.volumeClaimTemplates or [ ]))
         ) (builtins.filter (r: r.kind == "StatefulSet") resources)
         ++ builtins.concatMap (
           w:
@@ -915,7 +877,7 @@ rec {
                 "${w.kind} ${nsOf w}/${w.metadata.name} ephemeral volume '${vol.name or "unnamed"}'"
                 (nsOf w)
                 (t.spec.storageClassName or null)
-          ) (safeList ((getPodSpec w).volumes or [ ]))
+          ) (listOr ((getPodSpec w).volumes or [ ]))
         ) workloads;
 
       # --- 22. Named Secret and ConfigMap keys ---
@@ -940,8 +902,7 @@ rec {
           owned = e: "${e.r.metadata.name or "unnamed"}${instanceClause e.owner}";
           # Kubernetes still treats a StorageClass with the beta annotation
           # as a default (IsDefaultAnnotation in pkg/apis/storage/util).
-          annotated =
-            keys: e: builtins.any (key: ((e.r.metadata.annotations or { }).${key} or null) == "true") keys;
+          annotated = keys: e: builtins.any (key: (e.r.metadata.annotations.${key} or null) == "true") keys;
           check =
             kind: isDefault: text:
             let

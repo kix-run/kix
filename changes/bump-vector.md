@@ -1,0 +1,5 @@
++++
+kind = "silent"
+packages = ["experimental/clickhouse-logs", "experimental/loki-logs"]
++++
+`clickhouse-logs` and `loki-logs` now run Vector 0.62.0 (was 0.58.0). The first deploy restarts each agent pod once, and each agent continues from the read positions the old one saved, so no log line is lost or sent twice. The package's own configuration needs no change. If you add your own Vector configuration through `settings`, check it against Vector's upgrade guides for 0.59 to 0.62, because Vector refuses to start on a setting it removed, such as the `http` source alias, `compression: true` on a `vector` sink, or a `datadog_metrics` sink with `series_api_version: v1`. A `vector` sink address with no scheme now uses `https`. Vector also stopped publishing the metrics `internal_metrics_cardinality_total` and `buffer_max_byte_size`, `buffer_max_event_size`, and their `source_` and `transform_` forms, so a dashboard or alert that reads them shows no data. Use `internal_metrics_cardinality` and the `*_max_size_bytes` and `*_max_size_events` gauges. To go back, deploy the previous Kix version. Vector 0.58.0 reads the read positions 0.62.0 saves.

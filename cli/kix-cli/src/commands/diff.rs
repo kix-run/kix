@@ -12,8 +12,10 @@ use kix::cluster::apply::ApplyError;
 use kix::cluster::drift::{self, DriftReport, DriftVerdict};
 use kix::cluster::migrate::{MigrationPair, detect_migration_pairs};
 use kix::cluster::owned_view;
+use kix::cluster::scheduler::PrunePolicy;
 use kix::cluster::{discovery, inventory};
 use kix::eval::build_files::BuildFiles;
+use kix::eval::package_index::RecordPackageIndex;
 use kix::eval::store;
 use kix::eval::store_graph::StoreGraph;
 use kix::manifest::keys;
@@ -48,6 +50,11 @@ pub(crate) struct DiffResult {
     #[serde(skip)]
     #[schemars(skip)]
     migration_pairs: Vec<MigrationPair>,
+    /// Against the live cluster, the objects that are not in the build. The
+    /// document lists them under `prune`.
+    #[serde(skip)]
+    #[schemars(skip)]
+    orphans: Vec<ResourceId>,
     doc: Plan,
 }
 
@@ -66,7 +73,7 @@ impl CommandResponse for DiffResult {
 
 impl DiffResult {
     fn has_diff(&self) -> bool {
-        self.packages.has_changes() || !self.migration_pairs.is_empty()
+        self.doc.has_changes()
     }
 }
 
@@ -134,23 +141,25 @@ pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<Exit> {
 /// side is loaded from a build or a bundle, or synthesized from a manifest
 /// directory or the live cluster's Kix-owned view.
 pub(super) fn compare(args: &Comparison, ctx: &mut CommandContext) -> Result<Exit> {
-    let new_graph = match args.bundle {
-        Some(path) => kix_bundle::read_build(path, &[], args.cluster)
-            .map_err(|e| miette!("{e}"))?
-            .into_graph(),
+    let new_build = match args.bundle {
+        Some(path) => {
+            kix_bundle::read_build(path, &[], args.cluster).map_err(|e| miette!("{e}"))?
+        }
         None => {
-            let spinner = output::spinner(format!("Building cluster '{}'...", args.cluster));
-            let status = |msg: &str| set_spinner(&spinner, msg);
-            let build = super::build_flake(
+            // A status line, which `build_flake` clears before it prints the
+            // library's warnings. A spinner would draw over them.
+            let status = |msg: &str| output::status_line(msg);
+            status(&format!("Building cluster '{}'...", args.cluster));
+            super::build_flake(
                 &ctx.global,
                 args.cluster,
                 &status,
                 super::ACTIVATION_BUILD_FAILED,
-            )?;
-            clear_spinner(&spinner);
-            build.into_graph()
+            )?
         }
     };
+    let warnings = new_build.warnings().to_vec();
+    let new_graph = new_build.into_graph();
 
     let (old_graph, side) = match args.baseline {
         Baseline::FromBundle(path) => {
@@ -188,7 +197,7 @@ pub(super) fn compare(args: &Comparison, ctx: &mut CommandContext) -> Result<Exi
         Baseline::Live => {
             let spinner = output::spinner("Fetching live cluster state...");
             let global = ctx.global.clone();
-            let live = ctx
+            let mut live = ctx
                 .runtime()?
                 .block_on(fetch_live_manifests(&global, &new_graph))?;
             clear_spinner(&spinner);
@@ -198,6 +207,7 @@ pub(super) fn compare(args: &Comparison, ctx: &mut CommandContext) -> Result<Exi
                 .current
                 .as_ref()
                 .and_then(|record| activation::Record::of(record).package_index);
+            live.set_aside_left_earlier(&new_graph, deployed.as_ref());
             (
                 StoreGraph::synthesize_placed(
                     &live.manifests,
@@ -219,6 +229,7 @@ pub(super) fn compare(args: &Comparison, ctx: &mut CommandContext) -> Result<Exi
     };
     let mut result = diff_graphs(&old_graph, &new_graph, &side, detail);
     result.command = args.command;
+    result.doc.warnings = warnings;
     if let Some(path) = args.out {
         let sha256 = plan::save(result.doc.clone(), &new_graph, path)?;
         crate::esay!(
@@ -334,13 +345,26 @@ fn diff_graphs(old: &StoreGraph, new: &StoreGraph, side: &OldSide, detail: Detai
                 .and_then(|r| DeployedBuild::of_record(&r));
             doc.drift = Checked::found(drift);
             doc.drift_unchecked = live.drift_unchecked;
+            // A deploy with no flags keeps every orphan, so none counts as a
+            // change.
+            doc.prune = Checked::found(
+                live.orphans
+                    .iter()
+                    .map(|rid| super::plan::prune_entry(rid, PrunePolicy::WarnOnly, None))
+                    .collect(),
+            );
             doc
         }
+    };
+    let orphans = match side {
+        OldSide::Live(live) => live.orphans.clone(),
+        _ => Vec::new(),
     };
     DiffResult {
         command: "kix diff",
         packages,
         migration_pairs,
+        orphans,
         doc,
     }
 }
@@ -414,6 +438,43 @@ struct LiveSide {
     /// How many compared objects the drift check cannot judge
     /// ([`DriftVerdict::Unstamped`] or [`DriftVerdict::NoFieldset`]).
     drift_unchecked: usize,
+    /// The live objects a deploy of the build would find orphaned: each
+    /// stamped, prunable object that is not in the build, sorted.
+    orphans: Vec<ResourceId>,
+}
+
+impl LiveSide {
+    /// Record the orphans, and take out of `manifests` the ones that are not
+    /// in the deployed build either. An earlier deploy left those on the
+    /// cluster, so the build does not remove them, and `kix plan` lists
+    /// them only as orphans. Without the deployed record's package index,
+    /// every orphan stays in `manifests`.
+    fn set_aside_left_earlier(&mut self, new: &StoreGraph, deployed: Option<&RecordPackageIndex>) {
+        let in_build: HashSet<ResourceId> = new
+            .resources
+            .values()
+            .map(|r| ResourceId::from_value(&r.manifest))
+            .collect();
+        let is_orphan = |m: &Value| {
+            keys::get(m, keys::IDENTITY_HASH).is_some()
+                && lifecycle::lifecycle_of(m).prunable()
+                && !in_build.contains(&ResourceId::from_value(m))
+        };
+        self.orphans = self
+            .manifests
+            .iter()
+            .filter(|m| is_orphan(m))
+            .map(ResourceId::from_value)
+            .collect();
+        self.orphans.sort();
+        let Some(deployed) = deployed else {
+            return;
+        };
+        let hashes = deployed.hashes();
+        self.manifests.retain(|m| {
+            !is_orphan(m) || keys::get(m, keys::IDENTITY_HASH).is_some_and(|h| hashes.contains(h))
+        });
+    }
 }
 
 /// Fetch the live cluster's Kix-owned view for `new_graph`'s cluster.
@@ -517,6 +578,7 @@ async fn fetch_live_manifests(
         managed,
         drifted,
         drift_unchecked,
+        orphans: Vec::new(),
     })
 }
 
@@ -586,6 +648,13 @@ fn text_output(result: &DiffResult) -> String {
         out.push('\n');
     }
 
+    if !result.orphans.is_empty() {
+        out.push_str(&plan::render_plan_orphans(
+            &result.orphans,
+            &plan::kept_orphans_fate(&result.doc.cluster),
+        ));
+    }
+
     if result.has_diff() {
         out.push_str(&render::render_text(&result.doc));
     } else {
@@ -617,6 +686,11 @@ fn markdown_output(result: &DiffResult) -> String {
         out.push_str(&render::render_markdown(&result.doc));
     } else {
         out.push_str("No differences found.\n");
+        let warnings = render::render_warnings_markdown(&result.doc);
+        if !warnings.is_empty() {
+            out.push('\n');
+            out.push_str(&warnings);
+        }
         let drift = render::render_drift_markdown(&result.doc);
         if !drift.is_empty() {
             out.push('\n');
@@ -630,6 +704,7 @@ fn markdown_output(result: &DiffResult) -> String {
 mod tests {
     use super::*;
     use kix::eval::store_graph::ResourceNode;
+    use kix::plan::document::PruneFate;
     use kube::api::DynamicObject;
     use serde_json::json;
 
@@ -713,6 +788,7 @@ mod tests {
             managed: HashMap::new(),
             drifted,
             drift_unchecked,
+            orphans: Vec::new(),
         }));
         let result = diff_graphs(&old, &new, &side, Detail::Plain);
 
@@ -721,7 +797,7 @@ mod tests {
         assert_eq!(drift.len(), 1);
         assert_eq!(drift[0].path, "$.spec.template.spec.containers[web].image");
         let text = render::render_drift_text(&result.doc);
-        assert!(text.contains("Deployment/web@app"), "{text}");
+        assert!(text.contains("Deployment.apps/web@app"), "{text}");
         assert!(
             text.contains(&format!(
                 "2 object(s) not checked for drift: missing `{}` annotation",
@@ -742,5 +818,61 @@ mod tests {
             text.contains("\"web:2\" live, \"web:1\" in deployed build, set by kubectl-edit"),
             "{text}"
         );
+    }
+
+    /// A Job an earlier deploy left on the cluster is in neither the build
+    /// nor the deployed build. `kix plan --read-only` lists it as an orphan
+    /// the deploy keeps, as `kix plan` does, and finds no change.
+    #[test]
+    fn a_live_diff_lists_an_object_an_earlier_deploy_left_only_as_an_orphan() {
+        use kix::eval::package_index::FORMAT;
+        let manifest = |kind: &str, name: &str, hash: &str| {
+            json!({
+                "apiVersion": "v1", "kind": kind,
+                "metadata": {"name": name, "namespace": "app",
+                             "annotations": {keys::IDENTITY_HASH: hash}},
+            })
+        };
+        let web = manifest("ConfigMap", "web", &"d".repeat(32));
+        let mut new = StoreGraph::empty("c");
+        let path = format!("/nix/store/{}-k8s-ConfigMap-web", "d".repeat(32));
+        new.resources.insert(
+            path.clone().into(),
+            ResourceNode {
+                store_path: path.into(),
+                manifest: web.clone(),
+            },
+        );
+        let deployed = RecordPackageIndex {
+            format: FORMAT,
+            packages: Default::default(),
+            cluster_level: vec!["d".repeat(32), "r".repeat(32)],
+            names: Default::default(),
+            groups: None,
+        };
+        let left = manifest("Job", "bootstrap-old", &"j".repeat(32));
+        let removed = manifest("ConfigMap", "removed", &"r".repeat(32));
+        let mut live = LiveSide {
+            manifests: vec![web, left, removed],
+            namespaceless: Vec::new(),
+            current: None,
+            managed: HashMap::new(),
+            drifted: Vec::new(),
+            drift_unchecked: 0,
+            orphans: Vec::new(),
+        };
+        live.set_aside_left_earlier(&new, Some(&deployed));
+        let names = |ids: &[ResourceId]| ids.iter().map(|r| r.name.clone()).collect::<Vec<_>>();
+        assert_eq!(names(&live.orphans), ["removed", "bootstrap-old"]);
+        let compared: Vec<_> = live.manifests.iter().map(ResourceId::from_value).collect();
+        assert_eq!(names(&compared), ["web", "removed"]);
+
+        live.manifests
+            .retain(|m| m["metadata"]["name"] != "removed");
+        let old = StoreGraph::synthesize(&live.manifests, &new);
+        let result = diff_graphs(&old, &new, &OldSide::Live(Box::new(live)), Detail::Plain);
+        assert!(!result.has_diff(), "{}", result.doc.to_json());
+        let prune: Vec<_> = result.doc.prune.items().iter().map(|p| p.fate).collect();
+        assert_eq!(prune, [PruneFate::KeptWarnOnly, PruneFate::KeptWarnOnly]);
     }
 }

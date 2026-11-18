@@ -60,13 +60,20 @@
 # Version bump: the policy types mirror upstream by hand and upstream
 # publishes no schema. In a descheduler clone, read
 #
-#   git diff v0.36.0 v<new> -- pkg/api/types.go pkg/api/v1alpha2/types.go \
+#   git diff v0.37.0 v<new> -- pkg/api/types.go pkg/api/v1alpha2/types.go \
 #     pkg/framework/plugins/{defaultevictor,nodeutilization,podlifetime,removeduplicates,removefailedpods,removepodshavingtoomanyrestarts,removepodsviolatinginterpodantiaffinity,removepodsviolatingnodeaffinity,removepodsviolatingnodetaints,removepodsviolatingtopologyspreadconstraint}/{types,validation}.go \
 #     pkg/descheduler/setupplugins.go cmd/descheduler/app/options/options.go
 #
 # and mirror each change in policy.nix (types, enums, checkPolicy) or in the
 # owned flags below, or add it to policy.nix's "Not declared" list. Then
-# resolve the image digest again.
+# resolve the image digest again, and move `meta.k8s` to the Kubernetes
+# versions the new release supports.
+#
+# Upgrades: the descheduler keeps no data. It holds a Lease and reads the
+# policy file at startup. 0.37.0 reads the same policy as 0.36.0 and takes
+# over the Lease the old pods held, so an upgrade needs no step. Going back
+# to 0.36.0 works the same way: deploy the older package, and the old pods
+# read the same policy and take over the Lease.
 
 {
   scope,
@@ -75,7 +82,7 @@
   availability,
 }:
 let
-  release = "0.36.0";
+  release = "0.37.0";
   name = scope.instanceName;
   ns = scope.namespaceName;
   policyLib = import ./policy.nix { inherit lib; };
@@ -87,13 +94,21 @@ in
     version = release;
     owner = "platform";
     description = "Kubernetes descheduler, which evicts pods that break their placement rules or crowd busy nodes so the scheduler can place them again";
+    # From the compatibility matrix in upstream's README: each release
+    # supports the Kubernetes minor it is built against and the two before
+    # it. Move both bounds with `release`.
+    k8s = {
+      minVersion = "1.35";
+      maxVersion = "1.37";
+      reason = "[K4518] descheduler ${release} supports Kubernetes 1.35 to 1.37. Move the cluster to a Kubernetes version in that range, or use a Kix release whose descheduler package still accepts it";
+    };
   };
 
   options = {
     image = kix.options.image {
       repository = "registry.k8s.io/descheduler/descheduler";
       tag = "v${release}";
-      digest = "sha256:7ca92c0a7b4f1c51d306409da6b832005fcadb224e384795646376726734c6e5";
+      digest = "sha256:88deef34ff5c85cb69676d7073dd641bd5c35b156bc1ef4a35ca8fbf9644da98";
     };
 
     deschedulingInterval = lib.mkOption {

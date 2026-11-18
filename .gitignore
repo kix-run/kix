@@ -40,3 +40,6 @@ __pycache__/
 
 # Core dumps from a crashed process
 core.[0-9]*
+
+# macOS screenshots saved into the checkout
+Screenshot *.png

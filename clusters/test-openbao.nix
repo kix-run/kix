@@ -30,8 +30,8 @@
 # The refusals of the package and of `out.externalSecretsProvider` are
 # covered by kix/lib/tests/units/openbao.nix.
 #
-# Build:  nix build .#cluster-openbao --extra-experimental-features pipe-operators
-# Rules:  nix build ./clusters#checks.x86_64-linux.rules-cluster-openbao --extra-experimental-features pipe-operators
+# Build:  kix build openbao
+# Rules:  scripts/cluster-checks.sh . openbao clusters/test-openbao.rules-test.yaml
 
 { kix, packages }:
 

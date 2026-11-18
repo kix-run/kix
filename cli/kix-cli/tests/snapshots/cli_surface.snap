@@ -195,8 +195,8 @@ kix rollback --yes -y
 kix rollback --dry-run
 kix rollback --prune
 kix rollback --force-conflicts
+kix rollback --accept-migrations
 kix rollback --operator
-kix rollback --output -o <value> [text]
 kix rollback --verbose -v
 kix rollback --quiet -q
 kix rollback --no-color

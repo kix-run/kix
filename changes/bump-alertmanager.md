@@ -1,0 +1,5 @@
++++
+kind = "silent"
+packages = ["experimental/alertmanager"]
++++
+`alertmanager` now runs Alertmanager v0.35.0 (was v0.33.1). The first deploy restarts each Alertmanager pod once, and silences and the notification log on the pods' claims carry over. Alertmanager no longer sends CORS headers, so a browser page served from another origin can no longer call its API, and nothing reports an error. Grafana is not affected, because it calls Alertmanager from its server. To allow such a page, set `extraSpec.additionalArgs = [ { name = "web.cors.origin"; value = "<origin regex>"; } ]`. If you turned on the event recorder through `extraSpec.enableFeatures`, give each of its outputs a `name`, or Alertmanager refuses the configuration. Its events now use the `events/v2` format. The `reason` label of `alertmanager_notifications_failed_total` now reports `authError` and `rateLimited` where it reported `clientError`. To go back, deploy the previous Kix version. Alertmanager v0.33.1 reads the files v0.35.0 writes.

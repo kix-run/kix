@@ -128,7 +128,7 @@ fn a_package_hidden_behind_another_of_its_instance_is_refused() {
         .iter()
         .map(|w| w.split(' ').next().unwrap())
         .collect();
-    let pi = format!("{}/shop-2@{NS}", lifecycle::PACKAGE_INSTANCE_KIND);
+    let pi = ResourceId::from_value(&package_instance("shop-2", None)).display_id();
     assert_eq!(hidden, vec![id.display_id(), pi], "{refused:?}");
 }
 
@@ -158,7 +158,10 @@ fn a_second_activation_record_is_refused() {
     add(&mut new, &path("second", "Activation-second"), second);
     let refused = refused_writes(objects(None, &new, &[]));
     assert_eq!(refused.len(), 1, "{refused:?}");
-    assert!(refused[0].starts_with("Activation/"), "{refused:?}");
+    assert!(
+        refused[0].starts_with(&format!("Activation.{}/", keys::GROUP)),
+        "{refused:?}"
+    );
 }
 
 /// Two files of one object: the deploy applies one of them, and which
@@ -194,6 +197,7 @@ fn a_delete_the_plan_does_not_show_is_refused() {
     let checked = plan(&baseline, &new, flags(&[])).unwrap();
     let (plan, pkg_diff) = (checked.plan(), checked.pkg_diff());
     let stray = ResourceId {
+        group: String::new(),
         kind: "ConfigMap".into(),
         namespace: NS.into(),
         name: "not-in-any-build".into(),
@@ -291,6 +295,32 @@ fn a_redeploy_of_the_deployed_build_writes_nothing() {
     let build = build();
     let objects = objects(Some(&build), &build, &["--prune"]).unwrap();
     assert_eq!(objects, Objects::default());
+}
+
+/// An unchanged Job under `kix.run/rerun` runs again only if its last run
+/// failed, so a redeploy lists it apart from the writes it makes.
+#[test]
+fn a_redeploy_lists_an_unchanged_rerun_job_as_a_write_only_if_it_failed() {
+    let mut build = build();
+    let job = json!({
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "metadata": {
+            "name": "bootstrap",
+            "namespace": NS,
+            "annotations": {keys::RERUN: keys::RERUN_ON_CHANGE},
+        },
+        "spec": {"template": {"spec": {"restartPolicy": "Never", "containers": []}}},
+    });
+    add(&mut build, &path("rerunjob", "Job-bootstrap"), job);
+    let objects = objects(Some(&build), &build, &["--prune"]).unwrap();
+    let changes: Vec<(&str, WriteChange)> = objects
+        .writes
+        .iter()
+        .map(|w| (w.name.as_str(), w.change))
+        .collect();
+    assert_eq!(changes, [("bootstrap", WriteChange::IfLastRunFailed)]);
+    assert!(objects.writes.iter().all(|w| !w.change.certain()));
 }
 
 /// `--reconcile` writes every object again, each re-applied: the
@@ -584,4 +614,109 @@ fn a_saved_plan_refuses_a_build_that_lost_a_manifest() {
         saved_rules(Some(&reviewed), &reviewed, &deployed, &["--prune"]),
         vec![super::saved::Rule::Objects]
     );
+}
+
+/// Replace the object of `kind` that `graph` holds first with `manifest`,
+/// in a new file `seed` names, owned by the same package. Return the old
+/// manifest.
+fn replace_first(
+    graph: &mut StoreGraph,
+    kind: &str,
+    seed: &str,
+    manifest: impl FnOnce(&Value) -> Value,
+) -> Value {
+    let (at, old) = graph
+        .resources
+        .iter()
+        .filter(|(_, n)| n.manifest["kind"] == kind)
+        .min_by_key(|(p, _)| (*p).clone())
+        .map(|(p, n)| (p.clone(), n.manifest.clone()))
+        .unwrap_or_else(|| panic!("the build has a {kind}"));
+    let owner = graph.resource_owner[&at].clone();
+    let to = path(seed, &format!("{kind}-{seed}"));
+    graph.resources.remove(&at);
+    add(graph, &to, manifest(&old));
+    graph.resource_owner.remove(&at);
+    graph.resource_owner.insert(to.clone(), owner.clone());
+    let paths = &mut graph.packages[&owner].resource_paths;
+    paths.retain(|p| *p != at);
+    paths.push(to);
+    graph.validate().unwrap();
+    old
+}
+
+fn with_api_version(api_version: &str) -> impl FnOnce(&Value) -> Value + '_ {
+    move |m| {
+        let mut m = m.clone();
+        m["apiVersion"] = json!(api_version);
+        m
+    }
+}
+
+/// A build that moves an object to another API group, keeping its kind,
+/// namespace, and name, writes the object in its new group and deletes the
+/// one in its old group, and the plan shows both.
+#[test]
+fn moving_an_object_to_another_group_writes_one_and_deletes_the_other() {
+    let old = build();
+    let mut new = old.clone();
+    let before = replace_first(
+        &mut new,
+        "Deployment",
+        "moved",
+        with_api_version("apps.example.com/v1"),
+    );
+    let mut after = before.clone();
+    after["apiVersion"] = json!("apps.example.com/v1");
+    let objects = objects(Some(&old), &new, &["--prune"]).unwrap();
+    let (old_id, new_id) = (
+        ResourceId::from_value(&before),
+        ResourceId::from_value(&after),
+    );
+    assert_ne!(old_id.display_id(), new_id.display_id());
+    assert!(
+        objects
+            .writes
+            .iter()
+            .any(|w| w.resource_id() == new_id && w.change == WriteChange::Added),
+        "{objects:?}"
+    );
+    assert!(
+        objects
+            .deletes
+            .iter()
+            .any(|d| d.group == old_id.group && d.kind == old_id.kind && d.name == old_id.name),
+        "{objects:?}"
+    );
+}
+
+/// Kubernetes serves the core `Event` again as `events.k8s.io` `Event`. A
+/// build that moves an Event between the two is refused, because the deploy
+/// would delete through one group the object it wrote through the other.
+#[test]
+fn moving_an_object_between_aliased_groups_is_refused() {
+    let mut old = build();
+    replace_first(&mut old, "ConfigMap", "event", |m| {
+        let mut m = m.clone();
+        m["apiVersion"] = json!("v1");
+        m["kind"] = json!("Event");
+        m
+    });
+    let mut new = old.clone();
+    let before = replace_first(
+        &mut new,
+        "Event",
+        "moved",
+        with_api_version("events.k8s.io/v1"),
+    );
+    let old_id = ResourceId::from_value(&before);
+    match plan(&deployed(Some(&old)), &new, flags(&["--prune"])) {
+        Err(PlanError::AliasedMove(moves)) => {
+            assert_eq!(moves.len(), 1, "{moves:?}");
+            assert!(moves[0].starts_with(&old_id.to_string()), "{moves:?}");
+            assert!(moves[0].contains("Event.events.k8s.io/"), "{moves:?}");
+        }
+        Err(e) => panic!("refused for another reason: {e}"),
+        Ok(_) => panic!("the plan was not refused"),
+    }
 }

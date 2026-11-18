@@ -1,4 +1,5 @@
 use super::*;
+use crate::cluster::test_fixtures::{api_version_of, manifest};
 use kube::api::ObjectMeta;
 use serde_json::json;
 
@@ -133,14 +134,14 @@ fn tolerates_whitespace_and_empty_entries() {
 
 #[test]
 fn unstamped_old_manifest_is_never_an_orphan() {
-    let mut inherited = manifest("EndpointSlice", "web-abc", "default", "unused");
+    let mut inherited = manifest("EndpointSlice", "web-abc", "default", "unused", "");
     inherited["metadata"]
         .as_object_mut()
         .unwrap()
         .remove("annotations");
     let old = vec![
         inherited,
-        manifest("Deployment", "gone", "default", "id-gone"),
+        manifest("Deployment", "gone", "default", "id-gone", ""),
     ];
     let actions = detect_changes(&[], &old);
     let orphans: Vec<_> = actions
@@ -172,23 +173,9 @@ fn unstamped_live_object_is_never_an_orphan() {
     assert_eq!(orphans, vec!["gone"]);
 }
 
-fn manifest(kind: &str, name: &str, ns: &str, identity_hash: &str) -> Value {
-    json!({
-        "apiVersion": "apps/v1",
-        "kind": kind,
-        "metadata": {
-            "name": name,
-            "namespace": ns,
-            "annotations": {
-                keys::IDENTITY_HASH: identity_hash,
-            }
-        }
-    })
-}
-
 #[test]
 fn detect_new_resource() {
-    let new = vec![manifest("Deployment", "app", "default", "id1")];
+    let new = vec![manifest("Deployment", "app", "default", "id1", "")];
     let old: Vec<Value> = vec![];
 
     let actions = detect_changes(&new, &old);
@@ -198,8 +185,8 @@ fn detect_new_resource() {
 
 #[test]
 fn detect_unchanged_resource() {
-    let new = vec![manifest("Deployment", "app", "default", "id1")];
-    let old = vec![manifest("Deployment", "app", "default", "id1")];
+    let new = vec![manifest("Deployment", "app", "default", "id1", "")];
+    let old = vec![manifest("Deployment", "app", "default", "id1", "")];
 
     let actions = detect_changes(&new, &old);
     assert_eq!(actions.len(), 1);
@@ -208,8 +195,8 @@ fn detect_unchanged_resource() {
 
 #[test]
 fn detect_changed_resource() {
-    let new = vec![manifest("Deployment", "app", "default", "new-hash")];
-    let old = vec![manifest("Deployment", "app", "default", "old-hash")];
+    let new = vec![manifest("Deployment", "app", "default", "new-hash", "")];
+    let old = vec![manifest("Deployment", "app", "default", "old-hash", "")];
 
     let actions = detect_changes(&new, &old);
     assert_eq!(actions.len(), 1);
@@ -227,15 +214,15 @@ fn with_package(mut manifest: Value, package: &str) -> Value {
 #[test]
 fn detect_changed_owner_stamp() {
     let new = vec![with_package(
-        manifest("Deployment", "app", "default", "id1"),
+        manifest("Deployment", "app", "default", "id1", ""),
         "postgres",
     )];
     let same = vec![with_package(
-        manifest("Deployment", "app", "default", "id1"),
+        manifest("Deployment", "app", "default", "id1", ""),
         "postgres",
     )];
     let other = vec![with_package(
-        manifest("Deployment", "app", "default", "id1"),
+        manifest("Deployment", "app", "default", "id1", ""),
         "app-db",
     )];
 
@@ -249,7 +236,13 @@ fn detect_changed_owner_stamp() {
 #[test]
 fn detect_orphan() {
     let new: Vec<Value> = vec![];
-    let old = vec![manifest("Deployment", "old-app", "default", "id-orphan")];
+    let old = vec![manifest(
+        "Deployment",
+        "old-app",
+        "default",
+        "id-orphan",
+        "",
+    )];
 
     let actions = detect_changes(&new, &old);
     assert_eq!(actions.len(), 1);
@@ -262,14 +255,14 @@ fn detect_orphan() {
 #[test]
 fn detect_mixed_actions() {
     let new = vec![
-        manifest("Deployment", "unchanged", "default", "id1"),
-        manifest("Deployment", "changed", "default", "new-hash"),
-        manifest("Deployment", "new-app", "default", "id3"),
+        manifest("Deployment", "unchanged", "default", "id1", ""),
+        manifest("Deployment", "changed", "default", "new-hash", ""),
+        manifest("Deployment", "new-app", "default", "id3", ""),
     ];
     let old = vec![
-        manifest("Deployment", "unchanged", "default", "id1"),
-        manifest("Deployment", "changed", "default", "old-hash"),
-        manifest("Deployment", "orphan", "default", "id-orphan"),
+        manifest("Deployment", "unchanged", "default", "id1", ""),
+        manifest("Deployment", "changed", "default", "old-hash", ""),
+        manifest("Deployment", "orphan", "default", "id-orphan", ""),
     ];
 
     let actions = detect_changes(&new, &old);
@@ -297,8 +290,8 @@ fn detect_mixed_actions() {
 #[test]
 fn first_deploy_all_applies() {
     let new = vec![
-        manifest("Namespace", "default", CLUSTER_SCOPED, "id1"),
-        manifest("Deployment", "app", "default", "id2"),
+        manifest("Namespace", "default", CLUSTER_SCOPED, "id1", ""),
+        manifest("Deployment", "app", "default", "id2", ""),
     ];
     let old: Vec<Value> = vec![];
 
@@ -333,6 +326,16 @@ fn apply_action_eq() {
 }
 
 fn live_object(kind: &str, name: &str, ns: &str, identity_hash: &str) -> DynamicObject {
+    live_object_as(api_version_of(kind), kind, name, ns, identity_hash)
+}
+
+fn live_object_as(
+    api_version: &str,
+    kind: &str,
+    name: &str,
+    ns: &str,
+    identity_hash: &str,
+) -> DynamicObject {
     let mut annotations = std::collections::BTreeMap::new();
     annotations.insert(keys::IDENTITY_HASH.to_string(), identity_hash.to_string());
     DynamicObject {
@@ -348,11 +351,11 @@ fn live_object(kind: &str, name: &str, ns: &str, identity_hash: &str) -> Dynamic
         },
         types: Some(kube::api::TypeMeta {
             kind: kind.to_string(),
-            api_version: "apps/v1".to_string(),
+            api_version: api_version.to_string(),
         }),
         data: json!({
             "kind": kind,
-            "apiVersion": "apps/v1",
+            "apiVersion": api_version,
             "metadata": {
                 "name": name,
                 "namespace": ns,
@@ -366,7 +369,7 @@ fn live_object(kind: &str, name: &str, ns: &str, identity_hash: &str) -> Dynamic
 
 #[test]
 fn live_detect_new_resource() {
-    let desired = vec![manifest("Deployment", "app", "default", "id1")];
+    let desired = vec![manifest("Deployment", "app", "default", "id1", "")];
     let live: Vec<DynamicObject> = vec![];
 
     let actions = detect_changes_live(&desired, &live);
@@ -376,7 +379,7 @@ fn live_detect_new_resource() {
 
 #[test]
 fn live_detect_unchanged_resource() {
-    let desired = vec![manifest("Deployment", "app", "default", "id1")];
+    let desired = vec![manifest("Deployment", "app", "default", "id1", "")];
     let live = vec![live_object("Deployment", "app", "default", "id1")];
 
     let actions = detect_changes_live(&desired, &live);
@@ -389,7 +392,7 @@ fn live_detect_unchanged_resource() {
 #[test]
 fn live_detect_changed_owner_stamp() {
     let desired = vec![with_package(
-        manifest("Deployment", "app", "default", "id1"),
+        manifest("Deployment", "app", "default", "id1", ""),
         "postgres",
     )];
     let stamped = |package: &str| {
@@ -412,7 +415,7 @@ fn live_detect_changed_owner_stamp() {
 
 #[test]
 fn live_detect_drifted_resource() {
-    let desired = vec![manifest("Deployment", "app", "default", "desired-hash")];
+    let desired = vec![manifest("Deployment", "app", "default", "desired-hash", "")];
     let live = vec![live_object("Deployment", "app", "default", "live-hash")];
 
     let actions = detect_changes_live(&desired, &live);
@@ -436,9 +439,9 @@ fn live_detect_orphan() {
 #[test]
 fn live_detect_mixed() {
     let desired = vec![
-        manifest("Deployment", "unchanged", "default", "id1"),
-        manifest("Deployment", "drifted", "default", "new-hash"),
-        manifest("Deployment", "new-app", "default", "id3"),
+        manifest("Deployment", "unchanged", "default", "id1", ""),
+        manifest("Deployment", "drifted", "default", "new-hash", ""),
+        manifest("Deployment", "new-app", "default", "id3", ""),
     ];
     let live = vec![
         live_object("Deployment", "unchanged", "default", "id1"),
@@ -523,29 +526,29 @@ fn skip_ids(actions: &[ChangeAction]) -> Vec<String> {
 
 #[test]
 fn an_object_only_a_kept_closure_has_is_an_orphan_again() {
-    let active = vec![manifest("Deployment", "web", "app", "h1")];
+    let active = vec![manifest("Deployment", "web", "app", "h1", "")];
     let new = active.clone();
     let kept = vec![
-        manifest("Deployment", "web", "app", "h0"),
-        manifest("ConfigMap", "removed", "app", "h9"),
+        manifest("Deployment", "web", "app", "h0", ""),
+        manifest("ConfigMap", "removed", "app", "h9", ""),
         record("demo-old", "h8"),
     ];
 
     let folded = fold_kept_closures(detect_changes(&new, &active), &new, &[kept]);
     assert_eq!(orphan_ids(&folded), vec!["ConfigMap/removed@app"]);
     // A kept closure never turns a Skip into an Apply: A replaced it in full.
-    assert_eq!(skip_ids(&folded), vec!["Deployment/web@app"]);
+    assert_eq!(skip_ids(&folded), vec!["Deployment.apps/web@app"]);
     assert!(apply_ids(&folded).is_empty());
 }
 
 #[test]
 fn an_object_the_new_build_declares_again_is_not_an_orphan() {
-    let active = vec![manifest("Deployment", "web", "app", "h1")];
+    let active = vec![manifest("Deployment", "web", "app", "h1", "")];
     let new = vec![
-        manifest("Deployment", "web", "app", "h1"),
-        manifest("ConfigMap", "removed", "app", "h10"),
+        manifest("Deployment", "web", "app", "h1", ""),
+        manifest("ConfigMap", "removed", "app", "h10", ""),
     ];
-    let kept = vec![manifest("ConfigMap", "removed", "app", "h9")];
+    let kept = vec![manifest("ConfigMap", "removed", "app", "h9", "")];
 
     let folded = fold_kept_closures(detect_changes(&new, &active), &new, &[kept]);
     assert!(orphan_ids(&folded).is_empty());
@@ -554,15 +557,15 @@ fn an_object_the_new_build_declares_again_is_not_an_orphan() {
 #[test]
 fn kept_closures_and_the_active_diff_do_not_duplicate_orphans() {
     let active = vec![
-        manifest("Deployment", "web", "app", "h1"),
-        manifest("ConfigMap", "gone", "app", "h5"),
+        manifest("Deployment", "web", "app", "h1", ""),
+        manifest("ConfigMap", "gone", "app", "h5", ""),
     ];
-    let new = vec![manifest("Deployment", "web", "app", "h1")];
+    let new = vec![manifest("Deployment", "web", "app", "h1", "")];
     let first = vec![
-        manifest("ConfigMap", "gone", "app", "h4"),
-        manifest("Secret", "older", "app", "h3"),
+        manifest("ConfigMap", "gone", "app", "h4", ""),
+        manifest("Secret", "older", "app", "h3", ""),
     ];
-    let second = vec![manifest("Secret", "older", "app", "h3")];
+    let second = vec![manifest("Secret", "older", "app", "h3", "")];
 
     let folded = fold_kept_closures(detect_changes(&new, &active), &new, &[first, second]);
     assert_eq!(
@@ -573,30 +576,31 @@ fn kept_closures_and_the_active_diff_do_not_duplicate_orphans() {
 
 #[test]
 fn a_closure_leaves_orphans_only_for_deletable_objects_the_new_build_lacks() {
-    let new = vec![manifest("Deployment", "web", "app", "h1")];
+    let new = vec![manifest("Deployment", "web", "app", "h1", "")];
     assert!(leaves_orphans(
-        &[manifest("ConfigMap", "removed", "app", "h9")],
+        &[manifest("ConfigMap", "removed", "app", "h9", "")],
         &new
     ));
     // Same identity under a different hash is an update, not an orphan.
     assert!(!leaves_orphans(
-        &[manifest("Deployment", "web", "app", "h0")],
+        &[manifest("Deployment", "web", "app", "h0", "")],
         &new
     ));
     // Records are superseded and Namespaces are never pruned.
     assert!(!leaves_orphans(&[record("demo-old", "h8")], &new));
-    let mut ns = manifest("Namespace", "app", "app", "h7");
+    let mut ns = manifest("Namespace", "app", "app", "h7", "");
+    ns["apiVersion"] = json!("v1");
     ns["metadata"].as_object_mut().unwrap().remove("namespace");
     assert!(!leaves_orphans(&[ns], &new));
 }
 
 #[test]
 fn an_object_only_the_failed_closure_has_is_an_orphan() {
-    let active = vec![manifest("Deployment", "web", "app", "h1")];
-    let new = vec![manifest("Deployment", "web", "app", "h1")];
+    let active = vec![manifest("Deployment", "web", "app", "h1", "")];
+    let new = vec![manifest("Deployment", "web", "app", "h1", "")];
     let failed = vec![
-        manifest("Deployment", "web", "app", "h2"),
-        manifest("ConfigMap", "leftover", "app", "h9"),
+        manifest("Deployment", "web", "app", "h2", ""),
+        manifest("ConfigMap", "leftover", "app", "h9", ""),
     ];
 
     let actions = detect_changes(&new, &active);
@@ -611,15 +615,15 @@ fn an_object_the_failed_deploy_may_have_changed_is_reapplied() {
     // When N is identical to A, detect_changes marks `web` as Skip, but if
     // a failed deploy F had a different hash for `web`, it must be
     // re-applied in case F overwrote the live object before aborting.
-    let active = vec![manifest("Deployment", "web", "app", "h1")];
-    let new = vec![manifest("Deployment", "web", "app", "h1")];
-    let failed = vec![manifest("Deployment", "web", "app", "h2")];
+    let active = vec![manifest("Deployment", "web", "app", "h1", "")];
+    let new = vec![manifest("Deployment", "web", "app", "h1", "")];
+    let failed = vec![manifest("Deployment", "web", "app", "h2", "")];
 
     let actions = detect_changes(&new, &active);
-    assert_eq!(skip_ids(&actions), vec!["Deployment/web@app"]);
+    assert_eq!(skip_ids(&actions), vec!["Deployment.apps/web@app"]);
 
     let folded = fold_failed_closures(actions, &new, &[failed]);
-    assert_eq!(apply_ids(&folded), vec!["Deployment/web@app"]);
+    assert_eq!(apply_ids(&folded), vec!["Deployment.apps/web@app"]);
     assert!(skip_ids(&folded).is_empty());
 }
 
@@ -627,12 +631,12 @@ fn an_object_the_failed_deploy_may_have_changed_is_reapplied() {
 fn a_hash_the_failed_closure_agrees_on_stays_skipped() {
     // F never disagreed about this one, so nothing it did could have
     // changed it and re-applying would be noise.
-    let active = vec![manifest("Deployment", "web", "app", "h1")];
-    let new = vec![manifest("Deployment", "web", "app", "h1")];
-    let failed = vec![manifest("Deployment", "web", "app", "h1")];
+    let active = vec![manifest("Deployment", "web", "app", "h1", "")];
+    let new = vec![manifest("Deployment", "web", "app", "h1", "")];
+    let failed = vec![manifest("Deployment", "web", "app", "h1", "")];
 
     let folded = fold_failed_closures(detect_changes(&new, &active), &new, &[failed]);
-    assert_eq!(skip_ids(&folded), vec!["Deployment/web@app"]);
+    assert_eq!(skip_ids(&folded), vec!["Deployment.apps/web@app"]);
     assert!(apply_ids(&folded).is_empty());
 }
 
@@ -640,27 +644,27 @@ fn a_hash_the_failed_closure_agrees_on_stays_skipped() {
 fn retrying_the_closure_that_failed_applies_it_and_orphans_nothing() {
     // N == F: every node is already an Apply, and nothing F touched is
     // outside the set we are about to write.
-    let active = vec![manifest("Deployment", "web", "app", "h1")];
+    let active = vec![manifest("Deployment", "web", "app", "h1", "")];
     let new = vec![
-        manifest("Deployment", "web", "app", "h2"),
-        manifest("ConfigMap", "extra", "app", "h9"),
+        manifest("Deployment", "web", "app", "h2", ""),
+        manifest("ConfigMap", "extra", "app", "h9", ""),
     ];
     let failed = new.clone();
 
     let folded = fold_failed_closures(detect_changes(&new, &active), &new, &[failed]);
     assert_eq!(
         apply_ids(&folded),
-        vec!["ConfigMap/extra@app", "Deployment/web@app"]
+        vec!["ConfigMap/extra@app", "Deployment.apps/web@app"]
     );
     assert!(orphan_ids(&folded).is_empty());
 }
 
 #[test]
 fn stacked_failed_closures_union_their_leftovers() {
-    let active = vec![manifest("Deployment", "web", "app", "h1")];
-    let new = vec![manifest("Deployment", "web", "app", "h1")];
-    let first = vec![manifest("ConfigMap", "one", "app", "h7")];
-    let second = vec![manifest("ConfigMap", "two", "app", "h8")];
+    let active = vec![manifest("Deployment", "web", "app", "h1", "")];
+    let new = vec![manifest("Deployment", "web", "app", "h1", "")];
+    let first = vec![manifest("ConfigMap", "one", "app", "h7", "")];
+    let second = vec![manifest("ConfigMap", "two", "app", "h8", "")];
 
     let folded = fold_failed_closures(detect_changes(&new, &active), &new, &[first, second]);
     assert_eq!(
@@ -674,10 +678,10 @@ fn a_record_in_a_failed_closure_is_never_an_orphan() {
     // Records are superseded, not pruned. A failed closure always carries
     // its own, and its name differs from the new one on every changed
     // deploy, so without the lifecycle check every run would invent one.
-    let active = vec![manifest("Deployment", "web", "app", "h1")];
-    let new = vec![manifest("Deployment", "web", "app", "h1")];
+    let active = vec![manifest("Deployment", "web", "app", "h1", "")];
+    let new = vec![manifest("Deployment", "web", "app", "h1", "")];
     let failed = vec![
-        manifest("Deployment", "web", "app", "h1"),
+        manifest("Deployment", "web", "app", "h1", ""),
         record("demo-abc123", "h2"),
     ];
 
@@ -687,8 +691,8 @@ fn a_record_in_a_failed_closure_is_never_an_orphan() {
 
 #[test]
 fn an_unstamped_manifest_in_a_failed_closure_is_never_an_orphan() {
-    let active = vec![manifest("Deployment", "web", "app", "h1")];
-    let new = vec![manifest("Deployment", "web", "app", "h1")];
+    let active = vec![manifest("Deployment", "web", "app", "h1", "")];
+    let new = vec![manifest("Deployment", "web", "app", "h1", "")];
     let failed = vec![json!({
         "apiVersion": "v1",
         "kind": "ConfigMap",
@@ -702,11 +706,11 @@ fn an_unstamped_manifest_in_a_failed_closure_is_never_an_orphan() {
 #[test]
 fn an_orphan_detect_changes_already_found_is_not_duplicated() {
     let active = vec![
-        manifest("Deployment", "web", "app", "h1"),
-        manifest("ConfigMap", "gone", "app", "h5"),
+        manifest("Deployment", "web", "app", "h1", ""),
+        manifest("ConfigMap", "gone", "app", "h5", ""),
     ];
-    let new = vec![manifest("Deployment", "web", "app", "h1")];
-    let failed = vec![manifest("ConfigMap", "gone", "app", "h6")];
+    let new = vec![manifest("Deployment", "web", "app", "h1", "")];
+    let failed = vec![manifest("ConfigMap", "gone", "app", "h6", "")];
 
     let folded = fold_failed_closures(detect_changes(&new, &active), &new, &[failed]);
     assert_eq!(orphan_ids(&folded), vec!["ConfigMap/gone@app"]);
@@ -714,8 +718,8 @@ fn an_orphan_detect_changes_already_found_is_not_duplicated() {
 
 #[test]
 fn no_failed_closures_changes_nothing() {
-    let active = vec![manifest("Deployment", "web", "app", "h1")];
-    let new = vec![manifest("Deployment", "web", "app", "h1")];
+    let active = vec![manifest("Deployment", "web", "app", "h1", "")];
+    let new = vec![manifest("Deployment", "web", "app", "h1", "")];
     let before = detect_changes(&new, &active);
     let after = fold_failed_closures(before.clone(), &new, &[]);
     assert_eq!(skip_ids(&before), skip_ids(&after));
@@ -725,12 +729,12 @@ fn no_failed_closures_changes_nothing() {
 
 #[test]
 fn baseline_keeps_active_and_adds_only_what_is_missing() {
-    let active = vec![manifest("Deployment", "web", "app", "h1")];
+    let active = vec![manifest("Deployment", "web", "app", "h1", "")];
     let failed = vec![
         // Same identity as active: the active version wins, so the plan
         // describes the object the way the current closure does.
-        manifest("Deployment", "web", "app", "h2"),
-        manifest("ConfigMap", "leftover", "app", "h9"),
+        manifest("Deployment", "web", "app", "h2", ""),
+        manifest("ConfigMap", "leftover", "app", "h9", ""),
     ];
 
     let merged = baseline_manifests(&active, &[failed]);
@@ -752,6 +756,7 @@ fn record_rename_is_not_an_orphan() {
         "grafana-datasources",
         "monitoring-system",
         "same",
+        "",
     );
     let old = vec![
         record("stage1-0f3g4dhhzqfd", "0f3g4dhhzqfd0xvgwfw987lf0s8xhmkb"),
@@ -767,7 +772,10 @@ fn record_rename_is_not_an_orphan() {
         "{:?}",
         orphan_ids(&actions)
     );
-    assert_eq!(apply_ids(&actions), vec!["Activation/stage1-680afyh7g9kd"]);
+    assert_eq!(
+        apply_ids(&actions),
+        vec![format!("Activation.{}/stage1-680afyh7g9kd", keys::GROUP)]
+    );
 }
 
 /// An unchanged build keeps the same record name and hash, and must
@@ -775,7 +783,7 @@ fn record_rename_is_not_an_orphan() {
 /// short-circuit when the activation is identical.
 #[test]
 fn unchanged_record_is_skip_not_apply() {
-    let dep = manifest("Deployment", "web", "default", "d1");
+    let dep = manifest("Deployment", "web", "default", "d1", "");
     let same = record("stage1-0f3g4dhhzqfd", "0f3g4dhhzqfd0xvgwfw987lf0s8xhmkb");
     let actions = detect_changes(&[same.clone(), dep.clone()], &[same.clone(), dep.clone()]);
     assert!(apply_ids(&actions).is_empty(), "{:?}", apply_ids(&actions));
@@ -789,7 +797,8 @@ fn unchanged_record_is_skip_not_apply() {
     );
 
     let live = vec![
-        live_object(
+        live_object_as(
+            keys::API_VERSION,
             "Activation",
             "stage1-0f3g4dhhzqfd",
             CLUSTER_SCOPED,
@@ -807,10 +816,10 @@ fn unchanged_record_is_skip_not_apply() {
 /// `Lifecycle::prunable()` against a mutant that only prunes `Desired`.
 #[test]
 fn markers_and_plain_package_instances_can_be_orphans() {
-    let mut marker = manifest("PackageInstance", "pi-import", "ns", "m1");
+    let mut marker = manifest("PackageInstance", "pi-import", "ns", "m1", "");
     marker["metadata"]["annotations"][keys::MODE] = serde_json::json!("import");
-    let plain = manifest("PackageInstance", "pi-plain", "ns", "p1");
-    let keep = manifest("Deployment", "web", "default", "d1");
+    let plain = manifest("PackageInstance", "pi-plain", "ns", "p1", "");
+    let keep = manifest("Deployment", "web", "default", "d1", "");
     let old = vec![marker, plain, keep.clone()];
     let actions = detect_changes(std::slice::from_ref(&keep), &old);
     let mut orphans = orphan_ids(&actions);
@@ -818,8 +827,8 @@ fn markers_and_plain_package_instances_can_be_orphans() {
     assert_eq!(
         orphans,
         vec![
-            "PackageInstance/pi-import@ns",
-            "PackageInstance/pi-plain@ns"
+            format!("PackageInstance.{}/pi-import@ns", keys::GROUP),
+            format!("PackageInstance.{}/pi-plain@ns", keys::GROUP)
         ]
     );
 }
@@ -828,7 +837,7 @@ fn markers_and_plain_package_instances_can_be_orphans() {
 /// shapes of the two sets.
 #[test]
 fn records_are_never_orphans() {
-    let dep = manifest("Deployment", "web", "default", "d1");
+    let dep = manifest("Deployment", "web", "default", "d1", "");
     let cases: Vec<(Vec<Value>, Vec<Value>)> = vec![
         // old has a record, new has none
         (vec![dep.clone()], vec![record("c-a", "a"), dep.clone()]),
@@ -856,7 +865,7 @@ fn records_are_never_orphans() {
     }
     // The last case must still report the Deployment.
     let actions = detect_changes(&[record("c-b", "b")], &[record("c-a", "a"), dep]);
-    assert_eq!(orphan_ids(&actions), vec!["Deployment/web@default"]);
+    assert_eq!(orphan_ids(&actions), vec!["Deployment.apps/web@default"]);
 }
 
 /// Invariant 3: the store path and the live path agree on the orphan
@@ -865,12 +874,12 @@ fn records_are_never_orphans() {
 fn store_and_live_paths_agree_on_orphans() {
     let desired = vec![
         record("c-new", "new"),
-        manifest("Deployment", "keep", "default", "k1"),
+        manifest("Deployment", "keep", "default", "k1", ""),
     ];
     let old = vec![
         record("c-old", "old"),
-        manifest("Deployment", "keep", "default", "k1"),
-        manifest("Deployment", "gone", "default", "g1"),
+        manifest("Deployment", "keep", "default", "k1", ""),
+        manifest("Deployment", "gone", "default", "g1", ""),
     ];
     let live = vec![
         live_record("c-old", "old"),
@@ -879,19 +888,19 @@ fn store_and_live_paths_agree_on_orphans() {
     ];
     let via_store = orphan_ids(&detect_changes(&desired, &old));
     let via_live = orphan_ids(&detect_changes_live(&desired, &live));
-    assert_eq!(via_store, vec!["Deployment/gone@default"]);
+    assert_eq!(via_store, vec!["Deployment.apps/gone@default"]);
     assert_eq!(via_store, via_live);
     // Both paths still apply the new record.
     assert!(
         apply_ids(&detect_changes(&desired, &old))
             .iter()
-            .any(|id| id.starts_with("Activation/")),
+            .any(|id| id.starts_with(&format!("Activation.{}/", keys::GROUP))),
         "store path drops the new record"
     );
     assert!(
         apply_ids(&detect_changes_live(&desired, &live))
             .iter()
-            .any(|id| id.starts_with("Activation/")),
+            .any(|id| id.starts_with(&format!("Activation.{}/", keys::GROUP))),
         "live path drops the new record"
     );
 }
@@ -900,7 +909,7 @@ fn store_and_live_paths_agree_on_orphans() {
 /// Activation records must still not be reported as orphans.
 #[test]
 fn operator_shape_live_record_is_not_an_orphan() {
-    let desired = vec![manifest("Deployment", "web", "default", "d1")];
+    let desired = vec![manifest("Deployment", "web", "default", "d1", "")];
     let live = vec![
         live_record("c-active", "act"),
         live_object("Deployment", "web", "default", "d1"),
@@ -944,20 +953,43 @@ async fn a_namespaced_kind_without_a_namespace_is_refused() {
     );
     assert_eq!(api.requests().len(), before, "{:?}", api.requests());
 
-    let rid = |kind: &str, ns: &str| ResourceId {
+    let rid = |group: &str, kind: &str, ns: &str| ResourceId {
+        group: group.into(),
         kind: kind.into(),
         namespace: ns.into(),
         name: "shared".into(),
     };
     let candidates = [
-        rid("ConfigMap", CLUSTER_SCOPED),
-        rid("ConfigMap", "default"),
-        rid("ClusterRole", CLUSTER_SCOPED),
-        rid("Widget", CLUSTER_SCOPED),
+        rid("", "ConfigMap", CLUSTER_SCOPED),
+        rid("", "ConfigMap", "default"),
+        rid("rbac.authorization.k8s.io", "ClusterRole", CLUSTER_SCOPED),
+        rid("", "Widget", CLUSTER_SCOPED),
     ];
     assert_eq!(
         super::namespaceless(&discovery, &candidates),
-        vec![rid("ConfigMap", CLUSTER_SCOPED)]
+        vec![rid("", "ConfigMap", CLUSTER_SCOPED)]
+    );
+}
+
+/// Each kind is looked up in its own group: a `batch` Job without a
+/// namespace is refused, and a cluster-scoped `Job` of another group that
+/// discovery lists first is not.
+#[tokio::test]
+async fn namespaceless_looks_each_kind_up_in_its_own_group() {
+    use crate::cluster::{discovery, fake_api::FakeApi, fake_api::OTHER_JOB_GROUP};
+    use crate::manifest::types::{CLUSTER_SCOPED, ResourceId};
+
+    let api = FakeApi::default();
+    let discovery = discovery::discover_resources(&api.client()).await.unwrap();
+    let job = |group: &str| ResourceId {
+        group: group.into(),
+        kind: "Job".into(),
+        namespace: CLUSTER_SCOPED.into(),
+        name: "x".into(),
+    };
+    assert_eq!(
+        super::namespaceless(&discovery, &[job("batch"), job(OTHER_JOB_GROUP)]),
+        vec![job("batch")]
     );
 }
 
@@ -1018,7 +1050,7 @@ async fn an_apply_reports_the_fields_the_server_did_not_keep() {
 /// A Job under the rerun rule with `identity_hash` and, when given, the
 /// rerun hash the library stamps.
 fn rerun_job(identity_hash: &str, rerun_hash: Option<&str>) -> Value {
-    let mut job = manifest("Job", "bootstrap", "db", identity_hash);
+    let mut job = manifest("Job", "bootstrap", "db", identity_hash, "");
     job["apiVersion"] = json!("batch/v1");
     job["metadata"]["annotations"][keys::RERUN] = json!(keys::RERUN_ON_CHANGE);
     if let Some(hash) = rerun_hash {
@@ -1078,9 +1110,9 @@ fn unchanged_rerun_job_is_skipped() {
 /// The rerun hash only matters to a Job under the rerun rule.
 #[test]
 fn rerun_hash_on_a_plain_resource_is_ignored() {
-    let mut old = manifest("Deployment", "app", "default", "id1");
+    let mut old = manifest("Deployment", "app", "default", "id1", "");
     old["metadata"]["annotations"][keys::RERUN_HASH] = json!("c1");
-    let mut new = manifest("Deployment", "app", "default", "id2");
+    let mut new = manifest("Deployment", "app", "default", "id2", "");
     new["metadata"]["annotations"][keys::RERUN_HASH] = json!("c2");
     assert!(matches!(
         &detect_changes(&[new], &[old])[..],
@@ -1092,7 +1124,7 @@ fn rerun_hash_on_a_plain_resource_is_ignored() {
 #[test]
 fn live_rerun_job_compares_the_live_rerun_hash() {
     let live_with = |rerun_hash: &str| {
-        let mut obj = live_object("Job", "bootstrap", "db", "id1");
+        let mut obj = live_object_as("batch/v1", "Job", "bootstrap", "db", "id1");
         obj.metadata
             .annotations
             .as_mut()
@@ -1110,7 +1142,10 @@ fn live_rerun_job_compares_the_live_rerun_hash() {
         [ChangeAction::Recreate(..)]
     ));
     assert!(matches!(
-        &detect_changes_live(&desired, &[live_object("Job", "bootstrap", "db", "id1")])[..],
+        &detect_changes_live(
+            &desired,
+            &[live_object_as("batch/v1", "Job", "bootstrap", "db", "id1")]
+        )[..],
         [ChangeAction::Recreate(..)]
     ));
 }
@@ -1142,22 +1177,67 @@ fn rerun_job_a_failed_deploy_touched_follows_its_content() {
 
 /// A Job under the rerun rule whose last run failed runs again, and the
 /// reason names the failed run, whether or not its content changed since the
-/// deployed build. Without the rule a failed run changes nothing.
+/// deployed build. A Job no build had runs as new. Without the rule a failed
+/// run changes nothing.
 #[test]
 fn rerun_job_whose_last_run_failed_names_the_failed_run() {
     for old_content in [Some("c1"), Some("c0"), None] {
         assert!(matches!(
-            changed(&rerun_job("id2", Some("c1")), old_content, true),
+            changed(
+                &rerun_job("id2", Some("c1")),
+                Deployed::RerunHash(old_content),
+                true
+            ),
             ChangeAction::Recreate(_, RerunReason::LastRunFailed)
         ));
     }
     assert!(matches!(
-        changed(&rerun_job("id2", Some("c1")), Some("c0"), false),
+        changed(
+            &rerun_job("id2", Some("c1")),
+            Deployed::RerunHash(Some("c0")),
+            false
+        ),
         ChangeAction::Recreate(_, RerunReason::Changed)
     ));
-    let plain = manifest("Job", "bootstrap", "db", "id2");
     assert!(matches!(
-        changed(&plain, None, true),
+        changed(&rerun_job("id2", Some("c1")), Deployed::Nothing, false),
+        ChangeAction::Recreate(_, RerunReason::New)
+    ));
+    let plain = manifest("Job", "bootstrap", "db", "id2", "");
+    assert!(matches!(
+        changed(&plain, Deployed::Nothing, true),
         ChangeAction::Apply(_)
     ));
+}
+
+/// Two kinds of one name in two groups are two objects. A build that swaps
+/// one for the other applies the new one and prunes the old one, from the
+/// old build or from the live objects.
+#[test]
+fn a_kind_of_one_name_in_another_group_is_another_object() {
+    let cert = |api_version: &str| {
+        let mut m = manifest("Certificate", "tls", "app", "c1", "");
+        m["apiVersion"] = json!(api_version);
+        m
+    };
+    let old = cert("a.example/v1");
+    let new = cert("b.example/v1");
+    let orphan = |actions: &[ChangeAction]| -> Vec<ResourceId> {
+        actions
+            .iter()
+            .filter_map(|a| match a {
+                ChangeAction::Orphan(rid) => Some(rid.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+
+    let actions = detect_changes(std::slice::from_ref(&new), std::slice::from_ref(&old));
+    assert_eq!(apply_ids(&actions), vec!["Certificate.b.example/tls@app"]);
+    assert_eq!(orphan(&actions), vec![ResourceId::from_value(&old)]);
+
+    let live = live_object_as("a.example/v1", "Certificate", "tls", "app", "c1");
+    let actions = detect_changes_live(std::slice::from_ref(&new), &[live]);
+    assert_eq!(apply_ids(&actions), vec!["Certificate.b.example/tls@app"]);
+    assert_eq!(orphan(&actions), vec![ResourceId::from_value(&old)]);
 }

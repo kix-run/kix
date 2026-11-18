@@ -14,9 +14,9 @@ rec {
     "raw-pvc" = {
       description = "may emit raw PersistentVolumeClaim resources from its own build";
       rationale = ''
-        Storage is the cluster operator's concern (v2_discussions/63a): PVC
-        size, storageClass, and lifecycle compose at the cluster definition,
-        not inside consuming packages. The canonical author is the
+        Storage is the cluster operator's concern: PVC size, storageClass,
+        and lifecycle compose at the cluster definition, not inside
+        consuming packages. The canonical author is the
         `persistent-volume-claim` package; everything else declares a
         `storage` dep. Legitimate holders: the canonical package itself, and
         packages wrapping helm charts that emit PVCs when persistence is

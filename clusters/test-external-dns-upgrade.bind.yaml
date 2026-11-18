@@ -1,0 +1,93 @@
+# BIND for clusters/test-external-dns-upgrade.nix: a primary zone example.test
+# that accepts unsigned updates and zone transfers from any address, and a
+# NetworkPolicy that lets any pod reach it on port 53, since Cilium enforces
+# policy on every endpoint.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dns-server
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bind
+  namespace: dns-server
+data:
+  named.conf: |
+    options {
+      directory "/var/cache/bind";
+      listen-on { any; };
+      listen-on-v6 { none; };
+      allow-query { any; };
+      recursion no;
+      dnssec-validation no;
+    };
+    zone "example.test" {
+      type primary;
+      file "/var/lib/bind/example.test.zone";
+      allow-update { any; };
+      allow-transfer { any; };
+    };
+  example.test.zone: |
+    $TTL 60
+    @ IN SOA ns.example.test. admin.example.test. ( 1 60 60 600 60 )
+    @ IN NS ns.example.test.
+    ns IN A 127.0.0.1
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bind
+  namespace: dns-server
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: bind}}
+  template:
+    metadata: {labels: {app: bind}}
+    spec:
+      initContainers:
+        - name: zone
+          image: internetsystemsconsortium/bind9:9.20
+          command: ["sh", "-c", "cp /cfg/example.test.zone /var/lib/bind/ && chown -R bind:bind /var/lib/bind"]
+          volumeMounts:
+            - {name: cfg, mountPath: /cfg}
+            - {name: zone, mountPath: /var/lib/bind}
+      containers:
+        - name: bind
+          image: internetsystemsconsortium/bind9:9.20
+          command: ["/usr/sbin/named", "-g", "-u", "bind", "-c", "/cfg/named.conf"]
+          ports:
+            - {containerPort: 53, protocol: UDP, name: dns}
+            - {containerPort: 53, protocol: TCP, name: dns-tcp}
+          volumeMounts:
+            - {name: cfg, mountPath: /cfg}
+            - {name: zone, mountPath: /var/lib/bind}
+      volumes:
+        - name: cfg
+          configMap: {name: bind}
+        - name: zone
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bind
+  namespace: dns-server
+spec:
+  selector: {app: bind}
+  ports:
+    - {name: dns, port: 53, protocol: UDP}
+    - {name: dns-tcp, port: 53, protocol: TCP}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: dns-server
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - {port: 53, protocol: UDP}
+        - {port: 53, protocol: TCP}

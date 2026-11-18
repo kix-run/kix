@@ -7,7 +7,7 @@
 # Never deploy it to a real RKE2 cluster: it would overwrite that cluster's
 # rke2-cilium values.
 #
-# Build:  nix build ./clusters#cluster-rke2-cilium --extra-experimental-features pipe-operators
+# Build:  kix build rke2-cilium
 
 { kix, packages }:
 

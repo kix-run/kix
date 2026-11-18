@@ -34,7 +34,7 @@
     "flake-parts": {
       "inputs": {
         "nixpkgs-lib": [
-          "kixpkgs",
+          "kix",
           "nix-runtime",
           "nixpkgs"
         ]
@@ -56,15 +56,15 @@
     "git-hooks-nix": {
       "inputs": {
         "flake-compat": [
-          "kixpkgs",
+          "kix",
           "nix-runtime"
         ],
         "gitignore": [
-          "kixpkgs",
+          "kix",
           "nix-runtime"
         ],
         "nixpkgs": [
-          "kixpkgs",
+          "kix",
           "nix-runtime",
           "nixpkgs"
         ]
@@ -86,16 +86,16 @@
     "kix-examples": {
       "inputs": {
         "kix": [
-          "kixpkgs"
+          "kix"
         ],
         "nixpkgs": "nixpkgs"
       },
       "locked": {
-        "lastModified": 1794584897,
-        "narHash": "sha256-mGOTO+wdRL1u3YMphyTDpbTBksMyOiVsPz2avCdB/QM=",
+        "lastModified": 1795026080,
+        "narHash": "sha256-laT7ReSsJwBCTsDLA85b/veZTzJasof854FQSNgExdI=",
         "owner": "kix-run",
         "repo": "kix-examples",
-        "rev": "f7035300e30c3c29bb7b3feafeaede312516dcf1",
+        "rev": "11e0a91e32e861667c93b598b13f9b9c87e4d952",
         "type": "github"
       },
       "original": {
@@ -104,7 +104,7 @@
         "type": "github"
       }
     },
-    "kixpkgs": {
+    "kix": {
       "inputs": {
         "crane": "crane",
         "nix-runtime": "nix-runtime",
@@ -240,7 +240,7 @@
     "root": {
       "inputs": {
         "kix-examples": "kix-examples",
-        "kixpkgs": "kixpkgs",
+        "kix": "kix",
         "nixpkgs": "nixpkgs_4"
       }
     }

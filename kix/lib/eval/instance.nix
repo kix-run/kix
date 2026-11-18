@@ -80,7 +80,7 @@ in
         availability = availabilityLib.resolve {
           capabilities = clusterConfig.cluster.capabilities or { };
           clusterDefault =
-            ((clusterConfig.cluster or { }).availability or { }).default
+            clusterConfig.cluster.availability.default
               or (availabilityLib.substrate (clusterConfig.cluster.capabilities or { })).level;
           instanceOverride = instCfg.availability or null;
           ceiling = availabilityLib.ceilingOfMeta {
@@ -145,7 +145,7 @@ in
 
         # The netpol plugin declares networkPolicy.enable, so clusters without
         # the plugin default to false.
-        _netpolEnabled = (clusterConfig.networkPolicy or { }).enable or false;
+        _netpolEnabled = clusterConfig.networkPolicy.enable or false;
 
         _networkPolicyEnforcer =
           if !_netpolEnabled || _enforcerProvider == null || _isSelfEnforcer then
@@ -239,7 +239,7 @@ in
             requesterName = instanceName;
             requesterNamespace = namespaceName;
             hasDefault = depSpec.optional or false;
-            renamedFrom = (depsEnrichment.${argName} or { }).renamedFrom or null;
+            renamedFrom = depsEnrichment.${argName}.renamedFrom or null;
           }
         ) discoveredDeps;
 
@@ -392,6 +392,13 @@ in
         _scopeInjectedResources = builtins.concatMap (
           r: r._injectedResources or [ ]
         ) _partResourcesFromParts;
+
+        # Collect the warnings the builders attached to the instance's
+        # resources (`_warnings`, `scope/builders.nix`). A resource that two
+        # parts name gives its warnings once.
+        _resourceWarnings = lib.unique (
+          builtins.concatMap (r: r._warnings or [ ]) (_partResourcesFromParts ++ _scopeInjectedResources)
+        );
 
         # collectTypedAttrs excludes root, so the root resource must also be
         # assigned to a named part to be included in the manifest set.
@@ -630,7 +637,7 @@ in
                 ruleDefaults = scorecardConfig.ruleDefaults or { };
                 ruleOverrides = scorecardConfig.ruleOverrides or { };
                 maxSeverity = scorecardConfig.maxSeverity or "error";
-                acceptedSecretSources = ((clusterConfig.cluster or { }).secrets or { }).accept or null;
+                acceptedSecretSources = clusterConfig.cluster.secrets.accept or null;
               }
             ) (builtins.filter (r: r ? kind) (map (r: r.rawManifest or { }) shippedResources))
           else
@@ -815,26 +822,39 @@ in
         structuralWarnings =
           let
             res = r: "${r.kind}/${r.name}";
-            warn = msg: items: map msg items;
+            about = r: message: fix: {
+              object = { inherit (r) kind name; };
+              inherit message fix;
+            };
           in
           lib.concatLists [
             resolutionWarnings
-            (warn (
+            (map (
               w:
-              "resource '${res w.resource}' already references '${res w.req}'. Remove the redundant entry from requires; Kix tracks this dependency automatically."
+              about w.resource
+                "${res w.resource} lists '${res w.req}' in requires, and its manifest already references '${res w.req}'. Kix already orders '${res w.resource}' after '${res w.req}'."
+                "Remove '${res w.req}' from requires on ${res w.resource}."
             ) redundantRequiresWarnings)
-            (warn (
-              w: "resource '${res w.resource}' requires '${res w.req}' multiple times"
+            (map (
+              w:
+              about w.resource
+                "${res w.resource} lists '${res w.req}' more than once in requires. Kix ignores the duplicate entry."
+                "Remove the duplicate '${res w.req}' entry from requires on ${res w.resource}."
             ) duplicateRequiresWarnings)
-            (warn (
+            (map (
               r:
-              "resource '${res r}' is not referenced by root or its dependencies. Reference it from root, add it to requires, or remove the unused definition."
+              about r
+                "${res r} is not referenced by root or its dependencies. Kix still deploys ${res r}, and consumers of this instance do not wait for it."
+                "Reference ${res r} from root, add it to requires, or remove the unused definition."
             ) orphanedWarnings)
-            (warn (
+            (map (
               r:
-              "post-hook '${res r}' has no dependency on root or any resource that root requires. Add a dependency to ensure the hook runs after the resource it needs."
+              about r
+                "Post-hook ${res r} does not depend on root or any resource that root requires, so Kix can apply ${res r} before the package's resources are ready."
+                "Reference root or one of its dependencies from ${res r}, or add one to requires on ${res r}."
             ) postHookWarnings)
             processorWarnings
+            _resourceWarnings
           ];
 
         diagnostics = meta.combineDiagnostics {

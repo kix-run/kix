@@ -3,7 +3,7 @@
   "kind": "CustomResourceDefinition",
   "metadata": {
     "annotations": {
-      "controller-gen.kubebuilder.io/version": "v0.17.0"
+      "controller-gen.kubebuilder.io/version": "v0.22.0"
     },
     "name": "connectors.tailscale.com"
   },

@@ -158,12 +158,11 @@ fn images(graph: &StoreGraph) -> Value {
     for resource in graph.resources.values() {
         // Skip ConfigMap and Secret manifests so `image` keys inside opaque
         // configuration data are not mistaken for container images.
-        let kind = resource
-            .manifest
-            .get("kind")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default();
-        if kind == "ConfigMap" || kind == "Secret" {
+        use kix::manifest::kinds::{self, GroupKind};
+        if matches!(
+            GroupKind::of_manifest(&resource.manifest),
+            kinds::CONFIG_MAP | kinds::SECRET
+        ) {
             continue;
         }
         collect_images(&resource.manifest, &mut found);
@@ -207,17 +206,8 @@ fn looks_like_an_image(s: &str) -> bool {
 }
 
 fn flake_inputs(lock: &Value) -> Value {
-    let Some(nodes) = lock.get("nodes").and_then(|n| n.as_object()) else {
-        return json!([]);
-    };
     let mut inputs = Vec::new();
-    for (name, node) in nodes {
-        if name == "root" {
-            continue;
-        }
-        let Some(locked) = node.get("locked") else {
-            continue;
-        };
+    for (name, locked) in kix::flake_lock::locked_inputs(lock) {
         let mut entry = serde_json::Map::new();
         entry.insert("name".into(), json!(name));
         if let Some(r) = locked.get("rev").and_then(|v| v.as_str()) {

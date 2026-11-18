@@ -11,7 +11,7 @@
 # echo-server instances mount an emptyDir at /tmp, which the descheduler's
 # default protections never evict, so they stay where they are.
 #
-# Build:  nix build .#cluster-spread --extra-experimental-features pipe-operators
+# Build:  kix build spread
 # Deploy: scripts/kind-spread.sh
 
 { kix, packages }:

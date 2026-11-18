@@ -163,9 +163,11 @@ fn render_cluster(
 /// Return the `Next:` line for a cluster with a missing or changed object.
 ///
 /// A deploy stops on a field ownership conflict when another manager owns a
-/// field it applies, so the line adds `--force-conflicts` when a manager
-/// other than Kix owns fields of a changed object. A replica count changed
-/// through `/scale` with no recorded owner needs only `--reconcile`.
+/// field it applies and Kix does not, so the line adds `--force-conflicts`
+/// when a manager other than Kix owns such a field of a changed object. A
+/// manager that shares all its fields with Kix changed none of them. A
+/// replica count changed through `/scale` with no recorded owner needs only
+/// `--reconcile`.
 fn next_step(c: &ClusterStatus) -> String {
     let mut managers: Vec<&str> = c
         .packages
@@ -174,6 +176,7 @@ fn next_step(c: &ClusterStatus) -> String {
         .filter(|r| r.problems.contains(&Problem::Changed))
         .filter_map(|r| r.drift.as_ref())
         .flat_map(|d| &d.foreign_owners)
+        .filter(|o| !o.unshared_paths.is_empty())
         .map(|o| o.manager.as_str())
         .collect();
     managers.sort();
@@ -276,9 +279,10 @@ fn summary_line(s: &Summary) -> String {
 }
 
 fn resource_label(r: &ResourceStatus) -> String {
+    let kind = kix::manifest::types::qualified_kind(&r.group, &r.kind);
     match &r.namespace {
-        Some(ns) => format!("{} {ns}/{}", r.kind, r.name),
-        None => format!("{} {}", r.kind, r.name),
+        Some(ns) => format!("{kind} {ns}/{}", r.name),
+        None => format!("{kind} {}", r.name),
     }
 }
 
@@ -302,6 +306,9 @@ fn resource_state(r: &ResourceStatus) -> String {
     if parts.is_empty() {
         let not_checked = match (r.present, r.drift.as_ref().map(|d| d.verdict)) {
             (Present::Unknown, _) => Some("not checked: this account may not list its kind"),
+            (Present::Ambiguous, _) => Some(
+                "not checked: multiple API groups serve this kind, and this object's API group is not in the deploy record; run `kix deploy <cluster> --reconcile` to record it",
+            ),
             (_, Some(DriftState::Unstamped)) => {
                 Some("not checked for changes: no applied-hash stamp yet, the next deploy adds it")
             }
@@ -321,6 +328,9 @@ fn resource_state(r: &ResourceStatus) -> String {
 
 /// Describe a changed object: who changed which fields, when Kubernetes
 /// recorded it.
+///
+/// A field another manager shares with Kix still holds the value Kix
+/// applied, so only unshared fields name the manager that changed them.
 fn changed(drift: Option<&Drift>) -> String {
     let Some(drift) = drift else {
         return "changed since deploy".to_string();
@@ -341,7 +351,11 @@ fn changed(drift: Option<&Drift>) -> String {
     let fields: Vec<String> = drift
         .foreign_owners
         .iter()
-        .flat_map(|o| o.paths.iter().map(move |p| format!("{p} by {}", o.manager)))
+        .flat_map(|o| {
+            o.unshared_paths
+                .iter()
+                .map(move |p| format!("{p} by {}", o.manager))
+        })
         .collect();
     const SHOWN: usize = 3;
     match fields.len() {

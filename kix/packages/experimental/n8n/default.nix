@@ -109,6 +109,15 @@
 # `/etc/n8n-task-runners.json`. To change them, replace the `worker` part
 # through `partsOverlays` so that it mounts a file of your own at that path
 # in the `task-runners` container.
+#
+# Upgrades: n8n migrates its database when a pod starts, and every pod
+# takes a lock in the database first, so only one pod migrates. The
+# Recreate strategy stops the old main pod before the new one starts.
+# Upstream documents no way back to an older version. n8n 2.41.5 started
+# on a database that 2.48.5 had migrated and read its workflows,
+# credentials, and executions, so going back from 2.48.5 is deploying the
+# previous package. For a larger step back, restore a database backup
+# taken before the upgrade.
 
 {
   scope,
@@ -118,7 +127,7 @@
 }:
 
 let
-  release = "2.41.5";
+  release = "2.48.5";
 
   name = scope.instanceName;
   who = "n8n ${scope.namespaceName}/${name}";
@@ -190,6 +199,13 @@ in
     version = release;
     description = "n8n workflow automation: a main instance and queue workers with Code-node task-runner sidecars, on PostgreSQL and Valkey";
     owner = "app-team";
+    # The Kubernetes versions upstream's own Helm chart requires
+    # (n8n-io/n8n-hosting, charts/n8n: `kubeVersion: ">=1.25.0-0"` and
+    # "Kubernetes 1.25+" in its README). Upstream states no upper bound.
+    k8s = {
+      minVersion = "1.25";
+      reason = "[K1269] n8n ${release} requires Kubernetes 1.25 or later, according to upstream's n8n Helm chart. Move the cluster to Kubernetes 1.25 or later first";
+    };
     # Workflows call services the workflow author chooses, on any port.
     # `world` does not include endpoints inside the cluster.
     network.intents.workflows.egress = [ { to = "world"; } ];
@@ -217,7 +233,7 @@ in
     image = kix.options.image {
       repository = "docker.io/n8nio/n8n";
       tag = release;
-      digest = "sha256:6f532d3b819cfe66c6a13c5375228f312c53df1abaa11a377eb8c3d3f105c363";
+      digest = "sha256:c0ea1246a81a34ce8e2b3cfb1f718b97de64b0a1b3747ad24d6d431826bb71ad";
       description = "The n8n image, for the main instance, the workers, and the init container that writes the task-runner token.";
     };
 
@@ -274,7 +290,7 @@ in
       image = kix.options.image {
         repository = "docker.io/n8nio/runners";
         tag = release;
-        digest = "sha256:32619142405e7f4a02eedffe8584214c7e0b9b09d3753094e4212aee5f4d0045";
+        digest = "sha256:3d502b6dcb975958df66f80ceb59d30584e86d7339a4659730d3ecfb74c91fc0";
         tagText = "config.image.tag";
         description = "The task-runner sidecar image. Its version must match the n8n image's, so its tag follows `image.tag`.";
       };

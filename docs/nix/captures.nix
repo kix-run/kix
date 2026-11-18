@@ -1685,32 +1685,6 @@
     live = [
       {
         prepare = [
-          "helm"
-          "install"
-          "eg"
-          "oci://docker.io/envoyproxy/gateway-helm"
-          "--version"
-          "v1.9.1"
-          "--namespace"
-          "envoy-gateway-system"
-          "--create-namespace"
-        ];
-        timeout = "900s";
-      }
-      {
-        capture = "controller-ready";
-        run = [
-          "kubectl"
-          "wait"
-          "--timeout=5m"
-          "--namespace"
-          "envoy-gateway-system"
-          "deployment/envoy-gateway"
-          "--for=condition=Available"
-        ];
-      }
-      {
-        prepare = [
           "kix"
           "deploy"
           "how-to-platform-gateway"
@@ -2172,7 +2146,7 @@
           "--force-conflicts"
           "-y"
         ];
-        stdoutGrep = "Deployment/legacy-web|activation .*Active|Deploy complete";
+        stdoutGrep = "Deployment.apps/legacy-web|activation .*Active|Deploy complete";
       }
     ];
   }
@@ -2227,7 +2201,7 @@
           "-y"
         ];
         allowFailure = true;
-        stdoutGrep = "Deployment/legacy-web|Dry run complete";
+        stdoutGrep = "Deployment.apps/legacy-web|Dry run complete";
       }
       {
         capture = "resolve";
@@ -2239,7 +2213,7 @@
           "--force-conflicts"
           "-y"
         ];
-        stdoutGrep = "Deployment/legacy-web|activation .*Active|Deploy complete";
+        stdoutGrep = "Deployment.apps/legacy-web|activation .*Active|Deploy complete";
       }
     ];
   }
@@ -2321,7 +2295,7 @@
           "--force-conflicts"
           "-y"
         ];
-        stdoutGrep = "Deployment/reflector|activation .*Active|Deploy complete";
+        stdoutGrep = "Deployment.apps/reflector|activation .*Active|Deploy complete";
       }
       {
         capture = "remove-release-record";
@@ -2360,7 +2334,7 @@
           "-o"
           "tree"
         ];
-        stdoutGrep = "legacy-api-contract|PackageInstance/legacy-api@legacy";
+        stdoutGrep = "legacy-api-contract|PackageInstance.kix.run/legacy-api@legacy";
       }
     ];
   }

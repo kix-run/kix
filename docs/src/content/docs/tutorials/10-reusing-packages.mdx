@@ -40,8 +40,8 @@ Run `kix check` and `kix graph` on `10-reuse-packages`:
 
 In the dependency tree output, verify that the two proxy chains are isolated in their respective namespaces:
 
-- Under `Namespace/app-v1`, `Service/backend@app-v1` feeds `ConfigMap/gateway@app-v1` and `Deployment/gateway@app-v1`.
-- Under `Namespace/app-v2`, `Service/backend@app-v2` feeds `ConfigMap/gateway@app-v2` and `Deployment/gateway@app-v2`.
+- Under `Namespace/app-v1`, `Service/backend@app-v1` feeds `ConfigMap/gateway@app-v1` and `Deployment.apps/gateway@app-v1`.
+- Under `Namespace/app-v2`, `Service/backend@app-v2` feeds `ConfigMap/gateway@app-v2` and `Deployment.apps/gateway@app-v2`.
 
 You will see this two-namespace layout again in tutorial 12 when we run cluster-wide scorecard rules across `app-v1` and `app-v2`.
 

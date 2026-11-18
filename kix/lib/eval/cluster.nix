@@ -32,7 +32,8 @@
 }:
 
 let
-  inherit (import ../core/error.nix { inherit lib; }) fail;
+  inherit (import ../core/error.nix { inherit lib; }) fail warning;
+  inherit (import ../core/util.nix { inherit lib; }) plain namespaceOf;
 in
 {
   buildCluster =
@@ -132,7 +133,7 @@ in
               parts = lib.splitString "/" key;
               nsName = builtins.elemAt parts 0;
               instName = builtins.elemAt parts 1;
-              instCfg = (mergedInstances.${nsName} or { }).${instName} or null;
+              instCfg = mergedInstances.${nsName}.${instName} or null;
               where = if pins.file == null then "the pins attrset" else instancePinsLib.relativeFile pins.file;
             in
             if instCfg == null then
@@ -476,7 +477,7 @@ in
           inj:
           if builtins.isFunction inj.config then
             let
-              consumerCfg = (configMap.${inj.consumerNs} or { }).${inj.consumerInst} or { };
+              consumerCfg = configMap.${inj.consumerNs}.${inj.consumerInst} or { };
             in
             inj // { config = inj.config consumerCfg; }
           else
@@ -892,24 +893,22 @@ in
           extraImages = if extraImages == null then null else jsonFile "kix-extra-images.json" extraImages;
           imageSources = jsonFile "kix-image-sources.json" imageSources;
           interfaces = if platformSide == null then { } else platformSide.interfaces;
-        }
-        # A cluster with no warnings keeps the index it had before the
-        # library listed warnings in it.
-        // lib.optionalAttrs (libraryWarnings != [ ]) {
-          warnings = jsonFile "kix-warnings.json" (map builtins.unsafeDiscardStringContext libraryWarnings);
+          warnings = jsonFile "kix-warnings.json" libraryWarnings;
         };
 
-      # The library's warnings that are not scorecard findings. The CLI reads
-      # them from `kix-warnings.json`, because it shows Nix's trace output
-      # only when an evaluation fails. The scorecard report carries the
-      # scorecard's own warnings.
-      libraryWarnings = clusterDiagnostics.warnings ++ clusterHookWarnings ++ dnsWarnings;
+      # The library's warnings that are not scorecard findings, as records
+      # (`core/error.nix`). The CLI reads them from `kix-warnings.json`,
+      # because it shows Nix's trace output only when an evaluation fails.
+      # The scorecard report carries the scorecard's own warnings.
+      libraryWarnings =
+        clusterDiagnostics.warnings ++ map (warning null) (clusterHookWarnings ++ dnsWarnings);
 
       # Report missing DNS once for the cluster, however many instances
       # lack it.
-      dnsWarnings =
-        lib.optional (builtins.any (inst: inst._dnsMissing or false) allInstancesList)
-          "cluster '${name}' has no DNS instance (alias 'dns'), so Kix will not wait for DNS to be ready before deploying workloads. Import a cluster flavor (kix.flavors.<name>), add a coredns instance, or declare a kix.mkImport with roles = [ \"dns\" ].";
+      dnsWarnings = lib.optional (builtins.any (inst: inst._dnsMissing or false) allInstancesList) {
+        message = "cluster '${name}' has no DNS instance (alias 'dns'), so Kix will not wait for DNS to be ready before deploying workloads.";
+        fix = "Import a cluster flavor (kix.flavors.<name>), add a coredns instance, or declare a kix.mkImport with roles = [ \"dns\" ].";
+      };
 
       # The platform whose interface file supplied `k8sVersion`, or null when
       # the definition writes it or nothing sets it. `kix.interface` sets the
@@ -987,7 +986,6 @@ in
       # rejects the pods.
       podSecurityAssertions =
         let
-          plain = v: builtins.unsafeDiscardStringContext (toString v);
           levelOf = ns: if builtins.elem ns allNsNames then namespacePodSecurity ns else null;
           sourceOf =
             ns:
@@ -1030,7 +1028,6 @@ in
       quotaAssertions =
         let
           quotaCheck = import ../vocab/quota-use.nix { inherit lib; };
-          plain = v: builtins.unsafeDiscardStringContext (toString v);
           ofNamespace =
             nsName:
             let
@@ -1099,8 +1096,7 @@ in
       # the PackageInstance record hold no data.
       holdsDataAssertions =
         let
-          plain = v: builtins.unsafeDiscardStringContext (toString v);
-          isStateful = inst: ((inst._meta.packageMeta or { }).lifecycle or null) == "stateful";
+          isStateful = inst: (inst._meta.packageMeta.lifecycle or null) == "stateful";
           ofInstance =
             inst:
             let
@@ -1148,7 +1144,6 @@ in
       # cross-resource validation without naming the owning instances.
       sharedClusterObjectAssertions =
         let
-          plain = v: builtins.unsafeDiscardStringContext (toString v);
           owned = builtins.concatMap (
             inst:
             map
@@ -1261,11 +1256,7 @@ in
             else
               [ ];
           # Attribute names may not carry context; the namespace value does.
-          nsOf =
-            r:
-            builtins.unsafeDiscardStringContext (
-              toString (r.rawManifest.metadata.namespace or "cluster-scoped")
-            );
+          nsOf = r: plain (namespaceOf r.rawManifest);
           refsByResource = map (r: {
             ns = nsOf r;
             refs = walk r.rawManifest;

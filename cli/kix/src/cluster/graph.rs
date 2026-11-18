@@ -319,6 +319,7 @@ impl ResourceGraph {
                 ListedNode {
                     id: node.id.display_id(),
                     kind: node.id.kind.clone(),
+                    group: node.id.group.clone(),
                     name: node.id.name.clone(),
                     namespace: node.id.namespace.clone(),
                     identity_hash: node.identity_hash.clone(),
@@ -353,9 +354,14 @@ pub struct GraphListing {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ListedNode {
-    /// `Kind/name@namespace`, or `Kind/name` for a cluster-scoped object.
+    /// [`ResourceId::display_id`]: `Kind.group/name@namespace`, without
+    /// `.group` for the core group and `@namespace` for a cluster-scoped
+    /// object.
     pub id: String,
     pub kind: String,
+    /// The kind's API group. Left out for the core group.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub group: String,
     pub name: String,
     /// `_cluster` for a cluster-scoped object.
     pub namespace: String,
@@ -387,6 +393,7 @@ fn get_annotation(manifest: &serde_json::Value, key: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cluster::test_fixtures::manifest;
     use crate::manifest::types::CLUSTER_SCOPED;
     use serde_json::json;
 
@@ -398,24 +405,6 @@ mod tests {
             .flat_map(|idx| dag.neighbors_directed(idx, petgraph::Direction::Outgoing))
             .map(|dep| &dag[dep])
             .collect()
-    }
-
-    fn manifest(kind: &str, name: &str, ns: &str, id_hash: &str, deps: &str) -> serde_json::Value {
-        let mut annotations = serde_json::Map::new();
-        annotations.insert(keys::IDENTITY_HASH.into(), json!(id_hash));
-        if !deps.is_empty() {
-            annotations.insert(keys::DEPENDS_ON.into(), json!(deps));
-        }
-
-        json!({
-            "apiVersion": "v1",
-            "kind": kind,
-            "metadata": {
-                "name": name,
-                "namespace": ns,
-                "annotations": annotations,
-            }
-        })
     }
 
     #[test]
@@ -435,6 +424,7 @@ mod tests {
         assert_eq!(graph.edge_count(), 1);
 
         let deploy_id = ResourceId {
+            group: "apps".into(),
             kind: "Deployment".into(),
             namespace: "default".into(),
             name: "my-app".into(),
@@ -497,6 +487,7 @@ mod tests {
 
         let graph = ResourceGraph::from_manifests(&manifests).unwrap();
         let consumer_id = ResourceId {
+            group: String::new(),
             kind: "Ingress".into(),
             namespace: "ns-b".into(),
             name: "consumer".into(),
@@ -533,6 +524,7 @@ mod tests {
 
         let graph = ResourceGraph::from_manifests(&manifests).unwrap();
         let dep_id = ResourceId {
+            group: String::new(),
             kind: "Deployment".into(),
             namespace: "ns-a".into(),
             name: "dep".into(),
@@ -562,6 +554,7 @@ mod tests {
 
         let graph = ResourceGraph::from_manifests(&manifests).unwrap();
         let consumer_id = ResourceId {
+            group: String::new(),
             kind: "Ingress".into(),
             namespace: "ns-b".into(),
             name: "consumer".into(),
@@ -583,6 +576,7 @@ mod tests {
 
         let graph = ResourceGraph::from_manifests(&manifests).unwrap();
         let act_id = ResourceId {
+            group: keys::GROUP.into(),
             kind: "Activation".into(),
             namespace: CLUSTER_SCOPED.into(),
             name: "root".into(),

@@ -10,7 +10,7 @@
 #
 # usage: scripts/cluster-checks.sh <flake-dir> <cluster> [<rules-test.yaml>]
 #
-#   scripts/cluster-checks.sh clusters cnpg clusters/test-cnpg.rules-test.yaml
+#   scripts/cluster-checks.sh . cnpg clusters/test-cnpg.rules-test.yaml
 #
 # Set KIX to the `kix` command to run (default: `kix` on PATH).
 

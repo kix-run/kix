@@ -39,6 +39,22 @@
 #     };
 #   };
 #
+# Upgrades. 2.7.1 to 2.7.2 is a patch release. Upstream's 2.7.2 release
+# notes name no upgrade step. The first deploy restarts each pod once. On
+# kind, 2.7.1 started on the Raft volumes that 2.7.2 had written, and 2.7.2
+# started again on those volumes after the rollback. Both times the static
+# seal unsealed the pods, the reconcile Job completed, and the
+# ExternalSecret read the stored value.
+#
+# Going back is not supported by upstream. Its upgrade guide says that
+# replacing the binary "will not cleanly downgrade OpenBao" and that the
+# data store must be rolled back too. This package does not back up the
+# data before an upgrade, so take a Raft snapshot first. Going back means
+# deploying the previous version of this package. Upstream's HA guide says
+# not to fail over from a newer OpenBao to an older one. A deploy replaces
+# the pods in order, so the peers run two versions for a while. We did not
+# test that mixed state.
+#
 # Unseal. With `seal.type = "static"` OpenBao unseals itself on every start
 # with the key in `unsealKey`. Anyone who can read that Secret and a Raft
 # volume can decrypt the data, so protection at rest is no stronger than
@@ -194,6 +210,14 @@ in
     lifecycle = "stateful";
     defaultAliases = [ "openbao" ];
     network.intents.tokenReview.egress = [ { to = "apiserver"; } ];
+    # OpenBao's docs support the three most recent Kubernetes minor releases
+    # (website/content/partials/kubernetes-supported-versions.mdx at v2.7.2).
+    # Move both bounds with `release`.
+    k8s = {
+      minVersion = "1.35";
+      maxVersion = "1.37";
+      reason = "[K6360] OpenBao ${release} supports Kubernetes 1.35 to 1.37. Deploy a Kix release with an older openbao package, or move the cluster to a supported Kubernetes version first";
+    };
   };
 
   assertions =
@@ -259,7 +283,7 @@ in
     image = kix.options.image {
       repository = "quay.io/openbao/openbao";
       tag = release;
-      digest = "sha256:6d2b93856e3fcf7b18ad855a0b51eaba474dc8b79cf554379ea32034797d2acf";
+      digest = "sha256:5046911075e137e154ce49ab051502f4ec7cf367d484ae4a4dce665d9b90561f";
       description = "Image of the server and of the reconcile Job, which runs its `bao` CLI.";
     };
 

@@ -21,8 +21,8 @@
 
   image = kix.options.image {
     repository = "ghcr.io/cloudnative-pg/postgresql";
-    tag = "18.6-standard-trixie";
-    digest = "sha256:f89a40f4d74aa6e0900917eaf6299b125a6382eb02fd4ee5d46f55bcbf7e5726";
+    tag = "18.7-standard-trixie";
+    digest = "sha256:37fdeea29a4d3ed14570f719488ba55bd21e8975eaea864be5ce74d25a9a13de";
     description = "PostgreSQL operand image (`spec.imageName`). The tag must start with the PostgreSQL version. The `standard` images include contrib extensions, `pgvector`, `pgaudit`, and `pg_failover_slots`.";
   };
 

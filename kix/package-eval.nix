@@ -7,7 +7,7 @@
 # Forcing `rawManifests` forces the cluster's diagnostics and cross-resource
 # checks first (`eval/cluster.nix`), the PackageInstance wiring is validated
 # as `mkFlake` validates a real cluster's, and `scorecard.maxSeverity = "error"`
-# matches the cap `clusters/flake.nix` and the root `flake.nix` set. Nothing is
+# matches the cap the repository's `flake.nix` sets. Nothing is
 # built. Only `kix` renders the charts that chart packages read, so plain
 # `nix flake check` stops at the first one. The kix-cli test
 # `flake_checks_evaluate_with_helm` evaluates this check through `kix`.
@@ -251,6 +251,8 @@ let
       config.clusterIP = "10.96.0.53";
       instances.prometheus-operator.package = packages.prometheus-operator;
     };
+    # A Gateway API implementation needs the Gateway API CRDs.
+    envoy-gateway.instances.gateway-api.package = packages.gateway-api;
     external-dns = {
       config = {
         provider = "cloudflare";
@@ -286,36 +288,6 @@ let
       instances.prometheus-operator.package = packages.prometheus-operator;
     };
     filebrowser.instances = { inherit storage; };
-    firezone = {
-      config = {
-        domain = "firezone.example.com";
-        admin.email = "admin@example.com";
-      };
-      instances = {
-        database.package = packages.stackgres-database;
-        database-password = dbPassword;
-        # The three salts are optional; clusters/test-immich.nix sets them.
-        application-secrets = {
-          package = packages.secret;
-          aliases = [ "applicationSecrets" ];
-          config.stringData = {
-            GUARDIAN_SECRET_KEY = "guardian";
-            SECRET_KEY_BASE = "base";
-            DATABASE_ENCRYPTION_KEY = "encryption";
-          };
-        };
-        admin-password = {
-          package = packages.secret;
-          aliases = [ "adminPassword" ];
-          config.stringData.password = "password";
-        };
-        wireguard-key = {
-          package = packages.secret;
-          aliases = [ "wireguardKey" ];
-          config.stringData.private_key = "key";
-        };
-      };
-    };
     # The administrator's login, and a Prometheus provider, so the
     # ServiceMonitor is built.
     grafana.instances = {
@@ -501,7 +473,6 @@ let
     # are built.
     rabbitmq-operator.instances.prometheus-operator.package = packages.prometheus-operator;
     secret.config.stringData.password = "password";
-    secret-echo.instances = { inherit credentials; };
     secret-ref.config.keys = [ "password" ];
     service-ref.config = {
       selector."app.kubernetes.io/name" = "old-db";
@@ -578,6 +549,7 @@ let
       };
     };
     # A Prometheus provider, so the ServiceMonitor is built.
+    traefik.instances.gateway-api.package = packages.gateway-api;
     tempo.instances = {
       inherit storage;
       prometheus-operator.package = packages.prometheus-operator;

@@ -1,0 +1,178 @@
+#!/usr/bin/env bash
+#
+# Hand the user-facing text changed on the current branch to Antigravity,
+# running a Gemini model (Gemini 4 Carbon by default), which edits it as a
+# writer better than Claude, with CLAUDE.prose.md as its rules.
+#
+# Usage:
+#   scripts/copy-pass [--base <ref>] [file...]
+#   scripts/copy-pass --list [--base <ref>]
+#
+# Without file arguments it reviews every file on this branch that changes
+# text a person reads (see copy_files below). --list prints those files and
+# stops. The Copy pass workflow uses it to decide whether a pull
+# request needs the pass.
+#
+# Exit codes:
+#   0  the copy pass finished, or no file with user-facing text changed
+#   1  Antigravity did not finish (it was refused a tool, or said nothing)
+#   2  'agy' is not installed here. Add '- [ ] Copy pass', unticked.
+
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+base=""
+list_only=0
+files=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --base)
+      base="${2:?--base needs a git ref}"
+      shift 2
+      ;;
+    --list)
+      list_only=1
+      shift
+      ;;
+    -h | --help)
+      sed -n '2,18s/^# \{0,1\}//p' "$0"
+      exit 0
+      ;;
+    *)
+      files+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if [ -z "$base" ]; then
+  for cand in origin/main main; do
+    if git rev-parse --verify --quiet "${cand}^{commit}" >/dev/null; then
+      base="$cand"
+      break
+    fi
+  done
+fi
+if [ -z "$base" ]; then
+  echo "copy-pass: cannot find origin/main or main. Pass --base <ref>." >&2
+  exit 1
+fi
+
+mb="$(git merge-base "$base" HEAD)"
+
+# The files on this branch that change text a person reads:
+# - every changed doc page, skill, and change record;
+# - every Rust file under cli/ and Nix file under kix/ whose added lines
+#   hold a string of four or more words. Those strings reach people as
+#   errors, warnings, refusals, and log lines. Comments, asserts, tests,
+#   and fixtures do not count.
+copy_files() {
+  git diff --name-only --diff-filter=ACMR "$mb" -- \
+    ':(glob)docs/src/content/docs/**' \
+    ':(glob).claude/skills/**/*.md' \
+    ':(glob)changes/**/*.md'
+  local literal='"([^"\\]|\\.)*("|\\$)|^\+[^"]*\\$'
+  local nix_literal="\"([^\"\\\\]|\\\\.)*\"|''"
+  local sentence="[A-Za-z][a-z']* [a-z']+ [a-z']+ [a-z']+"
+  local path added
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    added="$(git diff -U0 "$mb" -- "$path" | grep -E '^\+([^+]|$)' || true)"
+    case "$path" in
+      *.rs)
+        if grep -vE '^\+[[:space:]]*//|(assert[a-z_]*)!\(|\.expect\(' <<<"$added" |
+          grep -oE "$literal" | grep -qE "$sentence"; then
+          echo "$path"
+        fi
+        ;;
+      *.nix)
+        if grep -vE '^\+[[:space:]]*#' <<<"$added" | grep -qE "$sentence" &&
+          grep -vE '^\+[[:space:]]*#' <<<"$added" | grep -qE "$nix_literal|throw|warn|trace|message"; then
+          echo "$path"
+        fi
+        ;;
+    esac
+  done < <(git diff --name-only --diff-filter=ACMR "$mb" -- \
+    ':(glob)cli/**/*.rs' \
+    ':(glob)kix/**/*.nix' \
+    ':(exclude,glob)cli/**/tests/**' \
+    ':(exclude,glob)cli/**/*_test.rs' \
+    ':(exclude,glob)cli/**/tests.rs' \
+    ':(exclude,glob)kix/lib/tests/**' \
+    ':(exclude,glob)kix/**/crds/**')
+}
+
+if [ "$list_only" -eq 1 ]; then
+  copy_files
+  exit 0
+fi
+
+if [ ${#files[@]} -eq 0 ]; then
+  while IFS= read -r path; do
+    files+=("$path")
+  done < <(copy_files)
+fi
+
+if [ ${#files[@]} -eq 0 ]; then
+  echo "copy-pass: no file with user-facing text changed against ${base}."
+  exit 0
+fi
+
+agy_bin=""
+if command -v agy >/dev/null 2>&1; then
+  agy_bin="$(command -v agy)"
+elif [ -x "$HOME/.local/bin/agy" ]; then
+  agy_bin="$HOME/.local/bin/agy"
+fi
+if [ -z "$agy_bin" ]; then
+  echo "copy-pass: 'agy' (the Antigravity CLI) is not installed on this machine." >&2
+  echo "Add '- [ ] Copy pass', unticked, to the pull request description, so" >&2
+  echo "someone with Antigravity can run scripts/copy-pass." >&2
+  exit 2
+fi
+
+model="${COPY_PASS_MODEL:-Gemini 4 Carbon (Medium)}"
+file_list="$(printf '  - %s\n' "${files[@]}")"
+
+# Headless Antigravity cannot ask for permission, so it gets every
+# permission, and the prompt tells it not to run anything. The script
+# writes the diff for it.
+diff_dir="$(mktemp -d)"
+trap 'rm -rf "$diff_dir"' EXIT
+git diff "$mb" -- "${files[@]}" >"$diff_dir/copy.diff"
+
+prompt="You are the editor for this branch of the Kix repository (merge-base: ${mb}). Kix is a Kubernetes compiler: a Nix library and packages describe a cluster, and a Rust CLI checks, plans, and deploys it.
+
+Claude, an AI coding agent, wrote the user-facing text on this branch. Claude writes code well and prose badly: its text is oblique, dense, and machine-sounding, it names internal concepts the reader has never met, and it buries what the reader should do. You are a far better writer than Claude. Act as the editor of a weak writer's draft, not as a checker of rules. Text that breaks no rule can still be unclear, wordy, or written from the code's point of view instead of the reader's. Improve every changed string that a good editor would improve. Leave a string alone only when you could not make it clearer for the person reading it.
+
+Changed files with user-facing text:
+${file_list}
+
+Instructions:
+1. Read CLAUDE.prose.md. Its rules are the floor, not the goal. Also follow ISO 24495 plain language: short sentences, common words, and no jargon a reader would need Kix knowledge to understand. Readers run clusters or write packages; assume they do not know how Kix works inside.
+2. Read ${diff_dir}/copy.diff, the diff of those files on this branch, to see every user-facing string added or changed. If it is empty, read the listed files.
+3. For each changed string, find where it is used (rg or git grep) and read that code, so you know whether it is an error, a warning, a log line, a doc page, or a change record (a file under changes/ whose text below the +++ header becomes a changelog entry), who sees it, what they just did, and what they can do next.
+4. Rewrite each changed string in place so that the reader understands it on first reading. An error or warning says what went wrong and names the object, says what Kix did or did not do, and gives the exact fix. A change record leads with what the reader must do, if anything, and stays plain paragraphs (no lists or code blocks). Do not change text this branch did not add or change. Do not touch code comments, or the TOML header between the +++ lines of a change record.
+5. Stay within the facts. Use only what the code, the diff, and the docs in this repository show. Do not invent commands, flags, options, behaviour, or advice. Keep interpolations ({...} in Rust format strings, \${...} in Nix strings), field and option names, command names, flags, file paths, wire tokens, and codes unchanged. If a string needs a fact you cannot find, keep its claim as it is and say so in your summary.
+6. If you change a string that a test, snapshot, or fixture checks word for word, update that test, snapshot, or fixture to match.
+7. Do not run tests, builds, or formatters, and do not commit, push, or change anything outside the working tree. Whoever runs this pass runs the checks afterwards.
+8. Output a short summary: each string you changed and why, each string you left alone and why, and any fact you could not find."
+
+echo "==> Running Antigravity (${model}) copy pass on ${#files[@]} file(s)..."
+# --print takes the next word as its prompt, so it goes last.
+result="$("$agy_bin" --model "$model" --mode accept-edits --add-dir "$diff_dir" \
+  --dangerously-skip-permissions --output-format json --print "$prompt")"
+
+# agy exits 0 even when it was refused a tool and did nothing.
+if ! jq -e '.status == "SUCCESS" and (.denied_actions // [] | length == 0) and (.response // "" | length > 0)' \
+  <<<"$result" >/dev/null; then
+  echo "copy-pass: the copy pass did not run to the end. Antigravity said:" >&2
+  jq -r '{status, denied_actions, response}' <<<"$result" >&2
+  exit 1
+fi
+jq -r '.response' <<<"$result"
+
+echo ""
+echo "copy-pass: done. Review its edits, run the checks, then add '- [x] Copy pass' to the pull request description."

@@ -174,8 +174,8 @@ let
     inst: part:
     builtins.unsafeDiscardStringContext
       cluster.instances.infisical.${inst}.raw.${part}.out.identityHash;
-  dependsOn = m: lib.splitString "," ((m.metadata.annotations or { }).${kixKeys.dependsOn} or "");
-  readinessOf = m: (m.metadata.annotations or { }).${kixKeys.readiness} or null;
+  dependsOn = m: lib.splitString "," (m.metadata.annotations.${kixKeys.dependsOn} or "");
+  readinessOf = m: m.metadata.annotations.${kixKeys.readiness} or null;
   envOf =
     c:
     builtins.listToAttrs (

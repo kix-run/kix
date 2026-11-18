@@ -1,7 +1,7 @@
 # openebs/zfs-localpv at the tag `release` in default.nix names (image.tag
 # is checked against it).
-https://raw.githubusercontent.com/openebs/zfs-localpv/v2.11.1/deploy/yamls/zfsnode-crd.yaml
-https://raw.githubusercontent.com/openebs/zfs-localpv/v2.11.1/deploy/yamls/zfsvolume-crd.yaml
-https://raw.githubusercontent.com/openebs/zfs-localpv/v2.11.1/deploy/yamls/zfssnapshot-crd.yaml
-https://raw.githubusercontent.com/openebs/zfs-localpv/v2.11.1/deploy/yamls/zfsbackup-crd.yaml
-https://raw.githubusercontent.com/openebs/zfs-localpv/v2.11.1/deploy/yamls/zfsrestore-crd.yaml
+https://raw.githubusercontent.com/openebs/zfs-localpv/v2.11.2/deploy/yamls/zfsnode-crd.yaml
+https://raw.githubusercontent.com/openebs/zfs-localpv/v2.11.2/deploy/yamls/zfsvolume-crd.yaml
+https://raw.githubusercontent.com/openebs/zfs-localpv/v2.11.2/deploy/yamls/zfssnapshot-crd.yaml
+https://raw.githubusercontent.com/openebs/zfs-localpv/v2.11.2/deploy/yamls/zfsbackup-crd.yaml
+https://raw.githubusercontent.com/openebs/zfs-localpv/v2.11.2/deploy/yamls/zfsrestore-crd.yaml

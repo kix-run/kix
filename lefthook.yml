@@ -1,4 +1,4 @@
-# Pre-commit hooks for kixpkgs
+# Pre-commit hooks for the Kix repository
 # Install: lefthook install
 #
 # Rust hooks adapted from lithus monorepo pattern (no mise: uses cargo directly)
@@ -135,11 +135,9 @@ pre-commit:
         fi
 
     # Type-check the landing page. This is the check the Pages deploy runs
-    # first (`npm run build` starts with `astro check`). A failure only
-    # surfaces in CI, and because GitHub Pages artifacts expire after ~1
-    # day, a broken build streak silently takes kix.run offline once the
-    # last good artifact ages out. Catching it here keeps a red build from
-    # ever reaching main.
+    # first (`npm run build` starts with `astro check`). The deploy runs only
+    # after a merge to main, where a failure stops kix.run from updating, so
+    # this hook catches the failure before the commit.
     typecheck-web:
       glob: "web/**/*.{ts,astro,mjs}"
       run: bash -c 'cd web && ./node_modules/.bin/astro check'

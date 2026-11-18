@@ -10,7 +10,7 @@ rec {
   name = scope.instanceName;
   ns = scope.namespaceName;
   who = "harbor ${ns}/${name}";
-  release = "2.15.2";
+  release = "2.15.5";
   tag = "v${release}";
 
   # Every component serves /metrics on this port when metrics are on.

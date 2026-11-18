@@ -56,18 +56,32 @@ pub enum TransitionKind {
 }
 
 impl TransitionKind {
+    /// Return the transition's name, spelled as the deploy log serializes it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TransitionKind::Apply => "apply",
+            TransitionKind::Skip => "skip",
+            TransitionKind::Recreate => "recreate",
+            TransitionKind::Migrate => "migrate",
+            TransitionKind::Drain => "drain",
+            TransitionKind::Delete => "delete",
+            TransitionKind::Pause => "pause",
+            TransitionKind::Wait => "wait",
+        }
+    }
+
     /// Return the short prefix tag used in renderers, or `None` for `Apply`.
     pub fn tag(self) -> Option<&'static str> {
         match self {
             TransitionKind::Apply => None,
-            TransitionKind::Skip => Some("skip"),
-            TransitionKind::Recreate => Some("recreate"),
-            TransitionKind::Migrate => Some("migrate"),
-            TransitionKind::Drain => Some("drain"),
-            TransitionKind::Delete => Some("delete"),
-            TransitionKind::Pause => Some("pause"),
-            TransitionKind::Wait => Some("wait"),
+            kind => Some(kind.as_str()),
         }
+    }
+}
+
+impl std::fmt::Display for TransitionKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -197,9 +211,11 @@ pub enum NodeDetail {
     /// A resource carrying `kix.run/rerun` was deleted and created again
     /// under the rerun rule (its own content changed, or its last run failed).
     Rerun { reason: String },
-    /// An `OnDelete` DaemonSet is ready, and `stale` of its pods run the
-    /// previous pod template until someone deletes them.
-    PendingRestart { stale: i64, message: String },
+    /// The resource is ready, and its running workload keeps the previous
+    /// spec until someone restarts it. `stale` counts the pods of an
+    /// `OnDelete` DaemonSet that run the previous template. It is `None` for
+    /// a custom resource in its declared `pendingRestart` state.
+    PendingRestart { stale: Option<i64>, message: String },
 }
 
 /// Metadata attached to a node at plan-time.
@@ -404,4 +420,30 @@ pub struct DeployResult {
 pub struct NodeFailure {
     pub node: NodeId,
     pub message: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cluster::apply::ApplyAction;
+
+    fn serialized<T: Serialize>(value: T) -> String {
+        serde_json::to_value(value)
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    #[test]
+    fn names_match_the_deploy_log() {
+        use TransitionKind::*;
+        for kind in [Apply, Skip, Recreate, Migrate, Drain, Delete, Pause, Wait] {
+            assert_eq!(kind.as_str(), serialized(kind));
+        }
+        use ApplyAction::*;
+        for action in [Created, Configured, Unchanged, Skipped] {
+            assert_eq!(action.as_str(), serialized(action.clone()));
+        }
+    }
 }

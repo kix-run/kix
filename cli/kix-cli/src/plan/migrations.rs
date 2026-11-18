@@ -6,6 +6,8 @@ use std::fmt::Write;
 use kix::cluster::migrate::MigrationPair;
 use kix::plan::document::Migration;
 
+use crate::commands::deploy::Command;
+
 /// One replacement as the messages name it.
 pub struct Replacement {
     pub slot: String,
@@ -61,23 +63,29 @@ pub enum SourceFate {
     OperatorPrunes,
 }
 
-/// Return the text `kix deploy` prints when it stops on `pairs` because
-/// `--accept-migrations` is not set. `fate` says what the deploy would do
-/// with each old workload.
-pub fn stop(cluster: &str, pairs: &[Replacement], fate: SourceFate) -> String {
+/// Return the text `command` prints when it stops on `pairs` because
+/// `--accept-migrations` is not set. `fate` says what the run would do with
+/// each old workload. A rollback's text starts with the id of the change
+/// record that made a rollback stop here.
+pub fn stop(cluster: &str, pairs: &[Replacement], fate: SourceFate, command: Command) -> String {
     let n = pairs.len();
+    let noun = command.noun();
+    let id = match command {
+        Command::Deploy => "",
+        Command::Rollback => "[K3354] ",
+    };
     let mut out = String::new();
     match fate {
         SourceFate::OperatorPrunes => {
             let _ = writeln!(
                 out,
-                "Deploy of '{cluster}' refused: cannot hand {n} stateful workload replacement(s) to the operator without `--accept-migrations`."
+                "{id}{noun} of '{cluster}' refused: cannot hand {n} stateful workload replacement(s) to the operator without `--accept-migrations`."
             );
         }
         _ => {
             let _ = writeln!(
                 out,
-                "Deploy of '{cluster}' stopped: {n} stateful workload replacement(s) require `--accept-migrations`."
+                "{id}{noun} of '{cluster}' stopped: {n} stateful workload replacement(s) require `--accept-migrations`."
             );
         }
     }
@@ -86,7 +94,7 @@ pub fn stop(cluster: &str, pairs: &[Replacement], fate: SourceFate) -> String {
     let _ = writeln!(out, "  Stateful workload replacements ({n}):");
     write_pairs(&mut out, pairs);
     let _ = writeln!(out);
-    let _ = writeln!(out, "  What happens on deploy:");
+    let _ = writeln!(out, "  What happens on {}:", noun.to_lowercase());
     for p in pairs {
         let line = match fate {
             SourceFate::Kept => format!(
@@ -111,6 +119,8 @@ pub fn stop(cluster: &str, pairs: &[Replacement], fate: SourceFate) -> String {
     }
     let _ = writeln!(out);
     let _ = writeln!(out, "  Next:");
+    let invocation = command.invocation();
+    let run = noun.to_lowercase();
     let sources = pairs
         .iter()
         .map(|p| p.source.as_str())
@@ -120,18 +130,18 @@ pub fn stop(cluster: &str, pairs: &[Replacement], fate: SourceFate) -> String {
         SourceFate::Kept => {
             let _ = writeln!(
                 out,
-                "    Prepare or migrate your data, then run the deploy with `--accept-migrations`:"
+                "    Prepare or migrate your data, then run the {run} with `--accept-migrations`:"
             );
-            let _ = writeln!(out, "      kix deploy {cluster} --accept-migrations");
+            let _ = writeln!(out, "      {invocation} {cluster} --accept-migrations");
         }
         SourceFate::Pruned => {
             let _ = writeln!(
                 out,
-                "    Back up or migrate data from {sources} first, then run the deploy with `--accept-migrations`:"
+                "    Back up or migrate data from {sources} first, then run the {run} with `--accept-migrations`:"
             );
             let _ = writeln!(
                 out,
-                "      kix deploy {cluster} --prune --accept-migrations"
+                "      {invocation} {cluster} --prune --accept-migrations"
             );
         }
         SourceFate::OperatorPrunes => {
@@ -141,7 +151,7 @@ pub fn stop(cluster: &str, pairs: &[Replacement], fate: SourceFate) -> String {
             );
             let _ = writeln!(
                 out,
-                "      kix deploy {cluster} --operator --accept-migrations"
+                "      {invocation} {cluster} --operator --accept-migrations"
             );
         }
     }
@@ -260,7 +270,7 @@ mod tests {
     /// command with the flags the fate needs.
     #[test]
     fn a_stop_says_nothing_was_applied_and_names_the_flag() {
-        let text = stop("prod", &[pair()], SourceFate::Pruned);
+        let text = stop("prod", &[pair()], SourceFate::Pruned, Command::Deploy);
         assert!(
             text.contains("Nothing was applied to the cluster."),
             "{text}"
@@ -270,12 +280,33 @@ mod tests {
             text.contains("kix deploy prod --prune --accept-migrations"),
             "{text}"
         );
-        let kept = stop("prod", &[pair()], SourceFate::Kept);
+        let kept = stop("prod", &[pair()], SourceFate::Kept, Command::Deploy);
         assert!(kept.contains("kept on the cluster as an orphan"), "{kept}");
-        let operator = stop("prod", &[pair()], SourceFate::OperatorPrunes);
+        let operator = stop(
+            "prod",
+            &[pair()],
+            SourceFate::OperatorPrunes,
+            Command::Deploy,
+        );
         assert!(
             operator.starts_with("Deploy of 'prod' refused"),
             "{operator}"
         );
+    }
+
+    /// A rollback stops on the same migration and names its own command,
+    /// with the id of the change that made it stop.
+    #[test]
+    fn a_rollback_stop_names_kix_rollback() {
+        let text = stop("prod", &[pair()], SourceFate::Kept, Command::Rollback);
+        assert!(
+            text.starts_with("[K3354] Rollback of 'prod' stopped"),
+            "{text}"
+        );
+        assert!(
+            text.contains("kix rollback prod --accept-migrations"),
+            "{text}"
+        );
+        assert!(!text.contains("kix deploy"), "{text}");
     }
 }

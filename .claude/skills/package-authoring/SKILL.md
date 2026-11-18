@@ -21,6 +21,7 @@ makes keeping this file current part of changing the package conventions.
 | CRDs and operator RBAC | `.claude/skills/crd-vendoring/SKILL.md`; `docs/src/content/docs/reference/secrets-crds-and-rbac.mdx` |
 | Any prose, including comments and the header | `CLAUDE.prose.md`, `CLAUDE.md` "Code comments" |
 | Logging what you notice and do not fix | `CLAUDE.housekeeping.md` |
+| Moving a package to a newer upstream version | "Upgrading the version a package pins" at the end of this file |
 
 Read `PRINCIPLES.md`, the package-review checklist headings, and the closest
 reference package in full before writing; open the rest when a decision
@@ -36,7 +37,7 @@ package in the pattern table below, the code wins.
 
 ## Setup
 
-- One git worktree per package, outside the checkout (`../kixpkgs-wt/<name>`).
+- One git worktree per package, outside the checkout (`../kix-wt/<name>`).
   If one exists, check `git -C <path> status` and its log; reuse it when it
   holds no work, and rebase it on `origin/main` before the review, or the
   reviewer's diff against `origin/main` shows main's newer commits reversed.
@@ -127,7 +128,7 @@ named decision; record the fact and its upstream path in the pull request.
 | Clustering and HA, in source | in-memory state, sessions, caches, job queues, leader election, peer discovery, cron singletons | the `pick` table and any ceiling (step 3) |
 | Monitoring material and failure reports | shipped rules or mixins, outage threads | alerts (step 9) |
 | Admission webhook configurations (chart templates, `config/webhook/`, the controller's startup code) | whether the controller reads or patches its own configuration at startup (certificate injection into `caBundle`), and whether it fails to start without it | which object requires which, and whether CRD handles need a check Job (C21, C26) |
-| CRDs (chart `crds/`, `config/crd/bases/`, release bundle) | public URL at the tag, conversion webhooks, condition types and which of them the controller sets for a spec it rejects and does not revisit, what the operator deletes with each custom resource (its volumes, its backup files) | `crds/sources.txt`, readiness (C5) and its `failed` list (C6a), `holdsData` (C24) |
+| CRDs (chart `crds/`, `config/crd/bases/`, release bundle) | public URL at the tag, conversion webhooks, condition types and which of them the controller sets for a spec it rejects and does not revisit, which status field holds the generation the controller has acted on and whether `status.observedGeneration` means that, whether a spec change can wait for a restart of the running workload, what the operator deletes with each custom resource (its volumes, its backup files) | `crds/sources.txt`, readiness (C5), its `failed` list (C6a), its `observedGeneration` and `pendingRestart` (C6b), `holdsData` (C24) |
 | Kubernetes client calls, for a program that calls the API with RBAC not vendored from upstream (crd-vendoring covers vendored roles) | every call (list, get, watch, create, update, patch, delete, deletecollection) on every resource and subresource (`pods/log`, `<kind>/status`), at startup and in every code path | the Role: one rule per call, nothing extra (C10, C23) |
 
 "Does it run replicated, and what does it need for that?" is a mandatory
@@ -179,8 +180,8 @@ is a finding from the upstream source, not a default.
    concurrent-safe (then Recreate, keycloak:83-88); session affinity (a
    Service setting, not a ceiling); cron or queue singletons (a ceiling on that
    workload only, or upstream's "run the scheduler in one pod" flag); one RWO
-   volume as the state (immich:157-159); one owner of an OS resource
-   (firezone:85-87). For each piece of in-memory state, also note what a
+   volume as the state (immich:157-159); one owner of an OS resource,
+   such as a network interface. For each piece of in-memory state, also note what a
    restart loses (sessions, buffered events), since Recreate and a singleton
    make every deploy a restart; the header's `Limits:` says it.
 3. If it replicates with configuration, configure it (keycloak's jdbc-ping,
@@ -278,7 +279,7 @@ the defaults fails there.
   are new, so a new consumer finding gaps in them is expected.
 - Test a contract change three ways: `every-package-evaluates` (every provider
   and consumer re-evaluates); the contract's swap check (`clickhouse-swap`,
-  `postgres-swap`, `gateway-swap`; `flake.nix:199, 235, 278`, fixtures under
+  `postgres-swap`, `gateway-swap`; `flake.nix:240, 275, 317`, fixtures under
   `clusters/test-*-swap/`); a lib unit test when a vocab file changed. A new
   consumer that reads fields which differ between implementations gets a swap
   fixture (`clusters/test-clickhouse-swap/consumer.nix`).
@@ -419,14 +420,17 @@ existence check before `CREATE`, an upsert, `kubectl annotate --overwrite`).
 Never generate a secret or append to a log in the Job without checking first
 (stackgres-database's bootstrap script is the model).
 
-A Job under `kix.run/rerun` reruns only when its own manifest changes, which
-includes the `checksum/*` annotations on its pod template. Give it one for
-each resource it reads or acts on whose change must run it again (the
-password Secret, the server it bootstraps, the webhook it checks), from that
-resource's `out.contentHash`, and drop those resources from `requires`.
-`kix check` warns when the Job reads a Kix-built Secret or ConfigMap
-without one. It cannot see the objects the Job acts on, so list those
-yourself.
+A Job with `kix.run/rerun` reruns when its own manifest changes, including
+any `checksum/*` annotations on its pod template. It also reruns when a
+Kix-built Secret or ConfigMap read by its pod (through a volume, `env`, or
+`envFrom`) changes; the Kix library includes those reads in
+`kix.run/rerun-hash`, so do not add `checksum/*` annotations for them. Add a
+`checksum/<name>` annotation set to `out.contentHash` on the pod template
+only for resources the Job reaches over the network or the Kubernetes API
+that should trigger a rerun (such as a server it bootstraps or a webhook it
+checks), and omit those resources from `requires`. Kix does not know the
+content of a `secret-ref` Secret, so changes to it never rerun the Job;
+document this in the package header when relevant.
 A change elsewhere in the graph, such as a namespace label, does not run it.
 
 ### Pattern to reference package
@@ -444,15 +448,15 @@ The only place in this skill with package line numbers. `pkg:N` is
 | `mergeEnv` defaults and owned groups | metabase:168-232 |
 | Discrete database variables through `keyRef`, owned `_FILE` twins | metabase:187-203 |
 | URL-shaped credential through `$(VAR)` | vaultwarden:143-147, 212-233 |
-| `guardArgs`, owned flags from owned env groups | keycloak:376 |
+| `guardArgs`, owned flags from owned env groups | keycloak:398 |
 | `mergeGuarded` on `settings` or `extraSpec` | tempo:386; cnpg-cluster:323, 430, 514 |
 | Migrations at start: Recreate, deadline from `startupSeconds`, probes | metabase:94-97, 252-256, 284-304 |
 | Config injection into a dependency | metabase:109-112; stackgres-database:120-125; cnpg-database:94-115 |
-| Contracts: consumer `assertions`, provider `check` | metabase:112; stackgres-database:554; keycloak:537; tempo:631 |
+| Contracts: consumer `assertions`, provider `check` | metabase:112; stackgres-database:554; keycloak:559; tempo:631 |
 | `pick` as an option default with `defaultText` | `cnpg-cluster/options.nix`:12-18 |
-| `pick` inline, header names the instance override (O19) | keycloak:234, header 74-76 |
-| `atLeast` | valkey:107 |
-| Ceilings: package-wide, per builder | tempo:276; valkey:546, `harbor/registry.nix`:245, `harbor/jobservice.nix`:338 |
+| `pick` inline, header names the instance override (O19) | keycloak:256, header 74-76 |
+| `atLeast` | valkey:122 |
+| Ceilings: package-wide, per builder | tempo:276; valkey:561, `harbor/registry.nix`:245, `harbor/jobservice.nix`:338 |
 | `kix.expose`, `exposure.urlOrNull` | metabase:172-175, 367 |
 | Metrics toggle that does not restart the workload | metabase:152-157; keycloak header 30-35 |
 | `kix.monitor` with alerts | openbao:393; clickhouse:626-636 and `alerts.nix` |
@@ -461,7 +465,7 @@ The only place in this skill with package line numbers. `pkg:N` is
 | Checksum annotations from `out.contentHash`, `enableServiceLinks = false` | metabase:258-271 |
 | Facade: consumer-namespace Secret, server-namespace Job | clickhouse-database:1-36; stackgres-database |
 | Facade resources in the server's namespace named with the consumer's namespace | clickhouse-database:356 (`serverSideName`) |
-| A Job that runs again when its content changes: a fixed name, `kix.run/rerun` (never a hash in the name), and `checksum/*` for what it reads | stackgres-database:449-466; clickhouse-database:507-526 |
+| A Job that runs again when its content changes: a fixed name, `kix.run/rerun` (never a hash in the name), and `checksum/*` only for resources reached over the network or the Kubernetes API | stackgres-database:449-465; clickhouse-database:506-523 |
 | Privileges injected into a facade, with the upstream file for each, and asserted on `out` | plausible:183-195, 213-253 |
 | Migrations in an init container sharing the server's env and mounts (`kix.withMountsOn [ "migrate" "plausible" ]`) | plausible:620-626, 693; vaultwarden:180-202, 277 |
 | One volume written by an init container and read by the main containers (two mount records, one `readOnly`) | n8n:499-513, 679-680 |
@@ -487,16 +491,18 @@ Mandatory:
 
 1. `kix/packages/experimental/<pkg>/default.nix`.
 2. `kix/package-eval.nix`: a `settings` entry when the package needs deps or
-   config to evaluate at `none` and `zone` (`:105`; keycloak at `:290-308`).
+   config to evaluate at `none` and `zone` (`:105`; keycloak at `:312-330`).
 3. `clusters/test-<pkg>.nix`: every toggle on, each optional dependency
    present at least once, a `cilium` instance and `networkPolicy.enable = true`
    so the kind deploy runs under default deny, and the bring-up, build, and
    deploy commands in the header (`clusters/test-clickhouse.nix:13-21`,
    `clusters/test-keycloak.nix:1-15`). A dependency from an unmerged change
    is a `kix.mkImport` stand-in; note the merge order.
-4. `clusters/flake.nix`: register the cluster in `clusters`.
+4. Nothing in `flake.nix`: `clusters/test-<pkg>.nix` registers itself under
+   the key `<pkg>`. A cluster kept in a directory, such as
+   `clusters/test-<pkg>/kind.nix`, needs a line under `clusters` there.
 5. `kix/lib/tests/units/<pkg>.nix`: names `<topic>-<what>`, helpers as in
-   `kix/lib/tests/units/keycloak.nix:8-18`. Each `evalFails` has a positive
+   `kix/lib/tests/units/keycloak.nix:8-19`. Each `evalFails` has a positive
    control (T2). Two instances in two namespaces (Na2, Na10) and each
    optional dependency absent (D15) are evaluated here with `mkCluster`, so
    they are committed, not a scratch run.
@@ -518,7 +524,8 @@ Conditional:
 11. `crds/` with `crds/sources.txt`, and `rbac/` (crd-vendoring skill); sibling
     files such as `health-check.py`, `release.nix`, and `alerts.nix`.
 12. `clusters/test-<contract>-swap/` for a second implementation of an alias,
-    registered in `clusters/flake.nix` and the root `flake.nix`.
+    and `flake.nix` to add both clusters to `clusters` and a `<contract>-swap`
+    check to `checks`.
 13. `docs/src/content/docs/reference/` and `docs/src/content/docs/explanation/`,
     and the kix-migration, package-review, and crd-vendoring skills and this
     one, when a lib API, role, `meta` key, or convention changes (T6).
@@ -531,16 +538,16 @@ Cheap first. Each step assumes the earlier ones pass.
 ```bash
 F=--extra-experimental-features; P=pipe-operators
 git add -A kix/packages/experimental/<pkg> clusters kix/lib/tests                     # 0. the fetcher sees nothing untracked
-nix build ./clusters#cluster-<cluster> $F $P                             # 1. the test cluster, every toggle on (use ./scripts/kix-manifests.sh ./clusters <cluster> ./result if it uses Helm); read its traces
+nix build .#cluster-<cluster> $F $P                                      # 1. the test cluster, every toggle on (use ./scripts/kix-manifests.sh . <cluster> ./result if it uses Helm); read its traces
 nix build .#checks.x86_64-linux.every-package-evaluates $F $P            # 2. defaults at none and zone, option contract, settings entry
 nix build .#checks.x86_64-linux.kix-lib-tests $F $P                      # 3. unit tests, negative tests with controls
-nix build ./clusters#checks.x86_64-linux.rules-cluster-<cluster> $F $P   # 4. promtool check and the .rules-test.yaml (alerts only; use ./scripts/cluster-checks.sh if the cluster uses Helm)
+nix build .#checks.x86_64-linux.rules-cluster-<cluster> $F $P            # 4. promtool check and the .rules-test.yaml (alerts only; use ./scripts/cluster-checks.sh if the cluster uses Helm)
 nix build .#checks.x86_64-linux.{clickhouse,postgres,gateway}-swap $F $P # 5. the contract's swap check (contract changes only)
 nix shell nixpkgs#uv -c uv run --frozen scripts/vendor-crds.py --check   # 6. CRDs only
 nix run .#kix -- check homelab-kind                                       # 7. smoke over the full package set
 ```
 
-`<cluster>` is the key in `clusters/flake.nix`. When `every-package-evaluates`
+`<cluster>` is the key under `clusters` in `flake.nix`. When `every-package-evaluates`
 fails, `evaluate level name` (`kix/package-eval.nix:742`) evaluates one
 package at one level. From the worktree root, with `$PWD` absolute:
 
@@ -584,8 +591,8 @@ deploy is the slowest and most informative step.
      - { role: worker, labels: { topology.kubernetes.io/zone: c } }
    ```
 
-   Deploy with `nix run .#kix -- deploy <cluster> --flake ./clusters
-   --context <context> -y`, taking the cluster key and context from the
+   Deploy with `nix run .#kix -- deploy <cluster> --context <context> -y`,
+   taking the cluster key and context from the
    header (`scripts/kind-operators.sh:49`; add `--timeout` for a slow first
    start, `clusters/test-keycloak.nix:12-14`). Run clusters one at a time.
    Kind finds what evaluation cannot: a wrong uid, a duplicate extension, a
@@ -621,9 +628,9 @@ deploy is the slowest and most informative step.
    then deploy the change on top:
 
    ```bash
-   git fetch origin && git worktree add ../kixpkgs-wt/main origin/main
-   nix run .#kix -- deploy <cluster> --flake ../kixpkgs-wt/main/clusters --context <context> -y
-   nix run .#kix -- deploy <cluster> --flake ./clusters --context <context> -y
+   git fetch origin && git worktree add ../kix-wt/main origin/main
+   nix run .#kix -- deploy <cluster> --flake ../kix-wt/main --context <context> -y
+   nix run .#kix -- deploy <cluster> --context <context> -y
    ```
 
    The second deploy applies with no extra flag (`--accept-migrations`,
@@ -643,3 +650,123 @@ deploy is the slowest and most informative step.
    housekeeping entries filed. When a package-review item proved wrong, add a
    "Checklist feedback" line and fix that skill in the same change.
 5. Nothing merges without the user.
+
+## Upgrading the version a package pins
+
+A version bump is rarely one line. Upstream moves ports, probes, flags,
+RBAC rules, and the image's user between releases, and files outside the
+package cite the version. The work is done when `scripts/check-bump.sh`
+prints `check-bump: PASS` and the upgrade deploy below has run.
+
+### Order of work
+
+1. Decide the target and read what changed upstream.
+2. Deploy the old version on kind and write state, before you edit any file
+   of the package. Editing first forces you to undo the edits to get the old
+   version back.
+3. Edit and commit.
+4. Run `scripts/check-bump.sh <package-dir> <old-version>` until it passes.
+5. Deploy the new version over the old one, verify, and test going back.
+
+### The target and the upstream changes
+
+- The target is the latest stable upstream release, unless the task names
+  another. When you stay on an older line, name the newer release and say
+  why you did not upgrade to it. Confirm the target's images exist for every
+  platform the old ones did: a release whose image publishing failed is
+  followed by a fix release.
+- Read the notes of every release between the pinned version and the
+  target. Release notes omit what a package depends on. Also compare
+  upstream's own deployment files between the two versions (manifests, Helm
+  chart templates, the Dockerfile, the default config) for ports, probes,
+  flags, environment variables, RBAC rules, the image's user, and files the
+  image now ships. A package that copies any of these follows them.
+- Write down what upstream says about which versions can upgrade directly
+  to which, and about going back. Upstream often says nothing. Then say
+  what you learned from its source or from testing.
+- Find the Kubernetes versions upstream supports for the target, and name
+  the source. Upstream's stated support (a support matrix, a requirements
+  page, a support policy) wins. Versions upstream only tests do not widen
+  or narrow a stated range. Use tested versions (its CI or e2e matrix) only
+  when upstream states no support, and `go.mod`'s client-go version only as
+  a last resort.
+
+### The edit
+
+- Encode that range in `meta.k8s` as `minVersion` and `maxVersion`, with a
+  `reason` that names the release and the range, so Kix refuses a cluster
+  that declares a version upstream does not support. For an open range
+  ("1.25 and later") set only `minVersion`. When upstream states no range,
+  leave `meta.k8s` as it is and say so in the pull request. A range that
+  refuses a version the package accepted before needs an `error` change
+  record: put its id at the start of `reason` as `[Kxxxx]`, and add a unit
+  test in `kix/lib/tests/units/` that refuses a version on each side and
+  accepts one inside (`cilium-k8s-range` in `cilium.nix` has the shape).
+
+- List every image the package renders, including images an operator is
+  told to deploy, and decide for each whether it moves.
+- Pin the multi-arch index digest of each new tag. Check your lookup first:
+  it must return the digest the package already pins for the old tag.
+- Re-vendor CRDs and roles with `scripts/vendor-crds.py` (crd-vendoring
+  skill).
+- Add or update the header's `Upgrades:` paragraph. It says whether the new
+  version works with what the old one left behind, whether going back
+  works, and what an operator does to go back.
+- Add a change record. Its text tells the user what changes for them and
+  what to do. Choose the kind from what a user who upgrades gets, and name
+  the other kind you considered in the pull request.
+
+### Files outside the package
+
+`scripts/check-bump.sh` finds these and lists every place the old version
+still appears. Update each place, or say why it stays.
+
+- `cli/kix-cli/tests/snapshots/` when the package is in the example
+  cluster. The snapshots hold hashes that change too, so regenerate them
+  instead of editing them directly. From `cli/`: `nix develop .. -c env
+  INSTA_UPDATE=always cargo test -p kix-cli --test snapshot_test`.
+- `docs/src/command-output/`: `nix run ./docs#regen-captures-offline --
+  --apply`. Revert a file in which only a timestamp changed.
+- `kix/lib/tests/units/`: a test that names the next version as one the
+  package must refuse fails after the bump. Move it up.
+- `ROADMAP.md`, where the package's entry cites its release.
+
+### The upgrade deploy
+
+Use the package's test cluster (file list, item 3) and the kind deploy in
+"Handover", step 3, with these additions.
+
+1. Deploy the old version. Confirm it works by using it, and do not rely on
+   pod status alone.
+2. Write state that exercises what the package stores or manages: data in a
+   volume, objects it reconciles, records it keeps. A package with
+   dependents in the repository has one in the test cluster.
+3. Deploy the new version with the same command and no extra flag. The plan
+   names the old and the new version.
+4. Check what the software itself reports. A deploy can return before an
+   operator has finished upgrading, and it can report success when an
+   operator has refused the change. Read each pod's image digest, the
+   version the program logs or serves, an operator's status fields, and the
+   PackageInstance version.
+5. Check that the state from step 2 is intact and that the package does new
+   work. A ready pod does not show this: Grafana 13.3 ran ready with every
+   data source missing.
+6. Test going back in the way that fits the package. For software that
+   keeps data files, start the old version on a copy of the files the new
+   version wrote. For an operator, deploy the old package over the new one
+   and read what the operator reports. Report the exact result. Look for an
+   upstream setting that permits going back, and test it.
+
+### Working beside other agents
+
+- `kind create cluster` and `kind delete cluster` change the current
+  context in the shared `~/.kube/config`. Pass `--kubeconfig
+  /tmp/kc-<cluster>` when you create the cluster, and set `KUBECONFIG` to
+  that file for every command.
+- Reach a Service with `kubectl exec`, or pick an unused local port for a
+  port-forward and start it again after each deploy. A forward stays on the
+  old pod.
+- Leave no login in the shared `~/.docker/config.json`.
+- Delete your kind cluster when you finish. Each worktree that runs a cargo
+  test builds its own target directory under
+  `$XDG_CACHE_HOME/kix-cargo-target`. Delete it when the worktree goes.

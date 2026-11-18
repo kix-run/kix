@@ -230,12 +230,8 @@ mod delete_tests {
     use kix::manifest::lifecycle::PHASE_ACTIVE;
     use serde_json::json;
 
-    fn rid(kind: &str, name: &str) -> ResourceId {
-        ResourceId {
-            kind: kind.into(),
-            name: name.into(),
-            namespace: CLUSTER_SCOPED.into(),
-        }
+    fn rid(group: &str, kind: &str, name: &str) -> ResourceId {
+        ResourceId::new(group, kind, CLUSTER_SCOPED, name)
     }
 
     /// Verify that `delete_resources` skips protected kinds without issuing API
@@ -248,8 +244,12 @@ mod delete_tests {
             "metadata": { "name": "gone" },
         })]);
         let resources = vec![
-            rid("CustomResourceDefinition", "widgets.example.com"),
-            rid("Namespace", "gone"),
+            rid(
+                "apiextensions.k8s.io",
+                "CustomResourceDefinition",
+                "widgets.example.com",
+            ),
+            rid("", "Namespace", "gone"),
         ];
         let done = delete_resources(&api.client(), "a", &resources)
             .await
@@ -295,9 +295,9 @@ mod delete_tests {
             o["metadata"]["annotations"][keys::ACTIVATIONS] = json!("a1,b1");
         });
         let resources = vec![
-            rid("ClusterRole", "mine"),
-            rid("ClusterRole", "shared"),
-            rid("ClusterRole", "racing"),
+            rid("rbac.authorization.k8s.io", "ClusterRole", "mine"),
+            rid("rbac.authorization.k8s.io", "ClusterRole", "shared"),
+            rid("rbac.authorization.k8s.io", "ClusterRole", "racing"),
         ];
         let done = delete_resources(&api.client(), "a", &resources)
             .await
@@ -311,6 +311,32 @@ mod delete_tests {
             }
         );
         assert_eq!(api.names("ClusterRole"), vec!["racing", "shared"]);
+    }
+
+    /// `delete_resources` deletes through the API of the object's own group,
+    /// though `/apis` lists another group that serves a `Job` kind first.
+    #[tokio::test]
+    async fn delete_resources_deletes_through_the_objects_group() {
+        use kix::cluster::fake_api::OTHER_JOB_GROUP;
+        let other_version = format!("{OTHER_JOB_GROUP}/v1alpha1");
+        let job = |api_version: &str| {
+            json!({
+                "apiVersion": api_version,
+                "kind": "Job",
+                "metadata": {
+                    "name": "x",
+                    "namespace": "default",
+                    "annotations": { (keys::ACTIVATIONS): "a1" },
+                },
+            })
+        };
+        let api = FakeApi::new([record("a", "a1"), job("batch/v1"), job(&other_version)]);
+        let done = delete_resources(&api.client(), "a", &[rid("batch", "Job", "x")])
+            .await
+            .unwrap();
+        assert_eq!(done.deleted, 1);
+        assert!(api.names_of("batch/v1", "Job").is_empty());
+        assert_eq!(api.names_of(&other_version, "Job"), vec!["x"]);
     }
 }
 

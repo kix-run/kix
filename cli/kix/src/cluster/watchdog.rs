@@ -401,14 +401,7 @@ pub fn describe(idle: Duration, in_flight: &[InFlight]) -> String {
     let mut parts: Vec<String> = in_flight
         .iter()
         .take(SHOWN)
-        .map(|f| {
-            format!(
-                "{} ({}, {}s)",
-                node_label(&f.node),
-                f.phase.as_str(),
-                f.since.as_secs()
-            )
-        })
+        .map(|f| format!("{} ({}, {}s)", f.node, f.phase.as_str(), f.since.as_secs()))
         .collect();
     if in_flight.len() > SHOWN {
         parts.push(format!("and {} more", in_flight.len() - SHOWN));
@@ -449,7 +442,7 @@ pub fn describe_wait(
     };
     format!(
         "{} waiting: {doing} ({age}){}",
-        node_label(node),
+        node,
         describe_holds(holds, holds_total)
     )
 }
@@ -466,7 +459,7 @@ fn describe_holds(holds: &[NodeId], holds_total: usize) -> String {
     } else {
         format!("{holds_total} objects wait for it")
     };
-    let names: Vec<String> = holds.iter().take(NAMED).map(node_label).collect();
+    let names: Vec<String> = holds.iter().take(NAMED).map(NodeId::to_string).collect();
     let more = holds_total.saturating_sub(names.len());
     let list = match (names.len(), more) {
         (0, _) => String::new(),
@@ -478,13 +471,6 @@ fn describe_holds(holds: &[NodeId], holds_total: usize) -> String {
         format!("; {what}")
     } else {
         format!("; {what}: {list}")
-    }
-}
-
-fn node_label(id: &NodeId) -> String {
-    match id {
-        NodeId::Resource(rid) => rid.display_id(),
-        NodeId::Synthetic(s) => s.clone(),
     }
 }
 
@@ -590,6 +576,7 @@ mod tests {
         let progress = Progress::new();
         progress.set_readiness_budget(secs(180));
         let node = NodeId::Resource(ResourceId {
+            group: String::new(),
             kind: "Service".into(),
             namespace: "app".into(),
             name: "web".into(),
@@ -629,6 +616,7 @@ mod tests {
 
     fn res(kind: &str, namespace: &str, name: &str) -> NodeId {
         NodeId::Resource(ResourceId {
+            group: String::new(),
             kind: kind.into(),
             namespace: namespace.into(),
             name: name.into(),
@@ -897,6 +885,7 @@ mod tests {
     fn describe_names_the_longest_waiting_first_and_caps_the_list() {
         let f = |name: &str, phase: Phase, s: u64| InFlight {
             node: NodeId::Resource(ResourceId {
+                group: "apps".into(),
                 kind: "Deployment".into(),
                 namespace: "default".into(),
                 name: name.into(),
@@ -910,7 +899,7 @@ mod tests {
         );
         assert_eq!(
             line,
-            "no progress for 31s: waiting on Deployment/a@default (apply, 31s), Deployment/b@default (readiness, 29s)"
+            "no progress for 31s: waiting on Deployment.apps/a@default (apply, 31s), Deployment.apps/b@default (readiness, 29s)"
         );
         let many: Vec<InFlight> = (0..7)
             .map(|i| f(&format!("n{i}"), Phase::Apply, 10))

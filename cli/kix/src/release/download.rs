@@ -221,39 +221,63 @@ impl<W: Write> Write for Hashing<W> {
     }
 }
 
+/// Why a release archive cannot be installed.
+#[derive(Debug, thiserror::Error)]
+pub enum ArchiveError {
+    /// The archive could not be read or unpacked.
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error("it holds the path {}", .0.display())]
+    UnsafePath(PathBuf),
+    #[error("{} is outside {top}/", .path.display())]
+    Outside { path: PathBuf, top: String },
+    #[error("the link {} has no target", .0.display())]
+    LinkWithoutTarget(PathBuf),
+    #[error("the link {} points to {}, outside {top}/", .path.display(), .target.display())]
+    LinkOutside {
+        path: PathBuf,
+        target: PathBuf,
+        top: String,
+    },
+    #[error("{} is not a file, directory, or link", .0.display())]
+    NotFileDirOrLink(PathBuf),
+    #[error("it has no {top}/bin/kix")]
+    NoKix { top: String },
+}
+
 /// Unpack the gzip tar archive at `archive` into `dest`, after checking that
 /// every entry sits under the directory `top` and that every link points
 /// inside it. Return the reason when the archive breaks either rule.
-pub fn unpack(archive: &Path, dest: &Path, top: &str) -> Result<(), String> {
-    let open = || {
-        std::fs::File::open(archive)
-            .map(|f| tar::Archive::new(flate2::read::GzDecoder::new(f)))
-            .map_err(|e| e.to_string())
-    };
+pub fn unpack(archive: &Path, dest: &Path, top: &str) -> Result<(), ArchiveError> {
+    let open =
+        || std::fs::File::open(archive).map(|f| tar::Archive::new(flate2::read::GzDecoder::new(f)));
     check_entries(&mut open()?, top)?;
-    std::fs::create_dir_all(dest).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(dest)?;
     let mut tar = open()?;
     tar.set_preserve_permissions(false);
     tar.set_overwrite(false);
-    tar.unpack(dest).map_err(|e| e.to_string())
+    Ok(tar.unpack(dest)?)
 }
 
-fn check_entries<R: std::io::Read>(tar: &mut tar::Archive<R>, top: &str) -> Result<(), String> {
-    let entries = tar.entries().map_err(|e| e.to_string())?;
-    for entry in entries {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let path = entry.path().map_err(|e| e.to_string())?.into_owned();
-        let shown = path.display().to_string();
-        let parts = normal_parts(&path).ok_or_else(|| format!("it holds the path {shown}"))?;
+fn check_entries<R: std::io::Read>(
+    tar: &mut tar::Archive<R>,
+    top: &str,
+) -> Result<(), ArchiveError> {
+    for entry in tar.entries()? {
+        let entry = entry?;
+        let path = entry.path()?.into_owned();
+        let parts = normal_parts(&path).ok_or_else(|| ArchiveError::UnsafePath(path.clone()))?;
         if parts.first().map(String::as_str) != Some(top) {
-            return Err(format!("{shown} is outside {top}/"));
+            return Err(ArchiveError::Outside {
+                path,
+                top: top.to_string(),
+            });
         }
         let kind = entry.header().entry_type();
         if kind.is_symlink() || kind.is_hard_link() {
             let target = entry
-                .link_name()
-                .map_err(|e| e.to_string())?
-                .ok_or_else(|| format!("the link {shown} has no target"))?
+                .link_name()?
+                .ok_or_else(|| ArchiveError::LinkWithoutTarget(path.clone()))?
                 .into_owned();
             // A hard link names a path from the archive root, and a symbolic
             // link names one from the link's own directory.
@@ -263,13 +287,14 @@ fn check_entries<R: std::io::Read>(tar: &mut tar::Archive<R>, top: &str) -> Resu
                 parts[..parts.len() - 1].to_vec()
             };
             if !stays_inside(&base, &target, top) {
-                return Err(format!(
-                    "the link {shown} points to {}, outside {top}/",
-                    target.display()
-                ));
+                return Err(ArchiveError::LinkOutside {
+                    path,
+                    target,
+                    top: top.to_string(),
+                });
             }
         } else if !(kind.is_file() || kind.is_dir()) {
-            return Err(format!("{shown} is not a file, directory, or link"));
+            return Err(ArchiveError::NotFileDirOrLink(path));
         }
     }
     Ok(())
@@ -361,7 +386,7 @@ mod tests {
     fn check(entries: &[(&str, &str)]) -> Result<(), String> {
         let tmp = tempfile::tempdir().unwrap();
         let path = archive(tmp.path(), entries);
-        unpack(&path, &tmp.path().join("out"), "kix-1.0.0-x86_64-linux")
+        unpack(&path, &tmp.path().join("out"), "kix-1.0.0-x86_64-linux").map_err(|e| e.to_string())
     }
 
     #[test]

@@ -211,6 +211,13 @@
             "string",
             "null"
           ]
+        },
+        "unshared_paths": {
+          "description": "The paths in `paths` that Kix does not also own. Only these can stop\na deploy on a field ownership conflict. A field Kix also owns still\nholds the value Kix applied.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -218,7 +225,8 @@
         "operation",
         "subresource",
         "time",
-        "paths"
+        "paths",
+        "unshared_paths"
       ],
       "type": "object"
     },
@@ -268,6 +276,11 @@
           "const": "unknown",
           "description": "This account may not list the object's kind.",
           "type": "string"
+        },
+        {
+          "const": "ambiguous",
+          "description": "The object's record does not say its API group, and more than one\ngroup on the cluster serves its kind, so Kix cannot look it up.",
+          "type": "string"
         }
       ]
     },
@@ -306,6 +319,10 @@
           ],
           "description": "The drift check, or `null` when it did not run or the object is not\non the cluster."
         },
+        "group": {
+          "description": "The kind's API group. Left out for the core group.",
+          "type": "string"
+        },
         "identity_hash": {
           "type": "string"
         },
@@ -328,7 +345,7 @@
           ]
         },
         "needed_by": {
-          "description": "The objects that depend on this one, as `Kind namespace/name`, when\nit is missing.",
+          "description": "The objects that depend on this one, as `Kind.group namespace/name`\n(`Kind namespace/name` for the core group), when it is missing.",
           "items": {
             "type": "string"
           },

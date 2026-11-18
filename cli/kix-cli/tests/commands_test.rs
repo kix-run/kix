@@ -132,13 +132,34 @@ fn check_shows_library_warnings() {
         .expect("an eval row");
     assert_eq!(eval["result"], "pass");
     let listed = eval["findings"].as_array().expect("eval findings");
+    // The warning is a record: the instance that raised it is a field of
+    // its own, and the message does not repeat it.
+    let found = listed
+        .iter()
+        .find(|f| f["message"].as_str().unwrap_or("").contains(warning))
+        .unwrap_or_else(|| panic!("the availability warning: {eval}"));
+    assert_eq!(found["severity"], "warning");
+    let instance = found["instance"].as_str().expect("an instance field");
+    assert!(instance.contains('/'), "{found}");
     assert!(
-        listed
-            .iter()
-            .any(|f| f["severity"] == "warning"
-                && f["message"].as_str().unwrap_or("").contains(warning)),
-        "{eval}"
+        !found["message"].as_str().unwrap().contains(instance),
+        "{found}"
     );
+}
+
+/// `kix build` shows the library's warnings on stderr, and keeps stdout for
+/// the manifests.
+#[test]
+fn build_shows_library_warnings() {
+    kix()
+        .args(["build", "example"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Warnings from the Kix library"))
+        .stderr(predicate::str::contains(
+            "availability \"node\" was requested",
+        ))
+        .stdout(predicate::str::contains("Warnings").not());
 }
 
 #[test]
@@ -222,13 +243,12 @@ fn every_test_cluster_bundles() {
     assert!(failed.is_empty(), "{}", failed.join("\n"));
 }
 
-/// Verify that the evaluation-only flake checks of every flake in the
-/// repository pass when Kix renders their Helm charts: the
-/// `pi-wiring-cluster-<name>` check of each cluster and
-/// `every-package-evaluates`. Plain `nix flake check` stops at the first
-/// chart, because only `kix` renders charts. Evaluates every cluster, so it
-/// runs only when asked: `cargo test -p kix-cli --test commands_test --
-/// --ignored flake_checks_evaluate_with_helm`.
+/// Verify that the repository flake's evaluation-only checks pass when Kix
+/// renders their Helm charts: the `pi-wiring-cluster-<name>` check of each
+/// cluster and `every-package-evaluates`. Plain `nix flake check` stops at
+/// the first chart, because only `kix` renders charts. Evaluates every
+/// cluster, so it runs only when asked: `cargo test -p kix-cli --test
+/// commands_test -- --ignored flake_checks_evaluate_with_helm`.
 #[test]
 #[ignore]
 fn flake_checks_evaluate_with_helm() {
@@ -240,36 +260,33 @@ fn flake_checks_evaluate_with_helm() {
     let system = kix::eval::nix::current_system();
     let mut failed = Vec::new();
     let mut evaluated = 0;
-    for flake in [".", "clusters"] {
-        let dir = repo.join(flake);
-        let checks = format!(".#checks.{system}");
-        let names = kix::eval::nix::eval_with_helm(
-            &dir,
-            &[
-                &checks,
-                "--apply",
-                "c: builtins.concatStringsSep \" \" (builtins.attrNames c)",
-            ],
+    let checks = format!(".#checks.{system}");
+    let names = kix::eval::nix::eval_with_helm(
+        repo,
+        &[
+            &checks,
+            "--apply",
+            "c: builtins.concatStringsSep \" \" (builtins.attrNames c)",
+        ],
+        &[],
+        &kix::version::policy::LibraryVersion::Unknown,
+        &|_| {},
+    )
+    .unwrap();
+    for name in names
+        .split_whitespace()
+        .filter(|n| n.starts_with("pi-wiring-cluster-") || *n == "every-package-evaluates")
+    {
+        evaluated += 1;
+        let attr = format!("{checks}.{name}.drvPath");
+        if let Err(e) = kix::eval::nix::eval_with_helm(
+            repo,
+            &[&attr],
             &[],
             &kix::version::policy::LibraryVersion::Unknown,
             &|_| {},
-        )
-        .unwrap();
-        for name in names
-            .split_whitespace()
-            .filter(|n| n.starts_with("pi-wiring-cluster-") || *n == "every-package-evaluates")
-        {
-            evaluated += 1;
-            let attr = format!("{checks}.{name}.drvPath");
-            if let Err(e) = kix::eval::nix::eval_with_helm(
-                &dir,
-                &[&attr],
-                &[],
-                &kix::version::policy::LibraryVersion::Unknown,
-                &|_| {},
-            ) {
-                failed.push(format!("{flake}#{name}: {e}"));
-            }
+        ) {
+            failed.push(format!("{name}: {e}"));
         }
     }
     assert!(evaluated > 0);
@@ -380,9 +397,7 @@ fn without_a_runtime_kix_refuses_to_run_programs() {
     // A `nix` on PATH that would succeed if Kix ran it.
     let bin = tempfile::tempdir().unwrap();
     let fake = bin.path().join("nix");
-    std::fs::write(&fake, "#!/bin/sh\necho 'fake nix ran' >&2\nexit 0\n").unwrap();
-    use std::os::unix::fs::PermissionsExt as _;
-    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    common::write_executable(&fake, "#!/bin/sh\necho 'fake nix ran' >&2\nexit 0\n");
     let path = format!("{}:/usr/bin:/bin", bin.path().display());
 
     let without_runtime = || {

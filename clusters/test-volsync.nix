@@ -11,7 +11,7 @@
 # directly (copyMethod Direct). A snapshot-controller instance provides the
 # VolumeSnapshot API the operator needs to start.
 #
-# Build:  nix build .#cluster-volsync --extra-experimental-features pipe-operators
+# Build:  kix build volsync
 
 { kix, packages }:
 

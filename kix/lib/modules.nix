@@ -6,6 +6,7 @@ let
   errors = import ./core/error.nix { inherit lib; };
 
   isMoved = package: (package._type or "") == "kix-moved";
+  isRemoved = package: (package._type or "") == "kix-removed";
 
   # Return the name and the spelling of every package that moved to
   # experimental and that an instance names by an old spelling, read from the raw definitions so
@@ -68,7 +69,6 @@ in
   imports = [
     ./plugins/netpol/module.nix
     ./plugins/availability/module.nix
-    ./plugins/rerun/module.nix
   ];
 
   options = {
@@ -138,12 +138,14 @@ in
             options = {
               package = lib.mkOption {
                 type = lib.types.raw;
-                # A package that moved to experimental leaves a marker under
-                # its old name, which carries the error to show.
+                # A package that moved to experimental or was removed leaves
+                # a marker under its old name, which carries the error to show.
                 apply =
                   package:
                   if isMoved package then
                     errors.fail (movedMessage package)
+                  else if isRemoved package then
+                    errors.fail package.error
                   else if builtins.isPath package then
                     errors.fail {
                       message = "An instance's `package` is set to the path ${toString package} without `import`.";
@@ -162,16 +164,13 @@ in
                 type = lib.types.nullOr (lib.types.listOf lib.types.str);
                 default = null;
                 description = ''
-                  DI resolution keys for this instance, in addition to the
-                  instance name itself. A list replaces the package's
-                  `meta.defaultAliases`, so `[ ]` gives the instance no
-                  aliases. When unset (null, the default), the package
-                  defaults apply.
+                  Extra dependency names that resolve to this instance, besides
+                  its own name and the package's `meta.roles`. When `null` (the
+                  default), Kix uses the package's `meta.defaultAliases`. Setting
+                  a list replaces `meta.defaultAliases`, so `[ ]` clears them.
 
-                  For multi-instance disambiguation prefer `deps.<argName>
-                  = ref.<ns>.<inst>` at the consumer site. Aliases are
-                  not the right tool for that case.  See BEST-PRACTICES
-                  §8.4.
+                  When a cluster runs multiple instances of the same service,
+                  wire consumers explicitly with `deps.<argName> = ref.<ns>.<inst>`.
                 '';
               };
               config = lib.mkOption {
@@ -773,17 +772,17 @@ in
             default = [ ];
             example = [ "eks.amazonaws.com" ];
             description = ''
-              Annotation domains consumed by something outside kix (a cloud
-              control plane, org-convention metadata). Exempted from the
-              architecture.annotationDomainOwnership lint alongside the
-              reserved Kubernetes domains and domains declared by in-cluster
-              packages via meta.annotationDomains (v2_discussions/128).
+              Annotation domains handled outside Kix, such as cloud provider
+              or organization annotations. The
+              `architecture.annotationDomainOwnership` scorecard rule ignores
+              these domains instead of requiring an in-cluster package that
+              declares them in `meta.annotationDomains`.
             '';
           };
         };
       };
       default = { };
-      description = "Scorecard policy evaluation. See v2_discussions/60_scorecard_rules_design.md.";
+      description = "Build-time policy rules and severity settings for the cluster. The \"Scorecard and rules\" page of the Kix docs lists the rules.";
     };
 
     consumers = lib.mkOption {
@@ -849,9 +848,9 @@ in
                         Secrets present in this namespace for the consumer to
                         use. Only on an exact name. The interface lists them
                         by name, keys, and type. Kix does not create them:
-                        this cluster's own instances do, for example the
-                        reflector package, or a package that mints a
-                        credential per consumer.
+                        this cluster's own instances do, for example a
+                        packages.secret instance in that namespace, or a
+                        package that mints a credential per consumer.
                       '';
                     };
                   };

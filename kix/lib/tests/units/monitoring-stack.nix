@@ -7,6 +7,7 @@
 
 {
   lib,
+  kixlib,
   mkCluster,
   baseInstances,
   netpolOn,
@@ -97,10 +98,10 @@ in
   monitoring-stack-operator-tag-minor-refused =
     (
       !(evalFails (clusterWith {
-        instances.prometheus-operator.config.image.tag = "v0.92.9";
+        instances.prometheus-operator.config.image.tag = "v0.95.9";
       }))
       && evalFails (clusterWith {
-        instances.prometheus-operator.config.image.tag = "v0.93.0";
+        instances.prometheus-operator.config.image.tag = "v0.96.0";
       })
     )
     || throw "the image.tag minor refusal did not fire";
@@ -865,6 +866,47 @@ in
     )
     || throw "the kube-state-metrics flag refusal did not fire";
 
+  # A cluster that declares a Kubernetes version kube-state-metrics does not
+  # support is refused with the change record's id. The meta check is called
+  # directly, because a failed meta assertion fails the cluster before its
+  # messages can be read.
+  monitoring-stack-kube-state-metrics-k8s-range =
+    let
+      metaLib = import ../../meta.nix { inherit lib; };
+      meta =
+        (pkg "kube-state-metrics" {
+          inherit lib;
+          kix = kixlib;
+          scope = {
+            instanceName = "kube-state-metrics";
+            namespaceName = "monitoring";
+          };
+        }).meta;
+      refusals =
+        k8sVersion:
+        map (a: a.message) (
+          builtins.filter (a: !a.assertion) (
+            (metaLib.checkMetaStatic {
+              packageMeta = meta;
+              instanceName = "kube-state-metrics";
+              namespaceName = "monitoring";
+              clusterConfig = { inherit k8sVersion; };
+              resolvedDepMeta = { };
+              resolutionIndex.byKey = { };
+            }).assertions
+          )
+        );
+      refused = v: builtins.any (lib.hasInfix "[K9973]") (refusals v);
+    in
+    (
+      refused "1.35"
+      && refused "1.37.0"
+      && refusals "1.36" == [ ]
+      && refusals "1.36.4" == [ ]
+      && refusals null == [ ]
+    )
+    || throw "kube-state-metrics k8s range: 1.35 ${show (refusals "1.35")}, 1.37.0 ${show (refusals "1.37.0")}, 1.36.4 ${show (refusals "1.36.4")}";
+
   # node-exporter refuses the flags its probes, Service, and host mounts
   # read.
   monitoring-stack-node-exporter-owned-flags =
@@ -878,4 +920,40 @@ in
       && evalFails (withArgs [ "--collector.textfile.directory=/tmp" ])
     )
     || throw "the node-exporter flag refusal did not fire";
+
+  # A cluster that declares a Kubernetes version older than
+  # prometheus-operator supports is refused, and upstream states no newest
+  # version, so a newer one is accepted. The meta check is
+  # called directly, because a failed meta assertion fails the cluster
+  # before its messages can be read.
+  monitoring-stack-operator-k8s-range =
+    let
+      metaLib = import ../../meta.nix { inherit lib; };
+      meta =
+        (import ../../../packages/experimental/prometheus-operator {
+          inherit lib;
+          kix = kixlib;
+          scope = {
+            instanceName = "prometheus-operator";
+            namespaceName = "monitoring";
+          };
+        }).meta;
+      refusals =
+        k8sVersion:
+        map (a: a.message) (
+          builtins.filter (a: !a.assertion) (
+            (metaLib.checkMetaStatic {
+              packageMeta = meta;
+              instanceName = "prometheus-operator";
+              namespaceName = "monitoring";
+              clusterConfig = { inherit k8sVersion; };
+              resolvedDepMeta = { };
+              resolutionIndex.byKey = { };
+            }).assertions
+          )
+        );
+      refused = v: builtins.any (lib.hasInfix "requires Kubernetes 1.25 or later") (refusals v);
+    in
+    (refused "1.24" && refusals "1.38.0" == [ ] && refusals "1.25" == [ ] && refusals null == [ ])
+    || throw "prometheus-operator k8s range: 1.24 ${show (refusals "1.24")}, 1.38.0 ${show (refusals "1.38.0")}, 1.37.2 ${show (refusals "1.37.2")}";
 }

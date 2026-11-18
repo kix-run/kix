@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
+use crate::manifest::kinds;
 use crate::manifest::lifecycle::never_pruned;
 use crate::manifest::types::ResourceId;
 
@@ -14,9 +15,8 @@ use chrono::Utc;
 use super::super::apply::{ApplyAction, ApplyError, ApplyResult, ChangeAction};
 use super::super::cancel::CancelToken;
 use super::super::graph::ResourceGraph;
-use super::super::kept::NotKeptField;
 use super::super::ops::{ResourceIo, SecretHydrator};
-use super::super::readiness::{self, ImportTarget, ReadinessResult};
+use super::super::readiness::{self, ReadinessResult};
 use super::super::secrets;
 use super::super::stream::{
     DeployEvent, DeployObserver, NodeDetail, NodeId, Phase, TransitionKind, Verdict,
@@ -55,11 +55,11 @@ pub(super) enum NodeOutcome {
         apply_action: ApplyAction,
         reason: String,
     },
-    /// Ready, with `stale` pods of an `OnDelete` DaemonSet still running the
-    /// previous pod template.
+    /// Ready, with the running workload still on the previous spec (see
+    /// `ReadinessResult::ReadyPendingRestart`).
     PendingRestart {
         apply_action: ApplyAction,
-        stale: i64,
+        stale: Option<i64>,
         message: String,
     },
     Failed {
@@ -88,12 +88,12 @@ async fn recreate(
 /// Return an error message if `rid` is a protected kind that Kix must not
 /// delete and recreate automatically, or `None` if recreation is allowed.
 pub(super) fn recreate_refusal(rid: &ResourceId) -> Option<String> {
-    if !never_pruned(&rid.kind) {
+    if !never_pruned(rid.group_kind()) {
         return None;
     }
-    let consequence = match rid.kind.as_str() {
-        "Namespace" => "deleting a Namespace deletes everything in it",
-        "CustomResourceDefinition" => {
+    let consequence = match rid.group_kind() {
+        kinds::NAMESPACE => "deleting a Namespace deletes everything in it",
+        kinds::CUSTOM_RESOURCE_DEFINITION => {
             "deleting a CustomResourceDefinition deletes every custom resource of that kind"
         }
         _ => "deleting it also deletes objects outside the build",
@@ -119,170 +119,93 @@ pub(super) async fn execute_node(
     if entry.kind == TransitionKind::Wait {
         return wait_for_platform(ctx, entry).await;
     }
-    let manifest = match (&entry.action, &entry.rerun) {
-        (ChangeAction::Apply(m) | ChangeAction::Recreate(m, _), _) => m.clone(),
-        (ChangeAction::Skip(rid), rerun) if super::plan::skip_reads_live(entry) => {
-            // An unchanged Job is never applied again, so its last run is
-            // read back, and a failed run is reported. The plan decides
-            // whether a Job runs again, so nothing is deleted here.
-            let live = ctx.resources.get_live(rid).await;
-            let terminal = match &live {
-                Ok(Some(obj)) => readiness::classify_workload_terminal(obj, &rid.kind),
-                _ => None,
-            };
-            match (live, terminal) {
-                (Ok(Some(_)), Some((reason, detail))) => {
-                    let message = format!(
-                        "{}: {detail}; unchanged since its last run, which failed. {}",
-                        reason.as_str(),
-                        job_next_step(rerun.is_some()),
-                    );
-                    return NodeOutcome::Failed {
-                        detail: NodeDetail::ReadinessFailed {
-                            message: message.clone(),
-                            missing_keys: Vec::new(),
-                            output: Vec::new(),
-                        },
-                        message,
-                    };
-                }
-                // A run that is still going holds back what depends on it,
-                // as a Job this deploy applied would.
-                (Ok(Some(obj)), None) if checked && !readiness::check_job_ready(&obj) => {
-                    return match check_unchanged(ctx, entry, rid).await {
-                        NodeOutcome::Failed { detail, message } => NodeOutcome::Failed {
-                            message: with_sentence(
-                                &message,
-                                &format!("{}.", job_next_step(rerun.is_some())),
-                            ),
-                            detail,
-                        },
-                        other => other,
-                    };
-                }
-                (Ok(_), _) => {
-                    return NodeOutcome::Ready {
-                        apply_action: ApplyAction::Unchanged,
-                    };
-                }
-                (Err(e), _) => {
-                    let message = format!("could not read the live object: {e}");
-                    return NodeOutcome::Failed {
-                        detail: NodeDetail::ApplyFailed(message.clone()),
-                        message,
-                    };
-                }
+    match &entry.action {
+        ChangeAction::Apply(m) | ChangeAction::Recreate(m, _) => {
+            match apply_node(ctx, entry, m.clone()).await {
+                Ok(outcome) | Err(outcome) => outcome,
             }
+        }
+        ChangeAction::Skip(rid) if super::plan::skip_reads_live(entry) => {
+            check_unchanged_job(ctx, entry, rid, checked).await
         }
         // The scheduler runs a task for any other Skip node only when
         // something in this deploy depends on it, so the live object is
         // checked.
-        (ChangeAction::Skip(rid), _) => return check_unchanged(ctx, entry, rid).await,
-        (ChangeAction::Orphan(_), _) => {
-            return NodeOutcome::Ready {
-                apply_action: ApplyAction::Skipped,
-            };
-        }
+        ChangeAction::Skip(rid) => check_unchanged(ctx, entry, rid).await,
+        ChangeAction::Orphan(_) => NodeOutcome::Ready {
+            apply_action: ApplyAction::Skipped,
+        },
+    }
+}
+
+/// Report the last run of an unchanged Job. An unchanged Job is never
+/// applied again, so its last run is read back, and a failed run is
+/// reported. The plan decides whether a Job runs again, so nothing is
+/// deleted here.
+async fn check_unchanged_job(
+    ctx: &NodeCtx,
+    entry: &PlanNodeEntry,
+    rid: &ResourceId,
+    checked: bool,
+) -> NodeOutcome {
+    let rerun = entry.rerun.is_some();
+    let live = ctx.resources.get_live(rid).await;
+    let terminal = match &live {
+        Ok(Some(obj)) => readiness::classify_workload_terminal(obj, rid.group_kind()),
+        _ => None,
     };
+    match (live, terminal) {
+        (Ok(Some(_)), Some((reason, detail))) => {
+            let message = format!(
+                "{}: {detail}; unchanged since its last run, which failed. {}",
+                reason.as_str(),
+                job_next_step(rerun),
+            );
+            NodeOutcome::Failed {
+                detail: NodeDetail::ReadinessFailed {
+                    message: message.clone(),
+                    missing_keys: Vec::new(),
+                    output: Vec::new(),
+                },
+                message,
+            }
+        }
+        // A run that is still going holds back what depends on it, as a Job
+        // this deploy applied would.
+        (Ok(Some(obj)), None) if checked && !readiness::check_job_ready(&obj) => {
+            match check_unchanged(ctx, entry, rid).await {
+                NodeOutcome::Failed { detail, message } => NodeOutcome::Failed {
+                    message: with_sentence(&message, &format!("{}.", job_next_step(rerun))),
+                    detail,
+                },
+                other => other,
+            }
+        }
+        (Ok(_), _) => NodeOutcome::Ready {
+            apply_action: ApplyAction::Unchanged,
+        },
+        (Err(e), _) => apply_failed(format!("could not read the live object: {e}")),
+    }
+}
+
+/// Hydrate, apply or recreate, and wait for `manifest`. Every step that
+/// fails returns the node's outcome as the error.
+async fn apply_node(
+    ctx: &NodeCtx,
+    entry: &PlanNodeEntry,
+    manifest: Value,
+) -> Result<NodeOutcome, NodeOutcome> {
     let rid = ResourceId::from_value(&manifest);
     let node = NodeId::Resource(rid.clone());
-
-    let manifest = if secrets::needs_hydration(&manifest) {
-        ctx.progress.set_phase(&node, Phase::Hydrate);
-        match ctx.secrets.hydrate(manifest).await {
-            Ok((manifest, results)) => {
-                for hr in &results {
-                    ctx.emit(DeployEvent::NodeStateChanged {
-                        node: NodeId::Resource(hr.rid.clone()),
-                        kind: entry.kind,
-                        verdict: Verdict::Running,
-                        detail: Some(NodeDetail::SecretHydrated {
-                            keys: hr.keys_injected,
-                        }),
-                    });
-                }
-                manifest
-            }
-            Err(e) => {
-                return NodeOutcome::Failed {
-                    detail: NodeDetail::SecretHydrationFailed(e.to_string()),
-                    message: format!("could not prepare secret values for deployment: {e}"),
-                };
-            }
-        }
-    } else {
-        manifest
-    };
-
-    // A Job the plan runs again is never patched in place. Delete the live
-    // object in the foreground first so its pods are removed before
-    // recreating it, or apply directly if no live object exists.
-    let mut rerun_reason: Option<&'static str> = None;
-    if let ChangeAction::Recreate(_, reason) = &entry.action {
-        match ctx.resources.get_live(&rid).await {
-            Ok(Some(_)) => rerun_reason = Some(reason.as_str()),
-            Ok(None) => {}
-            Err(e) => {
-                let message = format!("could not read the live object: {e}");
-                return NodeOutcome::Failed {
-                    detail: NodeDetail::ApplyFailed(message.clone()),
-                    message,
-                };
-            }
-        }
-    }
+    let manifest = hydrate(ctx, entry, &node, manifest).await?;
+    let rerun_reason = rerun_reason(ctx, entry, &rid).await?;
 
     ctx.progress.set_phase(&node, Phase::Apply);
     // Taken before the apply so a controller's verdict written while the
     // apply is in flight still counts as later than it.
     let apply_started = Utc::now();
-    let applied_action: ApplyAction;
-    let not_kept: Vec<NotKeptField>;
-    let mut recreated_reason: Option<String> = None;
-    if let Some(reason) = rerun_reason {
-        match recreate(ctx, &manifest, &rid).await {
-            Ok(apply_result) => {
-                applied_action = apply_result.action;
-                not_kept = apply_result.not_kept;
-            }
-            Err(e) => {
-                let message = format!("rerun ({reason}) failed: {e}");
-                return NodeOutcome::Failed {
-                    detail: NodeDetail::ApplyFailed(message.clone()),
-                    message,
-                };
-            }
-        }
-    } else {
-        match ctx.resources.apply(&manifest).await {
-            Ok(result) => {
-                applied_action = result.action;
-                not_kept = result.not_kept;
-            }
-            Err(ApplyError::ImmutableConflict { source, .. }) if ctx.orphan_set.contains(&rid) => {
-                let reason = source.to_string();
-                match recreate(ctx, &manifest, &rid).await {
-                    Ok(apply_result) => {
-                        applied_action = apply_result.action;
-                        not_kept = apply_result.not_kept;
-                        recreated_reason = Some(reason);
-                    }
-                    Err(e) => {
-                        return NodeOutcome::Failed {
-                            detail: NodeDetail::ApplyFailed(e.clone()),
-                            message: e,
-                        };
-                    }
-                }
-            }
-            Err(e) => {
-                return NodeOutcome::Failed {
-                    detail: NodeDetail::ApplyFailed(e.to_string()),
-                    message: e.to_string(),
-                };
-            }
-        }
-    }
+    let (applied, recreated_reason) = apply_or_recreate(ctx, &manifest, &rid, rerun_reason).await?;
+    let applied_action = applied.action;
 
     ctx.emit(DeployEvent::NodeStateChanged {
         node: node.clone(),
@@ -291,42 +214,136 @@ pub(super) async fn execute_node(
         detail: Some(NodeDetail::Applied(applied_action.clone())),
     });
     // A dry run reports these in the plan document instead.
-    if !ctx.dry_run && !not_kept.is_empty() {
+    if !ctx.dry_run && !applied.not_kept.is_empty() {
         ctx.emit(DeployEvent::FieldsNotKept {
             resource: rid.clone(),
-            fields: not_kept,
+            fields: applied.not_kept,
         });
     }
 
-    let done = |recreated_reason: Option<String>| match (rerun_reason, recreated_reason) {
+    let applied_at = matches!(
+        applied_action,
+        ApplyAction::Created | ApplyAction::Configured
+    )
+    .then_some(apply_started);
+    let done = match (rerun_reason, recreated_reason) {
         (Some(reason), _) => NodeOutcome::Rerun {
-            apply_action: applied_action.clone(),
+            apply_action: applied_action,
             reason: reason.to_string(),
         },
         (None, Some(reason)) => NodeOutcome::Recreated {
-            apply_action: applied_action.clone(),
+            apply_action: applied_action,
             reason,
         },
         (None, None) => NodeOutcome::Ready {
-            apply_action: applied_action.clone(),
+            apply_action: applied_action,
         },
     };
 
     // Dry-run applies are not persisted, so skip readiness polling.
     if ctx.dry_run {
-        return done(recreated_reason);
+        return Ok(done);
     }
-
-    let import_target: Option<ImportTarget> = entry.meta.import_target.clone();
-    if import_target.is_none() && readiness::is_immediate_kind(&rid.kind) {
-        return done(recreated_reason);
+    let import_target = entry.meta.import_target.as_ref();
+    if import_target.is_none() && readiness::is_immediate_kind(rid.group_kind()) {
+        return Ok(done);
     }
+    Ok(wait_applied(ctx, entry, &node, &rid, applied_at, done).await)
+}
 
-    // Poll for readiness. Each status callback updates the watchdog so an
-    // active rollout does not trigger a stall warning.
-    ctx.progress.set_phase(&node, Phase::Readiness);
+/// Fill in the secret values `manifest` refers to, when it has any.
+async fn hydrate(
+    ctx: &NodeCtx,
+    entry: &PlanNodeEntry,
+    node: &NodeId,
+    manifest: Value,
+) -> Result<Value, NodeOutcome> {
+    if !secrets::needs_hydration(&manifest) {
+        return Ok(manifest);
+    }
+    ctx.progress.set_phase(node, Phase::Hydrate);
+    match ctx.secrets.hydrate(manifest).await {
+        Ok((manifest, results)) => {
+            for hr in &results {
+                ctx.emit(DeployEvent::NodeStateChanged {
+                    node: NodeId::Resource(hr.rid.clone()),
+                    kind: entry.kind,
+                    verdict: Verdict::Running,
+                    detail: Some(NodeDetail::SecretHydrated {
+                        keys: hr.keys_injected,
+                    }),
+                });
+            }
+            Ok(manifest)
+        }
+        Err(e) => Err(NodeOutcome::Failed {
+            detail: NodeDetail::SecretHydrationFailed(e.to_string()),
+            message: format!("could not prepare secret values for deployment: {e}"),
+        }),
+    }
+}
+
+/// Return why the plan runs a Job again, when it does and the Job exists.
+/// A Job the plan runs again is never patched in place. Its live object is
+/// deleted in the foreground first so its pods are removed before it is
+/// recreated. A Job with no live object is applied directly.
+async fn rerun_reason(
+    ctx: &NodeCtx,
+    entry: &PlanNodeEntry,
+    rid: &ResourceId,
+) -> Result<Option<&'static str>, NodeOutcome> {
+    let ChangeAction::Recreate(_, reason) = &entry.action else {
+        return Ok(None);
+    };
+    match ctx.resources.get_live(rid).await {
+        Ok(Some(_)) => Ok(Some(reason.as_str())),
+        Ok(None) => Ok(None),
+        Err(e) => Err(apply_failed(format!("could not read the live object: {e}"))),
+    }
+}
+
+/// Apply `manifest`, or recreate it when the plan runs it again. An orphan
+/// that the API server refuses to change in place is recreated too, and the
+/// refusal is returned as the reason.
+async fn apply_or_recreate(
+    ctx: &NodeCtx,
+    manifest: &Value,
+    rid: &ResourceId,
+    rerun_reason: Option<&'static str>,
+) -> Result<(ApplyResult, Option<String>), NodeOutcome> {
+    if let Some(reason) = rerun_reason {
+        return match recreate(ctx, manifest, rid).await {
+            Ok(result) => Ok((result, None)),
+            Err(e) => Err(apply_failed(format!("rerun ({reason}) failed: {e}"))),
+        };
+    }
+    match ctx.resources.apply(manifest).await {
+        Ok(result) => Ok((result, None)),
+        Err(ApplyError::ImmutableConflict { source, .. }) if ctx.orphan_set.contains(rid) => {
+            let reason = source.to_string();
+            match recreate(ctx, manifest, rid).await {
+                Ok(result) => Ok((result, Some(reason))),
+                Err(e) => Err(apply_failed(e)),
+            }
+        }
+        Err(e) => Err(apply_failed(e.to_string())),
+    }
+}
+
+/// Wait for the object this node applied to become ready, and return `done`
+/// when it does. Each status callback updates the watchdog so an active
+/// rollout does not trigger a stall warning.
+async fn wait_applied(
+    ctx: &NodeCtx,
+    entry: &PlanNodeEntry,
+    node: &NodeId,
+    rid: &ResourceId,
+    applied_at: Option<chrono::DateTime<Utc>>,
+    done: NodeOutcome,
+) -> NodeOutcome {
+    ctx.progress.set_phase(node, Phase::Readiness);
     let on_status = |msg: &str| {
-        ctx.progress.set_status(&node, msg);
+        ctx.progress.set_status(node, msg);
         ctx.emit(DeployEvent::NodeStateChanged {
             node: node.clone(),
             kind: entry.kind,
@@ -334,23 +351,17 @@ pub(super) async fn execute_node(
             detail: Some(NodeDetail::ReadinessProgress(msg.to_string())),
         });
     };
-    let applied_at = matches!(
-        applied_action,
-        ApplyAction::Created | ApplyAction::Configured
-    )
-    .then_some(apply_started);
     let outcome = ctx
         .resources
         .wait_ready(
-            &rid,
-            import_target.as_ref(),
+            rid,
+            entry.meta.import_target.as_ref(),
             applied_at,
             ctx.timeout,
             &ctx.cancel,
             &on_status,
         )
         .await;
-
     let outcome = match outcome {
         Ok(o) => o,
         Err(e) => {
@@ -365,10 +376,9 @@ pub(super) async fn execute_node(
             };
         }
     };
-
     match outcome {
-        ReadinessResult::Ready => done(recreated_reason),
-        ReadinessResult::ReadyPendingRestart { stale, message } => match done(recreated_reason) {
+        ReadinessResult::Ready => done,
+        ReadinessResult::ReadyPendingRestart { stale, message } => match done {
             NodeOutcome::Ready { apply_action } => NodeOutcome::PendingRestart {
                 apply_action,
                 stale,
@@ -406,6 +416,14 @@ pub(super) async fn execute_node(
     }
 }
 
+/// Return the outcome of a node whose apply failed with `message`.
+fn apply_failed(message: String) -> NodeOutcome {
+    NodeOutcome::Failed {
+        detail: NodeDetail::ApplyFailed(message.clone()),
+        message,
+    }
+}
+
 /// Wait for a resource managed by a platform Kix cluster
 /// ([`TransitionKind::Wait`]) to become ready without applying it.
 async fn wait_for_platform(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOutcome {
@@ -429,7 +447,7 @@ async fn check_unchanged(ctx: &NodeCtx, entry: &PlanNodeEntry, rid: &ResourceId)
     if ctx.dry_run {
         return unchanged;
     }
-    if entry.meta.import_target.is_none() && readiness::is_immediate_kind(&rid.kind) {
+    if entry.meta.import_target.is_none() && readiness::is_immediate_kind(rid.group_kind()) {
         return unchanged;
     }
     match wait_live(ctx, entry, rid).await {
@@ -533,16 +551,10 @@ async fn wait_live(ctx: &NodeCtx, entry: &PlanNodeEntry, rid: &ResourceId) -> No
 /// `old_manifests`. Orphans without a matching manifest in `old_manifests`
 /// have no known dependencies and are appended at the end.
 pub(super) fn prune_order(orphan_rids: &[ResourceId], old_manifests: &[Value]) -> Vec<ResourceId> {
-    let orphan_set: HashSet<String> = orphan_rids
-        .iter()
-        .map(|rid| format!("{}/{}/{}", rid.kind, rid.namespace, rid.name))
-        .collect();
+    let orphan_set: HashSet<&ResourceId> = orphan_rids.iter().collect();
     let orphan_manifests: Vec<Value> = old_manifests
         .iter()
-        .filter(|m| {
-            let rid = ResourceId::from_value(m);
-            orphan_set.contains(&format!("{}/{}/{}", rid.kind, rid.namespace, rid.name))
-        })
+        .filter(|m| orphan_set.contains(&ResourceId::from_value(m)))
         .cloned()
         .collect();
     let mut ordered = match ResourceGraph::from_manifests(&orphan_manifests) {

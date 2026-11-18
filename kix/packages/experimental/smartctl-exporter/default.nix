@@ -54,6 +54,14 @@ let
     hash = "sha256-YVZTmmCuNnRYeDDBLQNWib4+FBo4mjMCqM5EKyd/Gss=";
   };
 
+  # The exporter release the chart's image runs. The chart has its own
+  # version above. Do not move to v0.15.0. On a node with a SCSI or SAS
+  # disk its /metrics answers HTTP 500, because it emits the new verify and
+  # endurance metrics without describing them, so Prometheus gets no
+  # metric from any disk of that node. v0.14.0 serves the same disk.
+  # https://github.com/prometheus-community/smartctl_exporter/issues/406
+  release = "v0.14.0";
+
   # The chart names its objects `<release>-<chart>` (_helpers.tpl).
   releaseName = "smartctl-exporter";
   serviceName = "${releaseName}-prometheus-smartctl-exporter";
@@ -61,7 +69,9 @@ let
   defaultValues = {
     image = {
       repository = "quay.io/prometheuscommunity/smartctl-exporter";
-      tag = "v0.14.0";
+      # The chart renders `repository:tag` and has no digest value, so the
+      # digest goes in the tag.
+      tag = "${release}@sha256:cfe22c36d7d2fac48ebf619707305acb65eb0fb670656eb80f356e606d782bc1";
     };
 
     resources = {
@@ -93,7 +103,7 @@ let
   device = "{{ $labels.device }} on the node of pod {{ $labels.pod }}";
 in
 {
-  meta.version = "0.16.0";
+  meta.version = lib.removePrefix "v" release;
   meta.description = "smartctl_exporter from the upstream Helm chart, a privileged DaemonSet that exports SMART disk health metrics to Prometheus";
   meta.owner = "platform";
   # smartctl reads SMART data from the node's block devices, which needs a

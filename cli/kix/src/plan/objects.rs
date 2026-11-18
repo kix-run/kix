@@ -13,8 +13,10 @@
 //! - A re-apply is a write of a file that a build this cluster already ran
 //!   holds for the same object: the deployed build, or the closure of a
 //!   deploy that stopped part way or kept its orphans. `--reconcile` writes
-//!   unchanged objects again this way, a deploy repairs what a stopped
-//!   deploy changed, and a probe Job under `kix.run/rerun` is created again.
+//!   unchanged objects again this way, and a deploy repairs what a stopped
+//!   deploy changed. An unchanged Job under `kix.run/rerun` is written
+//!   again only if its last run failed. The deploy reads that run when it
+//!   runs, so the plan lists the Job as `if_last_run_failed`.
 //!   It adds no object and no file those builds lack, so the diff does not
 //!   list it; the plan document's `objects` does.
 //! - Each delete must be one the diff lists as removed, or, when the plan
@@ -90,9 +92,11 @@ pub(crate) fn of<'a>(
     let mut unshown = Unshown::default();
     let mut writes = Vec::new();
     for node in &plan.nodes {
-        let id = match (&node.action, &node.rerun) {
-            (ChangeAction::Apply(m) | ChangeAction::Recreate(m, _), _) => ResourceId::from_value(m),
-            (ChangeAction::Skip(id), Some(_)) => id.clone(),
+        let (id, certain) = match (&node.action, &node.rerun) {
+            (ChangeAction::Apply(m) | ChangeAction::Recreate(m, _), _) => {
+                (ResourceId::from_value(m), true)
+            }
+            (ChangeAction::Skip(id), Some(_)) => (id.clone(), false),
             _ => continue,
         };
         let path = match files.get(&id).map(Vec::as_slice) {
@@ -116,7 +120,12 @@ pub(crate) fn of<'a>(
         let (package, change) = match shown.writes.get(&(id.clone(), hash.clone())) {
             Some((package, change)) => (package.clone(), *change),
             None if ran.contains(&(id.clone(), hash.as_str())) => {
-                (owner(graph, path), WriteChange::Reapplied)
+                let change = if certain {
+                    WriteChange::Reapplied
+                } else {
+                    WriteChange::IfLastRunFailed
+                };
+                (owner(graph, path), change)
             }
             None => {
                 unshown
@@ -126,6 +135,7 @@ pub(crate) fn of<'a>(
             }
         };
         writes.push(ObjectWrite {
+            group: id.group,
             kind: id.kind,
             namespace: id.namespace,
             name: id.name,
@@ -140,6 +150,7 @@ pub(crate) fn of<'a>(
     for id in deletes {
         if shown.deletes.contains_key(id) || listed_deletes.contains(id) {
             removed.push(ObjectDelete {
+                group: id.group.clone(),
                 kind: id.kind.clone(),
                 namespace: id.namespace.clone(),
                 name: id.name.clone(),
@@ -163,18 +174,20 @@ pub(crate) fn of<'a>(
 }
 
 /// Compute `sha256:` followed by the hex SHA-256 of the compact JSON
-/// `{"writes":[[kind,namespace,name,store_hash,package],...],"deletes":[[kind,namespace,name],...]}`
+/// `{"writes":[[kind,namespace,name,store_hash,package],...],"deletes":[[kind,namespace,name,group],...]}`
 /// of `objects`, with each list sorted by its string arrays in byte order.
 /// `serde_json` escapes `"`, `\`, and control characters and writes the rest
 /// of the text as UTF-8. A write's `change` is omitted because it describes how
-/// the plan displays the write rather than what is written.
+/// the plan displays the write rather than what is written. A write's group is
+/// omitted because its store hash already names the file, whose `apiVersion`
+/// gives the group.
 pub fn digest(objects: &Objects) -> String {
     use sha2::{Digest, Sha256};
 
     #[derive(serde::Serialize)]
     struct Canonical<'a> {
         writes: Vec<[&'a str; 5]>,
-        deletes: Vec<[&'a str; 3]>,
+        deletes: Vec<[&'a str; 4]>,
     }
     let mut canonical = Canonical {
         writes: objects
@@ -193,7 +206,7 @@ pub fn digest(objects: &Objects) -> String {
         deletes: objects
             .deletes
             .iter()
-            .map(|d| [d.kind.as_str(), &d.namespace, &d.name])
+            .map(|d| [d.kind.as_str(), &d.namespace, &d.name, &d.group])
             .collect(),
     };
     canonical.writes.sort();
@@ -285,14 +298,16 @@ mod tests {
                 store_hash: "h".into(),
                 package: "app/web".into(),
                 change: WriteChange::Reapplied,
+                group: String::new(),
             }],
             deletes: vec![ObjectDelete {
                 kind: "Secret".into(),
                 namespace: "_cluster".into(),
                 name: "s".into(),
+                group: "x.example".into(),
             }],
         };
-        let json = r#"{"writes":[["ConfigMap","app","a\"b","h","app/web"]],"deletes":[["Secret","_cluster","s"]]}"#;
+        let json = r#"{"writes":[["ConfigMap","app","a\"b","h","app/web"]],"deletes":[["Secret","_cluster","s","x.example"]]}"#;
         assert_eq!(
             digest(&objects),
             format!("sha256:{:x}", Sha256::digest(json))

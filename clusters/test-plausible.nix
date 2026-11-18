@@ -17,8 +17,8 @@
 #   networking: { disableDefaultCNI: true, podSubnet: "10.244.0.0/16" }
 #   nodes: [ { role: control-plane }, { role: worker } ]
 #   EOF
-# Build:   nix build ./clusters#cluster-plausible --extra-experimental-features pipe-operators
-# Deploy:  nix run .#kix -- deploy plausible --flake ./clusters --context kind-kix-plausible -y --timeout 20m
+# Build:   kix build plausible
+# Deploy:  kix deploy plausible --context kind-kix-plausible -y --timeout 20m
 #          The first start runs every migration, hence the timeout.
 
 { kix, packages }:

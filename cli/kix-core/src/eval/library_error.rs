@@ -2,51 +2,21 @@
 //!
 //! `kix.fail` and `scope.fail` (`kix/lib/core/error.nix`) throw text for a
 //! person, then one last line that starts with [`MARKER`] and holds the same
-//! errors as JSON. [`parse`] reads that line from Nix's stderr, and the
-//! [`std::fmt::Display`] of [`LibraryErrors`] shows each error from its
-//! fields, without the stack trace.
+//! errors as JSON, each a [`LibraryRecord`]. [`parse`] reads that line from
+//! Nix's stderr, and the [`std::fmt::Display`] of [`LibraryErrors`] shows
+//! each error from its fields, without the stack trace.
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+
+pub use super::library_record::LibraryRecord;
 
 /// The start of the line that carries the errors, version 1 of the format.
 pub const MARKER: &str = "kix-error/1 ";
 
-/// One error the Kix library raised. Fields this Kix does not know are
-/// skipped, so a newer library can add them.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
-pub struct LibraryError {
-    /// The change record id, such as `K0001`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    /// The instance that raised it, as `<namespace>/<name>`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub instance: Option<String>,
-    /// The package of that instance.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub package: Option<String>,
-    /// The option to change, as a path in the instance's `config`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub option: Option<String>,
-    /// The dependency to change, as its name in the instance's `deps`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dependency: Option<String>,
-    /// The cluster option to change, as a path in the cluster definition.
-    #[serde(
-        default,
-        rename = "clusterOption",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub cluster_option: Option<String>,
-    pub message: String,
-    /// What to change, which may span lines.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fix: Option<String>,
-}
-
 /// The errors of one failed evaluation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LibraryErrors {
-    pub errors: Vec<LibraryError>,
+    pub errors: Vec<LibraryRecord>,
     /// The cluster whose problem list this is, when the library named one.
     pub cluster: Option<String>,
     /// Nix's whole stderr, kept when the reader asked for `-v`.
@@ -55,7 +25,7 @@ pub struct LibraryErrors {
 
 #[derive(Deserialize)]
 struct Payload {
-    errors: Vec<LibraryError>,
+    errors: Vec<LibraryRecord>,
     #[serde(default)]
     cluster: Option<String>,
 }
@@ -83,44 +53,6 @@ pub fn parse(stderr: &str) -> Option<LibraryErrors> {
         cluster: payload.cluster,
         trace: None,
     })
-}
-
-impl LibraryError {
-    /// Return the first line: the id, the instance and package, and the
-    /// first line of the message.
-    fn headline(&self) -> String {
-        let mut out = String::new();
-        if let Some(id) = &self.id {
-            out.push_str(&format!("[{id}] "));
-        }
-        match (&self.instance, &self.package) {
-            (Some(i), Some(p)) => out.push_str(&format!("{i} ({p}): ")),
-            (Some(i), None) => out.push_str(&format!("{i}: ")),
-            (None, Some(p)) => out.push_str(&format!("{p}: ")),
-            (None, None) => {}
-        }
-        out.push_str(&self.message);
-        out
-    }
-
-    /// Return the error as text, with every line after the first indented
-    /// by `indent`.
-    fn describe(&self, indent: &str) -> String {
-        let mut text = self.headline();
-        if let Some(option) = &self.option {
-            text.push_str(&format!("\nOption: {option}"));
-        }
-        if let Some(dependency) = &self.dependency {
-            text.push_str(&format!("\nDependency: {dependency}"));
-        }
-        if let Some(cluster_option) = &self.cluster_option {
-            text.push_str(&format!("\nCluster option: {cluster_option}"));
-        }
-        if let Some(fix) = &self.fix {
-            text.push_str(&format!("\nFix: {fix}"));
-        }
-        text.replace('\n', &format!("\n{indent}"))
-    }
 }
 
 impl std::fmt::Display for LibraryErrors {
@@ -179,7 +111,7 @@ mod tests {
         let errors = parse(&text).expect("a library error");
         assert_eq!(
             errors.errors,
-            vec![LibraryError {
+            vec![LibraryRecord {
                 id: Some("K9503".into()),
                 instance: Some("shop/db".into()),
                 package: Some("cnpg-database".into()),
@@ -188,6 +120,7 @@ mod tests {
                 cluster_option: Some("cluster.domain".into()),
                 message: "the \"password\" option was removed.\nIt kept it in plain text.".into(),
                 fix: Some("Set this line:\n  deps.password = ref.shop.db-login;".into()),
+                object: None,
             }]
         );
         assert_eq!(

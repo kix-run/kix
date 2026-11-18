@@ -19,7 +19,7 @@ let
     };
   };
   dnsWarningsOf =
-    cluster: builtins.filter (lib.hasInfix "no DNS instance") cluster.diagnostics.warnings;
+    cluster: builtins.filter (w: lib.hasInfix "no DNS instance" w.message) cluster.diagnostics.warnings;
 in
 {
   # A cluster with no DNS instance lists the warning once, however many
@@ -35,7 +35,7 @@ in
       listed = builtins.fromJSON (builtins.readFile cluster.activationFiles.warnings);
     in
     builtins.length (dnsWarningsOf cluster) == 1
-    && builtins.length (builtins.filter (lib.hasInfix "no DNS instance") listed) == 1
+    && builtins.length (builtins.filter (w: lib.hasInfix "no DNS instance" w.message) listed) == 1
     || throw "expected one DNS warning, got ${builtins.toJSON cluster.diagnostics.warnings}";
 
   # A cluster with a DNS instance raises no such warning.

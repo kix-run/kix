@@ -14,6 +14,12 @@
 # every ServiceMonitor / PodMonitor) in the cluster is scraped, matching
 # the prometheus package's posture.
 #
+# Upgrades: vmagent keeps its remote-write queue in an emptyDir, so the pod
+# of a new version starts with an empty queue and reads nothing the old
+# version wrote. Samples still queued when the old pod stops are lost.
+# To go back, deploy the previous Kix release. The operator then restarts
+# vmagent with the older image.
+#
 # Dependencies:
 #   vmOperator (required)   provides the VMAgent CRD + mkVMAgent
 #   vmCluster (required)    out.remoteWriteUrl (remote-write target),
@@ -52,13 +58,17 @@
   availability,
 }:
 let
+  release = "v1.156.0";
   name = scope.instanceName;
 
   inherit (import ../victoria-metrics-operator/cr-image.nix { inherit lib kix; }) crImage;
+  inherit (import ../victoria-metrics-operator/operand-placement.nix { inherit lib kix; })
+    operandPlacement
+    ;
 in
 {
   meta = {
-    version = "1.150.0";
+    version = lib.removePrefix "v" release;
     description = "VictoriaMetrics agent: a metrics scraper run through a VMAgent CR";
     owner = "platform";
     defaultAliases = [ "vmAgent" ];
@@ -83,8 +93,9 @@ in
 
   options = {
     image = kix.options.image {
-      repository = "victoriametrics/vmagent";
-      tag = "v1.150.0";
+      repository = "docker.io/victoriametrics/vmagent";
+      tag = release;
+      digest = "sha256:d3229ab469c54ae5266e86246932266bad29b06668b5371acbd6d3de1b3035e7";
       pullPolicy = null;
     };
     replicaCount = lib.mkOption {
@@ -140,7 +151,7 @@ in
     extraSpec = lib.mkOption {
       type = lib.types.attrsOf lib.types.anything;
       default = { };
-      description = "Extra fields deep-merged into the VMAgent CR spec. The package refuses `remoteWrite` and `scrapeInterval`, which come from the vmCluster dependency, and `image`, `replicaCount`, `selectAllByDefault`, `resources`, and `extraArgs`, which have options of their own.";
+      description = "Extra fields deep-merged into the VMAgent CR spec. The package refuses `remoteWrite` and `scrapeInterval`, which come from the vmCluster dependency, and `image`, `replicaCount`, `selectAllByDefault`, `resources`, and `extraArgs`, which have options of their own. Setting `topologySpreadConstraints` here replaces the default pod spread constraints set from the availability level.";
     };
 
     # The operator scrapes the agent whatever this says; `enabled` only
@@ -201,26 +212,17 @@ in
           scrapeInterval =
             if config.scrapeInterval == null then vmCluster.out.scrapeInterval else config.scrapeInterval;
           selectAllByDefault = config.selectAllByDefault;
-          podDisruptionBudget = {
-            maxUnavailable = 1;
-          };
-          # Operand pods are rendered by the operator, so Kix's derived
-          # spread never sees them: the CR carries the rule, and the
-          # failure-domain keys come from the cluster, never a literal.
-          affinity = {
-            podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution = map (topologyKey: {
-              weight = 100;
-              podAffinityTerm = {
-                labelSelector.matchLabels = {
-                  "app.kubernetes.io/name" = "vmagent";
-                  "app.kubernetes.io/instance" = name;
-                };
-                inherit topologyKey;
-              };
-            }) clusterConfig.cluster.topology.failureDomainKeys;
-          };
           resources = config.resources;
           extraArgs = baseArgs // extraArgs;
+        }
+        // operandPlacement {
+          inherit availability;
+          topology = clusterConfig.cluster.topology;
+          selector = {
+            "app.kubernetes.io/name" = "vmagent";
+            "app.kubernetes.io/instance" = name;
+          };
+          replicas = config.replicaCount;
         }
         // lib.optionalAttrs (config.externalLabels != { }) {
           externalLabels = config.externalLabels;

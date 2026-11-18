@@ -40,9 +40,11 @@ availability, those defaults create three vmstorage replicas, two vmselect
 replicas, two vminsert replicas, two VMAgent replicas, and two replicas for each
 alerting component (at `none` availability they run one replica, and at `pod`
 availability vmstorage, VMAgent, and VMAlert remain at one replica while
-vmselect and vminsert run two). Pod disruption budgets allow one unavailable
-replica per multi-replica component, and preferred pod anti-affinity spreads
-replicas across nodes when possible.
+vmselect and vminsert run two). Each multi-replica component gets a
+`PodDisruptionBudget` that allows one unavailable pod. On multi-node clusters,
+it also gets `topologySpreadConstraints` (`maxSkew = 1`): spreading is required
+across nodes at `node` availability, required across zones at `zone`
+availability, and best-effort otherwise.
 
 ## Set retention and storage
 

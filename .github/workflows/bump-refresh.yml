@@ -1,0 +1,238 @@
+name: Bump refresh
+
+# Keep the bump workflow's open pull requests mergeable while main moves.
+# Bumps that run side by side change the same generated files, so each merge
+# leaves the others stale or in conflict. For every open pull request from the
+# bump app that is behind main, this rebases it onto main, takes main's side of
+# any conflict in the CLI snapshots, regenerates them, and replaces the branch's
+# commits with signed ones. No agent runs.
+#
+# The jobs are split by trust, as in bump-agent.yml:
+#
+#   list     finds the pull requests. It reads the repository and nothing else.
+#   rebase   rebases and regenerates. Regenerating runs the bump's own code,
+#            so it holds no secret.
+#   publish  holds the GitHub App key. It checks which files the result
+#            touches, then moves the branch. It skips a branch that changed
+#            since the list was made, or that has a commit from anyone but the
+#            bump app.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bump-refresh
+  cancel-in-progress: true
+
+env:
+  BOT: kix-run-bump[bot]
+
+jobs:
+  list:
+    runs-on: [self-hosted, spindle-2c-4g, access=isolated]
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      prs: ${{ steps.list.outputs.prs }}
+    steps:
+      - name: Find the bump pull requests that are behind main
+        id: list
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          api() {
+            curl -sS --fail-with-body -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/$1"
+          }
+          # The publish step writes the package folders into a comment at the
+          # top of the body. The agent's report comes after it, so the first
+          # match is the workflow's.
+          candidates=$(api "pulls?state=open&per_page=100" | jq -c --arg bot "$BOT" '[.[]
+            | select(.head.ref | startswith("bump/"))
+            | select(.user.login == $bot)
+            | {number, branch: .head.ref, head: .head.sha,
+               dirs: ((.body // "") | capture("<!-- bump-dirs: (?<d>[^>]*) -->").d // "")}
+            | select(.dirs != "")]')
+          prs='[]'
+          while read -r pr; do
+            number=$(jq -r .number <<<"$pr")
+            head=$(jq -r .head <<<"$pr")
+            others=$(api "pulls/$number/commits?per_page=100" \
+              | jq --arg bot "$BOT" '[.[] | select(.author.login != $bot)] | length')
+            if [ "$others" != 0 ]; then
+              echo "#$number: skipped, it has commits from someone other than the bump app"
+              continue
+            fi
+            behind=$(api "compare/main...$head" | jq .behind_by)
+            if [ "$behind" = 0 ]; then
+              echo "#$number: up to date"
+              continue
+            fi
+            echo "#$number: $behind commit(s) behind main"
+            prs=$(jq -c --argjson pr "$pr" '. + [$pr]' <<<"$prs")
+          done < <(jq -c '.[]' <<<"$candidates")
+          echo "prs=$prs" >> "$GITHUB_OUTPUT"
+
+  rebase:
+    needs: list
+    if: needs.list.outputs.prs != '[]'
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        pr: ${{ fromJSON(needs.list.outputs.prs) }}
+    # The Mac Studio's Linux runner: no cloud bill, and the snapshots do not
+    # depend on the machine's architecture.
+    runs-on: kix-linux-nix
+    timeout-minutes: 60
+    env:
+      BRANCH: ${{ matrix.pr.branch }}
+      NIX_CONFIG: |
+        extra-experimental-features = nix-command flakes pipe-operators
+        accept-flake-config = true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Rebase onto main
+        id: rebase
+        run: |
+          out="$RUNNER_TEMP/out"
+          mkdir -p "$out"
+          git rev-parse origin/main > "$out/main"
+          git config user.name "kix-bump agent"
+          git config user.email "kix-bump@users.noreply.github.com"
+          git switch -c work "origin/$BRANCH"
+          if ! git rebase origin/main; then
+            # A conflict in a generated file is settled by taking main's side
+            # and regenerating. Any other conflict needs a person.
+            while [ -d .git/rebase-merge ] || [ -d .git/rebase-apply ]; do
+              mapfile -t conflicted < <(git diff --name-only --diff-filter=U)
+              if [ "${#conflicted[@]}" -eq 0 ]; then
+                # The commit became empty against main, which already has it.
+                git rebase --skip || true
+                continue
+              fi
+              for f in "${conflicted[@]}"; do
+                case "$f" in
+                  cli/kix-cli/tests/snapshots/*) git checkout --ours -- "$f" && git add -- "$f" ;;
+                  *)
+                    echo "::warning::$BRANCH conflicts with main in $f, which needs a person"
+                    git rebase --abort
+                    echo "conflict" > "$out/status"
+                    exit 0
+                    ;;
+                esac
+              done
+              GIT_EDITOR=true git rebase --continue || true
+            done
+          fi
+          echo "rebased" > "$out/status"
+
+      - name: Regenerate the CLI snapshots
+        run: |
+          [ "$(cat "$RUNNER_TEMP/out/status")" = rebased ] || exit 0
+          cd cli
+          # The first run writes the snapshots that changed. The second shows
+          # that the result passes.
+          nix develop .. -c env INSTA_UPDATE=always cargo test -q -p kix-cli --test snapshot_test || true
+          nix develop .. -c cargo test -q -p kix-cli --test snapshot_test
+          cd ..
+          if [ -n "$(git status --porcelain)" ]; then
+            git add -A cli/kix-cli/tests/snapshots
+            git commit -q -m "Regenerate the CLI snapshots after rebasing onto main"
+          fi
+          git format-patch -q origin/main..HEAD -o "$RUNNER_TEMP/out/patches"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: refresh-${{ matrix.pr.number }}
+          path: ${{ runner.temp }}/out
+          retention-days: 7
+
+  publish:
+    needs: [list, rebase]
+    if: always() && needs.list.outputs.prs != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        pr: ${{ fromJSON(needs.list.outputs.prs) }}
+    runs-on: [self-hosted, spindle-2c-4g, access=isolated]
+    timeout-minutes: 15
+    env:
+      BRANCH: ${{ matrix.pr.branch }}
+      NUMBER: ${{ matrix.pr.number }}
+      LISTED_HEAD: ${{ matrix.pr.head }}
+      DIRS: ${{ matrix.pr.dirs }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: refresh-${{ matrix.pr.number }}
+          path: ${{ runner.temp }}/in
+
+      - name: Read the result
+        id: result
+        run: |
+          echo "status=$(cat "$RUNNER_TEMP/in/status")" >> "$GITHUB_OUTPUT"
+          echo "main=$(cat "$RUNNER_TEMP/in/main")" >> "$GITHUB_OUTPUT"
+
+      - name: Get a token for the bump app
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.BUMP_APP_ID }}
+          private-key: ${{ secrets.BUMP_APP_PRIVATE_KEY }}
+
+      - name: Checkout the main commit the rebase used
+        if: steps.result.outputs.status == 'rebased'
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ steps.result.outputs.main }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Replace the branch's commits
+        if: steps.result.outputs.status == 'rebased'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          MAIN: ${{ steps.result.outputs.main }}
+        run: |
+          cp .github/bump/check-paths.sh .github/bump/push-signed.py "$RUNNER_TEMP/"
+          git config user.name "kix-bump agent"
+          git config user.email "kix-bump@users.noreply.github.com"
+          git switch -c work
+          git am --keep-cr "$RUNNER_TEMP"/in/patches/*.patch
+          read -ra dirs <<<"$DIRS"
+          "$RUNNER_TEMP/check-paths.sh" "$MAIN" "${dirs[@]}"
+          head=$(curl -sS --fail-with-body -H "Authorization: Bearer $GH_TOKEN" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/pulls/$NUMBER" | jq -r .head.sha)
+          if [ "$head" != "$LISTED_HEAD" ]; then
+            echo "::warning::#$NUMBER changed while this ran, so it is left alone"
+            exit 0
+          fi
+          python3 "$RUNNER_TEMP/push-signed.py" --replace "$GITHUB_REPOSITORY" "$BRANCH" "$MAIN"
+
+      - name: Ask a person to settle the conflict
+        if: steps.result.outputs.status == 'conflict'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          api() {
+            curl -sS --fail-with-body -X POST -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/$1" --data-binary @- > /dev/null
+          }
+          jq -n '{labels: ["bump:needs-person"]}' | api "issues/$NUMBER/labels"
+          jq -n --arg body "This branch conflicts with main in a file that is not generated, so the refresh workflow could not rebase it. Rebase it by hand, or start the bump again." \
+            '{body: $body}' | api "issues/$NUMBER/comments"

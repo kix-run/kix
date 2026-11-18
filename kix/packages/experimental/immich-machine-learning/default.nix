@@ -34,6 +34,10 @@
 # `-armnn`, `-rknn`) runs unpinned unless `image.digest` is set. The package
 # requests no accelerator; request one in `resources`, and place the pod on
 # a GPU node through `partsOverlays`.
+#
+# Upgrades: the worker keeps no state besides the model cache, which it
+# fills again when a model is missing. It moves to a new release, and back,
+# together with its server.
 
 {
   scope,

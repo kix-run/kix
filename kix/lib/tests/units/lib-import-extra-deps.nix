@@ -69,7 +69,7 @@ let
     in
     if m == null then throw "import marker legacy/legacy-api not rendered" else m;
 
-  dependsOn = m: (m.metadata.annotations or { }).${kixKeys.dependsOn} or "";
+  dependsOn = m: m.metadata.annotations.${kixKeys.dependsOn} or "";
 
   # Whether the legacy/legacy-api marker carries an extraDeps edge to `res`.
   ordersAfter =

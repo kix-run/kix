@@ -29,11 +29,10 @@ pub fn activation_identity_hash(graph: &StoreGraph) -> String {
     store_hash(&graph.activation_path)
 }
 
-/// Parse `flake.lock` at the given flake path, returning `None` if it does not exist.
+/// Parse `flake.lock` at the given flake path, returning `None` if it is
+/// missing or unreadable.
 pub fn read_flake_lock(flake_path: &Path) -> Option<serde_json::Value> {
-    let lock = flake_path.join("flake.lock");
-    let contents = std::fs::read_to_string(&lock).ok()?;
-    serde_json::from_str(&contents).ok()
+    kix::flake_lock::read(flake_path).ok()
 }
 
 /// Compute the BLAKE3 hex digest of `input`.
@@ -91,32 +90,7 @@ pub fn git_state(flake_path: &Path) -> Option<GitState> {
     }
 }
 
-/// Generate a syntactically valid UUID v4 string from a BLAKE3 hash of the
-/// timestamp, PID, and a monotonic counter.
+/// Generate a random UUID v4 string.
 pub fn new_uuid() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let pid = std::process::id();
-    let seed = format!("{nanos}-{pid}-{}", rand_counter());
-    let hex = blake3::hash(seed.as_bytes()).to_hex().to_string();
-    // Format as 8-4-4-4-12 with version 4 / variant bits.
-    let b = hex.as_bytes();
-    let g = |r: std::ops::Range<usize>| std::str::from_utf8(&b[r]).unwrap();
-    format!(
-        "{}-{}-4{}-8{}-{}",
-        g(0..8),
-        g(8..12),
-        g(13..16),
-        g(17..20),
-        g(20..32)
-    )
-}
-
-fn rand_counter() -> u64 {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    COUNTER.fetch_add(1, Ordering::Relaxed)
+    uuid::Uuid::new_v4().to_string()
 }

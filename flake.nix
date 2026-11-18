@@ -1,10 +1,11 @@
-# kixpkgs root flake: aggregates all clusters.
+# The Kix repository flake: the Kix CLI, its runtime, the library checks,
+# and every cluster under clusters/.
 #
 # The smoke test is homelab-kind:
 #   nix run .#kix -- check homelab-kind
 
 {
-  description = "kixpkgs - Kubernetes packages built with Nix";
+  description = "Kix, the Kubernetes compiler: its CLI, library, packages, and clusters";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
@@ -23,58 +24,69 @@
 
       clusterOutputs = mkFlake {
         inherit inputs;
-        # Matches clusters/flake.nix: a finding from an error-severity
-        # scorecard rule fails the build.
+        # A finding from an error-severity scorecard rule fails the build in
+        # this repository. Every cluster otherwise runs the shipped default
+        # rule set.
         clusterModules = [ { scorecard.maxSeverity = "error"; } ];
-        clusters = {
-          # Test clusters
-          minimal = ./clusters/test-minimal.nix;
-          example = ./clusters/example.nix;
-          full = ./clusters/test-full.nix;
-          helm = ./clusters/test-helm.nix;
-          example-import = ./clusters/example-import.nix;
-          auto = ./clusters/test-auto.nix;
-          auto2 = ./clusters/test-auto2.nix;
-          immich = ./clusters/test-immich.nix;
-          clickhouse = ./clusters/test-clickhouse.nix;
-          clickhouse-operator = ./clusters/test-clickhouse-operator.nix;
-          clickhouse-swap-bare = ./clusters/test-clickhouse-swap/bare.nix;
-          clickhouse-swap-replicated = ./clusters/test-clickhouse-swap/replicated.nix;
-          cnpg = ./clusters/test-cnpg.nix;
-          rabbitmq = ./clusters/test-rabbitmq.nix;
-          postgres-swap-stackgres = ./clusters/test-postgres-swap/stackgres.nix;
-          postgres-swap-cnpg = ./clusters/test-postgres-swap/cnpg.nix;
-          gateway-swap-envoy = ./clusters/test-gateway-swap/envoy.nix;
-          gateway-swap-traefik = ./clusters/test-gateway-swap/traefik.nix;
-          kind = ./clusters/test-kind.nix;
-          kind-v2 = ./clusters/test-kind-v2.nix;
-          kind-port = ./clusters/test-kind-port.nix;
-          metrics-server = ./clusters/test-metrics-server.nix;
-          spegel = ./clusters/test-spegel.nix;
-          volsync = ./clusters/test-volsync.nix;
-          otel-collector = ./clusters/test-otel-collector.nix;
-          falco = ./clusters/test-falco.nix;
-          monitoring-native = ./clusters/test-monitoring-native.nix;
-          monitoring-loki = ./clusters/test-monitoring-loki.nix;
-          victoria-metrics = ./clusters/test-victoria-metrics.nix;
-          victoria-metrics-crd-ref = ./clusters/test-victoria-metrics-crd-ref.nix;
-          external-secrets = ./clusters/test-external-secrets.nix;
-          openbao = ./clusters/test-openbao.nix;
-          doc-how-tos = ./clusters/test-doc-how-tos.nix;
-          bundle-alias = ./clusters/test-bundle-alias.nix;
-          consumers-platform = ./clusters/test-consumers/platform.nix;
-          consumers-acme = ./clusters/test-consumers/acme.nix;
 
-          # Register documented examples so routine builds catch evaluation
-          # errors in them.
-          example-multi-env-dev = ./clusters/example-multi-env/dev.nix;
-          example-multi-env-prod = ./clusters/example-multi-env/prod.nix;
+        # Every cluster the repository builds, keyed by the name commands
+        # take: `kix build <key>`, `kix check <key>`, `kix deploy <key>`.
+        # The key is also the cluster's name unless the definition passes
+        # `name` to `buildCluster`. clusters/README.md says what each group
+        # is for.
+        #
+        # Each file clusters/test-<key>.nix is registered under <key> with no
+        # line here, so adding a test cluster never edits this file. The set
+        # below lists the clusters that live anywhere else.
+        clusters =
+          lib.mapAttrs'
+            (
+              file: _:
+              lib.nameValuePair (lib.removeSuffix ".nix" (lib.removePrefix "test-" file)) (
+                ./clusters + "/${file}"
+              )
+            )
+            (
+              lib.filterAttrs (
+                file: type: type == "regular" && lib.hasPrefix "test-" file && lib.hasSuffix ".nix" file
+              ) (builtins.readDir ./clusters)
+            )
+          // {
+            # Examples: start with example-hello.
+            example-hello = ./clusters/example-hello.nix;
+            example = ./clusters/example.nix;
+            example-import = ./clusters/example-import.nix;
+            example-multi-env-dev = ./clusters/example-multi-env/dev.nix;
+            example-multi-env-prod = ./clusters/example-multi-env/prod.nix;
 
-          # Smoke test: the full homelab service set on kind, and the same
-          # cluster moved to Gateway API for scripts/kix-rollback-check.sh.
-          homelab-kind = ./clusters/homelab/cluster-kind.nix;
-          homelab-kind-gateway-migrate = ./clusters/homelab/cluster-kind-gateway-migrate.nix;
-        };
+            # The smoke test: the full homelab service set on kind, and the same
+            # cluster moved to Gateway API for scripts/kix-rollback-check.sh.
+            homelab-kind = ./clusters/homelab/cluster-kind.nix;
+            homelab-kind-gateway-migrate = ./clusters/homelab/cluster-kind-gateway-migrate.nix;
+
+            # Library features: two consumers of one platform.
+            consumers-platform = ./clusters/test-consumers/platform.nix;
+            consumers-acme = ./clusters/test-consumers/acme.nix;
+
+            # Swap fixtures: two builds of one cluster that move a consumer from one
+            # provider package to another. Each pair shares a cluster name.
+            clickhouse-swap-bare = ./clusters/test-clickhouse-swap/bare.nix;
+            clickhouse-swap-replicated = ./clusters/test-clickhouse-swap/replicated.nix;
+            postgres-swap-stackgres = ./clusters/test-postgres-swap/stackgres.nix;
+            postgres-swap-cnpg = ./clusters/test-postgres-swap/cnpg.nix;
+            gateway-swap-envoy = ./clusters/test-gateway-swap/envoy.nix;
+            gateway-swap-traefik = ./clusters/test-gateway-swap/traefik.nix;
+
+            # Package tests kept in a directory with their fixtures.
+            reloader = ./clusters/test-reloader/kind.nix;
+            tailscale = ./clusters/test-tailscale/cluster.nix;
+          };
+
+        # region:pinFile
+        # A cluster function that takes a `pins` argument gets this file
+        # already loaded, so no cluster definition names the path.
+        pins = ./clusters/pins.json;
+        # endregion:pinFile
       };
 
       # Kix CLI package (built with crane)
@@ -299,9 +311,8 @@
       # except for the HTTPRoute's parentRef, which names each implementation's
       # Gateway (envoy-system/envoy, traefik-system/traefik), and Kix's
       # dependency bookkeeping. Network policy is off in both builds because
-      # only traefik publishes its data-plane pods, so enabling policy would
-      # emit an ingress rule in the traefik build that the envoy-gateway build
-      # lacks.
+      # the rule that admits each implementation's proxies to the backend
+      # names that implementation's pod labels.
       gatewaySwap = lib.genAttrs systems (system: {
         gateway-swap =
           let
@@ -377,7 +388,7 @@
       # Wrap cluster definitions into a complete per-system flake output for
       # external consumers:
       #
-      #   outputs = inputs: inputs.kixpkgs.lib.mkFlake {
+      #   outputs = inputs: inputs.kix.lib.mkFlake {
       #     inherit inputs;
       #     clusters.my-cluster = ./cluster.nix;
       #   };

@@ -7,7 +7,7 @@
 # the host's kernel, which must be Linux 5.8 or later with BTF for the
 # modern eBPF driver.
 #
-# Build:  nix build ./clusters#cluster-falco --extra-experimental-features pipe-operators
+# Build:  kix build falco
 
 { kix, packages }:
 

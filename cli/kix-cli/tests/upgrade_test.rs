@@ -9,7 +9,6 @@
 
 mod common;
 
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use assert_cmd::Command;
@@ -145,6 +144,11 @@ impl Setup {
         } else {
             "shop"
         };
+        let api_version = match kind {
+            "ClusterRole" => "rbac.authorization.k8s.io/v1",
+            "Deployment" => "apps/v1",
+            _ => "v1",
+        };
         let ns_line = if kind == "ClusterRole" {
             String::new()
         } else {
@@ -153,7 +157,7 @@ impl Setup {
         self.write(
             &format!("fake/{out}/{cluster}/{namespace}/{kind}-{name}.yaml"),
             &format!(
-                "apiVersion: v1\nkind: {kind}\nmetadata:\n  name: {name}\n{ns_line}  annotations:\n    {key}: {package}\nspec:\n  {spec}\n",
+                "apiVersion: {api_version}\nkind: {kind}\nmetadata:\n  name: {name}\n{ns_line}  annotations:\n    {key}: {package}\nspec:\n  {spec}\n",
                 key = kix::manifest::keys::PACKAGE
             ),
         );
@@ -401,8 +405,7 @@ fn dry_run_asks_the_installed_kix_which_packages_are_in_use() {
     s.releases(vec![]);
     let bin = s.data.join("9.1.0/bin");
     std::fs::create_dir_all(&bin).unwrap();
-    std::fs::write(bin.join("kix"), FAKE.replace("__VERSION__", "9.1.0")).unwrap();
-    std::fs::set_permissions(bin.join("kix"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    common::write_executable(&bin.join("kix"), FAKE.replace("__VERSION__", "9.1.0"));
     let (code, out) = s.upgrade(&["--dry-run"]);
     assert_eq!(code, 0, "{out}");
     // Every note is listed. The one whose package an instance is named
@@ -449,7 +452,7 @@ fn a_jump_that_builds_pins_the_target_and_removes_nothing_it_keeps() {
         "{out}"
     );
     assert!(
-        out.contains("  east, west:\n    ~ Deployment/web@shop (web)\n"),
+        out.contains("  east, west:\n    ~ Deployment.apps/web@shop (web)\n"),
         "{out}"
     );
     assert!(
@@ -626,11 +629,11 @@ fn a_sensitive_change_needs_a_person() {
     assert_eq!(code, 3, "{out}");
     assert!(out.contains("  east: no objects changed\n"), "{out}");
     assert!(
-        out.contains("  west:\n    ~ ClusterRole/db-reader (db) [review: ClusterRole]\n"),
+        out.contains("  west:\n    ~ ClusterRole.rbac.authorization.k8s.io/db-reader (db) [review: ClusterRole]\n"),
         "{out}"
     );
     assert!(
-        out.contains("Upgraded to Kix 9.3.0, but review before deploying:\n  1. 1 ClusterRole changed in cluster west (ClusterRole/db-reader).\n  2. 1 object changed in cluster west; read the changes above, or run `kix plan\n     west`, before you deploy.\n"),
+        out.contains("Upgraded to Kix 9.3.0, but review before deploying:\n  1. 1 ClusterRole changed in cluster west\n     (ClusterRole.rbac.authorization.k8s.io/db-reader).\n  2. 1 object changed in cluster west; read the changes above, or run `kix plan\n     west`, before you deploy.\n"),
         "{out}"
     );
     let state = s.state();
@@ -899,8 +902,7 @@ fn pruning_leaves_a_version_installed_before_the_run() {
     s.releases(vec![]);
     let bin = s.data.join("9.2.1/bin");
     std::fs::create_dir_all(&bin).unwrap();
-    std::fs::write(bin.join("kix"), FAKE.replace("__VERSION__", "9.2.1")).unwrap();
-    std::fs::set_permissions(bin.join("kix"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    common::write_executable(&bin.join("kix"), FAKE.replace("__VERSION__", "9.2.1"));
     s.write("fake/fail-9.3.0", "");
     let (code, out) = s.upgrade(&[]);
     assert_eq!(code, 1, "{out}");
@@ -1307,6 +1309,46 @@ fn a_resume_never_moves_the_project_below_its_pin() {
 }
 
 #[test]
+fn a_resume_of_a_state_without_its_request_asks_for_to() {
+    let s = Setup::new();
+    s.releases(vec![]);
+    s.publish("9.2.0-rc.1", "2026-01-15", None);
+    s.write("fake/fail-9.2.0-rc.1", "");
+    let (code, out) = s.upgrade(&["--to", "9.2.0-rc.1"]);
+    assert_eq!(code, 1, "{out}");
+    let mut state = s.state();
+    assert_eq!(state["requested"], "9.2.0-rc.1");
+
+    // A Kix that did not record the request wrote this state. Aiming at the
+    // latest release, 9.3.0, would leave the prerelease track unasked.
+    state.as_object_mut().unwrap().remove("requested");
+    s.write(
+        "kix-upgrade.json",
+        &serde_json::to_string_pretty(&state).unwrap(),
+    );
+    let lock = s.read("flake.lock");
+    std::fs::remove_file(s.project.join("fake/fail-9.2.0-rc.1")).unwrap();
+    let (code, out) = s.upgrade(&[]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("kix upgrade --to <version>"), "{out}");
+    assert_eq!(s.read("flake.lock"), lock);
+
+    let (code, out) = s.upgrade(&["--to", "9.2.0-rc.1"]);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(s.pinned(), "9.2.0-rc.1");
+}
+
+#[test]
+fn an_upgrade_to_the_latest_release_records_that_it_asked_for_it() {
+    let s = Setup::new();
+    s.releases(vec![]);
+    s.write("fake/fail-9.3.0", "");
+    let (code, out) = s.upgrade(&[]);
+    assert_eq!(code, 1, "{out}");
+    assert_eq!(s.state()["requested"], "latest");
+}
+
+#[test]
 fn the_version_the_project_is_on_needs_no_release_index() {
     let s = Setup::new();
     // No release site: Kix must not read the index.
@@ -1374,7 +1416,7 @@ fn a_tag_moved_by_hand_upgrades_from_the_locked_version() {
     let calls = s.calls();
     assert!(calls.contains("9.1.0 export east"), "{calls}");
     assert!(calls.contains("9.3.0 export east"), "{calls}");
-    assert!(out.contains("~ Deployment/web@shop (web)"), "{out}");
+    assert!(out.contains("~ Deployment.apps/web@shop (web)"), "{out}");
     assert_eq!(s.pinned(), "9.3.0");
     assert_eq!(s.read("flake.nix"), moved);
 }

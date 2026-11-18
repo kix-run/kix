@@ -211,7 +211,7 @@ fn to_k8s_event(event: &DeployEvent) -> Option<KEvent> {
 /// terminal verdict plus selected mid-flight milestones (SOPS hydration and
 /// in-place recreation).
 fn node_event(node: &NodeId, verdict: &Verdict, detail: Option<&NodeDetail>) -> Option<KEvent> {
-    let resource = node_label(node);
+    let resource = node.to_string();
     match verdict {
         Verdict::Pending => None,
         Verdict::Running => match detail? {
@@ -354,13 +354,6 @@ fn prune_note(resources: &[ResourceId], kept: &[ResourceId], delete: bool) -> St
     parts.join(". ")
 }
 
-fn node_label(id: &NodeId) -> String {
-    match id {
-        NodeId::Resource(rid) => rid.to_string(),
-        NodeId::Synthetic(s) => format!("⟦{s}⟧"),
-    }
-}
-
 /// Dispatches each [`DeployEvent`] to every wrapped observer.
 ///
 /// Used in the operator to run `OperatorObserver` (tracing) and
@@ -389,6 +382,7 @@ mod tests {
 
     fn rid(kind: &str, name: &str) -> ResourceId {
         ResourceId {
+            group: String::new(),
             kind: kind.into(),
             name: name.into(),
             namespace: "app".into(),

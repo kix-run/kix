@@ -26,11 +26,10 @@ pub struct ClusterOutput {
     /// Extra images declared by packages (operator-spawned, not in manifests).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extra_images: Option<Vec<ExtraImage>>,
-    /// The Kix library's warnings that are not scorecard findings. Nix
-    /// prints them as trace lines, which Kix shows only when an evaluation
-    /// fails, so the CLI reads them from the build instead.
+    /// The Kix library's warnings that are not scorecard findings
+    /// ([`crate::build_source::Build::warnings`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub warnings: Vec<String>,
+    pub warnings: Vec<super::library_record::LibraryRecord>,
 }
 
 impl ClusterOutput {

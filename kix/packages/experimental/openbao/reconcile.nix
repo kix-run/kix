@@ -168,10 +168,7 @@ in
           # electing a leader.
           backoffLimit = 6;
           template = {
-            metadata = {
-              labels = labelsFor "reconcile";
-              annotations."checksum/reconcile" = self.reconcileConfigMap.out.contentHash;
-            };
+            metadata.labels = labelsFor "reconcile";
             spec = {
               restartPolicy = "OnFailure";
               serviceAccount = self.reconcileServiceAccount;

@@ -63,7 +63,7 @@ in
   image = kix.options.image {
     repository = "docker.io/openebs/zfs-driver";
     tag = release;
-    digest = "sha256:16f1a74bb2495c78f9652be5d7cd6e869cb212c9decd42cac63e6566b07fa5f2";
+    digest = "sha256:0234692bb4a48b3e70d0bc25f3327ca2b6f1c93d57a066eea755a5c0d94bfb2d";
     description = "Image of the controller and node plugins. Its major.minor must match the vendored CRDs.";
   };
 

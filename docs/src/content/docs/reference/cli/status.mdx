@@ -80,10 +80,12 @@ The text output has four parts:
    `kix plan <cluster> --reconcile`, which shows what that deploy would change
    first. A deploy without `--reconcile` skips objects whose build did not
    change, so it does not put back a missing or changed object. When another
-   field manager owns fields of a changed object, as after `kubectl edit` or
-   `kubectl scale`, a deploy stops on those fields with a field ownership
-   conflict. The line then adds `--force-conflicts`, which takes the fields
-   back from that manager.
+   field manager owns fields on a changed object and Kix does not co-own them
+   (for example, after `kubectl edit` or `kubectl scale`), a deploy stops with
+   a field ownership conflict. The `Next:` line then adds `--force-conflicts`
+   to take those fields back. Fields shared with Kix still hold what Kix
+   applied, so a manager that shares all its fields with Kix does not trigger
+   `--force-conflicts`.
 
 ```text
 Cluster shop on Kubernetes v1.33.1 (context prod)
@@ -97,8 +99,8 @@ Last deploy: shop-7f3a2b1c0d9e  Active  2d0h ago
 db/postgres
   ConfigMap db/pg-config        changed since deploy (data.max_connections by kubectl-edit)
 vault/vaultwarden
-  Deployment vault/vaultwarden  not ready (0/1 ready, 0/1 updated)
-  Secret vault/vaultwarden-db   missing, needed by Deployment vault/vaultwarden
+  Deployment.apps vault/vaultwarden  not ready (0/1 ready, 0/1 updated)
+  Secret vault/vaultwarden-db        missing, needed by Deployment.apps vault/vaultwarden
 
 8 resources: 3 ok, 1 changed, 1 not ready, 1 missing, 2 not checked.
 Next: run `kix deploy shop --reconcile --force-conflicts` to put back what is missing or changed and take back the fields that kubectl-edit owns. `kix plan shop --reconcile --force-conflicts` shows what it would change first.
@@ -116,10 +118,10 @@ Kubernetes cluster ID: 4d7b1c2e
 Last deploy: shop-7f3a2b1c0d9e  Active  2d0h ago
 ...
 vault/vaultwarden
-  Deployment vault/vaultwarden      not ready (0/1 ready, 0/1 updated)
-  ConfigMap vault/vaultwarden-env   not checked for changes: no applied-hash stamp yet, the next deploy adds it
-  Secret vault/vaultwarden-db       missing, needed by Deployment vault/vaultwarden
-  Secret vault/vaultwarden-admin    not checked: this account may not list its kind
+  Deployment.apps vault/vaultwarden  not ready (0/1 ready, 0/1 updated)
+  ConfigMap vault/vaultwarden-env    not checked for changes: no applied-hash stamp yet, the next deploy adds it
+  Secret vault/vaultwarden-db        missing, needed by Deployment.apps vault/vaultwarden
+  Secret vault/vaultwarden-admin     not checked: this account may not list its kind
 (cluster-level)
   Namespace vault                   ok
 ```
@@ -156,7 +158,7 @@ there. Kix names it from the first of these that has it:
 3. Neither. The object is shown as `Unknown/(hash: xxxxxxxxxxxx...)`.
 
 The line for a missing object names the objects that depend on it, such as
-`missing, needed by Deployment vault/vaultwarden`.
+`missing, needed by Deployment.apps vault/vaultwarden`.
 
 A record written before Kix stored a package index lists no objects. Kix then
 finds the deploy's objects through the `kix.run/depends-on` annotations of the
@@ -188,13 +190,14 @@ Each entry of `resources[]`:
 | Field | Meaning |
 | --- | --- |
 | `kind`, `namespace`, `name` | The object. `namespace` is `null` for a cluster-scoped object. `kind` is `Unknown` when Kix cannot name a missing object. |
+| `group` | The kind's API group, such as `apps`. Omitted for core `v1` kinds. |
 | `identity_hash` | The object's `kix.run/identity-hash`. |
 | `named` | `false` when Kix could not name a missing object. |
-| `present` | `yes`, `no`, `external` (an import marker for an object Kix does not manage), or `unknown` (the account may not list the kind). |
-| `drift` | `null` when the drift check did not run or the object is gone. Otherwise `verdict` (`in_sync`, `changed`, `unstamped`, or `no_fieldset`), `foreign_owners` (other field managers, each with `manager`, `operation`, `subresource`, `time`, and `paths`), and `unrecorded_scale` (a replica count changed through `/scale` that Kubernetes recorded no owner for). |
+| `present` | `yes`, `no`, `external` (an import marker for an object Kix does not manage), `unknown` (the account may not list the kind), or `ambiguous` (no live object matches its identity hash, multiple API groups serve its kind, and an older deploy record lacks its API group; run `kix deploy <cluster> --reconcile` to record it). |
+| `drift` | `null` when the drift check did not run or the object is gone. Otherwise `verdict` (`in_sync`, `changed`, `unstamped`, or `no_fieldset`), `foreign_owners` (other field managers, each with `manager`, `operation`, `subresource`, `time`, `paths`, and `unshared_paths`; `unshared_paths` lists the paths Kix does not co-own, which can conflict on deploy), and `unrecorded_scale` (a replica count changed through `/scale` that Kubernetes recorded no owner for). |
 | `ready` | `true` or `false`. `null` when the readiness check did not run, the kind has no readiness (such as a ConfigMap), or the object is gone. |
 | `not_ready_reason` | Why the object is not ready, such as `0/1 ready, 0/1 updated`. |
-| `needed_by` | For a missing object, the objects that depend on it, as `Kind namespace/name`. |
+| `needed_by` | For a missing object, the objects that depend on it, as `Kind.group namespace/name` (or `Kind namespace/name` for core `v1` kinds). |
 | `problems` | `missing`, `changed`, and `not_ready`. Empty when the object is fine. |
 | `not_checked` | Whether a selected check could not run on the object. |
 

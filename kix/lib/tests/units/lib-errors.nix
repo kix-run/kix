@@ -72,6 +72,33 @@ let
     ];
   };
   asserting = mkCluster [ { instances.app.web.package = assertingPackage; } ];
+
+  warningPackage = {
+    meta.version = "test";
+    build =
+      { self, scope, ... }:
+      {
+        cm = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ConfigMap";
+          name = "warning";
+        };
+        unused = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ConfigMap";
+          name = "unused";
+        };
+        root = self.cm;
+      };
+    warnings = _: [
+      "plain"
+      {
+        message = "replicas will be removed.";
+        option = "replicas";
+        fix = "Leave it out.";
+      }
+    ];
+  };
 in
 {
   # One error: the id, the instance, the package, the message, the option,
@@ -151,8 +178,8 @@ in
         ];
       };
 
-  # kix.fail throws, for packages and for cluster definitions, and refuses a
-  # field it does not take, a missing message, and an id in brackets.
+  # kix.fail throws, for packages and for cluster definitions. A record
+  # needs a message.
   lib-errors-fail-throws =
     fails (kixlib.fail "boom")
     && fails (
@@ -163,39 +190,7 @@ in
     )
     && fails (kixlib.fail [ ])
     && fails (publicKix.fail { message = "boom"; })
-    && fails (
-      errors.text {
-        errors = [
-          {
-            message = "x";
-            fixes = "y";
-          }
-        ];
-        strict = true;
-      }
-    )
-    && fails (errors.text { errors = [ { fix = "y"; } ]; })
-    && fails (
-      errors.text {
-        errors = [
-          {
-            message = "x";
-            id = "[K0001]";
-          }
-        ];
-        strict = true;
-      }
-    )
-    && !fails (
-      errors.text {
-        errors = [
-          {
-            message = "x";
-            fixes = "y";
-          }
-        ];
-      }
-    );
+    && fails (errors.text { errors = [ { fix = "y"; } ]; });
 
   # A dependency and a cluster option each have a line of their own.
   lib-errors-dependency-and-cluster-option =
@@ -218,36 +213,67 @@ in
     ]
     || throw "dependency and cluster option: ${text}";
 
-  # kix.fail refuses a setting written in another form: an option with the
-  # `config.` prefix, a dependency or a package's meta as an option, a path
-  # with spaces, a dependency path, and a cluster option inside an instance.
+  # An object has a line of its own and keeps its fields in the JSON.
+  lib-errors-object =
+    let
+      object = {
+        kind = "Job";
+        namespace = "shop";
+        name = "migrate";
+      };
+      text = errors.text {
+        errors = [
+          {
+            message = "m";
+            inherit object;
+          }
+        ];
+      };
+    in
+    lib.take 2 (lib.splitString "\n" text) == [
+      "m"
+      "Object: Job shop/migrate"
+    ]
+    && (lib.head (payloadOf text).errors).object == object
+    || throw "object: ${text}";
+
+  # A field in the wrong form is left out of the record, and the message
+  # says why: an unknown field, an id that is no change record id, an option
+  # with the `config.` prefix, a dependency or a package's meta as an
+  # option, a path with spaces, a dependency path, a cluster option inside
+  # an instance, and an object without a kind.
   lib-errors-setting-form =
     let
       refused =
         e:
-        fails (
-          errors.text {
-            errors = [ ({ message = "m"; } // e) ];
-            strict = true;
-          }
-        );
+        let
+          r = lib.head (payloadOf (errors.text { errors = [ ({ message = "m"; } // e) ]; })).errors;
+        in
+        lib.hasPrefix "m\nKix omitted an invalid field from this diagnostic: " r.message
+        && builtins.all (n: !(r ? ${n})) (builtins.attrNames e);
     in
-    refused { option = "config.tls.secretName"; }
+    refused { fixes = "y"; }
+    && refused { id = "[K0001]"; }
+    && refused { option = "config.tls.secretName"; }
     && refused { option = "deps.database"; }
     && refused { option = "meta.podSecurity"; }
     && refused { option = "the extraSpec"; }
     && refused { dependency = "deps.database"; }
     && refused { clusterOption = "instances.shop.db.config.password"; }
+    && refused { object.name = "web"; }
     && !refused {
       option = "tls.secretName";
       dependency = "database";
       clusterOption = "cluster.domain";
+      object = {
+        kind = "Deployment";
+        name = "web";
+      };
     };
 
-  # Outside kix.fail, an error with a field in the wrong form keeps its
-  # place in the list and says what is wrong in its message, so the other
-  # errors still show.
-  lib-errors-bad-field-not-strict =
+  # An error with a field in the wrong form keeps its place in the list, so
+  # the other errors still show.
+  lib-errors-bad-field-keeps-the-list =
     let
       text = errors.text {
         cluster = "prod";
@@ -270,12 +296,49 @@ in
       builtins.length messages == 3
       && lib.hasPrefix "first\n" (builtins.elemAt messages 0)
       && lib.hasInfix "starts with `config.`" (builtins.elemAt messages 0)
-      && (builtins.elemAt payload.errors 0).option == "config.x"
-      && lib.hasInfix "is not a change record id" (builtins.elemAt messages 1)
+      && !((builtins.elemAt payload.errors 0) ? option)
+      && lib.hasInfix "is not a change ID" (builtins.elemAt messages 1)
       && !((builtins.elemAt payload.errors 1) ? id)
       && builtins.elemAt messages 2 == "third"
     )
-    || throw "bad field outside kix.fail: ${text}";
+    || throw "bad field in a list: ${text}";
+
+  # A warning is a record with the fields an error takes, and gains the
+  # instance unless it sets one. A field in the wrong form stops the build,
+  # as it does for kix.fail.
+  lib-errors-warning-records =
+    errors.warning "shop/db" "m" == {
+      instance = "shop/db";
+      message = "m";
+    }
+    &&
+      errors.warning null {
+        message = "m";
+        clusterOption = "cluster.domain";
+      } == {
+        message = "m";
+        clusterOption = "cluster.domain";
+      }
+    &&
+      errors.warning "shop/db" {
+        instance = "shop/other";
+        message = "m";
+      } == {
+        instance = "shop/other";
+        message = "m";
+      }
+    && fails (
+      errors.warning "shop/db" {
+        message = "m";
+        id = "K1";
+      }
+    )
+    && fails (
+      errors.warning "shop/db" {
+        message = "m";
+        severity = "high";
+      }
+    );
 
   # scope.fail stops the build of the instance that calls it.
   lib-errors-scope-fail = evalFails (mkCluster [ { instances.app.bad.package = failingPackage; } ]);
@@ -310,4 +373,33 @@ in
     ]
     && evalFails asserting
     || throw "assertions: ${builtins.toJSON combined.failedAssertions}";
+
+  # The warnings a package raises reach the file the CLI reads as records
+  # with the instance, and a structural warning names its object.
+  lib-errors-package-warnings-in-file =
+    let
+      cluster = mkCluster [ { instances.app.web.package = warningPackage; } ];
+      listed = builtins.fromJSON (builtins.readFile cluster.activationFiles.warnings);
+      ofWeb = builtins.filter (w: (w.instance or null) == "app/web") listed;
+    in
+    (
+      builtins.elem {
+        instance = "app/web";
+        message = "plain";
+      } ofWeb
+      && builtins.elem {
+        instance = "app/web";
+        message = "replicas will be removed.";
+        option = "replicas";
+        fix = "Leave it out.";
+      } ofWeb
+      && builtins.any (
+        w:
+        (w.object or null) == {
+          kind = "ConfigMap";
+          name = "unused";
+        }
+      ) ofWeb
+    )
+    || throw "package warnings: ${builtins.toJSON listed}";
 }

@@ -47,7 +47,7 @@ jobs:
         access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
 
@@ -74,6 +74,8 @@ jobs:
 
       - name: Change kind
         run: |
+          # The single quotes pass the script to the inner bash unexpanded.
+          # shellcheck disable=SC2016
           nix develop --command bash -c '
             set -euo pipefail
             # The base builds into its own target directory. When the two

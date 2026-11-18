@@ -48,6 +48,7 @@ let
   inherit (import ./core/error.nix { inherit lib; }) fail;
   k8s = import ./core { inherit lib; };
   helmDag = import ./helm-dag.nix { inherit lib; };
+  workloadKinds = import ./core/workload-kinds.nix { inherit lib; };
 
   helmVersions = lib.importJSON ./helm-versions.json;
 
@@ -588,13 +589,9 @@ rec {
 
           # Route workloads through scope.mkHelmWorkload to generate network
           # policies and run pod-spec validators without requiring DI-tracked
-          # resource names.
-          isWorkload = builtins.elem kind [
-            "Deployment"
-            "StatefulSet"
-            "DaemonSet"
-            "Job"
-          ];
+          # resource names. mkHelmWorkload reads `spec.selector` and
+          # `spec.template`, so it covers only the kinds that have both.
+          isWorkload = builtins.elem kind workloadKinds.selectorKinds;
           mkFn =
             if isClusterScopedKind kind then
               scope.mkClusterResource
@@ -644,7 +641,7 @@ rec {
       isTestHook =
         r:
         let
-          annotations = (r.metadata or { }).annotations or { };
+          annotations = r.metadata.annotations or { };
           hookVal = annotations."helm.sh/hook" or "";
         in
         lib.hasInfix "test" hookVal;

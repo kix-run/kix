@@ -1,7 +1,8 @@
 //! `kix NAME` runs the plugin `kix-NAME` from PATH. These tests put shell
 //! scripts on PATH as plugins, so they need no Nix and no cluster.
 
-use std::os::unix::fs::PermissionsExt;
+mod common;
+
 use std::path::Path;
 
 use assert_cmd::Command;
@@ -10,8 +11,7 @@ use predicates::prelude::*;
 /// Writes an executable `kix-NAME` into `dir`.
 fn plugin(dir: &Path, name: &str, body: &str) {
     let file = dir.join(format!("kix-{name}"));
-    std::fs::write(&file, format!("#!/bin/sh\n{body}\n")).unwrap();
-    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+    common::write_executable(&file, format!("#!/bin/sh\n{body}\n"));
 }
 
 /// `kix`, with `dir` first on PATH.

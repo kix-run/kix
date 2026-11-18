@@ -17,7 +17,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 # YAML read and written by Kix. Pure Rust, and the library kube itself uses.
 serde-saphyr = { version = "2", default-features = false, features = ["serialize", "deserialize"] }
-yaml-rust2 = { version = "0.13", default-features = false }
+# Helm renders: the YAML event parser serde-saphyr is built on.
+granit-parser = { version = "2.1", default-features = false, features = ["std"] }
 # A project's kix.toml
 toml = { version = "0.9", default-features = false, features = ["std", "parse", "serde"] }
 # JSON Schema of the `kix plan` and `kix diff` document
@@ -100,6 +101,9 @@ walkdir = "2"
 
 # Time
 chrono = "0.4"
+
+# Serial numbers of compliance documents (CycloneDX, OSCAL)
+uuid = { version = "1", features = ["v4"] }
 
 # Logging
 tracing = "0.1"

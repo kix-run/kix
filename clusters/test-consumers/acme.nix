@@ -6,7 +6,7 @@
 # the interface sets. It reaches the platform's api service as the import
 # acme-app/api.
 #
-# Build:  nix build .#cluster-consumers-acme
+# Build:  kix build consumers-acme
 
 { kix, packages }:
 

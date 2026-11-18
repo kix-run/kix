@@ -632,6 +632,102 @@
       ],
       "type": "object"
     },
+    "LibraryObject": {
+      "description": "A Kubernetes object a record is about.",
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "namespace": {
+          "description": "Absent for an object at cluster scope, or when the library does not\nknow it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "name"
+      ],
+      "type": "object"
+    },
+    "LibraryRecord": {
+      "description": "One error or warning of the Kix library. Fields this Kix does not know\nare skipped, so a newer library can add them.",
+      "properties": {
+        "clusterOption": {
+          "description": "The cluster option to change, as a path in the cluster definition.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dependency": {
+          "description": "The dependency to change, as its name in the instance's `deps`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fix": {
+          "description": "What to change, which may span lines.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "The change record id, such as `K0001`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "instance": {
+          "description": "The instance it is about, as `<namespace>/<name>`. Absent for the\nwhole cluster.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message": {
+          "description": "What is wrong, which may span lines.",
+          "type": "string"
+        },
+        "object": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LibraryObject"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The Kubernetes object it is about."
+        },
+        "option": {
+          "description": "The option to change, as a path in the instance's `config`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "package": {
+          "description": "The package of that instance.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "type": "object"
+    },
     "ListedEdge": {
       "additionalProperties": false,
       "description": "`from` depends on `to`.",
@@ -652,8 +748,12 @@
     "ListedNode": {
       "additionalProperties": false,
       "properties": {
+        "group": {
+          "description": "The kind's API group. Left out for the core group.",
+          "type": "string"
+        },
         "id": {
-          "description": "`Kind/name@namespace`, or `Kind/name` for a cluster-scoped object.",
+          "description": "[`ResourceId::display_id`]: `Kind.group/name@namespace`, without\n`.group` for the core group and `@namespace` for a cluster-scoped\nobject.",
           "type": "string"
         },
         "identityHash": {
@@ -813,6 +913,10 @@
     "ObjectDelete": {
       "description": "An object the deploy's prune deletes.",
       "properties": {
+        "group": {
+          "description": "The API group. Left out for the core group, so a plan written before\nthe field existed reads as the core group.",
+          "type": "string"
+        },
         "kind": {
           "type": "string"
         },
@@ -831,10 +935,14 @@
       "type": "object"
     },
     "ObjectWrite": {
-      "description": "An object the deploy applies, or may create again (a probe Job under the\nrerun rule).",
+      "description": "An object the deploy applies, or may create again (an unchanged Job under\nthe rerun rule, [`WriteChange::IfLastRunFailed`]).",
       "properties": {
         "change": {
           "$ref": "#/$defs/WriteChange"
+        },
+        "group": {
+          "description": "The API group. Left out for the core group, so a plan written before\nthe field existed reads as the core group.",
+          "type": "string"
         },
         "kind": {
           "type": "string"
@@ -1099,6 +1207,13 @@
         "schema_version": {
           "description": "The date, `YYYY-MM-DD`, of the document shape's last change that was\nnot backward compatible.",
           "type": "string"
+        },
+        "warnings": {
+          "description": "The Kix library's warnings for the new build, when the command\nevaluated it. A build read from a bundle has none. Left out when\nthere are none.",
+          "items": {
+            "$ref": "#/$defs/LibraryRecord"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -1269,6 +1384,11 @@
           "const": "other",
           "description": "The deploy refuses it before sending, or the apiserver gave another\nerror.",
           "type": "string"
+        },
+        {
+          "const": "webhook_unreachable",
+          "description": "The apiserver could not reach the Service behind an admission\nwebhook, so the webhook did not answer. This deploy does not write\nthat Service or the package that serves it.",
+          "type": "string"
         }
       ]
     },
@@ -1438,6 +1558,11 @@
         {
           "const": "reapplied",
           "description": "Not shown in `packages`: the deployed build, or a deploy of this\ncluster that stopped part way, already holds this file for the\nobject. `--reconcile` writes such objects again, as does a deploy that\nrepairs what a stopped deploy changed.",
+          "type": "string"
+        },
+        {
+          "const": "if_last_run_failed",
+          "description": "An unchanged Job under the rerun rule. The deploy reads its last run\nand creates it again only if that run failed, so the plan cannot\ncount it as a write.",
           "type": "string"
         }
       ]

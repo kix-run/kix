@@ -22,6 +22,9 @@ let
   normalize = import ../../core/normalize.nix { inherit lib; };
   rules = import ../../rules/architecture.nix { inherit lib; };
   envoyGatewayPackage = import ../../../packages/experimental/envoy-gateway;
+  # envoy-gateway needs the Gateway API CRDs. Other gateways ignore them.
+  gatewayApiInstance.instances.gatewayapi.gateway-api.package =
+    import ../../../packages/experimental/gateway-api;
 
   # A web Deployment and Service exposed through kix.expose. The Deployment
   # reads the record's `urlField` of the same instance into PUBLIC_URL.
@@ -145,6 +148,7 @@ let
           }
         )
       ]
+      ++ lib.optional (gatewayConfig != null) gatewayApiInstance
       ++ lib.optional (gatewayConfig != null) {
         instances.${gatewayNs}.gateway = {
           package = gatewayPackage;
@@ -285,7 +289,8 @@ let
     in
     cluster.instances.app.consumer._diagnostics;
   hasWarning =
-    infix: diag: builtins.any (w: lib.hasInfix infix w) diag.warnings && diag.failedAssertions == [ ];
+    infix: diag:
+    builtins.any (w: lib.hasInfix infix w.message) diag.warnings && diag.failedAssertions == [ ];
   # A failed meta assertion fails the cluster before its diagnostics can be
   # read.
   diagnosticsFail = args: !(builtins.tryEval (builtins.deepSeq (diagnosticsOf args) true)).success;
@@ -579,6 +584,7 @@ in
         byName "gateway" (
           ofKind "Gateway" (
             manifests (mkCluster [
+              gatewayApiInstance
               {
                 instances.gwns.gateway = {
                   package = envoyGatewayPackage;
@@ -766,7 +772,7 @@ in
       && k8sTooOld
       && hasWarning "which is not a version number" depWord
       && depOk.failedAssertions == [ ]
-      && !(builtins.any (lib.hasInfix "cannot check") depOk.warnings)
+      && !(builtins.any (w: lib.hasInfix "cannot check" w.message) depOk.warnings)
       && builtins.any (
         a: !a.assertion && lib.hasInfix "minVersion \"abc\" is not a version" a.message
       ) badConstraint

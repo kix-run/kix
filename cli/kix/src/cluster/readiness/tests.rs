@@ -97,16 +97,16 @@ fn declared_not_equals_readiness_accepts_absent_and_refuses_the_value() {
     }
 
     let unclaimed = make_annotated_obj(VM_CHILD_RULE, json!({}));
-    assert!(check_readiness(&unclaimed, "VMServiceScrape"));
+    assert!(check_readiness(&unclaimed, gk("VMServiceScrape")));
     let applied = make_annotated_obj(
         VM_CHILD_RULE,
         json!({"status": {"updateStatus": "operational"}}),
     );
-    assert!(check_readiness(&applied, "VMServiceScrape"));
+    assert!(check_readiness(&applied, gk("VMServiceScrape")));
 
     let failed = make_annotated_obj(VM_CHILD_RULE, json!({"status": {"updateStatus": "failed"}}));
-    assert!(!check_readiness(&failed, "VMServiceScrape"));
-    let msg = readiness_message(&failed, "VMServiceScrape");
+    assert!(!check_readiness(&failed, gk("VMServiceScrape")));
+    let msg = readiness_message(&failed, gk("VMServiceScrape"));
     assert!(
         msg.contains(r#"declared readiness /status/updateStatus!="failed", currently "failed""#),
         "got: {msg}"
@@ -120,7 +120,7 @@ fn declared_not_equals_readiness_accepts_absent_and_refuses_the_value() {
         ),
         2,
     );
-    assert!(!check_readiness(&stale, "VMServiceScrape"));
+    assert!(!check_readiness(&stale, gk("VMServiceScrape")));
 
     // A non-string notEquals is malformed and ignored.
     let bad = make_annotated_obj(r#"{"path":"/status/x","notEquals":true}"#, json!({}));
@@ -146,14 +146,14 @@ fn declared_readiness_ignores_malformed_annotations() {
 #[test]
 fn declared_readiness_gates_check_readiness() {
     let ready = make_annotated_obj(VM_RULE, json!({"status": {"updateStatus": "operational"}}));
-    assert!(check_readiness(&ready, "VMCluster"));
+    assert!(check_readiness(&ready, gk("VMCluster")));
 
     let expanding = make_annotated_obj(VM_RULE, json!({"status": {"updateStatus": "expanding"}}));
-    assert!(!check_readiness(&expanding, "VMCluster"));
+    assert!(!check_readiness(&expanding, gk("VMCluster")));
 
     // No status yet: declared readiness waits (unlike generic ready-on-empty).
     let fresh = make_annotated_obj(VM_RULE, json!({}));
-    assert!(!check_readiness(&fresh, "VMCluster"));
+    assert!(!check_readiness(&fresh, gk("VMCluster")));
 }
 
 const CONDITION_RULE: &str = r#"{"condition":{"type":"Bootstrapped","status":"True"}}"#;
@@ -187,24 +187,24 @@ fn declared_condition_gates_check_readiness() {
         CONDITION_RULE,
         json!({"status": {"conditions": [{"type": "Bootstrapped", "status": "True"}]}}),
     );
-    assert!(check_readiness(&ready, "SGCluster"));
+    assert!(check_readiness(&ready, gk("SGCluster")));
 
     let pending = make_annotated_obj(
         CONDITION_RULE,
         json!({"status": {"conditions": [{"type": "Bootstrapped", "status": "False"}]}}),
     );
-    assert!(!check_readiness(&pending, "SGCluster"));
+    assert!(!check_readiness(&pending, gk("SGCluster")));
 
     // A generic Ready=True does not satisfy a declared condition.
     let other = make_annotated_obj(
         CONDITION_RULE,
         json!({"status": {"conditions": [{"type": "Ready", "status": "True"}]}}),
     );
-    assert!(!check_readiness(&other, "SGCluster"));
+    assert!(!check_readiness(&other, gk("SGCluster")));
 
     // No status yet: declared readiness waits.
     let fresh = make_annotated_obj(CONDITION_RULE, json!({}));
-    assert!(!check_readiness(&fresh, "SGCluster"));
+    assert!(!check_readiness(&fresh, gk("SGCluster")));
 }
 
 #[test]
@@ -216,7 +216,7 @@ fn declared_condition_message_shapes() {
             {"type": "Valid", "status": "False", "message": "bad selector"}
         ]}}),
     );
-    let msg = readiness_message(&invalid, "CiliumNetworkPolicy");
+    let msg = readiness_message(&invalid, gk("CiliumNetworkPolicy"));
     assert!(
         msg.contains(
             "declared readiness condition Valid=True, currently Valid=False (bad selector)"
@@ -225,7 +225,7 @@ fn declared_condition_message_shapes() {
     );
 
     let absent = make_annotated_obj(rule, json!({}));
-    let msg = readiness_message(&absent, "CiliumNetworkPolicy");
+    let msg = readiness_message(&absent, gk("CiliumNetworkPolicy"));
     assert!(msg.contains("no Valid condition yet"), "got: {msg}");
 }
 
@@ -234,7 +234,7 @@ fn malformed_annotation_falls_through_to_kind_rules() {
     // Malformed annotations fall through for version compatibility. The CR
     // then uses check_generic_ready, which treats an empty status as ready.
     let no_status = make_annotated_obj("not json", json!({}));
-    assert!(check_readiness(&no_status, "VMCluster"));
+    assert!(check_readiness(&no_status, gk("VMCluster")));
 
     // ...and unrecognized condition vocabulary as not-ready.
     let stamped = make_annotated_obj(
@@ -243,7 +243,7 @@ fn malformed_annotation_falls_through_to_kind_rules() {
             {"type": "x.example.com/Applied", "status": "True"}
         ]}}),
     );
-    assert!(!check_readiness(&stamped, "VMCluster"));
+    assert!(!check_readiness(&stamped, gk("VMCluster")));
 }
 
 // A boolean or number at the path matches by its JSON text, as
@@ -252,11 +252,11 @@ fn malformed_annotation_falls_through_to_kind_rules() {
 fn declared_readiness_matches_scalars_by_text() {
     let applied = r#"{"path":"/status/applied","equals":"true"}"#;
     let ready = make_annotated_obj(applied, json!({"status": {"applied": true}}));
-    assert!(check_readiness(&ready, "Database"));
+    assert!(check_readiness(&ready, gk("Database")));
 
     let failed = make_annotated_obj(applied, json!({"status": {"applied": false}}));
-    assert!(!check_readiness(&failed, "Database"));
-    let msg = readiness_message(&failed, "Database");
+    assert!(!check_readiness(&failed, gk("Database")));
+    let msg = readiness_message(&failed, gk("Database"));
     assert!(
         msg.contains(r#"declared readiness /status/applied="true", currently false"#),
         "got: {msg}"
@@ -264,18 +264,18 @@ fn declared_readiness_matches_scalars_by_text() {
 
     let replicas = r#"{"path":"/status/replicas","equals":"3"}"#;
     let three = make_annotated_obj(replicas, json!({"status": {"replicas": 3}}));
-    assert!(check_readiness(&three, "VMCluster"));
+    assert!(check_readiness(&three, gk("VMCluster")));
     let two = make_annotated_obj(replicas, json!({"status": {"replicas": 2}}));
-    assert!(!check_readiness(&two, "VMCluster"));
+    assert!(!check_readiness(&two, gk("VMCluster")));
 
     // A string still compares as a string.
     let text = make_annotated_obj(applied, json!({"status": {"applied": "true"}}));
-    assert!(check_readiness(&text, "Database"));
+    assert!(check_readiness(&text, gk("Database")));
 
     // A missing path is not ready.
     let fresh = make_annotated_obj(applied, json!({"status": {}}));
-    assert!(!check_readiness(&fresh, "Database"));
-    assert!(readiness_message(&fresh, "Database").contains("<absent>"));
+    assert!(!check_readiness(&fresh, gk("Database")));
+    assert!(readiness_message(&fresh, gk("Database")).contains("<absent>"));
 }
 
 fn with_generation(mut obj: DynamicObject, generation: i64) -> DynamicObject {
@@ -296,8 +296,8 @@ fn declared_path_readiness_waits_for_observed_generation() {
         ),
         2,
     );
-    assert!(!check_readiness(&stale, "Database"));
-    let msg = readiness_message(&stale, "Database");
+    assert!(!check_readiness(&stale, gk("Database")));
+    let msg = readiness_message(&stale, gk("Database"));
     assert!(msg.contains("observed generation 1 of 2"), "got: {msg}");
 
     let current = with_generation(
@@ -307,14 +307,14 @@ fn declared_path_readiness_waits_for_observed_generation() {
         ),
         2,
     );
-    assert!(check_readiness(&current, "Database"));
-    assert!(!readiness_message(&current, "Database").contains("observed generation"));
+    assert!(check_readiness(&current, gk("Database")));
+    assert!(!readiness_message(&current, gk("Database")).contains("observed generation"));
 
     let absent = with_generation(
         make_annotated_obj(applied, json!({"status": {"applied": true}})),
         2,
     );
-    assert!(check_readiness(&absent, "Database"));
+    assert!(check_readiness(&absent, gk("Database")));
 }
 
 // A condition rule waits until the condition's own observedGeneration
@@ -334,18 +334,18 @@ fn declared_condition_readiness_waits_for_observed_generation() {
         make_annotated_obj(rule, condition(json!({"observedGeneration": 3}))),
         4,
     );
-    assert!(!check_readiness(&stale, "Cluster"));
-    let msg = readiness_message(&stale, "Cluster");
+    assert!(!check_readiness(&stale, gk("Cluster")));
+    let msg = readiness_message(&stale, gk("Cluster"));
     assert!(msg.contains("observed generation 3 of 4"), "got: {msg}");
 
     let current = with_generation(
         make_annotated_obj(rule, condition(json!({"observedGeneration": 4}))),
         4,
     );
-    assert!(check_readiness(&current, "Cluster"));
+    assert!(check_readiness(&current, gk("Cluster")));
 
     let absent = with_generation(make_annotated_obj(rule, condition(json!({}))), 4);
-    assert!(check_readiness(&absent, "Cluster"));
+    assert!(check_readiness(&absent, gk("Cluster")));
 }
 
 // A condition without its own observedGeneration falls back to
@@ -365,22 +365,22 @@ fn declared_condition_readiness_falls_back_to_status_generation() {
     let bare = json!({"type": "AllReplicasReady", "status": "True"});
 
     let stale = obj(bare.clone(), 4);
-    assert!(!check_readiness(&stale, "RabbitmqCluster"));
-    let msg = readiness_message(&stale, "RabbitmqCluster");
+    assert!(!check_readiness(&stale, gk("RabbitmqCluster")));
+    let msg = readiness_message(&stale, gk("RabbitmqCluster"));
     assert!(msg.contains("observed generation 4 of 5"), "got: {msg}");
 
-    assert!(check_readiness(&obj(bare, 5), "RabbitmqCluster"));
+    assert!(check_readiness(&obj(bare, 5), gk("RabbitmqCluster")));
 
     let own = json!({"type": "AllReplicasReady", "status": "True", "observedGeneration": 5});
-    assert!(check_readiness(&obj(own, 4), "RabbitmqCluster"));
+    assert!(check_readiness(&obj(own, 4), gk("RabbitmqCluster")));
 }
 
 #[test]
 fn declared_readiness_object_never_matches() {
     let rule = r#"{"path":"/status/applied","equals":"true"}"#;
     let obj = make_annotated_obj(rule, json!({"status": {"applied": {"value": true}}}));
-    assert!(!check_readiness(&obj, "Database"));
-    let msg = readiness_message(&obj, "Database");
+    assert!(!check_readiness(&obj, gk("Database")));
+    let msg = readiness_message(&obj, gk("Database"));
     assert!(
         msg.contains("only strings, booleans, and numbers"),
         "got: {msg}"
@@ -391,7 +391,7 @@ fn declared_readiness_object_never_matches() {
 #[test]
 fn declared_readiness_message_shapes() {
     let waiting = make_annotated_obj(VM_RULE, json!({"status": {"updateStatus": "expanding"}}));
-    let msg = readiness_message(&waiting, "VMCluster");
+    let msg = readiness_message(&waiting, gk("VMCluster"));
     assert!(
         msg.contains(
             r#"declared readiness /status/updateStatus="operational", currently "expanding""#
@@ -400,25 +400,25 @@ fn declared_readiness_message_shapes() {
     );
 
     let absent = make_annotated_obj(VM_RULE, json!({}));
-    let msg = readiness_message(&absent, "VMCluster");
+    let msg = readiness_message(&absent, gk("VMCluster"));
     assert!(msg.contains("<absent>"), "got: {msg}");
 }
 
 #[test]
 fn immediate_kinds() {
-    assert!(is_immediate_kind("ConfigMap"));
-    assert!(is_immediate_kind("Secret"));
-    assert!(is_immediate_kind("Service"));
-    assert!(is_immediate_kind("Namespace"));
-    assert!(is_immediate_kind("ServiceAccount"));
-    assert!(is_immediate_kind("ClusterRole"));
-    assert!(is_immediate_kind("ClusterRoleBinding"));
-    assert!(is_immediate_kind("Role"));
-    assert!(is_immediate_kind("RoleBinding"));
-    assert!(is_immediate_kind("Ingress"));
-    assert!(!is_immediate_kind("Deployment"));
-    assert!(!is_immediate_kind("StatefulSet"));
-    assert!(!is_immediate_kind("Job"));
+    assert!(is_immediate_kind(gk("ConfigMap")));
+    assert!(is_immediate_kind(gk("Secret")));
+    assert!(is_immediate_kind(gk("Service")));
+    assert!(is_immediate_kind(gk("Namespace")));
+    assert!(is_immediate_kind(gk("ServiceAccount")));
+    assert!(is_immediate_kind(gk("ClusterRole")));
+    assert!(is_immediate_kind(gk("ClusterRoleBinding")));
+    assert!(is_immediate_kind(gk("Role")));
+    assert!(is_immediate_kind(gk("RoleBinding")));
+    assert!(is_immediate_kind(gk("Ingress")));
+    assert!(!is_immediate_kind(gk("Deployment")));
+    assert!(!is_immediate_kind(gk("StatefulSet")));
+    assert!(!is_immediate_kind(gk("Job")));
 }
 
 #[test]
@@ -434,7 +434,29 @@ fn deployment_ready() {
             }
         }),
     );
-    assert!(check_readiness(&obj, "Deployment"));
+    assert!(check_readiness(&obj, gk("Deployment")));
+}
+
+/// A custom resource named `Deployment` is not judged by the rules for
+/// `apps` Deployments. Its replica counts mean nothing to Kix, and its
+/// `Ready` condition does.
+#[test]
+fn a_custom_kind_named_deployment_reads_its_conditions() {
+    let obj = make_obj_gen(
+        1,
+        json!({
+            "spec": {"replicas": 3},
+            "status": {
+                "observedGeneration": 1,
+                "readyReplicas": 3,
+                "updatedReplicas": 3,
+                "conditions": [{"type": "Ready", "status": "False"}],
+            }
+        }),
+    );
+    assert!(check_readiness(&obj, gk("Deployment")));
+    let custom = crate::manifest::kinds::GroupKind::new("example.com", "Deployment");
+    assert!(!check_readiness(&obj, custom));
 }
 
 #[test]
@@ -450,7 +472,7 @@ fn deployment_not_ready_replicas() {
             }
         }),
     );
-    assert!(!check_readiness(&obj, "Deployment"));
+    assert!(!check_readiness(&obj, gk("Deployment")));
 }
 
 /// A stuck rollout: the old pod is still ready and the updated pod never
@@ -471,7 +493,7 @@ fn deployment_with_a_stuck_rollout_is_not_ready() {
             }
         }),
     );
-    assert!(!check_readiness(&stuck, "Deployment"));
+    assert!(!check_readiness(&stuck, gk("Deployment")));
     let done = make_obj_gen(
         8,
         json!({
@@ -484,7 +506,7 @@ fn deployment_with_a_stuck_rollout_is_not_ready() {
             }
         }),
     );
-    assert!(check_readiness(&done, "Deployment"));
+    assert!(check_readiness(&done, gk("Deployment")));
 }
 
 /// A StatefulSet counts a terminating pod in `status.replicas`, so a
@@ -504,7 +526,7 @@ fn statefulset_with_a_terminating_pod_is_ready() {
             }
         }),
     );
-    assert!(check_readiness(&scaling_down, "StatefulSet"));
+    assert!(check_readiness(&scaling_down, gk("StatefulSet")));
 }
 
 #[test]
@@ -522,7 +544,7 @@ fn deployment_stale_status_not_ready() {
             }
         }),
     );
-    assert!(!check_readiness(&obj, "Deployment"));
+    assert!(!check_readiness(&obj, gk("Deployment")));
     let ds = make_obj_gen(
         2,
         json!({
@@ -534,7 +556,7 @@ fn deployment_stale_status_not_ready() {
             }
         }),
     );
-    assert!(!check_readiness(&ds, "DaemonSet"));
+    assert!(!check_readiness(&ds, gk("DaemonSet")));
 }
 
 fn on_delete_ds(desired: i64, ready: i64, updated: i64) -> DynamicObject {
@@ -555,27 +577,27 @@ fn on_delete_ds(desired: i64, ready: i64, updated: i64) -> DynamicObject {
 #[test]
 fn on_delete_daemonset_with_stale_pods_is_ready_and_pending_restart() {
     let ds = on_delete_ds(3, 3, 1);
-    assert!(check_readiness(&ds, "DaemonSet"));
+    assert!(check_readiness(&ds, gk("DaemonSet")));
     assert_eq!(daemonset_pending_restart(&ds.data), Some(2));
 }
 
 #[test]
 fn on_delete_daemonset_fully_updated_has_no_pending_restart() {
     let ds = on_delete_ds(3, 3, 3);
-    assert!(check_readiness(&ds, "DaemonSet"));
+    assert!(check_readiness(&ds, gk("DaemonSet")));
     assert_eq!(daemonset_pending_restart(&ds.data), None);
 }
 
 #[test]
 fn on_delete_daemonset_waits_for_ready_pods() {
     let ds = on_delete_ds(3, 2, 1);
-    assert!(!check_readiness(&ds, "DaemonSet"));
+    assert!(!check_readiness(&ds, gk("DaemonSet")));
 }
 
 #[test]
 fn on_delete_daemonset_matching_no_node_is_ready() {
     let ds = on_delete_ds(0, 0, 0);
-    assert!(check_readiness(&ds, "DaemonSet"));
+    assert!(check_readiness(&ds, gk("DaemonSet")));
     assert_eq!(daemonset_pending_restart(&ds.data), None);
 }
 
@@ -593,7 +615,7 @@ fn rolling_update_daemonset_waits_for_updated_pods() {
             }
         }),
     );
-    assert!(!check_readiness(&ds, "DaemonSet"));
+    assert!(!check_readiness(&ds, gk("DaemonSet")));
     assert_eq!(daemonset_pending_restart(&ds.data), None);
 }
 
@@ -612,10 +634,10 @@ fn daemonset_matching_no_node_is_ready_once_observed() {
             }
         }),
     );
-    assert!(check_readiness(&ds, "DaemonSet"));
+    assert!(check_readiness(&ds, gk("DaemonSet")));
     // The same object before the controller has written any status.
     let unobserved = make_obj_gen(1, json!({}));
-    assert!(!check_readiness(&unobserved, "DaemonSet"));
+    assert!(!check_readiness(&unobserved, gk("DaemonSet")));
 }
 
 #[test]
@@ -631,7 +653,7 @@ fn statefulset_ready() {
             }
         }),
     );
-    assert!(check_readiness(&obj, "StatefulSet"));
+    assert!(check_readiness(&obj, gk("StatefulSet")));
 }
 
 #[test]
@@ -644,7 +666,7 @@ fn a_rule_an_operator_copied_does_not_judge_the_copy() {
     let mut copy = written_by("operator", make_copied_obj(rule, status.clone()));
     copy.metadata.generation = Some(1);
     assert!(declared_rule(&copy).is_none());
-    assert!(check_readiness(&copy, "StatefulSet"));
+    assert!(check_readiness(&copy, gk("StatefulSet")));
 
     let mut unrecorded = make_copied_obj(rule, status.clone());
     unrecorded.metadata.generation = Some(1);
@@ -653,7 +675,7 @@ fn a_rule_an_operator_copied_does_not_judge_the_copy() {
     let mut applied = make_annotated_obj(rule, status);
     applied.metadata.generation = Some(1);
     assert_eq!(declared_rule(&applied), Some(rule));
-    assert!(!check_readiness(&applied, "StatefulSet"));
+    assert!(!check_readiness(&applied, gk("StatefulSet")));
 }
 
 #[test]
@@ -663,12 +685,12 @@ fn undeclared_custom_kind_uses_generic_conditions() {
     let valid_only = make_obj(json!({
         "status": {"conditions": [{"type": "Valid", "status": "True"}]}
     }));
-    assert!(!check_readiness(&valid_only, "CiliumNetworkPolicy"));
+    assert!(!check_readiness(&valid_only, gk("CiliumNetworkPolicy")));
 
     let ready = make_obj(json!({
         "status": {"conditions": [{"type": "Ready", "status": "True"}]}
     }));
-    assert!(check_readiness(&ready, "CiliumNetworkPolicy"));
+    assert!(check_readiness(&ready, gk("CiliumNetworkPolicy")));
 }
 
 #[test]
@@ -681,7 +703,7 @@ fn crd_established() {
             ]
         }
     }));
-    assert!(check_readiness(&obj, "CustomResourceDefinition"));
+    assert!(check_readiness(&obj, gk("CustomResourceDefinition")));
 }
 
 #[test]
@@ -693,7 +715,7 @@ fn crd_not_established() {
             ]
         }
     }));
-    assert!(!check_readiness(&obj, "CustomResourceDefinition"));
+    assert!(!check_readiness(&obj, gk("CustomResourceDefinition")));
 }
 
 #[test]
@@ -701,7 +723,7 @@ fn job_completed() {
     let obj = make_obj(json!({
         "status": {"succeeded": 1}
     }));
-    assert!(check_readiness(&obj, "Job"));
+    assert!(check_readiness(&obj, gk("Job")));
 }
 
 #[test]
@@ -819,7 +841,7 @@ fn import_marker_without_kind_has_no_target() {
     });
     assert!(import_target_from_manifest(&manifest).unwrap().is_none());
     // The marker itself is ready as soon as it exists.
-    assert!(is_immediate_kind("PackageInstance"));
+    assert!(is_immediate_kind(gk("PackageInstance")));
 }
 
 #[test]
@@ -1011,7 +1033,7 @@ fn generic_cr_ready() {
             ]
         }
     }));
-    assert!(check_readiness(&obj, "SomeCustomResource"));
+    assert!(check_readiness(&obj, gk("SomeCustomResource")));
 }
 
 #[test]
@@ -1214,7 +1236,7 @@ fn deployment_progress_deadline_is_terminal() {
             ]
         }
     });
-    let (reason, msg) = classify_workload_terminal(&obj, "Deployment").expect("terminal");
+    let (reason, msg) = classify_workload_terminal(&obj, gk("Deployment")).expect("terminal");
     assert_eq!(reason, TerminalReason::ProgressDeadline);
     assert!(msg.contains("timed out"));
 }
@@ -1228,7 +1250,7 @@ fn deployment_progressing_true_not_terminal() {
             ]
         }
     });
-    assert!(classify_workload_terminal(&obj, "Deployment").is_none());
+    assert!(classify_workload_terminal(&obj, gk("Deployment")).is_none());
 }
 
 #[test]
@@ -1237,7 +1259,7 @@ fn job_backoff_exceeded_is_terminal() {
         "spec": {"backoffLimit": 2},
         "status": {"failed": 3}
     });
-    let (reason, _) = classify_workload_terminal(&obj, "Job").expect("terminal");
+    let (reason, _) = classify_workload_terminal(&obj, gk("Job")).expect("terminal");
     assert_eq!(reason, TerminalReason::JobBackoffExceeded);
 }
 
@@ -1247,7 +1269,7 @@ fn job_within_backoff_not_terminal() {
         "spec": {"backoffLimit": 6},
         "status": {"failed": 2}
     });
-    assert!(classify_workload_terminal(&obj, "Job").is_none());
+    assert!(classify_workload_terminal(&obj, gk("Job")).is_none());
 }
 
 #[test]
@@ -1261,7 +1283,7 @@ fn job_failed_condition_is_terminal() {
             ]
         }
     });
-    let (reason, msg) = classify_workload_terminal(&obj, "Job").expect("terminal");
+    let (reason, msg) = classify_workload_terminal(&obj, gk("Job")).expect("terminal");
     assert_eq!(reason, TerminalReason::JobBackoffExceeded);
     assert!(msg.contains("DeadlineExceeded"));
 }
@@ -1284,7 +1306,7 @@ fn job_with_succeeded_and_failed_condition_is_terminal() {
     // The job IS "ready" by the succeeded check...
     assert!(check_job_ready(&obj));
     // ...but it IS terminal due to the failed condition.
-    let (reason, _) = classify_workload_terminal(&obj, "Job").expect("terminal");
+    let (reason, _) = classify_workload_terminal(&obj, gk("Job")).expect("terminal");
     assert_eq!(reason, TerminalReason::JobBackoffExceeded);
 }
 
@@ -1363,11 +1385,11 @@ fn rollout_is_not_judged_before_the_controller_observes_it() {
     let caught_up = rollout_workload(3, Some(3), "web:1");
     let never_seen = rollout_workload(1, None, "web:1");
     for kind in ["Deployment", "StatefulSet", "DaemonSet"] {
-        assert!(!rollout_observed(&behind, kind), "{kind}");
-        assert!(rollout_observed(&caught_up, kind), "{kind}");
-        assert!(!rollout_observed(&never_seen, kind), "{kind}");
+        assert!(!rollout_observed(&behind, gk(kind)), "{kind}");
+        assert!(rollout_observed(&caught_up, gk(kind)), "{kind}");
+        assert!(!rollout_observed(&never_seen, gk(kind)), "{kind}");
     }
-    assert!(rollout_observed(&behind, "Job"));
+    assert!(rollout_observed(&behind, gk("Job")));
 }
 
 #[test]
@@ -1507,8 +1529,8 @@ fn fingerprint_changes_when_replicas_progress() {
         "spec": {"replicas": 3},
         "status": {"observedGeneration": 1, "readyReplicas": 1, "updatedReplicas": 2}
     }));
-    let fp1 = progress_fingerprint(&before, "Deployment", &[]);
-    let fp2 = progress_fingerprint(&after, "Deployment", &[]);
+    let fp1 = progress_fingerprint(&before, gk("Deployment"), &[]);
+    let fp2 = progress_fingerprint(&after, gk("Deployment"), &[]);
     assert_ne!(
         fp1, fp2,
         "ready/updated count changes must register as progress"
@@ -1522,8 +1544,8 @@ fn fingerprint_stable_when_nothing_moves() {
         "spec": {"replicas": 3},
         "status": {"observedGeneration": 1, "readyReplicas": 0, "updatedReplicas": 0}
     }));
-    let fp1 = progress_fingerprint(&obj, "Deployment", &[]);
-    let fp2 = progress_fingerprint(&obj, "Deployment", &[]);
+    let fp1 = progress_fingerprint(&obj, gk("Deployment"), &[]);
+    let fp2 = progress_fingerprint(&obj, gk("Deployment"), &[]);
     assert_eq!(fp1, fp2);
 }
 
@@ -1552,8 +1574,8 @@ fn fingerprint_changes_on_pod_phase_transition() {
             }]
         }
     })];
-    let fp1 = progress_fingerprint(&obj, "Deployment", &pods_pending);
-    let fp2 = progress_fingerprint(&obj, "Deployment", &pods_running);
+    let fp1 = progress_fingerprint(&obj, gk("Deployment"), &pods_pending);
+    let fp2 = progress_fingerprint(&obj, gk("Deployment"), &pods_running);
     assert_ne!(
         fp1, fp2,
         "Pending→Running pod transition must register as progress"
@@ -1578,8 +1600,8 @@ fn fingerprint_changes_on_restart_count_bump() {
             "containerStatuses": [{"state": {"running": {}}, "restartCount": 2}]
         }
     })];
-    let fp1 = progress_fingerprint(&obj, "Deployment", &pods_low);
-    let fp2 = progress_fingerprint(&obj, "Deployment", &pods_high);
+    let fp1 = progress_fingerprint(&obj, gk("Deployment"), &pods_low);
+    let fp2 = progress_fingerprint(&obj, gk("Deployment"), &pods_high);
     assert_ne!(fp1, fp2, "restart count bump should register as progress");
 }
 
@@ -1647,8 +1669,8 @@ fn declared_readiness_without_failed_key_parses_as_before() {
         CONDITION_RULE,
         json!({"status": {"conditions": [{"type": "Bootstrapped", "status": "False"}]}}),
     );
-    assert!(declared_failure(&rejected, "SGCluster", None).is_none());
-    assert!(!check_readiness(&rejected, "SGCluster"));
+    assert!(declared_failure(&rejected, gk("SGCluster"), None).is_none());
+    assert!(!check_readiness(&rejected, gk("SGCluster")));
 
     let parsed = declared_readiness(&make_annotated_obj(VM_RULE, json!({}))).expect("parses");
     assert!(parsed.failed.is_empty());
@@ -1669,7 +1691,7 @@ fn declared_failed_rules_drop_malformed_entries() {
         not_a_list,
         json!({"status": {"conditions": [{"type": "Valid", "status": "True"}]}}),
     );
-    assert!(check_readiness(&ready, "CiliumNetworkPolicy"));
+    assert!(check_readiness(&ready, gk("CiliumNetworkPolicy")));
 }
 
 // A matching condition whose observedGeneration has reached the object's
@@ -1680,10 +1702,10 @@ fn declared_failure_with_current_generation_fails_at_once() {
         make_annotated_obj(CILIUM_RULE, valid_false(json!({"observedGeneration": 2}))),
         2,
     );
-    let failure = declared_failure(&obj, "CiliumNetworkPolicy", None).expect("matches");
+    let failure = declared_failure(&obj, gk("CiliumNetworkPolicy"), None).expect("matches");
     assert!(failure.confirmed);
     assert_eq!(failure.message, CILIUM_MESSAGE);
-    assert!(!check_readiness(&obj, "CiliumNetworkPolicy"));
+    assert!(!check_readiness(&obj, gk("CiliumNetworkPolicy")));
 
     let mut watch = FailureWatch::default();
     assert_eq!(
@@ -1699,7 +1721,7 @@ fn declared_failure_with_current_generation_fails_at_once() {
         ),
         2,
     );
-    let failure = declared_failure(&via_status, "CiliumNetworkPolicy", None).expect("matches");
+    let failure = declared_failure(&via_status, gk("CiliumNetworkPolicy"), None).expect("matches");
     assert!(failure.confirmed);
     assert_eq!(
         failure.message,
@@ -1711,11 +1733,11 @@ fn declared_failure_with_current_generation_fails_at_once() {
         CILIUM_RULE,
         json!({"status": {"conditions": [{"type": "Valid", "status": "True"}]}}),
     );
-    assert!(declared_failure(&accepted, "CiliumNetworkPolicy", None).is_none());
+    assert!(declared_failure(&accepted, gk("CiliumNetworkPolicy"), None).is_none());
     assert!(
         declared_failure(
             &make_annotated_obj(CILIUM_RULE, json!({})),
-            "CiliumNetworkPolicy",
+            gk("CiliumNetworkPolicy"),
             None
         )
         .is_none()
@@ -1730,7 +1752,7 @@ fn declared_failure_with_stale_generation_keeps_polling() {
         make_annotated_obj(CILIUM_RULE, valid_false(json!({"observedGeneration": 1}))),
         2,
     );
-    assert!(declared_failure(&stale, "CiliumNetworkPolicy", None).is_none());
+    assert!(declared_failure(&stale, gk("CiliumNetworkPolicy"), None).is_none());
 
     let stale_status = with_generation(
         make_annotated_obj(
@@ -1739,7 +1761,7 @@ fn declared_failure_with_stale_generation_keeps_polling() {
         ),
         2,
     );
-    assert!(declared_failure(&stale_status, "CiliumNetworkPolicy", None).is_none());
+    assert!(declared_failure(&stale_status, gk("CiliumNetworkPolicy"), None).is_none());
 
     let mut watch = FailureWatch::default();
     assert_eq!(watch.observe(None, Instant::now()), None);
@@ -1751,7 +1773,7 @@ fn declared_failure_with_stale_generation_keeps_polling() {
 #[test]
 fn declared_failure_without_generation_fails_after_the_grace() {
     let obj = make_annotated_obj(CILIUM_RULE, valid_false(json!({})));
-    let failure = declared_failure(&obj, "CiliumNetworkPolicy", None).expect("matches");
+    let failure = declared_failure(&obj, gk("CiliumNetworkPolicy"), None).expect("matches");
     assert!(!failure.confirmed);
     assert_eq!(failure.message, CILIUM_MESSAGE);
 
@@ -1796,8 +1818,8 @@ fn declared_failure_reason_must_match_when_declared() {
             1,
         )
     };
-    assert!(declared_failure(&route("Pending"), "HTTPRoute", None).is_none());
-    let failure = declared_failure(&route("Invalid"), "HTTPRoute", None).expect("matches");
+    assert!(declared_failure(&route("Pending"), gk("HTTPRoute"), None).is_none());
+    let failure = declared_failure(&route("Invalid"), gk("HTTPRoute"), None).expect("matches");
     assert_eq!(
         failure.message,
         "its controller rejected it with Accepted=False (Invalid): waiting. This will not fix itself, so Kix stopped waiting. Change this HTTPRoute in the package or cluster definition that creates it, then deploy again."
@@ -1816,8 +1838,10 @@ fn declared_failure_path_form() {
         {"equals":"PartiallyFailed","path":"/status/phase"}
     ],"path":"/status/phase"}"#;
     let backup = |status: Value| make_annotated_obj(rule, json!({"status": status}));
-    assert!(declared_failure(&backup(json!({"phase": "InProgress"})), "Backup", None).is_none());
-    assert!(declared_failure(&backup(json!({"phase": "Completed"})), "Backup", None).is_none());
+    assert!(
+        declared_failure(&backup(json!({"phase": "InProgress"})), gk("Backup"), None).is_none()
+    );
+    assert!(declared_failure(&backup(json!({"phase": "Completed"})), gk("Backup"), None).is_none());
 
     let parsed = declared_readiness(&backup(json!({}))).expect("parses");
     assert_eq!(
@@ -1831,8 +1855,12 @@ fn declared_failure_path_form() {
         }
     );
 
-    let no_hint = declared_failure(&backup(json!({"phase": "PartiallyFailed"})), "Backup", None)
-        .expect("matches");
+    let no_hint = declared_failure(
+        &backup(json!({"phase": "PartiallyFailed"})),
+        gk("Backup"),
+        None,
+    )
+    .expect("matches");
     assert!(!no_hint.confirmed);
     assert_eq!(
         no_hint.message,
@@ -1845,7 +1873,7 @@ fn declared_failure_path_form() {
         ),
         3,
     );
-    let failure = declared_failure(&with_hint, "Backup", None).expect("matches");
+    let failure = declared_failure(&with_hint, gk("Backup"), None).expect("matches");
     assert!(failure.confirmed);
     assert_eq!(
         failure.message,
@@ -1857,7 +1885,7 @@ fn declared_failure_path_form() {
         &backup(
             json!({"phase": "FailedValidation", "validationErrors": ["no location", "bad ttl"]}),
         ),
-        "Backup",
+        gk("Backup"),
         None,
     )
     .expect("matches");
@@ -1867,7 +1895,7 @@ fn declared_failure_path_form() {
     );
     let rejected = declared_failure(
         &backup(json!({"phase": "FailedValidation"})),
-        "Backup",
+        gk("Backup"),
         None,
     )
     .expect("matches");
@@ -1879,7 +1907,7 @@ fn declared_failure_path_form() {
         backup(json!({"phase": "Failed", "observedGeneration": 2})),
         3,
     );
-    assert!(declared_failure(&stale, "Backup", None).is_none());
+    assert!(declared_failure(&stale, gk("Backup"), None).is_none());
 
     // A `message` that is not a pointer or a list of them drops the entry.
     let bad = r#"{"equals":"Completed","failed":[{"equals":"Failed","message":3,"path":"/status/phase"}],"path":"/status/phase"}"#;
@@ -1893,7 +1921,7 @@ fn declared_failure_path_form() {
     // A boolean compares by its JSON text, as the ready rule does.
     let flag = r#"{"equals":"true","failed":[{"equals":"true","path":"/status/rejected"}],"path":"/status/applied"}"#;
     let rejected = make_annotated_obj(flag, json!({"status": {"rejected": true}}));
-    assert!(declared_failure(&rejected, "Database", None).is_some());
+    assert!(declared_failure(&rejected, gk("Database"), None).is_some());
     let failure = DeclaredFailure {
         message: "x".into(),
         confirmed: true,
@@ -1915,7 +1943,7 @@ fn declared_failure_trusts_a_transition_after_the_apply() {
         |t: &str| make_annotated_obj(CILIUM_RULE, valid_false(json!({"lastTransitionTime": t})));
     let applied =
         Utc.with_ymd_and_hms(2026, 11, 6, 12, 0, 0).unwrap() + chrono::Duration::milliseconds(700);
-    let kind = "CiliumNetworkPolicy";
+    let kind = gk("CiliumNetworkPolicy");
 
     assert!(declared_failure(&at("2026-11-06T11:58:00Z"), kind, Some(applied)).is_none());
 
@@ -2051,12 +2079,12 @@ fn a_retried_pull_moving_between_its_two_states_is_not_progress() {
     }));
     let err = progress_fingerprint(
         &obj,
-        "Deployment",
+        gk("Deployment"),
         &[pulling_pod("ErrImagePull", TLS_TIMEOUT_PULL)],
     );
     let backoff = progress_fingerprint(
         &obj,
-        "Deployment",
+        gk("Deployment"),
         &[pulling_pod("ImagePullBackOff", "Back-off pulling image")],
     );
     assert_eq!(err, backoff);
@@ -2069,4 +2097,583 @@ fn a_listed_pod_keeps_its_name_for_failure_messages() {
     let value = serde_json::to_value(pod).unwrap();
     assert_eq!(value.pointer("/metadata/name"), Some(&json!("web-5c7d")));
     assert_eq!(value.pointer("/status/phase"), Some(&json!("Pending")));
+}
+
+/// Return the group and kind a test names by kind alone: a built-in kind in
+/// its Kubernetes group, and any other kind in a custom resource's group.
+fn gk(kind: &'static str) -> crate::manifest::kinds::GroupKind<'static> {
+    use crate::manifest::kinds::{self, GroupKind};
+    [
+        kinds::CONFIG_MAP,
+        kinds::SECRET,
+        kinds::SERVICE,
+        kinds::SERVICE_ACCOUNT,
+        kinds::NAMESPACE,
+        kinds::POD,
+        kinds::PERSISTENT_VOLUME_CLAIM,
+        kinds::DEPLOYMENT,
+        kinds::STATEFUL_SET,
+        kinds::DAEMON_SET,
+        kinds::REPLICA_SET,
+        kinds::JOB,
+        kinds::CRON_JOB,
+        kinds::CLUSTER_ROLE,
+        kinds::CLUSTER_ROLE_BINDING,
+        kinds::ROLE,
+        kinds::ROLE_BINDING,
+        kinds::INGRESS,
+        kinds::NETWORK_POLICY,
+        kinds::LIMIT_RANGE,
+        kinds::RESOURCE_QUOTA,
+        kinds::POD_DISRUPTION_BUDGET,
+        kinds::HORIZONTAL_POD_AUTOSCALER,
+        kinds::PRIORITY_CLASS,
+        kinds::SERVICE_MONITOR,
+        kinds::STORAGE_CLASS,
+        kinds::CUSTOM_RESOURCE_DEFINITION,
+    ]
+    .into_iter()
+    .find(|k| k.kind == kind)
+    .unwrap_or(GroupKind::new("example.com", kind))
+}
+
+mod discovery_waits {
+    use super::*;
+    use crate::cluster::fake_api::{FakeApi, TWO_VERSION_GROUP};
+    use crate::manifest::types::CLUSTER_SCOPED;
+
+    const CRD_GROUP: &str = "apiextensions.k8s.io";
+    /// The readiness loops measure time with `std::time::Instant`, which a
+    /// paused tokio clock does not advance, so a timeout here is real time.
+    const TIMEOUT: Duration = Duration::from_secs(1);
+
+    /// An established CRD that defines `kind` in `group`.
+    fn crd(name: &str, group: &str, kind: &str) -> Value {
+        json!({
+            "apiVersion": "apiextensions.k8s.io/v1",
+            "kind": "CustomResourceDefinition",
+            "metadata": { "name": name },
+            "spec": {
+                "group": group,
+                "names": { "kind": kind },
+                "versions": [{ "name": "v1", "served": true }],
+            },
+            "status": { "conditions": [{ "type": "Established", "status": "True" }] },
+        })
+    }
+
+    async fn wait_for_crd(api: &FakeApi, name: &str) -> ReadinessResult {
+        let ar = ApiResource {
+            group: CRD_GROUP.into(),
+            version: "v1".into(),
+            api_version: "apiextensions.k8s.io/v1".into(),
+            kind: "CustomResourceDefinition".into(),
+            plural: "customresourcedefinitions".into(),
+        };
+        let rid = ResourceId {
+            group: CRD_GROUP.into(),
+            kind: "CustomResourceDefinition".into(),
+            namespace: CLUSTER_SCOPED.into(),
+            name: name.into(),
+        };
+        wait_for_ready(
+            &api.client(),
+            &ar,
+            &Scope::Cluster,
+            &rid,
+            None,
+            TIMEOUT,
+            &CancelToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap()
+    }
+
+    fn import(kind: &str, api_version: &str, name: &str) -> ImportTarget {
+        ImportTarget {
+            kind: kind.into(),
+            api_version: api_version.into(),
+            name: name.into(),
+            namespace: None,
+            expected_keys: Vec::new(),
+            served_versions: vec!["v1".into()],
+            platform: None,
+        }
+    }
+
+    async fn wait_for_import(api: &FakeApi, target: &ImportTarget) -> ReadinessResult {
+        wait_for_import_target(&api.client(), target, TIMEOUT, &CancelToken::new(), |_| {})
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_crd_whose_kind_discovery_serves_is_ready() {
+        let name = format!("gizmos.{TWO_VERSION_GROUP}");
+        let api = FakeApi::new([crd(&name, TWO_VERSION_GROUP, "Gizmo")]);
+        assert_eq!(wait_for_crd(&api, &name).await, ReadinessResult::Ready);
+    }
+
+    /// An established CRD whose kind discovery never serves times out with
+    /// a message that says what it waited for.
+    #[tokio::test(start_paused = true)]
+    async fn a_crd_waits_until_discovery_serves_its_kind() {
+        let api = FakeApi::new([crd("widgets.example.com", "example.com", "Widget")]);
+        let result = wait_for_crd(&api, "widgets.example.com").await;
+        let ReadinessResult::TimedOut { message, .. } = result else {
+            panic!("expected a timeout, got {result:?}");
+        };
+        assert!(message.contains(CRD_AWAITING_DISCOVERY), "{message}");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_imported_crd_is_ready_once_discovery_serves_its_kind() {
+        let name = format!("gizmos.{TWO_VERSION_GROUP}");
+        let api = FakeApi::new([crd(&name, TWO_VERSION_GROUP, "Gizmo")]);
+        let target = import("CustomResourceDefinition", "apiextensions.k8s.io/v1", &name);
+        assert_eq!(wait_for_import(&api, &target).await, ReadinessResult::Ready);
+    }
+
+    /// An import of a kind discovery does not serve waits for discovery and
+    /// never requests a resource path made up from the kind's name.
+    #[tokio::test(start_paused = true)]
+    async fn an_import_of_an_unserved_kind_waits_for_discovery() {
+        let api = FakeApi::new([]);
+        let target = import("Widget", "example.com/v1", "w");
+        let result = wait_for_import(&api, &target).await;
+        assert!(
+            matches!(result, ReadinessResult::TimedOut { .. }),
+            "{result:?}"
+        );
+        assert!(
+            !api.requests().iter().any(|r| r.contains("widget")),
+            "{:?}",
+            api.requests()
+        );
+    }
+}
+
+/// The declaration a running KubeVirt VirtualMachine carries: KubeVirt
+/// reports in `status.observedGeneration` the generation the running
+/// instance started from, and in `status.desiredGeneration` the generation
+/// virt-controller has processed.
+const RUNNING_VM_RULE: &str = r#"{"path":"/status/printableStatus","equals":"Running","observedGeneration":"/status/desiredGeneration","pendingRestart":{"condition":{"type":"RestartRequired","status":"True"},"hint":"Restart the VM with `virtctl restart <name>` to apply the change."}}"#;
+
+const RESTART_REQUIRED_MESSAGE: &str =
+    "a non-live-updatable field was changed in the template spec";
+
+fn running_vm(generation: i64, desired: i64, conditions: Value) -> DynamicObject {
+    with_generation(
+        make_annotated_obj(
+            RUNNING_VM_RULE,
+            json!({"status": {
+                "printableStatus": "Running",
+                "observedGeneration": 1,
+                "desiredGeneration": desired,
+                "conditions": conditions,
+            }}),
+        ),
+        generation,
+    )
+}
+
+fn restart_required() -> Value {
+    json!([{
+        "type": "RestartRequired",
+        "status": "True",
+        "message": RESTART_REQUIRED_MESSAGE,
+    }])
+}
+
+// The two new keys parse, and an annotation without them reads the
+// conventional field and declares no restart state.
+#[test]
+fn declared_readiness_parses_generation_field_and_pending_restart() {
+    let parsed =
+        declared_readiness(&make_annotated_obj(RUNNING_VM_RULE, json!({}))).expect("parses");
+    assert_eq!(
+        parsed.generation,
+        GenerationField::Declared("/status/desiredGeneration".into())
+    );
+    assert_eq!(
+        parsed.pending_restart,
+        Some(PendingRestartRule {
+            state: PendingState::Condition {
+                condition_type: "RestartRequired".into(),
+                status: "True".into(),
+                reason: None,
+            },
+            hint: Some("Restart the VM with `virtctl restart <name>` to apply the change.".into()),
+            message: Vec::new(),
+        })
+    );
+
+    let none =
+        r#"{"path":"/status/printableStatus","equals":"Stopped","observedGeneration":false}"#;
+    let parsed = declared_readiness(&make_annotated_obj(none, json!({}))).expect("parses");
+    assert_eq!(parsed.generation, GenerationField::None);
+
+    let parsed = declared_readiness(&make_annotated_obj(VM_RULE, json!({}))).expect("parses");
+    assert_eq!(parsed.generation, GenerationField::default());
+    assert_eq!(parsed.pending_restart, None);
+}
+
+// A malformed observedGeneration makes the annotation unreadable, as a
+// malformed ready rule does, so Kix never reads a field the package did not
+// name. A malformed pendingRestart is dropped on its own.
+#[test]
+fn declared_readiness_malformed_generation_keys() {
+    for bad in [
+        r#"{"path":"/status/x","equals":"y","observedGeneration":true}"#,
+        r#"{"path":"/status/x","equals":"y","observedGeneration":"status.gen"}"#,
+        r#"{"path":"/status/x","equals":"y","observedGeneration":3}"#,
+    ] {
+        assert!(
+            declared_readiness(&make_annotated_obj(bad, json!({}))).is_none(),
+            "{bad}"
+        );
+    }
+    for bad in [
+        r#"{"path":"/status/x","equals":"y","pendingRestart":"RestartRequired"}"#,
+        r#"{"path":"/status/x","equals":"y","pendingRestart":{"condition":{"type":"RestartRequired"}}}"#,
+        r#"{"path":"/status/x","equals":"y","pendingRestart":{"path":"/status/x"}}"#,
+        r#"{"path":"/status/x","equals":"y","pendingRestart":{"path":"/status/x","equals":"z","hint":1}}"#,
+    ] {
+        let parsed = declared_readiness(&make_annotated_obj(bad, json!({}))).expect("parses");
+        assert_eq!(parsed.pending_restart, None, "{bad}");
+        assert!(matches!(parsed.ready, ReadyRule::Path { .. }));
+    }
+}
+
+// A rule that names another field waits on that field and ignores
+// status.observedGeneration. This is the VM shape seen on kind after an
+// edit of a running VM: generation 3, observedGeneration 1 (the generation
+// the running instance started from), desiredGeneration 3.
+#[test]
+fn declared_generation_field_replaces_observed_generation() {
+    let current = running_vm(3, 3, json!([]));
+    assert!(check_readiness(&current, gk("VirtualMachine")));
+    assert!(!readiness_message(&current, gk("VirtualMachine")).contains("observed generation"));
+
+    let behind = running_vm(3, 2, json!([]));
+    assert!(!check_readiness(&behind, gk("VirtualMachine")));
+    let msg = readiness_message(&behind, gk("VirtualMachine"));
+    assert!(msg.ends_with("observed generation 2 of 3"), "got: {msg}");
+
+    // The same object under the default field waits on observedGeneration 1.
+    let default = with_generation(
+        make_annotated_obj(
+            r#"{"path":"/status/printableStatus","equals":"Running"}"#,
+            json!({"status": {"printableStatus": "Running", "observedGeneration": 1, "desiredGeneration": 3}}),
+        ),
+        3,
+    );
+    assert!(!check_readiness(&default, gk("VirtualMachine")));
+}
+
+// `false` says the kind reports no generation, so no status is stale. A
+// stopped VM keeps the generations from when it last ran.
+#[test]
+fn declared_generation_field_false_imposes_no_wait() {
+    let rule =
+        r#"{"path":"/status/printableStatus","equals":"Stopped","observedGeneration":false}"#;
+    let stopped = with_generation(
+        make_annotated_obj(
+            rule,
+            json!({"status": {"printableStatus": "Stopped", "observedGeneration": 1, "desiredGeneration": 2}}),
+        ),
+        5,
+    );
+    assert!(check_readiness(&stopped, gk("VirtualMachine")));
+    assert!(!readiness_message(&stopped, gk("VirtualMachine")).contains("observed generation"));
+    assert!(declared_pending_restart_now(&stopped).is_none());
+
+    // The not-equals and condition forms follow the same field.
+    let not_equals = r#"{"path":"/status/phase","notEquals":"Failed","observedGeneration":false}"#;
+    let obj = with_generation(
+        make_annotated_obj(not_equals, json!({"status": {"observedGeneration": 1}})),
+        2,
+    );
+    assert!(check_readiness(&obj, gk("Widget")));
+
+    let condition = r#"{"condition":{"type":"Ready","status":"True"},"observedGeneration":false}"#;
+    let obj = with_generation(
+        make_annotated_obj(
+            condition,
+            json!({"status": {"observedGeneration": 1, "conditions": [{"type": "Ready", "status": "True"}]}}),
+        ),
+        2,
+    );
+    assert!(check_readiness(&obj, gk("Widget")));
+
+    // A condition's own observedGeneration still comes first.
+    let own = with_generation(
+        make_annotated_obj(
+            condition,
+            json!({"status": {"conditions": [{"type": "Ready", "status": "True", "observedGeneration": 1}]}}),
+        ),
+        2,
+    );
+    assert!(!check_readiness(&own, gk("Widget")));
+}
+
+// RestartRequired=True on a running VM whose status is current gives the
+// pending-restart report with KubeVirt's message and the package's hint.
+#[test]
+fn declared_pending_restart_reports_on_a_current_ready_resource() {
+    let vm = running_vm(3, 3, restart_required());
+    assert!(check_readiness(&vm, gk("VirtualMachine")));
+    assert_eq!(
+        declared_pending_restart_now(&vm).as_deref(),
+        Some(
+            "its controller set RestartRequired=True (a non-live-updatable field was changed in the template spec), so the running workload keeps the previous spec until it restarts. Restart the VM with `virtctl restart <name>` to apply the change."
+        )
+    );
+
+    // No condition, or the condition in another state, is plain ready.
+    assert!(declared_pending_restart_now(&running_vm(3, 3, json!([]))).is_none());
+    let cleared = running_vm(
+        3,
+        3,
+        json!([{"type": "RestartRequired", "status": "False"}]),
+    );
+    assert!(declared_pending_restart_now(&cleared).is_none());
+}
+
+// With a stale desiredGeneration, virt-controller has not processed the
+// spec, so the VM is not ready and no restart is reported yet.
+#[test]
+fn declared_pending_restart_waits_for_a_stale_status() {
+    let vm = running_vm(3, 2, restart_required());
+    assert!(!check_readiness(&vm, gk("VirtualMachine")));
+    assert!(declared_pending_restart_now(&vm).is_none());
+}
+
+// The path form quotes the values at its message pointers, and the report
+// ends with a generic next step when the package gives no hint.
+#[test]
+fn declared_pending_restart_path_form() {
+    let rule = r#"{"path":"/status/phase","equals":"Ready","pendingRestart":{"path":"/status/restartPending","equals":"true","message":["/status/restartReason"]}}"#;
+    let obj = with_generation(
+        make_annotated_obj(
+            rule,
+            json!({"status": {"phase": "Ready", "observedGeneration": 4, "restartPending": true, "restartReason": "config changed."}}),
+        ),
+        4,
+    );
+    assert!(check_readiness(&obj, gk("Widget")));
+    assert_eq!(
+        declared_pending_restart_now(&obj).as_deref(),
+        Some(
+            "its controller set status.restartPending=true (config changed), so the running workload keeps the previous spec until it restarts. Restart it to apply the change."
+        )
+    );
+}
+
+// A failed entry is confirmed by the declared field.
+#[test]
+fn declared_failure_follows_the_generation_field() {
+    let rule = r#"{"path":"/status/printableStatus","equals":"Running","observedGeneration":"/status/desiredGeneration","failed":[{"path":"/status/printableStatus","equals":"ErrorUnschedulable"}]}"#;
+    let obj = |desired: i64| {
+        with_generation(
+            make_annotated_obj(
+                rule,
+                json!({"status": {"printableStatus": "ErrorUnschedulable", "observedGeneration": 1, "desiredGeneration": desired}}),
+            ),
+            3,
+        )
+    };
+    let failure = declared_failure(&obj(3), gk("VirtualMachine"), None).expect("matches");
+    assert!(failure.confirmed);
+    assert!(declared_failure(&obj(2), gk("VirtualMachine"), None).is_none());
+}
+
+// The progress fingerprint tracks the declared field, so a controller that
+// catches up counts as progress.
+#[test]
+fn progress_fingerprint_follows_the_generation_field() {
+    let behind = running_vm(3, 2, json!([]));
+    let current = running_vm(3, 3, json!([]));
+    let fp = |obj: &DynamicObject| progress_fingerprint(obj, gk("VirtualMachine"), &[]);
+    assert!(fp(&behind).contains("og=2"), "got: {}", fp(&behind));
+    assert!(fp(&current).contains("og=3"));
+}
+
+mod pending_restart_waits {
+    use super::*;
+    use crate::cluster::fake_api::{FakeApi, TWO_VERSION_GROUP};
+
+    /// A Gizmo that Kix wrote, with the running-VM declaration and the given
+    /// status.
+    fn gizmo(generation: i64, status: Value) -> Value {
+        json!({
+            "apiVersion": format!("{TWO_VERSION_GROUP}/v1"),
+            "kind": "Gizmo",
+            "metadata": {
+                "name": "demo",
+                "namespace": "default",
+                "generation": generation,
+                "annotations": { keys::READINESS: RUNNING_VM_RULE },
+                "managedFields": [{
+                    "manager": crate::cluster::fieldsv1::KIX_FIELD_MANAGER,
+                    "operation": "Apply",
+                }],
+            },
+            "status": status,
+        })
+    }
+
+    async fn wait(api: &FakeApi) -> ReadinessResult {
+        let ar = ApiResource {
+            group: TWO_VERSION_GROUP.into(),
+            version: "v1".into(),
+            api_version: format!("{TWO_VERSION_GROUP}/v1"),
+            kind: "Gizmo".into(),
+            plural: "gizmos".into(),
+        };
+        let rid = ResourceId {
+            group: TWO_VERSION_GROUP.into(),
+            kind: "Gizmo".into(),
+            namespace: "default".into(),
+            name: "demo".into(),
+        };
+        wait_for_ready(
+            &api.client(),
+            &ar,
+            &Scope::Namespaced,
+            &rid,
+            None,
+            Duration::from_secs(1),
+            &CancelToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap()
+    }
+
+    // The deploy ends with a pending restart for a current resource in the
+    // declared state, where it used to wait on observedGeneration until it
+    // timed out.
+    #[tokio::test(start_paused = true)]
+    async fn a_declared_pending_restart_ends_the_wait() {
+        let api = FakeApi::new([gizmo(
+            3,
+            json!({
+                "printableStatus": "Running",
+                "observedGeneration": 1,
+                "desiredGeneration": 3,
+                "conditions": restart_required(),
+            }),
+        )]);
+        let ReadinessResult::ReadyPendingRestart { stale, message } = wait(&api).await else {
+            panic!("expected a pending restart");
+        };
+        assert_eq!(stale, None);
+        assert!(message.contains(RESTART_REQUIRED_MESSAGE), "{message}");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_current_resource_without_the_state_is_ready() {
+        let api = FakeApi::new([gizmo(
+            3,
+            json!({"printableStatus": "Running", "observedGeneration": 1, "desiredGeneration": 3}),
+        )]);
+        assert_eq!(wait(&api).await, ReadinessResult::Ready);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_stale_resource_keeps_waiting() {
+        let api = FakeApi::new([gizmo(
+            3,
+            json!({
+                "printableStatus": "Running",
+                "observedGeneration": 1,
+                "desiredGeneration": 2,
+                "conditions": restart_required(),
+            }),
+        )]);
+        let result = wait(&api).await;
+        let ReadinessResult::TimedOut { message, .. } = &result else {
+            panic!("expected a timeout, got {result:?}");
+        };
+        assert!(message.contains("observed generation 2 of 3"), "{message}");
+    }
+}
+
+/// Ask for the pending-restart report of an object this deploy left as it was.
+fn declared_pending_restart_now(obj: &DynamicObject) -> Option<String> {
+    declared_pending_restart(obj, None)
+}
+
+// A declared generation field that the status does not carry yet means the
+// controller has not acted on the spec, so the deploy waits and says what
+// it waits for. The default field keeps imposing no wait while absent.
+#[test]
+fn declared_generation_field_absent_waits() {
+    let vm = with_generation(
+        make_annotated_obj(
+            RUNNING_VM_RULE,
+            json!({"status": {"printableStatus": "Running", "observedGeneration": 1}}),
+        ),
+        3,
+    );
+    assert!(!check_readiness(&vm, gk("VirtualMachine")));
+    let msg = readiness_message(&vm, gk("VirtualMachine"));
+    assert!(
+        msg.ends_with("no status.desiredGeneration yet"),
+        "got: {msg}"
+    );
+    assert!(declared_pending_restart_now(&vm).is_none());
+
+    // An object without metadata.generation imposes no wait.
+    let mut no_generation = vm.clone();
+    no_generation.metadata.generation = None;
+    assert!(check_readiness(&no_generation, gk("VirtualMachine")));
+
+    let default = with_generation(
+        make_annotated_obj(
+            r#"{"path":"/status/printableStatus","equals":"Running"}"#,
+            json!({"status": {"printableStatus": "Running"}}),
+        ),
+        3,
+    );
+    assert!(check_readiness(&default, gk("VirtualMachine")));
+}
+
+// Without a generation to compare, a pending-restart condition that changed
+// before this deploy's apply describes the previous spec and is not reported.
+// One that changed after it, or any match on an object the deploy left as it
+// was, is.
+#[test]
+fn declared_pending_restart_without_generation_uses_the_transition_time() {
+    let rule = r#"{"path":"/status/phase","equals":"Ready","observedGeneration":false,"pendingRestart":{"condition":{"type":"RestartRequired","status":"True"}}}"#;
+    let obj = with_generation(
+        make_annotated_obj(
+            rule,
+            json!({"status": {"phase": "Ready", "conditions": [{
+                "type": "RestartRequired",
+                "status": "True",
+                "lastTransitionTime": "2026-11-18T10:00:00Z",
+            }]}}),
+        ),
+        4,
+    );
+    let at = |t: &str| Some(t.parse::<DateTime<Utc>>().unwrap());
+    assert!(check_readiness(&obj, gk("Widget")));
+    assert!(declared_pending_restart(&obj, at("2026-11-18T10:05:00Z")).is_none());
+    assert!(declared_pending_restart(&obj, at("2026-11-18T09:55:00Z")).is_some());
+    assert!(declared_pending_restart(&obj, None).is_some());
+
+    // A generation that is known decides on its own.
+    let known = running_vm(
+        3,
+        3,
+        json!([{
+            "type": "RestartRequired",
+            "status": "True",
+            "lastTransitionTime": "2026-11-18T10:00:00Z",
+        }]),
+    );
+    assert!(declared_pending_restart(&known, at("2026-11-18T10:05:00Z")).is_some());
 }

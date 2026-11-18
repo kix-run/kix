@@ -20,6 +20,10 @@ let
   packagesByLevel = import ../../../packages/by-level.nix { inherit lib; };
   contracts = kixlib.contracts;
   modules = import ../../../modules { inherit lib; };
+  # Removed experimental packages keep a name that fails (removed.toml).
+  removedNames = map (lib.removePrefix "experimental/") (
+    builtins.attrNames (builtins.fromTOML (builtins.readFile ../../../packages/removed.toml))
+  );
 
   fails = v: !(builtins.tryEval v).success;
   # The entries of a merged level that are not graduation errors.
@@ -98,7 +102,9 @@ in
       &&
         builtins.attrNames packages.experimental == lib.unique (
           builtins.sort builtins.lessThan (
-            builtins.attrNames packagesByLevel.stable ++ builtins.attrNames packagesByLevel.experimental
+            builtins.attrNames packagesByLevel.stable
+            ++ builtins.attrNames packagesByLevel.experimental
+            ++ removedNames
           )
         )
     )
@@ -161,7 +167,7 @@ in
             instances.demo.app.package = package;
           }
         ];
-      shelf = mkCluster [
+      catalog = mkCluster [
         {
           availablePackages = packages;
           instances.demo.app.package = packages.echo-server;
@@ -173,7 +179,7 @@ in
       && !(evalFails (withPackage packages.experimental.dns-exporter))
       && packages.dns-exporter.error.id == "K0549"
       && lib.hasPrefix "`packages.dns-exporter` is experimental now" packages.dns-exporter.error.message
-      && manifests shelf != [ ]
+      && manifests catalog != [ ]
     )
     || throw "levels: the old name of an experimental package was accepted, or the registry read it";
 
@@ -233,7 +239,7 @@ in
             root = self.cm;
           };
       };
-      shelf = levels.merge {
+      catalog = levels.merge {
         prefix = "packages";
         stable = { };
         experimental.provider = provider;
@@ -245,7 +251,7 @@ in
         demotedNames = [ "provider" ];
         demotedId = "K0549";
       };
-      withShelf =
+      withCatalog =
         availablePackages:
         mkCluster [
           {
@@ -255,8 +261,8 @@ in
         ];
     in
     (
-      evalFails (withShelf shelf)
-      && manifests (withShelf (shelf // { inherit (shelf.experimental) provider; })) != [ ]
+      evalFails (withCatalog catalog)
+      && manifests (withCatalog (catalog // { inherit (catalog.experimental) provider; })) != [ ]
     )
     || throw "levels: a moved package was still offered, or naming it did not help";
 }

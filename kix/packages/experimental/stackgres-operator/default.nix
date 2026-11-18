@@ -35,6 +35,17 @@
 # The operator merges SGCONFIG into the live SGConfig. A key removed from
 # `sgConfig` keeps its old value there; set it explicitly instead.
 #
+# Upgrades: upstream allows an upgrade to a release at most two minor
+# versions newer than the installed one (its Helm upgrade page), so 1.19.2
+# to 1.19.5 is one deploy. The operator reinstalls its CRDs and webhook
+# entries when it starts. It updates the StatefulSet of each SGCluster at
+# once, but it does not restart the Pods: each SGCluster reports
+# PendingRestart until a restart or a securityUpgrade SGDbOps moves its Pods
+# to the new images. Upstream says nothing about going back to an older
+# release. Deploying 1.19.2 over 1.19.5 works: the older operator reads the
+# cluster state and the data the newer one wrote, and the Pods keep the
+# newer images until they restart.
+#
 # Minimal instance:
 #
 #   instances.stackgres-system.stackgres-operator.package = packages.experimental.stackgres-operator;
@@ -237,7 +248,7 @@ in
     image = kix.options.image {
       repository = "quay.io/stackgres/operator";
       tag = release;
-      digest = "sha256:82f33ab3fb1e30e6c076411ccb349be7335e6a25af5161d7bcecffbc44d42336";
+      digest = "sha256:c619e41641ff67a26eeab8618eab49c0b9c6029cbf61c22b30cf6cbefaa62b3a";
       description = "Operator image. Its tag must be the package's StackGres release (a -jvm tag is accepted). The repository minus /stackgres/operator is the registry prefix StackGres pulls operand images from, and pullPolicy is their pull policy.";
     };
 
@@ -271,8 +282,8 @@ in
 
     webhookCheck.image = kix.options.image {
       repository = "quay.io/ongres/kubectl";
-      tag = "v1.37.1-build-6.56";
-      digest = "sha256:8e3f36d49e403423627b450d803c94cf93c8bbebae8f59b11cb5e458bb0c1a39";
+      tag = "v1.37.2-build-6.57";
+      digest = "sha256:1546f3ca9a7763cdbf4273810f4d5124733a117cd903734c1516df39824fbbd7";
       description = "Image of the webhook-check Job, StackGres's kubectl image. It needs bash and kubectl. The declared tag is the newest kubectl entry in versions.properties. Its repository follows the registry prefix of `image.repository` and its pull policy follows `image.pullPolicy`.";
     };
 

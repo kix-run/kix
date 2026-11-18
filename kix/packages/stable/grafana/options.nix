@@ -63,7 +63,7 @@ in
   image = kix.options.image {
     repository = "docker.io/grafana/grafana";
     tag = release;
-    digest = "sha256:1a8e58976a6cd349d1ffdd27a14b92053816c7c60e6b7e157013e9bf0b9cec5f";
+    digest = "sha256:0615ec4fbd4072004b7d86b46ded63013a74b7d6eb1119273dd89e8fa25c13cf";
   };
   resources = kix.options.resources {
     requests = {

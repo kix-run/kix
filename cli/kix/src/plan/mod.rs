@@ -27,20 +27,24 @@ mod synthesize_tests;
 #[cfg(test)]
 mod tests;
 
+pub use crate::cluster::scheduler::LastRuns;
 #[cfg(test)]
 use diff::is_propagation_path;
 pub(crate) use diff::partition_propagation;
 pub use diff::{diff_garbage, diff_graphs};
-pub use planner::{CheckedPlan, OldSide, Planned, Planner, Target, TargetChecks, keep_shared};
+pub use planner::{
+    CheckedPlan, Connected, OldSide, Planned, Planner, Start, Target, TargetChecks, Work,
+    keep_shared,
+};
 #[cfg(test)]
 use redact::LAST_APPLIED;
 pub use redact::{
-    MAX_SHOWN_MANIFEST_BYTES, MAX_SHOWN_VALUE_BYTES, ManifestIndex, SECRET_CHANGED_NOT_SHOWN,
-    SECRET_NOT_SHOWN, without_secrets,
+    HASH_CHANGED_NOT_SHOWN, HASH_NOT_SHOWN, MAX_SHOWN_MANIFEST_BYTES, MAX_SHOWN_VALUE_BYTES,
+    ManifestIndex, SECRET_CHANGED_NOT_SHOWN, SECRET_NOT_SHOWN, without_secrets,
 };
 pub(crate) use redact::{Side, shown_value};
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
@@ -53,6 +57,7 @@ use crate::eval::PackageNode;
 use crate::eval::store_graph::StoreGraph;
 use crate::legacy_domain::LegacyDomainError;
 use crate::manifest::diff::Difference;
+use crate::manifest::kinds;
 use crate::manifest::lifecycle;
 use crate::manifest::types::ResourceId;
 
@@ -156,6 +161,15 @@ pub enum PlanError {
     Marker(MalformedMarker),
     #[error("{0}")]
     Unshown(objects::Unshown),
+    #[error(
+        "[K8031] cannot move {}: Kubernetes stores both API groups as the same object, \
+         so applying the new group and deleting from the old group deletes that object \
+         from the cluster. Nothing was planned or applied to the cluster. \
+         Next: keep the current apiVersion, or first deploy a build without the object \
+         using `kix deploy --prune` and then deploy a build with the new apiVersion.",
+        .0.join(", ")
+    )]
+    AliasedMove(Vec<String>),
 }
 
 pub struct PackageDiff {
@@ -248,6 +262,34 @@ pub struct RecordChange {
 }
 
 impl PackageDiff {
+    /// Return each object this diff deletes in one API group and writes in
+    /// another group that stores the same objects ([`kinds::ALIASED`]), as
+    /// `"<old> to <new>"`, sorted.
+    pub fn aliased_moves(&self) -> Vec<String> {
+        let mut written: HashMap<(&str, &str), Vec<&ResourceId>> = HashMap::new();
+        for (id, _) in self.shown.writes.keys() {
+            written
+                .entry((id.namespace.as_str(), id.name.as_str()))
+                .or_default()
+                .push(id);
+        }
+        let mut moves: Vec<String> = self
+            .shown
+            .deletes
+            .keys()
+            .flat_map(|old| {
+                written
+                    .get(&(old.namespace.as_str(), old.name.as_str()))
+                    .into_iter()
+                    .flatten()
+                    .filter(|new| kinds::aliased(old.group_kind(), new.group_kind()))
+                    .map(move |new| format!("{old} to {new}"))
+            })
+            .collect();
+        moves.sort();
+        moves
+    }
+
     /// Return true when there is any change to report.
     pub fn has_changes(&self) -> bool {
         !self.added.is_empty()
@@ -343,7 +385,7 @@ impl PackageInfo {
             .collect();
         let kept = resources
             .iter()
-            .filter(|rid| lifecycle::never_pruned(&rid.kind))
+            .filter(|rid| lifecycle::never_pruned(rid.group_kind()))
             .cloned()
             .collect();
         PackageInfo {
@@ -363,9 +405,6 @@ pub struct PackageChangeDiff {
     /// Resources with actual manifest field changes (propagation-only diffs filtered out).
     /// Only contains the real (non-propagation) differences.
     pub resource_diffs: Vec<(ResourceId, Vec<Difference>)>,
-    /// The resources in `resource_diffs` that are Secrets (see
-    /// `types::is_secret`) on either side. Renderers hide their values.
-    pub secrets: BTreeSet<ResourceId>,
     /// Resources whose identity-hash changed purely because a dependency's hash
     /// propagated up (via `kix.run/identity-hash`/`kix.run/depends-on`/`kix.run/activations`/
     /// `kix.run/built-via`). Manifest content is otherwise identical and redeploys
@@ -396,7 +435,7 @@ impl PackageChangeDiff {
         let (removed, mut kept): (Vec<&ResourceId>, Vec<&ResourceId>) = self
             .removed_resources
             .iter()
-            .partition(|id| !lifecycle::never_pruned(&id.kind));
+            .partition(|id| !lifecycle::never_pruned(id.group_kind()));
         kept.extend(&self.shared_kept);
         (removed, kept)
     }
@@ -411,6 +450,6 @@ pub const CLUSTER_LEVEL_KEY: &str = "_cluster";
 pub fn split_never_pruned(rids: Vec<ResourceId>) -> (Vec<ResourceId>, Vec<ResourceId>) {
     let (kept, delete) = rids
         .into_iter()
-        .partition(|rid| lifecycle::never_pruned(&rid.kind));
+        .partition(|rid| lifecycle::never_pruned(rid.group_kind()));
     (delete, kept)
 }

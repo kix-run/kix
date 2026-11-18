@@ -255,7 +255,7 @@ in
       && dataVolume.hostPath.path == "/var/lib/vector/logs.loki-logs"
       && byName "logs.loki-logs" (ofKind "ClusterRole" ms) != null
       && !(ds.spec.template.spec ? priorityClassName)
-      && (ds.metadata.labels or { })."app.kubernetes.io/name" or "loki-logs" == "loki-logs"
+      && ds.metadata.labels."app.kubernetes.io/name" or "loki-logs" == "loki-logs"
     )
     || throw "loki-logs default: ${builtins.toJSON { inherit settings container dataVolume; }}";
 
@@ -599,4 +599,44 @@ in
       && passes [ "-v" ]
     )
     || throw "guardArgs short flags: ${builtins.toJSON (guard [ "-c/etc/x" ])}";
+
+  # A cluster that declares a Kubernetes version Vector does not support is
+  # refused with the change record's id, by both packages that run the
+  # agent. The meta check is called directly, because a failed meta
+  # assertion fails the cluster before its messages can be read.
+  log-agents-k8s-range =
+    let
+      metaLib = import ../../meta.nix { inherit lib; };
+      refusals =
+        package: k8sVersion:
+        map (a: a.message) (
+          builtins.filter (a: !a.assertion) (
+            (metaLib.checkMetaStatic {
+              packageMeta =
+                (package {
+                  inherit lib;
+                  kix = kixlib;
+                  scope = {
+                    instanceName = "logs";
+                    namespaceName = "logs";
+                  };
+                }).meta;
+              instanceName = "logs";
+              namespaceName = "logs";
+              clusterConfig = { inherit k8sVersion; };
+              resolvedDepMeta = { };
+              resolutionIndex.byKey = { };
+            }).assertions
+          )
+        );
+      refused = package: v: builtins.any (lib.hasInfix "[K3359]") (refusals package v);
+      inRange =
+        package:
+        refused package "1.31.9"
+        && refusals package "1.32.0" == [ ]
+        && refusals package "1.37.0" == [ ]
+        && refusals package null == [ ];
+    in
+    (inRange clickhouseLogsPackage && inRange lokiLogsPackage)
+    || throw "log agents k8s range: 1.31.9 ${builtins.toJSON (refusals clickhouseLogsPackage "1.31.9")}, 1.32.0 ${builtins.toJSON (refusals clickhouseLogsPackage "1.32.0")}";
 }

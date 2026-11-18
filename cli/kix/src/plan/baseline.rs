@@ -36,7 +36,7 @@ use kube::{client::Client, discovery::ApiResource};
 use serde_json::Value;
 
 use super::{PlanError, PlanEvent};
-use crate::build_source::Build;
+use crate::build_source::{Build, InstallableBuild};
 use crate::cluster::activation::{self, KeptOrphanSource, OpenedRecords, Record, Records};
 use crate::cluster::apply::{self, ChangeAction};
 use crate::cluster::{discovery, inventory, owned_view, tenancy};
@@ -767,26 +767,40 @@ pub fn record_graph(
     if let Some(graph) = build.map_or(Ok(None), |b| b.deployed_build(identity_hash))? {
         return Ok(Some(graph));
     }
-    let built_via = built_via
-        .map(PathBuf::from)
-        .filter(|p| crate::eval::build_files::BuildFiles::is_build(p));
     checked_build(
         identity_hash,
-        built_via,
+        local_build_dir(built_via),
         || crate::eval::store::resolve_activation_by_hash(cluster, identity_hash),
         load_build,
+        |graph| graph,
     )
 }
 
-/// Load the target build for a rollback to record `name`, verified by
-/// [`record_graph`].
+/// Return `built_via` when it names a build directory.
+fn local_build_dir(built_via: Option<&str>) -> Option<PathBuf> {
+    built_via
+        .map(PathBuf::from)
+        .filter(|p| crate::eval::build_files::BuildFiles::is_build(p))
+}
+
+/// Load the target build for a rollback to record `name` from where
+/// [`record_graph`] looks, and verify it the same way. The cluster ran this
+/// build before, so it is installable even when it predates the domain move
+/// ([`Build::installable_as_deployed`]).
 pub fn target_build(
     cluster: &str,
     name: &str,
     identity_hash: &str,
     built_via: Option<&str>,
-) -> Result<StoreGraph, String> {
-    let found = record_graph(None, cluster, identity_hash, built_via).map_err(|error| {
+) -> Result<InstallableBuild, String> {
+    let found = checked_build(
+        identity_hash,
+        local_build_dir(built_via),
+        || crate::eval::store::resolve_activation_by_hash(cluster, identity_hash),
+        |dir| Build::local(dir, &|_| {}),
+        Build::graph,
+    )
+    .map_err(|error| {
         format!(
             "rollback target {name}'s build (hash: {identity_hash}) could not be loaded\n  \
              Nothing was applied to the cluster.\n\n  \
@@ -797,7 +811,7 @@ pub fn target_build(
              - Check out the git commit that deployed {name} and run `kix deploy {cluster}`."
         )
     })?;
-    found.ok_or_else(|| {
+    let found = found.ok_or_else(|| {
         format!(
             "rollback target {name}'s build is not on this machine (hash: {identity_hash})\n  \
              Nothing was applied to the cluster.\n\n  \
@@ -808,7 +822,8 @@ pub fn target_build(
              - Run `kix rollback {cluster}` interactively on this machine and pick a deployment record marked `[available]` (or run `kix history {cluster}` to see them).\n    \
              - Check out the git commit that deployed {name} and run `kix deploy {cluster}`."
         )
-    })
+    })?;
+    Ok(found.installable_as_deployed())
 }
 
 /// Load the build at `dir` with stamps applied. A record's build
@@ -820,16 +835,18 @@ fn load_build(dir: &Path) -> Result<StoreGraph, crate::eval::KixEvalError> {
 /// Load the first of `built_via` and `cached` that loads and matches
 /// `identity_hash`. Falls back to `cached` when `built_via` is absent, fails
 /// to load, or holds a different build.
-fn checked_build(
+/// `graph` reads the graph out of what `load` returns.
+fn checked_build<T>(
     identity_hash: &str,
     built_via: Option<PathBuf>,
     cached: impl FnOnce() -> Option<PathBuf>,
-    load: impl Fn(&Path) -> Result<StoreGraph, crate::eval::KixEvalError>,
-) -> Result<Option<StoreGraph>, String> {
-    let check = |dir: PathBuf| -> Result<StoreGraph, String> {
-        let graph = load(&dir)
+    load: impl Fn(&Path) -> Result<T, crate::eval::KixEvalError>,
+    graph: impl Fn(&T) -> &StoreGraph,
+) -> Result<Option<T>, String> {
+    let check = |dir: PathBuf| -> Result<T, String> {
+        let loaded = load(&dir)
             .map_err(|e| format!("the build at {} would not load: {e}", dir.display()))?;
-        let found = crate::eval::store_graph::store_hash(&graph.activation_path);
+        let found = crate::eval::store_graph::store_hash(&graph(&loaded).activation_path);
         if found != identity_hash {
             return Err(format!(
                 "the build at {} is activation {}, not {}",
@@ -838,7 +855,7 @@ fn checked_build(
                 short(identity_hash),
             ));
         }
-        Ok(graph)
+        Ok(loaded)
     };
     let refused = match built_via.clone().map(check) {
         Some(Ok(graph)) => return Ok(Some(graph)),
@@ -1483,12 +1500,18 @@ mod tests {
         let reused = Some(PathBuf::from("/builds").join(PROD));
         let cached = PathBuf::from("/cache").join(STAGING);
 
-        let found = checked_build(STAGING, reused.clone(), || Some(cached.clone()), load)
-            .unwrap()
-            .unwrap();
+        let found = checked_build(
+            STAGING,
+            reused.clone(),
+            || Some(cached.clone()),
+            load,
+            |g| g,
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(found.activation_path, graph_of(STAGING).activation_path);
 
-        let err = checked_build(STAGING, reused, || None, load).unwrap_err();
+        let err = checked_build(STAGING, reused, || None, load, |g| g).unwrap_err();
         assert!(
             err.contains(&format!("is activation {}", short(PROD))),
             "{err}"
@@ -1502,7 +1525,9 @@ mod tests {
         // `e` and `u` are outside Nix's base32 alphabet, so this hash names
         // no store path on this machine.
         let hash = "eeeeuuuueeeeuuuueeeeuuuueeeeuuuu";
-        let err = target_build("c", "rec-x", hash, None).unwrap_err();
+        let Err(err) = target_build("c", "rec-x", hash, None) else {
+            panic!("the build was found");
+        };
         assert!(
             err.contains(&format!(
                 "rec-x's build is not on this machine (hash: {hash})"

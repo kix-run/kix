@@ -446,9 +446,10 @@ in
         echo "stackgres-database bootstrap complete for ${userName}@${dbName}"
       '';
 
-      # The deploy reruns the Job when its own content changes. The checksum
-      # annotations put the content of what it reads into that content. A
-      # secret-ref or an imported cluster has no content hash.
+      # The deploy reruns the Job when its content or the content of a
+      # Kix-built Secret it reads changes. The server is reached over the
+      # network, so its checksum annotation reruns the Job when the server
+      # changes. An imported cluster has no content hash.
       bootstrapJob = backendScope.mkJob {
         name = "${serverSideName}-bootstrap";
         labels = labels;
@@ -459,8 +460,6 @@ in
             metadata = {
               inherit labels;
               annotations = lib.filterAttrs (_: v: v != null) {
-                "checksum/password" = bootstrapPassword.out.contentHash or null;
-                "checksum/superuser" = superuser.out.contentHash or null;
                 "checksum/server" = postgres.out.contentHash or null;
               };
             };

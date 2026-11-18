@@ -1026,7 +1026,14 @@ mod tests {
         let discovery = discovery::discover_resources(&client).await.unwrap();
         let records = Records::open_installed(&client, &discovery).unwrap();
         records
-            .submit("cluster-a-1", "cluster-a", "/nix/store/x", Some("h1"), None)
+            .submit(
+                "cluster-a-1",
+                "cluster-a",
+                "/nix/store/x",
+                Some("h1"),
+                None,
+                "r1",
+            )
             .await
             .unwrap();
         records
@@ -1035,7 +1042,14 @@ mod tests {
             .unwrap();
         assert_eq!(bound_record(&client).await.unwrap(), None);
         records
-            .submit("lab1-1", "lab1", "/nix/store/y", Some("h2"), Some(HERE))
+            .submit(
+                "lab1-1",
+                "lab1",
+                "/nix/store/y",
+                Some("h2"),
+                Some(HERE),
+                "r2",
+            )
             .await
             .unwrap();
         assert_eq!(bound_record(&client).await.unwrap(), None);

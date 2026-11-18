@@ -15,11 +15,18 @@
 # `out`: the Service's `name`, `fqdn`, and `port` (`config.service.port`,
 # 80 by default), and `version`, the nginx version `image.tag` names.
 # `/healthz` answers "ok"; every other path returns `config.message`.
+# nginx serves the message from a file, so it can hold any text.
 #
 # Escape hatches: none of its own. Use the instance's `partsOverlays` for
 # anything the options do not cover (placement, extra labels).
 #
-# Limits: the message is plain text, and the server serves nothing else.
+# Limits: the message is served as plain text, and the server serves
+# nothing else.
+#
+# Upgrades: nginx 1.30.6 reads the same config as 1.30.5 and keeps no data,
+# so a plain deploy upgrades an existing install. Going back to 1.30.5 also
+# works with a plain deploy of the older version. No operator step is needed
+# in either direction.
 
 {
   scope,
@@ -30,10 +37,11 @@
 
 let
   name = scope.instanceName;
+  release = "1.30.6";
 in
 {
   meta = {
-    version = "1.30.5";
+    version = release;
     description = "Nginx echo server for connectivity testing";
     owner = "app-team";
   };
@@ -50,8 +58,8 @@ in
   options = {
     image = kix.options.image {
       repository = "docker.io/nginxinc/nginx-unprivileged";
-      tag = "1.30.5-alpine";
-      digest = "sha256:ed04ec1ff34502c339ee5c3ae3f855442398edc1d05591e2b98981dcbbd20b1e";
+      tag = "${release}-alpine";
+      digest = "sha256:f5116ed4606f3eb015dd4a8e28cb9b351476dc0ad4bc6e9f93b19cec130cdf03";
     };
     # Declared only so that setting the removed name fails with the new one.
     replicaCount = lib.mkOption {
@@ -95,8 +103,9 @@ in
       type = lib.types.str;
       default = "kix echo server is running";
       description = ''
-        Plain-text response body returned by the echo-server at `/`. Useful
-        for distinguishing instances during connectivity checks.
+        Plain-text response body returned for every path except `/healthz`.
+        The server returns quotes and `$` characters as written. Set this to
+        tell instances apart during connectivity checks.
       '';
     };
   };
@@ -109,12 +118,19 @@ in
         kind = "ConfigMap";
         inherit name;
         data = {
+          # nginx includes only the *.conf files of this directory.
+          "message.txt" = "${config.message}\n";
           "default.conf" = ''
             server {
                 listen 8080;
                 location / {
+                    root /etc/nginx/conf.d;
                     default_type text/plain;
-                    return 200 '${config.message}\n';
+                    try_files /message.txt =404;
+                    # nginx refuses a POST for a static file with 405. The
+                    # redirect turns the request into a GET, so every
+                    # method gets the message.
+                    error_page 405 =200 /message.txt;
                 }
                 location /healthz {
                     default_type text/plain;
@@ -147,6 +163,9 @@ in
                   securityContext = {
                     runAsNonRoot = true;
                     readOnlyRootFilesystem = true;
+                    allowPrivilegeEscalation = false;
+                    capabilities.drop = [ "ALL" ];
+                    seccompProfile.type = "RuntimeDefault";
                   };
                   ports = [
                     (kix.port "http" 8080)

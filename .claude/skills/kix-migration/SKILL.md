@@ -28,7 +28,7 @@ When translating, read the source config first to understand intent, then check 
 
 - **Helm's release-name prefixing:** Helm prepends the release name to everything. Kix uses `scope.instanceName` and explicit naming. Don't cargo-cult the prefix pattern.
 - **Ansible's imperative ordering:** Ansible tasks run in order. Kix tracks dependencies via store-path references (`"${self.x}"`). You don't need to think about ordering; just reference what you depend on.
-- **Helm's values.yaml layering**: Helm has a complex values merge hierarchy. Kix uses typed `options` with `lib.mkOption` defaults, evaluated by the NixOS module system. An instance that sets one field of a submodule keeps the defaults of its other fields, but an attrset default is replaced as a whole, so put defaults on submodule fields (the option contract, `kix/lib/eval/options.nix`, refuses a non-empty attrset default). `every-package-evaluates` checks it for every kixpkgs package; cluster evaluation does not, so check a package kept outside kixpkgs with `kix.checkPackageOptions { package; who; }` (every availability level the package can run at), or list it under `mkFlake { packages.<name> = ./path; }` for an `option-contract-<name>` flake check (`docs/src/content/docs/reference/package-anatomy.mdx`).
+- **Helm's values.yaml layering**: Helm has a complex values merge hierarchy. Kix uses typed `options` with `lib.mkOption` defaults, evaluated by the NixOS module system. An instance that sets one field of a submodule keeps the defaults of its other fields, but an attrset default is replaced as a whole, so put defaults on submodule fields (the option contract, `kix/lib/eval/options.nix`, refuses a non-empty attrset default). `every-package-evaluates` checks it for every package in this repository; cluster evaluation does not, so check a package kept outside this repository with `kix.checkPackageOptions { package; who; }` (every availability level the package can run at), or list it under `mkFlake { packages.<name> = ./path; }` for an `option-contract-<name>` flake check (`docs/src/content/docs/reference/package-anatomy.mdx`).
 - **Ansible's `when:` conditionals:** Use `lib.optionalAttrs` / `lib.optional` for conditional resources, or `if/then/else` with `null` for optional parts of the attrset.
 - **Helm's template helpers (`_helpers.tpl`):** Use `let` bindings in Nix. Define shared values (labels, selectors, names) once in the `let` block and reference them.
 - **Multiple instances of the same service:** Don't duplicate package code. Write one package with config, instantiate it multiple times in the cluster definition with different configs. Use `kix.mkEnv` when the pattern is environment-based (prod/stage/demo).
@@ -266,10 +266,12 @@ A resource's `requires` and `root.requires` order different things. A resource's
 
 ### Warning system
 
-The build emits `builtins.trace` warnings for:
+`kix check`, `kix build`, `kix plan`, and `kix deploy` show the Kix library's warnings. Among them, the structural warnings name the resource in their `object` field:
 - **Redundant requires:** resource already referenced via `"${self.x}"`, no need to also list in `requires`
 - **Duplicate requires:** same resource listed twice
 - **Orphaned resources:** defined in the package but unreachable from `root`
+
+A package's own `warnings` function returns messages or records with the fields of `scope.fail` (`message`, `fix`, `object`, `option`, `dependency`, `clusterOption`, `id`). Return a warning through `warnings`, not `builtins.trace` or `lib.warn`, which no command shows when the build succeeds.
 
 Fix all warnings before committing.
 
@@ -284,7 +286,7 @@ Fix all warnings before committing.
 | `scope.mkDeployment` | Create a Deployment: auto-sets apiVersion/kind, copies `selector.matchLabels` to template labels |
 | `scope.mkStatefulSet` | Same as mkDeployment but for StatefulSets |
 | `scope.mkDaemonSet` | Same as mkDeployment but for DaemonSets |
-| `scope.mkJob` | Same for Jobs; the selector may be omitted (template labels are used). Never set `spec.ttlSecondsAfterFinished` (the build refuses it): a finished Job stays until a later build drops it and prune deletes it. A Job's pod template is immutable, so give a Job whose content changes a fixed name and `annotations.${kix.keys.rerun} = kix.keyValues.rerunOnChange` (stackgres-database, ingress-nginx, reflector). It reruns only when its own manifest changes, so put a `checksum/<name>` annotation from `out.contentHash` on its pod template for each Secret or object it reads (`kix check` warns about a Kix-built Secret or ConfigMap it reads without one), and make every step safe to run twice. Never put a hash of the content in the name: a renamed Job is a removed object plus an added one, and the old Job stays until it is pruned |
+| `scope.mkJob` | Same for Jobs; the selector may be omitted (template labels are used). Never set `spec.ttlSecondsAfterFinished` (the build refuses it): a finished Job stays until a later build drops it and prune deletes it. A Job's pod template is immutable, so give a Job whose content changes a fixed name and `annotations.${kix.keys.rerun} = kix.keyValues.rerunOnChange` (stackgres-database, ingress-nginx, openbao). Kix reruns the Job when its own manifest changes or when a Kix-built Secret or ConfigMap referenced by the pod through `out` changes (the Kix library includes those reads in `kix.run/rerun-hash`). Add a `checksum/<name>` pod annotation set to `out.contentHash` only for resources the Job reaches over the network or the Kubernetes API, and make every step safe to run twice. Never put a hash of the content in the name: a renamed Job is a removed object plus an added one, and the old Job stays until it is pruned |
 | `scope.selectorLabels` | Default selector labels for this instance. Overridable per-instance via `selectorLabels` in cluster config. |
 | `scope.mkSecret`, `scope.mkSecretRef` | Secret primitives with enriched `out` API. **Read `SECRETS.md` for the full API, gotchas, and usage patterns.** |
 | `scope.forNamespace nsName` | Get a scope for a different namespace (cross-namespace resources) |
@@ -300,7 +302,7 @@ Workload constructors (`mkDeployment`, `mkStatefulSet`, `mkDaemonSet`, `mkJob`) 
 
 `ownership.cede = [ "spec.versions" "webhooks[*].rules" ]` names fields an operator takes over after creation (also on `scope.mkCRD`): deploy applies without them when a 409 is confined to those paths, and fails any other conflict. cdi uses it; never reach for `--force-conflicts` in a package. When the operator writes every entry of an object (StackGres's webhook configurations), render the object as metadata only and order the operator after it instead of ceding.
 
-A CRD an operator installs at runtime is a `scope.mkCRDRef { group; kind; plural; version = "<served version>"; installedBy = self.operatorDeployment; }`; CRs of that kind are built with `scope.mkCR self.thatRef { ... }` (mayastor DiskPool). Read the served version off the operator's CRD (`kubectl get crd <plural>.<group> -o jsonpath='{.spec.versions[?(@.served==true)].name}'`); there is no default, and a missing `version` fails the build. Every CR must depend on its declaration; `scope.mkCR` adds it, and a raw `scope.mkResource` with a custom `apiVersion` fails cross-resource check 21. When a CR's readiness depends on its spec (a VirtualMachine is Running or Stopped by its runStrategy), declare no readiness on the marker and stamp `kix.keys.readiness` per CR in an `out.mk<Kind>` builder that refuses specs a deploy cannot wait on (kubevirt `out.mkVirtualMachine`, cdi `out.mkDataVolume`).
+A CRD an operator installs at runtime is a `scope.mkCRDRef { group; kind; plural; version = "<served version>"; installedBy = self.operatorDeployment; }`; CRs of that kind are built with `scope.mkCR self.thatRef { ... }` (mayastor DiskPool). Read the served version off the operator's CRD (`kubectl get crd <plural>.<group> -o jsonpath='{.spec.versions[?(@.served==true)].name}'`); there is no default, and a missing `version` fails the build. Every CR must depend on its declaration; `scope.mkCR` adds it, and a raw `scope.mkResource` with a custom `apiVersion` fails cross-resource check 21. When a CR's readiness depends on its spec (a VirtualMachine is Running or Stopped by its runStrategy), declare no readiness on the marker and pass `readiness` to `scope.mkCR` per CR in an `out.mk<Kind>` builder that refuses specs a deploy cannot wait on (kubevirt `out.mkVirtualMachine`, cdi `out.mkDataVolume`). The CR's `readiness` replaces the kind's and is validated like it.
 
 | Field | Description |
 |-------|-------------|
@@ -389,7 +391,7 @@ edge but NO netpol hole. Consequences when authoring:
   status field with a string (`victoria-metrics-operator/crds.nix`);
   `readiness = { condition = { type = "Bootstrapped"; status = "True"; }; }`
   looks for that entry in `status.conditions` (`stackgres-operator`,
-  `envoy-gateway`, `cilium/netpol-rules.nix`). Kix stamps the
+  `gateway-api`, `cilium/netpol-rules.nix`). Kix stamps the
   declaration on every typed-chain CR as the `kix.run/readiness`
   annotation and `kix deploy` evaluates it instead of the generic
   condition check. The CLI keeps no per-operator kind list: a new
@@ -420,7 +422,25 @@ edge but NO netpol hole. Consequences when authoring:
   condition has none, as with RabbitMQ's `AllReplicasReady`), to reach
   `metadata.generation` when the operator reports it. An operator that reports neither (CloudNativePG's
   Cluster) can still read as ready from its previous status right after
-  a spec change.
+  a spec change. When the operator reports the generation it has acted
+  on in another field, or gives `status.observedGeneration` another
+  meaning, name the field: `observedGeneration =
+  "/status/desiredGeneration"` beside the ready rule (KubeVirt's
+  VirtualMachine reports in `status.observedGeneration` the generation its
+  running guest started from, which lags after every edit until a
+  restart). Kix waits while a declared field is absent.
+  `observedGeneration = false` says the kind reports none, and is the safe
+  declaration for a stopped VirtualMachine, whose
+  `status.observedGeneration` stops advancing. The ready rule, `failed`,
+  and `pendingRestart` all use the declared field.
+
+  When the operator accepts a spec change but keeps the running workload
+  on the previous spec until a restart, and reports that, declare the
+  state in `pendingRestart`: `{ condition = { type = "RestartRequired";
+  status = "True"; }; hint = "<how to restart>"; }`, or `{ path; equals;
+  hint ?; message ?; }`. Once the resource is ready and current, `kix
+  deploy` reports it as ready with a restart pending and goes on, as it
+  does for an `OnDelete` DaemonSet.
 
   When the operator reports that it rejects a resource, and that verdict
   stands until the spec changes, list the state in `failed` beside the
@@ -437,7 +457,7 @@ edge but NO netpol hole. Consequences when authoring:
   external-secrets) or a `Pending` is not one, and neither is a phase with
   no generation and no timestamp that a restarting controller may leave
   stale (ARC `Outdated`). The CLI trusts the match once the condition's `observedGeneration`
-  (or `status.observedGeneration`) has reached `metadata.generation`;
+  (or the declared generation field) has reached `metadata.generation`;
   without a generation, once the condition's `lastTransitionTime` is later
   than this deploy's apply of the object (Cilium writes neither generation,
   so this is the check its policies get); and with neither field, once the
@@ -534,10 +554,10 @@ Use `options.metrics = kix.options.monitor;` for standardized metrics options (`
 
 Parameters, every callback taking `{ self, config, deps }` (`deps` is every DI package some other entry of the package declares): `script` (usually `builtins.readFile ./health-check.py`), `env` (`-> attrset`; the helper adds `RETRY_FOR`), `when` (`-> bool`, default `config.healthCheck.enabled or true`), `retryFor` (`-> int`, default `config.healthCheck.retryFor or 90`), `requires` (`-> [ resources ]`, on top of the package root, which the Job always waits for), `partName`, `runtime` (`kix.healthCheck.runtimes.python` by default, `runtimes.shell` on curl, or your own `{ image = { repository; tag; digest; }; file; interpreter; env; }`), `activeDeadlineSeconds` (null: `retryFor` plus `kix.healthCheck.roundBudget`, 90 s; a given value must leave that room or the build fails). Declare `options.healthCheck = kix.options.healthCheck;` (`enabled`, `retryFor`) and the defaults read it.
 
-The script gives up once `RETRY_FOR` seconds have passed and keeps one round of checks under the round budget. It reads what it expects off resources (`self.vmAgent.out.replicas`, a structural output), never off the option that produced them. The Job carries `kix.run/rerun: on-change` (`kix/lib/core/annotations.nix`): the deploy engine recreates it when its own content changed or the last run failed. `kix.healthCheck` puts `checksum/*` annotations for the script, `self.root`, and each resource `requires` returns on the pod template, so the probe runs again when one of those changes. Keep the script a file next to `default.nix` so it can be linted and run from a laptop through `kubectl proxy`. Example: `kix/packages/stable/victoria-metrics-agent/`. A probe that must log in takes the credential the same way a container does: `env = { self, ... }: { CLICKHOUSE_PASSWORD = self.credentials.out.keyRef "password"; ... }` (see `SECRETS.md`). Example: `kix/packages/experimental/clickhouse/`.
+The script gives up once `RETRY_FOR` seconds have passed and keeps one round of checks under the round budget. It reads what it expects off resources (`self.vmAgent.out.replicas`, a structural output), never off the option that produced them. The Job carries `kix.run/rerun: on-change` (`kix/lib/core/annotations.nix`): the deploy engine recreates it when its own content changed or the last run failed. `kix.run/rerun-hash` covers the script and any Kix-built Secrets or ConfigMaps referenced in `env`, while `kix.healthCheck` adds `checksum/*` annotations on the pod template for `self.root` and each resource in `requires`. Changing any of these reruns the probe. Keep the script a file next to `default.nix` so it can be linted and run from a laptop through `kubectl proxy`. Example: `kix/packages/stable/victoria-metrics-agent/`. A probe that must log in takes the credential the same way a container does: `env = { self, ... }: { CLICKHOUSE_PASSWORD = self.credentials.out.keyRef "password"; ... }` (see `SECRETS.md`). Example: `kix/packages/experimental/clickhouse/`.
 
 **Cluster-side wiring:**
-- Gateway API: instantiate `kix/packages/experimental/traefik` or `kix/packages/experimental/envoy-gateway`, which answer the `"gateway"` alias and honour `kix.contracts.gateway` (`kix/contracts/stable/gateway.nix`)
+- Gateway API: instantiate `kix/packages/experimental/gateway-api` (provides the Gateway API CRDs for the `gatewayApi` role) alongside `kix/packages/experimental/traefik` or `kix/packages/experimental/envoy-gateway` (both answer the `"gateway"` alias and implement `kix.contracts.gateway` in `kix/contracts/stable/gateway.nix`)
 - Ingress: instantiate `kix/packages/experimental/ingress-nginx` with alias `"ingressNginx"`
 
 #### Utility helpers
@@ -811,7 +831,7 @@ meta = {
 
 **Scorecard:** on by default with the full built-in rule set, every finding capped at `scorecard.maxSeverity = "warning"` for users; this repository's flakes raise the cap to `error` for every cluster (`mkFlake { clusterModules }`), so a package that trips an error-severity rule fails every test cluster it is in. Rules score what ships, derived resources included. Rules check for: resource requests/limits, liveness+readiness probes, non-root containers (`security.nonRoot`: set `runAsNonRoot = true` when the image runs as a non-root user, numeric `runAsUser` when the image names its user by name, and hold `meta.unsafe = [ "run-as-root" ]` with a comment saying why only when the image needs root), no `:latest` tags, `meta.owner`, `meta.description`, network policies, a source on every volume (`emptyDir = kix.keep { }` for an empty one), distinct labels on same-kind resources, and more. A cluster changes one rule with `scorecard.ruleOverrides`, never by copying `rules`. A package option that makes a rule fire on purpose (vaultwarden's `initChownData` adds a root chown container) reads `kix.scorecard.effectiveSeverity { inherit clusterConfig; rule = "security.nonRoot"; namespaceName = scope.namespaceName; owner = "app-team"; }` (the resolved severity, or null when the rule does not run) and throws its own message naming the override when that is `"error"`. Read `kix/lib/rules/` and `kix/lib/scorecard.nix`.
 
-**Annotation domains (v2_discussions/128):** operator packages declare the annotation prefixes they manage via `meta.annotationDomains = [ "reflector.v1.k8s.emberstack.com" ]` (reflector, prometheus-operator, reloader do). The index matches a domain exactly, so a package lists every subdomain it reads (reloader lists `reloader.stakater.com`, `secret.reloader.stakater.com`, `secrets.exclude.reloader.stakater.com`, and `deployment.reloader.stakater.com`). The `architecture.annotationDomainOwnership` rule warns when a package's resources carry `metadata.annotations` keys under a declared domain without a DI dep on the declarer, and when a domain-shaped annotation has no declarer anywhere (dead annotation: the operator is probably missing). Reserved suffixes (`kubernetes.io`, `k8s.io`, `kix.run`, `helm.sh`, `kubebuilder.io`) are exempt; by-convention domains consumed outside Kix (e.g. `prometheus.io` scrape annotations) go in the cluster's `scorecard.knownAnnotationDomains`. There is no `kix.run/capability` stamping anymore; the dep edge is the legitimacy marker. Restart-on-change for a Secret Kix does not build goes through the reloader dependency's `out.withReloadOn`; for a Kix-built ConfigMap or Secret put `checksum/<name> = <res>.out.contentHash` on the pod template (`docs/src/content/docs/reference/resources-and-out.mdx` `#triggering-rollouts-on-configmap-changes-with-outcontenthash`). Never build it from `out.identityHash`, which also changes when anything the resource depends on changes.
+**Annotation domains (v2_discussions/128):** operator packages declare the annotation prefixes they manage via `meta.annotationDomains = [ "reloader.stakater.com" ]` (prometheus-operator and reloader do). The index matches a domain exactly, so a package lists every subdomain it reads (reloader lists `reloader.stakater.com`, `secret.reloader.stakater.com`, `secrets.exclude.reloader.stakater.com`, and `deployment.reloader.stakater.com`). The `architecture.annotationDomainOwnership` rule warns when a package's resources carry `metadata.annotations` keys under a declared domain without a DI dep on the declarer, and when a domain-shaped annotation has no declarer anywhere (dead annotation: the operator is probably missing). Reserved suffixes (`kubernetes.io`, `k8s.io`, `kix.run`, `helm.sh`, `kubebuilder.io`) are exempt; by-convention domains consumed outside Kix (e.g. `prometheus.io` scrape annotations) go in the cluster's `scorecard.knownAnnotationDomains`. There is no `kix.run/capability` stamping anymore; the dep edge is the legitimacy marker. Restart-on-change for a Secret Kix does not build goes through the reloader dependency's `out.withReloadOn`; for a Kix-built ConfigMap or Secret put `checksum/<name> = <res>.out.contentHash` on the pod template (`docs/src/content/docs/reference/resources-and-out.mdx` `#triggering-rollouts-on-configmap-changes-with-outcontenthash`). Never build it from `out.identityHash`, which also changes when anything the resource depends on changes.
 
 ## Multi-Component Packages
 

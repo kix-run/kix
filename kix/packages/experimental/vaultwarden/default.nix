@@ -47,6 +47,18 @@
 # Escape hatches: `env` for Vaultwarden settings (signups, invitations,
 # ADMIN_TOKEN), `ingress` for the route, and the instance's `partsOverlays`.
 #
+# Upgrades: Vaultwarden runs its pending database migrations when it starts.
+# 1.37.5 takes over the database and the data folder that 1.36.0 left behind,
+# and adds three nullable or defaulted columns. The image's user, port,
+# health path, and start script are unchanged. Upstream says nothing about
+# which versions upgrade directly to which, or about going back. 1.36.0
+# starts on a database that 1.37.5 migrated, ignores the new columns, and
+# reads and writes the vault, so going back is a deploy of the older
+# package. Since 1.37.0, Vaultwarden trusts the client IP header
+# (IP_HEADER, default X-Real-IP) only from private addresses. Set
+# IP_HEADER_TRUSTED_PROXIES in `env` when a proxy reaches it from a public
+# address. Since 1.37.5, an invalid setting in `env` stops startup.
+#
 # Limits: one replica with the Recreate strategy. The database password goes
 # into DATABASE_URL unescaped, so it must not contain URL delimiters such as
 # `@`, `/`, or `:`.
@@ -58,6 +70,7 @@
 }:
 
 let
+  release = "1.37.5";
   name = scope.instanceName;
 
   # init-chown-data runs as root. When security.nonRoot would fail the
@@ -75,7 +88,7 @@ let
 in
 {
   meta = {
-    version = "1.36.0";
+    version = release;
     description = "Vaultwarden: Bitwarden-compatible password manager";
     owner = "app-team";
   };
@@ -89,9 +102,17 @@ in
 
   options = {
     image = kix.options.image {
-      repository = "vaultwarden/server";
-      tag = "1.36.0-alpine";
+      repository = "docker.io/vaultwarden/server";
+      tag = "${release}-alpine";
+      digest = "sha256:bbe684a02d6b0db54256ff88eac9754f4519284a7b26314afc241fd7d0918191";
       pullPolicy = null;
+    };
+    init.image = kix.options.image {
+      repository = "docker.io/library/busybox";
+      tag = "1.38.0";
+      digest = "sha256:a46257e06c82ad85242d0d38077d0a52d9896389ca60a1a59d3463db586e5fa4";
+      pullPolicy = null;
+      description = "Image of the init-chown-data container, which runs while `initChownData` is true. It needs `chown`.";
     };
     domain = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
@@ -214,7 +235,7 @@ in
                   else
                     {
                       name = "init-chown-data";
-                      image = "docker.io/library/busybox:1.38.0";
+                      image = kix.image.ref config.init.image;
                       command = [
                         "chown"
                         "-R"

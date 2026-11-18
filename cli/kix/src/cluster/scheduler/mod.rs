@@ -60,7 +60,7 @@ use node::recreate_refusal;
 use node::{NodeCtx, NodeOutcome, execute_node, prune_order, with_sentence};
 use plan::{SchedulerState, is_crd_like, runs_task};
 
-pub use plan::{DeployPlan, PlanNodeEntry};
+pub use plan::{DeployPlan, LastRuns, PlanNodeEntry};
 
 /// Policy for handling a node that reaches `Verdict::Failed`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,11 +73,10 @@ pub enum OnErrorPolicy {
 }
 
 /// Policy for handling orphaned resources after all plan nodes terminate.
-/// A saved plan records it as `flags.prune`.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
-)]
-#[serde(rename_all = "snake_case")]
+///
+/// The plan document maps it to its own type for `flags.prune`, so this
+/// type does not set the JSON of a plan or a saved plan file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrunePolicy {
     /// Do not look for orphans at all (`--skip-orphan-check`).
     Skip,
@@ -1072,14 +1071,18 @@ impl<'a> Run<'a> {
             .cloned()
             .collect();
         let mut orphans_left = prune != PrunePolicy::Delete
-            && effective_orphans.iter().any(|rid| !never_pruned(&rid.kind));
+            && effective_orphans
+                .iter()
+                .any(|rid| !never_pruned(rid.group_kind()));
         if effective_orphans.is_empty() || prune == PrunePolicy::Skip {
             return orphans_left;
         }
         let ordered = prune_order(&effective_orphans, self.old_manifests);
         let delete = prune == PrunePolicy::Delete;
-        let (kept, prunable): (Vec<ResourceId>, Vec<ResourceId>) =
-            ordered.iter().cloned().partition(|r| never_pruned(&r.kind));
+        let (kept, prunable): (Vec<ResourceId>, Vec<ResourceId>) = ordered
+            .iter()
+            .cloned()
+            .partition(|r| never_pruned(r.group_kind()));
         self.emit(DeployEvent::PruneStart {
             count: prunable.len(),
             resources: prunable,
@@ -1088,7 +1091,7 @@ impl<'a> Run<'a> {
         });
 
         for rid in &ordered {
-            if prune == PrunePolicy::WarnOnly || never_pruned(&rid.kind) {
+            if prune == PrunePolicy::WarnOnly || never_pruned(rid.group_kind()) {
                 continue;
             }
             let deleted =

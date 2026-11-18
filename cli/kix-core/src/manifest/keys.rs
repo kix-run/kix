@@ -95,6 +95,11 @@ pub const ACTIVATIONS_CRD: &str = concat!("activations.", domain!());
 /// `packageinstances.<domain>`, the CRD name.
 pub const PACKAGE_INSTANCES_CRD: &str = concat!("packageinstances.", domain!());
 
+/// Annotation the Kix operator writes on the Activation CRD when it starts,
+/// listing what it handles, comma-separated. The CLI reads it before it hands
+/// the operator a request. See `cluster::activation::OperatorFeatures`.
+pub const OPERATOR_FEATURES: &str = concat!(domain!(), "/operator-features");
+
 // --- Stamped by the CLI at load time (eval/stamp.rs) ---
 
 /// The 32-char Nix store hash of the resource's sealed manifest. The identity

@@ -260,6 +260,7 @@ fn unreachable_webhook_service(message: &str) -> Option<ResourceId> {
         return None;
     }
     Some(ResourceId {
+        group: String::new(),
         kind: "Service".into(),
         namespace: namespace.into(),
         name: name.into(),
@@ -414,6 +415,7 @@ mod tests {
 
     fn service(namespace: &str, name: &str) -> ResourceId {
         ResourceId {
+            group: String::new(),
             kind: "Service".into(),
             namespace: namespace.into(),
             name: name.into(),

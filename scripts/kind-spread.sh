@@ -45,7 +45,7 @@ kubectl --context "$CTX" get nodes -L topology.kubernetes.io/zone
 # bring-up not-ready taint is not a domain: apply only once every node is
 # Ready, as a real deploy would.
 kubectl --context "$CTX" wait --for=condition=Ready nodes --all --timeout=180s
-nix build ./clusters#cluster-spread --extra-experimental-features pipe-operators -o result-spread
+nix build .#cluster-spread --extra-experimental-features pipe-operators -o result-spread
 # CRDs first (the PackageInstance kind), then everything.
 for f in $(find result-spread/ -name '*customresourcedefinition*.yaml'); do
   kubectl --context "$CTX" apply -f "$f"

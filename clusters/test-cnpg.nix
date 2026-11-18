@@ -23,8 +23,8 @@
 #   kubectl -n data exec pg-imported-1 -c postgres -- \
 #     psql -At -d app -c 'select count(*) from import_check'
 #
-# Build:  nix build .#cluster-cnpg --extra-experimental-features pipe-operators
-# Deploy: kix deploy cnpg --flake ./clusters --context <kind context>
+# Build:  kix build cnpg
+# Deploy: kix deploy cnpg --context <kind context>
 #         on a kind cluster created with `disableDefaultCNI: true`.
 
 { kix, packages }:

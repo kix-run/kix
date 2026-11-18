@@ -104,6 +104,8 @@ let
       extra
       {
         cluster.domain = "test.local";
+        # envoy-gateway and traefik need the Gateway API CRDs.
+        instances.gatewayapi.gateway-api.package = import ../../../packages/experimental/gateway-api;
         instances.gwns.gw = gateway;
         instances.appns.web.package = backend;
       }
@@ -255,9 +257,8 @@ in
     || throw "traefik route or edge: ${builtins.toJSON (namesOf cnps)}";
 
   # envoy-gateway publishes the labels Envoy Gateway puts on the proxy pods
-  # and their namespace, so the backend admits the proxies. A merged
-  # GatewayClass selects by class; with proxyNamespace null, or another
-  # controller, there is no selector and no policy.
+  # of its Gateway, in its own namespace, so the backend admits the proxies.
+  # A merged GatewayClass selects by class.
   gateway-envoy-opens-backend =
     let
       edgeWith =
@@ -277,12 +278,9 @@ in
       merged = rule (edgeWith {
         proxySpec.mergeGateways = true;
       });
-      elsewhere = rule (edgeWith {
-        proxyNamespace = "gwns";
-      });
     in
     (
-      plain.callerNamespace == "envoy-gateway-system"
+      plain.callerNamespace == "gwns"
       &&
         plain.callerSelector == {
           "app.kubernetes.io/name" = "envoy";
@@ -294,9 +292,6 @@ in
       && (builtins.head plain.ports).port == 8080
       && merged.callerSelector."gateway.envoyproxy.io/owning-gatewayclass" == "gw"
       && !(merged.callerSelector ? "gateway.envoyproxy.io/owning-gateway-name")
-      && elsewhere.callerNamespace == "gwns"
-      && edgeWith { proxyNamespace = null; } == null
-      && edgeWith { controllerName = "example.com/other"; } == null
     )
     || throw "envoy-gateway edge: ${builtins.toJSON plain}";
 
@@ -393,6 +388,7 @@ in
           {
             cluster.domain = "test.local";
             instances.gwns.gw.package = traefik;
+            instances.gatewayapi.gateway-api.package = import ../../../packages/experimental/gateway-api;
             instances.appns.web.package = twoBackends;
           }
         ])
@@ -428,6 +424,7 @@ in
               {
                 cluster.roles.loadBalancer.binding = if absent then "absent" else "exclusive";
                 instances.gwns.gw.package = traefik;
+                instances.gatewayapi.gateway-api.package = import ../../../packages/experimental/gateway-api;
               }
             ])
           )

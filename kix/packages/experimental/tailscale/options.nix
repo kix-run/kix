@@ -10,7 +10,7 @@
   image = kix.options.image {
     repository = "docker.io/tailscale/k8s-operator";
     inherit tag;
-    digest = "sha256:3c8958c42fb3c46068e8553e11b944f2133b4671d4f36c86adc11f206746bf34";
+    digest = "sha256:51ba104ff02afcc39f93189415c8b2f44fb6037e8592d626bfa52c3c8afc02f6";
     description = "Image of the operator. Its major.minor must match the vendored CRDs and RBAC. Each operand image defaults to this repository with its own last path segment (`docker.io/tailscale/<name>`) and to this tag.";
   };
 

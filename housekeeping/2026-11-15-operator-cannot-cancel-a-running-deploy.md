@@ -1,0 +1,3 @@
+# 2026-11-15 · `cli/kix-operator/src/controller.rs` · A newer operator request cannot cancel the deploy that is running.
+
+The operator cancels a running deploy only when the operator itself stops (`Context::shutdown`). A newer request for the same Kix cluster waits until the current deploy ends (`start_queued` requeues while another operator-driven record is `Deploying`), however long its resources take, and the readiness timeout is fixed at 300 seconds (`READINESS_TIMEOUT`). Options: keep a token per Kix cluster in the operator's `Context` and cancel it when a newer request for that cluster arrives, which needs a watcher beside kube-runtime's controller (it runs one reconcile per object at a time); carry a timeout on the Activation request.

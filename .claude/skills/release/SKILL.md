@@ -48,8 +48,8 @@ counts as breaking. The kind picks the `CHANGELOG.md` heading:
    folder.
 3. `note`, `### Upgrade notes`: nothing to change, but worth knowing, such
    as a first deploy that restarts some pods once.
-4. `security`, `### Security`: a vulnerability fix. Its `workaround` says
-   how to get the fix without upgrading.
+4. `security`, `### Security`: a vulnerability fix. Its `workaround`, when
+   there is one, says how to get the fix without upgrading.
 5. `added`, `changed`, and `fixed`: `### Added`, `### Changed`, and
    `### Fixed`.
 
