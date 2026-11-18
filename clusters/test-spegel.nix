@@ -26,8 +26,8 @@
 #     - role: control-plane
 #     - role: worker
 #
-# Cilium in kube-proxy mode serves the hostPort that containerd reaches the
-# local Spegel pod through only with portmap chaining.
+# Cilium runs in kube-proxy mode, so kube-proxy serves the registry
+# NodePort and its `trafficDistribution: PreferSameNode`.
 #
 # Build:  kix build spegel
 
@@ -60,7 +60,6 @@ kix.buildCluster {
           package = packages.experimental.cilium;
           config.values = {
             kubeProxyReplacement = false;
-            cni.chainingMode = "portmap";
             prometheus.enabled = false;
             ipam.operator.clusterPoolIPv4PodCIDRList = [ "10.244.0.0/16" ];
           };
