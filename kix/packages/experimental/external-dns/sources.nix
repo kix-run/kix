@@ -1,7 +1,8 @@
 # Sources the package accepts for `sources`, with the RBAC each one needs and
 # the Gateway API kinds it reads. The rules follow
-# charts/external-dns/templates/clusterrole.yaml in chart 1.23.0 (external-dns
-# v0.23.0). Another upstream source is added here when a cluster needs it.
+# charts/external-dns/templates/clusterrole.yaml at tag v0.24.0, which is
+# unchanged since chart 1.23.0. Another upstream source is added here when a
+# cluster needs it.
 #
 # `intents` are RBAC DSL intents (kix/lib/vocab/rbac.nix). `crdRefs` name
 # Gateway API kinds whose CRDs must exist before the controller starts; the
