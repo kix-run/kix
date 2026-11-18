@@ -53,6 +53,12 @@
 # (`kubectl top` and HorizontalPodAutoscalers report missing metrics), and
 # no rule catches that.
 #
+# Upgrades: metrics-server keeps no state, and its RBAC, Service, and
+# APIService are the same in 0.9.0 and 0.9.1, so 0.9.1 runs on what 0.9.0
+# left behind. Upstream documents no upgrade or downgrade path. Going back
+# means deploying an older package, such as 0.9.0, over this one. The pods
+# restart.
+#
 # Escape hatches: `extraArgs` (the secure port, certificate directory, bind
 # address, and kubelet port flags are refused), `env`, and `partsOverlays`.
 #
@@ -75,7 +81,7 @@
   availability,
 }:
 let
-  release = "0.9.0";
+  release = "0.9.1";
 
   name = scope.instanceName;
   who = "metrics-server ${scope.namespaceName}/${name}";
@@ -97,8 +103,13 @@ in
     # The role admits one managed claimant per cluster, which also keeps a
     # second APIService v1beta1.metrics.k8s.io out.
     roles = [ "metricsApi" ];
-    # metrics-server README compatibility matrix: 0.9.x supports 1.34+.
-    k8s.minVersion = "1.34";
+    # The Kubernetes versions metrics-server 0.9.x supports, from the
+    # compatibility matrix in its README ("0.9.x ... 1.34+"). The matrix
+    # states no upper bound. Move the lower bound with `release`.
+    k8s = {
+      minVersion = "1.34";
+      reason = "metrics-server ${release} supports Kubernetes 1.34 and later. Deploy a Kix release with an older metrics-server package, or move the cluster to a supported Kubernetes version first";
+    };
     network.intents = {
       # The API server proxies metrics.k8s.io requests to the pods.
       aggregatedApi.ingress = [
@@ -127,7 +138,7 @@ in
     image = kix.options.image {
       repository = "registry.k8s.io/metrics-server/metrics-server";
       tag = "v${release}";
-      digest = "sha256:d9862115e7c7881280d3d75ca26bda8ffc0fc213315979575bf23ce9826205c0";
+      digest = "sha256:9b0ba1926e1d3089673f45461c3c1416109dea33b3ba3434048defd380df329b";
     };
 
     # No limits: upstream sets none, and usage grows with the number of
@@ -374,7 +385,7 @@ in
     // mkClusterRoleSet scope {
       inherit subjects;
       labels = scope.selectorLabels;
-      # metrics-server v0.9.0 components.yaml, ClusterRole system:metrics-server.
+      # metrics-server v0.9.1 components.yaml, ClusterRole system:metrics-server.
       roles.${qualified} = grant [
         (core.nodes |> sub "metrics" |> allow [ "get" ])
         (
