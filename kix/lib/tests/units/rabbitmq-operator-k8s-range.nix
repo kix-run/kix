@@ -38,7 +38,7 @@ in
 {
   # The README's Compatibility section requires Kubernetes 1.31 or later and
   # states no upper bound, so 1.30 is refused with the record's id, and 1.31
-  # and 1.34 (the production version) are accepted. A cluster with no
+  # and 1.34 are accepted. A cluster with no
   # version is not checked.
   rabbitmq-operator-k8s-range =
     (
