@@ -239,7 +239,7 @@ in
 
         # Trim a name segment for the operator's per-replica Service name,
         # chi-{chi}-{cluster}-{shard}-{replica} with zero-based indexes
-        # (patterns.go in operator 0.27.3). It cuts the installation name to
+        # (patterns.go in operator 0.27.4). It cuts the installation name to
         # 60 characters and the cluster name to 15, then trims "-", "_", and
         # "." from both ends of each. A serviceTemplate could rename it, so
         # extraSpec may not define one.
