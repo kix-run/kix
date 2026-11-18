@@ -32,9 +32,9 @@
 # paths, so the package declares the `run-as-root` grant and the namespace
 # runs at the `privileged` Pod Security level.
 #
-# The Vector agent itself (image, options, pod spec, RBAC, health check)
-# comes from ../clickhouse-logs/vector-agent.nix, which clickhouse-logs
-# shares.
+# The Vector agent itself (image, options, pod spec, RBAC, health check,
+# supported Kubernetes versions, and upgrade notes) comes from
+# ../clickhouse-logs/vector-agent.nix, which clickhouse-logs shares.
 
 {
   scope,
@@ -48,7 +48,7 @@ let
 in
 {
   meta = {
-    inherit (vectorAgent) version;
+    inherit (vectorAgent) version k8s;
     description = "Pod logs into Loki, shipped by a Vector agent on every node";
     owner = "platform";
     # The kubelet writes pod logs as root with mode 0640, so the agent reads
