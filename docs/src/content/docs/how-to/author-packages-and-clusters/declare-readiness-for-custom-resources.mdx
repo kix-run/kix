@@ -6,6 +6,8 @@ description: "Tell Kix which status value means that an operator-managed custom 
 import Command from '/src/components/Command.astro';
 import Snippet from '/src/components/Snippet.astro';
 import customResourceReadiness from '/src/snippets/how-to/composition/custom-resource-package/customResourceReadiness.json';
+import customResourceGenerationField from '/src/snippets/how-to/composition/custom-resource-package/customResourceGenerationField.json';
+import customResourceOwnReadiness from '/src/snippets/how-to/composition/custom-resource-package/customResourceOwnReadiness.json';
 import widget from '/src/command-output/how-to/application-custom-resource-readiness/widget.json';
 
 Use a readiness declaration when a custom resource's controller does not set a
@@ -124,15 +126,14 @@ default.
 Some controllers report it in another field, or give
 `status.observedGeneration` another meaning. Check the field's description in
 the CRD and the controller code that sets it. When it is not the generation the
-controller has acted on, name the right field in `observedGeneration`:
+controller has acted on, name the right field in `observedGeneration` beside
+the ready rule. The example declares a `Machine` kind that stands in for such
+an operator kind:
 
-```nix
-readiness = {
-  path = "/status/printableStatus";
-  equals = "Running";
-  observedGeneration = "/status/desiredGeneration";
-};
-```
+<Snippet
+  {...customResourceGenerationField}
+  elide={{ customResourcePendingRestart: '            # pendingRestart: see the next section' }}
+/>
 
 KubeVirt is such a controller. On a VirtualMachine, `status.observedGeneration`
 is the generation the running guest started from, so it stays behind after any
@@ -155,22 +156,10 @@ entries use the same field.
 Some controllers accept a change to the spec but keep the running workload on
 the previous spec until someone restarts it. KubeVirt does this for a change
 that it cannot apply to a running guest, and sets `RestartRequired=True`. Name
-that state in `pendingRestart`, with a `hint` that says how to restart:
+that state in `pendingRestart` beside the ready rule, with a `hint` that says
+how to restart:
 
-```nix
-readiness = {
-  path = "/status/printableStatus";
-  equals = "Running";
-  observedGeneration = "/status/desiredGeneration";
-  pendingRestart = {
-    condition = {
-      type = "RestartRequired";
-      status = "True";
-    };
-    hint = "Restart the VM with `virtctl restart <name>` to apply the change.";
-  };
-};
-```
+<Snippet {...customResourceGenerationField} />
 
 `pendingRestart` takes the two shapes of a `failed` entry: a condition (`type`,
 `status`, and an optional `reason`) or a status field (`path`, `equals`, and an
@@ -178,9 +167,8 @@ optional `message` that names the status fields to quote). Kix reads it only
 once the resource is ready and its status describes the current spec. When the
 kind reports no generation, a condition that last changed before this deploy
 applied the resource describes the previous spec, and Kix does not report it.
-The
-deploy then reports the resource as ready with a restart pending, quotes the
-controller's message and the hint, and goes on. Restarting the workload is left
+When the state matches, the deploy reports the resource as ready with a restart
+pending, quotes the controller's message and the hint, and goes on. Restarting the workload is left
 to you, because it interrupts what runs in it.
 
 ## Give one resource its own rule
@@ -189,22 +177,12 @@ When the ready state depends on the resource's own spec, pass `readiness` to
 `scope.mkCR`. It replaces the kind's rule for that resource, and Kix checks it
 the same way:
 
-```nix
-vm = scope.mkCR kubevirt.out.crds.VirtualMachine {
-  name = "halted";
-  spec = { runStrategy = "Halted"; /* ... */ };
-  readiness = {
-    path = "/status/printableStatus";
-    equals = "Stopped";
-    observedGeneration = false;
-  };
-};
-```
+<Snippet {...customResourceOwnReadiness} />
 
-A stopped VirtualMachine has no running guest, so its
-`status.observedGeneration` stops advancing, and Kix would wait on it after
-every edit. `observedGeneration = false` is the safe declaration for a stopped
-VM.
+A stopped KubeVirt VirtualMachine behaves the same way: it has no running
+guest, so its `status.observedGeneration` stops advancing, and Kix would wait on
+it after every edit. `observedGeneration = false` is the safe declaration for a
+stopped VM.
 
 ## Check the generated custom resource
 
