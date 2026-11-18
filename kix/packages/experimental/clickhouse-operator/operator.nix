@@ -8,7 +8,7 @@
 # configuration tree under /etc/clickhouse-operator, so both get the same
 # mounts.
 #
-# RBAC is transcribed from the upstream ClusterRole (chart 0.27.3,
+# RBAC is transcribed from the upstream ClusterRole (chart 0.27.4,
 # templates/generated/ClusterRole-clickhouse-operator-kube-system.yaml), with
 # the custom resource rules derived from kinds.nix. It is cluster-wide: the
 # operator watches every namespace (`watch.namespaces.include` below) unless
@@ -171,10 +171,8 @@ let
       user = "chk/users.d";
     };
 
-    template = {
-      chi.path = "chi/templates.d";
-      chk.path = "chk/templates.d";
-    };
+    # The operator reads templates for ClickHouseInstallations only.
+    template.chi.path = "chi/templates.d";
 
     reconcile = {
       # Compiled-in is one thread for each.

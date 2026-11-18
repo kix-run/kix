@@ -6,7 +6,7 @@
 # All four ship, whether or not Kix has a builder for them. The operator
 # lists ClickHouseOperatorConfigurations at startup, its metrics exporter
 # runs an informer on them, and the reconciler merges
-# ClickHouseInstallationTemplates into every installation. Whether 0.27.3
+# ClickHouseInstallationTemplates into every installation. Whether 0.27.4
 # survives one of them being absent is unproven, and the VictoriaMetrics
 # operator's answer to the same question was a crashloop that took three
 # minutes to show (victoria-metrics-operator/kinds.nix). Trim this table only
