@@ -124,6 +124,7 @@
           traefik = ./clusters/test-traefik.nix;
           envoy-gateway = ./clusters/test-envoy-gateway.nix;
           filebrowser = ./clusters/test-filebrowser.nix;
+          vaultwarden = ./clusters/test-vaultwarden.nix;
           caddy = ./clusters/test-caddy.nix;
           cloudflared = ./clusters/test-cloudflared.nix;
           tempo = ./clusters/test-tempo.nix;
