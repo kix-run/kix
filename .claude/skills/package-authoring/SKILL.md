@@ -21,6 +21,7 @@ makes keeping this file current part of changing the package conventions.
 | CRDs and operator RBAC | `.claude/skills/crd-vendoring/SKILL.md`; `docs/src/content/docs/reference/secrets-crds-and-rbac.mdx` |
 | Any prose, including comments and the header | `CLAUDE.prose.md`, `CLAUDE.md` "Code comments" |
 | Logging what you notice and do not fix | `CLAUDE.housekeeping.md` |
+| Moving a package to a newer upstream version | "Upgrading the version a package pins" at the end of this file |
 
 Read `PRINCIPLES.md`, the package-review checklist headings, and the closest
 reference package in full before writing; open the rest when a decision
@@ -647,3 +648,123 @@ deploy is the slowest and most informative step.
    housekeeping entries filed. When a package-review item proved wrong, add a
    "Checklist feedback" line and fix that skill in the same change.
 5. Nothing merges without the user.
+
+## Upgrading the version a package pins
+
+A version bump is rarely one line. Upstream moves ports, probes, flags,
+RBAC rules, and the image's user between releases, and files outside the
+package cite the version. The work is done when `scripts/check-bump.sh`
+prints `check-bump: PASS` and the upgrade deploy below has run.
+
+### Order of work
+
+1. Decide the target and read what changed upstream.
+2. Deploy the old version on kind and write state, before you edit any file
+   of the package. Editing first forces you to undo the edits to get the old
+   version back.
+3. Edit and commit.
+4. Run `scripts/check-bump.sh <package-dir> <old-version>` until it passes.
+5. Deploy the new version over the old one, verify, and test going back.
+
+### The target and the upstream changes
+
+- The target is the latest stable upstream release, unless the task names
+  another. When you stay on an older line, name the newer release and say
+  why you did not upgrade to it. Confirm the target's images exist for every
+  platform the old ones did: a release whose image publishing failed is
+  followed by a fix release.
+- Read the notes of every release between the pinned version and the
+  target. Release notes omit what a package depends on. Also compare
+  upstream's own deployment files between the two versions (manifests, Helm
+  chart templates, the Dockerfile, the default config) for ports, probes,
+  flags, environment variables, RBAC rules, the image's user, and files the
+  image now ships. A package that copies any of these follows them.
+- Write down what upstream says about which versions can upgrade directly
+  to which, and about going back. Upstream often says nothing. Then say
+  what you learned from its source or from testing.
+- Find the Kubernetes versions upstream supports for the target, and name
+  the source. Upstream's stated support (a support matrix, a requirements
+  page, a support policy) wins. Versions upstream only tests do not widen
+  or narrow a stated range. Use tested versions (its CI or e2e matrix) only
+  when upstream states no support, and `go.mod`'s client-go version only as
+  a last resort.
+
+### The edit
+
+- Encode that range in `meta.k8s` as `minVersion` and `maxVersion`, with a
+  `reason` that names the release and the range, so Kix refuses a cluster
+  that declares a version upstream does not support. For an open range
+  ("1.25 and later") set only `minVersion`. When upstream states no range,
+  leave `meta.k8s` as it is and say so in the pull request. A range that
+  refuses a version the package accepted before needs an `error` change
+  record: put its id at the start of `reason` as `[Kxxxx]`, and add a unit
+  test in `kix/lib/tests/units/` that refuses a version on each side and
+  accepts one inside (`cilium-k8s-range` in `cilium.nix` has the shape).
+
+- List every image the package renders, including images an operator is
+  told to deploy, and decide for each whether it moves.
+- Pin the multi-arch index digest of each new tag. Check your lookup first:
+  it must return the digest the package already pins for the old tag.
+- Re-vendor CRDs and roles with `scripts/vendor-crds.py` (crd-vendoring
+  skill).
+- Add or update the header's `Upgrades:` paragraph. It says whether the new
+  version works with what the old one left behind, whether going back
+  works, and what an operator does to go back.
+- Add a change record. Its text tells the user what changes for them and
+  what to do. Choose the kind from what a user who upgrades gets, and name
+  the other kind you considered in the pull request.
+
+### Files outside the package
+
+`scripts/check-bump.sh` finds these and lists every place the old version
+still appears. Update each place, or say why it stays.
+
+- `cli/kix-cli/tests/snapshots/` when the package is in the example
+  cluster. The snapshots hold hashes that change too, so regenerate them
+  instead of editing them directly. From `cli/`: `nix develop .. -c env
+  INSTA_UPDATE=always cargo test -p kix-cli --test snapshot_test`.
+- `docs/src/command-output/`: `nix run ./docs#regen-captures-offline --
+  --apply`. Revert a file in which only a timestamp changed.
+- `kix/lib/tests/units/`: a test that names the next version as one the
+  package must refuse fails after the bump. Move it up.
+- `ROADMAP.md`, where the package's entry cites its release.
+
+### The upgrade deploy
+
+Use the package's test cluster (file list, item 3) and the kind deploy in
+"Handover", step 3, with these additions.
+
+1. Deploy the old version. Confirm it works by using it, and do not rely on
+   pod status alone.
+2. Write state that exercises what the package stores or manages: data in a
+   volume, objects it reconciles, records it keeps. A package with
+   dependents in the repository has one in the test cluster.
+3. Deploy the new version with the same command and no extra flag. The plan
+   names the old and the new version.
+4. Check what the software itself reports. A deploy can return before an
+   operator has finished upgrading, and it can report success when an
+   operator has refused the change. Read each pod's image digest, the
+   version the program logs or serves, an operator's status fields, and the
+   PackageInstance version.
+5. Check that the state from step 2 is intact and that the package does new
+   work. A ready pod does not show this: Grafana 13.3 ran ready with every
+   data source missing.
+6. Test going back in the way that fits the package. For software that
+   keeps data files, start the old version on a copy of the files the new
+   version wrote. For an operator, deploy the old package over the new one
+   and read what the operator reports. Report the exact result. Look for an
+   upstream setting that permits going back, and test it.
+
+### Working beside other agents
+
+- `kind create cluster` and `kind delete cluster` change the current
+  context in the shared `~/.kube/config`. Pass `--kubeconfig
+  /tmp/kc-<cluster>` when you create the cluster, and set `KUBECONFIG` to
+  that file for every command.
+- Reach a Service with `kubectl exec`, or pick an unused local port for a
+  port-forward and start it again after each deploy. A forward stays on the
+  old pod.
+- Leave no login in the shared `~/.docker/config.json`.
+- Delete your kind cluster when you finish. Each worktree that runs a cargo
+  test builds its own target directory under
+  `$XDG_CACHE_HOME/kix-cargo-target`. Delete it when the worktree goes.
