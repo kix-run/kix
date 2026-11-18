@@ -67,18 +67,30 @@ pub(super) struct DeclaredReadiness {
 /// `status.observedGeneration`. Some controllers give it another meaning,
 /// such as KubeVirt, whose VirtualMachine reports there the generation its
 /// running instance started from.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) enum GenerationField {
-    /// The JSON pointer of the field.
-    Pointer(String),
+    /// `status.observedGeneration`, which many operators never write. While
+    /// it is absent no generation guard applies.
+    #[default]
+    Default,
+    /// The JSON pointer a package declared. The package says the controller
+    /// writes it, so while it is absent the controller has not acted on the
+    /// spec yet.
+    Declared(String),
     /// The kind reports no generation, so no status counts as stale.
     None,
 }
 
-impl Default for GenerationField {
-    fn default() -> Self {
-        Self::Pointer("/status/observedGeneration".to_string())
-    }
+/// What a custom resource's status says about the generation its controller
+/// has acted on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Observed<'a> {
+    /// The status reports this generation.
+    At(i64),
+    /// The status reports no generation, and none is expected.
+    Unreported,
+    /// The declared field at this pointer holds no generation yet.
+    Missing(&'a str),
 }
 
 /// A state in which the controller has accepted the current spec and the
@@ -111,8 +123,9 @@ pub(super) enum PendingState {
 ///
 /// * `{"path": "/status/...", "equals": "<value>"}` is ready when the string,
 ///   boolean, or number at `path` formats to `equals` (`true` matches `"true"`,
-///   `3` matches `"3"`, and `1.0` matches `"1.0"`), and the declared
-///   [`GenerationField`] (when present) has reached `metadata.generation`.
+///   `3` matches `"3"`, and `1.0` matches `"1.0"`), and the
+///   [`GenerationField`] has reached `metadata.generation` (see
+///   [`generation_observed`] for an absent field).
 /// * `{"path": "/status/...", "notEquals": "<value>"}` is ready when the value
 ///   at `path` is absent or does not match `notEquals` under the same
 ///   generation guard. This is used when status is written only by a consumer
@@ -185,8 +198,10 @@ pub fn declared_rule(obj: &DynamicObject) -> Option<&str> {
 /// resource with no recognized readiness rule uses `check_generic_ready`, which
 /// treats an empty status as ready. A `failed` entry that does not parse is
 /// dropped on its own, so a shape this CLI does not know can only make the
-/// deploy wait longer, never fail it. A malformed `observedGeneration` or
-/// `pendingRestart` falls back to the default in the same way.
+/// deploy wait longer, never fail it. A malformed `pendingRestart` is dropped
+/// in the same way. A malformed `observedGeneration` makes the whole
+/// annotation unreadable, as a malformed ready rule does, because reading
+/// another field than the package named could take a stale status as current.
 pub(super) fn declared_readiness(obj: &DynamicObject) -> Option<DeclaredReadiness> {
     let raw = declared_rule(obj)?;
     let v: Value = serde_json::from_str(raw).ok()?;
@@ -197,11 +212,12 @@ pub(super) fn declared_readiness(obj: &DynamicObject) -> Option<DeclaredReadines
         .map(|entries| entries.iter().filter_map(parse_failed_rule).collect())
         .unwrap_or_default();
     let generation = match v.get("observedGeneration") {
+        None | Some(Value::Null) => GenerationField::Default,
         Some(Value::Bool(false)) => GenerationField::None,
         Some(Value::String(pointer)) if pointer.starts_with('/') => {
-            GenerationField::Pointer(pointer.clone())
+            GenerationField::Declared(pointer.clone())
         }
-        _ => GenerationField::default(),
+        Some(_) => return None,
     };
     let pending_restart = v.get("pendingRestart").and_then(parse_pending_restart);
     Some(DeclaredReadiness {
@@ -418,10 +434,16 @@ fn condition_message(condition: &Value) -> Option<&str> {
 }
 
 /// Return the report for a declared pending-restart state the object is in,
-/// or `None`. The caller asks only once the ready rule holds. A match whose
-/// generation is behind `metadata.generation` is not reported, because the
-/// controller has not judged the current spec yet.
-pub(super) fn declared_pending_restart(obj: &DynamicObject) -> Option<String> {
+/// or `None`. The caller asks only once the ready rule holds. `applied_at` is
+/// when this deploy changed the object, as for [`declared_failure`]. A match
+/// is not reported when its status is known to describe an older spec: its
+/// generation is behind `metadata.generation`, or, with no generation, its
+/// condition last changed before the apply. The controller has not judged
+/// this spec yet, so the state may belong to the spec the apply replaced.
+pub(super) fn declared_pending_restart(
+    obj: &DynamicObject,
+    applied_at: Option<DateTime<Utc>>,
+) -> Option<String> {
     let declared = declared_readiness(obj)?;
     let rule = declared.pending_restart?;
     let data = &obj.data;
@@ -450,8 +472,16 @@ pub(super) fn declared_pending_restart(obj: &DynamicObject) -> Option<String> {
             (format!("{}={text}", dotted_path(path)), None)
         }
     };
+    let generation = obj.metadata.generation;
     let observed = observed_generation(data, &declared.generation, condition);
-    if !generation_observed(obj.metadata.generation, observed) {
+    if !generation_observed(generation, observed) {
+        return None;
+    }
+    if !generation_known(generation, observed)
+        && let (Some(transitioned), Some(applied)) =
+            (condition.and_then(transition_time), applied_at)
+        && transitioned < applied
+    {
         return None;
     }
     let quoted = match condition {
@@ -532,8 +562,8 @@ fn dotted_path(path: &str) -> String {
 
 /// Return `true` when both `metadata.generation` and the observed generation
 /// are present, so a comparison between them means something.
-fn generation_known(generation: Option<i64>, observed: Option<&Value>) -> bool {
-    generation.is_some() && observed.and_then(Value::as_i64).is_some()
+fn generation_known(generation: Option<i64>, observed: Observed<'_>) -> bool {
+    generation.is_some() && matches!(observed, Observed::At(_))
 }
 
 /// How long a declared failure must hold before it ends the wait on an object
@@ -853,49 +883,67 @@ fn find_condition<'a>(data: &'a Value, condition_type: &str) -> Option<&'a Value
         .find(|c| c.get("type").and_then(Value::as_str) == Some(condition_type))
 }
 
-/// Return `true` if `observed` has reached the object's `metadata.generation`,
-/// or if either value is absent.
-fn generation_observed(generation: Option<i64>, observed: Option<&Value>) -> bool {
-    match (generation, observed.and_then(Value::as_i64)) {
-        (Some(generation), Some(observed)) => observed >= generation,
+/// Return `true` if `observed` has reached the object's `metadata.generation`.
+/// An object without `metadata.generation`, or a status that reports no
+/// generation and need not, imposes no wait. A declared field that is still
+/// absent does.
+fn generation_observed(generation: Option<i64>, observed: Observed<'_>) -> bool {
+    match (generation, observed) {
+        (Some(generation), Observed::At(observed)) => observed >= generation,
+        (Some(_), Observed::Missing(_)) => false,
         _ => true,
     }
 }
 
-/// Return the generation that a custom resource's status describes, to
-/// compare with `metadata.generation`. A matched `condition`'s own
-/// `observedGeneration` comes first, then the declared `field`. `None` means
-/// the status names no generation, so no wait applies.
+/// Return what a custom resource's status says about the generation its
+/// controller has acted on, to compare with `metadata.generation`. A matched
+/// `condition`'s own `observedGeneration` comes first, then the declared
+/// `field`.
 fn observed_generation<'a>(
-    data: &'a Value,
-    field: &GenerationField,
-    condition: Option<&'a Value>,
-) -> Option<&'a Value> {
-    condition
+    data: &Value,
+    field: &'a GenerationField,
+    condition: Option<&Value>,
+) -> Observed<'a> {
+    if let Some(own) = condition
         .and_then(|c| c.get("observedGeneration"))
-        .or_else(|| match field {
-            GenerationField::Pointer(pointer) => data.pointer(pointer),
-            GenerationField::None => None,
-        })
+        .and_then(Value::as_i64)
+    {
+        return Observed::At(own);
+    }
+    match field {
+        GenerationField::Default => data
+            .pointer("/status/observedGeneration")
+            .and_then(Value::as_i64)
+            .map_or(Observed::Unreported, Observed::At),
+        GenerationField::Declared(pointer) => data
+            .pointer(pointer)
+            .and_then(Value::as_i64)
+            .map_or(Observed::Missing(pointer), Observed::At),
+        GenerationField::None => Observed::Unreported,
+    }
 }
 
-/// Return the generation that `obj`'s status describes: the field its
-/// declared readiness names, or `status.observedGeneration` for an object
+/// Return the generation that `obj`'s status reports: in the field its
+/// declared readiness names, or in `status.observedGeneration` for an object
 /// with no declaration.
-pub(super) fn status_observed_generation(obj: &DynamicObject) -> Option<&Value> {
+pub(super) fn status_observed_generation(obj: &DynamicObject) -> Option<i64> {
     let field = declared_readiness(obj)
         .map(|rule| rule.generation)
         .unwrap_or_default();
-    observed_generation(&obj.data, &field, None)
+    match observed_generation(&obj.data, &field, None) {
+        Observed::At(generation) => Some(generation),
+        Observed::Unreported | Observed::Missing(_) => None,
+    }
 }
 
-/// Format the suffix appended to a readiness message when `observed` predates
-/// `generation`.
-fn stale_note(generation: Option<i64>, observed: Option<&Value>) -> String {
-    match (generation, observed.and_then(Value::as_i64)) {
-        (Some(generation), Some(observed)) if observed < generation => {
+/// Format the suffix appended to a readiness message when the status
+/// predates `generation`, or when the declared generation field is absent.
+fn stale_note(generation: Option<i64>, observed: Observed<'_>) -> String {
+    match (generation, observed) {
+        (Some(generation), Observed::At(observed)) if observed < generation => {
             format!(", observed generation {observed} of {generation}")
         }
+        (Some(_), Observed::Missing(pointer)) => format!(", no {} yet", dotted_path(pointer)),
         _ => String::new(),
     }
 }

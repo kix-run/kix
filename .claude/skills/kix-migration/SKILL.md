@@ -428,8 +428,11 @@ edge but NO netpol hole. Consequences when authoring:
   "/status/desiredGeneration"` beside the ready rule (KubeVirt's
   VirtualMachine reports in `status.observedGeneration` the generation its
   running guest started from, which lags after every edit until a
-  restart). `observedGeneration = false` says the kind reports none. The
-  ready rule, `failed`, and `pendingRestart` all use the declared field.
+  restart). Kix waits while a declared field is absent.
+  `observedGeneration = false` says the kind reports none, and is the safe
+  declaration for a stopped VirtualMachine, whose
+  `status.observedGeneration` stops advancing. The ready rule, `failed`,
+  and `pendingRestart` all use the declared field.
 
   When the operator accepts a spec change but keeps the running workload
   on the previous spec until a restart, and reports that, declare the

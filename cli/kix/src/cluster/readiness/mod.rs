@@ -112,12 +112,12 @@ pub(crate) enum ReadinessError {
 pub(crate) enum ReadinessResult {
     /// Resource is ready.
     Ready,
-    /// The resource is ready, and `stale` of its workloads still run the
-    /// previous spec until someone restarts them, so the deploy reports this
-    /// instead of waiting. An `OnDelete` DaemonSet counts its pods that run
-    /// the previous template. A custom resource whose declared
-    /// `pendingRestart` state matches counts as one. `message` says why.
-    ReadyPendingRestart { stale: i64, message: String },
+    /// The resource is ready, and its running workload keeps the previous
+    /// spec until someone restarts it, so the deploy reports this instead of
+    /// waiting. `message` says why. For an `OnDelete` DaemonSet, `stale` is
+    /// how many of its pods run the previous template. A custom resource
+    /// whose declared `pendingRestart` state matches has no count.
+    ReadyPendingRestart { stale: Option<i64>, message: String },
     /// Timed out waiting for readiness.
     TimedOut { elapsed: Duration, message: String },
     /// The poll loop observed a cancellation request and bailed before
@@ -266,14 +266,17 @@ pub(crate) async fn wait_for_ready(
                     "pods still run"
                 };
                 return Ok(ReadinessResult::ReadyPendingRestart {
-                    stale,
+                    stale: Some(stale),
                     message: format!(
                         "{stale} {pods} the previous pod template, and the DaemonSet replaces a pod only when someone deletes it"
                     ),
                 });
             }
-            if let Some(message) = declared_pending_restart(&obj) {
-                return Ok(ReadinessResult::ReadyPendingRestart { stale: 1, message });
+            if let Some(message) = declared_pending_restart(&obj, applied_at) {
+                return Ok(ReadinessResult::ReadyPendingRestart {
+                    stale: None,
+                    message,
+                });
             }
             if kind != kinds::CUSTOM_RESOURCE_DEFINITION || crd_kind_served(client, &obj.data).await
             {

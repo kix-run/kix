@@ -701,7 +701,7 @@ pub(super) fn progress_fingerprint(
     let mut parts: Vec<String> = Vec::with_capacity(4);
     parts.push(readiness_message(obj, kind));
 
-    if let Some(g) = status_observed_generation(obj).and_then(Value::as_i64) {
+    if let Some(g) = status_observed_generation(obj) {
         parts.push(format!("og={g}"));
     }
 

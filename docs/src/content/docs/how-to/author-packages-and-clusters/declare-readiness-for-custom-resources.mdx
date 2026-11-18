@@ -139,6 +139,12 @@ is the generation the running guest started from, so it stays behind after any
 edit until the guest restarts, and `status.desiredGeneration` is the generation
 the controller has processed.
 
+Kix waits while a declared field is absent, because the controller has not
+acted on the spec yet. The deploy then says, for example, `no
+status.desiredGeneration yet`. With the default field, an absent
+`status.observedGeneration` imposes no wait, because many controllers never
+write it.
+
 Set `observedGeneration = false` when the kind reports no such generation. Kix
 then reads the status as current. A condition's own `observedGeneration`, when
 the controller sets one, still comes first. The `failed` and `pendingRestart`
@@ -169,7 +175,10 @@ readiness = {
 `pendingRestart` takes the two shapes of a `failed` entry: a condition (`type`,
 `status`, and an optional `reason`) or a status field (`path`, `equals`, and an
 optional `message` that names the status fields to quote). Kix reads it only
-once the resource is ready and its status describes the current spec. The
+once the resource is ready and its status describes the current spec. When the
+kind reports no generation, a condition that last changed before this deploy
+applied the resource describes the previous spec, and Kix does not report it.
+The
 deploy then reports the resource as ready with a restart pending, quotes the
 controller's message and the hint, and goes on. Restarting the workload is left
 to you, because it interrupts what runs in it.
@@ -192,9 +201,10 @@ vm = scope.mkCR kubevirt.out.crds.VirtualMachine {
 };
 ```
 
-A stopped VirtualMachine has no running guest, so KubeVirt stops updating its
-generation fields, and `observedGeneration = false` keeps Kix from waiting on
-them.
+A stopped VirtualMachine has no running guest, so its
+`status.observedGeneration` stops advancing, and Kix would wait on it after
+every edit. `observedGeneration = false` is the safe declaration for a stopped
+VM.
 
 ## Check the generated custom resource
 

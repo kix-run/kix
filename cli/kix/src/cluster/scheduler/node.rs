@@ -55,11 +55,11 @@ pub(super) enum NodeOutcome {
         apply_action: ApplyAction,
         reason: String,
     },
-    /// Ready, with `stale` workloads still running the previous spec (see
+    /// Ready, with the running workload still on the previous spec (see
     /// `ReadinessResult::ReadyPendingRestart`).
     PendingRestart {
         apply_action: ApplyAction,
-        stale: i64,
+        stale: Option<i64>,
         message: String,
     },
     Failed {

@@ -398,8 +398,17 @@ mod tests {
                 TransitionKind::Apply,
                 Verdict::Ready,
                 Some(NodeDetail::PendingRestart {
-                    stale: 2,
+                    stale: Some(2),
                     message: "OnDelete".into(),
+                }),
+            ),
+            state(
+                node("VirtualMachine", "demo"),
+                TransitionKind::Apply,
+                Verdict::Ready,
+                Some(NodeDetail::PendingRestart {
+                    stale: None,
+                    message: "its controller set RestartRequired=True".into(),
                 }),
             ),
             state(
