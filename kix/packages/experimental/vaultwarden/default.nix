@@ -58,7 +58,7 @@
 }:
 
 let
-  release = "1.36.0";
+  release = "1.37.5";
   name = scope.instanceName;
 
   # init-chown-data runs as root. When security.nonRoot would fail the
@@ -92,7 +92,7 @@ in
     image = kix.options.image {
       repository = "docker.io/vaultwarden/server";
       tag = "${release}-alpine";
-      digest = "sha256:d3531610b486905943706b235e97159331801c6856e1367a93a5905e2b40f204";
+      digest = "sha256:bbe684a02d6b0db54256ff88eac9754f4519284a7b26314afc241fd7d0918191";
       pullPolicy = null;
     };
     init.image = kix.options.image {
