@@ -75,7 +75,7 @@ env:
 
 jobs:
   agent:
-    runs-on: [self-hosted, spindle-8c-16g-100d, access=isolated]
+    runs-on: [self-hosted, spindle-4c-8g-50d, access=isolated]
     timeout-minutes: 150
     permissions:
       contents: read
@@ -229,7 +229,7 @@ jobs:
 
   verify:
     needs: agent
-    runs-on: [self-hosted, spindle-8c-16g-100d, access=isolated]
+    runs-on: [self-hosted, spindle-4c-8g-50d, access=isolated]
     timeout-minutes: 60
     env:
       BASE: ${{ needs.agent.outputs.base }}
