@@ -43,6 +43,18 @@
 # Escape hatches: `image` for a build with plugins, and the instance's
 # `partsOverlays`.
 #
+# Upgrades: Caddy 2.11.9 reads the certificates, the local CA, and the ACME
+# account keys that 2.10.0 left in /data, and serves the same certificates
+# without issuing new ones. The image's user, ports, environment, and
+# default command are unchanged. Caddy 2.11 refuses some Caddyfiles that
+# 2.10 accepted, such as two `expression` lines in one matcher set or an
+# unknown TLS `protocol_min`. A refused Caddyfile stops the new pod at start,
+# and the old pod keeps serving. To go back, deploy the older package over
+# the newer one: 2.10.0 starts on the /data that 2.11.9 wrote and serves the
+# same certificates. Upstream says nothing about which versions upgrade
+# directly to which, or about going back. Upstream publishes no range of
+# supported Kubernetes versions, so the package sets no `meta.k8s`.
+#
 # Limits: without `storage`, each pod keeps its own certificates on an
 # emptyDir, so a new pod requests them again and can reach the ACME
 # issuer's rate limits. With `storage` and more than one replica, the claim
@@ -58,7 +70,7 @@
 let
   name = scope.instanceName;
   who = "caddy ${scope.namespaceName}/${name}";
-  release = "2.10.0";
+  release = "2.11.9";
 
   # Stateless and serving user traffic: two replicas once a pod restart
   # must not be downtime, spread so either survives a lost node or zone.
@@ -119,7 +131,7 @@ in
     image = kix.options.image {
       repository = "docker.io/library/caddy";
       tag = release;
-      digest = "sha256:133b5eb7ef9d42e34756ba206b06d84f4e3eb308044e268e182c2747083f09de";
+      digest = "sha256:4851e54a46b206517c574821bb5cc67f170d2156041e9fbc4c9193b45e84a75b";
     };
     replicas = lib.mkOption {
       type = lib.types.ints.positive;

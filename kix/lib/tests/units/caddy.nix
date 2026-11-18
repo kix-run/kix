@@ -111,7 +111,7 @@ in
           extra = caddyfileSecret;
         })).image;
     in
-    lib.hasPrefix "docker.io/library/caddy:2.10.0@sha256:" image || throw "caddy image: ${image}";
+    lib.hasPrefix "docker.io/library/caddy:2.11.9@sha256:" image || throw "caddy image: ${image}";
 
   # `replicas` sets the Deployment's replicas. The removed `replicaCount`
   # fails the build with a message that names `replicas`.
