@@ -40,7 +40,7 @@
   availability,
 }:
 let
-  release = "2.11.1";
+  release = "2.11.2";
 
   name = scope.instanceName;
   ns = scope.namespaceName;
@@ -87,7 +87,10 @@ in
     podSecurity = "privileged";
     defaultAliases = [ "zfsLocalPv" ];
     conflictsWith = [ "cluster:zfsLocalPv" ];
-    k8s.minVersion = "1.24";
+    k8s = {
+      minVersion = "1.23";
+      reason = "zfs-localpv ${release} supports Kubernetes 1.23 and later, as the supported-system table in its README states";
+    };
   };
 
   options = import ./options.nix {
