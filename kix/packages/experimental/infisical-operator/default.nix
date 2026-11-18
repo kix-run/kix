@@ -1,7 +1,7 @@
 # infisical-operator: the Infisical Kubernetes operator, which syncs secrets
 # between Infisical and Kubernetes Secrets and ConfigMaps.
 #
-# The package renders the controller, its RBAC, the seven custom resource
+# The package renders the controller, its RBAC, the eight custom resource
 # definitions it watches, and an InfisicalConnection named `default` that
 # points at `address`. An InfisicalAuth without `infisicalConnectionRef` uses
 # that connection. The connection's IsReady condition means the operator
@@ -116,6 +116,15 @@
 # custom resource. Without either, the deploy waits on the connection's
 # IsReady until it times out.
 #
+# Upgrades: 0.11.18 needs the InfisicalStaticSecretPush CRD and a patch
+# verb on apps, and the deploy applies both before the operator starts.
+# Upstream states no upgrade path. Tested on kind from 0.11.10: the
+# InfisicalAuth and InfisicalStaticSecret written on 0.11.10 were read by
+# 0.11.18 unchanged, and the operator's 401 error gained Infisical's
+# response body. Going back to 0.11.10 keeps the InfisicalStaticSecretPush
+# CRD, which the old operator ignores, so no object is deleted. Delete that
+# CRD by hand once no InfisicalStaticSecretPush remains.
+#
 # root = the operator Deployment.
 
 {
@@ -127,7 +136,7 @@
 let
   # The upstream release: meta.version, the default image.tag, the CRD tag
   # in crds/sources.txt (checked below), and the RBAC rules in the build.
-  release = "v0.11.10";
+  release = "v0.11.18";
   sourceUrls = builtins.filter (l: l != "" && !lib.hasPrefix "#" l) (
     lib.splitString "\n" (builtins.readFile ./crds/sources.txt)
   );
@@ -205,6 +214,15 @@ in
     # Workloads opt in to restarts on secret change with
     # secrets.infisical.com/auto-reload.
     annotationDomains = [ "secrets.infisical.com" ];
+    # The Kubernetes minor releases upstream states support for, from the
+    # supported-versions list on its Kubernetes documentation page (1.29
+    # through 1.33). Its CI tests 1.30 through 1.33 only, which does not
+    # narrow that list.
+    k8s = {
+      minVersion = "1.29";
+      maxVersion = "1.33";
+      reason = "[K6591] infisical-operator ${release} supports Kubernetes 1.29 to 1.33. Deploy a Kix release with an older infisical-operator package, or move the cluster to a supported Kubernetes version first";
+    };
     # Infisical Cloud serves its API on TCP 443. meta is static, so this
     # intent cannot follow `address`; under egress enforcement the build
     # refuses an address it does not cover unless a platform intent does
@@ -242,7 +260,7 @@ in
     image = kix.options.image {
       repository = "docker.io/infisical/kubernetes-operator";
       tag = release;
-      digest = "sha256:c4ad1d6e389653598de3138e7f60f8f34a002af3d3ca736c8716c498b3172035";
+      digest = "sha256:95d6ac1384d80a1181dda22c2a3b663955b01693b88d84c08e185760a12b7fa5";
     };
 
     address = lib.mkOption {
@@ -371,6 +389,7 @@ in
               |> allow [
                 "get"
                 "list"
+                "patch"
                 "update"
                 "watch"
               ]
@@ -390,6 +409,7 @@ in
                 "infisicaldynamicsecrets"
                 "infisicalpushsecrets"
                 "infisicalsecrets"
+                "infisicalstaticsecretpushes"
                 "infisicalstaticsecrets"
               ]
               |> finalize
@@ -623,6 +643,13 @@ in
           # The operator sets no IsReady condition on this kind.
           infisicalStaticSecrets = scope.mkCRD {
             spec = vendored "infisicalstaticsecrets";
+            readiness = condition "LastReconcileStatus" "True";
+            usesAtLeast = _: { };
+          };
+          # Upstream 0.11.18 starts its push controller with the manager, so
+          # the kind must exist before the operator's first reconcile.
+          infisicalStaticSecretPushes = scope.mkCRD {
+            spec = vendored "infisicalstaticsecretpushes";
             readiness = condition "LastReconcileStatus" "True";
             usesAtLeast = _: { };
           };
