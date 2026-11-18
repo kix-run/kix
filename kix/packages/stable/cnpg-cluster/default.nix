@@ -49,10 +49,12 @@
 # Upgrades: PostgreSQL 18.7 upgrades directly from 18.6 with no dump and
 # restore. Upstream says minor releases never change the storage format and
 # are compatible with earlier and later minor releases of the same major.
-# The deploy changes the image, so the operator rolls each instance to the
-# new pod. Going back is deploying the 18.6 package over this one, which
-# runs 18.6 on the same data. 18.6 has the bugs that 18.7 fixes, so index
-# corruption can happen again while the cluster runs 18.6.
+# The operator upgrades the replicas first, then restarts the primary in
+# place, so a one-instance cluster is down while its pod restarts. Going
+# back is deploying the 18.6 package over this one. Both directions ran on
+# kind with one- and two-instance clusters, keeping the data from before
+# each step. 18.6 has the bugs that 18.7 fixes, so index corruption can
+# happen again while the cluster runs 18.6.
 #
 # Exposes (`root.out`, `root` = the `Cluster`):
 #   out.name, out.fqdn, out.port  The `-rw` Service (port 5432).
