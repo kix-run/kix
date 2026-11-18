@@ -39,6 +39,22 @@
 #     };
 #   };
 #
+# Upgrades. 2.7.1 to 2.7.2 is a patch release. Upstream's 2.7.2 release
+# notes name no upgrade step. The first deploy restarts each pod once. On
+# kind, 2.7.1 started on the Raft volumes that 2.7.2 had written, and 2.7.2
+# started again on those volumes after the rollback. Both times the static
+# seal unsealed the pods, the reconcile Job completed, and the
+# ExternalSecret read the stored value.
+#
+# Going back is not supported by upstream. Its upgrade guide says that
+# replacing the binary "will not cleanly downgrade OpenBao" and that the
+# data store must be rolled back too. This package does not back up the
+# data before an upgrade, so take a Raft snapshot first. Going back means
+# deploying the previous version of this package. Upstream's HA guide says
+# not to fail over from a newer OpenBao to an older one. A deploy replaces
+# the pods in order, so the peers run two versions for a while. We did not
+# test that mixed state.
+#
 # Unseal. With `seal.type = "static"` OpenBao unseals itself on every start
 # with the key in `unsealKey`. Anyone who can read that Secret and a Raft
 # volume can decrypt the data, so protection at rest is no stronger than
