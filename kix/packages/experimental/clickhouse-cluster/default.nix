@@ -26,10 +26,18 @@
 # over the operator's pod labels.
 #
 # Upgrades: stay on an LTS line (the March and August releases), and upgrade
-# to a new version only after it has had a few weeks of fixes. The operator
-# restarts one replica at a time on an image change. Run no DDL until every
-# replica reports the new version, and use no new feature until then
-# either. Keep clickhouse-keeper on the same LTS line as the servers.
+# to a new version only after it has had a few weeks of fixes. ClickHouse
+# supports moving between two versions released less than a year apart,
+# which covers one LTS to the next. The operator restarts one replica at a
+# time on an image change. Run no DDL until every replica reports the new
+# version, and use no new feature until then either. That includes
+# lightweight UPDATE: 26.8 writes its patch parts in a format a 26.3
+# replica cannot read. Upstream's advice for a rolling upgrade is to set
+# patch_parts_version to v1 until every replica runs 26.8. Going back
+# works the same way, by deploying the older package version, and only
+# while no feature of the newer version has been used. Going back to 26.3
+# can need a manual step for clickhouse-keeper (see its header). Keep
+# clickhouse-keeper on the same LTS line as the servers. On amd64 nodes, 26.6 and later need a CPU with AVX2.
 #
 # Object storage is not modelled. A serverConfig that adds an S3 disk, and
 # especially one that turns on allow_remote_fs_zero_copy_replication (off
@@ -78,7 +86,7 @@
 }:
 let
   # ClickHouse versions have four parts, and the image tag is the version.
-  release = "26.3.33.24";
+  release = "26.8.39.19";
 
   name = scope.instanceName;
   passwordKey = "password";
@@ -124,7 +132,7 @@ in
     image = kix.options.image {
       repository = "docker.io/clickhouse/clickhouse-server";
       tag = release;
-      digest = "sha256:810861a2e2d0188744f5f23b2d3ec9ff95812bcb9ddbb8fed13a377a7f305893";
+      digest = "sha256:a42be7a55bbbe15a062afb72759564be70c92bf020265bf8d8011af73c95b98c";
     };
 
     clusterName = lib.mkOption {
