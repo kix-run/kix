@@ -24,7 +24,7 @@ You will read text other people wrote: release notes, changelogs, issues, upstre
 
 1. Work out what changed upstream between the two versions, as the skill section describes.
 2. Choose or write the test cluster.
-3. Docker is running. Create one kind cluster named `${CLUSTER}` with `--kubeconfig ${KUBECONFIG}`; `KUBECONFIG` is already set to that path. kind is not on PATH: use `nix shell nixpkgs#kind -c kind ...`. Deploy with the package still at the old version, confirm it works by using it, and write state.
+3. Docker is running. Create one kind cluster named `${CLUSTER}` with `--kubeconfig ${KUBECONFIG}`; `KUBECONFIG` is already set to that path. `kind`, `kubectl`, and `helm` are on PATH. The machine is arm64 Linux, so kind pulls arm64 images. If an image the package uses has no arm64 build, do not swap it or work around it: say so in your report, because the workflow cannot test that package here. Deploy with the package still at the old version, confirm it works by using it, and write state.
 4. Make the upgrade and every change that goes with it. Add one change record, `changes/bump-${NAME}.md`. Update skill or docs line citations if you moved cited code.
 5. Deploy the upgraded package over the old one on the same cluster and verify it, including going back, as the skill section describes.
 6. Commit on your branch (several commits are fine). No `Co-Authored-By` trailer. Do not push, and do not run `scripts/copy-pass`. You have no credentials to push, and the workflow does it.
