@@ -127,7 +127,7 @@ expression: stable
     "metadata": {
       "annotations": {
         "kix.run/depends-on": "q7x7scjvyzqah44crggq3gkbf9q4psvf,sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m,x7p9j83hg3nmkyvn8y9a9wg3fz7ip307",
-        "kix.run/identity-hash": "yywbz822dr4vl02lmvsj4qxgk0xr615r",
+        "kix.run/identity-hash": "2l050fc4h62lb23hvc7az6wr68frb0zb",
         "kix.run/package": "coredns",
         "kix.run/package-namespace": "kube-system"
       },
@@ -165,7 +165,7 @@ expression: stable
                 "-conf",
                 "/etc/coredns/Corefile"
               ],
-              "image": "docker.io/coredns/coredns:1.13.1@sha256:9b9128672209474da07c91439bf15ed704ae05ad918dd6454e5b6ae14e35fee6",
+              "image": "docker.io/coredns/coredns:1.15.0@sha256:0a9d8c8ddf34347eb59aad9a8784f0710de88d6d112726d11d271f9bc6daca26",
               "imagePullPolicy": "IfNotPresent",
               "livenessProbe": {
                 "failureThreshold": 5,
@@ -287,9 +287,9 @@ expression: stable
     "kind": "Activation",
     "metadata": {
       "annotations": {
-        "kix.run/built-via": "/nix/store/xrjxqsa9ls91p4c67al2kndmpmlb2sgz-kix-activation-test-minimal.json",
-        "kix.run/depends-on": "w292z6zi6i3z5lnp7wz61v5g9qjdi1wp,requires:gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj",
-        "kix.run/identity-hash": "dsnfplzp4745qvqs74vcl16y8bfdd56n",
+        "kix.run/built-via": "/nix/store/xs54f7y9dj331val4wg17fjq7ga3d084-kix-activation-test-minimal.json",
+        "kix.run/depends-on": "1fc0h71aqx0d5ps1rkib2ccw9jix1yy9,requires:gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj",
+        "kix.run/identity-hash": "g8daxbi64lh1as2q0mpg9qihfghnxaqs",
         "kix.run/package": "_cluster",
         "kix.run/package-namespace": "_cluster"
       },
@@ -297,7 +297,7 @@ expression: stable
         "app.kubernetes.io/managed-by": "kix",
         "kix.run/cluster": "test-minimal"
       },
-      "name": "test-minimal-dsnfplzp4745"
+      "name": "test-minimal-g8daxbi64lh1"
     },
     "spec": {
       "instances": {
@@ -312,8 +312,8 @@ expression: stable
     "kind": "PackageInstance",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "7z8q3qb0p110445n6wdjdnwfqk3y1957,bfjmwgck5555jazsn70xiib5amcdnwwl,g8a9a1ad5b62ym06hdp6h4dh0v6kwyil,sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
-        "kix.run/identity-hash": "w292z6zi6i3z5lnp7wz61v5g9qjdi1wp",
+        "kix.run/depends-on": "7z8q3qb0p110445n6wdjdnwfqk3y1957,g8a9a1ad5b62ym06hdp6h4dh0v6kwyil,jw13kzl78h0w0dqyc05mlpn8v6y5i85j,sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
+        "kix.run/identity-hash": "1fc0h71aqx0d5ps1rkib2ccw9jix1yy9",
         "kix.run/inverse-deps": "ClusterRoleBinding/coredns,PodDisruptionBudget/coredns",
         "kix.run/package": "_cluster",
         "kix.run/package-namespace": "_cluster",
@@ -329,7 +329,7 @@ expression: stable
     "spec": {
       "instanceName": "coredns",
       "namespaceName": "kube-system",
-      "version": "1.13.1"
+      "version": "1.15.0"
     }
   },
   {
@@ -475,8 +475,8 @@ expression: stable
     "kind": "Service",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m,yywbz822dr4vl02lmvsj4qxgk0xr615r",
-        "kix.run/identity-hash": "bfjmwgck5555jazsn70xiib5amcdnwwl",
+        "kix.run/depends-on": "2l050fc4h62lb23hvc7az6wr68frb0zb,sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m",
+        "kix.run/identity-hash": "jw13kzl78h0w0dqyc05mlpn8v6y5i85j",
         "kix.run/package": "coredns",
         "kix.run/package-namespace": "kube-system"
       },

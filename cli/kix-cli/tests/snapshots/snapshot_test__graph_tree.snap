@@ -3,37 +3,37 @@ source: kix-cli/tests/snapshot_test.rs
 expression: stdout
 ---
 CustomResourceDefinition.apiextensions.k8s.io/activations.kix.run
-└── Activation.kix.run/test-minimal-dsnfplzp4745
+└── Activation.kix.run/test-minimal-g8daxbi64lh1
 CustomResourceDefinition.apiextensions.k8s.io/packageinstances.kix.run
 └── PackageInstance.kix.run/coredns@kube-system
-    └── Activation.kix.run/test-minimal-dsnfplzp4745
+    └── Activation.kix.run/test-minimal-g8daxbi64lh1
 ClusterRole.rbac.authorization.k8s.io/coredns
 └── ClusterRoleBinding.rbac.authorization.k8s.io/coredns
     └── PackageInstance.kix.run/coredns@kube-system
-        └── Activation.kix.run/test-minimal-dsnfplzp4745
+        └── Activation.kix.run/test-minimal-g8daxbi64lh1
 Namespace/kube-system
 ├── ServiceAccount/coredns@kube-system
 │   ├── ClusterRoleBinding.rbac.authorization.k8s.io/coredns
 │   │   └── PackageInstance.kix.run/coredns@kube-system
-│   │       └── Activation.kix.run/test-minimal-dsnfplzp4745
+│   │       └── Activation.kix.run/test-minimal-g8daxbi64lh1
 │   └── Deployment.apps/coredns@kube-system
 │       └── Service/coredns@kube-system
 │           └── PackageInstance.kix.run/coredns@kube-system
-│               └── Activation.kix.run/test-minimal-dsnfplzp4745
+│               └── Activation.kix.run/test-minimal-g8daxbi64lh1
 ├── Service/coredns@kube-system
 │   └── PackageInstance.kix.run/coredns@kube-system
-│       └── Activation.kix.run/test-minimal-dsnfplzp4745
+│       └── Activation.kix.run/test-minimal-g8daxbi64lh1
 ├── ConfigMap/coredns@kube-system
 │   └── Deployment.apps/coredns@kube-system
 │       └── Service/coredns@kube-system
 │           └── PackageInstance.kix.run/coredns@kube-system
-│               └── Activation.kix.run/test-minimal-dsnfplzp4745
+│               └── Activation.kix.run/test-minimal-g8daxbi64lh1
 ├── PodDisruptionBudget.policy/coredns@kube-system
 │   └── PackageInstance.kix.run/coredns@kube-system
-│       └── Activation.kix.run/test-minimal-dsnfplzp4745
+│       └── Activation.kix.run/test-minimal-g8daxbi64lh1
 ├── PackageInstance.kix.run/coredns@kube-system
-│   └── Activation.kix.run/test-minimal-dsnfplzp4745
+│   └── Activation.kix.run/test-minimal-g8daxbi64lh1
 └── Deployment.apps/coredns@kube-system
     └── Service/coredns@kube-system
         └── PackageInstance.kix.run/coredns@kube-system
-            └── Activation.kix.run/test-minimal-dsnfplzp4745
+            └── Activation.kix.run/test-minimal-g8daxbi64lh1

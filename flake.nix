@@ -107,6 +107,7 @@
           plausible = ./clusters/test-plausible.nix;
           plausible-replicated = ./clusters/test-plausible-replicated.nix;
           metrics-server = ./clusters/test-metrics-server.nix;
+          coredns = ./clusters/test-coredns.nix;
           spegel = ./clusters/test-spegel.nix;
           volsync = ./clusters/test-volsync.nix;
           keycloak = ./clusters/test-keycloak.nix;
