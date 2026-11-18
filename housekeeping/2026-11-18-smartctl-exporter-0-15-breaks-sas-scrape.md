@@ -1,0 +1,3 @@
+# 2026-11-18 · `kix/packages/experimental/smartctl-exporter` · The package stays on exporter v0.14.0 because v0.15.0 fails every scrape on a node with a SCSI or SAS disk.
+
+v0.15.0 emits four `smartctl_verify_*` metrics and `smartctl_scsi_percentage_used_endurance_indicator` without describing them, so `/metrics` answers HTTP 500 and Prometheus loses every disk on that node. Upstream's testdata `SEAGATE_ST373453LC_26.json` with `--smartctl.fake-data` shows it: v0.14.0 answers 200, v0.15.0 answers 500. Upstream issues 406 and 417 track it, and pull request 397 holds an unmerged fix. Move the package to the first release that includes the fix, and repeat that fake-data check before you do.

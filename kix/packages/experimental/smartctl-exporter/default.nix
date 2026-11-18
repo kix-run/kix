@@ -55,7 +55,11 @@ let
   };
 
   # The exporter release the chart's image runs. The chart has its own
-  # version above.
+  # version above. Do not move to v0.15.0. On a node with a SCSI or SAS
+  # disk its /metrics answers HTTP 500, because it emits the new verify and
+  # endurance metrics without describing them, so Prometheus gets no
+  # metric from any disk of that node. v0.14.0 serves the same disk.
+  # https://github.com/prometheus-community/smartctl_exporter/issues/406
   release = "v0.14.0";
 
   # The chart names its objects `<release>-<chart>` (_helpers.tpl).
