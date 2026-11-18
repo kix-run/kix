@@ -37,6 +37,10 @@ kix.buildCluster {
           config = {
             domain = "vpn.example.com";
             admin.email = "admin@example.com";
+            # The default pool is two connections per core of the node. On a
+            # 32-core kind node that is 64 per pod, and StackGres allows 100,
+            # so the old and new pods of a rollout cannot both connect.
+            env.DATABASE_POOL_SIZE = "10";
           };
         };
         firezone-pg = {
