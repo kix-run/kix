@@ -34,7 +34,7 @@
 # feature of the newer one has been used. 26.8 writes lightweight UPDATE
 # patch parts in a format 26.3 cannot read, so an UPDATE run on 26.8 ends
 # the way back. To go back, deploy the older package version over the same
-# volume. On amd64 nodes, 26.4 and later need a CPU with AVX2.
+# volume. On amd64 nodes, 26.6 and later need a CPU with AVX2.
 #
 # Dependencies:
 #   storage (required)      a persistent-volume-claim instance, mounted at
