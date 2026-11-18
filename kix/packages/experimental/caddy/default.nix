@@ -49,9 +49,9 @@
 # default command are unchanged. Caddy 2.11 refuses some Caddyfiles that
 # 2.10 accepted, such as two `expression` lines in one matcher set or an
 # unknown TLS `protocol_min`. A refused Caddyfile stops the new pod at start,
-# and the old pod keeps serving. To go back, deploy the older package over
-# the newer one: 2.10.0 starts on the /data that 2.11.9 wrote and serves the
-# same certificates. Upstream says nothing about which versions upgrade
+# and the old pod keeps serving. To go back, run `kix rollback` or deploy
+# the older package over the newer one. 2.10.0 starts on the /data that
+# 2.11.9 wrote and serves the same certificates. Upstream says nothing about which versions upgrade
 # directly to which, or about going back. Upstream publishes no range of
 # supported Kubernetes versions, so the package sets no `meta.k8s`.
 #
