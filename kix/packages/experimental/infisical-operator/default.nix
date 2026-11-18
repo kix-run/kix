@@ -116,6 +116,15 @@
 # custom resource. Without either, the deploy waits on the connection's
 # IsReady until it times out.
 #
+# Upgrades: 0.11.18 needs the InfisicalStaticSecretPush CRD and a patch
+# verb on apps, and the deploy applies both before the operator starts.
+# Upstream states no upgrade path. Tested on kind from 0.11.10: the
+# InfisicalAuth and InfisicalStaticSecret written on 0.11.10 were read by
+# 0.11.18 unchanged, and the operator's 401 error gained Infisical's
+# response body. Going back to 0.11.10 keeps the InfisicalStaticSecretPush
+# CRD, which the old operator ignores, so no object is deleted. Delete that
+# CRD by hand once no InfisicalStaticSecretPush remains.
+#
 # root = the operator Deployment.
 
 {
