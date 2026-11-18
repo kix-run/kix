@@ -481,7 +481,7 @@ in
       cdiSpec = (find merged "CDI" "cdi").spec;
       refused = {
         kvReplicas = mkVirtCluster { kubevirt.config.extraSpec.infra.replicas = 3; };
-        kvTag = mkVirtCluster { kubevirt.config.extraSpec.imageTag = "v1.5.1"; };
+        kvTag = mkVirtCluster { kubevirt.config.extraSpec.imageTag = "v1.5.2"; };
         kvPullPolicy = mkVirtCluster { kubevirt.config.extraSpec.imagePullPolicy = "Always"; };
         cdiReplicas = mkVirtCluster { cdi.config.extraSpec.infra.apiServerReplicas = 3; };
         cdiInfraNull = mkVirtCluster { cdi.config.extraSpec.infra = null; };
@@ -530,7 +530,7 @@ in
   # operands and keeps their digests.
   kubevirt-cdi-images =
     let
-      pinned = lib.hasInfix ":v1.5.0@sha256:";
+      pinned = lib.hasInfix ":v1.5.1@sha256:";
       defaults = mkVirtCluster { };
       kvEnv = envOf defaults "kubevirt-operator";
       cdiEnv = envOf defaults "cdi-operator";
@@ -538,7 +538,7 @@ in
       kvOperands = removeAttrs (imageVars kvEnv) [ "VIRT_OPERATOR_IMAGE" ];
       extraImages = (outOf defaults "kubevirt").extraImages ++ (outOf defaults "cdi").extraImages;
 
-      patch = mkVirtCluster { kubevirt.config.image.tag = "v1.5.1"; };
+      patch = mkVirtCluster { kubevirt.config.image.tag = "v1.5.2"; };
       patchEnv = envOf patch "kubevirt-operator";
 
       moved = mkVirtCluster {
@@ -546,11 +546,11 @@ in
       };
       movedEnv = envOf moved "kubevirt-operator";
 
-      releaseMessage = "kubevirt/{crds,rbac} are vendored from v1.5.0";
+      releaseMessage = "kubevirt/{crds,rbac} are vendored from v1.5.1";
       refused = {
         minor = refusedWith releaseMessage "kubevirt" { image.tag = "v1.6.0"; };
         latest = refusedWith releaseMessage "kubevirt" { image.tag = "latest"; };
-        noV = refusedWith releaseMessage "kubevirt" { image.tag = "1.5.0"; };
+        noV = refusedWith releaseMessage "kubevirt" { image.tag = "1.5.1"; };
         cdiMinor = refusedWith "is not a v1.66 release" "cdi" { image.tag = "v1.67.0"; };
         operandPullPolicy = refusedWith "operandImages.cdi-importer.pullPolicy" "cdi" {
           operandImages.cdi-importer.pullPolicy = "Always";
@@ -566,16 +566,16 @@ in
       && lib.all (lib.hasInfix "@sha256:") extraImages
       &&
         kvEnv.VIRT_OPERATOR_IMAGE
-        == "quay.io/kubevirt/virt-operator@sha256:1591b45d3f35b857cb13921429b83e8da4e21a35aa54e1c88290baf996c05a2d"
-      && patchEnv.VIRT_OPERATOR_IMAGE == "quay.io/kubevirt/virt-operator:v1.5.1"
-      && patchEnv.VIRT_API_IMAGE == "quay.io/kubevirt/virt-api:v1.5.1"
+        == "quay.io/kubevirt/virt-operator@sha256:d04db6730f6f45a81e99556970c9cae68e701cb25597f21bd6ad0924358fdf87"
+      && patchEnv.VIRT_OPERATOR_IMAGE == "quay.io/kubevirt/virt-operator:v1.5.2"
+      && patchEnv.VIRT_API_IMAGE == "quay.io/kubevirt/virt-api:v1.5.2"
       && lib.all (v: !(lib.hasInfix "@" v)) (builtins.attrValues (imageVars patchEnv))
       &&
         movedEnv.VIRT_HANDLER_IMAGE
-        == "registry.example/mirror/virt-handler:v1.5.0@sha256:70605363b54f4cc982a80dfdabd01462920bb2c64b028ab3b0c368ddb04e6370"
+        == "registry.example/mirror/virt-handler:v1.5.1@sha256:5f4d360f2feef1483a3945a5d8cee3c53e1fa8198742c6ad6d065e344f0e9495"
       && notFailing == [ ]
     )
-    || throw "images: kubevirt ${builtins.toJSON kvEnv}, v1.5.1 ${builtins.toJSON patchEnv}, moved ${builtins.toJSON movedEnv}, accepted ${builtins.toJSON notFailing}";
+    || throw "images: kubevirt ${builtins.toJSON kvEnv}, v1.5.2 ${builtins.toJSON patchEnv}, moved ${builtins.toJSON movedEnv}, accepted ${builtins.toJSON notFailing}";
 
   # A second instance of either package is refused, naming the other
   # instance. The meta check is called directly: a failed meta assertion
@@ -627,6 +627,34 @@ in
       && evalFails cdi2
     )
     || throw "singleton: ${builtins.toJSON got}";
+
+  # A cluster that declares a Kubernetes version KubeVirt does not support
+  # is refused with the change record's id.
+  kubevirt-k8s-range =
+    let
+      refusals =
+        k8sVersion:
+        map (a: a.message) (
+          builtins.filter (a: !a.assertion)
+            (metaLib.checkMetaStatic {
+              packageMeta = metaOf kubevirtPackage;
+              instanceName = "kubevirt";
+              namespaceName = "kubevirt";
+              clusterConfig = { inherit k8sVersion; };
+              resolvedDepMeta = { };
+              resolutionIndex.byKey = { };
+            }).assertions
+        );
+      refused = v: builtins.any (lib.hasInfix "[K9189]") (refusals v);
+    in
+    (
+      refused "1.29"
+      && refused "1.33.0"
+      && refusals "1.30" == [ ]
+      && refusals "1.32.4" == [ ]
+      && refusals null == [ ]
+    )
+    || throw "kubevirt k8s range: 1.29 ${builtins.toJSON (refusals "1.29")}, 1.33.0 ${builtins.toJSON (refusals "1.33.0")}, 1.32.4 ${builtins.toJSON (refusals "1.32.4")}";
 
   # The tags in crds/sources.txt and rbac/sources.txt are the package's
   # release, so the vendored CRD and roles match the default images.
