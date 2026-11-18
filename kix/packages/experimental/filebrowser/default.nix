@@ -59,6 +59,17 @@
 # Escape hatches: `ingress` for the route's host and annotations, and the
 # instance's `partsOverlays`.
 #
+# Upgrades: File Browser 2.63.23 opens the database that 2.63.18 wrote. Upstream
+# keeps the database format at version 2, and the image's user, port, health
+# path, and init script are unchanged. Upgrading from 2.63.18 to 2.63.23 needs
+# no steps. To go back, deploy the older package over the newer one: 2.63.18
+# reads the database and the files that 2.63.23 wrote. Upstream says nothing
+# about which versions upgrade directly to which, or about going back.
+#
+# Upstream is winding down. The repository is archived on 2026-09-01, and
+# 2.63.23 is its last planned release. Upstream fixes no security issues after
+# that date.
+#
 # Limits: one replica, because the database is a single file.
 
 {
@@ -68,7 +79,7 @@
 }:
 
 let
-  release = "v2.63.18";
+  release = "v2.63.23";
   name = scope.instanceName;
 in
 {
@@ -82,7 +93,7 @@ in
     image = kix.options.image {
       repository = "docker.io/filebrowser/filebrowser";
       tag = release;
-      digest = "sha256:c4c627f687668c5a02ab410d8473712c77be7f1f0ea4f8d624d2a1392c495e76";
+      digest = "sha256:a469ea076d4a1b4b1d86a41d130f2f536cd9da996a2b1fb39c0d7635f9d89b9a";
       pullPolicy = null;
     };
     # Upstream publishes no chart or resource guidance. An idle instance
