@@ -2,4 +2,4 @@
 # the tag `release` in default.nix names (also the tag in crds/sources.txt).
 # default.nix binds it to the controller's ServiceAccount; the leader
 # election Role is written there.
-https://raw.githubusercontent.com/backube/volsync/v0.16.0/config/rbac/role.yaml ClusterRole/manager-role
+https://raw.githubusercontent.com/backube/volsync/v0.17.0/config/rbac/role.yaml ClusterRole/manager-role
