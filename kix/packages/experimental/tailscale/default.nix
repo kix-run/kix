@@ -49,6 +49,15 @@
 #   - The `proxies` ServiceAccount has full Secret access in this namespace;
 #     keep unrelated Secrets in other namespaces.
 #
+# Upgrades: the operator keeps its tailnet device in the Secret
+# `<instance>-state` and reads its settings from the tailscale.com
+# resources, so a new release starts from what the old one left. It then
+# moves every proxy it manages to its own proxy image, which restarts each
+# proxy pod once. Going back to an older package works the same way. The
+# older CRDs drop fields that only the newer release knows, such as
+# PeerRelay `port` and `staticEndpoints` from 1.104, so the API server
+# removes them from stored resources.
+#
 # Exposes (`root.out`):
 #   out.loadBalancerClass  "tailscale", carrying a dependency on the operator.
 #   out.mkBackendPolicy    Network policy admitting proxies to a Service's pods.
@@ -72,7 +81,7 @@
 }:
 let
   # Shared across meta.version, image.tag, crds/sources.txt, and rbac.nix.
-  release = "1.102.4";
+  release = "1.104.7";
   tag = "v${release}";
 
   name = scope.instanceName;
@@ -82,10 +91,10 @@ let
   metricsPort = 8080;
 
   operandDigests = {
-    tailscale = "sha256:2667499ed87ae29218f292556ba062918402dd5e92e93637af14867e4df12dd3";
-    k8s-proxy = "sha256:a43ae88f544dab66ffd690a9834ed38adf7cef39e9a4a6d0cbf0467ddaa02281";
-    k8s-nameserver = "sha256:3676e2277ad16da948caee7952b2a27859a66b905edd981e1bb58b2626bc92a4";
-    tsrecorder = "sha256:47b602ddee9e97d2060fb017496f7758551e7e619ebfd984e94fb8541f581aea";
+    tailscale = "sha256:72c1e19e0aedca96b8533bbb0b4368564410ff20b17e53b804eb6c1f04a31be4";
+    k8s-proxy = "sha256:bb86ef8c98ea071612926f766c6f461f3ac22788a3d862397012f423a581bcb8";
+    k8s-nameserver = "sha256:9b0685a4dd89742043084affa56fbda04f56b348d6cd9a8a23105a24ed3ebb39";
+    tsrecorder = "sha256:2d141b9088627d111bcae66c500d4e1afea46715f3dd40c007d1d8353a4afcc3";
   };
   operatorPulled = [
     "tailscale"
@@ -158,7 +167,14 @@ in
         ];
       }
     ];
-    k8s.minVersion = "1.25";
+    # Tailscale's compatibility page states Kubernetes 1.23.0 and later for
+    # the operator, with no upper bound. The floor is 1.25 because five of
+    # the vendored CRDs carry x-kubernetes-validations rules, which
+    # Kubernetes runs from 1.25.
+    k8s = {
+      minVersion = "1.25";
+      reason = "The Tailscale operator ${release} supports Kubernetes 1.23 and later, and its CRDs validate fields with rules that need Kubernetes 1.25";
+    };
   };
 
   assertions =
