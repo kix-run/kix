@@ -13,7 +13,7 @@ A cluster that runs `kube-state-metrics` and `keycloak` fails on every `k8sVersi
 
 The only way out today is to remove `k8sVersion` from the cluster, which turns off every range check and the deploy-time version check with it.
 
-The cause is that one range carries two different facts. "Upstream does not state support for this version" and "the package does not work on this version" are both a refusal. Most of the ranges above are the first kind. Keycloak makes no Kubernetes API call that 1.35 or 1.36 changes. kube-state-metrics 2.20.0 has one known break below 1.36: its `mutatingadmissionpolicies` and `mutatingadmissionpolicybindings` collectors, on by default, read `admissionregistration.k8s.io/v1`, and Kubernetes 1.34 and 1.35 serve those kinds only as `v1beta1`. Its README recommends the latest release for older clusters and calls other versions "best effort". I did not test 2.20.0 on an older cluster.
+The cause is that one range carries two different facts. "Upstream does not state support for this version" and "the package does not work on this version" are both a refusal. Most of the ranges above are the first kind. Keycloak makes no Kubernetes API call that 1.35 or 1.36 changes. kube-state-metrics 2.20.0 has one known break below 1.36: its `mutatingadmissionpolicies` and `mutatingadmissionpolicybindings` collectors, on by default, read `admissionregistration.k8s.io/v1`, and Kubernetes 1.34 and 1.35 serve those kinds only as `v1beta1`. Its README recommends the latest release in general, says an older cluster might need an older release to cover every resource, and calls compatibility beyond its client-go version "best effort". I did not test 2.20.0 on an older cluster.
 
 Options:
 
