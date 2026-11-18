@@ -23,13 +23,18 @@
 # Upgrades: virt-operator moves the operands to its own version once its
 # Deployment changes. Running virtual machines keep their old virt-launcher
 # pods until they restart or migrate. KubeVirt supports updating only from
-# one release to the next: from the latest patch of one minor to the latest
-# patch of the next. This package moved from v1.5.0 to v1.9.1 in one step,
-# which skips that path. To follow it instead, set `image.tag` (and
-# `image.digest`) to each step in turn and deploy once per step: v1.5.3,
-# v1.6.6, v1.7.4, v1.8.4, then remove the setting. The package accepts
-# these minors because the vendored CRD and roles of v1.9.1 contain every
-# field and rule the older releases use. Upstream documents no way back.
+# the latest patch of one minor to the latest patch of the next. This
+# package moved from v1.5.0 to v1.9.1 in one step, which skips that path.
+# To follow it instead, set `image.tag` to each step in turn and deploy
+# once per step (v1.5.3, v1.6.6, v1.7.4, v1.8.4), then remove the setting.
+# The package accepts those minors because the vendored CRD and roles of
+# v1.9.1 hold every field and rule the older releases use. After each
+# upgrade, the new virt-controller rewrites every existing VirtualMachine
+# and raises its generation, and a running VM reports the generation it
+# started from until it restarts. A later deploy that changes such a VM
+# waits on it until `virtctl restart` or the deploy timeout. Going back
+# does not work: an older virt-operator cannot install its CRDs over the
+# storage versions a newer one recorded, and stays Degraded.
 #
 # Minimal instance:
 #
