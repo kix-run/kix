@@ -880,8 +880,9 @@ in
     )
     || throw "the node-exporter flag refusal did not fire";
 
-  # A cluster that declares a Kubernetes version prometheus-operator does
-  # not support is refused with the change record's id. The meta check is
+  # A cluster that declares a Kubernetes version older than
+  # prometheus-operator supports is refused, and upstream states no newest
+  # version, so a newer one is accepted. The meta check is
   # called directly, because a failed meta assertion fails the cluster
   # before its messages can be read.
   monitoring-stack-operator-k8s-range =
@@ -910,16 +911,8 @@ in
             }).assertions
           )
         );
-      refused = v: builtins.any (lib.hasInfix "[K2247]") (refusals v);
-      tooOld = "1.24";
-      tooNew = "1.38.0";
+      refused = v: builtins.any (lib.hasInfix "requires Kubernetes 1.25 or later") (refusals v);
     in
-    (
-      refused tooOld
-      && refused tooNew
-      && refusals "1.37.2" == [ ]
-      && refusals "1.25" == [ ]
-      && refusals null == [ ]
-    )
+    (refused "1.24" && refusals "1.38.0" == [ ] && refusals "1.25" == [ ] && refusals null == [ ])
     || throw "prometheus-operator k8s range: 1.24 ${show (refusals "1.24")}, 1.38.0 ${show (refusals "1.38.0")}, 1.37.2 ${show (refusals "1.37.2")}";
 }

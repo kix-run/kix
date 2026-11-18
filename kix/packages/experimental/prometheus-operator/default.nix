@@ -129,14 +129,11 @@ in
     # find it by name.
     scope = "cluster";
     # Upstream's compatibility page (Documentation/getting-started/compatibility.md)
-    # requires 1.25 because the CRDs use CEL validation rules, and it names
-    # no newest version. The newest is the Kubernetes version upstream's e2e
-    # tests run on (`kind-image` in .github/env), which is also the minor of
-    # its client-go. Move both bounds with `release`.
+    # requires 1.25, because the CRDs use CEL validation rules. It states no
+    # newest version, so the package sets no upper bound.
     k8s = {
       minVersion = "1.25";
-      maxVersion = "1.37";
-      reason = "[K2247] prometheus-operator ${release} requires Kubernetes 1.25 or later and is tested up to 1.37. Deploy a Kix release with an older prometheus-operator package, or move the cluster to a supported Kubernetes version first";
+      reason = "prometheus-operator ${release} requires Kubernetes 1.25 or later";
     };
     # This package owns the operator.prometheus.io annotation domain (it
     # stamps its CRDs with it); declared for the
