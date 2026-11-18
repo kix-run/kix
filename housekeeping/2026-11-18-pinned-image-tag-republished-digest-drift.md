@@ -1,0 +1,3 @@
+# 2026-11-18 · `kix/packages/stable/cnpg-cluster` · CloudNativePG re-pushed `18.6-standard-trixie`, so the tag no longer resolves to the pinned digest.
+
+The package pins a tag and a digest together, but the registry moved the tag. On 2026-11-18, `ghcr.io/cloudnative-pg/postgresql:18.6-standard-trixie` resolved to `sha256:de57…` (built 2026-11-09), while the pinned `sha256:f89a…` (built 2026-09-28) still exists by digest. A bump check that looks up the old tag and expects the pinned digest fails for this image, even though the pin is valid. The old digest still runs on kind. Look at how `kix.options.image` pins and how bump checks compare digests, and decide how a tag that moved should be handled.

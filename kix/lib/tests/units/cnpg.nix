@@ -461,7 +461,7 @@ in
       });
     in
     (
-      lib.hasPrefix "ghcr.io/cloudnative-pg/postgresql:18.6-standard-trixie@sha256:" one.imageName
+      lib.hasPrefix "ghcr.io/cloudnative-pg/postgresql:18.7-standard-trixie@sha256:" one.imageName
       && one.instances == 1
       && one.storage.size == "20Gi"
       && one.affinity.enablePodAntiAffinity == false
@@ -598,7 +598,7 @@ in
         clusterConfig.image.tag = "latest";
       };
     in
-    ((record.spec.version or null) == "18.6" && evalFails latest)
+    ((record.spec.version or null) == "18.7" && evalFails latest)
     || throw "record version: ${builtins.toJSON (record.spec.version or null)}";
 
   cnpg-cluster-extra-spec-locks =
