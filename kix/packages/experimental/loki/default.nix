@@ -12,6 +12,14 @@
 # Limits: one replica (`availability.max = "none"`), filesystem storage only
 # (no object store), and a single tenant.
 #
+# Upgrades: upstream asks users to upgrade one release at a time where
+# possible and allows skipping releases after a test in a development
+# environment. Upgrading from 3.7.8 to 3.7.10 in one deploy, which skips
+# 3.7.9, kept the logs and the index, and Grafana's Loki data source stayed
+# healthy. Upstream documents no way back. In a test, 3.7.8 started on a
+# claim that 3.7.10 had written, reported ready, and read its logs. To go
+# back, deploy the previous package version.
+#
 # Beside a workload whose own `storage` dependency is optional (Grafana),
 # give Loki's claim another instance name and `aliases`, and wire
 # `deps.storage = ref.<ns>.<claim>` as kix.modules.experimental.monitoring does.
@@ -85,7 +93,7 @@
 let
   name = scope.instanceName;
   who = "loki ${scope.namespaceName}/${name}";
-  release = "3.7.8";
+  release = "3.7.10";
 
   httpPort = 3100;
   dataPath = "/var/loki";
@@ -219,13 +227,19 @@ in
     # One process owns the volume (WAL, TSDB index, chunks). A second
     # replica has no volume of its own and no shared store to read.
     availability.max = "none";
+    # Upstream's Helm install page for Loki 3.7.10 says "Kubernetes 1.25 or
+    # later" and states no newest version, so no maxVersion is set.
+    k8s = {
+      minVersion = "1.25";
+      reason = "[K0459] loki ${release} requires Kubernetes 1.25 or later. Deploy a Kix release with an older loki package, or move the cluster to a supported Kubernetes version first";
+    };
   };
 
   options = {
     image = kix.options.image {
       repository = "docker.io/grafana/loki";
       tag = release;
-      digest = "sha256:1107dd5274e0ada47e42472b7a7e71f3b2a2fe878878108f3e2f9e51528f0193";
+      digest = "sha256:b43c257ccfc925d4a50b8717cac61a3b51df8c48d01847936057e5c4075a24a7";
     };
 
     settings = lib.mkOption {
