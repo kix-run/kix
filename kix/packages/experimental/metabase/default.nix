@@ -87,7 +87,7 @@
 }:
 
 let
-  release = "0.63.19";
+  release = "0.65.5";
   name = scope.instanceName;
   who = "metabase ${scope.namespaceName}/${name}";
 
@@ -118,7 +118,7 @@ in
     image = kix.options.image {
       repository = "docker.io/metabase/metabase";
       tag = "v${release}";
-      digest = "sha256:7324f83713df9851c6c7b6c8247098de14c0924fc3b868202f886df4877cd4ff";
+      digest = "sha256:27c039c322266e7db86ff5fa157410edf1b94e988dc386c2f13d2bccaa3d94de";
     };
     # A memory limit also sizes the heap (see JAVA_OPTS).
     resources = kix.options.resources {
