@@ -46,9 +46,17 @@
 # to copy than the deploy waits for the Cluster to be ready. Run the deploy
 # again once the Cluster is ready.
 #
+# Upgrades: PostgreSQL 18.7 upgrades directly from 18.6 with no dump and
+# restore. Upstream says minor releases never change the storage format and
+# are compatible with earlier and later minor releases of the same major.
+# The deploy changes the image, so the operator rolls each instance to the
+# new pod. Going back is deploying the 18.6 package over this one, which
+# runs 18.6 on the same data. 18.6 has the bugs that 18.7 fixes, so index
+# corruption can happen again while the cluster runs 18.6.
+#
 # Exposes (`root.out`, `root` = the `Cluster`):
 #   out.name, out.fqdn, out.port  The `-rw` Service (port 5432).
-#   out.version                   The PostgreSQL version `image.tag` names, such as "18.6".
+#   out.version                   The PostgreSQL version `image.tag` names, such as "18.7".
 #   out.clusterName               The Cluster's name.
 #   out.selector                  Instance pod labels.
 #   out.tls                       true (PostgreSQL always serves TLS).
