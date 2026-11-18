@@ -19,7 +19,7 @@ in
   image = kix.options.image {
     repository = "docker.io/grafana/tempo";
     tag = release;
-    digest = "sha256:64e2fbd56d9c2b3412a4b430a58ea59e91a670b1e75f920a0c702213ad145044";
+    digest = "sha256:3076b8dcdfb32fd6bc5ccef85e7b7313e6199b9cb84366257fc17ecb696db5fd";
   };
 
   retention = lib.mkOption {
