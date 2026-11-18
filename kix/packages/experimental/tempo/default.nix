@@ -38,10 +38,11 @@
 #
 # Upgrades: upstream's upgrade guide has a section for each minor release and
 # none for patch releases, so 3.1.0 to 3.1.1 is one step. The 3.1.1 image is
-# built with a newer Go toolchain and carries no change to Tempo's code. It
-# reads and writes the data that 3.1.0 wrote. Upstream documents no way back
-# to an older 3.1 release. To go back to 3.1.0, deploy the previous package
-# version.
+# built with a newer Go toolchain, and Tempo's own code is unchanged. In a
+# test on kind, 3.1.1 served the traces that 3.1.0 wrote, and 3.1.0 read the
+# traces that 3.1.1 wrote after the going-back deploy. Upstream documents no
+# way back to an older 3.1 release. To go back to 3.1.0, deploy the previous
+# package version.
 
 {
   scope,
