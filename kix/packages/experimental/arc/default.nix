@@ -32,6 +32,14 @@
 # `kix deploy --reconcile` after that deploy to re-create the runner sets
 # and the finalizers on their supporting objects.
 #
+# Upgrades: 0.15.1 takes over what 0.14.2 left behind: the CRDs keep the
+# v1alpha1 version, and the controller reconciles existing runner sets.
+# The move from 0.14 is a minor version change, so the paragraph above
+# applies. Going back to 0.14.2 is also a minor version change. Deploy the
+# older package, then run `kix deploy --reconcile`. Upstream documents no
+# upgrade path between minor versions and no way back. GitHub supports
+# only the latest release.
+#
 # Not modelled: `--watch-single-namespace` and image pull secrets for the
 # listener. Escape hatches: `extraArgs`, `env`, `partsOverlays`, `extra`.
 #
