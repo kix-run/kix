@@ -93,12 +93,18 @@
 # which kind of change a deploy carries, so a deploy makes Keycloak
 # unavailable until a new pod is ready.
 #
-# Upgrades: 26.8.2 is a patch release of 26.8, and its first pod migrates
-# each realm in place (`MigrateTo26_8_2` adds the `kc-admin-api` client
-# scope and three client registration policies). Keycloak's
-# update-compatibility check reports a recreate for any version change, so
-# `Recreate` matches upstream. Going back to 26.8.0 on that database: TBD
-# (tested, see the change record).
+# Upgrades: 26.8.2 is a patch release of 26.8. Its first pod migrates each
+# realm in place: `MigrateTo26_8_2` adds the `kc-admin-api` client scope and
+# three client registration policies, two of them `default-roles`.
+# Keycloak's update-compatibility check reports a recreate for any version
+# change, which matches `Recreate` above.
+#
+# Going back to 26.8.0 on a migrated database starts the pod and serves its
+# realms, and the log says "Possibly incorrect state of migration". Anonymous
+# client registration then fails with 403 until an operator deletes both
+# `default-roles` policy components in the admin API, and the next policy
+# decides the request. Upstream describes no way back, so restore a database
+# backup taken before the upgrade when client registration matters.
 #
 # Each instance needs its own database. Two instances on one database share
 # realms and the JGroups discovery table, and nothing in the build refuses
