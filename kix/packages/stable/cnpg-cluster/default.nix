@@ -167,7 +167,7 @@ in
             imageTag = builtins.unsafeDiscardStringContext config.image.tag;
           in
           builtins.match "[0-9]+(\\.[0-9]+)?([-_].*)?" imageTag != null;
-        message = "image.tag \"${builtins.unsafeDiscardStringContext config.image.tag}\" does not start with a PostgreSQL version. CloudNativePG reads the version from the tag and refuses `latest`; use a tag such as \"18.6-standard-trixie\".";
+        message = "image.tag \"${builtins.unsafeDiscardStringContext config.image.tag}\" does not start with a PostgreSQL version. CloudNativePG reads the version from the tag and refuses `latest`; use a tag such as \"18.7-standard-trixie\".";
       }
       {
         assertion =
