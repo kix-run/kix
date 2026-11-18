@@ -1,5 +1,5 @@
 # DNS providers the package accepts for `provider`: upstream `ProviderNames`
-# in pkg/apis/externaldns/types.go at v0.23.0, without `webhook`. A webhook
+# in pkg/apis/externaldns/types.go at v0.24.0, without `webhook`. A webhook
 # provider runs as a sidecar container, which this package does not render.
 #
 # `credentialKeySets` lists the environment variables the provider reads its

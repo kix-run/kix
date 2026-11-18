@@ -385,7 +385,7 @@ in
         { env.EXTERNAL_DNS_POLICY = null; }
         {
           image = {
-            tag = "v0.24.0";
+            tag = "v0.25.0";
             digest = null;
           };
         }
@@ -393,7 +393,7 @@ in
       patch = evalFails (
         ednsCluster (inmemory {
           image = {
-            tag = "v0.23.1";
+            tag = "v0.24.1";
             digest = null;
           };
         })

@@ -10,16 +10,17 @@
 # - prometheus-operator gives both instances a metrics Service, a
 #   ServiceMonitor, and alerts.
 #
-# BIND runs outside Kix, in namespace `dns-server`, with a primary zone
-# `example.test` that accepts unsigned updates and zone transfers from any
-# address. Its Service is `bind.dns-server`.
+# BIND runs outside Kix, from test-external-dns-upgrade.bind.yaml, in
+# namespace `dns-server`. Its Service is `bind.dns-server`.
 #
 # Bring up: kind create cluster --name <name> --config <config>
 #           where the config sets networking.disableDefaultCNI = true
-#           kubectl apply -f <BIND Namespace, ConfigMap, Deployment, Service>
+#           kubectl apply -f clusters/test-external-dns-upgrade.bind.yaml
 # Deploy:   kix deploy external-dns-upgrade --context kind-<name> -y
-# Check:    dig @<BIND pod> example.test AXFR lists an A record and a TXT
-#           record for each annotated Service.
+# Use:      annotate a Service in any namespace with
+#           external-dns.kubernetes.io/hostname=<name>.example.test, then
+#           `dig @127.0.0.1 example.test AXFR` in the BIND pod lists its A
+#           record and a TXT record owned by test-external-dns-bind.
 
 { kix, packages }:
 
