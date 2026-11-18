@@ -46,16 +46,17 @@
 # upstream's Recreate strategy, so every deploy that changes the pod stops
 # the plugin briefly, whatever the count. While no plugin pod is ready, the
 # operator cannot reconcile a Cluster that uses it or create its instance
-# pods. WAL archiving and backups run in the sidecar and go on.
+# pods. WAL archiving runs in the sidecar and goes on.
 #
-# Upgrades: 0.16 reads the ObjectStores and the backups that 0.15 wrote.
-# Upstream needs no step to upgrade between these releases
-# (web/docs/upgrades.mdx) and says nothing about going back. A kind test
-# deployed 0.15.1 over 0.16.0: the plugin started and archived WAL, and a
-# backup completed. Going back fails if an ObjectStore sets a field that
-# 0.16 added (`s3AddressingStyle`, `s3Credentials.sseCustomerKey`, or `zstd`
-# base backup compression), because the 0.15 definition refuses it. Remove
-# those fields before going back.
+# Upgrades: 0.16 reads the ObjectStores, base backups, and WAL that 0.15
+# wrote. Upstream needs no step to upgrade between these releases
+# (web/docs/upgrades.mdx) and says nothing about going back. Going back to
+# 0.15 works for an ObjectStore that uses no field 0.16 added: the plugin
+# and the sidecars restart on 0.15, and archiving and backups go on. The
+# 0.15 definition rejects `zstd` base backup compression, and it does not
+# know `s3AddressingStyle` or `s3Credentials.sseCustomerKey`, so the API
+# server rejects or drops them. Remove those fields from every ObjectStore
+# before going back.
 #
 # Escape hatches: `extraArgs` (the operator subcommand's flags, such as
 # `--log-level`), `env`, and the instance's `partsOverlays`.
