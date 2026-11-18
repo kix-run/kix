@@ -79,7 +79,7 @@
 }:
 
 let
-  release = "0.7.26";
+  release = "0.7.36";
   name = scope.instanceName;
   who = "firezone ${scope.namespaceName}/${name}";
 in
@@ -114,7 +114,7 @@ in
     image = kix.options.image {
       repository = "docker.io/firezone/firezone";
       tag = release;
-      digest = "sha256:e8faaf176a2ca77d2da1ce6812ef3b5e7d5195672a762ad78b5d6afea98219af";
+      digest = "sha256:6e65ebab1ddbdc8dfe8c6aa10defda1ea9b2b48e0f2b54772338f3e735be8a6f";
     };
     init.image = kix.options.image {
       repository = "docker.io/library/busybox";
