@@ -431,4 +431,30 @@ in
       && rulesOf { config.metrics.enabled = false; } == null
     )
     || throw "descheduler alerts: ${builtins.toJSON (builtins.attrNames rules)}";
+
+  # A cluster that declares a Kubernetes version the descheduler does not
+  # support is refused with the change record's id. The meta check is
+  # called directly, because a failed meta assertion fails the cluster
+  # before its messages can be read.
+  descheduler-k8s-range =
+    let
+      metaLib = import ../../meta.nix { inherit lib; };
+      refusals =
+        k8sVersion:
+        map (a: a.message) (
+          builtins.filter (a: !a.assertion) (
+            (metaLib.checkMetaStatic {
+              packageMeta = package.meta;
+              instanceName = "descheduler";
+              namespaceName = "descheduler";
+              clusterConfig = { inherit k8sVersion; };
+              resolvedDepMeta = { };
+              resolutionIndex.byKey = { };
+            }).assertions
+          )
+        );
+      refused = v: builtins.any (lib.hasInfix "[K4518]") (refusals v);
+    in
+    (refused "1.34" && refused "1.38.0" && refusals "1.36.2" == [ ] && refusals null == [ ])
+    || throw "descheduler k8s range: 1.34 ${builtins.toJSON (refusals "1.34")}, 1.38.0 ${builtins.toJSON (refusals "1.38.0")}, 1.36.2 ${builtins.toJSON (refusals "1.36.2")}";
 }

@@ -1,6 +1,6 @@
 # Types, default profile, checks, and renderer for the descheduler's
 # DeschedulerPolicy (apiVersion descheduler/v1alpha2), mirrored from
-# descheduler v0.36.0: pkg/api/v1alpha2/types.go, pkg/api/types.go, and each
+# descheduler v0.37.0: pkg/api/v1alpha2/types.go, pkg/api/types.go, and each
 # plugin's types.go and validation.go under pkg/framework/plugins.
 #
 # Every field carries its upstream JSON name. Scalars are null until set and
@@ -9,7 +9,7 @@
 # DefaultEvictor and the plugins that profile enables, nothing else.
 #
 # Not declared:
-# - plugins.presort, plugins.sort: no v0.36.0 plugin implements them.
+# - plugins.presort, plugins.sort: no v0.37.0 plugin implements them.
 # - plugins.filter, plugins.preevictionfilter: the binary always enables
 #   DefaultEvictor at both (pkg/descheduler/policyconfig.go).
 # - every plugins.<point>.disabled list: the binary never reads it.
