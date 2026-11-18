@@ -5,7 +5,7 @@
 # proxies' through the PodMonitor, whose job is <namespace>/<PodMonitor name>.
 rule_files:
   - envoy-gateway-system/envoy-gateway-controller-alerts-prometheusrule.yaml
-  - envoy-gateway-system/envoy-gateway-proxy-alerts-prometheusrule.yaml
+  - edge/envoy-gateway-proxy-alerts-prometheusrule.yaml
 evaluation_interval: 1m
 tests:
   # The only controller replica stops answering.
@@ -84,19 +84,19 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: "critical"
-              namespace: "envoy-gateway-system"
-              job: "envoy-gateway-system/envoy-gateway-proxy"
+              namespace: "edge"
+              job: "edge/envoy-gateway-proxy"
             exp_annotations:
               summary: "The Envoy proxies of a Gateway are down."
-              description: "No Envoy proxy pod for Gateway envoy-gateway-system/envoy-gateway has responded to metrics scrapes for 5 minutes, so the Gateway may not be serving traffic. Check the proxy Deployment in envoy-gateway-system (label gateway.envoyproxy.io/owning-gateway-name=envoy-gateway) and the logs of Deployment envoy-gateway-system/envoy-gateway."
+              description: "No Envoy proxy pod for Gateway edge/envoy-gateway has responded to metrics scrapes for 5 minutes, so the Gateway may not be serving traffic. Check Deployment edge/envoy-gateway, which runs the proxies, and the logs of Deployment envoy-gateway-system/envoy-gateway."
   # A proxy loses its xDS stream; the other proxy keeps it and fires nothing.
   - interval: 1m
     input_series:
-      - series: 'up{namespace="envoy-gateway-system",job="envoy-gateway-system/envoy-gateway-proxy",pod="envoy-a",instance="10.0.0.2:19001"}'
+      - series: 'up{namespace="edge",job="edge/envoy-gateway-proxy",pod="envoy-a",instance="10.0.0.2:19001"}'
         values: '1x20'
-      - series: 'envoy_control_plane_connected_state{namespace="envoy-gateway-system",job="envoy-gateway-system/envoy-gateway-proxy",pod="envoy-a",instance="10.0.0.2:19001"}'
+      - series: 'envoy_control_plane_connected_state{namespace="edge",job="edge/envoy-gateway-proxy",pod="envoy-a",instance="10.0.0.2:19001"}'
         values: '1 1 0x18'
-      - series: 'envoy_control_plane_connected_state{namespace="envoy-gateway-system",job="envoy-gateway-system/envoy-gateway-proxy",pod="envoy-b",instance="10.0.0.3:19001"}'
+      - series: 'envoy_control_plane_connected_state{namespace="edge",job="edge/envoy-gateway-proxy",pod="envoy-b",instance="10.0.0.3:19001"}'
         values: '1x20'
     alert_rule_test:
       - eval_time: 15m
@@ -107,9 +107,9 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: "warning"
-              namespace: "envoy-gateway-system"
-              job: "envoy-gateway-system/envoy-gateway-proxy"
+              namespace: "edge"
+              job: "edge/envoy-gateway-proxy"
               pod: "envoy-a"
             exp_annotations:
               summary: "An Envoy proxy lost its connection to the controller."
-              description: "Proxy pod envoy-a for Gateway envoy-gateway-system/envoy-gateway has been disconnected from the Envoy Gateway control plane (xDS) for 10 minutes. The pod continues serving its last configuration, so route and certificate updates do not reach it. Check that Deployment envoy-gateway-system/envoy-gateway is running and that the pod can reach Service envoy-gateway-system/envoy-gateway on port 18000."
+              description: "Proxy pod envoy-a for Gateway edge/envoy-gateway has been disconnected from the Envoy Gateway control plane (xDS) for 10 minutes. The pod continues serving its last configuration, so route and certificate updates do not reach it. Check that Deployment envoy-gateway-system/envoy-gateway is running and that the pod can reach Service envoy-gateway-system/envoy-gateway on port 18000."

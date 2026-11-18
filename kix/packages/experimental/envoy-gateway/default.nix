@@ -21,26 +21,27 @@
 #
 #   instances.envoy-gateway-system.gateway.package = packages.experimental.envoy-gateway;
 #
-# An instance lives in the envoy-gateway-controller instance's namespace, because the
-# controller starts every Gateway's proxies there and the policies select
-# them there. A cluster can run several instances, such as a public Gateway
-# and a private one. Every instance answers the `gateway` alias by default,
-# so with more than one, set `aliases = [ ]` on all but one and wire the
-# packages that use those with `deps.gateway = ref.<namespace>.<instance>`.
+# An instance lives in any namespace, and the controller starts the
+# Gateway's proxies there. A cluster can run several instances, such as a
+# public Gateway and a private one, each in a namespace of its own. Every
+# instance answers the `gateway` alias by default, so with more than one,
+# set `aliases = [ ]` on all but one and wire the packages that use those
+# with `deps.gateway = ref.<namespace>.<instance>`.
 #
-# The controller creates the data plane. It starts an Envoy Deployment and
-# a Service for the Gateway in its own namespace
-# (internal/infrastructure/kubernetes/proxy/resource.go), from the
-# EnvoyProxy the Gateway names. Kix renders that EnvoyProxy: the Envoy
-# image the envoy-gateway-controller instance pins, the replica count from the
-# availability level, a topology spread and a PodDisruptionBudget when
-# there is more than one replica, and a NodePort Service when
-# `cluster.roles.loadBalancer.binding` is "absent" (the kind flavour sets
-# that). `proxySpec` adds to it. The proxies run as uid 65532 with every
-# capability dropped, which the restricted Pod Security level admits. The
-# Gateway is ready once the controller reports it Programmed, which needs
-# an available proxy and, for a LoadBalancer Service, an address
-# (internal/gatewayapi/status/gateway.go).
+# The controller creates the data plane. It starts an Envoy Deployment, a
+# Service, a ServiceAccount, and a ConfigMap, all named after the Gateway,
+# in this namespace (internal/infrastructure/kubernetes/proxy/resource.go),
+# from the EnvoyProxy the Gateway names. The package grants the controller
+# a Role here for that (`<instance>-envoy-gateway-infra`). Kix renders the
+# EnvoyProxy: the Envoy image the envoy-gateway-controller instance pins,
+# the replica count from the availability level, a topology spread and a
+# PodDisruptionBudget when there is more than one replica, and a NodePort
+# Service when `cluster.roles.loadBalancer.binding` is "absent" (the kind
+# flavour sets that). `proxySpec` adds to it. The proxies run as uid 65532
+# with every capability dropped, which the restricted Pod Security level
+# admits. The Gateway is ready once the controller reports it Programmed,
+# which needs an available proxy and, for a LoadBalancer Service, an
+# address (internal/gatewayapi/status/gateway.go).
 #
 # Network policy: clients from outside the cluster and from every pod
 # reach the proxies on their listener ports. The proxies reach every pod in
@@ -80,7 +81,9 @@
 # A pod in the cluster reaches the proxies only if its own egress allows
 # it, because the graph does not show which pods call the Gateway.
 # `proxySpec.mergeGateways` is refused: it is a setting of a whole
-# GatewayClass, and each instance runs its own proxies.
+# GatewayClass, and each instance runs its own proxies. The proxy
+# Deployment, Service, ServiceAccount, and ConfigMap take the instance's
+# name, so no other object of those kinds in the namespace may have it.
 
 {
   scope,
@@ -102,8 +105,8 @@ let
   # Options of earlier releases of this package, when it also named the
   # controller, which Helm installed outside Kix.
   removedOptions = {
-    controllerName = "Remove `controllerName` and add an `envoy-gateway-controller` instance in the same namespace, or set `package` to another Gateway API package such as `packages.experimental.traefik`.";
-    proxyNamespace = "Remove `proxyNamespace`. Envoy proxy pods always run in the same namespace as `envoy-gateway-controller` and this instance.";
+    controllerName = "Remove `controllerName` and add an `envoy-gateway-controller` instance, or set `package` to another Gateway API package such as `packages.experimental.traefik`.";
+    proxyNamespace = "Remove `proxyNamespace`. Envoy proxy pods always run in this instance's namespace.";
     gatewayClassName = "Remove `gatewayClassName`. The Gateway uses the `GatewayClass` created by `envoy-gateway-controller`.";
     gatewayName = "Remove `gatewayName`. The Gateway always uses the instance name.";
   };
@@ -244,13 +247,15 @@ in
               id = "K5531";
               dependency = "envoyGateway";
               message = "this envoy-gateway instance requires the Envoy Gateway controller, but no envoy-gateway-controller instance in the cluster provides it. envoy-gateway creates a Gateway, while envoy-gateway-controller deploys the controller and GatewayClass.";
-              fix = "Add `instances.${ns}.envoy-gateway-controller.package = packages.experimental.envoy-gateway-controller;`.";
+              fix = "Add `instances.envoy-gateway-system.envoy-gateway-controller.package = packages.experimental.envoy-gateway-controller;`.";
             }
           else if
             out ? gatewayClassName
             && out ? namespace
             && out ? proxyImage
             && out ? proxyLabels
+            && out ? serviceAccount
+            && out ? infraManagerRules
             && out ? version
             && (out.crds or { }) ? EnvoyProxy
           then
@@ -260,15 +265,6 @@ in
               dependency = "envoyGateway";
               message = "the 'envoyGateway' dependency is not an envoy-gateway-controller instance. envoy-gateway requires the envoy-gateway-controller package and cannot use kix.mkImport or another package in its place.";
               fix = "Add `instances.${ns}.envoy-gateway-controller.package = packages.experimental.envoy-gateway-controller;` and remove the `envoyGateway` alias from any other instance. If Envoy Gateway is installed outside Kix, replace this `envoy-gateway` instance with a `kix.mkImport { out.gatewayRef = { name = \"<gateway>\"; namespace = \"<namespace>\"; }; }` instance with `aliases = [ \"gateway\" ];`.";
-            };
-
-        inControllerNamespace =
-          if controller.namespace == ns then
-            true
-          else
-            scope.fail {
-              message = "this envoy-gateway instance is in namespace \"${ns}\", but envoy-gateway-controller is in \"${controller.namespace}\". Both must be in the same namespace because Envoy Gateway runs all proxy pods in the controller's namespace.";
-              fix = "Move this instance to namespace \"${controller.namespace}\", or move envoy-gateway-controller to the same namespace.";
             };
 
         activeListeners = gatewayListeners.active config.listeners;
@@ -378,6 +374,20 @@ in
         };
       in
       {
+        # The controller creates this Gateway's proxy Deployment, Service,
+        # ServiceAccount, and ConfigMap in this namespace, and this Role is
+        # what lets it. Its own ClusterRole only reads them.
+        infraRole = scope.rbac.mkRoleSet scope {
+          subjects = [
+            {
+              kind = "ServiceAccount";
+              inherit (controller.serviceAccount) name namespace;
+            }
+          ];
+          labels = scope.selectorLabels;
+          roles."${name}-envoy-gateway-infra" = controller.infraManagerRules;
+        };
+
         proxyPodMonitor =
           if config.metrics.enabled && prometheus != null then
             prometheus.out.mkPodMonitor scope {
@@ -444,13 +454,11 @@ in
         };
 
         envoyProxy =
-          builtins.seq inControllerNamespace (
-            scope.mkCR controller.crds.EnvoyProxy {
-              inherit name;
-              labels = scope.selectorLabels;
-              spec = proxySpec;
-            }
-          )
+          scope.mkCR controller.crds.EnvoyProxy {
+            inherit name;
+            labels = scope.selectorLabels;
+            spec = proxySpec;
+          }
           // {
             _warnings = lib.optional (loadBalancerBinding == null && proxyServiceType == "LoadBalancer") {
               clusterOption = "cluster.roles.loadBalancer.binding";
@@ -470,11 +478,14 @@ in
             scope.mkCR gatewayCrds.Gateway {
               inherit name;
               labels = scope.selectorLabels;
-              # The proxies need their network policy to become ready.
-              requires = builtins.filter (p: p != null) [
-                self.proxyIngress
-                self.proxyEgress
-              ];
+              # The controller needs the Role to create the proxies, and the
+              # proxies need their network policy to become ready.
+              requires =
+                builtins.attrValues self.infraRole
+                ++ builtins.filter (p: p != null) [
+                  self.proxyIngress
+                  self.proxyEgress
+                ];
               spec = {
                 # The class name carries the envoy-gateway-controller instance's
                 # context, so the Gateway waits for the controller.

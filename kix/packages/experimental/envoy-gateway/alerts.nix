@@ -29,7 +29,7 @@ kix.alerts {
       "for" = "5m";
       severity = "critical";
       summary = "The Envoy proxies of a Gateway are down.";
-      description = "No Envoy proxy pod for Gateway ${ns}/${name} has responded to metrics scrapes for 5 minutes, so the Gateway may not be serving traffic. Check the proxy Deployment in ${ns} (label gateway.envoyproxy.io/owning-gateway-name=${name}) and the logs of ${deployment}.";
+      description = "No Envoy proxy pod for Gateway ${ns}/${name} has responded to metrics scrapes for 5 minutes, so the Gateway may not be serving traffic. Check Deployment ${ns}/${name}, which runs the proxies, and the logs of ${deployment}.";
     };
     # Envoy's control plane gauge is 1 while its xDS stream to the
     # controller is up.

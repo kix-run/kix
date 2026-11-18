@@ -2,4 +2,4 @@
 # `release` in default.nix (the tag in crds/sources.txt). The manifest is
 # the Helm chart rendered with release name `eg`; default.nix binds each
 # role to its own ServiceAccount under a name of its own.
-https://github.com/envoyproxy/gateway/releases/download/v1.10.0/install.yaml ClusterRole/eg-gateway-helm-envoy-gateway-role Role/eg-gateway-helm-infra-manager Role/eg-gateway-helm-leader-election-role Role/eg-gateway-helm-certgen ClusterRole/eg-gateway-helm-certgen:envoy-gateway-system
+https://github.com/envoyproxy/gateway/releases/download/v1.10.0/install.yaml ClusterRole/eg-gateway-helm-envoy-gateway-role Role/eg-gateway-helm-infra-manager Role/eg-gateway-helm-leader-election-role Role/eg-gateway-helm-certgen

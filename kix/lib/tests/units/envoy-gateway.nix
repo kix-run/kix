@@ -133,6 +133,9 @@ in
       class = byName "eg" (ofKind "GatewayClass" plain);
       gateway = byName "gw" (ofKind "Gateway" plain);
       classProxy = (byName "eg" (ofKind "EnvoyProxy" plain)).spec;
+      certgenCommand =
+        (builtins.head (byName "eg-certgen" (ofKind "Job" plain)).spec.template.spec.containers).command;
+      clusterRole = byName "eg-${ns}" (ofKind "ClusterRole" plain);
       crdNames = map (m: m.metadata.name) (ofKind "CustomResourceDefinition" plain);
       proxy = envoyProxyOf plain;
       cfg = configOf plain;
@@ -141,8 +144,23 @@ in
       byName "envoy-gateway" (ofKind "Service" plain) != null
       && byName "eg-certgen" (ofKind "Job" plain) != null
       && byName "envoy-gateway-certgen" (ofKind "ServiceAccount" plain) != null
-      &&
-        byName "envoy-gateway-topology-injector.${ns}" (ofKind "MutatingWebhookConfiguration" plain) != null
+      # GatewayNamespace mode, with the topology injector and its webhook
+      # off, and certgen told so.
+      && ofKind "MutatingWebhookConfiguration" plain == [ ]
+      && cfg.provider.kubernetes.deploy.type == "GatewayNamespace"
+      && cfg.provider.kubernetes.proxyTopologyInjector.disable
+      && builtins.elem "--disable-topology-injector" certgenCommand
+      && builtins.any (rule: builtins.elem "tokenreviews" rule.resources) clusterRole.rules
+      && lib.all (
+        rule:
+        !(builtins.elem "deployments" rule.resources)
+        ||
+          rule.verbs == [
+            "get"
+            "list"
+            "watch"
+          ]
+      ) clusterRole.rules
       && lib.hasPrefix "docker.io/envoyproxy/gateway:v1.10.0@sha256:" container.image
       && builtins.elem "envoyproxies.gateway.envoyproxy.io" crdNames
       && builtins.elem "gateways.gateway.networking.k8s.io" crdNames
@@ -192,9 +210,9 @@ in
       )
       && lib.hasInfix (hashOf cluster "gatewayClass") (dependsOn gateway)
       && lib.hasInfix (gatewayHashOf cluster "envoyProxy") (dependsOn gateway)
-      && lib.hasInfix (hashOf cluster "topologyInjector") (
-        dependsOn (byName "eg-certgen" (ofKind "Job" ms))
-      )
+      && lib.hasInfix (k8s.extractStoreHash
+        cluster.instances.${ns}.gw.raw.infraRole."gw-envoy-gateway-infra-binding".outPath
+      ) (dependsOn gateway)
     )
     || throw "envoy-gateway ordering: deployment depends-on '${dependsOn deployment}'";
 
@@ -243,9 +261,10 @@ in
       }
     ]);
 
-  # A cluster runs several Gateways on the one controller. Each has its own
-  # EnvoyProxy, so its own Service type, and its own proxy pods in the
-  # policies and the contract.
+  # A cluster runs several Gateways on the one controller, each in its own
+  # namespace. Each has its own EnvoyProxy, so its own Service type, its own
+  # proxy pods in the policies and the contract, and a Role that lets the
+  # controller create those proxies in its namespace.
   envoy-gateway-several-gateways =
     let
       two = mkCluster [
@@ -253,26 +272,50 @@ in
         netpolOn
         {
           instances.monitoring.prometheus.package = prometheusStub;
-          instances.${ns} = {
-            eg.package = envoyGatewayController;
-            public.package = envoyGateway;
-            private = {
-              package = envoyGateway;
-              aliases = [ ];
-              config.proxySpec.provider.kubernetes.envoyService.type = "ClusterIP";
-            };
+          instances.${ns}.eg.package = envoyGatewayController;
+          instances.edge.public.package = envoyGateway;
+          instances.internal.private = {
+            package = envoyGateway;
+            aliases = [ ];
+            config.proxySpec.provider.kubernetes.envoyService.type = "ClusterIP";
           };
         }
       ];
       ms = manifests two;
       typeOf = n: (byName n (ofKind "EnvoyProxy" ms)).spec.provider.kubernetes.envoyService.type;
-      out = n: two.instances.${ns}.${n}.out;
+      nsOf = {
+        public = "edge";
+        private = "internal";
+      };
+      out = n: two.instances.${nsOf.${n}}.${n}.out;
+      roleIn =
+        n:
+        builtins.filter (m: m.metadata.namespace == nsOf.${n}) (ofKind "Role" ms)
+        |> byName "${n}-envoy-gateway-infra";
+      bindingIn =
+        n:
+        builtins.filter (m: m.metadata.namespace == nsOf.${n}) (ofKind "RoleBinding" ms)
+        |> byName "${n}-envoy-gateway-infra";
       ownerOf = n: (out n).podSelector."gateway.envoyproxy.io/owning-gateway-name";
       cnps = ofKind "CiliumNetworkPolicy" ms;
     in
     (
       typeOf "public" == "LoadBalancer"
       && typeOf "private" == "ClusterIP"
+      &&
+        (out "public").gatewayRef == {
+          name = "public";
+          namespace = "edge";
+        }
+      && (out "private").podNamespace == "internal"
+      && roleIn "public" != null
+      && builtins.any (rule: builtins.elem "deployments" rule.resources) (roleIn "private").rules
+      &&
+        (builtins.head (bindingIn "private").subjects) == {
+          kind = "ServiceAccount";
+          name = "envoy-gateway";
+          namespace = ns;
+        }
       && (out "public").gatewayRef.name == "public"
       && (out "private").gatewayRef.name == "private"
       && ownerOf "public" == "public"
@@ -287,21 +330,23 @@ in
     )
     || throw "envoy-gateway several gateways: ${builtins.toJSON (map (m: m.metadata.name) cnps)}";
 
-  # A Gateway with no controller is refused, as is one outside the
-  # controller's namespace and one whose controller is a kix.mkImport, which
-  # names no GatewayClass. The control is the default cluster.
+  # A Gateway with no controller is refused, as is one whose controller is
+  # a kix.mkImport, which names no GatewayClass. The controls are the
+  # default cluster and a Gateway in another namespace than the controller.
   envoy-gateway-needs-the-controller =
     evalFails (mkCluster [
       withGatewayApi
       { instances.${ns}.gw.package = envoyGateway; }
     ])
-    && evalFails (mkCluster [
-      withGatewayApi
-      {
-        instances.${ns}.eg.package = envoyGatewayController;
-        instances.other.gw.package = envoyGateway;
-      }
-    ])
+    && (builtins.tryEval (
+      builtins.deepSeq (manifests (mkCluster [
+        withGatewayApi
+        {
+          instances.${ns}.eg.package = envoyGatewayController;
+          instances.other.gw.package = envoyGateway;
+        }
+      ])) true
+    )).success
     && evalFails (mkCluster [
       withGatewayApi
       {
@@ -527,6 +572,17 @@ in
       controllerIn = byName "eg-controller-from-proxies" cnps;
       ports = lib.concatMap (r: map (p: p.port) r.ports) proxyIn.spec.ingress;
       callerPorts = map (p: p.port) (builtins.head controllerIn.spec.ingress).ports;
+      # Cilium's rendering of a caller in any namespace, and in one.
+      cilium = import ../../../packages/experimental/cilium/netpol-rules.nix { inherit lib; };
+      callerRule =
+        callerNamespace:
+        cilium.mkCallerIngressRule {
+          callerSelector.app = "proxy";
+          inherit callerNamespace;
+          ports = [ ];
+        };
+      ciliumAnyNamespace = callerRule null;
+      ciliumOneNamespace = callerRule "gwns";
     in
     (
       proxyIn.spec.endpointSelector.matchLabels."gateway.envoyproxy.io/owning-gateway-name" == "gw"
@@ -539,6 +595,19 @@ in
           18000
           18002
         ]
+      # The proxies run in each Gateway's namespace, so the controller
+      # admits them from any.
+      && (builtins.head controllerIn.spec.ingress).callerNamespace == null
+      &&
+        (builtins.head ciliumAnyNamespace.fromEndpoints).matchExpressions == [
+          {
+            key = "k8s:io.kubernetes.pod.namespace";
+            operator = "Exists";
+          }
+        ]
+      &&
+        (builtins.head ciliumOneNamespace.fromEndpoints).matchLabels."k8s:io.kubernetes.pod.namespace"
+        == "gwns"
     )
     || throw "envoy-gateway policies: ${builtins.toJSON { inherit proxyIn controllerIn; }}";
 

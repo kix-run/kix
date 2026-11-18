@@ -5,8 +5,8 @@
 # from the release's envoy-gateway-crds.yaml); the controller Deployment, its
 # ServiceAccount, ConfigMap, and Service; its roles (rbac/, vendored from the
 # release's install.yaml); the certgen Job that writes the control plane's
-# certificates; the topology injector's MutatingWebhookConfiguration; and a
-# GatewayClass and an EnvoyProxy named after the instance. With the optional
+# certificates; and a GatewayClass and an EnvoyProxy named after the
+# instance. With the optional
 # `prometheus` dependency and `metrics.enabled`, it also adds a metrics
 # Service, a ServiceMonitor, and alerts.
 #
@@ -36,22 +36,27 @@
 # looks them up by those names; the GatewayClass and its EnvoyProxy take the
 # instance name.
 #
-# The controller creates the data plane. For each Gateway it starts an
-# Envoy Deployment and a Service in the controller's namespace
+# The controller creates the data plane, in GatewayNamespace mode: for
+# each Gateway it starts an Envoy Deployment and a Service, named after the
+# Gateway, in the Gateway's namespace
 # (internal/infrastructure/kubernetes/proxy/resource.go). A Gateway of the
 # envoy-gateway package names its own EnvoyProxy, which says how its
-# proxies run. The EnvoyProxy this package renders is the GatewayClass's:
-# it pins the Envoy image for a Gateway that names none, such as one a Helm
-# chart writes.
+# proxies run, and grants the controller `out.infraManagerRules` in its
+# namespace. The controller's own ClusterRole only reads those objects, so
+# a Gateway in a namespace with no such grant gets no proxies. The
+# EnvoyProxy this package renders is the GatewayClass's: it pins the Envoy
+# image for a Gateway that names none.
 #
-# The controller and the proxies talk over mutual TLS. The certgen Job
-# (`envoy-gateway certgen`) writes the CA and the certificates into the
-# Secrets envoy-gateway, envoy, envoy-rate-limit, and envoy-oidc-hmac in the
-# instance's namespace, and the CA into the topology injector's webhook.
-# It leaves existing Secrets alone, so it can run again
-# (internal/cmd/certgen.go). The certificates are valid for five years
-# (internal/crypto/certgen.go) and nothing renews them. Delete the four
-# Secrets and run the Job again to renew them.
+# The proxies check the controller's certificate, and the controller
+# checks each proxy's ServiceAccount token with a TokenReview
+# (site/content/en/v1.10/tasks/operations/gateway-namespace-mode.md
+# upstream). The certgen Job (`envoy-gateway certgen`) writes the CA and
+# the certificates into the Secrets envoy-gateway, envoy, envoy-rate-limit,
+# and envoy-oidc-hmac in the instance's namespace. It leaves existing
+# Secrets alone, so it can run again (internal/cmd/certgen.go). The
+# certificates are valid for five years (internal/crypto/certgen.go) and
+# nothing renews them. Delete the four Secrets and run the Job again to
+# renew them.
 #
 # Leader election is on, as upstream ships it. Every replica serves xDS to
 # the proxies, and the leader writes status and the proxy Deployments. The
@@ -59,21 +64,24 @@
 # node up. The proxies keep their last configuration while the controller
 # is down.
 #
-# The topology injector, a mutating webhook on pods/binding in the
-# controller's namespace, copies the node's zone onto each proxy pod for
-# zone-aware routing. Its failurePolicy is Ignore, so a pod binds while the
-# webhook is down.
+# The topology injector is off. It is a mutating webhook on pods/binding
+# that copies the node's zone onto each proxy pod for zone-aware routing,
+# and in GatewayNamespace mode upstream registers it for every namespace
+# (charts/gateway-helm/templates/envoy-proxy-topology-injector-webhook.yaml),
+# so every pod binding in the cluster would call the controller.
 #
-# Network policy: the API server reaches the topology injector on TCP 9443
-# (`meta.network.intents.webhook`, which also opens that port on the
-# certgen Job's pod, where nothing listens). The proxies and the rate limit
-# pods, which the controller creates in this namespace, reach the
-# controller's xDS (18000), rate limit xDS (18001), and Wasm (18002) ports.
-# The policy for a Gateway's proxies is the envoy-gateway package's.
+# Network policy: the proxies of every Gateway, in any namespace, and the
+# rate limit pods, which the controller creates in this namespace, reach
+# the controller's xDS (18000), rate limit xDS (18001), and Wasm (18002)
+# ports. The policy for a Gateway's proxies is the envoy-gateway package's.
 #
 # `out`:
 #   out.gatewayClassName  the GatewayClass a Gateway names.
-#   out.namespace         the controller's namespace, where the proxies run.
+#   out.namespace         the controller's namespace.
+#   out.serviceAccount    the controller's ServiceAccount, name and namespace.
+#   out.infraManagerRules the rules a Gateway grants that ServiceAccount in
+#                         its own namespace, so the controller can create
+#                         the Gateway's proxies there.
 #   out.proxyImage        the Envoy image, for a Gateway's EnvoyProxy.
 #   out.proxyLabels       the labels of every proxy pod the controller
 #                         creates.
@@ -106,12 +114,13 @@
 # Limits: under network policy, the controller's own fetches (Wasm images,
 # extension servers) need a policy written outside Kix. Global rate
 # limiting needs a Redis the package does not wire, and its rate limit
-# Deployment gets no policy. GatewayNamespace mode and a namespace-scoped
-# watch are refused, because the roles and the policies assume the proxies
-# run in the controller's namespace and the controller watches the whole
-# cluster. A Gateway on the class that is not an envoy-gateway instance
-# gets proxies with no network policy, and nothing routes to it through
-# kix.expose. The certgen Job writes Secrets Kix does not track, so
+# Deployment gets no policy. ControllerNamespace mode and a
+# namespace-scoped watch are refused, because the roles and the policies
+# assume each Gateway's proxies run in its own namespace and the controller
+# watches the whole cluster. A Gateway on the class that is not an
+# envoy-gateway instance gets no proxies, because nothing grants the
+# controller its namespace. Zone-aware routing is not available while the
+# topology injector is off. The certgen Job writes Secrets Kix does not track, so
 # `kix gc` and pruning leave them behind.
 #
 # Upgrades: from a release of the envoy-gateway package that ran the
@@ -121,7 +130,11 @@
 # change. The proxies keep serving while the controller is away: on kind
 # the same proxy pod answered every request across the deploy. The Gateway
 # keeps its name and moves to the new GatewayClass, and `--prune` removes
-# the old class, roles, and policies.
+# the old class, roles, policies, and the topology injector's webhook. The
+# controller then starts new proxies in the Gateway's namespace, with a new
+# Service named after the Gateway, and removes the old ones. A LoadBalancer
+# Service gets a new address unless the Gateway's `addresses` or the
+# Service's annotations pin it.
 #
 # From an Envoy Gateway that Helm installed, uninstall the Helm
 # release first, delete the certgen hook objects and the topology injector
@@ -140,7 +153,7 @@
 # that release (api/v1alpha1/shared_types.go), move the tag in
 # crds/sources.txt and rbac/sources.txt, run
 # `uv run scripts/vendor-crds.py envoy-gateway-controller`, compare the
-# Deployment, certgen Job, and webhook below with the release's
+# Deployment and certgen Job below with the release's
 # charts/gateway-helm templates, and check the gateway-api package's
 # release against the release's go.mod.
 
@@ -169,8 +182,7 @@ let
   # envoy-gateway.<namespace> (internal/xds/bootstrap/bootstrap.go), certgen
   # issues the controller's certificate for that name and writes it to the
   # Secret envoy-gateway (internal/crypto/certgen.go,
-  # internal/provider/kubernetes/secrets.go), and patches the webhook of
-  # this name (internal/cmd/certgen.go).
+  # internal/provider/kubernetes/secrets.go).
   serviceName = "envoy-gateway";
   certSecretName = "envoy-gateway";
   # With rate limiting on, the controller reads the UIDs of its own
@@ -180,7 +192,6 @@ let
   # the controller reserves beside it
   # (internal/infrastructure/kubernetes/proxy/resource_provider.go).
   controllerName' = serviceName;
-  webhookName = "envoy-gateway-topology-injector.${ns}";
 
   ports = {
     xds = 18000;
@@ -188,7 +199,6 @@ let
     wasm = 18002;
     metrics = 19001;
     health = 8081;
-    webhook = 9443;
   };
 
   controllerLabels = {
@@ -247,7 +257,11 @@ let
       "container"
       "image"
     ]
-    [ "proxyTopologyInjector" ]
+    [
+      "provider"
+      "kubernetes"
+      "proxyTopologyInjector"
+    ]
     # A default EnvoyProxy would sit beside the one each Gateway names;
     # set proxySpec on the envoy-gateway instance instead.
     [ "envoyProxy" ]
@@ -265,17 +279,6 @@ in
     # Envoy Gateway 1.10 supports Kubernetes 1.34 to 1.37
     # (site/content/en/news/releases/matrix.md upstream).
     k8s.minVersion = "1.34";
-    network.intents.webhook.ingress = [
-      {
-        from = "apiserver";
-        ports = [
-          {
-            port = ports.webhook;
-            protocol = "TCP";
-          }
-        ];
-      }
-    ];
   };
 
   assertions =
@@ -386,6 +389,10 @@ in
         netpol = scope.networkPolicyEnforcer.netpol;
         inherit (scope.rbac) mkClusterRoleSet mkRoleSet;
         rbacRules = file: (readJSON ./rbac/${file}).rules;
+        # What the controller needs to create and update a Gateway's proxy
+        # Deployment, Service, ServiceAccount, ConfigMap, autoscaler, and
+        # PodDisruptionBudget.
+        infraManagerRules = rbacRules "role-eg-gateway-helm-infra-manager.json";
 
         controllerReplicas = kix.availability.pick availability {
           none = 1;
@@ -399,6 +406,11 @@ in
           provider = {
             type = "Kubernetes";
             kubernetes = {
+              # Each Gateway's proxies run in the Gateway's namespace.
+              deploy.type = "GatewayNamespace";
+              # In this mode the injector's webhook would see every pod
+              # binding in the cluster, so it stays off.
+              proxyTopologyInjector.disable = true;
               rateLimitDeployment.container.image = kix.image.ref config.operandImages.rateLimit;
               shutdownManager.image = kix.image.ref config.image;
             };
@@ -510,7 +522,32 @@ in
             }
           ];
           labels = controllerLabels;
-          roles."${name}-${ns}" = rbacRules "clusterrole-eg-gateway-helm-envoy-gateway-role.json";
+          # The release's controller role, and what GatewayNamespace mode
+          # adds to it (charts/gateway-helm/templates/_rbac.tpl): the
+          # controller checks each proxy's ServiceAccount token with a
+          # TokenReview, and its cache lists the proxy objects in every
+          # namespace. It writes them only where an envoy-gateway instance
+          # grants `out.infraManagerRules`.
+          roles."${name}-${ns}" =
+            rbacRules "clusterrole-eg-gateway-helm-envoy-gateway-role.json"
+            ++ [
+              {
+                apiGroups = [ "authentication.k8s.io" ];
+                resources = [ "tokenreviews" ];
+                verbs = [ "create" ];
+              }
+            ]
+            ++ map (
+              rule:
+              rule
+              // {
+                verbs = [
+                  "get"
+                  "list"
+                  "watch"
+                ];
+              }
+            ) infraManagerRules;
         };
 
         # The infra manager role lets the controller create the proxy
@@ -525,7 +562,8 @@ in
           ];
           labels = controllerLabels;
           roles = {
-            "${name}-infra-manager" = rbacRules "role-eg-gateway-helm-infra-manager.json";
+            # For the rate limit Deployment, which runs here.
+            "${name}-infra-manager" = infraManagerRules;
             "${name}-leader-election" = rbacRules "role-eg-gateway-helm-leader-election-role.json";
           };
         };
@@ -545,85 +583,26 @@ in
           labels = certgenLabels;
         };
 
-        certgenRole =
-          let
-            subjects = [
-              {
-                kind = "ServiceAccount";
-                name = self.certgenServiceAccount.out.name;
-                namespace = ns;
-              }
-            ];
-          in
-          mkRoleSet scope {
-            inherit subjects;
-            labels = certgenLabels;
-            roles."${name}-certgen" = rbacRules "role-eg-gateway-helm-certgen.json";
-          }
-          // mkClusterRoleSet scope {
-            inherit subjects;
-            labels = certgenLabels;
-            # The release manifest names the webhook of the namespace it
-            # was rendered for; the rule names this namespace's.
-            roles."${name}-certgen-${ns}" = map (
-              rule:
-              rule
-              // lib.optionalAttrs (rule ? resourceNames) {
-                resourceNames = [ webhookName ];
-              }
-            ) (rbacRules "clusterrole-eg-gateway-helm-certgen_envoy-gateway-system.json");
-          };
-
-        topologyInjector = scope.mkClusterResource {
-          apiVersion = "admissionregistration.k8s.io/v1";
-          kind = "MutatingWebhookConfiguration";
-          name = webhookName;
-          labels = controllerLabels // {
-            "app.kubernetes.io/component" = "topology-injector";
-          };
-          extra.webhooks = [
+        certgenRole = mkRoleSet scope {
+          subjects = [
             {
-              name = "topology.webhook.gateway.envoyproxy.io";
-              admissionReviewVersions = [ "v1" ];
-              sideEffects = "None";
-              # certgen writes caBundle; Kix never sets it. The fixed name,
-              # without the Service's context: the Service selects the
-              # Deployment's pods, and the Deployment needs certgen, which
-              # needs this configuration.
-              clientConfig.service = {
-                name = serviceName;
-                namespace = ns;
-                path = "/inject-pod-topology";
-                port = ports.webhook;
-              };
-              failurePolicy = "Ignore";
-              rules = [
-                {
-                  operations = [ "CREATE" ];
-                  apiGroups = [ "" ];
-                  apiVersions = [ "v1" ];
-                  resources = [ "pods/binding" ];
-                }
-              ];
-              namespaceSelector.matchExpressions = [
-                {
-                  key = "kubernetes.io/metadata.name";
-                  operator = "In";
-                  values = [ ns ];
-                }
-              ];
+              kind = "ServiceAccount";
+              name = self.certgenServiceAccount.out.name;
+              namespace = ns;
             }
           ];
+          labels = certgenLabels;
+          roles."${name}-certgen" = rbacRules "role-eg-gateway-helm-certgen.json";
         };
 
         # `envoy-gateway certgen` creates the four Secrets when they are
-        # missing, leaves existing ones alone, and writes the CA into the
-        # topology injector, so a second run changes nothing.
+        # missing and leaves existing ones alone, so a second run changes
+        # nothing.
         certgen = scope.mkJob {
           name = "${name}-certgen";
           labels = certgenLabels;
           annotations.${kix.keys.rerun} = kix.keyValues.rerunOnChange;
-          requires = [ self.topologyInjector ] ++ builtins.attrValues self.certgenRole;
+          requires = builtins.attrValues self.certgenRole;
           spec = {
             backoffLimit = 3;
             template = {
@@ -640,6 +619,8 @@ in
                     command = [
                       "envoy-gateway"
                       "certgen"
+                      # No webhook exists for certgen to write the CA into.
+                      "--disable-topology-injector"
                     ];
                     env = kix.mkEnvVars sharedEnv;
                     inherit (config.certgen) resources;
@@ -713,7 +694,6 @@ in
                         (kix.port "ratelimit" ports.rateLimitXds)
                         (kix.port "wasm" ports.wasm)
                         (kix.port "metrics" ports.metrics)
-                        (kix.port "webhook" ports.webhook)
                       ];
                       # The release chart's probes.
                       startupProbe = {
@@ -793,11 +773,6 @@ in
                 port = ports.metrics;
                 targetPort = ports.metrics;
               }
-              {
-                name = "webhook";
-                port = ports.webhook;
-                targetPort = ports.webhook;
-              }
             ];
           };
         };
@@ -831,9 +806,10 @@ in
           spec = {
             endpointSelector.matchLabels = controllerLabels;
             ingress = [
+              # A Gateway's proxies run in the Gateway's namespace.
               (netpol.mkCallerIngressRule {
                 callerSelector = proxyLabels;
-                callerNamespace = ns;
+                callerNamespace = null;
                 ports = map tcp [
                   ports.xds
                   ports.wasm
@@ -906,6 +882,13 @@ in
             # it waits for the controller.
             gatewayClassName = self.gatewayClass.out.name;
             namespace = ns;
+            # A Gateway grants these rules to this ServiceAccount in its
+            # own namespace, where the controller creates its proxies.
+            serviceAccount = {
+              name = self.serviceAccount.out.name;
+              namespace = ns;
+            };
+            inherit infraManagerRules;
             # What a Gateway's own EnvoyProxy and network policy need:
             # the pinned Envoy image and the labels of every proxy pod.
             proxyImage = kix.image.ref config.operandImages.envoy;

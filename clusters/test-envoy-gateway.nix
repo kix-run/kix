@@ -3,7 +3,7 @@
 #
 # gateway-api installs the Gateway API CRDs, envoy-gateway-controller
 # installs the controller and its GatewayClass, and envoy-gateway adds a
-# Gateway with its EnvoyProxy. filebrowser, in a
+# Gateway with its EnvoyProxy in the namespace `edge`, where its proxies run. filebrowser, in a
 # namespace of its own, is exposed through kix.expose, so it gets an
 # HTTPRoute on the Gateway and a policy that admits the Envoy proxies to
 # its pod port. The kind flavour binds the loadBalancer role absent, so the
@@ -58,12 +58,15 @@ kix.buildCluster {
               settings.extensionApis.enableBackend = true;
             };
           };
-          envoy-gateway = {
-            package = packages.experimental.envoy-gateway;
-            config = {
-              metrics.enabled = true;
-              proxySpec.logging.level.default = "warn";
-            };
+        };
+
+        # The Gateway has a namespace of its own, where the controller
+        # starts its proxies.
+        edge.envoy-gateway = {
+          package = packages.experimental.envoy-gateway;
+          config = {
+            metrics.enabled = true;
+            proxySpec.logging.level.default = "warn";
           };
         };
 

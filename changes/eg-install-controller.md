@@ -9,15 +9,14 @@ Helm step you used to install the Gateway API CRDs. Both packages now read the
 Gateway API CRDs from the `gatewayApi` role instead of expecting them to be
 installed outside Kix. In clusters that use `envoy-gateway`, also add
 `instances.<namespace>.envoy-gateway-controller.package =
-packages.experimental.envoy-gateway-controller;` in the same namespace as
-`envoy-gateway`. Remove `controllerName`, `proxyNamespace`,
+packages.experimental.envoy-gateway-controller;`. Remove `controllerName`, `proxyNamespace`,
 `gatewayClassName`, `gatewayName`, and `proxySpec.mergeGateways` from your
 `envoy-gateway` instances. The new `envoy-gateway-controller` package deploys
 one Envoy Gateway v1.10.0 controller per cluster, along with its CRDs, RBAC,
 certificate Job, and `GatewayClass`. Each `envoy-gateway` instance now creates
 one `Gateway` on that controller with its own Envoy proxies, `Service`, and
-network policies, so a cluster can run several Gateways (for example, one
-public and one private).
+network policies in the instance's namespace, so a cluster can run several
+Gateways (for example, one public and one private, each in its own namespace).
 
 If `envoy-gateway` already deployed the controller on your cluster (from an
 earlier Kix 0.10 release candidate), delete the controller Deployment first
@@ -44,9 +43,10 @@ clusterrole,clusterrolebinding,mutatingwebhookconfiguration --selector
 app.kubernetes.io/instance=<release>`. Then run `kix deploy <cluster>
 --force-conflicts` once so Kix can take ownership of the CRD fields Helm wrote.
 
-Envoy Gateway now starts proxy pods in the `envoy-gateway-controller`
-instance's namespace. If Helm ran the proxies in another namespace, the controller creates
-a new proxy `Service`, and a cloud load balancer assigns it a new IP address.
+Envoy Gateway now starts each Gateway's proxy pods in the `envoy-gateway`
+instance's namespace, with a `Service` named after the Gateway. That is a new
+`Service` on every cluster that upgrades, and a cloud load balancer assigns it
+a new IP address.
 Point DNS at the new address, then remove the old proxy resources from Helm's
 namespace with `kubectl delete
 deployment,service,serviceaccount,configmap,hpa,pdb --namespace

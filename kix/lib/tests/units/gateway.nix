@@ -291,6 +291,54 @@ in
     )
     || throw "envoy-gateway edge: ${builtins.toJSON plain}";
 
+  # Two Gateways that both answer `gateway` are refused when a package
+  # routes through the alias, so a forgotten `aliases = [ ]` cannot send a
+  # private application to the public Gateway. With the alias left to one
+  # Gateway, an application routes to that one, and to the other only by a
+  # ref.
+  gateway-two-gateways-need-a-choice =
+    let
+      twoGateways =
+        { privateAliases, web }:
+        mkCluster [
+          (
+            { ref, ... }:
+            {
+              cluster.domain = "test.local";
+              instances.gatewayapi.gateway-api.package = import ../../../packages/experimental/gateway-api;
+              instances.gwns.envoy-gateway-controller.package = import ../../../packages/experimental/envoy-gateway-controller;
+              instances.edge.public.package = envoyGateway;
+              instances.internal.private = {
+                package = envoyGateway;
+              }
+              // privateAliases;
+              instances.appns.web = {
+                package = backend;
+              }
+              // web ref;
+            }
+          )
+        ];
+      parentOf =
+        cluster:
+        (builtins.head (byName "web" (ofKind "HTTPRoute" (manifests cluster))).spec.parentRefs).name;
+      only.aliases = [ ];
+    in
+    evalFails (twoGateways {
+      privateAliases = { };
+      web = _: { };
+    })
+    &&
+      parentOf (twoGateways {
+        privateAliases = only;
+        web = _: { };
+      }) == "public"
+    &&
+      parentOf (twoGateways {
+        privateAliases = only;
+        web = ref: { deps.gateway = ref.internal.private; };
+      }) == "private";
+
   # The edge is ingress-only, so a cluster that enforces only egress gets
   # none; the control enforces ingress only.
   gateway-edge-follows-directions =
