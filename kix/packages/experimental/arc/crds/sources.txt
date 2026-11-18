@@ -1,5 +1,5 @@
 # gha-runner-scale-set-controller chart at the tag in `release` (kix/packages/experimental/arc/default.nix).
-https://raw.githubusercontent.com/actions/actions-runner-controller/gha-runner-scale-set-0.14.2/charts/gha-runner-scale-set-controller/crds/actions.github.com_autoscalinglisteners.yaml
-https://raw.githubusercontent.com/actions/actions-runner-controller/gha-runner-scale-set-0.14.2/charts/gha-runner-scale-set-controller/crds/actions.github.com_autoscalingrunnersets.yaml
-https://raw.githubusercontent.com/actions/actions-runner-controller/gha-runner-scale-set-0.14.2/charts/gha-runner-scale-set-controller/crds/actions.github.com_ephemeralrunners.yaml
-https://raw.githubusercontent.com/actions/actions-runner-controller/gha-runner-scale-set-0.14.2/charts/gha-runner-scale-set-controller/crds/actions.github.com_ephemeralrunnersets.yaml
+https://raw.githubusercontent.com/actions/actions-runner-controller/gha-runner-scale-set-0.15.1/charts/gha-runner-scale-set-controller/crds/actions.github.com_autoscalinglisteners.yaml
+https://raw.githubusercontent.com/actions/actions-runner-controller/gha-runner-scale-set-0.15.1/charts/gha-runner-scale-set-controller/crds/actions.github.com_autoscalingrunnersets.yaml
+https://raw.githubusercontent.com/actions/actions-runner-controller/gha-runner-scale-set-0.15.1/charts/gha-runner-scale-set-controller/crds/actions.github.com_ephemeralrunners.yaml
+https://raw.githubusercontent.com/actions/actions-runner-controller/gha-runner-scale-set-0.15.1/charts/gha-runner-scale-set-controller/crds/actions.github.com_ephemeralrunnersets.yaml

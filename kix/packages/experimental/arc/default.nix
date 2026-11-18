@@ -32,6 +32,14 @@
 # `kix deploy --reconcile` after that deploy to re-create the runner sets
 # and the finalizers on their supporting objects.
 #
+# Upgrades: 0.15.1 takes over what 0.14.2 left behind: the CRDs keep the
+# v1alpha1 version, and the controller reconciles existing runner sets.
+# The move from 0.14 is a minor version change, so the paragraph above
+# applies. Going back to 0.14.2 is also a minor version change. Deploy the
+# older package, then run `kix deploy --reconcile`. Upstream documents no
+# upgrade path between minor versions and no way back. GitHub supports
+# only the latest release.
+#
 # Not modelled: `--watch-single-namespace` and image pull secrets for the
 # listener. Escape hatches: `extraArgs`, `env`, `partsOverlays`, `extra`.
 #
@@ -82,7 +90,7 @@
 let
   # The upstream release: meta.version, image.tag, and the chart tag in
   # crds/sources.txt.
-  release = "0.14.2";
+  release = "0.15.1";
 
   name = scope.instanceName;
   ns = scope.namespaceName;
@@ -93,7 +101,7 @@ let
 
   # The first two captures are the major and minor version. null for a tag
   # the controller's parseSemver (apis/actions.github.com/v1alpha1/
-  # version.go) rejects, such as "v0.14.2" or "0.14.x": the tag becomes
+  # version.go) rejects, such as "v0.15.1" or "0.15.x": the tag becomes
   # every runner set's version label, and the controller deletes a runner
   # set whose label it cannot parse.
   versionParts =
@@ -217,6 +225,7 @@ let
         "create"
         "delete"
         "get"
+        "patch"
       ]
     )
     (core "pods/status" |> allow [ "get" ])
@@ -280,7 +289,7 @@ in
     image = kix.options.image {
       repository = "ghcr.io/actions/gha-runner-scale-set-controller";
       tag = release;
-      digest = "sha256:1b4c7f62e971ab259a4b8798e48e2adaad4af747f45990f474ea5feefa03531d";
+      digest = "sha256:4b51a20db717b194e2f3fa96cfe2ddcb21602811f79053c75fd1a383517b9f90";
       description = "Image of the controller, which the listener pods also run. Its major.minor must match the vendored CRDs, and it becomes the version label of every runner set.";
     };
 
@@ -443,16 +452,17 @@ in
             holdsData = false;
           };
           # The controller writes `Pending` when it first sees the runner set
-          # and again after every spec or label change, and `Running` once
-          # the scale set is registered with GitHub, its EphemeralRunnerSet
-          # is current, and its listener exists. Bad credentials or a wrong
-          # URL keep it at `Pending`, so the deploy fails. The rule compares
-          # no observedGeneration, so a deploy can read a stale `Running`
-          # right after an apply. `Outdated` (a runner image GitHub no longer
-          # accepts) fails until the runner spec changes, but is not declared
-          # as a failed state: the status carries no observedGeneration and no
-          # timestamp, so an old `Outdated` cannot be told from a new one
-          # while a new controller waits for its leader lease.
+          # and again after every spec change, and `Running` once the scale
+          # set is registered with GitHub, its EphemeralRunnerSet is current,
+          # and its listener exists. Bad credentials or a wrong URL keep it at
+          # `Pending`, so the deploy fails. `Running` sets
+          # `status.observedGeneration` to the spec's generation, and Kix
+          # waits until it has caught up, so a deploy does not read the
+          # `Running` of the previous spec. `Outdated` (a runner image GitHub
+          # no longer accepts) holds until the runner spec changes, but is not
+          # declared as a failed state. Before the first `Running` the status
+          # has no observedGeneration, so Kix cannot tell a new `Outdated`
+          # from an old one while a new controller waits for its leader lease.
           autoscalingRunnerSets = scope.mkCRD {
             spec = vendored "autoscalingrunnersets";
             holdsData = false;
@@ -507,7 +517,10 @@ in
             selector.matchLabels = scope.selectorLabels;
             template.spec = {
               serviceAccount = self.serviceAccount;
-              terminationGracePeriodSeconds = 10;
+              # Above controller-runtime's 30 second graceful shutdown, so
+              # reconciles in flight finish before the kubelet kills the
+              # process (the chart's default).
+              terminationGracePeriodSeconds = 35;
               securityContext = {
                 runAsNonRoot = true;
                 seccompProfile.type = "RuntimeDefault";
