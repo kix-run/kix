@@ -906,8 +906,8 @@ in
       # Report missing DNS once for the cluster, however many instances
       # lack it.
       dnsWarnings = lib.optional (builtins.any (inst: inst._dnsMissing or false) allInstancesList) {
-        message = "cluster '${name}' has no DNS instance (alias 'dns'), so Kix will not wait for DNS to be ready before deploying workloads.";
-        fix = "Import a cluster flavor (kix.flavors.<name>), add a coredns instance, or declare a kix.mkImport with roles = [ \"dns\" ].";
+        message = "cluster '${name}' has no DNS instance, so Kix will not wait for DNS to be ready before deploying workloads.";
+        fix = "If the cluster already runs DNS, add a cluster flavor (kix.flavors.<name>) to modules, or import the DNS workload with kix.mkImport (setting kind, apiVersion, roles = [ \"dns\" ], out.name, and out.fqdn). To deploy CoreDNS with Kix, add a packages.experimental.coredns instance.";
       };
 
       # The platform whose interface file supplied `k8sVersion`, or null when
