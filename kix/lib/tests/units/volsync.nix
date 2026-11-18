@@ -185,13 +185,13 @@ in
   # The vendored CRDs and ClusterRole follow the release.
   volsync-image-minor = check "volsync image.tag" {
     other-minor = {
-      cluster = cluster { volsyncConfig.image.tag = "0.15.0"; };
+      cluster = cluster { volsyncConfig.image.tag = "0.16.0"; };
       builds = false;
     };
     same-minor = {
       cluster = cluster {
         volsyncConfig.image = {
-          tag = "0.16.1";
+          tag = "0.17.1";
           digest = null;
         };
       };
