@@ -39,6 +39,20 @@
 # queues need a majority of the nodes, so an even replica count is
 # refused.
 #
+# Upgrades: RabbitMQ supports a rolling upgrade from 4.3.x to 4.4.x when
+# every stable feature flag is enabled first. The operator enables all
+# flags when it creates a cluster, so a cluster created by this package
+# meets that. A deploy rolls the pods to 4.4.1 one at a time, and queues,
+# messages, users, and policies stay. The operator enables no flag after an
+# upgrade, so the 4.4 flag `rabbitmq_4.4.0` stays disabled. Run
+# `rabbitmqctl enable_feature_flag all` in a pod before the next minor
+# upgrade. Going back to 4.3 does not work. Upstream supports no
+# downgrade, and says a node that holds classic queue files in the 4.4
+# format cannot go back to 4.3. Deployed over a cluster that 4.4.1 had
+# run, 4.3.6 pods stop at boot after five minutes with `{error,timeout}`
+# and restart in a loop. Deploying 4.4.1 again recovers the cluster with
+# its data.
+#
 # Placement: with more than one replica, the pods spread over nodes and
 # zones as the availability level asks, and a PodDisruptionBudget lets one
 # pod go at a time. The operator's own zone spread is off
@@ -105,8 +119,8 @@
 # from the first boot. Evaluation warns about such a `storage.size`.
 # The rules derive from the cluster-operator 2.23.3 rules in
 # observability/prometheus/rules/rabbitmq, rewritten to select the instance.
-# Left out: the file descriptor alarm rule, whose metric RabbitMQ 4.3.6 no
-# longer reports; queues without consumers, growing queues, unroutable
+# Left out: the file descriptor alarm rule, whose metric RabbitMQ 4.4.1
+# does not report; queues without consumers, growing queues, unroutable
 # messages, and connection churn, which need per-queue metrics or depend on
 # the application; and nodes not ready, full volumes, and crash
 # loops, which prometheus-default-rules reports
