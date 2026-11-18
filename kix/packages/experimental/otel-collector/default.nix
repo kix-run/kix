@@ -88,6 +88,13 @@
 # `partsOverlays` entry that replaces the `configMap` part (the refusal lives
 # in it) and the `workload` (to mount the token), and adds a ClusterRole and
 # binding.
+#
+# Upgrades: the collector keeps no data. It reads its configuration at
+# startup, and the events receiver starts watching from the current
+# resourceVersion. 0.165.0 reads the same configuration as 0.161.0, so an
+# upgrade needs no step. Going back works the same way: deploy the older
+# package. As in any rollout of an events instance, an Event that changes
+# while the old and new pod both run may be written twice.
 
 {
   scope,
@@ -96,7 +103,7 @@
   availability,
 }:
 let
-  release = "0.161.0";
+  release = "0.165.0";
   name = scope.instanceName;
   who = "otel-collector ${scope.namespaceName}/${name}";
 
@@ -121,7 +128,7 @@ in
     image = kix.options.image {
       repository = "docker.io/otel/opentelemetry-collector-contrib";
       tag = release;
-      digest = "sha256:fd328de2552466ad78385e1b1289c3f2402b1c45f265b252aab1955b42845ac1";
+      digest = "sha256:e40d61f10c9a617cca1ffd1be4d7e2b3a4b0f0001798ff07e58cabe82e618cea";
     };
 
     mode = lib.mkOption {
