@@ -32,6 +32,14 @@
 # address outside the cluster on any port, and the API server when `rules` is
 # set. Pods a job creates through `rules` are not covered by that policy.
 #
+# Upgrades: the runner keeps no data, and each runner pod runs one job. A new
+# `image.tag` changes the runner set's pod template, so the controller
+# replaces the listener and the idle runners. Runner pods already running a
+# job finish it on the old image. Going back is the same change in reverse:
+# set `image.tag` and `image.digest` to the older runner. GitHub refuses jobs
+# to a runner more than 30 days behind its latest release, so an older
+# runner works only inside that window.
+#
 # Removal: remove the runner set first, then its secret and arc in a later
 # deploy (see the arc package).
 #
@@ -55,7 +63,7 @@
 
 let
   # The actions-runner release: meta.version and image.tag.
-  release = "2.337.0";
+  release = "2.338.2";
 
   name = scope.instanceName;
   ns = scope.namespaceName;
@@ -112,7 +120,7 @@ in
     image = kix.options.image {
       repository = "ghcr.io/actions/actions-runner";
       tag = release;
-      digest = "sha256:e5496277be5d09bc968b3d64911b74e219ac4a3f2edce956a3ecf9271bea1ef4";
+      digest = "sha256:6d0b2d80d80f143f77dcb676e50920100bbb547e39e883454d57f45ab8c31300";
       description = "Image of the runner container. The controller turns off the runner's self-update, and GitHub stops sending jobs to a runner more than 30 days behind the latest runner release, so keep the tag current. A runner set whose phase is `Outdated` has hit that limit.";
     };
 
