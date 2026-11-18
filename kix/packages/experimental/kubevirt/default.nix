@@ -25,9 +25,9 @@
 # virt-launcher pods until they restart. KubeVirt supports updating only
 # from one release to the next: one patch at a time within a minor, and
 # from the latest patch of one minor to the latest patch of the next. Move
-# `release` one step at a time. Going back is not supported upstream: an
-# older package over a newer virt-operator brings the operands back to the
-# older version, and running virtual machines keep the launchers they have.
+# `release` one step at a time. Upstream documents no way back. Deploying
+# the v1.5.0 package over v1.5.1 brought every operand back to v1.5.0, and
+# running virtual machines kept their launcher pods.
 #
 # Minimal instance:
 #
