@@ -65,6 +65,9 @@ kix.buildCluster {
             GUARDIAN_SECRET_KEY = "F7UV+h8tWfNUxvRi9kFGi9sl1Z0Nr54eT1LMLsMXQBusGBLShbOSwklpwqfzR95x";
             SECRET_KEY_BASE = "LO/lLsn+KMdpxKAxIxLTkZluLLsbDSo3E2t40wiUc4tB9q53fQyEJwGssJbVY8/nG5jK3g9qzb8C4LzkIhMHNg==";
             DATABASE_ENCRYPTION_KEY = "xLWlQWJORGLJu0EJtFTcMP7HZEDPuzwVSvyYk1ZsDio=";
+            LIVE_VIEW_SIGNING_SALT = "+aJluUZfW2w7a+ZT5T7AgBQjUEMIgLCh";
+            COOKIE_SIGNING_SALT = "Es+Z0agcHALnzhFbfD3lLV3T9UXw11wR";
+            COOKIE_ENCRYPTION_SALT = "ZnivDUnTQ6CsdeFg5ihE0SFgVX6wA9A9";
           };
         };
         firezone-admin = {
