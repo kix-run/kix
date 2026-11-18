@@ -54,9 +54,10 @@
 # resources, so a new release starts from what the old one left. It then
 # moves every proxy it manages to its own proxy image, which restarts each
 # proxy pod once. Going back to an older package works the same way. The
-# older CRDs drop fields that only the newer release knows, such as
-# PeerRelay `service.port` and `staticEndpoints` from 1.104, so the API server
-# removes them from stored resources.
+# older CRDs do not know fields that the newer release added, such as
+# PeerRelay `service.port` and `staticEndpoints` from 1.104. While they are
+# installed, the API server leaves those fields out when it serves a
+# resource, and drops them when it writes one.
 #
 # Exposes (`root.out`):
 #   out.loadBalancerClass  "tailscale", carrying a dependency on the operator.
