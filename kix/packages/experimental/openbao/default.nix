@@ -194,6 +194,14 @@ in
     lifecycle = "stateful";
     defaultAliases = [ "openbao" ];
     network.intents.tokenReview.egress = [ { to = "apiserver"; } ];
+    # OpenBao's docs support the three most recent Kubernetes minor releases
+    # (website/content/partials/kubernetes-supported-versions.mdx at v2.7.2).
+    # Move both bounds with `release`.
+    k8s = {
+      minVersion = "1.35";
+      maxVersion = "1.37";
+      reason = "[K6360] OpenBao ${release} supports Kubernetes 1.35 to 1.37. Deploy a Kix release with an older openbao package, or move the cluster to a supported Kubernetes version first";
+    };
   };
 
   assertions =
@@ -259,7 +267,7 @@ in
     image = kix.options.image {
       repository = "quay.io/openbao/openbao";
       tag = release;
-      digest = "sha256:6d2b93856e3fcf7b18ad855a0b51eaba474dc8b79cf554379ea32034797d2acf";
+      digest = "sha256:5046911075e137e154ce49ab051502f4ec7cf367d484ae4a4dce665d9b90561f";
       description = "Image of the server and of the reconcile Job, which runs its `bao` CLI.";
     };
 
