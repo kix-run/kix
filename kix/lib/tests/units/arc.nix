@@ -94,6 +94,25 @@ in
     (builtins.length urls == 4 && builtins.all (lib.hasInfix "/gha-runner-scale-set-${version}/") urls)
     || throw "arc sources: crds/sources.txt does not fetch every CRD from gha-runner-scale-set-${version}: ${builtins.toJSON urls}";
 
+  # The controller patches the listener pods it runs in its own namespace
+  # (the chart's manager_listener_role.yaml).
+  arc-listener-role =
+    let
+      role = find "Role" "arc-listener";
+      podRule = lib.findFirst (r: r.resources == [ "pods" ]) null role.rules;
+    in
+    (
+      podRule != null
+      &&
+        lib.sort lib.lessThan podRule.verbs == [
+          "create"
+          "delete"
+          "get"
+          "patch"
+        ]
+    )
+    || throw "arc listener role: ${builtins.toJSON role.rules}";
+
   # The runner set carries the controller's version and names its three
   # supporting objects; those carry the cleanup finalizer and bind the
   # controller's ServiceAccount.
@@ -107,7 +126,7 @@ in
       annotations = ars.metadata.annotations;
     in
     (
-      ars.metadata.labels."app.kubernetes.io/version" == "0.14.2"
+      ars.metadata.labels."app.kubernetes.io/version" == "0.15.1"
       && annotations."actions.github.com/cleanup-manager-role-binding" == "linux-manager"
       && annotations."actions.github.com/cleanup-manager-role-name" == "linux-manager"
       && annotations."actions.github.com/cleanup-no-permission-service-account-name" == "linux-runner"
@@ -202,32 +221,33 @@ in
       otherMinor =
         tag:
         !(check tag).assertion
-        && lib.hasPrefix "image.tag \"${tag}\" is not a 0.14 release, and the CRDs under kix/packages/experimental/arc/crds are vendored from 0.14.2." (check tag)
+        && lib.hasPrefix "image.tag \"${tag}\" is not a 0.15 release, and the CRDs under kix/packages/experimental/arc/crds are vendored from 0.15.1." (check tag)
         .message;
     in
     (
       builtins.all accepted [
-        "0.14.2"
-        "0.14.9"
-        "0.14.2-rc.1"
+        "0.15.1"
+        "0.15.9"
+        "0.15.1-rc.1"
       ]
       && builtins.all unparsable [
-        "v0.14.2"
-        "0.14.x"
-        "0.14.02"
+        "v0.15.1"
+        "0.15.x"
+        "0.15.02"
         "latest"
       ]
       && builtins.all otherMinor [
-        "0.15.0"
-        "1.14.2"
+        "0.14.2"
+        "0.16.0"
+        "1.15.1"
       ]
     )
     || throw "arc image tag: ${
       builtins.toJSON (
         map check [
-          "0.14.2"
-          "v0.14.2"
-          "0.15.0"
+          "0.15.1"
+          "v0.15.1"
+          "0.16.0"
         ]
       )
     }";
@@ -411,7 +431,7 @@ in
       && fails { arcConfig.extraArgs = [ "--metrics-addr=:9090" ]; }
       && fails { arcConfig.extraArgs = [ "--enable-leader-election=false" ]; }
       && fails { arcConfig.env.CONTROLLER_MANAGER_POD_NAMESPACE = "x"; }
-      && fails { arcConfig.image.tag = "0.15.0"; }
+      && fails { arcConfig.image.tag = "0.14.2"; }
       && fails { modules = [ { instances.other.arc.package = arcPackage; } ]; }
     )
     || throw "arc build refusals: a refused configuration evaluated, or the base cluster failed";
