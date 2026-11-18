@@ -55,7 +55,7 @@
 # moves every proxy it manages to its own proxy image, which restarts each
 # proxy pod once. Going back to an older package works the same way. The
 # older CRDs drop fields that only the newer release knows, such as
-# PeerRelay `port` and `staticEndpoints` from 1.104, so the API server
+# PeerRelay `service.port` and `staticEndpoints` from 1.104, so the API server
 # removes them from stored resources.
 #
 # Exposes (`root.out`):
