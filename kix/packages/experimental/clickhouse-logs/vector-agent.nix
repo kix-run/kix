@@ -10,11 +10,25 @@
 # Each package keeps its own parts and deps: it builds the ConfigMap from
 # `mergeConfig`, the DaemonSet from `podSpec` plus its own mounts, and the
 # metrics Service that `healthCheck` reads through `self.root.out.metricsUrl`.
+#
+# Upgrades: Vector keeps one file of state, the read position in each log
+# file (`kubernetes_logs/checkpoints.json` under the hostPath data
+# directory), and upstream says nothing about upgrading or going back
+# between releases. In a test, 0.62.0 took over the read positions 0.58.0
+# had written and shipped every line once, with none lost or repeated, and
+# 0.58.0 did the same with the positions 0.62.0 wrote. To go back, deploy
+# the previous package version.
 
 { lib, kix }:
 let
-  version = "0.58.0";
+  version = "0.62.0";
   metricsPort = 9598;
+  # Vector's 0.59 upgrade guide drops Kubernetes 1.31 and asks for 1.32 or
+  # later, and names no upper bound. Move it with `version`.
+  k8s = {
+    minVersion = "1.32";
+    reason = "[K3359] Vector ${version} supports Kubernetes 1.32 and later. Move the cluster to Kubernetes 1.32 or later first, or deploy a Kix release with an older version of this package";
+  };
   # Each package mounts its ConfigMap at `configDir`, with the merged
   # settings under the key `configFile`.
   configDir = "/etc/vector";
@@ -46,6 +60,7 @@ in
   inherit
     version
     metricsPort
+    k8s
     configDir
     configFile
     ;
@@ -54,7 +69,7 @@ in
     image = kix.options.image {
       repository = "docker.io/timberio/vector";
       tag = "${version}-distroless-libc";
-      digest = "sha256:6c93dfe2554cc7e38316d618961cd657d5271c7a7aa727e0007502b28cb82c2e";
+      digest = "sha256:22100806cedabab3768edd6ac919be1a3a026b1020c5b280174a54573572db9d";
     };
 
     resources = kix.options.resources {

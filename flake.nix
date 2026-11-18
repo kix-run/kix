@@ -90,6 +90,7 @@
           clickhouse = ./clusters/test-clickhouse.nix;
           clickhouse-operator = ./clusters/test-clickhouse-operator.nix;
           clickhouse-operator-upgrade = ./clusters/test-clickhouse-operator-upgrade.nix;
+          log-agents = ./clusters/test-log-agents.nix;
           cnpg = ./clusters/test-cnpg.nix;
           rabbitmq = ./clusters/test-rabbitmq.nix;
           harbor = ./clusters/test-harbor.nix;
