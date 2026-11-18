@@ -559,7 +559,8 @@ in
           "sidecar"
         ]
       && runner.command == [ ]
-      && lib.hasPrefix "ghcr.io/actions/actions-runner:2.337.0@sha256:" runner.image
+      && lib.hasPrefix "ghcr.io/actions/actions-runner:" runner.image
+      && lib.hasInfix "@sha256:" runner.image
     )
     || throw "arc runner set template: ${builtins.toJSON podSpec}";
 }
