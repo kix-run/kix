@@ -1,0 +1,3 @@
+# 2026-11-18 · `cli/kix` deploy · A deploy cannot replace a StatefulSet pod that is crash-looping on an older revision.
+
+After a failed `kix rollback` left `clickhouse-0` crash-looping on the 26.3 template, `kix deploy` of the 26.8 template failed with `no readiness progress for 180s`. The StatefulSet's `updateRevision` was the 26.8 one, but the controller never replaced the broken pod. Kubernetes documents this ("forced rollback"): an operator must delete the pod by hand. Kix gives no hint of it. The deploy passed after `kubectl delete pod -n analytics clickhouse-0`. A failed deploy or rollback of any StatefulSet can leave a cluster in this state.

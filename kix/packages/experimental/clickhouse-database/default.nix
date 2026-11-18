@@ -143,7 +143,8 @@ let
 
   contract = kix.contracts.experimental.clickhouse;
 
-  # The bootstrap SQL and the probe were written and verified against 26.3.
+  # The bootstrap SQL and the probe were written against 26.3 and verified
+  # against 26.3 and 26.8.
   # Nothing older than this has been tried, and an untried server is
   # refused rather than assumed to work. Raise it when something the Job
   # runs needs a newer server; lower it only after running the fixture

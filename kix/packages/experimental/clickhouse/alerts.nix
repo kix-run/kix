@@ -3,7 +3,7 @@
 # conditions under the same names. Each package passes the selector of its
 # own scrape and the facts it knows; this file derives the thresholds.
 #
-# Metric names are those ClickHouse 26.3 writes
+# Metric names are those ClickHouse 26.8 writes
 # (src/Server/PrometheusMetricsWriter.cpp): `ClickHouseMetrics_*` from
 # system.metrics, `ClickHouseAsyncMetrics_*` from system.asynchronous_metrics,
 # and `ClickHouseProfileEvents_*` from system.events, counters without a
@@ -51,7 +51,7 @@ let
       value;
 
   # Inserts are throttled at parts_to_delay_insert active parts in one
-  # partition (1000 by default in 26.3) and refused at parts_to_throw_insert
+  # partition (1000 by default in 26.8) and refused at parts_to_throw_insert
   # (3000). A table's own SETTINGS can lower it; the rule reads the server
   # default only.
   partsToDelayInsert = setting [ "merge_tree" "parts_to_delay_insert" ] 1000;

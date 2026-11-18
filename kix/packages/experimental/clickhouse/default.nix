@@ -30,11 +30,12 @@
 # Upgrades: stay on an LTS line (the March and August releases).
 # ClickHouse supports moving between two versions released less than a
 # year apart, which covers one LTS to the next, and reads the data files
-# the older one wrote. Going back to the older version works only while no
-# feature of the newer one has been used. 26.8 writes lightweight UPDATE
-# patch parts in a format 26.3 cannot read, so an UPDATE run on 26.8 ends
-# the way back. To go back, deploy the older package version over the same
-# volume. On amd64 nodes, 26.6 and later need a CPU with AVX2.
+# the older one wrote. Going back from 26.8 to 26.3 does not work. The
+# embedded Keeper of 26.8 writes a snapshot as soon as it starts, in
+# snapshot format 8, and 26.3 refuses to start on it. Keeper's coordination
+# setting write_snapshot_version = 6 makes 26.8 write a format 26.3 reads.
+# 26.8 also writes lightweight UPDATE patch parts in a format 26.3 cannot
+# read. On amd64 nodes, 26.6 and later need a CPU with AVX2.
 #
 # Dependencies:
 #   storage (required)      a persistent-volume-claim instance, mounted at

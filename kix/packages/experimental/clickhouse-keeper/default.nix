@@ -57,9 +57,11 @@
 # changes the CHK's settings, so the operator restarts each replica once.
 # A new image restarts each replica once too, one at a time, and the
 # quorum holds while each one restarts. Keeper reads the raft log and
-# snapshots the previous LTS line wrote, and going back by deploying the
-# older package version works the same way. Move Keeper and
-# clickhouse-cluster to a new LTS line together.
+# snapshots the previous LTS line wrote. Going back does not work: Keeper
+# 26.8 writes a snapshot as soon as it starts, in snapshot format 8, and
+# Keeper 26.3 refuses to start on it. Keeper's coordination setting
+# write_snapshot_version = 6 makes 26.8 write a format 26.3 reads. Move
+# Keeper and clickhouse-cluster to a new LTS line together.
 #
 # `out`:
 #   out.host    "keeper-<name>.<ns>.svc..." (the operator's Service)
