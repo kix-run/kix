@@ -35,6 +35,14 @@
 #   out.version, the Tempo version `image.tag` names.
 #
 # Limits: single replica (`meta.availability.max = "none"`) and single tenant.
+#
+# Upgrades: upstream's upgrade guide has a section for each minor release and
+# none for patch releases, so 3.1.0 to 3.1.1 is one step. The 3.1.1 image is
+# built with a newer Go toolchain, and Tempo's own code is unchanged. In a
+# test on kind, 3.1.1 served the traces that 3.1.0 wrote, and 3.1.0 read the
+# traces that 3.1.1 wrote after the going-back deploy. Upstream documents no
+# way back to an older 3.1 release. To go back to 3.1.0, deploy the previous
+# package version.
 
 {
   scope,
@@ -44,7 +52,7 @@
 let
   name = scope.instanceName;
   who = "tempo ${scope.namespaceName}/${name}";
-  release = "3.1.0";
+  release = "3.1.1";
 
   httpPort = 3200;
   otlpGrpcPort = 4317;
@@ -274,6 +282,13 @@ in
     owner = "platform";
     defaultAliases = [ "tempo" ];
     availability.max = "none";
+    # Tempo's documentation requires Kubernetes 1.25 or later for Tempo 3
+    # (the Software requirements of the tempo-distributed get-started page),
+    # and states no upper bound. Move the lower bound with `release`.
+    k8s = {
+      minVersion = "1.25";
+      reason = "[K2763] Tempo ${release} requires Kubernetes 1.25 or later. Deploy a Kix release with an older tempo package, or move the cluster to Kubernetes 1.25 or later first";
+    };
   };
 
   options = import ./options.nix {
