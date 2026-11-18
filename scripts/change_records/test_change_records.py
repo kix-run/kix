@@ -179,8 +179,16 @@ class ValidationTest(RepoTest):
             record('kind = "fixed"\ncve = ["CVE-1"]'), "`cve` is only for"
         )
 
-    def test_security_needs_workaround(self):
-        self.assertProblem(record('kind = "security"'), "needs a `workaround`")
+    def test_security_without_workaround(self):
+        self.repo.write(
+            "changes/x.md", record('kind = "security"\ncve = ["CVE-2026-1"]')
+        )
+        self.assertEqual(self.problems(), [])
+
+    def test_empty_workaround(self):
+        self.assertProblem(
+            record('kind = "security"\nworkaround = " "'), "Leave it out"
+        )
 
     def test_workaround_only_with_security(self):
         self.assertProblem(

@@ -40,7 +40,7 @@ Only `kind` is required. Any field not listed here is an error.
 | `required-stop` | bool | Clusters must be deployed with this release before upgrading further. Only with `state = true`. This should be rare |
 | `id` | string | `K` and four digits. Required for `kind = "error"`, optional otherwise. Unique across `changes/` |
 | `cve` | list of strings | CVE ids. Only with `kind = "security"` |
-| `workaround` | string | How to get the fix without upgrading. Required for `kind = "security"` |
+| `workaround` | string | How to get the fix without upgrading. Only with `kind = "security"`. Leave it out when there is no workaround, such as a fix that only a new image carries |
 
 ## Kinds
 
