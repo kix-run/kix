@@ -38,6 +38,15 @@
 # Limits: the hostnames and target Services live in Cloudflare, so Kix
 # derives no dependency or network policy from them. The metrics port
 # (2000) serves the probes; the package renders no ServiceMonitor.
+#
+# Upgrades: cloudflared keeps no state, so a pod on 2026.11.1 starts from
+# nothing that 2026.9.3 left, and each pod is replaced once. Both versions
+# take the same flags and the same token. Cloudflare publishes no rule on
+# which versions can upgrade to which. To go back, set `image.tag` and
+# `image.digest` to the older image, or deploy the previous version of this
+# package. Upstream publishes no range of supported Kubernetes versions, and
+# cloudflared does not call the Kubernetes API, so the package sets no
+# `meta.k8s`.
 
 {
   scope,
@@ -47,7 +56,7 @@
 }:
 
 let
-  release = "2026.9.3";
+  release = "2026.11.1";
   name = scope.instanceName;
   who = "cloudflared ${scope.namespaceName}/${name}";
 in
@@ -64,7 +73,7 @@ in
     image = kix.options.image {
       repository = "docker.io/cloudflare/cloudflared";
       tag = release;
-      digest = "sha256:072c067d25ccbe61d46e18f0d0723255f2bb5304f7317caa95b27031520ff92c";
+      digest = "sha256:e613aadbc2d9511785d2e67a86b0c8ac18dd63a3f9af0d06faf04cbfdcb35f2d";
     };
     replicas = lib.mkOption {
       type = lib.types.int;
