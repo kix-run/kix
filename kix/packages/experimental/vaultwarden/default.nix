@@ -47,6 +47,18 @@
 # Escape hatches: `env` for Vaultwarden settings (signups, invitations,
 # ADMIN_TOKEN), `ingress` for the route, and the instance's `partsOverlays`.
 #
+# Upgrades: Vaultwarden runs its pending database migrations when it starts.
+# 1.37.5 takes over the database and the data folder that 1.36.0 left behind,
+# and adds three nullable or defaulted columns. The image's user, port,
+# health path, and start script are unchanged. Upstream says nothing about
+# which versions upgrade directly to which, or about going back. 1.36.0
+# starts on a database that 1.37.5 migrated, ignores the new columns, and
+# reads and writes the vault, so going back is a deploy of the older
+# package. Since 1.37.0, Vaultwarden trusts the client IP header
+# (IP_HEADER, default X-Real-IP) only from private addresses. Set
+# IP_HEADER_TRUSTED_PROXIES in `env` when a proxy reaches it from a public
+# address. Since 1.37.5, an invalid setting in `env` stops startup.
+#
 # Limits: one replica with the Recreate strategy. The database password goes
 # into DATABASE_URL unescaped, so it must not contain URL delimiters such as
 # `@`, `/`, or `:`.
