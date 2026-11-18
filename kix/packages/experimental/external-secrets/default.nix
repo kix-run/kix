@@ -72,6 +72,16 @@
 # status conditions name failures. Fewer ready replicas than desired and
 # crash loops are left to prometheus-default-rules.
 #
+# Upgrades: v2.15.0 takes over directly from v2.11.0. The deploy updates the
+# CRDs, which add optional fields and keep every served and stored API
+# version, and restarts the three Deployments. The new controller reconciles
+# the ExternalSecrets and stores the old one left behind, and keeps the
+# Secrets they wrote. Upstream recommends upgrading one minor version at a
+# time (docs/introduction/stability-support.md) and names no release that
+# needs a migration step. Going back works. Deploying the v2.11.0 package
+# restores the old CRDs and controller, which read the objects v2.15.0 left
+# behind.
+#
 # Escape hatches: `extraArgs` and `env` for the controller;
 # `webhookCheck.image`; `partsOverlays` on any part.
 #
@@ -201,8 +211,14 @@ in
     defaultAliases = [ "externalSecrets" ];
     # One instance per cluster; see the header.
     conflictsWith = [ "cluster:externalSecrets" ];
-    # The vendored CRDs carry x-kubernetes-validations (CEL) rules.
-    k8s.minVersion = "1.25";
+    # The Kubernetes versions upstream supports for this release, from the
+    # table in docs/introduction/stability-support.md. Move both bounds with
+    # `release`.
+    k8s = {
+      minVersion = "1.37";
+      maxVersion = "1.37";
+      reason = "[K6770] External Secrets Operator ${release} supports Kubernetes 1.37 only. Deploy a Kix release with an older external-secrets package, or move the cluster to Kubernetes 1.37 first";
+    };
     network.intents = {
       # Provider APIs are runtime data in SecretStore specs. Cloud secret
       # managers serve HTTPS on 443.
@@ -260,7 +276,7 @@ in
     image = kix.options.image {
       repository = "ghcr.io/external-secrets/external-secrets";
       tag = release;
-      digest = "sha256:66fb710878cbf3eba4a927e35c5d75e29a202c9bab238aad64bfb23b786b962b";
+      digest = "sha256:6888f243e5f8f7592c6d7fae2a5547c9e33531441b47b53807b9093b25a00e31";
       description = "Image of the controller, the webhook, and the cert-controller. Its major.minor must match the vendored CRDs.";
     };
 
