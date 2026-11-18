@@ -3,4 +3,4 @@
 # ServiceAccount. The manifest's rabbitmq-cluster-service-binding-role is
 # left out: it only aggregates read access for a Service Binding
 # controller, which no package runs.
-https://github.com/rabbitmq/cluster-operator/releases/download/v2.23.0/cluster-operator.yml ClusterRole/rabbitmq-cluster-operator-role Role/rabbitmq-cluster-leader-election-role
+https://github.com/rabbitmq/cluster-operator/releases/download/v2.23.3/cluster-operator.yml ClusterRole/rabbitmq-cluster-operator-role Role/rabbitmq-cluster-leader-election-role

@@ -103,7 +103,7 @@
 # RabbitMQDiskNearAlarm can fire while the cluster is idle and healthy, and
 # at 2GB or less RabbitMQDiskAlarm fires too and publishers are blocked
 # from the first boot. Evaluation warns about such a `storage.size`.
-# The rules derive from the cluster-operator 2.23.0 rules in
+# The rules derive from the cluster-operator 2.23.3 rules in
 # observability/prometheus/rules/rabbitmq, rewritten to select the instance.
 # Left out: the file descriptor alarm rule, whose metric RabbitMQ 4.3.6 no
 # longer reports; queues without consumers, growing queues, unroutable
