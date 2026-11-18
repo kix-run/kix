@@ -24,10 +24,10 @@ let
   ]);
 in
 {
-  # The operator writes updateStatus on a VMServiceScrape only from a VMAgent
-  # or VMSingle that selects it, so the operator's own scrape is ready unless
-  # a consumer rejects it. The VMCluster, which the operator reconciles
-  # itself, must report operational.
+  # A VMServiceScrape is ready unless its updateStatus reads `failed`, so
+  # the operator's own scrape is ready with no VMAgent selecting it. The
+  # VMCluster, which the operator reconciles itself, must report
+  # operational.
   victoria-metrics-operator-config-kinds-ready-without-consumer =
     let
       scrapes = ofKind "VMServiceScrape" ms;

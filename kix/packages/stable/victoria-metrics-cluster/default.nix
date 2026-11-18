@@ -619,7 +619,7 @@ in
         ns = scope.namespaceName;
         # The operator's VMServiceScrape for each component sets `job` to
         # the component's Service name, such as vmstorage-<CR name>
-        # (factory/vmscrapes/servicescrape.go at operator v0.74.1). The
+        # (factory/vmscrapes/servicescrape.go at operator v0.75.2). The
         # `service` label is the same, but vmstorage's vmbackupmanager
         # endpoint shares that Service under job
         # `vmstorage-<name>-vmbackupmanager`, so only `job` picks out the

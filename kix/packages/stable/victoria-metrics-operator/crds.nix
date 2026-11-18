@@ -82,7 +82,7 @@ let
   # (`factBehavior.selfScrapes`), so the netpol scrape join opens the paths
   # from the VMAgents that select them. The operator makes a VMServiceScrape
   # named and labelled like the operand's Service (factory/build/vmscrape.go
-  # at operator v0.74.1), scraping the `http` port and, with a
+  # at operator v0.75.2), scraping the `http` port and, with a
   # config-reloader sidecar, its port 8435. A VMAgent in daemonSetMode gets
   # a VMPodScrape labelled with the pod selector instead. A CR with
   # `disableSelfServiceScrape`, or the operator variable
@@ -341,13 +341,13 @@ let
   # time, so Kix keeps no kind list.
   #
   # The operator reconciles operand kinds (VMCluster, VMAgent, ...) itself
-  # and always writes updateStatus. It writes updateStatus on a
-  # configuration kind only from a consumer that selects it: a VMAgent or
-  # VMSingle for the scrape kinds, a VMAlert for VMRule, a VMAlertmanager
-  # for VMAlertmanagerConfig, a VMAuth for VMUser, a VMAnomaly for
-  # VMAnomalyConfig (factory/reconcile/status.go, writeAggregatedStatus, at
-  # v0.74.1). With no consumer the field never appears, so those kinds are
-  # ready unless a consumer rejected them (`failed`).
+  # and always writes updateStatus. On a configuration kind, operator
+  # v0.75.2 writes `operational`, or `failed` when it cannot parse the
+  # object's spec, whether or not a VMAgent, VMAlert, or other consumer
+  # selects it. Each consumer's verdict goes to status.conditions instead.
+  # Operators before v0.75.0 wrote the field only from a selecting
+  # consumer, so the rule also accepts an absent field and is ready unless
+  # the field reads `failed`.
   #
   # The parked kinds (VTCluster, VLAgent, ...) inherit the operand rule on
   # the operator's convention alone. If the operator never writes

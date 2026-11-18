@@ -4,8 +4,8 @@
 # them into running workloads, and converts prometheus-operator objects
 # (ServiceMonitor, PodMonitor, PrometheusRule, Probe) into VM equivalents.
 #
-# RBAC is curated from the upstream chart's role.yaml (victoria-metrics-
-# operator 0.67.x, operator v0.74.1). The wide core/apps/rbac grants are
+# RBAC is curated from upstream's config/rbac/role.yaml at operator
+# v0.75.2. The wide core/apps/rbac grants are
 # required: the operator creates operand workloads, their Services,
 # ServiceAccounts, and per-operand RBAC. K8s escalation prevention means
 # the operator must itself hold everything it grants (nodes, /metrics

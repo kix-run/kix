@@ -10,6 +10,16 @@
 # every existing kix.monitor call and app-package ServiceMonitor works
 # unchanged when this package holds the `prometheus` alias.
 #
+# Upgrades: operator v0.75.2 takes over the objects v0.74.1 left behind
+# with no migration. It needs the VTAgent CRD and the grants on it, which
+# this package ships, and it stops when they are missing. On its first
+# start it restarts each VMAlertmanager pod, and each VMAgent and VMAlert
+# pod that watches a config folder, because it adds a flag to their
+# config-reloader. Upstream says nothing about going back. Deploying the
+# previous package over this one runs v0.74.1 again: it ignores the
+# VTAgent CRD, which stays on the cluster, and it reconciles the same
+# objects.
+#
 # No conflictsWith entry for prometheus-operator: mixed clusters are
 # legitimate, and DI ambiguity on the `prometheus` alias is the guard
 # against wiring both at once.
@@ -40,7 +50,7 @@
 }:
 
 let
-  release = "v0.74.1";
+  release = "v0.75.2";
   inherit (import ./kinds.nix) promCompatDefs;
 
   # Removed options and what replaces each. They stay declared, hidden, so
@@ -65,6 +75,7 @@ in
     # One operator watches every namespace, so consumers in any namespace
     # find it by name.
     scope = "cluster";
+    # Upstream's FAQ supports Kubernetes 1.25 and later, with no upper bound.
     k8s.minVersion = "1.25";
     # This package owns the operator.victoriametrics.com annotation domain
     # (it stamps its CRDs with it); declared for the
@@ -83,7 +94,7 @@ in
     image = kix.options.image {
       repository = "docker.io/victoriametrics/operator";
       tag = release;
-      digest = "sha256:7310c4a80b94f530c5f0b1fcf6d6eaf933f39cc5704e983900d9cfd6b31f9dc1";
+      digest = "sha256:237fac68b608c7ed7bc4c47ad25ebcb1cbe973c9a789661d2b6cfaa83093f87a";
     };
     replicas = lib.mkOption {
       type = lib.types.int;
