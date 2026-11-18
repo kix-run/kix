@@ -110,14 +110,10 @@ in
           explicitOverride = null;
         };
         # Missing DNS prevents Kix from ordering workloads after a DNS provider.
-        # This remains a warning until diagnostics support severity levels.
-        # An inactive optional instance answering `dns`, such as a flavour's
-        # platform-dns import, declares DNS without ordering on it.
-        _dnsResolutionCheck =
-          if !_dnsResolution.found && !((clusterCtx.inactiveOptionalKeys or { }) ? dns) then
-            builtins.trace "[kix] warning: no DNS instance (alias 'dns') was found. Kix will not wait for DNS to be ready before deploying workloads. Add a DNS provider or import if this ordering is required" null
-          else
-            null;
+        # The cluster reports it once as a warning. An inactive optional
+        # instance answering `dns`, such as a flavour's platform-dns import,
+        # declares DNS without ordering on it.
+        _dnsMissing = !_dnsResolution.found && !((clusterCtx.inactiveOptionalKeys or { }) ? dns);
         _dnsRoot =
           if !_dnsResolution.found || (_dnsResolution.direct or false) then
             null
@@ -873,8 +869,8 @@ in
         };
 
       in
-      builtins.seq _dnsResolutionCheck (
-        builtins.seq diagnostics.emitWarnings (
+      builtins.seq _dnsMissing (
+        builtins.seq diagnostics.evaluateWarnings (
           builtins.seq diagnostics.emitAssertionWarnings (
             let
               view' = mkPackageView {
@@ -896,6 +892,7 @@ in
               _depLinks = directDepLinks;
               _hookResources = _scopeInjectedResources ++ processorResources;
               _scorecardFindings = scorecardFindings;
+              inherit _dnsMissing;
               _diagnostics = {
                 warnings = diagnostics.allWarnings;
                 assertions = diagnostics.allAssertions;
