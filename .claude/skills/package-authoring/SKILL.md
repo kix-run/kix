@@ -181,7 +181,7 @@ is a finding from the upstream source, not a default.
    concurrent-safe (then Recreate, keycloak:83-88); session affinity (a
    Service setting, not a ceiling); cron or queue singletons (a ceiling on that
    workload only, or upstream's "run the scheduler in one pod" flag); one RWO
-   volume as the state (immich:157-159); one owner of an OS resource,
+   volume as the state (immich:174-176); one owner of an OS resource,
    such as a network interface. For each piece of in-memory state, also note what a
    restart loses (sessions, buffered events), since Recreate and a singleton
    make every deploy a restart; the header's `Limits:` says it.
@@ -251,7 +251,7 @@ the defaults fails there.
 - A package that renames a dependency sets `deps.<arg>.renamedFrom = { name
   = "<old name>"; id = "K1234"; }`, with the id of the `error` change
   record. The error for a missing dependency then carries the id and says
-  what the dependency was called before (immich:192-195).
+  what the dependency was called before (immich:209-212).
 - A consumer that reads an optional field (`username`, `extensions`, `tls`)
   handles its absence on a `kix.mkImport` stand-in
   (`kix/contracts/stable/postgresDatabase.nix:1-8`, D22), and acts on it where the
@@ -442,7 +442,7 @@ The only place in this skill with package line numbers. `pkg:N` is
 | Pattern | Reference |
 |---|---|
 | Release binding, digest, `who`, `startupSeconds` in one `let` | metabase:89-97 |
-| Shared release file for a release group | `immich/release.nix`, immich:107 |
+| Shared release file for a release group | `immich/release.nix`, immich:121 |
 | Running version published from the image (`out.version`) | echo-server:228; among several images, valkey |
 | Follower image tag with `tagText` and `mkDefault` | n8n:268-275, 308 |
 | `kix.contracts.secret.helpers.use`, read through the binding | metabase:158-163, 208, 264 |
@@ -474,7 +474,7 @@ The only place in this skill with package line numbers. `pkg:N` is
 | Config-derived egress (a port read from config) through `kix.operandPolicy` | plausible:712-737; cnpg-cluster:591-656 |
 | A step after the migrations on one replica of a dependency: an init container running a sibling script from a ConfigMap, with a checksum annotation | plausible:518-561, 605-606; `plausible/replicate.py` |
 | One alias, two implementations, a contract file | `kix/contracts/experimental/clickhouse.nix`; clickhouse:101, clickhouse-cluster:90 |
-| Renamed dependency with `renamedFrom` | immich:192-195; `kix/contracts/stable/redis.nix` (`helpers.renamedFrom`) |
+| Renamed dependency with `renamedFrom` | immich:209-212; `kix/contracts/stable/redis.nix` (`helpers.renamedFrom`) |
 
 A script of more than a few lines is a sibling file read with
 `builtins.readFile`, so it can be linted and run alone
