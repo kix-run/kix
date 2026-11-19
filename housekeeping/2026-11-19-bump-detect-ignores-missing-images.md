@@ -1,0 +1,3 @@
+# 2026-11-19 · `.github/bump/detect.py` · Bump detection proposes a release whose image is not published yet.
+
+Detection reads only upstream version tags, so it starts a bump for a release whose container image does not exist. On 2026-11-19 it proposed echo-server 1.30.7 (upstream tag `release-1.30.7`, published 2026-11-18). `docker.io/nginxinc/nginx-unprivileged:1.30.7-alpine` was not on Docker Hub, and the newest 1.30 tag there was 1.30.6. The bump agent cannot pin a digest, so the bump is held. The check should be that every image tag the package pins exists before the bump starts. See `.github/workflows/bump-detect.yml` (header) and `.github/bump/sources.toml` (the `[echo-server]` entry).
