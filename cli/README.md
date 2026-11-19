@@ -500,7 +500,7 @@ writes. Versions before 0.10.0-rc.4 take the older spellings `list packages
   before the first pin (`fix-needed`, the step `started`) and after each
   step, so a project left part of the way always has one. A state that is
   `fix-needed` or `edit-needed` resumes: `from`, `before`, the steps, the
-  acknowledgements, `packagesInUse`, and `requested` (the first run's
+  acknowledgements, `packageIdsInUse`, and `requested` (the first run's
   `--to`, or `latest`, used when the resume passes none) come from the
   file, and the target and any required stop are worked out again. A
   state that Kix 0.10.0-rc.4 or older wrote has no `requested`, and its

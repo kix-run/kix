@@ -173,7 +173,7 @@ A package, a contract, or a module is stable or experimental. The folder it is i
 - A package becomes stable once it has run in production long enough to settle, such as in more than one Lithus cluster. New packages start experimental.
 - `availablePackages = packages` offers stable packages only. A cluster names each experimental package Kix may add: `packages // { inherit (packages.experimental) cert-manager; }`.
 - An experimental package may publish a stable contract. A stable package can then take it as a dependency.
-- Graduation is a folder move, in any release, and it changes nothing that is deployed. After it, the experimental name fails with an error that gives the stable one. Do not add a forwarding name.
+- Graduation is a folder move, in any release. It changes one thing that is deployed: `spec.package` on each PackageInstance of the package goes from `experimental/<name>` to `<name>`, so the Change kind check asks for a record. After it, the experimental name fails with an error that gives the stable one. Do not add a forwarding name.
 - An experimental package may have the name of a stable package. It is a rework of that package and replaces it in a minor release.
 - No package or contract is named `stable` or `experimental`.
 - The library has no experimental level. A break to a library function needs a minor release.

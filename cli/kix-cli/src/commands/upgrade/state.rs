@@ -93,7 +93,7 @@ pub struct UpgradeState {
     /// started from listed them. Absent when that Kix could not list them,
     /// and then no record is marked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub packages_in_use: Option<Vec<String>>,
+    pub package_ids_in_use: Option<Vec<String>>,
 }
 
 impl UpgradeState {
@@ -170,7 +170,7 @@ mod tests {
             sensitive_changes: 1,
             cli_hits: vec![],
             before: "/cache/before".into(),
-            packages_in_use: Some(vec!["harbor".into(), "experimental/coredns".into()]),
+            package_ids_in_use: Some(vec!["harbor".into(), "experimental/coredns".into()]),
         };
         state.write(dir.path()).unwrap();
         let text = std::fs::read_to_string(dir.path().join(FILE)).unwrap();

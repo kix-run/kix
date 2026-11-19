@@ -552,6 +552,7 @@ rec {
       scope,
       availability ? "none",
       kix ? kixlib,
+      instance ? null,
     }:
     packageLib.call {
       inherit
@@ -559,6 +560,7 @@ rec {
         scope
         availability
         kix
+        instance
         ;
     };
 

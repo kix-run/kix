@@ -210,6 +210,7 @@ in
           scope = scope';
           availability = availability.level;
           kix = packageKix;
+          instance = where;
         };
 
         packageMeta = raw.meta or { };

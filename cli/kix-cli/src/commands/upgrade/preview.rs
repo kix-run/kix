@@ -31,7 +31,7 @@ pub(super) fn dry_run(
     let (in_use, known) = match (resume, &from_kix) {
         (Some(s), _) => (
             saved_in_use(s),
-            Known::of(s.packages_in_use.is_some(), None),
+            Known::of(s.package_ids_in_use.is_some(), None),
         ),
         // Kix X would evaluate the tag flake.nix now names, and Nix
         // would rewrite the lock, so a dry run does not ask it.
@@ -63,7 +63,7 @@ pub(super) fn dry_run(
 
 /// Return the packages in use that a stopped run recorded.
 pub(super) fn saved_in_use(s: &UpgradeState) -> Option<BTreeSet<String>> {
-    s.packages_in_use
+    s.package_ids_in_use
         .as_ref()
         .map(|p| p.iter().cloned().collect())
 }

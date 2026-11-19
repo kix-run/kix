@@ -18,8 +18,8 @@ in
       postHooks ? [ ],
       inverseDeps ? [ ],
       version ? null,
-      # The id of the Kix package the instance runs, or null for a package
-      # that is not one of Kix's own.
+      # Set `package` to the id of the Kix package the instance runs. Leave
+      # it null for a package that is not one of Kix's own.
       package ? null,
       labels ? { },
       extraAnnotations ? { },

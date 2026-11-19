@@ -82,7 +82,7 @@ impl Setup {
         s.write("fake/clusters.json", r#"["east", "west"]"#);
         s.write(
             "fake/packages.json",
-            r#"[{"name": "web", "status": "installed [shop]", "package": "web"},
+            r#"[{"name": "frontend", "status": "installed [shop]", "package": "web"},
                 {"name": "db", "status": "installed [shop]", "package": "db"},
                 {"name": "site", "status": "installed [shop]", "package": null},
                 {"name": "echo-server", "status": "available", "package": "echo-server"}]"#,

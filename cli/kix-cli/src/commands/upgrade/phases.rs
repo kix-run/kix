@@ -137,7 +137,7 @@ impl Run {
             sensitive_changes: 0,
             cli_hits: Vec::new(),
             before: self.work.join("before"),
-            packages_in_use: in_use.map(|p| p.iter().cloned().collect()),
+            package_ids_in_use: in_use.map(|p| p.iter().cloned().collect()),
         });
         self.save()
     }

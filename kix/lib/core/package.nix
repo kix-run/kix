@@ -13,8 +13,7 @@ let
   typeOf = value: if builtins.isAttrs value then value._type or "" else "";
 in
 rec {
-  # Name the arguments Kix passes to a package function. Any other argument
-  # of a package function is not a package argument.
+  # List the arguments Kix passes to a package function.
   systemArgNames = [
     "scope"
     "lib"
@@ -50,8 +49,9 @@ rec {
       "kix-removed"
     ];
 
-  # `lib.isFunction` accepts a package of Kix's own set, which is an
-  # attribute set that can be called. `builtins.isFunction` does not.
+  # Return whether `value` is a package function. A package of Kix's own
+  # set is an attribute set that can be called, which `lib.isFunction`
+  # accepts and `builtins.isFunction` does not.
   isFunction = lib.isFunction;
 
   isInline = value: builtins.isAttrs value && value ? build && !isImport value && !isFunction value;
@@ -69,7 +69,8 @@ rec {
   # Return what a package defines: `meta`, `options`, `config`, and `build`.
   # A package function receives `scope` and `lib`, and `kix` and
   # `availability` when it names them. `extraArgs` adds arguments that the
-  # caller knows the function names.
+  # caller knows the function names. `instance` names the instance in the
+  # error for a value that is not a package.
   call =
     {
       package,
@@ -77,6 +78,7 @@ rec {
       kix,
       availability ? "none",
       extraArgs ? { },
+      instance ? null,
     }:
     if isRefused package then
       fail package.error
@@ -88,8 +90,19 @@ rec {
         // lib.intersectAttrs (argsOf package) { inherit kix availability; }
         // extraArgs
       )
+    else if isInline package || isImport package then
+      package
     else
-      package;
+      fail {
+        inherit instance;
+        message = "`package` is ${
+          if builtins.isAttrs package then
+            "an attribute set without a `build` attribute"
+          else
+            "a value of type `${builtins.typeOf package}`"
+        }, so Kix cannot use it as a package.";
+        fix = "Set `package` to a built-in package (`packages.<name>` or `packages.experimental.<name>`), a package function (`{ scope, lib, ... }: { ... }`), an inline attribute set with `build`, or `kix.mkImport { ... }`.";
+      };
 
   # Return a package's `meta` without building it. A package function is
   # called with an empty scope and `availability = "none"`, so `meta` must
@@ -97,8 +110,11 @@ rec {
   # instance is known.
   metaOf =
     { package, kix }:
-    (call {
-      inherit package kix;
-      scope = { };
-    }).meta or { };
+    if isFunction package || isRefused package then
+      (call {
+        inherit package kix;
+        scope = { };
+      }).meta or { }
+    else
+      package.meta or { };
 }

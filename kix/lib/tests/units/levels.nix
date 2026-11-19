@@ -338,4 +338,20 @@ in
     in
     (recorded == expected && listed == expected)
     || throw "levels: instances recorded ${builtins.toJSON recorded} and listed ${builtins.toJSON listed}";
+
+  # A value that is no package is refused where Kix calls the package.
+  levels-not-a-package-is-refused =
+    lib.all
+      (
+        package:
+        evalFails (mkCluster [
+          { instances.demo.app = { inherit package; }; }
+        ])
+      )
+      [
+        packages.stable
+        "echo-server"
+        { meta.version = "1"; }
+      ]
+    || throw "levels: a value that is not a package was accepted as one";
 }
