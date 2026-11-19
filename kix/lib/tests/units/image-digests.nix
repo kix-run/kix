@@ -1,97 +1,22 @@
 # Tests that every default image a package Kix ships is pinned by digest.
 # A tag can move to other content on the registry, so a default without a
 # digest deploys whatever the tag points at on the day of the pull. The
-# check reads each package's option declarations and finds the image
-# options that `kix.options.image` builds, at any depth. An image option
-# with a default repository and tag must also carry a default digest, and
-# its repository must name the registry host.
+# check reads the default images that `kix/packages/default-images.nix`
+# finds in each package's option declarations. An image option with a
+# default repository and tag must also carry a default digest, and its
+# repository must name the registry host.
 # `kix/packages/unpinned-images.nix` lists the images that cannot take a
 # digest. A container image written as a string literal in a package file
 # escapes the option walk, so a second check refuses those.
 
 {
   lib,
-  kixlib,
   ...
 }:
 
 let
-  packagesByLevel = import ../../../packages/by-level.nix { inherit lib; };
+  defaultImages = import ../../../packages/default-images.nix { inherit lib; };
   unpinnedAllowed = import ../../../packages/unpinned-images.nix;
-
-  # A scope with the values option declarations read for their defaults.
-  stubScope = {
-    instanceName = "inst";
-    namespaceName = "ns";
-  };
-
-  optionsOf =
-    package:
-    let
-      fnArgs = builtins.functionArgs package;
-      result = package (
-        {
-          scope = stubScope;
-          inherit lib;
-        }
-        // lib.optionalAttrs (fnArgs ? kix) { kix = kixlib; }
-        // lib.optionalAttrs (fnArgs ? availability) { availability = "none"; }
-      );
-    in
-    result.options or { };
-
-  # The options a submodule declares, under any `nullOr`, `listOf`, or
-  # `attrsOf`, or `{ }` for any other type.
-  subOptionsOf =
-    t:
-    if t == null then
-      { }
-    else if
-      builtins.elem t.name [
-        "nullOr"
-        "listOf"
-        "attrsOf"
-        "lazyAttrsOf"
-      ]
-    then
-      subOptionsOf (t.nestedTypes.elemType or null)
-    else if t.name == "submodule" then
-      removeAttrs (t.getSubOptions [ ]) [ "_module" ]
-    else
-      { };
-
-  isImageOption =
-    v:
-    let
-      subs = subOptionsOf (v.type or null);
-    in
-    subs ? repository && subs ? tag && subs ? digest && subs ? pullPolicy;
-
-  # Return `[ { path; default; } ]` for every image option under `opts`.
-  imagesIn =
-    prefix: opts:
-    lib.concatLists (
-      lib.mapAttrsToList (
-        name: v:
-        let
-          path = if prefix == "" then name else "${prefix}.${name}";
-        in
-        if (v._type or null) == "option" then
-          if isImageOption v then
-            [
-              {
-                inherit path;
-                default = v.default or { };
-              }
-            ]
-          else
-            imagesIn path (subOptionsOf (v.type or null))
-        else if builtins.isAttrs v && !(v ? _type) then
-          imagesIn path v
-        else
-          [ ]
-      ) opts
-    );
 
   hasDefaultImage = d: (d.repository or null) != null && (d.tag or null) != null;
   isDigest = d: d != null && builtins.match "sha256:[0-9a-f]{64}" d != null;
@@ -104,18 +29,18 @@ let
     in
     lib.hasInfix "/" repo && (lib.hasInfix "." first || lib.hasInfix ":" first || first == "localhost");
 
-  allPackages = packagesByLevel.stable // packagesByLevel.experimental;
-  images = lib.concatLists (
-    lib.mapAttrsToList (
-      pkgName: package:
-      map (i: i // { name = "${pkgName}.${i.path}"; }) (
-        builtins.filter (i: hasDefaultImage i.default) (imagesIn "" (optionsOf package))
-      )
-    ) allPackages
-  );
+  images = lib.concatMap (
+    level:
+    lib.concatLists (
+      lib.mapAttrsToList (
+        pkgName: pkgImages:
+        map (i: i // { name = "${pkgName}.${i.path}"; }) (builtins.filter hasDefaultImage pkgImages)
+      ) defaultImages.${level}
+    )
+  ) (builtins.attrNames defaultImages);
 
-  unpinned = map (i: "${i.name} (${i.default.repository}:${i.default.tag})") (
-    builtins.filter (i: !(unpinnedAllowed ? ${i.name}) && !(isDigest (i.default.digest or null))) images
+  unpinned = map (i: "${i.name} (${i.repository}:${i.tag})") (
+    builtins.filter (i: !(unpinnedAllowed ? ${i.name}) && !(isDigest i.digest)) images
   );
   stale = builtins.filter (k: !(builtins.any (i: i.name == k) images)) (
     builtins.attrNames unpinnedAllowed
@@ -144,8 +69,8 @@ let
       )
     )
   ) (nixFiles packagesDir);
-  noHost = map (i: "${i.name} (${i.default.repository})") (
-    builtins.filter (i: !(hasRegistryHost i.default.repository)) images
+  noHost = map (i: "${i.name} (${i.repository})") (
+    builtins.filter (i: !(hasRegistryHost i.repository)) images
   );
 in
 {

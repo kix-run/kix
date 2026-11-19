@@ -356,6 +356,13 @@ jobs:
           done
           exit "$fail"
 
+      # The agent tests on arm64, and most clusters run amd64.
+      - name: Check every default image has an amd64 build
+        if: env.OUTCOME == 'upgraded'
+        run: |
+          read -ra dirs <<<"$DIRS"
+          nix shell nixpkgs#crane nixpkgs#python3 -c python3 .github/bump/check-images.py "${dirs[@]}"
+
   publish:
     needs: [agent, verify]
     runs-on: [self-hosted, spindle-2c-4g, access=isolated]
