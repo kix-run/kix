@@ -24,15 +24,17 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: bump-merge
-  cancel-in-progress: false
-
 jobs:
   merge:
     if: >-
       github.event_name == 'workflow_dispatch'
       || startsWith(github.event.workflow_run.head_branch, 'bump/')
+    # The group is on the job, not the workflow. A run whose job is skipped
+    # then never joins it, so runs for other branches cannot cancel a run
+    # that waits for a machine.
+    concurrency:
+      group: bump-merge
+      cancel-in-progress: false
     runs-on: [self-hosted, spindle-2c-4g, access=isolated]
     timeout-minutes: 10
     steps:
