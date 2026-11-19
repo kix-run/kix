@@ -139,10 +139,10 @@ fn preview(p: &Preview) {
             Known::Clusters(n) => out::legend(p.applying, Some(n)),
             Known::Packages => out::legend(p.applying, None),
             Known::Nothing => Some(format!(
-                "  (current Kix {from} is not installed, so notes are not marked)"
+                "  (current Kix {from} is not installed, so notes for packages you use are not marked)"
             )),
             Known::Unreported => Some(format!(
-                "  (current Kix {from} did not report which packages your clusters use, so notes are not marked)"
+                "  (current Kix {from} did not report which packages your clusters use, so matching notes are not marked)"
             )),
         };
         if let Some(legend) = legend {

@@ -413,7 +413,7 @@ fn dry_run_asks_the_installed_kix_which_packages_are_in_use() {
     // is marked.
     assert!(
         out.contains(
-            "2 changes between 9.1.0 and 9.3.0:\n  * names a package your 2 clusters use\n"
+            "2 changes between 9.1.0 and 9.3.0:\n  * package used in this project (2 clusters)\n"
         ),
         "{out}"
     );
@@ -524,7 +524,7 @@ fn a_failed_jump_steps_and_stops_at_the_first_failing_minor_then_resumes() {
         "{out}"
     );
     assert!(
-        out.contains("  Config changes required in Kix 9.2.0:\n    * names a package this project's clusters use\n  * [K0001] web:"),
+        out.contains("  Config changes required in Kix 9.2.0:\n    * package used in this project\n  * [K0001] web:"),
         "{out}"
     );
     assert!(

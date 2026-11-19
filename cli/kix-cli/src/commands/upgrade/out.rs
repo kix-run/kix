@@ -146,10 +146,10 @@ pub fn legend(applying: &[Applying], clusters: Option<usize>) -> Option<String> 
         .any(|a| a.names_package_in_use)
         .then(|| match clusters {
             Some(n) => format!(
-                "  * names a package your {n} {} use",
+                "  * package used in this project ({n} {})",
                 if n == 1 { "cluster" } else { "clusters" }
             ),
-            None => "  * names a package this project's clusters use".to_string(),
+            None => "  * package used in this project".to_string(),
         })
 }
 

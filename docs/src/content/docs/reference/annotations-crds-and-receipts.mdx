@@ -230,7 +230,7 @@ spec:
 | `spec.instanceName` | Managed and import instances | Name of the instance within its namespace. |
 | `spec.namespaceName` | Managed and import instances | Namespace of the instance, or its `_`-prefixed key such as `_cluster`. Kix groups a package's resources by this value, not by the record's own namespace. |
 | `spec.version` | Managed and import instances | The instance's `version` option, else the `out.version` the package builds, else the package's `meta.version`. Left out when none is set, or when `out.version` is `null` because the image tag names no version. |
-| `spec.package` | Instances of a package from `packages` | The id of the package the instance runs. A stable package's id is its name, such as `harbor`. An experimental package's id is `experimental/<name>`, such as `experimental/coredns`. The release notes in `CHANGELOG.md` name packages by the same id, so a tool can tell which instances a note applies to. Left out for an import, for a package defined in your own project, and for a function of your own that calls a Kix package. |
+| `spec.package` | Instances of built-in packages | Package ID of the built-in Kix package: `<name>` for stable packages (such as `harbor`) and `experimental/<name>` for experimental packages (such as `experimental/coredns`). Kix release notes use the same IDs, so tools can match notes to running instances. Omitted for imports, custom packages, and wrapper functions around built-in packages. |
 | `spec.lifecycle` | When `meta.lifecycle` is set | Workload lifecycle (`"stateful"`, `"stateless"`, or `"ephemeral"`). Only `"stateful"` changes build validation and deploy behavior; other values are informational. |
 | `kix.run/root` | Managed instances | Name of the package's `root` resource. |
 | `kix.run/package-requires` | When non-empty | Comma-separated `<Kind>/<name>` entries that the package's `root` resource transitively depends on. |
@@ -244,7 +244,7 @@ spec:
 | `kix.run/import-fqdn`, `kix.run/service-selector`, `kix.run/service-ports`, `kix.run/service-labels` | `scope.mkServiceRef` and Service imports | Service address, JSON-encoded selector, ports, and metadata labels used by network policy derivation and scorecard rules. |
 | `kix.run/crd-kind`, `kix.run/crd-version`, `kix.run/crd-served-versions`, `kix.run/crd-scope` | `scope.mkCRDRef` and `kix.mkImport { crds }` markers | CRD kind, default version, comma-separated served versions, and scope (`Namespaced` or `Cluster`) verified against the live CRD during `kix deploy`. |
 
-`spec.package` holds the id the package had in the Kix version that built the record. When an experimental package becomes stable, its id changes from `experimental/<name>` to `<name>`, and the record keeps the old id until the next deploy. A tool that compares a record with later release notes treats an equal id as a match, and an equal name with a different level as a possible match.
+`spec.package` stores the package ID from the Kix version that built the `PackageInstance`. When an experimental package graduates to stable, its ID changes from `experimental/<name>` to `<name>`, while existing cluster records keep `experimental/<name>` until the next deploy. A tool comparing a live record against later release notes treats an exact ID match as a match, and a matching `<name>` across stability levels as a possible match.
 
 ## Deploy receipt schema
 

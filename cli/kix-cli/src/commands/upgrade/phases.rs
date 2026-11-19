@@ -235,7 +235,7 @@ fn print_matching(matching: &[Applying], previous: &Version, failing: &Version) 
         ),
     }
     if matching.iter().any(|a| a.names_package_in_use) {
-        println!("    * names a package this project's clusters use");
+        println!("    * package used in this project");
     }
     for a in matching {
         let gutter = if a.names_package_in_use {

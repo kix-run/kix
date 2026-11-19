@@ -1,4 +1,4 @@
 +++
 kind = "fixed"
 +++
-`kix list packages <cluster>` now lists each instance on its own row. Before, two instances with the same name in different namespaces were printed as one row, which showed the namespace of one and the version and owner of the other.
+`kix list packages <cluster>` now lists every instance on its own row. Previously, instances with the same name in different namespaces were merged into a single row that mixed one instance's status and namespace with another's version and owner.
