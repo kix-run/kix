@@ -375,6 +375,48 @@ in
     )
     || throw "helmChartConfig values merge: ${builtins.toJSON values}";
 
+  # The HelmChartConfig carries spec.failurePolicy only when the instance
+  # sets the option, so the environment's own policy applies otherwise.
+  # Evaluation fails for a value outside the three helm-controller knows,
+  # and in the two deliveries that write no HelmChartConfig. Control: those
+  # two deliveries build without the option.
+  cilium-helmchartconfig-failure-policy =
+    let
+      specOf =
+        config:
+        (byName "rke2-cilium" (
+          ofKind "HelmChartConfig" (
+            manifests (rke2CiliumCluster {
+              inherit config;
+            })
+          )
+        )).spec;
+      policies = lib.genAttrs [ "abort" "reinstall" "retry" ] (
+        policy: (specOf { failurePolicy = policy; }).failurePolicy
+      );
+    in
+    (
+      !(specOf { } ? failurePolicy)
+      &&
+        policies == {
+          abort = "abort";
+          reinstall = "reinstall";
+          retry = "retry";
+        }
+      && evalFails (rke2CiliumCluster {
+        config.failurePolicy = "ignore";
+      })
+      && evalFails (platformCiliumCluster {
+        config.failurePolicy = "abort";
+      })
+      && !(evalFails (platformCiliumCluster { }))
+      && evalFails (chartCluster {
+        config.failurePolicy = "abort";
+      })
+      && !(evalFails (chartCluster { }))
+    )
+    || throw "helmChartConfig failurePolicy: ${builtins.toJSON policies}";
+
   # With the import's out.helmChartConfig = null the instance writes no
   # Cilium configuration, and refuses `values`.
   cilium-none-delivery =
