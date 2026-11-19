@@ -1,6 +1,6 @@
 # 173: Kubernetes ranges and the release window
 
-**Status:** RFC / Draft
+**Status:** Implemented (kix#257, kix-examples#14, 2026-11-19). §5.1 to §5.3 shipped. §5.4, the kind runs of §5.3, and the remaining questions of §9 are in `ROADMAP.md § Open design questions`. kube-state-metrics went further than §6: it leaves out the collectors the cluster does not serve and refuses nothing new.
 **Related:** `155_platform_versions_and_compatibility.md` (principle 4, §5.4, §5.6), `172_package_version_upkeep.md`, `172b_bump_workflow_operations.md`, `140_catalogue_versions_and_upgrade_windows.md`, `127_compiler_target_model.md` (three-valued facts)
 
 ---
