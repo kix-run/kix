@@ -3,7 +3,7 @@
 
 {
   lib,
-  kixlib,
+  eval,
   mkCluster,
   evalFails,
   ...
@@ -25,18 +25,14 @@ let
     path:
     let
       name = baseNameOf path;
-      package = import (../../../packages + "/${path}");
-      args = {
-        inherit lib;
-        kix = kixlib;
-        scope = {
-          instanceName = name;
-          namespaceName = name;
-        };
-        availability = "none";
-      };
     in
-    (package (builtins.intersectAttrs (builtins.functionArgs package) args)).meta;
+    (eval.callPackagePhase1 {
+      package = import (../../../packages + "/${path}");
+      scope = {
+        instanceName = name;
+        namespaceName = name;
+      };
+    }).meta;
   metaOf = name: metaAt "stable/${name}";
 
   # What each package's ranges do at chosen Kubernetes versions. `refuses`

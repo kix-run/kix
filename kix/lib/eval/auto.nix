@@ -9,33 +9,19 @@
 let
   inherit (resolve) discoverBuildDeps refsOf;
   inherit (import ../core/error.nix { inherit lib; }) fail;
+  packageLib = import ../core/package.nix { inherit lib; };
 in
 
 rec {
-  isPackageEntry =
-    value:
-    builtins.isFunction value
-    || (value._type or "") == "kix-import"
-    || (builtins.isAttrs value && value ? package)
-    || (builtins.isAttrs value && value ? build);
+  # Return whether `value` is an `availablePackages` entry: a package, or
+  # `{ package; namespace; aliases; }`.
+  isPackageEntry = value: packageLib.isPackage value || (builtins.isAttrs value && value ? package);
 
   normalizeAvailablePackages =
     raw:
     lib.mapAttrs (
       name: value:
-      if builtins.isFunction value then
-        {
-          package = value;
-          namespace = null;
-          aliases = [ ];
-        }
-      else if (value._type or "") == "kix-import" then
-        {
-          package = value;
-          namespace = null;
-          aliases = [ ];
-        }
-      else if builtins.isAttrs value && value ? build then
+      if packageLib.isPackage value then
         {
           package = value;
           namespace = null;
@@ -52,7 +38,7 @@ rec {
   getDepsWhere =
     pred: pkg:
     let
-      raw = resolve.normalizePackage {
+      raw = resolve.callPackagePhase1 {
         package = pkg;
         scope = { };
       };

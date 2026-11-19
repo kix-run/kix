@@ -13,6 +13,7 @@
 let
   inherit (import ../core/error.nix { inherit lib; }) fail;
   availabilityLib = import ../core/availability.nix { inherit lib; };
+  packageLib = import ../core/package.nix { inherit lib; };
 
   # Return the checked availability `levels` and deduplicated option contract
   # `violations`, annotated with the levels where each violation occurs.
@@ -42,7 +43,7 @@ let
             where = who;
             what = "meta.availability.max";
           };
-      takesLevel = builtins.isFunction package && (builtins.functionArgs package) ? availability;
+      takesLevel = packageLib.takes package "availability";
       levels =
         if !takesLevel then
           [ "none" ]

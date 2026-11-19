@@ -11,6 +11,7 @@
   mkNamespace,
   computeAutoInstances,
   possibleInstanceNames,
+  normalizeAvailablePackages,
   buildResolutionIndex,
   callPackagePhase1,
   discoverBuildDeps,
@@ -36,6 +37,7 @@ let
   inherit (import ../core/util.nix { inherit lib; }) plain namespaceOf;
   versions = import ../core/version.nix { inherit lib; };
   kubernetes = import ../core/kubernetes.nix;
+  packageLib = import ../core/package.nix { inherit lib; };
 in
 {
   buildCluster =
@@ -1329,26 +1331,6 @@ in
           ++ (if consumerSide == null then [ ] else consumerSide.assertionsFor rawManifestList);
       };
 
-      isInlinePackage = v: builtins.isAttrs v && v ? build && (v._type or "") != "kix-import";
-
-      isPackageEntry =
-        v:
-        builtins.isFunction v
-        || (v._type or "") == "kix-import"
-        || (builtins.isAttrs v && v ? package)
-        || (builtins.isAttrs v && v ? build);
-
-      getPackageFromEntry =
-        v:
-        if builtins.isFunction v then
-          v
-        else if (v._type or "") == "kix-import" then
-          v
-        else if builtins.isAttrs v && v ? build then
-          v
-        else
-          v.package;
-
       instanceInfo = lib.mapAttrs (
         nsName: nsInsts:
         lib.mapAttrs (
@@ -1366,23 +1348,25 @@ in
       ) mergedInstances;
 
       availablePackagesInfo = lib.mapAttrs (
-        _name: value:
+        name: entry:
         let
+          # An inline package given directly lists as "inline". One given as
+          # `{ package = ...; }` lists by its `meta`.
+          inline = packageLib.isInline cfg.availablePackages.${name};
           pkgMeta =
-            if isInlinePackage value then
+            if inline then
               { }
             else
               meta.peekPackageMeta {
-                package = getPackageFromEntry value;
+                inherit (entry) package;
                 inherit kixlib;
               };
-          version = if isInlinePackage value then "inline" else pkgMeta.version or null;
         in
         {
-          inherit version;
+          version = if inline then "inline" else pkgMeta.version or null;
           owner = pkgMeta.owner or null;
         }
-      ) (lib.filterAttrs (_: isPackageEntry) cfg.availablePackages);
+      ) (normalizeAvailablePackages cfg.availablePackages);
 
       info = {
         instances = instanceInfo;
