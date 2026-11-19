@@ -19,6 +19,9 @@
 #   track     Optional. "major" stays within the pinned major version, and
 #             "minor" within the pinned minor version.
 #   skip      Optional. Versions not to move to, each with the reason.
+#   also      Optional. More package names whose folders the bump may
+#             change, for packages that set no `meta.version` but pin the
+#             same image, such as a Job that runs the server's client.
 #   pinned    Optional, for a version that is not the package's
 #             `meta.version`. A `file` and a regular expression `match` with
 #             one group that captures the pinned version.
@@ -105,6 +108,7 @@ repo = "https://github.com/cilium/cilium"
 
 [clickhouse]
 packages = ["experimental.clickhouse", "experimental.clickhouse-cluster", "experimental.clickhouse-keeper"]
+also = ["experimental.clickhouse-database"]
 repo = "https://github.com/ClickHouse/ClickHouse"
 tags = '^v(\d+\.\d+\.\d+\.\d+)-lts$'
 
@@ -252,6 +256,14 @@ repo = "https://github.com/kubernetes-csi/external-snapshotter"
 [spegel]
 packages = ["experimental.spegel"]
 repo = "https://github.com/spegel-org/spegel"
+
+[stackgres-database-postgres]
+packages = ["experimental.stackgres-database"]
+repo = "https://github.com/postgres/postgres"
+tags = '^REL_(\d+_\d+)$'
+# The bootstrap Job only runs psql, so it has no reason to change major version.
+track = "major"
+pinned = { file = "kix/packages/experimental/stackgres-database/default.nix", match = 'tag = "(\d+\.\d+)-alpine"' }
 
 [stackgres-operator]
 packages = ["experimental.stackgres-operator"]
