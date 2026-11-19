@@ -11,10 +11,10 @@ name: Documentation captures
 # Pages deploy job only builds the site, so a stale capture never stops
 # kix.run from deploying.
 #
-# A pull request that changes only packages, change records, library tests
-# or test clusters does not run it. Package version bumps are such pull
-# requests, and they leave the captures alone: the release regenerates every
-# capture. Until then, a capture that shows a package's output can be out of
+# A pull request that changes only packages, change records, library tests,
+# test clusters or the CLI snapshots does not run it. Package version bumps
+# are such pull requests, and they leave the captures alone: the release
+# regenerates every capture. Until then, a capture that shows a package's output can be out of
 # date, and the next pull request this job checks fails on it.
 #
 # The fix when this fails is to run
@@ -37,6 +37,7 @@ on:
       - '!clusters/test-*'
       - '!clusters/test-*/**'
       - 'cli/**'
+      - '!cli/kix-cli/tests/snapshots/**'
       - '.github/workflows/docs-captures.yml'
   workflow_dispatch:
 
