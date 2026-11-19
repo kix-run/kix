@@ -92,7 +92,7 @@
 }:
 
 let
-  release = "v3.7.17";
+  release = "v3.7.19";
 
   # Traefik's GatewayClass controller, pkg/provider/kubernetes/gateway/kubernetes.go.
   controllerName = "traefik.io/gateway-controller";
@@ -190,7 +190,7 @@ in
     image = kix.options.image {
       repository = "docker.io/library/traefik";
       tag = release;
-      digest = "sha256:f4bb143d1135a579b630ed491e17ec50f6f7c9c6a30585ff3d385471d2a86f5a";
+      digest = "sha256:a6c0194dda77bcb804824580f36fa7edc56e315b1acfe933366c8b52844a78a4";
       description = "Image of Traefik.";
     };
     replicas = lib.mkOption {
