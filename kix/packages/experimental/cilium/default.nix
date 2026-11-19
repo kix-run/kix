@@ -173,26 +173,27 @@ in
       );
       default = null;
       description = ''
-        What the environment's helm-controller does when its Helm job fails
-        to install or upgrade Cilium. Written to `spec.failurePolicy` of
-        the HelmChartConfig, so it applies in the helmChartConfig delivery
-        only. The other deliveries refuse it.
+        Policy that `helm-controller` follows when Cilium's Helm install or
+        upgrade job fails. Kix writes this value to `spec.failurePolicy` on the
+        `HelmChartConfig`, such as `kube-system/rke2-cilium` on RKE2. Setting
+        `failurePolicy` fails evaluation when this instance writes no
+        `HelmChartConfig` (when Kix installs the Cilium Helm chart directly, or
+        when the `platform-cilium` import sets `out.helmChartConfig = null`).
 
-        Unset, the HelmChartConfig carries no policy and the environment's
-        own applies. RKE2 releases from 4 August 2026 (1.33.13, 1.34.10,
-        1.35.7, 1.36.3) set "retry" on their bundled charts. Older ones
-        use "reinstall".
+        When `null` (the default), Kix omits `spec.failurePolicy` and the
+        cluster's default applies. RKE2 releases from 4 August 2026 onward
+        (1.33.13, 1.34.10, 1.35.7, 1.36.3, and later) default to `"retry"` on
+        their bundled charts. Earlier RKE2 releases default to `"reinstall"`;
+        set `"abort"` on those releases.
 
-        "abort" leaves the failed release for a person to fix. The Cilium
-        that is running stays as it was.
-
-        "reinstall" uninstalls the release and installs it again. Until
-        the install succeeds, no node runs Cilium: flows that are already
-        open keep going, and new pods get no network.
-
-        "retry" tries the install or upgrade again without uninstalling.
-        An RKE2 release older than the ones above does not know this value,
-        and its API server refuses the HelmChartConfig.
+        - `"abort"`: leave the failed Helm release in place to fix and keep the
+          running Cilium installation unchanged.
+        - `"reinstall"`: uninstall the Helm release and install it again. No
+          node runs Cilium until the reinstall succeeds: open connections keep
+          working, while new pods get no networking.
+        - `"retry"`: retry the install or upgrade without uninstalling Cilium.
+          RKE2 releases before 4 August 2026 do not recognize `"retry"`, and
+          their API server rejects the `HelmChartConfig`.
       '';
     };
 
@@ -369,14 +370,14 @@ in
             option = "failurePolicy";
             message =
               if delivery == "chart" then
-                "sets failurePolicy, but this instance installs the Cilium chart itself. failurePolicy is a field of the HelmChartConfig that an environment's helm-controller reads, and this instance writes none."
+                "failurePolicy is set, but this instance installs the Cilium Helm chart directly and writes no HelmChartConfig. Only a HelmChartConfig (such as kube-system/rke2-cilium on RKE2) has spec.failurePolicy."
               else
-                "sets failurePolicy, but the platform-cilium dependency's out.helmChartConfig is null, so this instance writes no HelmChartConfig to put it in.";
+                "failurePolicy is set, but the platform-cilium dependency has out.helmChartConfig = null, so this instance does not configure Cilium or write a HelmChartConfig.";
             fix =
               if delivery == "chart" then
-                "Remove `failurePolicy`."
+                "Remove `failurePolicy`, or if RKE2 installs Cilium on this cluster, use `kix.flavors.rke2` with `cluster.flavor.rke2.cni = [ \"cilium\" ]`."
               else
-                "Remove `failurePolicy`, or set the import's out.helmChartConfig if the environment merges a HelmChartConfig into its Cilium chart (on RKE2: cluster.flavor.rke2.cni = [ \"cilium\" ]).";
+                "Remove `failurePolicy`, or set the `platform-cilium` import's `out.helmChartConfig` to `{ name = \"<name>\"; namespace = \"<namespace>\"; }` if `helm-controller` merges a HelmChartConfig into Cilium (on RKE2: `cluster.flavor.rke2.cni = [ \"cilium\" ]`).";
           }
         else if !(builtins.elem effectiveEnforcement enforcementModes) then
           scope.fail {

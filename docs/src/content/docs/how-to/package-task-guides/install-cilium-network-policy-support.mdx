@@ -136,23 +136,10 @@ Kix then owns `kube-system/rke2-cilium`, which has two consequences:
   HelmChartConfig, and helm-controller then reinstalls RKE2's Cilium with its
   chart defaults.
 
-### What a failed install does
+### Keep Cilium running if a Helm upgrade fails
 
-When RKE2's Helm job fails to install or upgrade Cilium, RKE2's
-helm-controller follows a failure policy. Which one depends on the RKE2
-release:
-
-| RKE2 release | Policy | What happens |
-|---|---|---|
-| 1.33.13, 1.34.10, 1.35.7, 1.36.3 (4 August 2026) and later | `retry` | helm-controller tries the upgrade again. Cilium stays installed. |
-| Older | `reinstall` | helm-controller uninstalls Cilium and installs it again. |
-
-Under `reinstall`, no node runs Cilium until the install succeeds.
-Connections that are already open keep working, and new pods get no network.
-During an RKE2 minor upgrade the second install can fail too.
-
-By default the instance writes no policy, so RKE2's own applies. On an older
-RKE2 release, set `failurePolicy` to `"abort"`:
+On RKE2 releases before 4 August 2026 (earlier than 1.33.13, 1.34.10, 1.35.7,
+or 1.36.3), set `failurePolicy` to `"abort"`:
 
 ```nix
 instances.kube-system.cilium = {
@@ -161,40 +148,54 @@ instances.kube-system.cilium = {
 };
 ```
 
-helm-controller then leaves the failed release for you to fix, and the Cilium
-that is running stays as it was. The option takes `"abort"`, `"reinstall"`,
-or `"retry"`, and the instance writes it to `spec.failurePolicy` of the
-HelmChartConfig. An older RKE2 release does not know `"retry"`, and its API
-server refuses the object.
+When RKE2's Helm job fails to install or upgrade Cilium, `helm-controller`
+follows a failure policy. When `failurePolicy` is unset, Kix omits
+`spec.failurePolicy` from `kube-system/rke2-cilium` and RKE2's default applies:
 
-Only this delivery writes a HelmChartConfig. An instance that installs the
-chart itself, or one whose import sets `out.helmChartConfig = null`, fails
-evaluation if it sets `failurePolicy`.
+| RKE2 release | Default policy | What happens on failure |
+|---|---|---|
+| 1.33.13, 1.34.10, 1.35.7, 1.36.3 (4 August 2026) and later | `retry` | `helm-controller` retries the install or upgrade. Cilium stays installed. |
+| Earlier releases | `reinstall` | `helm-controller` uninstalls Cilium and installs it again. |
 
-### What a values change restarts
+Under `reinstall`, no node runs Cilium until the reinstall succeeds. Open
+connections keep working, while new pods get no networking. During an RKE2
+minor upgrade, the reinstall can fail too. With `"abort"`, `helm-controller`
+leaves the failed Helm release for you to fix and keeps the running Cilium
+installation unchanged.
 
-The Cilium agent reads most of its settings, such as
-`loadBalancer.algorithm`, only when it starts. The package sets the chart's
-`rollOutCiliumPods` and `operator.rollOutPods`, so a change to `values` that
-changes Cilium's ConfigMap restarts the agent on every node and restarts the
-operator. This holds when the instance installs the chart too.
+`failurePolicy` accepts `"abort"`, `"reinstall"`, or `"retry"` and writes that
+value to `spec.failurePolicy` on the `HelmChartConfig`. RKE2 releases before
+4 August 2026 do not recognize `"retry"`, and their API server rejects the
+`HelmChartConfig`.
 
-Restarting the agent on a node that holds an L2 announcement moves that
-address to another node. To choose the moment yourself, set
-`values.rollOutCiliumPods = false`. A deploy then succeeds while every agent
-still runs the old settings, until you restart them:
+Only an instance that writes a `HelmChartConfig` accepts `failurePolicy`. If
+the `cilium` instance installs the Helm chart directly, or if its
+`platform-cilium` import sets `out.helmChartConfig = null`, setting
+`failurePolicy` fails evaluation.
+
+### Control when Cilium pods restart after a values change
+
+The Cilium agent reads most settings, such as `loadBalancer.algorithm`, only at
+startup. By default, the `cilium` package sets `rollOutCiliumPods = true` and
+`operator.rollOutPods = true`, so any change to `values` that updates Cilium's
+ConfigMap restarts the Cilium agent on every node and restarts the operator.
+This applies whether RKE2 or Kix installs the Cilium chart.
+
+Restarting the agent on a node that holds an L2 announcement moves that IP
+address to another node. To control when the agents restart, set
+`values.rollOutCiliumPods = false`. `kix deploy` then finishes while the agents
+keep running with their previous settings. Restart them when you are ready:
 
 <Command commands={["kubectl -n kube-system rollout restart ds/cilium"]} />
 
-The operator still restarts on the deploy unless you also set
+The Cilium operator still restarts during `kix deploy` unless you also set
 `values.operator.rollOutPods = false`.
 
 ### Adopt an existing HelmChartConfig
 
-A cluster may already have a `kube-system/rke2-cilium` HelmChartConfig that
-something else wrote. Kix replaces the whole of its `spec.valuesContent`, so
-any setting you do not copy is removed by the first deploy. Read the live
-settings:
+If your cluster already has a `kube-system/rke2-cilium` HelmChartConfig, Kix
+replaces all of `spec.valuesContent` on the first deploy. Any setting you do
+not copy into `values` is removed. Read the live settings first:
 
 <Command
   commands={[
@@ -202,19 +203,22 @@ settings:
   ]}
 />
 
-Copy each setting into the instance's `values`. If the live object sets
-`spec.failurePolicy`, set the `failurePolicy` option to the same value. Then
-run `kix plan` before the first deploy. The plan shows `valuesContent` as
-changed even when the settings match, because Kix writes JSON and adds the
-settings the package sets itself: `policyEnforcementMode`, `policyAuditMode`,
-`operator.replicas`, `operator.rollOutPods`, and `rollOutCiliumPods`. Compare
-the settings, and check that nothing you rely on is missing.
+Copy each setting into the instance's `values`. If the live `HelmChartConfig`
+also sets `spec.failurePolicy`, set `failurePolicy` to the same value. Run
+`kix plan` before your first deploy. The plan shows `valuesContent` as changed
+even when your settings match, because Kix writes JSON and includes the
+package's defaults: `policyEnforcementMode`, `policyAuditMode`,
+`operator.replicas`, `operator.rollOutPods`, and `rollOutCiliumPods`. Check the
+diff to confirm that none of your existing settings were dropped.
 
-If another writer still owns the field, the plan refuses the write and names
-the owner. Remove that writer first. On RKE2 it is usually a file in the
-server's manifests directory, which RKE2 applies again each time it starts
-(see above). Then deploy once with `kix deploy --force-conflicts`. The first
-deploy restarts the agents once, because it turns on `rollOutCiliumPods`.
+If another field manager owns fields on `rke2-cilium`, `kix plan` reports a
+field ownership conflict and names that owner. Stop that tool from writing the
+object again first. On RKE2, remove any `rke2-cilium` manifest from
+`/var/lib/rancher/rke2/server/manifests`, because RKE2 reapplies files in that
+directory each time it starts. Then run `kix deploy --force-conflicts` once to
+transfer field ownership to Kix. Because the package enables
+`rollOutCiliumPods` by default, expect the first deploy to restart the Cilium
+agents once unless you set `values.rollOutCiliumPods = false`.
 
 ## When the environment installed Cilium
 
