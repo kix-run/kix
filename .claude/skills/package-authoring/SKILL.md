@@ -530,6 +530,9 @@ Conditional:
     and the kix-migration, package-review, and crd-vendoring skills and this
     one, when a lib API, role, `meta` key, or convention changes (T6).
 14. `kix/lib/eval/roles.nix` and `kix/lib/flavors/*.nix` only for a new role.
+15. `.github/bump/sources.toml`: an entry that names the upstream repository,
+    when the package sets `meta.version`. The weekly Bump detect workflow
+    reads it to start version bumps.
 
 ## Verification ladder
 
@@ -675,6 +678,9 @@ prints `check-bump: PASS` and the upgrade deploy below has run.
   why you did not upgrade to it. Confirm the target's images exist for every
   platform the old ones did: a release whose image publishing failed is
   followed by a fix release.
+- The weekly Bump detect workflow picks targets from
+  `.github/bump/sources.toml`. When a package must stay below a release,
+  add that version to `skip` in the package's entry, with the reason.
 - Read the notes of every release between the pinned version and the
   target. Release notes omit what a package depends on. Also compare
   upstream's own deployment files between the two versions (manifests, Helm

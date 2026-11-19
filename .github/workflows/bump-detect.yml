@@ -1,0 +1,73 @@
+name: Bump detect
+
+# Once a week, compare each package's pinned version with upstream's newest
+# release, and start the bump workflow for the packages that are behind.
+# `.github/bump/sources.toml` names each package's upstream, and
+# `.github/bump/detect.py` does the work. The run's summary lists every
+# package that is behind, and the ones it could not check.
+#
+# The job runs no agent and holds no secret. Its token can start workflows
+# and read issues and pull requests. It reads only version tags from
+# upstream.
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: Most bumps to start. 0 lists the packages that are behind and starts none
+        required: false
+        default: '5'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bump-detect
+  cancel-in-progress: false
+
+jobs:
+  detect:
+    runs-on: kix-linux-nix
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: write
+      issues: read
+      pull-requests: read
+    env:
+      NIX_CONFIG: |
+        extra-experimental-features = nix-command flakes pipe-operators
+        accept-flake-config = true
+      LIMIT: ${{ inputs.limit || '5' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Read the pinned versions
+        run: |
+          system=$(nix eval --impure --raw --expr builtins.currentSystem)
+          nix eval --json ".#legacyPackages.$system.kixPackages" > "$RUNNER_TEMP/packages.json"
+
+      - name: Compare with upstream and start the bumps
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          [[ "$LIMIT" =~ ^[0-9]+$ ]] || { echo "::error::limit must be a whole number"; exit 1; }
+          set +e
+          nix shell nixpkgs#python3 nixpkgs#git -c \
+            python3 .github/bump/detect.py "$RUNNER_TEMP/packages.json" --dispatch "$LIMIT" \
+            > "$RUNNER_TEMP/summary.md"
+          status=$?
+          set -e
+          cat "$RUNNER_TEMP/summary.md" | tee -a "$GITHUB_STEP_SUMMARY"
+          # Status 1 means a package could not be checked or is missing from
+          # sources.toml. The bumps it could start are started, and the run
+          # still fails so that someone fixes the source.
+          if [ "$status" = 1 ]; then
+            echo "::error title=Bump detect::Some packages could not be checked. The run summary lists them."
+          fi
+          exit "$status"
