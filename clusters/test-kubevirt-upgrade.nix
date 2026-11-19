@@ -32,6 +32,9 @@ let
               runStrategy = "Always";
               template.spec = {
                 domain = {
+                  # The VM needs no network. KubeVirt's default bridge
+                  # binding finds no gateway route on a pod under Cilium.
+                  devices.autoattachPodInterface = false;
                   devices.disks = [
                     {
                       name = "disk";
