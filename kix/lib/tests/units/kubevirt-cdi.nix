@@ -498,7 +498,7 @@ in
       cdiSpec = (find merged "CDI" "cdi").spec;
       refused = {
         kvReplicas = mkVirtCluster { kubevirt.config.extraSpec.infra.replicas = 3; };
-        kvTag = mkVirtCluster { kubevirt.config.extraSpec.imageTag = "v1.9.2"; };
+        kvTag = mkVirtCluster { kubevirt.config.extraSpec.imageTag = "v1.10.1"; };
         kvPullPolicy = mkVirtCluster { kubevirt.config.extraSpec.imagePullPolicy = "Always"; };
         cdiReplicas = mkVirtCluster { cdi.config.extraSpec.infra.apiServerReplicas = 3; };
         cdiInfraNull = mkVirtCluster { cdi.config.extraSpec.infra = null; };
@@ -537,7 +537,7 @@ in
         ]
       && subjects == [ "kubevirt-operator" ]
       && admin.metadata.labels."rbac.authorization.k8s.io/aggregate-to-admin" or null == "true"
-      && builtins.length clusterRole.rules == 139
+      && builtins.length clusterRole.rules == 143
     )
     || throw "kubevirt RBAC: bindings ${builtins.toJSON refs}, subjects ${builtins.toJSON subjects}";
 
@@ -549,7 +549,7 @@ in
   # operands and keeps their digests.
   kubevirt-cdi-images =
     let
-      pinned = lib.hasInfix ":v1.9.1@sha256:";
+      pinned = lib.hasInfix ":v1.10.0@sha256:";
       defaults = mkVirtCluster { };
       kvEnv = envOf defaults "kubevirt-operator";
       cdiEnv = envOf defaults "cdi-operator";
@@ -557,7 +557,7 @@ in
       kvOperands = removeAttrs (imageVars kvEnv) [ "VIRT_OPERATOR_IMAGE" ];
       extraImages = (outOf defaults "kubevirt").extraImages ++ (outOf defaults "cdi").extraImages;
 
-      patch = mkVirtCluster { kubevirt.config.image.tag = "v1.9.2"; };
+      patch = mkVirtCluster { kubevirt.config.image.tag = "v1.10.1"; };
       patchEnv = envOf patch "kubevirt-operator";
       # An older step of upstream's update path is accepted for walking up.
       walkUpEnv = envOf (mkVirtCluster { kubevirt.config.image.tag = "v1.6.6"; }) "kubevirt-operator";
@@ -571,12 +571,12 @@ in
       };
       movedEnv = envOf moved "kubevirt-operator";
 
-      releaseMessage = "kubevirt/{crds,rbac} are vendored from v1.9.1";
+      releaseMessage = "kubevirt/{crds,rbac} are vendored from v1.10.0";
       refused = {
         older = refusedWith releaseMessage "kubevirt" { image.tag = "v1.4.1"; };
-        newer = refusedWith releaseMessage "kubevirt" { image.tag = "v1.10.0"; };
+        newer = refusedWith releaseMessage "kubevirt" { image.tag = "v1.11.0"; };
         latest = refusedWith releaseMessage "kubevirt" { image.tag = "latest"; };
-        noV = refusedWith releaseMessage "kubevirt" { image.tag = "1.9.1"; };
+        noV = refusedWith releaseMessage "kubevirt" { image.tag = "1.10.0"; };
         cdiMinor = refusedWith "is not a v1.66 release" "cdi" { image.tag = "v1.67.0"; };
         operandPullPolicy = refusedWith "operandImages.cdi-importer.pullPolicy" "cdi" {
           operandImages.cdi-importer.pullPolicy = "Always";
@@ -587,15 +587,15 @@ in
     (
       builtins.length (builtins.attrNames kvOperands) == 12
       && lib.all pinned (builtins.attrValues (removeAttrs kvOperands templateVars))
-      && lib.all (lib.hasInfix ":v0.2.3@sha256:") (map (n: kvOperands.${n}) templateVars)
+      && lib.all (lib.hasInfix ":v0.3.0@sha256:") (map (n: kvOperands.${n}) templateVars)
       && lib.all (lib.hasInfix ":v1.66.1@sha256:") (builtins.attrValues (imageVars cdiEnv))
       && builtins.length extraImages == 18
       && lib.all (lib.hasInfix "@sha256:") extraImages
       &&
         kvEnv.VIRT_OPERATOR_IMAGE
-        == "quay.io/kubevirt/virt-operator@sha256:a8adf7b772e9ce0bf7e2ce889910fc41ebadf552c9dbe843e9b86641e34f5df9"
-      && patchEnv.VIRT_OPERATOR_IMAGE == "quay.io/kubevirt/virt-operator:v1.9.2"
-      && patchEnv.VIRT_API_IMAGE == "quay.io/kubevirt/virt-api:v1.9.2"
+        == "quay.io/kubevirt/virt-operator@sha256:37c1287ad094eed25c4c6cc78744c06dd9bf340f7301eb0d26bdf3c4c230b738"
+      && patchEnv.VIRT_OPERATOR_IMAGE == "quay.io/kubevirt/virt-operator:v1.10.1"
+      && patchEnv.VIRT_API_IMAGE == "quay.io/kubevirt/virt-api:v1.10.1"
       && lib.all (v: !(lib.hasInfix "@" v)) (
         builtins.attrValues (removeAttrs (imageVars patchEnv) templateVars)
       )
@@ -603,10 +603,10 @@ in
       && walkUpEnv.KUBEVIRT_VERSION == "v1.6.6"
       &&
         movedEnv.VIRT_HANDLER_IMAGE
-        == "registry.example/mirror/virt-handler:v1.9.1@sha256:c23b635ea4aff7f0779c6c061c431da0469c7796255e6de90a5970236b5ea61b"
+        == "registry.example/mirror/virt-handler:v1.10.0@sha256:1cc169b352ea09ad25824f633b955b2692a5a284c15e9689bf393992b1c6d199"
       && notFailing == [ ]
     )
-    || throw "images: kubevirt ${builtins.toJSON kvEnv}, v1.5.1 ${builtins.toJSON patchEnv}, moved ${builtins.toJSON movedEnv}, accepted ${builtins.toJSON notFailing}";
+    || throw "images: kubevirt ${builtins.toJSON kvEnv}, patch ${builtins.toJSON patchEnv}, moved ${builtins.toJSON movedEnv}, accepted ${builtins.toJSON notFailing}";
 
   # A second instance of either package is refused, naming the other
   # instance. The meta check is called directly: a failed meta assertion

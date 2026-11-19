@@ -153,12 +153,12 @@ let
     };
     "experimental/kubevirt" = {
       warns = [
-        "1.33"
-        "1.37"
+        "1.34"
+        "1.38"
       ];
       accepts = [
-        "1.34"
-        "1.36"
+        "1.35"
+        "1.37"
       ];
     };
     "experimental/spegel" = {
