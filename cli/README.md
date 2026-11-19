@@ -443,8 +443,10 @@ selection, and the Kix that runs it evaluates nothing: every list and build
 is a subprocess of the installed Kix of the version being tried (`run_kix`,
 with `KIX_SELECTED_BY` set, per the hand-over contract). From another
 version it reads only `-o json list clusters`, `-o json list packages <c>`
-(the packages in use: rows whose `status` is not `available`, by instance
-name), and the directory `export <c> --out <dir> --with-kix-metadata`
+(the packages in use: the `package` id of each row whose `status` is not
+`available`, skipping rows whose `package` is null; a row without the
+`package` key comes from a Kix too old to report ids, and the set is then
+unknown), and the directory `export <c> --out <dir> --with-kix-metadata`
 writes. Versions before 0.10.0-rc.4 take the older spellings `list packages
 --cluster <c>` and `export --for audit`, which `new_command_line` picks.
 
@@ -465,9 +467,10 @@ writes. Versions before 0.10.0-rc.4 take the older spellings `list packages
   takes the newest release of its own minor first), `required_stop` (the
   earliest release in (from, target) with a `requiredStop` record ends the
   upgrade at the newest patch of its minor), and `applying` (which
-  lists every record in range and marks it `likely` when it names a
-  package an instance in use is named after; the package list holds
-  instance names, so a match is never certain and no record is left out).
+  lists every record in range and sets `names_package_in_use` when an
+  entry of the record's `packages` is one of the package ids in use; ids
+  match exactly, such as `experimental/coredns`, and no record is left
+  out).
 - `compare.rs` (pure): `load_dir` reads an export, keeps the
   `kix.run/package` annotation, strips Kix's annotations, and drops
   Activation and PackageInstance; `compare` gives added, removed, and
@@ -1304,7 +1307,7 @@ a record line need regenerating.
 
 **Annotations** are stamped at build time: `kix.run/identity-hash`, `kix.run/package`, `kix.run/depends-on`, and `kix.run/activations`. Everything downstream reads these annotations rather than raw store paths.
 
-**Builder abstraction.** The `Builder` trait (`eval/evaluator.rs`) is what a project's builder does: evaluate a cluster, list clusters, list packages, and list a cluster's packages. Its contract does not assume the work happens locally: a result names store paths the builder has made available in the local store. It has two implementations: `LocalBuilder` (production, which shells out to the `nix` CLI) and `MockBuilder` (tests, which runs without Nix).
+**Builder abstraction.** The `Builder` trait (`eval/evaluator.rs`) is what a project's builder does: evaluate a cluster, list clusters, list packages, and list a cluster's packages. `PackageInfo` and `InstanceInfo` carry `package`, the id of one of Kix's own packages (`harbor`, `experimental/coredns`, the id change records use) or `None` for a project's own package, an inline package, or an import. `kix list packages -o json` prints it on every row, as `null` when there is none. Its contract does not assume the work happens locally: a result names store paths the builder has made available in the local store. It has two implementations: `LocalBuilder` (production, which shells out to the `nix` CLI) and `MockBuilder` (tests, which runs without Nix).
 
 **Operator mode** (`--operator` flag on `deploy`, `rollback`, and `gc`). Instead of calling the reconcile engine directly, the CLI creates or patches Activation CRs and watches their status while the operator applies the resources. Building and plan display still happen locally because they require Nix. It supports three flows:
 - `deploy --operator`: build locally → show plan → apply Activation CR with source path → watch status.waves

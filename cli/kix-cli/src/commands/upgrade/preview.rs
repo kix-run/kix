@@ -75,8 +75,13 @@ enum Known {
     Clusters(usize),
     /// The packages in use only.
     Packages,
-    /// Neither: every change in the range counts.
+    /// Neither, because the current Kix is not installed: every change in
+    /// the range counts.
     Nothing,
+    /// Neither, because the current Kix did not report the packages in use,
+    /// such as a Kix too old to report package ids: every change in the
+    /// range counts.
+    Unreported,
 }
 
 impl Known {
@@ -84,7 +89,7 @@ impl Known {
         match (packages, clusters) {
             (true, Some(n)) => Known::Clusters(n),
             (true, None) => Known::Packages,
-            (false, _) => Known::Nothing,
+            (false, _) => Known::Unreported,
         }
     }
 }
@@ -134,7 +139,10 @@ fn preview(p: &Preview) {
             Known::Clusters(n) => out::legend(p.applying, Some(n)),
             Known::Packages => out::legend(p.applying, None),
             Known::Nothing => Some(format!(
-                "  (current Kix {from} is not installed, so likely matches are not marked)"
+                "  (current Kix {from} is not installed, so notes are not marked)"
+            )),
+            Known::Unreported => Some(format!(
+                "  (current Kix {from} did not report which packages your clusters use, so notes are not marked)"
             )),
         };
         if let Some(legend) = legend {

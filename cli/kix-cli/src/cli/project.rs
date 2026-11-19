@@ -13,8 +13,8 @@ pub struct UpgradeArgs {
     #[arg(long, value_name = "VERSION")]
     pub to: Option<String>,
 
-    /// Print the target version and the release notes in the range with likely
-    /// matches marked, and change nothing
+    /// Print the target version and the release notes in the range, marking
+    /// the notes that name a package the clusters use, and change nothing
     #[arg(long)]
     pub dry_run: bool,
 

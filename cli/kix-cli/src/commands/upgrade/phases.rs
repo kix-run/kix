@@ -210,7 +210,8 @@ fn print_failures(failures: &Failures) {
 }
 
 /// Print every "Config changes required" note of the releases the failed
-/// step moved through, with likely matches marked.
+/// step moved through, marking the notes that name a package the project's
+/// clusters use.
 fn print_matching(matching: &[Applying], previous: &Version, failing: &Version) {
     if matching.is_empty() {
         return;
@@ -233,11 +234,15 @@ fn print_matching(matching: &[Applying], previous: &Version, failing: &Version) 
             failing.release()
         ),
     }
-    if matching.iter().any(|a| a.likely) {
-        println!("    * may affect this project (package name matches an instance in use)");
+    if matching.iter().any(|a| a.names_package_in_use) {
+        println!("    * names a package this project's clusters use");
     }
     for a in matching {
-        let gutter = if a.likely { "  * " } else { "    " };
+        let gutter = if a.names_package_in_use {
+            "  * "
+        } else {
+            "    "
+        };
         let mut head = format!("{gutter}[{}]", a.reference());
         if !a.record.packages.is_empty() {
             head.push_str(&format!(" {}", out::list(&a.record.packages)));
