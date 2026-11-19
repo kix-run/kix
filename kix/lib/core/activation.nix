@@ -18,6 +18,9 @@ in
       postHooks ? [ ],
       inverseDeps ? [ ],
       version ? null,
+      # The id of the Kix package the instance runs, or null for a package
+      # that is not one of Kix's own.
+      package ? null,
       labels ? { },
       extraAnnotations ? { },
       lifecycle ? null,
@@ -49,6 +52,7 @@ in
         inherit instanceName namespaceName;
       }
       // lib.optionalAttrs (version != null) { inherit version; }
+      // lib.optionalAttrs (package != null) { inherit package; }
       // lib.optionalAttrs (lifecycle != null) {
         inherit lifecycle;
       };

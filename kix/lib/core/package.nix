@@ -2,7 +2,7 @@
 # them. An instance's `package` is one of:
 #
 # - a package function, `{ scope, lib, ... }: { meta, options, build }`
-# - a package of Kix's own set, which is such a function with an id
+# - a package of Kix's own set, which is such a function with an id (`withId`)
 # - an inline package, an attribute set with `build`
 # - an import, which `kix.mkImport` returns
 # - a marker for a package that moved or was removed, which carries an error
@@ -21,6 +21,24 @@ rec {
     "kix"
     "availability"
   ];
+
+  # Return the package function `fn` as a package of Kix's own set. The
+  # result is called like `fn`, and `lib.functionArgs` returns the arguments
+  # `fn` names. `id` is the name change records give the package: the folder
+  # name for a stable package, and `experimental/<name>` for an experimental
+  # one.
+  withId =
+    id: fn:
+    lib.setFunctionArgs fn (lib.functionArgs fn)
+    // {
+      _type = "kix-package";
+      inherit id;
+    };
+
+  # Return the id of a package of Kix's own set, or null for any other
+  # package. A function that calls such a package is another package, and
+  # has no id.
+  idOf = value: if typeOf value == "kix-package" then value.id else null;
 
   isImport = value: typeOf value == "kix-import";
 

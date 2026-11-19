@@ -1,21 +1,24 @@
 # Tests for the stable and experimental levels (kix/lib/core/levels.nix):
 # the merged set a cluster or a package reads, the error for a name that
 # has only a stable entry, the error for the old name of an entry that
-# moved to experimental, and the one shape every contract in kix/contracts
-# has.
+# moved to experimental, the one shape every contract in kix/contracts
+# has, and the id each package of Kix's own set carries.
 
 {
   lib,
+  eval,
   kixlib,
   mkCluster,
   mkCmPackage,
   evalFails,
   manifests,
+  ofKind,
   ...
 }:
 
 let
   levels = import ../../core/levels.nix { inherit lib; };
+  packageLib = import ../../core/package.nix { inherit lib; };
   packages = import ../../../packages { inherit lib; };
   packagesByLevel = import ../../../packages/by-level.nix { inherit lib; };
   contracts = kixlib.contracts;
@@ -265,4 +268,74 @@ in
       && manifests (withCatalog (catalog // { inherit (catalog.experimental) provider; })) != [ ]
     )
     || throw "levels: a moved package was still offered, or naming it did not help";
+
+  # Every package of Kix's own set carries the id change records use for
+  # it, and names the arguments its function names.
+  levels-package-ids =
+    lib.all (
+      level:
+      lib.all (
+        name:
+        let
+          package = packagesByLevel.${level}.${name};
+          fn = import (../../../packages + "/${level}/${name}");
+        in
+        packageLib.idOf package == (if level == "stable" then name else "experimental/${name}")
+        && lib.functionArgs package == builtins.functionArgs fn
+      ) (builtins.attrNames packagesByLevel.${level})
+    ) levels.names
+    || throw "levels: a package has the wrong id, or does not name its function's arguments";
+
+  # The old name of a moved package leads to the experimental package, so
+  # it has the experimental id.
+  levels-moved-package-id =
+    (
+      packageLib.idOf packages.dns-exporter.experimentalPackage == "experimental/dns-exporter"
+      && packageLib.idOf packages.stable.dns-exporter.experimentalPackage == "experimental/dns-exporter"
+    )
+    || throw "levels: the old name of a moved package does not lead to the experimental id";
+
+  # An instance records the id of its package on its PackageInstance and in
+  # the build's instance info. Only a package of Kix's own set has one.
+  levels-instance-records-package-id =
+    let
+      cluster = mkCluster [
+        {
+          instances.stable.app.package = packages.echo-server;
+          instances.spelled.app.package = packages.stable.echo-server;
+          instances.experimental.app.package = packages.experimental.dns-exporter;
+          instances.inline.app.package = mkCmPackage { name = "inline"; };
+          instances.function.app.package = _: mkCmPackage { name = "function"; };
+          # A function that calls a Kix package is another package.
+          instances.calls.app.package =
+            {
+              scope,
+              lib,
+              kix,
+              availability,
+            }@args:
+            packages.echo-server args;
+          instances.imported.app.package = eval.mkImport {
+            from = packages.experimental.dns-exporter;
+          };
+        }
+      ];
+      recorded = builtins.listToAttrs (
+        map (m: lib.nameValuePair m.spec.namespaceName (m.spec.package or null)) (
+          ofKind "PackageInstance" (manifests cluster)
+        )
+      );
+      listed = lib.mapAttrs (_: instances: instances.app.package) cluster.info.instances;
+      expected = {
+        stable = "echo-server";
+        spelled = "echo-server";
+        experimental = "experimental/dns-exporter";
+        inline = null;
+        function = null;
+        calls = null;
+        imported = null;
+      };
+    in
+    (recorded == expected && listed == expected)
+    || throw "levels: instances recorded ${builtins.toJSON recorded} and listed ${builtins.toJSON listed}";
 }

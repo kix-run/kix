@@ -1341,6 +1341,7 @@ in
           {
             version = pkgMeta.version or null;
             owner = pkgMeta.owner or null;
+            package = packageLib.idOf instCfg.package;
             auto = instCfg._autoInstantiated or false;
             isImport = (instCfg.package._type or "") == "kix-import";
           }
@@ -1365,6 +1366,7 @@ in
         {
           version = if inline then "inline" else pkgMeta.version or null;
           owner = pkgMeta.owner or null;
+          package = packageLib.idOf entry.package;
         }
       ) (normalizeAvailablePackages cfg.availablePackages);
 
