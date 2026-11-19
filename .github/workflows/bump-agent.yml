@@ -426,7 +426,7 @@ jobs:
           case "$OUTCOME" in
             upgraded)
               title="Update $PACKAGE to $TARGET"
-              summary="An agent ($MODEL, \$$cost) wrote this change in [this workflow run]($RUN_URL). The workflow ran \`scripts/check-bump.sh\` on it again and it passed, and every changed file is in a place a version bump may touch. It merges on its own once every check passes, unless it changes where an image comes from. To stop that, push a commit to it or label it \`$LABEL\`."
+              summary="An agent ($MODEL, \$$cost) wrote this change in [this workflow run]($RUN_URL). The workflow ran \`scripts/check-bump.sh\` on it again and it passed, and every changed file is in a place a version bump may touch. Once its checks pass, the daily combined pull request carries it, and merging that closes this one. A bump that changes where an image comes from waits for a person. To keep it out, push a commit to it or label it \`$LABEL\`."
               ;;
             held)
               title="Held: $PACKAGE stays below $TARGET"
@@ -442,8 +442,7 @@ jobs:
               ;;
           esac
           {
-            # bump-refresh.yml reads the package folders from this line, and
-            # bump-detect.yml reads both lines.
+            # batch.py and bump-detect.yml read both lines.
             echo "<!-- bump-dirs: $DIRS -->"
             echo "<!-- bump-target: $PACKAGE $TARGET -->"
             echo "\`$PACKAGE\` pins \`$PINNED\`. Upstream's newest release is \`$TARGET\` (tag \`$TAG\`)."
