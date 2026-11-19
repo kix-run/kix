@@ -102,7 +102,11 @@
 # it refuses to go back: a server older than the database's newest
 # migration stops at start with "Migration ... was already applied to this database
 # but is not in this version of Immich", and Immich's docs say downgrading
-# is not supported, even within a minor release. To go back, restore a
+# is not supported, even within a minor release. The FUTO Backups module
+# in the server keeps its own migrations, and a patch release can add some.
+# A server older than those still serves the library, but FUTO Backups
+# fails to start with "corrupted migrations: previously executed migration
+# ... is missing". To go back, restore a
 # database backup taken before the upgrade and deploy the older release.
 
 {
