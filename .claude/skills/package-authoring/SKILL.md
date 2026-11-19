@@ -684,24 +684,49 @@ prints `check-bump: PASS` and the upgrade deploy below has run.
 - Write down what upstream says about which versions can upgrade directly
   to which, and about going back. Upstream often says nothing. Then say
   what you learned from its source or from testing.
-- Find the Kubernetes versions upstream supports for the target, and name
-  the source. Upstream's stated support (a support matrix, a requirements
-  page, a support policy) wins. Versions upstream only tests do not widen
-  or narrow a stated range. Use tested versions (its CI or e2e matrix) only
-  when upstream states no support, and `go.mod`'s client-go version only as
-  a last resort.
+- Find the Kubernetes versions the upstream project supports for the target
+  release, and note where it states them. Prefer an explicit support policy,
+  compatibility matrix, or requirements page. Fall back to the versions
+  upstream tests in CI or end-to-end runs only when it states no support
+  range, and use `go.mod`'s `client-go` version only as a last resort. This
+  range goes in `meta.k8s.supported`, which warns when `k8sVersion` falls
+  outside it.
+- Check whether anything fails outside that range. Count only concrete
+  incompatibilities: an API version the package emits or the workload reads
+  that older Kubernetes releases do not serve, a CRD validation rule added in
+  a specific Kubernetes version, a startup version check in the upstream code,
+  or a confirmed upstream failure report. Do not treat a support table alone
+  as proof that other versions fail. Confirmed failure bounds go at the top
+  level of `meta.k8s`, which fails the build.
 
 ### The edit
 
-- Encode that range in `meta.k8s` as `minVersion` and `maxVersion`, with a
-  `reason` that names the release and the range, so Kix refuses a cluster
-  that declares a version upstream does not support. For an open range
-  ("1.25 and later") set only `minVersion`. When upstream states no range,
-  leave `meta.k8s` as it is and say so in the pull request. A range that
-  refuses a version the package accepted before needs an `error` change
-  record: put its id at the start of `reason` as `[Kxxxx]`, and add a unit
-  test in `kix/lib/tests/units/` that refuses a version on each side and
-  accepts one inside (`cilium-k8s-range` in `cilium.nix` has the shape).
+- Record upstream's supported or tested versions in `meta.k8s.supported`
+  using `minVersion`, `maxVersion`, and a `source` naming the document or
+  workflow. For an open-ended range ("1.25 and later"), set only `minVersion`
+  (or only `maxVersion`). When upstream neither states nor tests a Kubernetes
+  version range, omit `supported` and note that in the pull request.
+- Set top-level `meta.k8s.minVersion` or `meta.k8s.maxVersion` only when you
+  have concrete evidence that versions outside that bound fail, and explain
+  what fails and how to fix it in `reason`. If a new bound rejects a version
+  the package previously accepted, add an `error` change record and start
+  `reason` with its ID in brackets (`[Kxxxx]`).
+- Before setting a hard bound, check whether the package can disable just the
+  incompatible feature on older clusters. Read `clusterConfig.k8sVersion` in
+  `build` and compare it with `kix.version.atLeast` or `kix.version.atMost`
+  (leaving upstream's defaults enabled when `k8sVersion` is `null`). For
+  example, `kube-state-metrics` disables collectors whose APIs the cluster
+  does not serve and omits their resource types from its ClusterRole, so it
+  keeps `minVersion = "1.25"` instead of requiring Kubernetes 1.36.
+- Add or update the package's entry in `ranges` in
+  `kix/lib/tests/units/k8s-window.nix`, listing versions for `accepts`,
+  `warns`, and (when top-level `meta.k8s` sets a bound) `refuses` and any
+  `[Kxxxx]` `id`.
+- Every stable package must accept all Kubernetes versions in the release
+  window (`kix/lib/core/kubernetes.nix`), enforced by the
+  `k8s-window-stable-packages-cover-it` test. If an upstream upgrade drops a
+  version in that window, keep the package working across the window or hold
+  the upgrade. Moving the release window is a release decision, so ask first.
 
 - List every image the package renders, including images an operator is
   told to deploy, and decide for each whether it moves.

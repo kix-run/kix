@@ -157,15 +157,15 @@ in
     # One Gateway accepts HTTPRoutes from every namespace, so consumers in
     # any namespace find it by name.
     scope = "cluster";
-    # The Kubernetes versions Traefik supports, from the Kubernetes support
-    # policy in its docs (docs/content/includes/kubernetes-requirements.md),
-    # which says Traefik supports the latest three minor versions. Kubernetes
-    # v1.37 is the newest minor release at this Traefik release, so it is the
-    # upper bound. Move both bounds with `release`.
-    k8s = {
+    # Traefik's docs say it supports the latest three Kubernetes minor
+    # versions (docs/content/includes/kubernetes-requirements.md). Nothing is
+    # known to fail outside that range, so Kix only warns. Kubernetes v1.37
+    # is the newest minor release at this Traefik release. Move `supported`
+    # with `release`.
+    k8s.supported = {
       minVersion = "1.35";
       maxVersion = "1.37";
-      reason = "[K1871] Traefik ${release} supports Kubernetes 1.35 to 1.37. Deploy a Kix release with an older traefik package, or move the cluster to a supported Kubernetes version first";
+      source = "the Kubernetes requirements in Traefik's docs";
     };
     network.intents = {
       # HTTPRoutes name their backends at runtime, on any port, so the graph

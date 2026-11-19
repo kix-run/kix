@@ -31,8 +31,9 @@
 #
 # Node prerequisites, which Kix cannot apply. The package reads them from
 # the cluster definition and refuses a cluster that cannot serve:
-#   - Kubernetes 1.35 to 1.37 (meta.k8s), the versions Spegel supports.
-#     `trafficDistribution: PreferSameNode` needs 1.34 or later.
+#   - Kubernetes 1.34 or later (meta.k8s), for `trafficDistribution:
+#     PreferSameNode`. Spegel supports 1.35 to 1.37, and a cluster outside
+#     that gets a warning.
 #   - containerd 2.2 or later, with a registry `config_path`. The registry
 #     container exits with an error on an older containerd. Kix has no
 #     fact for the containerd version, so it cannot refuse one. The socket, the config
@@ -130,13 +131,21 @@ in
     description = "Spegel, a peer-to-peer OCI registry mirror that serves image layers from the nodes that already hold them";
     owner = "platform";
     roles = [ "registryMirror" ];
-    # Upstream's release page states support for the latest three
-    # Kubernetes minors at release time, and the 0.8 release notes set 1.35
-    # as the minimum. Move both bounds with `release`.
+    # The registry Service sets `trafficDistribution: PreferSameNode`, a
+    # value that Kubernetes serves from 1.34 (the Spegel pull request that
+    # added it names 1.34 as the version that introduced it), so an older
+    # cluster is refused. Upstream supports the latest three Kubernetes
+    # minors at the time of a release and tests 1.35 to 1.37 at 0.8. It
+    # states no failure on a newer version, so none is refused. Move
+    # `supported` with `release`.
     k8s = {
-      minVersion = "1.35";
-      maxVersion = "1.37";
-      reason = "[K8826] Spegel ${release} supports Kubernetes 1.35 to 1.37. Deploy a Kix release with an older spegel package, or move the cluster to a supported Kubernetes version first";
+      minVersion = "1.34";
+      reason = "[K8826] Spegel ${release} sets trafficDistribution: PreferSameNode on its registry Service, which Kubernetes 1.33 and older reject. Upgrade the cluster to Kubernetes 1.34 or newer and update k8sVersion, or stay on an older version of Kix.";
+      supported = {
+        minVersion = "1.35";
+        maxVersion = "1.37";
+        source = "Spegel's support policy (the three latest Kubernetes minor versions) and integration tests";
+      };
     };
     # The registry container reads the containerd socket and content store,
     # which root owns on the host.

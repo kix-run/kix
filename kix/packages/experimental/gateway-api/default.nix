@@ -114,13 +114,20 @@ in
     # The role admits one managed claimant per cluster, which keeps a
     # second copy of the cluster-scoped CRDs out.
     roles = [ "gatewayApi" ];
-    # The Kubernetes versions the release tests its CRDs' CEL validation on
-    # (.github/workflows/crd-validation.yml upstream). TLSRoute uses CEL's
-    # isIP and BackendTLSPolicy the format library.
+    # The TLSRoute CRD validates with CEL's isIP and the BackendTLSPolicy CRD
+    # with the CEL format library. The Kubernetes CEL docs list the IP
+    # address library from 1.31 and the format library from 1.32. An older
+    # apiserver cannot compile those rules and rejects the CRDs. Upstream
+    # tests the CRDs' CEL validation on five minor versions
+    # (.github/workflows/crd-validation.yml). Move `supported` with `release`.
     k8s = {
-      minVersion = "1.33";
-      maxVersion = "1.37";
-      reason = "Gateway API ${release} is tested on Kubernetes 1.33 to 1.37";
+      minVersion = "1.32";
+      reason = "The Gateway API ${release} CRDs use CEL validation rules from the format library added in Kubernetes 1.32, so older API servers reject them. Upgrade the cluster to Kubernetes 1.32 or newer and update k8sVersion, or stay on an older version of Kix.";
+      supported = {
+        minVersion = "1.33";
+        maxVersion = "1.37";
+        source = "Gateway API's CRD validation CI workflow";
+      };
     };
   };
 

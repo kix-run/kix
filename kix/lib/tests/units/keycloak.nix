@@ -434,46 +434,4 @@ in
       && lib.hasInfix "465" (builtins.toJSON (policyOf server))
     )
     || throw "keycloak mail egress: ${builtins.toJSON (policyOf server)}";
-
-  # A cluster that declares a Kubernetes version outside 1.31 to 1.34 is
-  # refused with the change record's id. The meta check runs directly,
-  # because a failed meta assertion fails the cluster before its message can
-  # be read.
-  keycloak-k8s-range =
-    let
-      metaLib = import ../../meta.nix { inherit lib; };
-      meta =
-        (keycloakPackage {
-          inherit lib;
-          kix = kixlib;
-          scope = {
-            instanceName = "keycloak";
-            namespaceName = "auth";
-          };
-          availability = "none";
-        }).meta;
-      refusals =
-        k8sVersion:
-        map (a: a.message) (
-          builtins.filter (a: !a.assertion) (
-            (metaLib.checkMetaStatic {
-              packageMeta = meta;
-              instanceName = "keycloak";
-              namespaceName = "auth";
-              clusterConfig = { inherit k8sVersion; };
-              resolvedDepMeta = { };
-              resolutionIndex.byKey = { };
-            }).assertions
-          )
-        );
-      refused = v: builtins.any (lib.hasInfix "[K4417]") (refusals v);
-    in
-    (
-      refused "1.30"
-      && refused "1.35.0"
-      && refusals "1.31.2" == [ ]
-      && refusals "1.34.0" == [ ]
-      && refusals null == [ ]
-    )
-    || throw "keycloak k8s range: 1.30 ${builtins.toJSON (refusals "1.30")}, 1.35.0 ${builtins.toJSON (refusals "1.35.0")}, 1.31.2 ${builtins.toJSON (refusals "1.31.2")}";
 }

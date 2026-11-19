@@ -653,38 +653,4 @@ in
     in
     wrong == [ ]
     || throw "external-secrets refusals: bad case built or good case failed: ${builtins.toJSON wrong}";
-
-  # meta.k8s refuses a cluster that declares a Kubernetes version outside the
-  # range upstream supports for the pinned release.
-  external-secrets-k8s-range =
-    let
-      metaLib = import ../../meta.nix { inherit lib; };
-      meta =
-        (operatorPackage {
-          inherit lib;
-          kix = kixlib;
-          scope = {
-            instanceName = "external-secrets";
-            namespaceName = "external-secrets";
-          };
-          availability = "none";
-        }).meta;
-      refusals =
-        k8sVersion:
-        map (a: a.message) (
-          builtins.filter (a: !a.assertion) (
-            (metaLib.checkMetaStatic {
-              packageMeta = meta;
-              instanceName = "external-secrets";
-              namespaceName = "external-secrets";
-              clusterConfig = { inherit k8sVersion; };
-              resolvedDepMeta = { };
-              resolutionIndex.byKey = { };
-            }).assertions
-          )
-        );
-      refused = v: builtins.any (lib.hasInfix "[K6770]") (refusals v);
-    in
-    (refused "1.36" && refused "1.38.0" && refusals "1.37.2" == [ ] && refusals null == [ ])
-    || throw "external-secrets k8s range: 1.36 ${builtins.toJSON (refusals "1.36")}, 1.38.0 ${builtins.toJSON (refusals "1.38.0")}, 1.37.2 ${builtins.toJSON (refusals "1.37.2")}";
 }

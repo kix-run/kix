@@ -241,8 +241,46 @@ rec {
       resolutionIndex,
     }:
     let
-      k8s = packageMeta.k8s or { };
+      # `meta.k8s` holds two ranges. The bounds at its top level refuse a
+      # cluster, so each needs evidence that the package fails outside it.
+      # `supported` is what upstream states it supports, and only warns.
+      k8s = removeAttrs (packageMeta.k8s or { }) [ "supported" ];
+      k8sSupported = removeAttrs ((packageMeta.k8s or { }).supported or { }) [ "source" ];
       clusterK8s = clusterConfig.k8sVersion or null;
+
+      supportedRange =
+        let
+          min = k8sSupported.minVersion or null;
+          max = k8sSupported.maxVersion or null;
+        in
+        if min != null && max != null then
+          (if min == max then "${min} only" else "${min} to ${max}")
+        else if min != null then
+          "${min} and later"
+        else
+          "${max} and earlier";
+      supportedSource = (packageMeta.k8s or { }).supported.source or null;
+      supportedDiag = constraintDiagnostics {
+        field = "meta.k8s.supported";
+        subject = "the cluster's k8sVersion";
+        version = clusterK8s;
+        constraint = k8sSupported;
+        warnWhenNull = false;
+        describeFailure =
+          _: _:
+          "the cluster sets k8sVersion to ${clusterK8s}, while the upstream project supports or tests Kubernetes ${supportedRange}. Kix knows of no failure on Kubernetes ${clusterK8s}, so the build continues."
+          + lib.optionalString (supportedSource != null) " Source: ${supportedSource}."
+          + " To stay on a supported Kubernetes version, move the cluster to one and update k8sVersion.";
+      };
+      supportedIsMalformed = builtins.any (
+        b: k8sSupported ? ${b} && !(versions.isVersion k8sSupported.${b})
+      ) (builtins.attrNames k8sSupported);
+      # A version outside `supported` warns once, even when it misses both
+      # bounds. A bound that is not a version stays an author error.
+      supportedWarnings =
+        supportedDiag.warnings
+        ++ lib.optionals (!supportedIsMalformed) (lib.unique (map (a: a.message) supportedDiag.assertions));
+      supportedAssertions = lib.optionals supportedIsMalformed supportedDiag.assertions;
 
       # Most clusters leave k8sVersion unset, so null does not warn.
       k8sDiag = constraintDiagnostics {
@@ -355,11 +393,13 @@ rec {
     {
       assertions = lib.concatLists [
         (builtins.concatMap (d: d.assertions) versionDiags)
+        supportedAssertions
         conflictAssertions
         scopeAssertions
         unsafeAssertions
       ];
-      warnings = deprecationWarnings ++ builtins.concatMap (d: d.warnings) versionDiags;
+      warnings =
+        deprecationWarnings ++ builtins.concatMap (d: d.warnings) versionDiags ++ supportedWarnings;
     };
 
   evaluatePackageDiagnostics =
@@ -457,11 +497,12 @@ rec {
       allInstancesList,
       scorecardWarnings ? [ ],
       extraAssertions ? [ ],
+      extraWarnings ? [ ],
     }:
     let
       collect =
         field: builtins.concatMap (inst: (inst._diagnostics or noDiagnostics).${field}) allInstancesList;
-      warnings = collect "warnings";
+      warnings = collect "warnings" ++ extraWarnings;
       assertions = collect "assertions" ++ extraAssertions;
       failedAssertions = collect "failedAssertions" ++ builtins.filter (a: !a.assertion) extraAssertions;
       assertionCheck =

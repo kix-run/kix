@@ -172,7 +172,12 @@ meta = {
   };
   k8s = {
     minVersion = "1.28";
-    maxVersion = "1.32";
+    reason = "The CRDs use a validation rule added in Kubernetes 1.28";
+    supported = {
+      minVersion = "1.30";
+      maxVersion = "1.32";
+      source = "the compatibility table in the upstream README";
+    };
   };
 };
 ```
@@ -187,7 +192,7 @@ meta = {
 | `defaultAliases` | list of strings | `[ ]` | Default dependency-injection names registered when `instances.<name>.aliases` is empty. |
 | `availability.max` | `"none"` \| `"pod"` \| `"node"` \| `"zone"` | None | Highest availability level the package supports. |
 | `compatibleWith` | attrset of `{ minVersion?; maxVersion?; reason?; }` | `{ }` | Version bounds for upstream dependencies keyed by dependency argument name. |
-| `k8s` | `{ minVersion?; maxVersion?; reason?; }` | None | Supported Kubernetes minor or patch version range, checked against `k8sVersion`. |
+| `k8s` | `{ minVersion?; maxVersion?; reason?; supported?; }` | None | Kubernetes version bounds checked against [`k8sVersion`](/docs/reference/cluster-configuration/). Top-level `minVersion` and `maxVersion` fail the build outside that range; `supported = { minVersion?; maxVersion?; source?; }` emits a warning without stopping the build. |
 | `conflictsWith` | list of strings | `[ ]` | Packages that cannot coexist with this package (`"<name>"` for same-namespace, `"cluster:<name>"` for cluster-wide). |
 | `podSecurity` | `"privileged"` \| `"baseline"` \| `"restricted"` | None | Pod Security Standards enforcement level applied to the instance namespace. |
 | `unsafe` | list of strings | `[ ]` | Acknowledged security or architectural exceptions (`"raw-pvc"`, `"host-network"`, `"privileged"`, `"run-as-root"`, `"cluster-admin"`). |
@@ -291,6 +296,27 @@ meta.compatibleWith.postgres = {
 ```
 
 Bounds are inclusive (`minVersion <= actual <= maxVersion`) and compare only up to the segment precision of the bound. For example, `maxVersion = "1.29"` accepts `"1.29.4"`, while `maxVersion = "1.29.0"` rejects `"1.29.4"`. `meta.k8s` uses the same comparison rules against `k8sVersion`.
+
+`meta.k8s` holds two ranges:
+
+- Top-level `minVersion` and `maxVersion` fail the build when `k8sVersion` falls outside them. Set these bounds only when the package is known to fail beyond them, such as when a workload reads an API version that older Kubernetes releases do not serve or a CRD uses a validation rule added in a newer Kubernetes release, and explain what fails in `reason`. When a package can disable just the unsupported feature on older clusters, compare `clusterConfig.k8sVersion` with [`kix.version.atLeast`](/docs/reference/composition-helpers/#version-helpers) in `build` instead of setting a hard bound.
+- `supported` records the Kubernetes versions the upstream project lists as supported or tests in CI, and `source` names where upstream states that range. When `k8sVersion` falls outside `supported`, the build continues and emits a warning with the range and its source.
+
+When a cluster leaves `k8sVersion` unset, Kix skips both checks without warning.
+
+```nix
+meta.k8s = {
+  minVersion = "1.36";
+  reason = "Reads admissionregistration.k8s.io/v1 MutatingAdmissionPolicy, added in Kubernetes 1.36";
+  supported = {
+    minVersion = "1.36";
+    maxVersion = "1.36";
+    source = "the compatibility matrix in the upstream README";
+  };
+};
+```
+
+Each Kix release supports a range of Kubernetes versions (1.36 and 1.37 in this release). Every stable package accepts all versions in that range, so a cluster on Kubernetes 1.36 or 1.37 builds with any combination of stable packages. Setting `k8sVersion` outside that range emits a warning without stopping the build.
 
 ### `meta.conflictsWith`
 

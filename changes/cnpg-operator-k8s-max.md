@@ -1,6 +1,5 @@
 +++
-kind = "error"
+kind = "changed"
 packages = ["cnpg-operator"]
-id = "K4963"
 +++
-`cnpg-operator` supports Kubernetes 1.34 to 1.36 only, so it refuses a cluster that declares Kubernetes 1.31 to 1.33, or 1.37 or newer. The deploy stops with `[K4963]`. Before you deploy this release, move the cluster to Kubernetes 1.34, 1.35, or 1.36.
+`cnpg-operator` now warns when `k8sVersion` is outside Kubernetes 1.34 to 1.36, the versions CloudNativePG 1.30 lists as supported. When `k8sVersion` is 1.31 to 1.33 or newer than 1.36, the build still succeeds because no version from 1.31 onward is known to fail. `cnpg-operator` continues to refuse `k8sVersion` values below 1.31, and leaves clusters without `k8sVersion` unchecked.

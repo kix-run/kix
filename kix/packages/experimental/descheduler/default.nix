@@ -94,13 +94,15 @@ in
     version = release;
     owner = "platform";
     description = "Kubernetes descheduler, which evicts pods that break their placement rules or crowd busy nodes so the scheduler can place them again";
-    # From the compatibility matrix in upstream's README: each release
-    # supports the Kubernetes minor it is built against and the two before
-    # it. Move both bounds with `release`.
-    k8s = {
+    # Upstream's README says descheduler has no hard dependency on a
+    # Kubernetes release and that each release is tested against the three
+    # latest Kubernetes minors. Its compatibility matrix lists the client
+    # library version each release is built with. No version is known to
+    # fail, so none is refused. Move `supported` with `release`.
+    k8s.supported = {
       minVersion = "1.35";
       maxVersion = "1.37";
-      reason = "[K4518] descheduler ${release} supports Kubernetes 1.35 to 1.37. Move the cluster to a Kubernetes version in that range, or use a Kix release whose descheduler package still accepts it";
+      source = "the compatibility section of descheduler's README";
     };
   };
 

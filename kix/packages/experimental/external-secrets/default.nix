@@ -213,13 +213,16 @@ in
     defaultAliases = [ "externalSecrets" ];
     # One instance per cluster; see the header.
     conflictsWith = [ "cluster:externalSecrets" ];
-    # The Kubernetes versions upstream supports for this release, from the
-    # table in docs/introduction/stability-support.md. Move both bounds with
-    # `release`.
-    k8s = {
+    # Upstream states the Kubernetes versions it supports for each release
+    # in a table in docs/introduction/stability-support.md and tests no
+    # others. The table does not say that other versions fail. The CRD rules
+    # use only CEL functions that Kubernetes has had since 1.25, and the
+    # manifests use only v1 APIs, so no hard range is set. Move `supported`
+    # with `release`.
+    k8s.supported = {
       minVersion = "1.37";
       maxVersion = "1.37";
-      reason = "[K6770] External Secrets Operator ${release} supports Kubernetes 1.37 only. Deploy a Kix release with an older external-secrets package, or move the cluster to Kubernetes 1.37 first";
+      source = "the support table in External Secrets Operator's stability documentation";
     };
     network.intents = {
       # Provider APIs are runtime data in SecretStore specs. Cloud secret

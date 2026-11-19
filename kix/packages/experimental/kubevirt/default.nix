@@ -230,11 +230,15 @@ in
     conflictsWith = [ "cluster:kubevirt" ];
     # KubeVirt's support matrix (kubevirt/sig-release,
     # releases/k8s-support-matrix.md) lists the Kubernetes versions each
-    # minor release supports. Move both bounds with `release`.
-    k8s = {
+    # minor release supports. No version is known to fail: the manifests use
+    # only core v1, RBAC v1, and scheduling v1, the KubeVirt CRD has no CEL
+    # validation, and virt-operator creates ValidatingAdmissionPolicy v1 (GA
+    # in 1.30) and checks at run time whether MutatingAdmissionPolicy is
+    # served. Nothing is refused. Move `supported` with `release`.
+    k8s.supported = {
       minVersion = "1.34";
       maxVersion = "1.36";
-      reason = "[K0297] KubeVirt ${release} supports Kubernetes 1.34 to 1.36 only. Move the cluster to a Kubernetes version in that range, or use a Kix release whose kubevirt package supports it";
+      source = "KubeVirt's Kubernetes support matrix";
     };
     # virt-operator runs virt-handler on every node, privileged, as root, in
     # the host PID namespace. Upstream labels its namespace the same way.
