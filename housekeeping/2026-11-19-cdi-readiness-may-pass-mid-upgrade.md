@@ -1,0 +1,3 @@
+# 2026-11-19 · `kix/packages/experimental/cdi` · The CDI resource waits for phase Deployed, which may stay Deployed while cdi-operator moves to a new version.
+
+The kubevirt package had this problem: virt-operator keeps phase Deployed during an upgrade, so `kix deploy` reported KubeVirt ready while the old version still ran. It now waits for `status.observedKubeVirtVersion`. CDI has the same status shape (`status.observedVersion`, `status.targetVersion`), but nobody has checked whether cdi-operator also keeps the phase during an upgrade. Read `pkg/operator/controller` in containerized-data-importer, or watch the phase during a CDI version change on kind.
