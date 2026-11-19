@@ -444,7 +444,8 @@ in
 
   # At `none` KubeVirt runs one virt-api and virt-controller and CDI one of
   # each operand; at `zone` KubeVirt keeps its own counts and CDI runs
-  # two. Both CRs wait for phase Deployed.
+  # two. CDI waits for phase Deployed, and KubeVirt for the release it
+  # installs to be the one it reports.
   kubevirt-cdi-operand-replicas =
     let
       at =
@@ -462,6 +463,10 @@ in
         path = "/status/phase";
         equals = "Deployed";
       };
+      installed = builtins.toJSON {
+        path = "/status/observedKubeVirtVersion";
+        equals = "v1.10.0";
+      };
     in
     (
       (kvSpec none).infra.replicas or null == 1
@@ -478,7 +483,7 @@ in
           deploymentReplicas = 2;
           uploadProxyReplicas = 2;
         }
-      && readinessOf (find none "KubeVirt" "kubevirt") == deployed
+      && readinessOf (find none "KubeVirt" "kubevirt") == installed
       && readinessOf (find none "CDI" "cdi") == deployed
     )
     || throw "operand replicas: kubevirt none ${builtins.toJSON (kvSpec none)}, zone ${builtins.toJSON (kvSpec zone)}; cdi none ${builtins.toJSON (cdiInfra none)}, zone ${builtins.toJSON (cdiInfra zone)}";

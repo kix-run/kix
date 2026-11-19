@@ -6,7 +6,8 @@
 # virt-operator then runs virt-api and virt-controller in this namespace and
 # virt-handler on every node, and installs the CRDs of its own kinds
 # (VirtualMachine, VirtualMachineInstance, and the rest). The deploy waits
-# for the KubeVirt resource to reach phase Deployed.
+# until the KubeVirt resource reports the version `image.tag` names as
+# installed.
 #
 # A cluster runs one instance: the KubeVirt CRD, the PriorityClass, the
 # admin ClusterRole `kubevirt.io:operator`, and the CRDs and webhooks
@@ -728,6 +729,14 @@ in
             [ "imageTag" ]
           ];
         } baseSpec config.extraSpec;
+        # The phase stays Deployed while virt-operator moves the operands to
+        # a new version. virt-operator sets observedKubeVirtVersion only once
+        # every component of that version is ready
+        # (pkg/virt-operator/kubevirt.go, syncInstallation).
+        readiness = {
+          path = "/status/observedKubeVirtVersion";
+          equals = builtins.unsafeDiscardStringContext config.image.tag;
+        };
         requires = [
           self.deployment
           self.priorityClass
