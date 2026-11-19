@@ -57,9 +57,10 @@ Write exactly one of these words to `${OUTCOME}`, and give the same word as the 
 - `upgraded`: the package is at the target, or at the newest release upstream supports directly from `${OLD}`, it is tested, and `check-bump` passes. If the upgrade migrates data in a way the old version cannot read, you also tested going back the way the record says: the old image against the migrated data, or a restore of a backup.
 - `held`: you chose not to move, because the target is broken, withdrawn, a pre-release, or has a regression that affects users (say which issue). Commit nothing but housekeeping entries.
 - `needs-decision`: a person must choose, such as between two versions, chaining through releases or jumping, accepting a range that refuses many clusters, a data migration you could not test going back from, or an image with no arm64 build. Give the options, what each costs, and your recommendation. Commit the work you have.
+- `not-ready`: the target is released, but something the package needs from it is not published yet, such as its image or Helm chart. Say what is missing and where you looked. Commit nothing. The workflow opens no issue, and the weekly check starts this bump again.
 - `blocked-on-kix`: Kix itself must change first, such as a missing feature or a bug in the library. Add a housekeeping entry that says what, and stop. Do not work around it in the package.
 
-Only `upgraded` opens a normal pull request. Every other outcome goes to a person, with whatever you committed.
+Only `upgraded` opens a normal pull request. `not-ready` opens nothing. Every other outcome goes to a person, with whatever you committed.
 
 ## Rules
 

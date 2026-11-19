@@ -214,7 +214,7 @@ def main():
             continue
         if key(r["target"]) <= key(r["pinned"]):
             continue
-        dirs = [folder(p) for p in r["entry"]["packages"]]
+        dirs = [folder(p) for p in r["entry"]["packages"] + r["entry"].get("also", [])]
         states = runs.get((r["name"], r["target"]), set())
         if (r["name"], r["target"]) in targets:
             r["why"] = "an issue or pull request from the bump app names this version"

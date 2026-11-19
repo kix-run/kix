@@ -277,6 +277,9 @@ jobs:
           outcome=$(tr -d '[:space:]' < "$RUNNER_TEMP/outcome" 2>/dev/null || true)
           case "$outcome" in
             upgraded|held|needs-decision|blocked-on-kix) ;;
+            not-ready)
+              echo "::notice title=Not ready::$PACKAGE $TARGET is released, but something the package needs is not published yet. The weekly check starts this bump again."
+              ;;
             *)
               echo "::error::the agent gave no valid outcome (got '$outcome')"
               outcome=invalid
@@ -294,7 +297,10 @@ jobs:
 
   verify:
     needs: agent
-    if: needs.agent.outputs.outcome != 'invalid'
+    # A not-ready run opens nothing, so that the weekly check tries again.
+    if: >-
+      needs.agent.outputs.outcome != 'invalid'
+      && needs.agent.outputs.outcome != 'not-ready'
     runs-on: [self-hosted, spindle-4c-8g-50d, access=isolated]
     timeout-minutes: 60
     env:
