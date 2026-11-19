@@ -14,7 +14,8 @@
 # test-metabase.rules-test.yaml tests.
 #
 # Build:  kix build metabase
-# Deploy: kix deploy metabase --context <kind context> --timeout 35m
+# Deploy: SOPS_AGE_KEY_FILE=clusters/dev-secrets/age-key.txt \
+#           kix deploy metabase --context <kind context> --timeout 35m
 #         on a kind cluster created with `disableDefaultCNI: true`. The
 #         first start migrates the schema, hence the timeout.
 
