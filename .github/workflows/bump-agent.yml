@@ -210,6 +210,9 @@ jobs:
           for d in "${dirs[@]:1}"; do
             CHECK_MORE+=$'\n\nRun it for each other package folder too, and make each pass: `scripts/check-bump.sh '"$d $PINNED $BASE"'`'
           done
+          if [ "${#dirs[@]}" -gt 1 ]; then
+            CHECK_MORE+=$'\n\nRun these one at a time, never in parallel. Each run builds the library and runs the test suites, and several at once overload the machine your kind cluster runs on.'
+          fi
           [ -n "$EXTRA" ] || EXTRA="No extra instructions for this package."
           export PKG_DIRS CHECK_MORE EXTRA
           brief=$(<.github/bump/brief.md)
