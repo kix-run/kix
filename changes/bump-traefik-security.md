@@ -1,0 +1,5 @@
++++
+kind = "security"
+packages = ["experimental/traefik"]
++++
+`traefik` runs Traefik v3.7.19, which carries the fixes from Traefik v3.7.18 for advisories GHSA-cp28-5662-543f, GHSA-x5pf-cqh3-2gv8, GHSA-p956-6gvv-mxqp, GHSA-ccgh-9g52-6vwg, and GHSA-rr42-h8r2-f28g. Upstream has assigned them no CVE ids. Two of them affect the setup this package deploys. Before v3.7.18, a path segment such as `/..;x/` passed through path sanitizing, so a request could reach a backend path that a route meant to keep out of reach. Traefik now resolves `.`, `..`, and empty segments that carry path parameters like plain ones, so `/foo/..;bar/baz` reaches the backend as `/baz`. Before v3.7.18, the zstd encoder in the Compress middleware let unauthenticated clients exhaust Traefik's memory. The other advisories concern ForwardAuth with NTLM and the Ingress-NGINX provider, which this package does not turn on. v3.7.19 also moves to golang.org/x/crypto 0.59.0 and quic-go 0.65.0. The first deploy after you upgrade restarts the Traefik pods once. To go back, deploy the previous Kix version: Traefik keeps no state.
