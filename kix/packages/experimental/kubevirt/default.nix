@@ -23,14 +23,18 @@
 # Upgrades: virt-operator moves the operands to its own version once its
 # Deployment changes. Running virtual machines keep their old virt-launcher
 # pods until they restart or migrate. KubeVirt supports updating only from
-# the latest patch of one minor to the latest patch of the next. This
-# package moved from v1.5.0 to v1.9.1 in one step, which skips that path.
-# To follow it instead, set `image.tag` to each step in turn and deploy
-# once per step (v1.5.3, v1.6.6, v1.7.4, v1.8.4), then remove the setting.
-# The package accepts those minors because the vendored CRD and roles of
-# v1.9.1 hold every field and rule the older releases use. After each
-# upgrade, the new virt-controller rewrites every existing VirtualMachine
-# and raises its generation. out.mkVirtualMachine reads the generation from
+# the latest patch of one minor to the latest patch of the next, so v1.9.1
+# moves to v1.10.0 in one deploy. A cluster on an older minor sets
+# `image.tag` to each step in turn and deploys once per step (v1.5.3,
+# v1.6.6, v1.7.4, v1.8.4, v1.9.1), then removes the setting. The package
+# accepts those minors because the vendored CRD and roles of v1.10.0 hold
+# every field and rule the older releases use. The roles of v1.10.0 drop
+# virt-operator's pods/exec rule. Upstream kept it only for upgrades from
+# releases older than these, whose virt-api needed it. Turn off the alpha MigrationStallDetection
+# feature gate before moving to v1.10, because v1.10 changes the fields its
+# stall detector sends between virt-handlers. After each upgrade, the new
+# virt-controller rewrites every existing VirtualMachine and raises its
+# generation. out.mkVirtualMachine reads the generation from
 # status.desiredGeneration, so the deploy does not wait for a restart.
 # Going back
 # does not work: an older virt-operator cannot install its CRDs over the
@@ -113,9 +117,9 @@ let
   # The upstream release: meta.version, the default image.tag, and the tag
   # in crds/sources.txt and rbac/sources.txt (kix-lib test
   # kubevirt-cdi-sources-match-release).
-  release = "v1.9.1";
+  release = "v1.10.0";
 
-  # "v1.9.1" -> "v1.9"; null for a tag that is not a vX.Y release.
+  # "v1.10.0" -> "v1.10"; null for a tag that is not a vX.Y release.
   # Upstream tags every release with the leading v.
   minorOf =
     tag: lib.mapNullable (m: "v${builtins.head m}") (builtins.match "v([0-9]+\\.[0-9]+)(\\..*)?" tag);
@@ -129,6 +133,7 @@ let
     "v1.6"
     "v1.7"
     "v1.8"
+    "v1.9"
     (minorOf release)
   ];
 
@@ -143,52 +148,52 @@ let
   # is passed in, and what runs it.
   operands = {
     virt-api = {
-      digest = "sha256:d341c751dbe632d183989cce78203a888293e0e2a32719f32461bd6273322485";
+      digest = "sha256:876171a8625f7f20c337aba14d4ee4275923d612674c776fa25db5bf75901d5b";
       env = "VIRT_API_IMAGE";
       what = "virt-api";
     };
     virt-controller = {
-      digest = "sha256:75c94c787eec15458729848e00fe0b421ca8998c6219de8c2d3cae72ff0bd287";
+      digest = "sha256:a3e588b9b88662153c29bc0c32f429b871880ff2a1aef6c01d83e69fc3d584ab";
       env = "VIRT_CONTROLLER_IMAGE";
       what = "virt-controller";
     };
     virt-handler = {
-      digest = "sha256:c23b635ea4aff7f0779c6c061c431da0469c7796255e6de90a5970236b5ea61b";
+      digest = "sha256:1cc169b352ea09ad25824f633b955b2692a5a284c15e9689bf393992b1c6d199";
       env = "VIRT_HANDLER_IMAGE";
       what = "virt-handler on every node";
     };
     virt-launcher = {
-      digest = "sha256:53e6d12197761cda653201f82e295ac6098d689a58bc2c68df0970c248d61fa6";
+      digest = "sha256:e8ac130526a7ca76c93127cbe005e0c9d155361dfe3a16eaf8d3bb6fc8d659d1";
       env = "VIRT_LAUNCHER_IMAGE";
       what = "the pod of each virtual machine";
     };
     virt-exportproxy = {
-      digest = "sha256:fe9a0a297e7b407c3a322c6f5fccba5313c668907c30cb0b80b8c51bcdea640a";
+      digest = "sha256:ae0b9039f376cbb90445f20877a1a449b9dc5ffa7deeed3184a22e671e9c7fb2";
       env = "VIRT_EXPORTPROXY_IMAGE";
       what = "virt-exportproxy, with the VMExport feature gate";
     };
     virt-exportserver = {
-      digest = "sha256:76c01dca74921eb5fd74d00b82e77a60d58e8213c72d84cc66a3bc92679690b8";
+      digest = "sha256:394de63c4abc2c1ad894e6c9dce4685918aa0e7f1575242b2727750a9a395a6a";
       env = "VIRT_EXPORTSERVER_IMAGE";
       what = "a VirtualMachineExport's server pod";
     };
     libguestfs-tools = {
-      digest = "sha256:08df144de2a77ad8259f93df3dca7e13e73669651ce8fbe63f58c23e4fdd6427";
+      digest = "sha256:5bf4732489e420a0a82e689e5ee7a81f55b432b1073279bef9618211ff5a4842";
       env = "GS_IMAGE";
       what = "`virtctl guestfs` pods, on demand";
     };
     pr-helper = {
-      digest = "sha256:c7724681efa3297091d0ce0edf4fda52c062455fb83b76484499a46ae261f61d";
+      digest = "sha256:9861e7a072f33c68a53d020a071f4dc62e0e4373f7b380c710942e97e60cb833";
       env = "PR_HELPER_IMAGE";
       what = "the persistent reservation helper, with the PersistentReservation feature gate";
     };
     sidecar-shim = {
-      digest = "sha256:d48c6af64305c28de7e9a5509a11737b115cc0193f57f2a0f42faff85bebe5cd";
+      digest = "sha256:93d211a7de2a1e47a45da63ec8ea93ef8e84ae2fb6bf2de07f310e7093fa6891";
       env = "SIDECAR_SHIM_IMAGE";
       what = "hook sidecars, on demand";
     };
     virt-synchronization-controller = {
-      digest = "sha256:5f3da789a7b7a4febb1ece9f4a085ceb73aabcd468af84563ea7b6809341eb10";
+      digest = "sha256:db90aa35f2e056c1a39b7da7e42562dfa56e0661d3d131cf45460f9d32c33ed9";
       env = "VIRT_SYNCHRONIZATIONCONTROLLER_IMAGE";
       what = "virt-synchronization-controller, with the DecentralizedLiveMigration feature gate";
     };
@@ -197,14 +202,14 @@ let
     # data/virt-template/install-virt-operator.yaml at the release), and
     # takes these variables as whole image references.
     virt-template-apiserver = {
-      tag = "v0.2.3";
-      digest = "sha256:27defde24b4a4705d6096a86d134df0dc324243b56be8f0c057e1882c6da338b";
+      tag = "v0.3.0";
+      digest = "sha256:eaf118b2c1645c197f351c4aa0b56e49ace5c438530803b3ebcf390dc7b43731";
       env = "VIRT_TEMPLATE_APISERVER_IMAGE";
       what = "virt-template-apiserver, unless the Template feature gate is off";
     };
     virt-template-controller = {
-      tag = "v0.2.3";
-      digest = "sha256:b45ac55de5fc9dbbee14974b45718c41eaed4d4979f92677dab3500598e33d22";
+      tag = "v0.3.0";
+      digest = "sha256:5313fe9a7364881a8afd9ac3afb764fa7d009e098f4180417ed3708c5bdf2efc";
       env = "VIRT_TEMPLATE_CONTROLLER_IMAGE";
       what = "virt-template-controller, unless the Template feature gate is off";
     };
@@ -228,17 +233,16 @@ in
     defaultAliases = [ "kubevirt" ];
     # One instance per cluster; see the header.
     conflictsWith = [ "cluster:kubevirt" ];
-    # KubeVirt's support matrix (kubevirt/sig-release,
-    # releases/k8s-support-matrix.md) lists the Kubernetes versions each
-    # minor release supports. No version is known to fail: the manifests use
-    # only core v1, RBAC v1, and scheduling v1, the KubeVirt CRD has no CEL
-    # validation, and virt-operator creates ValidatingAdmissionPolicy v1 (GA
-    # in 1.30) and checks at run time whether MutatingAdmissionPolicy is
-    # served. Nothing is refused. Move `supported` with `release`.
-    k8s.supported = {
-      minVersion = "1.34";
-      maxVersion = "1.36";
-      source = "KubeVirt's Kubernetes support matrix";
+    # KubeVirt supports a release on the three latest Kubernetes minors
+    # released when it ships (user guide, "Installation" requirements, and
+    # docs/release.md at the release). v1.10.0 shipped on 2026-11-18, when
+    # those were 1.35 to 1.37. KubeVirt's published support matrix
+    # (kubevirt/sig-release, releases/k8s-support-matrix.md) has no v1.10 row
+    # yet. Move the range with `release`.
+    k8s = {
+      minVersion = "1.35";
+      maxVersion = "1.37";
+      reason = "[K9806] KubeVirt ${release} supports Kubernetes 1.35 to 1.37. Upgrade the cluster to one of those versions and update k8sVersion, or stay on an older version of Kix.";
     };
     # virt-operator runs virt-handler on every node, privileged, as root, in
     # the host PID namespace. Upstream labels its namespace the same way.
@@ -275,8 +279,8 @@ in
     image = kix.options.image {
       repository = "quay.io/kubevirt/virt-operator";
       tag = release;
-      digest = "sha256:a8adf7b772e9ce0bf7e2ce889910fc41ebadf552c9dbe843e9b86641e34f5df9";
-      description = "Image of virt-operator. Its minor must be the release's, or an older step of upstream's update path (v1.5 to v1.8) while walking up one minor per deploy. Each operand image defaults to this repository's registry and path with its own name (quay.io/kubevirt/<name>) and to this tag, and every operand uses this image's pullPolicy.";
+      digest = "sha256:37c1287ad094eed25c4c6cc78744c06dd9bf340f7301eb0d26bdf3c4c230b738";
+      description = "Image of virt-operator. Its minor must be the release's, or an older step of upstream's update path (v1.5 to v1.9) while walking up one minor per deploy. Each operand image defaults to this repository's registry and path with its own name (quay.io/kubevirt/<name>) and to this tag, and every operand uses this image's pullPolicy.";
     };
 
     operandImages = lib.mapAttrs (

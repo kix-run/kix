@@ -152,13 +152,14 @@ let
       ];
     };
     "experimental/kubevirt" = {
-      warns = [
-        "1.33"
-        "1.37"
-      ];
-      accepts = [
+      refuses = [
         "1.34"
-        "1.36"
+        "1.38"
+      ];
+      id = "K9806";
+      accepts = [
+        "1.35"
+        "1.37.2"
       ];
     };
     "experimental/spegel" = {
