@@ -37,7 +37,7 @@ Your work is finished only when this command, run from the root of the checkout 
 scripts/check-bump.sh ${PKG_DIR1} ${OLD} ${BASE}
 ```
 
-It prints one line per check and keeps each check's output in a log file. Run it, fix what it reports, commit, and run it again until it passes. It also lists places where the old version still appears. Update each one, or say in your report why it stays. If you cannot make it pass, your outcome is not `upgraded`. The workflow runs it again on amd64 after you finish, and only your committed work counts.${CHECK_MORE}
+It prints one line per check and keeps each check's output in a log file. Run it, fix what it reports, commit, and run it again until it passes. It also lists places where the old version still appears. Update each one, or say in your report why it stays. If you cannot make it pass, your outcome is not `upgraded`. The workflow runs it again on amd64 after you finish, and only your committed work counts. It also checks that every image the package names has a linux/amd64 build, because your tests run on arm64. If the new release has no amd64 image yet, your outcome is `not-ready`.${CHECK_MORE}
 
 ## Change record kinds
 
