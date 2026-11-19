@@ -1,4 +1,6 @@
 name: Bump agent
+# bump-detect.yml reads the package and version from the run name.
+run-name: Bump ${{ inputs.package }} to ${{ inputs.target }}
 
 # Update the version one package pins, with an AI agent doing the package
 # change, and open a pull request when the change passes the checks.
@@ -424,8 +426,10 @@ jobs:
               ;;
           esac
           {
-            # bump-refresh.yml reads the package folders from this line.
+            # bump-refresh.yml reads the package folders from this line, and
+            # bump-detect.yml reads both lines.
             echo "<!-- bump-dirs: $DIRS -->"
+            echo "<!-- bump-target: $PACKAGE $TARGET -->"
             echo "\`$PACKAGE\` pins \`$PINNED\`. Upstream's newest release is \`$TARGET\` (tag \`$TAG\`)."
             echo
             echo "$summary"
