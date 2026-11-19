@@ -93,7 +93,7 @@
 }:
 let
   # ClickHouse versions have four parts, and the image tag is the version.
-  release = "26.8.39.19";
+  release = "26.8.40.7";
 
   name = scope.instanceName;
 
@@ -159,7 +159,7 @@ in
     image = kix.options.image {
       repository = "docker.io/clickhouse/clickhouse-server";
       tag = release;
-      digest = "sha256:a42be7a55bbbe15a062afb72759564be70c92bf020265bf8d8011af73c95b98c";
+      digest = "sha256:6d462904f276dc6c1fa531d887cac02d4ef7a8f212d6142377d36608c2330d59";
     };
 
     clusterName = lib.mkOption {
