@@ -60,6 +60,7 @@ let
 
   catalogPackages = import ../packages { inherit lib; };
   packagesByLevel = import ../packages/by-level.nix { inherit lib; };
+  packageLib = import ./core/package.nix { inherit lib; };
 
   eachSystem =
     f:
@@ -299,6 +300,7 @@ let
               {
                 version = m.version or null;
                 owner = m.owner or null;
+                package = packageLib.idOf pkg;
               }
             )
             (

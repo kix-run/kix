@@ -7,6 +7,7 @@
 let
   kixlib = import ../lib/vocab { inherit lib; };
   packagesByLevel = import ./by-level.nix { inherit lib; };
+  packageLib = import ../lib/core/package.nix { inherit lib; };
 
   # A scope with the values option declarations read for their defaults.
   stubScope = {
@@ -16,18 +17,11 @@ let
 
   optionsOf =
     package:
-    let
-      fnArgs = builtins.functionArgs package;
-      result = package (
-        {
-          scope = stubScope;
-          inherit lib;
-        }
-        // lib.optionalAttrs (fnArgs ? kix) { kix = kixlib; }
-        // lib.optionalAttrs (fnArgs ? availability) { availability = "none"; }
-      );
-    in
-    result.options or { };
+    (packageLib.call {
+      inherit package;
+      scope = stubScope;
+      kix = kixlib;
+    }).options or { };
 
   # Return the options a submodule declares, under any `nullOr`, `listOf`,
   # or `attrsOf`, or `{ }` for any other type.

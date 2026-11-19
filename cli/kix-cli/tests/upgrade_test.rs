@@ -82,9 +82,10 @@ impl Setup {
         s.write("fake/clusters.json", r#"["east", "west"]"#);
         s.write(
             "fake/packages.json",
-            r#"[{"name": "web", "status": "installed [shop]"},
-                {"name": "db", "status": "installed [shop]"},
-                {"name": "echo-server", "status": "available"}]"#,
+            r#"[{"name": "frontend", "status": "installed [shop]", "package": "web"},
+                {"name": "db", "status": "installed [shop]", "package": "db"},
+                {"name": "site", "status": "installed [shop]", "package": null},
+                {"name": "echo-server", "status": "available", "package": "echo-server"}]"#,
         );
         for cluster in ["east", "west"] {
             s.manifest("out", cluster, "Deployment", "web", "web", "image: web:1");
@@ -408,9 +409,14 @@ fn dry_run_asks_the_installed_kix_which_packages_are_in_use() {
     common::write_executable(&bin.join("kix"), FAKE.replace("__VERSION__", "9.1.0"));
     let (code, out) = s.upgrade(&["--dry-run"]);
     assert_eq!(code, 0, "{out}");
-    // Every note is listed. The one whose package an instance is named
-    // after is marked as a likely match.
-    assert!(out.contains("2 changes between 9.1.0 and 9.3.0:\n  * may affect your 2 clusters (package name matches an instance in use)\n"), "{out}");
+    // Every note is listed. The one that names a package the clusters use
+    // is marked.
+    assert!(
+        out.contains(
+            "2 changes between 9.1.0 and 9.3.0:\n  * package used in this project (2 clusters)\n"
+        ),
+        "{out}"
+    );
     assert!(out.contains("  * [K0001] web (9.2.0):"), "{out}");
     assert!(out.contains("    [K0002] echo-server (9.2.0):"), "{out}");
     assert!(
@@ -418,6 +424,27 @@ fn dry_run_asks_the_installed_kix_which_packages_are_in_use() {
         "{}",
         s.calls()
     );
+}
+
+#[test]
+fn dry_run_marks_nothing_when_the_installed_kix_reports_no_package_ids() {
+    let s = Setup::new();
+    s.releases(vec![]);
+    s.write(
+        "fake/packages.json",
+        r#"[{"name": "web", "status": "installed [shop]"},
+            {"name": "echo-server", "status": "available"}]"#,
+    );
+    let bin = s.data.join("9.1.0/bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    common::write_executable(&bin.join("kix"), FAKE.replace("__VERSION__", "9.1.0"));
+    let (code, out) = s.upgrade(&["--dry-run"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains("current Kix 9.1.0 did not report which packages your clusters use"),
+        "{out}"
+    );
+    assert!(out.contains("    [K0001] web (9.2.0):"), "{out}");
 }
 
 #[test]
@@ -497,7 +524,7 @@ fn a_failed_jump_steps_and_stops_at_the_first_failing_minor_then_resumes() {
         "{out}"
     );
     assert!(
-        out.contains("  Config changes required in Kix 9.2.0:\n    * may affect this project (package name matches an instance in use)\n  * [K0001] web:"),
+        out.contains("  Config changes required in Kix 9.2.0:\n    * package used in this project\n  * [K0001] web:"),
         "{out}"
     );
     assert!(

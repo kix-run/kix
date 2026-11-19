@@ -113,7 +113,7 @@ nothing:
 Kix 0.10.0 -> 0.12.1 (preview, no files changed)
 
 6 changes between 0.10.0 and 0.12.1:
-  * may affect your 6 clusters (package name matches an instance in use)
+  * package used in this project (6 clusters)
 
   Config changes required (will fail the build until updated):
   * [K0003] caddy (0.11.0): `replicaCount` was renamed to `replicas`.
@@ -297,7 +297,7 @@ moved by hand gets no refusal. Commit `kix-upgrade.json` with the upgrade.
 | `sensitiveChanges` | How many changed objects are sensitive. |
 | `cliHits` | Each project line that uses a changed command or flag: `text`, `file`, `line`. |
 | `before` | The directory of the builds made with the version the upgrade started from. |
-| `packagesInUse` | The instances the project's clusters install, as the version the upgrade started from listed them. Absent when Kix could not list them. |
+| `packageIdsInUse` | Built-in package IDs installed across the project's clusters (such as `harbor` or `experimental/coredns`), reported by the Kix version the upgrade started from. Omitted when that version does not report package IDs or could not list packages. |
 
 Programs that read the file must skip fields they do not know.
 

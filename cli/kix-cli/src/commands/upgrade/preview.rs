@@ -31,7 +31,7 @@ pub(super) fn dry_run(
     let (in_use, known) = match (resume, &from_kix) {
         (Some(s), _) => (
             saved_in_use(s),
-            Known::of(s.packages_in_use.is_some(), None),
+            Known::of(s.package_ids_in_use.is_some(), None),
         ),
         // Kix X would evaluate the tag flake.nix now names, and Nix
         // would rewrite the lock, so a dry run does not ask it.
@@ -63,7 +63,7 @@ pub(super) fn dry_run(
 
 /// Return the packages in use that a stopped run recorded.
 pub(super) fn saved_in_use(s: &UpgradeState) -> Option<BTreeSet<String>> {
-    s.packages_in_use
+    s.package_ids_in_use
         .as_ref()
         .map(|p| p.iter().cloned().collect())
 }
@@ -75,8 +75,13 @@ enum Known {
     Clusters(usize),
     /// The packages in use only.
     Packages,
-    /// Neither: every change in the range counts.
+    /// Neither, because the current Kix is not installed: every change in
+    /// the range counts.
     Nothing,
+    /// Neither, because the current Kix did not report the packages in use,
+    /// such as a Kix too old to report package ids: every change in the
+    /// range counts.
+    Unreported,
 }
 
 impl Known {
@@ -84,7 +89,7 @@ impl Known {
         match (packages, clusters) {
             (true, Some(n)) => Known::Clusters(n),
             (true, None) => Known::Packages,
-            (false, _) => Known::Nothing,
+            (false, _) => Known::Unreported,
         }
     }
 }
@@ -134,7 +139,10 @@ fn preview(p: &Preview) {
             Known::Clusters(n) => out::legend(p.applying, Some(n)),
             Known::Packages => out::legend(p.applying, None),
             Known::Nothing => Some(format!(
-                "  (current Kix {from} is not installed, so likely matches are not marked)"
+                "  (current Kix {from} is not installed, so notes for packages you use are not marked)"
+            )),
+            Known::Unreported => Some(format!(
+                "  (current Kix {from} did not report which packages your clusters use, so matching notes are not marked)"
             )),
         };
         if let Some(legend) = legend {

@@ -88,11 +88,12 @@ pub struct UpgradeState {
     pub cli_hits: Vec<CliHit>,
     /// The builds made with the version the upgrade started from.
     pub before: PathBuf,
-    /// The instances the project's clusters install, as the version the
-    /// upgrade started from listed them. Absent when Kix could not list
-    /// them, and then every record applies.
+    /// The ids of Kix's own packages that the project's clusters install,
+    /// such as `harbor` or `experimental/coredns`, as the version the upgrade
+    /// started from listed them. Absent when that Kix could not list them,
+    /// and then no record is marked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub packages_in_use: Option<Vec<String>>,
+    pub package_ids_in_use: Option<Vec<String>>,
 }
 
 impl UpgradeState {
@@ -169,7 +170,7 @@ mod tests {
             sensitive_changes: 1,
             cli_hits: vec![],
             before: "/cache/before".into(),
-            packages_in_use: Some(vec!["web".into()]),
+            package_ids_in_use: Some(vec!["harbor".into(), "experimental/coredns".into()]),
         };
         state.write(dir.path()).unwrap();
         let text = std::fs::read_to_string(dir.path().join(FILE)).unwrap();

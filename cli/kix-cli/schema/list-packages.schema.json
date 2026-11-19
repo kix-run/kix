@@ -17,6 +17,13 @@
           "description": "The package's owner, or `-`.",
           "type": "string"
         },
+        "package": {
+          "description": "The id of one of Kix's own packages (`harbor`,\n`experimental/coredns`), the id change records use. `null` for a\nproject's own package, an inline package, or an import.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "status": {
           "description": "With a cluster: `installed [<namespace>]`, `installed (auto)\n[<namespace>]`, `import [<namespace>]`, or `available`. Absent\nwithout a cluster.",
           "type": [
@@ -32,7 +39,8 @@
       "required": [
         "name",
         "version",
-        "owner"
+        "owner",
+        "package"
       ],
       "type": "object"
     }

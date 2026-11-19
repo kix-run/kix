@@ -32,6 +32,7 @@ let
     ;
   inherit (import_) evaluateImportInstance;
   availabilityLib = import ../core/availability.nix { inherit lib; };
+  packageLib = import ../core/package.nix { inherit lib; };
 in
 
 {
@@ -209,6 +210,7 @@ in
           scope = scope';
           availability = availability.level;
           kix = packageKix;
+          instance = where;
         };
 
         packageMeta = raw.meta or { };
@@ -682,6 +684,7 @@ in
           # A package that deploys no software has no version, and the
           # record then omits it.
           version = instanceVersion;
+          package = packageLib.idOf instCfg.package;
           labels = clusterLabels // {
             "app.kubernetes.io/instance" = instanceName;
             "app.kubernetes.io/managed-by" = "kix";

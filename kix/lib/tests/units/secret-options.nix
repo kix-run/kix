@@ -8,6 +8,7 @@
 
 {
   lib,
+  eval,
   kixlib,
   ...
 }:
@@ -25,18 +26,10 @@ let
 
   optionsOf =
     package:
-    let
-      fnArgs = builtins.functionArgs package;
-      result = package (
-        {
-          scope = stubScope;
-          inherit lib;
-        }
-        // lib.optionalAttrs (fnArgs ? kix) { kix = kixlib; }
-        // lib.optionalAttrs (fnArgs ? availability) { availability = "none"; }
-      );
-    in
-    result.options or { };
+    (eval.callPackagePhase1 {
+      inherit package;
+      scope = stubScope;
+    }).options or { };
 
   # Return `[ { path; type; } ]` for every visible option under `opts`.
   # A hidden option only refuses a removed name, so it is skipped.

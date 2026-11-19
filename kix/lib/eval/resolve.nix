@@ -2,12 +2,8 @@
 
 let
   inherit (import ../core/error.nix { inherit lib; }) fail;
-  systemArgNames = [
-    "scope"
-    "lib"
-    "kix"
-    "availability"
-  ];
+  packageLib = import ../core/package.nix { inherit lib; };
+  inherit (packageLib) systemArgNames;
 
   systemBuildArgNames = [
     "self"
@@ -550,30 +546,23 @@ rec {
 
   # Evaluate phase 1 of a package definition, passing `scope`, `lib`, and
   # optional `kix` and `availability` arguments.
-  normalizePackage =
+  callPackagePhase1 =
     {
       package,
       scope,
       availability ? "none",
       kix ? kixlib,
+      instance ? null,
     }:
-    if builtins.isAttrs package && package ? build then
-      package
-    else if (package._type or "") == "kix-import" then
-      package
-    else
-      let
-        fnArgs = builtins.functionArgs package;
-      in
-      package (
-        {
-          inherit scope lib;
-        }
-        // lib.optionalAttrs (fnArgs ? kix) { inherit kix; }
-        // lib.optionalAttrs (fnArgs ? availability) { inherit availability; }
-      );
-
-  callPackagePhase1 = normalizePackage;
+    packageLib.call {
+      inherit
+        package
+        scope
+        availability
+        kix
+        instance
+        ;
+    };
 
   # Normalize a package's `build` attribute into a list of build functions,
   # importing any path entries.

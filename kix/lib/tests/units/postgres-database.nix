@@ -5,6 +5,7 @@
 
 {
   lib,
+  eval,
   kixlib,
   mkCluster,
   manifests,
@@ -71,17 +72,13 @@ let
     let
       package = (import ../../../packages/by-level.nix { inherit lib; }).byName.${pname};
     in
-    package (
-      builtins.intersectAttrs (builtins.functionArgs package) {
-        scope = {
-          instanceName = pname;
-          namespaceName = "apps";
-        };
-        inherit lib;
-        kix = kixlib;
-        availability = "none";
-      }
-    )
+    eval.callPackagePhase1 {
+      inherit package;
+      scope = {
+        instanceName = pname;
+        namespaceName = "apps";
+      };
+    }
   );
 
   # A `database` provider publishing `out`, for a metabase cluster.

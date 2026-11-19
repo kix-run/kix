@@ -58,10 +58,14 @@ install, with a `STATUS` column:
 | `import [<namespace>]` | An instance that stands for resources Kix does not manage |
 | `available` | A package the cluster can use but has not instantiated |
 
-Rows are keyed by name and sorted. An `OWNER` column appears when any package
-declares an owner; the rest show `-`. JSON entries have `name`, `version`, and
-`owner`, plus `status` and `isImport` with a cluster. An empty result prints
-`No packages found.` on stderr.
+Rows are sorted by name, then by namespace. Each cluster instance gets its own
+row, so two instances with the same name in different namespaces appear
+separately. An `OWNER` column appears when any package declares an owner; the
+rest show `-`. JSON entries have `name`, `version`, `owner`, and `package`,
+plus `status` and `isImport` with a cluster. For built-in Kix packages,
+`package` is the package ID used in release notes, such as `harbor` or
+`experimental/coredns`. For custom packages and imports, `package` is `null`.
+An empty result prints `No packages found.` on stderr.
 
 ## `list resources`
 

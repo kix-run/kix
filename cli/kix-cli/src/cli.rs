@@ -266,10 +266,8 @@ pub enum Command {
     /// at a time and stops at the first release that does not build, leaving
     /// the project pinned there; fix the build and run `kix upgrade` again to
     /// continue. Compares the manifests before and after, lists every breaking,
-    /// security, and upgrade note in the range (marking notes whose package
-    /// name matches an instance the clusters use with `*` as likely matches,
-    /// since Kix cannot tell for certain which notes affect the project), and
-    /// writes kix-upgrade.json.
+    /// security, and upgrade note in the range (marking with `*` each note
+    /// that names a package the clusters use), and writes kix-upgrade.json.
     ///
     /// Exits 0 when the project builds on the target, no object changed in any
     /// cluster, and nothing needs review; 1 when Kix refused or could not start

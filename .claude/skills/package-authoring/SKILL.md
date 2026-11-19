@@ -80,7 +80,8 @@ rewrites the later ones.
   only stable contracts. An experimental package may read
   `kix.contracts.experimental.<name>` too, and may share a stable package's
   name as a rework of it. No package is named `stable` or `experimental`.
-  The package graduates when its folder moves to `stable/`. This skill
+  The package graduates when its folder moves to `stable/`, which changes
+  `spec.package` on its PackageInstance records and nothing else. This skill
   writes paths as `kix/packages/experimental/<pkg>`. Read `stable` there for
   a stable package.
 - One package per upstream unit. A multi-component application stays one

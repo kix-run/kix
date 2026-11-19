@@ -127,18 +127,12 @@ pub fn required_stop(
     (&until < target).then_some((stop, until))
 }
 
-/// Return whether `record` names a package whose name is an instance in
-/// `in_use`. Records name packages and Kix sees only instance names, so a
-/// match is likely, never certain, and no match proves nothing. A record
-/// names an experimental package as `experimental/<name>`, and an instance
-/// of it is usually called `<name>`.
-pub fn likely(record: &Record, in_use: Option<&BTreeSet<String>>) -> bool {
-    in_use.is_some_and(|in_use| {
-        record
-            .packages
-            .iter()
-            .any(|p| in_use.contains(p.strip_prefix("experimental/").unwrap_or(p)))
-    })
+/// Return whether `record` names a package in `in_use`, the ids of Kix's
+/// own packages that the project's clusters install. Both use the same ids,
+/// such as `harbor` or `experimental/coredns`, so the match is exact. Return
+/// false when `in_use` is unknown.
+pub fn names_package_in_use(record: &Record, in_use: Option<&BTreeSet<String>>) -> bool {
+    in_use.is_some_and(|in_use| record.packages.iter().any(|p| in_use.contains(p)))
 }
 
 /// One record in the range of an upgrade, with the release that shipped it.
@@ -146,8 +140,8 @@ pub fn likely(record: &Record, in_use: Option<&BTreeSet<String>>) -> bool {
 pub struct Applying {
     pub release: Version,
     pub record: Record,
-    /// The record names a package that an instance in use is named after.
-    pub likely: bool,
+    /// The record names a package that the project's clusters install.
+    pub names_package_in_use: bool,
 }
 
 impl Applying {
@@ -161,7 +155,7 @@ impl Applying {
 }
 
 /// Return every record of the releases after `from` up to `to`, each
-/// marked when it is [`likely`] to touch the project.
+/// marked when it [names a package in use](names_package_in_use).
 pub fn applying(
     records: &[ReleaseRecords],
     from: &Version,
@@ -178,7 +172,7 @@ pub fn applying(
                 .map(|rec| Applying {
                     release: r.version.clone(),
                     record: rec.clone(),
-                    likely: likely(rec, in_use),
+                    names_package_in_use: names_package_in_use(rec, in_use),
                 })
         })
         .collect()
@@ -410,14 +404,27 @@ pub(super) mod tests {
             "+++\nkind = \"error\"\nid = \"K0001\"\npackages = [\"echo-server\"]\n+++\nRenamed.\n",
         );
         let in_use: BTreeSet<String> = ["caddy".to_string(), "echo-server".to_string()].into();
-        assert!(likely(&echo, Some(&in_use)));
-        assert!(!likely(&general, Some(&in_use)));
-        assert!(!likely(&echo, None));
+        assert!(names_package_in_use(&echo, Some(&in_use)));
+        assert!(!names_package_in_use(&general, Some(&in_use)));
+        assert!(!names_package_in_use(&echo, None));
+
         let experimental = record(
             "experimental",
-            "+++\nkind = \"silent\"\npackages = [\"experimental/caddy\"]\n+++\nMoved.\n",
+            "+++\nkind = \"silent\"\npackages = [\"experimental/dns-exporter\"]\n+++\nMoved.\n",
         );
-        assert!(likely(&experimental, Some(&in_use)));
+        let stable = record(
+            "stable",
+            "+++\nkind = \"silent\"\npackages = [\"dns-exporter\"]\n+++\nMoved.\n",
+        );
+        let uses_experimental: BTreeSet<String> = ["experimental/dns-exporter".to_string()].into();
+        assert!(names_package_in_use(
+            &experimental,
+            Some(&uses_experimental)
+        ));
+        assert!(!names_package_in_use(&stable, Some(&uses_experimental)));
+        let uses_stable: BTreeSet<String> = ["dns-exporter".to_string()].into();
+        assert!(names_package_in_use(&stable, Some(&uses_stable)));
+        assert!(!names_package_in_use(&experimental, Some(&uses_stable)));
 
         let records = vec![
             doc("0.9.1", vec![general.clone()]),
@@ -427,11 +434,11 @@ pub(super) mod tests {
         let got = applying(&records, &v("0.9.1"), &v("0.10.1"), Some(&in_use));
         assert_eq!(got.len(), 2);
         assert_eq!(got[0].reference(), "K0001");
-        assert!(got[0].likely);
-        assert!(!got[1].likely);
+        assert!(got[0].names_package_in_use);
+        assert!(!got[1].names_package_in_use);
         let all = applying(&records, &v("0.9.0"), &v("0.11.1"), None);
         assert_eq!(all.len(), 4);
-        assert!(all.iter().all(|a| !a.likely));
+        assert!(all.iter().all(|a| !a.names_package_in_use));
         assert_eq!(of_kind(&all, Kind::Error).len(), 2);
     }
 }

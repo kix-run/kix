@@ -71,7 +71,7 @@ pub fn note(a: &Applying, indent: usize, preview: bool) -> Vec<String> {
         format!("[{}] {} ({paren}):", a.reference(), list(&r.packages))
     };
     let mut lines = wrap(
-        &format!("{}{head}", gutter(indent, a.likely)),
+        &format!("{}{head}", gutter(indent, a.names_package_in_use)),
         indent + 2,
         &r.body,
     );
@@ -104,9 +104,9 @@ pub fn note(a: &Applying, indent: usize, preview: bool) -> Vec<String> {
 }
 
 /// Return the indent of a note's first line, with a `*` in it when the
-/// note is a likely match.
-fn gutter(indent: usize, likely: bool) -> String {
-    if likely && indent >= 2 {
+/// note names a package the project's clusters use.
+fn gutter(indent: usize, marked: bool) -> String {
+    if marked && indent >= 2 {
         format!("{}* ", " ".repeat(indent - 2))
     } else {
         " ".repeat(indent)
@@ -137,20 +137,19 @@ fn group(a: &Applying) -> Kind {
     }
 }
 
-/// Return the legend for likely matches, or `None` when no listed note is
-/// one. `clusters` is the number of clusters when Kix knows it.
+/// Return the legend for the `*` mark, or `None` when no listed note names
+/// a package the project's clusters use. `clusters` is the number of
+/// clusters when Kix knows it.
 pub fn legend(applying: &[Applying], clusters: Option<usize>) -> Option<String> {
     listed(applying)
         .iter()
-        .any(|a| a.likely)
+        .any(|a| a.names_package_in_use)
         .then(|| match clusters {
             Some(n) => format!(
-                "  * may affect your {n} {} (package name matches an instance in use)",
+                "  * package used in this project ({n} {})",
                 if n == 1 { "cluster" } else { "clusters" }
             ),
-            None => {
-                "  * may affect this project (package name matches an instance in use)".to_string()
-            }
+            None => "  * package used in this project".to_string(),
         })
 }
 

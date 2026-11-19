@@ -40,14 +40,10 @@ let
       config ? { },
     }:
     let
-      attrs = package (
-        builtins.intersectAttrs (builtins.functionArgs package) {
-          scope = { inherit instanceName namespaceName; };
-          inherit lib;
-          kix = kixlib;
-          availability = "none";
-        }
-      );
+      attrs = eval.callPackagePhase1 {
+        inherit package;
+        scope = { inherit instanceName namespaceName; };
+      };
       evaluated = eval.evaluateInstanceConfig {
         packageOptions = attrs.options;
         instCfg.config.imports = [ config ];

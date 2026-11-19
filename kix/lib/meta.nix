@@ -6,6 +6,7 @@ let
 
   versions = import ./core/version.nix { inherit lib; };
   errors = import ./core/error.nix { inherit lib; };
+  packageLib = import ./core/package.nix { inherit lib; };
 
   failedAssertion = message: {
     assertion = false;
@@ -112,36 +113,10 @@ in
 rec {
   peekPackageMeta =
     { package, kixlib }:
-    if
-      builtins.elem (package._type or "") [
-        "kix-moved"
-        "kix-removed"
-      ]
-    then
-      errors.fail package.error
-    else if builtins.isAttrs package && package ? build then
-      package.meta or { }
-    else if (package._type or "") == "kix-import" then
-      package.meta or { }
-    else if builtins.isAttrs package && package ? meta then
-      package.meta
-    else if builtins.isAttrs package && !(builtins.isFunction package) then
-      { }
-    else
-      let
-        fnArgs = builtins.functionArgs package;
-        result = package (
-          {
-            scope = { };
-            inherit lib;
-          }
-          // lib.optionalAttrs (fnArgs ? kix) { kix = kixlib; }
-          # `meta` must not depend on `availability`, because this peek runs
-          # before the availability level is resolved.
-          // lib.optionalAttrs (fnArgs ? availability) { availability = "none"; }
-        );
-      in
-      result.meta or { };
+    packageLib.metaOf {
+      inherit package;
+      kix = kixlib;
+    };
 
   scopeValues = [
     "cluster"

@@ -7,12 +7,12 @@
   evaluateInstanceConfig,
   buildEntriesOf,
   discoverBuildDeps,
-  systemArgNames,
 }:
 
 let
   inherit (import ../core/error.nix { inherit lib; }) fail;
   meta = import ../meta.nix { inherit lib; };
+  packageLib = import ../core/package.nix { inherit lib; };
   kixAnnotations = import ../core/annotations.nix;
   kixKeys = kixAnnotations.keys;
   inherit (k8s)
@@ -307,8 +307,9 @@ rec {
                 ;
             };
 
-            fnArgs = builtins.functionArgs importDef.from;
-            depArgNames = builtins.attrNames (removeAttrs fnArgs systemArgNames);
+            depArgNames = builtins.attrNames (
+              removeAttrs (packageLib.argsOf importDef.from) packageLib.systemArgNames
+            );
             mkDepProxy =
               depName:
               fail {
@@ -325,17 +326,15 @@ rec {
                 value = mkDepProxy name;
               }) depArgNames
             );
-            raw = importDef.from (
-              {
-                scope = importScope;
-                inherit lib;
-              }
-              // lib.optionalAttrs (fnArgs ? kix) { kix = kixlib; }
-              # Pass `availability = "none"` so availability-mapped option
-              # defaults evaluate cleanly when building the import's `out`.
-              // lib.optionalAttrs (fnArgs ? availability) { availability = "none"; }
-              // nullDeps
-            );
+            # Pass `availability = "none"` so availability-mapped option
+            # defaults evaluate cleanly when building the import's `out`.
+            raw = packageLib.call {
+              package = importDef.from;
+              scope = importScope;
+              kix = kixlib;
+              availability = "none";
+              extraArgs = nullDeps;
+            };
 
             evaluatedConfig = evaluateInstanceConfig {
               packageOptions = raw.options or { };

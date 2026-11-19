@@ -77,7 +77,7 @@ Focus on the **Modified** section. Each entry shows exactly which fields differ 
 
 ## Package Anatomy
 
-A function `{ scope, lib, kix, availability }: ...` that returns `{ meta?, options?, config?, deps?, build }`. The lib passes only the arguments the function names, so leave out `availability` when nothing maps it. **Dependencies are declared as build function args**, not package function args. Kix evaluates Nix expressions in its local store and writes files with `builtins.toFile` (and renders Helm charts via `scope.helm.*`), but cannot run Nix derivation builds (`pkgs.runCommand`, `pkgs.writeText`, `pkgs.stdenv.mkDerivation`).
+A function `{ scope, lib, kix, availability }: ...` that returns `{ meta?, options?, config?, deps?, build }`. The lib passes only the arguments the function names, so leave out `availability` when nothing maps it. **Dependencies are declared as build function args**, not package function args. Built-in packages (`packages.<name>` and `packages.experimental.<name>`) are callable attribute sets that also carry `id` (such as `"harbor"` or `"experimental/coredns"`), which Kix writes to `spec.package` on the instance's `PackageInstance`. Because `builtins.isFunction` and `builtins.functionArgs` reject callable attribute sets, call packages with `eval.callPackagePhase1 { package; scope; }` in tests and inspect or call them via `kix/lib/core/package.nix` in library code. Kix evaluates Nix expressions in its local store and writes files with `builtins.toFile` (and renders Helm charts via `scope.helm.*`), but cannot run Nix derivation builds (`pkgs.runCommand`, `pkgs.writeText`, `pkgs.stdenv.mkDerivation`).
 
 ```nix
 { scope, lib, kix, availability }:
