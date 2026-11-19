@@ -35,6 +35,9 @@ let
                   # The VM needs no network. KubeVirt's default bridge
                   # binding finds no gateway route on a pod under Cilium.
                   devices.autoattachPodInterface = false;
+                  # QEMU without KVM refuses the default host-passthrough
+                  # CPU on arm64.
+                  cpu.model = "max";
                   devices.disks = [
                     {
                       name = "disk";
