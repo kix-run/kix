@@ -105,18 +105,20 @@ in
   sidecar = {
     image = kix.options.image {
       repository = "quay.io/kiwigrid/k8s-sidecar";
-      tag = "2.8.1";
-      digest = "sha256:abb55b2165c60e8f97e473862c7a3123df6f67d44f592949577c29b8fb2df9d6";
+      tag = "2.14.3";
+      digest = "sha256:52d311dcedd587421a236c4d6c621f05614c40a51386e955e0699dca97ec0880";
       description = "Image for the k8s-sidecar containers that load dashboards and datasources from labelled ConfigMaps and Secrets.";
     };
+    # k8s-sidecar 2.14.3 holds about 80 MiB once synced and peaks near
+    # 106 MiB during the initial sync, so a 100Mi limit OOM-kills it.
     resources = kix.options.resources {
       requests = {
         cpu = "50m";
-        memory = "50Mi";
+        memory = "96Mi";
       };
       limits = {
         cpu = "100m";
-        memory = "100Mi";
+        memory = "256Mi";
       };
       description = "Resources for each k8s-sidecar container.";
     };

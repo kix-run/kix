@@ -1,0 +1,3 @@
+# 2026-11-08 · `kix plan` · Renamed stackgres-database bootstrap objects are reported as stateful migrations, and the pairs are wrong.
+
+Kix 0.7.0 adds the consumer namespace to the bootstrap object names (`immich-db-bootstrap-*` became `immich-db-immich-bootstrap-*`). On ludo, `kix plan` then listed three "Stateful migrations detected" and exited 3. The objects are a Secret that is rebuilt from SOPS and two CiliumNetworkPolicies, so none of them hold data. The report also paired the old `...-egress` policy with the new `...-to-postgres-ingress` policy, and the old ingress policy with the new egress one. The only way through was `--accept-migrations`, which would also let a real migration in the same deploy go through unchecked.
