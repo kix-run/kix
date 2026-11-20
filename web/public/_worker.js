@@ -138,7 +138,11 @@ export default {
       if (url.pathname === '/install') {
         headers.set('content-type', 'text/plain; charset=utf-8');
       }
-      headers.set('cache-control', 'public, max-age=300');
+      // The index and its signature must come from the same build, or the
+      // signature does not verify, so caches check both with the site
+      // every time.
+      const indexPair = url.pathname === '/releases/index.json' || url.pathname === '/releases/index.json.sig';
+      headers.set('cache-control', indexPair ? 'public, no-cache' : 'public, max-age=300');
       return new Response(asset.body, { status: asset.status, statusText: asset.statusText, headers });
     }
 

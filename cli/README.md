@@ -223,7 +223,8 @@ the archives to another host changes no shipped binary
 | URL | Source |
 | --- | --- |
 | `kix.run/install` | `web/public/install`, with `Content-Type: text/plain` from `web/public/_headers` |
-| `kix.run/releases/index.json` | written by `web/scripts/release-index.mjs` in the "Stage combined artifact" step of `pages.yml` |
+| `kix.run/releases/index.json` | written by `web/scripts/release-index.mjs` in the "Stage combined artifact" step of `pages.yml`, from the release tags and `web/releases/withdrawn.json` |
+| `kix.run/releases/index.json.sig` | signed by `scripts/sign-index.sh` in the "Sign the release index" step of `pages.yml`, with the index key (`cli/kix/index-keys/`) |
 | `kix.run/releases/v<version>/SHA256SUMS` and `SHA256SUMS.sig` | copied there by the same script |
 | `kix.run/download/<version>/<file>` | a 302 redirect from the site Worker (`web/public/_worker.js`, `DOWNLOAD_ORIGIN`) to `kix-run/kix-releases` |
 
@@ -237,6 +238,7 @@ readers skip fields they do not know:
 {
   "schema": "kix.run/releases/v1",
   "generated": "2026-11-08T12:00:00Z",
+  "expires": "2026-11-15T12:00:00Z",
   "latest": "0.8.4",
   "releases": [
     {
@@ -247,15 +249,29 @@ readers skip fields they do not know:
       "signature": "/releases/v0.8.4/SHA256SUMS.sig",
       "download": "/download/0.8.4/"
     }
+  ],
+  "withdrawn": [
+    { "version": "0.8.3", "reason": "it deletes Secrets on rollback", "use": "0.8.4" }
   ]
 }
 ```
 
 `latest` is `null` and `releases` is empty while no release is signed.
+A withdrawn release is under `withdrawn` only. Kix (`release/trust.rs`)
+accepts an index whose signature verifies against an index key, that has not
+passed `expires`, and that is not older than the newest index Kix accepted
+before, which it keeps in `<data dir>/release-index.json`. `pages.yml` runs
+daily, because an index expires a week after `generated`. Deploy and rollback
+read the kept index to refuse a withdrawn Kix (`KIX_ALLOW_WITHDRAWN` lets one
+through and annotates the record `kix.run/withdrawn-kix`), fetching a new one
+when it is more than a day old. Other commands only warn
+(`kix-cli/src/commands/deploy/withdrawn.rs`). The release skill withdraws a
+release.
 `latest` is never a prerelease, so it is also `null` while only prereleases
 are signed.
 `node --test 'web/scripts/*.test.mjs'` tests the generator, the Worker, and
-that `RELEASE_KEYS` in the install script matches `cli/kix/release-keys/`.
+that `RELEASE_KEYS` and `INDEX_KEYS` in the install script match
+`cli/kix/release-keys/` and `cli/kix/index-keys/`.
 `sh web/scripts/test-install.sh` runs the install script against signed fake
 releases on disk. `pages.yml` runs both, and shellcheck, before it deploys.
 

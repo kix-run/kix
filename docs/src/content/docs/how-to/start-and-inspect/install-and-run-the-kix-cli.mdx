@@ -35,11 +35,15 @@ exists and the script did not create it, for example a `kix` installed with
 Nix. Remove that file, or choose another directory with `KIX_INSTALL_DIR`.
 
 :::note
-The script checks the Ed25519 signature of `SHA256SUMS` when the machine's
-`openssl` can (OpenSSL 3 can, and the LibreSSL that ships with macOS cannot).
-When it cannot, the script says so and checks the SHA-256 of the release
-archive only. Kix itself always checks the signature when it installs another
-version.
+When the machine's `openssl` supports Ed25519 (OpenSSL 3 does, while macOS's
+built-in LibreSSL does not), the script verifies the signatures on both the
+release index and `SHA256SUMS`. Otherwise, the script prints a note and checks
+only the SHA-256 checksum of the release archive. Kix itself always verifies
+both signatures when installing other versions.
+
+The script never selects a withdrawn release by default. If you set
+`KIX_VERSION` to a withdrawn version, the script installs it with a warning and
+names the version to install instead.
 :::
 
 ## Choose the version of Kix for a project

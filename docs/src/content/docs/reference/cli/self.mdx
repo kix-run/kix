@@ -39,10 +39,12 @@ Installs a version of Kix from kix.run. `<VERSION>` is a minor, such as
 version, such as `0.8.3`. A minor never installs a prerelease. Name a
 prerelease in full to install it, such as `kix self install 0.9.0-rc.1`.
 
-Kix reads the release index at `https://kix.run/releases/index.json`, checks
-the release's `SHA256SUMS` against its Ed25519 signature with the key built
-into Kix, downloads the release archive for this machine, checks its SHA-256,
-and unpacks it. A version is installed only after every check passes:
+Kix fetches the release index from `https://kix.run/releases/index.json`,
+verifies its Ed25519 signature against a built-in key, and checks that the
+index is current. Next, it verifies the release's `SHA256SUMS` signature
+against a built-in release key, downloads the release archive for this
+platform, verifies its SHA-256 checksum, and unpacks it. Kix installs the
+version only after every check passes:
 
 <Command commands={["kix self install 0.8"]} />
 
@@ -54,12 +56,21 @@ Kix refuses to install a release when:
 
 | Condition | Message |
 | --- | --- |
+| The release index has no signature file | `[K5221] the release index from <source> has no signature file (/releases/index.json.sig), so Kix cannot verify it. Kix installed nothing. If you set KIX_RELEASE_SOURCE to a mirror, copy releases/index.json.sig alongside releases/index.json` |
+| The index signature is invalid, or the index is expired, future-dated, or older than the saved copy | `Kix refused the release index from <source> and installed nothing: <reason>` |
 | No release matches for this platform | `no Kix <version> release exists for <system>. The newest release is <latest>` |
 | The release has no signature | `Kix <version> has no release signature, so Kix cannot verify it` |
 | The signature does not verify | `the release signature for Kix <version> does not verify against any key built into Kix <running>. Kix did not install it. Report this at https://github.com/kix-run/kix/issues` |
 | The archive does not match `SHA256SUMS` | `downloaded kix-<system>.tar.gz does not match SHA256SUMS (expected <a>, got <b>)` |
 | kix.run cannot be reached | `could not reach <source>: <error>. Set KIX_AUTO_INSTALL=0 to stop Kix from installing versions, and install Kix <version> with the install script` |
 | Neither `HOME` nor `XDG_DATA_HOME` is set | `Kix cannot find a home directory to install into. Set HOME or XDG_DATA_HOME.` |
+
+A minor version such as `0.8` requires a current index and never selects a
+withdrawn release. An exact version such as `0.8.3` uses the index only to
+locate the release files, which Kix still verifies against the release's signed
+`SHA256SUMS`. As long as the index signature is valid, an exact version installs
+with a warning even if the index is out of date or the version was withdrawn, so
+a project pinned to a withdrawn release can still run `kix upgrade`.
 
 When two commands install the same version at once, the one that finishes
 second finds it installed and uses it.
@@ -116,7 +127,7 @@ Kix knows the install script installed it, and which link it made, from
 | --- | --- |
 | `XDG_DATA_HOME` | Versions are installed under `$XDG_DATA_HOME/kix/` in place of `~/.local/share/kix/`. |
 | `KIX_AUTO_INSTALL` | `0`, `false`, or `no` stops Kix from downloading a version on its own when a project needs one. `kix self install` still downloads. |
-| `KIX_RELEASE_SOURCE` | A site laid out like `https://kix.run`, such as an internal mirror, that Kix fetches the release index, `SHA256SUMS`, signatures, release archives, and release notes from. Kix still checks every file against the signing key built into Kix, so a mirror only needs to copy the files. |
+| `KIX_RELEASE_SOURCE` | Site with the same layout as `https://kix.run`, such as an internal mirror. Kix fetches the release index, `SHA256SUMS`, signatures, release archives, and release notes from it, and verifies every file against Kix's built-in signing keys. Copy `releases/index.json` and `releases/index.json.sig` together and refresh both at least once a week, because each index expires seven days after kix.run signs it. |
 
 ## Exit status
 

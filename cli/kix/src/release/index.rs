@@ -7,6 +7,7 @@
 //! {
 //!   "schema": "kix.run/releases/v1",
 //!   "generated": "2026-11-08T12:00:00Z",
+//!   "expires": "2026-11-15T12:00:00Z",
 //!   "latest": "0.8.4",
 //!   "releases": [
 //!     {
@@ -16,6 +17,17 @@
 //!       "sums": "/releases/v0.8.4/SHA256SUMS",
 //!       "signature": "/releases/v0.8.4/SHA256SUMS.sig",
 //!       "download": "/download/0.8.4/"
+//!     }
+//!   ],
+//!   "withdrawn": [
+//!     {
+//!       "version": "0.8.3",
+//!       "reason": "it deletes Secrets on rollback",
+//!       "use": "0.8.4",
+//!       "systems": ["x86_64-linux", "aarch64-linux", "aarch64-darwin"],
+//!       "sums": "/releases/v0.8.3/SHA256SUMS",
+//!       "signature": "/releases/v0.8.3/SHA256SUMS.sig",
+//!       "download": "/download/0.8.3/"
 //!     }
 //!   ]
 //! }
@@ -27,10 +39,20 @@
 //!
 //! An archive's path is `download` followed by `kix-<system>.tar.gz`. Kix
 //! skips fields it does not know and releases whose version it cannot parse,
-//! so a newer site can add to the index without breaking an older Kix. The
-//! index is not signed. It decides which release Kix fetches, and the signed
-//! `SHA256SUMS` decides whether Kix installs it.
+//! so a newer site can add to the index without breaking an older Kix.
+//!
+//! A withdrawn release is listed under `withdrawn` and not under `releases`,
+//! so a Kix that reads only `releases` never chooses it. `use` names a newer
+//! release to install instead. The entry keeps the release's files, so a
+//! project that names the withdrawn version exactly can still install it and
+//! move off it with `kix upgrade`.
+//!
+//! The site signs the index with an index key and serves the signature at
+//! `/releases/index.json.sig` ([`super::verify`]). The signature decides
+//! which releases Kix may choose from, and `expires` bounds how long an old
+//! copy can be served again. [`super::trust`] checks both.
 
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
 use crate::version::Version;
@@ -39,11 +61,32 @@ use crate::version::policy::{Requirement, satisfies};
 /// The path of the index on the site.
 pub const PATH: &str = "/releases/index.json";
 
+/// The path of the index's signature on the site.
+pub const SIGNATURE_PATH: &str = "/releases/index.json.sig";
+
 /// The release index.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Index {
+    /// When the site wrote the index. `None` in an index made before the
+    /// index was signed.
+    pub generated: Option<DateTime<Utc>>,
+    /// When the index stops being current.
+    pub expires: Option<DateTime<Utc>>,
     pub latest: Option<String>,
     pub releases: Vec<Release>,
+    pub withdrawn: Vec<Withdrawn>,
+}
+
+/// A release that no one should install or deploy with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Withdrawn {
+    pub version: Version,
+    /// Why it was withdrawn, in one sentence.
+    pub reason: String,
+    /// The release to use instead.
+    pub use_instead: Option<Version>,
+    /// The release's files, for a Kix that names this version exactly.
+    pub release: Option<Release>,
 }
 
 /// One release in the index.
@@ -64,9 +107,34 @@ pub struct Release {
 #[derive(Deserialize)]
 struct RawIndex {
     #[serde(default)]
+    generated: Option<String>,
+    #[serde(default)]
+    expires: Option<String>,
+    #[serde(default)]
     latest: Option<String>,
     #[serde(default)]
     releases: Vec<RawRelease>,
+    #[serde(default)]
+    withdrawn: Vec<RawWithdrawn>,
+}
+
+#[derive(Deserialize)]
+struct RawWithdrawn {
+    version: String,
+    #[serde(default)]
+    reason: String,
+    #[serde(default, rename = "use")]
+    use_instead: Option<String>,
+    #[serde(default)]
+    systems: Vec<String>,
+    #[serde(default)]
+    sums: Option<String>,
+    #[serde(default)]
+    signature: Option<String>,
+    #[serde(default)]
+    download: Option<String>,
+    #[serde(default)]
+    date: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -83,15 +151,49 @@ struct RawRelease {
 }
 
 impl Index {
-    /// Parse the index, or say why it cannot be read.
+    /// Parse the index, or say why it cannot be read. A release listed as
+    /// withdrawn is left out of `releases` even if the index lists it there
+    /// too.
     pub fn parse(bytes: &[u8]) -> Result<Self, serde_json::Error> {
         let raw: RawIndex = serde_json::from_slice(bytes)?;
+        let time = |t: Option<String>| {
+            t.and_then(|t| DateTime::parse_from_rfc3339(&t).ok())
+                .map(|t| t.with_timezone(&Utc))
+        };
+        let withdrawn: Vec<Withdrawn> = raw
+            .withdrawn
+            .into_iter()
+            .filter_map(|w| {
+                let version: Version = w.version.parse().ok()?;
+                let release = match (w.sums, w.download) {
+                    (Some(sums), Some(download)) => Some(Release {
+                        version: version.clone(),
+                        systems: w.systems,
+                        sums,
+                        signature: w.signature,
+                        download,
+                        date: w.date,
+                    }),
+                    _ => None,
+                };
+                Some(Withdrawn {
+                    version,
+                    reason: w.reason,
+                    use_instead: w.use_instead.and_then(|v| v.parse().ok()),
+                    release,
+                })
+            })
+            .collect();
         let releases = raw
             .releases
             .into_iter()
             .filter_map(|r| {
+                let version: Version = r.version.parse().ok()?;
+                if withdrawn.iter().any(|w| w.version == version) {
+                    return None;
+                }
                 Some(Release {
-                    version: r.version.parse().ok()?,
+                    version,
                     systems: r.systems,
                     sums: r.sums,
                     signature: r.signature,
@@ -101,9 +203,34 @@ impl Index {
             })
             .collect();
         Ok(Index {
+            generated: time(raw.generated),
+            expires: time(raw.expires),
             latest: raw.latest,
             releases,
+            withdrawn,
         })
+    }
+
+    /// Return the withdrawal of `version`, if the index lists one.
+    pub fn withdrawal(&self, version: &Version) -> Option<&Withdrawn> {
+        self.withdrawn.iter().find(|w| w.version == *version)
+    }
+
+    /// Return the release `version` with an archive for `system`, withdrawn
+    /// or not, and its withdrawal. Only a Kix that names a version exactly
+    /// may install a withdrawn one.
+    pub fn exact(&self, version: &Version, system: &str) -> Option<(&Release, Option<&Withdrawn>)> {
+        let built = |r: &&Release| r.systems.iter().any(|s| s == system);
+        if let Some(r) = self
+            .releases
+            .iter()
+            .filter(built)
+            .find(|r| r.version == *version)
+        {
+            return Some((r, None));
+        }
+        let w = self.withdrawal(version)?;
+        Some((w.release.as_ref().filter(built)?, Some(w)))
     }
 
     /// Return the newest release that meets `req` and has an archive for

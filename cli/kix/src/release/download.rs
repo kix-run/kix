@@ -50,6 +50,8 @@ impl FetchError {
 pub struct Fetcher {
     source: Source,
     runtime: Option<(tokio::runtime::Runtime, reqwest::Client)>,
+    /// How long to wait to connect, and between bytes of an answer.
+    timeouts: (std::time::Duration, std::time::Duration),
 }
 
 impl Fetcher {
@@ -57,7 +59,27 @@ impl Fetcher {
         Self {
             source,
             runtime: None,
+            timeouts: (
+                std::time::Duration::from_secs(15),
+                std::time::Duration::from_secs(60),
+            ),
         }
+    }
+
+    /// Return a fetcher that gives up after a few seconds, for a check that
+    /// must not hold up a command when the source cannot be reached.
+    pub fn quick(source: Source) -> Self {
+        Self {
+            timeouts: (
+                std::time::Duration::from_secs(5),
+                std::time::Duration::from_secs(10),
+            ),
+            ..Self::new(source)
+        }
+    }
+
+    pub fn source(&self) -> &Source {
+        &self.source
     }
 
     /// Return the URL or file `path` names on the source. `path` comes from
@@ -86,8 +108,8 @@ impl Fetcher {
                 .map_err(|e| FetchError::Unreachable(e.to_string()))?;
             let client = reqwest::Client::builder()
                 .user_agent(format!("kix/{}", version::running().release()))
-                .connect_timeout(std::time::Duration::from_secs(15))
-                .read_timeout(std::time::Duration::from_secs(60))
+                .connect_timeout(self.timeouts.0)
+                .read_timeout(self.timeouts.1)
                 .build()
                 .map_err(|e| FetchError::Unreachable(e.to_string()))?;
             self.runtime = Some((runtime, client));

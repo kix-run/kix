@@ -310,6 +310,9 @@ pub fn run(args: &[OsString]) -> miette::Result<Outcome> {
                 )
             })
             .map_err(|e| miette!("{e}"))?;
+            for warning in &installed.warnings {
+                eprintln!("warning: {warning}");
+            }
             return Err(exec(&installed.install, args));
         }
     }

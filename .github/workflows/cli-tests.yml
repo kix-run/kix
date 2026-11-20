@@ -717,10 +717,13 @@ jobs:
           test -s dist/SHA256SUMS.sig || { echo "no key is committed, so there is nothing to rehearse"; exit 1; }
 
       - name: Build a copy of the release site
+        env:
+          KIX_INDEX_SIGNING_KEY: ${{ secrets.KIX_INDEX_SIGNING_KEY }}
         run: |
           mkdir -p "release-src/v$VERSION" "site/download/$VERSION"
           cp dist/SHA256SUMS dist/SHA256SUMS.sig "release-src/v$VERSION/"
           node web/scripts/release-index.mjs release-src site
+          scripts/sign-index.sh site
           cp dist/kix-*.tar.gz "site/download/$VERSION/"
           if [ "$PRERELEASE" = true ]; then
             jq -e --arg v "$VERSION" '.latest != $v and any(.releases[]; .version == $v and .prerelease == true)' site/releases/index.json
