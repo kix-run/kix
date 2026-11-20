@@ -271,7 +271,7 @@ fn run_direct(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> Resul
     } else {
         super::deploy::withdrawn::check(cluster, super::deploy::stops::Writer::Rollback)?
     };
-    let (current, target, mut p) = ctx.runtime()?.block_on(async {
+    let (current, target, mut p, downgrade) = ctx.runtime()?.block_on(async {
         crate::say!("Connecting to cluster...");
         let client = client::make_client(ctx.global.context.as_deref())
             .await
@@ -287,14 +287,20 @@ fn run_direct(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> Resul
             .ok_or_else(|| super::no_active_record(cluster))?;
         print_current(&current);
 
-        // A rollback writes to the cluster with this Kix, so it must not skip
-        // a required stop either. With `--operator`, the operator checks
-        // instead.
-        super::deploy::stops::check(
-            cluster,
-            current.deployed_with.as_deref(),
-            super::deploy::stops::Writer::Rollback,
-        )?;
+        // A rollback writes to the cluster with this Kix, so this Kix must be
+        // one that may deploy the cluster, whichever Kix built the target.
+        // With `--operator`, the operator checks instead.
+        // A dry run writes nothing, so it only warns.
+        let downgrade = if args.dry_run {
+            super::deploy::stops::warn(cluster, Some(&current));
+            None
+        } else {
+            super::deploy::stops::check(
+                cluster,
+                Some(&current),
+                super::deploy::stops::Writer::Rollback,
+            )?
+        };
 
         let superseded = records
             .rollback_targets(cluster)
@@ -317,11 +323,14 @@ fn run_direct(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> Resul
             flags(args.prune, args.force_conflicts, args.accept_migrations),
         )
         .await?;
-        Ok::<_, miette::Report>((current, selected.name.clone(), p))
+        Ok::<_, miette::Report>((current, selected.name.clone(), p, downgrade))
     })?;
 
     if let Some(version) = &withdrawn_kix {
         p.note_withdrawn_kix(version);
+    }
+    if let Some(from) = &downgrade {
+        p.note_downgrade(from);
     }
     if !super::deploy::migration_gate(&p, Command::Rollback, Runner::Cli) {
         return Ok(Exit::Failure);

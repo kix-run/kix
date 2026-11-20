@@ -210,6 +210,22 @@ mod orphans_kept_from_tests {
         assert_eq!(with(json!(null)), None);
     }
 
+    /// The commit of a deploy is read off its receipt's source.
+    #[test]
+    fn reads_the_commit_that_was_deployed() {
+        let obj: DynamicObject = serde_json::from_value(json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": "Activation",
+            "metadata": { "name": "c-v1" },
+            "status": { (keys::RECEIPT_FIELD): { "source": { "gitCommit": "abc1234def" } } },
+        }))
+        .unwrap();
+        assert_eq!(
+            Record::of(&obj).deployed_from.as_deref(),
+            Some("abc1234def")
+        );
+    }
+
     /// A consumer's pinned interfaces and a platform's published hashes are
     /// read off `spec`; a malformed entry is left out.
     #[test]

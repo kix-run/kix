@@ -1,0 +1,3 @@
+# 2026-11-20 · `cli/kix-operator/src/controller.rs` · The operator refuses an older-Kix deploy with no override, so a cluster run by the operator cannot move back from a bad newer release.
+
+`KIX_ALLOW_DOWNGRADE` works only in the CLI (`cli/kix-cli/src/commands/deploy/stops.rs`). If someone rolls the operator back to an older minor to leave a bad release, the operator marks every queued Activation `Failed` with `OlderKix`. The way out today is a direct `kix deploy` with the override. A fix that keeps one owner for the decision: `kix deploy --operator` with the variable set writes the allowed version onto the queued Activation, and the operator passes it to the same `stops::downgrade_allowed`.

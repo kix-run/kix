@@ -137,6 +137,11 @@ pub const PREVIOUS: &str = key!("previous");
 /// rollback, because `KIX_ALLOW_WITHDRAWN` named it.
 pub const WITHDRAWN_KIX: &str = key!("withdrawn-kix");
 
+/// The newer Kix that last deployed the cluster before an older minor of Kix
+/// wrote this record's deploy or rollback, because `KIX_ALLOW_DOWNGRADE`
+/// named it.
+pub const DOWNGRADED_FROM: &str = key!("downgraded-from");
+
 /// RFC 3339 timestamp of the deploy that created the activation.
 pub const DEPLOYED_AT: &str = key!("deployed-at");
 

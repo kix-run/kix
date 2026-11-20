@@ -72,12 +72,15 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
     let Some(mut p) = prepare(&args.plan, flags, ctx)? else {
         return Ok(Exit::Success);
     };
-    // A cluster that has never run a required stop must deploy it first.
-    stops::check(
+    // A cluster that has never run a required stop must deploy it first,
+    // and a cluster a newer minor of Kix deployed refuses this one.
+    if let Some(from) = stops::check(
         &args.plan.cluster,
-        p.baseline.active().and_then(|r| r.deployed_with.as_deref()),
+        p.baseline.active(),
         stops::Writer::Deploy,
-    )?;
+    )? {
+        p.note_downgrade(&from);
+    }
     if let Some(version) = withdrawn::check(&args.plan.cluster, stops::Writer::Deploy)? {
         p.note_withdrawn_kix(&version);
     }
@@ -753,6 +756,16 @@ async fn run_deploy_async(
             binding::Connection::InCluster => None,
         };
         check_cached_baseline(records.as_ref(), cluster_name, hash, context).await?;
+        // A plan from the cache does not know which Kix deployed the cluster
+        // last, so the deploy checks it now, before it applies anything.
+        let active = match &records {
+            Some(records) => records
+                .active(cluster_name)
+                .await
+                .map_err(|e| miette!("{e}"))?,
+            None => None,
+        };
+        stops::check_offline(cluster_name, active.as_ref())?;
     }
 
     // A plan made without connecting (`--offline`) learns only now whether
