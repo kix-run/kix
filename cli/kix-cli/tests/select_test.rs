@@ -466,7 +466,6 @@ impl Signer {
         let generated = chrono::Utc::now() - age;
         let stamp =
             |t: chrono::DateTime<chrono::Utc>| t.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-        index["schema"] = serde_json::json!("kix.run/releases/v1");
         index["generated"] = serde_json::json!(stamp(generated));
         index["expires"] = serde_json::json!(stamp(generated + chrono::Duration::days(7)));
         let bytes = index.to_string();

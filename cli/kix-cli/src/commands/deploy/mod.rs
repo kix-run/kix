@@ -1128,7 +1128,8 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
             && let Err(e) = records.note_withdrawn_kix(&activation_name, version).await
         {
             eprintln!(
-                "warning: could not set kix.run/withdrawn-kix on Activation '{activation_name}' for Kix {}: {e}. The deploy continues without that annotation.",
+                "warning: could not set {} on Activation '{activation_name}' for Kix {}: {e}. The deploy continues without that annotation.",
+                kix::manifest::keys::WITHDRAWN_KIX,
                 version.release()
             );
         }

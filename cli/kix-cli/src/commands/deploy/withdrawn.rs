@@ -2,6 +2,7 @@
 //! ([`kix::release::trust`]), and warn when a command that only reads runs
 //! with one.
 
+use kix::manifest::keys::WITHDRAWN_KIX;
 use kix::release::index::Withdrawn;
 use kix::release::trust::{self, ALLOW_WITHDRAWN_VAR, Verdict};
 use kix::version::Version;
@@ -66,7 +67,7 @@ fn render_refusal(cluster: &str, w: &Withdrawn, writer: Writer) -> String {
          Nothing was applied to cluster {cluster}.\n\
          \n\
          Next: {}, then run `kix {command} {cluster}` again.\n\
-         To {verb} with Kix {version} anyway, set {ALLOW_WITHDRAWN_VAR}={version}. Kix will set kix.run/withdrawn-kix={version} on cluster {cluster}'s Activation record.\n",
+         To {verb} with Kix {version} anyway, set {ALLOW_WITHDRAWN_VAR}={version}. Kix will set {WITHDRAWN_KIX}={version} on cluster {cluster}'s Activation record.\n",
         reason(w),
         move_to(w),
     )
@@ -80,7 +81,7 @@ fn render_allowed(cluster: &str, w: &Withdrawn, writer: Writer) -> String {
     let version = w.version.release();
     format!(
         "warning: {}.\n\
-         {ALLOW_WITHDRAWN_VAR}={version} is set, so this {what} will proceed and set kix.run/withdrawn-kix={version} on cluster {cluster}'s Activation record.\n",
+         {ALLOW_WITHDRAWN_VAR}={version} is set, so this {what} will proceed and set {WITHDRAWN_KIX}={version} on cluster {cluster}'s Activation record.\n",
         reason(w),
     )
 }
@@ -112,11 +113,13 @@ mod tests {
     fn a_deploy_refusal_names_the_reason_and_the_ways_on() {
         assert_eq!(
             render_refusal("lt1", &withdrawn(Some("0.10.2")), Writer::Deploy),
-            "Deploy blocked: Kix 0.10.1 was withdrawn because it deletes Secrets on rollback.\n\
+            format!(
+                "Deploy blocked: Kix 0.10.1 was withdrawn because it deletes Secrets on rollback.\n\
              Nothing was applied to cluster lt1.\n\
              \n\
              Next: upgrade this project to Kix 0.10.2 with `kix upgrade --to 0.10.2`, then run `kix deploy lt1` again.\n\
-             To deploy with Kix 0.10.1 anyway, set KIX_ALLOW_WITHDRAWN=0.10.1. Kix will set kix.run/withdrawn-kix=0.10.1 on cluster lt1's Activation record.\n"
+             To deploy with Kix 0.10.1 anyway, set KIX_ALLOW_WITHDRAWN=0.10.1. Kix will set {WITHDRAWN_KIX}=0.10.1 on cluster lt1's Activation record.\n"
+            )
         );
     }
 
@@ -138,8 +141,10 @@ mod tests {
     fn an_allowed_write_and_a_read_say_what_happens() {
         assert_eq!(
             render_allowed("lt1", &withdrawn(Some("0.10.2")), Writer::Deploy),
-            "warning: Kix 0.10.1 was withdrawn because it deletes Secrets on rollback.\n\
-             KIX_ALLOW_WITHDRAWN=0.10.1 is set, so this deploy will proceed and set kix.run/withdrawn-kix=0.10.1 on cluster lt1's Activation record.\n"
+            format!(
+                "warning: Kix 0.10.1 was withdrawn because it deletes Secrets on rollback.\n\
+             KIX_ALLOW_WITHDRAWN=0.10.1 is set, so this deploy will proceed and set {WITHDRAWN_KIX}=0.10.1 on cluster lt1's Activation record.\n"
+            )
         );
         assert_eq!(
             render_warning(&withdrawn(Some("0.10.2"))),
