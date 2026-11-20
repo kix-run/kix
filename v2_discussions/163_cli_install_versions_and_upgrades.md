@@ -300,6 +300,12 @@ The operator runs the same check. This is a refusal in the same family as the
 Kubernetes version check (`kubernetes_version::check`): it never changes what
 is applied, so the rule that a deploy never decides from live state holds.
 
+Built in `cli/kix/src/cluster/stops.rs` (`older_kix`), beside the required
+stops, so each writer runs both checks. Deploying with the previous Kix is how
+a person leaves a bad release, so the CLI has an explicit override:
+`KIX_ALLOW_DOWNGRADE` set to the version that deployed the cluster last. The
+record then carries `kix.run/downgraded-from`. The operator has no override.
+
 ### 12. A release can be withdrawn
 
 `web/releases/withdrawn.json` lists releases that no one should run, each

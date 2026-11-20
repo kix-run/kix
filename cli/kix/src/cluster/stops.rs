@@ -13,6 +13,11 @@ use std::fmt;
 use crate::cluster::activation::Record;
 use crate::version::Version;
 
+/// The variable that lets an older minor of Kix deploy a cluster anyway, for
+/// someone who must leave a bad newer release. Its value must be the version
+/// that made the cluster's last deploy, so the setting fits one cluster state.
+pub const ALLOW_DOWNGRADE_VAR: &str = "KIX_ALLOW_DOWNGRADE";
+
 /// The releases every cluster must deploy before it moves past their minor.
 /// The release skill adds a version here when one of the release's change
 /// records has `required-stop = true`.
@@ -136,6 +141,12 @@ pub fn older_kix(active: Option<&Record>, running: &Version) -> Option<OlderKix>
         commit: active.deployed_from.clone(),
         running: running.clone(),
     })
+}
+
+/// Return whether [`ALLOW_DOWNGRADE_VAR`], set to `allow`, lets `refusal`
+/// through.
+pub fn downgrade_allowed(refusal: &OlderKix, allow: Option<&str>) -> bool {
+    allow.map(str::trim) == Some(refusal.last.release().as_str())
 }
 
 fn last_version(active: &Record) -> Option<Version> {
@@ -291,6 +302,17 @@ mod tests {
         // A prerelease of the newer minor counts as that minor.
         assert!(older_kix(Some(&last("0.9.0-rc.1")), &v("0.8.4")).is_some());
         assert!(older_kix(Some(&last("1.0.0")), &v("0.12.0")).is_some());
+    }
+
+    #[test]
+    fn only_the_last_version_named_allows_a_downgrade() {
+        let refusal = older_kix(Some(&last("0.9.1+abc")), &v("0.8.4")).unwrap();
+        assert!(downgrade_allowed(&refusal, Some("0.9.1")));
+        assert!(downgrade_allowed(&refusal, Some(" 0.9.1\n")));
+        assert!(!downgrade_allowed(&refusal, Some("0.9")));
+        assert!(!downgrade_allowed(&refusal, Some("0.8.4")));
+        assert!(!downgrade_allowed(&refusal, Some("1")));
+        assert!(!downgrade_allowed(&refusal, None));
     }
 
     #[test]

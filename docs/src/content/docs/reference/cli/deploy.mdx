@@ -174,7 +174,13 @@ Nothing was applied to cluster prod.
 Once Kix 0.9 has deployed a cluster, only Kix 0.9 or newer can deploy it.
 
 Next: make the change on a commit that uses Kix 0.9 or newer, or move this project to Kix 0.9 or newer with `kix upgrade`. Then run `kix deploy prod` again.
+To deploy with Kix 0.8.4 anyway, for example to leave a bad Kix 0.9.1, set KIX_ALLOW_DOWNGRADE=0.9.1. Kix 0.8.4 may not understand what Kix 0.9.1 stored in the cluster. The record of cluster prod will then show that you did this.
 ```
+
+To leave a bad newer release, set `KIX_ALLOW_DOWNGRADE` to the version that
+made the last deploy. The deploy then goes ahead and the `Activation` record
+gets the annotation `kix.run/downgraded-from`. The operator has no such
+setting, so deploy directly with `kix deploy` to move a cluster back.
 
 An older patch release of the same minor passes, and so does a cluster whose
 receipt names no Kix version. `kix rollback` refuses the same way, comparing
