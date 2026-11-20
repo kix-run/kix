@@ -287,12 +287,12 @@ fn run_direct(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> Resul
             .ok_or_else(|| super::no_active_record(cluster))?;
         print_current(&current);
 
-        // A rollback writes to the cluster with this Kix, so it must not skip
-        // a required stop either. With `--operator`, the operator checks
-        // instead.
+        // A rollback writes to the cluster with this Kix, so this Kix must be
+        // one that may deploy the cluster, whichever Kix built the target.
+        // With `--operator`, the operator checks instead.
         super::deploy::stops::check(
             cluster,
-            current.deployed_with.as_deref(),
+            Some(&current),
             super::deploy::stops::Writer::Rollback,
         )?;
 

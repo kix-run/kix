@@ -72,10 +72,11 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
     let Some(mut p) = prepare(&args.plan, flags, ctx)? else {
         return Ok(Exit::Success);
     };
-    // A cluster that has never run a required stop must deploy it first.
+    // A cluster that has never run a required stop must deploy it first,
+    // and a cluster a newer minor of Kix deployed refuses this one.
     stops::check(
         &args.plan.cluster,
-        p.baseline.active().and_then(|r| r.deployed_with.as_deref()),
+        p.baseline.active(),
         stops::Writer::Deploy,
     )?;
     if let Some(version) = withdrawn::check(&args.plan.cluster, stops::Writer::Deploy)? {

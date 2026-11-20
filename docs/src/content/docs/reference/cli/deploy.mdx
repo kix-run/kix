@@ -161,6 +161,28 @@ the reason and emits a `RequiredStopSkipped` event, so `kix deploy --operator`
 and `kix rollback --operator` stop there too. [`kix upgrade`](/docs/reference/cli/upgrade/)
 stops at such a release, so a project normally deploys it on the way.
 
+## Deploys by an older Kix
+
+`kix deploy` also refuses, before it applies anything, when a newer minor of
+Kix made the cluster's last deploy. The deploy receipt names that Kix and the
+commit it deployed from:
+
+```text
+Deploy blocked: cluster prod was last deployed with Kix 0.9.1 (from commit abc1234), and this is Kix 0.8.4.
+Nothing was applied to cluster prod.
+
+Once Kix 0.9 has deployed a cluster, only Kix 0.9 or newer can deploy it.
+
+Next: make the change on a commit that uses Kix 0.9 or newer, or move this project to Kix 0.9 or newer with `kix upgrade`. Then run `kix deploy prod` again.
+```
+
+An older patch release of the same minor passes, and so does a cluster whose
+receipt names no Kix version. `kix rollback` refuses the same way, comparing
+the Kix that runs it, whichever Kix built the rollback target. The in-cluster
+operator marks the queued Activation `Failed` and emits an `OlderKix` event.
+`kix plan`, `kix plan --read-only`, and `kix deploy --dry-run` print the same
+facts as a warning and carry on.
+
 ## Deploy a reviewed plan
 
 Save the plan a reviewer approves as a
@@ -273,7 +295,7 @@ status is non-zero.
 | Code | Meaning |
 | --- | --- |
 | `0` | Deploy complete, nothing to apply, or the prompt was declined |
-| `1` | A resource failed, under either `--on-error` mode, or the run was cancelled; the plan showed a refused write under `--on-error stop`; a stateful migration was detected without `--accept-migrations`; confirmation was needed on a non-interactive terminal; the cluster would skip a [required stop](#required-stops); `kix-upgrade.json` lists a change to stored data that no one has acknowledged with [`kix upgrade --acknowledge`](/docs/reference/cli/upgrade/#changes-to-stored-data); or a build, evaluation, or cluster error |
+| `1` | A resource failed, under either `--on-error` mode, or the run was cancelled; the plan showed a refused write under `--on-error stop`; a stateful migration was detected without `--accept-migrations`; confirmation was needed on a non-interactive terminal; the cluster would skip a [required stop](#required-stops); a newer minor of Kix made the cluster's [last deploy](#deploys-by-an-older-kix); `kix-upgrade.json` lists a change to stored data that no one has acknowledged with [`kix upgrade --acknowledge`](/docs/reference/cli/upgrade/#changes-to-stored-data); or a build, evaluation, or cluster error |
 
 With `--dry-run` the exit status is [`kix plan`'s](/docs/reference/cli/plan/#exit-status):
 `0` when nothing would change, `2` when something would, and `3` when the

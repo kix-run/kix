@@ -1,9 +1,12 @@
-//! Print the refusal of a command that would skip a required stop
-//! ([`kix::cluster::stops`]).
+//! Print the refusal of a command whose Kix may not deploy the cluster
+//! ([`kix::cluster::stops`]): it would skip a required stop, or a newer
+//! minor of Kix made the last deploy.
 
-use kix::cluster::stops::{self, SkippedStop};
+use kix::cluster::activation::Record;
+use kix::cluster::stops::{self, OlderKix, Refusal, SkippedStop};
 
 use crate::exit::{Exit, Stopped};
+use crate::output;
 
 /// The command that would write the deploy.
 #[derive(Clone, Copy)]
@@ -12,19 +15,35 @@ pub(crate) enum Writer {
     Rollback,
 }
 
-/// Refuse the deploy or rollback of `cluster`, whose last deploy Kix `last`
-/// made, when it would skip a required stop. Print why and stop with exit
+/// Refuse the deploy or rollback of `cluster`, whose Active record is
+/// `active`, when this Kix may not deploy it. Print why and stop with exit
 /// code 1.
-pub(crate) fn check(cluster: &str, last: Option<&str>, writer: Writer) -> miette::Result<()> {
+pub(crate) fn check(cluster: &str, active: Option<&Record>, writer: Writer) -> miette::Result<()> {
     let running = kix::version::running();
-    if let Err(refusal) = stops::check(last, running, &stops::required_stops()) {
-        eprint!("{}", render(cluster, &refusal, writer));
+    if let Err(refusal) = stops::check(active, running, &stops::required_stops()) {
+        let text = match &*refusal {
+            Refusal::SkippedStop(r) => render_skipped_stop(cluster, r, writer),
+            Refusal::OlderKix(r) => render_older_kix(cluster, r, writer),
+        };
+        eprint!("{text}");
         return Err(Stopped(Exit::Failure).into());
     }
     Ok(())
 }
 
-fn render(cluster: &str, refusal: &SkippedStop, writer: Writer) -> String {
+/// Warn, for a command that only plans, that `kix deploy` would refuse
+/// `cluster` because a newer minor of Kix made its last deploy.
+pub(crate) fn warn(cluster: &str, active: Option<&Record>) {
+    if let Some(refusal) = stops::older_kix(active, kix::version::running()) {
+        eprint!(
+            "{} {}",
+            output::yellow("warning:"),
+            render_older_kix_warning(cluster, &refusal)
+        );
+    }
+}
+
+fn render_skipped_stop(cluster: &str, refusal: &SkippedStop, writer: Writer) -> String {
     let last = refusal.last.release();
     let stop = refusal.stop.release();
     let stop_minor = refusal.stop.minor_text();
@@ -53,6 +72,44 @@ fn render(cluster: &str, refusal: &SkippedStop, writer: Writer) -> String {
     )
 }
 
+fn render_older_kix(cluster: &str, refusal: &OlderKix, writer: Writer) -> String {
+    let last = refusal.last_deploy();
+    let minor = refusal.last.minor_text();
+    let running = refusal.running.release();
+    let (blocked, next) = match writer {
+        Writer::Deploy => (
+            "Deploy blocked",
+            format!(
+                "Next: make the change on a commit that uses Kix {minor} or newer, or move this project to Kix {minor} or newer with `kix upgrade`. Then run `kix deploy {cluster}` again."
+            ),
+        ),
+        Writer::Rollback => (
+            "Rollback blocked",
+            format!(
+                "Next: run `kix rollback {cluster}` from a commit that uses Kix {minor} or newer."
+            ),
+        ),
+    };
+    format!(
+        "{blocked}: cluster {cluster} was last deployed with {last}, and this is Kix {running}.\n\
+         Nothing was applied to cluster {cluster}.\n\
+         \n\
+         Once Kix {minor} has deployed a cluster, only Kix {minor} or newer can deploy it.\n\
+         \n\
+         {next}\n"
+    )
+}
+
+fn render_older_kix_warning(cluster: &str, refusal: &OlderKix) -> String {
+    let last = refusal.last_deploy();
+    let minor = refusal.last.minor_text();
+    let running = refusal.running.release();
+    format!(
+        "cluster {cluster} was last deployed with {last}, and this is Kix {running}. `kix deploy {cluster}` with this Kix will refuse to deploy.\n\
+         Make the change on a commit that uses Kix {minor} or newer, or move this project to Kix {minor} or newer with `kix upgrade`.\n"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -65,10 +122,18 @@ mod tests {
         }
     }
 
+    fn older(commit: Option<&str>) -> OlderKix {
+        OlderKix {
+            last: "0.9.1".parse().unwrap(),
+            commit: commit.map(str::to_string),
+            running: "0.8.4".parse().unwrap(),
+        }
+    }
+
     #[test]
     fn a_deploy_refusal_names_the_stop_and_the_way_through() {
         assert_eq!(
-            render("lt1", &refusal(), Writer::Deploy),
+            render_skipped_stop("lt1", &refusal(), Writer::Deploy),
             "Deploy blocked: cluster lt1 was last deployed with Kix 0.10.0, and cannot skip required stop Kix 0.11.0 on the way to Kix 0.12.1.\n\
              Nothing was applied to cluster lt1.\n\
              \n\
@@ -80,11 +145,46 @@ mod tests {
 
     #[test]
     fn a_rollback_refusal_rolls_back_with_the_stop() {
-        let text = render("lt1", &refusal(), Writer::Rollback);
+        let text = render_skipped_stop("lt1", &refusal(), Writer::Rollback);
         assert!(text.starts_with("Rollback blocked: cluster lt1"), "{text}");
         assert!(
             text.contains("and run `kix rollback lt1` from there."),
             "{text}"
+        );
+    }
+
+    #[test]
+    fn a_deploy_by_an_older_kix_names_both_versions_and_the_commit() {
+        assert_eq!(
+            render_older_kix("prod", &older(Some("abc1234def5678")), Writer::Deploy),
+            "Deploy blocked: cluster prod was last deployed with Kix 0.9.1 (from commit abc1234), and this is Kix 0.8.4.\n\
+             Nothing was applied to cluster prod.\n\
+             \n\
+             Once Kix 0.9 has deployed a cluster, only Kix 0.9 or newer can deploy it.\n\
+             \n\
+             Next: make the change on a commit that uses Kix 0.9 or newer, or move this project to Kix 0.9 or newer with `kix upgrade`. Then run `kix deploy prod` again.\n"
+        );
+    }
+
+    #[test]
+    fn a_rollback_by_an_older_kix_rolls_back_with_the_newer_one() {
+        assert_eq!(
+            render_older_kix("prod", &older(None), Writer::Rollback),
+            "Rollback blocked: cluster prod was last deployed with Kix 0.9.1, and this is Kix 0.8.4.\n\
+             Nothing was applied to cluster prod.\n\
+             \n\
+             Once Kix 0.9 has deployed a cluster, only Kix 0.9 or newer can deploy it.\n\
+             \n\
+             Next: run `kix rollback prod` from a commit that uses Kix 0.9 or newer.\n"
+        );
+    }
+
+    #[test]
+    fn a_plan_by_an_older_kix_warns() {
+        assert_eq!(
+            render_older_kix_warning("prod", &older(Some("abc1234def5678"))),
+            "cluster prod was last deployed with Kix 0.9.1 (from commit abc1234), and this is Kix 0.8.4. `kix deploy prod` with this Kix will refuse to deploy.\n\
+             Make the change on a commit that uses Kix 0.9 or newer, or move this project to Kix 0.9 or newer with `kix upgrade`.\n"
         );
     }
 }

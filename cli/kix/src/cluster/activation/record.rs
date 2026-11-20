@@ -73,6 +73,10 @@ pub struct Record {
     /// else `builder.kixVersion`. `None` when the record has no receipt, as
     /// an operator deploy's record does.
     pub deployed_with: Option<String>,
+    /// The commit the deploy was built from, from the receipt's
+    /// `source.gitCommit`. `None` when the record has no receipt, or the
+    /// build did not come from a Git checkout.
+    pub deployed_from: Option<String>,
 }
 
 /// Platform interface file metadata pinned by a consumer build.
@@ -159,6 +163,7 @@ impl Record {
             deployed_with: ["deployer", "builder"].into_iter().find_map(|who| {
                 status(&format!("/status/{}/{who}/kixVersion", keys::RECEIPT_FIELD))
             }),
+            deployed_from: status(&format!("/status/{}/source/gitCommit", keys::RECEIPT_FIELD)),
         }
     }
 
