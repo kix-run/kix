@@ -1,0 +1,132 @@
+# Open an issue when the release index on kix.run is close to expiring.
+#
+# Kix refuses a release index seven days after kix.run made it, and then
+# stops choosing releases (cli/kix/src/release/trust.rs). pages.yml signs a
+# fresh index every day, but only when the whole site builds, so a docs build
+# that keeps failing stops the renewal. This check reads the live index once
+# a day and opens one issue, assigned to the maintainers, when it is unsigned,
+# unreadable, or has less than three days left. It closes that issue once a
+# fresh index is live.
+#
+# GitHub turns off scheduled workflows in a public repository after 60 days
+# without activity, and that would stop this check together with the daily
+# signing in pages.yml. A push to main turns both back on.
+name: Release index expiry
+
+on:
+  schedule:
+    - cron: '43 11 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: index-expiry
+  cancel-in-progress: false
+
+env:
+  SITE: https://kix.run
+  WARN_DAYS: '3'
+  TITLE: The release index on kix.run expires soon
+  ASSIGNEES: adamcharnock,clotodex
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: cli/kix/index-keys
+
+      - name: Check the live release index
+        id: check
+        run: |
+          set -uo pipefail
+          problem=""
+          expires=""
+          work=$(mktemp -d)
+          if ! curl -fsS -o "$work/index.json" "$SITE/releases/index.json"; then
+            problem="Could not download $SITE/releases/index.json."
+          elif ! curl -fsS -o "$work/index.json.sig" "$SITE/releases/index.json.sig"; then
+            problem="Could not download $SITE/releases/index.json.sig, so Kix refuses the index."
+          else
+            verified=""
+            # Each keyid and signature pair names a committed public key.
+            # The index is good when any pair verifies, as in Kix.
+            while IFS='=' read -r field value; do
+              case "$field" in
+                keyid) keyid="$value" ;;
+                signature)
+                  pub="cli/kix/index-keys/$keyid.pub"
+                  [ -f "$pub" ] || continue
+                  printf '%s' "$value" | base64 -d > "$work/sig.bin"
+                  { printf '302a300506032b6570032100'; tr -d '[:space:]' < "$pub"; } | xxd -r -p > "$work/pub.der"
+                  if openssl pkeyutl -verify -pubin -keyform DER -inkey "$work/pub.der" \
+                      -rawin -in "$work/index.json" -sigfile "$work/sig.bin" >/dev/null 2>&1; then
+                    verified="$keyid"
+                  fi
+                  ;;
+              esac
+            done < "$work/index.json.sig"
+            expires=$(jq -r '.expires // empty' "$work/index.json")
+            if [ -z "$verified" ]; then
+              problem="The signature in $SITE/releases/index.json.sig does not verify with any key in cli/kix/index-keys/, so Kix refuses the index."
+            elif [ -z "$expires" ]; then
+              problem="$SITE/releases/index.json has no expiry date, so Kix refuses it."
+            else
+              left=$(( $(date -d "$expires" +%s) - $(date +%s) ))
+              if [ "$left" -le 0 ]; then
+                problem="The release index expired at $expires. Kix no longer chooses releases."
+              elif [ "$left" -lt $(( WARN_DAYS * 86400 )) ]; then
+                problem="The release index expires at $expires, in $(( left / 3600 )) hours. After that, Kix no longer chooses releases."
+              fi
+            fi
+          fi
+          echo "expires=$expires" >> "$GITHUB_OUTPUT"
+          {
+            echo "problem<<PROBLEM_END"
+            echo "$problem"
+            echo "PROBLEM_END"
+          } >> "$GITHUB_OUTPUT"
+          if [ -n "$problem" ]; then
+            echo "::warning::$problem"
+          else
+            echo "The release index is signed and expires at $expires."
+          fi
+
+      - name: Open or close the issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PROBLEM: ${{ steps.check.outputs.problem }}
+          EXPIRES: ${{ steps.check.outputs.expires }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          open=$(gh issue list --state open --search "in:title \"$TITLE\"" --json number,title \
+            --jq "map(select(.title == env.TITLE)) | .[0].number // empty")
+          if [ -n "$PROBLEM" ]; then
+            if [ -n "$open" ]; then
+              echo "Issue #$open is already open."
+              exit 0
+            fi
+            body=$(cat <<EOF
+          $PROBLEM
+
+          Kix refuses a release index seven days after kix.run made it. Without a fresh one, \`kix self install <minor>\`, \`kix upgrade\`, and \`kix self update\` stop working for every user. A project that pins an exact Kix version still installs it, with a warning.
+
+          The workflow "Deploy site to Cloudflare Pages" (\`.github/workflows/pages.yml\`) signs a new index every day, and on every push to main. To fix this:
+
+          1. Open the latest runs of that workflow on main and find the step that failed. Its step "Sign the release index" runs only after the whole site, docs included, has built.
+          2. Fix the failure, then run the workflow again on main.
+          3. If "Sign the release index" itself failed, check the secret \`KIX_INDEX_SIGNING_KEY\` against \`cli/kix/index-keys/README.md\`.
+
+          This check closes the issue once a fresh index is live. Found by $RUN_URL.
+          EOF
+            )
+            gh issue create --title "$TITLE" --body "$body" --assignee "$ASSIGNEES"
+          elif [ -n "$open" ]; then
+            gh issue close "$open" --comment "A fresh release index is live. It expires at $EXPIRES. Checked by $RUN_URL."
+          fi
