@@ -91,7 +91,7 @@ impl fmt::Display for OlderKix {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "the cluster was last deployed with {last}, and Kix {running} cannot deploy a cluster that a newer minor of Kix deployed. \
+            "the cluster was last deployed with {last}, and Kix {running} is older than Kix {minor}. \
              Nothing was applied. Deploy with Kix {minor} or newer.",
             last = self.last_deploy(),
             running = self.running.release(),
@@ -296,8 +296,7 @@ mod tests {
         assert_eq!(
             refusal.to_string(),
             "the cluster was last deployed with Kix 0.9.1 (from commit abc1234), and Kix 0.8.4 \
-             cannot deploy a cluster that a newer minor of Kix deployed. Nothing was applied. \
-             Deploy with Kix 0.9 or newer."
+             is older than Kix 0.9. Nothing was applied. Deploy with Kix 0.9 or newer."
         );
         // A prerelease of the newer minor counts as that minor.
         assert!(older_kix(Some(&last("0.9.0-rc.1")), &v("0.8.4")).is_some());

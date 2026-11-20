@@ -163,33 +163,42 @@ stops at such a release, so a project normally deploys it on the way.
 
 ## Deploys by an older Kix
 
-`kix deploy` also refuses, before it applies anything, when a newer minor of
-Kix made the cluster's last deploy. The deploy receipt names that Kix and the
-commit it deployed from:
+`kix deploy` stops before applying anything if a newer minor version of Kix
+last deployed the cluster. Kix reads that version and the deployed commit from
+the cluster's [deploy receipt](/docs/reference/annotations-crds-and-receipts/#deploy-receipt-schema):
 
 ```text
 Deploy blocked: cluster prod was last deployed with Kix 0.9.1 (from commit abc1234), and this is Kix 0.8.4.
 Nothing was applied to cluster prod.
 
-Once Kix 0.9 has deployed a cluster, only Kix 0.9 or newer can deploy it.
+Kix 0.8.4 may not understand what Kix 0.9.1 wrote to the cluster. Once Kix 0.9 has deployed a cluster, only Kix 0.9 or newer can deploy or roll it back.
 
-Next: make the change on a commit that uses Kix 0.9 or newer, or move this project to Kix 0.9 or newer with `kix upgrade`. Then run `kix deploy prod` again.
-To deploy with Kix 0.8.4 anyway, for example to leave a bad Kix 0.9.1, set KIX_ALLOW_DOWNGRADE=0.9.1. Kix 0.8.4 may not understand what Kix 0.9.1 stored in the cluster. The record of cluster prod will then show that you did this.
+Next: switch to a commit that uses Kix 0.9 or newer, or upgrade this project to Kix 0.9 or newer with `kix upgrade`. Then run `kix deploy prod` again.
+To deploy with Kix 0.8.4 anyway (for example, to downgrade from a broken release), set KIX_ALLOW_DOWNGRADE=0.9.1. Cluster prod's deployment record will note the downgrade from Kix 0.9.1.
 ```
 
-To leave a bad newer release, set `KIX_ALLOW_DOWNGRADE` to the version that
-made the last deploy. The deploy then goes ahead and the `Activation` record
-gets the annotation `kix.run/downgraded-from`. The operator has no such
-setting, so deploy directly with `kix deploy` to move a cluster back.
+An older patch release of the same minor version is allowed, and so is a
+cluster whose receipt names no Kix version.
 
-An older patch release of the same minor passes, and so does a cluster whose
-receipt names no Kix version. `kix rollback` refuses the same way, comparing
-the Kix that runs it, whichever Kix built the rollback target. The in-cluster
-operator marks the queued Activation `Failed` and emits an `OlderKix` event.
-`kix plan`, `kix plan --read-only`, `kix deploy --dry-run`, and
-`kix rollback --dry-run` print the same facts as a warning and carry on.
-`kix deploy --offline` checks when it connects to apply, and there
-`KIX_ALLOW_DOWNGRADE` does not apply.
+To downgrade a cluster on purpose (for example, from a broken release), set
+`KIX_ALLOW_DOWNGRADE` to the exact Kix version that last deployed the cluster
+(such as `0.9.1`). Kix then allows the deploy or rollback and writes that
+version to the `kix.run/downgraded-from` annotation on the `Activation` record.
+
+Other commands and flags handle this check as follows:
+
+- **`kix rollback`**: Checks the running Kix version against the cluster's last
+  deploy, regardless of which Kix version built the rollback target. Honors
+  `KIX_ALLOW_DOWNGRADE`.
+- **Operator mode (`--operator`)**: The Kix operator checks its own Kix
+  version, marks the queued `Activation` `Failed`, and emits an `OlderKix`
+  event. The operator has no downgrade override; run `kix deploy` or
+  `kix rollback` without `--operator` to downgrade a cluster.
+- **`kix plan`, `kix plan --read-only`, `kix deploy --dry-run`, and `kix rollback --dry-run`**:
+  Print a warning and still show the plan.
+- **`kix deploy --offline`**: Runs the check after connecting to apply, before
+  changing the cluster. `KIX_ALLOW_DOWNGRADE` does not work with `--offline`;
+  run `kix deploy` without `--offline` to downgrade.
 
 ## Deploy a reviewed plan
 
@@ -303,7 +312,7 @@ status is non-zero.
 | Code | Meaning |
 | --- | --- |
 | `0` | Deploy complete, nothing to apply, or the prompt was declined |
-| `1` | A resource failed, under either `--on-error` mode, or the run was cancelled; the plan showed a refused write under `--on-error stop`; a stateful migration was detected without `--accept-migrations`; confirmation was needed on a non-interactive terminal; the cluster would skip a [required stop](#required-stops); a newer minor of Kix made the cluster's [last deploy](#deploys-by-an-older-kix); `kix-upgrade.json` lists a change to stored data that no one has acknowledged with [`kix upgrade --acknowledge`](/docs/reference/cli/upgrade/#changes-to-stored-data); or a build, evaluation, or cluster error |
+| `1` | A resource failed, under either `--on-error` mode, or the run was cancelled; the plan showed a refused write under `--on-error stop`; a stateful migration was detected without `--accept-migrations`; confirmation was needed on a non-interactive terminal; the cluster would skip a [required stop](#required-stops); the cluster was [last deployed by a newer minor version of Kix](#deploys-by-an-older-kix); `kix-upgrade.json` lists a change to stored data that no one has acknowledged with [`kix upgrade --acknowledge`](/docs/reference/cli/upgrade/#changes-to-stored-data); or a build, evaluation, or cluster error |
 
 With `--dry-run` the exit status is [`kix plan`'s](/docs/reference/cli/plan/#exit-status):
 `0` when nothing would change, `2` when something would, and `3` when the

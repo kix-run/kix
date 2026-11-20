@@ -57,7 +57,7 @@ pub(crate) fn check_offline(cluster: &str, active: Option<&Record>) -> miette::R
     };
     if std::env::var_os(ALLOW_DOWNGRADE_VAR).is_some() {
         text.push_str(&format!(
-            "{ALLOW_DOWNGRADE_VAR} works only for a plan made while connected to the cluster. Run `kix deploy {cluster}` without `--offline`.\n"
+            "{ALLOW_DOWNGRADE_VAR} does not work with `--offline`. Run `kix deploy {cluster}` without `--offline`.\n"
         ));
     }
     eprint!("{text}");
@@ -113,7 +113,7 @@ fn render_older_kix(cluster: &str, refusal: &OlderKix, writer: Writer) -> String
         Writer::Deploy => (
             "Deploy blocked",
             format!(
-                "Next: make the change on a commit that uses Kix {minor} or newer, or move this project to Kix {minor} or newer with `kix upgrade`. Then run `kix deploy {cluster}` again."
+                "Next: switch to a commit that uses Kix {minor} or newer, or upgrade this project to Kix {minor} or newer with `kix upgrade`. Then run `kix deploy {cluster}` again."
             ),
         ),
         Writer::Rollback => (
@@ -132,10 +132,10 @@ fn render_older_kix(cluster: &str, refusal: &OlderKix, writer: Writer) -> String
         "{blocked}: cluster {cluster} was last deployed with {last}, and this is Kix {running}.\n\
          Nothing was applied to cluster {cluster}.\n\
          \n\
-         Once Kix {minor} has deployed a cluster, only Kix {minor} or newer can deploy it.\n\
+         Kix {running} may not understand what Kix {newer} wrote to the cluster. Once Kix {minor} has deployed a cluster, only Kix {minor} or newer can deploy or roll it back.\n\
          \n\
          {next}\n\
-         To {verb} with Kix {running} anyway, for example to leave a bad Kix {newer}, set {ALLOW_DOWNGRADE_VAR}={newer}. Kix {running} may not understand what Kix {newer} stored in the cluster. The record of cluster {cluster} will then show that you did this.\n"
+         To {verb} with Kix {running} anyway (for example, to downgrade from a broken release), set {ALLOW_DOWNGRADE_VAR}={newer}. Cluster {cluster}'s deployment record will note the downgrade from Kix {newer}.\n"
     )
 }
 
@@ -146,7 +146,7 @@ fn render_downgrade_allowed(cluster: &str, refusal: &OlderKix, writer: Writer) -
     };
     format!(
         "warning: cluster {cluster} was last deployed with {last}, and this is Kix {running}.\n\
-         {ALLOW_DOWNGRADE_VAR}={newer} is set, so this {what} goes ahead, and the record of cluster {cluster} will show that it moved the cluster back from Kix {newer}.\n",
+         {ALLOW_DOWNGRADE_VAR}={newer} is set, so this {what} can proceed. Cluster {cluster}'s deployment record will note the downgrade from Kix {newer}.\n",
         last = refusal.last_deploy(),
         running = refusal.running.release(),
         newer = refusal.last.release(),
@@ -158,8 +158,9 @@ fn render_older_kix_warning(cluster: &str, refusal: &OlderKix) -> String {
     let minor = refusal.last.minor_text();
     let running = refusal.running.release();
     format!(
-        "cluster {cluster} was last deployed with {last}, and this is Kix {running}. `kix deploy {cluster}` with this Kix will refuse to deploy.\n\
-         Make the change on a commit that uses Kix {minor} or newer, or move this project to Kix {minor} or newer with `kix upgrade`.\n"
+        "cluster {cluster} was last deployed with {last}, and this is Kix {running}.\n\
+         Showing the plan anyway, but `kix deploy` and `kix rollback` will refuse to change cluster {cluster} with Kix {running}.\n\
+         Switch to a commit that uses Kix {minor} or newer, or upgrade this project to Kix {minor} or newer with `kix upgrade`.\n"
     )
 }
 
@@ -213,10 +214,10 @@ mod tests {
             "Deploy blocked: cluster prod was last deployed with Kix 0.9.1 (from commit abc1234), and this is Kix 0.8.4.\n\
              Nothing was applied to cluster prod.\n\
              \n\
-             Once Kix 0.9 has deployed a cluster, only Kix 0.9 or newer can deploy it.\n\
+             Kix 0.8.4 may not understand what Kix 0.9.1 wrote to the cluster. Once Kix 0.9 has deployed a cluster, only Kix 0.9 or newer can deploy or roll it back.\n\
              \n\
-             Next: make the change on a commit that uses Kix 0.9 or newer, or move this project to Kix 0.9 or newer with `kix upgrade`. Then run `kix deploy prod` again.\n\
-             To deploy with Kix 0.8.4 anyway, for example to leave a bad Kix 0.9.1, set KIX_ALLOW_DOWNGRADE=0.9.1. Kix 0.8.4 may not understand what Kix 0.9.1 stored in the cluster. The record of cluster prod will then show that you did this.\n"
+             Next: switch to a commit that uses Kix 0.9 or newer, or upgrade this project to Kix 0.9 or newer with `kix upgrade`. Then run `kix deploy prod` again.\n\
+             To deploy with Kix 0.8.4 anyway (for example, to downgrade from a broken release), set KIX_ALLOW_DOWNGRADE=0.9.1. Cluster prod's deployment record will note the downgrade from Kix 0.9.1.\n"
         );
     }
 
@@ -227,10 +228,10 @@ mod tests {
             "Rollback blocked: cluster prod was last deployed with Kix 0.9.1, and this is Kix 0.8.4.\n\
              Nothing was applied to cluster prod.\n\
              \n\
-             Once Kix 0.9 has deployed a cluster, only Kix 0.9 or newer can deploy it.\n\
+             Kix 0.8.4 may not understand what Kix 0.9.1 wrote to the cluster. Once Kix 0.9 has deployed a cluster, only Kix 0.9 or newer can deploy or roll it back.\n\
              \n\
              Next: run `kix rollback prod` from a commit that uses Kix 0.9 or newer.\n\
-             To roll back with Kix 0.8.4 anyway, for example to leave a bad Kix 0.9.1, set KIX_ALLOW_DOWNGRADE=0.9.1. Kix 0.8.4 may not understand what Kix 0.9.1 stored in the cluster. The record of cluster prod will then show that you did this.\n"
+             To roll back with Kix 0.8.4 anyway (for example, to downgrade from a broken release), set KIX_ALLOW_DOWNGRADE=0.9.1. Cluster prod's deployment record will note the downgrade from Kix 0.9.1.\n"
         );
     }
 
@@ -239,7 +240,7 @@ mod tests {
         assert_eq!(
             render_downgrade_allowed("prod", &older(Some("abc1234def5678")), Writer::Deploy),
             "warning: cluster prod was last deployed with Kix 0.9.1 (from commit abc1234), and this is Kix 0.8.4.\n\
-             KIX_ALLOW_DOWNGRADE=0.9.1 is set, so this deploy goes ahead, and the record of cluster prod will show that it moved the cluster back from Kix 0.9.1.\n"
+             KIX_ALLOW_DOWNGRADE=0.9.1 is set, so this deploy can proceed. Cluster prod's deployment record will note the downgrade from Kix 0.9.1.\n"
         );
     }
 
@@ -247,8 +248,9 @@ mod tests {
     fn a_plan_by_an_older_kix_warns() {
         assert_eq!(
             render_older_kix_warning("prod", &older(Some("abc1234def5678"))),
-            "cluster prod was last deployed with Kix 0.9.1 (from commit abc1234), and this is Kix 0.8.4. `kix deploy prod` with this Kix will refuse to deploy.\n\
-             Make the change on a commit that uses Kix 0.9 or newer, or move this project to Kix 0.9 or newer with `kix upgrade`.\n"
+            "cluster prod was last deployed with Kix 0.9.1 (from commit abc1234), and this is Kix 0.8.4.\n\
+             Showing the plan anyway, but `kix deploy` and `kix rollback` will refuse to change cluster prod with Kix 0.8.4.\n\
+             Switch to a commit that uses Kix 0.9 or newer, or upgrade this project to Kix 0.9 or newer with `kix upgrade`.\n"
         );
     }
 }
