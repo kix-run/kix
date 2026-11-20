@@ -224,6 +224,29 @@ When the plan was made by a different build of Kix (another store path), or of
 another version, the deploy prints a note and does not refuse. Two binaries
 built outside the store with the same version print no note.
 
+## A withdrawn Kix
+
+A Kix release can be withdrawn when it has a bug that can damage a cluster.
+kix.run's signed release index lists the withdrawn releases, with a reason
+and the release to use instead. `kix deploy` reads the index that Kix fetched
+last, and fetches a new one when that copy is more than a day old. When the
+running Kix was withdrawn, it refuses before it applies anything:
+
+```text
+Deploy blocked: Kix 0.10.1 was withdrawn: it deletes Secrets on rollback.
+Nothing was applied to cluster lt1.
+
+Next: move this project to Kix 0.10.2 with `kix upgrade --to 0.10.2`, then run `kix deploy lt1` again.
+To deploy with Kix 0.10.1 anyway, set KIX_ALLOW_WITHDRAWN=0.10.1. The record of cluster lt1 will then show that Kix 0.10.1 wrote it.
+```
+
+With `KIX_ALLOW_WITHDRAWN` set to the withdrawn version, the deploy goes
+ahead and the `Activation` record gets the annotation `kix.run/withdrawn-kix`.
+`kix rollback` makes the same check. `kix deploy --dry-run`, `kix plan`, and
+other commands that do not change the cluster print a warning instead. When
+Kix cannot reach kix.run, it uses the index it fetched last, and a machine
+that has never fetched one deploys without the check.
+
 ## Examples
 
 <Command commands={[

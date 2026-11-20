@@ -170,7 +170,42 @@ list an unsigned release, so the index and install-script checks above do not
 find it, and Kix cannot install it automatically. Tell the person the release
 is unsigned and point them at `cli/kix/release-keys/README.md` to add a key.
 
+If "Sign the release index" fails in the site rebuild, the secret
+`KIX_INDEX_SIGNING_KEY` is missing or its public key is not committed in
+`cli/kix/index-keys/`. Ask the person to fix it (`cli/kix/index-keys/README.md`).
+Until a site build signs a new index, the index on kix.run expires a week
+after the last good build, and Kix then installs nothing.
+
 Give the person the release URL.
+
+## Withdraw a release
+
+Withdraw a release when people must not install it or deploy with it, such
+as a release that damages a cluster. Withdrawing does not delete anything,
+and a withdrawn release stays in `kix-run/kix-releases`.
+
+1. Make sure a release that fixes the problem exists, or cut one first. The
+   withdrawal names the release to use instead, and it must be a release that
+   the index lists and that is not withdrawn.
+2. Add an entry to `web/releases/withdrawn.json`:
+   `{ "version": "0.10.1", "reason": "it deletes Secrets on rollback", "use": "0.10.2" }`.
+   The reason is one plain sentence that a person deciding whether to upgrade
+   can act on. It must not hold a quote, a backslash, or a brace, because the
+   install script reads the index with `sed`.
+3. Run `node --test 'web/scripts/*.test.mjs'`, then open a pull request that
+   says why the release is withdrawn, and merge it. Add no change record,
+   since nothing in `cli/` or `kix/` changes, and label it `no-changelog`.
+4. The merge starts "Deploy site to Cloudflare Pages". When it finishes,
+   `curl -s https://kix.run/releases/index.json | jq .withdrawn` lists the
+   release, and `.releases` and `.latest` no longer name it.
+5. Tell the person what happens next. A Kix that fetches the index refuses to
+   install the release at once. An installed copy of the release refuses
+   `kix deploy` and `kix rollback` from the next run that fetches the index,
+   which is at most a day later. Projects that pin it move with
+   `kix upgrade --to <use>`. Announce the withdrawal where users will see it,
+   such as the release notes of the fixed release.
+
+To take a withdrawal back, remove the entry and merge again.
 
 If the job failed, read its log, fix the cause, and run the job again. A
 second run is safe: it skips a release that already exists in

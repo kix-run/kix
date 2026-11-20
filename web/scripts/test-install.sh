@@ -80,8 +80,15 @@ sign() {
   esac
 }
 
+# Sign the release index of the source tree $1, as pages.yml does.
+sign_index() {
+  printf 'kix-index-signature v1\nkeyid=%s\nsignature=%s\n' "$keyid" "$(sign "$1/releases/index.json")" \
+    >"$1/releases/index.json.sig"
+}
+
 # Build a release source tree under $1 holding the versions given after it,
-# laid out as kix.run serves it.
+# laid out as kix.run serves it. $withdrawn, when set, names the generator's
+# withdrawn.json.
 make_source() {
   src=$1
   shift
@@ -99,13 +106,13 @@ make_source() {
     printf 'kix-release-signature v1\nkeyid=%s\nsignature=%s\n' "$keyid" "$(sign "$sums/SHA256SUMS")" >"$sums/SHA256SUMS.sig"
   done
   if command -v node >/dev/null 2>&1; then
-    node "$generator" "$tmp/sums-$(basename "$src")" "$src" >/dev/null 2>&1
+    node "$generator" "$tmp/sums-$(basename "$src")" "$src" ${withdrawn:+"$withdrawn"} >/dev/null 2>&1
   else
     # The generator's shape, for a machine without Node.
     mkdir -p "$src/releases"
     cp -R "$tmp/sums-$(basename "$src")/." "$src/releases/"
     {
-      printf '{\n  "schema": "kix.run/releases/v1",\n  "generated": "2026-11-08T12:00:00Z",\n  "latest": "%s",\n  "releases": [' "$1"
+      printf '{\n  "schema": "kix.run/releases/v1",\n  "generated": "2026-11-08T12:00:00Z",\n  "expires": "2099-01-01T00:00:00Z",\n  "latest": "%s",\n  "releases": [' "$1"
       sep=''
       for v in "$@"; do
         printf '%s\n    {\n      "version": "%s",\n      "systems": ["aarch64-darwin", "aarch64-linux", "x86_64-linux"],\n' "$sep" "$v"
@@ -115,6 +122,7 @@ make_source() {
       printf '\n  ]\n}\n'
     } >"$src/releases/index.json"
   fi
+  sign_index "$src"
 }
 
 # Run the installer with HOME=$1, from the source $2, with the remaining
@@ -174,7 +182,7 @@ if [ "$can_verify" = yes ]; then
   else
     bad 'verifies the signature'
   fi
-elif has "this machine's openssl cannot check Ed25519 signatures; checked the SHA-256 only"; then
+elif has "this machine's openssl cannot check Ed25519 signatures, so it did not check the signature of SHA256SUMS for Kix 1.2.3"; then
   pass 'says the signature was not checked'
 else
   bad 'says the signature was not checked'
@@ -223,11 +231,31 @@ if [ "$can_verify" = yes ]; then
     >"$tmp/badsig/releases/v1.10.0/SHA256SUMS.sig"
   h=$tmp/h-badsig
   install_into "$h" "$tmp/badsig" "KIX_INSTALL_TEST_PUBKEY=$pubkey"
-  if [ "$status" -ne 0 ] && has 'the release signature for Kix 1.10.0 does not verify' &&
+  if [ "$status" -ne 0 ] && has 'the signature of SHA256SUMS for Kix 1.10.0 does not verify' &&
     [ ! -e "$h/.local/share/kix/1.10.0" ]; then
     pass 'refuses a signature that does not verify'
   else
     bad 'refuses a signature that does not verify'
+  fi
+
+  # An index signed over other bytes, or not signed at all.
+  cp -R "$tmp/good" "$tmp/badindex"
+  printf 'kix-index-signature v1\nkeyid=%s\nsignature=%s\n' "$keyid" "$(sign "$tmp/other")" \
+    >"$tmp/badindex/releases/index.json.sig"
+  h=$tmp/h-badindex
+  install_into "$h" "$tmp/badindex" "KIX_INSTALL_TEST_PUBKEY=$pubkey"
+  if [ "$status" -ne 0 ] && has 'the signature of the release index does not verify' &&
+    [ ! -e "$h/.local/share/kix/1.10.0" ]; then
+    pass 'refuses an index whose signature does not verify'
+  else
+    bad 'refuses an index whose signature does not verify'
+  fi
+  rm "$tmp/badindex/releases/index.json.sig"
+  install_into "$h" "$tmp/badindex" "KIX_INSTALL_TEST_PUBKEY=$pubkey"
+  if [ "$status" -ne 0 ] && has 'could not download file://' && has 'index.json.sig'; then
+    pass 'refuses an index without a signature'
+  else
+    bad 'refuses an index without a signature'
   fi
 
   h=$tmp/h-otherkey
@@ -318,8 +346,35 @@ if command -v node >/dev/null 2>&1; then
   else
     bad 'names the prerelease when there is no release'
   fi
+
+  # An index generated long ago has expired.
+  SOURCE_DATE_EPOCH=1700000000 make_source "$tmp/expired" 1.2.3
+  h=$tmp/h-expired
+  install_into "$h" "$tmp/expired" "KIX_INSTALL_TEST_PUBKEY=$pubkey"
+  if [ "$status" -ne 0 ] && has 'the release index from' && has 'expired at 2023-11-21T22:13:20Z'; then
+    pass 'refuses an expired index'
+  else
+    bad 'refuses an expired index'
+  fi
+
+  printf '[{"version": "1.10.0", "reason": "it breaks", "use": "1.2.3"}]\n' >"$tmp/withdrawn.json"
+  withdrawn=$tmp/withdrawn.json make_source "$tmp/pulled" 1.10.0 1.2.3
+  h=$tmp/h-pulled
+  install_into "$h" "$tmp/pulled" "KIX_INSTALL_TEST_PUBKEY=$pubkey"
+  if [ "$status" -eq 0 ] && [ "$("$h/.local/bin/kix")" = "kix 1.2.3" ]; then
+    pass 'installs the newest release that was not withdrawn'
+  else
+    bad 'installs the newest release that was not withdrawn'
+  fi
+  install_into "$h" "$tmp/pulled" KIX_VERSION=1.10.0 "KIX_INSTALL_TEST_PUBKEY=$pubkey"
+  if [ "$status" -ne 0 ] && has 'Kix 1.10.0 was withdrawn, so this script did not install it' &&
+    has 'KIX_VERSION=1.2.3 sh' && [ ! -e "$h/.local/share/kix/1.10.0" ]; then
+    pass 'refuses a withdrawn version by name'
+  else
+    bad 'refuses a withdrawn version by name'
+  fi
 else
-  echo 'skip prerelease checks, which need node'
+  echo 'skip prerelease, expiry, and withdrawal checks, which need node'
 fi
 
 mkdir -p "$tmp/fakebin"

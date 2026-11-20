@@ -2,14 +2,22 @@
 // Write kix.run/releases/index.json, the list of Kix releases that Kix and
 // the install script read.
 //
-//   node release-index.mjs <src-dir> <out-dir>
+//   node release-index.mjs <src-dir> <out-dir> [<withdrawn.json>]
 //
 // <src-dir> holds one directory per release tag, `v<version>/`, with that
 // release's SHA256SUMS and SHA256SUMS.sig and an optional `date` file
 // (YYYY-MM-DD). pages.yml fetches them from the release host. A release
 // without both files, or with a signature file that does not parse, is left
 // out. The script writes <out-dir>/releases/index.json and copies each listed
-// release's two files to <out-dir>/releases/v<version>/.
+// release's two files to <out-dir>/releases/v<version>/. pages.yml then signs
+// the index with scripts/sign-index.sh.
+//
+// <withdrawn.json> (web/releases/withdrawn.json) lists the releases no one
+// should install, as `[{ "version", "reason", "use" }]`. A withdrawn release
+// moves from `releases` to `withdrawn` in the index, so a Kix that reads only
+// `releases` never installs it, and it is never `latest`. The script stops on
+// an entry that names no listed release, has no reason, or whose `use` is
+// not a listed release that is still current.
 //
 // The index shape is a contract with every shipped Kix (`kix::release::index`
 // in cli/kix/src/release/) and with web/public/install, which reads it with
@@ -20,12 +28,17 @@
 // is never `latest`, so only someone who names it installs it.
 //
 // `generated` is the current time, or SOURCE_DATE_EPOCH when it is set.
+// `expires` is LIFETIME_DAYS later. Kix refuses an expired index, so the
+// site must be built and signed again before then. pages.yml runs daily.
 
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 export const SCHEMA = 'kix.run/releases/v1';
+
+/** How long an index stays current after it is generated. */
+export const LIFETIME_DAYS = 7;
 
 const TAG = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
 const ARCHIVE = /^kix-(.+)\.tar\.gz$/;
@@ -118,8 +131,43 @@ function compareIdentifiers(a, b) {
 
 function generatedAt(env) {
   const epoch = env.SOURCE_DATE_EPOCH;
-  const date = epoch ? new Date(Number(epoch) * 1000) : new Date();
+  return epoch ? new Date(Number(epoch) * 1000) : new Date();
+}
+
+function stamp(date) {
   return date.toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
+// The install script reads the index with sed after deleting whitespace and
+// splitting at braces, so a reason must not hold a quote, a backslash, or a
+// brace.
+const REASON = /^[^"\\{}\r\n]+$/;
+
+/**
+ * Check the entries of withdrawn.json against the releases the index lists.
+ * Return them in index form. Throw on the first entry that is wrong, because
+ * a typo would leave a broken release installable.
+ */
+export function checkWithdrawn(entries, releases) {
+  if (!Array.isArray(entries)) {
+    throw new Error('withdrawn.json must be a list');
+  }
+  const listed = new Set(releases.map((r) => r.version));
+  const versions = new Set(entries.map((e) => e?.version));
+  return entries.map((entry) => {
+    const { version, reason, use } = entry ?? {};
+    const name = `withdrawn.json entry ${JSON.stringify(version)}`;
+    if (typeof version !== 'string' || !listed.has(version)) {
+      throw new Error(`${name} names no release in the index`);
+    }
+    if (typeof reason !== 'string' || !REASON.test(reason.trim())) {
+      throw new Error(`${name} needs a reason: one line with no quote, backslash, or brace`);
+    }
+    if (typeof use !== 'string' || !listed.has(use) || versions.has(use)) {
+      throw new Error(`${name} needs "use": a release in the index that is not withdrawn`);
+    }
+    return { version, reason: reason.trim(), use };
+  });
 }
 
 function readIfFile(path) {
@@ -131,7 +179,7 @@ function readIfFile(path) {
  * object and the `[from, to]` copies (relative to the output directory) it
  * refers to. Every skipped release is reported through `warn`.
  */
-export function collect(src, { env = process.env, warn = () => {} } = {}) {
+export function collect(src, { env = process.env, warn = () => {}, withdrawn = [] } = {}) {
   const releases = [];
   const files = [];
   const tags = existsSync(src) ? readdirSync(src).sort() : [];
@@ -186,17 +234,27 @@ export function collect(src, { env = process.env, warn = () => {} } = {}) {
     files.push([join(dir, 'SHA256SUMS.sig'), join('releases', tag, 'SHA256SUMS.sig')]);
   }
 
-  releases.sort((a, b) => compareVersions(b.version, a.version));
-  if (releases.length === 0) {
+  const pulled = checkWithdrawn(withdrawn, releases).sort((a, b) =>
+    compareVersions(b.version, a.version),
+  );
+  const isPulled = (version) => pulled.some((w) => w.version === version);
+  const current = releases.filter((r) => !isPulled(r.version));
+  current.sort((a, b) => compareVersions(b.version, a.version));
+  if (current.length === 0) {
     warn('no release has a signed SHA256SUMS, so the index lists none');
   }
+  const generated = generatedAt(env);
+  const expires = new Date(generated.getTime() + LIFETIME_DAYS * 24 * 60 * 60 * 1000);
   const index = {
     schema: SCHEMA,
-    generated: generatedAt(env),
-    latest: releases.find((r) => !r.prerelease)?.version ?? null,
-    releases,
+    generated: stamp(generated),
+    expires: stamp(expires),
+    latest: current.find((r) => !r.prerelease)?.version ?? null,
+    releases: current,
+    withdrawn: pulled,
   };
-  return { index, files };
+  const kept = files.filter(([from]) => !pulled.some((w) => from.startsWith(join(src, `v${w.version}`, '/'))));
+  return { index, files: kept };
 }
 
 /** Write the index and the per-release files under `out`. Return the index. */
@@ -212,12 +270,16 @@ export function generate(src, out, options = {}) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const [src, out] = process.argv.slice(2);
+  const [src, out, withdrawnFile] = process.argv.slice(2);
   if (!src || !out) {
-    console.error('usage: node release-index.mjs <src-dir> <out-dir>');
+    console.error('usage: node release-index.mjs <src-dir> <out-dir> [<withdrawn.json>]');
     process.exit(2);
   }
-  const index = generate(src, out, { warn: (message) => console.error(`release-index: ${message}`) });
+  const withdrawn = withdrawnFile ? JSON.parse(readFileSync(withdrawnFile, 'utf8')) : [];
+  const index = generate(src, out, {
+    withdrawn,
+    warn: (message) => console.error(`release-index: ${message}`),
+  });
   const listed = index.releases.map((release) => release.version).join(', ') || 'none';
   console.log(`release-index: wrote ${join(out, 'releases', 'index.json')} (releases: ${listed})`);
 }

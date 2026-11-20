@@ -133,6 +133,10 @@ pub const APPLIED_HASH: &str = key!("applied-hash");
 /// Name of the activation this one superseded.
 pub const PREVIOUS: &str = key!("previous");
 
+/// The version of a withdrawn Kix that wrote this record's deploy or
+/// rollback, because `KIX_ALLOW_WITHDRAWN` named it.
+pub const WITHDRAWN_KIX: &str = key!("withdrawn-kix");
+
 /// RFC 3339 timestamp of the deploy that created the activation.
 pub const DEPLOYED_AT: &str = key!("deployed-at");
 

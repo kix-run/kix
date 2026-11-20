@@ -29,6 +29,8 @@ use super::deploy::{Command, Previous, RunOptions, Runner};
 pub fn run(args: &RollbackArgs, ctx: &mut CommandContext) -> Result<Exit> {
     let cluster = ctx.cluster_identity(&args.cluster, super::Lookup::Mutating)?;
     if args.operator {
+        // The operator writes this rollback with its own Kix.
+        super::deploy::withdrawn::warn();
         return ctx
             .runtime()?
             .block_on(run_operator_async(args, &cluster, ctx));
@@ -262,6 +264,13 @@ impl CommandResponse for HistoryResponse {
 /// Roll `cluster` back by deploying an earlier record's build, through the
 /// steps `kix deploy` takes once it has a plan (see `super::deploy`).
 fn run_direct(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> Result<Exit> {
+    // A dry run writes nothing, so a withdrawn Kix only warns there.
+    let withdrawn_kix = if args.dry_run {
+        super::deploy::withdrawn::warn();
+        None
+    } else {
+        super::deploy::withdrawn::check(cluster, super::deploy::stops::Writer::Rollback)?
+    };
     let (current, target, mut p) = ctx.runtime()?.block_on(async {
         crate::say!("Connecting to cluster...");
         let client = client::make_client(ctx.global.context.as_deref())
@@ -311,6 +320,9 @@ fn run_direct(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> Resul
         Ok::<_, miette::Report>((current, selected.name.clone(), p))
     })?;
 
+    if let Some(version) = &withdrawn_kix {
+        p.note_withdrawn_kix(version);
+    }
     if !super::deploy::migration_gate(&p, Command::Rollback, Runner::Cli) {
         return Ok(Exit::Failure);
     }

@@ -56,7 +56,8 @@ shipped binary.
 
 - `kix.run/releases/index.json` lists the releases that have a signed
   `SHA256SUMS`. It is a static asset that the site build writes
-  (`.github/workflows/pages.yml`), with the per-release files beside it:
+  (`.github/workflows/pages.yml`), with its signature
+  `kix.run/releases/index.json.sig` and the per-release files beside it:
   `kix.run/releases/v<version>/SHA256SUMS` and `SHA256SUMS.sig`.
 - `kix.run/download/<version>/<file>` serves an archive. The site Worker
   (`web/public/_worker.js`) answers with a redirect to wherever the file is
@@ -79,6 +80,7 @@ The index shape:
 {
   "schema": "kix.run/releases/v1",
   "generated": "2026-11-08T12:00:00Z",
+  "expires": "2026-11-15T12:00:00Z",
   "latest": "0.8.4",
   "releases": [
     {
@@ -89,12 +91,18 @@ The index shape:
       "signature": "/releases/v0.8.4/SHA256SUMS.sig",
       "download": "/download/0.8.4/"
     }
+  ],
+  "withdrawn": [
+    { "version": "0.8.3", "reason": "it deletes Secrets on rollback", "use": "0.8.4" }
   ]
 }
 ```
 
 Archive names stay as they are (`kix-<system>.tar.gz`), so an archive URL is
-`<download><name>`. Readers skip fields they do not know.
+`<download><name>`. Readers skip fields they do not know. `expires` and
+`withdrawn` came with the signed index (§3, §12). A Kix made before then
+reads the index without its signature and ignores both fields. A withdrawn
+release is not under `releases`, so that Kix does not install it either.
 
 Rejected: reading the index from the GitHub API or a GitHub release asset
 (binds every shipped binary to GitHub). Rejected: committing release metadata
@@ -133,6 +141,41 @@ Rejected: minisign and signify (a second tool in CI and a format Kix would
 have to parse; the raw signature is enough for one producer and one consumer).
 Rejected: Sigstore (a network dependency on a third party at verify time).
 
+**The index is signed too, with a key of its own.** The index decides which
+release Kix installs when several match, what `kix upgrade` and `kix self
+update` offer, and what the install script fetches. Unsigned, whoever controls
+kix.run or the path to it could hide a release, such as one that fixes a
+security problem, or serve an old index, and Kix would install an older
+signed release without a word. So `pages.yml` signs the index with
+`scripts/sign-index.sh` and serves `index.json.sig` beside it, in the same
+format as `SHA256SUMS.sig` but with the first line `kix-index-signature v1`.
+Kix (`cli/kix/src/release/trust.rs`) and the install script check it. The
+signature is a separate file so that `index.json` stays readable by every Kix
+already shipped.
+
+The index key (`cli/kix/index-keys/`, secret `KIX_INDEX_SIGNING_KEY`) is not
+the release key. Freshness (below) means the site build signs the index every
+day, so its key is always online in a workflow that also builds the docs. A
+stolen index key lets the thief hide or withdraw a release, which is what an
+unsigned index allowed anyway, but not make a release Kix installs. Signing
+the index with the release key would have put the key that makes releases
+into that workflow. `sign-index.sh` refuses a release key.
+
+**Freshness.** A signature alone does not stop an old signed index being
+served again. The index carries `expires`, seven days after `generated`, and
+Kix refuses an expired index. `pages.yml` runs daily, so an index is at most
+a day old and a failed build has six days of slack. Kix also keeps the newest
+index it accepted in `<data dir>/release-index.json` and refuses one older
+than that, the timestamp rule of The Update Framework. The install script
+checks the signature and `expires`, and keeps nothing. The Worker sends the
+index and its signature with `cache-control: no-cache`, so a cache never
+pairs one build's index with another build's signature.
+
+Known limit: rotating the index key breaks every Kix that knows only the old
+key as soon as the site signs with the new one, because the index is signed
+again every day. A future signature format with more than one signature
+would let the site sign with both keys during a rotation.
+
 ### 4. Compatibility rule, in one module
 
 Before 1.0: Kix and the library must have the same minor, and Kix's patch must
@@ -146,17 +189,19 @@ older library output.
 
 ### 5. A project names its Kix, and Kix selects itself
 
-`kix.toml` gains `kix = "0.8"` (a minor) or `kix = "0.8.3"` (exact). Kix 0.7
-already refuses an unknown key and says to upgrade (`project.rs`,
-`UnknownKey`), which is the right outcome for a 0.7 that meets a 0.8 project.
-For the same reason a project cannot name Kix 0.7 or older: no such Kix could
-read the file, so `kix = "0.7"` is a `kix.toml` error (`FIRST_SELECTING` in
-`policy.rs`). The library ignores keys it does not read (`mkFlake.nix` reads
-`settings.builder or "kix"`), so the key costs nothing there.
+From 0.10, a project names its Kix by the release tag `v<version>` of its
+flake input named `kix`, which `flake.lock` records
+(`cli/kix-core/src/flake_lock.rs`, `changes/0.10.0/version-from-flake-lock.md`
+once released). The tag is an exact version, so a project's Kix and its Kix
+library always have the same version. `kix.toml` names no version and refuses
+a `kix` key. A `kix` input on a local folder or a branch is a development
+library, and Kix runs the version the user started. Until 0.10, `kix.toml`
+named the version with a `kix` key, which this section first described and
+the table below still shows.
 
 Selection runs in `main()` before clap parses, because the Kix that should run
 may have different flags. It reads `--flake` (or `KIX_FLAKE`) from the raw
-arguments, reads only the `kix` key of `kix.toml` (other keys and errors are
+arguments, reads only the `kix` input of `flake.lock` (everything else is
 left to the Kix that runs, so an older Kix can hand over to a newer one), and
 decides:
 
@@ -245,6 +290,26 @@ The operator runs the same check. This is a refusal in the same family as the
 Kubernetes version check (`kubernetes_version::check`): it never changes what
 is applied, so the rule that a deploy never decides from live state holds.
 
+### 12. A release can be withdrawn
+
+`web/releases/withdrawn.json` lists releases that no one should run, each
+with a reason and the release to use instead. The index generator moves them
+from `releases` to `withdrawn`, so the signed index (§3) carries the
+withdrawal. Kix refuses to install a withdrawn release and says what to use
+instead, and `kix upgrade`, `kix self update`, and the install script never
+pick one. A withdrawn Kix that is already installed still runs: `kix deploy`
+and `kix rollback` refuse to change a cluster with it, and other commands warn.
+Deploy and rollback read the kept index and fetch a new one when it is more
+than a day old, giving up after a few seconds and falling back to the kept
+copy, so a machine that cannot reach kix.run still deploys. Setting
+`KIX_ALLOW_WITHDRAWN` to the withdrawn version lets the write through, and the
+Activation record then carries `kix.run/withdrawn-kix`. The release skill has
+the steps for withdrawing a release.
+
+Not built: the operator does not learn that its own Kix was withdrawn, because
+it has no route to kix.run. `housekeeping/2026-11-20-operator-cannot-see-a-withdrawn-kix.md`
+lists the options.
+
 ### 10. The plan document names the baseline's Kix
 
 The plan document gains the baseline's Kix version beside the record change,
@@ -287,10 +352,6 @@ the `PATH` version and the chooser only when they differ from the running one.
 
 ## Open questions
 
-- **Signed index.** The index is unsigned; only `SHA256SUMS` is signed. A
-  compromised site could hide a release or offer an older signed one. Signing
-  the index means the signing key reaches the site build too. Decide when the
-  first outside user depends on auto-install.
 - **Where `self update` leaves a Nix install.** It prints `nix profile upgrade
   kix` today; a profile installed from a flake reference may need
   `nix profile upgrade <index>`. Check against the Determinate installer.

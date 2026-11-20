@@ -1,13 +1,15 @@
 //! Fetch, verify, and install a released version of Kix.
 //!
 //! Everything comes from kix.run. The site serves the release index at
-//! `/releases/index.json` ([`index`]), each release's `SHA256SUMS` and its
-//! Ed25519 signature beside it, and the release archives under `/download/`,
-//! which the site redirects to wherever they are stored. Kix trusts none of
-//! those locations. It checks the signature of `SHA256SUMS` against a key
-//! compiled into Kix ([`verify`]) and the archive against `SHA256SUMS`
-//! before it unpacks anything ([`download`]). [`changes`] fetches a
-//! release's change records the same way.
+//! `/releases/index.json` ([`index`]) with its signature beside it, each
+//! release's `SHA256SUMS` and its Ed25519 signature, and the release archives
+//! under `/download/`, which the site redirects to wherever they are stored.
+//! Kix trusts none of those locations. It checks the index's signature
+//! against an index key compiled into Kix and refuses an old or expired
+//! index ([`trust`]), checks the signature of `SHA256SUMS` against a release
+//! key compiled into Kix ([`verify`]), and checks the archive against
+//! `SHA256SUMS` before it unpacks anything ([`download`]). [`changes`]
+//! fetches a release's change records the same way.
 //!
 //! An install unpacks into a `tmp-*` directory beside the installed versions
 //! and renames the result into place, so `<data dir>/<version>` is either a
@@ -15,6 +17,7 @@
 
 pub mod download;
 pub mod index;
+pub mod trust;
 pub mod verify;
 
 use std::path::{Path, PathBuf};
@@ -24,6 +27,7 @@ use sha2::Digest;
 use crate::installs::{self, Install};
 use crate::version::policy::Requirement;
 use crate::version::{self, Version};
+use verify::Signed;
 
 /// The environment variable that points Kix at another release source: a
 /// mirror of kix.run, or a directory in Kix's own tests. Kix checks a
@@ -93,10 +97,23 @@ pub enum InstallError {
     #[error("could not download {url}: {message}")]
     Download { url: String, message: String },
 
-    #[error("the release index from {site} cannot be read: {reason}")]
-    BadIndex {
+    #[error(
+        "[K5221] the release index from {site} has no signature (/releases/index.json.sig), so Kix cannot trust it, and installed nothing. A mirror set with KIX_RELEASE_SOURCE must copy index.json.sig with index.json"
+    )]
+    UnsignedIndex { site: String },
+
+    #[error("Kix did not trust the release index from {site}, and installed nothing: {reason}")]
+    UntrustedIndex {
         site: String,
-        reason: serde_json::Error,
+        #[source]
+        reason: trust::Refused,
+    },
+
+    #[error("{}", withdrawn_message(.version, .reason, .use_instead.as_deref()))]
+    Withdrawn {
+        version: String,
+        reason: String,
+        use_instead: Option<String>,
     },
 
     #[error("{}", no_release_message(.req, .system, .latest.as_deref(), .prerelease.as_deref()))]
@@ -153,6 +170,16 @@ pub enum InstallError {
         #[source]
         source: std::io::Error,
     },
+}
+
+fn withdrawn_message(version: &str, reason: &str, use_instead: Option<&str>) -> String {
+    let mut message = format!("Kix {version} was withdrawn, so Kix did not install it: {reason}");
+    if let Some(next) = use_instead {
+        message.push_str(&format!(
+            ". Use Kix {next} instead. In a project, run `kix upgrade --to {next}`"
+        ));
+    }
+    message
 }
 
 fn no_release_message(
@@ -228,7 +255,7 @@ pub fn install(
     source: &Source,
     starting: &dyn Fn(&Version),
 ) -> Result<Installed, InstallError> {
-    let keys = verify::trusted_keys(source, verify::test_key().as_deref());
+    let keys = verify::trusted_keys(Signed::Sums, source, verify::test_key().as_deref());
     if keys.is_empty() {
         return Err(InstallError::NoKeys);
     }
@@ -239,13 +266,16 @@ pub fn install(
         req: req.to_string(),
         message,
     };
-    let index_bytes = fetcher
-        .get(index::PATH)
-        .map_err(|e| e.into_install_error(&unreachable))?;
-    let index = index::Index::parse(&index_bytes).map_err(|reason| InstallError::BadIndex {
-        site: source.to_string(),
-        reason,
-    })?;
+    let index = trust::fetch(&mut fetcher, &unreachable)?;
+    if let Requirement::Exact(version) = req
+        && let Some(w) = index.withdrawal(version)
+    {
+        return Err(InstallError::Withdrawn {
+            version: w.version.release(),
+            reason: w.reason.clone(),
+            use_instead: w.use_instead.as_ref().map(Version::release),
+        });
+    }
     let release = index
         .newest(req, system)
         .ok_or_else(|| InstallError::NoRelease {
@@ -338,24 +368,18 @@ fn verified_sums(
         version: v.clone(),
         reason,
     };
-    let signature =
-        verify::parse_signature(&String::from_utf8_lossy(&sig_text)).map_err(bad_signature)?;
-    verify::verify_sums(&sums, &signature, keys).map_err(bad_signature)?;
+    let signature = verify::parse_signature(&String::from_utf8_lossy(&sig_text), Signed::Sums)
+        .map_err(bad_signature)?;
+    verify::verify(&sums, &signature, keys).map_err(bad_signature)?;
     Ok(String::from_utf8_lossy(&sums).into_owned())
 }
 
-/// Return the release index at `source`.
+/// Return the release index at `source`, once [`trust`] accepts it.
 pub fn fetch_index(source: &Source) -> Result<index::Index, InstallError> {
     let mut fetcher = download::Fetcher::new(source.clone());
-    let bytes = fetcher.get(index::PATH).map_err(|e| {
-        e.into_install_error(&|message| InstallError::Download {
-            url: format!("{source}{}", index::PATH),
-            message,
-        })
-    })?;
-    index::Index::parse(&bytes).map_err(|reason| InstallError::BadIndex {
-        site: source.to_string(),
-        reason,
+    trust::fetch(&mut fetcher, &|message| InstallError::Download {
+        url: format!("{source}{}", index::PATH),
+        message,
     })
 }
 
@@ -372,7 +396,7 @@ pub fn changes(
     source: &Source,
     release: &index::Release,
 ) -> Result<Option<crate::changes::Document>, InstallError> {
-    let keys = verify::trusted_keys(source, verify::test_key().as_deref());
+    let keys = verify::trusted_keys(Signed::Sums, source, verify::test_key().as_deref());
     if keys.is_empty() {
         return Err(InstallError::NoKeys);
     }
@@ -431,17 +455,7 @@ pub fn latest(
     system: &str,
     running: &Version,
 ) -> Result<Option<Version>, InstallError> {
-    let mut fetcher = download::Fetcher::new(source.clone());
-    let bytes = fetcher.get(index::PATH).map_err(|e| {
-        e.into_install_error(&|message| InstallError::Download {
-            url: format!("{source}{}", index::PATH),
-            message,
-        })
-    })?;
-    let index = index::Index::parse(&bytes).map_err(|reason| InstallError::BadIndex {
-        site: source.to_string(),
-        reason,
-    })?;
+    let index = fetch_index(source)?;
     Ok(index.latest_for(system, running).map(|r| r.version.clone()))
 }
 

@@ -272,15 +272,9 @@ impl Setup {
         let releases = self.site.join("releases").join(format!("v{version}"));
         std::fs::create_dir_all(&releases).unwrap();
         std::fs::write(releases.join("SHA256SUMS"), &sums).unwrap();
-        let key: [u8; 32] = self.signer.public_key().as_ref().try_into().unwrap();
         std::fs::write(
             releases.join("SHA256SUMS.sig"),
-            format!(
-                "kix-release-signature v1\nkeyid={}\nsignature={}\n",
-                kix::release::verify::keyid(&key),
-                base64::engine::general_purpose::STANDARD
-                    .encode(self.signer.sign(sums.as_bytes()).as_ref())
-            ),
+            self.signature(sums.as_bytes(), "kix-release-signature v1"),
         )
         .unwrap();
 
@@ -300,7 +294,28 @@ impl Setup {
                 "signature": format!("/releases/v{version}/SHA256SUMS.sig"),
                 "download": format!("/download/{version}/"),
             }));
-        std::fs::write(index_path, index.to_string()).unwrap();
+        let now = chrono::Utc::now();
+        let stamp =
+            |t: chrono::DateTime<chrono::Utc>| t.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        index["generated"] = serde_json::json!(stamp(now));
+        index["expires"] = serde_json::json!(stamp(now + chrono::Duration::days(7)));
+        let bytes = index.to_string();
+        std::fs::write(&index_path, &bytes).unwrap();
+        std::fs::write(
+            index_path.with_extension("json.sig"),
+            self.signature(bytes.as_bytes(), "kix-index-signature v1"),
+        )
+        .unwrap();
+    }
+
+    /// Return a signature file over `bytes` that starts with `header`.
+    fn signature(&self, bytes: &[u8], header: &str) -> String {
+        let key: [u8; 32] = self.signer.public_key().as_ref().try_into().unwrap();
+        format!(
+            "{header}\nkeyid={}\nsignature={}\n",
+            kix::release::verify::keyid(&key),
+            base64::engine::general_purpose::STANDARD.encode(self.signer.sign(bytes).as_ref())
+        )
     }
 
     /// Publish 9.1.0, 9.2.0, 9.2.1, and 9.3.0, each dated long ago. 9.2.0

@@ -448,12 +448,36 @@ impl Signer {
     }
 
     fn signature_file(&self, bytes: &[u8]) -> String {
+        self.signature_as(bytes, "kix-release-signature v1")
+    }
+
+    fn signature_as(&self, bytes: &[u8], header: &str) -> String {
         let key: [u8; 32] = self.pair.public_key().as_ref().try_into().unwrap();
         format!(
-            "kix-release-signature v1\nkeyid={}\nsignature={}\n",
+            "{header}\nkeyid={}\nsignature={}\n",
             kix::release::verify::keyid(&key),
             base64::engine::general_purpose::STANDARD.encode(self.pair.sign(bytes).as_ref())
         )
+    }
+
+    /// Write `index` as the site's release index, signed, with `generated`
+    /// set `age` ago and `expires` a week after that.
+    fn write_index(&self, site: &Path, mut index: serde_json::Value, age: chrono::Duration) {
+        let generated = chrono::Utc::now() - age;
+        let stamp =
+            |t: chrono::DateTime<chrono::Utc>| t.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        index["schema"] = serde_json::json!("kix.run/releases/v1");
+        index["generated"] = serde_json::json!(stamp(generated));
+        index["expires"] = serde_json::json!(stamp(generated + chrono::Duration::days(7)));
+        let bytes = index.to_string();
+        let dir = site.join("releases");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("index.json"), &bytes).unwrap();
+        std::fs::write(
+            dir.join("index.json.sig"),
+            self.signature_as(bytes.as_bytes(), "kix-index-signature v1"),
+        )
+        .unwrap();
     }
 }
 
@@ -509,23 +533,25 @@ fn publish(s: &Setup, signer: &Signer, version: &str, signed: Signed) {
         .unwrap(),
         Signed::Missing => {}
     }
-    let index = serde_json::json!({
-        "generated": "2026-11-08T12:00:00Z",
-        "latest": version,
-        "releases": [{
-            "version": version,
-            "date": "2026-11-07",
-            "systems": [system],
-            "sums": format!("/releases/v{version}/SHA256SUMS"),
-            "signature": format!("/releases/v{version}/SHA256SUMS.sig"),
-            "download": format!("/download/{version}/"),
-        }],
-    });
-    std::fs::write(
-        s.site.join("releases").join("index.json"),
-        index.to_string(),
-    )
-    .unwrap();
+    signer.write_index(
+        &s.site,
+        serde_json::json!({
+            "latest": version,
+            "releases": [index_entry(version, &system)],
+        }),
+        chrono::Duration::zero(),
+    );
+}
+
+fn index_entry(version: &str, system: &str) -> serde_json::Value {
+    serde_json::json!({
+        "version": version,
+        "date": "2026-11-07",
+        "systems": [system],
+        "sums": format!("/releases/v{version}/SHA256SUMS"),
+        "signature": format!("/releases/v{version}/SHA256SUMS.sig"),
+        "download": format!("/download/{version}/"),
+    })
 }
 
 fn leftovers(data: &Path) -> Vec<String> {
@@ -625,6 +651,12 @@ fn a_release_whose_signature_does_not_verify_is_not_installed() {
     // A key that did not sign the release does not help either.
     let other = Signer::new();
     publish(&s, &signer, "9.9.1", Signed::Yes);
+    let system = kix::release::system().unwrap();
+    other.write_index(
+        &s.site,
+        serde_json::json!({ "latest": "9.9.1", "releases": [index_entry("9.9.1", &system)] }),
+        chrono::Duration::zero(),
+    );
     s.kix()
         .env("KIX_RELEASE_TEST_KEY", other.public_hex())
         .arg("--flake")
@@ -650,6 +682,125 @@ fn a_release_without_a_signature_is_not_installed() {
             "Kix 9.9.1 has no release signature, so Kix cannot verify it",
         ));
     assert!(!s.data.join("9.9.1").exists());
+}
+
+/// Run `kix self install <req>` against the fixture site with `signer`'s
+/// key trusted.
+fn self_install(s: &Setup, signer: &Signer, req: &str) -> assert_cmd::assert::Assert {
+    s.kix()
+        .env("KIX_RELEASE_TEST_KEY", signer.public_hex())
+        .args(["self", "install", req])
+        .assert()
+}
+
+#[test]
+fn an_index_without_a_valid_signature_installs_nothing() {
+    let s = Setup::new("9.9.1");
+    let signer = Signer::new();
+    publish(&s, &signer, "9.9.1", Signed::Yes);
+    let sig = s.site.join("releases").join("index.json.sig");
+
+    std::fs::remove_file(&sig).unwrap();
+    self_install(&s, &signer, "9.9").code(1).stderr(
+        predicate::str::contains("the release index from").and(predicate::str::contains(
+            "has no signature, so Kix cannot trust it",
+        )),
+    );
+
+    // A signature over other bytes, or one made with a release header.
+    std::fs::write(&sig, signer.signature_as(b"{}", "kix-index-signature v1")).unwrap();
+    self_install(&s, &signer, "9.9")
+        .code(1)
+        .stderr(predicate::str::contains(
+            "Kix did not trust the release index",
+        ));
+    let index = std::fs::read(s.site.join("releases").join("index.json")).unwrap();
+    std::fs::write(&sig, signer.signature_file(&index)).unwrap();
+    self_install(&s, &signer, "9.9")
+        .code(1)
+        .stderr(predicate::str::contains(
+            "index.json.sig is not a Kix signature file",
+        ));
+    assert!(!s.data.join("9.9.1").exists());
+}
+
+#[test]
+fn an_expired_index_installs_nothing() {
+    let s = Setup::new("9.9.1");
+    let signer = Signer::new();
+    publish(&s, &signer, "9.9.1", Signed::Yes);
+    let system = kix::release::system().unwrap();
+    signer.write_index(
+        &s.site,
+        serde_json::json!({ "latest": "9.9.1", "releases": [index_entry("9.9.1", &system)] }),
+        chrono::Duration::days(8),
+    );
+    self_install(&s, &signer, "9.9")
+        .code(1)
+        .stderr(predicate::str::contains("it expired at"));
+    assert!(!s.data.join("9.9.1").exists());
+}
+
+#[test]
+fn an_index_older_than_one_already_accepted_installs_nothing() {
+    let s = Setup::new("9.9.1");
+    let signer = Signer::new();
+    publish(&s, &signer, "9.9.0", Signed::Yes);
+    publish(&s, &signer, "9.9.1", Signed::Yes);
+    self_install(&s, &signer, "9.9.1").success();
+    assert!(s.data.join("release-index.json").is_file());
+
+    // The site serves an index from before 9.9.1, made an hour earlier.
+    let system = kix::release::system().unwrap();
+    signer.write_index(
+        &s.site,
+        serde_json::json!({ "latest": "9.9.0", "releases": [index_entry("9.9.0", &system)] }),
+        chrono::Duration::hours(1),
+    );
+    self_install(&s, &signer, "9.9.0")
+        .code(1)
+        .stderr(predicate::str::contains(
+            "this machine already accepted an index made at",
+        ));
+    assert!(!s.data.join("9.9.0").exists());
+}
+
+#[test]
+fn a_withdrawn_release_is_never_installed() {
+    let s = Setup::new("9.9.1");
+    let signer = Signer::new();
+    publish(&s, &signer, "9.9.0", Signed::Yes);
+    publish(&s, &signer, "9.9.1", Signed::Yes);
+    let system = kix::release::system().unwrap();
+    signer.write_index(
+        &s.site,
+        serde_json::json!({
+            "latest": "9.9.0",
+            "releases": [index_entry("9.9.0", &system)],
+            "withdrawn": [{ "version": "9.9.1", "reason": "it deletes Secrets", "use": "9.9.0" }],
+        }),
+        chrono::Duration::zero(),
+    );
+
+    self_install(&s, &signer, "9.9.1").code(1).stderr(predicate::str::contains(
+        "Kix 9.9.1 was withdrawn, so Kix did not install it: it deletes Secrets. Use Kix 9.9.0 instead. In a project, run `kix upgrade --to 9.9.0`",
+    ));
+    assert!(!s.data.join("9.9.1").exists());
+
+    // A minor takes the newest release that was not withdrawn.
+    self_install(&s, &signer, "9.9").success();
+    assert!(s.data.join("9.9.0").exists());
+    assert!(!s.data.join("9.9.1").exists());
+
+    // The project pins 9.9.1, so selection refuses to install it too.
+    s.kix()
+        .env("KIX_RELEASE_TEST_KEY", signer.public_hex())
+        .arg("--flake")
+        .arg(&s.project)
+        .args(["list", "clusters"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("Kix 9.9.1 was withdrawn"));
 }
 
 // `release::verify` tests that the test key is never trusted for a site.

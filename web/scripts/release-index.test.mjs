@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, test } from 'node:test';
@@ -31,9 +31,9 @@ function release(version, { sig = SIGNATURE, systems = ['aarch64-darwin', 'x86_6
   }
 }
 
-function run() {
+function run(withdrawn = []) {
   const warnings = [];
-  const index = generate(src, out, { env, warn: (w) => warnings.push(w) });
+  const index = generate(src, out, { env, withdrawn, warn: (w) => warnings.push(w) });
   const written = JSON.parse(readFileSync(join(out, 'releases', 'index.json'), 'utf8'));
   assert.deepEqual(written, index);
   return { index, warnings };
@@ -57,6 +57,7 @@ test('writes the documented shape and copies the signed files', () => {
   assert.deepEqual(index, {
     schema: SCHEMA,
     generated: '2025-11-08T12:00:00Z',
+    expires: '2025-11-15T12:00:00Z',
     latest: '0.8.4',
     releases: [
       {
@@ -68,6 +69,7 @@ test('writes the documented shape and copies the signed files', () => {
         download: '/download/0.8.4/',
       },
     ],
+    withdrawn: [],
   });
   assert.equal(readFileSync(join(out, 'releases/v0.8.4/SHA256SUMS.sig'), 'utf8'), SIGNATURE);
   assert.equal(
@@ -186,7 +188,14 @@ test('writes the same output when run twice', () => {
 test('writes an empty index when no release is signed', () => {
   release('0.7.0', { sig: null });
   const { index, warnings } = run();
-  assert.deepEqual(index, { schema: SCHEMA, generated: '2025-11-08T12:00:00Z', latest: null, releases: [] });
+  assert.deepEqual(index, {
+    schema: SCHEMA,
+    generated: '2025-11-08T12:00:00Z',
+    expires: '2025-11-15T12:00:00Z',
+    latest: null,
+    releases: [],
+    withdrawn: [],
+  });
   assert.match(warnings.at(-1), /no release has a signed SHA256SUMS/);
 });
 
@@ -195,4 +204,38 @@ test('writes an empty index when the source directory does not exist', () => {
   const { index } = run();
   assert.equal(index.latest, null);
   assert.deepEqual(index.releases, []);
+});
+
+test('moves a withdrawn release out of releases and never makes it latest', () => {
+  release('0.8.3');
+  release('0.8.4');
+  const { index } = run([{ version: '0.8.4', reason: ' it deletes Secrets on rollback ', use: '0.8.3' }]);
+  assert.deepEqual(
+    index.releases.map((r) => r.version),
+    ['0.8.3'],
+  );
+  assert.equal(index.latest, '0.8.3');
+  assert.deepEqual(index.withdrawn, [
+    { version: '0.8.4', reason: 'it deletes Secrets on rollback', use: '0.8.3' },
+  ]);
+  assert.equal(existsSync(join(out, 'releases/v0.8.4/SHA256SUMS')), false);
+  assert.equal(existsSync(join(out, 'releases/v0.8.3/SHA256SUMS')), true);
+});
+
+test('stops on a withdrawal it cannot apply', () => {
+  release('0.8.3');
+  release('0.8.4');
+  const entry = { version: '0.8.4', reason: 'it breaks', use: '0.8.3' };
+  for (const [withdrawn, message] of [
+    [{}, /must be a list/],
+    [[{ ...entry, version: '0.8.9' }], /names no release/],
+    [[{ ...entry, reason: '' }], /needs a reason/],
+    [[{ ...entry, reason: 'say "no"' }], /needs a reason/],
+    [[{ ...entry, reason: 'a {b}' }], /needs a reason/],
+    [[{ ...entry, use: undefined }], /needs "use"/],
+    [[{ ...entry, use: '0.8.9' }], /needs "use"/],
+    [[entry, { version: '0.8.3', reason: 'it breaks too', use: '0.8.4' }], /needs "use"/],
+  ]) {
+    assert.throws(() => run(withdrawn), message, JSON.stringify(withdrawn));
+  }
 });
