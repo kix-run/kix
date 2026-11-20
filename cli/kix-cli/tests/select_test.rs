@@ -703,7 +703,7 @@ fn an_index_without_a_valid_signature_installs_nothing() {
     std::fs::remove_file(&sig).unwrap();
     self_install(&s, &signer, "9.9").code(1).stderr(
         predicate::str::contains("the release index from").and(predicate::str::contains(
-            "has no signature (/releases/index.json.sig), so Kix cannot trust it",
+            "has no signature file (/releases/index.json.sig), so Kix cannot verify it",
         )),
     );
 
@@ -712,14 +712,14 @@ fn an_index_without_a_valid_signature_installs_nothing() {
     self_install(&s, &signer, "9.9")
         .code(1)
         .stderr(predicate::str::contains(
-            "Kix did not trust the release index",
+            "Kix refused the release index from",
         ));
     let index = std::fs::read(s.site.join("releases").join("index.json")).unwrap();
     std::fs::write(&sig, signer.signature_file(&index)).unwrap();
     self_install(&s, &signer, "9.9")
         .code(1)
         .stderr(predicate::str::contains(
-            "index.json.sig is not a Kix signature file",
+            "index.json.sig is not a valid Kix signature file",
         ));
     assert!(!s.data.join("9.9.1").exists());
 }
@@ -761,7 +761,7 @@ fn an_index_older_than_one_already_accepted_installs_nothing() {
     self_install(&s, &signer, "9.9")
         .code(1)
         .stderr(predicate::str::contains(
-            "this machine already accepted an index made at",
+            "which is older than the index from",
         ));
     assert!(!s.data.join("9.9.0").exists());
 }
@@ -796,7 +796,7 @@ fn a_withdrawn_release_installs_only_when_named_exactly() {
     self_install(&s, &signer, "9.9.2")
         .success()
         .stderr(predicate::str::contains(
-            "warning: Kix 9.9.2 was withdrawn: it deletes Secrets. Kix installed it because it was named exactly, and `kix deploy` and `kix rollback` refuse to run with it. Use Kix 9.9.3 instead. In a project, run `kix upgrade --to 9.9.3`.",
+            "warning: Kix 9.9.2 was withdrawn because it deletes Secrets. Kix installed it anyway because that exact version was requested. `kix deploy` and `kix rollback` refuse to apply changes with it. Use Kix 9.9.3 instead. To upgrade a project, run `kix upgrade --to 9.9.3`.",
         ));
     assert!(s.data.join("9.9.2").exists());
 }
@@ -817,7 +817,7 @@ fn a_stale_index_still_installs_a_version_named_exactly() {
         .stderr(predicate::str::contains("it expired at"));
     self_install(&s, &signer, "9.9.1")
         .success()
-        .stderr(predicate::str::contains("is not current: it expired at"));
+        .stderr(predicate::str::contains("signature): it expired at"));
     assert!(s.data.join("9.9.1").exists());
     // A stale index is never kept.
     assert!(!s.data.join("release-index.json").exists());

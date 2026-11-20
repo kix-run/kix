@@ -224,28 +224,32 @@ When the plan was made by a different build of Kix (another store path), or of
 another version, the deploy prints a note and does not refuse. Two binaries
 built outside the store with the same version print no note.
 
-## A withdrawn Kix
+## Withdrawn releases
 
-A Kix release can be withdrawn when it has a bug that can damage a cluster.
-kix.run's signed release index lists the withdrawn releases, with a reason
-and the release to use instead. `kix deploy` reads the index that Kix fetched
-last, and fetches a new one when that copy is more than a day old. When the
-running Kix was withdrawn, it refuses before it applies anything:
+When a Kix release has a bug that can damage a cluster, kix.run marks it as
+withdrawn in the signed release index, with the reason and the version to use
+instead. `kix deploy` checks Kix's saved copy of the release index (refreshing
+it from kix.run if it is more than a day old) and stops before applying
+anything if the running version of Kix was withdrawn:
 
 ```text
-Deploy blocked: Kix 0.10.1 was withdrawn: it deletes Secrets on rollback.
+Deploy blocked: Kix 0.10.1 was withdrawn because it deletes Secrets on rollback.
 Nothing was applied to cluster lt1.
 
-Next: move this project to Kix 0.10.2 with `kix upgrade --to 0.10.2`, then run `kix deploy lt1` again.
-To deploy with Kix 0.10.1 anyway, set KIX_ALLOW_WITHDRAWN=0.10.1. The record of cluster lt1 will then show that Kix 0.10.1 wrote it.
+Next: upgrade this project to Kix 0.10.2 with `kix upgrade --to 0.10.2`, then run `kix deploy lt1` again.
+To deploy with Kix 0.10.1 anyway, set KIX_ALLOW_WITHDRAWN=0.10.1. Kix will set kix.run/withdrawn-kix=0.10.1 on cluster lt1's Activation record.
 ```
 
-With `KIX_ALLOW_WITHDRAWN` set to the withdrawn version, the deploy goes
-ahead and the `Activation` record gets the annotation `kix.run/withdrawn-kix`.
-`kix rollback` makes the same check. `kix deploy --dry-run`, `kix plan`, and
-other commands that do not change the cluster print a warning instead. When
-Kix cannot reach kix.run, it uses the index it fetched last, and a machine
-that has never fetched one deploys without the check.
+Setting `KIX_ALLOW_WITHDRAWN` to the exact withdrawn version lets the deploy
+proceed and sets `kix.run/withdrawn-kix` to that version on the `Activation`
+record.
+
+`kix rollback` runs the same check (except with `--operator`, where the
+operator runs its own version of Kix and the CLI only warns). `kix deploy
+--dry-run`, `kix rollback --dry-run`, and other project commands such as `kix
+plan` and `kix check` print a warning and continue. If Kix cannot reach
+kix.run, it uses its last saved index. A machine that has never saved an index
+deploys without this check.
 
 ## Examples
 

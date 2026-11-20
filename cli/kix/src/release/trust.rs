@@ -78,22 +78,22 @@ struct Kept {
 pub enum Refused {
     #[error("{0}")]
     Signature(VerifyError),
-    #[error("it cannot be read: {0}")]
+    #[error("index.json is not valid JSON: {0}")]
     Parse(serde_json::Error),
-    #[error("it does not say when it was made and when it expires")]
+    #[error("index.json has no creation or expiration timestamp")]
     Undated,
-    #[error("it stays current for longer than the 7 days kix.run gives an index")]
+    #[error("its expiration time is more than 8 days after it was created")]
     TooLong,
     #[error(
-        "it was made at {0}, which is in the future. Check this machine's clock, or report this at https://github.com/kix-run/kix/issues"
+        "it is dated {0}, which is in the future. Check this machine's clock, or report this at https://github.com/kix-run/kix/issues"
     )]
     Future(DateTime<Utc>),
     #[error(
-        "it expired at {0}. If this machine's clock is right, the site has not signed a new index. Report this at https://github.com/kix-run/kix/issues"
+        "it expired at {0}. Check this machine's clock. If you use KIX_RELEASE_SOURCE, update index.json and index.json.sig on your mirror. Otherwise, report this at https://github.com/kix-run/kix/issues"
     )]
     Expired(DateTime<Utc>),
     #[error(
-        "it was made at {served}, and this machine already accepted an index made at {kept}. Someone may be serving an old index to hide a release. Report this at https://github.com/kix-run/kix/issues"
+        "it is dated {served}, which is older than the index from {kept} already saved on this machine (an older index can hide new releases or withdrawals). If you use KIX_RELEASE_SOURCE, update index.json and index.json.sig on your mirror. Otherwise, report this at https://github.com/kix-run/kix/issues"
     )]
     Older {
         served: DateTime<Utc>,
@@ -171,7 +171,7 @@ pub(super) fn fetch(
             if let Some(path) = &kept_path
                 && let Err(e) = keep(path, &bytes, &sig, index.generated)
             {
-                tracing::warn!(path = %path.display(), error = %e, "could not keep the release index");
+                tracing::warn!(path = %path.display(), error = %e, "could not save the release index");
             }
             Ok(Fetched { index, stale: None })
         }
@@ -251,7 +251,7 @@ pub fn withdrawal(version: &Version, refresh: bool) -> Option<Withdrawn> {
                 tracing::debug!(error = %e, "could not fetch the release index");
             }
             Err(e) => {
-                tracing::warn!(error = %e, "could not check whether this Kix was withdrawn");
+                tracing::warn!(error = %e, "could not check whether the running version of Kix was withdrawn");
             }
         }
     }

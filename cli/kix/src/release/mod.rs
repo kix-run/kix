@@ -98,11 +98,11 @@ pub enum InstallError {
     Download { url: String, message: String },
 
     #[error(
-        "[K5221] the release index from {site} has no signature (/releases/index.json.sig), so Kix cannot trust it, and installed nothing. A mirror set with KIX_RELEASE_SOURCE must copy index.json.sig with index.json"
+        "[K5221] the release index from {site} has no signature file (/releases/index.json.sig), so Kix cannot verify it. Kix installed nothing. If you set KIX_RELEASE_SOURCE to a mirror, copy releases/index.json.sig alongside releases/index.json"
     )]
     UnsignedIndex { site: String },
 
-    #[error("Kix did not trust the release index from {site}, and installed nothing: {reason}")]
+    #[error("Kix refused the release index from {site} and installed nothing: {reason}")]
     UntrustedIndex {
         site: String,
         #[source]
@@ -171,12 +171,12 @@ pub fn withdrawn_warning(w: &index::Withdrawn) -> String {
     let version = w.version.release();
     let reason = w.reason.trim_end_matches('.');
     let mut message = format!(
-        "Kix {version} was withdrawn: {reason}. Kix installed it because it was named exactly, and `kix deploy` and `kix rollback` refuse to run with it."
+        "Kix {version} was withdrawn because {reason}. Kix installed it anyway because that exact version was requested. `kix deploy` and `kix rollback` refuse to apply changes with it."
     );
     if let Some(next) = &w.use_instead {
         let next = next.release();
         message.push_str(&format!(
-            " Use Kix {next} instead. In a project, run `kix upgrade --to {next}`."
+            " Use Kix {next} instead. To upgrade a project, run `kix upgrade --to {next}`."
         ));
     }
     message
@@ -285,7 +285,7 @@ pub fn install(
     let mut warnings = Vec::new();
     if let Some(stale) = &fetched.stale {
         warnings.push(format!(
-            "the release index from {source} is not current: {stale}. Kix used it only to find the files of Kix {req}, which it checked against their signature"
+            "the release index from {source} is not current (Kix still used it because Kix {req} is verified by its own release signature): {stale}"
         ));
     }
     let found = match req {

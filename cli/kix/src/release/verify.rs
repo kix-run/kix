@@ -104,11 +104,11 @@ pub struct Signature {
 /// Why a signature does not verify.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum VerifyError {
-    #[error("{file} is not a Kix signature file: {why}")]
+    #[error("{file} is not a valid Kix signature file: {why}")]
     Malformed { file: &'static str, why: String },
     #[error("it was made with key {0}, which this Kix does not have")]
     UnknownKey(String),
-    #[error("the signature does not match the file it signs")]
+    #[error("the signature does not match the file contents")]
     Mismatch,
 }
 
