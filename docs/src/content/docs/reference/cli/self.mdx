@@ -58,14 +58,20 @@ Kix refuses to install a release when:
 | Condition | Message |
 | --- | --- |
 | The release index has no signature | `[K5221] the release index from <source> has no signature (/releases/index.json.sig), so Kix cannot trust it, and installed nothing. A mirror set with KIX_RELEASE_SOURCE must copy index.json.sig with index.json` |
-| The index signature does not verify, the index expired, or it is older than one Kix already read | `Kix did not trust the release index from <source>, and installed nothing: <reason>` |
-| The release was withdrawn | `Kix <version> was withdrawn, so Kix did not install it: <reason>. Use Kix <other> instead. In a project, run `kix upgrade --to <other>`` |
+| The index signature does not verify, or the index expired, is dated in the future, or is older than one Kix already read | `Kix did not trust the release index from <source>, and installed nothing: <reason>` |
 | No release matches for this platform | `no Kix <version> release exists for <system>. The newest release is <latest>` |
 | The release has no signature | `Kix <version> has no release signature, so Kix cannot verify it` |
 | The signature does not verify | `the release signature for Kix <version> does not verify against any key built into Kix <running>. Kix did not install it. Report this at https://github.com/kix-run/kix/issues` |
 | The archive does not match `SHA256SUMS` | `downloaded kix-<system>.tar.gz does not match SHA256SUMS (expected <a>, got <b>)` |
 | kix.run cannot be reached | `could not reach <source>: <error>. Set KIX_AUTO_INSTALL=0 to stop Kix from installing versions, and install Kix <version> with the install script` |
 | Neither `HOME` nor `XDG_DATA_HOME` is set | `Kix cannot find a home directory to install into. Set HOME or XDG_DATA_HOME.` |
+
+A minor, such as `0.8`, never installs a withdrawn release and needs a current
+index. An exact version, such as `0.8.3`, needs the index only to find the
+release's files, which Kix checks against their signature. It installs even
+when the index is out of date or the version was withdrawn, and prints a
+warning, so a project pinned to a withdrawn release can still move off it
+with `kix upgrade`.
 
 When two commands install the same version at once, the one that finishes
 second finds it installed and uses it.

@@ -1,0 +1,3 @@
+# 2026-11-20 · `cli/kix/src/release/trust.rs` · Kix fetches `index.json` and `index.json.sig` in two requests, so a site deploy between them looks like tampering.
+
+If a Pages deploy lands between the two requests, the signature is over another build's index and verification fails with "the signature does not match the file it signs". The Worker's `no-cache` keeps caches from mixing builds but cannot help here. The window is a few milliseconds a day. A retry would hide a real mismatch, so it is not the fix. A cleaner fix is to name the signature after the index content, for example `index.json.sig` carrying the SHA-256 of the index it signs, so Kix can tell "new build" from "bad signature" and fetch again once.

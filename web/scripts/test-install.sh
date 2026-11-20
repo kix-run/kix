@@ -357,21 +357,36 @@ if command -v node >/dev/null 2>&1; then
     bad 'refuses an expired index'
   fi
 
-  printf '[{"version": "1.10.0", "reason": "it breaks", "use": "1.2.3"}]\n' >"$tmp/withdrawn.json"
-  withdrawn=$tmp/withdrawn.json make_source "$tmp/pulled" 1.10.0 1.2.3
+  printf '[{"version": "1.10.0", "reason": "it breaks", "use": "1.11.0"}]\n' >"$tmp/withdrawn.json"
+  withdrawn=$tmp/withdrawn.json make_source "$tmp/pulled" 1.11.0 1.10.0 1.2.3
   h=$tmp/h-pulled
   install_into "$h" "$tmp/pulled" "KIX_INSTALL_TEST_PUBKEY=$pubkey"
-  if [ "$status" -eq 0 ] && [ "$("$h/.local/bin/kix")" = "kix 1.2.3" ]; then
+  if [ "$status" -eq 0 ] && [ "$("$h/.local/bin/kix")" = "kix 1.11.0" ]; then
     pass 'installs the newest release that was not withdrawn'
   else
     bad 'installs the newest release that was not withdrawn'
   fi
   install_into "$h" "$tmp/pulled" KIX_VERSION=1.10.0 "KIX_INSTALL_TEST_PUBKEY=$pubkey"
-  if [ "$status" -ne 0 ] && has 'Kix 1.10.0 was withdrawn, so this script did not install it' &&
-    has 'KIX_VERSION=1.2.3 sh' && [ ! -e "$h/.local/share/kix/1.10.0" ]; then
-    pass 'refuses a withdrawn version by name'
+  if [ "$status" -eq 0 ] && has 'Kix 1.10.0 was withdrawn' &&
+    has 'KIX_VERSION=1.11.0 sh' && [ "$("$h/.local/bin/kix")" = "kix 1.10.0" ]; then
+    pass 'installs a withdrawn version named exactly, with a warning'
   else
-    bad 'refuses a withdrawn version by name'
+    bad 'installs a withdrawn version named exactly, with a warning'
+  fi
+
+  # An index signed during a key rotation: a pair for a key the script does
+  # not know, then the pair it does.
+  cp -R "$tmp/good" "$tmp/rotated"
+  {
+    printf 'kix-index-signature v1\nkeyid=0badc0de\nsignature=%s\n' "$(sign "$tmp/other")"
+    sed 1d "$tmp/good/releases/index.json.sig"
+  } >"$tmp/rotated/releases/index.json.sig"
+  h=$tmp/h-rotated
+  install_into "$h" "$tmp/rotated" "KIX_INSTALL_TEST_PUBKEY=$pubkey"
+  if [ "$status" -eq 0 ] && { [ "$can_verify" = no ] || has "Verified the release index with index key $keyid"; }; then
+    pass 'verifies an index signed with two keys'
+  else
+    bad 'verifies an index signed with two keys'
   fi
 else
   echo 'skip prerelease, expiry, and withdrawal checks, which need node'

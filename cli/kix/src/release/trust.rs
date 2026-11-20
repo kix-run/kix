@@ -1,12 +1,17 @@
 //! Decide whether to believe the release index.
 //!
-//! Kix accepts an index when its signature verifies against an index key
-//! built into Kix, it has not expired, and it is not older than the newest
-//! index this machine accepted before. Kix keeps that newest index in
-//! `<data dir>/release-index.json`. A site that serves an old signed index
-//! again, to hide a release or a withdrawal, is then refused once the
-//! machine has seen a newer one, and an index nobody re-signed stops counting
-//! when it expires. The site signs the index again every day.
+//! An index is authentic when its signature verifies against an index key
+//! built into Kix and its lifetime is no longer than the site gives one. It
+//! is fresh when it has not expired, is not dated in the future, and is not
+//! older than the newest index this machine accepted before. Kix keeps that
+//! newest index in `<data dir>/release-index.json`. A site that serves an old
+//! signed index again, to hide a release or a withdrawal, is then refused
+//! once the machine has seen a newer one, and an index nobody re-signed
+//! stops counting when it expires. The site signs the index again every day.
+//!
+//! Kix needs a fresh index to choose a release. A Kix that names one version
+//! exactly only reads where the files are, and the signed `SHA256SUMS`
+//! protects those, so a stale index only warns there ([`Freshness`]).
 //!
 //! The kept copy also tells a deploy whether the running Kix was withdrawn
 //! without asking kix.run every time ([`withdrawal`]).
@@ -35,6 +40,31 @@ pub const ALLOW_WITHDRAWN_VAR: &str = "KIX_ALLOW_WITHDRAWN";
 /// How old the kept index may be before a deploy fetches a new one.
 const REFRESH_AFTER: Duration = Duration::from_secs(24 * 60 * 60);
 
+/// The longest lifetime, from `generated` to `expires`, that Kix accepts.
+/// The site gives seven days. A longer one would let a stolen index key
+/// freeze what Kix sees for longer.
+const MAX_LIFETIME: chrono::TimeDelta = chrono::TimeDelta::days(8);
+
+/// How far in the future `generated` may be, for clocks that are wrong. A
+/// later date would be kept and then make every real index look older.
+const MAX_CLOCK_SKEW: chrono::TimeDelta = chrono::TimeDelta::days(1);
+
+/// Whether Kix needs a fresh index for what it does with it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Freshness {
+    /// Kix chooses a release from the index, so a stale index is refused.
+    Required,
+    /// Kix installs a version it was given exactly, so a stale index warns.
+    Warn,
+}
+
+/// An index that [`fetch`] accepted.
+pub struct Fetched {
+    pub index: Index,
+    /// Why the index is not fresh, when [`Freshness::Warn`] let it through.
+    pub stale: Option<Refused>,
+}
+
 /// The kept index: the bytes the site served and their signature, so Kix
 /// can check the copy again when it reads it.
 #[derive(Serialize, Deserialize)]
@@ -52,6 +82,12 @@ pub enum Refused {
     Parse(serde_json::Error),
     #[error("it does not say when it was made and when it expires")]
     Undated,
+    #[error("it stays current for longer than the 7 days kix.run gives an index")]
+    TooLong,
+    #[error(
+        "it was made at {0}, which is in the future. Check this machine's clock, or report this at https://github.com/kix-run/kix/issues"
+    )]
+    Future(DateTime<Utc>),
     #[error(
         "it expired at {0}. If this machine's clock is right, the site has not signed a new index. Report this at https://github.com/kix-run/kix/issues"
     )]
@@ -65,15 +101,9 @@ pub enum Refused {
     },
 }
 
-/// Check the index `bytes` against its signature `sig`, the keys Kix trusts,
-/// the time `now`, and the index this machine accepted last, `kept`.
-fn accept(
-    bytes: &[u8],
-    sig: &[u8],
-    keys: &[(String, [u8; 32])],
-    kept: Option<&Index>,
-    now: DateTime<Utc>,
-) -> Result<Index, Refused> {
+/// Check the index `bytes` against its signature `sig` and the keys Kix
+/// trusts, and that it has a lifetime Kix accepts.
+fn authentic(bytes: &[u8], sig: &[u8], keys: &[(String, [u8; 32])]) -> Result<Index, Refused> {
     let signature = verify::parse_signature(&String::from_utf8_lossy(sig), Signed::Index)
         .map_err(Refused::Signature)?;
     verify::verify(bytes, &signature, keys).map_err(Refused::Signature)?;
@@ -81,6 +111,21 @@ fn accept(
     let (Some(generated), Some(expires)) = (index.generated, index.expires) else {
         return Err(Refused::Undated);
     };
+    if expires - generated > MAX_LIFETIME {
+        return Err(Refused::TooLong);
+    }
+    Ok(index)
+}
+
+/// Check that an authentic `index` is current at `now` and not older than
+/// `kept`, the index this machine accepted last.
+fn fresh(index: &Index, kept: Option<&Index>, now: DateTime<Utc>) -> Result<(), Refused> {
+    let (Some(generated), Some(expires)) = (index.generated, index.expires) else {
+        return Err(Refused::Undated);
+    };
+    if generated > now + MAX_CLOCK_SKEW {
+        return Err(Refused::Future(generated));
+    }
     if expires <= now {
         return Err(Refused::Expired(expires));
     }
@@ -92,15 +137,17 @@ fn accept(
             kept,
         });
     }
-    Ok(index)
+    Ok(())
 }
 
-/// Fetch the index from `fetcher`'s source and check it. Keep it as the
-/// newest index this machine accepted.
+/// Fetch the index from `fetcher`'s source and check it. Keep a fresh index
+/// as the newest one this machine accepted. A stale one is refused, unless
+/// `freshness` is [`Freshness::Warn`].
 pub(super) fn fetch(
     fetcher: &mut Fetcher,
     unreachable: &dyn Fn(String) -> InstallError,
-) -> Result<Index, InstallError> {
+    freshness: Freshness,
+) -> Result<Fetched, InstallError> {
     let source = fetcher.source().clone();
     let site = source.to_string();
     let keys = verify::trusted_keys(Signed::Index, &source, verify::test_key().as_deref());
@@ -112,16 +159,28 @@ pub(super) fn fetch(
         Err(FetchError::NotFound(_)) => return Err(InstallError::UnsignedIndex { site }),
         Err(e) => return Err(e.into_install_error(unreachable)),
     };
+    let untrusted = |reason| InstallError::UntrustedIndex {
+        site: site.clone(),
+        reason,
+    };
+    let index = authentic(&bytes, &sig, &keys).map_err(untrusted)?;
     let kept_path = installs::data_dir().map(|dir| dir.join(KEPT_FILE));
     let kept = kept_path.as_deref().and_then(|p| read_kept(p, &keys));
-    let index = accept(&bytes, &sig, &keys, kept.as_ref(), Utc::now())
-        .map_err(|reason| InstallError::UntrustedIndex { site, reason })?;
-    if let Some(path) = &kept_path
-        && let Err(e) = keep(path, &bytes, &sig)
-    {
-        tracing::warn!(path = %path.display(), error = %e, "could not keep the release index");
+    match fresh(&index, kept.as_ref(), Utc::now()) {
+        Ok(()) => {
+            if let Some(path) = &kept_path
+                && let Err(e) = keep(path, &bytes, &sig, index.generated)
+            {
+                tracing::warn!(path = %path.display(), error = %e, "could not keep the release index");
+            }
+            Ok(Fetched { index, stale: None })
+        }
+        Err(reason) if freshness == Freshness::Warn => Ok(Fetched {
+            index,
+            stale: Some(reason),
+        }),
+        Err(reason) => Err(untrusted(reason)),
     }
-    Ok(index)
 }
 
 /// Return the kept index at `path` when its signature still verifies against
@@ -136,8 +195,22 @@ fn read_kept(path: &Path, keys: &[(String, [u8; 32])]) -> Option<Index> {
 }
 
 /// Write the index and its signature to `path`, replacing the file in one
-/// step so a reader never sees half of it.
-fn keep(path: &Path, bytes: &[u8], sig: &[u8]) -> std::io::Result<()> {
+/// step so a reader never sees half of it. Leave a kept index made after
+/// `generated` alone, which another Kix may have written since this one read
+/// it.
+fn keep(
+    path: &Path,
+    bytes: &[u8],
+    sig: &[u8],
+    generated: Option<DateTime<Utc>>,
+) -> std::io::Result<()> {
+    let newer_kept = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Kept>(&text).ok())
+        .and_then(|kept| Index::parse(kept.index.as_bytes()).ok()?.generated);
+    if newer_kept.is_some_and(|kept| Some(kept) > generated) {
+        return Ok(());
+    }
     let kept = Kept {
         index: String::from_utf8(bytes.to_vec())
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?,
@@ -172,8 +245,8 @@ pub fn withdrawal(version: &Version, refresh: bool) -> Option<Withdrawn> {
             url: format!("{source}{}", index::PATH),
             message,
         };
-        match fetch(&mut fetcher, &unreachable) {
-            Ok(index) => return index.withdrawal(version).cloned(),
+        match fetch(&mut fetcher, &unreachable, Freshness::Required) {
+            Ok(fetched) => return fetched.index.withdrawal(version).cloned(),
             Err(e @ InstallError::Download { .. }) => {
                 tracing::debug!(error = %e, "could not fetch the release index");
             }
@@ -259,6 +332,62 @@ mod tests {
 
     const NOW: &str = "2026-11-20T12:00:00Z";
 
+    fn accept(
+        bytes: &[u8],
+        sig: &[u8],
+        keys: &[(String, [u8; 32])],
+        kept: Option<&Index>,
+        now: DateTime<Utc>,
+    ) -> Result<Index, Refused> {
+        let index = authentic(bytes, sig, keys)?;
+        fresh(&index, kept, now)?;
+        Ok(index)
+    }
+
+    #[test]
+    fn an_index_from_the_future_or_with_a_long_life_is_refused() {
+        let signer = Signer::new();
+        let future = index("2026-11-22T00:00:00Z", "2026-11-29T00:00:00Z");
+        let sig = signer.sign(&future, Signed::Index);
+        let err = accept(&future, &sig, &signer.keys(), None, time(NOW)).unwrap_err();
+        assert!(matches!(err, Refused::Future(_)), "{err}");
+        // A clock a few hours behind still accepts a fresh index.
+        let soon = index("2026-11-20T18:00:00Z", "2026-11-27T18:00:00Z");
+        let sig = signer.sign(&soon, Signed::Index);
+        accept(&soon, &sig, &signer.keys(), None, time(NOW)).unwrap();
+
+        let long = index("2026-11-19T00:00:00Z", "9999-01-01T00:00:00Z");
+        let sig = signer.sign(&long, Signed::Index);
+        let err = authentic(&long, &sig, &signer.keys()).unwrap_err();
+        assert!(matches!(err, Refused::TooLong), "{err}");
+    }
+
+    #[test]
+    fn a_slower_writer_does_not_move_the_kept_index_back() {
+        let signer = Signer::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(KEPT_FILE);
+        let newer = index("2026-11-19T00:00:00Z", "2026-11-26T00:00:00Z");
+        let older = index("2026-11-18T00:00:00Z", "2026-11-25T00:00:00Z");
+        let generated = |bytes: &[u8]| Index::parse(bytes).unwrap().generated;
+        keep(
+            &path,
+            &newer,
+            &signer.sign(&newer, Signed::Index),
+            generated(&newer),
+        )
+        .unwrap();
+        keep(
+            &path,
+            &older,
+            &signer.sign(&older, Signed::Index),
+            generated(&older),
+        )
+        .unwrap();
+        let kept = read_kept(&path, &signer.keys()).unwrap();
+        assert_eq!(kept.generated, generated(&newer));
+    }
+
     #[test]
     fn a_signed_current_index_is_accepted() {
         let signer = Signer::new();
@@ -339,6 +468,7 @@ mod tests {
             version: "0.10.0".parse().unwrap(),
             reason: "it breaks".into(),
             use_instead: Some("0.10.1".parse().unwrap()),
+            release: None,
         };
         assert_eq!(judge(None, Some("0.10.0")), Verdict::Current);
         assert_eq!(judge(Some(w.clone()), None), Verdict::Refused(w.clone()));
@@ -359,11 +489,18 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("nested").join(KEPT_FILE);
         let bytes = index("2026-11-19T00:00:00Z", "2026-11-26T00:00:00Z");
-        keep(&path, &bytes, &signer.sign(&bytes, Signed::Index)).unwrap();
+        let generated = Index::parse(&bytes).unwrap().generated;
+        keep(
+            &path,
+            &bytes,
+            &signer.sign(&bytes, Signed::Index),
+            generated,
+        )
+        .unwrap();
         assert!(read_kept(&path, &signer.keys()).is_some());
         assert!(read_kept(&path, &Signer::new().keys()).is_none());
 
-        keep(&path, b"{}", &signer.sign(&bytes, Signed::Index)).unwrap();
+        keep(&path, b"{}", &signer.sign(&bytes, Signed::Index), generated).unwrap();
         assert!(read_kept(&path, &signer.keys()).is_none());
         assert!(read_kept(&tmp.path().join("missing"), &signer.keys()).is_none());
     }

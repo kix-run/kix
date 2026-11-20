@@ -42,7 +42,9 @@ The current key is `297d90c8`, created on 20 November 2026. Its private key is
 the secret `KIX_INDEX_SIGNING_KEY`.
 
 If the secret is empty, "Sign the release index" in `pages.yml` fails and the
-site is not deployed. The index on kix.run then expires a week after it was
+site is not deployed. That step runs only on the tip of `main`: a preview
+from another branch deploys an unsigned index, and a re-run of an old run
+fails there, because Kix accepts any newer index. The index on kix.run then expires a week after it was
 made, and from then on Kix installs nothing until a build signs a new one.
 
 ## Make a key
@@ -61,11 +63,14 @@ two places above.
 
 ## Rotate a key
 
-1. Add the new key in all three places, beside the old one, and release a
-   Kix that knows both.
-2. Replace the secret with the new private key. The next site build signs
-   with it.
-3. One minor release later, remove the old key from all three places.
+`index.json.sig` can hold one `keyid` and `signature` pair per key, and Kix
+and the install script accept it when one pair verifies with a key they know.
+`scripts/sign-index.sh` signs with every PEM key in the secret.
 
-A Kix that knows only the old key stops trusting the index after step 2, so
-wait until few people run a Kix older than the release in step 1.
+1. Make a new key and add it in all three places, beside the old one.
+2. Put both private keys, one after the other, in `KIX_INDEX_SIGNING_KEY`.
+   From the next site build, the index carries both signatures, so every
+   Kix verifies it.
+3. Release a Kix that knows the new key. Keep both keys in the secret for as
+   long as people may run a Kix that knows only the old one.
+4. Remove the old key from the secret and from all three places.

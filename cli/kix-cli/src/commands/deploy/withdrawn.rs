@@ -104,6 +104,7 @@ mod tests {
             version: "0.10.1".parse().unwrap(),
             reason: "it deletes Secrets on rollback.".to_string(),
             use_instead: use_instead.map(|v| v.parse().unwrap()),
+            release: None,
         }
     }
 

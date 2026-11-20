@@ -166,15 +166,25 @@ served again. The index carries `expires`, seven days after `generated`, and
 Kix refuses an expired index. `pages.yml` runs daily, so an index is at most
 a day old and a failed build has six days of slack. Kix also keeps the newest
 index it accepted in `<data dir>/release-index.json` and refuses one older
-than that, the timestamp rule of The Update Framework. The install script
-checks the signature and `expires`, and keeps nothing. The Worker sends the
+than that, the timestamp rule of The Update Framework. It also refuses an
+index dated more than a day in the future, or one that stays current for
+more than eight days, so a stolen key or a wrong clock cannot leave a kept
+index that blocks every real one. The install script checks the signature
+and `expires`, and keeps nothing.
+
+Freshness matters when Kix chooses a release: the newest patch of a minor,
+`kix upgrade`, and `kix self update`. A version named exactly, as `flake.lock`
+names it, needs the index only to find its files, and the signed `SHA256SUMS`
+protects those. So an exact install with a stale index warns and goes on, and
+a pinned project keeps working when the site has not signed for a week.
+Only the tip of `main` signs: `pages.yml` refuses to sign in a re-run of an
+old run, and a preview from a branch gets an unsigned index. The Worker sends the
 index and its signature with `cache-control: no-cache`, so a cache never
 pairs one build's index with another build's signature.
 
-Known limit: rotating the index key breaks every Kix that knows only the old
-key as soon as the site signs with the new one, because the index is signed
-again every day. A future signature format with more than one signature
-would let the site sign with both keys during a rotation.
+A signature file may hold one `keyid` and `signature` pair per key, and a
+reader accepts it when one pair verifies. During a rotation the site signs
+the index with both keys, so a Kix that knows only the old one keeps working.
 
 ### 4. Compatibility rule, in one module
 
@@ -295,13 +305,18 @@ is applied, so the rule that a deploy never decides from live state holds.
 `web/releases/withdrawn.json` lists releases that no one should run, each
 with a reason and the release to use instead. The index generator moves them
 from `releases` to `withdrawn`, so the signed index (§3) carries the
-withdrawal. Kix refuses to install a withdrawn release and says what to use
-instead, and `kix upgrade`, `kix self update`, and the install script never
-pick one. A withdrawn Kix that is already installed still runs: `kix deploy`
+withdrawal. Kix, `kix upgrade`, `kix self update`, and the install script never pick a
+withdrawn release, and `use` must name a newer one. The entry keeps the
+release's files, so a project that names the version exactly still installs
+it, with a warning. That matters because `kix upgrade` builds with the
+project's current Kix before it moves, so a project could not leave a
+withdrawn release it cannot install. A withdrawn Kix that is already installed still runs: `kix deploy`
 and `kix rollback` refuse to change a cluster with it, and other commands warn.
 Deploy and rollback read the kept index and fetch a new one when it is more
 than a day old, giving up after a few seconds and falling back to the kept
-copy, so a machine that cannot reach kix.run still deploys. Setting
+copy, so a machine that cannot reach kix.run still deploys. The check is
+best effort and fails open: a machine that has never fetched the index, and
+cannot reach kix.run, deploys without it. Setting
 `KIX_ALLOW_WITHDRAWN` to the withdrawn version lets the write through, and the
 Activation record then carries `kix.run/withdrawn-kix`. The release skill has
 the steps for withdrawing a release.

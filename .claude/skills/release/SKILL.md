@@ -184,9 +184,9 @@ Withdraw a release when people must not install it or deploy with it, such
 as a release that damages a cluster. Withdrawing does not delete anything,
 and a withdrawn release stays in `kix-run/kix-releases`.
 
-1. Make sure a release that fixes the problem exists, or cut one first. The
-   withdrawal names the release to use instead, and it must be a release that
-   the index lists and that is not withdrawn.
+1. Make sure a newer release that fixes the problem exists, or cut one
+   first. The withdrawal names the release to use instead, and it must be
+   newer than the withdrawn one, listed in the index, and not withdrawn.
 2. Add an entry to `web/releases/withdrawn.json`:
    `{ "version": "0.10.1", "reason": "it deletes Secrets on rollback", "use": "0.10.2" }`.
    The reason is one plain sentence that a person deciding whether to upgrade
@@ -198,8 +198,9 @@ and a withdrawn release stays in `kix-run/kix-releases`.
 4. The merge starts "Deploy site to Cloudflare Pages". When it finishes,
    `curl -s https://kix.run/releases/index.json | jq .withdrawn` lists the
    release, and `.releases` and `.latest` no longer name it.
-5. Tell the person what happens next. A Kix that fetches the index refuses to
-   install the release at once. An installed copy of the release refuses
+5. Tell the person what happens next. From the next index, Kix never picks
+   the release, and installs it only for a project that names it exactly,
+   with a warning. An installed copy of the release refuses
    `kix deploy` and `kix rollback` from the next run that fetches the index,
    which is at most a day later. Projects that pin it move with
    `kix upgrade --to <use>`. Announce the withdrawal where users will see it,

@@ -39,8 +39,9 @@ The script checks the Ed25519 signatures of the release index and of
 `SHA256SUMS` when the machine's `openssl` can (OpenSSL 3 can, and the LibreSSL
 that ships with macOS cannot). When it cannot, the script says so and checks
 the SHA-256 of the release archive only. Kix itself always checks both
-signatures when it installs another version. The script does not install a
-release that was withdrawn, and names the release to install instead.
+signatures when it installs another version. The script never picks a
+release that was withdrawn. If `KIX_VERSION` names one, the script installs it
+and warns, naming the release to install instead.
 :::
 
 ## Choose the version of Kix for a project

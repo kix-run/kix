@@ -15,9 +15,11 @@
 // <withdrawn.json> (web/releases/withdrawn.json) lists the releases no one
 // should install, as `[{ "version", "reason", "use" }]`. A withdrawn release
 // moves from `releases` to `withdrawn` in the index, so a Kix that reads only
-// `releases` never installs it, and it is never `latest`. The script stops on
-// an entry that names no listed release, has no reason, or whose `use` is
-// not a listed release that is still current.
+// `releases` never chooses it, and it is never `latest`. Its entry keeps the
+// release's fields and files, so a project that names that version exactly
+// can still install it and move off it. The script stops on an entry that
+// names no listed release, has no reason, or whose `use` is not a newer
+// listed release that is still current.
 //
 // The index shape is a contract with every shipped Kix (`kix::release::index`
 // in cli/kix/src/release/) and with web/public/install, which reads it with
@@ -163,8 +165,13 @@ export function checkWithdrawn(entries, releases) {
     if (typeof reason !== 'string' || !REASON.test(reason.trim())) {
       throw new Error(`${name} needs a reason: one line with no quote, backslash, or brace`);
     }
-    if (typeof use !== 'string' || !listed.has(use) || versions.has(use)) {
-      throw new Error(`${name} needs "use": a release in the index that is not withdrawn`);
+    if (
+      typeof use !== 'string' ||
+      !listed.has(use) ||
+      versions.has(use) ||
+      compareVersions(use, version) <= 0
+    ) {
+      throw new Error(`${name} needs "use": a newer release in the index that is not withdrawn`);
     }
     return { version, reason: reason.trim(), use };
   });
@@ -238,6 +245,12 @@ export function collect(src, { env = process.env, warn = () => {}, withdrawn = [
     compareVersions(b.version, a.version),
   );
   const isPulled = (version) => pulled.some((w) => w.version === version);
+  // The withdrawn entry leads with the fields the install script and Kix
+  // match on, then carries the release's own fields.
+  const withdrawnEntries = pulled.map((w) => {
+    const { version, ...files } = releases.find((r) => r.version === w.version);
+    return { ...w, ...files };
+  });
   const current = releases.filter((r) => !isPulled(r.version));
   current.sort((a, b) => compareVersions(b.version, a.version));
   if (current.length === 0) {
@@ -251,10 +264,9 @@ export function collect(src, { env = process.env, warn = () => {}, withdrawn = [
     expires: stamp(expires),
     latest: current.find((r) => !r.prerelease)?.version ?? null,
     releases: current,
-    withdrawn: pulled,
+    withdrawn: withdrawnEntries,
   };
-  const kept = files.filter(([from]) => !pulled.some((w) => from.startsWith(join(src, `v${w.version}`, '/'))));
-  return { index, files: kept };
+  return { index, files };
 }
 
 /** Write the index and the per-release files under `out`. Return the index. */

@@ -209,23 +209,32 @@ test('writes an empty index when the source directory does not exist', () => {
 test('moves a withdrawn release out of releases and never makes it latest', () => {
   release('0.8.3');
   release('0.8.4');
-  const { index } = run([{ version: '0.8.4', reason: ' it deletes Secrets on rollback ', use: '0.8.3' }]);
+  release('0.8.2');
+  const { index } = run([{ version: '0.8.3', reason: ' it deletes Secrets on rollback ', use: '0.8.4' }]);
   assert.deepEqual(
     index.releases.map((r) => r.version),
-    ['0.8.3'],
+    ['0.8.4', '0.8.2'],
   );
-  assert.equal(index.latest, '0.8.3');
+  assert.equal(index.latest, '0.8.4');
   assert.deepEqual(index.withdrawn, [
-    { version: '0.8.4', reason: 'it deletes Secrets on rollback', use: '0.8.3' },
+    {
+      version: '0.8.3',
+      reason: 'it deletes Secrets on rollback',
+      use: '0.8.4',
+      systems: ['aarch64-darwin', 'x86_64-linux'],
+      sums: '/releases/v0.8.3/SHA256SUMS',
+      signature: '/releases/v0.8.3/SHA256SUMS.sig',
+      download: '/download/0.8.3/',
+    },
   ]);
-  assert.equal(existsSync(join(out, 'releases/v0.8.4/SHA256SUMS')), false);
+  // A project that names it exactly can still install it.
   assert.equal(existsSync(join(out, 'releases/v0.8.3/SHA256SUMS')), true);
 });
 
 test('stops on a withdrawal it cannot apply', () => {
   release('0.8.3');
   release('0.8.4');
-  const entry = { version: '0.8.4', reason: 'it breaks', use: '0.8.3' };
+  const entry = { version: '0.8.3', reason: 'it breaks', use: '0.8.4' };
   for (const [withdrawn, message] of [
     [{}, /must be a list/],
     [[{ ...entry, version: '0.8.9' }], /names no release/],
@@ -234,7 +243,8 @@ test('stops on a withdrawal it cannot apply', () => {
     [[{ ...entry, reason: 'a {b}' }], /needs a reason/],
     [[{ ...entry, use: undefined }], /needs "use"/],
     [[{ ...entry, use: '0.8.9' }], /needs "use"/],
-    [[entry, { version: '0.8.3', reason: 'it breaks too', use: '0.8.4' }], /needs "use"/],
+    [[entry, { version: '0.8.4', reason: 'it breaks too', use: '0.8.3' }], /needs "use"/],
+    [[{ version: '0.8.4', reason: 'it breaks', use: '0.8.3' }], /needs "use": a newer release/],
   ]) {
     assert.throws(() => run(withdrawn), message, JSON.stringify(withdrawn));
   }

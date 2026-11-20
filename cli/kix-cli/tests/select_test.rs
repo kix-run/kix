@@ -703,7 +703,7 @@ fn an_index_without_a_valid_signature_installs_nothing() {
     std::fs::remove_file(&sig).unwrap();
     self_install(&s, &signer, "9.9").code(1).stderr(
         predicate::str::contains("the release index from").and(predicate::str::contains(
-            "has no signature, so Kix cannot trust it",
+            "has no signature (/releases/index.json.sig), so Kix cannot trust it",
         )),
     );
 
@@ -757,7 +757,8 @@ fn an_index_older_than_one_already_accepted_installs_nothing() {
         serde_json::json!({ "latest": "9.9.0", "releases": [index_entry("9.9.0", &system)] }),
         chrono::Duration::hours(1),
     );
-    self_install(&s, &signer, "9.9.0")
+    // Choosing from it is refused. An exact version only warns.
+    self_install(&s, &signer, "9.9")
         .code(1)
         .stderr(predicate::str::contains(
             "this machine already accepted an index made at",
@@ -766,41 +767,60 @@ fn an_index_older_than_one_already_accepted_installs_nothing() {
 }
 
 #[test]
-fn a_withdrawn_release_is_never_installed() {
+fn a_withdrawn_release_installs_only_when_named_exactly() {
     let s = Setup::new("9.9.1");
     let signer = Signer::new();
-    publish(&s, &signer, "9.9.0", Signed::Yes);
     publish(&s, &signer, "9.9.1", Signed::Yes);
+    publish(&s, &signer, "9.9.2", Signed::Yes);
     let system = kix::release::system().unwrap();
+    let mut withdrawn = index_entry("9.9.2", &system);
+    withdrawn["reason"] = serde_json::json!("it deletes Secrets");
+    withdrawn["use"] = serde_json::json!("9.9.3");
     signer.write_index(
         &s.site,
         serde_json::json!({
-            "latest": "9.9.0",
-            "releases": [index_entry("9.9.0", &system)],
-            "withdrawn": [{ "version": "9.9.1", "reason": "it deletes Secrets", "use": "9.9.0" }],
+            "latest": "9.9.1",
+            "releases": [index_entry("9.9.1", &system)],
+            "withdrawn": [withdrawn],
         }),
         chrono::Duration::zero(),
     );
 
-    self_install(&s, &signer, "9.9.1").code(1).stderr(predicate::str::contains(
-        "Kix 9.9.1 was withdrawn, so Kix did not install it: it deletes Secrets. Use Kix 9.9.0 instead. In a project, run `kix upgrade --to 9.9.0`",
-    ));
-    assert!(!s.data.join("9.9.1").exists());
-
     // A minor takes the newest release that was not withdrawn.
     self_install(&s, &signer, "9.9").success();
-    assert!(s.data.join("9.9.0").exists());
-    assert!(!s.data.join("9.9.1").exists());
+    assert!(s.data.join("9.9.1").exists());
+    assert!(!s.data.join("9.9.2").exists());
 
-    // The project pins 9.9.1, so selection refuses to install it too.
-    s.kix()
-        .env("KIX_RELEASE_TEST_KEY", signer.public_hex())
-        .arg("--flake")
-        .arg(&s.project)
-        .args(["list", "clusters"])
-        .assert()
+    // Named exactly, it installs with a warning, so a project pinned to it
+    // can still run `kix upgrade` to leave it.
+    self_install(&s, &signer, "9.9.2")
+        .success()
+        .stderr(predicate::str::contains(
+            "warning: Kix 9.9.2 was withdrawn: it deletes Secrets. Kix installed it because it was named exactly, and `kix deploy` and `kix rollback` refuse to run with it. Use Kix 9.9.3 instead. In a project, run `kix upgrade --to 9.9.3`.",
+        ));
+    assert!(s.data.join("9.9.2").exists());
+}
+
+#[test]
+fn a_stale_index_still_installs_a_version_named_exactly() {
+    let s = Setup::new("9.9.1");
+    let signer = Signer::new();
+    publish(&s, &signer, "9.9.1", Signed::Yes);
+    let system = kix::release::system().unwrap();
+    signer.write_index(
+        &s.site,
+        serde_json::json!({ "latest": "9.9.1", "releases": [index_entry("9.9.1", &system)] }),
+        chrono::Duration::days(8),
+    );
+    self_install(&s, &signer, "9.9")
         .code(1)
-        .stderr(predicate::str::contains("Kix 9.9.1 was withdrawn"));
+        .stderr(predicate::str::contains("it expired at"));
+    self_install(&s, &signer, "9.9.1")
+        .success()
+        .stderr(predicate::str::contains("is not current: it expired at"));
+    assert!(s.data.join("9.9.1").exists());
+    // A stale index is never kept.
+    assert!(!s.data.join("release-index.json").exists());
 }
 
 // `release::verify` tests that the test key is never trusted for a site.

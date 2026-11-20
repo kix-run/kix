@@ -142,9 +142,13 @@ verify_signature() {
   if [ "$(sed -n 1p "$sig")" != "$header" ]; then
     fail "the signature of $what is not a $header file. Do not install it; report this at https://kix.run"
   fi
-  keyid=$(sed -n 's/^keyid=\([0-9a-f]\{8\}\)$/\1/p' "$sig")
-  signature=$(sed -n 's/^signature=\([A-Za-z0-9+/=]*\)$/\1/p' "$sig")
-  if [ -z "$keyid" ] || [ -z "$signature" ]; then
+  # One "<keyid> <signature>" line per key that signed the file. A file
+  # signed during a key rotation has two.
+  pairs=$(awk '
+    /^keyid=[0-9a-f]+$/ && length($0) == 14 { id = substr($0, 7); next }
+    /^signature=[A-Za-z0-9+\/=]+$/ && id != "" { print id, substr($0, 11); id = "" }
+  ' "$sig")
+  if [ -z "$pairs" ]; then
     fail "the signature of $what has no keyid or signature line. Do not install it; report this at https://kix.run"
   fi
 
@@ -158,23 +162,31 @@ verify_signature() {
     return 0
   fi
 
-  key=''
-  for candidate in $keys; do
-    if [ "$(hex_bytes "$candidate" | sha256 | cut -c1-8)" = "$keyid" ]; then
-      key=$candidate
+  known=''
+  named=''
+  printf '%s\n' "$pairs" >"$work/pairs"
+  while read -r keyid signature; do
+    named="$named${named:+, }$keyid"
+    key=''
+    for candidate in $keys; do
+      if [ "$(hex_bytes "$candidate" | sha256 | cut -c1-8)" = "$keyid" ]; then
+        key=$candidate
+      fi
+    done
+    [ -n "$key" ] || continue
+    known=yes
+    hex_bytes "$ED25519_DER_PREFIX$key" >"$work/key.der"
+    printf '%s' "$signature" | openssl base64 -d -A >"$work/sig.bin"
+    if openssl pkeyutl -verify -pubin -keyform DER -inkey "$work/key.der" -rawin \
+      -in "$file" -sigfile "$work/sig.bin" >/dev/null 2>&1; then
+      say "Verified $what with $kind key $keyid"
+      return 0
     fi
-  done
-  if [ -z "$key" ]; then
-    fail "the signature of $what names key $keyid, which this install script does not know. Do not install it; report this at https://kix.run"
+  done <"$work/pairs"
+  if [ -z "$known" ]; then
+    fail "the signature of $what names key $named, which this install script does not know. Do not install it; report this at https://kix.run"
   fi
-
-  hex_bytes "$ED25519_DER_PREFIX$key" >"$work/key.der"
-  printf '%s' "$signature" | openssl base64 -d -A >"$work/sig.bin"
-  if ! openssl pkeyutl -verify -pubin -keyform DER -inkey "$work/key.der" -rawin \
-    -in "$file" -sigfile "$work/sig.bin" >/dev/null 2>&1; then
-    fail "the signature of $what does not verify. Do not install it; report this at https://kix.run"
-  fi
-  say "Verified $what with $kind key $keyid"
+  fail "the signature of $what does not verify. Do not install it; report this at https://kix.run"
 }
 
 # Point the kix link at the installed version, unless something else owns
@@ -265,14 +277,16 @@ main() {
     *[!0-9A-Za-z.-]* | [!0-9]* | *. | *- | *..* | *.-* | *-.*) fail "KIX_VERSION=$version is not a Kix version. Write one such as 0.8.3 or 0.9.0-rc.1" ;;
   esac
 
-  # A withdrawn release is listed with a reason and not with the releases,
-  # whose lines have no "reason" field.
-  pulled=$(grep -F "\"version\":\"$version\"" "$work/index.lines" | grep -F '"reason":' | sed -n 1p || true)
-  if [ -n "$pulled" ]; then
-    use=$(field "$pulled" use)
-    fail "Kix $version was withdrawn, so this script did not install it. $source/releases/index.json says why. Install Kix $use instead: curl -fsSL $source/install | KIX_VERSION=$use sh"
-  fi
+  # A withdrawn release is listed with a reason and its files, apart from
+  # the releases, whose lines have no "reason" field. The default is never
+  # withdrawn, so only a version named exactly can be one.
   entry=$(grep -F "\"version\":\"$version\"" "$work/index.lines" | grep -F '"sums":' | sed -n 1p || true)
+  case $entry in
+    *'"reason":'*)
+      use=$(field "$entry" use)
+      note "Kix $version was withdrawn, and kix deploy and kix rollback refuse to run with it. $source/releases/index.json says why. Install Kix $use instead: curl -fsSL $source/install | KIX_VERSION=$use sh"
+      ;;
+  esac
   if [ -z "$entry" ]; then
     latest=$(field "$header" latest)
     fail "no Kix $version release exists${latest:+. The newest is $latest}"

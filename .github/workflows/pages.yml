@@ -283,11 +283,22 @@ jobs:
           # to read every file it uploads.
           chmod -R a+rX _site
 
+      # Only the tip of main is signed. Every Kix accepts a newer index, so a
+      # re-run of an old run, or a preview from a branch, must not sign one
+      # with an older or different withdrawn.json. A preview deploys an
+      # unsigned index, which Kix refuses.
       - name: Sign the release index
+        if: github.ref == 'refs/heads/main'
         working-directory: kix
         env:
           KIX_INDEX_SIGNING_KEY: ${{ secrets.KIX_INDEX_SIGNING_KEY }}
-        run: nix shell --inputs-from . nixpkgs#openssl -c scripts/sign-index.sh ../_site
+        run: |
+          git fetch --quiet origin main
+          if [ "$(git rev-parse HEAD)" != "$(git rev-parse FETCH_HEAD)" ]; then
+            echo "::error::This run builds $(git rev-parse --short HEAD), and main is now $(git rev-parse --short FETCH_HEAD). Only the tip of main signs the release index. Run this workflow on main instead of re-running an old run."
+            exit 1
+          fi
+          nix shell --inputs-from . nixpkgs#openssl -c scripts/sign-index.sh ../_site
 
       - name: Deploy to Cloudflare Pages
         uses: cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0 # v4.1.3

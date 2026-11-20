@@ -28,27 +28,36 @@ fi
 umask 077
 work=$(mktemp -d "${RUNNER_TEMP:-/tmp}/sign-index.XXXXXX")
 trap 'rm -rf "$work"' EXIT
-key="$work/kix-index.pem"
-printf '%s\n' "$KIX_INDEX_SIGNING_KEY" > "$key"
 
-openssl pkey -in "$key" -pubout -outform DER | tail -c 32 > "$work/index-key.raw"
-keyid=$(sha256sum "$work/index-key.raw" | cut -c1-8)
-public=$(od -An -v -tx1 "$work/index-key.raw" | tr -d ' \n')
-committed="cli/kix/index-keys/$keyid.pub"
-if [ ! -f "$committed" ] || [ "$(tr -d '[:space:]' < "$committed")" != "$public" ]; then
-  echo "::error::$committed does not hold the public half of KIX_INDEX_SIGNING_KEY. Commit it before signing. See cli/kix/index-keys/README.md."
-  exit 1
-fi
-if [ -f "cli/kix/release-keys/$keyid.pub" ]; then
-  echo "::error::KIX_INDEX_SIGNING_KEY is release key $keyid. The index needs a key of its own. See cli/kix/index-keys/README.md."
-  exit 1
-fi
+# The secret holds one PEM private key, or two during a key rotation. Each
+# key adds a keyid and signature pair, so a Kix that knows either key
+# verifies the index.
+printf '%s\n' "$KIX_INDEX_SIGNING_KEY" | awk -v dir="$work" '
+  /-----BEGIN / { n++ }
+  n { print > (dir "/key-" n ".pem") }
+'
+ls "$work"/key-*.pem >/dev/null 2>&1 || { echo "::error::KIX_INDEX_SIGNING_KEY holds no PEM key. See cli/kix/index-keys/README.md."; exit 1; }
 
-openssl pkeyutl -sign -inkey "$key" -rawin -in "$index" > "$work/index.sig.bin"
-printf 'kix-index-signature v1\nkeyid=%s\nsignature=%s\n' \
-  "$keyid" "$(base64 -w0 < "$work/index.sig.bin")" > "$index.sig"
+printf 'kix-index-signature v1\n' > "$work/index.json.sig"
+for key in "$work"/key-*.pem; do
+  openssl pkey -in "$key" -pubout -outform DER | tail -c 32 > "$work/index-key.raw"
+  keyid=$(sha256sum "$work/index-key.raw" | cut -c1-8)
+  public=$(od -An -v -tx1 "$work/index-key.raw" | tr -d ' \n')
+  committed="cli/kix/index-keys/$keyid.pub"
+  if [ ! -f "$committed" ] || [ "$(tr -d '[:space:]' < "$committed")" != "$public" ]; then
+    echo "::error::$committed does not hold the public half of a key in KIX_INDEX_SIGNING_KEY. Commit it before signing. See cli/kix/index-keys/README.md."
+    exit 1
+  fi
+  if [ -f "cli/kix/release-keys/$keyid.pub" ]; then
+    echo "::error::KIX_INDEX_SIGNING_KEY holds release key $keyid. The index needs a key of its own. See cli/kix/index-keys/README.md."
+    exit 1
+  fi
+  openssl pkeyutl -sign -inkey "$key" -rawin -in "$index" > "$work/index.sig.bin"
+  openssl pkey -in "$key" -pubout -out "$work/index-key.pub.pem"
+  openssl pkeyutl -verify -pubin -inkey "$work/index-key.pub.pem" -rawin \
+    -in "$index" -sigfile "$work/index.sig.bin"
+  printf 'keyid=%s\nsignature=%s\n' "$keyid" "$(base64 -w0 < "$work/index.sig.bin")" >> "$work/index.json.sig"
+done
 
-openssl pkey -in "$key" -pubout -out "$work/index-key.pub.pem"
-openssl pkeyutl -verify -pubin -inkey "$work/index-key.pub.pem" -rawin \
-  -in "$index" -sigfile "$work/index.sig.bin"
+cp "$work/index.json.sig" "$index.sig"
 cat "$index.sig"

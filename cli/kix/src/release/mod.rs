@@ -109,13 +109,6 @@ pub enum InstallError {
         reason: trust::Refused,
     },
 
-    #[error("{}", withdrawn_message(.version, .reason, .use_instead.as_deref()))]
-    Withdrawn {
-        version: String,
-        reason: String,
-        use_instead: Option<String>,
-    },
-
     #[error("{}", no_release_message(.req, .system, .latest.as_deref(), .prerelease.as_deref()))]
     NoRelease {
         req: String,
@@ -172,11 +165,18 @@ pub enum InstallError {
     },
 }
 
-fn withdrawn_message(version: &str, reason: &str, use_instead: Option<&str>) -> String {
-    let mut message = format!("Kix {version} was withdrawn, so Kix did not install it: {reason}");
-    if let Some(next) = use_instead {
+/// Return the warning for installing the withdrawn release `w`, which only
+/// a Kix that names it exactly does.
+pub fn withdrawn_warning(w: &index::Withdrawn) -> String {
+    let version = w.version.release();
+    let reason = w.reason.trim_end_matches('.');
+    let mut message = format!(
+        "Kix {version} was withdrawn: {reason}. Kix installed it because it was named exactly, and `kix deploy` and `kix rollback` refuse to run with it."
+    );
+    if let Some(next) = &w.use_instead {
+        let next = next.release();
         message.push_str(&format!(
-            ". Use Kix {next} instead. In a project, run `kix upgrade --to {next}`"
+            " Use Kix {next} instead. In a project, run `kix upgrade --to {next}`."
         ));
     }
     message
@@ -240,11 +240,21 @@ pub struct Installed {
     pub install: Install,
     /// Whether Kix downloaded it, or found it installed already.
     pub downloaded: bool,
+    /// What the caller should tell the person, such as that the version was
+    /// withdrawn. [`install`] can run before logging is set up, so it prints
+    /// nothing itself.
+    pub warnings: Vec<String>,
 }
 
 /// Install the newest release that meets `req` for `system` from `source`,
 /// unless that version is installed already. `starting` is called with the
 /// version before Kix downloads it.
+///
+/// A minor requirement chooses from the index, so it needs a fresh index and
+/// never picks a withdrawn release. An exact version needs only the index's
+/// file paths, which the signed `SHA256SUMS` backs, so a stale index or a
+/// withdrawn version installs with a warning. That lets a project pinned to
+/// a withdrawn release run `kix upgrade` to leave it.
 ///
 /// The archive is checked against the signed `SHA256SUMS` before it is
 /// unpacked, and nothing lands under `<data dir>/<version>` unless every
@@ -266,18 +276,27 @@ pub fn install(
         req: req.to_string(),
         message,
     };
-    let index = trust::fetch(&mut fetcher, &unreachable)?;
-    if let Requirement::Exact(version) = req
-        && let Some(w) = index.withdrawal(version)
-    {
-        return Err(InstallError::Withdrawn {
-            version: w.version.release(),
-            reason: w.reason.clone(),
-            use_instead: w.use_instead.as_ref().map(Version::release),
-        });
+    let freshness = match req {
+        Requirement::Exact(_) => trust::Freshness::Warn,
+        Requirement::Minor(..) => trust::Freshness::Required,
+    };
+    let fetched = trust::fetch(&mut fetcher, &unreachable, freshness)?;
+    let index = &fetched.index;
+    let mut warnings = Vec::new();
+    if let Some(stale) = &fetched.stale {
+        warnings.push(format!(
+            "the release index from {source} is not current: {stale}. Kix used it only to find the files of Kix {req}, which it checked against their signature"
+        ));
     }
-    let release = index
-        .newest(req, system)
+    let found = match req {
+        Requirement::Exact(version) => index.exact(version, system),
+        Requirement::Minor(..) => index.newest(req, system).map(|r| (r, None)),
+    };
+    if let Some((_, Some(w))) = found {
+        warnings.push(withdrawn_warning(w));
+    }
+    let release = found
+        .map(|(r, _)| r)
         .ok_or_else(|| InstallError::NoRelease {
             req: req.to_string(),
             system: system.to_string(),
@@ -297,6 +316,7 @@ pub fn install(
         return Ok(Installed {
             install: existing,
             downloaded: false,
+            warnings,
         });
     }
     starting(&release.version);
@@ -342,6 +362,7 @@ pub fn install(
             dir: dest,
         },
         downloaded: true,
+        warnings,
     })
 }
 
@@ -377,10 +398,11 @@ fn verified_sums(
 /// Return the release index at `source`, once [`trust`] accepts it.
 pub fn fetch_index(source: &Source) -> Result<index::Index, InstallError> {
     let mut fetcher = download::Fetcher::new(source.clone());
-    trust::fetch(&mut fetcher, &|message| InstallError::Download {
+    let unreachable = |message| InstallError::Download {
         url: format!("{source}{}", index::PATH),
         message,
-    })
+    };
+    trust::fetch(&mut fetcher, &unreachable, trust::Freshness::Required).map(|f| f.index)
 }
 
 /// Return the name of the change records file of Kix `version`.

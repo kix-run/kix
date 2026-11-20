@@ -14,6 +14,11 @@
 //!
 //! An index signature starts with `kix-index-signature v1` instead.
 //!
+//! A file may hold more than one `keyid` and `signature` pair, each
+//! signature on the line after its key id. Kix accepts the file when one
+//! pair verifies with a key it has. During a key rotation the site signs with
+//! both keys, so a Kix that knows only one of them still verifies the file.
+//!
 //! `keyid` is the first 8 hex digits of the SHA-256 of the raw 32-byte public
 //! key, and selects one of the keys built into Kix ([`Signed::keys`]).
 //! During a key rotation Kix carries both keys, so it verifies a file signed
@@ -90,11 +95,10 @@ impl Signed {
     }
 }
 
-/// A parsed signature file.
+/// A parsed signature file: one signature per key that signed the file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Signature {
-    pub keyid: String,
-    pub bytes: Vec<u8>,
+    pub pairs: Vec<(String, Vec<u8>)>,
 }
 
 /// Why a signature does not verify.
@@ -119,24 +123,28 @@ pub fn parse_signature(text: &str, signed: Signed) -> Result<Signature, VerifyEr
     if lines.next().map(str::trim_end) != Some(header) {
         return Err(bad(&format!("the first line is not `{header}`")));
     }
-    let mut keyid = None;
-    let mut signature = None;
+    let mut pairs = Vec::new();
+    let mut keyid: Option<String> = None;
     for line in lines {
         match line.trim_end().split_once('=') {
             Some(("keyid", v)) => keyid = Some(v.to_string()),
-            Some(("signature", v)) => signature = Some(v.to_string()),
+            Some(("signature", v)) => {
+                let id = keyid.take().ok_or_else(|| bad("it has no keyid line"))?;
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(v)
+                    .map_err(|_| bad("the signature is not base64"))?;
+                if bytes.len() != 64 {
+                    return Err(bad("the signature is not 64 bytes"));
+                }
+                pairs.push((id, bytes));
+            }
             _ => {}
         }
     }
-    let keyid = keyid.ok_or_else(|| bad("it has no keyid line"))?;
-    let signature = signature.ok_or_else(|| bad("it has no signature line"))?;
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(signature)
-        .map_err(|_| bad("the signature is not base64"))?;
-    if bytes.len() != 64 {
-        return Err(bad("the signature is not 64 bytes"));
+    if pairs.is_empty() {
+        return Err(bad("it has no signature line"));
     }
-    Ok(Signature { keyid, bytes })
+    Ok(Signature { pairs })
 }
 
 /// Return the key id of a raw Ed25519 public key.
@@ -184,13 +192,30 @@ pub fn verify(
     sig: &Signature,
     keys: &[(String, [u8; 32])],
 ) -> Result<(), VerifyError> {
-    let (_, key) = keys
-        .iter()
-        .find(|(id, _)| *id == sig.keyid)
-        .ok_or_else(|| VerifyError::UnknownKey(sig.keyid.clone()))?;
-    ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, key)
-        .verify(bytes, &sig.bytes)
-        .map_err(|_| VerifyError::Mismatch)
+    let mut known = false;
+    for (id, signature) in &sig.pairs {
+        let Some((_, key)) = keys.iter().find(|(k, _)| k == id) else {
+            continue;
+        };
+        known = true;
+        if ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, key)
+            .verify(bytes, signature)
+            .is_ok()
+        {
+            return Ok(());
+        }
+    }
+    if known {
+        Err(VerifyError::Mismatch)
+    } else {
+        Err(VerifyError::UnknownKey(
+            sig.pairs
+                .iter()
+                .map(|(id, _)| id.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
+        ))
+    }
 }
 
 /// Return the SHA-256 that `sums` (the text of `SHA256SUMS`) lists for
@@ -239,8 +264,9 @@ mod tests {
         let pair = key_pair();
         let sig =
             parse_signature(&signature_file(&pair, b"sums", Signed::Sums), Signed::Sums).unwrap();
-        assert_eq!(sig.keyid, keyid(&public(&pair)));
-        assert_eq!(sig.bytes.len(), 64);
+        assert_eq!(sig.pairs.len(), 1);
+        assert_eq!(sig.pairs[0].0, keyid(&public(&pair)));
+        assert_eq!(sig.pairs[0].1.len(), 64);
 
         for (text, why) in [
             ("", "first line"),
@@ -289,12 +315,35 @@ mod tests {
 
         assert_eq!(verify(b"tampered", &sig, &keys), Err(VerifyError::Mismatch));
         let other = key_pair();
-        let wrong = vec![(sig.keyid.clone(), public(&other))];
+        let wrong = vec![(sig.pairs[0].0.clone(), public(&other))];
         assert_eq!(verify(sums, &sig, &wrong), Err(VerifyError::Mismatch));
         assert_eq!(
             verify(sums, &sig, &[]),
-            Err(VerifyError::UnknownKey(sig.keyid.clone()))
+            Err(VerifyError::UnknownKey(sig.pairs[0].0.clone()))
         );
+    }
+
+    #[test]
+    fn a_file_signed_by_two_keys_verifies_with_either() {
+        let old = key_pair();
+        let new = key_pair();
+        let bytes = b"index";
+        let one = signature_file(&old, bytes, Signed::Index);
+        let two = signature_file(&new, bytes, Signed::Index);
+        let both = format!(
+            "{one}{}",
+            two.lines().skip(1).collect::<Vec<_>>().join("\n")
+        );
+        let sig = parse_signature(&both, Signed::Index).unwrap();
+        assert_eq!(sig.pairs.len(), 2);
+        for pair in [&old, &new] {
+            let keys = vec![(keyid(&public(pair)), public(pair))];
+            verify(bytes, &sig, &keys).unwrap();
+        }
+        assert!(matches!(
+            verify(bytes, &sig, &[]),
+            Err(VerifyError::UnknownKey(ids)) if ids.contains(", ")
+        ));
     }
 
     #[test]
