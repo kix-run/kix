@@ -756,6 +756,16 @@ async fn run_deploy_async(
             binding::Connection::InCluster => None,
         };
         check_cached_baseline(records.as_ref(), cluster_name, hash, context).await?;
+        // A plan from the cache does not know which Kix deployed the cluster
+        // last, so the deploy checks it now, before it applies anything.
+        let active = match &records {
+            Some(records) => records
+                .active(cluster_name)
+                .await
+                .map_err(|e| miette!("{e}"))?,
+            None => None,
+        };
+        stops::check_offline(cluster_name, active.as_ref())?;
     }
 
     // A plan made without connecting (`--offline`) learns only now whether

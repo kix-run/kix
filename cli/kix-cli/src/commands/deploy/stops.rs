@@ -43,6 +43,27 @@ pub(crate) fn check(
     Err(Stopped(Exit::Failure).into())
 }
 
+/// Refuse a deploy planned from the cache (`--offline`) the way [`check`]
+/// does. The plan is already made, so [`ALLOW_DOWNGRADE_VAR`] cannot note
+/// itself on the record, and it does not let a downgrade through here.
+pub(crate) fn check_offline(cluster: &str, active: Option<&Record>) -> miette::Result<()> {
+    let running = kix::version::running();
+    let Err(refusal) = stops::check(active, running, &stops::required_stops()) else {
+        return Ok(());
+    };
+    let mut text = match &*refusal {
+        Refusal::SkippedStop(r) => render_skipped_stop(cluster, r, Writer::Deploy),
+        Refusal::OlderKix(r) => render_older_kix(cluster, r, Writer::Deploy),
+    };
+    if std::env::var_os(ALLOW_DOWNGRADE_VAR).is_some() {
+        text.push_str(&format!(
+            "{ALLOW_DOWNGRADE_VAR} works only for a plan made while connected to the cluster. Run `kix deploy {cluster}` without `--offline`.\n"
+        ));
+    }
+    eprint!("{text}");
+    Err(Stopped(Exit::Failure).into())
+}
+
 /// Warn, for a command that only plans, that `kix deploy` would refuse
 /// `cluster` because a newer minor of Kix made its last deploy.
 pub(crate) fn warn(cluster: &str, active: Option<&Record>) {

@@ -186,8 +186,10 @@ An older patch release of the same minor passes, and so does a cluster whose
 receipt names no Kix version. `kix rollback` refuses the same way, comparing
 the Kix that runs it, whichever Kix built the rollback target. The in-cluster
 operator marks the queued Activation `Failed` and emits an `OlderKix` event.
-`kix plan`, `kix plan --read-only`, and `kix deploy --dry-run` print the same
-facts as a warning and carry on.
+`kix plan`, `kix plan --read-only`, `kix deploy --dry-run`, and
+`kix rollback --dry-run` print the same facts as a warning and carry on.
+`kix deploy --offline` checks when it connects to apply, and there
+`KIX_ALLOW_DOWNGRADE` does not apply.
 
 ## Deploy a reviewed plan
 

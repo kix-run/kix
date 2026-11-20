@@ -290,11 +290,17 @@ fn run_direct(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> Resul
         // A rollback writes to the cluster with this Kix, so this Kix must be
         // one that may deploy the cluster, whichever Kix built the target.
         // With `--operator`, the operator checks instead.
-        let downgrade = super::deploy::stops::check(
-            cluster,
-            Some(&current),
-            super::deploy::stops::Writer::Rollback,
-        )?;
+        // A dry run writes nothing, so it only warns.
+        let downgrade = if args.dry_run {
+            super::deploy::stops::warn(cluster, Some(&current));
+            None
+        } else {
+            super::deploy::stops::check(
+                cluster,
+                Some(&current),
+                super::deploy::stops::Writer::Rollback,
+            )?
+        };
 
         let superseded = records
             .rollback_targets(cluster)
