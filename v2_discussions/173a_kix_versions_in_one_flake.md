@@ -1,6 +1,6 @@
 # 173a: Several Kix versions in one flake
 
-**Status:** Draft, a variant of 173
+**Status:** Accepted, a variant of 173. Implemented in kix#288, not merged yet
 **Related:** `173_kix_version_per_project.md` (the problem, the first three spikes, and the separate-projects design), `archive/169_version_from_flake_lock.md`, `interesting_thoughts/169b_bundled_kix_library.md`
 
 Doc 173 gives each group of clusters its own project folder. This variant
@@ -357,3 +357,33 @@ The unit tests of `kix-core` (283) and of the `kix` program (214) pass.
 - Integration tests, the change record, the reference pages, and
   formatting of `mkFlake.nix`.
 
+## 10. Implementation
+
+Built on 21 November 2026 in kix#288, from the prototype. What it settled
+beyond the sections above:
+
+- **A second input on the same url.** `kix upgrade` used to stop when two
+  inputs named one repository at one tag, which is exactly the state after
+  the first setup step. Kix now reads which input a url belongs to
+  (`owner_of` in `cli/kix-core/src/pin_library.rs`) and changes only that
+  one.
+- **A cluster that fails on its new input stays there.** The run saves its
+  state as an upgrade of an input does, so the person fixes the cluster on
+  the new version and the same command resumes. Putting the cluster back
+  would leave no way to fix a cluster that needs the new library.
+- **A cluster only moves to a newer version**, and not past a release that
+  must be deployed first.
+- **An input with no clusters is only pinned.** This is the first upgrade
+  after every cluster is held back.
+- **Held back means older than `kix`.** The CLI compares the running Kix
+  with the release `kix` pins. The library compares its own version with
+  the tag `flake.lock` records for `kix`. Neither needs to know the cluster.
+- **A new input is locked with `kix upgrade <input>`**, and every other
+  command says so.
+- **An older release cannot be one of the versions.** A Kix from before
+  this change refuses the `versions` key. No floor is written into the
+  code, because the release that ships this is not numbered yet.
+
+Not tested against a live cluster: the `builder.kixInput` field of the
+deploy receipt, and `kix status` and `kix snapshot` with a cluster's key.
+The scratch kind cluster of spike 3 was gone.
