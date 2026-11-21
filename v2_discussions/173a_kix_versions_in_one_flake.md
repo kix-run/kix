@@ -200,6 +200,17 @@ flags of each command that take a value, as it has today for the global
 flags. A test keeps that list in step with the snapshot of the command
 line. About fifty flags take a value today.
 
+The implementation keeps no lists by hand. Before it parses, Kix builds
+the command definition (`cli::command()`) and reads from it which flags take
+a value, which commands have a second command word, and which commands take
+a cluster: the ones whose first positional argument is named `cluster`. A
+new command or flag is then covered when it is defined. Two checks keep the
+definition honest. `Command::cluster_name` matches every command with no
+catch-all arm, so a new command does not compile until it says whether it
+has a cluster. A test checks that a command returns a cluster there exactly
+when its first positional argument is named `cluster`. The prototype uses
+lists and a test instead.
+
 Commands that name no cluster:
 
 | Command | What it needs | Runs in |
