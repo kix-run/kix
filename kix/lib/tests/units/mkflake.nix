@@ -143,7 +143,7 @@ in
           clusters = { };
           notAnArgument = true;
         };
-      builds = self: (builtins.tryEval (builtins.attrNames (flake self))).success;
+      builds = self: (builtins.tryEval (builtins.attrNames (flake self).legacyPackages)).success;
     in
     (!builds null && !builds ./projects/versions-newest && builds ./projects/versions-held-back)
     || throw "an unknown mkFlake argument is refused unless the library is held back";

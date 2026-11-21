@@ -403,17 +403,24 @@ let
     };
 
   systemOutputs = eachSystem perSystem;
+  # Refuse an argument this library does not know, when the outputs are
+  # read. The check reads the project's files through `self`, and the flake
+  # needs the names of the outputs before `self` exists, so it cannot wrap
+  # the whole set.
+  checked =
+    outputs:
+    if unknownArguments != [ ] && !heldBack then
+      fail {
+        message = "mkFlake does not take the argument ${
+          lib.concatMapStringsSep ", " (a: "`${a}`") unknownArguments
+        }${lib.optionalString (libraryVersion != null) " (Kix library ${libraryVersion})"}.";
+        fix = "Check the spelling, or run `kix upgrade` if the project needs a newer Kix library.";
+      }
+    else
+      outputs;
 in
-if unknownArguments != [ ] && !heldBack then
-  fail {
-    message = "mkFlake does not take the argument ${
-      lib.concatMapStringsSep ", " (a: "`${a}`") unknownArguments
-    }${lib.optionalString (libraryVersion != null) " (Kix library ${libraryVersion})"}.";
-    fix = "Check the spelling, or run `kix upgrade` if the project needs a newer Kix library.";
-  }
-else
-  {
-    packages = lib.mapAttrs (_: s: s.packages) systemOutputs;
-    checks = lib.mapAttrs (_: s: s.checks) systemOutputs;
-    legacyPackages = lib.mapAttrs (_: s: s.legacyPackages) systemOutputs;
-  }
+{
+  packages = checked (lib.mapAttrs (_: s: s.packages) systemOutputs);
+  checks = checked (lib.mapAttrs (_: s: s.checks) systemOutputs);
+  legacyPackages = checked (lib.mapAttrs (_: s: s.legacyPackages) systemOutputs);
+}
