@@ -104,25 +104,30 @@ impl Versions {
         };
         match table.get(TABLE) {
             None => Ok(None),
-            Some(value) => Self::parse(value).map(Some),
+            Some(value) => Self::parse(value, older_than_newest(dir)).map(Some),
         }
     }
 
-    /// Parse the value of the `versions` key.
-    pub fn parse(value: &toml::Value) -> Result<Self, VersionsError> {
+    /// Parse the value of the `versions` key. With `held_back`, this Kix is
+    /// older than the newest one in the project, and skips an entry that is
+    /// not a list of cluster names, which a newer Kix may read.
+    pub fn parse(value: &toml::Value, held_back: bool) -> Result<Self, VersionsError> {
         let table = value
             .as_table()
             .ok_or_else(|| VersionsError::Shape(TABLE.to_string()))?;
         let mut inputs = BTreeMap::new();
         let mut owner: BTreeMap<String, String> = BTreeMap::new();
         for (input, clusters) in table {
-            let shape = || VersionsError::Shape(input.clone());
-            let clusters = clusters
-                .as_array()
-                .ok_or_else(shape)?
-                .iter()
-                .map(|c| c.as_str().map(str::to_owned).ok_or_else(shape))
-                .collect::<Result<Vec<_>, _>>()?;
+            let names = clusters.as_array().and_then(|list| {
+                list.iter()
+                    .map(|c| c.as_str().map(str::to_owned))
+                    .collect::<Option<Vec<_>>>()
+            });
+            let clusters = match names {
+                Some(names) => names,
+                None if held_back => continue,
+                None => return Err(VersionsError::Shape(input.clone())),
+            };
             for cluster in &clusters {
                 if let Some(first) = owner.insert(cluster.clone(), input.clone()) {
                     return Err(VersionsError::Twice {
@@ -285,9 +290,12 @@ pub fn flake_text(dir: &Path) -> String {
 /// the input `kix` is the newest, knows every setting, and checks them all.
 /// An older Kix skips the settings it does not know.
 pub fn held_back(dir: &Path) -> bool {
-    if !matches!(Versions::read(dir), Ok(Some(_))) {
-        return false;
-    }
+    matches!(Versions::read(dir), Ok(Some(_))) && older_than_newest(dir)
+}
+
+/// Return whether the running Kix is older than the release that the input
+/// `kix` of the project in `dir` pins.
+fn older_than_newest(dir: &Path) -> bool {
     let Ok(lock) = flake_lock::read(dir) else {
         return false;
     };
@@ -408,7 +416,22 @@ mod tests {
 
     fn versions(text: &str) -> Result<Versions, VersionsError> {
         let table: toml::Table = toml::from_str(text).unwrap();
-        Versions::parse(&table[TABLE])
+        Versions::parse(&table[TABLE], false)
+    }
+
+    #[test]
+    fn an_older_kix_skips_an_entry_it_cannot_read() {
+        let table: toml::Table = toml::from_str(
+            "[versions]\nkix = [\"staging\"]\nkix-stable = [\"prod\"]\nkix-next = { clusters = [\"dev\"] }\n",
+        )
+        .unwrap();
+        assert!(matches!(
+            Versions::parse(&table[TABLE], false),
+            Err(VersionsError::Shape(_))
+        ));
+        let read = Versions::parse(&table[TABLE], true).unwrap();
+        assert_eq!(read.input_of("prod"), Some("kix-stable"));
+        assert!(!read.has_input("kix-next"));
     }
 
     fn lock(kix: &str, stable: &str) -> Value {

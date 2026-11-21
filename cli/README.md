@@ -454,7 +454,7 @@ search CHANGELOG.md for the id, and tools match it.
 
 ### Several versions of Kix in one project
 
-`v2_discussions/174a_kix_versions_in_one_flake.md` is the design. A project
+`v2_discussions/archive/174a_kix_versions_in_one_flake.md` is the design. A project
 may hold clusters on different versions of Kix. Each version is an input of
 `flake.nix`: `kix`, and one more for each version a cluster is held back on,
 such as `kix-stable`. The `[versions]` table of `kix.toml` lists the clusters

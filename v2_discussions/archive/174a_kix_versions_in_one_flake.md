@@ -1,7 +1,7 @@
 # 174a: Several Kix versions in one flake
 
-**Status:** Accepted, a variant of 174. Implemented in kix#288, not merged yet
-**Related:** `174_kix_version_per_project.md` (the problem, the first three spikes, and the separate-projects design), `archive/169_version_from_flake_lock.md`, `interesting_thoughts/169b_bundled_kix_library.md`
+**Status:** Implemented (kix#288, Kix 0.10.0-rc.6). A variant of 174
+**Related:** `174_kix_version_per_project.md` (the problem, the first three spikes, and the separate-projects design), `169_version_from_flake_lock.md`, `../interesting_thoughts/169b_bundled_kix_library.md`
 
 Doc 174 gives each group of clusters its own project folder. This variant
 keeps one `flake.nix` and one `flake.lock` at the repository root, which is
@@ -385,21 +385,22 @@ beyond the sections above:
   of Kix, so `--to nixpkgs` is refused.
 - **A new input is locked with `kix upgrade <input>`**, and every other
   command says so.
-- **An older release cannot be one of the versions.** A Kix from before
-  this change refuses the `versions` key. No floor is written into the
-  code, because the release that ships this is not numbered yet.
+- **The first release that can be one of the versions is 0.10.0.** A Kix
+  from before it refuses the `versions` key.
+- **An older Kix skips an entry of the table it cannot read**, as it skips
+  other settings it does not know. A later release can then add to the
+  table without breaking the clusters on older versions.
 
 Tested against two kind clusters, one per version: deploys, the
 `builder.kixInput` field of the deploy receipt, `kix status` and
 `kix snapshot` with a cluster's key, and each form of `kix upgrade`.
 
-Left open by the review of kix#288, each with an entry in `housekeeping/`:
+Left open by the review of kix#288, each with an entry in `housekeeping/`
+and listed in `ROADMAP.md` under Open design questions:
 
 - An older Kix skips unknown settings without a word. A warning that names
   each skipped setting would show when production builds without something
   `flake.nix` asks for.
-- An older Kix refuses any new shape inside `[versions]`, so the table
-  cannot grow after its first release.
 - A command that evaluates nothing does not check that the right Kix runs.
 - `kix doctor` does not warn about an input far behind `kix`, or about a
   cluster the table leaves out.

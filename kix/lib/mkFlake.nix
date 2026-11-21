@@ -67,7 +67,10 @@ let
   versions = settings.versions or null;
   inputOf =
     name:
-    lib.findFirst (input: builtins.elem name versions.${input}) null (builtins.attrNames versions);
+    lib.findFirst (
+      # A newer version of Kix may write an entry that is not a list.
+      input: builtins.isList versions.${input} && builtins.elem name versions.${input}
+    ) null (builtins.attrNames versions);
 
   # Return `cluster` when this library is the input that `[versions]` names
   # for it. The flake's outputs read only the input `kix`, and Kix replaces

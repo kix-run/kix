@@ -317,7 +317,7 @@ impl ProjectConfig {
         let library = parse_library(path, table.get("library"))?;
         if let Some(versions) = table.get(crate::versions::TABLE) {
             let bad = |e: crate::versions::VersionsError| ProjectError::Versions(e.to_string());
-            crate::versions::Versions::parse(versions).map_err(bad)?;
+            crate::versions::Versions::parse(versions, held_back).map_err(bad)?;
             if library == Library::OwnFlake {
                 return Err(bad(crate::versions::VersionsError::OwnLibrary));
             }

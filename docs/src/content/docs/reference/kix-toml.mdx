@@ -135,7 +135,7 @@ kix-stable = ["prod"]
 - **Distinct names.** A cluster may not share a name with any input in `[versions]`, and may not be named `kix`.
 - **Every key is a locked input.** Each key in `[versions]` must be declared in `flake.nix` and locked in `flake.lock`. Lock a new input with [`kix upgrade <input>`](/docs/reference/cli/upgrade/).
 - **Incompatible with `library = "self"`.** `library = "self"` and `[versions]` cannot be used together.
-- **Every version must recognize `[versions]`.** Every version of Kix in the project must support `[versions]`. Earlier versions reject `versions` as an unknown setting in `kix.toml`.
+- **Every version must recognize `[versions]`.** Every version of Kix in the project must support `[versions]` (Kix 0.10.0 or later). Earlier versions reject `versions` as an unknown setting in `kix.toml`.
 
 ### Shared files across versions
 

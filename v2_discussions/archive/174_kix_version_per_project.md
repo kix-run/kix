@@ -1,8 +1,8 @@
 # 174: One repository, several Kix versions
 
-**Status:** Draft
-**Related:** `archive/169_version_from_flake_lock.md` (the version comes from `flake.lock`), `archive/164_versioning_at_agent_speed.md`, `140_catalogue_versions_and_upgrade_windows.md` (upgrade windows as a managed-service policy), `archive/150_scope_managed_sweep_to_one_cluster.md`
-**Supersedes:** `archive/164b_per_cluster_kix_versions.md`
+**Status:** Superseded by 174a, which was built instead
+**Related:** `169_version_from_flake_lock.md` (the version comes from `flake.lock`), `164_versioning_at_agent_speed.md`, `../140_catalogue_versions_and_upgrade_windows.md` (upgrade windows as a managed-service policy), `150_scope_managed_sweep_to_one_cluster.md`
+**Supersedes:** `164b_per_cluster_kix_versions.md`
 
 ## 1. Problem
 
