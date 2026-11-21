@@ -37,7 +37,7 @@ with the input assigned to that cluster in `[versions]`, such as
 cluster assigned to `kix-stable` is ignored with a warning:
 
 ```text
-warning: ignoring `--override-input kix` because this cluster uses input `kix-stable` (kix.toml [versions]); Kix is evaluating with `kix-stable` as locked. Pass `--override-input kix-stable <url>` to replace its Kix library.
+warning: ignoring `--override-input kix` because this cluster uses input `kix-stable` in kix.toml [versions]. Kix will evaluate with `kix-stable` from flake.lock. Pass `--override-input kix-stable <url>` to override this cluster's Kix library.
 ```
 
 ## Which commands read which flag

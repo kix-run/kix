@@ -25,9 +25,10 @@ inputs.kix.url = "github:kix-run/kix/v0.10.0";
 ```
 
 `kix upgrade` updates that tag and refreshes `flake.lock`. If `flake.nix`
-contains another matching URL for the same repository that Kix cannot tie to an
-input, `kix upgrade` stops and asks you to edit `inputs.kix.url` yourself. To
-upgrade some clusters while keeping others on their current version, see
+contains another matching URL for the same repository and Kix cannot tell which
+input owns it, `kix upgrade` stops and asks you to edit `inputs.kix.url`
+yourself. To upgrade some clusters while keeping others on their current
+version, see
 [Keep clusters on different versions of Kix](/docs/how-to/start-and-inspect/hold-clusters-on-different-kix-versions/).
 
 ## Pin a project that has no version
@@ -170,9 +171,9 @@ cluster before you deploy:
 ## Acknowledge a change to stored data
 
 When a change moves or reinterprets the data a package stores, `kix deploy`
-blocks any cluster built by that upgrade until someone acknowledges the change.
-The error prints the release note; read it, take any backup it asks for, and
-acknowledge it by ID:
+blocks deploys for the upgraded clusters until someone acknowledges the change.
+The error prints the release note. Read it, take any backup it asks for, and
+acknowledge the change by ID:
 
 <Command commands={["kix upgrade --acknowledge K0012"]} cwd="my-project/" />
 

@@ -31,7 +31,7 @@ pub struct Versions {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum VersionsError {
     #[error(
-        "Invalid `{0}` in kix.toml: [versions] must be a table mapping each input name to a list of cluster names, such as `kix = [\"staging\"]` and `kix-stable = [\"prod\"]`."
+        "Invalid `{0}` in kix.toml [versions]: map each input name to a list of cluster names, such as `kix = [\"staging\"]` and `kix-stable = [\"prod\"]`."
     )]
     Shape(String),
     #[error(
@@ -68,11 +68,11 @@ pub enum VersionsError {
     )]
     OwnLibrary,
     #[error(
-        "Kix could not update [versions] in kix.toml: {0}. Move `\"{1}\"` to `{2}` in kix.toml [versions]."
+        "Kix could not update [versions] in kix.toml: {0}. Move `\"{1}\"` under `{2}` in kix.toml [versions] yourself."
     )]
     Edit(String, String, String),
     #[error(
-        "Input `{input}` pins Kix {newer}, which is newer than Kix {kix} on `kix`. The `kix` input must pin the newest version in the project. Upgrade `kix` with `kix upgrade`, or move `{input}`'s clusters to `kix` and remove `{input}` from kix.toml [versions]."
+        "Input `{input}` pins Kix {newer}, which is newer than Kix {kix} on input `kix`. Input `kix` must pin the newest version in the project. Run `kix upgrade` to upgrade `kix`, or move `{input}`'s clusters to `kix` and remove `{input}` from kix.toml [versions]."
     )]
     NewerThanKix {
         input: String,
@@ -300,7 +300,7 @@ pub fn move_cluster(dir: &Path, cluster: &str, to: &str) -> Result<(), VersionsE
     let edit = |why: &str| VersionsError::Edit(why.to_string(), cluster.into(), to.into());
     let text = std::fs::read_to_string(&path).map_err(|e| edit(&e.to_string()))?;
     let moved = moved_text(&text, cluster, to).ok_or_else(|| {
-        edit("comments inside a list or inline formatting cannot be rewritten safely (kix.toml was not modified)")
+        edit("comments inside a list or an inline [versions] table cannot be rewritten automatically (kix.toml was not modified)")
     })?;
     // Read the new text back, so a wrong edit never reaches the file.
     let expected = toml::from_str::<toml::Table>(&moved)
@@ -309,7 +309,7 @@ pub fn move_cluster(dir: &Path, cluster: &str, to: &str) -> Result<(), VersionsE
         .is_some_and(|v| v.input_of(cluster) == Some(to));
     if !expected {
         return Err(edit(
-            "the updated TOML could not be verified (kix.toml was not modified)",
+            "Kix could not confirm its edit of the [versions] table (kix.toml was not modified)",
         ));
     }
     std::fs::write(&path, moved).map_err(|e| edit(&e.to_string()))

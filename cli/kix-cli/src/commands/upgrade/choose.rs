@@ -335,7 +335,7 @@ impl NothingToCompare {
                 "This project's flake.lock pins no version of Kix.".to_string()
             }
             (NothingToCompare::NoRelease, _) => {
-                format!("flake.lock has no Kix version for input `{input}`.")
+                format!("Input `{input}` has no Kix version in flake.lock.")
             }
             (NothingToCompare::NoClusters, _) => {
                 format!("No clusters use input `{input}` in kix.toml [versions].")
@@ -349,10 +349,10 @@ impl NothingToCompare {
                 "This project's flake.lock pinned no version of Kix before, so Kix built nothing to compare.".to_string()
             }
             (NothingToCompare::NoRelease, _) => format!(
-                "Input `{input}` had no previous Kix version in flake.lock, so there was nothing to build and compare."
+                "Input `{input}` had no previous version in flake.lock, so Kix built nothing to compare."
             ),
             (NothingToCompare::NoClusters, _) => format!(
-                "No clusters use input `{input}` in kix.toml [versions], so there was nothing to build and compare."
+                "No clusters use input `{input}` in kix.toml [versions], so Kix built nothing to compare."
             ),
         }
     }
@@ -370,9 +370,14 @@ pub(super) fn pin_only(
     why: NothingToCompare,
 ) -> Flow<()> {
     let release = version.release();
+    let target = if input == kix::flake_lock::INPUT {
+        format!("the Kix library to {release}")
+    } else {
+        format!("input `{input}` to Kix {release}")
+    };
     if dry_run {
         println!(
-            "{} `{command} --to {release}` would pin the Kix library to {release} in flake.nix and flake.lock (dry run, no files changed).",
+            "{} `{command} --to {release}` would pin {target} in flake.nix and flake.lock (dry run, no files changed).",
             why.before(input)
         );
         println!("Next: run `{command} --to {release}`.");
@@ -382,12 +387,16 @@ pub(super) fn pin_only(
         .and_then(|plan| pin::pin(input, None, version, &plan));
     match pinned {
         Ok(files) if files.is_empty() => {
-            println!("flake.nix and flake.lock already pin Kix {release}.");
+            if input == kix::flake_lock::INPUT {
+                println!("flake.nix and flake.lock already pin Kix {release}.");
+            } else {
+                println!("Input `{input}` already pins Kix {release} in flake.nix and flake.lock.");
+            }
             Ok(())
         }
         Ok(files) => {
             println!(
-                "Pinned the Kix library to {release} (updated {}). {}",
+                "Pinned {target} (updated {}). {}",
                 out::list(&files),
                 why.after(input)
             );

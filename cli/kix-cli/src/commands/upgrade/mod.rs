@@ -76,11 +76,11 @@ fn upgrade(args: &UpgradeArgs, global: &GlobalArgs) -> Flow<Exit> {
         .clone()
         .filter(|s| matches!(s.status, Status::FixNeeded | Status::EditNeeded));
     if let Some(unfinished) = resume.as_ref().filter(|s| !subject.wrote(s)) {
+        let other = subject::command_of(unfinished);
         return Err(refused(format!(
-            "Cannot run `{}`: an unfinished upgrade to Kix {} is still in progress (recorded in kix-upgrade.json).\nNo project files were modified.\nNext: run `{}` to finish that upgrade, or delete kix-upgrade.json to discard its saved state.",
+            "Cannot run `{}`: an earlier `{other}` run to Kix {} has not finished (recorded in kix-upgrade.json).\nNo project files were modified.\nNext: run `{other}` to finish that upgrade, or delete kix-upgrade.json to discard its saved state.",
             subject.command(),
             unfinished.to,
-            subject::command_of(unfinished)
         )));
     }
     match &subject {
@@ -134,7 +134,7 @@ fn upgrade_input(
         (None, _) if resume.is_some() => None,
         (None, _) => Some(newest.as_ref().map(Version::release).ok_or_else(|| {
             refused(format!(
-                "Cannot choose a target version for input `{name}`: `{command}` defaults to the version pinned by `kix`, but `kix` does not pin a release in flake.lock.\nNo project files were modified.\nNext: pass a target version with `{command} --to <version>`."
+                "Cannot upgrade input `{name}` without `--to`: `{command}` upgrades `{name}` to match input `kix`, which pins no version of Kix in flake.lock.\nNo project files were modified.\nNext: pass a version with `{command} --to <version>`."
             ))
         })?),
     };

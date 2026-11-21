@@ -34,7 +34,7 @@ kix upgrade --acknowledge <ID>...
 
 | Argument or flag | Default | Description |
 | --- | --- | --- |
-| `[NAME]` | `kix` | Optional. In projects with a `[versions]` table in [`kix.toml`](/docs/reference/kix-toml/#the-versions-table), the name of an input in `[versions]` (or `kix`) or the name of a cluster. Projects without a `[versions]` table accept no name other than `kix`. |
+| `[NAME]` | `kix` | Optional. In projects with a `[versions]` table in [`kix.toml`](/docs/reference/kix-toml/#the-versions-table), an input name from `[versions]` (or `kix`) or a cluster name. Projects without `[versions]` accept only `kix` (or no name). |
 | `--to <VERSION or INPUT>` | `latest` for `kix`; the `kix` input's version for another input; `kix` for a cluster | When upgrading an input, sets the target version: an exact release (`0.10.2`), a full prerelease (`0.11.0-rc.1`), a minor series (`0.10`, choosing its newest release), or `latest` (the newest non-prerelease). Inputs with no locked version or no clusters are [pinned without building](#pin-a-project-that-has-no-version). When `NAME` is a cluster, `--to` names the target input. |
 | `--dry-run` | `false` | Print what the upgrade would do and the release notes that apply, and change nothing. |
 | `--acknowledge <ID>...` | none | Acknowledge a change to stored data by its id or name, so that `kix deploy` goes ahead. Does nothing else. |
@@ -56,9 +56,9 @@ No project files were modified.
 Next: run `kix upgrade` to upgrade `kix` first.
 ```
 
-If an earlier upgrade stopped unfinished (after a build failure or pending
-manual edit), starting a different `kix upgrade` command fails and prints the
-command that finishes the in-progress upgrade.
+If an earlier upgrade stopped unfinished (after a build failure or a pending
+manual edit), running a different `kix upgrade` command fails and prints the
+command needed to finish that upgrade.
 
 ## The version the project uses
 
@@ -109,14 +109,14 @@ Commit flake.nix and flake.lock.
 A local folder has no versions, so Kix cannot pin it:
 
 ```text
-The input kix points to the local folder ../kix, which has no release tags. Set `inputs.kix.url` in flake.nix to a release tag such as `github:kix-run/kix/v0.10.0`.
+Input `kix` points to the local folder `../kix`, which has no release tags. Set `inputs.kix.url` in flake.nix to a release tag such as `github:kix-run/kix/v0.10.0`.
 ```
 
 Kix matches each `url` attribute in `flake.nix` to its input
 (`inputs.<name>.url = "..."`, or `url = "..."` inside `<name> = { ... }`) and
 updates only the target input's URL, leaving other inputs untouched even when
-they point to the same repository and tag. If more than one matching URL in
-`flake.nix` cannot be tied to an input, Kix changes nothing, prints the
+they point to the same repository and tag. If `flake.nix` has multiple matching
+URLs and Kix cannot tell which input owns them, Kix changes nothing, prints the
 matching lines, and asks you to edit the URL yourself. With `--dry-run`, Kix
 prints what it would pin and changes nothing.
 
@@ -192,12 +192,13 @@ range has no breaking, security, or upgrade notes, it says
    and locks it in `flake.lock`. Kix matches each `url` attribute in
    `flake.nix` to its input (`inputs.<name>.url = "..."`, or `url = "..."`
    inside `<name> = { ... }`) and updates only the target input's URL. If
-   multiple matching URLs cannot be tied to an input, Kix changes no files,
-   prints the matching lines, writes `edit-needed` to `kix-upgrade.json`, and
-   exits `3` before installing the target; update the input's URL yourself and
-   re-run the command. If Nix cannot lock the new tag, or the project evaluates
-   with a mismatched Kix library version, Kix restores `flake.nix` and
-   `flake.lock`, prints the error, and exits `1` or `3`.
+   `flake.nix` has multiple matching URLs and Kix cannot tell which input owns
+   them, Kix changes no files, prints the matching lines, writes `edit-needed`
+   to `kix-upgrade.json`, and exits `3` before installing the target; update the
+   input's URL yourself and run the command again. If Nix cannot lock the new
+   tag, or the project evaluates with a mismatched Kix library version, Kix
+   restores `flake.nix` and `flake.lock`, prints the error, and exits `1` or
+   `3`.
 3. When a cluster does not build with the target, takes one minor release at
    a time: the newest patch of each minor after the project's, ending with
    the target. A project on a prerelease, such as `0.9.0-rc.1`, takes the
@@ -291,8 +292,8 @@ compares the two builds, and shows the release notes between the two versions.
 `flake.nix` and `flake.lock` stay unchanged. Output includes:
 
 ```text
-Cluster `west`, from the input `kix-stable` to the input `kix`
-Moved the cluster `west` to the input `kix`, Kix 9.2.0 (updated kix.toml)
+Cluster `west`, from input `kix-stable` to input `kix`
+Moved cluster `west` to input `kix` on Kix 9.2.0 (updated kix.toml)
 ```
 
 When nothing changed and nothing needs review, the run ends with
@@ -309,7 +310,7 @@ the target input in `kix.toml` so you can fix the build, saves
 kix.toml now lists cluster `west` under `kix` (Kix 9.2.0) so you can fix the build.
 ```
 
-Fix the build and re-run `kix upgrade west --to kix`; Kix reuses the cached
+Fix the build and run `kix upgrade west --to kix` again. Kix reuses the cached
 baseline build and finishes the comparison.
 
 Other rules when moving a cluster:
@@ -391,8 +392,8 @@ Programs that read the file must skip fields they do not know.
 ## Exit status
 
 - `0` when the upgraded clusters build cleanly on the target version with no manifest changes or items requiring review, and on `--dry-run` or `--acknowledge`.
-- `1` when the release index or release notes cannot be fetched or verified, a version cannot be installed, the input or cluster cannot be upgraded, or a cluster fails to build on its starting version or a target release.
-- `3` when the upgraded clusters build on the target version (or the run pauses for a manual edit) and require review before deploying: manifest changes, sensitive resource changes, behavior or data migrations, a manual edit to `flake.nix` or `kix.toml`, or a required intermediate deploy.
+- `1` when the release index or release notes cannot be fetched or verified, a version cannot be installed, the input or cluster cannot be upgraded, or a cluster fails to build on its current version or a target version.
+- `3` when the upgrade needs your attention: either the run paused for a manual edit to `flake.nix` or `kix.toml`, or the upgraded clusters built on the target version with items to review before deploying (manifest changes, sensitive resource changes, behavior or data migrations, or a required intermediate deploy).
 
 :::tip[Use it in a task]
 See [Upgrade a project to a new version of Kix](/docs/how-to/start-and-inspect/upgrade-a-project-to-a-new-kix/)

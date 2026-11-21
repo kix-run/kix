@@ -74,7 +74,7 @@ impl Run {
             }
             Subject::Input { .. } => {}
             Subject::Cluster { cluster, from, to } => {
-                println!("Cluster `{cluster}`, from the input `{from}` to the input `{to}`");
+                println!("Cluster `{cluster}`, from input `{from}` to input `{to}`");
             }
         }
         if !route.without_notes.is_empty() {

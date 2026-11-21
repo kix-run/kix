@@ -220,7 +220,7 @@ impl Run {
             return Err(self.stop(Status::EditNeeded, &message, EXIT_NEEDS_PERSON));
         }
         println!(
-            "Moved the cluster `{cluster}` to the input `{to}`, Kix {} (updated kix.toml)",
+            "Moved cluster `{cluster}` to input `{to}` on Kix {} (updated kix.toml)",
             version.release()
         );
         Ok(kix)

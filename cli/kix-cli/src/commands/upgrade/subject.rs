@@ -74,19 +74,15 @@ impl Subject {
         let known = versions.has_input(to)
             || flake_lock::read(dir).is_ok_and(|lock| flake_lock::input(&lock, to).is_ok());
         if !known {
+            if to.parse::<kix::version::policy::Requirement>().is_ok() {
+                return Err(refused(format!(
+                    "Cannot upgrade cluster `{name}` with `--to {to}`: when upgrading a cluster, `--to` takes an input name (such as `kix`), whereas `{to}` looks like a Kix version.\nNo project files were modified.\nNext: run `kix upgrade {name}` to move `{name}` to input `kix`, or run `kix upgrade {from} --to {to}` to upgrade input `{from}` (and every cluster on it) to {to}."
+                )));
+            }
             let inputs: Vec<String> = versions.inputs().map(|i| format!("`{i}`")).collect();
-            let next = if to.parse::<kix::version::policy::Requirement>().is_ok() {
-                format!(
-                    "when upgrading a cluster, `--to` names the target input. Run `kix upgrade {name} --to kix` to move `{name}` to `kix`, or run `kix upgrade {from} --to {to}` to upgrade input `{from}` and its clusters to {to}."
-                )
-            } else {
-                format!(
-                    "pass an existing input name with `--to` ({}), or add `inputs.{to}.url` to flake.nix and run `kix upgrade {to}` to lock it first.",
-                    out::list(&inputs)
-                )
-            };
             return Err(refused(format!(
-                "Cannot move cluster `{name}` to `{to}`: `{to}` is not a locked input in flake.lock or kix.toml [versions].\nNo project files were modified.\nNext: {next}"
+                "Cannot move cluster `{name}` to `{to}`: `{to}` is not an input in kix.toml [versions] or flake.lock.\nNo project files were modified.\nNext: pass an existing input name with `--to` ({}), or add `inputs.{to}.url` to flake.nix and run `kix upgrade {to}` to lock it first.",
+                out::list(&inputs)
             )));
         }
         Ok(Subject::Cluster {

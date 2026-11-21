@@ -146,7 +146,7 @@ impl CommandContext {
                 Lookup::Mutating => Err(e),
                 Lookup::ReadOnly => {
                     eprintln!(
-                        "warning: could not read the project to look up cluster '{arg}': {e}\nKix will check the Kubernetes cluster for '{arg}' as given. Fix the error above if '{arg}' sets a different `name` in its cluster definition."
+                        "warning: could not load the project to check the deployed name of cluster '{arg}': {e}\nKix will look for '{arg}' on the Kubernetes cluster directly. If '{arg}' sets a different `name` in its cluster definition, fix the error above and run the command again."
                     );
                     Ok(arg.to_string())
                 }

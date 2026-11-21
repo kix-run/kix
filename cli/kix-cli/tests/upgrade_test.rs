@@ -1605,11 +1605,11 @@ fn a_cluster_moves_to_another_input_after_a_review() {
     let (code, out) = s.upgrade(&["west", "--to", "kix"]);
     assert_eq!(code, 3, "{out}");
     assert!(
-        out.contains("Cluster `west`, from the input `kix-stable` to the input `kix`"),
+        out.contains("Cluster `west`, from input `kix-stable` to input `kix`"),
         "{out}"
     );
     assert!(
-        out.contains("Moved the cluster `west` to the input `kix`, Kix 9.2.0 (updated kix.toml)"),
+        out.contains("Moved cluster `west` to input `kix` on Kix 9.2.0 (updated kix.toml)"),
         "{out}"
     );
     assert!(

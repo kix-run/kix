@@ -97,8 +97,8 @@ let
       }
     else if (inputs.kix.outPath or null) != inputs.${input}.outPath then
       fail {
-        message = "Cluster '${name}' is assigned to input `${input}` in kix.toml [versions], so it cannot be evaluated with `inputs.kix`.";
-        fix = "Build or check '${name}' with `kix` (such as `kix check ${name}` or `kix build ${name}`), or pass `--override-input kix <locked-${input}-ref>` when invoking `nix` directly.";
+        message = "Cluster '${name}' is assigned to input `${input}` in kix.toml [versions], which pins a different Kix library than `inputs.kix`.";
+        fix = "Run `kix check ${name}` or `kix build ${name}` so Kix selects `${input}` automatically, or pass `--override-input kix <locked-${input}-ref>` to `nix`.";
       }
     else
       cluster;

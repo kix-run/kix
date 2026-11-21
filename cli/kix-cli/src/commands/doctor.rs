@@ -110,12 +110,12 @@ fn check_versions(dir: &std::path::Path) -> usize {
         return 1;
     }
     for input in versions.inputs() {
-        let kix = match flake_lock::input(&lock, input).map(flake_lock::from_original) {
-            Ok(Ok(ProjectKix::Release(v))) => format!("Kix {}", v.release()),
+        let what = match flake_lock::input(&lock, input).map(flake_lock::from_original) {
+            Ok(Ok(ProjectKix::Release(v))) => format!("pins Kix {}", v.release()),
             Ok(Ok(ProjectKix::Development(from))) => {
-                format!("a development Kix library ({})", from.describe(input))
+                format!("uses a development Kix library ({})", from.describe(input))
             }
-            _ => "an unknown version of Kix".to_string(),
+            _ => "has an unknown version of Kix".to_string(),
         };
         let clusters = versions.clusters_of(input);
         let used_by = if clusters.is_empty() {
@@ -123,7 +123,7 @@ fn check_versions(dir: &std::path::Path) -> usize {
         } else {
             format!("used by {}", clusters.join(", "))
         };
-        ok(&format!("Input {input} pins {kix}, {used_by}"));
+        ok(&format!("Input {input} {what}, {used_by}"));
     }
     0
 }

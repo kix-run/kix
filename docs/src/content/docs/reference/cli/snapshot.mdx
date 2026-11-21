@@ -20,15 +20,15 @@ kix snapshot <CLUSTER> --out <DIR> [--context <CONTEXT>] [--quiet]
 
 | Argument or flag | Meaning |
 | --- | --- |
-| `<CLUSTER>` | Kix cluster whose resources to save: either its key in `flake.nix` or the name on its Activation records (`kix.run/cluster`). Kix checks the Kubernetes cluster for Activation records labeled `<CLUSTER>` first; if none match, it evaluates `flake.nix` to look up the cluster's deployed `name`. Fails if the cluster has no records while other Kix clusters do. |
+| `<CLUSTER>` | Kix cluster whose resources to save: either its key in `flake.nix` or the name on its Activation records (`kix.run/cluster`). Kix checks the Kubernetes cluster for Activation records labeled `<CLUSTER>` first. If none match, it evaluates `flake.nix` to look up the cluster's deployed `name`. Fails if the cluster has no records while other Kix clusters do. |
 | `--out <DIR>` | Directory to write. Required. Kix stages the complete snapshot beside this path before replacing an existing directory. Paths containing `..` are rejected. |
 | `--context <CONTEXT>` | Kubeconfig context to read. Defaults to the current context. |
 | `-q`, `--quiet` | Suppress the progress lines on stderr. |
 
 When Activation records on the Kubernetes cluster already match `<CLUSTER>`,
 Kix reads the cluster directly without evaluating `flake.nix`. `--no-cache` has
-no effect, and `--flake` and `--override-input` apply only when Kix evaluates a
-flake to look up the cluster's `name`.
+no effect, and `--flake` and `--override-input` apply only when Kix evaluates
+`flake.nix` to look up the cluster's `name`.
 
 ## What is saved
 

@@ -61,12 +61,11 @@ A project with a [`[versions]` table](/docs/reference/kix-toml/#the-versions-tab
 in `kix.toml` can keep clusters on different versions of Kix, each pinned by its
 own input in `flake.nix` (see
 [Keep clusters on different versions of Kix](/docs/how-to/start-and-inspect/hold-clusters-on-different-kix-versions/)).
-When you run a command for a cluster (such as `kix deploy prod` or
-`kix list resources prod`), Kix looks up that cluster's input in `[versions]`,
-reads its version from `flake.lock`, and evaluates the cluster with that input's
-Kix library without modifying `flake.lock`. Commands that do not target a single
-cluster (`kix list clusters`, `kix list packages` with no cluster, `kix doctor`,
-`kix pin`, and `kix status` with no cluster argument) use the `kix` input.
+When you run a command for a cluster, such as `kix check prod` or
+`kix deploy prod`, Kix looks up that cluster's input in `[versions]` and runs
+the version pinned for it in `flake.lock`. Project-wide commands that take no
+cluster name (such as `kix list clusters`, `kix doctor`, and `kix status` with
+no cluster) use the `kix` input.
 
 Before Kix parses its arguments, it reads `flake.lock`. When the selected input
 pins the running version, the command runs directly. Otherwise Kix runs that
