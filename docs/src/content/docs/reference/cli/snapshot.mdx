@@ -20,13 +20,15 @@ kix snapshot <CLUSTER> --out <DIR> [--context <CONTEXT>] [--quiet]
 
 | Argument or flag | Meaning |
 | --- | --- |
-| `<CLUSTER>` | Kix cluster whose resources to save. Kix finds them through the cluster's Activation records, so the name is the one those records carry in their `kix.run/cluster` label. The command fails when the cluster has no records while other Kix clusters do. |
+| `<CLUSTER>` | Kix cluster whose resources to save: its key in `flake.nix` or the name on its Activation records (`kix.run/cluster`). Kix looks for Activation records under `<CLUSTER>` first, and evaluates the local flake to find the cluster's recorded `name` only when there are none. The command fails when the cluster has no records while other Kix clusters do. |
 | `--out <DIR>` | Directory to write. Required. Kix stages the complete snapshot beside this path before replacing an existing directory. Paths containing `..` are rejected. |
 | `--context <CONTEXT>` | Kubeconfig context to read. Defaults to the current context. |
 | `-q`, `--quiet` | Suppress the progress lines on stderr. |
 
-The command reads the cluster only. It does not evaluate a flake, so `--flake`
-and `--no-cache` have no effect.
+When Activation records on the Kubernetes cluster already carry `<CLUSTER>`,
+Kix reads the cluster without evaluating a flake. `--no-cache` has no effect.
+`--flake` and `--override-input` apply only when Kix evaluates the local flake
+to find the cluster's recorded `name`.
 
 ## What is saved
 

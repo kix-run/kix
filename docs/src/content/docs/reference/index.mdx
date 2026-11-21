@@ -11,7 +11,7 @@ The Reference section documents the options, functions, schemas, and policy rule
 
 | Page | Covers |
 | --- | --- |
-| [`kix.toml`](/docs/reference/kix-toml/) | Project configuration beside `flake.nix` that chooses whether Kix evaluates with the Kix runtime (`builder = "kix"`) or the machine's Nix (`builder = "nix"`). |
+| [`kix.toml`](/docs/reference/kix-toml/) | Project configuration beside `flake.nix` that chooses whether Kix evaluates with the Kix runtime (`builder = "kix"`) or the machine's Nix (`builder = "nix"`), maps clusters to Kix library inputs (`[versions]`), and sets how `kix upgrade` picks releases (`[upgrade]`). |
 | [Cluster configuration](/docs/reference/cluster-configuration/) | How to configure cluster-wide settings such as availability targets, namespaces, network policies, and scorecard enforcement. |
 | [Instances and composition](/docs/reference/instances-and-composition/) | How to declare package instances in a cluster, wire dependencies across namespaces, and stamp environments across teams. |
 | [Flavors and capabilities](/docs/reference/flavors-and-capabilities/) | Built-in provider profiles (`kix.flavors.*`) that pre-configure cloud capabilities, storage classes, and platform services. |

@@ -21,6 +21,17 @@ List every cluster registered with `kix.lib.mkFlake`:
 The name in the first column is the value accepted by commands such as
 `kix check`, `kix build`, and `kix deploy`.
 
+When [`kix.toml`](/docs/reference/kix-toml/#the-versions-table) has a
+`[versions]` table, text output adds `KIX` and `INPUT` columns showing which
+version of Kix and which flake input each cluster uses (see
+[Hold clusters on different versions of Kix](/docs/how-to/start-and-inspect/hold-clusters-on-different-kix-versions/)):
+
+```text
+ NAME     KIX     INPUT
+ prod     0.12.3  kix-stable
+ staging  0.14.2  kix
+```
+
 For a flake in another directory, pass its path explicitly:
 
 <Command commands={["kix list clusters --flake ../infrastructure"]} />

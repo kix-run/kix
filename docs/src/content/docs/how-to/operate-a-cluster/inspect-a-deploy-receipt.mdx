@@ -46,7 +46,7 @@ The receipt records these top-level fields:
 | `activationHash` | The identity of the deployed Activation |
 | `deployedAt` | When the deployment completed |
 | `source` | Flake reference, Git revision, lock-file digest, and dirty-tree state when available |
-| `builder` | Kix version, Nix version, operating system, and architecture |
+| `builder` | Kix version, Nix version, Kix library input (when `[versions]` is set in `kix.toml`), operating system, and architecture |
 | `inputs` | Locked flake input revisions and NAR hashes |
 | `images` | Sorted container image references found in the deployment |
 
