@@ -1,4 +1,4 @@
 +++
 kind = "fixed"
 +++
-`kix upgrade` no longer stops and asks you to edit `flake.nix` when a second input uses the same url as the `kix` input. It reads which input each url belongs to and changes only that one. It still stops when it cannot tell, such as when the same url appears outside an input.
+`kix upgrade` now updates `flake.nix` automatically even when another input points to the same Kix repository and tag. Kix matches each `url` setting to its input and changes only the input being upgraded. If a matching URL in `flake.nix` cannot be tied to an input, `kix upgrade` still stops and asks you to edit the file.

@@ -258,7 +258,7 @@ mod tests {
         let lines = super::stopped_lines(&prod, &v("0.11.0"), &v("0.11.0"), &[v("0.11.0")]);
         assert_eq!(
             lines[1],
-            "kix.toml lists the cluster `prod` under `kix` (Kix 0.11.0) so you can fix the build."
+            "kix.toml now lists cluster `prod` under `kix` (Kix 0.11.0) so you can fix the build."
         );
         assert_eq!(
             lines[2],

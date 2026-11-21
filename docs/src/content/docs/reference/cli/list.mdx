@@ -50,9 +50,10 @@ has a `[versions]` table, text output adds `KIX` and `INPUT` columns:
  staging  0.14.2  kix
 ```
 
-`KIX` shows the version that `flake.lock` pins for the cluster's input, or
-`development` when the input points to a local folder or a branch. A cluster
-left out of `[versions]` shows `-` and `not listed in [versions]`.
+`KIX` shows the release version pinned for the cluster's input in `flake.lock`,
+`development` when the input points to a local folder or branch, or `unknown`
+when `flake.lock` has no version for that input. A cluster missing from
+`[versions]` shows `-` and `not listed in [versions]`.
 
 JSON and YAML output are unchanged: an array of cluster names. A flake with no
 clusters prints `No clusters found in this flake.` on stderr.

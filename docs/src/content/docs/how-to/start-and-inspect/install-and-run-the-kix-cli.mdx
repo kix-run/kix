@@ -57,24 +57,22 @@ everyone who works on the project, and every CI job, runs Kix 0.10.0 for it.
 [`kix upgrade --to <version>`](/docs/reference/cli/upgrade/) sets the tag and
 writes `flake.lock`. Commit both files.
 
-A project whose [`kix.toml`](/docs/reference/kix-toml/#the-versions-table) has
-a `[versions]` table can hold clusters on different versions of Kix, each pinned
-by its own input in `flake.nix` (see
-[Hold clusters on different versions of Kix](/docs/how-to/start-and-inspect/hold-clusters-on-different-kix-versions/)).
-For a command that names a cluster (the first plain word after the command
-words, such as `kix deploy prod` or `kix list resources prod`), Kix looks that
-cluster up in `[versions]` and reads the release tag of its input from
-`flake.lock`. When that version of Kix evaluates the project, it replaces `kix`
-with the cluster's input so the cluster builds with its own version's library,
-without changing `flake.lock`. A command that names no cluster
-(`kix list clusters`, `kix list packages` with no cluster, `kix doctor`,
-`kix pin`, and `kix status` with no cluster) uses the `kix` input.
+A project with a [`[versions]` table](/docs/reference/kix-toml/#the-versions-table)
+in `kix.toml` can keep clusters on different versions of Kix, each pinned by its
+own input in `flake.nix` (see
+[Keep clusters on different versions of Kix](/docs/how-to/start-and-inspect/hold-clusters-on-different-kix-versions/)).
+When you run a command for a cluster (such as `kix deploy prod` or
+`kix list resources prod`), Kix looks up that cluster's input in `[versions]`,
+reads its version from `flake.lock`, and evaluates the cluster with that input's
+Kix library without modifying `flake.lock`. Commands that do not target a single
+cluster (`kix list clusters`, `kix list packages` with no cluster, `kix doctor`,
+`kix pin`, and `kix status` with no cluster argument) use the `kix` input.
 
-Before Kix parses its arguments, it reads `flake.lock`. When the chosen input
-pins the running version, the command runs. Otherwise Kix runs that version
-from `~/.local/share/kix/<version>` in its place, with the same arguments. When
-that version is not installed, Kix downloads it from kix.run, checks its
-signature and SHA-256, and then runs it:
+Before Kix parses its arguments, it reads `flake.lock`. When the selected input
+pins the running version, the command runs directly. Otherwise Kix runs that
+version from `~/.local/share/kix/<version>` in its place, with the same
+arguments. When that version is not installed, Kix downloads it from kix.run,
+checks its signature and SHA-256, and then runs it:
 
 ```text
 Installing Kix 0.10.0 (this project uses 0.10.0)
@@ -152,11 +150,11 @@ or an input you replace with
 `kix.toml` sets [`library = "self"`](/docs/reference/kix-toml/#the-library-setting),
 as the Kix repository does because its own flake provides the Kix library. In a
 project with a [`[versions]` table](/docs/reference/kix-toml/#the-versions-table),
-an input that is a local folder or a branch (or replaced with
-`--override-input <input> <url>`) is a development library for its own clusters
-only, and the other clusters keep their pinned versions. A development Kix
-library has no release version, so Kix runs the Kix you started and compares no
-versions. It prints one line on stderr:
+pointing an input at a local folder or branch (or passing
+`--override-input <input> <url>`) uses a development Kix library only for the
+clusters on that input, while other clusters keep their pinned versions. A
+development Kix library has no release version, so Kix runs the Kix you started
+and compares no versions. It prints one line on stderr:
 
 ```text
 note: this project uses a development Kix library (the input kix is the local folder /home/me/src/kix), so Kix 0.10.0 runs it without checking its version.

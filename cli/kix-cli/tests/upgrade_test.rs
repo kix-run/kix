@@ -1548,7 +1548,7 @@ fn a_named_input_moves_to_the_version_kix_is_on() {
     let (code, out) = s.upgrade(&["kix-stable", "--to", "9.3.0"]);
     assert_eq!(code, 1, "{out}");
     assert!(
-        out.contains("Cannot move the input `kix-stable` to Kix 9.3.0: the input `kix` pins Kix 9.2.0, and `kix` must pin the newest version in the project."),
+        out.contains("Cannot upgrade input `kix-stable` to Kix 9.3.0: input `kix` pins Kix 9.2.0, and `kix` must pin the newest version in the project."),
         "{out}"
     );
 
@@ -1606,7 +1606,7 @@ fn a_cluster_moves_to_another_input_after_a_review() {
     );
     assert!(
         out.contains(
-            "Moved the cluster `west` to Kix 9.2.0 (the input `kix`), but review before deploying:"
+            "Moved cluster `west` to Kix 9.2.0 (input `kix`), but review before deploying:"
         ),
         "{out}"
     );
@@ -1621,7 +1621,7 @@ fn a_cluster_moves_to_another_input_after_a_review() {
     let (code, out) = s.upgrade(&["west"]);
     assert_eq!(code, 0, "{out}");
     assert!(
-        out.contains("The cluster `west` already uses the input `kix`. Nothing to move."),
+        out.contains("Cluster `west` already uses input `kix`. Nothing to move."),
         "{out}"
     );
 }
@@ -1637,14 +1637,14 @@ fn a_cluster_that_fails_on_its_new_input_stays_there_and_resumes() {
     let (code, out) = s.upgrade(&["west"]);
     assert_eq!(code, 1, "{out}");
     assert!(
-        out.contains("kix.toml lists the cluster `west` under `kix` (Kix 9.2.0) so you can fix the build.\nNext: fix the error above, then run `kix upgrade west --to kix` to finish the upgrade."),
+        out.contains("kix.toml now lists cluster `west` under `kix` (Kix 9.2.0) so you can fix the build.\nNext: fix the error above, then run `kix upgrade west --to kix` to finish the upgrade."),
         "{out}"
     );
     // Another upgrade waits for this one.
     let (code, out) = s.upgrade(&[]);
     assert_eq!(code, 1, "{out}");
     assert!(
-        out.contains("Next: run `kix upgrade west --to kix` to finish it, or delete kix-upgrade.json to drop it."),
+        out.contains("Next: run `kix upgrade west --to kix` to finish that upgrade, or delete kix-upgrade.json to discard its saved state."),
         "{out}"
     );
     std::fs::remove_file(s.project.join("fake/fail-9.2.0")).unwrap();
@@ -1673,7 +1673,7 @@ fn a_new_input_is_locked_by_upgrading_it() {
     let out = s.kix().args(["build", "west"]).output().unwrap();
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(
-        err.contains("flake.nix names the input `kix-stable`, and flake.lock does not hold it yet. Run `kix upgrade kix-stable` to lock it."),
+        err.contains("Input `kix-stable` is defined in flake.nix and kix.toml [versions], but is not locked in flake.lock yet. Run `kix upgrade kix-stable` to lock it."),
         "{err}"
     );
     let (code, out) = s.upgrade(&["kix-stable"]);
@@ -1688,14 +1688,14 @@ fn a_name_that_is_no_input_and_no_cluster_is_refused() {
     let (code, out) = s.upgrade(&["west"]);
     assert_eq!(code, 1, "{out}");
     assert!(
-        out.contains("this project has one version of Kix, so `kix upgrade` takes no name"),
+        out.contains("kix.toml has no [versions] table, so every cluster in this project uses the same version of Kix"),
         "{out}"
     );
     two_versions(&s);
     let (code, out) = s.upgrade(&["north"]);
     assert_eq!(code, 1, "{out}");
     assert!(
-        out.contains("kix.toml [versions] has no input and no cluster of that name (inputs: `kix`, `kix-stable`)"),
+        out.contains("`north` is neither an input nor a cluster in kix.toml [versions] (inputs: `kix`, `kix-stable`)"),
         "{out}"
     );
 }

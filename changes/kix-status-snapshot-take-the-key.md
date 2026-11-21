@@ -1,4 +1,4 @@
 +++
 kind = "changed"
 +++
-`kix status <cluster>` and `kix snapshot <cluster>` accept the name a cluster has in `flake.nix`, as `kix rollback` and `kix history` do. For a cluster whose definition sets its own `name`, they used to need that name. The name on the deploy records still works.
+`kix status <cluster>` and `kix snapshot <cluster>` now accept the cluster's key in `flake.nix` (`clusters.<name>`) even when the cluster definition sets a different `name`, matching `kix rollback` and `kix history`. Passing the `name` recorded on the cluster still works, and both commands now accept `--flake` and `--override-input` when looking up a cluster in `flake.nix`.

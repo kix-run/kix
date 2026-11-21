@@ -5,7 +5,7 @@ description: "Project configuration file that chooses whether Kix evaluates a pr
 
 import Command from '../../../components/Command.astro';
 
-`kix.toml` is an optional configuration file placed beside `flake.nix` at the root of a Kix project. It chooses the project's **builder**: whether Kix evaluates clusters with the Nix in the Kix runtime and Kix's local store (`builder = "kix"`, the default) or with the machine's installed Nix and `/nix/store` (`builder = "nix"`). It can also map clusters to different Kix library inputs in [the `[versions]` table](#the-versions-table), so one project can hold clusters on different versions of Kix. Because `kix.toml` lives in the repository, every contributor and CI job uses the same settings without passing extra flags or environment variables. Every version of Kix in a project comes from `flake.lock`, as [The version of Kix](#the-version-of-kix) explains.
+`kix.toml` is an optional configuration file placed beside `flake.nix` at the root of a Kix project. It chooses the project's **builder**: whether Kix evaluates clusters with the Nix in the Kix runtime and Kix's local store (`builder = "kix"`, the default) or with the machine's installed Nix and `/nix/store` (`builder = "nix"`). It can also assign clusters to different Kix library inputs in [the `[versions]` table](#the-versions-table), so one project can keep clusters on different versions of Kix. Because `kix.toml` lives in the repository, every contributor and CI job uses the same settings without passing extra flags or environment variables. Version numbers live in `flake.lock`, as [The version of Kix](#the-version-of-kix) explains.
 
 :::note[Helpful background]
 - [Install and run Kix](/docs/how-to/start-and-inspect/install-and-run-the-kix-cli/): see how the release archive ships the Kix runtime and how to verify your setup with `kix doctor`.
@@ -29,11 +29,11 @@ The file and its settings are optional. An absent `kix.toml` or an empty `kix.to
 builder = "kix"
 ```
 
-`kix.toml` accepts only keys that the installed version of Kix recognizes. In this version of Kix, the valid settings are `builder`, [`library`](#the-library-setting), the [`[upgrade]` table](#the-upgrade-table), and the [`[versions]` table](#the-versions-table). Unknown keys, unknown builder names, a `kix` line, and TOML syntax errors stop the command before evaluation starts. In a project with a `[versions]` table, the Kix that the `kix` input pins checks every setting in `kix.toml`, while an older Kix in the project skips settings it does not recognize.
+`kix.toml` accepts only keys that the installed version of Kix recognizes. In this version of Kix, the valid settings are `builder`, [`library`](#the-library-setting), the [`[upgrade]` table](#the-upgrade-table), and the [`[versions]` table](#the-versions-table). Unknown keys, unknown builder names, a `kix` line, and TOML syntax errors stop the command before evaluation starts. In a project with a `[versions]` table, the Kix version pinned by `kix` validates every setting in `kix.toml`, while older Kix versions in the project ignore settings they do not recognize.
 
 ## The version of Kix
 
-`kix.toml` holds no version numbers. Every version of Kix in a project is a release tag in `flake.lock`, such as `v0.10.0` for Kix 0.10.0. By default, every cluster uses the `kix` input. A project with a [`[versions]` table](#the-versions-table) can list clusters under additional inputs so some clusters stay on an older version while others upgrade. Before Kix parses its command line, it reads `flake.lock` for the cluster's input (or `kix` when the command names no cluster) and runs the matching version, installing it first when needed. See [Choose the version of Kix for a project](/docs/how-to/start-and-inspect/install-and-run-the-kix-cli/#choose-the-version-of-kix-for-a-project).
+`kix.toml` stores no version numbers; every version of Kix in a project comes from a release tag in `flake.lock`, such as `v0.10.0` for Kix 0.10.0. By default, every cluster uses the `kix` input. Adding a [`[versions]` table](#the-versions-table) lets you assign clusters to additional inputs so some clusters stay on an older version while others upgrade. Before Kix parses its command line, it checks `flake.lock` for the cluster's input (or `kix` when the command names no cluster) and runs the matching version, installing it first when needed. See [Choose the version of Kix for a project](/docs/how-to/start-and-inspect/install-and-run-the-kix-cli/#choose-the-version-of-kix-for-a-project).
 
 A `kix` line in `kix.toml` stops every command with error [K4476]. Delete the line, run [`kix upgrade --to <version>`](/docs/reference/cli/upgrade/) with the version the line named to pin the project to it, then run `kix upgrade` to move to a newer version and see what it changes. [Upgrade a project from Kix 0.9](/docs/how-to/start-and-inspect/upgrade-a-project-to-a-new-kix/#upgrade-a-project-from-kix-09) gives each step.
 
@@ -89,7 +89,7 @@ Even when `builder = "nix"`, Kix still runs `kubectl`, `sops`, and any direct CL
 
 ## The `[upgrade]` table
 
-The `[upgrade]` table sets how [`kix upgrade`](/docs/reference/cli/upgrade/) picks the release it moves an input to:
+The `[upgrade]` table configures how [`kix upgrade`](/docs/reference/cli/upgrade/) selects target releases when upgrading an input:
 
 ```toml
 [upgrade]
@@ -102,9 +102,9 @@ min-age = "7d"
 
 ## The `[versions]` table
 
-The `[versions]` table maps flake input names in `flake.nix` to lists of cluster names, so one project can hold clusters on different versions of Kix. Each key matches an input name in `flake.nix` (`kix` for the newest version, plus an input such as `kix-stable` for each older version). `flake.lock` still holds every version number; `kix.toml` holds none. A project with no `[versions]` table uses `kix` for every cluster.
+The `[versions]` table maps flake input names from `flake.nix` to lists of cluster names, letting one project keep clusters on different versions of Kix. Each key matches an input in `flake.nix` (`kix` for the newest version, plus an input such as `kix-stable` for each held-back version). Version tags stay in `flake.nix` and `flake.lock`; `kix.toml` stores only which clusters use each input. Projects without `[versions]` use `kix` for every cluster.
 
-The outputs of `flake.nix` read only `inputs.kix`. Nothing in `flake.nix` reads the other Kix inputs directly. When a command names a cluster listed under another input, Kix runs the version of Kix that input pins in `flake.lock` and evaluates the project with `kix` replaced by that input, leaving `flake.lock` unchanged. Commands that name no cluster (`kix list clusters`, `kix list packages` with no cluster, `kix doctor`, `kix pin`, and `kix status` with no cluster) run in the Kix that `kix` pins.
+`flake.nix` passes only `inputs.kix` to `mkFlake`; nothing in `outputs` references the other Kix inputs directly. When a command targets a cluster assigned to another input, Kix runs the version pinned by that input in `flake.lock` and substitutes that input for `kix` during evaluation, leaving `flake.lock` untouched. Commands that do not target a single cluster (`kix list clusters`, `kix list packages` with no cluster, `kix doctor`, `kix pin`, and `kix status` with no cluster argument) run the version pinned by `kix`.
 
 ```nix
 # flake.nix (version numbers are examples)
@@ -130,23 +130,23 @@ kix-stable = ["prod"]
 ### Rules
 
 - **List every cluster.** Once `[versions]` exists, every cluster in `flake.nix` must appear in the table.
-- **`kix` pins the newest release.** No other input in `[versions]` may pin a newer release than `kix`. An input that points to a local folder or a branch has no release version and is not compared.
-- **One input per cluster.** A cluster may appear under one input only.
-- **Distinct names.** A cluster may not have the same name as an input in `[versions]`, and may not be named `kix`.
-- **Every key is a locked input.** Each key in `[versions]` must be an input of `flake.nix` and locked in `flake.lock`. Lock a new input with [`kix upgrade <input>`](/docs/reference/cli/upgrade/).
+- **`kix` pins the newest release.** No other input in `[versions]` may pin a newer release than `kix`. Inputs pointing to a local folder or branch have no release version and are skipped in this comparison.
+- **One input per cluster.** Each cluster may appear under one input only.
+- **Distinct names.** A cluster may not share a name with any input in `[versions]`, and may not be named `kix`.
+- **Every key is a locked input.** Each key in `[versions]` must be declared in `flake.nix` and locked in `flake.lock`. Lock a new input with [`kix upgrade <input>`](/docs/reference/cli/upgrade/).
 - **Incompatible with `library = "self"`.** `library = "self"` and `[versions]` cannot be used together.
-- **Every version must recognize `[versions]`.** Every version of Kix in the project must support the `[versions]` table. Releases made before `[versions]` existed reject `versions` as an unknown setting in `kix.toml`.
+- **Every version must recognize `[versions]`.** Every Kix version in the project must support `[versions]`. Releases predating `[versions]` reject `versions` as an unknown setting in `kix.toml`.
 
 ### Shared files across versions
 
-Every cluster in the repository reads the same `flake.nix`, `kix.toml`, and shared Nix files:
+Every cluster in the repository shares `flake.nix`, `kix.toml`, and imported `.nix` modules:
 
-- Shared modules and helpers used by more than one cluster must work with every version of Kix in the project.
-- The Kix that `kix` pins checks all `kix.toml` settings and `mkFlake` arguments, and stops on an unknown setting or argument.
-- An older Kix in the project skips `kix.toml` settings and `mkFlake` arguments it does not know. A setting it does know with a value it does not know is still an error.
+- Shared modules and helpers imported by multiple clusters must stay compatible with every Kix version in the project.
+- The Kix version pinned by `kix` validates all `kix.toml` settings and `mkFlake` arguments, failing on unknown keys or arguments.
+- Older Kix versions in `[versions]` ignore unknown `kix.toml` keys and unknown `mkFlake` arguments, while still rejecting invalid values for settings they recognize.
 
 :::tip[Use it in a task]
-See [Hold clusters on different versions of Kix](/docs/how-to/start-and-inspect/hold-clusters-on-different-kix-versions/) for step-by-step instructions to upgrade staging before production.
+See [Keep clusters on different versions of Kix](/docs/how-to/start-and-inspect/hold-clusters-on-different-kix-versions/) for step-by-step instructions to upgrade staging before production.
 :::
 
 ## Tracking `kix.toml` in Git
@@ -209,7 +209,7 @@ When you invoke `kix`, it automatically passes `--extra-experimental-features "n
   'nix build --extra-experimental-features "nix-command flakes pipe-operators" .#cluster-prod-activation',
 ]} />
 
-In a project with a [`[versions]` table](#the-versions-table), plain `nix` evaluates with `inputs.kix`. Building a cluster listed under another input such as `kix-stable` fails unless you evaluate through `kix` or pass `--override-input kix` with the locked `kix-stable` revision.
+In a project with a [`[versions]` table](#the-versions-table), plain `nix` evaluates with `inputs.kix`. Evaluating a cluster assigned to another input such as `kix-stable` fails unless you run through `kix` or pass `--override-input kix <locked-kix-stable-ref>`.
 
 ### Restricting `systems` for `nix flake check`
 
@@ -244,15 +244,15 @@ To avoid needing builders for platforms you do not use, pass `systems` to `kix.l
 | Invalid TOML syntax | `<path> is not valid TOML: line <N>: <reason>` |
 | Unknown key in `kix.toml` | `` <path> has an unknown setting `<key>` (Kix <version> supports: builder, library, upgrade, versions). Check the spelling, or upgrade Kix if the project needs a newer version `` |
 | `library` is neither `"input"` nor `"self"` | `<path> sets library = <value>, which Kix does not know. Write library = "input" (the default: the flake input named kix holds the Kix library) or library = "self" (this flake provides the Kix library itself).` |
-| `library = "self"` combined with `[versions]` | `kix.toml sets library = "self" and has a [versions] table. A project whose flake provides the Kix library has one version of Kix. Remove [versions].` |
-| `[versions]` is not a table, or an entry is not a list of strings | `` kix.toml [versions] must map each input name to a list of cluster names, such as `kix-stable = ["prod"]`, and `<key>` is not a list of names. `` |
-| Cluster listed under two inputs in `[versions]` | `` kix.toml [versions] lists the cluster `<cluster>` under both `<first>` and `<second>`. List it under one. `` |
-| Cluster omitted from `[versions]` | `` kix.toml [versions] does not list the cluster `<cluster>`. Add it to one of: `<input>`, ... `` |
-| Cluster has the same name as an input (or `kix`) | `` kix.toml [versions] lists a cluster named `<name>`, which is also the name of an input. `kix upgrade <name>` could mean either. Rename the input in flake.nix and in [versions]. `` |
-| `[versions]` names an input missing from `flake.nix` | `` kix.toml [versions] names the input `<input>`, and flake.nix has no input of that name. Add `inputs.<input>.url = "github:kix-run/kix/v<version>";` to flake.nix, then run `kix upgrade <input>` to lock it. `` |
-| Input in `flake.nix` is not in `flake.lock` yet | `` flake.nix names the input `<input>`, and flake.lock does not hold it yet. Run `kix upgrade <input>` to lock it. `` |
-| Input in `[versions]` pins a newer release than `kix` | `` The input `<input>` pins Kix <newer>, which is newer than the Kix <kix> that the input `kix` pins. The input `kix` must pin the newest version in the project. Run `kix upgrade`, or point the clusters under `<input>` at `kix`. `` |
-| Plain `nix` evaluates a cluster whose input in `[versions]` is not `kix` | `` The cluster '<name>' uses the Kix library input `<input>` (kix.toml [versions]), and this evaluation uses the input `kix`. `` The fix line adds: `` Run the command with `kix`, which evaluates each cluster with its own library. With plain Nix, pass `--override-input kix` with the locked `<input>`. `` |
+| `library = "self"` combined with `[versions]` | `` kix.toml cannot set `library = "self"` together with a `[versions]` table: a project whose own flake provides the Kix library has only one version of Kix. Remove `[versions]` (or remove `library = "self"`) from kix.toml. `` |
+| `[versions]` is not a table, or an entry is not a list of strings | `` Invalid `<key>` in kix.toml: [versions] must be a table mapping each input name to a list of cluster names, such as `kix = ["staging"]` and `kix-stable = ["prod"]`. `` |
+| Cluster listed under two inputs in `[versions]` | `` kix.toml [versions] lists cluster `<cluster>` under both `<first>` and `<second>`. Remove `<cluster>` from one of those lists so each cluster uses a single input. `` |
+| Cluster omitted from `[versions]` | `` Cluster `<cluster>` is not listed in kix.toml [versions]. Check the spelling (run `kix list clusters` to see defined clusters), or add `"<cluster>"` to one of the lists in kix.toml [versions] (`<input>`, ...). `` |
+| Cluster has the same name as an input (or `kix`) | `` kix.toml [versions] lists a cluster named `<name>`, which collides with the input `<name>` (`kix upgrade <name>` would be ambiguous). Rename input `<name>` in flake.nix and kix.toml [versions], then run `kix upgrade <new-input>` to lock it. `` (When `<name>` is `kix`, asks to rename the cluster instead.) |
+| `[versions]` names an input missing from `flake.nix` | `` kix.toml [versions] names input `<input>`, which is missing from flake.nix. Add `inputs.<input>.url = "github:kix-run/kix/v<version>";` to flake.nix, then run `kix upgrade <input>` to lock it. `` |
+| Input in `flake.nix` is not in `flake.lock` yet | `` Input `<input>` is defined in flake.nix and kix.toml [versions], but is not locked in flake.lock yet. Run `kix upgrade <input>` to lock it. `` |
+| Input in `[versions]` pins a newer release than `kix` | `` Input `<input>` pins Kix <newer>, which is newer than Kix <kix> on `kix`. The `kix` input must pin the newest version in the project. Upgrade `kix` with `kix upgrade`, or move `<input>`'s clusters to `kix` and remove `<input>` from kix.toml [versions]. `` |
+| Plain `nix` evaluates a cluster whose input in `[versions]` is not `kix` | `` Cluster '<name>' is assigned to input `<input>` in kix.toml [versions], so it cannot be evaluated with `inputs.kix`. `` The fix line adds: `` Build or check '<name>' with `kix` (such as `kix check <name>` or `kix build <name>`), or pass `--override-input kix <locked-<input>-ref>` when invoking `nix` directly. `` |
 | `kix.toml` sets `kix` | ``[K4476] <path> sets kix = "<value>", but Kix now takes this project's version from the Kix library tag in flake.lock. Delete the kix line from kix.toml, then run `kix upgrade --to <value>` to record the version this project uses now, then run `kix upgrade` to move to a newer version and review what changes.`` |
 | The version of Kix that `flake.lock` names is not installed, with `KIX_AUTO_INSTALL=0` | `` This project uses Kix <version> (flake.lock), and Kix <version> is not installed. Automatic installs are off (KIX_AUTO_INSTALL=0). Run `kix self install <version>`. `` |
 | Unknown `builder` value | `<path> sets builder = "<value>", which is not a known builder (Kix <version> supports: kix, nix, remote). Check the spelling, or upgrade Kix if the project needs a newer version` |

@@ -77,7 +77,7 @@ fn upgrade(args: &UpgradeArgs, global: &GlobalArgs) -> Flow<Exit> {
         .filter(|s| matches!(s.status, Status::FixNeeded | Status::EditNeeded));
     if let Some(unfinished) = resume.as_ref().filter(|s| !subject.wrote(s)) {
         return Err(refused(format!(
-            "Cannot start `{}`: another upgrade, to Kix {}, is not finished.\nNo project files were modified.\nNext: run `{}` to finish it, or delete kix-upgrade.json to drop it.",
+            "Cannot run `{}`: an unfinished upgrade to Kix {} is still in progress (recorded in kix-upgrade.json).\nNo project files were modified.\nNext: run `{}` to finish that upgrade, or delete kix-upgrade.json to discard its saved state.",
             subject.command(),
             unfinished.to,
             subject::command_of(unfinished)
@@ -134,7 +134,7 @@ fn upgrade_input(
         (None, _) if resume.is_some() => None,
         (None, _) => Some(newest.as_ref().map(Version::release).ok_or_else(|| {
             refused(format!(
-                "Cannot choose a version for the input `{name}`: the input `kix` pins no release of Kix to move it to.\nNo project files were modified.\nNext: name the version, as in `{command} --to <version>`."
+                "Cannot choose a target version for input `{name}`: `{command}` defaults to the version pinned by `kix`, but `kix` does not pin a release in flake.lock.\nNo project files were modified.\nNext: pass a target version with `{command} --to <version>`."
             ))
         })?),
     };
@@ -144,7 +144,7 @@ fn upgrade_input(
         && target > newest
     {
         return Err(refused(format!(
-            "Cannot move the input `{name}` to Kix {}: the input `kix` pins Kix {}, and `kix` must pin the newest version in the project.\nNo project files were modified.\nNext: run `kix upgrade` to move `kix` first.",
+            "Cannot upgrade input `{name}` to Kix {}: input `kix` pins Kix {}, and `kix` must pin the newest version in the project.\nNo project files were modified.\nNext: run `kix upgrade` to upgrade `kix` first.",
             target.release(),
             newest.release()
         )));

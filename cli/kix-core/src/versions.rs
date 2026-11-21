@@ -31,11 +31,11 @@ pub struct Versions {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum VersionsError {
     #[error(
-        "kix.toml [versions] must map each input name to a list of cluster names, such as `kix-stable = [\"prod\"]`, and `{0}` is not a list of names."
+        "Invalid `{0}` in kix.toml: [versions] must be a table mapping each input name to a list of cluster names, such as `kix = [\"staging\"]` and `kix-stable = [\"prod\"]`."
     )]
     Shape(String),
     #[error(
-        "kix.toml [versions] lists the cluster `{cluster}` under both `{first}` and `{second}`. List it under one."
+        "kix.toml [versions] lists cluster `{cluster}` under both `{first}` and `{second}`. Remove `{cluster}` from one of those lists so each cluster uses a single input."
     )]
     Twice {
         cluster: String,
@@ -43,31 +43,36 @@ pub enum VersionsError {
         second: String,
     },
     #[error(
-        "kix.toml [versions] does not list the cluster `{cluster}`. Add it to one of: {inputs}."
+        "Cluster `{cluster}` is not listed in kix.toml [versions]. Check the spelling (run `kix list clusters` to see defined clusters), or add `\"{cluster}\"` to one of the lists in kix.toml [versions] ({inputs})."
     )]
     Unlisted { cluster: String, inputs: String },
     #[error(
-        "kix.toml [versions] names the input `{input}`, and flake.nix has no input of that name. Add `inputs.{input}.url = \"github:kix-run/kix/v<version>\";` to flake.nix, then run `kix upgrade {input}` to lock it."
+        "kix.toml [versions] names input `{input}`, which is missing from flake.nix. Add `inputs.{input}.url = \"github:kix-run/kix/v<version>\";` to flake.nix, then run `kix upgrade {input}` to lock it."
     )]
     NoInput { input: String },
     #[error(
-        "flake.nix names the input `{input}`, and flake.lock does not hold it yet. Run `kix upgrade {input}` to lock it."
+        "Input `{input}` is defined in flake.nix and kix.toml [versions], but is not locked in flake.lock yet. Run `kix upgrade {input}` to lock it."
     )]
     NotLocked { input: String },
     #[error(
-        "kix.toml [versions] lists a cluster named `{name}`, which is also the name of an input. `kix upgrade {name}` could mean either. Rename the input in flake.nix and in [versions]."
+        "kix.toml [versions] lists a cluster named `{name}`, which collides with the input `{name}` (`kix upgrade {name}` would be ambiguous). {}",
+        if name.as_str() == INPUT {
+            "Rename the cluster `kix` in flake.nix and kix.toml [versions] (the main Kix input must stay named `kix`).".to_string()
+        } else {
+            format!("Rename input `{name}` in flake.nix and kix.toml [versions], then run `kix upgrade <new-input>` to lock it.")
+        }
     )]
     NameClash { name: String },
     #[error(
-        "kix.toml sets library = \"self\" and has a [versions] table. A project whose flake provides the Kix library has one version of Kix. Remove [versions]."
+        "kix.toml cannot set `library = \"self\"` together with a `[versions]` table: a project whose own flake provides the Kix library has only one version of Kix. Remove `[versions]` (or remove `library = \"self\"`) from kix.toml."
     )]
     OwnLibrary,
     #[error(
-        "Kix cannot change [versions] in kix.toml: {0} Move `{1}` to the list of `{2}` in [versions] yourself."
+        "Kix could not update [versions] in kix.toml: {0}. Move `\"{1}\"` to `{2}` in kix.toml [versions]."
     )]
     Edit(String, String, String),
     #[error(
-        "The input `{input}` pins Kix {newer}, which is newer than the Kix {kix} that the input `kix` pins. The input `kix` must pin the newest version in the project. Run `kix upgrade`, or point the clusters under `{input}` at `kix`."
+        "Input `{input}` pins Kix {newer}, which is newer than Kix {kix} on `kix`. The `kix` input must pin the newest version in the project. Upgrade `kix` with `kix upgrade`, or move `{input}`'s clusters to `kix` and remove `{input}` from kix.toml [versions]."
     )]
     NewerThanKix {
         input: String,
@@ -293,9 +298,9 @@ pub fn held_back(dir: &Path) -> bool {
 pub fn move_cluster(dir: &Path, cluster: &str, to: &str) -> Result<(), VersionsError> {
     let path = dir.join(crate::project::FILE);
     let edit = |why: &str| VersionsError::Edit(why.to_string(), cluster.into(), to.into());
-    let text = std::fs::read_to_string(&path).map_err(|e| edit(&format!("{e}.")))?;
+    let text = std::fs::read_to_string(&path).map_err(|e| edit(&e.to_string()))?;
     let moved = moved_text(&text, cluster, to).ok_or_else(|| {
-        edit("the table is written in a way Kix does not change, such as with a comment inside a list.")
+        edit("comments inside a list or inline formatting cannot be rewritten safely (kix.toml was not modified)")
     })?;
     // Read the new text back, so a wrong edit never reaches the file.
     let expected = toml::from_str::<toml::Table>(&moved)
@@ -303,9 +308,11 @@ pub fn move_cluster(dir: &Path, cluster: &str, to: &str) -> Result<(), VersionsE
         .and_then(|t| Versions::parse(t.get(TABLE)?).ok())
         .is_some_and(|v| v.input_of(cluster) == Some(to));
     if !expected {
-        return Err(edit("the changed table did not read back as expected."));
+        return Err(edit(
+            "the updated TOML could not be verified (kix.toml was not modified)",
+        ));
     }
-    std::fs::write(&path, moved).map_err(|e| edit(&format!("{e}.")))
+    std::fs::write(&path, moved).map_err(|e| edit(&e.to_string()))
 }
 
 /// Return `text`, a `kix.toml`, with `cluster` moved to the list of `to` in
@@ -489,7 +496,7 @@ mod tests {
         let e = v.check(&lock, flake).unwrap_err();
         assert_eq!(
             e.to_string(),
-            "flake.nix names the input `kix-old`, and flake.lock does not hold it yet. Run `kix upgrade kix-old` to lock it."
+            "Input `kix-old` is defined in flake.nix and kix.toml [versions], but is not locked in flake.lock yet. Run `kix upgrade kix-old` to lock it."
         );
     }
 

@@ -329,10 +329,10 @@ impl NothingToCompare {
                 "This project's flake.lock pins no version of Kix.".to_string()
             }
             (NothingToCompare::NoRelease, _) => {
-                format!("flake.lock pins no version of Kix for the input `{input}`.")
+                format!("flake.lock has no Kix version for input `{input}`.")
             }
             (NothingToCompare::NoClusters, _) => {
-                format!("kix.toml [versions] lists no cluster under the input `{input}`.")
+                format!("No clusters use input `{input}` in kix.toml [versions].")
             }
         }
     }
@@ -343,10 +343,10 @@ impl NothingToCompare {
                 "This project's flake.lock pinned no version of Kix before, so Kix built nothing to compare.".to_string()
             }
             (NothingToCompare::NoRelease, _) => format!(
-                "flake.lock pinned no version of Kix for the input `{input}` before, so Kix built nothing to compare."
+                "Input `{input}` had no previous Kix version in flake.lock, so there was nothing to build and compare."
             ),
             (NothingToCompare::NoClusters, _) => format!(
-                "kix.toml [versions] lists no cluster under the input `{input}`, so Kix built nothing to compare."
+                "No clusters use input `{input}` in kix.toml [versions], so there was nothing to build and compare."
             ),
         }
     }

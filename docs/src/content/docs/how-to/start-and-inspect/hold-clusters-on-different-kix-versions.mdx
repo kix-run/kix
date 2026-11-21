@@ -1,32 +1,32 @@
 ---
-title: "Hold clusters on different versions of Kix"
+title: "Keep clusters on different versions of Kix"
 description: "Upgrade staging before production by adding a second Kix input to flake.nix and mapping clusters to inputs in kix.toml."
 ---
 
 import Command from '../../../../components/Command.astro';
 
 By default, every cluster in a project uses the `kix` input in `flake.nix` and
-upgrades at the same time. To upgrade `staging` first, watch it run, and
-upgrade `prod` later, add a second Kix input to `flake.nix` and list which
-clusters use each input in the `[versions]` table of `kix.toml`.
+upgrades together. To upgrade `staging` first and keep `prod` on its current
+version until you are ready, add a second Kix input to `flake.nix` and map each
+cluster to an input in the `[versions]` table of `kix.toml`.
 
 :::note[Helpful background]
-- [Upgrade a project to a new version of Kix](/docs/how-to/start-and-inspect/upgrade-a-project-to-a-new-kix/): preview release notes, fix build errors one release at a time, and acknowledge changes to stored data.
-- [`kix.toml` reference](/docs/reference/kix-toml/#the-versions-table): every rule and error message for the `[versions]` table.
-- [`kix upgrade` reference](/docs/reference/cli/upgrade/): moving an input or a single cluster, and `kix-upgrade.json`.
+- [Upgrade a project to a new version of Kix](/docs/how-to/start-and-inspect/upgrade-a-project-to-a-new-kix/): preview release notes, fix build errors one minor release at a time, and acknowledge changes to stored data.
+- [`kix.toml` reference](/docs/reference/kix-toml/#the-versions-table): rules and error messages for the `[versions]` table.
+- [`kix upgrade` reference](/docs/reference/cli/upgrade/): upgrading an input, moving a single cluster, and `kix-upgrade.json`.
 :::
 
 ## Add a second input and `[versions]`
 
-Suppose your project is on Kix `0.12.3` (version numbers on this page are
-examples) and defines two clusters, `staging` and `prod`. Every version of Kix
-in the project must support the `[versions]` table; a release from before
-`[versions]` existed rejects `versions` as an unknown setting in `kix.toml`.
+Suppose your project runs Kix `0.12.3` and defines two clusters, `staging` and
+`prod` (version numbers on this page are examples). Every Kix version in the
+project must support `[versions]`; older releases that predate `[versions]`
+reject it as an unknown setting in `kix.toml`.
 
-First, add a second input (such as `kix-stable`) to `flake.nix` with the same
-URL and tag that `kix` uses now. Leave `outputs` unchanged: `mkFlake` still
-reads only `inputs.kix`, and Kix swaps `kix-stable` in when evaluating clusters
-listed under it:
+First, add a second Kix input (such as `kix-stable`) to `flake.nix` with the
+same URL and tag as `kix`. Leave `outputs` unchanged; `mkFlake` still reads
+`inputs.kix`, and Kix substitutes `kix-stable` automatically when evaluating
+clusters assigned to it:
 
 ```nix title="flake.nix"
 {
@@ -41,9 +41,9 @@ listed under it:
 }
 ```
 
-Next, add a `[versions]` table to `kix.toml` that lists every cluster in the
-project. Put the clusters to upgrade first under `kix`, and the clusters to
-hold back under `kix-stable`:
+Next, add a `[versions]` table to `kix.toml` listing every cluster in the
+project. List the clusters you want to upgrade first under `kix`, and the
+clusters you want to keep on `0.12.3` under `kix-stable`:
 
 ```toml title="kix.toml"
 [versions]
@@ -51,11 +51,11 @@ kix        = ["staging"]
 kix-stable = ["prod"]
 ```
 
-`kix.toml` holds no version numbers; `flake.lock` holds them. Once `[versions]`
-exists, every cluster in `flake.nix` must appear under one input, and `kix`
-must always pin the newest release in the project.
+Version numbers stay in `flake.nix` and `flake.lock`. Once `[versions]` is set
+in `kix.toml`, every cluster in `flake.nix` must appear under one input, and
+`kix` must always pin the newest Kix release in the project.
 
-Stage both files so Nix can read them:
+Track both files in Git so Kix sees them during evaluation:
 
 <Command commands={["git add kix.toml flake.nix"]} cwd="my-project/" />
 
@@ -63,11 +63,11 @@ Then lock the new input in `flake.lock`:
 
 <Command commands={["kix upgrade kix-stable"]} cwd="my-project/" />
 
-Because `flake.lock` did not hold `kix-stable` yet, Kix locks it without
-building anything:
+Because `kix-stable` was not in `flake.lock` yet, Kix locks it without building
+anything:
 
 ```text
-Pinned the Kix library to 0.12.3 (updated flake.lock). flake.lock pinned no version of Kix for the input `kix-stable` before, so Kix built nothing to compare.
+Pinned the Kix library to 0.12.3 (updated flake.lock). Input `kix-stable` had no previous Kix version in flake.lock, so there was nothing to build and compare.
 Commit flake.lock and kix.toml.
 ```
 
@@ -75,7 +75,7 @@ Commit `kix.toml`, `flake.nix`, and `flake.lock` before starting the upgrade.
 
 ## Upgrade `staging` first
 
-Preview and run `kix upgrade` with no name:
+Preview and run `kix upgrade` with no arguments:
 
 <Command
   commands={[
@@ -85,18 +85,18 @@ Preview and run `kix upgrade` with no name:
   cwd="my-project/"
 />
 
-`kix upgrade` moves only the `kix` input (for example, to `0.14.2`) and builds
-only the clusters listed under `kix`:
+`kix upgrade` upgrades only the `kix` input (for example, to `0.14.2`) and
+builds only the clusters listed under `kix`:
 
 ```text
 Upgrading Kix 0.12.3 -> 0.14.2
 Input `kix` in flake.nix, used by staging
 ```
 
-`kix-stable` stays at `v0.12.3` in `flake.nix` and `flake.lock`, so `prod` is
-untouched. If the upgrade records a data migration that requires
-`kix upgrade --acknowledge`, `kix deploy` blocks `staging` until you
-acknowledge it, while `kix deploy prod` can still run.
+`kix-stable` stays on `v0.12.3` in `flake.nix` and `flake.lock`, leaving `prod`
+unchanged. If the upgrade includes a data migration that requires
+`kix upgrade --acknowledge`, `kix deploy staging` waits until you acknowledge
+it, while `kix deploy prod` continues to work.
 
 Review the manifest changes and release notes, commit `flake.nix`, `flake.lock`,
 and `kix-upgrade.json`, and deploy `staging`:
@@ -133,51 +133,50 @@ present:
 ✓ Input kix-stable pins Kix 0.12.3, used by prod
 ```
 
-When you run any cluster command, such as `kix check prod`, `kix plan prod`, or
+When you run a cluster command such as `kix check prod`, `kix plan prod`, or
 `kix deploy prod`, Kix looks `prod` up in `[versions]`, runs Kix `0.12.3`
-(installing it first if needed), and builds `prod` with the `kix-stable`
-library. Two Kix clusters on different versions of Kix can also deploy to the
-same Kubernetes cluster.
+(installing it if needed), and builds `prod` with the `kix-stable` library.
+Clusters on different Kix versions can even deploy to the same Kubernetes
+cluster.
 
-Because every cluster reads the same `flake.nix`, `kix.toml`, and shared Nix
-files, keep shared modules and helpers working with both versions until every
-cluster has moved forward.
+Every cluster in the repository still shares `flake.nix`, `kix.toml`, and any
+imported `.nix` modules, so keep shared modules compatible with both Kix
+versions until all clusters have upgraded.
 
 ## Upgrade `prod` later
 
 Once you are ready to upgrade the held-back clusters, choose either approach:
 
-### Move every cluster on `kix-stable` together
+### Upgrade every cluster on `kix-stable` together
 
 Run `kix upgrade` with the input name:
 
 <Command commands={["kix upgrade kix-stable"]} cwd="my-project/" />
 
-With no `--to`, this moves `kix-stable` in `flake.nix` and `flake.lock` to the
-release `kix` pins (`0.14.2`), builds every cluster listed under `kix-stable`
-before and after, and prints the manifest changes and release notes. Pass
-`--to <version>` to move `kix-stable` to an earlier version between the two
-instead.
+Without `--to`, this upgrades `kix-stable` in `flake.nix` and `flake.lock` to
+match `kix` (`0.14.2`), builds every cluster under `kix-stable` before and
+after, and shows the manifest changes and release notes. Pass `--to <version>`
+to upgrade `kix-stable` to an intermediate release instead.
 
 ### Move one cluster at a time
 
-If several clusters share `kix-stable` (such as `prod` and `eu`) and you want
-to upgrade one first, pass the cluster name:
+If multiple clusters share `kix-stable` (such as `prod` and `eu`) and you want
+to upgrade one at a time, pass the cluster name:
 
 <Command commands={["kix upgrade prod --to kix"]} cwd="my-project/" />
 
 `--to` names the target input and defaults to `kix` when omitted. Kix builds
-`prod` on `kix-stable`, moves `prod` to `kix` in `kix.toml`, builds `prod`
-again on `kix`, and prints the manifest changes and release notes:
+`prod` on `kix-stable`, moves `prod` to `kix` in `kix.toml`, rebuilds `prod` on
+`kix`, and shows the manifest changes and release notes:
 
 ```text
 Cluster `prod`, from the input `kix-stable` to the input `kix`
 Moved the cluster `prod` to the input `kix`, Kix 0.14.2 (updated kix.toml)
 ```
 
-`flake.nix` and `flake.lock` do not change. If `prod` fails to build on the new
-version, Kix leaves `prod` listed under `kix` in `kix.toml` so you can fix the
-error, then run `kix upgrade prod --to kix` again to resume.
+`flake.nix` and `flake.lock` stay unchanged. If `prod` fails to build on the new
+version, Kix leaves `prod` under `kix` in `kix.toml` so you can fix the build
+error and re-run `kix upgrade prod --to kix` to finish.
 
 Commit the updated files (`flake.nix` and `flake.lock`, or `kix.toml`, plus
 `kix-upgrade.json`) and deploy `prod`:
@@ -186,7 +185,7 @@ Commit the updated files (`flake.nix` and `flake.lock`, or `kix.toml`, plus
 
 ## Keep or remove the second input
 
-When no cluster is left under `kix-stable`, you can either leave the input in
-`flake.nix` and `kix-stable = []` in `kix.toml` for the next upgrade, or remove
-the `kix-stable` input from `flake.nix` and its key (or the `[versions]` table)
-from `kix.toml`.
+Once `kix-stable` has no clusters left (`kix-stable = []`), you can either leave
+it in `flake.nix` and `kix.toml` for your next staged upgrade, or remove
+`inputs.kix-stable` from `flake.nix` and delete `kix-stable` (or the entire
+`[versions]` table) from `kix.toml`.

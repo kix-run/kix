@@ -54,7 +54,7 @@ impl Subject {
                 });
             }
             return Err(refused(format!(
-                "Cannot upgrade `{name}`: this project has one version of Kix, so `kix upgrade` takes no name.\nNo project files were modified.\nNext: run `kix upgrade`, or add a [versions] table to kix.toml to hold some clusters back on another version."
+                "Cannot upgrade `{name}` on its own: kix.toml has no [versions] table, so every cluster in this project uses the same version of Kix.\nNo project files were modified.\nNext: run `kix upgrade` to upgrade the whole project, or add a [versions] table to kix.toml to keep clusters on different versions."
             )));
         };
         if versions.has_input(name) {
@@ -66,7 +66,7 @@ impl Subject {
         let Some(from) = versions.input_of(name) else {
             let inputs: Vec<String> = versions.inputs().map(|i| format!("`{i}`")).collect();
             return Err(refused(format!(
-                "Cannot upgrade `{name}`: kix.toml [versions] has no input and no cluster of that name (inputs: {}).\nNo project files were modified.",
+                "Cannot upgrade `{name}`: `{name}` is neither an input nor a cluster in kix.toml [versions] (inputs: {}).\nNo project files were modified.\nNext: pass an input or cluster listed in kix.toml [versions], or run `kix list clusters` to see the project's clusters.",
                 out::list(&inputs)
             )));
         };
@@ -74,15 +74,19 @@ impl Subject {
         let known = versions.has_input(to)
             || flake_lock::read(dir).is_ok_and(|lock| flake_lock::input(&lock, to).is_ok());
         if !known {
-            let hint = if to.parse::<kix::version::policy::Requirement>().is_ok() {
+            let inputs: Vec<String> = versions.inputs().map(|i| format!("`{i}`")).collect();
+            let next = if to.parse::<kix::version::policy::Requirement>().is_ok() {
                 format!(
-                    " For a cluster, `--to` names the input it moves to. To move the version that `{name}` is on, run `kix upgrade {from} --to {to}`."
+                    "when upgrading a cluster, `--to` names the target input. Run `kix upgrade {name} --to kix` to move `{name}` to `kix`, or run `kix upgrade {from} --to {to}` to upgrade input `{from}` and its clusters to {to}."
                 )
             } else {
-                String::new()
+                format!(
+                    "pass an existing input name with `--to` ({}), or add `inputs.{to}.url` to flake.nix and run `kix upgrade {to}` to lock it first.",
+                    out::list(&inputs)
+                )
             };
             return Err(refused(format!(
-                "Cannot move the cluster `{name}` to `{to}`: flake.nix has no input of that name.{hint}\nNo project files were modified."
+                "Cannot move cluster `{name}` to `{to}`: `{to}` is not a locked input in flake.lock or kix.toml [versions].\nNo project files were modified.\nNext: {next}"
             )));
         }
         Ok(Subject::Cluster {
@@ -150,11 +154,11 @@ impl Subject {
                 version.release()
             ),
             Subject::Input { name, .. } => format!(
-                "The input `{name}` in flake.nix and flake.lock is pinned to {}",
+                "Input `{name}` is pinned to {} in flake.nix and flake.lock",
                 version.release()
             ),
             Subject::Cluster { cluster, to, .. } => format!(
-                "kix.toml lists the cluster `{cluster}` under `{to}` (Kix {})",
+                "kix.toml now lists cluster `{cluster}` under `{to}` (Kix {})",
                 version.release()
             ),
         }

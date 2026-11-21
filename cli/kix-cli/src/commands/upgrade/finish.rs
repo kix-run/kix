@@ -70,7 +70,7 @@ impl Run {
         let upgraded = match &self.subject {
             Subject::Input { .. } => format!("Upgraded to Kix {}", goal.release()),
             Subject::Cluster { cluster, to, .. } => format!(
-                "Moved the cluster `{cluster}` to Kix {} (the input `{to}`)",
+                "Moved cluster `{cluster}` to Kix {} (input `{to}`)",
                 goal.release()
             ),
         };

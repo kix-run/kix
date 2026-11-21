@@ -47,7 +47,7 @@ pub enum PinLibraryError {
     },
 
     #[error(
-        "The input {input} is the local folder {path}, which has no versions. Point the input at the tag {tag}, such as github:kix-run/kix/{tag}."
+        "The input {input} points to the local folder {path}, which has no release tags. Set `inputs.{input}.url` in flake.nix to a release tag such as `github:kix-run/kix/{tag}`."
     )]
     Folder {
         input: String,
@@ -56,7 +56,7 @@ pub enum PinLibraryError {
     },
 
     #[error(
-        "The input {input} reads the Kix library from {url}, and Kix can pin only a Git repository or a GitHub, GitLab, or SourceHut repository to a release tag. Point the input at the tag {tag}, such as github:kix-run/kix/{tag}."
+        "The input `{input}` uses `{url}`, and `kix upgrade` can pin only Git, GitHub, GitLab, or SourceHut URLs to a release tag. Set `inputs.{input}.url` in flake.nix to a tagged repository URL such as `github:kix-run/kix/{tag}`."
     )]
     Unsupported {
         input: String,
@@ -65,7 +65,7 @@ pub enum PinLibraryError {
     },
 
     #[error(
-        "Kix could not find the url of the input {input} in flake.nix, so it changed nothing. Change that url to {to_url} in flake.nix."
+        "Kix could not find `inputs.{input}.url` in flake.nix, so it changed nothing. Set the URL for input `{input}` to `{to_url}` in flake.nix."
     )]
     UrlNotFound { input: String, to_url: String },
 
@@ -695,7 +695,7 @@ impl Plan {
                     .ok()
                     .and_then(|lock| crate::versions::locked_ref(&lock, other))
                     .ok_or_else(|| {
-                        format!("Kix could not read what flake.lock pins for the input {other}.")
+                        format!("Kix could not read a locked revision for input `{other}` from flake.lock.")
                     })?;
                 vec![(INPUT.to_string(), swap)]
             }
@@ -733,7 +733,7 @@ impl Plan {
             return Ok(());
         }
         Err(format!(
-            "Kix moved the input {} to {tag}, but the project builds with the Kix library {}. Check that the tag {tag} of {} holds the Kix library {kix}.",
+            "Kix pinned input `{}` to {tag}, but the project evaluated with the Kix library {}. Check that tag {tag} in {} contains the Kix library {kix}.",
             self.input,
             found.release(),
             self.repo
@@ -903,7 +903,7 @@ mod tests {
             .to_string();
         assert_eq!(
             err,
-            "Kix could not find the url of the input kix in flake.nix, so it changed nothing. Change that url to github:kix-run/kix/v0.10.0 in flake.nix."
+            "Kix could not find `inputs.kix.url` in flake.nix, so it changed nothing. Set the URL for input `kix` to `github:kix-run/kix/v0.10.0` in flake.nix."
         );
         // Another pin of the same repository is not the input.
         for other in [

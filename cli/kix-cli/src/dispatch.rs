@@ -437,7 +437,7 @@ fn warn_unused_override(global: &crate::cli::GlobalArgs) {
     };
     if overridden(kix::flake_lock::INPUT) && !overridden(&chosen.input) {
         eprintln!(
-            "warning: --override-input kix does not apply to this cluster, which uses the input `{input}` (kix.toml [versions]). Pass `--override-input {input} <url>` to replace its Kix library.",
+            "warning: ignoring `--override-input kix` because this cluster uses input `{input}` (kix.toml [versions]); Kix is evaluating with `{input}` as locked. Pass `--override-input {input} <url>` to replace its Kix library.",
             input = chosen.input
         );
     }

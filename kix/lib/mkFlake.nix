@@ -85,20 +85,20 @@ let
       cluster
     else if input == null then
       fail {
-        message = "kix.toml [versions] does not list the cluster '${name}'.";
-        fix = "Add '${name}' to one of: ${listed}.";
+        message = "Cluster '${name}' in flake.nix is missing from kix.toml [versions].";
+        fix = "Add \"${name}\" to one of the input lists in kix.toml [versions] (${listed}).";
       }
     else if input == "kix" then
       cluster
     else if !(inputs ? ${input}) then
       fail {
-        message = "kix.toml [versions] names the input `${input}` for the cluster '${name}', and flake.nix has no input of that name.";
-        fix = "Add `inputs.${input}.url` to flake.nix.";
+        message = "kix.toml [versions] assigns cluster '${name}' to input `${input}`, which is missing from flake.nix.";
+        fix = "Add `inputs.${input}.url = \"github:kix-run/kix/v<version>\";` to flake.nix, then run `kix upgrade ${input}` to lock it.";
       }
     else if (inputs.kix.outPath or null) != inputs.${input}.outPath then
       fail {
-        message = "The cluster '${name}' uses the Kix library input `${input}` (kix.toml [versions]), and this evaluation uses the input `kix`.";
-        fix = "Run the command with `kix`, which evaluates each cluster with its own library. With plain Nix, pass `--override-input kix` with the locked `${input}`.";
+        message = "Cluster '${name}' is assigned to input `${input}` in kix.toml [versions], so it cannot be evaluated with `inputs.kix`.";
+        fix = "Build or check '${name}' with `kix` (such as `kix check ${name}` or `kix build ${name}`), or pass `--override-input kix <locked-${input}-ref>` when invoking `nix` directly.";
       }
     else
       cluster;
@@ -411,10 +411,12 @@ let
     outputs:
     if unknownArguments != [ ] && !heldBack then
       fail {
-        message = "mkFlake does not take the argument ${
+        message = "Unknown `mkFlake` argument ${
           lib.concatMapStringsSep ", " (a: "`${a}`") unknownArguments
-        }${lib.optionalString (libraryVersion != null) " (Kix library ${libraryVersion})"}.";
-        fix = "Check the spelling, or run `kix upgrade` if the project needs a newer Kix library.";
+        }${
+          lib.optionalString (libraryVersion != null) " in the Kix library ${libraryVersion}"
+        } (supported: inputs, clusters, pins, clusterModules, packages, systems).";
+        fix = "Check the spelling in flake.nix, or run `kix upgrade` if the project needs a newer Kix library.";
       }
     else
       outputs;

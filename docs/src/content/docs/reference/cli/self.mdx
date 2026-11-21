@@ -82,8 +82,9 @@ runs, and prints each version it removes.
 | `--keep <N>` | `2` | How many of the newest versions to keep. |
 | `--dry-run` | `false` | Print the versions that would be removed, and remove nothing. |
 
-A project or cluster whose `flake.lock` pins a removed version gets it again
-the next time a command runs for it, unless `KIX_AUTO_INSTALL=0` is set.
+If `flake.lock` pins a removed version for a project or cluster, Kix installs it
+again automatically the next time a command needs it, unless `KIX_AUTO_INSTALL=0`
+is set.
 
 ## `kix self upgrade`
 

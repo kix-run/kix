@@ -12,9 +12,10 @@ every object of the cluster's last deploy, it checks three things: the object
 is on the cluster, it still holds what Kix applied, and it is ready.
 
 `kix status` does not build the cluster definition, so you can run it from any
-directory, including on a machine without the project. Inside a project, when
-`<cluster>` is a key in `flake.nix` whose definition sets another `name`, Kix
-evaluates the flake to find that name.
+directory, including on a machine without the project. Inside a project, you can
+pass either the cluster's key in `flake.nix` or its deployed `name`: if no
+deploy record on the cluster matches `<cluster>`, Kix checks `flake.nix` to look
+up its `name`.
 
 {/* The output below is maintained by hand until the live captures in
     docs/nix/captures.nix (how-to/application-status and

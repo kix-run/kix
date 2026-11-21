@@ -106,13 +106,13 @@ impl InputError {
         if input != INPUT {
             return match self {
                 InputError::Malformed(message) => {
-                    format!("Kix could not read the lock of flake.nix: {message}")
+                    format!("Kix could not read flake.lock: {message}")
                 }
                 InputError::Missing | InputError::OldName { .. } => format!(
-                    "flake.nix has no input named {input}, which kix.toml [versions] names. Add `inputs.{input}.url = \"github:kix-run/kix/v{version}\";` to flake.nix"
+                    "kix.toml [versions] names input `{input}`, which is missing from flake.nix. Add `inputs.{input}.url = \"github:kix-run/kix/v{version}\";` to flake.nix"
                 ),
                 InputError::Follows(path) => format!(
-                    "The input {input} in flake.nix follows {path}, so the Kix library comes from another flake. Set `inputs.{input}.url = \"github:kix-run/kix/v{version}\";` in flake.nix"
+                    "Input `{input}` in flake.nix uses `follows` (`{path}`) instead of pinning a Kix version directly. Replace `follows` with `inputs.{input}.url = \"github:kix-run/kix/v{version}\";` in flake.nix"
                 ),
             };
         }

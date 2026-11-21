@@ -146,7 +146,7 @@ impl CommandContext {
                 Lookup::Mutating => Err(e),
                 Lookup::ReadOnly => {
                     eprintln!(
-                        "warning: could not evaluate the name of cluster '{arg}', so looking it up as '{arg}': {e}"
+                        "warning: could not read the project to look up cluster '{arg}': {e}\nKix will check the Kubernetes cluster for '{arg}' as given. Fix the error above if '{arg}' sets a different `name` in its cluster definition."
                     );
                     Ok(arg.to_string())
                 }

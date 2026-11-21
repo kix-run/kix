@@ -32,12 +32,12 @@ Create a `flake.nix` and declare nixpkgs and the Kix library, as the input named
 }
 ```
 
-The tag `v0.10.0` in the url of the `kix` input sets the version of Kix the
-project runs by default, and the main Kix library input must be named `kix`. To
-hold some clusters on an older version of Kix, add another input and list each
-cluster in the [`[versions]` table](/docs/reference/kix-toml/#the-versions-table)
-of `kix.toml`; see
-[Hold clusters on different versions of Kix](/docs/how-to/start-and-inspect/hold-clusters-on-different-kix-versions/).
+The `v0.10.0` tag in `inputs.kix.url` sets the version of Kix the project runs
+by default, and the main Kix library input must be named `kix`. To keep some
+clusters on an older version while upgrading others, add a second Kix input and
+map each cluster in the [`[versions]` table](/docs/reference/kix-toml/#the-versions-table)
+of `kix.toml` (see
+[Keep clusters on different versions of Kix](/docs/how-to/start-and-inspect/hold-clusters-on-different-kix-versions/)).
 Following the same nixpkgs input keeps package evaluation on one nixpkgs
 revision.
 

@@ -35,33 +35,43 @@ pub(super) fn relocate(
         unreachable!("only a cluster is moved between inputs");
     };
     if from == to && resume.is_none() {
-        println!("The cluster `{cluster}` already uses the input `{to}`. Nothing to move.");
+        println!("Cluster `{cluster}` already uses input `{to}`. Nothing to move.");
         return Ok(Exit::Success);
     }
     let to_version = release_of(dir, to)?;
     // A stopped run already changed [versions], so the version the cluster
     // came from is the one the run recorded.
     let from_version = match resume {
-        Some(s) => Some(
-            s.from
-                .parse::<Version>()
-                .map_err(|_| miette!("kix-upgrade.json names no version in `from`"))?,
-        ),
+        Some(s) => Some(s.from.parse::<Version>().map_err(|_| {
+            miette!(
+                "Cannot read kix-upgrade.json: `from` (`{}`) is not a valid Kix version. Delete kix-upgrade.json to discard the saved upgrade state and run `{}` again.",
+                s.from,
+                subject.command()
+            )
+        })?),
         None => release_of(dir, from)?,
     };
-    let (Some(from_version), Some(to_version)) = (from_version, to_version) else {
-        return edit_only(
-            dir,
-            &subject,
-            args.dry_run,
-            "One of the two inputs pins no release of Kix, so Kix built nothing to compare.",
-        );
+    let (Some(from_version), Some(to_version)) = (&from_version, &to_version) else {
+        let why = match (&from_version, &to_version) {
+            (None, None) => format!(
+                "Inputs `{from}` and `{to}` do not pin Kix releases in flake.lock, so Kix cannot compare builds."
+            ),
+            (None, Some(_)) => format!(
+                "Input `{from}` does not pin a Kix release in flake.lock, so Kix cannot compare builds."
+            ),
+            (Some(_), None) => format!(
+                "Input `{to}` does not pin a Kix release in flake.lock, so Kix cannot compare builds."
+            ),
+            (Some(_), Some(_)) => unreachable!(),
+        };
+        return edit_only(dir, &subject, args.dry_run, &why);
     };
+    let (from_version, to_version) = (from_version.clone(), to_version.clone());
     if to_version < from_version {
         return Err(refused(format!(
-            "Cannot move the cluster `{cluster}` to the input `{to}`: `{to}` pins Kix {}, and the cluster is on Kix {}. `kix upgrade` only moves a cluster to a newer version.\nNo project files were modified.",
-            to_version.release(),
-            from_version.release()
+            "Cannot move cluster `{cluster}` to input `{to}`: `{to}` pins Kix {to_rel}, while `{cluster}` is on Kix {from_rel} (input `{from}`). `kix upgrade` only moves clusters to a newer version.\nNo project files were modified.\nNext: run `kix upgrade {to}` to upgrade `{to}` first.",
+            to_rel = to_version.release(),
+            from_rel = from_version.release()
         )));
     }
     if to_version == from_version {
@@ -70,7 +80,7 @@ pub(super) fn relocate(
             &subject,
             args.dry_run,
             &format!(
-                "Both inputs pin Kix {}, so nothing about the cluster changes.",
+                "Inputs `{from}` and `{to}` both pin Kix {}, so the cluster's Kix version does not change.",
                 to_version.release()
             ),
         );
@@ -102,7 +112,7 @@ pub(super) fn relocate(
     )?;
     if let Some((stop, _)) = &route.stop {
         return Err(refused(format!(
-            "Cannot move the cluster `{cluster}` from Kix {} to Kix {}: Kix {stop} must be deployed to the cluster first.\nNo project files were modified.\nNext: run `kix upgrade {from} --to {stop}`, deploy the clusters on `{from}`, then run `{}` again.",
+            "Cannot move cluster `{cluster}` directly from Kix {} (input `{from}`) to Kix {} (input `{to}`): Kix {stop} must be deployed to `{cluster}` first.\nNo project files were modified.\nNext: run `kix upgrade {from} --to {stop}`, deploy the clusters on `{from}` with `kix deploy <cluster>`, then run `{}` again.",
             from_version.release(),
             to_version.release(),
             subject.command(),
@@ -144,13 +154,13 @@ fn edit_only(dir: &Path, subject: &Subject, dry_run: bool, why: &str) -> Flow<Ex
     };
     if dry_run {
         println!(
-            "`{}` would list the cluster `{cluster}` under `{to}` in kix.toml (dry run, no files changed). {why}",
+            "`{}` would move cluster `{cluster}` to input `{to}` in kix.toml (dry run, no files changed). {why}",
             subject.command()
         );
         return Ok(Exit::Success);
     }
     kix::versions::move_cluster(dir, cluster, to).map_err(|e| refused(e.to_string()))?;
-    println!("Moved the cluster `{cluster}` to the input `{to}` (updated kix.toml). {why}");
-    println!("Run `kix plan {cluster}` to see what a deploy would change.");
+    println!("Moved cluster `{cluster}` to input `{to}` (updated kix.toml). {why}");
+    println!("Run `kix plan {cluster}` to see what deploying will change.");
     Ok(Exit::Success)
 }

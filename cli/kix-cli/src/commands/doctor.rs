@@ -96,7 +96,7 @@ fn check_versions(dir: &std::path::Path) -> usize {
         Ok(Some(versions)) => versions,
         Ok(None) => return 0,
         Err(e) => {
-            fail("kix.toml [versions]: not usable");
+            fail("kix.toml [versions] is invalid");
             detail(&e.to_string());
             return 1;
         }
@@ -119,7 +119,7 @@ fn check_versions(dir: &std::path::Path) -> usize {
         };
         let clusters = versions.clusters_of(input);
         let used_by = if clusters.is_empty() {
-            "used by no cluster".to_string()
+            "used by no clusters".to_string()
         } else {
             format!("used by {}", clusters.join(", "))
         };

@@ -27,17 +27,17 @@ for plugins.
 | `--context <CONTEXT>` | `KIX_CONTEXT` | Current kubeconfig context | Kubeconfig context for every command that talks to a cluster. `logs` and `port-forward` pass it to `kubectl`. |
 | `--flake <FLAKE>` | `KIX_FLAKE` | `.` | Flake to evaluate clusters from. A value without `:` is a local path, resolved against the working directory; anything else, such as `github:org/repo`, is passed as a remote flake reference. Commands that use the [eval cache](/docs/reference/cli/eval-cache-behavior/) currently fail on a remote reference. |
 | `--no-cache` | `KIX_NO_CACHE` | Off | Skip the Kix eval cache and re-evaluate the cluster every time. See [Eval cache behavior](/docs/reference/cli/eval-cache-behavior/). |
-| `--override-input <INPUT> <URL>` | `KIX_OVERRIDE_INPUT`, names and URLs separated by spaces, read only without the flag | None | Override a flake input's URL during evaluation. Repeatable, two values each time. Kix skips the [eval cache](/docs/reference/cli/eval-cache-behavior/) when this is set. Overriding a cluster's Kix library input (`kix` by default, or the input listed for the cluster in `kix.toml` [`[versions]`](/docs/reference/kix-toml/#the-versions-table)) runs that cluster with a [development Kix library](/docs/how-to/start-and-inspect/install-and-run-the-kix-cli/#work-on-the-kix-library-itself): Kix runs the Kix you started and compares no versions. |
+| `--override-input <INPUT> <URL>` | `KIX_OVERRIDE_INPUT`, names and URLs separated by spaces, read only without the flag | None | Override a flake input's URL during evaluation. Repeatable, two values each time. Kix skips the [eval cache](/docs/reference/cli/eval-cache-behavior/) when this is set. Overriding the Kix library input for the command (`kix` by default, or the cluster's input in `kix.toml` [`[versions]`](/docs/reference/kix-toml/#the-versions-table)) runs with a [development Kix library](/docs/how-to/start-and-inspect/install-and-run-the-kix-cli/#work-on-the-kix-library-itself): Kix runs the version you started and compares no versions. |
 | `-h`, `--help` | | | Print help. `-h` prints a summary, `--help` the long form. |
 | `-V`, `--version` | | | Print the version. |
 
-In a project with a `[versions]` table, `--override-input` replaces a cluster's
-Kix library when `<INPUT>` matches that cluster's input in `[versions]`, such
-as `--override-input kix-stable <url>`. Passing `--override-input kix` for a
-cluster on `kix-stable` has no effect and prints:
+In a project with a `[versions]` table, pass `--override-input <INPUT> <URL>`
+with the input assigned to that cluster in `[versions]`, such as
+`--override-input kix-stable <url>`. Passing `--override-input kix` for a
+cluster assigned to `kix-stable` is ignored with a warning:
 
 ```text
-warning: --override-input kix does not apply to this cluster, which uses the input `kix-stable` (kix.toml [versions]). Pass `--override-input kix-stable <url>` to replace its Kix library.
+warning: ignoring `--override-input kix` because this cluster uses input `kix-stable` (kix.toml [versions]); Kix is evaluating with `kix-stable` as locked. Pass `--override-input kix-stable <url>` to replace its Kix library.
 ```
 
 ## Which commands read which flag
@@ -68,9 +68,9 @@ flags are accepted and have no effect.
 [eval cache](/docs/reference/cli/eval-cache-behavior/). `kix pin` uses
 `--flake` only as a place to look for `pins.json`, and `kix doctor` uses it to
 locate [`kix.toml`](/docs/reference/kix-toml/). `rollback`, `history`,
-`status <CLUSTER>`, and `snapshot` use `--flake` and `--override-input` only to
-evaluate the cluster name when no Activation record in the current context
-already carries `<CLUSTER>` as its `kix.run/cluster` label. `-o` on `deploy`
+`status <CLUSTER>`, and `snapshot` use `--flake` and `--override-input` only
+when no Activation record in the current context matches `<CLUSTER>` and Kix
+evaluates `flake.nix` to look up the cluster's deployed `name`. `-o` on `deploy`
 applies only with `--dry-run`.
 
 ## Environment variables

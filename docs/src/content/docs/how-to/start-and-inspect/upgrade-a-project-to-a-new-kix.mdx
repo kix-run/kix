@@ -11,7 +11,7 @@ new version changes before you deploy.
 
 :::note[Helpful background]
 - [Install and run Kix](/docs/how-to/start-and-inspect/install-and-run-the-kix-cli/#choose-the-version-of-kix-for-a-project): how Kix chooses the version a project uses.
-- [Hold clusters on different versions of Kix](/docs/how-to/start-and-inspect/hold-clusters-on-different-kix-versions/): upgrade staging first while holding production on its current version.
+- [Keep clusters on different versions of Kix](/docs/how-to/start-and-inspect/hold-clusters-on-different-kix-versions/): upgrade staging first while keeping production on its current version.
 - [`kix upgrade` reference](/docs/reference/cli/upgrade/): every flag, the steps of a run, and `kix-upgrade.json`.
 :::
 
@@ -24,12 +24,11 @@ Kix, and `flake.lock` records it:
 inputs.kix.url = "github:kix-run/kix/v0.10.0";
 ```
 
-`kix upgrade` changes that tag and updates `flake.lock`. When `flake.nix` has
-another URL for the same repository and Kix cannot tell which input each URL
-belongs to, `kix upgrade` stops and asks you to update the url of the `kix`
-input yourself. To hold some clusters back on an older version while upgrading
-others, see
-[Hold clusters on different versions of Kix](/docs/how-to/start-and-inspect/hold-clusters-on-different-kix-versions/).
+`kix upgrade` updates that tag and refreshes `flake.lock`. If `flake.nix`
+contains another matching URL for the same repository that Kix cannot tie to an
+input, `kix upgrade` stops and asks you to edit `inputs.kix.url` yourself. To
+upgrade some clusters while keeping others on their current version, see
+[Keep clusters on different versions of Kix](/docs/how-to/start-and-inspect/hold-clusters-on-different-kix-versions/).
 
 ## Pin a project that has no version
 
@@ -171,9 +170,9 @@ cluster before you deploy:
 ## Acknowledge a change to stored data
 
 When a change moves or reinterprets the data a package stores, `kix deploy`
-refuses for any cluster the upgrade built until someone acknowledges it. The
-refusal prints the release note. Read it, take any backup it asks for, then
-acknowledge it by its id:
+blocks any cluster built by that upgrade until someone acknowledges the change.
+The error prints the release note; read it, take any backup it asks for, and
+acknowledge it by ID:
 
 <Command commands={["kix upgrade --acknowledge K0012"]} cwd="my-project/" />
 

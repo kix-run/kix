@@ -208,7 +208,7 @@ fn a_folder_has_no_versions_to_pin() {
         .assert()
         .code(1)
         .stdout(predicate::str::starts_with(format!(
-            "The input kix is the local folder {}, which has no versions. Point the input at the tag v{VERSION}",
+            "The input kix points to the local folder {}, which has no release tags. Set `inputs.kix.url` in flake.nix to a release tag such as `github:kix-run/kix/v{VERSION}`.",
             lib.dir.display()
         )));
 }
