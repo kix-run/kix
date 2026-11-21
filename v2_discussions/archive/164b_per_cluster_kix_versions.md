@@ -1,7 +1,7 @@
 # 164b: Per-cluster Kix versions in one project
 
-**Status:** Exploration
-**Related:** `../archive/164_versioning_at_agent_speed.md` (the versioning decisions this came from), `../140_catalogue_versions_and_upgrade_windows.md`
+**Status:** Superseded by 174
+**Related:** `164_versioning_at_agent_speed.md` (the versioning decisions this came from), `../140_catalogue_versions_and_upgrade_windows.md`
 
 A sketch, lifted from doc 164 when its tooling shipped. Not for implementation
 yet. The Lithus monorepo needs this first.

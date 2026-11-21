@@ -1149,11 +1149,16 @@ fn lock_flake(dir: &Path) {
 /// Needs a Kix runtime (`KIX_RUNTIME_DIR` in the development shell), since
 /// Kix reads the library input with Nix.
 #[test]
-fn two_inputs_on_one_tag_stop_for_an_edit_before_installing() {
+fn two_urls_kix_cannot_tell_apart_stop_for_an_edit_before_installing() {
     let s = Setup::new();
     s.releases(vec![]);
     let url = format!("{}?ref=refs/tags/v9.1.0", s.library);
-    let flake = project_flake(&[("kix", &url), ("image-kix", &url)]);
+    // The second url belongs to no input, so Kix cannot rule it out.
+    let flake = project_flake(&[("kix", &url)]).replacen(
+        "  outputs",
+        &format!("  description = \"{url}\";\n  outputs"),
+        1,
+    );
     s.write("flake.nix", &flake);
     lock_flake(&s.project);
     let lock = s.read("flake.lock");
@@ -1161,7 +1166,7 @@ fn two_inputs_on_one_tag_stop_for_an_edit_before_installing() {
     assert_eq!(code, 3, "{out}");
     assert!(
         out.contains(&format!(
-            "Cannot update flake.nix automatically: two inputs use the Kix library's repository:\n  flake.nix:2:   inputs.kix.url = \"{url}\";\n  flake.nix:3:   inputs.image-kix.url"
+            "Cannot update flake.nix automatically: two inputs use the Kix library's repository:\n  flake.nix:2:   inputs.kix.url = \"{url}\";\n  flake.nix:3:   description"
         )),
         "{out}"
     );
@@ -1526,4 +1531,221 @@ fn the_old_input_name_and_the_kix_setting_are_refused() {
     let (code, out) = s.upgrade(&["--to", "9.3.0"]);
     assert_ne!(code, 0, "{out}");
     assert!(out.contains("[K4476]"), "{out}");
+}
+
+/// A project on Kix 9.1.0 whose `[versions]` table puts `east` on the input
+/// `kix` and `west` on the input `kix-stable`.
+fn two_versions(s: &Setup) {
+    let url = format!("{}?ref=refs/tags/v9.1.0", s.library);
+    s.write(
+        "flake.nix",
+        &project_flake(&[("kix", &url), ("kix-stable", &url)]),
+    );
+    lock_flake(&s.project);
+    s.write(
+        "kix.toml",
+        "[versions]\nkix = [\"east\"]\nkix-stable = [\"west\"]\n",
+    );
+}
+
+/// Return the release tag `flake.lock` records for the input `input`.
+fn locked_tag(s: &Setup, input: &str) -> String {
+    let lock: serde_json::Value = serde_json::from_str(&s.read("flake.lock")).unwrap();
+    let node = lock["nodes"]["root"]["inputs"][input].as_str().unwrap();
+    lock["nodes"][node]["original"]["ref"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+#[test]
+fn an_upgrade_moves_only_the_input_kix_and_builds_only_its_clusters() {
+    let s = Setup::new();
+    s.releases(vec![]);
+    two_versions(&s);
+    let (code, out) = s.upgrade(&["--to", "9.2.0"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains("Input `kix` in flake.nix, used by east"),
+        "{out}"
+    );
+    assert_eq!(locked_tag(&s, "kix"), "refs/tags/v9.2.0");
+    assert_eq!(locked_tag(&s, "kix-stable"), "refs/tags/v9.1.0");
+    let calls = s.calls();
+    assert!(calls.contains("export east"), "{calls}");
+    assert!(!calls.contains("west"), "{calls}");
+    assert!(!calls.contains("list clusters"), "{calls}");
+    assert_eq!(s.state()["clusters"], serde_json::json!(["east"]));
+}
+
+#[test]
+fn a_named_input_moves_to_the_version_kix_is_on() {
+    let s = Setup::new();
+    s.releases(vec![]);
+    two_versions(&s);
+    let (code, out) = s.upgrade(&["--to", "9.2.0"]);
+    assert_eq!(code, 0, "{out}");
+
+    // An input may not pass `kix`.
+    let (code, out) = s.upgrade(&["kix-stable", "--to", "9.3.0"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains("Cannot upgrade input `kix-stable` to Kix 9.3.0: input `kix` pins Kix 9.2.0, and `kix` must pin the newest version in the project."),
+        "{out}"
+    );
+
+    let (code, out) = s.upgrade(&["kix-stable"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.starts_with("Upgrading Kix 9.1.0 -> 9.2.0\n"), "{out}");
+    assert!(
+        out.contains("Input `kix-stable` in flake.nix, used by west"),
+        "{out}"
+    );
+    assert!(
+        out.contains("Pinned input `kix-stable` to Kix 9.2.0 (updated flake.nix, flake.lock)"),
+        "{out}"
+    );
+    assert!(
+        out.ends_with("Upgraded input `kix-stable` to Kix 9.2.0. Ready to deploy.\n"),
+        "{out}"
+    );
+    assert_eq!(locked_tag(&s, "kix"), "refs/tags/v9.2.0");
+    assert_eq!(locked_tag(&s, "kix-stable"), "refs/tags/v9.2.0");
+    assert_eq!(s.state()["input"], "kix-stable");
+    assert_eq!(s.state()["clusters"], serde_json::json!(["west"]));
+
+    let (code, out) = s.upgrade(&["kix-stable"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("Already on Kix 9.2.0"), "{out}");
+}
+
+#[test]
+fn a_cluster_moves_to_another_input_after_a_review() {
+    let s = Setup::new();
+    s.releases(vec![]);
+    two_versions(&s);
+    let (code, out) = s.upgrade(&["--to", "9.2.0"]);
+    assert_eq!(code, 0, "{out}");
+    s.out_for("9.2.0");
+    s.manifest(
+        "out-9.2.0",
+        "west",
+        "Deployment",
+        "web",
+        "web",
+        "image: web:2",
+    );
+
+    let (code, out) = s.upgrade(&["west", "--dry-run"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains("Next: run `kix upgrade west --to kix`."),
+        "{out}"
+    );
+    assert!(s.read("kix.toml").contains("kix-stable = [\"west\"]"));
+
+    let (code, out) = s.upgrade(&["west", "--to", "kix"]);
+    assert_eq!(code, 3, "{out}");
+    assert!(
+        out.contains("Cluster `west`, from input `kix-stable` to input `kix`"),
+        "{out}"
+    );
+    assert!(
+        out.contains("Moved cluster `west` to input `kix` on Kix 9.2.0 (updated kix.toml)"),
+        "{out}"
+    );
+    assert!(
+        out.contains(
+            "Moved cluster `west` to Kix 9.2.0 (input `kix`), but review before deploying:"
+        ),
+        "{out}"
+    );
+    assert_eq!(
+        s.read("kix.toml"),
+        "[versions]\nkix = [\"east\", \"west\"]\nkix-stable = []\n"
+    );
+    // The lock holds the versions, and a move changes none.
+    assert_eq!(locked_tag(&s, "kix-stable"), "refs/tags/v9.1.0");
+    assert_eq!(s.state()["cluster"], "west");
+
+    let (code, out) = s.upgrade(&["west"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains("Cluster `west` already uses input `kix`. Nothing to move."),
+        "{out}"
+    );
+}
+
+#[test]
+fn a_cluster_that_fails_on_its_new_input_stays_there_and_resumes() {
+    let s = Setup::new();
+    s.releases(vec![]);
+    two_versions(&s);
+    let (code, out) = s.upgrade(&["--to", "9.2.0"]);
+    assert_eq!(code, 0, "{out}");
+    s.write("fake/fail-9.2.0", "");
+    let (code, out) = s.upgrade(&["west"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains("kix.toml now lists cluster `west` under `kix` (Kix 9.2.0) so you can fix the build.\nNext: fix the error above, then run `kix upgrade west --to kix` to finish the upgrade."),
+        "{out}"
+    );
+    // Another upgrade waits for this one.
+    let (code, out) = s.upgrade(&[]);
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains("Next: run `kix upgrade west --to kix` to finish that upgrade, or delete kix-upgrade.json to discard its saved state."),
+        "{out}"
+    );
+    std::fs::remove_file(s.project.join("fake/fail-9.2.0")).unwrap();
+    let (code, out) = s.upgrade(&["west"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.starts_with("Resuming upgrade Kix 9.1.0 -> 9.2.0 (reusing 9.1.0 baseline)\n"),
+        "{out}"
+    );
+}
+
+#[test]
+fn a_new_input_is_locked_by_upgrading_it() {
+    let s = Setup::new();
+    s.releases(vec![]);
+    let url = format!("{}?ref=refs/tags/v9.1.0", s.library);
+    s.write(
+        "flake.nix",
+        &project_flake(&[("kix", &url), ("kix-stable", &url)]),
+    );
+    s.write(
+        "kix.toml",
+        "[versions]\nkix = [\"east\"]\nkix-stable = [\"west\"]\n",
+    );
+    // flake.lock holds only `kix`, as it did before the second input.
+    let out = s.kix().args(["build", "west"]).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("Input `kix-stable` is defined in flake.nix and kix.toml [versions], but is not locked in flake.lock yet. Run `kix upgrade kix-stable` to lock it."),
+        "{err}"
+    );
+    let (code, out) = s.upgrade(&["kix-stable"]);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(locked_tag(&s, "kix-stable"), "refs/tags/v9.1.0");
+}
+
+#[test]
+fn a_name_that_is_no_input_and_no_cluster_is_refused() {
+    let s = Setup::new();
+    s.releases(vec![]);
+    let (code, out) = s.upgrade(&["west"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains("kix.toml has no [versions] table, so every cluster in this project uses the same version of Kix"),
+        "{out}"
+    );
+    two_versions(&s);
+    let (code, out) = s.upgrade(&["north"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains("`north` is neither an input nor a cluster in kix.toml [versions] (inputs: `kix`, `kix-stable`)"),
+        "{out}"
+    );
 }

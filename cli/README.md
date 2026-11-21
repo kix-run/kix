@@ -452,7 +452,69 @@ A refusal for a removed or renamed option starts with the record's id in
 brackets, and the id comes from `scripts/change-records.py next-id`. People
 search CHANGELOG.md for the id, and tools match it.
 
+### Several versions of Kix in one project
+
+`v2_discussions/archive/174a_kix_versions_in_one_flake.md` is the design. A project
+may hold clusters on different versions of Kix. Each version is an input of
+`flake.nix`: `kix`, and one more for each version a cluster is held back on,
+such as `kix-stable`. The `[versions]` table of `kix.toml` lists the clusters
+under each input. `flake.lock` still holds every version.
+
+- **The table** (`kix-core/src/versions.rs`): `Versions::read` reads it as
+  leniently as `library_setting` reads `library`. `Versions::check` refuses a
+  key that is no input of the lock (`NoInput`, or `NotLocked` when
+  `flake.nix` already names it), and an input that pins a newer release than
+  `kix` (`NewerThanKix`). `Versions::parse` refuses a cluster listed twice and
+  a cluster with the name of an input. `choose(dir, cluster)` runs once per
+  command, from `dispatch::prepare_evaluation`, and stores the cluster's
+  input and the flake reference of what the lock pins for it (`locked_ref`).
+  A cluster the table leaves out is `Unlisted`.
+- **Swap at evaluation**: the outputs of `flake.nix` read only the input
+  `kix`. `GlobalArgs::input_overrides` adds `--override-input kix <locked
+  ref>` for a cluster on another input, so every evaluation of that command
+  uses the cluster's library. No version of Kix evaluates another version's
+  library. An `--override-input` of the cluster's own input replaces it
+  there, and `dispatch::warn_unused_override` warns about an override of
+  `kix` that does not apply. `kix/lib/mkFlake.nix` refuses a cluster built
+  with another input's library, for plain `nix build`.
+- **Finding the cluster before parsing** (`select.rs`): `scan` builds the
+  clap definition (`cli::command()`) and reads from it which flags take a
+  value, which words are commands, and which commands take a cluster: the
+  ones whose first positional argument is named `cluster` (`CLUSTER_ARG`).
+  It keeps no list of its own. `Command::cluster_name` says the same after
+  parsing, with no catch-all arm, and the test
+  `a_command_has_a_cluster_exactly_when_its_first_positional_is_named_cluster`
+  (`cli.rs`) checks that the two agree for every command. A command that
+  names no cluster runs in the Kix of the input `kix`.
+- **Settings an older Kix does not know**: `versions::held_back` is true
+  when the running Kix is older than the release `kix` pins. Then
+  `ProjectConfig::parse` skips unknown keys, and `mkFlake.nix` skips unknown
+  arguments (`heldBack`, from the tag of `kix` in `flake.lock`). The Kix of
+  `kix` checks both in full. A known setting with an unknown value is an
+  error in every version.
+- **Where it shows**: `kix list clusters` adds `KIX` and `INPUT` columns to
+  its text form (JSON stays the list of names), `kix doctor` prints a line
+  for each input (`check_versions`), and the deploy receipt records
+  `builder.kixInput`.
+- `kix status` and `kix snapshot` take a cluster's key in `flake.nix`, as
+  `kix rollback` does: `CommandContext::cluster_identity` (and
+  `cluster_identity_after` for `kix status`, which sets up the project only
+  when it must evaluate).
+
 ### `kix upgrade`
+
+`kix upgrade` takes an optional name (`upgrade/subject.rs`, `Subject`). With
+no name, or the name of an input, it moves that input to a newer release and
+builds only the clusters `[versions]` lists under it. An input other than
+`kix` moves to the release `kix` pins unless `--to` names one, and may not
+pass `kix`. An input with no clusters is only pinned. With the name of a
+cluster, `--to` names an input, and `upgrade/relocate.rs` moves the cluster
+there: it builds the cluster on the version it is on, lists it under the new
+input (`versions::move_cluster`, which edits the text of `kix.toml` and reads
+it back), builds it again, and reports like any upgrade. `kix-upgrade.json`
+records `input`, `cluster`, and `clusters`, so a stopped run resumes only
+under the same name, and `check_deploy` holds back only the clusters the
+upgrade built.
 
 `kix-cli/src/commands/upgrade/` moves a project to a newer Kix. It skips
 selection, and the Kix that runs it evaluates nothing: every list and build
@@ -1212,7 +1274,8 @@ a record line need regenerating.
 
 #### pin_library (`kix-core/src/pin_library.rs`)
 
-- `pin_library.rs`: `plan(dir, version)` then `Plan::apply`, which `kix upgrade` calls for each step and for a project that pins no version. `plan` runs `nix flake metadata --json --no-write-lock-file` once and never reads `flake.lock` on disk, so a project with no lock, or one behind `flake.nix`, can be pinned. The library is the root input named `kix`, found by `flake_lock::kix_input`, whose `InputError` (`OldName`, `[K9179]`; `Follows`; `Missing`) comes back as `PinLibraryError::Input`. A `path` input is `Folder`, and an input type other than Git, GitHub, GitLab, or SourceHut is `Unsupported`. Unless the input's `original` already names the tag, `retag_flake` rewrites the one string literal in `flake.nix` that names the input's repository and pins what the input pins (no ref, a branch, a commit, or a tag) to the release tag `v<version>`, else `UrlNotFound` or `Edit` with the lines. `apply` writes `flake.nix`, runs `nix flake lock`, evaluates the library version once (`eval::nix::library_version`), and requires it to be the version. On a failed lock or check it puts `flake.nix` and `flake.lock` back.
+- `versions.rs`: the `[versions]` table of `kix.toml`; see "Several versions of Kix in one project".
+- `pin_library.rs`: `plan(dir, input, version)` pins the input `input` (`kix`, or another input `[versions]` names). `owner_of` reads which input a url in `flake.nix` belongs to (`inputs.<name>.url = "..."`, or `url = "..."` inside `<name> = { ... }`), so a second input on the same url, such as a second version of Kix, is left alone. Then `Plan::apply`, which `kix upgrade` calls for each step and for a project that pins no version. `plan` runs `nix flake metadata --json --no-write-lock-file` once and never reads `flake.lock` on disk, so a project with no lock, or one behind `flake.nix`, can be pinned. The library is the root input named `kix`, found by `flake_lock::kix_input`, whose `InputError` (`OldName`, `[K9179]`; `Follows`; `Missing`) comes back as `PinLibraryError::Input`. A `path` input is `Folder`, and an input type other than Git, GitHub, GitLab, or SourceHut is `Unsupported`. Unless the input's `original` already names the tag, `retag_flake` rewrites the one string literal in `flake.nix` that names the input's repository and pins what the input pins (no ref, a branch, a commit, or a tag) to the release tag `v<version>`, else `UrlNotFound` or `Edit` with the lines. `apply` writes `flake.nix`, runs `nix flake lock`, evaluates the library version once (`eval::nix::library_version`), and requires it to be the version. On a failed lock or check it puts `flake.nix` and `flake.lock` back.
 
 #### version, installs, and release (`kix-core/src/version/`, `kix/src/installs.rs`, `kix/src/release/`)
 

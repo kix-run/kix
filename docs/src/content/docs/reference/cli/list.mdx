@@ -38,9 +38,25 @@ kix list images <CLUSTER> [--sources] [-o text|json|yaml]
 ## `list clusters`
 
 Prints a `NAME` column with every cluster registered with `kix.lib.mkFlake`,
-read from `legacyPackages.<system>.kixClusters`. JSON output is an array of
-names. A flake with no clusters prints `No clusters found in this flake.` on
-stderr.
+read from `legacyPackages.<system>.kixClusters`.
+
+When the project's [`kix.toml`](/docs/reference/kix-toml/#the-versions-table)
+has a `[versions]` table, text output adds `KIX` and `INPUT` columns:
+
+```text
+ NAME     KIX     INPUT
+ dev      -       not listed in [versions]
+ prod     0.12.3  kix-stable
+ staging  0.14.2  kix
+```
+
+`KIX` shows the release version pinned for the cluster's input in `flake.lock`,
+`development` when the input points to a local folder or branch, or `unknown`
+when `flake.lock` has no version for that input. A cluster missing from
+`[versions]` shows `-` and `not listed in [versions]`.
+
+JSON and YAML output are unchanged: an array of cluster names. A flake with no
+clusters prints `No clusters found in this flake.` on stderr.
 
 ## `list packages`
 

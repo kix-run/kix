@@ -950,6 +950,12 @@
       ]
     },
     {
+      "page": "start-and-inspect/hold-clusters-on-different-kix-versions",
+      "scenario": "application",
+      "status": "implemented",
+      "unverifiedNixBlocks": 1
+    },
+    {
       "page": "start-and-inspect/install-and-run-the-kix-cli",
       "scenario": "application",
       "status": "implemented",

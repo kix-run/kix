@@ -58,6 +58,9 @@ pub fn run(args: &SnapshotArgs, ctx: &mut CommandContext) -> Result<()> {
     }
 
     let global = ctx.global.clone();
+    // A person types the cluster's key in flake.nix. Its deploy records
+    // carry its name, which differs when the definition sets one.
+    let cluster = ctx.cluster_identity(&args.cluster, super::Lookup::ReadOnly)?;
 
     ctx.runtime()?.block_on(async {
         let context = global.context.as_deref();
@@ -65,7 +68,7 @@ pub fn run(args: &SnapshotArgs, ctx: &mut CommandContext) -> Result<()> {
             .await
             .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
 
-        let sweep = sweep_cluster(&client, &args.cluster).await?;
+        let sweep = sweep_cluster(&client, &cluster).await?;
 
         crate::esay!("Fetched {} resources", sweep.managed.len());
         for note in sweep.scope_notes() {
@@ -91,8 +94,8 @@ pub fn run(args: &SnapshotArgs, ctx: &mut CommandContext) -> Result<()> {
              **Context:** {context}\n\
              **Resources written:** {written}\n\n\
              ## Command\n\n\
-             ```\nkix snapshot {cluster} --out {dir}\n```\n",
-            cluster = args.cluster,
+             ```\nkix snapshot {key} --out {dir}\n```\n",
+            key = args.cluster,
             context = global.context.as_deref().unwrap_or("(current)"),
             dir = args.out,
         );

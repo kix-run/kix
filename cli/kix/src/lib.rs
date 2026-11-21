@@ -20,7 +20,7 @@
 
 pub use kix_core::{
     VERSION, build_source, changes, eval, flake_lock, pin_library, project, runtime, system_nix,
-    text, version, yaml,
+    text, version, versions, yaml,
 };
 
 pub mod cluster;

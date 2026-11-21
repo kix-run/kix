@@ -94,11 +94,30 @@ impl GlobalArgs {
     ///
     /// Both clap (for the flag) and `override_input_from_env` (for
     /// `KIX_OVERRIDE_INPUT`) guarantee an even number of elements.
+    ///
+    /// When this run's cluster uses another input than `kix`
+    /// (`kix::versions`), the pairs end with the one that replaces `kix`
+    /// with that input, so the project evaluates with the cluster's library.
+    /// An override of that input replaces it there too, and an override of
+    /// `kix` itself does not apply to this cluster.
     pub fn input_overrides(&self) -> Vec<(String, String)> {
-        self.override_input
+        let mut pairs: Vec<(String, String)> = self
+            .override_input
             .chunks_exact(2)
             .map(|c| (c[0].clone(), c[1].clone()))
-            .collect()
+            .collect();
+        if let Some(chosen) = kix::versions::chosen()
+            && let Some(swap) = &chosen.swap
+        {
+            let url = pairs
+                .iter()
+                .rev()
+                .find(|(name, _)| name == &chosen.input)
+                .map_or_else(|| swap.clone(), |(_, url)| url.clone());
+            pairs.retain(|(name, _)| name != kix::flake_lock::INPUT);
+            pairs.push((kix::flake_lock::INPUT.to_string(), url));
+        }
+        pairs
     }
 }
 
@@ -338,6 +357,80 @@ impl Command {
 mod tests {
     use super::*;
     use clap::FromArgMatches;
+
+    /// Return a command line for the command at `path` that gives every
+    /// required argument a value, with `first` as the first positional.
+    fn sample(command: &clap::Command, path: &[String], first: &str) -> Vec<String> {
+        let mut argv = vec!["kix".to_string()];
+        argv.extend(path.iter().cloned());
+        let value = |arg: &clap::Arg| {
+            arg.get_possible_values()
+                .first()
+                .map_or("1".to_string(), |v| v.get_name().to_string())
+        };
+        for arg in command.get_positionals() {
+            if arg.get_index() == Some(1) && arg.get_possible_values().is_empty() {
+                argv.push(first.to_string());
+            } else if arg.is_required_set() {
+                argv.push(value(arg));
+            }
+        }
+        for arg in command.get_arguments().filter(|a| !a.is_positional()) {
+            if arg.is_required_set()
+                && let Some(long) = arg.get_long()
+            {
+                argv.push(format!("--{long}"));
+                if arg.get_action().takes_values() {
+                    argv.push(value(arg));
+                }
+            }
+        }
+        argv
+    }
+
+    /// Kix chooses its version before it parses, from the definition of the
+    /// command line: a command acts on a cluster when its first positional
+    /// argument is named `cluster`. `Command::cluster_name` says the same
+    /// after parsing, and the two must agree for every command.
+    #[test]
+    fn a_command_has_a_cluster_exactly_when_its_first_positional_is_named_cluster() {
+        fn walk(command: &clap::Command, path: &mut Vec<String>, problems: &mut Vec<String>) {
+            if command.has_subcommands() {
+                // Building the definition adds a `help` command at each level.
+                for sub in command.get_subcommands().filter(|s| s.get_name() != "help") {
+                    path.push(sub.get_name().to_string());
+                    walk(sub, path, problems);
+                    path.pop();
+                }
+                return;
+            }
+            let named = command
+                .get_positionals()
+                .find(|a| a.get_index() == Some(1))
+                .is_some_and(|a| a.get_id() == crate::select::CLUSTER_ARG);
+            let argv = sample(command, path, "the-cluster");
+            let line = argv.join(" ");
+            let cli = match Cli::try_parse_from(&argv) {
+                Ok(cli) => cli,
+                Err(e) => {
+                    problems.push(format!("`{line}` does not parse: {}", e.kind()));
+                    return;
+                }
+            };
+            let cluster = cli.command.cluster_name();
+            let expected = named.then_some("the-cluster");
+            if cluster != expected {
+                problems.push(format!(
+                    "`{line}`: the first positional is named cluster: {named}, and cluster_name returns {cluster:?}"
+                ));
+            }
+        }
+        let mut root = live_command();
+        root.build();
+        let mut problems = Vec::new();
+        walk(&root, &mut Vec::new(), &mut problems);
+        assert!(problems.is_empty(), "{}", problems.join("\n"));
+    }
 
     #[test]
     fn documented_commands_parse_with_clap() {

@@ -56,36 +56,84 @@ pub struct Scan {
     pub version: bool,
     /// Each `--override-input` pair.
     pub overrides: Vec<(String, String)>,
+    /// The cluster the command acts on, for a command that takes one.
+    pub cluster: Option<String>,
 }
 
-/// The global flags that take a value, and how many.
-const VALUE_FLAGS: &[(&str, usize)] = &[
-    ("--output", 1),
-    ("--context", 1),
-    ("--flake", 1),
-    ("--override-input", 2),
-];
+/// The name clap gives the argument that holds a command's cluster. A
+/// command acts on a cluster when its first positional argument has this
+/// name.
+pub const CLUSTER_ARG: &str = "cluster";
 
-/// The short global flags that take a value.
-const SHORT_VALUE_FLAGS: &[char] = &['o'];
+/// Return how many of the words after a flag are its values.
+fn values_of(arg: &clap::Arg) -> usize {
+    if !arg.get_action().takes_values() {
+        return 0;
+    }
+    arg.get_num_args().map_or(1, |n| n.min_values().max(1))
+}
+
+/// Return the flag of `command` that a person writes as `--<name>`.
+fn long_flag<'a>(command: &'a clap::Command, name: &str) -> Option<&'a clap::Arg> {
+    command.get_arguments().find(|a| {
+        a.get_long() == Some(name)
+            || a.get_all_aliases()
+                .is_some_and(|aliases| aliases.contains(&name))
+    })
+}
+
+/// Return the flag of `command` that a person writes as `-<c>`.
+fn short_flag(command: &clap::Command, c: char) -> Option<&clap::Arg> {
+    command.get_arguments().find(|a| {
+        a.get_short() == Some(c)
+            || a.get_all_short_aliases()
+                .is_some_and(|aliases| aliases.contains(&c))
+    })
+}
+
+/// Return whether the first positional argument of `command` is a cluster.
+fn takes_cluster(command: &clap::Command) -> bool {
+    command
+        .get_positionals()
+        .find(|a| a.get_index() == Some(1))
+        .is_some_and(|a| a.get_id() == CLUSTER_ARG)
+}
 
 /// Read `args` (with the program name first) the way clap will, as far as
 /// selection needs.
+///
+/// The scan reads the definition of the command line to learn which flags
+/// take a value, which words are commands, and which commands take a
+/// cluster, so a new command or flag needs no change here.
 pub fn scan(args: &[OsString]) -> Scan {
+    let mut root = crate::cli::command();
+    // Building copies each global flag into every command.
+    root.build();
+    scan_with(&root, args)
+}
+
+fn scan_with(root: &clap::Command, args: &[OsString]) -> Scan {
     let mut scan = Scan::default();
     let args: Vec<String> = args
         .iter()
         .skip(1)
         .map(|a| a.to_string_lossy().into_owned())
         .collect();
+    // The command the words so far have reached, or `None` after a word that
+    // is no command of Kix, which is a plugin with arguments of its own.
+    let mut at = Some(root);
+    let mut positionals = 0;
+    // After `--` every word is a positional, as clap reads it.
+    let mut flags = true;
     let mut i = 0;
     while i < args.len() {
         let arg = args[i].as_str();
         i += 1;
-        if arg == "--" {
-            break;
+        if flags && arg == "--" {
+            flags = false;
+            continue;
         }
-        if let Some(long) = arg.strip_prefix("--") {
+        if flags && let Some(long) = arg.strip_prefix("--") {
             let (name, attached) = match long.split_once('=') {
                 Some((name, value)) => (name, Some(value)),
                 None => (long, None),
@@ -95,11 +143,11 @@ pub fn scan(args: &[OsString]) -> Scan {
                 "version" if scan.command.is_none() => scan.version = true,
                 _ => {}
             }
-            let takes = VALUE_FLAGS
-                .iter()
-                .find(|(flag, _)| flag.strip_prefix("--") == Some(name))
-                .map(|(_, n)| *n);
-            if let Some(n) = takes {
+            let n = at
+                .and_then(|c| long_flag(c, name))
+                .or_else(|| long_flag(root, name))
+                .map_or(0, values_of);
+            if n > 0 {
                 let values: Vec<&str> = attached
                     .into_iter()
                     .chain(args[i..].iter().map(String::as_str))
@@ -117,16 +165,21 @@ pub fn scan(args: &[OsString]) -> Scan {
             }
             continue;
         }
-        if let Some(shorts) = arg.strip_prefix('-').filter(|s| !s.is_empty()) {
-            for (at, c) in shorts.char_indices() {
+        if flags && let Some(shorts) = arg.strip_prefix('-').filter(|s| !s.is_empty()) {
+            for (pos, c) in shorts.char_indices() {
                 match c {
                     'h' => scan.help = true,
                     'V' if scan.command.is_none() => scan.version = true,
                     _ => {}
                 }
-                if SHORT_VALUE_FLAGS.contains(&c) {
-                    if at + c.len_utf8() == shorts.len() {
-                        i += 1;
+                let n = at
+                    .and_then(|cmd| short_flag(cmd, c))
+                    .or_else(|| short_flag(root, c))
+                    .map_or(0, values_of);
+                if n > 0 {
+                    // The rest of the word is the value, or else the next word.
+                    if pos + c.len_utf8() == shorts.len() {
+                        i += n;
                     }
                     break;
                 }
@@ -135,6 +188,15 @@ pub fn scan(args: &[OsString]) -> Scan {
         }
         if scan.command.is_none() {
             scan.command = Some(arg.to_string());
+        }
+        let Some(command) = at else { continue };
+        if command.has_subcommands() {
+            at = command.find_subcommand(arg);
+            continue;
+        }
+        positionals += 1;
+        if positionals == 1 && takes_cluster(command) {
+            scan.cluster = Some(arg.to_string());
         }
     }
     scan
@@ -218,13 +280,43 @@ pub fn auto_install_on(value: Option<&OsStr>) -> bool {
 /// Return the Kix the project in `scan` uses, or `None` when the command
 /// reads no local project: `--flake` names a remote flake, or the
 /// directory has no `flake.nix`.
-fn project_kix(scan: &Scan) -> Option<Result<ProjectKix, LockError>> {
+fn project_kix(scan: &Scan) -> Option<(String, Result<ProjectKix, LockError>)> {
     let flake = raw_flake(scan, std::env::var_os("KIX_FLAKE").as_deref());
     let dir = crate::commands::project_dir(&flake)?;
     if !dir.join("flake.nix").is_file() {
         return None;
     }
-    Some(flake_lock::project_kix(&dir, &overrides(scan)))
+    Some(match input_in(&dir, scan) {
+        Ok(input) => {
+            let kix = flake_lock::project_kix_on(&dir, &overrides(scan), &input);
+            (input, kix)
+        }
+        Err(e) => (flake_lock::INPUT.to_string(), Err(e)),
+    })
+}
+
+/// Return the input whose Kix runs the command `scan` found, in the project
+/// in `dir`. A project with a `[versions]` table uses the input that lists
+/// the cluster. A command that names no cluster, or names a word the table
+/// does not list, uses the input `kix`, and the chosen Kix judges the word
+/// once it has parsed the command.
+fn input_in(dir: &Path, scan: &Scan) -> Result<String, LockError> {
+    let setting = |e: kix::versions::VersionsError| LockError::Setting(e.to_string());
+    let versions = kix::versions::Versions::read(dir).map_err(setting)?;
+    // A table that names an input the lock does not hold is wrong for every
+    // cluster, so it is reported before the lock of any one input is read.
+    if let Some(versions) = &versions
+        && let Ok(lock) = flake_lock::read(dir)
+    {
+        versions
+            .check(&lock, &kix::versions::flake_text(dir))
+            .map_err(setting)?;
+    }
+    let input = match (&versions, &scan.cluster) {
+        (Some(versions), Some(cluster)) => versions.input_of(cluster),
+        _ => None,
+    };
+    Ok(input.unwrap_or(flake_lock::INPUT).to_string())
 }
 
 /// Return the `--override-input` pairs, or else the pairs in
@@ -257,7 +349,10 @@ pub fn run(args: &[OsString]) -> miette::Result<Outcome> {
         Some(_) => None,
         None => project_kix(&scan),
     };
-    let kix = match kix {
+    let input = kix
+        .as_ref()
+        .map_or(flake_lock::INPUT.to_string(), |(input, _)| input.clone());
+    let kix = match kix.map(|(_, kix)| kix) {
         None => None,
         Some(Ok(kix)) => Some(kix),
         // `kix --version` still prints the version.
@@ -319,13 +414,17 @@ pub fn run(args: &[OsString]) -> miette::Result<Outcome> {
     if scan.version {
         print_version(selected_by.as_deref());
         if let Some(ProjectKix::Development(from)) = &kix {
-            eprintln!("  this project uses a development Kix library: {from}");
+            eprintln!(
+                "  this project uses a development Kix library: {}",
+                from.describe(&input)
+            );
         }
         return Ok(Outcome::PrintedVersion);
     }
     if let Some(ProjectKix::Development(from)) = &kix {
         eprintln!(
-            "note: this project uses a development Kix library ({from}), so Kix {} runs it without checking its version.",
+            "note: this project uses a development Kix library ({}), so Kix {} runs it without checking its version.",
+            from.describe(&input),
             version::running().release()
         );
     }
@@ -397,6 +496,38 @@ mod tests {
         Install {
             version: v(version),
             dir: PathBuf::from(format!("/data/{version}")),
+        }
+    }
+
+    #[test]
+    fn the_cluster_is_the_first_bare_word_after_the_command_words() {
+        let cases: &[(&str, Option<&str>)] = &[
+            ("deploy prod", Some("prod")),
+            ("deploy prod --yes", Some("prod")),
+            ("--flake p deploy prod", Some("prod")),
+            ("export staging --out prod", Some("staging")),
+            ("export --out prod staging", Some("staging")),
+            ("deploy --plan prod staging", Some("staging")),
+            ("status --package prod staging", Some("staging")),
+            ("logs -c prod staging web", Some("staging")),
+            ("logs staging prod", Some("staging")),
+            ("list resources prod", Some("prod")),
+            ("list clusters", None),
+            ("compliance audit prod --out staging", Some("prod")),
+            ("migrate domain prod", Some("prod")),
+            ("status", None),
+            ("status prod", Some("prod")),
+            ("rollback -- prod", Some("prod")),
+            ("deploy --yes -- prod", Some("prod")),
+            ("rollback prod -- --yes", Some("prod")),
+            ("pf prod web 80", Some("prod")),
+            ("pin set prod", None),
+            ("upgrade prod --to kix", None),
+            ("self install prod", None),
+            ("some-plugin prod", None),
+        ];
+        for (line, cluster) in cases {
+            assert_eq!(scan(&args(line)).cluster.as_deref(), *cluster, "{line}");
         }
     }
 

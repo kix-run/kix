@@ -51,6 +51,9 @@ const SCOPED_GLOBALS: &[(&str, &[&str])] = &[
             "pin",
             "doctor",
             "upgrade",
+            // These two evaluate only to find a cluster's name from its key.
+            "status",
+            "snapshot",
         ],
     ),
     // Only commands that evaluate through the eval cache.
@@ -76,6 +79,8 @@ const SCOPED_GLOBALS: &[(&str, &[&str])] = &[
             "logs",
             "port-forward",
             "compliance",
+            "status",
+            "snapshot",
         ],
     ),
 ];
@@ -413,10 +418,11 @@ mod tests {
         let gc = long_help(&["gc"]);
         assert!(!gc.contains("--output"));
 
-        // `status` reads only the cluster, so it takes no project flags.
+        // `status` evaluates the project only to find a cluster's name from
+        // its key, so it reads `--flake` and never the eval cache.
         let status = long_help(&["status"]);
         assert!(status.contains("--context") && status.contains("--output"));
-        assert!(!status.contains("--flake"));
+        assert!(status.contains("--flake") && !status.contains("--no-cache"));
 
         let sbom = long_help(&["compliance", "sbom"]);
         assert!(sbom.contains("--output") && !sbom.contains("--context"));

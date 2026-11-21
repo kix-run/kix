@@ -96,6 +96,8 @@ kix status --verbose -v
 kix status --quiet -q
 kix status --no-color
 kix status --context <value>
+kix status --flake <value>
+kix status --override-input <value>
 kix list
 kix list --output -o <value> [text|json|yaml]
 kix list --verbose -v
@@ -254,6 +256,8 @@ kix snapshot --verbose -v
 kix snapshot --quiet -q
 kix snapshot --no-color
 kix snapshot --context <value>
+kix snapshot --flake <value>
+kix snapshot --override-input <value>
 kix completions
 kix completions <shell> required [bash|elvish|fish|powershell|zsh]
 kix completions --verbose -v
@@ -358,6 +362,7 @@ kix pin list --quiet -q
 kix pin list --no-color
 kix pin list --flake <value>
 kix upgrade
+kix upgrade <name>
 kix upgrade --to <value>
 kix upgrade --dry-run
 kix upgrade --acknowledge <value>

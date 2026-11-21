@@ -13,18 +13,71 @@ use super::CommandContext;
 #[serde(transparent)]
 pub(crate) struct ClustersResponse {
     clusters: Vec<String>,
+    /// The Kix each cluster uses, in a project whose kix.toml has a
+    /// [versions] table. The text form shows it.
+    #[serde(skip)]
+    #[schemars(skip)]
+    versions: Option<Vec<ClusterKix>>,
+}
+
+/// The version of Kix one cluster uses.
+struct ClusterKix {
+    /// The release, or what the input follows when it pins none.
+    kix: String,
+    /// The input of flake.nix that [versions] lists the cluster under.
+    input: String,
 }
 
 impl CommandResponse for ClustersResponse {
     fn text(&self) -> String {
         let mut table = comfy_table::Table::new();
         table.load_preset(comfy_table::presets::NOTHING);
-        table.set_header(["NAME"]);
-        for c in &self.clusters {
-            table.add_row([c]);
+        match &self.versions {
+            None => {
+                table.set_header(["NAME"]);
+                for c in &self.clusters {
+                    table.add_row([c]);
+                }
+            }
+            Some(versions) => {
+                table.set_header(["NAME", "KIX", "INPUT"]);
+                for (c, v) in self.clusters.iter().zip(versions) {
+                    table.add_row([c, &v.kix, &v.input]);
+                }
+            }
         }
         table.to_string()
     }
+}
+
+/// Return the Kix each of `clusters` uses, when the project in `dir` has a
+/// `[versions]` table. A cluster the table leaves out shows as not listed,
+/// since every command on it fails until it is.
+fn cluster_versions(dir: &std::path::Path, clusters: &[String]) -> Option<Vec<ClusterKix>> {
+    use kix::flake_lock::{self, ProjectKix};
+    let versions = kix::versions::Versions::read(dir).ok()??;
+    let lock = flake_lock::read(dir).ok()?;
+    let kix_of = |input: &str| match flake_lock::input(&lock, input).map(flake_lock::from_original)
+    {
+        Ok(Ok(ProjectKix::Release(v))) => v.release(),
+        Ok(Ok(ProjectKix::Development(_))) => "development".to_string(),
+        _ => "unknown".to_string(),
+    };
+    Some(
+        clusters
+            .iter()
+            .map(|cluster| match versions.input_of(cluster) {
+                Some(input) => ClusterKix {
+                    kix: kix_of(input),
+                    input: input.to_string(),
+                },
+                None => ClusterKix {
+                    kix: "-".to_string(),
+                    input: "not listed in [versions]".to_string(),
+                },
+            })
+            .collect(),
+    )
 }
 
 /// One package of `kix list packages`.
@@ -113,7 +166,9 @@ fn run_clusters(ctx: &mut CommandContext) -> Result<()> {
         return Ok(());
     }
 
-    let response = ClustersResponse { clusters };
+    let versions =
+        super::project_dir(&ctx.global.flake).and_then(|dir| cluster_versions(&dir, &clusters));
+    let response = ClustersResponse { clusters, versions };
     output::result(&response)
 }
 

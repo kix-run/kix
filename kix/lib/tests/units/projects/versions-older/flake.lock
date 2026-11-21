@@ -1,0 +1,1 @@
+{"root":"root","version":7,"nodes":{"root":{"inputs":{"kix":"kix","kix-stable":"kix-stable"}},"kix":{"original":{"type":"github","owner":"kix-run","repo":"kix","ref":"v0.0.1"}},"kix-stable":{"original":{"type":"github","owner":"kix-run","repo":"kix","ref":"v0.1.0"}}}}

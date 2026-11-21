@@ -33,6 +33,7 @@ pub mod runtime;
 pub mod system_nix;
 pub mod text;
 pub mod version;
+pub mod versions;
 pub mod yaml;
 
 /// The version of the running Kix as the build recorded it. Code reads it

@@ -39,7 +39,7 @@ Both project builders ([`kix.toml`](/docs/reference/kix-toml/)) run the same pin
 - **Under `builder = "kix"` (the default):** Kix runs the `helm` programs in the Kix runtime and writes the fetched charts and rendered manifests into Kix's local store (`~/.cache/kix/store`).
 - **Under `builder = "nix"`:** The machine's Nix fetches the chart and runs `helm template` during evaluation (`allow-import-from-derivation`).
 
-Because rendered chart hashes depend on the exact Helm version, Kix pins the Helm versions in `kix/lib/helm-versions.json`. A project on a release uses a Kix library of the same version as Kix, so both name the same Helm versions. [`kix upgrade`](/docs/reference/cli/upgrade/) moves the Kix library with the project's version of Kix.
+Because rendered chart hashes depend on the exact Helm version, Kix pins the Helm versions in `kix/lib/helm-versions.json`. Each cluster runs the version of Kix that matches its Kix library, so Kix and the Kix library always use the same Helm versions. [`kix upgrade`](/docs/reference/cli/upgrade/) updates the Kix library tag in `flake.nix` and `flake.lock` so both stay on the same version.
 
 Kix supports three tiers of Helm integration depending on how much control you need:
 
