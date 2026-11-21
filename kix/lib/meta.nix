@@ -6,6 +6,7 @@ let
 
   versions = import ./core/version.nix { inherit lib; };
   errors = import ./core/error.nix { inherit lib; };
+  packageLib = import ./core/package.nix { inherit lib; };
 
   failedAssertion = message: {
     assertion = false;
@@ -112,36 +113,10 @@ in
 rec {
   peekPackageMeta =
     { package, kixlib }:
-    if
-      builtins.elem (package._type or "") [
-        "kix-moved"
-        "kix-removed"
-      ]
-    then
-      errors.fail package.error
-    else if builtins.isAttrs package && package ? build then
-      package.meta or { }
-    else if (package._type or "") == "kix-import" then
-      package.meta or { }
-    else if builtins.isAttrs package && package ? meta then
-      package.meta
-    else if builtins.isAttrs package && !(builtins.isFunction package) then
-      { }
-    else
-      let
-        fnArgs = builtins.functionArgs package;
-        result = package (
-          {
-            scope = { };
-            inherit lib;
-          }
-          // lib.optionalAttrs (fnArgs ? kix) { kix = kixlib; }
-          # `meta` must not depend on `availability`, because this peek runs
-          # before the availability level is resolved.
-          // lib.optionalAttrs (fnArgs ? availability) { availability = "none"; }
-        );
-      in
-      result.meta or { };
+    packageLib.metaOf {
+      inherit package;
+      kix = kixlib;
+    };
 
   scopeValues = [
     "cluster"
@@ -241,8 +216,46 @@ rec {
       resolutionIndex,
     }:
     let
-      k8s = packageMeta.k8s or { };
+      # `meta.k8s` holds two ranges. The bounds at its top level refuse a
+      # cluster, so each needs evidence that the package fails outside it.
+      # `supported` is what upstream states it supports, and only warns.
+      k8s = removeAttrs (packageMeta.k8s or { }) [ "supported" ];
+      k8sSupported = removeAttrs ((packageMeta.k8s or { }).supported or { }) [ "source" ];
       clusterK8s = clusterConfig.k8sVersion or null;
+
+      supportedRange =
+        let
+          min = k8sSupported.minVersion or null;
+          max = k8sSupported.maxVersion or null;
+        in
+        if min != null && max != null then
+          (if min == max then "${min} only" else "${min} to ${max}")
+        else if min != null then
+          "${min} and later"
+        else
+          "${max} and earlier";
+      supportedSource = (packageMeta.k8s or { }).supported.source or null;
+      supportedDiag = constraintDiagnostics {
+        field = "meta.k8s.supported";
+        subject = "the cluster's k8sVersion";
+        version = clusterK8s;
+        constraint = k8sSupported;
+        warnWhenNull = false;
+        describeFailure =
+          _: _:
+          "the cluster sets k8sVersion to ${clusterK8s}, while the upstream project supports or tests Kubernetes ${supportedRange}. Kix knows of no failure on Kubernetes ${clusterK8s}, so the build continues."
+          + lib.optionalString (supportedSource != null) " Source: ${supportedSource}."
+          + " To stay on a supported Kubernetes version, move the cluster to one and update k8sVersion.";
+      };
+      supportedIsMalformed = builtins.any (
+        b: k8sSupported ? ${b} && !(versions.isVersion k8sSupported.${b})
+      ) (builtins.attrNames k8sSupported);
+      # A version outside `supported` warns once, even when it misses both
+      # bounds. A bound that is not a version stays an author error.
+      supportedWarnings =
+        supportedDiag.warnings
+        ++ lib.optionals (!supportedIsMalformed) (lib.unique (map (a: a.message) supportedDiag.assertions));
+      supportedAssertions = lib.optionals supportedIsMalformed supportedDiag.assertions;
 
       # Most clusters leave k8sVersion unset, so null does not warn.
       k8sDiag = constraintDiagnostics {
@@ -355,11 +368,13 @@ rec {
     {
       assertions = lib.concatLists [
         (builtins.concatMap (d: d.assertions) versionDiags)
+        supportedAssertions
         conflictAssertions
         scopeAssertions
         unsafeAssertions
       ];
-      warnings = deprecationWarnings ++ builtins.concatMap (d: d.warnings) versionDiags;
+      warnings =
+        deprecationWarnings ++ builtins.concatMap (d: d.warnings) versionDiags ++ supportedWarnings;
     };
 
   evaluatePackageDiagnostics =
@@ -412,9 +427,12 @@ rec {
   # gets `instance` set to the instance that raised it, so the code that
   # raises one leaves the instance out of its text.
   #
-  # `scorecardWarnings` are traced but left out of `allWarnings`, because the
-  # scorecard report already carries them as findings and the CLI shows that
-  # report.
+  # `scorecardWarnings` are left out of `allWarnings`, because the scorecard
+  # report already carries them as findings and the CLI shows that report.
+  #
+  # `evaluateWarnings` computes every warning and prints nothing. The
+  # instance forces it, so an error raised while a warning is worked out
+  # stops the build of the instance.
   combineDiagnostics =
     {
       instanceName,
@@ -436,28 +454,30 @@ rec {
     in
     {
       inherit allWarnings allAssertions failedAssertions;
-      emitWarnings = emitTraces "warning: " (map (errors.describe "  ") allWarnings ++ scorecardWarnings);
+      evaluateWarnings = builtins.deepSeq (
+        map (errors.describe "  ") allWarnings ++ scorecardWarnings
+      ) null;
       emitAssertionWarnings = emitTraces "ASSERTION FAILED: " (
         map (a: "${a.instance}: ${a.message}") failedAssertions
       );
     };
 
   # Aggregate diagnostics across all instances and attach cluster- and
-  # namespace-level ones. `scorecardWarnings` are traced but left out of
-  # `warnings`, as in `combineDiagnostics`. `emitExtraWarnings` traces only
-  # them because instance warnings are already traced during instance
-  # evaluation.
+  # namespace-level ones. `scorecardWarnings` are left out of `warnings`, as
+  # in `combineDiagnostics`. `evaluateExtraWarnings` computes them and prints
+  # nothing. Each instance has already computed its own warnings.
   collectClusterDiagnostics =
     {
       clusterName,
       allInstancesList,
       scorecardWarnings ? [ ],
       extraAssertions ? [ ],
+      extraWarnings ? [ ],
     }:
     let
       collect =
         field: builtins.concatMap (inst: (inst._diagnostics or noDiagnostics).${field}) allInstancesList;
-      warnings = collect "warnings";
+      warnings = collect "warnings" ++ extraWarnings;
       assertions = collect "assertions" ++ extraAssertions;
       failedAssertions = collect "failedAssertions" ++ builtins.filter (a: !a.assertion) extraAssertions;
       assertionCheck =
@@ -476,6 +496,6 @@ rec {
         failedAssertions
         assertionCheck
         ;
-      emitExtraWarnings = emitTraces "warning: " scorecardWarnings;
+      evaluateExtraWarnings = builtins.deepSeq scorecardWarnings null;
     };
 }

@@ -92,7 +92,7 @@
 }:
 
 let
-  release = "v3.7.17";
+  release = "v3.7.19";
 
   # Traefik's GatewayClass controller, pkg/provider/kubernetes/gateway/kubernetes.go.
   controllerName = "traefik.io/gateway-controller";
@@ -157,15 +157,15 @@ in
     # One Gateway accepts HTTPRoutes from every namespace, so consumers in
     # any namespace find it by name.
     scope = "cluster";
-    # The Kubernetes versions Traefik supports, from the Kubernetes support
-    # policy in its docs (docs/content/includes/kubernetes-requirements.md),
-    # which says Traefik supports the latest three minor versions. Kubernetes
-    # v1.37 is the newest minor release at this Traefik release, so it is the
-    # upper bound. Move both bounds with `release`.
-    k8s = {
+    # Traefik's docs say it supports the latest three Kubernetes minor
+    # versions (docs/content/includes/kubernetes-requirements.md). Nothing is
+    # known to fail outside that range, so Kix only warns. Kubernetes v1.37
+    # is the newest minor release at this Traefik release. Move `supported`
+    # with `release`.
+    k8s.supported = {
       minVersion = "1.35";
       maxVersion = "1.37";
-      reason = "[K1871] Traefik ${release} supports Kubernetes 1.35 to 1.37. Deploy a Kix release with an older traefik package, or move the cluster to a supported Kubernetes version first";
+      source = "the Kubernetes requirements in Traefik's docs";
     };
     network.intents = {
       # HTTPRoutes name their backends at runtime, on any port, so the graph
@@ -190,7 +190,7 @@ in
     image = kix.options.image {
       repository = "docker.io/library/traefik";
       tag = release;
-      digest = "sha256:f4bb143d1135a579b630ed491e17ec50f6f7c9c6a30585ff3d385471d2a86f5a";
+      digest = "sha256:a6c0194dda77bcb804824580f36fa7edc56e315b1acfe933366c8b52844a78a4";
       description = "Image of Traefik.";
     };
     replicas = lib.mkOption {
@@ -760,6 +760,9 @@ in
               # already depends on this instance through gatewayRef.
               podSelector = selectorLabels;
               podNamespace = scope.namespaceName;
+              # A ClusterIP Service is reachable from inside the cluster
+              # only.
+              public = serviceType != "ClusterIP";
               version = kix.image.version config.image;
             };
           };

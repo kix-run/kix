@@ -49,7 +49,6 @@ let
       evaluateInstanceConfig
       buildEntriesOf
       discoverBuildDeps
-      systemArgNames
       ;
   };
   namespaceMod = import ./namespace.nix { inherit lib k8s; };
@@ -95,7 +94,7 @@ let
       roles
       ;
     inherit (namespaceMod) mkNamespace;
-    inherit (auto) computeAutoInstances possibleInstanceNames;
+    inherit (auto) computeAutoInstances possibleInstanceNames normalizeAvailablePackages;
     inherit (resolve)
       buildResolutionIndex
       callPackagePhase1

@@ -179,9 +179,15 @@ build = [
 | `port` | int, string, or `null` | `null` | Explicit Service port name or number used when `service` is set (defaults to `service.out.port`). |
 | `partName` | string | `"route"` | Part name for the generated `HTTPRoute` or `Ingress` resource. In Gateway mode, `"${partName}Crd"` holds the `HTTPRoute` CRD reference (`scope.mkCRDRef` for `gateway.networking.k8s.io/v1` `HTTPRoute`). |
 | `exposurePart` | string | `"exposure"` | Attribute name in `self` where resolved exposure metadata (`self.exposure`) is published. |
-| `defaultAnnotations` | attrset | `{ }` | Default annotations merged under `config.ingress.annotations` when generating an `Ingress`. |
-| `timeouts` | `{ request?; backendRequest?; }` or `null` | `null` | Optional Gateway API `HTTPRoute` rule timeouts (for example, `{ request = "60s"; }`). Ignored in Ingress mode. |
+| `defaultAnnotations` | attrset | `{ }` | Default annotations for the generated `Ingress` or `HTTPRoute`. Keys in `config.ingress.annotations` override them. |
+| `timeouts` | `{ request?; backendRequest?; }` or `null` | `null` | Optional Gateway API `HTTPRoute` rule timeouts (for example, `{ request = "60s"; }`). Overridden when the instance sets `config.ingress.timeouts`. Ignored in Ingress mode. |
+| `filters` | list of Gateway API `HTTPRouteFilter` | `[ ]` | Gateway API `HTTPRouteFilter` entries (such as `ResponseHeaderModifier`) added to every generated backend rule. Supported only in Gateway mode; fails evaluation in Ingress mode. |
+| `extraRules` | list of Gateway API `HTTPRouteRule` | `[ ]` | Complete `HTTPRouteRule` entries prepended before the generated backend rules (for example, a `RequestRedirect` on an exact path). Supported only in Gateway mode; fails evaluation in Ingress mode. |
 | `deriveHost` | bool | `true` | When `true`, falls back to `"${scope.instanceName}.${clusterConfig.cluster.domain}"` if `config.ingress.host` is `null`. When `false`, a route is emitted only when `config.ingress.host` is explicitly set. |
+
+`kix.expose` reads `config.ingress` (defined by `kix.options.ingress`): `host`, `extraHosts`, and `annotations` apply in both Gateway and Ingress modes, while `timeouts` applies only in Gateway mode.
+
+In Gateway mode, `kix.expose` checks during evaluation that at least one Gateway listener accepts each hostname (`host` and every entry in `extraHosts`) from the instance's namespace, and fails evaluation if none does. When a listener sets `allowedRoutes.namespaces.from = "Selector"`, Kix checks selectors that match only the `kubernetes.io/metadata.name` label; selectors on other labels cannot be checked during evaluation and emit a warning.
 
 ### `self.exposure` metadata
 
@@ -341,6 +347,28 @@ Kix models cluster availability across four ordered levels: `"none"` < `"pod"` <
 | `kix.availability.pick` | `level -> { none, pod, node, zone } -> value` | Selects `table.${level}`. All four keys (`none`, `pod`, `node`, and `zone`) are required; omitting any key throws an evaluation error. |
 | `kix.availability.atLeast` | `min -> level -> bool` | Returns `true` when `rank level >= rank min` (for example, `kix.availability.atLeast "node" availability`). Throws an evaluation error inside a package if `min` exceeds the package's `meta.availability.max`. |
 | `kix.availability.spreadConstraints` | `{ level, selector, topology } -> list` | Synthesizes `topologySpreadConstraints` for operator custom resources (such as CloudNativePG `Cluster` or Valkey) from `topology` (`clusterConfig.cluster.topology`, which is required). Emits one constraint per key in `topology.failureDomainKeys`, setting `whenUnsatisfiable = "DoNotSchedule"` on `topology.zoneKey` when `level == "zone"` and on `topology.hostKey` when `level == "node"`, and `"ScheduleAnyway"` otherwise. |
+
+---
+
+## Version helpers
+
+Packages can read `clusterConfig.k8sVersion` in `build` and compare it against a version bound to omit flags, collectors, or RBAC rules that older Kubernetes releases do not support.
+
+### `kix.version.atLeast` and `kix.version.atMost`
+
+| Function | Signature | Behavior |
+| --- | --- | --- |
+| `kix.version.atLeast` | `version -> bound -> bool or null` | Returns `true` when `version` is `bound` or newer, `false` when older, or `null` when `version` is too imprecise to tell. |
+| `kix.version.atMost` | `version -> bound -> bool or null` | Returns `true` when `version` is `bound` or older, `false` when newer, or `null` when `version` is too imprecise to tell. |
+
+Both functions compare up to the segment precision of `bound` (using the [version rules](/docs/reference/package-anatomy/#metaversion)), so `kix.version.atLeast "1.36.2" "1.36"` and `kix.version.atMost "1.36.2" "1.36"` both return `true`. When `version` has fewer numeric segments than `bound` and matches its prefix (such as `"1.36"` against `"1.36.2"`), both return `null`; if an earlier segment already differs (such as `"1.35"` against `"1.36.2"`), they still return `true` or `false`.
+
+Passing `null` or a non-version string throws an evaluation error. Because `clusterConfig.k8sVersion` is `null` when the cluster leaves it unset, check for `null` first. Comparing with `!= false` keeps the feature enabled when `k8sVersion` is unset or less precise than `bound`:
+
+```nix
+k8sVersion = clusterConfig.k8sVersion or null;
+served = k8sVersion == null || kix.version.atLeast k8sVersion "1.36" != false;
+```
 
 ---
 

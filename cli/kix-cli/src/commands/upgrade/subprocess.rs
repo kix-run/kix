@@ -57,9 +57,10 @@ pub(super) fn new_command_line(version: &Version) -> bool {
     *version >= first
 }
 
-/// Return the packages that `clusters` of the project install, or `None`
-/// when Kix `version` at `kix` cannot list them. `kix list packages` names instances,
-/// so instance names stand in for package names.
+/// Return the ids of Kix's own packages that the project's clusters install,
+/// or `None` when Kix `version` at `kix` cannot list them. An id is the name
+/// change records use in their `packages` field, such as `harbor` or
+/// `experimental/coredns`.
 pub(super) fn packages_in_use(
     kix: &Path,
     version: &Version,
@@ -78,15 +79,63 @@ pub(super) fn packages_in_use(
             continue;
         }
         let rows: Vec<serde_json::Value> = serde_json::from_str(&out).ok()?;
-        for row in rows {
-            // A row this Kix cannot read leaves the list unknown.
-            let (Some(name), Some(status)) = (row["name"].as_str(), row["status"].as_str()) else {
-                return None;
-            };
-            if status != "available" {
-                in_use.insert(name.to_string());
-            }
-        }
+        in_use.extend(package_ids(&rows)?);
     }
     Some(in_use)
+}
+
+/// Return the package ids of the rows of one cluster's `kix list packages
+/// -o json` that the cluster installs, or `None` when a row cannot be read.
+/// A row whose `package` is null is a project's own package and has no id.
+/// A row without a `package` key comes from a Kix too old to report ids, so
+/// the set is unknown.
+fn package_ids(rows: &[serde_json::Value]) -> Option<BTreeSet<String>> {
+    let mut ids = BTreeSet::new();
+    for row in rows {
+        let status = row.get("status")?.as_str()?;
+        let package = row.get("package")?;
+        if status == "available" || package.is_null() {
+            continue;
+        }
+        ids.insert(package.as_str()?.to_string());
+    }
+    Some(ids)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn package_ids_collects_installed_ids() {
+        let rows = vec![
+            json!({"name": "registry", "status": "installed [infra]", "package": "harbor"}),
+            json!({"name": "dns", "status": "installed (auto) [kube-system]",
+                   "package": "experimental/coredns"}),
+            json!({"name": "web", "status": "installed [apps]", "package": null}),
+            json!({"name": "loki", "status": "available", "package": "loki"}),
+        ];
+        let got = package_ids(&rows).unwrap();
+        let want: BTreeSet<String> = ["harbor", "experimental/coredns"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn package_ids_is_unknown_without_the_key() {
+        let rows = vec![
+            json!({"name": "registry", "status": "installed [infra]", "package": "harbor"}),
+            json!({"name": "web", "status": "installed [apps]"}),
+        ];
+        assert_eq!(package_ids(&rows), None);
+    }
+
+    #[test]
+    fn package_ids_is_unknown_for_an_unreadable_row() {
+        let rows = vec![json!({"name": "web", "package": "harbor"})];
+        assert_eq!(package_ids(&rows), None);
+    }
 }

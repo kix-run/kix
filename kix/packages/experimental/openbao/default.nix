@@ -212,11 +212,13 @@ in
     network.intents.tokenReview.egress = [ { to = "apiserver"; } ];
     # OpenBao's docs support the three most recent Kubernetes minor releases
     # (website/content/partials/kubernetes-supported-versions.mdx at v2.7.2).
-    # Move both bounds with `release`.
-    k8s = {
+    # The package uses only v1 APIs and Kubernetes TokenReview, and no
+    # version is known to fail, so no hard range is set. Move `supported`
+    # with `release`.
+    k8s.supported = {
       minVersion = "1.35";
       maxVersion = "1.37";
-      reason = "[K6360] OpenBao ${release} supports Kubernetes 1.35 to 1.37. Deploy a Kix release with an older openbao package, or move the cluster to a supported Kubernetes version first";
+      source = "the supported Kubernetes versions in OpenBao's documentation";
     };
   };
 

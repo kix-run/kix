@@ -2,4 +2,4 @@
 # release in default.nix (also the tag in crds/sources.txt). default.nix
 # binds the first two to the operator's ServiceAccount; kubevirt.io:operator
 # aggregates into the built-in admin role and has no binding.
-https://github.com/kubevirt/kubevirt/releases/download/v1.5.0/kubevirt-operator.yaml ClusterRole/kubevirt-operator Role/kubevirt-operator ClusterRole/kubevirt.io:operator
+https://github.com/kubevirt/kubevirt/releases/download/v1.10.0/kubevirt-operator.yaml ClusterRole/kubevirt-operator Role/kubevirt-operator ClusterRole/kubevirt.io:operator

@@ -1,0 +1,57 @@
+name: Bump merge
+
+# Merge the combined bump pull request once its checks pass, and close the
+# bump pull requests it carries. `.github/bump/batch.py merge` says when. It
+# runs when a check workflow finishes on the branch `bump/batch`, so the
+# last check to finish starts the merge. It runs the version of this file on
+# main and reads the pull request only through the API.
+
+on:
+  workflow_run:
+    workflows:
+      - Bundle checks
+      - Change kind
+      - Changelog
+      - CLI tests
+      - Copy pass
+      - CRD vendoring check
+      - Documentation captures
+      - Library tests
+      - Lint
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  merge:
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || github.event.workflow_run.head_branch == 'bump/batch'
+    # The group is on the job, not the workflow. A run whose job is skipped
+    # then never joins it, so runs for other branches cannot cancel a run
+    # that waits for a machine.
+    concurrency:
+      group: bump-merge
+      cancel-in-progress: false
+    runs-on: [self-hosted, spindle-2c-4g, access=isolated]
+    timeout-minutes: 10
+    steps:
+      - name: Get a token for the bump app
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.BUMP_APP_ID }}
+          private-key: ${{ secrets.BUMP_APP_PRIVATE_KEY }}
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Merge the combined pull request if it is ready
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: python3 .github/bump/batch.py merge

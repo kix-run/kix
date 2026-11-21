@@ -1,0 +1,5 @@
+# 2026-11-18 · `kix/packages/experimental/envoy-gateway-controller` · Renaming the controller instance needs the Deployment deleted by hand.
+
+The controller's Deployment, Service, ServiceAccount, and ConfigMap have the fixed name `envoy-gateway`, because Envoy Gateway looks them up by it. Their labels and the Deployment's selector still carry `app.kubernetes.io/instance = <instance name>`. A cluster that renames the instance therefore changes the selector of a Deployment whose name stays the same, and Kubernetes refuses that change. `kix deploy` stops at its dry run with "changes a field that cannot be modified". The split of `envoy-gateway` into `envoy-gateway-controller` and `envoy-gateway` met this, and its change record tells the operator to delete the Deployment first.
+
+Options: leave it, since the package is one per cluster and an instance is rarely renamed. Or select the pods by labels that do not name the instance, which is itself a selector change that every existing install pays once. Recommendation: leave it until a second case appears.

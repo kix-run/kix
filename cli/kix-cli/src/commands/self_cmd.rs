@@ -38,10 +38,14 @@ fn install(text: &str) -> miette::Result<()> {
 
 fn fetch(req: &Requirement) -> miette::Result<release::Installed> {
     let system = release::system().map_err(|e| miette!("{e}"))?;
-    release::install(req, &system, &Source::from_env(), &|v| {
+    let installed = release::install(req, &system, &Source::from_env(), &|v| {
         eprintln!("Installing Kix {}", v.release())
     })
-    .map_err(|e| miette!("{e}"))
+    .map_err(|e| miette!("{e}"))?;
+    for warning in &installed.warnings {
+        eprintln!("warning: {warning}");
+    }
+    Ok(installed)
 }
 
 fn list() {

@@ -1,0 +1,302 @@
+# Where each package's upstream releases come from. `detect.py` reads this
+# file once a week, compares upstream's newest release with the version each
+# package pins, and starts the bump workflow for each package that is behind.
+#
+# Each table is one upstream, and its name is the bump's name: the branch
+# `bump/<name>-<version>` and the change record `changes/bump-<name>.md`.
+#
+#   packages  Package names as `kix list packages` shows them, such as
+#             "grafana" or "experimental.cert-manager". Packages that share
+#             one upstream version are listed together and bumped together.
+#   repo      The upstream git repository. On github.com the script reads
+#             the release list and skips drafts and pre-releases. It reads
+#             the git tags when the project publishes no releases, or when
+#             the repository is elsewhere.
+#   tags      Optional. A regular expression for the release tags, with one
+#             group that captures the version. Underscores in the version
+#             count as dots. The default takes `1.2.3` and `v1.2.3`, so it
+#             skips pre-release tags such as `v1.2.3-rc.1`.
+#   track     Optional. "major" stays within the pinned major version, and
+#             "minor" within the pinned minor version.
+#   skip      Optional. Versions not to move to, each with the reason.
+#   also      Optional. More package names whose folders the bump may
+#             change, for packages that set no `meta.version` but pin the
+#             same image, such as a Job that runs the server's client.
+#   pinned    Optional, for a version that is not the package's
+#             `meta.version`. A `file` and a regular expression `match` with
+#             one group that captures the pinned version.
+#
+# A package that sets `meta.version` and appears in no table is listed in
+# the weekly run's summary, so add it here.
+
+[cnpg-operator]
+packages = ["cnpg-operator"]
+repo = "https://github.com/cloudnative-pg/cloudnative-pg"
+
+[cnpg-cluster-postgres]
+packages = ["cnpg-cluster"]
+repo = "https://github.com/postgres/postgres"
+tags = '^REL_(\d+_\d+)$'
+# A new PostgreSQL major version needs a dump and restore.
+track = "major"
+pinned = { file = "kix/packages/stable/cnpg-cluster/options.nix", match = 'tag = "(\d+\.\d+)-' }
+
+[echo-server]
+packages = ["echo-server"]
+repo = "https://github.com/nginx/nginx"
+tags = '^release-(\d+\.\d+\.\d+)$'
+# nginx's even minor versions are its stable line, and odd ones mainline.
+track = "minor"
+
+[grafana]
+packages = ["grafana"]
+repo = "https://github.com/grafana/grafana"
+
+[harbor]
+packages = ["harbor"]
+repo = "https://github.com/goharbor/harbor"
+skip = { "2.16.0" = "Kept at 2.15 until 2.16.1 ships. A branch with the 2.16.0 work is kept as bump/harbor-2.16.0." }
+
+[kube-state-metrics]
+packages = ["kube-state-metrics"]
+repo = "https://github.com/kubernetes/kube-state-metrics"
+
+[node-exporter]
+packages = ["node-exporter"]
+repo = "https://github.com/prometheus/node_exporter"
+
+[valkey]
+packages = ["valkey"]
+repo = "https://github.com/valkey-io/valkey"
+
+[victoria-metrics]
+packages = ["victoria-metrics-agent", "victoria-metrics-alert", "victoria-metrics-cluster"]
+repo = "https://github.com/VictoriaMetrics/VictoriaMetrics"
+
+[victoria-metrics-operator]
+packages = ["victoria-metrics-operator"]
+repo = "https://github.com/VictoriaMetrics/operator"
+
+[alertmanager]
+packages = ["experimental.alertmanager"]
+repo = "https://github.com/prometheus/alertmanager"
+
+[arc]
+packages = ["experimental.arc"]
+repo = "https://github.com/actions/actions-runner-controller"
+tags = '^gha-runner-scale-set-(\d+\.\d+\.\d+)$'
+
+[arc-runner-set]
+packages = ["experimental.arc-runner-set"]
+repo = "https://github.com/actions/runner"
+
+[caddy]
+packages = ["experimental.caddy"]
+repo = "https://github.com/caddyserver/caddy"
+
+[cdi]
+packages = ["experimental.cdi"]
+repo = "https://github.com/kubevirt/containerized-data-importer"
+
+[cert-manager]
+packages = ["experimental.cert-manager"]
+repo = "https://github.com/cert-manager/cert-manager"
+
+[cilium]
+packages = ["experimental.cilium"]
+repo = "https://github.com/cilium/cilium"
+
+[clickhouse]
+packages = ["experimental.clickhouse", "experimental.clickhouse-cluster", "experimental.clickhouse-keeper"]
+also = ["experimental.clickhouse-database"]
+repo = "https://github.com/ClickHouse/ClickHouse"
+tags = '^v(\d+\.\d+\.\d+\.\d+)-lts$'
+
+[clickhouse-operator]
+packages = ["experimental.clickhouse-operator"]
+repo = "https://github.com/Altinity/clickhouse-operator"
+tags = '^release-(\d+\.\d+\.\d+)$'
+
+[cloudflared]
+packages = ["experimental.cloudflared"]
+repo = "https://github.com/cloudflare/cloudflared"
+
+[cnpg-barman-cloud]
+packages = ["experimental.cnpg-barman-cloud"]
+repo = "https://github.com/cloudnative-pg/plugin-barman-cloud"
+
+[cnpg-pooler]
+packages = ["experimental.cnpg-pooler"]
+repo = "https://github.com/pgbouncer/pgbouncer"
+tags = '^pgbouncer_(\d+_\d+_\d+)$'
+
+[coredns]
+packages = ["experimental.coredns"]
+repo = "https://github.com/coredns/coredns"
+
+[descheduler]
+packages = ["experimental.descheduler"]
+repo = "https://github.com/kubernetes-sigs/descheduler"
+
+[dns-exporter]
+packages = ["experimental.dns-exporter"]
+repo = "https://github.com/tykling/dns_exporter"
+
+[envoy-gateway]
+packages = ["experimental.envoy-gateway-controller"]
+repo = "https://github.com/envoyproxy/gateway"
+
+[external-dns]
+packages = ["experimental.external-dns"]
+repo = "https://github.com/kubernetes-sigs/external-dns"
+
+[external-secrets]
+packages = ["experimental.external-secrets"]
+repo = "https://github.com/external-secrets/external-secrets"
+
+[falco]
+packages = ["experimental.falco"]
+repo = "https://github.com/falcosecurity/falco"
+
+[filebrowser]
+packages = ["experimental.filebrowser"]
+repo = "https://github.com/filebrowser/filebrowser"
+
+[gateway-api]
+packages = ["experimental.gateway-api"]
+repo = "https://github.com/kubernetes-sigs/gateway-api"
+
+[immich]
+packages = ["experimental.immich", "experimental.immich-machine-learning"]
+repo = "https://github.com/immich-app/immich"
+
+[infisical-operator]
+packages = ["experimental.infisical-operator"]
+repo = "https://github.com/Infisical/kubernetes-operator"
+tags = '^infisical-k8-operator/v(\d+\.\d+\.\d+)$'
+
+[ingress-nginx]
+packages = ["experimental.ingress-nginx"]
+repo = "https://github.com/kubernetes/ingress-nginx"
+tags = '^controller-v(\d+\.\d+\.\d+)$'
+
+[keycloak]
+packages = ["experimental.keycloak"]
+repo = "https://github.com/keycloak/keycloak"
+
+[kubevirt]
+packages = ["experimental.kubevirt"]
+repo = "https://github.com/kubevirt/kubevirt"
+
+[loki]
+packages = ["experimental.loki"]
+repo = "https://github.com/grafana/loki"
+
+[mayastor]
+packages = ["experimental.mayastor"]
+repo = "https://github.com/openebs/mayastor"
+
+[metabase]
+packages = ["experimental.metabase"]
+repo = "https://github.com/metabase/metabase"
+tags = '^v(0\.\d+\.\d+)$'
+# Metabase's 1.x releases are the paid Enterprise edition of the same code.
+track = "major"
+
+[metrics-server]
+packages = ["experimental.metrics-server"]
+repo = "https://github.com/kubernetes-sigs/metrics-server"
+
+[n8n]
+packages = ["experimental.n8n"]
+repo = "https://github.com/n8n-io/n8n"
+tags = '^n8n@(\d+\.\d+\.\d+)$'
+
+[openbao]
+packages = ["experimental.openbao"]
+repo = "https://github.com/openbao/openbao"
+
+[otel-collector]
+packages = ["experimental.otel-collector"]
+repo = "https://github.com/open-telemetry/opentelemetry-collector-releases"
+
+[plausible]
+packages = ["experimental.plausible"]
+repo = "https://github.com/plausible/analytics"
+
+[prometheus]
+packages = ["experimental.prometheus"]
+repo = "https://github.com/prometheus/prometheus"
+
+[prometheus-operator]
+packages = ["experimental.prometheus-operator"]
+repo = "https://github.com/prometheus-operator/prometheus-operator"
+
+[rabbitmq-cluster]
+packages = ["experimental.rabbitmq-cluster"]
+repo = "https://github.com/rabbitmq/rabbitmq-server"
+
+[rabbitmq-operator]
+packages = ["experimental.rabbitmq-operator"]
+repo = "https://github.com/rabbitmq/cluster-operator"
+
+[reloader]
+packages = ["experimental.reloader"]
+repo = "https://github.com/stakater/Reloader"
+
+[smartctl-exporter]
+packages = ["experimental.smartctl-exporter"]
+repo = "https://github.com/prometheus-community/smartctl_exporter"
+skip = { "0.15.0" = "With a SCSI or SAS disk on the node, /metrics returns HTTP 500, because five new metrics are missing from the exporter's descriptor list." }
+
+[snapshot-controller]
+packages = ["experimental.snapshot-controller"]
+repo = "https://github.com/kubernetes-csi/external-snapshotter"
+
+[spegel]
+packages = ["experimental.spegel"]
+repo = "https://github.com/spegel-org/spegel"
+
+[stackgres-database-postgres]
+packages = ["experimental.stackgres-database"]
+repo = "https://github.com/postgres/postgres"
+tags = '^REL_(\d+_\d+)$'
+# The bootstrap Job only runs psql, so it has no reason to change major version.
+track = "major"
+pinned = { file = "kix/packages/experimental/stackgres-database/default.nix", match = 'tag = "(\d+\.\d+)-alpine"' }
+
+[stackgres-operator]
+packages = ["experimental.stackgres-operator"]
+repo = "https://gitlab.com/ongresinc/stackgres.git"
+
+[tailscale]
+packages = ["experimental.tailscale"]
+repo = "https://github.com/tailscale/tailscale"
+
+[tempo]
+packages = ["experimental.tempo"]
+repo = "https://github.com/grafana/tempo"
+
+[traefik]
+packages = ["experimental.traefik"]
+repo = "https://github.com/traefik/traefik"
+
+[vaultwarden]
+packages = ["experimental.vaultwarden"]
+repo = "https://github.com/dani-garcia/vaultwarden"
+
+[vector]
+packages = ["experimental.clickhouse-logs", "experimental.loki-logs"]
+repo = "https://github.com/vectordotdev/vector"
+
+[velero]
+packages = ["experimental.velero"]
+repo = "https://github.com/vmware-tanzu/velero"
+
+[volsync]
+packages = ["experimental.volsync"]
+repo = "https://github.com/backube/volsync"
+
+[zfs-localpv]
+packages = ["experimental.zfs-localpv"]
+repo = "https://github.com/openebs/zfs-localpv"

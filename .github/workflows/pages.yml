@@ -25,13 +25,21 @@ name: Deploy site to Cloudflare Pages
 #
 #   kix.run/install                       ← web/public/install
 #   kix.run/releases/index.json           ← web/scripts/release-index.mjs
+#   kix.run/releases/index.json.sig       ← scripts/sign-index.sh
 #   kix.run/releases/v<version>/SHA256SUMS and SHA256SUMS.sig
 #   kix.run/download/<version>/<file>     → redirect by _worker.js
 #
 # The index lists the releases in kix-run/kix-releases that have a signed
 # SHA256SUMS. The release job starts this workflow after it publishes, so a
 # run started by the release merge, which fetches before the release exists,
-# is followed by one that lists it.
+# is followed by one that lists it. web/releases/withdrawn.json lists the
+# releases to withdraw, which the index moves out of `releases`.
+#
+# Kix refuses an index that is not signed with an index key
+# (cli/kix/index-keys/) or that has expired, a week after it was generated.
+# So this workflow also runs every day, to sign a fresh index. The secret
+# KIX_INDEX_SIGNING_KEY holds the index key. It is not the release key, so
+# this workflow never holds the key that signs a release.
 #
 # kix-examples is a separate private repository (kix-run/kix-examples) that
 # the snippet pipeline reads. CI checks it out with the KIX_EXAMPLES_TOKEN
@@ -56,6 +64,9 @@ on:
       - 'cli/**'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
+  # Sign a fresh index before the last one expires.
+  schedule:
+    - cron: '17 5 * * *'
 
 permissions:
   contents: read
@@ -93,7 +104,7 @@ jobs:
         access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout kix
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: kix
           # Nix's git fetcher needs the full history to resolve refs/revs
@@ -121,7 +132,7 @@ jobs:
           done
 
       - name: Checkout kix-examples
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: kix-run/kix-examples
           token: ${{ secrets.KIX_EXAMPLES_TOKEN }}
@@ -184,7 +195,7 @@ jobs:
       - name: Restore release docs
         id: release-docs
         if: steps.docs.outputs.latest != ''
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: docs-releases
           key: ${{ steps.docs.outputs.key }}
@@ -243,7 +254,7 @@ jobs:
         run: |
           mkdir -p _site
           cp -r kix/web/dist/. _site/
-          node kix/web/scripts/release-index.mjs releases-src _site
+          node kix/web/scripts/release-index.mjs releases-src _site kix/web/releases/withdrawn.json
           mkdir -p _site/docs
           if [ -z "$LATEST" ]; then
             cp -r --no-preserve=mode kix/result/. _site/docs/
@@ -272,8 +283,25 @@ jobs:
           # to read every file it uploads.
           chmod -R a+rX _site
 
+      # Only the tip of main is signed. Every Kix accepts a newer index, so a
+      # re-run of an old run, or a preview from a branch, must not sign one
+      # with an older or different withdrawn.json. A preview deploys an
+      # unsigned index, which Kix refuses.
+      - name: Sign the release index
+        if: github.ref == 'refs/heads/main'
+        working-directory: kix
+        env:
+          KIX_INDEX_SIGNING_KEY: ${{ secrets.KIX_INDEX_SIGNING_KEY }}
+        run: |
+          git fetch --quiet origin main
+          if [ "$(git rev-parse HEAD)" != "$(git rev-parse FETCH_HEAD)" ]; then
+            echo "::error::This run builds $(git rev-parse --short HEAD), and main is now $(git rev-parse --short FETCH_HEAD). Only the tip of main signs the release index. Run this workflow on main instead of re-running an old run."
+            exit 1
+          fi
+          nix shell --inputs-from . nixpkgs#openssl -c scripts/sign-index.sh ../_site
+
       - name: Deploy to Cloudflare Pages
-        uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3.15.0
+        uses: cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0 # v4.1.3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

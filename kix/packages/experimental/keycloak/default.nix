@@ -202,11 +202,12 @@ in
     # Upstream's supported configurations page
     # (docs/guides/server/supported-configurations.adoc) names OpenShift 4.18
     # to 4.21, which corresponds to Kubernetes API 1.31 to 1.34. It states no
-    # other range. Move both bounds with `release`.
-    k8s = {
+    # other range. Keycloak calls no Kubernetes API, so no version is known
+    # to fail and none is refused. Move `supported` with `release`.
+    k8s.supported = {
       minVersion = "1.31";
       maxVersion = "1.34";
-      reason = "[K4417] keycloak ${release} supports Kubernetes 1.31 to 1.34 (OpenShift 4.18 to 4.21). Deploy a Kix release with an older keycloak package, or move the cluster to a supported Kubernetes version first";
+      source = "Keycloak's supported configurations page, which lists OpenShift 4.18 to 4.21 (Kubernetes 1.31 to 1.34)";
     };
   };
 

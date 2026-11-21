@@ -3,9 +3,7 @@
 # `replicaCount` fails with a message that names `replicas`.
 
 {
-  lib,
   eval,
-  kixlib,
   mkCluster,
   manifests,
   ofKind,
@@ -36,17 +34,13 @@ let
   failedMessages =
     package: config:
     let
-      attrs = package (
-        builtins.intersectAttrs (builtins.functionArgs package) {
-          scope = {
-            instanceName = "app";
-            namespaceName = "demo";
-          };
-          inherit lib;
-          kix = kixlib;
-          availability = "none";
-        }
-      );
+      attrs = eval.callPackagePhase1 {
+        inherit package;
+        scope = {
+          instanceName = "app";
+          namespaceName = "demo";
+        };
+      };
       evaluated = eval.evaluateInstanceConfig {
         packageOptions = attrs.options;
         instCfg.config.imports = [ config ];

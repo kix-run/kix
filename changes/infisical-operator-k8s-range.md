@@ -1,6 +1,5 @@
 +++
-kind = "error"
+kind = "changed"
 packages = ["experimental/infisical-operator"]
-id = "K6591"
 +++
-`experimental/infisical-operator` supports Kubernetes 1.29 to 1.33, as upstream's documentation states. A cluster on another minor release now fails the build with `[K6591]`. Move the cluster to a supported version, or keep the older Kix release until it can.
+`infisical-operator` now warns when `k8sVersion` is outside Kubernetes 1.29 to 1.33, the versions Infisical's operator documentation lists as supported. The build still succeeds because no version is known to fail. Clusters that leave `k8sVersion` unset are not checked.

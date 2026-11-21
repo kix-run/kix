@@ -350,6 +350,10 @@ impl Command {
 pub fn run(cli: &Cli) -> Result<Exit> {
     if cli.command.needs() == Needs::Project {
         prepare_project(cli)?;
+        // Deploy and rollback refuse a withdrawn Kix themselves.
+        if !matches!(cli.command, Command::Deploy(_) | Command::Rollback(_)) {
+            commands::deploy::withdrawn::warn();
+        }
     }
     let mut ctx = CommandContext::new(
         &cli.global,

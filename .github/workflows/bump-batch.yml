@@ -1,0 +1,256 @@
+name: Bump batch
+
+# Build the combined pull request that merges the ready bumps together.
+# Each bump keeps its own pull request with the agent's report, and its
+# checks run once. Rebasing each bump onto main after every merge and
+# checking it again cost more than the first checks did, so the bumps merge
+# together instead: one commit each on the branch `bump/batch`, one set of
+# checks, one merge. `.github/bump/batch.py` says which bumps are ready,
+# and bump-merge.yml merges the result.
+#
+# It runs each day, so the bumps the weekly check starts together go into
+# one pull request. After a push to main it builds an open combined pull
+# request again on the new main.
+#
+# The jobs are split by trust, as in bump-agent.yml:
+#
+#   list     finds the ready bumps. It reads the repository and nothing else.
+#   build    applies them to main and regenerates the CLI snapshots. That
+#            runs the bumps' own code, so it holds no secret.
+#   publish  holds the GitHub App key. It checks which files the result
+#            touches, then moves the branch and writes the pull request.
+
+on:
+  schedule:
+    - cron: '0 12 * * *'
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bump-batch
+  cancel-in-progress: true
+
+jobs:
+  list:
+    runs-on: [self-hosted, spindle-2c-4g, access=isolated]
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+    outputs:
+      plan: ${{ steps.list.outputs.plan }}
+      rebuild: ${{ steps.list.outputs.rebuild }}
+      held: ${{ steps.list.outputs.held }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Find the ready bumps
+        id: list
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          flag=()
+          [ "$GITHUB_EVENT_NAME" != push ] || flag=(--push)
+          plan=$(python3 .github/bump/batch.py list "${flag[@]}")
+          jq . <<<"$plan"
+          {
+            echo "plan=$(jq -c . <<<"$plan")"
+            echo "rebuild=$(jq -r .rebuild <<<"$plan")"
+            echo "held=$(jq -r '.held | length' <<<"$plan")"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: list
+    if: needs.list.outputs.rebuild == 'true'
+    runs-on: kix-linux-nix
+    timeout-minutes: 60
+    env:
+      PLAN: ${{ needs.list.outputs.plan }}
+      NIX_CONFIG: |
+        extra-experimental-features = nix-command flakes pipe-operators
+        accept-flake-config = true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ fromJSON(needs.list.outputs.plan).main }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Each bump becomes one commit with the bump's own changes, taken
+      # against the main it was written on. The CLI snapshots are left out
+      # and regenerated once at the end, because every bump changes them.
+      - name: Apply the bumps
+        run: |
+          out="$RUNNER_TEMP/out"
+          mkdir -p "$out"
+          git config user.name "kix-bump agent"
+          git config user.email "kix-bump@users.noreply.github.com"
+          main=$(git rev-parse HEAD)
+          echo "$main" > "$out/main"
+          echo '[]' > "$out/applied.json"
+          echo '[]' > "$out/conflicts.json"
+          while read -r pr; do
+            number=$(jq -r .number <<<"$pr")
+            branch=$(jq -r .branch <<<"$pr")
+            git fetch -q origin "$branch"
+            [ "$(git rev-parse FETCH_HEAD)" = "$(jq -r .head <<<"$pr")" ] || {
+              echo "#$number moved since the list was made, so it waits for the next build"
+              continue
+            }
+            base=$(git merge-base "$main" FETCH_HEAD)
+            if git diff --binary --no-color --no-ext-diff --src-prefix=a/ --dst-prefix=b/ \
+                "$base" FETCH_HEAD -- . ':!cli/kix-cli/tests/snapshots' \
+                | git apply --3way --index; then
+              git commit -q -m "Update $(jq -r .package <<<"$pr") to $(jq -r .target <<<"$pr") (#$number)"
+              jq --argjson pr "$pr" '. + [$pr]' "$out/applied.json" > "$out/a" && mv "$out/a" "$out/applied.json"
+            else
+              echo "::warning::#$number conflicts with main or with an earlier bump in this batch"
+              git reset -q --hard HEAD
+              jq --argjson pr "$pr" '. + [$pr]' "$out/conflicts.json" > "$out/c" && mv "$out/c" "$out/conflicts.json"
+            fi
+          done < <(jq -c '.prs[]' <<<"$PLAN")
+
+      - name: Regenerate the CLI snapshots
+        run: |
+          [ "$(jq length "$RUNNER_TEMP/out/applied.json")" -gt 0 ] || exit 0
+          cd cli
+          nix develop .. -c env INSTA_UPDATE=always cargo test -q -p kix-cli --test snapshot_test || true
+          nix develop .. -c cargo test -q -p kix-cli --test snapshot_test
+          cd ..
+          if [ -n "$(git status --porcelain)" ]; then
+            git add -A cli/kix-cli/tests/snapshots
+            git commit -q -m "Regenerate the CLI snapshots"
+          fi
+          git format-patch -q "$(cat "$RUNNER_TEMP/out/main")..HEAD" -o "$RUNNER_TEMP/out/patches"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bump-batch
+          path: ${{ runner.temp }}/out
+          retention-days: 7
+
+  publish:
+    needs: [list, build]
+    if: >-
+      always()
+      && (needs.list.outputs.held != '0' || needs.build.result == 'success')
+    runs-on: [self-hosted, spindle-2c-4g, access=isolated]
+    timeout-minutes: 15
+    env:
+      PLAN: ${{ needs.list.outputs.plan }}
+      LABEL: 'bump:needs-person'
+    steps:
+      - name: Get a token for the bump app
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.BUMP_APP_ID }}
+          private-key: ${{ secrets.BUMP_APP_PRIVATE_KEY }}
+
+      - name: Checkout main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ fromJSON(needs.list.outputs.plan).main }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: needs.build.result == 'success'
+        with:
+          name: bump-batch
+          path: ${{ runner.temp }}/in
+
+      - name: Hand the held bumps to a person
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          api() {
+            curl -sS --fail-with-body -X POST -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/$1" --data-binary @- > /dev/null
+          }
+          hold() {
+            jq -n --arg label "$LABEL" '{labels: [$label]}' | api "issues/$1/labels"
+            jq -n --arg body "$2" '{body: $body}' | api "issues/$1/comments"
+          }
+          while read -r pr; do
+            lines=$(jq -r '.lines[:20] | join("\n")' <<<"$pr")
+            # The backticks are Markdown for the comment, not a command.
+            # shellcheck disable=SC2016
+            hold "$(jq -r .number <<<"$pr")" "$(printf '%s\n\n```\n%s\n```' \
+              "This bump changes where an image comes from, so it does not merge on its own. The agent reads upstream release notes, and anyone can write text there. Check that the new source belongs to the upstream project, then remove the label \`$LABEL\`, and the next combined pull request takes it. The changed lines:" \
+              "$lines")"
+          done < <(jq -c '.held[]' <<<"$PLAN")
+          [ -f "$RUNNER_TEMP/in/conflicts.json" ] || exit 0
+          while read -r number; do
+            hold "$number" "This bump conflicts with main, or with another bump that merges before it, in a file that is not generated. Start the bump again, or resolve the conflict by hand."
+          done < <(jq -r '.[].number' "$RUNNER_TEMP/in/conflicts.json")
+
+      - name: Move the branch and write the pull request
+        if: needs.build.result == 'success'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          BATCH: ${{ fromJSON(needs.list.outputs.plan).batch }}
+        run: |
+          applied="$RUNNER_TEMP/in/applied.json"
+          if [ "$(jq length "$applied")" -eq 0 ]; then
+            echo "No bump applied, so nothing changes"
+            exit 0
+          fi
+          api() {
+            curl -sS --fail-with-body -X "$1" -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/$2" --data-binary @-
+          }
+          main=$(cat "$RUNNER_TEMP/in/main")
+          cp .github/bump/check-paths.sh .github/bump/push-signed.py "$RUNNER_TEMP/"
+          git config user.name "kix-bump agent"
+          git config user.email "kix-bump@users.noreply.github.com"
+          git switch -c work
+          git am --keep-cr "$RUNNER_TEMP"/in/patches/*.patch
+          read -ra dirs <<<"$(jq -r '[.[].dirs] | join(" ")' "$applied")"
+          "$RUNNER_TEMP/check-paths.sh" "$main" "${dirs[@]}"
+          # The branch can outlive its pull request, such as when a person
+          # closes it.
+          if curl -sS -o /dev/null --fail -H "Authorization: Bearer $GH_TOKEN" \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/git/ref/heads/bump/batch"; then
+            python3 "$RUNNER_TEMP/push-signed.py" --replace "$GITHUB_REPOSITORY" bump/batch "$main"
+          else
+            python3 "$RUNNER_TEMP/push-signed.py" "$GITHUB_REPOSITORY" bump/batch "$main"
+          fi
+          names=$(jq -r '[.[].package] | join(", ")' "$applied")
+          {
+            # bump-detect.yml reads the package folders, and batch.py the
+            # pull request numbers.
+            echo "<!-- bump-dirs: ${dirs[*]} -->"
+            echo "<!-- bump-prs: $(jq -r '[.[].number | tostring] | join(" ")' "$applied") -->"
+            echo "This merges these package bumps together. Each one passed its checks on its own pull request, which has the agent's report."
+            echo
+            echo "| Pull request | Package | Version |"
+            echo "|---|---|---|"
+            jq -r '.[] | "| #\(.number) | `\(.package)` | \(.target) |"' "$applied"
+            echo
+            echo "It merges on its own once every check passes, and that closes the pull requests above. To stop it, label it \`$LABEL\` or push a commit to it."
+            echo
+            echo "🤖 Generated with [Claude Code](https://claude.com/claude-code)"
+          } > "$RUNNER_TEMP/body.md"
+          title="Package bumps: $names"
+          if [ "$BATCH" != null ]; then
+            jq -n --arg title "$title" --rawfile body "$RUNNER_TEMP/body.md" '{title: $title, body: $body}' \
+              | api PATCH "pulls/$BATCH" > /dev/null
+            echo "Updated #$BATCH"
+          else
+            number=$(jq -n --arg title "$title" --rawfile body "$RUNNER_TEMP/body.md" \
+                '{title: $title, head: "bump/batch", base: "main", body: $body}' \
+              | api POST pulls | jq -r .number)
+            echo "Opened #$number"
+          fi

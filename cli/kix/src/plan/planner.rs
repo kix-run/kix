@@ -552,8 +552,26 @@ impl Planned {
                 keys::DOMAIN
             ));
         }
+        self.set_record_annotations(annotations);
+        Ok(())
+    }
+
+    /// Write [`keys::WITHDRAWN_KIX`] onto the Activation record, so the
+    /// record shows that a withdrawn Kix wrote it on purpose.
+    pub fn note_withdrawn_kix(&mut self, version: &crate::version::Version) {
+        self.set_record_annotations(&[(keys::WITHDRAWN_KIX.to_string(), version.release())]);
+    }
+
+    /// Write [`keys::DOWNGRADED_FROM`] onto the Activation record, so the
+    /// record shows that an older minor of Kix wrote it on purpose over a
+    /// cluster that Kix `from` deployed last.
+    pub fn note_downgrade(&mut self, from: &crate::version::Version) {
+        self.set_record_annotations(&[(keys::DOWNGRADED_FROM.to_string(), from.release())]);
+    }
+
+    fn set_record_annotations(&mut self, annotations: &[(String, String)]) {
         if annotations.is_empty() {
-            return Ok(());
+            return;
         }
         let annotate = |manifest: &mut Value| {
             if !lifecycle::is_record(manifest) {
@@ -583,7 +601,6 @@ impl Planned {
                 annotate(manifest);
             }
         }
-        Ok(())
     }
 
     /// Replace the package diff's entries with what the apiserver answered
@@ -1108,5 +1125,21 @@ mod tests {
             .unwrap();
         let ticket = record_annotation(&p, "example.com/ticket");
         assert_eq!(ticket, vec![Some("T-1".to_string()); 3]);
+    }
+
+    #[test]
+    fn a_downgrade_is_noted_on_the_record() {
+        let mut p = planned();
+        p.note_downgrade(&"0.11.0".parse().unwrap());
+        let noted = record_annotation(&p, keys::DOWNGRADED_FROM);
+        assert_eq!(noted, vec![Some("0.11.0".to_string()); 3]);
+    }
+
+    #[test]
+    fn a_withdrawn_kix_is_noted_on_the_record() {
+        let mut p = planned();
+        p.note_withdrawn_kix(&"0.10.0+abc".parse().unwrap());
+        let noted = record_annotation(&p, keys::WITHDRAWN_KIX);
+        assert_eq!(noted, vec![Some("0.10.0".to_string()); 3]);
     }
 }

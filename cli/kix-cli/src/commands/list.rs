@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use miette::{IntoDiagnostic, Result};
 
@@ -88,6 +88,10 @@ pub(crate) struct PackageRow {
     version: String,
     /// The package's owner, or `-`.
     owner: String,
+    /// The id of one of Kix's own packages (`harbor`,
+    /// `experimental/coredns`), the id change records use. `null` for a
+    /// project's own package, an inline package, or an import.
+    package: Option<String>,
     /// With a cluster: `installed [<namespace>]`, `installed (auto)
     /// [<namespace>]`, `import [<namespace>]`, or `available`. Absent
     /// without a cluster.
@@ -169,7 +173,9 @@ fn run_clusters(ctx: &mut CommandContext) -> Result<()> {
 }
 
 fn run_packages(cluster: Option<&str>, ctx: &mut CommandContext) -> Result<()> {
-    let mut rows: BTreeMap<String, PackageRow> = BTreeMap::new();
+    // Rows sort by name, then by namespace. A row that is not an instance
+    // has an empty namespace.
+    let mut rows: BTreeMap<(String, String), PackageRow> = BTreeMap::new();
 
     if let Some(cluster_name) = cluster {
         let cluster_info = ctx
@@ -187,37 +193,50 @@ fn run_packages(cluster: Option<&str>, ctx: &mut CommandContext) -> Result<()> {
                     format!("installed [{ns}]")
                 };
 
-                rows.entry(inst_name.clone())
-                    .and_modify(|r| r.status = Some(status.clone()))
-                    .or_insert_with(|| PackageRow {
+                rows.insert(
+                    (inst_name.clone(), ns.clone()),
+                    PackageRow {
                         name: inst_name.clone(),
                         version: inst_info.version.as_deref().unwrap_or("-").to_string(),
                         owner: inst_info.owner.as_deref().unwrap_or("-").to_string(),
+                        package: inst_info.package.clone(),
                         status: Some(status),
                         is_import: Some(inst_info.is_import),
-                    });
+                    },
+                );
             }
         }
 
+        // An available package that an instance is named after is listed as
+        // that instance.
+        let installed: BTreeSet<String> = rows.keys().map(|(name, _)| name.clone()).collect();
         for (name, avail_info) in &cluster_info.available_packages {
-            rows.entry(name.clone()).or_insert_with(|| PackageRow {
-                name: name.clone(),
-                version: avail_info.version.as_deref().unwrap_or("-").to_string(),
-                owner: avail_info.owner.as_deref().unwrap_or("-").to_string(),
-                status: Some("available".to_string()),
-                is_import: Some(false),
-            });
+            if installed.contains(name) {
+                continue;
+            }
+            rows.insert(
+                (name.clone(), String::new()),
+                PackageRow {
+                    name: name.clone(),
+                    version: avail_info.version.as_deref().unwrap_or("-").to_string(),
+                    owner: avail_info.owner.as_deref().unwrap_or("-").to_string(),
+                    package: avail_info.package.clone(),
+                    status: Some("available".to_string()),
+                    is_import: Some(false),
+                },
+            );
         }
     } else {
         let global_packages = ctx.evaluator()?.list_packages().into_diagnostic()?;
 
         for (name, info) in &global_packages {
             rows.insert(
-                name.clone(),
+                (name.clone(), String::new()),
                 PackageRow {
                     name: name.clone(),
                     version: info.version.as_deref().unwrap_or("-").to_string(),
                     owner: info.owner.as_deref().unwrap_or("-").to_string(),
+                    package: info.package.clone(),
                     status: None,
                     is_import: None,
                 },

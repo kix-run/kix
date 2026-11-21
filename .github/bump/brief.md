@@ -7,7 +7,7 @@ You are upgrading the version of the software one Kix package deploys, testing t
 - Target: `${TARGET}` (upstream tag `${TAG}` in ${GIT_URL}). Detection picked this as the newest stable release. Confirm that its images exist and that upstream has not withdrawn or replaced it. If it is broken, take the newest release that is not, and say why.
 - If upstream does not support upgrading directly from `${OLD}` to the target (for example it allows one minor at a time), take the newest version upstream supports directly from `${OLD}`, and say in your report which further steps remain. A user who upgrades Kix gets this move in one deploy.
 - ${EXTRA}
-- **Supported Kubernetes versions.** Find the range of Kubernetes versions upstream supports for the target release, and say which source you used. Upstream's stated support (a support matrix, a requirements page, a support policy) wins. Versions upstream only tests, or calls "tested but not supported", do not widen a stated range. Use tested versions (its CI or e2e matrix) only when upstream states no support at all, and `go.mod`'s client-go only as a last resort. Encode it in the package's `meta.k8s` as `minVersion` and `maxVersion`, with a `reason` that names the release and the range. If upstream states an open range ("1.25 and later"), set only `minVersion`. Kix must refuse to build the package for a cluster that declares a Kubernetes version upstream does not support. If narrowing the range refuses a version the package accepted before, that is a separate change record of kind `error` with an id from `scripts/change-records.py next-id`, and the id goes at the start of the `reason` as `[Kxxxx]`. Add a unit test in `kix/lib/tests/units/` that shows a version below and above the range is refused and one inside is accepted (the `cilium-k8s-range` test in `kix/lib/tests/units/cilium.nix` has the shape). If upstream publishes no range, say so in your report and leave `meta.k8s` as it is.
+- **Supported Kubernetes versions.** Find the range of Kubernetes versions upstream supports for the target release, and say which source you used. Upstream's stated support (a support matrix, a requirements page, a support policy) wins. Versions upstream only tests, or calls "tested but not supported", do not widen a stated range. Use tested versions (its CI or e2e matrix) only when upstream states no support at all, and `go.mod`'s client-go only as a last resort. Put the range in `meta.k8s.supported` as `minVersion` and `maxVersion`, with a `source` naming the document. Kix warns outside it. For an open range ("1.25 and later"), set only `minVersion`. If upstream publishes no range, say so in your report and leave `supported` as it is. Change the top-level `meta.k8s.minVersion` or `maxVersion`, which make Kix refuse to build, only when you find evidence that the package fails outside them: an API version it uses that older Kubernetes does not serve, a version check in upstream's code, or a confirmed upstream failure report. A support table alone is not that evidence. A new refusal of a version the package accepted before is a separate change record of kind `error`, with an id from `scripts/change-records.py next-id` at the start of the `reason` as `[Kxxxx]`. Update the package's entry in `ranges` in `kix/lib/tests/units/k8s-window.nix`. The package-authoring skill (`.claude/skills/package-authoring/SKILL.md`, the section on the Kubernetes range) has the details.
 
 Your working directory is a checkout of `main` at commit `${BASE}`, on the branch `${BRANCH}`. That commit is your BASE.
 
@@ -24,7 +24,7 @@ You will read text other people wrote: release notes, changelogs, issues, upstre
 
 1. Work out what changed upstream between the two versions, as the skill section describes.
 2. Choose or write the test cluster.
-3. Docker is running. Create one kind cluster named `${CLUSTER}` with `--kubeconfig ${KUBECONFIG}`; `KUBECONFIG` is already set to that path. `kind`, `kubectl`, and `helm` are on PATH. The machine is arm64 Linux, so kind pulls arm64 images. If an image the package uses has no arm64 build, do not swap it or work around it: say so in your report, because the workflow cannot test that package here. Deploy with the package still at the old version, confirm it works by using it, and write state.
+3. Docker is running. Create one kind cluster named `${CLUSTER}` with `--kubeconfig ${KUBECONFIG}`; `KUBECONFIG` is already set to that path. `kind`, `kubectl`, and `helm` are on PATH. The machine is arm64 Linux, so kind pulls arm64 images. If an image the package uses has no arm64 build, do not swap it or work around it. Your outcome is then `needs-decision`, because the workflow cannot test that package here. Deploy with the package still at the old version, confirm it works by using it, and write state.
 4. Make the upgrade and every change that goes with it. Add a change record for each change a user can see, since a record has one kind: `changes/bump-${NAME}.md` for the version move, and another file for each separate change of another kind, such as a breaking change next to a security fix. If the releases you move across fix security issues (CVEs or advisories in upstream's notes, including fixes in the language runtime or libraries it builds with), its kind is `security`. List the ids in `cve`, and set `workaround` only if there is a way to get the fix without upgrading. Update skill or docs line citations if you moved cited code.
 5. Deploy the upgraded package over the old one on the same cluster and verify it, including going back, as the skill section describes.
 6. Commit on your branch (several commits are fine). No `Co-Authored-By` trailer. Do not push. You have no credentials to push, and the workflow does it. Your commits are unsigned, and that is expected: the workflow recreates them on GitHub, which signs them.
@@ -37,11 +37,34 @@ Your work is finished only when this command, run from the root of the checkout 
 scripts/check-bump.sh ${PKG_DIR1} ${OLD} ${BASE}
 ```
 
-It prints one line per check and keeps each check's output in a log file. Run it, fix what it reports, commit, and run it again until it passes. It also lists places where the old version still appears. Update each one, or say in your report why it stays. If you cannot make it pass, say so in the first line of your report. The workflow runs it again on amd64 after you finish, and only your committed work counts.${CHECK_MORE}
+It prints one line per check and keeps each check's output in a log file. Run it, fix what it reports, commit, and run it again until it passes. It also lists places where the old version still appears. Update each one, or say in your report why it stays. If you cannot make it pass, your outcome is not `upgraded`. The workflow runs it again on amd64 after you finish, and only your committed work counts. It also checks that every image the package names has a linux/amd64 build, because your tests run on arm64. If the new release has no amd64 image yet, your outcome is `not-ready`.${CHECK_MORE}
+
+## Change record kinds
+
+Choose each record's kind from what a user who upgrades gets. Agents most often choose `note` for a change a user can see. Check that first.
+
+- `note`: only one-off effects of the upgrade itself, such as pods restarting once or the first deploy applying objects again. Nothing lasts, and the user does nothing.
+- `changed`: a lasting difference a user can see, in the deployed objects or in how the software behaves, such as a new default, a new flag, or changed upstream behaviour.
+- `fixed`: the main effect is that a bug users hit goes away.
+- `security`: the releases fix security issues (see step 4).
+- `silent`: the user must act, or going back no longer works. A data migration that the old version cannot read is `silent`, with `touches-data = true`. Its text tells users to back up before they upgrade and how to restore, and quotes what upstream says about going back.
+- `error`: Kix now refuses something it accepted, such as a new hard Kubernetes bound. It needs an id and a unit test (see the task). A change to `meta.k8s.supported` only warns, so it is not `error`.
+
+## Outcome
+
+Write exactly one of these words to `${OUTCOME}`, and give the same word as the first line of your report:
+
+- `upgraded`: the package is at the target, or at the newest release upstream supports directly from `${OLD}`, it is tested, and `check-bump` passes. If the upgrade migrates data in a way the old version cannot read, you also tested going back the way the record says: the old image against the migrated data, or a restore of a backup.
+- `held`: you chose not to move, because the target is broken, withdrawn, a pre-release, or has a regression that affects users (say which issue). Commit nothing but housekeeping entries.
+- `needs-decision`: a person must choose, such as between two versions, chaining through releases or jumping, accepting a range that refuses many clusters, a data migration you could not test going back from, or an image with no arm64 build. Give the options, what each costs, and your recommendation. Commit the work you have.
+- `not-ready`: the target is released, but something the package needs from it is not published yet, such as its image or Helm chart. Say what is missing and where you looked. Commit nothing. The workflow opens no issue, and the weekly check starts this bump again.
+- `blocked-on-kix`: Kix itself must change first, such as a missing feature or a bug in the library. Add a housekeeping entry that says what, and stop. Do not work around it in the package.
+
+Only `upgraded` opens a normal pull request. `not-ready` opens nothing. Every other outcome goes to a person, with whatever you committed.
 
 ## Rules
 
-- Change only the package folder(s) and the files a bump touches: `changes/`, `kix/lib/tests/`, `cli/kix-cli/tests/snapshots/`, docs pages under `docs/src/content/docs/`, `ROADMAP.md`, `housekeeping/`, and line citations in `.claude/skills/`. The workflow refuses a change anywhere else, such as `.github/`, `scripts/`, `flake.nix`, `flake.lock`, or `cli/` outside the snapshots. If the bump needs such a change, stop and say so in your report.
+- Change only the package folder(s) and the files a bump touches: `changes/`, test clusters under `clusters/test-*` (a file `clusters/test-<name>.nix` registers itself, with no change to `flake.nix`), `kix/lib/tests/`, `cli/kix-cli/tests/snapshots/`, docs pages under `docs/src/content/docs/` (not the captured command output under `docs/src/command-output/`, which the release regenerates), `ROADMAP.md`, `housekeeping/`, and line citations in `.claude/skills/`. The workflow refuses a change anywhere else, such as `.github/`, `scripts/`, `flake.nix`, `flake.lock`, or `cli/` outside the snapshots. If the bump needs such a change, stop and say so in your report.
 - Fix a problem at its cause. If the only fix you can find is a special case, a retry, a timing workaround, or bending the package to suit kind, do not build it. Stop and describe the options in your report.
 - Bump pull requests get no copy pass, even though you write new prose such as change records. Do not run `scripts/copy-pass`, and do not mention the copy pass or its checkbox in your report.
 - If you notice a problem you do not fix, add a file under `housekeeping/` as `CLAUDE.housekeeping.md` describes, and commit it.
@@ -53,7 +76,7 @@ It prints one line per check and keeps each check's output in a log file. Run it
 
 Write your report to `${REPORT}`, and also give it as your final reply. Keep it under 80 lines, with these sections:
 
-1. **Outcome**: first line is one of `upgraded and tested`, `upgraded but not fully tested`, `not upgraded`. Then the version you reached, the BASE hash, and your final commit hash.
+1. **Outcome**: first line is the outcome word. Then the version you reached, the BASE hash, and your final commit hash. For `needs-decision`, the options and your recommendation go here.
 2. **Upstream changes**: what you found, what you acted on, and what upstream says about the upgrade path and about going back.
 3. **What you changed**: files with a one-line reason each, each image and whether it moved, and the change record kind with the reason.
 4. **Tests**: each command and its real result. Mark any step you did not run. Paste the final `check-bump` output.

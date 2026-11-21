@@ -2,8 +2,8 @@
 # face recognition, smart search, OCR, and duplicate detection for
 # immich-server over HTTP. One Deployment and its Service on port 3003. It
 # answers the `machineLearning` dependency of an `immich` instance in its own
-# namespace and must run the same release (release.nix). A server in another
-# namespace reaches it only through a kix.mkImport.
+# namespace and must run the same release (`../immich/release.nix`). A
+# server in another namespace reaches it only through a kix.mkImport.
 #
 # A minimal instance, beside immich in namespace `photos`:
 #

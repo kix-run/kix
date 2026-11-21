@@ -11,6 +11,7 @@
   mkNamespace,
   computeAutoInstances,
   possibleInstanceNames,
+  normalizeAvailablePackages,
   buildResolutionIndex,
   callPackagePhase1,
   discoverBuildDeps,
@@ -34,6 +35,9 @@
 let
   inherit (import ../core/error.nix { inherit lib; }) fail warning;
   inherit (import ../core/util.nix { inherit lib; }) plain namespaceOf;
+  versions = import ../core/version.nix { inherit lib; };
+  kubernetes = import ../core/kubernetes.nix;
+  packageLib = import ../core/package.nix { inherit lib; };
 in
 {
   buildCluster =
@@ -900,7 +904,30 @@ in
       # (`core/error.nix`). The CLI reads them from `kix-warnings.json`,
       # because it shows Nix's trace output only when an evaluation fails.
       # The scorecard report carries the scorecard's own warnings.
-      libraryWarnings = clusterDiagnostics.warnings ++ map (warning null) clusterHookWarnings;
+      libraryWarnings =
+        clusterDiagnostics.warnings
+        ++ map (warning null) (clusterHookWarnings ++ dnsWarnings ++ windowWarnings);
+
+      # Report a `k8sVersion` outside the versions this Kix release supports.
+      # A package refuses the cluster only where its own range says so.
+      windowWarnings =
+        let
+          inherit (kubernetes) window;
+          inside =
+            versions.atLeast cfg.k8sVersion window.minVersion != false
+            && versions.atMost cfg.k8sVersion window.maxVersion != false;
+        in
+        lib.optional (cfg.k8sVersion != null && !inside) {
+          message = "cluster '${name}' sets k8sVersion to ${cfg.k8sVersion}. This Kix release supports Kubernetes ${window.minVersion} to ${window.maxVersion}. The build continues and still checks each package's Kubernetes version bounds.";
+          fix = "Move the cluster to Kubernetes ${window.minVersion} to ${window.maxVersion} and update k8sVersion, or use a version of Kix that supports Kubernetes ${cfg.k8sVersion}.";
+        };
+
+      # Report missing DNS once for the cluster, however many instances
+      # lack it.
+      dnsWarnings = lib.optional (builtins.any (inst: inst._dnsMissing or false) allInstancesList) {
+        message = "cluster '${name}' has no DNS instance, so Kix will not wait for DNS to be ready before deploying workloads.";
+        fix = "If the cluster already runs DNS, add a cluster flavor (kix.flavors.<name>) to modules, or import the DNS workload with kix.mkImport (setting kind, apiVersion, roles = [ \"dns\" ], out.name, and out.fqdn). To deploy CoreDNS with Kix, add a packages.experimental.coredns instance.";
+      };
 
       # The platform whose interface file supplied `k8sVersion`, or null when
       # the definition writes it or nothing sets it. `kix.interface` sets the
@@ -1304,26 +1331,6 @@ in
           ++ (if consumerSide == null then [ ] else consumerSide.assertionsFor rawManifestList);
       };
 
-      isInlinePackage = v: builtins.isAttrs v && v ? build && (v._type or "") != "kix-import";
-
-      isPackageEntry =
-        v:
-        builtins.isFunction v
-        || (v._type or "") == "kix-import"
-        || (builtins.isAttrs v && v ? package)
-        || (builtins.isAttrs v && v ? build);
-
-      getPackageFromEntry =
-        v:
-        if builtins.isFunction v then
-          v
-        else if (v._type or "") == "kix-import" then
-          v
-        else if builtins.isAttrs v && v ? build then
-          v
-        else
-          v.package;
-
       instanceInfo = lib.mapAttrs (
         nsName: nsInsts:
         lib.mapAttrs (
@@ -1334,6 +1341,7 @@ in
           {
             version = pkgMeta.version or null;
             owner = pkgMeta.owner or null;
+            package = packageLib.idOf instCfg.package;
             auto = instCfg._autoInstantiated or false;
             isImport = (instCfg.package._type or "") == "kix-import";
           }
@@ -1341,23 +1349,26 @@ in
       ) mergedInstances;
 
       availablePackagesInfo = lib.mapAttrs (
-        _name: value:
+        name: entry:
         let
+          # An inline package given directly lists as "inline". One given as
+          # `{ package = ...; }` lists by its `meta`.
+          inline = packageLib.isInline cfg.availablePackages.${name};
           pkgMeta =
-            if isInlinePackage value then
+            if inline then
               { }
             else
               meta.peekPackageMeta {
-                package = getPackageFromEntry value;
+                inherit (entry) package;
                 inherit kixlib;
               };
-          version = if isInlinePackage value then "inline" else pkgMeta.version or null;
         in
         {
-          inherit version;
+          version = if inline then "inline" else pkgMeta.version or null;
           owner = pkgMeta.owner or null;
+          package = packageLib.idOf entry.package;
         }
-      ) (lib.filterAttrs (_: isPackageEntry) cfg.availablePackages);
+      ) (normalizeAvailablePackages cfg.availablePackages);
 
       info = {
         instances = instanceInfo;
@@ -1374,7 +1385,7 @@ in
             builtins.seq _roleBindingsCheck (
               builtins.seq _annotationDomainsCheck (
                 builtins.seq _clusterHookChecksRun (
-                  builtins.seq clusterDiagnostics.emitExtraWarnings (
+                  builtins.seq clusterDiagnostics.evaluateExtraWarnings (
                     builtins.seq clusterDiagnostics.assertionCheck {
                       _type = "k8s-cluster-v2";
                       inherit name;

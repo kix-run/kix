@@ -11,9 +11,15 @@ name: Documentation captures
 # Pages deploy job only builds the site, so a stale capture never stops
 # kix.run from deploying.
 #
+# A pull request that changes only packages, change records, library tests,
+# test clusters or the CLI snapshots does not run it. Package version bumps
+# are such pull requests, and they leave the captures alone: the release
+# regenerates every capture. Until then, a capture that shows a package's output can be out of
+# date, and the next pull request this job checks fails on it.
+#
 # The fix when this fails is to run
 # `nix run ./docs#regen-captures-offline -- --apply` locally and commit
-# the result.
+# the result, even when the drift came from a package bump.
 #
 # The captures need the private kix-run/kix-examples repository, which
 # only the KIX_EXAMPLES_TOKEN secret can read. GitHub gives no secrets to a
@@ -25,8 +31,13 @@ on:
     paths:
       - 'docs/**'
       - 'kix/**'
+      - '!kix/packages/**'
+      - '!kix/lib/tests/**'
       - 'clusters/**'
+      - '!clusters/test-*'
+      - '!clusters/test-*/**'
       - 'cli/**'
+      - '!cli/kix-cli/tests/snapshots/**'
       - '.github/workflows/docs-captures.yml'
   workflow_dispatch:
 
@@ -59,7 +70,7 @@ jobs:
 
       - name: Checkout kix
         if: steps.token.outputs.present == 'true'
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: kix
           fetch-depth: 0
@@ -77,7 +88,7 @@ jobs:
       # and the flake input is overridden to point at it.
       - name: Checkout kix-examples
         if: steps.token.outputs.present == 'true'
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: kix-run/kix-examples
           ref: ${{ steps.examples-rev.outputs.rev }}

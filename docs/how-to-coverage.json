@@ -574,7 +574,7 @@
         "how-to/package-cilium/check",
         "how-to/package-cilium/components"
       ],
-      "unverifiedNixBlocks": 2
+      "unverifiedNixBlocks": 3
     },
     {
       "page": "package-task-guides/install-envoy-gateway",

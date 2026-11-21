@@ -61,14 +61,16 @@
 # and the Recreate strategy stops the old pods first. Upstream supports
 # going from any version since 0.40 straight to the latest one. Metabase
 # 0.65.5 started on the database that 0.63.19 left, with users, data
-# sources, questions, and dashboards intact. An older version refuses a
-# database that a newer one migrated ("Downgrade detected") and never
-# becomes ready. To go back, scale the Deployment to zero, run the newer
-# image once with the argument `migrate down` and the same database
-# variables, then deploy the older package version. Metabase 0.63.19 then
-# started and kept a question created on 0.65.5. Upstream recommends a
-# backup of the application database before every upgrade, and restoring
-# it is the other way back.
+# sources, questions, and dashboards intact. Metabase 0.65.6 adds no
+# migrations to 0.65.5. It started on the database 0.65.5 left and kept a
+# saved question, and a plain deploy of 0.65.5 went back to it. An older
+# version refuses a database that a newer one migrated ("Downgrade
+# detected") and never becomes ready. To go back across a release that
+# migrates, scale the Deployment to zero, run the newer image once with the
+# argument `migrate down` and the same database variables, then deploy the
+# older package version. Metabase 0.63.19 then started and kept a question
+# created on 0.65.5. Upstream recommends a backup of the application
+# database before every upgrade, and restoring it is the other way back.
 #
 # `MB_SITE_URL` is the route's URL. When TLS terminates outside Kix (for
 # example behind cloudflared), set `env.MB_SITE_URL` to the public URL.
@@ -100,7 +102,7 @@
 }:
 
 let
-  release = "0.65.5";
+  release = "0.65.6";
   name = scope.instanceName;
   who = "metabase ${scope.namespaceName}/${name}";
 
@@ -131,7 +133,7 @@ in
     image = kix.options.image {
       repository = "docker.io/metabase/metabase";
       tag = "v${release}";
-      digest = "sha256:27c039c322266e7db86ff5fa157410edf1b94e988dc386c2f13d2bccaa3d94de";
+      digest = "sha256:21a0c25c12a9d6334c9efb3d74db9973707baaf543ae6abb43bd6d42818e01af";
     };
     # A memory limit also sizes the heap (see JAVA_OPTS).
     resources = kix.options.resources {

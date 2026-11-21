@@ -80,7 +80,8 @@ rewrites the later ones.
   only stable contracts. An experimental package may read
   `kix.contracts.experimental.<name>` too, and may share a stable package's
   name as a rework of it. No package is named `stable` or `experimental`.
-  The package graduates when its folder moves to `stable/`. This skill
+  The package graduates when its folder moves to `stable/`, which changes
+  `spec.package` on its PackageInstance records and nothing else. This skill
   writes paths as `kix/packages/experimental/<pkg>`. Read `stable` there for
   a stable package.
 - One package per upstream unit. A multi-component application stays one
@@ -180,7 +181,7 @@ is a finding from the upstream source, not a default.
    concurrent-safe (then Recreate, keycloak:83-88); session affinity (a
    Service setting, not a ceiling); cron or queue singletons (a ceiling on that
    workload only, or upstream's "run the scheduler in one pod" flag); one RWO
-   volume as the state (immich:157-159); one owner of an OS resource,
+   volume as the state (immich:174-176); one owner of an OS resource,
    such as a network interface. For each piece of in-memory state, also note what a
    restart loses (sessions, buffered events), since Recreate and a singleton
    make every deploy a restart; the header's `Limits:` says it.
@@ -250,7 +251,7 @@ the defaults fails there.
 - A package that renames a dependency sets `deps.<arg>.renamedFrom = { name
   = "<old name>"; id = "K1234"; }`, with the id of the `error` change
   record. The error for a missing dependency then carries the id and says
-  what the dependency was called before (immich:192-195).
+  what the dependency was called before (immich:209-212).
 - A consumer that reads an optional field (`username`, `extensions`, `tls`)
   handles its absence on a `kix.mkImport` stand-in
   (`kix/contracts/stable/postgresDatabase.nix:1-8`, D22), and acts on it where the
@@ -279,7 +280,7 @@ the defaults fails there.
   are new, so a new consumer finding gaps in them is expected.
 - Test a contract change three ways: `every-package-evaluates` (every provider
   and consumer re-evaluates); the contract's swap check (`clickhouse-swap`,
-  `postgres-swap`, `gateway-swap`; `flake.nix:199, 235, 278`, fixtures under
+  `postgres-swap`, `gateway-swap`; `flake.nix:240, 275, 317`, fixtures under
   `clusters/test-*-swap/`); a lib unit test when a vocab file changed. A new
   consumer that reads fields which differ between implementations gets a swap
   fixture (`clusters/test-clickhouse-swap/consumer.nix`).
@@ -441,7 +442,7 @@ The only place in this skill with package line numbers. `pkg:N` is
 | Pattern | Reference |
 |---|---|
 | Release binding, digest, `who`, `startupSeconds` in one `let` | metabase:89-97 |
-| Shared release file for a release group | `immich/release.nix`, immich:107 |
+| Shared release file for a release group | `immich/release.nix`, immich:121 |
 | Running version published from the image (`out.version`) | echo-server:228; among several images, valkey |
 | Follower image tag with `tagText` and `mkDefault` | n8n:268-275, 308 |
 | `kix.contracts.secret.helpers.use`, read through the binding | metabase:158-163, 208, 264 |
@@ -473,7 +474,7 @@ The only place in this skill with package line numbers. `pkg:N` is
 | Config-derived egress (a port read from config) through `kix.operandPolicy` | plausible:712-737; cnpg-cluster:591-656 |
 | A step after the migrations on one replica of a dependency: an init container running a sibling script from a ConfigMap, with a checksum annotation | plausible:518-561, 605-606; `plausible/replicate.py` |
 | One alias, two implementations, a contract file | `kix/contracts/experimental/clickhouse.nix`; clickhouse:101, clickhouse-cluster:90 |
-| Renamed dependency with `renamedFrom` | immich:192-195; `kix/contracts/stable/redis.nix` (`helpers.renamedFrom`) |
+| Renamed dependency with `renamedFrom` | immich:209-212; `kix/contracts/stable/redis.nix` (`helpers.renamedFrom`) |
 
 A script of more than a few lines is a sibling file read with
 `builtins.readFile`, so it can be linted and run alone
@@ -498,7 +499,9 @@ Mandatory:
    deploy commands in the header (`clusters/test-clickhouse.nix:13-21`,
    `clusters/test-keycloak.nix:1-15`). A dependency from an unmerged change
    is a `kix.mkImport` stand-in; note the merge order.
-4. `flake.nix`: add the cluster to `clusters`.
+4. Nothing in `flake.nix`: `clusters/test-<pkg>.nix` registers itself under
+   the key `<pkg>`. A cluster kept in a directory, such as
+   `clusters/test-<pkg>/kind.nix`, needs a line under `clusters` there.
 5. `kix/lib/tests/units/<pkg>.nix`: names `<topic>-<what>`, helpers as in
    `kix/lib/tests/units/keycloak.nix:8-19`. Each `evalFails` has a positive
    control (T2). Two instances in two namespaces (Na2, Na10) and each
@@ -528,6 +531,11 @@ Conditional:
     and the kix-migration, package-review, and crd-vendoring skills and this
     one, when a lib API, role, `meta` key, or convention changes (T6).
 14. `kix/lib/eval/roles.nix` and `kix/lib/flavors/*.nix` only for a new role.
+15. `.github/bump/sources.toml` when the package sets `meta.version`: add a
+    table with `packages` and `repo` for the upstream repository, or add the
+    package to an existing upstream table. `.github/workflows/bump-detect.yml`
+    reads this file every week to start version upgrades and fails if a
+    package with `meta.version` is missing.
 
 ## Verification ladder
 
@@ -673,6 +681,11 @@ prints `check-bump: PASS` and the upgrade deploy below has run.
   why you did not upgrade to it. Confirm the target's images exist for every
   platform the old ones did: a release whose image publishing failed is
   followed by a fix release.
+- `.github/workflows/bump-detect.yml` reads `.github/bump/sources.toml` every
+  week to find new upstream releases. To skip a specific release, add
+  `"<version>" = "<reason>"` to `skip` in the package's entry. To keep a
+  package within its pinned major or minor version, set `track = "major"` or
+  `track = "minor"` with a comment explaining why.
 - Read the notes of every release between the pinned version and the
   target. Release notes omit what a package depends on. Also compare
   upstream's own deployment files between the two versions (manifests, Helm
@@ -682,24 +695,49 @@ prints `check-bump: PASS` and the upgrade deploy below has run.
 - Write down what upstream says about which versions can upgrade directly
   to which, and about going back. Upstream often says nothing. Then say
   what you learned from its source or from testing.
-- Find the Kubernetes versions upstream supports for the target, and name
-  the source. Upstream's stated support (a support matrix, a requirements
-  page, a support policy) wins. Versions upstream only tests do not widen
-  or narrow a stated range. Use tested versions (its CI or e2e matrix) only
-  when upstream states no support, and `go.mod`'s client-go version only as
-  a last resort.
+- Find the Kubernetes versions the upstream project supports for the target
+  release, and note where it states them. Prefer an explicit support policy,
+  compatibility matrix, or requirements page. Fall back to the versions
+  upstream tests in CI or end-to-end runs only when it states no support
+  range, and use `go.mod`'s `client-go` version only as a last resort. This
+  range goes in `meta.k8s.supported`, which warns when `k8sVersion` falls
+  outside it.
+- Check whether anything fails outside that range. Count only concrete
+  incompatibilities: an API version the package emits or the workload reads
+  that older Kubernetes releases do not serve, a CRD validation rule added in
+  a specific Kubernetes version, a startup version check in the upstream code,
+  or a confirmed upstream failure report. Do not treat a support table alone
+  as proof that other versions fail. Confirmed failure bounds go at the top
+  level of `meta.k8s`, which fails the build.
 
 ### The edit
 
-- Encode that range in `meta.k8s` as `minVersion` and `maxVersion`, with a
-  `reason` that names the release and the range, so Kix refuses a cluster
-  that declares a version upstream does not support. For an open range
-  ("1.25 and later") set only `minVersion`. When upstream states no range,
-  leave `meta.k8s` as it is and say so in the pull request. A range that
-  refuses a version the package accepted before needs an `error` change
-  record: put its id at the start of `reason` as `[Kxxxx]`, and add a unit
-  test in `kix/lib/tests/units/` that refuses a version on each side and
-  accepts one inside (`cilium-k8s-range` in `cilium.nix` has the shape).
+- Record upstream's supported or tested versions in `meta.k8s.supported`
+  using `minVersion`, `maxVersion`, and a `source` naming the document or
+  workflow. For an open-ended range ("1.25 and later"), set only `minVersion`
+  (or only `maxVersion`). When upstream neither states nor tests a Kubernetes
+  version range, omit `supported` and note that in the pull request.
+- Set top-level `meta.k8s.minVersion` or `meta.k8s.maxVersion` only when you
+  have concrete evidence that versions outside that bound fail, and explain
+  what fails and how to fix it in `reason`. If a new bound rejects a version
+  the package previously accepted, add an `error` change record and start
+  `reason` with its ID in brackets (`[Kxxxx]`).
+- Before setting a hard bound, check whether the package can disable just the
+  incompatible feature on older clusters. Read `clusterConfig.k8sVersion` in
+  `build` and compare it with `kix.version.atLeast` or `kix.version.atMost`
+  (leaving upstream's defaults enabled when `k8sVersion` is `null`). For
+  example, `kube-state-metrics` disables collectors whose APIs the cluster
+  does not serve and omits their resource types from its ClusterRole, so it
+  keeps `minVersion = "1.25"` instead of requiring Kubernetes 1.36.
+- Add or update the package's entry in `ranges` in
+  `kix/lib/tests/units/k8s-window.nix`, listing versions for `accepts`,
+  `warns`, and (when top-level `meta.k8s` sets a bound) `refuses` and any
+  `[Kxxxx]` `id`.
+- Every stable package must accept all Kubernetes versions in the release
+  window (`kix/lib/core/kubernetes.nix`), enforced by the
+  `k8s-window-stable-packages-cover-it` test. If an upstream upgrade drops a
+  version in that window, keep the package working across the window or hold
+  the upgrade. Moving the release window is a release decision, so ask first.
 
 - List every image the package renders, including images an operator is
   told to deploy, and decide for each whether it moves.
@@ -723,8 +761,9 @@ still appears. Update each place, or say why it stays.
   cluster. The snapshots hold hashes that change too, so regenerate them
   instead of editing them directly. From `cli/`: `nix develop .. -c env
   INSTA_UPDATE=always cargo test -p kix-cli --test snapshot_test`.
-- `docs/src/command-output/`: `nix run ./docs#regen-captures-offline --
-  --apply`. Revert a file in which only a timestamp changed.
+- `docs/src/command-output/`: leave these files alone. Each Kix release
+  regenerates the captured command output in the docs, so
+  `scripts/check-bump.sh` skips them.
 - `kix/lib/tests/units/`: a test that names the next version as one the
   package must refuse fails after the bump. Move it up.
 - `ROADMAP.md`, where the package's entry cites its release.

@@ -32,6 +32,7 @@ let
     ;
   inherit (import_) evaluateImportInstance;
   availabilityLib = import ../core/availability.nix { inherit lib; };
+  packageLib = import ../core/package.nix { inherit lib; };
 in
 
 {
@@ -110,14 +111,10 @@ in
           explicitOverride = null;
         };
         # Missing DNS prevents Kix from ordering workloads after a DNS provider.
-        # This remains a warning until diagnostics support severity levels.
-        # An inactive optional instance answering `dns`, such as a flavour's
-        # platform-dns import, declares DNS without ordering on it.
-        _dnsResolutionCheck =
-          if !_dnsResolution.found && !((clusterCtx.inactiveOptionalKeys or { }) ? dns) then
-            builtins.trace "[kix] warning: no DNS instance (alias 'dns') was found. Kix will not wait for DNS to be ready before deploying workloads. Add a DNS provider or import if this ordering is required" null
-          else
-            null;
+        # The cluster reports it once as a warning. An inactive optional
+        # instance answering `dns`, such as a flavour's platform-dns import,
+        # declares DNS without ordering on it.
+        _dnsMissing = !_dnsResolution.found && !((clusterCtx.inactiveOptionalKeys or { }) ? dns);
         _dnsRoot =
           if !_dnsResolution.found || (_dnsResolution.direct or false) then
             null
@@ -213,6 +210,7 @@ in
           scope = scope';
           availability = availability.level;
           kix = packageKix;
+          instance = where;
         };
 
         packageMeta = raw.meta or { };
@@ -686,6 +684,7 @@ in
           # A package that deploys no software has no version, and the
           # record then omits it.
           version = instanceVersion;
+          package = packageLib.idOf instCfg.package;
           labels = clusterLabels // {
             "app.kubernetes.io/instance" = instanceName;
             "app.kubernetes.io/managed-by" = "kix";
@@ -873,8 +872,8 @@ in
         };
 
       in
-      builtins.seq _dnsResolutionCheck (
-        builtins.seq diagnostics.emitWarnings (
+      builtins.seq _dnsMissing (
+        builtins.seq diagnostics.evaluateWarnings (
           builtins.seq diagnostics.emitAssertionWarnings (
             let
               view' = mkPackageView {
@@ -896,6 +895,7 @@ in
               _depLinks = directDepLinks;
               _hookResources = _scopeInjectedResources ++ processorResources;
               _scorecardFindings = scorecardFindings;
+              inherit _dnsMissing;
               _diagnostics = {
                 warnings = diagnostics.allWarnings;
                 assertions = diagnostics.allAssertions;

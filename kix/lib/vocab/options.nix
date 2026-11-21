@@ -270,10 +270,39 @@ in
       default = null;
       description = "Ingress hostname. Null = auto-derive from cluster.domain.";
     };
+    extraHosts = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      example = [ "www.example.com" ];
+      description = "Additional hostnames added to the Ingress or HTTPRoute alongside `host`. In Gateway mode, a listener must accept each hostname or evaluation fails. The instance's public URL (`self.exposure.url`) still uses `host`.";
+    };
     annotations = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;
       default = { };
-      description = "Extra ingress annotations.";
+      description = "Annotations added to the generated Ingress or HTTPRoute (for example, external-dns annotations). Keys set here override package defaults.";
+    };
+    timeouts = lib.mkOption {
+      type = lib.types.nullOr (
+        lib.types.submodule {
+          options = {
+            request = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              description = "Maximum duration for the entire client request, as a Gateway API duration string such as `30s`. Set `0s` to disable the timeout.";
+            };
+            backendRequest = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              description = "Maximum duration for a single request from the Gateway to a backend, as a Gateway API duration string such as `10s`.";
+            };
+          };
+        }
+      );
+      default = null;
+      example = {
+        request = "0s";
+      };
+      description = "Gateway API HTTPRoute rule `timeouts` for this instance. When set, replaces any default `timeouts` set by the package; `null` keeps the package defaults. Ignored in Ingress mode.";
     };
   };
 

@@ -79,6 +79,8 @@ impl Run {
             return Ok(i.bin());
         }
         let system = release::system().map_err(|e| miette!("{e}"))?;
+        // A withdrawn baseline installs with warnings meant for someone who
+        // stays on it. The upgrade is leaving it, so they are not printed.
         let installed = release::install(
             &Requirement::Exact(version.clone()),
             &system,

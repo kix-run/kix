@@ -57,6 +57,7 @@ pub fn run(args: &PlanArgs, save: Option<&Path>, ctx: &mut CommandContext) -> Re
         }
         return Ok(Exit::Success);
     };
+    super::deploy::stops::warn(&args.cluster, p.baseline.active());
     // A plan decrypts no SOPS file the build carries: those Secrets get
     // placeholder values, so planning before anyone has approved reads no
     // secret.

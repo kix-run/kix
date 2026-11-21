@@ -1,0 +1,4 @@
++++
+kind = "added"
++++
+`kix deploy`, `kix rollback`, and the Kix operator now stop before applying anything if a newer minor version of Kix last deployed the cluster. To proceed, switch to a commit that uses that minor version or newer, or run `kix upgrade`. The error names both Kix versions and the commit of the last deploy, while the operator marks the queued `Activation` `Failed` and emits an `OlderKix` event. `kix plan`, `kix plan --read-only`, `kix deploy --dry-run`, and `kix rollback --dry-run` warn instead and still show the plan. To downgrade a cluster on purpose (for example, from a broken release), set `KIX_ALLOW_DOWNGRADE` to the exact Kix version that last deployed it and run `kix deploy` or `kix rollback` without `--offline` or `--operator`. Kix then records that version in the `kix.run/downgraded-from` annotation on the `Activation` record.

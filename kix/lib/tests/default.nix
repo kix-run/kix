@@ -1272,10 +1272,11 @@ let
       (cluster.scorecardReport or { findings = [ ]; }).findings
     );
 
-  # A gateway-api and an envoy-gateway instance in `gwns`; the Gateway is
-  # gwns/gateway.
+  # A gateway-api, an envoy-gateway-controller, and an envoy-gateway
+  # instance in `gwns`; the Gateway is gwns/gateway.
   envoyGatewayInstances.instances.gwns = {
     gateway-api.package = import ../../packages/experimental/gateway-api;
+    envoy-gateway-controller.package = import ../../packages/experimental/envoy-gateway-controller;
     gateway.package = import ../../packages/experimental/envoy-gateway;
   };
 

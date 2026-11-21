@@ -3,8 +3,9 @@
 #
 #   curl -fsSL https://kix.run/install | sh
 #
-# The script downloads the release archive for this machine from kix.run,
-# checks it against the release's signed SHA256SUMS, unpacks it to
+# The script reads kix.run's signed release index, downloads the release
+# archive for this machine from kix.run, checks it against the release's
+# signed SHA256SUMS, unpacks it to
 # ~/.local/share/kix/<version>/, links ~/.local/bin/kix to it, and writes
 # ~/.local/share/kix/receipt.json, which `kix self update` reads. It never
 # edits a shell startup file.
@@ -25,6 +26,10 @@ set -eu
 # as in cli/kix/release-keys/<keyid>.pub. web/scripts/install.test.mjs checks that
 # this list matches that directory.
 RELEASE_KEYS='33e0a9bbc5a5d97b5f72a361214ee95add83f1e58dab9ceed61058b1cce52549'
+
+# The index signing keys, in the same form, as in cli/kix/index-keys/.
+# web/scripts/install.test.mjs checks this list too.
+INDEX_KEYS='98b07af3879f69d625fbb54b707f3cc7532d7c7adbc971551faa2f402fa6571b'
 
 # The DER header of an Ed25519 public key, which OpenSSL reads in front of
 # the raw key.
@@ -113,13 +118,20 @@ field() {
   printf '%s\n' "$1" | sed -n "s/.*\"$2\":\"\\([^\"]*\\)\".*/\\1/p"
 }
 
-# Check SHA256SUMS against SHA256SUMS.sig with the release keys, or say why
+# Check a file against its signature file with one set of keys, or say why
 # the check is skipped. A signature that is checked and does not verify stops
 # the install.
-verify_sums() {
-  sums=$1
+#
+#   verify_signature <file> <sig> <header> <keys> <what> <key kind>
+#
+# <what> names the signed file in messages, such as "SHA256SUMS for Kix 0.8.3".
+verify_signature() {
+  file=$1
   sig=$2
-  keys=$RELEASE_KEYS
+  header=$3
+  keys=$4
+  what=$5
+  kind=$6
   if [ -n "${KIX_INSTALL_TEST_PUBKEY:-}" ]; then
     case $source in
       file://*) keys="$keys $KIX_INSTALL_TEST_PUBKEY" ;;
@@ -127,42 +139,54 @@ verify_sums() {
     esac
   fi
 
-  if [ "$(sed -n 1p "$sig")" != 'kix-release-signature v1' ]; then
-    fail "SHA256SUMS.sig for Kix $version is not a kix-release-signature v1 file. Do not install it; report this at https://kix.run"
+  if [ "$(sed -n 1p "$sig")" != "$header" ]; then
+    fail "the signature of $what is not a $header file. Do not install it; report this at https://kix.run"
   fi
-  keyid=$(sed -n 's/^keyid=\([0-9a-f]\{8\}\)$/\1/p' "$sig")
-  signature=$(sed -n 's/^signature=\([A-Za-z0-9+/=]*\)$/\1/p' "$sig")
-  if [ -z "$keyid" ] || [ -z "$signature" ]; then
-    fail "SHA256SUMS.sig for Kix $version has no keyid or signature line. Do not install it; report this at https://kix.run"
+  # One "<keyid> <signature>" line per key that signed the file. A file
+  # signed during a key rotation has two.
+  pairs=$(awk '
+    /^keyid=[0-9a-f]+$/ && length($0) == 14 { id = substr($0, 7); next }
+    /^signature=[A-Za-z0-9+\/=]+$/ && id != "" { print id, substr($0, 11); id = "" }
+  ' "$sig")
+  if [ -z "$pairs" ]; then
+    fail "the signature of $what has no keyid or signature line. Do not install it; report this at https://kix.run"
   fi
 
   if [ -z "$(printf '%s' "$keys" | tr -d '[:space:]')" ]; then
-    note "this install script has no release signing key yet, so it checked the SHA-256 only"
+    note "this install script has no $kind key yet, so it did not check the signature of $what"
     return 0
   fi
   if ! command -v openssl >/dev/null 2>&1 ||
     ! openssl pkeyutl -help 2>&1 | grep -q -- '-rawin'; then
-    note "this machine's openssl cannot check Ed25519 signatures; checked the SHA-256 only"
+    note "this machine's openssl cannot check Ed25519 signatures, so it did not check the signature of $what"
     return 0
   fi
 
-  key=''
-  for candidate in $keys; do
-    if [ "$(hex_bytes "$candidate" | sha256 | cut -c1-8)" = "$keyid" ]; then
-      key=$candidate
+  known=''
+  named=''
+  printf '%s\n' "$pairs" >"$work/pairs"
+  while read -r keyid signature; do
+    named="$named${named:+, }$keyid"
+    key=''
+    for candidate in $keys; do
+      if [ "$(hex_bytes "$candidate" | sha256 | cut -c1-8)" = "$keyid" ]; then
+        key=$candidate
+      fi
+    done
+    [ -n "$key" ] || continue
+    known=yes
+    hex_bytes "$ED25519_DER_PREFIX$key" >"$work/key.der"
+    printf '%s' "$signature" | openssl base64 -d -A >"$work/sig.bin"
+    if openssl pkeyutl -verify -pubin -keyform DER -inkey "$work/key.der" -rawin \
+      -in "$file" -sigfile "$work/sig.bin" >/dev/null 2>&1; then
+      say "Verified $what with $kind key $keyid"
+      return 0
     fi
-  done
-  if [ -z "$key" ]; then
-    fail "the release signature for Kix $version names key $keyid, which this install script does not know. Do not install it; report this at https://kix.run"
+  done <"$work/pairs"
+  if [ -z "$known" ]; then
+    fail "the signature of $what names key $named, which this install script does not know. Do not install it; report this at https://kix.run"
   fi
-
-  hex_bytes "$ED25519_DER_PREFIX$key" >"$work/key.der"
-  printf '%s' "$signature" | openssl base64 -d -A >"$work/sig.bin"
-  if ! openssl pkeyutl -verify -pubin -keyform DER -inkey "$work/key.der" -rawin \
-    -in "$sums" -sigfile "$work/sig.bin" >/dev/null 2>&1; then
-    fail "the release signature for Kix $version does not verify. Do not install it; report this at https://kix.run"
-  fi
-  say "Verified SHA256SUMS for Kix $version with release key $keyid"
+  fail "the signature of $what does not verify. Do not install it; report this at https://kix.run"
 }
 
 # Point the kix link at the installed version, unless something else owns
@@ -221,10 +245,20 @@ main() {
   # dropping whitespace and splitting at braces puts the header on the first
   # line and each release on a line of its own.
   fetch /releases/index.json "$work/index.json"
+  fetch /releases/index.json.sig "$work/index.json.sig"
+  verify_signature "$work/index.json" "$work/index.json.sig" 'kix-index-signature v1' \
+    "$INDEX_KEYS" "the release index" index
   tr -d ' \t\r\n' <"$work/index.json" | tr '{' '\n' | tr '}' '\n' | sed '/^,*$/d' >"$work/index.lines"
   header=$(sed -n 1p "$work/index.lines")
   if [ "$(field "$header" schema)" != 'kix.run/releases/v1' ]; then
     fail "$source/releases/index.json is not a release index this script can read"
+  fi
+  # Both times are UTC in the same form, so they compare as text. An old
+  # index served again stops working when it expires.
+  expires=$(field "$header" expires)
+  now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  if [ -z "$expires" ] || [ "$(expr "$now" \< "$expires")" != 1 ]; then
+    fail "the release index from $source expired at ${expires:-an unknown time}. If this machine's clock is right, the site has not signed a new index. Report this at https://github.com/kix-run/kix/issues"
   fi
 
   version=${KIX_VERSION:-}
@@ -243,7 +277,16 @@ main() {
     *[!0-9A-Za-z.-]* | [!0-9]* | *. | *- | *..* | *.-* | *-.*) fail "KIX_VERSION=$version is not a Kix version. Write one such as 0.8.3 or 0.9.0-rc.1" ;;
   esac
 
-  entry=$(grep -F "\"version\":\"$version\"" "$work/index.lines" | sed -n 1p || true)
+  # A withdrawn release is listed with a reason and its files, apart from
+  # the releases, whose lines have no "reason" field. The default is never
+  # withdrawn, so only a version named exactly can be one.
+  entry=$(grep -F "\"version\":\"$version\"" "$work/index.lines" | grep -F '"sums":' | sed -n 1p || true)
+  case $entry in
+    *'"reason":'*)
+      use=$(field "$entry" use)
+      note "Kix $version was withdrawn, and kix deploy and kix rollback refuse to run with it. $source/releases/index.json says why. Install Kix $use instead: curl -fsSL $source/install | KIX_VERSION=$use sh"
+      ;;
+  esac
   if [ -z "$entry" ]; then
     latest=$(field "$header" latest)
     fail "no Kix $version release exists${latest:+. The newest is $latest}"
@@ -261,7 +304,8 @@ main() {
     say "Downloading Kix $version for $system"
     fetch "$(field "$entry" sums)" "$work/SHA256SUMS"
     fetch "$(field "$entry" signature)" "$work/SHA256SUMS.sig"
-    verify_sums "$work/SHA256SUMS" "$work/SHA256SUMS.sig"
+    verify_signature "$work/SHA256SUMS" "$work/SHA256SUMS.sig" 'kix-release-signature v1' \
+      "$RELEASE_KEYS" "SHA256SUMS for Kix $version" release
 
     expected=$(awk -v name="$archive" '$2 == name || $2 == "*" name { print $1 }' "$work/SHA256SUMS")
     [ -n "$expected" ] || fail "SHA256SUMS for Kix $version lists no $archive"

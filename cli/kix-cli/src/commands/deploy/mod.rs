@@ -12,6 +12,7 @@ mod saved_plan;
 pub(crate) mod stops;
 #[cfg(test)]
 mod tests;
+pub(crate) mod withdrawn;
 
 use std::io::Write;
 use std::sync::Arc;
@@ -54,6 +55,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
         None => None,
     };
     if args.dry_run {
+        withdrawn::warn();
         return match &saved {
             Some(s) => check_saved_plan(s, &args.plan, ctx),
             None => super::plan::run(&args.plan, None, ctx),
@@ -70,12 +72,18 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
     let Some(mut p) = prepare(&args.plan, flags, ctx)? else {
         return Ok(Exit::Success);
     };
-    // A cluster that has never run a required stop must deploy it first.
-    stops::check(
+    // A cluster that has never run a required stop must deploy it first,
+    // and a cluster a newer minor of Kix deployed refuses this one.
+    if let Some(from) = stops::check(
         &args.plan.cluster,
-        p.baseline.active().and_then(|r| r.deployed_with.as_deref()),
+        p.baseline.active(),
         stops::Writer::Deploy,
-    )?;
+    )? {
+        p.note_downgrade(&from);
+    }
+    if let Some(version) = withdrawn::check(&args.plan.cluster, stops::Writer::Deploy)? {
+        p.note_withdrawn_kix(&version);
+    }
     let sops = p.sops_sources(false).map_err(|e| miette!("{e}"))?;
     p.annotate_record(&args.record_annotations)
         .map_err(|e| miette!("{e}"))?;
@@ -748,6 +756,16 @@ async fn run_deploy_async(
             binding::Connection::InCluster => None,
         };
         check_cached_baseline(records.as_ref(), cluster_name, hash, context).await?;
+        // A plan from the cache does not know which Kix deployed the cluster
+        // last, so the deploy checks it now, before it applies anything.
+        let active = match &records {
+            Some(records) => records
+                .active(cluster_name)
+                .await
+                .map_err(|e| miette!("{e}"))?,
+            None => None,
+        };
+        stops::check_offline(cluster_name, active.as_ref())?;
     }
 
     // A plan made without connecting (`--offline`) learns only now whether
@@ -1028,6 +1046,9 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
     let Some(p) = prepare(&args.plan, operator_flags(flags_of(&args.plan)), ctx)? else {
         return Ok(Exit::Success);
     };
+    // The build came from this Kix, so a withdrawn one must not hand it to
+    // the operator either.
+    let withdrawn_kix = withdrawn::check(&args.plan.cluster, stops::Writer::Deploy)?;
     let checked = &p.checked;
     let activation_name = checked
         .activation_name()
@@ -1114,6 +1135,17 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
             &package_index,
         )
         .await?;
+        // The operator may already be deploying, so a failed note warns
+        // instead of stopping the command.
+        if let Some(version) = &withdrawn_kix
+            && let Err(e) = records.note_withdrawn_kix(&activation_name, version).await
+        {
+            eprintln!(
+                "warning: could not set {} on Activation '{activation_name}' for Kix {}: {e}. The deploy continues without that annotation.",
+                kix::manifest::keys::WITHDRAWN_KIX,
+                version.release()
+            );
+        }
 
         crate::say!(
             "  {} Activation CR applied. Waiting for operator...",

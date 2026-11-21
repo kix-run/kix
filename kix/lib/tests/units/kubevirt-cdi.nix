@@ -218,13 +218,10 @@ let
     };
 
   vmReadiness =
-    strategy: readinessOf (find (mkVirtCluster { vms = vmWith strategy; }) "VirtualMachine" "vm");
-  printable =
-    status:
-    builtins.toJSON {
-      path = "/status/printableStatus";
-      equals = status;
-    };
+    strategy:
+    builtins.fromJSON (
+      readinessOf (find (mkVirtCluster { vms = vmWith strategy; }) "VirtualMachine" "vm")
+    );
 
   diskTemplate = {
     metadata.name = "disk";
@@ -312,8 +309,10 @@ in
     )
     || throw "kix.operandPolicy directions: ingress ${builtins.toJSON ingressOnly}, egress ${builtins.toJSON egressOnly}, dropped ${builtins.toJSON dropped}";
 
-  # runStrategy Always and running = true wait for Running; Halted and
-  # running = false for Stopped. The caller's annotations stay.
+  # runStrategy Always and running = true wait for Running, read the
+  # generation from status.desiredGeneration, and report RestartRequired as
+  # a pending restart. Halted and running = false wait for Stopped and read
+  # no generation. The caller's annotations stay.
   kubevirt-cdi-vm-readiness =
     let
       got = {
@@ -322,18 +321,36 @@ in
         halted = vmReadiness { runStrategy = "Halted"; };
         stopped = vmReadiness { running = false; };
       };
-      want = {
-        always = printable "Running";
-        running = printable "Running";
-        halted = printable "Stopped";
-        stopped = printable "Stopped";
-      };
+      runningOk =
+        r:
+        r.path == "/status/printableStatus"
+        && r.equals == "Running"
+        && r.observedGeneration == "/status/desiredGeneration"
+        &&
+          r.pendingRestart.condition == {
+            type = "RestartRequired";
+            status = "True";
+          }
+        && lib.hasInfix "virtctl restart vm -n vms" r.pendingRestart.hint;
+      stoppedOk =
+        r:
+        r == {
+          path = "/status/printableStatus";
+          equals = "Stopped";
+          observedGeneration = false;
+        };
       note =
         (annotationsOf (
           find (mkVirtCluster { vms = vmWith { runStrategy = "Halted"; }; }) "VirtualMachine" "vm"
         )).note or null;
     in
-    (got == want && note == "kept")
+    (
+      runningOk got.always
+      && runningOk got.running
+      && stoppedOk got.halted
+      && stoppedOk got.stopped
+      && note == "kept"
+    )
     || throw "mkVirtualMachine readiness: got ${builtins.toJSON got}, caller annotation ${builtins.toJSON note}";
 
   # A run strategy whose outcome depends on a user or the guest, an
@@ -427,7 +444,8 @@ in
 
   # At `none` KubeVirt runs one virt-api and virt-controller and CDI one of
   # each operand; at `zone` KubeVirt keeps its own counts and CDI runs
-  # two. Both CRs wait for phase Deployed.
+  # two. CDI waits for phase Deployed, and KubeVirt for the release it
+  # installs to be the one it reports.
   kubevirt-cdi-operand-replicas =
     let
       at =
@@ -445,6 +463,10 @@ in
         path = "/status/phase";
         equals = "Deployed";
       };
+      installed = builtins.toJSON {
+        path = "/status/observedKubeVirtVersion";
+        equals = "v1.10.0";
+      };
     in
     (
       (kvSpec none).infra.replicas or null == 1
@@ -461,7 +483,7 @@ in
           deploymentReplicas = 2;
           uploadProxyReplicas = 2;
         }
-      && readinessOf (find none "KubeVirt" "kubevirt") == deployed
+      && readinessOf (find none "KubeVirt" "kubevirt") == installed
       && readinessOf (find none "CDI" "cdi") == deployed
     )
     || throw "operand replicas: kubevirt none ${builtins.toJSON (kvSpec none)}, zone ${builtins.toJSON (kvSpec zone)}; cdi none ${builtins.toJSON (cdiInfra none)}, zone ${builtins.toJSON (cdiInfra zone)}";
@@ -481,7 +503,7 @@ in
       cdiSpec = (find merged "CDI" "cdi").spec;
       refused = {
         kvReplicas = mkVirtCluster { kubevirt.config.extraSpec.infra.replicas = 3; };
-        kvTag = mkVirtCluster { kubevirt.config.extraSpec.imageTag = "v1.5.1"; };
+        kvTag = mkVirtCluster { kubevirt.config.extraSpec.imageTag = "v1.10.1"; };
         kvPullPolicy = mkVirtCluster { kubevirt.config.extraSpec.imagePullPolicy = "Always"; };
         cdiReplicas = mkVirtCluster { cdi.config.extraSpec.infra.apiServerReplicas = 3; };
         cdiInfraNull = mkVirtCluster { cdi.config.extraSpec.infra = null; };
@@ -520,17 +542,19 @@ in
         ]
       && subjects == [ "kubevirt-operator" ]
       && admin.metadata.labels."rbac.authorization.k8s.io/aggregate-to-admin" or null == "true"
-      && builtins.length clusterRole.rules == 115
+      && builtins.length clusterRole.rules == 143
     )
     || throw "kubevirt RBAC: bindings ${builtins.toJSON refs}, subjects ${builtins.toJSON subjects}";
 
   # Default images carry the release tag and digest everywhere, except
-  # VIRT_OPERATOR_IMAGE, which is repo@digest. Another patch tag drops every
-  # digest; another minor release fails. A moved repository moves the
+  # VIRT_OPERATOR_IMAGE, which is repo@digest, and the virt-template images,
+  # which carry virt-template's own tag. Another patch tag drops every
+  # digest that follows image.tag. An older minor on upstream's update path
+  # is accepted, and a minor outside it fails. A moved repository moves the
   # operands and keeps their digests.
   kubevirt-cdi-images =
     let
-      pinned = lib.hasInfix ":v1.5.0@sha256:";
+      pinned = lib.hasInfix ":v1.10.0@sha256:";
       defaults = mkVirtCluster { };
       kvEnv = envOf defaults "kubevirt-operator";
       cdiEnv = envOf defaults "cdi-operator";
@@ -538,19 +562,26 @@ in
       kvOperands = removeAttrs (imageVars kvEnv) [ "VIRT_OPERATOR_IMAGE" ];
       extraImages = (outOf defaults "kubevirt").extraImages ++ (outOf defaults "cdi").extraImages;
 
-      patch = mkVirtCluster { kubevirt.config.image.tag = "v1.5.1"; };
+      patch = mkVirtCluster { kubevirt.config.image.tag = "v1.10.1"; };
       patchEnv = envOf patch "kubevirt-operator";
+      # An older step of upstream's update path is accepted for walking up.
+      walkUpEnv = envOf (mkVirtCluster { kubevirt.config.image.tag = "v1.6.6"; }) "kubevirt-operator";
+      templateVars = [
+        "VIRT_TEMPLATE_APISERVER_IMAGE"
+        "VIRT_TEMPLATE_CONTROLLER_IMAGE"
+      ];
 
       moved = mkVirtCluster {
         kubevirt.config.image.repository = "registry.example/mirror/virt-operator";
       };
       movedEnv = envOf moved "kubevirt-operator";
 
-      releaseMessage = "kubevirt/{crds,rbac} are vendored from v1.5.0";
+      releaseMessage = "kubevirt/{crds,rbac} are vendored from v1.10.0";
       refused = {
-        minor = refusedWith releaseMessage "kubevirt" { image.tag = "v1.6.0"; };
+        older = refusedWith releaseMessage "kubevirt" { image.tag = "v1.4.1"; };
+        newer = refusedWith releaseMessage "kubevirt" { image.tag = "v1.11.0"; };
         latest = refusedWith releaseMessage "kubevirt" { image.tag = "latest"; };
-        noV = refusedWith releaseMessage "kubevirt" { image.tag = "1.5.0"; };
+        noV = refusedWith releaseMessage "kubevirt" { image.tag = "1.10.0"; };
         cdiMinor = refusedWith "is not a v1.66 release" "cdi" { image.tag = "v1.67.0"; };
         operandPullPolicy = refusedWith "operandImages.cdi-importer.pullPolicy" "cdi" {
           operandImages.cdi-importer.pullPolicy = "Always";
@@ -559,23 +590,28 @@ in
       notFailing = builtins.attrNames (lib.filterAttrs (_: ok: !ok) refused);
     in
     (
-      builtins.length (builtins.attrNames kvOperands) == 9
-      && lib.all pinned (builtins.attrValues kvOperands)
+      builtins.length (builtins.attrNames kvOperands) == 12
+      && lib.all pinned (builtins.attrValues (removeAttrs kvOperands templateVars))
+      && lib.all (lib.hasInfix ":v0.3.0@sha256:") (map (n: kvOperands.${n}) templateVars)
       && lib.all (lib.hasInfix ":v1.66.1@sha256:") (builtins.attrValues (imageVars cdiEnv))
-      && builtins.length extraImages == 15
+      && builtins.length extraImages == 18
       && lib.all (lib.hasInfix "@sha256:") extraImages
       &&
         kvEnv.VIRT_OPERATOR_IMAGE
-        == "quay.io/kubevirt/virt-operator@sha256:1591b45d3f35b857cb13921429b83e8da4e21a35aa54e1c88290baf996c05a2d"
-      && patchEnv.VIRT_OPERATOR_IMAGE == "quay.io/kubevirt/virt-operator:v1.5.1"
-      && patchEnv.VIRT_API_IMAGE == "quay.io/kubevirt/virt-api:v1.5.1"
-      && lib.all (v: !(lib.hasInfix "@" v)) (builtins.attrValues (imageVars patchEnv))
+        == "quay.io/kubevirt/virt-operator@sha256:37c1287ad094eed25c4c6cc78744c06dd9bf340f7301eb0d26bdf3c4c230b738"
+      && patchEnv.VIRT_OPERATOR_IMAGE == "quay.io/kubevirt/virt-operator:v1.10.1"
+      && patchEnv.VIRT_API_IMAGE == "quay.io/kubevirt/virt-api:v1.10.1"
+      && lib.all (v: !(lib.hasInfix "@" v)) (
+        builtins.attrValues (removeAttrs (imageVars patchEnv) templateVars)
+      )
+      && walkUpEnv.VIRT_OPERATOR_IMAGE == "quay.io/kubevirt/virt-operator:v1.6.6"
+      && walkUpEnv.KUBEVIRT_VERSION == "v1.6.6"
       &&
         movedEnv.VIRT_HANDLER_IMAGE
-        == "registry.example/mirror/virt-handler:v1.5.0@sha256:70605363b54f4cc982a80dfdabd01462920bb2c64b028ab3b0c368ddb04e6370"
+        == "registry.example/mirror/virt-handler:v1.10.0@sha256:1cc169b352ea09ad25824f633b955b2692a5a284c15e9689bf393992b1c6d199"
       && notFailing == [ ]
     )
-    || throw "images: kubevirt ${builtins.toJSON kvEnv}, v1.5.1 ${builtins.toJSON patchEnv}, moved ${builtins.toJSON movedEnv}, accepted ${builtins.toJSON notFailing}";
+    || throw "images: kubevirt ${builtins.toJSON kvEnv}, patch ${builtins.toJSON patchEnv}, moved ${builtins.toJSON movedEnv}, accepted ${builtins.toJSON notFailing}";
 
   # A second instance of either package is refused, naming the other
   # instance. The meta check is called directly: a failed meta assertion
@@ -895,7 +931,8 @@ in
     || throw "CDI priorityClass: ${builtins.toJSON (spec (withClass { }))}";
 
   # With an enforcer, each operand gets its policy; without one, none
-  # renders. virt-exportproxy gets one only with the VMExport gate.
+  # renders. The virt-template pods get theirs unless the Template gate is
+  # disabled.
   kubevirt-cdi-operand-policies =
     let
       names = [
@@ -903,14 +940,23 @@ in
         "kubevirt-virt-controller"
         "kubevirt-virt-handler"
         "kubevirt-strategy-dumper"
+        "kubevirt-virt-exportproxy"
+        "kubevirt-virt-template-apiserver"
+        "kubevirt-virt-template-controller"
         "cdi-cdi-apiserver"
         "cdi-cdi-deployment"
         "cdi-cdi-uploadproxy"
       ];
       on = mkVirtCluster { modules = [ netpolOn ]; };
       off = mkVirtCluster { };
-      exportGate = mkVirtCluster {
-        kubevirt.config.extraSpec.configuration.developerConfiguration.featureGates = [ "VMExport" ];
+      noTemplate = mkVirtCluster {
+        kubevirt.config.extraSpec.configuration.developerConfiguration.disabledFeatureGates = [
+          "Template"
+        ];
+        modules = [ netpolOn ];
+      };
+      templateOff = mkVirtCluster {
+        kubevirt.config.extraSpec.configuration.virtTemplateDeployment.enabled = false;
         modules = [ netpolOn ];
       };
       # The test enforcer's mkEndpointSelector writes `matchLabels` at the
@@ -922,8 +968,14 @@ in
     (
       missing == [ ]
       && present == [ ]
-      && find on "CiliumNetworkPolicy" "kubevirt-virt-exportproxy" == null
-      && selectorOf exportGate "kubevirt-virt-exportproxy" == { "kubevirt.io" = "virt-exportproxy"; }
+      && selectorOf on "kubevirt-virt-exportproxy" == { "kubevirt.io" = "virt-exportproxy"; }
+      &&
+        selectorOf on "kubevirt-virt-template-apiserver" == {
+          "app.kubernetes.io/name" = "virt-template";
+          control-plane = "apiserver";
+        }
+      && find noTemplate "CiliumNetworkPolicy" "kubevirt-virt-template-apiserver" == null
+      && find templateOff "CiliumNetworkPolicy" "kubevirt-virt-template-controller" == null
       && selectorOf on "kubevirt-virt-handler" == { "kubevirt.io" = "virt-handler"; }
       &&
         selectorOf on "cdi-cdi-deployment" == {

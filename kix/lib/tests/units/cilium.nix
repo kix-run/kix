@@ -375,6 +375,48 @@ in
     )
     || throw "helmChartConfig values merge: ${builtins.toJSON values}";
 
+  # The HelmChartConfig carries spec.failurePolicy only when the instance
+  # sets the option, so the environment's own policy applies otherwise.
+  # Evaluation fails for a value outside the three helm-controller knows,
+  # and in the two deliveries that write no HelmChartConfig. Control: those
+  # two deliveries build without the option.
+  cilium-helmchartconfig-failure-policy =
+    let
+      specOf =
+        config:
+        (byName "rke2-cilium" (
+          ofKind "HelmChartConfig" (
+            manifests (rke2CiliumCluster {
+              inherit config;
+            })
+          )
+        )).spec;
+      policies = lib.genAttrs [ "abort" "reinstall" "retry" ] (
+        policy: (specOf { failurePolicy = policy; }).failurePolicy
+      );
+    in
+    (
+      !(specOf { } ? failurePolicy)
+      &&
+        policies == {
+          abort = "abort";
+          reinstall = "reinstall";
+          retry = "retry";
+        }
+      && evalFails (rke2CiliumCluster {
+        config.failurePolicy = "ignore";
+      })
+      && evalFails (platformCiliumCluster {
+        config.failurePolicy = "abort";
+      })
+      && !(evalFails (platformCiliumCluster { }))
+      && evalFails (chartCluster {
+        config.failurePolicy = "abort";
+      })
+      && !(evalFails (chartCluster { }))
+    )
+    || throw "helmChartConfig failurePolicy: ${builtins.toJSON policies}";
+
   # With the import's out.helmChartConfig = null the instance writes no
   # Cilium configuration, and refuses `values`.
   cilium-none-delivery =
@@ -656,40 +698,4 @@ in
         }
     )
     || throw "rke2 platform intents, missing ${builtins.toJSON missing}: ${builtins.toJSON cnps}";
-
-  # A cluster that declares a Kubernetes version Cilium does not support is
-  # refused with the change record's id. The meta check is called directly,
-  # because a failed meta assertion fails the cluster before its messages
-  # can be read.
-  cilium-k8s-range =
-    let
-      metaLib = import ../../meta.nix { inherit lib; };
-      meta =
-        (ciliumPackage {
-          inherit lib;
-          kix = kixlib;
-          scope = {
-            instanceName = "cilium";
-            namespaceName = "kube-system";
-          };
-          availability = "none";
-        }).meta;
-      refusals =
-        k8sVersion:
-        map (a: a.message) (
-          builtins.filter (a: !a.assertion) (
-            (metaLib.checkMetaStatic {
-              packageMeta = meta;
-              instanceName = "cilium";
-              namespaceName = "kube-system";
-              clusterConfig = { inherit k8sVersion; };
-              resolvedDepMeta = { };
-              resolutionIndex.byKey = { };
-            }).assertions
-          )
-        );
-      refused = v: builtins.any (lib.hasInfix "[K8720]") (refusals v);
-    in
-    (refused "1.32" && refused "1.37.0" && refusals "1.34.3" == [ ] && refusals null == [ ])
-    || throw "cilium k8s range: 1.32 ${builtins.toJSON (refusals "1.32")}, 1.37.0 ${builtins.toJSON (refusals "1.37.0")}, 1.34.3 ${builtins.toJSON (refusals "1.34.3")}";
 }

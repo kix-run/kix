@@ -180,9 +180,11 @@ Two regen apps, one per execution mode:
   (deploy, diff, status, kubectl get) against it. Used for output
   whose shape only makes sense against a real Kubernetes API.
 
-CI runs `regen-captures-offline -- --check` on every push; offline
-sidecars must be regenerated and committed before merging changes
-that affect their output, or the site build fails.
+CI runs `regen-captures-offline -- --check` on pull requests, except
+those that change only packages, change records, library tests or test
+clusters. Regenerate and commit the offline sidecars before merging
+a change that affects their output. Package version bumps skip this,
+and the release regenerates every sidecar.
 
 Both drivers share `docs/nix/captures-lib.nix` (workspace setup,
 mutate / capture step shells, drift comparison) and consume the

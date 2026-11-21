@@ -70,6 +70,10 @@ pub struct ExtraImageSource {
 pub struct PackageInfo {
     pub version: Option<String>,
     pub owner: Option<String>,
+    /// The id of one of Kix's own packages (`harbor`,
+    /// `experimental/coredns`), or `None` for a project's own package.
+    #[serde(default)]
+    pub package: Option<String>,
 }
 
 /// Version + auto-instantiation info for a cluster instance.
@@ -77,6 +81,11 @@ pub struct PackageInfo {
 pub struct InstanceInfo {
     pub version: Option<String>,
     pub owner: Option<String>,
+    /// The id of one of Kix's own packages (`harbor`,
+    /// `experimental/coredns`), or `None` for a project's own package, an
+    /// inline package, or an import.
+    #[serde(default)]
+    pub package: Option<String>,
     #[serde(default)]
     pub auto: bool,
     #[serde(default, rename = "isImport")]

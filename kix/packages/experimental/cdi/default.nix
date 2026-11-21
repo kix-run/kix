@@ -220,11 +220,13 @@ in
     conflictsWith = [ "cluster:cdi" ];
     # CDI states no supported Kubernetes versions. These are the versions
     # its end-to-end lanes run at the release (automation/*.sh, TARGET).
-    # Move both bounds with `release`.
-    k8s = {
+    # No version is known to fail: the package's manifests use only core v1,
+    # RBAC v1, and the CDI CRD, whose schema has no CEL validation, so
+    # nothing is refused. Move `supported` with `release`.
+    k8s.supported = {
       minVersion = "1.35";
       maxVersion = "1.36";
-      reason = "[K6643] CDI ${release} is tested on Kubernetes 1.35 and 1.36 only. Move the cluster to a Kubernetes version in that range, or use a Kix release whose cdi package still accepts it";
+      source = "CDI's end-to-end test lanes";
     };
   };
 
@@ -471,17 +473,19 @@ in
           // {
             annotations = (args.annotations or { }) // {
               "cdi.kubevirt.io/storage.bind.immediate.requested" = "true";
-              ${kix.keys.readiness} = builtins.toJSON {
-                path = "/status/phase";
-                equals = "Succeeded";
-                failed = [
-                  {
-                    path = "/status/phase";
-                    equals = "Failed";
-                    hint = "The claim behind the DataVolume was lost. Recreate the DataVolume.";
-                  }
-                ];
-              };
+            };
+            # DataVolumeStatus has no generation field, so the deploy reads
+            # the phase as current.
+            readiness = {
+              path = "/status/phase";
+              equals = "Succeeded";
+              failed = [
+                {
+                  path = "/status/phase";
+                  equals = "Failed";
+                  hint = "The claim behind the DataVolume was lost. Recreate the DataVolume.";
+                }
+              ];
             };
           }
         );

@@ -82,9 +82,10 @@ impl Setup {
         s.write("fake/clusters.json", r#"["east", "west"]"#);
         s.write(
             "fake/packages.json",
-            r#"[{"name": "web", "status": "installed [shop]"},
-                {"name": "db", "status": "installed [shop]"},
-                {"name": "echo-server", "status": "available"}]"#,
+            r#"[{"name": "frontend", "status": "installed [shop]", "package": "web"},
+                {"name": "db", "status": "installed [shop]", "package": "db"},
+                {"name": "site", "status": "installed [shop]", "package": null},
+                {"name": "echo-server", "status": "available", "package": "echo-server"}]"#,
         );
         for cluster in ["east", "west"] {
             s.manifest("out", cluster, "Deployment", "web", "web", "image: web:1");
@@ -271,15 +272,9 @@ impl Setup {
         let releases = self.site.join("releases").join(format!("v{version}"));
         std::fs::create_dir_all(&releases).unwrap();
         std::fs::write(releases.join("SHA256SUMS"), &sums).unwrap();
-        let key: [u8; 32] = self.signer.public_key().as_ref().try_into().unwrap();
         std::fs::write(
             releases.join("SHA256SUMS.sig"),
-            format!(
-                "kix-release-signature v1\nkeyid={}\nsignature={}\n",
-                kix::release::verify::keyid(&key),
-                base64::engine::general_purpose::STANDARD
-                    .encode(self.signer.sign(sums.as_bytes()).as_ref())
-            ),
+            self.signature(sums.as_bytes(), "kix-release-signature v1"),
         )
         .unwrap();
 
@@ -299,7 +294,28 @@ impl Setup {
                 "signature": format!("/releases/v{version}/SHA256SUMS.sig"),
                 "download": format!("/download/{version}/"),
             }));
-        std::fs::write(index_path, index.to_string()).unwrap();
+        let now = chrono::Utc::now();
+        let stamp =
+            |t: chrono::DateTime<chrono::Utc>| t.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        index["generated"] = serde_json::json!(stamp(now));
+        index["expires"] = serde_json::json!(stamp(now + chrono::Duration::days(7)));
+        let bytes = index.to_string();
+        std::fs::write(&index_path, &bytes).unwrap();
+        std::fs::write(
+            index_path.with_extension("json.sig"),
+            self.signature(bytes.as_bytes(), "kix-index-signature v1"),
+        )
+        .unwrap();
+    }
+
+    /// Return a signature file over `bytes` that starts with `header`.
+    fn signature(&self, bytes: &[u8], header: &str) -> String {
+        let key: [u8; 32] = self.signer.public_key().as_ref().try_into().unwrap();
+        format!(
+            "{header}\nkeyid={}\nsignature={}\n",
+            kix::release::verify::keyid(&key),
+            base64::engine::general_purpose::STANDARD.encode(self.signer.sign(bytes).as_ref())
+        )
     }
 
     /// Publish 9.1.0, 9.2.0, 9.2.1, and 9.3.0, each dated long ago. 9.2.0
@@ -408,9 +424,14 @@ fn dry_run_asks_the_installed_kix_which_packages_are_in_use() {
     common::write_executable(&bin.join("kix"), FAKE.replace("__VERSION__", "9.1.0"));
     let (code, out) = s.upgrade(&["--dry-run"]);
     assert_eq!(code, 0, "{out}");
-    // Every note is listed. The one whose package an instance is named
-    // after is marked as a likely match.
-    assert!(out.contains("2 changes between 9.1.0 and 9.3.0:\n  * may affect your 2 clusters (package name matches an instance in use)\n"), "{out}");
+    // Every note is listed. The one that names a package the clusters use
+    // is marked.
+    assert!(
+        out.contains(
+            "2 changes between 9.1.0 and 9.3.0:\n  * package used in this project (2 clusters)\n"
+        ),
+        "{out}"
+    );
     assert!(out.contains("  * [K0001] web (9.2.0):"), "{out}");
     assert!(out.contains("    [K0002] echo-server (9.2.0):"), "{out}");
     assert!(
@@ -418,6 +439,27 @@ fn dry_run_asks_the_installed_kix_which_packages_are_in_use() {
         "{}",
         s.calls()
     );
+}
+
+#[test]
+fn dry_run_marks_nothing_when_the_installed_kix_reports_no_package_ids() {
+    let s = Setup::new();
+    s.releases(vec![]);
+    s.write(
+        "fake/packages.json",
+        r#"[{"name": "web", "status": "installed [shop]"},
+            {"name": "echo-server", "status": "available"}]"#,
+    );
+    let bin = s.data.join("9.1.0/bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    common::write_executable(&bin.join("kix"), FAKE.replace("__VERSION__", "9.1.0"));
+    let (code, out) = s.upgrade(&["--dry-run"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains("current Kix 9.1.0 did not report which packages your clusters use"),
+        "{out}"
+    );
+    assert!(out.contains("    [K0001] web (9.2.0):"), "{out}");
 }
 
 #[test]
@@ -497,7 +539,7 @@ fn a_failed_jump_steps_and_stops_at_the_first_failing_minor_then_resumes() {
         "{out}"
     );
     assert!(
-        out.contains("  Config changes required in Kix 9.2.0:\n    * may affect this project (package name matches an instance in use)\n  * [K0001] web:"),
+        out.contains("  Config changes required in Kix 9.2.0:\n    * package used in this project\n  * [K0001] web:"),
         "{out}"
     );
     assert!(

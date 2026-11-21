@@ -5,6 +5,7 @@ let
   compose = import ./compose.nix { inherit lib; };
   durations = import ./durations.nix { inherit lib; };
   storageClass = import ./storage-class.nix { inherit lib; };
+  versions = import ../core/version.nix { inherit lib; };
   availability = import ../core/availability.nix { inherit lib; };
   scorecard = import ../scorecard.nix { inherit lib; };
   quotaUse = import ./quota-use.nix { inherit lib; };
@@ -36,6 +37,11 @@ compose
       id = "K0106";
       message = "kix.options.mail moved to kix.contracts.smtp.options.";
     };
+  };
+  # Compare version strings such as a cluster's `k8sVersion`. Both return
+  # null when the version is less precise than the bound.
+  version = {
+    inherit (versions) atLeast atMost;
   };
   # Map availability levels to replica counts, quorums, and topology spread
   # constraints (`core/availability.nix`). Single-replica workloads set a

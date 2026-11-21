@@ -187,11 +187,25 @@ let
         ports,
       }:
       let
-        fromEndpoint = {
-          matchLabels = callerSelector // {
-            "k8s:io.kubernetes.pod.namespace" = callerNamespace;
-          };
-        };
+        # Without a namespace Cilium matches the policy's own namespace
+        # only, so a caller in any namespace is selected with Exists.
+        fromEndpoint =
+          if callerNamespace == null then
+            {
+              matchLabels = callerSelector;
+              matchExpressions = [
+                {
+                  key = "k8s:io.kubernetes.pod.namespace";
+                  operator = "Exists";
+                }
+              ];
+            }
+          else
+            {
+              matchLabels = callerSelector // {
+                "k8s:io.kubernetes.pod.namespace" = callerNamespace;
+              };
+            };
         cp = ingressPortsToCilium ports;
       in
       {

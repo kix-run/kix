@@ -113,11 +113,12 @@
 # Upgrades: n8n migrates its database when a pod starts, and every pod
 # takes a lock in the database first, so only one pod migrates. The
 # Recreate strategy stops the old main pod before the new one starts.
-# Upstream documents no way back to an older version. n8n 2.41.5 started
-# on a database that 2.48.5 had migrated and read its workflows,
-# credentials, and executions, so going back from 2.48.5 is deploying the
-# previous package. For a larger step back, restore a database backup
-# taken before the upgrade.
+# Upstream documents no way back to an older version. n8n 2.48.6 adds no
+# database migration to 2.48.5. n8n 2.41.5 and 2.48.5 started on a
+# database that 2.48.6 had migrated and read its workflows, credentials,
+# and executions, so going back from 2.48.6 is deploying the previous
+# package. For a larger step back, restore a database backup taken before
+# the upgrade.
 
 {
   scope,
@@ -127,7 +128,7 @@
 }:
 
 let
-  release = "2.48.5";
+  release = "2.48.6";
 
   name = scope.instanceName;
   who = "n8n ${scope.namespaceName}/${name}";
@@ -233,7 +234,7 @@ in
     image = kix.options.image {
       repository = "docker.io/n8nio/n8n";
       tag = release;
-      digest = "sha256:c0ea1246a81a34ce8e2b3cfb1f718b97de64b0a1b3747ad24d6d431826bb71ad";
+      digest = "sha256:eafe48609be09a2d56dd3628b29932a12c2e81a06ac5a309205652ea36146619";
       description = "The n8n image, for the main instance, the workers, and the init container that writes the task-runner token.";
     };
 
@@ -290,7 +291,7 @@ in
       image = kix.options.image {
         repository = "docker.io/n8nio/runners";
         tag = release;
-        digest = "sha256:3d502b6dcb975958df66f80ceb59d30584e86d7339a4659730d3ecfb74c91fc0";
+        digest = "sha256:4f99e9d82bb26565eae8cb00b687a26e7ce09a8ab476cb39ac9c1ef2d8ecd132";
         tagText = "config.image.tag";
         description = "The task-runner sidecar image. Its version must match the n8n image's, so its tag follows `image.tag`.";
       };

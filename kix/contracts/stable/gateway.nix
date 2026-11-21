@@ -50,6 +50,15 @@ let
       shape = "the data-plane pods' namespace, or null when the provider cannot tell";
       test = v: v == null || isString v;
     };
+    # Lets a package refuse to expose something that must not face the
+    # internet, such as an administration page with no login. A provider
+    # says false only when it knows the Gateway cannot be reached from
+    # outside the cluster, so a reader treats null as true.
+    public = {
+      required = false;
+      shape = "a boolean indicating whether the Gateway may be reachable from outside the cluster, or null when unknown";
+      test = v: v == null || builtins.isBool v;
+    };
   };
 in
 mkContract {

@@ -693,6 +693,23 @@ impl Records {
             .await
     }
 
+    /// Write [`keys::WITHDRAWN_KIX`] onto `name`, so the record shows that a
+    /// withdrawn Kix submitted it on purpose.
+    pub async fn note_withdrawn_kix(
+        &self,
+        name: &str,
+        version: &crate::version::Version,
+    ) -> Result<(), RecordsError> {
+        let patch = json!({
+            "metadata": { "annotations": { keys::WITHDRAWN_KIX: version.release() } }
+        });
+        self.api()
+            .patch(name, &PatchParams::default(), &Patch::Merge(&patch))
+            .await
+            .map_err(RecordsError::on("patch", name))?;
+        Ok(())
+    }
+
     /// Set `metadata.finalizers` on `name`.
     pub async fn set_finalizers(
         &self,

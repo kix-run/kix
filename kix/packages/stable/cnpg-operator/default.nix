@@ -208,13 +208,16 @@ in
     annotationDomains = [ "cnpg.io" ];
     # The Kubernetes versions upstream supports for the 1.30.x series, from
     # the support status table on its supported releases page
-    # (https://cloudnative-pg.io/docs/1.30/supported_releases/). Versions
-    # upstream only tests are not supported, so they are refused. Move both
-    # bounds with `release`.
+    # (https://cloudnative-pg.io/docs/1.30/supported_releases/). Upstream
+    # also tests 1.33 and 1.37, and no version from 1.31 is known to fail,
+    # so the minimum stays where it was. Move `supported` with `release`.
     k8s = {
-      minVersion = "1.34";
-      maxVersion = "1.36";
-      reason = "[K4963] CloudNativePG ${release} supports Kubernetes 1.34 to 1.36. Move the cluster to a Kubernetes version in that range, or use a Kix release whose cnpg-operator package still accepts it";
+      minVersion = "1.31";
+      supported = {
+        minVersion = "1.34";
+        maxVersion = "1.36";
+        source = "the support status table at cloudnative-pg.io/docs/1.30/supported_releases";
+      };
     };
     network.intents.webhooks.ingress = [
       {
