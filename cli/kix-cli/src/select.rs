@@ -56,86 +56,73 @@ pub struct Scan {
     pub version: bool,
     /// Each `--override-input` pair.
     pub overrides: Vec<(String, String)>,
-    /// The first bare word after the command words: the cluster, for a
-    /// command that acts on one.
+    /// The cluster the command acts on, for a command that takes one.
     pub cluster: Option<String>,
-    /// The second command word of a command in [`NESTED`].
-    pub subcommand: Option<String>,
 }
 
-/// The flags that take a value, and how many. A flag of this name takes a
-/// value in every command that has it, which a test checks against the
-/// command line, so the scan can step over the value without knowing the
-/// command.
-const VALUE_FLAGS: &[(&str, usize)] = &[
-    ("--output", 1),
-    ("--context", 1),
-    ("--flake", 1),
-    ("--override-input", 2),
-    ("--ack", 1),
-    ("--acknowledge", 1),
-    ("--address", 1),
-    ("--builder-id", 1),
-    ("--bundle", 1),
-    ("--check", 1),
-    ("--cluster", 1),
-    ("--container", 1),
-    ("--deployed-bundle", 1),
-    ("--detail", 1),
-    ("--digest", 1),
-    ("--fold-height", 1),
-    ("--for", 1),
-    ("--format", 1),
-    ("--framework", 1),
-    ("--from", 1),
-    ("--from-bundle", 1),
-    ("--group-by", 1),
-    ("--include", 1),
-    ("--invocation-id", 1),
-    ("--keep", 1),
-    ("--keep-for", 1),
-    ("--keep-max", 1),
-    ("--key", 1),
-    ("--log-format", 1),
-    ("--note", 1),
-    ("--on-error", 1),
-    ("--option", 1),
-    ("--out", 1),
-    ("--package", 1),
-    ("--pins-file", 1),
-    ("--plan", 1),
-    ("--promoted-by", 1),
-    ("--prune-mode", 1),
-    ("--record-annotation", 1),
-    ("--repository", 1),
-    ("--save", 1),
-    ("--since", 1),
-    ("--source-rev", 1),
-    ("--tag", 1),
-    ("--tail", 1),
-    ("--timeout", 1),
-    ("--to", 1),
-];
+/// The name clap gives the argument that holds a command's cluster. A
+/// command acts on a cluster when its first positional argument has this
+/// name.
+pub const CLUSTER_ARG: &str = "cluster";
 
-/// The short flags that take a value.
-const SHORT_VALUE_FLAGS: &[char] = &['o', 'c'];
+/// Return how many of the words after a flag are its values.
+fn values_of(arg: &clap::Arg) -> usize {
+    if !arg.get_action().takes_values() {
+        return 0;
+    }
+    arg.get_num_args().map_or(1, |n| n.min_values().max(1))
+}
 
-/// The commands whose second word is also a command word, such as
-/// `kix list resources <cluster>`.
-const NESTED: &[&str] = &["list", "migrate", "compliance"];
+/// Return the flag of `command` that a person writes as `--<name>`.
+fn long_flag<'a>(command: &'a clap::Command, name: &str) -> Option<&'a clap::Arg> {
+    command.get_arguments().find(|a| {
+        a.get_long() == Some(name)
+            || a.get_all_aliases()
+                .is_some_and(|aliases| aliases.contains(&name))
+    })
+}
 
-/// The commands that act on no cluster, so none of their words names one.
-const NO_CLUSTER: &[&str] = &["pin", "self", "doctor", "upgrade", "completions", "help"];
+/// Return the flag of `command` that a person writes as `-<c>`.
+fn short_flag(command: &clap::Command, c: char) -> Option<&clap::Arg> {
+    command.get_arguments().find(|a| {
+        a.get_short() == Some(c)
+            || a.get_all_short_aliases()
+                .is_some_and(|aliases| aliases.contains(&c))
+    })
+}
+
+/// Return whether the first positional argument of `command` is a cluster.
+fn takes_cluster(command: &clap::Command) -> bool {
+    command
+        .get_positionals()
+        .find(|a| a.get_index() == Some(1))
+        .is_some_and(|a| a.get_id() == CLUSTER_ARG)
+}
 
 /// Read `args` (with the program name first) the way clap will, as far as
 /// selection needs.
+///
+/// The scan reads the definition of the command line to learn which flags
+/// take a value, which words are commands, and which commands take a
+/// cluster, so a new command or flag needs no change here.
 pub fn scan(args: &[OsString]) -> Scan {
+    let mut root = crate::cli::command();
+    // Building copies each global flag into every command.
+    root.build();
+    scan_with(&root, args)
+}
+
+fn scan_with(root: &clap::Command, args: &[OsString]) -> Scan {
     let mut scan = Scan::default();
     let args: Vec<String> = args
         .iter()
         .skip(1)
         .map(|a| a.to_string_lossy().into_owned())
         .collect();
+    // The command the words so far have reached, or `None` after a word that
+    // is no command of Kix, which is a plugin with arguments of its own.
+    let mut at = Some(root);
+    let mut positionals = 0;
     let mut i = 0;
     while i < args.len() {
         let arg = args[i].as_str();
@@ -153,11 +140,11 @@ pub fn scan(args: &[OsString]) -> Scan {
                 "version" if scan.command.is_none() => scan.version = true,
                 _ => {}
             }
-            let takes = VALUE_FLAGS
-                .iter()
-                .find(|(flag, _)| flag.strip_prefix("--") == Some(name))
-                .map(|(_, n)| *n);
-            if let Some(n) = takes {
+            let n = at
+                .and_then(|c| long_flag(c, name))
+                .or_else(|| long_flag(root, name))
+                .map_or(0, values_of);
+            if n > 0 {
                 let values: Vec<&str> = attached
                     .into_iter()
                     .chain(args[i..].iter().map(String::as_str))
@@ -176,30 +163,37 @@ pub fn scan(args: &[OsString]) -> Scan {
             continue;
         }
         if let Some(shorts) = arg.strip_prefix('-').filter(|s| !s.is_empty()) {
-            for (at, c) in shorts.char_indices() {
+            for (pos, c) in shorts.char_indices() {
                 match c {
                     'h' => scan.help = true,
                     'V' if scan.command.is_none() => scan.version = true,
                     _ => {}
                 }
-                if SHORT_VALUE_FLAGS.contains(&c) {
-                    if at + c.len_utf8() == shorts.len() {
-                        i += 1;
+                let n = at
+                    .and_then(|cmd| short_flag(cmd, c))
+                    .or_else(|| short_flag(root, c))
+                    .map_or(0, values_of);
+                if n > 0 {
+                    // The rest of the word is the value, or else the next word.
+                    if pos + c.len_utf8() == shorts.len() {
+                        i += n;
                     }
                     break;
                 }
             }
             continue;
         }
-        match scan.command.as_deref() {
-            None => scan.command = Some(arg.to_string()),
-            Some(command) if NESTED.contains(&command) && scan.subcommand.is_none() => {
-                scan.subcommand = Some(arg.to_string());
-            }
-            Some(command) if scan.cluster.is_none() && !NO_CLUSTER.contains(&command) => {
-                scan.cluster = Some(arg.to_string());
-            }
-            Some(_) => {}
+        if scan.command.is_none() {
+            scan.command = Some(arg.to_string());
+        }
+        let Some(command) = at else { continue };
+        if command.has_subcommands() {
+            at = command.find_subcommand(arg);
+            continue;
+        }
+        positionals += 1;
+        if positionals == 1 && takes_cluster(command) {
+            scan.cluster = Some(arg.to_string());
         }
     }
     scan
@@ -494,41 +488,16 @@ mod tests {
             ("compliance audit prod --out staging", Some("prod")),
             ("migrate domain prod", Some("prod")),
             ("status", None),
+            ("status prod", Some("prod")),
+            ("pf prod web 80", Some("prod")),
             ("pin set prod", None),
+            ("upgrade prod --to kix", None),
+            ("self install prod", None),
+            ("some-plugin prod", None),
         ];
         for (line, cluster) in cases {
             assert_eq!(scan(&args(line)).cluster.as_deref(), *cluster, "{line}");
         }
-    }
-
-    /// The scan steps over the value of a flag by the flag's name alone, so
-    /// every flag of the command line must take a value in all of its
-    /// commands or in none, and [`VALUE_FLAGS`] must list the ones that do.
-    #[test]
-    fn the_value_flags_match_the_command_line() {
-        fn walk(command: &clap::Command, path: &str, problems: &mut Vec<String>) {
-            for arg in command.get_arguments().filter(|a| !a.is_positional()) {
-                let takes = arg.get_action().takes_values();
-                if let Some(long) = arg.get_long() {
-                    let listed = VALUE_FLAGS.iter().any(|(f, _)| f[2..] == *long);
-                    if takes != listed {
-                        problems.push(format!("{path} --{long}: takes a value: {takes}"));
-                    }
-                }
-                if let Some(short) = arg.get_short() {
-                    let listed = SHORT_VALUE_FLAGS.contains(&short);
-                    if takes != listed {
-                        problems.push(format!("{path} -{short}: takes a value: {takes}"));
-                    }
-                }
-            }
-            for sub in command.get_subcommands() {
-                walk(sub, &format!("{path} {}", sub.get_name()), problems);
-            }
-        }
-        let mut problems = Vec::new();
-        walk(&crate::cli::command(), "kix", &mut problems);
-        assert!(problems.is_empty(), "{}", problems.join("\n"));
     }
 
     #[test]
