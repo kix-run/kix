@@ -145,7 +145,15 @@ in
         };
       builds = self: (builtins.tryEval (builtins.attrNames (flake self).legacyPackages)).success;
     in
-    (!builds null && !builds ./projects/versions-newest && builds ./projects/versions-held-back)
+    (
+      !builds null
+      && !builds ./projects/versions-newest
+      # A `kix` input on a branch or on an older release does not make
+      # this library the older one.
+      && !builds ./projects/versions-branch
+      && !builds ./projects/versions-older
+      && builds ./projects/versions-held-back
+    )
     || throw "an unknown mkFlake argument is refused unless the library is held back";
 
   mkflake-unknown-builder-fails =

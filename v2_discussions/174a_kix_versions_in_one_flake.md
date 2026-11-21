@@ -377,13 +377,29 @@ beyond the sections above:
   after every cluster is held back.
 - **Held back means older than `kix`.** The CLI compares the running Kix
   with the release `kix` pins. The library compares its own version with
-  the tag `flake.lock` records for `kix`. Neither needs to know the cluster.
+  the tag `flake.lock` records for `kix`. Both count only an older version
+  against a release tag, so a `kix` input on a branch makes no library
+  lenient. Neither needs to know the cluster.
+- **A cluster moves only to an input the table names.** An empty list
+  counts. The table is the one place that says which inputs are versions
+  of Kix, so `--to nixpkgs` is refused.
 - **A new input is locked with `kix upgrade <input>`**, and every other
   command says so.
 - **An older release cannot be one of the versions.** A Kix from before
   this change refuses the `versions` key. No floor is written into the
   code, because the release that ships this is not numbered yet.
 
-Not tested against a live cluster: the `builder.kixInput` field of the
-deploy receipt, and `kix status` and `kix snapshot` with a cluster's key.
-The scratch kind cluster of spike 3 was gone.
+Tested against two kind clusters, one per version: deploys, the
+`builder.kixInput` field of the deploy receipt, `kix status` and
+`kix snapshot` with a cluster's key, and each form of `kix upgrade`.
+
+Left open by the review of kix#288, each with an entry in `housekeeping/`:
+
+- An older Kix skips unknown settings without a word. A warning that names
+  each skipped setting would show when production builds without something
+  `flake.nix` asks for.
+- An older Kix refuses any new shape inside `[versions]`, so the table
+  cannot grow after its first release.
+- A command that evaluates nothing does not check that the right Kix runs.
+- `kix doctor` does not warn about an input far behind `kix`, or about a
+  cluster the table leaves out.

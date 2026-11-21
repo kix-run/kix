@@ -258,7 +258,7 @@ fn nothing_to_upgrade(
 /// Set the input `input` in the `flake.nix` in `dir` back to the tag
 /// `flake.lock` pins, when a person moved it by hand.
 pub(super) fn reset_moved_tag(dir: &Path, input: &str) -> Flow<()> {
-    let Err(kix::flake_lock::LockError::TagMoved { locked, asked }) =
+    let Err(kix::flake_lock::LockError::TagMoved { locked, asked, .. }) =
         kix::flake_lock::project_kix_on(dir, &[], input)
     else {
         return Ok(());

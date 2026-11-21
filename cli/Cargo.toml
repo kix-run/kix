@@ -21,6 +21,8 @@ serde-saphyr = { version = "2", default-features = false, features = ["serialize
 granit-parser = { version = "2.1", default-features = false, features = ["std"] }
 # A project's kix.toml
 toml = { version = "0.9", default-features = false, features = ["std", "parse", "serde"] }
+# Edits a project's kix.toml and keeps its comments and layout
+toml_edit = { version = "0.25", default-features = false, features = ["parse", "display"] }
 # JSON Schema of the `kix plan` and `kix diff` document
 schemars = "1"
 

@@ -123,14 +123,17 @@ fn scan_with(root: &clap::Command, args: &[OsString]) -> Scan {
     // is no command of Kix, which is a plugin with arguments of its own.
     let mut at = Some(root);
     let mut positionals = 0;
+    // After `--` every word is a positional, as clap reads it.
+    let mut flags = true;
     let mut i = 0;
     while i < args.len() {
         let arg = args[i].as_str();
         i += 1;
-        if arg == "--" {
-            break;
+        if flags && arg == "--" {
+            flags = false;
+            continue;
         }
-        if let Some(long) = arg.strip_prefix("--") {
+        if flags && let Some(long) = arg.strip_prefix("--") {
             let (name, attached) = match long.split_once('=') {
                 Some((name, value)) => (name, Some(value)),
                 None => (long, None),
@@ -162,7 +165,7 @@ fn scan_with(root: &clap::Command, args: &[OsString]) -> Scan {
             }
             continue;
         }
-        if let Some(shorts) = arg.strip_prefix('-').filter(|s| !s.is_empty()) {
+        if flags && let Some(shorts) = arg.strip_prefix('-').filter(|s| !s.is_empty()) {
             for (pos, c) in shorts.char_indices() {
                 match c {
                     'h' => scan.help = true,
@@ -514,6 +517,9 @@ mod tests {
             ("migrate domain prod", Some("prod")),
             ("status", None),
             ("status prod", Some("prod")),
+            ("rollback -- prod", Some("prod")),
+            ("deploy --yes -- prod", Some("prod")),
+            ("rollback prod -- --yes", Some("prod")),
             ("pf prod web 80", Some("prod")),
             ("pin set prod", None),
             ("upgrade prod --to kix", None),

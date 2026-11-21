@@ -71,8 +71,9 @@ impl Subject {
             )));
         };
         let to = args.to.as_deref().unwrap_or(INPUT);
-        let known = versions.has_input(to)
-            || flake_lock::read(dir).is_ok_and(|lock| flake_lock::input(&lock, to).is_ok());
+        // The table says which inputs are versions of Kix, so a cluster
+        // moves only to an input it names.
+        let known = versions.has_input(to);
         if !known {
             if to.parse::<kix::version::policy::Requirement>().is_ok() {
                 return Err(refused(format!(
@@ -81,7 +82,7 @@ impl Subject {
             }
             let inputs: Vec<String> = versions.inputs().map(|i| format!("`{i}`")).collect();
             return Err(refused(format!(
-                "Cannot move cluster `{name}` to `{to}`: `{to}` is not an input in kix.toml [versions] or flake.lock.\nNo project files were modified.\nNext: pass an existing input name with `--to` ({}), or add `inputs.{to}.url` to flake.nix and run `kix upgrade {to}` to lock it first.",
+                "Cannot move cluster `{name}` to `{to}`: `{to}` is not listed in kix.toml [versions] (inputs: {}).\nNo project files were modified.\nNext: pass an existing input with `--to`, or add `inputs.{to}.url` to flake.nix and `{to} = []` to kix.toml [versions], run `kix upgrade {to}` to lock it, and run `kix upgrade {name} --to {to}` again.",
                 out::list(&inputs)
             )));
         }
@@ -247,8 +248,9 @@ mod tests {
             }
         );
         assert_eq!(prod.command(), "kix upgrade prod --to kix");
-        // An input the table does not list yet is still a place to move to.
-        assert!(resolve(Some("prod"), Some("kix-next")).is_ok());
+        // An input the table does not name is no place to move to, even
+        // when flake.lock has it.
+        assert!(resolve(Some("prod"), Some("kix-next")).is_err());
         assert!(resolve(Some("prod"), Some("0.12.0")).is_err());
         assert!(resolve(Some("dev"), None).is_err());
     }

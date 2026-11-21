@@ -24,6 +24,13 @@ Suppose your project uses Kix 0.12.3 and defines two clusters, `staging` and
 the project must support `[versions]`; earlier versions reject `versions` as an
 unknown setting in `kix.toml`.
 
+Every machine that runs `kix` for this project, including CI, also needs an
+installed Kix on `PATH` that supports `[versions]` (run `kix self upgrade` to
+update it). The Kix you start is what selects the version for each cluster. A
+Kix from before `[versions]` always selects the version pinned by input `kix`,
+and that version then refuses any cluster on another input because its Kix
+library does not match.
+
 First, add a second Kix library input (such as `kix-stable`) to `flake.nix` with
 the same URL and tag as `kix`. Leave `outputs` unchanged. `mkFlake` still reads
 `inputs.kix`, and Kix swaps in `kix-stable` automatically when building clusters
@@ -166,9 +173,13 @@ to upgrade one at a time, pass the cluster name:
 
 <Command commands={["kix upgrade prod --to kix"]} cwd="my-project/" />
 
-`--to` names the target input and defaults to `kix` when omitted. Kix builds
-`prod` on `kix-stable`, moves `prod` to `kix` in `kix.toml`, rebuilds `prod` on
-`kix`, and shows the manifest changes and release notes:
+`--to` names the target input (which must appear in `[versions]`, or be `kix`)
+and defaults to `kix` when omitted. To move a cluster to a new input instead,
+add `inputs.<input>.url` to `flake.nix` and `<input> = []` to `[versions]` in
+`kix.toml`, run `kix upgrade <input>` to lock it, and then run
+`kix upgrade <cluster> --to <input>`. Kix builds `prod` on `kix-stable`, moves
+`prod` to `kix` in `kix.toml`, rebuilds `prod` on `kix`, and shows the manifest
+changes and release notes:
 
 ```text
 Cluster `prod`, from input `kix-stable` to input `kix`

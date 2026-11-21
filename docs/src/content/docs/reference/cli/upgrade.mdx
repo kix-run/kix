@@ -35,7 +35,7 @@ kix upgrade --acknowledge <ID>...
 | Argument or flag | Default | Description |
 | --- | --- | --- |
 | `[NAME]` | `kix` | Optional. In projects with a `[versions]` table in [`kix.toml`](/docs/reference/kix-toml/#the-versions-table), an input name from `[versions]` (or `kix`) or a cluster name. Projects without `[versions]` accept only `kix` (or no name). |
-| `--to <VERSION or INPUT>` | `latest` for `kix`; the `kix` input's version for another input; `kix` for a cluster | When upgrading an input, sets the target version: an exact release (`0.10.2`), a full prerelease (`0.11.0-rc.1`), a minor series (`0.10`, choosing its newest release), or `latest` (the newest non-prerelease). Inputs with no locked version or no clusters are [pinned without building](#pin-a-project-that-has-no-version). When `NAME` is a cluster, `--to` names the target input. |
+| `--to <VERSION or INPUT>` | `latest` for `kix`; the `kix` input's version for another input; `kix` for a cluster | When upgrading an input, sets the target version: an exact release (`0.10.2`), a full prerelease (`0.11.0-rc.1`), a minor series (`0.10`, choosing its newest release), or `latest` (the newest non-prerelease). Inputs with no locked version or no clusters are [pinned without building](#pin-a-project-that-has-no-version). When `NAME` is a cluster, `--to` names the target input, which must appear in `[versions]` (or be `kix`). |
 | `--dry-run` | `false` | Print what the upgrade would do and the release notes that apply, and change nothing. |
 | `--acknowledge <ID>...` | none | Acknowledge a change to stored data by its id or name, so that `kix deploy` goes ahead. Does nothing else. |
 
@@ -45,7 +45,7 @@ kix upgrade --acknowledge <ID>...
 | --- | --- |
 | `kix upgrade` | Upgrades the `kix` input to the newest release (or `--to`). Builds every cluster in the project, or only the clusters under `kix` when `kix.toml` defines `[versions]`. |
 | `kix upgrade kix-stable` | Upgrades the `kix-stable` input to match `kix` (or `--to <VERSION>`), and builds only the clusters under `kix-stable`. Also locks a new input not yet in `flake.lock`. |
-| `kix upgrade prod --to kix` | [Moves the cluster `prod`](#move-a-cluster-between-inputs) to the `kix` input in `kix.toml`. `--to` names the target input and defaults to `kix` when omitted. |
+| `kix upgrade prod --to kix` | [Moves the cluster `prod`](#move-a-cluster-between-inputs) to the `kix` input in `kix.toml`. `--to` names an input in `[versions]` (or `kix`, the default when omitted). |
 
 An input other than `kix` cannot advance past `kix`. When `--to` names a newer
 version than `kix` pins, Kix changes nothing and exits `1`:
@@ -284,7 +284,8 @@ cluster that would skip the release.
 In a project with a `[versions]` table in
 [`kix.toml`](/docs/reference/kix-toml/#the-versions-table),
 `kix upgrade <cluster> [--to <input>]` moves one cluster from its current input
-to `<input>` (defaulting to `kix` when `--to` is omitted).
+to another input listed in `[versions]` (or `kix`, the default when `--to` is
+omitted).
 
 Kix builds the cluster on its current input's version, moves the cluster to the
 target input in `kix.toml`, rebuilds the cluster on the target input's version,
@@ -315,6 +316,12 @@ baseline build and finishes the comparison.
 
 Other rules when moving a cluster:
 
+- **Target input in `[versions]`:** `<input>` must be listed in `[versions]`
+  (an empty list such as `kix-next = []` counts), or be `kix`. An input present
+  only in `flake.lock` is refused. To add a new version input, set
+  `inputs.<input>.url` in `flake.nix` and `<input> = []` in `kix.toml`
+  `[versions]`, run `kix upgrade <input>` to lock it, and then run
+  `kix upgrade <cluster> --to <input>`.
 - **Newer versions only:** A cluster can move only to an input that pins a
   newer version. Moving to an input on an older version is refused.
 - **Same version or development input:** When both inputs pin the same version,

@@ -19,6 +19,7 @@ serde-saphyr.workspace = true
 granit-parser.workspace = true
 # A project's kix.toml
 toml.workspace = true
+toml_edit.workspace = true
 # The plan document's JSON Schema
 schemars.workspace = true
 

@@ -145,8 +145,13 @@ pub enum LockError {
     /// The `kix` input names no release tag: it has no ref, or it pins a
     /// commit.
     NoVersion,
-    /// A person moved the tag in `flake.nix` after `flake.lock` was written.
+    /// The lock does not show the Kix library as the input `input`, one
+    /// that `[versions]` names beside `kix`.
+    OtherInput { input: String, error: InputError },
+    /// A person moved the tag of the input `input` in `flake.nix` after
+    /// `flake.lock` was written.
     TagMoved {
+        input: String,
         locked: Box<Version>,
         asked: Box<Version>,
     },
@@ -183,12 +188,36 @@ impl fmt::Display for LockError {
                 "flake.nix uses the Kix library without a version, so Kix cannot tell which version this project uses. To pin it, {}",
                 pin_then_upgrade(None)
             ),
-            LockError::TagMoved { locked, asked } => write!(
+            LockError::OtherInput {
+                input,
+                error: error @ InputError::Malformed(_),
+            } => write!(f, "{}.", error.change_of(input, "<version>")),
+            LockError::OtherInput { input, error } => write!(
+                f,
+                "{}, then run `kix upgrade {input}`.",
+                error.change_of(input, "<version>")
+            ),
+            LockError::TagMoved {
+                input,
+                locked,
+                asked,
+            } if input == INPUT => write!(
                 f,
                 "flake.nix asks for Kix {}, but flake.lock pins Kix {}. {}",
                 asked.release(),
                 locked.release(),
-                moved_tag_next_step(locked, asked)
+                moved_tag_next_step(input, locked, asked)
+            ),
+            LockError::TagMoved {
+                input,
+                locked,
+                asked,
+            } => write!(
+                f,
+                "For input `{input}`, flake.nix asks for Kix {}, but flake.lock pins Kix {}. {}",
+                asked.release(),
+                locked.release(),
+                moved_tag_next_step(input, locked, asked)
             ),
             LockError::Setting(message) => f.write_str(message),
         }
@@ -218,12 +247,22 @@ pub fn pin_then_upgrade(current: Option<&str>) -> String {
 /// Return what to do when `flake.nix` asks for Kix `asked` but `flake.lock`
 /// pins Kix `locked`. `kix upgrade` only moves a project to a newer version,
 /// so an older `asked` gets the two ways out that do not need it.
-pub fn moved_tag_next_step(locked: &Version, asked: &Version) -> String {
+pub fn moved_tag_next_step(input: &str, locked: &Version, asked: &Version) -> String {
     use crate::version::policy::{UpgradeVerdict, judge_upgrade};
+    let command = if input == INPUT {
+        "kix upgrade".to_string()
+    } else {
+        format!("kix upgrade {input}")
+    };
     if judge_upgrade(locked, locked, asked) == UpgradeVerdict::Proceed {
-        return format!("Run `kix upgrade --to {}`.", asked.release());
+        return format!("Run `{command} --to {}`.", asked.release());
     }
     let (locked, asked) = (locked.release(), asked.release());
+    if input != INPUT {
+        return format!(
+            "`{command}` only moves an input to a newer version of Kix. To stay on Kix {locked}, set the tag of `inputs.{input}.url` in flake.nix back to v{locked}. To go back to Kix {asked}, restore flake.nix and flake.lock from a commit where `{input}` pinned Kix {asked}."
+        );
+    }
     format!(
         "`kix upgrade` only moves a project to a newer version of Kix. To stay on Kix {locked}, set the tag in flake.nix back to v{locked}. To go back to Kix {asked}, restore flake.nix and flake.lock from a commit that pinned it."
     )
@@ -257,6 +296,7 @@ pub fn project_kix(dir: &Path, overrides: &[(String, String)]) -> Result<Project
         Err(LockError::Missing
             | LockError::Unreadable { .. }
             | LockError::Input(_)
+            | LockError::OtherInput { .. }
             | LockError::NoVersion)
     );
     if no_release {
@@ -293,6 +333,10 @@ fn locked_kix(dir: &Path, input_name: &str) -> Result<ProjectKix, LockError> {
     let lock = read(dir)?;
     let original = input(&lock, input_name).map_err(|e| match e {
         InputError::Malformed(message) => unreadable(message.to_string()),
+        e if input_name != INPUT => LockError::OtherInput {
+            input: input_name.to_string(),
+            error: e,
+        },
         e => LockError::Input(e),
     })?;
     let kix = from_original(original)?;
@@ -302,6 +346,7 @@ fn locked_kix(dir: &Path, input_name: &str) -> Result<ProjectKix, LockError> {
         && &asked != locked
     {
         return Err(LockError::TagMoved {
+            input: input_name.to_string(),
             locked: Box::new(locked.clone()),
             asked: Box::new(asked),
         });
@@ -630,6 +675,7 @@ mod tests {
         assert_eq!(
             err,
             LockError::TagMoved {
+                input: "kix".into(),
                 locked: Box::new(v("0.10.0")),
                 asked: Box::new(v("0.10.2"))
             }
@@ -651,7 +697,7 @@ mod tests {
 
     #[test]
     fn a_moved_tag_names_upgrade_only_for_a_newer_version() {
-        let step = |locked: &str, asked: &str| moved_tag_next_step(&v(locked), &v(asked));
+        let step = |locked: &str, asked: &str| moved_tag_next_step("kix", &v(locked), &v(asked));
         assert_eq!(
             step("0.10.0-rc.2", "0.10.0-rc.3"),
             "Run `kix upgrade --to 0.10.0-rc.3`."

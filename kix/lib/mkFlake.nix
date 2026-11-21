@@ -127,15 +127,67 @@ let
     else
       null;
 
-  # Whether this library is an older version of Kix than the project's
-  # input `kix`, which holds some clusters back on it (`[versions]`). Every
-  # version reads the same flake.nix, so an older one skips the arguments
-  # it does not know. The library of `kix` is the newest and checks them.
+  # Split a Kix version such as `0.12.3` or `0.12.0-rc.1` into its three
+  # numbers and the parts of its pre-release label. Return null for text
+  # that is not a version, such as a branch name.
+  parseVersion =
+    text:
+    let
+      match = builtins.match "([0-9]+)\\.([0-9]+)\\.([0-9]+)(-([0-9A-Za-z.-]+))?" text;
+      pre = builtins.elemAt match 4;
+    in
+    if match == null then
+      null
+    else
+      {
+        numbers = map lib.toIntBase10 (lib.take 3 match);
+        pre = if pre == null then null else lib.splitString "." pre;
+      };
+
+  # Compare two parts of a pre-release label as semantic versioning does:
+  # numbers by value, and a number before a word.
+  comparePart =
+    a: b:
+    let
+      number = part: builtins.match "[0-9]+" part != null;
+    in
+    if number a && number b then
+      lib.compare (lib.toIntBase10 a) (lib.toIntBase10 b)
+    else if number a then
+      -1
+    else if number b then
+      1
+    else
+      lib.compare a b;
+
+  # Whether the version `a` is older than `b`. A pre-release is older than
+  # its release.
+  olderVersion =
+    a: b:
+    let
+      numbers = lib.compareLists lib.compare a.numbers b.numbers;
+    in
+    if numbers != 0 then
+      numbers < 0
+    else if a.pre == null then
+      false
+    else if b.pre == null then
+      true
+    else
+      lib.compareLists comparePart a.pre b.pre < 0;
+
+  # Whether this library is an older version of Kix than the release the
+  # project's input `kix` pins, which holds some clusters back on it
+  # (`[versions]`). Every version reads the same flake.nix, so an older one
+  # skips the arguments it does not know. The library of `kix` is the
+  # newest and checks them. A `kix` input on a branch names no release, so
+  # every library checks its arguments.
   heldBack =
-    versions != null
-    && lockedKixTag != null
-    && libraryVersion != null
-    && lockedKixTag != "v${libraryVersion}";
+    let
+      newest = if lockedKixTag == null then null else parseVersion (lib.removePrefix "v" lockedKixTag);
+      own = if libraryVersion == null then null else parseVersion libraryVersion;
+    in
+    versions != null && newest != null && own != null && olderVersion own newest;
 
   unknownArguments = builtins.attrNames (
     removeAttrs arguments [

@@ -64,6 +64,10 @@ pub enum VersionsError {
     )]
     NameClash { name: String },
     #[error(
+        "Cannot evaluate clusters on input `{input}`: flake.lock locks `{input}` with an input type Kix cannot pass as a flake reference. Kix supports `github:`, `gitlab:`, `sourcehut:`, `git+`, and `path:` inputs in kix.toml [versions]. Change `inputs.{input}.url` in flake.nix to one of those forms (for a release tag, run `kix upgrade {input}` to lock it)."
+    )]
+    LockedKind { input: String },
+    #[error(
         "kix.toml cannot set `library = \"self\"` together with a `[versions]` table: a project whose own flake provides the Kix library has only one version of Kix. Remove `[versions]` (or remove `library = \"self\"`) from kix.toml."
     )]
     OwnLibrary,
@@ -72,7 +76,7 @@ pub enum VersionsError {
     )]
     Edit(String, String, String),
     #[error(
-        "Input `{input}` pins Kix {newer}, which is newer than Kix {kix} on input `kix`. Input `kix` must pin the newest version in the project. Run `kix upgrade` to upgrade `kix`, or move `{input}`'s clusters to `kix` and remove `{input}` from kix.toml [versions]."
+        "Input `{input}` pins Kix {newer}, which is newer than Kix {kix} on input `kix`. Input `kix` must pin the newest version in the project, and every command that builds or deploys a cluster (along with `kix upgrade`) stops until it does. Restore flake.nix and flake.lock from a commit where `{input}` pinned Kix {kix} or older."
     )]
     NewerThanKix {
         input: String,
@@ -256,7 +260,7 @@ pub fn choose(dir: &Path, cluster: Option<&str>) -> Result<(), VersionsError> {
     let swap = match input {
         INPUT => None,
         other => Some(
-            locked_ref(&lock, other).ok_or_else(|| VersionsError::NoInput {
+            locked_ref(&lock, other).ok_or_else(|| VersionsError::LockedKind {
                 input: other.to_string(),
             })?,
         ),
@@ -299,108 +303,62 @@ pub fn move_cluster(dir: &Path, cluster: &str, to: &str) -> Result<(), VersionsE
     let path = dir.join(crate::project::FILE);
     let edit = |why: &str| VersionsError::Edit(why.to_string(), cluster.into(), to.into());
     let text = std::fs::read_to_string(&path).map_err(|e| edit(&e.to_string()))?;
-    let moved = moved_text(&text, cluster, to).ok_or_else(|| {
-        edit("comments inside a list or an inline [versions] table cannot be rewritten automatically (kix.toml was not modified)")
-    })?;
-    // Read the new text back, so a wrong edit never reaches the file.
-    let expected = toml::from_str::<toml::Table>(&moved)
-        .ok()
-        .and_then(|t| Versions::parse(t.get(TABLE)?).ok())
-        .is_some_and(|v| v.input_of(cluster) == Some(to));
-    if !expected {
-        return Err(edit(
-            "Kix could not confirm its edit of the [versions] table (kix.toml was not modified)",
-        ));
-    }
+    // Read the new text back, so a wrong edit never reaches the file. It
+    // must hold the settings of the old text, with only this cluster moved.
+    let moved = moved_text(&text, cluster, to)
+        .filter(|moved| {
+            let read = |text: &str| toml::from_str::<toml::Table>(text).ok();
+            let expected = read(&text).and_then(|table| moved_table(table, cluster, to));
+            expected.is_some() && expected == read(moved)
+        })
+        .ok_or_else(|| {
+            edit("Kix could not confirm its edit of the [versions] table (kix.toml was not modified)")
+        })?;
     std::fs::write(&path, moved).map_err(|e| edit(&e.to_string()))
 }
 
-/// Return `text`, a `kix.toml`, with `cluster` moved to the list of `to` in
-/// `[versions]`, or `None` when Kix cannot find the lists.
-fn moved_text(text: &str, cluster: &str, to: &str) -> Option<String> {
-    let header = text
-        .lines()
-        .scan(0, |at, line| {
-            let start = *at;
-            *at += line.len() + 1;
-            Some((start, line))
-        })
-        .find(|(_, line)| line.trim() == format!("[{TABLE}]"))?;
-    let body_start = (header.0 + header.1.len() + 1).min(text.len());
-    let body_end = text[body_start..]
-        .lines()
-        .scan(body_start, |at, line| {
-            let start = *at;
-            *at += line.len() + 1;
-            Some((start, line))
-        })
-        .find(|(_, line)| line.trim_start().starts_with('['))
-        .map_or(text.len(), |(start, _)| start);
-    let body = &text[body_start..body_end];
+/// Return the settings of a `kix.toml` with `cluster` moved to the list of
+/// `to` in `[versions]`, or `None` when the table is not lists of names.
+fn moved_table(mut table: toml::Table, cluster: &str, to: &str) -> Option<toml::Table> {
+    let versions = table.get_mut(TABLE)?.as_table_mut()?;
+    for (_, list) in versions.iter_mut() {
+        list.as_array_mut()?
+            .retain(|name| name.as_str() != Some(cluster));
+    }
+    versions
+        .entry(to)
+        .or_insert_with(|| toml::Value::Array(Vec::new()))
+        .as_array_mut()?
+        .push(cluster.into());
+    Some(table)
+}
 
-    // Each list of the table: where its brackets are, and its names.
-    struct List {
-        key: String,
-        open: usize,
-        close: usize,
-        names: Vec<String>,
-    }
-    let mut lists = Vec::new();
-    let mut at = 0;
-    while let Some(open) = body[at..].find('[').map(|i| at + i) {
-        let close = open + body[open..].find(']')?;
-        let line_start = body[..open].rfind('\n').map_or(0, |n| n + 1);
-        let key = body[line_start..open]
-            .trim()
-            .strip_suffix('=')?
-            .trim()
-            .trim_matches('"')
-            .to_string();
-        let inside = &body[open + 1..close];
-        if inside.contains('#') {
-            return None;
+/// Return `text`, a `kix.toml`, with `cluster` moved to the list of `to` in
+/// `[versions]`, or `None` when Kix cannot find the lists. Comments and
+/// layout outside the lists that change stay as they are.
+fn moved_text(text: &str, cluster: &str, to: &str) -> Option<String> {
+    let mut document: toml_edit::DocumentMut = text.parse().ok()?;
+    let versions = document.get_mut(TABLE)?.as_table_like_mut()?;
+    for (_, list) in versions.iter_mut() {
+        let list = list.as_array_mut()?;
+        list.retain(|name| name.as_str() != Some(cluster));
+        // The name that is now first keeps the space that followed the
+        // comma before it.
+        if let Some(first) = list.iter_mut().next()
+            && first.decor().prefix().and_then(|p| p.as_str()) == Some(" ")
+        {
+            first.decor_mut().set_prefix("");
         }
-        let names = inside
-            .split(',')
-            .map(|n| n.trim().trim_matches('"').to_string())
-            .filter(|n| !n.is_empty())
-            .collect();
-        lists.push(List {
-            key,
-            open,
-            close,
-            names,
-        });
-        at = close + 1;
     }
-    let write = |names: &[String]| {
-        let quoted: Vec<String> = names.iter().map(|n| format!("\"{n}\"")).collect();
-        format!("[{}]", quoted.join(", "))
-    };
-    let mut out = String::new();
-    let mut copied = 0;
-    let mut added = false;
-    for list in &mut lists {
-        let before = list.names.len();
-        list.names.retain(|n| n != cluster);
-        if list.key == to {
-            list.names.push(cluster.to_string());
-            added = true;
-        } else if list.names.len() == before {
-            continue;
+    match versions.get_mut(to) {
+        Some(list) => list.as_array_mut()?.push(cluster),
+        None => {
+            let mut list = toml_edit::Array::new();
+            list.push(cluster);
+            versions.insert(to, toml_edit::value(list));
         }
-        out.push_str(&body[copied..list.open]);
-        out.push_str(&write(&list.names));
-        copied = list.close + 1;
     }
-    out.push_str(&body[copied..]);
-    if !added {
-        let gap = out.len() - out.trim_end().len();
-        let tail = out.split_off(out.len() - gap);
-        out.push_str(&format!("\n{to} = {}", write(&[cluster.to_string()])));
-        out.push_str(if tail.is_empty() { "\n" } else { &tail });
-    }
-    Some(format!("{}{out}{}", &text[..body_start], &text[body_end..]))
+    Some(document.to_string())
 }
 
 /// Return a flake reference for exactly what `lock` pins for the project's
@@ -411,23 +369,36 @@ pub fn locked_ref(lock: &Value, name: &str) -> Option<String> {
     let key = lock["nodes"][root]["inputs"][name].as_str()?;
     let locked = &lock["nodes"][key]["locked"];
     let s = |k: &str| locked[k].as_str();
-    match s("type")? {
-        "github" => Some(format!(
-            "github:{}/{}/{}",
-            s("owner")?,
-            s("repo")?,
-            s("rev")?
-        )),
-        "git" => {
-            let mut url = format!("git+{}?rev={}", s("url")?, s("rev")?);
-            if let Some(r) = s("ref") {
-                url.push_str(&format!("&ref={r}"));
+    // The settings that follow `?` in a reference.
+    let mut query = Vec::new();
+    let mut base = match s("type")? {
+        kind @ ("github" | "gitlab" | "sourcehut") => {
+            if let Some(host) = s("host") {
+                query.push(format!("host={host}"));
             }
-            Some(url)
+            format!("{kind}:{}/{}/{}", s("owner")?, s("repo")?, s("rev")?)
         }
-        "path" => Some(format!("path:{}", s("path")?)),
-        _ => None,
+        "git" => {
+            query.push(format!("rev={}", s("rev")?));
+            if let Some(r) = s("ref") {
+                query.push(format!("ref={r}"));
+            }
+            if locked["submodules"].as_bool() == Some(true) {
+                query.push("submodules=1".to_string());
+            }
+            format!("git+{}", s("url")?)
+        }
+        "path" => format!("path:{}", s("path")?),
+        _ => return None,
+    };
+    if let Some(dir) = s("dir") {
+        query.push(format!("dir={dir}"));
     }
+    if !query.is_empty() {
+        base.push('?');
+        base.push_str(&query.join("&"));
+    }
+    Some(base)
 }
 
 #[cfg(test)]
@@ -518,11 +489,11 @@ mod tests {
             moved_text(text, "prod", "kix").unwrap(),
             "# Project settings\nbuilder = \"kix\"\n\n[versions]\n# newest\nkix        = [\"staging\", \"prod\"]\nkix-stable = [\"eu\"]  # held back\n\n[upgrade]\nmin-age = \"7d\"\n"
         );
-        // A list over several lines becomes one line.
+        // A list over several lines keeps its layout.
         let text = "[versions]\nkix = []\nkix-stable = [\n  \"prod\",\n  \"eu\",\n]\n";
         assert_eq!(
             moved_text(text, "eu", "kix").unwrap(),
-            "[versions]\nkix = [\"eu\"]\nkix-stable = [\"prod\"]\n"
+            "[versions]\nkix = [\"eu\"]\nkix-stable = [\n  \"prod\",\n]\n"
         );
         // An input the table does not list yet gets a line.
         let text = "[versions]\nkix-stable = [\"prod\"]\n\n[upgrade]\nmin-age = \"7d\"\n";
@@ -530,11 +501,52 @@ mod tests {
             moved_text(text, "prod", "kix").unwrap(),
             "[versions]\nkix-stable = []\nkix = [\"prod\"]\n\n[upgrade]\nmin-age = \"7d\"\n"
         );
-        assert_eq!(
-            moved_text("[versions]\nkix = [ # c\n\"a\"]\n", "a", "b"),
-            None
-        );
         assert_eq!(moved_text("builder = \"kix\"\n", "a", "b"), None);
+    }
+
+    /// The table a `kix.toml` text holds, as input and its clusters.
+    fn table_of(text: &str) -> Vec<(String, Vec<String>)> {
+        let v = versions(text).unwrap();
+        v.inputs()
+            .map(|i| (i.to_string(), v.clusters_of(i).to_vec()))
+            .collect()
+    }
+
+    #[test]
+    fn a_move_keeps_every_other_name_however_the_file_is_written() {
+        let moved = |text: &str| {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join(crate::project::FILE);
+            std::fs::write(&path, text).unwrap();
+            move_cluster(dir.path(), "prod", "kix").unwrap();
+            std::fs::read_to_string(path).unwrap()
+        };
+        let want = vec![
+            (
+                "kix".to_string(),
+                vec!["staging".to_string(), "prod".to_string()],
+            ),
+            ("kix-stable".to_string(), vec!["eu".to_string()]),
+        ];
+        for text in [
+            // Names in single quotes.
+            "[versions]\nkix = ['staging']\nkix-stable = ['prod', 'eu']\n",
+            // Windows line endings, and text before the table that is not ASCII.
+            "# clústeres\r\nbuilder = \"kix\"\r\n\r\n[versions]\r\nkix = [\"staging\"]\r\nkix-stable = [\"prod\", \"eu\"]\r\n",
+            // A comment inside a list, and one after the table's heading.
+            "[versions] # who runs what\nkix = [\"staging\"]\nkix-stable = [\n  \"prod\", # moves next\n  \"eu\",\n]\n",
+            // The table written with dotted keys.
+            "versions.kix = [\"staging\"]\nversions.kix-stable = [\"prod\", \"eu\"]\n",
+        ] {
+            assert_eq!(table_of(&moved(text)), want, "{text}");
+        }
+        let kept = moved(
+            "[versions] # who runs what\nkix = [\"staging\"]\nkix-stable = [\"prod\"] # held back\n",
+        );
+        assert!(
+            kept.contains("# who runs what") && kept.contains("# held back"),
+            "{kept}"
+        );
     }
 
     #[test]
@@ -544,5 +556,38 @@ mod tests {
             Some("github:kix-run/kix/rev-of-v0.11.3")
         );
         assert_eq!(locked_ref(&lock("v0.12.0", "v0.11.3"), "kix-none"), None);
+        let with = |locked: Value| {
+            let lock = json!({"root": "root", "nodes": {
+                "root": {"inputs": {"kix-stable": "s"}}, "s": {"locked": locked}}});
+            locked_ref(&lock, "kix-stable")
+        };
+        assert_eq!(
+            with(
+                json!({"type": "github", "owner": "o", "repo": "r", "rev": "abc",
+                "host": "git.example.com", "dir": "kix"})
+            )
+            .as_deref(),
+            Some("github:o/r/abc?host=git.example.com&dir=kix")
+        );
+        assert_eq!(
+            with(json!({"type": "gitlab", "owner": "o", "repo": "r", "rev": "abc"})).as_deref(),
+            Some("gitlab:o/r/abc")
+        );
+        assert_eq!(
+            with(json!({"type": "sourcehut", "owner": "~o", "repo": "r", "rev": "abc"})).as_deref(),
+            Some("sourcehut:~o/r/abc")
+        );
+        assert_eq!(
+            with(
+                json!({"type": "git", "url": "https://example.com/r", "rev": "abc",
+                "ref": "refs/tags/v1", "submodules": true})
+            )
+            .as_deref(),
+            Some("git+https://example.com/r?rev=abc&ref=refs/tags/v1&submodules=1")
+        );
+        assert_eq!(
+            with(json!({"type": "tarball", "url": "https://example.com/r.tgz"})),
+            None
+        );
     }
 }
