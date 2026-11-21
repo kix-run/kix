@@ -1,0 +1,281 @@
+# 173a: Several Kix versions in one flake
+
+**Status:** Draft, a variant of 173
+**Related:** `173_kix_version_per_project.md` (the problem, the first three spikes, and the separate-projects design), `archive/169_version_from_flake_lock.md`, `interesting_thoughts/169b_bundled_kix_library.md`
+
+Doc 173 gives each group of clusters its own project folder. This variant
+keeps one `flake.nix` and one `flake.lock` at the repository root, which is
+the usual Nix layout. Doc 173 §7 turned down the first one-flake design
+because one release had to build clusters with another release's library.
+This design avoids that.
+
+## 1. The idea
+
+The flake's outputs use one input, `kix`, as they do today. A project that
+holds some clusters back declares a second input for the older version.
+Nothing in the outputs reads it. When Kix works on a held-back cluster, it
+runs the older Kix and evaluates the flake with the `kix` input swapped for
+the second one. Each Kix therefore evaluates the whole flake with its own
+library, and no release meets another's.
+
+```nix
+# flake.nix
+{
+  inputs.kix.url        = "github:kix-run/kix/v0.14.2";
+  inputs.kix-stable.url = "github:kix-run/kix/v0.12.3";   # held back
+
+  outputs = inputs: inputs.kix.lib.mkFlake {
+    inherit inputs;
+    clusters.staging = ./clusters/staging.nix;
+    clusters.prod    = ./clusters/prod.nix;
+  };
+}
+```
+
+```toml
+# kix.toml
+[versions]
+kix        = ["staging"]
+kix-stable = ["prod"]
+```
+
+`[versions]` names the Kix versions in the project. Each key is
+the name of an input in `flake.nix`, written the same way in both files, so
+a reader can match them by eye. Once the table exists it lists every cluster, and a
+cluster it leaves out is an error, so a new cluster cannot land on the
+newest version unnoticed. A project with no table has one version, as today. `flake.lock`
+still holds every version and is the only place that does.
+
+The input `kix` pins the newest release in the project. A cluster that is
+held back names another input. Kix refuses a project where another input
+pins a newer release than `kix`, and names both. An input that is a folder
+or a branch has no release and is exempt (§5a). `kix.toml` says
+which clusters use which input, and holds no version number.
+
+## 2. Spike
+
+Run on 21 November 2026 with the released Kix 0.10.0-rc.4 and 0.10.0-rc.5
+and the `flake.nix` above (no `kix.toml` table, since no release reads one).
+
+| Step | Result |
+|---|---|
+| `kix build staging` | Kix 0.10.0-rc.5 and its library built it. |
+| Kix 0.10.0-rc.4 with `--override-input kix <the locked kix-stable>` on `prod` | Kix 0.10.0-rc.4 and its library built it, in 0.22 s. |
+| `flake.lock` afterwards | Unchanged. |
+
+The swapped-in reference came from the `kix-stable` entry of `flake.lock`
+with `jq`, so choosing it needs no evaluation. An input that follows the
+library, such as `nixpkgs.follows = "kix/nixpkgs"`, follows the swap, so a
+named version is still a whole release.
+
+## 3. What Kix would do
+
+1. **Choose the version.** Kix finds the cluster named in the command,
+   looks it up in `[versions]`, and reads the release tag of its input from
+   `flake.lock`. It then runs that Kix, as it does today for the one input.
+   A command that names no cluster runs in the Kix of the input `kix`.
+2. **Evaluate.** The chosen Kix evaluates the flake with `kix` swapped for
+   the locked input of that cluster.
+3. **Refuse the wrong library.** `mkFlake` already reads `kix.toml`. It
+   compares the library it runs from with the input each cluster names,
+   and a cluster that names another input fails with an error that gives
+   the input and its version. Plain `nix build` and `nix flake check` use the input
+   `kix` for everything, so without this they would build a held-back
+   cluster with the wrong version and say nothing.
+4. **Upgrade with one command.** `kix upgrade` takes an optional name
+   and keeps `--to`. It gains no new command and no new flag.
+
+   | Command | What moves |
+   |---|---|
+   | `kix upgrade` | The input `kix`, to the newest release. |
+   | `kix upgrade kix-stable` | The input `kix-stable`, to the release `kix` pins. `--to` names an older one. |
+   | `kix upgrade prod --to kix` | The cluster `prod`, to the version the input `kix` pins. |
+
+   A name is an input or a cluster, so a cluster may not have the name of an
+   input. Naming an input changes its tag in `flake.nix`, locks that one
+   input again, and reviews the clusters that use it. Naming a cluster
+   reviews that cluster between its old and new version, then edits
+   `[versions]`. A person may still edit `[versions]` directly, and
+   `kix plan` shows what changes.
+5. **Show it.** `kix list clusters` gains a column for each cluster's Kix
+   version, which is the overview doc 173 needed a new command for.
+
+No release evaluates another release's library. What releases share is the
+`[versions]` table and the input names, read by each Kix on its own.
+
+## 4. Compared with separate projects (173)
+
+| | One flake, several versions | Separate projects |
+|---|---|---|
+| Layout | One `flake.nix`, one lock: the usual Nix layout | A flake for each group, which is less common |
+| Works today | No | Yes |
+| Change to Kix | Version choice, evaluation, the library check, `mkFlake`, `kix upgrade`, the deploy receipt | Docs, one message, one listing command |
+| New concept | A `[versions]` table in `kix.toml` | None |
+| Overview | `kix list clusters` | `kix list projects` (new) |
+| Move a cluster to another version | Edit one line of `kix.toml` | Move its files, or upgrade its project |
+| Shared code | Files in the same flake | Relative paths out of the project folder, which needs a guarantee from Nix (173 §8, question 8) |
+| Other inputs | Shared by all versions unless they follow the library | Pinned by each project |
+| Plain `nix` on a held-back cluster | An error that gives the override to pass | Works |
+| Hold a client back for months with frozen shared code | Hard: every cluster reads the same files | Possible: pin an older copy |
+
+Separate projects stay possible whichever is chosen, because they need
+nothing from Kix.
+
+## 5. Costs and risks
+
+- **Finding the cluster before the command is parsed.** Kix chooses its
+  version before it reads its arguments in full, because the chosen Kix may
+  take other arguments. §5b gives the rule. A wrong guess is safe: the
+  chosen Kix parses the command properly, finds that its version is not the
+  cluster's, and stops.
+- **Two files take part.** `kix.toml` assigns and `flake.lock` pins. They
+  cannot disagree about a version, because only the lock holds one. A table
+  entry that names a missing input, or a missing cluster, is an error.
+- **Moving a cluster to another version is an upgrade with no review.** It is a
+  one-line edit, so `kix upgrade` never sees it. The deploy still enforces
+  required stops, and `kix plan` shows the changes, but the upgrade notes
+  are not shown.
+- **The `nix` builder.** A project that builds with plain Nix must pass the
+  override itself for held-back clusters. The refusal in §3 step 3 tells it
+  how.
+
+- **Every version reads the same `flake.nix` and `kix.toml`.** A setting
+  that arrives in a newer release would break the held-back clusters,
+  because Kix refuses a `kix.toml` setting it does not know
+  (`cli/kix-core/src/project.rs`) and `mkFlake` refuses an argument it does
+  not know. Decided on 21 November 2026: the Kix of the input `kix` checks
+  both files in full, as today, because it is the newest and knows every
+  setting. A Kix that runs for another input skips what it does not know.
+  A typing mistake is still caught by every command on a cluster that uses
+  `kix`, by `kix check`, and by `kix doctor`, which already fails on an
+  invalid `kix.toml`. A known setting with a value the older Kix does not
+  know is not covered, and needs a rule of its own.
+
+## 5a. A version that is not a release
+
+Today a project uses a development library when its `kix` input is a local
+folder or a branch, when a command passes `--override-input kix`, or when
+`kix.toml` sets `library = "self"`. Kix then runs the version the person
+started and compares nothing. With several inputs, the rule applies to each
+input on its own:
+
+- **An input that is a folder or a branch.** Its clusters run in the Kix the
+  person started, with a note, as today. Clusters on other inputs are not
+  affected. A maintainer can point `kix-next` at a checkout, put staging on
+  it, and leave production on a release.
+- **`--override-input` on a command.** It applies to a cluster when it names
+  that cluster's input, so `--override-input kix-stable <url>` replaces the
+  library for the clusters on `kix-stable`. Kix warns when a command
+  overrides `kix` and the cluster uses another input, because the override
+  does nothing there. To try one library on every cluster, override every
+  input.
+- **`library = "self"`.** The project's own flake provides the library, so
+  it has one version by construction. Kix refuses a `[versions]` table in
+  such a project.
+- **`kix upgrade` on a development input.** As today, it pins the input to
+  a release without a review, because there is no earlier release to
+  compare with.
+- **The refusal in the library** (§3, step 3) compares the library in use
+  with the input the cluster names. Kix swaps in that input after applying
+  any override of it, so the two match and the refusal stays quiet.
+
+## 5b. Finding the cluster in a command
+
+A review of every command on 21 November 2026
+(`cli/kix-cli/tests/snapshots/cli_surface.snap`, `cli/kix-cli/src/cli.rs`)
+found:
+
+- Every command that acts on a cluster takes exactly one, and takes it as
+  the first bare word after the command. `list`, `migrate`, and
+  `compliance` have one more command word first (`list resources prod`).
+- No command takes two clusters.
+- Looking for any word that matches a cluster name is not reliable.
+  `kix export staging --out prod` and `kix deploy --plan prod staging`
+  would both choose the version of `prod`, because Kix does not know before
+  parsing that `--out` and `--plan` take a value.
+
+The rule is therefore: the cluster is the first bare word after the command
+words. To find it, the code that chooses the version needs a list of the
+flags of each command that take a value, as it has today for the global
+flags. A test keeps that list in step with the snapshot of the command
+line. About fifty flags take a value today.
+
+Commands that name no cluster:
+
+| Command | What it needs | Runs in |
+|---|---|---|
+| `kix list clusters`, `kix list packages` with no cluster | One library's view of the project | The Kix of the input `kix` |
+| `kix status` with no cluster | Reads every deployed cluster from Kubernetes, and evaluates nothing | The Kix of the input `kix` |
+| `kix pin`, `kix doctor` | No cluster and no evaluation | The Kix of the input `kix` |
+| `kix upgrade` | Builds clusters before and after | Already runs each build in the Kix of that version |
+
+`kix status` and `kix snapshot` take the name on the cluster's deploy
+records. That name differs from the cluster's key in `flake.nix` when the
+definition sets its own `name`, and `[versions]` is keyed by the key in
+`flake.nix`. Neither command evaluates the project, so the library version
+does not matter to them. A name the table does not hold runs in the Kix of
+the input `kix`.
+
+Proposed: `kix status` and `kix snapshot` take the key in `flake.nix` as
+well, as `kix rollback` and `kix history` do (`cluster_identity` in
+`cli/kix-cli/src/commands/mod.rs`). They look for deploy records under the
+word given, and evaluate the project to find the name only when there are
+none. `kix status` keeps working outside a project.
+
+## 6. Other one-flake designs
+
+**One library builds a cluster with another** (164b). Rejected in 173 §7.
+
+**Ship the library inside the Kix release** (169b), with a version for each
+cluster in `kix.toml` and no library input at all. It gives the simplest
+project file. It changes far more, and it reverses doc 169 a week after it
+shipped. This design does not rule it out later.
+
+**An input for each cluster, found by its name** (`kix-prod` for the cluster
+`prod`), with no table. It needs no `kix.toml` entry, but twenty clusters on
+one old version need twenty inputs.
+
+## 7. Smaller points, with proposed answers
+
+Proposed on 21 November 2026. None needs code that converts an existing
+project.
+
+**Setting up the second version the first time.** The how-to page gives
+two edits: add `inputs.kix-stable.url` with the same URL as `kix`, and
+write the `[versions]` table. `kix upgrade` does not write either. The
+errors carry the rest: a table that names an input `flake.nix` lacks gives
+the line to add, and a table that leaves out a cluster lists the clusters
+it must hold. The prototype must check what Kix does between the edit and
+the first lock of the new input.
+
+**A cluster's key and its `name` stay separate.** Making them one would
+remove the lookup in §5b, but this repository relies on the difference:
+`gateway-swap-envoy` and `gateway-swap-traefik` are two definitions of the
+one deployed cluster `test-gateway-swap`, and the swap tests deploy one
+over the other. The key is what a person types and what `[versions]`
+lists. The `name` is what Kubernetes records carry. `kix status` and
+`kix snapshot` accept the key as well (§5b).
+
+**A known setting with a value the held-back Kix does not know stays an
+error.** `kix.toml` has three settings today: `builder`, `library`, and
+`[upgrade] min-age`. An unknown setting can be skipped because the older
+Kix has no behaviour for it. A known setting changes how that Kix builds,
+so it cannot guess. The error names the cluster's input and its version,
+and says the value needs a newer Kix. The project uses the new value once
+every cluster has moved.
+
+## 8. Order of work
+
+1. A prototype on a branch of the version choice (§5b), the swap during
+   evaluation, and the refusal in the library (§3, step 3), tested with two
+   versions as in §2.
+2. The implementation, with its tests, change records, and the reference
+   pages it touches.
+3. Last, a pass over all the existing documentation by Antigravity
+   (`agy`, Gemini 4 Carbon). It reads every page under
+   `docs/src/content/docs/` against the choices in this doc and updates
+   what they change: one project with one version is no longer the only
+   layout, `kix.toml` has a `[versions]` table, `kix upgrade` takes a name,
+   and `kix status` accepts a cluster's key. This is wider than
+   `scripts/copy-pass`, which only edits text a branch changed. Check every
+   claim it adds against the code.
