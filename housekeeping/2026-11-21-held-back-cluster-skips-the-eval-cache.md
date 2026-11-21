@@ -1,4 +1,4 @@
-# A cluster on another input than `kix` never uses the eval cache
+# 2026-11-21 · `cli/kix-core` · A cluster on another input than `kix` never uses the eval cache.
 
 Commands on a cluster that `[versions]` in `kix.toml` lists under an input
 other than `kix` evaluate the project from source every time. A cluster on
