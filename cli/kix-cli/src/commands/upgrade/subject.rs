@@ -165,6 +165,15 @@ impl Subject {
     }
 }
 
+/// Return the command that upgrades the input `input`.
+pub(super) fn input_command(input: &str) -> String {
+    if input == INPUT {
+        "kix upgrade".to_string()
+    } else {
+        format!("kix upgrade {input}")
+    }
+}
+
 /// Return the command that goes on with the upgrade `state` records.
 pub(super) fn command_of(state: &UpgradeState) -> String {
     match (&state.cluster, state.input.as_deref()) {

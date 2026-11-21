@@ -10,6 +10,7 @@ use miette::miette;
 use super::halt::{Flow, refused};
 use super::pin::edit_message;
 use super::state::{self, UpgradeState};
+use super::subject::input_command;
 use super::target::{self, Decision};
 use super::{out, pin, plan};
 use crate::exit::Exit;
@@ -82,7 +83,11 @@ pub(super) fn choose(
 
 /// Refuse a new upgrade that would change files while the previous one
 /// lists data migrations no one has acknowledged.
-pub(super) fn check_acknowledged(previous: Option<&UpgradeState>, decision: &Decision) -> Flow<()> {
+pub(super) fn check_acknowledged(
+    previous: Option<&UpgradeState>,
+    decision: &Decision,
+    command: &str,
+) -> Flow<()> {
     if !matches!(decision, Decision::Proceed { .. } | Decision::PinOnly(_)) {
         return Ok(());
     }
@@ -101,7 +106,7 @@ pub(super) fn check_acknowledged(previous: Option<&UpgradeState>, decision: &Dec
         "unacknowledged data migrations"
     };
     Err(refused(format!(
-        "Cannot start a new upgrade: the previous upgrade to Kix {} has {migration} ({}).\nNo project files were modified.\nNext: review {} in kix-upgrade.json, run `kix upgrade --acknowledge {}`, then run `kix upgrade` again.",
+        "Cannot start a new upgrade: the previous upgrade to Kix {} has {migration} ({}).\nNo project files were modified.\nNext: review {} in kix-upgrade.json, run `kix upgrade --acknowledge {}`, then run `{command}` again.",
         p.to,
         out::list(&refs),
         out::list(&refs),
@@ -260,7 +265,8 @@ pub(super) fn reset_moved_tag(dir: &Path, input: &str) -> Flow<()> {
     };
     if let Err(e) = kix::pin_library::reset_moved_tag(dir, input) {
         return Err(refused(format!(
-            "{e}\nNext: make that change, then run `kix upgrade` again."
+            "{e}\nNext: make that change, then run `{}` again.",
+            input_command(input)
         )));
     }
     println!(
@@ -372,8 +378,8 @@ pub(super) fn pin_only(
         println!("Next: run `{command} --to {release}`.");
         return Ok(());
     }
-    let pinned =
-        pin::prepare(dir, input, None, version).and_then(|plan| pin::pin(None, version, &plan));
+    let pinned = pin::prepare(dir, input, None, version)
+        .and_then(|plan| pin::pin(input, None, version, &plan));
     match pinned {
         Ok(files) if files.is_empty() => {
             println!("flake.nix and flake.lock already pin Kix {release}.");

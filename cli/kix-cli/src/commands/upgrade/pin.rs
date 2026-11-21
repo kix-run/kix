@@ -6,6 +6,8 @@ use std::path::Path;
 use kix::pin_library::{HandEdit, PinLibraryError, Plan};
 use kix::version::Version;
 
+use super::subject::input_command;
+
 /// Why Kix could not pin the project. Each message is ready to print and
 /// ends with a `Next:` line.
 #[derive(Debug)]
@@ -63,20 +65,22 @@ pub fn prepare(
         Ok(plan) => Ok(plan),
         Err(PinLibraryError::Edit(edit)) => Err(PinError::Edit(edit)),
         Err(e @ PinLibraryError::Read(_)) => {
-            Err(PinError::Lock(lock_failed(&e, version, "", None)))
+            Err(PinError::Lock(lock_failed(&e, input, version, "", None)))
         }
         Err(e) => Err(PinError::ByHand(format!(
-            "{e}\n{}\nNext: make that change, then run `kix upgrade --to {}` again.",
+            "{e}\n{}\nNext: make that change, then run `{} --to {}` again.",
             remains(current),
+            input_command(input),
             version.release()
         ))),
     }
 }
 
 /// Return the message for a Nix command that failed while Kix moved the
-/// project to `version`, followed by `restored` and the next step.
+/// input `input` to `version`, followed by `restored` and the next step.
 fn lock_failed(
     error: &PinLibraryError,
+    input: &str,
     version: &Version,
     restored: &str,
     tag: Option<&str>,
@@ -93,19 +97,21 @@ fn lock_failed(
         Some(tag) => format!("Cannot lock Kix library tag {tag} for Kix {release}:\n{detail}\n"),
         None => format!("Cannot read the inputs of flake.nix:\n{detail}\n"),
     };
+    let command = input_command(input);
     let next = match tag {
         Some(tag) => format!(
-            "Next: check that tag {tag} is reachable in your Kix input repository, then run `kix upgrade` again."
+            "Next: check that tag {tag} is reachable in your Kix input repository, then run `{command}` again."
         ),
-        None => "Next: fix the error above, then run `kix upgrade` again.".to_string(),
+        None => format!("Next: fix the error above, then run `{command}` again."),
     };
     format!("{head}{restored}{next}")
 }
 
-/// Pin the project, now pinned to `current`, to `version` as `plan` says.
+/// Pin the input `input`, now pinned to `current`, to `version` as `plan` says.
 /// Return the name of each file Kix changed. When pinning fails, Kix puts
 /// `flake.nix` and `flake.lock` back.
 pub fn pin(
+    input: &str,
     current: Option<&Version>,
     version: &Version,
     plan: &Plan,
@@ -121,13 +127,15 @@ pub fn pin(
         match e {
             PinLibraryError::Lock { .. } => PinError::Lock(lock_failed(
                 &e,
+                input,
                 version,
                 &restored,
                 Some(&format!("v{}", version.release())),
             )),
             // The check says itself that Kix put the files back.
             e => PinError::ByHand(format!(
-                "{e}\nNext: make that change, then run `kix upgrade` again."
+                "{e}\nNext: make that change, then run `{}` again.",
+                input_command(input)
             )),
         }
     })

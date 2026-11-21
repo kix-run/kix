@@ -17,6 +17,7 @@ use super::state::{self, DataChange, Status};
 use super::subject::Subject;
 use super::{compare, out, search};
 use crate::exit::Exit;
+use kix::flake_lock::INPUT;
 
 impl Run {
     /// Compare the builds, print the release notes and what a person should
@@ -68,7 +69,12 @@ impl Run {
 
         println!();
         let upgraded = match &self.subject {
-            Subject::Input { .. } => format!("Upgraded to Kix {}", goal.release()),
+            Subject::Input { name, .. } if name == INPUT => {
+                format!("Upgraded to Kix {}", goal.release())
+            }
+            Subject::Input { name, .. } => {
+                format!("Upgraded input `{name}` to Kix {}", goal.release())
+            }
             Subject::Cluster { cluster, to, .. } => format!(
                 "Moved cluster `{cluster}` to Kix {} (input `{to}`)",
                 goal.release()
@@ -102,8 +108,9 @@ impl Run {
         }
         if route.stop.is_some() {
             println!(
-                "Next: commit this {} step and deploy every cluster with `kix deploy <cluster>`, then run `kix upgrade` to continue to {}.",
+                "Next: commit this {} step and deploy every cluster with `kix deploy <cluster>`, then run `{}` to continue to {}.",
                 goal.release(),
+                self.subject.command(),
                 route.target.release()
             );
         }

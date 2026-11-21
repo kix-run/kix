@@ -150,7 +150,7 @@ fn upgrade_input(
         )));
     }
     if resume.is_none() && !args.dry_run {
-        check_acknowledged(previous, &chosen.decision)?;
+        check_acknowledged(previous, &chosen.decision, &subject.command())?;
     }
     let Decision::Proceed {
         from,

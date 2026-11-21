@@ -1559,6 +1559,14 @@ fn a_named_input_moves_to_the_version_kix_is_on() {
         out.contains("Input `kix-stable` in flake.nix, used by west"),
         "{out}"
     );
+    assert!(
+        out.contains("Pinned input `kix-stable` to Kix 9.2.0 (updated flake.nix, flake.lock)"),
+        "{out}"
+    );
+    assert!(
+        out.ends_with("Upgraded input `kix-stable` to Kix 9.2.0. Ready to deploy.\n"),
+        "{out}"
+    );
     assert_eq!(locked_tag(&s, "kix"), "refs/tags/v9.2.0");
     assert_eq!(locked_tag(&s, "kix-stable"), "refs/tags/v9.2.0");
     assert_eq!(s.state()["input"], "kix-stable");

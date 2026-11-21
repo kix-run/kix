@@ -35,8 +35,9 @@ impl Run {
         if let Some(s) = resume {
             if s.before != before || !before.is_dir() {
                 return Err(refused(format!(
-                    "Cannot resume upgrade from Kix {from}: cached baseline builds were not found at {}.\nflake.nix and flake.lock remain at Kix {pinned}.\nNext: delete kix-upgrade.json and run `kix upgrade` to start a new comparison from Kix {pinned}.",
+                    "Cannot resume upgrade from Kix {from}: cached baseline builds were not found at {}.\nflake.nix and flake.lock remain at Kix {pinned}.\nNext: delete kix-upgrade.json and run `{command}` to start a new comparison from Kix {pinned}.",
                     before.display(),
+                    command = self.subject.command(),
                     from = from.release(),
                     pinned = self.pinned.release()
                 )));
@@ -84,8 +85,9 @@ impl Run {
         let names = self.names(&from_kix).map_err(|e| miette!("{e}"))?;
         if names.is_empty() {
             return Err(refused(format!(
-                "Cannot upgrade: Kix {} found no clusters in this project.\nNo project files were modified.\nNext: add at least one cluster to the project, then run `kix upgrade` again.",
-                from.release()
+                "Cannot upgrade: Kix {} found no clusters in this project.\nNo project files were modified.\nNext: add at least one cluster to the project, then run `{}` again.",
+                from.release(),
+                self.subject.command()
             )));
         }
         let in_use = packages_in_use(&from_kix, from, &self.dir, &names);
@@ -121,8 +123,9 @@ impl Run {
         }
         println!("No project files were modified.");
         println!(
-            "Next: fix the build on Kix {}, then run `kix upgrade` again.",
-            from.release()
+            "Next: fix the build on Kix {}, then run `{}` again.",
+            from.release(),
+            self.subject.command()
         );
         Err(Halt::Stopped(EXIT_BUILD_FAILED))
     }

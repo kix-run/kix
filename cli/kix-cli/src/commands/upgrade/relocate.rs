@@ -91,7 +91,7 @@ pub(super) fn relocate(
         requested: to_version.release(),
     };
     if resume.is_none() && !args.dry_run {
-        check_acknowledged(previous, &decision)?;
+        check_acknowledged(previous, &decision, &subject.command())?;
     }
     let source = Source::from_env();
     let index = release::fetch_index(&source).map_err(|e| miette!("{e}"))?;

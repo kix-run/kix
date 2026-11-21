@@ -16,6 +16,7 @@ use super::subject::Subject;
 use super::subprocess::{clusters, new_command_line, run_kix};
 use super::{EXIT_BUILD_FAILED, EXIT_NEEDS_PERSON};
 use crate::exit::Exit;
+use kix::flake_lock::INPUT;
 
 /// One cluster that failed to build.
 pub(super) struct Failure {
@@ -90,9 +91,10 @@ impl Run {
             Err(e) if self.state.is_some() => {
                 let v = version.release();
                 return Err(refused(format!(
-                    "Installing Kix {v}... failed\n\nCannot download Kix {v}: {}.\nUpgrade state is saved in kix-upgrade.json (the {} baseline build is cached).\nNext: check your network connection, then run `kix upgrade` to resume at Kix {v}.",
+                    "Installing Kix {v}... failed\n\nCannot download Kix {v}: {}.\nUpgrade state is saved in kix-upgrade.json (the {} baseline build is cached).\nNext: check your network connection, then run `{}` to resume at Kix {v}.",
                     e.to_string().trim_end_matches('.'),
-                    self.from.release()
+                    self.from.release(),
+                    self.subject.command()
                 )));
             }
             Err(e) => {
@@ -168,11 +170,16 @@ impl Run {
             Err(e) => return Err(miette!("{e}").into()),
         };
         let kix = self.kix(version)?;
-        match pin::pin(Some(&self.pinned), version, &plan) {
+        match pin::pin(input, Some(&self.pinned), version, &plan) {
             Ok(files) => {
                 if !files.is_empty() {
+                    let pinned = if input == INPUT {
+                        "project".to_string()
+                    } else {
+                        format!("input `{input}`")
+                    };
                     println!(
-                        "Pinned project to Kix {} (updated {})",
+                        "Pinned {pinned} to Kix {} (updated {})",
                         version.release(),
                         out::list(&files)
                     );
