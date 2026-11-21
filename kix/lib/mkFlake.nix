@@ -25,7 +25,11 @@
     "x86_64-darwin"
     "aarch64-darwin"
   ],
-}:
+
+  # Arguments this library does not know. `unknownArguments` below refuses
+  # them unless a newer version of Kix in the same project may read them.
+  ...
+}@arguments:
 
 let
   lib = inputs.nixpkgs.lib;
@@ -98,6 +102,51 @@ let
       }
     else
       cluster;
+
+  # The release tag that flake.lock records for the input `kix`, or null
+  # when the project has no lock or `kix` names no tag. Replacing the input
+  # for one evaluation does not change the file, so this is the newest
+  # version of Kix in the project.
+  lockedKixTag =
+    let
+      lockFile = if self == null then null else "${self}/flake.lock";
+      lock =
+        if lockFile != null && builtins.pathExists lockFile then
+          builtins.fromJSON (builtins.readFile lockFile)
+        else
+          { };
+      node = lock.nodes.${lock.root or "root"}.inputs.kix or null;
+      ref = if builtins.isString node then lock.nodes.${node}.original.ref or null else null;
+    in
+    if ref == null then null else lib.removePrefix "refs/tags/" ref;
+
+  cargoToml = ../../cli/Cargo.toml;
+  libraryVersion =
+    if builtins.pathExists cargoToml then
+      (builtins.fromTOML (builtins.readFile cargoToml)).workspace.package.version
+    else
+      null;
+
+  # Whether this library is an older version of Kix than the project's
+  # input `kix`, which holds some clusters back on it (`[versions]`). Every
+  # version reads the same flake.nix, so an older one skips the arguments
+  # it does not know. The library of `kix` is the newest and checks them.
+  heldBack =
+    versions != null
+    && lockedKixTag != null
+    && libraryVersion != null
+    && lockedKixTag != "v${libraryVersion}";
+
+  unknownArguments = builtins.attrNames (
+    removeAttrs arguments [
+      "inputs"
+      "clusters"
+      "pins"
+      "clusterModules"
+      "packages"
+      "systems"
+    ]
+  );
 
   catalogPackages = import ../packages { inherit lib; };
   packagesByLevel = import ../packages/by-level.nix { inherit lib; };
@@ -355,8 +404,16 @@ let
 
   systemOutputs = eachSystem perSystem;
 in
-{
-  packages = lib.mapAttrs (_: s: s.packages) systemOutputs;
-  checks = lib.mapAttrs (_: s: s.checks) systemOutputs;
-  legacyPackages = lib.mapAttrs (_: s: s.legacyPackages) systemOutputs;
-}
+if unknownArguments != [ ] && !heldBack then
+  fail {
+    message = "mkFlake does not take the argument ${
+      lib.concatMapStringsSep ", " (a: "`${a}`") unknownArguments
+    }${lib.optionalString (libraryVersion != null) " (Kix library ${libraryVersion})"}.";
+    fix = "Check the spelling, or run `kix upgrade` if the project needs a newer Kix library.";
+  }
+else
+  {
+    packages = lib.mapAttrs (_: s: s.packages) systemOutputs;
+    checks = lib.mapAttrs (_: s: s.checks) systemOutputs;
+    legacyPackages = lib.mapAttrs (_: s: s.legacyPackages) systemOutputs;
+  }

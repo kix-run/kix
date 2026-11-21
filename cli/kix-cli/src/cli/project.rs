@@ -6,10 +6,19 @@ use clap_complete::Shell;
 
 #[derive(clap::Args)]
 pub struct UpgradeArgs {
+    /// What to move, in a project whose kix.toml has a [versions] table: an
+    /// input of flake.nix that holds a version of Kix, such as kix-stable,
+    /// or a cluster. An input moves to a newer release. A cluster moves to
+    /// the input `--to` names. With no name, the input `kix` moves
+    #[arg(value_name = "NAME")]
+    pub name: Option<String>,
+
     /// The version to move to: an exact version such as 0.12.1, a prerelease
     /// named in full such as 0.12.0-rc.1, a minor such as 0.12 (its newest
     /// patch), or `latest`. The version the project is on already changes
-    /// nothing
+    /// nothing. An input other than `kix` moves to the version `kix` is on
+    /// when this is left out. When NAME is a cluster, this is the input the
+    /// cluster moves to, and `kix` when left out
     #[arg(long, value_name = "VERSION")]
     pub to: Option<String>,
 

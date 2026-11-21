@@ -292,8 +292,17 @@ fn project_kix(scan: &Scan) -> Option<Result<ProjectKix, LockError>> {
 /// not list, uses the input `kix`, and the chosen Kix judges the word once
 /// it has parsed the command.
 fn project_kix_in(dir: &Path, scan: &Scan) -> Result<ProjectKix, LockError> {
-    let versions =
-        kix::versions::Versions::read(dir).map_err(|e| LockError::Setting(e.to_string()))?;
+    let setting = |e: kix::versions::VersionsError| LockError::Setting(e.to_string());
+    let versions = kix::versions::Versions::read(dir).map_err(setting)?;
+    // A table that names an input the lock does not hold is wrong for every
+    // cluster, so it is reported before the lock of any one input is read.
+    if let Some(versions) = &versions
+        && let Ok(lock) = flake_lock::read(dir)
+    {
+        versions
+            .check(&lock, &kix::versions::flake_text(dir))
+            .map_err(setting)?;
+    }
     let input = match (&versions, &scan.cluster) {
         (Some(versions), Some(cluster)) => versions.input_of(cluster),
         _ => None,

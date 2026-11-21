@@ -9,6 +9,7 @@ use super::choose::Chosen;
 use super::halt::Flow;
 use super::plan::{self, ReleaseRecords};
 use super::state::{self, Step};
+use super::subject::Subject;
 
 /// The way from the baseline to the goal, and the change records on it.
 pub(super) struct Route {
@@ -96,9 +97,15 @@ pub(super) fn walk_from(recorded: &[Step], steps: &[Version], goal: &Version) ->
     }
 }
 
-/// Return the lines that say where an upgrade along `steps` to `goal`
-/// stopped when the build at `failing` failed.
-pub(super) fn stopped_lines(failing: &Version, goal: &Version, steps: &[Version]) -> Vec<String> {
+/// Return the lines that say where an upgrade of `subject` along `steps` to
+/// `goal` stopped when the build at `failing` failed.
+pub(super) fn stopped_lines(
+    subject: &Subject,
+    failing: &Version,
+    goal: &Version,
+    steps: &[Version],
+) -> Vec<String> {
+    let command = subject.command();
     let position = steps.iter().position(|v| v == failing).map_or(1, |i| i + 1);
     if failing != goal {
         return vec![
@@ -109,11 +116,11 @@ pub(super) fn stopped_lines(failing: &Version, goal: &Version, steps: &[Version]
                 goal.release()
             ),
             format!(
-                "flake.nix and flake.lock are pinned to {} so you can fix this step first.",
-                failing.release()
+                "{} so you can fix this step first.",
+                subject.left_on(failing)
             ),
             format!(
-                "Next: fix the error above, then run `kix upgrade` to continue to {}.",
+                "Next: fix the error above, then run `{command}` to continue to {}.",
                 goal.release()
             ),
         ];
@@ -129,11 +136,8 @@ pub(super) fn stopped_lines(failing: &Version, goal: &Version, steps: &[Version]
     };
     vec![
         stopped,
-        format!(
-            "flake.nix and flake.lock are pinned to {} so you can fix the build.",
-            goal.release()
-        ),
-        "Next: fix the error above, then run `kix upgrade` to finish the upgrade.".to_string(),
+        format!("{} so you can fix the build.", subject.left_on(goal)),
+        format!("Next: fix the error above, then run `{command}` to finish the upgrade."),
     ]
 }
 
@@ -224,6 +228,13 @@ mod tests {
     #[test]
     fn a_failed_step_says_where_the_upgrade_stopped() {
         let steps = [v("0.10.1"), v("0.11.0")];
+        let kix = Subject::Input {
+            name: "kix".into(),
+            clusters: None,
+        };
+        let stopped_lines = |failing: &Version, goal: &Version, steps: &[Version]| {
+            stopped_lines(&kix, failing, goal, steps)
+        };
         let lines = stopped_lines(&v("0.10.1"), &v("0.11.0"), &steps);
         assert_eq!(
             lines[0],
@@ -235,5 +246,23 @@ mod tests {
         assert!(lines[2].ends_with("to finish the upgrade."), "{lines:?}");
         let lines = stopped_lines(&v("0.11.0"), &v("0.11.0"), &[v("0.11.0")]);
         assert_eq!(lines[0], "Stopped at Kix 0.11.0.");
+        assert_eq!(
+            lines[1],
+            "flake.nix and flake.lock are pinned to 0.11.0 so you can fix the build."
+        );
+        let prod = Subject::Cluster {
+            cluster: "prod".into(),
+            from: "kix-stable".into(),
+            to: "kix".into(),
+        };
+        let lines = super::stopped_lines(&prod, &v("0.11.0"), &v("0.11.0"), &[v("0.11.0")]);
+        assert_eq!(
+            lines[1],
+            "kix.toml lists the cluster `prod` under `kix` (Kix 0.11.0) so you can fix the build."
+        );
+        assert_eq!(
+            lines[2],
+            "Next: fix the error above, then run `kix upgrade prod --to kix` to finish the upgrade."
+        );
     }
 }

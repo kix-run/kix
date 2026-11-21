@@ -174,24 +174,27 @@ fn a_branch_or_a_commit_is_pinned_to_the_tag() {
 }
 
 #[test]
-fn two_urls_of_the_repository_are_left_to_a_person() {
+fn a_second_input_on_the_same_url_stays() {
     let tmp = tempfile::tempdir().unwrap();
     let lib = Library::new(&tmp.path().join("lib"));
     let proj = tmp.path().join("project");
     let main = format!("{}?ref=main", lib.url());
     project(&proj, &[("kix", &main), ("image-kix", &main)], "kix");
     nix(&proj, &["flake", "lock"]);
-    let flake = read(&proj.join("flake.nix"));
-    let lock = read(&proj.join("flake.lock"));
 
-    upgrade(&proj)
-        .assert()
-        .code(1)
-        .stdout(predicate::str::starts_with(
-            "Cannot update flake.nix automatically: two inputs use the Kix library's repository:\n  flake.nix:2:   inputs.kix.url",
-        ));
-    assert_eq!(read(&proj.join("flake.nix")), flake);
-    assert_eq!(read(&proj.join("flake.lock")), lock);
+    upgrade(&proj).assert().success();
+    let flake = read(&proj.join("flake.nix"));
+    assert!(
+        flake.contains(&format!(
+            "inputs.kix.url = \"{}?ref=refs/tags/v{VERSION}\";",
+            lib.url()
+        )),
+        "{flake}"
+    );
+    assert!(
+        flake.contains(&format!("inputs.image-kix.url = \"{main}\";")),
+        "{flake}"
+    );
 }
 
 #[test]

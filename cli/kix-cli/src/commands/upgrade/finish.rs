@@ -14,6 +14,7 @@ use super::plan::{self, Applying};
 use super::route::Route;
 use super::run::Run;
 use super::state::{self, DataChange, Status};
+use super::subject::Subject;
 use super::{compare, out, search};
 use crate::exit::Exit;
 
@@ -66,8 +67,15 @@ impl Run {
         state.write(&self.dir).map_err(|e| miette!("{e}"))?;
 
         println!();
+        let upgraded = match &self.subject {
+            Subject::Input { .. } => format!("Upgraded to Kix {}", goal.release()),
+            Subject::Cluster { cluster, to, .. } => format!(
+                "Moved the cluster `{cluster}` to Kix {} (the input `{to}`)",
+                goal.release()
+            ),
+        };
         if state.status == Status::Done {
-            println!("Upgraded to Kix {}. Ready to deploy.", goal.release());
+            println!("{upgraded}. Ready to deploy.");
             return Ok(Exit::Success);
         }
         if let Some((r, _)) = &route.stop {
@@ -88,10 +96,7 @@ impl Run {
                 ),
             ]);
         }
-        println!(
-            "Upgraded to Kix {}, but review before deploying:",
-            goal.release()
-        );
+        println!("{upgraded}, but review before deploying:");
         for line in out::numbered(&items) {
             println!("{line}");
         }

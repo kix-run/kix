@@ -358,6 +358,7 @@ kix pin list --quiet -q
 kix pin list --no-color
 kix pin list --flake <value>
 kix upgrade
+kix upgrade <name>
 kix upgrade --to <value>
 kix upgrade --dry-run
 kix upgrade --acknowledge <value>

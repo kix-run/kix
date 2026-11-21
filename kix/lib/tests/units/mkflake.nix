@@ -124,6 +124,30 @@ in
     )
     || throw "kixLib does not follow the builder";
 
+  # An argument this library does not know fails, as a typing mistake
+  # should. A library that an older version of Kix in the project runs
+  # skips it, because the newest version may read it.
+  mkflake-unknown-argument-fails =
+    let
+      flake =
+        self:
+        import ../../mkFlake.nix {
+          inputs = {
+            nixpkgs = {
+              inherit lib;
+              legacyPackages.test-system = throw "evaluating the cluster forced pkgs";
+            };
+            inherit self;
+          };
+          systems = [ "test-system" ];
+          clusters = { };
+          notAnArgument = true;
+        };
+      builds = self: (builtins.tryEval (builtins.attrNames (flake self))).success;
+    in
+    (!builds null && !builds ./projects/versions-newest && builds ./projects/versions-held-back)
+    || throw "an unknown mkFlake argument is refused unless the library is held back";
+
   mkflake-unknown-builder-fails =
     !(builtins.tryEval (projectFlake "unknown-builder").legacyPackages.test-system.kixConfig.builder)
     .success;

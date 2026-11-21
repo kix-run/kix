@@ -204,6 +204,9 @@ pub enum ProjectError {
         crate::version::running().release()
     )]
     BadUpgrade { path: PathBuf, problem: String },
+
+    #[error("{0}")]
+    Versions(String),
 }
 
 /// Parse a minimum release age such as `7d` into days.
@@ -212,7 +215,11 @@ pub fn parse_min_age(text: &str) -> Option<u32> {
 }
 
 /// Read the `[upgrade]` table's `min-age`.
-fn parse_upgrade(path: &Path, value: Option<&toml::Value>) -> Result<Option<u32>, ProjectError> {
+fn parse_upgrade(
+    path: &Path,
+    value: Option<&toml::Value>,
+    held_back: bool,
+) -> Result<Option<u32>, ProjectError> {
     let bad = |problem: String| ProjectError::BadUpgrade {
         path: path.to_path_buf(),
         problem,
@@ -223,7 +230,7 @@ fn parse_upgrade(path: &Path, value: Option<&toml::Value>) -> Result<Option<u32>
     let table = value
         .as_table()
         .ok_or_else(|| bad("upgrade must be a table".to_string()))?;
-    if let Some(key) = table.keys().find(|k| !UPGRADE_KEYS.contains(&k.as_str())) {
+    if !held_back && let Some(key) = table.keys().find(|k| !UPGRADE_KEYS.contains(&k.as_str())) {
         return Err(bad(format!("`{key}` is not a setting")));
     }
     match table.get("min-age") {
@@ -282,14 +289,16 @@ impl ProjectConfig {
         };
         let path = dir.join(FILE);
         match std::fs::read_to_string(&path) {
-            Ok(text) => Self::parse(&path, &text),
+            Ok(text) => Self::parse(&path, &text, crate::versions::held_back(dir)),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(source) => Err(ProjectError::Unreadable { path, source }),
         }
     }
 
-    /// Parse the text of the `kix.toml` at `path`.
-    fn parse(path: &Path, text: &str) -> Result<Self, ProjectError> {
+    /// Parse the text of the `kix.toml` at `path`. With `held_back`, this
+    /// Kix is older than the newest one in the project, and skips the
+    /// settings it does not know.
+    fn parse(path: &Path, text: &str, held_back: bool) -> Result<Self, ProjectError> {
         let table: toml::Table = toml::from_str(text).map_err(|e| ProjectError::Syntax {
             path: path.to_path_buf(),
             line: e
@@ -298,14 +307,21 @@ impl ProjectConfig {
             message: e.message().to_string(),
         })?;
         refuse_kix_setting(path, &table)?;
-        if let Some(key) = table.keys().find(|k| !KNOWN_KEYS.contains(&k.as_str())) {
+        if !held_back && let Some(key) = table.keys().find(|k| !KNOWN_KEYS.contains(&k.as_str())) {
             return Err(ProjectError::UnknownKey {
                 path: path.to_path_buf(),
                 key: key.clone(),
             });
         }
-        let upgrade_min_age = parse_upgrade(path, table.get("upgrade"))?;
+        let upgrade_min_age = parse_upgrade(path, table.get("upgrade"), held_back)?;
         let library = parse_library(path, table.get("library"))?;
+        if let Some(versions) = table.get(crate::versions::TABLE) {
+            let bad = |e: crate::versions::VersionsError| ProjectError::Versions(e.to_string());
+            crate::versions::Versions::parse(versions).map_err(bad)?;
+            if library == Library::OwnFlake {
+                return Err(bad(crate::versions::VersionsError::OwnLibrary));
+            }
+        }
         let Some(value) = table.get("builder") else {
             return Ok(Self {
                 upgrade_min_age,

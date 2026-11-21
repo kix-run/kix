@@ -1,0 +1,3 @@
+[versions]
+kix = []
+kix-stable = ["alpha"]

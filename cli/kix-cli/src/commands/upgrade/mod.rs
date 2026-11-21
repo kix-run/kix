@@ -16,10 +16,12 @@ mod phases;
 mod pin;
 mod plan;
 mod preview;
+mod relocate;
 mod route;
 mod run;
 mod search;
 pub mod state;
+mod subject;
 mod subprocess;
 mod target;
 
@@ -29,12 +31,16 @@ use crate::cli::{GlobalArgs, UpgradeArgs};
 use crate::exit::Exit;
 use acknowledge::acknowledge;
 pub use acknowledge::check_deploy;
-use choose::{check_acknowledged, choose, conclude, reset_moved_tag};
+use choose::{NothingToCompare, check_acknowledged, choose, conclude, pin_only, reset_moved_tag};
 use halt::{Flow, Halt, refused};
+use kix::flake_lock::INPUT;
+use kix::version::Version;
 use preview::dry_run;
+use relocate::relocate;
 use route::plan_route;
 use run::{Run, work_dir};
 use state::{Status, UpgradeState};
+use subject::Subject;
 use target::Decision;
 
 /// A build failed.
@@ -46,11 +52,9 @@ pub fn run(args: &UpgradeArgs, global: &GlobalArgs) -> Result<Exit> {
     upgrade(args, global).or_else(Halt::end)
 }
 
-/// Run `kix upgrade`. Each step owns one job: [`choose`] decides the target,
-/// [`conclude`] ends a run that does not proceed, [`plan_route`] works out
-/// the steps, [`Run::baseline`] builds the project as it is,
-/// [`Run::walk`] pins and builds each step, and [`Run::finish`] reports
-/// what changed.
+/// Run `kix upgrade`: work out what the command moves, then move an input
+/// to a newer release ([`upgrade_input`]) or a cluster to another input
+/// ([`relocate`]).
 fn upgrade(args: &UpgradeArgs, global: &GlobalArgs) -> Flow<Exit> {
     let verbose = global.verbose > 0;
     let Some(dir) = super::project_dir(&global.flake).filter(|d| d.is_dir()) else {
@@ -63,6 +67,7 @@ fn upgrade(args: &UpgradeArgs, global: &GlobalArgs) -> Flow<Exit> {
         acknowledge(&dir, &args.acknowledge)?;
         return Ok(Exit::Success);
     }
+    let subject = Subject::resolve(&dir, args)?;
     let config = kix::project::ProjectConfig::read(Some(&dir), None).map_err(|e| miette!("{e}"))?;
     let previous = UpgradeState::read(&dir).map_err(|e| miette!("{e}"))?;
     // A run that a build failure, a flake.nix edit, or an interruption
@@ -70,10 +75,82 @@ fn upgrade(args: &UpgradeArgs, global: &GlobalArgs) -> Flow<Exit> {
     let resume = previous
         .clone()
         .filter(|s| matches!(s.status, Status::FixNeeded | Status::EditNeeded));
+    if let Some(unfinished) = resume.as_ref().filter(|s| !subject.wrote(s)) {
+        return Err(refused(format!(
+            "Cannot start `{}`: another upgrade, to Kix {}, is not finished.\nNo project files were modified.\nNext: run `{}` to finish it, or delete kix-upgrade.json to drop it.",
+            subject.command(),
+            unfinished.to,
+            subject::command_of(unfinished)
+        )));
+    }
+    match &subject {
+        Subject::Input { .. } => upgrade_input(
+            dir,
+            subject,
+            args,
+            config.upgrade_min_age,
+            previous.as_ref(),
+            resume.as_ref(),
+            verbose,
+        ),
+        Subject::Cluster { .. } => relocate(
+            &dir,
+            subject,
+            args,
+            previous.as_ref(),
+            resume.as_ref(),
+            verbose,
+        ),
+    }
+}
 
-    let chosen = choose(&dir, args, config.upgrade_min_age, resume.as_ref())?;
+/// Move an input to a newer release. Each step owns one job: [`choose`]
+/// decides the target, [`conclude`] ends a run that does not proceed,
+/// [`plan_route`] works out the steps, [`Run::baseline`] builds the
+/// clusters as they are, [`Run::walk`] pins and builds each step, and
+/// [`Run::finish`] reports what changed.
+fn upgrade_input(
+    dir: std::path::PathBuf,
+    subject: Subject,
+    args: &UpgradeArgs,
+    min_age: Option<u32>,
+    previous: Option<&UpgradeState>,
+    resume: Option<&UpgradeState>,
+    verbose: bool,
+) -> Flow<Exit> {
+    let Subject::Input { name, clusters } = subject.clone() else {
+        unreachable!("only an input moves to a newer release");
+    };
+    let command = subject.command();
+    // An input that holds clusters back moves to the version `kix` is on,
+    // unless the command names another.
+    let newest = match name.as_str() {
+        INPUT => None,
+        _ => subject::release_of(&dir, INPUT)?,
+    };
+    let to = match (&args.to, name.as_str()) {
+        (Some(to), _) => Some(to.clone()),
+        (None, INPUT) => None,
+        (None, _) if resume.is_some() => None,
+        (None, _) => Some(newest.as_ref().map(Version::release).ok_or_else(|| {
+            refused(format!(
+                "Cannot choose a version for the input `{name}`: the input `kix` pins no release of Kix to move it to.\nNo project files were modified.\nNext: name the version, as in `{command} --to <version>`."
+            ))
+        })?),
+    };
+    let chosen = choose(&dir, &name, to.as_deref(), min_age, resume)?;
+    if let (Some(newest), Decision::Proceed { target, .. } | Decision::PinOnly(target)) =
+        (&newest, &chosen.decision)
+        && target > newest
+    {
+        return Err(refused(format!(
+            "Cannot move the input `{name}` to Kix {}: the input `kix` pins Kix {}, and `kix` must pin the newest version in the project.\nNo project files were modified.\nNext: run `kix upgrade` to move `kix` first.",
+            target.release(),
+            newest.release()
+        )));
+    }
     if resume.is_none() && !args.dry_run {
-        check_acknowledged(previous.as_ref(), &chosen.decision)?;
+        check_acknowledged(previous, &chosen.decision)?;
     }
     let Decision::Proceed {
         from,
@@ -81,21 +158,33 @@ fn upgrade(args: &UpgradeArgs, global: &GlobalArgs) -> Flow<Exit> {
         requested,
     } = chosen.decision.clone()
     else {
-        return conclude(&dir, chosen, args.dry_run);
+        return conclude(&dir, &name, &command, chosen, args.dry_run);
     };
     // The upgrade builds the baseline with the version the lock pins, so a
     // tag a person moved in flake.nix goes back to it first.
     if resume.is_none() && !args.dry_run {
-        reset_moved_tag(&dir)?;
+        reset_moved_tag(&dir, &name)?;
+    }
+    if clusters.as_ref().is_some_and(Vec::is_empty) {
+        pin_only(
+            &dir,
+            &name,
+            &command,
+            &target,
+            args.dry_run,
+            NothingToCompare::NoClusters,
+        )?;
+        return Ok(Exit::Success);
     }
     let route = plan_route(&chosen, from, target, requested)?;
     if args.dry_run {
-        dry_run(&dir, resume.as_ref(), &route, args, verbose);
+        dry_run(&dir, &subject, resume, &route, args, verbose);
         return Ok(Exit::Success);
     }
 
     let mut run = Run {
-        work: work_dir(&dir),
+        work: work_dir(&dir, &subject),
+        subject,
         dir,
         source: chosen.source,
         installed_here: Vec::new(),
@@ -104,9 +193,9 @@ fn upgrade(args: &UpgradeArgs, global: &GlobalArgs) -> Flow<Exit> {
         state: None,
         verbose,
     };
-    let in_use = run.baseline(resume.as_ref(), &route)?;
+    let in_use = run.baseline(resume, &route)?;
     let applying = plan::applying(&route.records, &route.from, &route.goal, in_use.as_ref());
-    run.begin(resume.as_ref(), &route, &applying, in_use.as_ref())?;
+    run.begin(resume, &route, &applying, in_use.as_ref())?;
     if let Err((failing, failures)) = run.walk(&route)? {
         return Err(run.stopped_at(&route, &failing, &failures, in_use.as_ref()));
     }

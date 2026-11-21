@@ -47,9 +47,25 @@ pub enum VersionsError {
     )]
     Unlisted { cluster: String, inputs: String },
     #[error(
-        "kix.toml [versions] names the input `{input}`, and flake.lock has no input of that name. Add `inputs.{input}.url = \"github:kix-run/kix/v<version>\";` to flake.nix."
+        "kix.toml [versions] names the input `{input}`, and flake.nix has no input of that name. Add `inputs.{input}.url = \"github:kix-run/kix/v<version>\";` to flake.nix, then run `kix upgrade {input}` to lock it."
     )]
     NoInput { input: String },
+    #[error(
+        "flake.nix names the input `{input}`, and flake.lock does not hold it yet. Run `kix upgrade {input}` to lock it."
+    )]
+    NotLocked { input: String },
+    #[error(
+        "kix.toml [versions] lists a cluster named `{name}`, which is also the name of an input. `kix upgrade {name}` could mean either. Rename the input in flake.nix and in [versions]."
+    )]
+    NameClash { name: String },
+    #[error(
+        "kix.toml sets library = \"self\" and has a [versions] table. A project whose flake provides the Kix library has one version of Kix. Remove [versions]."
+    )]
+    OwnLibrary,
+    #[error(
+        "Kix cannot change [versions] in kix.toml: {0} Move `{1}` to the list of `{2}` in [versions] yourself."
+    )]
+    Edit(String, String, String),
     #[error(
         "The input `{input}` pins Kix {newer}, which is newer than the Kix {kix} that the input `kix` pins. The input `kix` must pin the newest version in the project. Run `kix upgrade`, or point the clusters under `{input}` at `kix`."
     )]
@@ -109,6 +125,12 @@ impl Versions {
             }
             inputs.insert(input.clone(), clusters);
         }
+        if let Some(name) = owner
+            .keys()
+            .find(|cluster| *cluster == INPUT || inputs.contains_key(*cluster))
+        {
+            return Err(VersionsError::NameClash { name: name.clone() });
+        }
         Ok(Self { inputs })
     }
 
@@ -119,6 +141,17 @@ impl Versions {
             .iter()
             .find(|(_, clusters)| clusters.iter().any(|c| c == cluster))
             .map(|(input, _)| input.as_str())
+    }
+
+    /// Return the clusters the table lists under `input`.
+    pub fn clusters_of(&self, input: &str) -> &[String] {
+        self.inputs.get(input).map_or(&[], Vec::as_slice)
+    }
+
+    /// Return whether `name` is an input the table can list clusters under:
+    /// one of its keys, or `kix`.
+    pub fn has_input(&self, name: &str) -> bool {
+        name == INPUT || self.inputs.contains_key(name)
     }
 
     /// Return the input names, in order.
@@ -140,11 +173,21 @@ impl Versions {
 
     /// Check the table against `lock`: every input it names is an input of
     /// the project, and none pins a newer release than `kix`.
-    pub fn check(&self, lock: &Value) -> Result<(), VersionsError> {
+    ///
+    /// `flake` is the text of `flake.nix`, which tells an input that is
+    /// not locked yet from one that does not exist.
+    pub fn check(&self, lock: &Value, flake: &str) -> Result<(), VersionsError> {
         let release = |input: &str| match flake_lock::input(lock, input) {
-            Err(_) => Err(VersionsError::NoInput {
+            Err(_) if input != INPUT && crate::pin_library::names_input(flake, input) => {
+                Err(VersionsError::NotLocked {
+                    input: input.to_string(),
+                })
+            }
+            Err(_) if input != INPUT => Err(VersionsError::NoInput {
                 input: input.to_string(),
             }),
+            // The reading of the input `kix` reports its own absence.
+            Err(_) => Ok(None),
             Ok(original) => Ok(match flake_lock::from_original(original) {
                 Ok(ProjectKix::Release(v)) => Some(v),
                 // A folder or a branch has no release to compare.
@@ -198,7 +241,7 @@ pub fn choose(dir: &Path, cluster: Option<&str>) -> Result<(), VersionsError> {
         return Ok(());
     };
     let lock = flake_lock::read(dir).map_err(|e| VersionsError::Lock(e.to_string()))?;
-    versions.check(&lock)?;
+    versions.check(&lock, &flake_text(dir))?;
     let Some(cluster) = cluster else {
         return Ok(());
     };
@@ -218,6 +261,139 @@ pub fn choose(dir: &Path, cluster: Option<&str>) -> Result<(), VersionsError> {
         swap,
     });
     Ok(())
+}
+
+/// Return the text of the `flake.nix` in `dir`, or nothing when Kix cannot
+/// read it.
+pub fn flake_text(dir: &Path) -> String {
+    std::fs::read_to_string(dir.join("flake.nix")).unwrap_or_default()
+}
+
+/// Return whether the Kix that runs is older than the one the input `kix`
+/// of the project in `dir` pins, in a project with a `[versions]` table.
+///
+/// Every version of Kix in a project reads the same `kix.toml`. The Kix of
+/// the input `kix` is the newest, knows every setting, and checks them all.
+/// An older Kix skips the settings it does not know.
+pub fn held_back(dir: &Path) -> bool {
+    if !matches!(Versions::read(dir), Ok(Some(_))) {
+        return false;
+    }
+    let Ok(lock) = flake_lock::read(dir) else {
+        return false;
+    };
+    matches!(
+        flake_lock::input(&lock, INPUT).map(flake_lock::from_original),
+        Ok(Ok(ProjectKix::Release(newest))) if crate::version::running() < &newest
+    )
+}
+
+/// Move `cluster` to the list of `to` in the `[versions]` table of the
+/// `kix.toml` in `dir`, keeping the rest of the file as it is.
+pub fn move_cluster(dir: &Path, cluster: &str, to: &str) -> Result<(), VersionsError> {
+    let path = dir.join(crate::project::FILE);
+    let edit = |why: &str| VersionsError::Edit(why.to_string(), cluster.into(), to.into());
+    let text = std::fs::read_to_string(&path).map_err(|e| edit(&format!("{e}.")))?;
+    let moved = moved_text(&text, cluster, to).ok_or_else(|| {
+        edit("the table is written in a way Kix does not change, such as with a comment inside a list.")
+    })?;
+    // Read the new text back, so a wrong edit never reaches the file.
+    let expected = toml::from_str::<toml::Table>(&moved)
+        .ok()
+        .and_then(|t| Versions::parse(t.get(TABLE)?).ok())
+        .is_some_and(|v| v.input_of(cluster) == Some(to));
+    if !expected {
+        return Err(edit("the changed table did not read back as expected."));
+    }
+    std::fs::write(&path, moved).map_err(|e| edit(&format!("{e}.")))
+}
+
+/// Return `text`, a `kix.toml`, with `cluster` moved to the list of `to` in
+/// `[versions]`, or `None` when Kix cannot find the lists.
+fn moved_text(text: &str, cluster: &str, to: &str) -> Option<String> {
+    let header = text
+        .lines()
+        .scan(0, |at, line| {
+            let start = *at;
+            *at += line.len() + 1;
+            Some((start, line))
+        })
+        .find(|(_, line)| line.trim() == format!("[{TABLE}]"))?;
+    let body_start = (header.0 + header.1.len() + 1).min(text.len());
+    let body_end = text[body_start..]
+        .lines()
+        .scan(body_start, |at, line| {
+            let start = *at;
+            *at += line.len() + 1;
+            Some((start, line))
+        })
+        .find(|(_, line)| line.trim_start().starts_with('['))
+        .map_or(text.len(), |(start, _)| start);
+    let body = &text[body_start..body_end];
+
+    // Each list of the table: where its brackets are, and its names.
+    struct List {
+        key: String,
+        open: usize,
+        close: usize,
+        names: Vec<String>,
+    }
+    let mut lists = Vec::new();
+    let mut at = 0;
+    while let Some(open) = body[at..].find('[').map(|i| at + i) {
+        let close = open + body[open..].find(']')?;
+        let line_start = body[..open].rfind('\n').map_or(0, |n| n + 1);
+        let key = body[line_start..open]
+            .trim()
+            .strip_suffix('=')?
+            .trim()
+            .trim_matches('"')
+            .to_string();
+        let inside = &body[open + 1..close];
+        if inside.contains('#') {
+            return None;
+        }
+        let names = inside
+            .split(',')
+            .map(|n| n.trim().trim_matches('"').to_string())
+            .filter(|n| !n.is_empty())
+            .collect();
+        lists.push(List {
+            key,
+            open,
+            close,
+            names,
+        });
+        at = close + 1;
+    }
+    let write = |names: &[String]| {
+        let quoted: Vec<String> = names.iter().map(|n| format!("\"{n}\"")).collect();
+        format!("[{}]", quoted.join(", "))
+    };
+    let mut out = String::new();
+    let mut copied = 0;
+    let mut added = false;
+    for list in &mut lists {
+        let before = list.names.len();
+        list.names.retain(|n| n != cluster);
+        if list.key == to {
+            list.names.push(cluster.to_string());
+            added = true;
+        } else if list.names.len() == before {
+            continue;
+        }
+        out.push_str(&body[copied..list.open]);
+        out.push_str(&write(&list.names));
+        copied = list.close + 1;
+    }
+    out.push_str(&body[copied..]);
+    if !added {
+        let gap = out.len() - out.trim_end().len();
+        let tail = out.split_off(out.len() - gap);
+        out.push_str(&format!("\n{to} = {}", write(&[cluster.to_string()])));
+        out.push_str(if tail.is_empty() { "\n" } else { &tail });
+    }
+    Some(format!("{}{out}{}", &text[..body_start], &text[body_end..]))
 }
 
 /// Return a flake reference for exactly what `lock` pins for the project's
@@ -297,13 +473,61 @@ mod tests {
     #[test]
     fn kix_pins_the_newest_release() {
         let v = versions("[versions]\nkix = [\"staging\"]\nkix-stable = [\"prod\"]").unwrap();
-        assert_eq!(v.check(&lock("v0.12.0", "v0.11.3")), Ok(()));
-        assert_eq!(v.check(&lock("v0.12.0", "v0.12.0")), Ok(()));
-        let e = v.check(&lock("v0.11.3", "v0.12.0")).unwrap_err();
+        assert_eq!(v.check(&lock("v0.12.0", "v0.11.3"), ""), Ok(()));
+        assert_eq!(v.check(&lock("v0.12.0", "v0.12.0"), ""), Ok(()));
+        let e = v.check(&lock("v0.11.3", "v0.12.0"), "").unwrap_err();
         assert!(matches!(e, VersionsError::NewerThanKix { .. }), "{e}");
+    }
+
+    #[test]
+    fn an_input_the_lock_does_not_hold_says_whether_flake_nix_names_it() {
         let v = versions("[versions]\nkix = [\"staging\"]\nkix-old = [\"prod\"]").unwrap();
-        let e = v.check(&lock("v0.12.0", "v0.11.3")).unwrap_err();
+        let lock = lock("v0.12.0", "v0.11.3");
+        let e = v.check(&lock, "").unwrap_err();
         assert!(matches!(e, VersionsError::NoInput { .. }), "{e}");
+        let flake = "inputs.kix-old.url = \"github:kix-run/kix/v0.11.0\";";
+        let e = v.check(&lock, flake).unwrap_err();
+        assert_eq!(
+            e.to_string(),
+            "flake.nix names the input `kix-old`, and flake.lock does not hold it yet. Run `kix upgrade kix-old` to lock it."
+        );
+    }
+
+    #[test]
+    fn a_cluster_may_not_have_the_name_of_an_input() {
+        for text in [
+            "[versions]\nkix = [\"kix-stable\"]\nkix-stable = [\"prod\"]",
+            "[versions]\nkix-stable = [\"kix\"]",
+        ] {
+            let e = versions(text).unwrap_err();
+            assert!(matches!(e, VersionsError::NameClash { .. }), "{e}");
+        }
+    }
+
+    #[test]
+    fn a_cluster_moves_between_lists_and_the_rest_stays() {
+        let text = "# Project settings\nbuilder = \"kix\"\n\n[versions]\n# newest\nkix        = [\"staging\"]\nkix-stable = [\"prod\", \"eu\"]  # held back\n\n[upgrade]\nmin-age = \"7d\"\n";
+        assert_eq!(
+            moved_text(text, "prod", "kix").unwrap(),
+            "# Project settings\nbuilder = \"kix\"\n\n[versions]\n# newest\nkix        = [\"staging\", \"prod\"]\nkix-stable = [\"eu\"]  # held back\n\n[upgrade]\nmin-age = \"7d\"\n"
+        );
+        // A list over several lines becomes one line.
+        let text = "[versions]\nkix = []\nkix-stable = [\n  \"prod\",\n  \"eu\",\n]\n";
+        assert_eq!(
+            moved_text(text, "eu", "kix").unwrap(),
+            "[versions]\nkix = [\"eu\"]\nkix-stable = [\"prod\"]\n"
+        );
+        // An input the table does not list yet gets a line.
+        let text = "[versions]\nkix-stable = [\"prod\"]\n\n[upgrade]\nmin-age = \"7d\"\n";
+        assert_eq!(
+            moved_text(text, "prod", "kix").unwrap(),
+            "[versions]\nkix-stable = []\nkix = [\"prod\"]\n\n[upgrade]\nmin-age = \"7d\"\n"
+        );
+        assert_eq!(
+            moved_text("[versions]\nkix = [ # c\n\"a\"]\n", "a", "b"),
+            None
+        );
+        assert_eq!(moved_text("builder = \"kix\"\n", "a", "b"), None);
     }
 
     #[test]

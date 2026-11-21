@@ -86,6 +86,24 @@ impl InputError {
     /// that fixes it, without a final period. `version` is the release the
     /// fixed input should name.
     pub fn change(&self, version: &str) -> String {
+        self.change_of(INPUT, version)
+    }
+
+    /// Return [`InputError::change`] for the input `input`.
+    pub fn change_of(&self, input: &str, version: &str) -> String {
+        if input != INPUT {
+            return match self {
+                InputError::Malformed(message) => {
+                    format!("Kix could not read the lock of flake.nix: {message}")
+                }
+                InputError::Missing | InputError::OldName { .. } => format!(
+                    "flake.nix has no input named {input}, which kix.toml [versions] names. Add `inputs.{input}.url = \"github:kix-run/kix/v{version}\";` to flake.nix"
+                ),
+                InputError::Follows(path) => format!(
+                    "The input {input} in flake.nix follows {path}, so the Kix library comes from another flake. Set `inputs.{input}.url = \"github:kix-run/kix/v{version}\";` in flake.nix"
+                ),
+            };
+        }
         match self {
             InputError::Malformed(message) => {
                 format!("Kix could not read the lock of flake.nix: {message}")
@@ -268,7 +286,7 @@ fn locked_kix(dir: &Path, input_name: &str) -> Result<ProjectKix, LockError> {
     let kix = from_original(original)?;
     if let ProjectKix::Release(locked) = &kix
         && let Ok(flake) = std::fs::read_to_string(dir.join("flake.nix"))
-        && let Some(asked) = crate::pin_library::declared_tag(&flake, original)
+        && let Some(asked) = crate::pin_library::declared_tag(&flake, input_name, original)
         && &asked != locked
     {
         return Err(LockError::TagMoved {

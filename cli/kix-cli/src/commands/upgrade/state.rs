@@ -75,6 +75,17 @@ pub struct UpgradeState {
     /// write it, and a resume of their state needs `--to`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requested: Option<String>,
+    /// The input of flake.nix the upgrade moved, when it is not `kix`, or
+    /// the input a cluster moved to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input: Option<String>,
+    /// The cluster the upgrade moved to another input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cluster: Option<String>,
+    /// The clusters the upgrade built, when it built only some of the
+    /// project's clusters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clusters: Option<Vec<String>>,
     pub status: Status,
     pub steps: Vec<Step>,
     /// The applying records by kind, each named by its id or its name.
@@ -146,6 +157,9 @@ mod tests {
             from: "0.9.0".into(),
             to: "0.10.0".into(),
             requested: Some("0.10".into()),
+            input: Some("kix-stable".into()),
+            cluster: None,
+            clusters: Some(vec!["prod".into()]),
             status: Status::NeedsPerson,
             steps: vec![Step {
                 version: "0.10.0".into(),

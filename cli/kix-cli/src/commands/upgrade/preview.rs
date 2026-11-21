@@ -12,12 +12,15 @@ use super::out;
 use super::plan::{self, Applying};
 use super::route::Route;
 use super::state::UpgradeState;
+use super::subject::Subject;
 use super::subprocess::{clusters, packages_in_use};
 use crate::cli::UpgradeArgs;
 
-/// Print what the upgrade along `route` would do, changing nothing.
+/// Print what the upgrade of `subject` along `route` would do, changing
+/// nothing.
 pub(super) fn dry_run(
     dir: &Path,
+    subject: &Subject,
     resume: Option<&UpgradeState>,
     route: &Route,
     args: &UpgradeArgs,
@@ -35,11 +38,18 @@ pub(super) fn dry_run(
         ),
         // Kix X would evaluate the tag flake.nix now names, and Nix
         // would rewrite the lock, so a dry run does not ask it.
-        (None, Some(_)) if tag_moved(dir) => (None, Known::Nothing),
+        (None, Some(_)) if subject.input().is_some_and(|input| tag_moved(dir, input)) => {
+            (None, Known::Nothing)
+        }
         (None, Some(kix)) => {
-            let in_use = packages_in_use(kix, from, dir);
-            let count = clusters(kix, dir).ok().map(|c| c.len());
-            let known = Known::of(in_use.is_some(), count);
+            let names = match subject.clusters() {
+                Some(names) => Some(names),
+                None => clusters(kix, dir).ok(),
+            };
+            let in_use = names
+                .as_ref()
+                .and_then(|names| packages_in_use(kix, from, dir, names));
+            let known = Known::of(in_use.is_some(), names.map(|n| n.len()));
             (in_use, known)
         }
         (None, None) => (None, Known::Nothing),
@@ -54,9 +64,9 @@ pub(super) fn dry_run(
         known,
         without_notes: &route.without_notes,
         verbose,
-        command: &match args.to.as_deref() {
-            None | Some("latest") => "kix upgrade".to_string(),
-            Some(text) => format!("kix upgrade --to {text}"),
+        command: &match (subject, args.to.as_deref()) {
+            (Subject::Cluster { .. }, _) | (_, None | Some("latest")) => subject.command(),
+            (_, Some(text)) => format!("{} --to {text}", subject.command()),
         },
     });
 }

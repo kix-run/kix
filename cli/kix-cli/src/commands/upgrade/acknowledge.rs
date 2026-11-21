@@ -66,12 +66,20 @@ pub(super) fn acknowledge(dir: &Path, refs: &[String]) -> Flow<()> {
     Ok(())
 }
 
-/// Refuse a deploy while `kix-upgrade.json` in `dir` lists a change to
-/// stored data that no one has acknowledged.
-pub fn check_deploy(dir: &Path) -> Result<()> {
+/// Refuse a deploy of `cluster` while `kix-upgrade.json` in `dir` lists a
+/// change to stored data that no one has acknowledged. An upgrade that
+/// built only some clusters holds back only those.
+pub fn check_deploy(dir: &Path, cluster: &str) -> Result<()> {
     let Some(state) = UpgradeState::read(dir).map_err(|e| miette!("{e}"))? else {
         return Ok(());
     };
+    if state
+        .clusters
+        .as_ref()
+        .is_some_and(|built| !built.iter().any(|c| c == cluster))
+    {
+        return Ok(());
+    }
     let open = state.unacknowledged();
     if open.is_empty() {
         return Ok(());

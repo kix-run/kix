@@ -12,7 +12,6 @@ use super::pin::edit_message;
 use super::state::{self, UpgradeState};
 use super::target::{self, Decision};
 use super::{out, pin, plan};
-use crate::cli::UpgradeArgs;
 use crate::exit::Exit;
 
 /// What [`choose`] found: the decision and what it read to make it.
@@ -29,11 +28,13 @@ pub(super) struct Chosen {
     pub(super) today: chrono::NaiveDate,
 }
 
-/// Decide the target of the upgrade, fetching the release index only when
-/// the decision needs it.
+/// Decide the target of the upgrade of the input `input`, fetching the
+/// release index only when the decision needs it. `to` is the version asked
+/// for.
 pub(super) fn choose(
     dir: &Path,
-    args: &UpgradeArgs,
+    input: &str,
+    to: Option<&str>,
     min_age: Option<u32>,
     resume: Option<&UpgradeState>,
 ) -> Flow<Chosen> {
@@ -48,14 +49,15 @@ pub(super) fn choose(
         }),
         None => None,
     };
-    let pinned = project_version(dir)?.or_else(|| resumed.as_ref().map(|r| r.baseline.clone()));
+    let pinned =
+        project_version(dir, input)?.or_else(|| resumed.as_ref().map(|r| r.baseline.clone()));
     let source = Source::from_env();
     let system = release::system().map_err(|e| miette!("{e}"))?;
     let today = chrono::Utc::now().date_naive();
     let ask = target::Ask {
         pinned: pinned.as_ref(),
         resume: resumed.as_ref(),
-        to: args.to.as_deref(),
+        to,
         system: &system,
         min_age,
         today,
@@ -107,9 +109,16 @@ pub(super) fn check_acknowledged(previous: Option<&UpgradeState>, decision: &Dec
     )))
 }
 
-/// End a run whose decision is not to proceed: pin a project that pins no
-/// release, say there is nothing to do, or refuse.
-pub(super) fn conclude(dir: &Path, chosen: Chosen, dry_run: bool) -> Flow<Exit> {
+/// End a run on the input `input` whose decision is not to proceed: pin an
+/// input that pins no release, say there is nothing to do, or refuse.
+/// `command` runs the upgrade again.
+pub(super) fn conclude(
+    dir: &Path,
+    input: &str,
+    command: &str,
+    chosen: Chosen,
+    dry_run: bool,
+) -> Flow<Exit> {
     let Chosen {
         decision,
         index,
@@ -120,7 +129,14 @@ pub(super) fn conclude(dir: &Path, chosen: Chosen, dry_run: bool) -> Flow<Exit> 
     } = chosen;
     let text = match decision {
         Decision::PinOnly(v) => {
-            pin_only(dir, &v, dry_run)?;
+            pin_only(
+                dir,
+                input,
+                command,
+                &v,
+                dry_run,
+                NothingToCompare::NoRelease,
+            )?;
             return Ok(Exit::Success);
         }
         Decision::NothingToDo { from, target, to } => {
@@ -234,15 +250,15 @@ fn nothing_to_upgrade(
     }
 }
 
-/// Set `flake.nix` in `dir` back to the tag `flake.lock` pins, when a person
-/// moved it by hand.
-pub(super) fn reset_moved_tag(dir: &Path) -> Flow<()> {
+/// Set the input `input` in the `flake.nix` in `dir` back to the tag
+/// `flake.lock` pins, when a person moved it by hand.
+pub(super) fn reset_moved_tag(dir: &Path, input: &str) -> Flow<()> {
     let Err(kix::flake_lock::LockError::TagMoved { locked, asked }) =
-        kix::flake_lock::project_kix(dir, &[])
+        kix::flake_lock::project_kix_on(dir, &[], input)
     else {
         return Ok(());
     };
-    if let Err(e) = kix::pin_library::reset_moved_tag(dir) {
+    if let Err(e) = kix::pin_library::reset_moved_tag(dir, input) {
         return Err(refused(format!(
             "{e}\nNext: make that change, then run `kix upgrade` again."
         )));
@@ -256,13 +272,13 @@ pub(super) fn reset_moved_tag(dir: &Path) -> Flow<()> {
     Ok(())
 }
 
-/// Return the version of Kix the project in `dir` uses, from the release
-/// tag its `flake.lock` pins, or `None` when it pins none. When a person
-/// moved the tag in `flake.nix` by hand, the lock's version is the one the
-/// project is on.
-fn project_version(dir: &Path) -> Flow<Option<Version>> {
+/// Return the version of Kix the input `input` of the project in `dir`
+/// pins, from its release tag in `flake.lock`, or `None` when it pins none.
+/// When a person moved the tag in `flake.nix` by hand, the lock's version
+/// is the one the project is on.
+fn project_version(dir: &Path, input: &str) -> Flow<Option<Version>> {
     use kix::flake_lock::{Development, LockError, ProjectKix};
-    match kix::flake_lock::project_kix(dir, &[]) {
+    match kix::flake_lock::project_kix_on(dir, &[], input) {
         Ok(ProjectKix::Release(v)) => Ok(Some(v)),
         Ok(ProjectKix::Development(Development::OwnLibrary)) => Err(refused(
             "This project's kix.toml sets library = \"self\", so its flake provides the Kix library and it has no version of Kix to upgrade.",
@@ -276,11 +292,11 @@ fn project_version(dir: &Path) -> Flow<Option<Version>> {
     }
 }
 
-/// Return whether a person moved the tag in the `flake.nix` of `dir` after
-/// `flake.lock` was written.
-pub(super) fn tag_moved(dir: &Path) -> bool {
+/// Return whether a person moved the tag of the input `input` in the
+/// `flake.nix` of `dir` after `flake.lock` was written.
+pub(super) fn tag_moved(dir: &Path, input: &str) -> bool {
     matches!(
-        kix::flake_lock::project_kix(dir, &[]),
+        kix::flake_lock::project_kix_on(dir, &[], input),
         Err(kix::flake_lock::LockError::TagMoved { .. })
     )
 }
@@ -297,19 +313,67 @@ fn modified(dir: &Path, rel: &str) -> bool {
         .is_ok_and(|o| o.status.success() && !o.stdout.is_empty())
 }
 
-/// Pin the project in `dir`, whose `flake.lock` pins no version of Kix, to
-/// `version`. There is no version to build and compare against, so Kix
-/// only moves the Kix library. With `dry_run`, change nothing.
-fn pin_only(dir: &Path, version: &Version, dry_run: bool) -> Flow<()> {
+/// Why Kix pins an input without building anything.
+#[derive(Clone, Copy)]
+pub(super) enum NothingToCompare {
+    /// `flake.lock` pins no release for the input.
+    NoRelease,
+    /// `[versions]` lists no cluster under the input.
+    NoClusters,
+}
+
+impl NothingToCompare {
+    fn before(self, input: &str) -> String {
+        match (self, input) {
+            (NothingToCompare::NoRelease, kix::flake_lock::INPUT) => {
+                "This project's flake.lock pins no version of Kix.".to_string()
+            }
+            (NothingToCompare::NoRelease, _) => {
+                format!("flake.lock pins no version of Kix for the input `{input}`.")
+            }
+            (NothingToCompare::NoClusters, _) => {
+                format!("kix.toml [versions] lists no cluster under the input `{input}`.")
+            }
+        }
+    }
+
+    fn after(self, input: &str) -> String {
+        match (self, input) {
+            (NothingToCompare::NoRelease, kix::flake_lock::INPUT) => {
+                "This project's flake.lock pinned no version of Kix before, so Kix built nothing to compare.".to_string()
+            }
+            (NothingToCompare::NoRelease, _) => format!(
+                "flake.lock pinned no version of Kix for the input `{input}` before, so Kix built nothing to compare."
+            ),
+            (NothingToCompare::NoClusters, _) => format!(
+                "kix.toml [versions] lists no cluster under the input `{input}`, so Kix built nothing to compare."
+            ),
+        }
+    }
+}
+
+/// Pin the input `input` of the project in `dir` to `version` without
+/// building, because there is nothing to build and compare against (`why`).
+/// `command` runs the upgrade again. With `dry_run`, change nothing.
+pub(super) fn pin_only(
+    dir: &Path,
+    input: &str,
+    command: &str,
+    version: &Version,
+    dry_run: bool,
+    why: NothingToCompare,
+) -> Flow<()> {
     let release = version.release();
     if dry_run {
         println!(
-            "This project's flake.lock pins no version of Kix. `kix upgrade --to {release}` would pin the Kix library to {release} in flake.nix and flake.lock (dry run, no files changed)."
+            "{} `{command} --to {release}` would pin the Kix library to {release} in flake.nix and flake.lock (dry run, no files changed).",
+            why.before(input)
         );
-        println!("Next: run `kix upgrade --to {release}`.");
+        println!("Next: run `{command} --to {release}`.");
         return Ok(());
     }
-    let pinned = pin::prepare(dir, None, version).and_then(|plan| pin::pin(None, version, &plan));
+    let pinned =
+        pin::prepare(dir, input, None, version).and_then(|plan| pin::pin(None, version, &plan));
     match pinned {
         Ok(files) if files.is_empty() => {
             println!("flake.nix and flake.lock already pin Kix {release}.");
@@ -317,8 +381,9 @@ fn pin_only(dir: &Path, version: &Version, dry_run: bool) -> Flow<()> {
         }
         Ok(files) => {
             println!(
-                "Pinned the Kix library to {release} (updated {}). This project's flake.lock pinned no version of Kix before, so Kix built nothing to compare.",
-                out::list(&files)
+                "Pinned the Kix library to {release} (updated {}). {}",
+                out::list(&files),
+                why.after(input)
             );
             let mut commit: Vec<String> = files.iter().map(|f| f.to_string()).collect();
             if modified(dir, kix::project::FILE) {
@@ -330,7 +395,7 @@ fn pin_only(dir: &Path, version: &Version, dry_run: bool) -> Flow<()> {
         Err(pin::PinError::Edit(edit)) => Err(refused(edit_message(
             &edit,
             "Kix did not change flake.nix or flake.lock.",
-            &format!("kix upgrade --to {release}"),
+            &format!("{command} --to {release}"),
         ))),
         Err(e) => Err(refused(e.to_string())),
     }
@@ -343,6 +408,7 @@ mod tests {
     #[test]
     fn the_version_the_project_is_on_comes_from_flake_lock() {
         let dir = tempfile::tempdir().unwrap();
+        let project_version = |dir: &Path| project_version(dir, "kix");
         assert_eq!(project_version(dir.path()).unwrap(), None);
         std::fs::write(
             dir.path().join("flake.lock"),

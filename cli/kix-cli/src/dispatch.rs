@@ -397,7 +397,7 @@ fn prepare_project(cli: &Cli) -> Result<()> {
         && !args.dry_run
         && let Some(dir) = commands::project_dir(&cli.global.flake)
     {
-        commands::upgrade::check_deploy(&dir)?;
+        commands::upgrade::check_deploy(&dir, &args.plan.cluster)?;
     }
     // Validate the cluster name before the Nix backend starts, which is slow.
     if let Some(name) = cli.command.cluster_name() {

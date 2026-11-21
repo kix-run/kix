@@ -48,13 +48,18 @@ fn remains(current: Option<&Version>) -> String {
     }
 }
 
-/// Work out how to pin the Kix library of the project in `dir`, now pinned
-/// to `current`, to `version`, before Kix installs that version or changes
-/// a file.
-pub fn prepare(dir: &Path, current: Option<&Version>, version: &Version) -> Result<Plan, PinError> {
+/// Work out how to pin the Kix library input `input` of the project in
+/// `dir`, now pinned to `current`, to `version`, before Kix installs that
+/// version or changes a file.
+pub fn prepare(
+    dir: &Path,
+    input: &str,
+    current: Option<&Version>,
+    version: &Version,
+) -> Result<Plan, PinError> {
     crate::commands::select_builder_for(dir)?;
     kix::runtime::runtime().map_err(|e| e.to_string())?;
-    match kix::pin_library::plan(dir, version) {
+    match kix::pin_library::plan(dir, input, version) {
         Ok(plan) => Ok(plan),
         Err(PinLibraryError::Edit(edit)) => Err(PinError::Edit(edit)),
         Err(e @ PinLibraryError::Read(_)) => {
