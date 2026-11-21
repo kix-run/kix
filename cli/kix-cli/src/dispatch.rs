@@ -403,6 +403,12 @@ fn prepare_project(cli: &Cli) -> Result<()> {
     if let Some(name) = cli.command.cluster_name() {
         validate_cluster_name(name)?;
     }
+    // A project with several versions of Kix evaluates with the library of
+    // the input this cluster uses.
+    if let Some(dir) = commands::project_dir(&cli.global.flake) {
+        kix::versions::choose(&dir, cli.command.cluster_name())
+            .map_err(|e| miette::miette!("{e}"))?;
+    }
     // The project's builder decides which Nix every later step runs.
     commands::select_builder(&cli.global)?;
     // Stop before any work when Kix has no runtime, or its runtime comes from

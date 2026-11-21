@@ -58,6 +58,47 @@ let
         fix = "Check the spelling, or run `kix upgrade` if the project needs a newer Kix library.";
       };
 
+  # The clusters each Kix library input builds, from `[versions]` in
+  # kix.toml, or null when the project has one version of Kix.
+  versions = settings.versions or null;
+  inputOf =
+    name:
+    lib.findFirst (input: builtins.elem name versions.${input}) null (builtins.attrNames versions);
+
+  # Return `cluster` when this library is the input that `[versions]` names
+  # for it. The flake's outputs read only the input `kix`, and Kix replaces
+  # that input with the cluster's own before it evaluates. Without the
+  # replacement, a cluster on another input would build with the library of
+  # `kix`, so it fails here. A cluster on `kix` cannot be checked, because
+  # the replaced input is not visible to the library.
+  onItsLibrary =
+    name: cluster:
+    let
+      input = inputOf name;
+      listed = lib.concatMapStringsSep ", " (i: "`${i}`") (builtins.attrNames versions);
+    in
+    if versions == null then
+      cluster
+    else if input == null then
+      fail {
+        message = "kix.toml [versions] does not list the cluster '${name}'.";
+        fix = "Add '${name}' to one of: ${listed}.";
+      }
+    else if input == "kix" then
+      cluster
+    else if !(inputs ? ${input}) then
+      fail {
+        message = "kix.toml [versions] names the input `${input}` for the cluster '${name}', and flake.nix has no input of that name.";
+        fix = "Add `inputs.${input}.url` to flake.nix.";
+      }
+    else if (inputs.kix.outPath or null) != inputs.${input}.outPath then
+      fail {
+        message = "The cluster '${name}' uses the Kix library input `${input}` (kix.toml [versions]), and this evaluation uses the input `kix`.";
+        fix = "Run the command with `kix`, which evaluates each cluster with its own library. With plain Nix, pass `--override-input kix` with the locked `${input}`.";
+      }
+    else
+      cluster;
+
   catalogPackages = import ../packages { inherit lib; };
   packagesByLevel = import ../packages/by-level.nix { inherit lib; };
 
@@ -138,21 +179,23 @@ let
                   kix.kixlib.pins pins;
             };
           in
-          if builtins.isFunction fn then
-            let
-              fArgs = builtins.functionArgs fn;
-              # functionArgs marks defaulted arguments as true. Omit `pins`
-              # when no shared file exists so the function's default applies.
-              wantsItsOwnDefault = pins == null && (fArgs.pins or false);
-              passArgs =
-                let
-                  all = lib.intersectAttrs fArgs available;
-                in
-                if wantsItsOwnDefault then builtins.removeAttrs all [ "pins" ] else all;
-            in
-            fn passArgs
-          else
-            fn
+          onItsLibrary name (
+            if builtins.isFunction fn then
+              let
+                fArgs = builtins.functionArgs fn;
+                # functionArgs marks defaulted arguments as true. Omit `pins`
+                # when no shared file exists so the function's default applies.
+                wantsItsOwnDefault = pins == null && (fArgs.pins or false);
+                passArgs =
+                  let
+                    all = lib.intersectAttrs fArgs available;
+                  in
+                  if wantsItsOwnDefault then builtins.removeAttrs all [ "pins" ] else all;
+              in
+              fn passArgs
+            else
+              fn
+          )
         ) clusters;
 
       resolvedClusters = resolveClusters kix;

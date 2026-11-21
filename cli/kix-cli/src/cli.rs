@@ -94,11 +94,30 @@ impl GlobalArgs {
     ///
     /// Both clap (for the flag) and `override_input_from_env` (for
     /// `KIX_OVERRIDE_INPUT`) guarantee an even number of elements.
+    ///
+    /// When this run's cluster uses another input than `kix`
+    /// (`kix::versions`), the pairs end with the one that replaces `kix`
+    /// with that input, so the project evaluates with the cluster's library.
+    /// An override of that input replaces it there too, and an override of
+    /// `kix` itself does not apply to this cluster.
     pub fn input_overrides(&self) -> Vec<(String, String)> {
-        self.override_input
+        let mut pairs: Vec<(String, String)> = self
+            .override_input
             .chunks_exact(2)
             .map(|c| (c[0].clone(), c[1].clone()))
-            .collect()
+            .collect();
+        if let Some(chosen) = kix::versions::chosen()
+            && let Some(swap) = &chosen.swap
+        {
+            let url = pairs
+                .iter()
+                .rev()
+                .find(|(name, _)| name == &chosen.input)
+                .map_or_else(|| swap.clone(), |(_, url)| url.clone());
+            pairs.retain(|(name, _)| name != kix::flake_lock::INPUT);
+            pairs.push((kix::flake_lock::INPUT.to_string(), url));
+        }
+        pairs
     }
 }
 

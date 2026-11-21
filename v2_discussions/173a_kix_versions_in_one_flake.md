@@ -279,3 +279,70 @@ every cluster has moved.
    and `kix status` accepts a cluster's key. This is wider than
    `scripts/copy-pass`, which only edits text a branch changed. Check every
    claim it adds against the code.
+
+## 9. Prototype
+
+Built on 21 November 2026 on the branch `prototype/kix-versions-one-flake`.
+It covers step 1 of §8 and nothing else.
+
+**What it has**
+
+- `cli/kix-core/src/versions.rs`: reads `[versions]`, finds a cluster's
+  input, checks that every input exists in `flake.lock` and that `kix` pins
+  the newest release, and writes the flake reference of a locked input.
+- `cli/kix-cli/src/select.rs`: finds the cluster before parsing (§5b) and
+  chooses the Kix of its input. A test walks every command and fails when a
+  flag that takes a value is missing from the list, or when a flag takes a
+  value in one command and none in another.
+- `GlobalArgs::input_overrides` (`cli/kix-cli/src/cli.rs`): adds the pair
+  that replaces `kix` with the cluster's input. Every evaluation reads its
+  overrides from there, so one change covers them all.
+- `kix/lib/mkFlake.nix`: refuses a cluster evaluated with the library of
+  another input, and a cluster the table leaves out.
+
+**What the test showed.** Two builds of the prototype, 0.10.0-proto.1 and
+0.10.0-proto.2, each with a tagged library, and a project with `staging`
+on `kix` and `prod` on `kix-stable`:
+
+| Step | Result |
+|---|---|
+| `kix build staging` | Kix proto.2 and its library. |
+| `kix build prod`, started with proto.2 | Handed over to proto.1, which built with its library. 0.38 s. |
+| `kix build prod` with proto.1 not installed | "This project uses Kix 0.10.0-proto.1 (flake.lock), and Kix 0.10.0-proto.1 is not installed." |
+| Kix proto.2 forced onto `prod` | "flake.lock pins Kix 0.10.0-proto.1, but this is Kix 0.10.0-proto.2." |
+| `kix build dev`, a cluster the table leaves out | "kix.toml [versions] does not list the cluster `dev`. Add it to one of: `kix`, `kix-stable`." |
+| `kix export staging --out prod` | Chose `staging`. |
+| Plain `nix eval` of `prod` | The library's refusal, with the fix. |
+| Plain `nix eval` of `staging` | Worked. |
+| `kix-stable` pinned newer than `kix` | Refused, naming both inputs and versions. |
+| `flake.lock` after all of it | Unchanged. |
+
+The unit tests of `kix-core` (283) and of the `kix` program (214) pass.
+
+**What it found**
+
+- No flag takes a value in one command and none in another, so the scan
+  can step over a value by the flag's name alone. Forty-seven flags take a
+  value.
+- A command that acts on no cluster (`kix pin`, `kix self`, `kix doctor`,
+  `kix upgrade`) needs to be on a list, or its first word is taken for a
+  cluster.
+- An input that `flake.nix` declares and `flake.lock` does not hold yet
+  gets a wrong message: "flake.nix has no input named kix" for a cluster on
+  the new input, and "Add `inputs.kix-old.url` to flake.nix" for the
+  others. The implementation should lock the new input, or say to.
+- The library cannot check a cluster on `kix`, because the replaced input
+  is not visible to it (§3, step 3).
+
+**What it leaves out**
+
+- `kix upgrade` with a name (§3, step 4).
+- A held-back Kix skipping settings it does not know (§5).
+- `kix list clusters` showing each version, and `kix status` and
+  `kix snapshot` accepting a cluster's key.
+- The deploy receipt naming the input a cluster used.
+- An input that is a folder or a branch (§5a), which the code handles and
+  no test covers.
+- Integration tests, the change record, the reference pages, and
+  formatting of `mkFlake.nix`.
+

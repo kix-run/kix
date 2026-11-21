@@ -29,7 +29,7 @@ pub const FILE: &str = "kix.toml";
 pub const TEST_BUILDER_VAR: &str = "KIX_TEST_BUILDER";
 
 /// The keys this version of Kix reads from `kix.toml`.
-const KNOWN_KEYS: &[&str] = &["builder", "library", "upgrade"];
+const KNOWN_KEYS: &[&str] = &["builder", "library", "upgrade", "versions"];
 
 /// The id of the change record that moved the project's version of Kix from
 /// `kix` in `kix.toml` to `flake.lock`.

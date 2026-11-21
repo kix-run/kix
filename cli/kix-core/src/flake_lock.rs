@@ -206,7 +206,10 @@ pub fn moved_tag_next_step(locked: &Version, asked: &Version) -> String {
 /// another tag than the lock pins is [`LockError::TagMoved`], found before
 /// Nix evaluates and rewrites the lock.
 pub fn project_kix(dir: &Path, overrides: &[(String, String)]) -> Result<ProjectKix, LockError> {
-    if let Some((_, url)) = overrides.iter().rev().find(|(name, _)| name == INPUT) {
+    // An override of the input this run's cluster uses makes it a
+    // development library.
+    let input = crate::versions::chosen_input();
+    if let Some((_, url)) = overrides.iter().rev().find(|(name, _)| name == input) {
         return Ok(ProjectKix::Development(Development::Override(url.clone())));
     }
     let library =
@@ -214,7 +217,7 @@ pub fn project_kix(dir: &Path, overrides: &[(String, String)]) -> Result<Project
     if library == crate::project::Library::OwnFlake {
         return Ok(ProjectKix::Development(Development::OwnLibrary));
     }
-    let kix = locked_kix(dir);
+    let kix = locked_kix(dir, input);
     // When the lock names no release, this Kix judges the project, and it
     // reads kix.toml before flake.lock. A project on a release hands over to
     // that release, which judges kix.toml itself. A moved tag names releases,
@@ -232,16 +235,33 @@ pub fn project_kix(dir: &Path, overrides: &[(String, String)]) -> Result<Project
     kix
 }
 
-/// Return which Kix the `flake.lock` in `dir` pins, and refuse a tag moved
-/// in `flake.nix` since.
-fn locked_kix(dir: &Path) -> Result<ProjectKix, LockError> {
+/// Return which Kix the project in `dir` uses for a cluster on the input
+/// `input_name`, as [`project_kix`] does for the input this run chose. Kix
+/// calls this before it parses the command, when no input is chosen yet.
+pub fn project_kix_on(
+    dir: &Path,
+    overrides: &[(String, String)],
+    input_name: &str,
+) -> Result<ProjectKix, LockError> {
+    if input_name == INPUT {
+        return project_kix(dir, overrides);
+    }
+    if let Some((_, url)) = overrides.iter().rev().find(|(name, _)| name == input_name) {
+        return Ok(ProjectKix::Development(Development::Override(url.clone())));
+    }
+    locked_kix(dir, input_name)
+}
+
+/// Return which Kix the input `input_name` pins in the `flake.lock` in
+/// `dir`, and refuse a tag moved in `flake.nix` since.
+fn locked_kix(dir: &Path, input_name: &str) -> Result<ProjectKix, LockError> {
     let path = dir.join(FILE);
     let unreadable = |message: String| LockError::Unreadable {
         path: path.clone(),
         message,
     };
     let lock = read(dir)?;
-    let original = kix_input(&lock).map_err(|e| match e {
+    let original = input(&lock, input_name).map_err(|e| match e {
         InputError::Malformed(message) => unreadable(message.to_string()),
         e => LockError::Input(e),
     })?;
@@ -296,13 +316,19 @@ pub fn locked_inputs(
 /// Return the `original` of the root's `kix` input in `lock`: the input as
 /// `flake.nix` gave it when Nix wrote the lock.
 pub fn kix_input(lock: &Value) -> Result<&Value, InputError> {
+    input(lock, INPUT)
+}
+
+/// Return the `original` of the root's input `name` in `lock`: the input as
+/// `flake.nix` gave it when Nix wrote the lock.
+pub fn input<'a>(lock: &'a Value, name: &str) -> Result<&'a Value, InputError> {
     let root = lock["root"].as_str().unwrap_or("root");
     let node = &lock["nodes"][root];
     if !node.is_object() {
         return Err(InputError::Malformed("it has no root node"));
     }
     let inputs = node["inputs"].as_object();
-    match inputs.and_then(|i| i.get(INPUT)) {
+    match inputs.and_then(|i| i.get(name)) {
         Some(Value::String(key)) => Ok(&lock["nodes"][key]["original"]),
         Some(Value::Array(path)) => {
             let path: Vec<&str> = path.iter().filter_map(Value::as_str).collect();
@@ -312,7 +338,7 @@ pub fn kix_input(lock: &Value) -> Result<&Value, InputError> {
             "the input kix is neither a node nor a follows path",
         )),
         None => match inputs.and_then(|i| i.get(OLD_NAME)) {
-            Some(Value::String(key)) => Err(InputError::OldName {
+            Some(Value::String(key)) if name == INPUT => Err(InputError::OldName {
                 version: match pinned(&lock["nodes"][key]["original"]) {
                     Pinned::Tag(v) => Some(v),
                     _ => None,
@@ -323,8 +349,8 @@ pub fn kix_input(lock: &Value) -> Result<&Value, InputError> {
     }
 }
 
-/// Return which Kix the `kix` input's `original` pins.
-fn from_original(original: &Value) -> Result<ProjectKix, LockError> {
+/// Return which Kix an input's `original` pins.
+pub fn from_original(original: &Value) -> Result<ProjectKix, LockError> {
     match pinned(original) {
         Pinned::Tag(v) => Ok(ProjectKix::Release(v)),
         Pinned::Development(d) => Ok(ProjectKix::Development(d)),
