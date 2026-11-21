@@ -74,6 +74,11 @@ pub(super) fn build_receipt(graph: &StoreGraph, flake_ref: &str) -> Value {
     if let Some(v) = kix::eval::nix::version() {
         builder["nixVersion"] = json!(v);
     }
+    // A project with several versions of Kix says which input this
+    // cluster's Kix library came from.
+    if let Some(chosen) = kix::versions::chosen() {
+        builder["kixInput"] = json!(chosen.input);
+    }
 
     json!({
         "schema": keys::RECEIPT_SCHEMA,

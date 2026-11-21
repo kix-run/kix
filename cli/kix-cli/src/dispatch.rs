@@ -399,22 +399,48 @@ fn prepare_project(cli: &Cli) -> Result<()> {
     {
         commands::upgrade::check_deploy(&dir, &args.plan.cluster)?;
     }
+    prepare_evaluation(&cli.global, cli.command.cluster_name())
+}
+
+/// Set up what an evaluation of the project needs: the Kix library input of
+/// `cluster`, the builder, and the runtime.
+pub fn prepare_evaluation(global: &crate::cli::GlobalArgs, cluster: Option<&str>) -> Result<()> {
     // Validate the cluster name before the Nix backend starts, which is slow.
-    if let Some(name) = cli.command.cluster_name() {
+    if let Some(name) = cluster {
         validate_cluster_name(name)?;
     }
     // A project with several versions of Kix evaluates with the library of
     // the input this cluster uses.
-    if let Some(dir) = commands::project_dir(&cli.global.flake) {
-        kix::versions::choose(&dir, cli.command.cluster_name())
-            .map_err(|e| miette::miette!("{e}"))?;
+    if let Some(dir) = commands::project_dir(&global.flake) {
+        kix::versions::choose(&dir, cluster).map_err(|e| miette::miette!("{e}"))?;
+        warn_unused_override(global);
     }
     // The project's builder decides which Nix every later step runs.
-    commands::select_builder(&cli.global)?;
+    commands::select_builder(global)?;
     // Stop before any work when Kix has no runtime, or its runtime comes from
     // another release.
     kix::runtime::runtime().map_err(|e| miette::miette!("{e}"))?;
     Ok(())
+}
+
+/// Warn when the command overrides the input `kix` and its cluster uses
+/// another input, where the override changes nothing.
+fn warn_unused_override(global: &crate::cli::GlobalArgs) {
+    let Some(chosen) = kix::versions::chosen().filter(|c| c.swap.is_some()) else {
+        return;
+    };
+    let overridden = |name: &str| {
+        global
+            .override_input
+            .chunks_exact(2)
+            .any(|pair| pair[0] == name)
+    };
+    if overridden(kix::flake_lock::INPUT) && !overridden(&chosen.input) {
+        eprintln!(
+            "warning: --override-input kix does not apply to this cluster, which uses the input `{input}` (kix.toml [versions]). Pass `--override-input {input} <url>` to replace its Kix library.",
+            input = chosen.input
+        );
+    }
 }
 
 /// Validate cluster name format.

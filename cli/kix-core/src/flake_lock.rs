@@ -55,14 +55,26 @@ pub enum Development {
     Override(String),
 }
 
+impl Development {
+    /// Return where the development library of the input `input` comes
+    /// from, as a message words it.
+    pub fn describe(&self, input: &str) -> String {
+        match self {
+            Development::Folder(path) => {
+                format!("the input {input} is the local folder {path}")
+            }
+            Development::Branch(branch) => {
+                format!("the input {input} follows the branch {branch}")
+            }
+            Development::OwnLibrary => "kix.toml sets library = \"self\"".to_string(),
+            Development::Override(url) => format!("--override-input {input} {url}"),
+        }
+    }
+}
+
 impl fmt::Display for Development {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Development::Folder(path) => write!(f, "the input kix is the local folder {path}"),
-            Development::Branch(branch) => write!(f, "the input kix follows the branch {branch}"),
-            Development::OwnLibrary => f.write_str("kix.toml sets library = \"self\""),
-            Development::Override(url) => write!(f, "--override-input kix {url}"),
-        }
+        f.write_str(&self.describe(INPUT))
     }
 }
 

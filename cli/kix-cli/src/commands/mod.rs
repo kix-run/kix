@@ -112,6 +112,18 @@ impl CommandContext {
     /// that build the cluster read `StoreGraph::cluster_name` from the build
     /// instead.
     pub fn cluster_identity(&self, arg: &str, lookup: Lookup) -> miette::Result<String> {
+        self.cluster_identity_after(arg, lookup, || Ok(()))
+    }
+
+    /// Return the cluster name as [`CommandContext::cluster_identity`] does,
+    /// for a command that has not set up the project. `prepare` sets it up,
+    /// and runs only when step 3 has to evaluate.
+    pub fn cluster_identity_after(
+        &self,
+        arg: &str,
+        lookup: Lookup,
+        prepare: impl FnOnce() -> miette::Result<()>,
+    ) -> miette::Result<String> {
         let flake_path = match resolve_flake_path(&self.global.flake) {
             Ok(p) => p,
             Err(_) => return Ok(arg.to_string()),
@@ -127,6 +139,19 @@ impl CommandContext {
                 .await
                 .ok()
         });
+        if has_records != Some(true)
+            && let Err(e) = prepare()
+        {
+            return match lookup {
+                Lookup::Mutating => Err(e),
+                Lookup::ReadOnly => {
+                    eprintln!(
+                        "warning: could not evaluate the name of cluster '{arg}', so looking it up as '{arg}': {e}"
+                    );
+                    Ok(arg.to_string())
+                }
+            };
+        }
         resolve_identity(arg, has_records == Some(true), lookup, || {
             kix::eval::eval_cluster_name(
                 &flake_path.to_string_lossy(),

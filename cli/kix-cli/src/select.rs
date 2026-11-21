@@ -277,21 +277,27 @@ pub fn auto_install_on(value: Option<&OsStr>) -> bool {
 /// Return the Kix the project in `scan` uses, or `None` when the command
 /// reads no local project: `--flake` names a remote flake, or the
 /// directory has no `flake.nix`.
-fn project_kix(scan: &Scan) -> Option<Result<ProjectKix, LockError>> {
+fn project_kix(scan: &Scan) -> Option<(String, Result<ProjectKix, LockError>)> {
     let flake = raw_flake(scan, std::env::var_os("KIX_FLAKE").as_deref());
     let dir = crate::commands::project_dir(&flake)?;
     if !dir.join("flake.nix").is_file() {
         return None;
     }
-    Some(project_kix_in(&dir, scan))
+    Some(match input_in(&dir, scan) {
+        Ok(input) => {
+            let kix = flake_lock::project_kix_on(&dir, &overrides(scan), &input);
+            (input, kix)
+        }
+        Err(e) => (flake_lock::INPUT.to_string(), Err(e)),
+    })
 }
 
-/// Return the Kix the project in `dir` uses for the cluster `scan` found.
-/// A project with a `[versions]` table uses the input that lists the
-/// cluster. A command that names no cluster, or names a word the table does
-/// not list, uses the input `kix`, and the chosen Kix judges the word once
-/// it has parsed the command.
-fn project_kix_in(dir: &Path, scan: &Scan) -> Result<ProjectKix, LockError> {
+/// Return the input whose Kix runs the command `scan` found, in the project
+/// in `dir`. A project with a `[versions]` table uses the input that lists
+/// the cluster. A command that names no cluster, or names a word the table
+/// does not list, uses the input `kix`, and the chosen Kix judges the word
+/// once it has parsed the command.
+fn input_in(dir: &Path, scan: &Scan) -> Result<String, LockError> {
     let setting = |e: kix::versions::VersionsError| LockError::Setting(e.to_string());
     let versions = kix::versions::Versions::read(dir).map_err(setting)?;
     // A table that names an input the lock does not hold is wrong for every
@@ -307,7 +313,7 @@ fn project_kix_in(dir: &Path, scan: &Scan) -> Result<ProjectKix, LockError> {
         (Some(versions), Some(cluster)) => versions.input_of(cluster),
         _ => None,
     };
-    flake_lock::project_kix_on(dir, &overrides(scan), input.unwrap_or(flake_lock::INPUT))
+    Ok(input.unwrap_or(flake_lock::INPUT).to_string())
 }
 
 /// Return the `--override-input` pairs, or else the pairs in
@@ -340,7 +346,10 @@ pub fn run(args: &[OsString]) -> miette::Result<Outcome> {
         Some(_) => None,
         None => project_kix(&scan),
     };
-    let kix = match kix {
+    let input = kix
+        .as_ref()
+        .map_or(flake_lock::INPUT.to_string(), |(input, _)| input.clone());
+    let kix = match kix.map(|(_, kix)| kix) {
         None => None,
         Some(Ok(kix)) => Some(kix),
         // `kix --version` still prints the version.
@@ -399,13 +408,17 @@ pub fn run(args: &[OsString]) -> miette::Result<Outcome> {
     if scan.version {
         print_version(selected_by.as_deref());
         if let Some(ProjectKix::Development(from)) = &kix {
-            eprintln!("  this project uses a development Kix library: {from}");
+            eprintln!(
+                "  this project uses a development Kix library: {}",
+                from.describe(&input)
+            );
         }
         return Ok(Outcome::PrintedVersion);
     }
     if let Some(ProjectKix::Development(from)) = &kix {
         eprintln!(
-            "note: this project uses a development Kix library ({from}), so Kix {} runs it without checking its version.",
+            "note: this project uses a development Kix library ({}), so Kix {} runs it without checking its version.",
+            from.describe(&input),
             version::running().release()
         );
     }
