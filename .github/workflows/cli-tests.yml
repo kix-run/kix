@@ -816,6 +816,15 @@ jobs:
             exit 0
           fi
           printf '%s\n' "$NOTES" > release-notes.md
+          # GitHub refuses release notes over 125,000 characters. The notes
+          # list breaking changes first, so cutting whole lines from the end
+          # drops fixes. The attached change records hold every entry.
+          max=120000
+          if [ "$(wc -c < release-notes.md)" -gt "$max" ]; then
+            head -c "$max" release-notes.md | sed '$d' > release-notes-cut.md
+            printf '\n\nThese notes stop here because GitHub limits their length. The file `kix-%s-changes.json`, attached to this release, lists every change.\n' "$VERSION" >> release-notes-cut.md
+            mv release-notes-cut.md release-notes.md
+          fi
           # A prerelease is marked as one and never becomes GitHub's latest
           # release, matching how kix.run lists it.
           if [ "$PRERELEASE" = true ]; then
