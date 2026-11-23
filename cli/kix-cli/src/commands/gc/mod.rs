@@ -682,14 +682,14 @@ pub(super) async fn delete_resources(
         match removal {
             Removal::NeverPruned => {
                 eprintln!(
-                    "  {} {}: kept; Kix never deletes this kind automatically (delete with `kubectl` if intended)",
+                    "  {} {}: kept because Kix never deletes this kind automatically. Delete it with `kubectl` if you want to remove it.",
                     output::yellow("!"),
                     rid
                 );
             }
             Removal::UnknownKind => {
                 eprintln!(
-                    "  {} {}: not deleted because Kubernetes does not recognize this kind. If its CRD was removed, Kubernetes deleted this object with it. `kix gc --full-scan` checks only objects that exist now, so it does not report this.",
+                    "  {} {}: not deleted because Kubernetes does not recognize its kind. If its CustomResourceDefinition was removed, Kubernetes already deleted this object with it. Run `kix gc --full-scan` instead to check only objects still on the cluster.",
                     output::red("!"),
                     rid
                 );

@@ -801,12 +801,12 @@ async fn delete_closure(
             Removal::NeverPruned => tracing::info!(
                 name,
                 resource = %rid,
-                "Kept during teardown: Kix never deletes this kind automatically; delete with kubectl if intended"
+                "Kept while deleting Activation: Kix never deletes this kind automatically. Delete it with kubectl if you want to remove it"
             ),
             Removal::UnknownKind => tracing::warn!(
                 name,
                 resource = %rid,
-                "Skipped during teardown: Kubernetes does not recognize this kind (for example, if its CRD was already removed)"
+                "Not deleted while deleting Activation: Kubernetes does not recognize this kind. If its CustomResourceDefinition was removed, Kubernetes already deleted this object with it"
             ),
             Removal::Pruned(Pruned::Deleted) => tracing::info!(name, resource = %rid, "Deleted"),
             Removal::Pruned(Pruned::Gone) => {}
