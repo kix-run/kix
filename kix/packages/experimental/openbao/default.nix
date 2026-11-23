@@ -39,9 +39,9 @@
 #     };
 #   };
 #
-# Upgrades. 2.7.1 to 2.7.2 is a patch release. Upstream's 2.7.2 release
+# Upgrades. 2.7.2 to 2.7.3 is a patch release. Upstream's 2.7.3 release
 # notes name no upgrade step. The first deploy restarts each pod once. On
-# kind, 2.7.1 started on the Raft volumes that 2.7.2 had written, and 2.7.2
+# kind, 2.7.2 started on the Raft volumes that 2.7.3 had written, and 2.7.3
 # started again on those volumes after the rollback. Both times the static
 # seal unsealed the pods, the reconcile Job completed, and the
 # ExternalSecret read the stored value.
@@ -211,7 +211,7 @@ in
     defaultAliases = [ "openbao" ];
     network.intents.tokenReview.egress = [ { to = "apiserver"; } ];
     # OpenBao's docs support the three most recent Kubernetes minor releases
-    # (website/content/partials/kubernetes-supported-versions.mdx at v2.7.2).
+    # (website/content/partials/kubernetes-supported-versions.mdx at v2.7.3).
     # The package uses only v1 APIs and Kubernetes TokenReview, and no
     # version is known to fail, so no hard range is set. Move `supported`
     # with `release`.
@@ -285,7 +285,7 @@ in
     image = kix.options.image {
       repository = "quay.io/openbao/openbao";
       tag = release;
-      digest = "sha256:5046911075e137e154ce49ab051502f4ec7cf367d484ae4a4dce665d9b90561f";
+      digest = "sha256:ba4b133eb9586630024e71a617e66f37f29cc3534cdd46a6233e098ceded8dc9";
       description = "Image of the server and of the reconcile Job, which runs its `bao` CLI.";
     };
 
