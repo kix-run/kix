@@ -734,7 +734,7 @@ kix.buildCluster {
 Available: `k3s`, `kind`, `kubeadm`, `eks`, `gke`, `gke-autopilot`, `aks`, `openshift`, `ovh`, `scaleway`, `rke2`, `talos`.
 
 Flavors provide imports for platform-managed services, declared via `kix.mkImport { roles = [ ... ]; out = { ... }; }`:
-- **DNS** (`platform-dns`, role `dns`): all flavors, `optional = true` except on kind. Each flavor names the DNS Service once through `kix/lib/flavors/platform-dns.nix`, which derives `out.name` and `out.fqdn`.
+- **DNS** (`platform-dns`, role `dns`): all flavors, `optional = true` except on kind. Imports the platform's DNS Service via `kix/lib/flavors/platform-dns.nix`, setting `out.name` and `out.fqdn` from that Service's name and namespace.
 - **Storage** (`platform-storage`, role `storageClasses`; the import names the StorageClass with `kind`/`apiVersion`/`out.name`) in flavors whose provider creates the class on every new cluster (not EKS). Not optional: packages take `storageClasses` as an optional dependency, which activates no optional import, and the PVC StorageClass check needs the marker.
 - **Snapshot API** (`platform-snapshot-controller`, role `snapshotController`, with `crds`) on RKE2, not optional for the same reason.
 - **Resource metrics API** (role `metricsApi`): rke2, k3s, gke, gke-autopilot, and aks bind it `exclusive` with no import; kind, kubeadm, talos, and eks bind it `absent`. A HorizontalPodAutoscaler on resource metrics, or a descheduler with a `KubernetesMetrics` provider, fails evaluation under `absent` until a `metrics-server` instance claims the role. On kind and Talos, give it `extraArgs = [ "--kubelet-insecure-tls" ]`.

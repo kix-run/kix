@@ -1,4 +1,4 @@
 +++
 kind = "fixed"
 +++
-Each flavor's `platform-dns` import now names the platform's DNS Service, and derives `out.name` and `out.fqdn` from that one name and namespace. Before, `out.name` named the DNS Deployment while `out.fqdn` named the Service. When a workload activates `platform-dns`, `kix deploy` now waits until that Service has a ready endpoint, instead of waiting for a Deployment. On `rke2`, `out.name` and `out.fqdn` now name `rke2-coredns-rke2-coredns`, the Service RKE2 creates, instead of `coredns` and `kube-dns`, which RKE2 does not create.
+In every built-in flavor, `platform-dns` now imports the cluster's DNS Service, so `out.name` and `out.fqdn` both refer to that Service. Previously, `platform-dns` imported the DNS Deployment and set `out.name` to the Deployment name while `out.fqdn` pointed to the Service. When `platform-dns` is active, `kix deploy` now waits until the Service has a ready endpoint before deploying dependent workloads. On `rke2`, `out.name` and `out.fqdn` now point to `rke2-coredns-rke2-coredns`, the DNS Service RKE2 installs, rather than `coredns` and `kube-dns`, which RKE2 does not create.
