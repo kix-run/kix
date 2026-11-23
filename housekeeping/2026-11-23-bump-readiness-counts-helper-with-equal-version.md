@@ -1,0 +1,3 @@
+# 2026-11-23 · `kix/packages/release-images.nix` · A helper image whose version equals the package's is treated as part of the release.
+
+The bump workflow asks the registry for each default image whose tag names the pinned version. A helper on a version line of its own is left out only because its version differs. `vaultwarden` pins `1.37.5` and a busybox init image at `1.38.0`. Once vaultwarden reaches 1.38.0, detection will ask for `busybox:1.38.1` when vaultwarden 1.38.1 is released, find none, and list vaultwarden as waiting, with the busybox reference as the reason. No wrong bump starts, but the package stops moving until someone reads the summary. The package has no way to say which of its images follow its release.

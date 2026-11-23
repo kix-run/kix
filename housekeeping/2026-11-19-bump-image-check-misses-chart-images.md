@@ -1,3 +1,5 @@
-# 2026-11-19 · `.github/bump/check-images.py` · The bump workflow's amd64 image check cannot see images that come from a Helm chart or an operator.
+# 2026-11-19 · `.github/bump/readiness.py` · The bump workflow's image check cannot see images that come from a Helm chart or an operator.
 
 The check reads the images that packages declare with `kix.options.image`. It prints `skip` for packages whose images come from chart values or that an operator runs, such as `cilium`, `smartctl-exporter`, `victoria-metrics-cluster`, `stackgres-cluster` and `envoy-gateway`. A bump of one of those can pass with an image that has no amd64 build, because the agent tests on arm64. A check that rendered the package's manifests would see every image, but it needs Helm and a test cluster definition for each package.
+
+- 2026-11-23: the same gap now also applies before a bump starts. `detect.py` targets the newest release whose images the registry has, and for `cilium` and `smartctl-exporter` it has no image to ask about, so it takes the newest release unchecked and says so in the run summary. The chart of `smartctl-exporter` has a version line of its own, so the release version does not name a chart version to look up.

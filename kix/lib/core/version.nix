@@ -87,6 +87,27 @@ let
       builtins.elemAt m 0
       + lib.optionalString (suffix != null && prereleaseOf suffix != [ ]) "-${suffix}";
 
+  # Return `tag` with the version it names replaced by `version`, or null
+  # when `tag` names none. The leading `v`, a vendor suffix, and a `+build`
+  # stay as they are, so `retag "v1.30.6-alpine" "1.30.8"` gives
+  # `v1.30.8-alpine`. A digest and a prerelease suffix belong to the old
+  # version and are dropped. `retag tag (ofTag tag)` gives back the tag.
+  retag =
+    tag: version:
+    let
+      bare = if builtins.isString tag then builtins.head (lib.splitString "@" tag) else null;
+      m = if bare == null then null else builtins.match grammar bare;
+      suffix = builtins.elemAt m 3;
+      build = builtins.elemAt m 5;
+    in
+    if m == null then
+      null
+    else
+      lib.optionalString (builtins.match "[vV].*" bare != null) (builtins.substring 0 1 bare)
+      + version
+      + lib.optionalString (suffix != null && prereleaseOf suffix == [ ]) "-${suffix}"
+      + lib.optionalString (build != null) "+${build}";
+
   cmp =
     a: b:
     if a < b then
@@ -215,6 +236,7 @@ in
     tryParse
     parse
     ofTag
+    retag
     compare
     atLeast
     atMost
