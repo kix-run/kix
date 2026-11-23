@@ -183,6 +183,7 @@ in
             availability
             ;
           networkPolicyEnforcer = _networkPolicyEnforcer;
+          packageId = packageLib.idOf instCfg.package;
           namespaces = nsResources;
           labelStyle = instCfg.labelStyle;
           selectorLabelsOverride = instCfg.selectorLabels;

@@ -222,7 +222,6 @@ in
         ...
       }:
       let
-        who = "descheduler ${scope.namespaceName}/${name}";
 
         inherit (scope.rbac)
           core
@@ -269,7 +268,7 @@ in
         args =
           baseArgs
           ++ kix.guardArgs {
-            inherit who;
+            inherit scope;
             owned = {
               "--policy-config-file" = "set policy instead.";
               "--descheduling-interval" = "set deschedulingInterval instead.";

@@ -16,7 +16,6 @@ let
   inherit (c)
     name
     ns
-    who
     ports
     controllerLeaseName
     controllerLabels
@@ -72,7 +71,7 @@ let
     "--live-addr=:${toString ports.controllerHealth}"
   ]
   ++ kix.guardArgs {
-    inherit who;
+    inherit scope;
     owned = {
       "--enable-leader-election" =
         "the package always enables leader election, so instances above availability none run one active controller; remove it.";
@@ -273,7 +272,7 @@ in
             image = kix.image.ref config.image;
             imagePullPolicy = config.image.pullPolicy;
             args = controllerArgs;
-            env = kix.mkEnvVars (kix.mergeEnv { inherit who; } config.env);
+            env = kix.mkEnvVars (kix.mergeEnv { inherit scope; } config.env);
             ports = [
               (kix.port "metrics" ports.metrics)
               (kix.port "live" ports.controllerHealth)

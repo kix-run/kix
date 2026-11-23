@@ -212,7 +212,7 @@ let
   ]
   ++ kix.mkEnvVars (
     kix.mergeEnv {
-      inherit who;
+      inherit scope;
       owned = [
         {
           vars = {

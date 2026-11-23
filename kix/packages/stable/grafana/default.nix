@@ -217,7 +217,7 @@ in
           inherit
             lib
             kix
-            who
+            scope
             httpPort
             paths
             config

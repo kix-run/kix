@@ -84,7 +84,6 @@ let
   release = "0.9.1";
 
   name = scope.instanceName;
-  who = "metrics-server ${scope.namespaceName}/${name}";
   securePort = 10250;
   # The kubelet's default port; see the known limits in the header.
   kubeletPort = 10250;
@@ -194,7 +193,7 @@ in
         "--metric-resolution=15s"
       ]
       ++ kix.guardArgs {
-        inherit who;
+        inherit scope;
         owned = {
           "--secure-port" =
             "the Service, the probes, and the network policy use ${toString securePort}; remove it.";
@@ -247,7 +246,7 @@ in
                   image = kix.image.ref config.image;
                   imagePullPolicy = config.image.pullPolicy;
                   inherit args;
-                  env = kix.mkEnvVars (kix.mergeEnv { inherit who; } config.env);
+                  env = kix.mkEnvVars (kix.mergeEnv { inherit scope; } config.env);
                   ports = [ (kix.port "https" securePort) ];
                   livenessProbe = {
                     httpGet = {

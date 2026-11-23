@@ -316,7 +316,7 @@ in
 
         env = kix.mkEnvVars (
           kix.mergeEnv {
-            inherit who;
+            inherit scope;
             owned = [
               {
                 vars.INFISICAL_HOST_API = "${addr}/api";
@@ -337,7 +337,7 @@ in
           "--metrics-secure=false"
         ]
         ++ kix.guardArgs {
-          inherit who;
+          inherit scope;
           owned = {
             "--leader-elect" =
               "the package always enables leader election, so instances above availability none run one active controller; remove it.";

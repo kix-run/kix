@@ -2,7 +2,6 @@
 {
   lib,
   kix,
-  who,
   ns,
   managedLabels,
   config,

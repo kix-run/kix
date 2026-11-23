@@ -185,10 +185,13 @@ let
     in
     "${text}\n${marker}${builtins.toJSON payload}";
 
-  withInstance =
-    instance: e:
-    lib.optionalAttrs (instance != null) { inherit instance; }
-    // (if builtins.isString e then { message = e; } else e);
+  # Return error `e` as an attribute set, with each non-null field of
+  # `defaults` set unless `e` sets it.
+  withDefaults =
+    defaults: e:
+    lib.filterAttrs (_: v: v != null) defaults // (if builtins.isString e then { message = e; } else e);
+
+  withInstance = instance: withDefaults { inherit instance; };
 in
 rec {
   inherit marker fields describe;
@@ -234,10 +237,40 @@ rec {
   failAll = args: throw (text args);
 
   # Return `scope.fail` for an instance: `fail` with `instance` set to
-  # "<namespace>/<name>" on every error that does not set it.
+  # "<namespace>/<name>", and `package` to the id of the package it runs, on
+  # every error that does not set them. `package` is null for a package
+  # outside Kix's own set, and the errors then name none.
   failFor =
-    instance: e:
-    fail (if builtins.isList e then map (withInstance instance) e else withInstance instance e);
+    {
+      instance,
+      package ? null,
+    }:
+    e:
+    let
+      fill = withDefaults { inherit instance package; };
+    in
+    fail (if builtins.isList e then map fill e else fill e);
+
+  # Return the `fail` of the `scope` that the library helper `helper`
+  # received. The helpers named their caller with a `who` string before they
+  # took `scope`, and a call that still passes `who` is refused with the form
+  # to use.
+  failOf =
+    helper:
+    { scope, who }:
+    if who != null then
+      fail {
+        id = "K6417";
+        message = "kix.${helper} takes `scope` in place of `who`, and names the instance and its package from it.";
+        fix = "Replace `who = ...` with `inherit scope;`.";
+      }
+    else if scope == null then
+      fail {
+        message = "kix.${helper} needs `scope`, the instance's scope, to name the instance in its errors.";
+        fix = "Add `inherit scope;` to its arguments.";
+      }
+    else
+      scope.fail;
 
   # Return the error record of a failed assertion: its fields without
   # `assertion`, with `instance` set unless it sets one.

@@ -452,9 +452,11 @@ Packages often expose an escape hatch option (`extraSpec`, `extraEnv`, `extraArg
 
 | Helper | Signature | Behavior |
 | --- | --- | --- |
-| `kix.mergeGuarded` | `{ who, locked, what ? "extraSpec" } base overrides` | Recursively merges `overrides` onto `base`, but throws an evaluation error naming `who` and `what` if `overrides` touches any attribute path (a list of path segments, such as `[ [ "replicas" ] [ "selector" ] ]` or `[ [ "template" "spec" "serviceAccountName" ] ]`) listed in `locked`, or replaces a parent of a locked path with a non-attrset value. |
-| `kix.mergeEnv` | `{ who, owned ? [ ], defaults ? { } } userEnv` | Validates that `userEnv` does not set any environment variable claimed by `owned` (where each entry is `{ vars ? { }; names ? [ ]; from; fix; }`, even as `null`), and returns the merged attribute set `defaults // userEnv // <all owned.vars>` ready to pass to `kix.mkEnvVars`. |
-| `kix.guardArgs` | `{ who, option ? "extraArgs", owned } userArgs` | Validates CLI flags and returns `userArgs` unchanged. `userArgs` can be a list of flag strings (matching `--flag`, `--flag=value`, or a one-letter `-f` with an attached value) or an attrset keyed by flag name, like a VictoriaMetrics CR's `extraArgs` (matching each key with or without leading dashes). `owned` maps each refused flag to its reason and fix; the error reads `<who>: <option> sets "<flag>", which this package does not accept: <reason>`. |
+| `kix.mergeGuarded` | `{ scope, locked, what ? "extraSpec", object ? null } base overrides` | Recursively merges `overrides` onto `base`, but throws an evaluation error if `overrides` touches any attribute path (a list of path segments, such as `[ [ "replicas" ] [ "selector" ] ]` or `[ [ "template" "spec" "serviceAccountName" ] ]`) listed in `locked`, or replaces a parent of a locked path with a non-attrset value. The error names `what` as the option and tells the user to remove the path from it. Set `object` to `{ kind; name; namespace ? null; }` when one option builds several objects. |
+| `kix.mergeEnv` | `{ scope, option ? "env", owned ? [ ], defaults ? { } } userEnv` | Validates that `userEnv` does not set any environment variable claimed by `owned`, even as `null`, and returns the merged attribute set `defaults // userEnv // <all owned.vars>` ready to pass to `kix.mkEnvVars`. Each entry of `owned` is `{ vars ? { }; names ? [ ]; from; fix; }` for variables the package sets, or `{ names; reason; fix ? null; }` for variables it refuses outright. The error names `option`, and reads `<option> sets <VAR>, which comes from <from>.` or `<option> sets <VAR>, which this package does not accept: <reason>`. |
+| `kix.guardArgs` | `{ scope, option ? "extraArgs", owned } userArgs` | Validates CLI flags and returns `userArgs` unchanged. `userArgs` can be a list of flag strings (matching `--flag`, `--flag=value`, or a one-letter `-f` with an attached value) or an attrset keyed by flag name, like a VictoriaMetrics CR's `extraArgs` (matching each key with or without leading dashes). `owned` maps each refused flag to its reason and fix; the error reads `<option> sets "<flag>", which this package does not accept: <reason>`. |
+
+Each helper raises its error through `scope.fail`, so the error names the instance and its package as fields, and `kix check -o json` reports them. Pass the instance's scope with `inherit scope;`.
 
 ```nix
 # Guarding CLI flags and environment variables owned by typed options
@@ -462,7 +464,7 @@ args = [
   "--storage.tsdb.retention.time=${config.retention}"
   "--web.listen-address=:9090"
 ] ++ kix.guardArgs {
-  who = "prometheus";
+  inherit scope;
   owned = {
     "--storage.tsdb.retention.time" = "set retention instead.";
     "--web.listen-address" = "the Service and the probes use port 9090; remove it.";
@@ -471,7 +473,8 @@ args = [
 
 env = kix.mkEnvVars (
   kix.mergeEnv {
-    who = "myapp";
+    inherit scope;
+    option = "extraEnv";
     defaults = { LOG_FORMAT = "json"; };
     owned = [
       {
@@ -674,7 +677,7 @@ _passwordCheck =
 | `dependency` | No | The dependency to change, as its name in the instance's `deps`, such as `"database"`. |
 | `clusterOption` | No | The cluster option to change, as a path in the cluster definition, such as `"cluster.domain"`. |
 | `instance` | No | Set by `scope.fail` to `<namespace>/<instance>`. |
-| `package` | No | The package's name. |
+| `package` | No | The package's name. `scope.fail` sets it for a built-in package, to its id, such as `"harbor"` or `"experimental/coredns"`. |
 
 `option`, `dependency`, and `clusterOption` name settings a person can change in a cluster definition. A package's `meta` is not an instance option, so leave `option` out when an error is about `meta`. An `option` must not start with `config.`, `deps.`, or `meta.`, and a `clusterOption` must not start with `instances.`. Kix leaves out a field in the wrong form, or one it does not take, and adds a line to the message that says why. A warning with such a field stops evaluation with that error. Start `fix` with a capital letter.
 

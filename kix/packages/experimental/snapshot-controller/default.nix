@@ -66,7 +66,6 @@ let
 
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "snapshot-controller ${ns}/${name}";
   httpPort = 8080;
 
   vendored = file: builtins.fromJSON (builtins.readFile ./crds/${file});
@@ -196,7 +195,7 @@ in
           "--feature-gates=CSIVolumeGroupSnapshot=false"
         ]
         ++ kix.guardArgs {
-          inherit who;
+          inherit scope;
           owned = {
             "--leader-election" =
               "leader election keeps one active controller while the instance's availability level runs several; remove it.";
@@ -257,7 +256,7 @@ in
                   image = checkedRef config.image;
                   imagePullPolicy = config.image.pullPolicy;
                   inherit args;
-                  env = kix.mkEnvVars (kix.mergeEnv { inherit who; } config.env);
+                  env = kix.mkEnvVars (kix.mergeEnv { inherit scope; } config.env);
                   ports = [ (kix.port "http" httpPort) ];
                   # The endpoint fails only while this replica holds the Lease
                   # and cannot renew it; a standby reports healthy.

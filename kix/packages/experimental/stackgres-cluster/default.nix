@@ -346,7 +346,7 @@ in
 
         spec = builtins.seq _flavor (
           kix.mergeGuarded {
-            inherit who locked;
+            inherit scope locked;
           } baseSpec config.extraSpec
         );
 

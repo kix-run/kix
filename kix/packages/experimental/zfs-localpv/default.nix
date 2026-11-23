@@ -55,7 +55,6 @@ let
 
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "zfs-localpv ${ns}/${name}";
 
   driverName = "zfs.csi.openebs.io";
   socketDir = "/var/lib/csi/sockets/pluginproxy";
@@ -167,7 +166,7 @@ in
       pluginDir = "${kubeletDir}/plugins/zfs-localpv";
 
       sc = kix.storage.mkClasses {
-        inherit scope clusterConfig who;
+        inherit scope clusterConfig;
         optionPath = "config.storageClasses";
         classes = config.storageClasses;
         parts = self.classes;
@@ -381,7 +380,7 @@ in
                   "--plugin=$(OPENEBS_CONTROLLER_DRIVER)"
                 ]
                 ++ kix.guardArgs {
-                  inherit who;
+                  inherit scope;
                   option = "controller.extraArgs";
                   owned = {
                     "--endpoint" = "the sidecars reach the plugin on the socket the package sets; remove it.";
@@ -391,7 +390,8 @@ in
                 } config.controller.extraArgs;
                 env = kix.mkEnvVars (
                   kix.mergeEnv {
-                    inherit who;
+                    inherit scope;
+                    option = "controller.env";
                     defaults = {
                       OPENEBS_IO_ENABLE_ANALYTICS = "false";
                       OPENEBS_IO_ENABLE_BACKUP_GC = "false";
@@ -497,7 +497,7 @@ in
                     "--plugin=$(OPENEBS_NODE_DRIVER)"
                   ]
                   ++ kix.guardArgs {
-                    inherit who;
+                    inherit scope;
                     option = "node.extraArgs";
                     owned = {
                       "--nodename" =
@@ -510,7 +510,8 @@ in
                   } config.node.extraArgs;
                   env = kix.mkEnvVars (
                     kix.mergeEnv {
-                      inherit who;
+                      inherit scope;
+                      option = "node.env";
                       defaults.ALLOWED_TOPOLOGIES = lib.concatStringsSep "," allowedTopologyKeys;
                       owned = ownedEnv "node.env" (
                         namespaceVar

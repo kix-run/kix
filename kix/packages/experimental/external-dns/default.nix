@@ -94,7 +94,6 @@ let
 
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "external-dns ${ns}/${name}";
 
   # kingpin's DefaultEnvars (pkg/apis/externaldns/types.go) reads `--<flag>`
   # from this variable when the flag is not on the command line.
@@ -473,7 +472,7 @@ in
 
         env = kix.mkEnvVars (
           kix.mergeEnv {
-            inherit who;
+            inherit scope;
             owned = [
               {
                 names = ownedEnvNames;
@@ -507,7 +506,7 @@ in
         ]
         ++ map (s: "--source=${s}") selected
         ++ kix.guardArgs {
-          inherit who;
+          inherit scope;
           owned = {
             "--provider" = "set the provider option.";
             "--policy" = "set the policy option.";

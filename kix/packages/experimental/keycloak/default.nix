@@ -398,7 +398,7 @@ in
 
         env = kix.mkEnvVars (
           kix.mergeEnv {
-            inherit who;
+            inherit scope;
             owned = ownedGroups;
           } config.env
           // {
@@ -418,7 +418,7 @@ in
           "start"
         ]
         ++ kix.guardArgs {
-          inherit who;
+          inherit scope;
           owned = ownedFlags // {
             "--optimized" =
               "Keycloak must run its build step at start, because the stock image is built for other build-time options. Remove it from extraArgs.";

@@ -19,6 +19,15 @@ let
   throws = v: !(builtins.tryEval (builtins.deepSeq v v)).success;
   evalFails' = ms: throws ms;
 
+  # A scope whose `fail` returns `{ thrown; }` instead of throwing, as the
+  # scope of instance ns/inst of package `pkg`.
+  caughtScope.fail =
+    ((import ../caught.nix { inherit lib; }).caught ../../core/error.nix { inherit lib; }).failFor
+      {
+        instance = "ns/inst";
+        package = "pkg";
+      };
+
   # The value of one option `o` after the module system merges `defs`.
   optionValue =
     o: defs:
@@ -301,7 +310,7 @@ in
   lib-options-typing-merge-env =
     let
       merge = kixlib.mergeEnv {
-        who = "pkg ns/inst";
+        scope.fail = kixlib.fail;
         defaults.LOG = "info";
         owned = [
           {
@@ -337,7 +346,7 @@ in
   lib-options-typing-guard-args =
     let
       guard = kixlib.guardArgs {
-        who = "pkg ns/inst";
+        scope.fail = kixlib.fail;
         owned."--ingress-class" = "remove it.";
       };
     in
@@ -358,14 +367,13 @@ in
   # and the reason.
   lib-options-typing-guard-args-attrset =
     let
+      helpers = import ../caught.nix { inherit lib; };
       guardArgs = {
-        who = "pkg ns/inst";
+        scope = caughtScope;
         option = "vmstorage.extraArgs";
         owned."dedup.minScrapeInterval" = "set scrapeInterval instead.";
       };
-      guard = kixlib.guardArgs guardArgs;
-      # compose.nix with `throw` replaced, so the message can be read.
-      helpers = import ../caught.nix { inherit lib; };
+      guard = kixlib.guardArgs (guardArgs // { scope.fail = kixlib.fail; });
       refusal =
         args:
         helpers.records (
@@ -393,8 +401,10 @@ in
           "dedup.minScrapeInterval" = "1m";
         } == [
           {
+            instance = "ns/inst";
+            package = "pkg";
             option = "vmstorage.extraArgs";
-            message = "pkg ns/inst: vmstorage.extraArgs sets \"dedup.minScrapeInterval\", which this package does not accept: set scrapeInterval instead.";
+            message = "vmstorage.extraArgs sets \"dedup.minScrapeInterval\", which this package does not accept: set scrapeInterval instead.";
           }
         ]
     )
@@ -403,6 +413,104 @@ in
         "dedup.minScrapeInterval" = "1m";
       })
     }";
+
+  # The helpers' refusals name the instance and the package through
+  # `scope.fail`, and the option the user set. A mergeEnv group with a
+  # `reason` refuses a variable outright, and a mergeGuarded refusal tells
+  # the user to remove the locked path.
+  lib-options-typing-helper-refusal-records =
+    let
+      compose = (import ../caught.nix { inherit lib; }).caught ../../vocab/compose.nix { inherit lib; };
+      records = (import ../caught.nix { inherit lib; }).records;
+      envRefusal =
+        (compose.mergeEnv
+          {
+            scope = caughtScope;
+            option = "runners.env";
+            owned = [
+              {
+                names = [ "CLIENT_ID" ];
+                reason = "it selects workload identity.";
+                fix = "Wire deps.oauth.";
+              }
+              {
+                vars.DB_HOST = "db";
+                from = "the database dependency";
+              }
+            ];
+          }
+          {
+            CLIENT_ID = "x";
+            DB_HOST = "y";
+          }
+        ).thrown;
+      guardedRefusal =
+        (compose.mergeGuarded {
+          scope = caughtScope;
+          what = "settings";
+          locked = [ [ "auth_enabled" ] ];
+        } { } { auth_enabled = true; }).thrown;
+      expected = {
+        env = [
+          {
+            instance = "ns/inst";
+            package = "pkg";
+            option = "runners.env";
+            message = "runners.env sets CLIENT_ID, which this package does not accept: it selects workload identity.";
+            fix = "Wire deps.oauth.";
+          }
+          {
+            instance = "ns/inst";
+            package = "pkg";
+            option = "runners.env";
+            message = "runners.env sets DB_HOST, which comes from the database dependency.";
+          }
+        ];
+        guarded = [
+          {
+            instance = "ns/inst";
+            package = "pkg";
+            option = "settings";
+            message = "settings overrides auth_enabled, which the package sets for correctness.";
+            fix = "Remove it from settings.";
+          }
+        ];
+      };
+      got = {
+        env = records envRefusal;
+        guarded = records guardedRefusal;
+      };
+    in
+    got == expected || throw "helper refusal records: ${builtins.toJSON got}";
+
+  # A helper called with `who` is refused with the change record id, and
+  # one called without `scope` is refused too.
+  lib-options-typing-helpers-refuse-who =
+    let
+      caughtErrors = (import ../caught.nix { inherit lib; }).caught ../../core/error.nix { inherit lib; };
+      records = (import ../caught.nix { inherit lib; }).records;
+      withWho =
+        (caughtErrors.failOf "guardArgs" {
+          scope = null;
+          who = "pkg ns/inst";
+        }).thrown;
+      withoutScope =
+        (caughtErrors.failOf "mergeEnv" {
+          scope = null;
+          who = null;
+        }).thrown;
+    in
+    (
+      (builtins.head (records withWho)).id or null == "K6417"
+      && lib.hasInfix "needs `scope`" (builtins.head (records withoutScope)).message
+    )
+    && throws (
+      kixlib.guardArgs {
+        who = "pkg ns/inst";
+        owned = { };
+      } [ ]
+    )
+    || throw "helpers accepted `who` or a missing scope: ${withWho} ${withoutScope}";
 
   lib-options-typing-check-secret-keys =
     let

@@ -267,7 +267,7 @@ in
       }:
       let
         sc = kix.storage.mkClasses {
-          inherit scope clusterConfig who;
+          inherit scope clusterConfig;
           optionPath = "config.storageClasses";
           classes = config.storageClasses;
           parts = self.classes;
@@ -363,7 +363,7 @@ in
             spec =
               kix.mergeGuarded
                 {
-                  inherit who;
+                  inherit scope;
                   what = "diskPools.${poolName}.extraSpec";
                   locked = [
                     [ "node" ]

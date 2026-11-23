@@ -312,17 +312,17 @@ in
           )
           {
             names = [ "CLIENT_ID" ];
-            from = "the oauthCredentials dependency in this package; CLIENT_ID selects workload identity federation, which needs serviceaccounts/token RBAC the package does not grant";
+            reason = "it selects workload identity federation, which needs serviceaccounts/token RBAC the package does not grant.";
             fix = "Wire an OAuth client through deps.oauthCredentials.";
           }
           {
             names = [ "APISERVER_PROXY" ];
-            from = "a kube-apiserver ProxyGroup in this package; the operator's in-process API server proxy needs impersonation RBAC the package does not grant";
-            fix = "Build one with out.mkProxyGroup, spec.type = \"kube-apiserver\" and spec.kubeAPIServer.mode = \"noauth\".";
+            reason = "it turns on the operator's in-process API server proxy, which needs impersonation RBAC the package does not grant.";
+            fix = "Build a kube-apiserver ProxyGroup with out.mkProxyGroup, spec.type = \"kube-apiserver\" and spec.kubeAPIServer.mode = \"noauth\".";
           }
           {
             names = [ "OPERATOR_DEFAULT_LOAD_BALANCER" ];
-            from = "each Service's loadBalancerClass in this package; the variable makes the operator claim every LoadBalancer Service without a class, which is the cluster's loadBalancer role";
+            reason = "it makes the operator claim every LoadBalancer Service without a class, which is the cluster's loadBalancer role.";
             fix = "Set loadBalancerClass = tailscale.out.loadBalancerClass on the Services you want on the tailnet.";
           }
           {
@@ -334,7 +334,7 @@ in
 
         env = kix.mkEnvVars (
           kix.mergeEnv {
-            inherit who;
+            inherit scope;
             owned = ownedEnv;
           } config.env
         );
@@ -381,7 +381,6 @@ in
           inherit
             lib
             kix
-            who
             ns
             managedLabels
             config

@@ -340,6 +340,50 @@ in
       }
     );
 
+  # scope.fail names the instance and its package on each error that names
+  # neither, and keeps a value the error sets.
+  lib-errors-fail-for-fills-package =
+    let
+      caughtErrors = (import ../caught.nix { inherit lib; }).caught ../../core/error.nix { inherit lib; };
+      records = (import ../caught.nix { inherit lib; }).records;
+      failHere = caughtErrors.failFor {
+        instance = "shop/db";
+        package = "experimental/cnpg-database";
+      };
+      got =
+        records
+          (failHere [
+            "m"
+            {
+              message = "n";
+              package = "other";
+            }
+          ]).thrown;
+      noPackage = records (caughtErrors.failFor { instance = "shop/db"; } "m").thrown;
+    in
+    (
+      got == [
+        {
+          instance = "shop/db";
+          package = "experimental/cnpg-database";
+          message = "m";
+        }
+        {
+          instance = "shop/db";
+          package = "other";
+          message = "n";
+        }
+      ]
+      &&
+        noPackage == [
+          {
+            instance = "shop/db";
+            message = "m";
+          }
+        ]
+    )
+    || throw "failFor: ${builtins.toJSON got} ${builtins.toJSON noPackage}";
+
   # scope.fail stops the build of the instance that calls it.
   lib-errors-scope-fail = evalFails (mkCluster [ { instances.app.bad.package = failingPackage; } ]);
 

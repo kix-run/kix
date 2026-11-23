@@ -416,7 +416,7 @@ in
           credentialEnv
           ++ kix.mkEnvVars (
             kix.mergeEnv {
-              inherit who;
+              inherit scope;
               defaults = {
                 BASE_URL = self.exposure.url;
                 TMPDIR = "/tmp";

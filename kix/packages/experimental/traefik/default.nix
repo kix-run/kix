@@ -408,7 +408,7 @@ in
           else
             kix.mergeGuarded
               {
-                inherit who;
+                inherit scope;
                 what = "service.spec";
                 locked = [
                   [ "selector" ]
@@ -535,7 +535,7 @@ in
               fix = "Pass the setting in extraArgs.";
             }
           else
-            kix.mkEnvVars (kix.mergeEnv { inherit who; } config.env);
+            kix.mkEnvVars (kix.mergeEnv { inherit scope; } config.env);
 
         clusterRbac = mkClusterRoleSet scope {
           subjects = [

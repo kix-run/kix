@@ -3,7 +3,7 @@
 { lib }:
 
 let
-  inherit (import ../core/error.nix { inherit lib; }) fail;
+  inherit (import ../core/error.nix { inherit lib; }) fail failOf;
   markers = import ../core/markers.nix { inherit lib; };
 
   kixAnnotations = import ../core/annotations.nix;
@@ -18,6 +18,7 @@ let
   optionsModule = import ./options.nix { inherit lib; };
   monitorModule = import ./monitor.nix { inherit lib; };
   exposeModule = import ./expose.nix { inherit lib; };
+
 in
 
 rec {
@@ -105,15 +106,22 @@ rec {
 
   # Merge `overrides` into `base` with `lib.recursiveUpdate`, failing if
   # `overrides` touches any attribute path in `locked` or replaces a parent of
-  # a locked path with a non-attrset value.
+  # a locked path with a non-attrset value. `what` is the option that holds
+  # `overrides`, and the error names it. `object` names the Kubernetes object
+  # the merge builds, `{ kind; name; namespace ? null; }`, when the instance
+  # builds several from one option.
   mergeGuarded =
     {
-      who,
+      scope ? null,
+      who ? null,
       locked,
       what ? "extraSpec",
+      object ? null,
     }:
     base: overrides:
     let
+      scopeFail = failOf "mergeGuarded" { inherit scope who; };
+
       # Return the shortest proper prefix of `path` that `overrides` sets to a
       # non-attrset, or null when none exists.
       replacingAncestor =
@@ -142,13 +150,14 @@ rec {
       touched = builtins.filter (d: d != null) (map describe locked);
     in
     if touched != [ ] then
-      fail {
+      scopeFail {
         option = what;
-        message = "${who}: ${what} overrides ${lib.concatStringsSep ", " touched}, which the package sets for correctness.";
-        fix = "Use the option that owns it.";
+        inherit object;
+        message = "${what} overrides ${lib.concatStringsSep ", " touched}, which the package sets for correctness.";
+        fix = "Remove ${if builtins.length touched == 1 then "it" else "them"} from ${what}.";
       }
     else
-      lib.recursiveUpdate base overrides;
+      builtins.seq scopeFail (lib.recursiveUpdate base overrides);
 
   # Validate Kubernetes resource quantities (`vocab/quantity.nix`).
   types.quantity = quantity.type;
@@ -161,18 +170,24 @@ rec {
   # Merge package `defaults`, user `env` (`kix.options.env`), and package-owned
   # variables into an attrset for `kix.mkEnvVars`.
   #
-  # Each entry in `owned` has `{ vars ? { }; names ? [ ]; from; fix; }`. `vars`
-  # are added to the result, while `names` reserves variables delivered via
-  # `envFrom`. Throws if `env` defines any key in `vars` or `names` (even as
-  # null).
+  # Each entry in `owned` has `{ vars ? { }; names ? [ ]; from; fix; }` or
+  # `{ names; reason; fix ? null; }`. `vars` are added to the result, while
+  # `names` reserves variables delivered via `envFrom` or refused outright.
+  # Throws if `env` defines any key in `vars` or `names` (even as null). The
+  # error names `option`, the instance option that holds `env`. It says a
+  # variable comes `from` somewhere, or that the package does not accept it
+  # and why, when the group gives a `reason`.
   mergeEnv =
     {
-      who,
+      scope ? null,
+      who ? null,
+      option ? "env",
       owned ? [ ],
       defaults ? { },
     }:
     env:
     let
+      scopeFail = failOf "mergeEnv" { inherit scope who; };
       hits =
         group:
         builtins.filter (n: env ? ${n}) (builtins.attrNames (group.vars or { }) ++ group.names or [ ]);
@@ -182,26 +197,34 @@ rec {
           h = hits group;
         in
         lib.optional (h != [ ]) {
-          option = "env";
-          message = "${who}: env sets ${lib.concatStringsSep ", " h}, which ${
-            if builtins.length h == 1 then "comes" else "come"
-          } from ${group.from}.";
-          fix = group.fix;
+          inherit option;
+          message =
+            "${option} sets ${lib.concatStringsSep ", " h}, which "
+            + (
+              if group ? reason then
+                "this package does not accept: ${group.reason}"
+              else
+                "${if builtins.length h == 1 then "comes" else "come"} from ${group.from}."
+            );
+          fix = group.fix or null;
         }
       ) owned;
     in
     if lines != [ ] then
-      fail lines
+      scopeFail lines
     else
-      defaults // env // lib.foldl' (acc: group: acc // group.vars or { }) { } owned;
+      builtins.seq scopeFail (
+        defaults // env // lib.foldl' (acc: group: acc // group.vars or { }) { } owned
+      );
 
   # Validate that `args` does not set any CLI flag in `owned`, and return
   # `args` unchanged.
   #
   # `owned` maps each refused flag to the reason and the remedy. The message
-  # reads `<who>: <option> sets "<flag>", which this package does not accept:
+  # reads `<option> sets "<flag>", which this package does not accept:
   # <reason>`, so a reason fits a flag the package sets itself and a flag it
-  # does not support.
+  # does not support. The error names the instance and its package from
+  # `scope`.
   #
   # `args` is either a list of command-line words or an attrset of flags
   # keyed by flag name, the form a VictoriaMetrics CR's `extraArgs` takes.
@@ -212,12 +235,14 @@ rec {
   # dashes are removed.
   guardArgs =
     {
-      who,
+      scope ? null,
+      who ? null,
       option ? "extraArgs",
       owned,
     }:
     args:
     let
+      scopeFail = failOf "guardArgs" { inherit scope who; };
       isShortFlag = flag: builtins.match "-[^-]" flag != null;
       flagOf =
         arg:
@@ -252,11 +277,11 @@ rec {
         { written, flag }:
         {
           inherit option;
-          message = "${who}: ${option} sets \"${written}\", which this package does not accept: ${owned.${flag}}";
+          message = "${option} sets \"${written}\", which this package does not accept: ${owned.${flag}}";
         }
       ) hits;
     in
-    if lines != [ ] then fail lines else args;
+    if lines != [ ] then scopeFail lines else builtins.seq scopeFail args;
 
   # Validate that a secret dependency `dep` declares all required `keys` (and
   # at least one key group in `anyOf` when set) in `dep.out.keys`, then return

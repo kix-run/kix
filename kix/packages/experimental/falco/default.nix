@@ -399,7 +399,7 @@ in
             }
           else
             kix.mergeGuarded {
-              inherit who;
+              inherit scope;
               what = "settings";
               locked = map (l: lib.splitString "." l.path) lockedPaths;
             } builtinSettings config.settings;
@@ -493,7 +493,7 @@ in
                         ];
                         env = kix.mkEnvVars (
                           kix.mergeEnv {
-                            inherit who;
+                            inherit scope;
                             owned = [
                               {
                                 vars = {

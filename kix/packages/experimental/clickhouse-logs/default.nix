@@ -217,7 +217,7 @@ in
         };
 
         mergedSettings = vectorAgent.mergeConfig {
-          inherit who;
+          inherit scope;
           sink = "clickhouse";
           locked = [
             [

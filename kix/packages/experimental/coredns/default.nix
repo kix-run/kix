@@ -425,7 +425,7 @@ in
 
         metricsPorts = lib.optional (facts.metricsPort != null) (kix.port "metrics" facts.metricsPort);
 
-        envVars = kix.mkEnvVars (kix.mergeEnv { inherit who; } config.env);
+        envVars = kix.mkEnvVars (kix.mergeEnv { inherit scope; } config.env);
       in
       {
         serviceAccount = scope.mkResource {

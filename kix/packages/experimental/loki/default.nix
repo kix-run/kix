@@ -92,7 +92,6 @@
 }:
 let
   name = scope.instanceName;
-  who = "loki ${scope.namespaceName}/${name}";
   release = "3.7.10";
 
   httpPort = 3100;
@@ -212,7 +211,7 @@ let
     config:
     lib.filterAttrsRecursive (_: v: v != null) (
       kix.mergeGuarded {
-        inherit who;
+        inherit scope;
         what = "settings";
         locked = lockedPaths;
       } builtinConfig config.settings
@@ -340,7 +339,7 @@ in
           "-config.expand-env=true"
         ]
         ++ kix.guardArgs {
-          inherit who;
+          inherit scope;
           owned = ownedFlags;
         } config.extraArgs;
       in
@@ -405,7 +404,7 @@ in
                       image = kix.image.ref config.image;
                       imagePullPolicy = config.image.pullPolicy;
                       inherit args;
-                      env = kix.mkEnvVars (kix.mergeEnv { inherit who; } config.env);
+                      env = kix.mkEnvVars (kix.mergeEnv { inherit scope; } config.env);
                       # gRPC (9095) stays inside the pod.
                       ports = [ (kix.port "http" httpPort) ];
                       readinessProbe = {

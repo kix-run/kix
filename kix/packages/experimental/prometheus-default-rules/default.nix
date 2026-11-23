@@ -63,7 +63,6 @@
 }:
 let
   name = scope.instanceName;
-  who = "prometheus-default-rules ${scope.namespaceName}/${name}";
 
   saToken = "/var/run/secrets/kubernetes.io/serviceaccount/token";
   saCa = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt";
@@ -532,7 +531,7 @@ in
         endpointFor =
           key: base:
           kix.mergeGuarded {
-            inherit who;
+            inherit scope;
             what = "monitors.${key}.endpoint";
             locked = [
               [ "port" ]

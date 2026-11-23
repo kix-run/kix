@@ -2,7 +2,7 @@
 {
   lib,
   kix,
-  who,
+  scope,
   fail,
   httpPort,
   paths,
@@ -219,7 +219,7 @@ let
 
   ini = lib.mapAttrs (_: lib.filterAttrs (_: v: v != null)) (
     kix.mergeGuarded {
-      inherit who;
+      inherit scope;
       what = "settings";
       locked = [
         [ "paths" ]
@@ -304,7 +304,7 @@ let
 
   env = kix.mkEnvVars (
     kix.mergeEnv {
-      inherit who;
+      inherit scope;
       owned = [
         {
           vars = paths;

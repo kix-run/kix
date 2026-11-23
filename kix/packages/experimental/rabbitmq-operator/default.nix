@@ -111,7 +111,6 @@ let
 
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "rabbitmq-operator ${ns}/${name}";
 
   group = "rabbitmq.com";
   readJSON = file: builtins.fromJSON (builtins.readFile file);
@@ -234,7 +233,7 @@ in
       let
         env = kix.mkEnvVars (
           kix.mergeEnv {
-            inherit who;
+            inherit scope;
             owned = [
               {
                 vars.OPERATOR_NAMESPACE = fieldRef "metadata.namespace";

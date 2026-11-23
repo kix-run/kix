@@ -19,7 +19,6 @@ let
   c = import ./common.nix { inherit lib kix scope; };
   inherit (c)
     name
-    who
     metricsPort
     registryUser
     svc
@@ -86,7 +85,7 @@ let
       lib.filterAttrsRecursive (_: v: v != null) (
         kix.mergeGuarded
           {
-            inherit who;
+            inherit scope;
             what = "registry.settings";
             locked = [
               [

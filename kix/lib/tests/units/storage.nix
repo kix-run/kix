@@ -41,7 +41,6 @@ let
       let
         sc = kixlib.storage.mkClasses {
           inherit scope clusterConfig;
-          who = "class-author ${scope.namespaceName}/${scope.instanceName}";
           optionPath = "config.classes";
           classes = config.classes;
           parts = self.classes;
@@ -91,7 +90,6 @@ let
       let
         sc = kixlib.storage.mkClasses {
           inherit scope clusterConfig;
-          who = "driver ${scope.namespaceName}/${scope.instanceName}";
           optionPath = "config.classes";
           classes = config.classes;
           parts = self.classes;

@@ -389,7 +389,7 @@ in
                 "--acme-http01-solver-image=${acmesolverImage}"
               ]
               ++ kix.guardArgs {
-                inherit who;
+                inherit scope;
                 owned = {
                   "--cluster-resource-namespace" =
                     "the controller reads ClusterIssuer Secrets from the instance's namespace (out.clusterResourceNamespace); remove it.";
@@ -415,7 +415,7 @@ in
               # Kubernetes leaves an undefined variable unexpanded.
               env = kix.mkEnvVars (
                 kix.mergeEnv {
-                  inherit who;
+                  inherit scope;
                   owned = [
                     {
                       vars.POD_NAMESPACE.valueFrom.fieldRef.fieldPath = "metadata.namespace";

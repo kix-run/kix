@@ -9,7 +9,7 @@
 { lib }:
 
 let
-  inherit (import ../core/error.nix { inherit lib; }) fail;
+  inherit (import ../core/error.nix { inherit lib; }) failOf;
   defaultAnnotation = "storageclass.kubernetes.io/is-default-class";
 
   isAnnotatedDefault = cls: (cls.annotations.${defaultAnnotation} or null) == "true";
@@ -122,7 +122,7 @@ in
     {
       scope,
       clusterConfig,
-      who,
+      who ? null,
       optionPath,
       classes,
       parts,
@@ -130,6 +130,7 @@ in
       requires ? [ ],
     }:
     let
+      fail = failOf "storage.mkClasses" { inherit scope who; };
       names = builtins.attrNames classes;
       namesText = builtins.concatStringsSep ", " names;
       annotated = builtins.filter (n: isAnnotatedDefault classes.${n}) names;
@@ -144,7 +145,7 @@ in
         if reserved != [ ] then
           fail {
             option = "${optionPath}.${builtins.head reserved}";
-            message = "${who}: ${optionPath}.${builtins.head reserved}: Kix drops parts named root or meta, so this StorageClass would not be rendered.";
+            message = "${optionPath}.${builtins.head reserved}: Kix drops parts named root or meta, so this StorageClass would not be rendered.";
             fix = "Rename it.";
           }
         else if shadowable && annotated != [ ] then
@@ -153,7 +154,7 @@ in
           in
           fail {
             option = "${optionPath}.${k}";
-            message = "${who}: ${optionPath}.${k} is annotated ${defaultAnnotation}=\"true\", but cluster.roles.storageClasses.binding is \"shadowable\": the environment already has a default StorageClass, so the cluster would have two.";
+            message = "${optionPath}.${k} is annotated ${defaultAnnotation}=\"true\", but cluster.roles.storageClasses.binding is \"shadowable\": the environment already has a default StorageClass, so the cluster would have two.";
             fix = "Remove the annotation; a Kix consumer that needs this class names it, for example persistent-volume-claim config.storageClassName = \"${k}\". If the environment's class is no longer annotated default, set cluster.roles.storageClasses.binding = \"absent\".";
           }
         else
@@ -189,19 +190,19 @@ in
       );
     in
     {
-      resources = builtins.seq checks (lib.mapAttrs render classes);
+      resources = builtins.seq fail (builtins.seq checks (lib.mapAttrs render classes));
       storageClassName =
         if names == [ ] then
           fail {
             option = optionPath;
-            message = "${who}: out.storageClassName was read, but ${optionPath} defines no classes.";
+            message = "out.storageClassName was read, but ${optionPath} defines no classes.";
           }
         else if builtins.length annotated == 1 then
           parts.${builtins.head annotated}.out.name
         else if annotated != [ ] then
           fail {
             option = optionPath;
-            message = "${who}: out.storageClassName was read, but ${optionPath} annotates ${builtins.concatStringsSep ", " annotated} as the cluster default.";
+            message = "out.storageClassName was read, but ${optionPath} annotates ${builtins.concatStringsSep ", " annotated} as the cluster default.";
             fix = "Keep the annotation on one class.";
           }
         else if builtins.length names == 1 then
@@ -209,7 +210,7 @@ in
         else
           fail {
             option = optionPath;
-            message = "${who}: out.storageClassName was read, but ${optionPath} has ${toString (builtins.length names)} classes (${namesText}) and none is chosen for consumers that name no class.";
+            message = "out.storageClassName was read, but ${optionPath} has ${toString (builtins.length names)} classes (${namesText}) and none is chosen for consumers that name no class.";
             fix = "${lib.toUpper (builtins.substring 0 1 remedies)}${builtins.substring 1 (-1) remedies}.";
           };
     };

@@ -472,7 +472,7 @@ in
           role:
           kix.mkEnvVars (
             kix.mergeEnv {
-              inherit who;
+              inherit scope;
               defaults = defaultsFor role;
               owned = [
                 databaseGroup
@@ -486,7 +486,8 @@ in
 
         runnerEnv = kix.mkEnvVars (
           kix.mergeEnv {
-            who = "${who} runners.env";
+            inherit scope;
+            option = "runners.env";
             defaults = lib.getAttrs (lib.intersectLists runnerSharedVars (lib.attrNames config.env)) config.env;
             owned = [
               (group

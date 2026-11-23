@@ -131,7 +131,6 @@ let
 
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "stackgres-operator ${ns}/${name}";
 
   group = "stackgres.io";
   # Quarkus serves HTTP on 8080 beside the webhooks' HTTPS on 8443.
@@ -325,7 +324,7 @@ in
         sgConfigSpec =
           kix.mergeGuarded
             {
-              inherit who;
+              inherit scope;
               what = "sgConfig";
               locked = [
                 [ "containerRegistry" ]
@@ -362,7 +361,7 @@ in
 
         env = kix.mkEnvVars (
           kix.mergeEnv {
-            inherit who;
+            inherit scope;
             owned = [
               {
                 vars = {

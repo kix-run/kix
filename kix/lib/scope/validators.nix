@@ -61,6 +61,7 @@ in
     {
       instanceName,
       namespaceName,
+      packageId ? null,
       capabilities,
       roleStatus ? (_: "unknown"),
       # Validated unsafe grants from peeked package meta (kix/lib/unsafe.nix).
@@ -68,7 +69,10 @@ in
     }:
     let
       # Fail with `e`, naming this instance.
-      failHere = failFor "${namespaceName}/${instanceName}";
+      failHere = failFor {
+        instance = "${namespaceName}/${instanceName}";
+        package = packageId;
+      };
 
       # Validate a required cluster capability. Throw when the capability is
       # false, return a warning when it is null, and skip checks when

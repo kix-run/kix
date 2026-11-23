@@ -257,7 +257,6 @@ in
     let
       builder = import ../../../packages/experimental/arc/runner-set.nix {
         inherit lib;
-        who = "arc arc-systems/arc";
         ns = "arc-systems";
         self = { };
         config = { };

@@ -40,7 +40,7 @@
 
 let
   c = import ./common.nix { inherit lib kix scope; };
-  inherit (c) name ns who;
+  inherit (c) name ns;
 
   members = kix.availability.pick availability {
     none = 1;
@@ -138,7 +138,8 @@ let
     podVars
     ++ kix.mkEnvVars (
       kix.mergeEnv {
-        inherit who;
+        inherit scope;
+        option = "etcd.env";
         defaults = {
           ETCD_LOG_LEVEL = "info";
           ETCD_AUTO_COMPACTION_MODE = "revision";

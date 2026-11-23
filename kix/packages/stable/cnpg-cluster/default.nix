@@ -356,7 +356,7 @@ in
 
         inClusterStore = endpointService != null;
         objectStoreSpec = kix.mergeGuarded {
-          inherit who;
+          inherit scope;
           what = "backup.extraSpec";
           locked = [
             [
@@ -507,7 +507,7 @@ in
               "ca.crt"
             ).valueFrom.secretKeyRef;
         importSpec = kix.mergeGuarded {
-          inherit who;
+          inherit scope;
           what = "import.extraSpec";
           locked = [
             [ "type" ]
@@ -611,7 +611,7 @@ in
 
         spec = builtins.seq _unownedPaths (
           kix.mergeGuarded {
-            inherit who;
+            inherit scope;
             locked =
               locked
               ++ lib.optional backupOn [ "plugins" ]

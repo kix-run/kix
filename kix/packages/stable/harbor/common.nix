@@ -273,7 +273,7 @@ rec {
         secretEnv
         ++ kix.mkEnvVars (
           kix.mergeEnv {
-            inherit who;
+            inherit scope option;
             defaults = tunables;
             owned = [
               {

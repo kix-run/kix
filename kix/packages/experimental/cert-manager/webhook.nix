@@ -184,7 +184,7 @@ in
                 "--dynamic-serving-dns-names=${serviceName}.$(POD_NAMESPACE).svc"
               ]
               ++ kix.guardArgs {
-                inherit who;
+                inherit scope;
                 option = "webhook.extraArgs";
                 owned = {
                   "--secure-port" =

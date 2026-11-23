@@ -158,15 +158,14 @@ rec {
     base
     ++ dropOverridden tunables extraArgs
     ++ kix.guardArgs {
-      inherit who option owned;
+      inherit scope option owned;
     } extraArgs;
 
   fieldRef = path: { valueFrom.fieldRef.fieldPath = path; };
 
   # A component's env: `defaults` the instance may override or remove,
   # then the instance's `env`, then the variables the package owns.
-  # `option` is the instance's env option, which the refusal names because
-  # `kix.mergeEnv`'s message names only the variable.
+  # `option` is the instance's env option, which the refusal names.
   env =
     {
       option,
@@ -176,7 +175,7 @@ rec {
     instanceEnv:
     kix.mkEnvVars (
       kix.mergeEnv {
-        inherit who defaults;
+        inherit scope option defaults;
         owned = lib.optional (owned != { }) {
           vars = owned;
           from = "the pod's Downward API fields, which the package's flags and the program read";

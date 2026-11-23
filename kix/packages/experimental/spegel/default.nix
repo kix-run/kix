@@ -261,7 +261,7 @@ in
           [ "--mirrored-registries" ] ++ config.mirroredRegistries
         )
         ++ kix.guardArgs {
-          inherit who;
+          inherit scope;
           owned = {
             "--registry-addr" =
               "the NodePort, the probes, and the network policy use ${toString registryPort}; remove it.";

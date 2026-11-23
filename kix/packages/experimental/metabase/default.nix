@@ -184,7 +184,7 @@ in
 
         env = kix.mkEnvVars (
           kix.mergeEnv {
-            inherit who;
+            inherit scope;
             defaults = {
               # Null when Kix cannot derive the URL, such as when nothing
               # routes to the instance; Metabase then records the URL of the

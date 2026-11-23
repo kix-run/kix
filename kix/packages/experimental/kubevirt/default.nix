@@ -139,7 +139,6 @@ let
 
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "kubevirt ${ns}/${name}";
 
   readJSON = file: builtins.fromJSON (builtins.readFile file);
 
@@ -718,7 +717,7 @@ in
       kubevirtCR = scope.mkCR self.crds.kubeVirts {
         inherit name;
         spec = kix.mergeGuarded {
-          inherit who;
+          inherit scope;
           locked = [
             [
               "infra"
