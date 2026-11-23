@@ -98,6 +98,7 @@ When `scorecard.enable = true` and no error-severity finding aborts evaluation, 
 | `resource` | `string \| null` | Kubernetes object name for `manifest` findings or cluster rules that report a specific resource. |
 | `message` | `string` | Diagnostic message from `check` (defaults to `"check failed"` if omitted). |
 | `tags` | `array of string` | Tags copied from the rule definition. |
+| `id` | `string` | Change record id, such as `"K1895"`, when the rule's `check` returned one with the finding. Kix prints it in brackets before the finding. |
 
 When a finding resolves to `"error"` (which requires `scorecard.maxSeverity = "error"`), Kix converts it into a failed cluster assertion and stops the build. `kix check -o sarif` exports the scorecard report (or the evaluation failure) in SARIF 2.1.0 format.
 

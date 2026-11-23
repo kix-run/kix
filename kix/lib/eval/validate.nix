@@ -35,7 +35,14 @@ let
 in
 rec {
   # Return a failure of `crossResourceFailures` as one text, for tests.
-  failureText = f: if builtins.isString f then f else "${f.message}\nFix: ${f.fix}";
+  failureText =
+    f:
+    if builtins.isString f then
+      f
+    else
+      lib.optionalString (f ? id) "[${f.id}] "
+      + f.message
+      + lib.optionalString (f ? fix) "\nFix: ${f.fix}";
 
   crossResourceFailures =
     {
@@ -473,6 +480,12 @@ rec {
           [ "${r.kind} ${resourceId r} is missing app.kubernetes.io/managed-by=kix label" ]
       ) resources;
 
+      # Checks 9, 12, 14, and 25 read `matchExpressions`, so a selector that
+      # built before can fail them now. Their failures carry the id of the
+      # change record that tells users what to change.
+      withSelectorRecord =
+        f: (if builtins.isString f then { message = f; } else f) // { id = labelSelector.recordId; };
+
       # --- 9. Selector consistency ---
       # A workload's spec.selector must match its pod template labels,
       # otherwise the workload will never match its pods.
@@ -484,7 +497,7 @@ rec {
           templateLabels = w.spec.template.metadata.labels or { };
           ns = w.metadata.namespace or "cluster-scoped";
         in
-        if labelSelector.isEmpty selector then
+        if labelSelector.isEmpty selector || labelSelector.problems selector != [ ] then
           [ ]
         else if selectorMatches selector templateLabels then
           [ ]
@@ -594,8 +607,9 @@ rec {
           selector = np.spec.podSelector or { };
           ns = np.metadata.namespace or "cluster-scoped";
         in
-        # An empty selector matches all pods in the namespace.
-        if labelSelector.isEmpty selector then
+        # An empty selector matches all pods in the namespace. Check 25
+        # reports a malformed one.
+        if labelSelector.isEmpty selector || labelSelector.problems selector != [ ] then
           [ ]
         else if selectsPodsIn ns selector || selectsRefPods ns selector then
           [ ]
@@ -666,7 +680,12 @@ rec {
           matchesAny = selectsPodsIn ns selector || selectsRefPods ns selector;
           decl = operandOf pdb;
         in
-        if labelSelector.isEmpty selector || matchesAny || operandCrPresent pdb then
+        if
+          labelSelector.isEmpty selector
+          || labelSelector.problems selector != [ ]
+          || matchesAny
+          || operandCrPresent pdb
+        then
           [ ]
         else if decl != null && builtins.length (lib.splitString "/" decl) != 3 then
           [
@@ -951,6 +970,32 @@ rec {
         "Job ${ns}/${job.metadata.name} sets ttlSecondsAfterFinished, so Kubernetes would delete it after it finishes and Kix would run it again on the next deploy. Remove ttlSecondsAfterFinished. Kix deletes the Job when a later build no longer contains it."
       ) (builtins.filter (r: r.kind == "Job" && (r.spec or { }) ? ttlSecondsAfterFinished) resources);
 
+      # --- 25. Label selectors are well-formed ---
+      # Report each selector that Kubernetes would reject, on the kinds whose
+      # selectors the checks above, the scorecard rules, and the Helm ordering
+      # read. `matches` treats such a selector as matching nothing.
+
+      selectorPaths = {
+        NetworkPolicy = "podSelector";
+        PodDisruptionBudget = "selector";
+        ServiceMonitor = "selector";
+        PodMonitor = "selector";
+        VMServiceScrape = "selector";
+        VMPodScrape = "selector";
+      }
+      // lib.genAttrs workloadKinds.selectorKinds (_: "selector");
+
+      selectorProblemFailures = builtins.concatMap (
+        r:
+        let
+          field = selectorPaths.${r.kind};
+          ns = r.metadata.namespace or "cluster-scoped";
+        in
+        map (problem: {
+          message = "${r.kind} ${ns}/${r.metadata.name or "unnamed"} spec.${field} is not a valid label selector: ${problem}";
+        }) (labelSelector.problems (r.spec.${field} or { }))
+      ) (builtins.filter (r: selectorPaths ? ${r.kind or ""}) resources);
+
       allFailures =
         saFailures
         ++ roleRefFailures
@@ -960,12 +1005,12 @@ rec {
         ++ serviceNameFailures
         ++ duplicateFailures
         ++ managedByFailures
-        ++ selectorConsistencyFailures
+        ++ map withSelectorRecord selectorConsistencyFailures
         ++ ingressFailures
         ++ uniqueNamespaceFailures
-        ++ networkPolicyFailures
+        ++ map withSelectorRecord networkPolicyFailures
         ++ portNameFailures
-        ++ pdbFailures
+        ++ map withSelectorRecord pdbFailures
         ++ jobEndpointFailures
         ++ rerunFailures
         ++ priorityClassFailures
@@ -975,7 +1020,8 @@ rec {
         ++ customResourceFailures
         ++ keyFailures
         ++ defaultFailures
-        ++ jobTtlFailures;
+        ++ jobTtlFailures
+        ++ map withSelectorRecord selectorProblemFailures;
     in
     allFailures;
 }

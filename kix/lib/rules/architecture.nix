@@ -305,6 +305,7 @@ in
             && labelSelector.matches selector (podLabels b);
         in
         map (b: {
+          id = labelSelector.recordId;
           message =
             "${rid a} selects on ${builtins.toJSON selector}, which also matches the pods of ${rid b}. "
             + "Both pod sets answer to that selector, so readiness, Services, PodDisruptionBudgets and "
@@ -689,7 +690,7 @@ in
           else
             [ ];
       in
-      builtins.concatMap checkMonitor monitors;
+      map (f: f // { id = labelSelector.recordId; }) (builtins.concatMap checkMonitor monitors);
   };
 
   # Report monitorsExternalService exemptions at info severity so reviewers

@@ -795,20 +795,40 @@ in
     ]
   );
 
-  v12c-networkpolicy-matchexpressions-selects-nothing = onlyFailure "podSelector" (
-    base "a"
-    ++ [
-      (res "NetworkPolicy" "a" "np" {
-        apiVersion = "networking.k8s.io/v1";
-        spec.podSelector.matchExpressions = [
-          {
-            key = "app";
-            operator = "DoesNotExist";
-          }
-        ];
-      })
-    ]
-  );
+  v25-selector-operator-is-not-valid =
+    onlyFailure
+      "[K1895] PodDisruptionBudget a/bad spec.selector is not a valid label selector: the matchExpressions entry for key 'app' sets operator 'Equals'"
+      (
+        base "a"
+        ++ [
+          (pdb "a" "bad" { } {
+            spec.selector.matchExpressions = [
+              {
+                key = "app";
+                operator = "Equals";
+                values = [ "web" ];
+              }
+            ];
+          })
+        ]
+      );
+
+  v12c-networkpolicy-matchexpressions-selects-nothing =
+    onlyFailure "[K1895] NetworkPolicy a/np podSelector"
+      (
+        base "a"
+        ++ [
+          (res "NetworkPolicy" "a" "np" {
+            apiVersion = "networking.k8s.io/v1";
+            spec.podSelector.matchExpressions = [
+              {
+                key = "app";
+                operator = "DoesNotExist";
+              }
+            ];
+          })
+        ]
+      );
 
   v09b-selector-expression-outside-template-labels =
     onlyFailure "does not match pod template labels"

@@ -6,31 +6,55 @@
 { lib }:
 
 let
-  inherit (import ./error.nix { inherit lib; }) fail;
   inherit (import ./util.nix { inherit lib; }) attrsOr listOr;
 
   # Helm charts can render either field as an explicit null.
   matchLabelsOf = selector: attrsOr (selector.matchLabels or null);
   expressionsOf = selector: listOr (selector.matchExpressions or null);
 
+  operators = [
+    "In"
+    "NotIn"
+    "Exists"
+    "DoesNotExist"
+  ];
+
+  # Return what is wrong with one expression, or null.
+  expressionProblem =
+    e:
+    if !(builtins.isAttrs e) then
+      "matchExpressions holds ${builtins.toJSON e}, which is not an expression."
+    else if !(builtins.isString (e.key or null)) then
+      "a matchExpressions entry has no key."
+    else if !(builtins.elem (e.operator or null) operators) then
+      "the matchExpressions entry for key '${e.key}' sets operator '${toString (e.operator or "")}', which Kubernetes rejects. Set operator to \"In\", \"NotIn\", \"Exists\", or \"DoesNotExist\"."
+    else
+      null;
+
+  # An expression with a problem never holds, so a malformed selector matches
+  # nothing. `problems` reports why.
   holds =
     labels: e:
     let
       has = labels ? ${e.key};
-      values = e.values or [ ];
+      values = listOr (e.values or null);
     in
-    if e.operator == "In" then
+    if expressionProblem e != null then
+      false
+    else if e.operator == "In" then
       has && builtins.elem labels.${e.key} values
     else if e.operator == "NotIn" then
       !has || !(builtins.elem labels.${e.key} values)
     else if e.operator == "Exists" then
       has
-    else if e.operator == "DoesNotExist" then
-      !has
     else
-      fail "Label selector matchExpressions sets operator '${toString e.operator}', which Kubernetes rejects. Set operator to \"In\", \"NotIn\", \"Exists\", or \"DoesNotExist\".";
+      !has;
 in
 {
+  # The change record for the checks that started to read `matchExpressions`.
+  # Their refusals print it.
+  recordId = "K1895";
+
   # Return true when `labels` satisfies `selector`. An empty selector matches
   # every label set, as in Kubernetes. Callers that treat an empty selector as
   # selecting nothing check `isEmpty` first.
@@ -49,19 +73,33 @@ in
     let
       expression =
         e:
-        if e.operator == "In" then
-          "${e.key} in (${lib.concatStringsSep ", " (map toString (e.values or [ ]))})"
-        else if e.operator == "NotIn" then
-          "${e.key} notin (${lib.concatStringsSep ", " (map toString (e.values or [ ]))})"
-        else if e.operator == "Exists" then
-          e.key
+        let
+          key = toString (e.key or "?");
+          operator = e.operator or "?";
+          values = "(${lib.concatStringsSep ", " (map toString (listOr (e.values or null)))})";
+        in
+        if !(builtins.isAttrs e) then
+          builtins.toJSON e
+        else if operator == "In" then
+          "${key} in ${values}"
+        else if operator == "NotIn" then
+          "${key} notin ${values}"
+        else if operator == "Exists" then
+          key
+        else if operator == "DoesNotExist" then
+          "!${key}"
         else
-          "!${e.key}";
+          "${key} ${toString operator} ${values}";
     in
     lib.concatStringsSep ", " (
       lib.mapAttrsToList (k: v: "${k}=${toString v}") (matchLabelsOf selector)
       ++ map expression (expressionsOf selector)
     );
+
+  # Return what is wrong with `selector`, as a list of sentences. Kubernetes
+  # rejects an object whose selector has a problem.
+  problems =
+    selector: builtins.filter (p: p != null) (map expressionProblem (expressionsOf selector));
 
   # Return true when `selector` has no `matchLabels` and no `matchExpressions`.
   isEmpty = selector: matchLabelsOf selector == { } && expressionsOf selector == [ ];
