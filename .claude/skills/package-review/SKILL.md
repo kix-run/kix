@@ -297,6 +297,7 @@ when a check fails or the path is not evaluated by default.
 - Mo19. Does an alert restate a kube-prometheus rule from `prometheus-default-rules` (crash looping, replicas mismatch, volume filling up, Job failed, TargetDown)? Detection: `grep -h '"alert"' kix/packages/experimental/prometheus-default-rules/rules/*.json`. Fix: delete it; alert on what only the package's own metrics show.
 - Mo20. Does a rule break under Prometheus or vmalert: a template function one of them lacks, such as `float64` (prometheus-operator refuses the whole PrometheusRule, the VM converter the whole group), `query_offset`, or an exact comparison of `rate()` or `increase()`? Fix: `docs/src/content/docs/reference/composition-helpers.mdx` (`#monitor`).
 - Mo23. Does a ratio alert (errors over requests) lack a traffic floor, so one failure at low traffic fires it? Does a down alert fire when the component runs zero replicas by design or its metrics Service is off? Does a last-success alert lack a missing-metric partner? Fix: `docs/src/content/docs/reference/composition-helpers.mdx` (`#monitor`).
+- Mo24. Does an operator built on controller-runtime alert on `controller_runtime_reconcile_errors_total` with its own expression, or ship no reconcile alert? A bare error rate fires on the optimistic-lock conflicts of a busy healthy operator. Fix: `kix.reconcileErrorsAlert` (`docs/src/content/docs/reference/composition-helpers.mdx` `#operator-reconcile-errors-kixreconcileerrorsalert`).
 - Mo21. Does an alert use a metric name not found in the program's source or a scrape at the pinned version? Upstream renames metrics between releases, and a rule over a missing metric never fires. Fix: cite where each metric is defined in the pull request; recheck on version bumps.
 - Mo22. Do the rules lack a unit test (renders under its name, every expression has the selector, nothing without `prometheus` or with `metrics.enabled = false`), or does the package's test cluster lack a `.rules-test.yaml` beside its cluster file (same base name) that gives each alert a failing and a healthy fixture? The `rules-cluster-<name>` check runs `promtool check rules` on every cluster and `promtool test rules` on that file. Fix: `docs/src/content/docs/reference/composition-helpers.mdx` (`#monitor`).
 
@@ -398,7 +399,7 @@ a source for each claim; they go in the pull request description.
    as `prometheus-default-rules` does (string substitution of the `job`
    matchers in `rebake`), and test that every expression got the selector.
 6. **Write and test the rules** against `docs/src/content/docs/reference/composition-helpers.mdx` (`#monitor`) and
-   items Mo5 to Mo23. Test each rule with a fixture that breaks the condition
+   items Mo5 to Mo24. Test each rule with a fixture that breaks the condition
    and one that stays healthy.
 7. **Say what is covered.** The package header lists the alerts and the
    failure modes left to the generic rules or to the site.
@@ -501,6 +502,7 @@ Mo4 prometheus\.io/
 Mo5 job=~
 Mo14 absent\([^)]*==|without \(|\b(sum|max|min|avg|count) *\(
 Mo20 float64|query_offset
+Mo24 controller_runtime_reconcile
 E5 config\.(values|extraSpec|settings) //|// config\.(values|extraSpec|settings)
 E7 hasPrefix "-
 E11 releaseName|fullnameOverride|namePrefix|labelStyle

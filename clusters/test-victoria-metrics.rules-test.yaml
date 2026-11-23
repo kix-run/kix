@@ -440,12 +440,14 @@ tests:
       - eval_time: 30m
         alertname: VMAlertmanagerMembersInconsistent
         exp_alerts: []
-  # The operator stores no samples and its reconciles fail on the
+  # The operator stores no samples, and one reconcile in two fails on the
   # vmcluster controller.
   - interval: 1m
     input_series:
       - series: 'controller_runtime_reconcile_errors_total{namespace="monitoring-system",job="vm-operator",pod="vm-operator-a",controller="vmcluster"}'
         values: '0+1x30'
+      - series: 'controller_runtime_reconcile_total{namespace="monitoring-system",job="vm-operator",pod="vm-operator-a",controller="vmcluster"}'
+        values: '0+2x30'
     alert_rule_test:
       - eval_time: 11m
         alertname: VMOperatorDown
@@ -457,7 +459,7 @@ tests:
             exp_annotations:
               summary: "The VictoriaMetrics operator is down."
               description: "No replica of the VictoriaMetrics operator monitoring-system/vm-operator has answered a scrape for 10 minutes. Running VMCluster, VMAgent, and VMAlert workloads keep working, but no change to a VictoriaMetrics CR, ServiceMonitor, or PrometheusRule is applied. Check the operator Deployment."
-      - eval_time: 20m
+      - eval_time: 25m
         alertname: VMOperatorReconcileErrors
         exp_alerts:
           - exp_labels:
@@ -467,7 +469,7 @@ tests:
               controller: vmcluster
             exp_annotations:
               summary: "The VictoriaMetrics operator fails to reconcile objects."
-              description: "The vmcluster controller of the VictoriaMetrics operator monitoring-system/vm-operator has failed reconciles for 15 minutes, so the objects it manages may not match their CRs. Check the operator logs for the object and the error."
+              description: "The vmcluster controller of the VictoriaMetrics operator monitoring-system/vm-operator has failed 50% of its reconciles over the last 30 minutes, so the objects it manages may not match their CRs. Check the operator logs for the object and the error."
   # A healthy operator fires nothing.
   - interval: 1m
     input_series:
@@ -480,5 +482,17 @@ tests:
         alertname: VMOperatorDown
         exp_alerts: []
       - eval_time: 20m
+        alertname: VMOperatorReconcileErrors
+        exp_alerts: []
+  # A busy, healthy operator retries a conflict now and then, one reconcile
+  # in a hundred. That is below the 10% share, so nothing fires.
+  - interval: 1m
+    input_series:
+      - series: 'controller_runtime_reconcile_total{namespace="monitoring-system",job="vm-operator",pod="vm-operator-a",controller="vmcluster"}'
+        values: '0+10x40'
+      - series: 'controller_runtime_reconcile_errors_total{namespace="monitoring-system",job="vm-operator",pod="vm-operator-a",controller="vmcluster"}'
+        values: '0+0.1x40'
+    alert_rule_test:
+      - eval_time: 35m
         alertname: VMOperatorReconcileErrors
         exp_alerts: []

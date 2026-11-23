@@ -283,6 +283,33 @@ For packages that define `PrometheusRule` alerts without a `ServiceMonitor` (for
 
 `kix.alerts` accepts `alerts`, `name` (defaults to `scope.instanceName`), `extraLabels`, and `rulesPart` (defaults to `"prometheusRules"`), and is gated by `config.metrics.enabled` (default `true`).
 
+### Operator reconcile errors (`kix.reconcileErrorsAlert`)
+
+An operator built on controller-runtime counts every failed reconcile in `controller_runtime_reconcile_errors_total`, including the optimistic-lock conflicts that a busy, healthy operator retries at once. `kix.reconcileErrorsAlert` returns one entry for `alerts` that fires when more than 10% of a controller's reconciles fail over 30 minutes, with more than two errors, for 15 minutes. Use it for every operator package that exposes these metrics, so all of them share one rule.
+
+```nix
+alerts = {
+  FooOperatorReconcileErrors = kix.reconcileErrorsAlert {
+    selector = ''namespace="${ns}",service="${metricsServiceName}"'';
+    operator = "Foo operator ${ns}/${name}";
+    summary = "The Foo operator fails to reconcile its resources.";
+    impact = "a Foo may not match its spec";
+    nextStep = "The operator log names the error and the resource.";
+  };
+};
+```
+
+| Argument | Type | Default | Description |
+| --- | --- | --- | --- |
+| `selector` | string | Required | Label matchers that scope both counters to the instance. |
+| `by` | list of strings | `[ "namespace" "service" ]` | Labels that name the instance in the result. `controller` is always added. Behind a PodMonitor or a VMServiceScrape that sets `job`, use `[ "namespace" "job" ]`. |
+| `operator` | string | Required | Names the operator instance in the description. |
+| `summary` | string | Required | The fixed `summary` annotation. |
+| `impact` | string | Required | Completes the description's "so ..." clause, saying what may be wrong while reconciles fail. |
+| `nextStep` | string | Required | The description's last sentence, saying what to check first. |
+
+The description reads "The `<controller>` controller of the `<operator>` has failed `<share>` of its reconciles over the last 30 minutes, so `<impact>`. `<nextStep>`". Merge with `//` to change a field, such as `severity`.
+
 ---
 
 ## healthCheck

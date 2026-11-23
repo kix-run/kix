@@ -196,14 +196,17 @@ in
       description = "Operator image. Its major.minor must be the package's release.";
     };
 
-    # The release manifest's values.
+    # Requests and the memory limit are the release manifest's values. The
+    # manifest also caps CPU at its 200m request, which throttles the
+    # operator whenever it reconciles many objects at once; the limit here
+    # lets it burst to one core.
     resources = kix.options.resources {
       requests = {
         cpu = "200m";
         memory = "500Mi";
       };
       limits = {
-        cpu = "200m";
+        cpu = "1";
         memory = "500Mi";
       };
     };
@@ -765,12 +768,12 @@ in
             summary = "The RabbitMQ Cluster Operator is down.";
             description = "No replica of the ${operator} has answered a scrape for 10 minutes. Running RabbitMQ clusters keep serving, but changes to RabbitmqClusters are not applied, and its webhooks refuse creating or updating one. Check the operator Deployment in ${ns}.";
           };
-          RabbitMQOperatorReconcileErrors = {
-            expr = "sum by (namespace, service, controller) (rate(controller_runtime_reconcile_errors_total{${sel}}[5m])) > 0";
-            "for" = "15m";
-            severity = "warning";
+          RabbitMQOperatorReconcileErrors = kix.reconcileErrorsAlert {
+            selector = sel;
+            inherit operator;
             summary = "The RabbitMQ Cluster Operator fails to reconcile RabbitMQ clusters.";
-            description = "The {{ $labels.controller }} controller of the ${operator} has failed reconciles for 15 minutes, so a RabbitmqCluster's StatefulSet, Services, or claims may not match its spec. The operator log and the ReconcileSuccess condition of the RabbitmqCluster name the error.";
+            impact = "a RabbitmqCluster's StatefulSet, Services, or claims may not match its spec";
+            nextStep = "The operator log and the ReconcileSuccess condition of the RabbitmqCluster name the error.";
           };
         };
       } args
