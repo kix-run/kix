@@ -79,8 +79,8 @@ kix.buildCluster {
             };
           };
 
-          # The kind flavour imports kind's own CoreDNS Deployment here, and
-          # the deploy waits for it. This kind cluster has none.
+          # The kind flavour imports the `kube-system/kube-dns` Service here,
+          # and the deploy waits for it to have a ready endpoint.
           platform-dns.optional = true;
         };
 
