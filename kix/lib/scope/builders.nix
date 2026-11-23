@@ -2,6 +2,7 @@
 
 let
   inherit (import ../core/error.nix { inherit lib; }) fail;
+  inherit (import ../core/util.nix { inherit lib; }) reasonSentence;
   kixAnnotations = import ../core/annotations.nix;
   kixKeys = kixAnnotations.keys;
   availabilityLib = import ../core/availability.nix { inherit lib; };
@@ -286,7 +287,7 @@ in
               "${workloadKind} '${workloadInput.name or "?"}' supports at most "
               + "\"${workloadCeiling}\" availability (the package sets `availability.max` on it). "
               + "Kix runs this workload at \"${workloadCeiling}\" instead of \"${availability.level}\", so it ${cappedConsequence}. "
-              + lib.optionalString (workloadCeilingReason != null) "Reason: ${workloadCeilingReason} "
+              + lib.optionalString (workloadCeilingReason != null) "${reasonSentence workloadCeilingReason} "
               + "Other workloads in this instance still run at \"${availability.level}\". "
               + "To run the whole instance at \"${workloadCeiling}\" and silence this warning, set `availability = \"${workloadCeiling}\";` on the instance.";
           };

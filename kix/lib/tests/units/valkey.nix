@@ -169,10 +169,10 @@ in
     (data.host or null == "cache.cache.svc.cluster.local" && data.port or null == "6379")
     || throw "import of a list build: consumer data ${builtins.toJSON data}";
 
-  # The not-found error fails for a declared requester and for one that
-  # auto-instantiation added. tryEval drops the message, and
-  # lib-eval-messages checks its text.
-  valkey-missing-dep-names-requester =
+  # A missing dependency fails the build for a declared requester and for
+  # one that auto-instantiation added. tryEval drops the message, so
+  # lib-eval-messages checks its text through resolveArg.
+  valkey-missing-dep-fails-declared-and-added =
     let
       direct = mkCluster [ { instances.app.cache.package = secretConsumer; } ];
       auto = mkCluster [

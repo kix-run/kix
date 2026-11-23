@@ -33,7 +33,7 @@
 
 let
   inherit (import ../core/error.nix { inherit lib; }) fail warning;
-  inherit (import ../core/util.nix { inherit lib; }) plain namespaceOf;
+  inherit (import ../core/util.nix { inherit lib; }) plain namespaceOf instanceLabel;
   versions = import ../core/version.nix { inherit lib; };
   kubernetes = import ../core/kubernetes.nix;
   packageLib = import ../core/package.nix { inherit lib; };
@@ -1158,9 +1158,9 @@ in
         builtins.concatMap ofInstance (builtins.filter isStateful allInstancesList);
 
       # Reject cluster-scoped objects rendered with the same API group, kind,
-      # and name by multiple active instances. Identical copies would otherwise
-      # be collapsed by `dedupeByOutPath`, and differing copies would fail
-      # cross-resource validation without naming the owning instances.
+      # and name by multiple active instances. `dedupeByOutPath` collapses
+      # identical copies, so the cross-resource duplicate check sees only
+      # differing ones, and this check also catches the identical ones.
       sharedClusterObjectAssertions =
         let
           owned = builtins.concatMap (
@@ -1199,12 +1199,7 @@ in
                 parts = lib.splitString "/" o;
               in
               mergedInstances.${builtins.head parts}.${builtins.elemAt parts 1}._autoInstantiatedFor or null;
-            label =
-              o:
-              let
-                rs = requestersOf o;
-              in
-              if rs == null then o else "${o} (auto-instantiated for ${builtins.concatStringsSep ", " rs})";
+            label = o: instanceLabel o (requestersOf o);
             anyAuto = builtins.any (o: requestersOf o != null) os;
           in
           {

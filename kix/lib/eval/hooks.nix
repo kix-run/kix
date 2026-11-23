@@ -5,6 +5,7 @@
 
 let
   inherit (import ../core/error.nix { inherit lib; }) fail;
+  inherit (import ../core/util.nix { inherit lib; }) instanceLabel;
   # Allowed result keys per hook channel. `collectHooks` validates each hook's
   # return value against this map so misspelled keys fail immediately.
   channelResultKeys = {
@@ -162,13 +163,7 @@ rec {
       fmt =
         cs:
         builtins.concatStringsSep ", " (
-          map (
-            c:
-            "${c.ns}/${c.inst}"
-            + lib.optionalString (
-              c.autoInstantiatedFor != null
-            ) " (auto-instantiated for ${builtins.concatStringsSep ", " c.autoInstantiatedFor})"
-          ) cs
+          map (c: instanceLabel "${c.ns}/${c.inst}" c.autoInstantiatedFor) cs
         );
     in
     builtins.seq _known (

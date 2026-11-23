@@ -14,6 +14,7 @@
 
 let
   inherit (import ../../core/error.nix { inherit lib; }) fail;
+  inherit (import ../../core/util.nix { inherit lib; }) reasonSentence;
   avail = import ../../core/availability.nix { inherit lib; };
   caps = config.cluster.capabilities;
 
@@ -317,7 +318,7 @@ in
               "${m.kind} '${m.metadata.name}' runs "
               + "${toString m.spec.replicas} replicas, but ${ceilingSource.${ceiling.from}} is \"none\", "
               + "so it supports one pod at a time."
-              + lib.optionalString (ceiling.reason != null) " Reason: ${ceiling.reason}";
+              + lib.optionalString (ceiling.reason != null) " ${reasonSentence ceiling.reason}";
             fix =
               "Set its replica count to 1. If you maintain the package "
               + "and the program can coordinate several replicas (leader election, an HA mode, a shared "

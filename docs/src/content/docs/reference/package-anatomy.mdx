@@ -283,7 +283,7 @@ Each role in `meta.roles` also registers that role name as a dependency alias so
 
 Individual workloads can further clamp their own ceiling by passing `availability.max` to `scope.mkDeployment`, `scope.mkStatefulSet`, `scope.mkJob`, or `scope.mkCronJob`.
 
-Include `reason` alongside `max` (in `meta.availability` or on a workload builder) to explain why the software cannot run at a higher availability level. Kix includes `reason` when it warns that an instance or workload was capped at `max`, and when it rejects a workload with more than one replica under `max = "none"`:
+Include `reason` alongside `max` (in `meta.availability` or on a workload builder) to explain why the software cannot run at a higher availability level. Kix includes `reason` when it warns that an instance or workload was capped at `max`, and when it rejects a workload with more than one replica under `max = "none"`. Write `reason` as one or more full sentences. Kix shows it as `Reason: <reason>` and adds a final full stop when it has none. A `reason` on a `meta.conflictsWith` entry follows the same form:
 
 ```nix
 availability = {

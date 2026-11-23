@@ -39,6 +39,15 @@ rec {
   # has no id.
   idOf = value: if typeOf value == "kix-package" then value.id else null;
 
+  # Return how a cluster definition names a package of Kix's own set, such
+  # as "packages.experimental.cert-manager", or null for any other package.
+  spellingOf =
+    value:
+    let
+      id = idOf value;
+    in
+    if id == null then null else "packages.${builtins.replaceStrings [ "/" ] [ "." ] id}";
+
   isImport = value: typeOf value == "kix-import";
 
   # Return whether `value` stands for a package that moved or was removed.

@@ -13,6 +13,7 @@
 
 let
   inherit (import ./error.nix { inherit lib; }) fail;
+  inherit (import ./util.nix { inherit lib; }) reasonSentence;
   levels = [
     "none"
     "pod"
@@ -249,7 +250,7 @@ let
         ++ lib.optional capped (
           "availability \"${requested}\" was requested but the package declares "
           + "meta.availability.max = \"${packageCeiling}\", so it runs at \"${packageCeiling}\". "
-          + lib.optionalString (ceilingReason != null) "Reason: ${ceilingReason} "
+          + lib.optionalString (ceilingReason != null) "${reasonSentence ceilingReason} "
           + "This instance does not meet the requested availability level."
         );
     };

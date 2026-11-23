@@ -2,6 +2,7 @@
 
 let
   inherit (import ../core/error.nix { inherit lib; }) fail;
+  inherit (import ../core/util.nix { inherit lib; }) instanceLabel;
   packageLib = import ../core/package.nix { inherit lib; };
   inherit (packageLib) systemArgNames;
   roles = import ./roles.nix { inherit lib; };
@@ -80,10 +81,9 @@ rec {
   # instances whose dependencies made auto-instantiation add it.
   addedForNote =
     instance: addedFor:
-    lib.optionalString (addedFor != [ ])
-      " The cluster definition does not declare ${instance}. Kix added it from availablePackages because ${builtins.concatStringsSep ", " addedFor} ${
-         if builtins.length addedFor == 1 then "depends" else "depend"
-       } on it.";
+    lib.optionalString (
+      addedFor != [ ]
+    ) " The cluster definition does not declare ${instanceLabel instance addedFor}.";
 
   # Return the error for a required dependency on a cluster role that no
   # instance provides. A provider of a role serves every namespace, so the
@@ -103,12 +103,7 @@ rec {
         );
       claimants =
         builtins.concatMap
-          (
-            level:
-            map (package: "packages.${builtins.replaceStrings [ "/" ] [ "." ] (packageLib.idOf package)}") (
-              builtins.filter claims (builtins.attrValues byLevel.${level})
-            )
-          )
+          (level: map packageLib.spellingOf (builtins.filter claims (builtins.attrValues byLevel.${level})))
           [
             "stable"
             "experimental"

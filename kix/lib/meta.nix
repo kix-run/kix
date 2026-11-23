@@ -7,6 +7,7 @@ let
   versions = import ./core/version.nix { inherit lib; };
   errors = import ./core/error.nix { inherit lib; };
   packageLib = import ./core/package.nix { inherit lib; };
+  inherit (import ./core/util.nix { inherit lib; }) instanceLabel reasonSentence;
 
   failedAssertion = message: {
     assertion = false;
@@ -360,10 +361,7 @@ rec {
               builtins.filter (c: c.namespace == namespaceName && !(isSelf c)) candidates;
           scope = if isClusterWide then "(cluster-wide)" else "in namespace '${namespaceName}'";
           isAuto = c: (c.meta.autoInstantiatedFor or null) != null;
-          label =
-            c:
-            "${c.namespace}/${c.instName}"
-            + lib.optionalString (isAuto c) " (auto-instantiated for ${builtins.concatStringsSep ", " c.meta.autoInstantiatedFor})";
+          label = c: instanceLabel "${c.namespace}/${c.instName}" (c.meta.autoInstantiatedFor or null);
           instances = builtins.concatStringsSep ", " (map label matching);
           autoAdvice = lib.optionalString (builtins.any isAuto matching) (
             " An auto-instantiated instance is created for a required dependency that no declared instance answers. "
@@ -375,7 +373,7 @@ rec {
           assertion = false;
           message =
             "It conflicts with '${name}' ${scope}. Conflicting instances: ${instances}."
-            + lib.optionalString (entry.reason != null) " Reason: ${entry.reason}"
+            + lib.optionalString (entry.reason != null) " ${reasonSentence entry.reason}"
             + autoAdvice;
           fix =
             if isClusterWide then

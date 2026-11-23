@@ -29,4 +29,22 @@
   # Return the namespace of a rendered manifest, or "cluster-scoped" for a
   # manifest without one.
   namespaceOf = m: m.metadata.namespace or "cluster-scoped";
+
+  # Return a package's `reason` for a limit as the sentence messages add,
+  # "Reason: <reason>.", or "" when `reason` is null. The full stop is added
+  # when the reason has none.
+  reasonSentence =
+    reason:
+    lib.optionalString (reason != null)
+      "Reason: ${reason}${lib.optionalString (!(lib.hasSuffix "." (lib.trim reason))) "."}";
+
+  # Return `instance` (`<namespace>/<name>`) as messages show it. `addedFor`
+  # is null or the `_autoInstantiatedFor` list of an instance that
+  # auto-instantiation added, and the label then names those instances.
+  instanceLabel =
+    instance: addedFor:
+    if addedFor == null || addedFor == [ ] then
+      instance
+    else
+      "${instance} (auto-instantiated for ${builtins.concatStringsSep ", " addedFor})";
 }

@@ -247,7 +247,7 @@ the defaults fails there.
   result of `mkContract { name; alias; fields; remedyNoun ? ; extraProblems ? ;
   helpers ? { }; options ? null; }`. Every contract then has the same parts:
   `name`, `alias`, `fields`, `problems`, `check`, `assertions`, `require`,
-  `helpers`, and `options`. A field without `required` is required. The
+  `requireAs`, `helpers`, and `options`. A field without `required` is required. The
   contract's own functions go under `helpers`
   (`kix/contracts/stable/redis.nix`).
 - A package that renames a dependency sets `deps.<arg>.renamedFrom = { name
