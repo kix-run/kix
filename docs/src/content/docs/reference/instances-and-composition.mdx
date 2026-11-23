@@ -130,6 +130,8 @@ See [Add typed package options](/docs/how-to/author-packages-and-clusters/add-ty
 
 `instances.<namespace>.<name>.deps` overrides automatic dependency resolution for specific build arguments of the package.
 
+Each key must name a dependency the package takes. Evaluation fails with `[K3646]` on any other key, including a key on a `kix.mkImport` instance, which takes no dependencies. When a package renamed a dependency (`deps.<arg>.renamedFrom`), the old key fails with an error that gives the new name.
+
 ```nix
 { packages, ref, ... }:
 {
@@ -157,6 +159,7 @@ Every cluster module receives `ref` in its module arguments. Writing `ref.<names
 - Any value that is not a `ref` (or a list of `ref`s) is passed as-is to the build argument without package view wrapping, compatibility checks, or config injection.
 - Setting `deps.<arg> = null;` behaves the same as leaving `deps.<arg>` unset: Kix falls back to automatic resolution or the build argument's default value.
 - Explicitly wiring `deps.<arg>` suppresses `availablePackages` auto-instantiation for that argument.
+- An instance is never its own dependency. Automatic resolution skips the instance itself when one of its own names or aliases matches the argument, and `deps.<arg> = ref.<namespace>.<instance>` that names the instance itself fails evaluation.
 
 :::tip[Use it in a task]
 See [Wire cross-namespace dependencies explicitly](/docs/how-to/debug-dependency-wiring/wire-cross-namespace-dependencies-explicitly/) and [Debug a missing dependency](/docs/how-to/debug-dependency-wiring/debug-a-missing-dependency/).
@@ -203,7 +206,7 @@ Kix starts from all non-optional instances (`optional = false`) and walks the de
 
 An optional build argument (`{ prometheus ? null, ... }`) never activates a dormant optional instance, and a dormant optional instance or import never answers an optional build argument (the argument receives `null` unless an active instance matches). Note that `extraDeps` or a `ref` in `out` on a `kix.mkImport` instance also does not activate an optional instance.
 
-When activated, the instance is stamped with `kix.run/optional-activated: "true"` on its `PackageInstance` record and deployed normally. When dormant, it emits no manifests.
+When activated, the instance is stamped with `kix.run/optional-activated: "true"` on its `PackageInstance` record and deployed normally. When dormant, it emits no manifests and resolves none of its own dependencies, so a dependency with no active provider does not fail the cluster.
 
 ## availability
 

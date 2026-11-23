@@ -176,7 +176,8 @@ in
     let
       cases = {
         # The instance answers storageClasses through its own alias and no
-        # explicit dependency is wired.
+        # explicit dependency is wired. The resolver skips the instance
+        # itself, so nothing else provides the class.
         aliasOnly = evalFails (clusterWith {
           aliases = [
             "storageClasses"
@@ -195,16 +196,33 @@ in
             };
           in
           builds c && etcdClass c == "local-path";
-        # With the alias, a named class is still refused: the dependency
-        # resolves to this instance before the named class is read.
-        aliasWithNamedClass = evalFails (clusterWith {
-          aliases = [
-            "storageClasses"
-            "mayastor"
-          ];
-          deps = _: { };
-          config.etcd.storage.storageClassName = "local";
-        });
+        # With the alias and no dependency wired, a named class builds.
+        aliasWithNamedClass =
+          let
+            c = clusterWith {
+              aliases = [
+                "storageClasses"
+                "mayastor"
+              ];
+              deps = _: { };
+              config.etcd.storage.storageClassName = "local";
+            };
+          in
+          builds c && etcdClass c == "local";
+        # With the alias and another instance answering storageClasses,
+        # the dependency binds that instance.
+        aliasWithOtherProvider =
+          let
+            c = clusterWith {
+              aliases = [
+                "storageClasses"
+                "mayastor"
+              ];
+              deps = _: { };
+              extra.instances.mayastor.local-path.aliases = [ "storageClasses" ];
+            };
+          in
+          builds c && etcdClass c == "local-path";
         selfRef = evalFails (clusterWith {
           deps = ref: { storageClasses = ref.mayastor.mayastor; };
         });

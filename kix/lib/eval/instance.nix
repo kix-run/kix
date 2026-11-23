@@ -110,11 +110,18 @@ in
           hasDefault = true;
           explicitOverride = null;
         };
+        # Return whether this instance answers `dns` itself. The resolver
+        # never binds an instance to itself, so the DNS provider finds no
+        # other provider and still counts as DNS for the cluster.
+        _answersDns = builtins.any (c: c.namespace == namespaceName && c.instName == instanceName) (
+          resolutionIndex.byKey.dns or [ ]
+        );
         # Missing DNS prevents Kix from ordering workloads after a DNS provider.
         # The cluster reports it once as a warning. An inactive optional
         # instance answering `dns`, such as a flavour's platform-dns import,
         # declares DNS without ordering on it.
-        _dnsMissing = !_dnsResolution.found && !((clusterCtx.inactiveOptionalKeys or { }) ? dns);
+        _dnsMissing =
+          !_dnsResolution.found && !_answersDns && !((clusterCtx.inactiveOptionalKeys or { }) ? dns);
         _dnsRoot =
           if !_dnsResolution.found || (_dnsResolution.direct or false) then
             null
@@ -122,11 +129,9 @@ in
             let
               dnsInst = allInstances.${_dnsResolution.namespace}.${_dnsResolution.instanceName};
             in
-            if _dnsResolution.namespace == namespaceName && _dnsResolution.instanceName == instanceName then
-              null
             # Depend on the provider's root resource rather than its PackageInstance (`dnsInst.root`).
             # Import instances have no parts, so their marker in `root` is the only resource to depend on.
-            else if dnsInst ? raw then
+            if dnsInst ? raw then
               dnsInst.raw.root.resource or dnsInst.raw.root
             else if dnsInst ? root then
               dnsInst.root
@@ -451,7 +456,10 @@ in
           manifestDeps ++ requiresDeps ++ extraDepsDeps;
 
         forwardRoots = [ rootRes ] ++ packageRequires ++ postHooks;
-        forwardClosure =
+
+        # Return `roots` and every resource they reach through `getForwardDeps`.
+        closureOf =
+          roots:
           let
             go =
               {
@@ -484,8 +492,10 @@ in
           go {
             seen = { };
             result = [ ];
-            queue = forwardRoots;
+            queue = roots;
           };
+
+        forwardClosure = closureOf forwardRoots;
 
         forwardPaths = builtins.listToAttrs (
           map (r: {
@@ -792,18 +802,18 @@ in
           r: !(builtins.hasAttr (builtins.unsafeDiscardStringContext r.outPath) reachablePaths)
         ) allPartResources;
 
+        # A post-hook runs after the package only when it reaches root or a
+        # `root.requires` entry through its own dependencies.
         postHookWarnings =
           let
-            nonPostHookForwardPaths = builtins.removeAttrs forwardPaths (
-              map (r: builtins.unsafeDiscardStringContext r.outPath) postHooks
-            );
+            plainPath = r: builtins.unsafeDiscardStringContext r.outPath;
+            mainRootPaths = map plainPath ([ rootRes ] ++ packageRequires);
             hookMissingDep =
               hook:
               let
-                deps = getForwardDeps hook;
-                depPaths = map (d: builtins.unsafeDiscardStringContext d.outPath) deps;
+                reached = map plainPath (closureOf (getForwardDeps hook));
               in
-              !(builtins.any (p: builtins.hasAttr p nonPostHookForwardPaths) depPaths);
+              !(builtins.any (p: builtins.elem p reached) mainRootPaths);
           in
           builtins.filter hookMissingDep postHooks;
 

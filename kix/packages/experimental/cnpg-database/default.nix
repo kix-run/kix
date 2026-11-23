@@ -458,11 +458,11 @@ in
       # region:postgresDatabaseCheck
       root = {
         resource = credentials;
-        # `postHooks` puts the Database, and the role and Secret it
+        # `requires` puts the Database, and the role and Secret it
         # requires, in this instance's own closure even when no consumer
         # reads `out.host`. `credentials` does not reference them and can be
         # applied first.
-        postHooks = [ self.database ];
+        requires = [ self.database ];
 
         out = kix.contracts.postgresDatabase.check who {
           host = self.pg.fqdn;

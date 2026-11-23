@@ -13,15 +13,10 @@
 # `etcdctl snapshot save` into a fresh cluster.
 #
 # The class of the members' volumes, checked in this order:
-#   1. refused when this instance answers `storageClasses` itself, through
-#      its own aliases with no explicit dependency or through an explicit
-#      `deps.storageClasses` that names it. Kix then resolves the
-#      dependency to this instance, and evaluating it recurses even when
-#      etcd's class is named below, so this check comes first;
-#   2. `etcd.storage.storageClassName`, unless it names one of this
+#   1. `etcd.storage.storageClassName`, unless it names one of this
 #      instance's classes;
-#   3. refused when nothing provides `storageClasses`;
-#   4. the dependency's `out.storageClassName`, unless it is one of this
+#   2. refused when nothing provides `storageClasses`;
+#   3. the dependency's `out.storageClassName`, unless it is one of this
 #      instance's classes or the provider's `out.provisioner` is this
 #      instance's CSI driver.
 # etcd on a Mayastor volume cannot start after a full restart, because
@@ -29,7 +24,6 @@
 {
   self,
   config,
-  clusterConfig,
   scope,
   lib,
   kix,
@@ -40,7 +34,7 @@
 
 let
   c = import ./common.nix { inherit lib kix scope; };
-  inherit (c) name ns who;
+  inherit (c) name who;
 
   members = kix.availability.pick availability {
     none = 1;
@@ -54,28 +48,11 @@ let
   onOwnVolume = "etcd must not live on a Mayastor volume: Mayastor needs etcd to bring its volumes up, so etcd could not start after a full restart.";
   storageFix = "Wire deps.storageClasses to a local provider (a zfs-localpv or storage-classes instance, or an import of a class the cluster already has: kix.mkImport { out.storageClassName = \"local-path\"; }), or set config.etcd.storage.storageClassName to a class that is not Mayastor's. A cloud block class also works.";
 
-  instance = clusterConfig.instances.${ns}.${name} or { };
-  depRef = (instance.deps or { }).storageClasses or null;
-  selfByRef =
-    builtins.isAttrs depRef
-    && (depRef._type or null) == "kix-ref"
-    && depRef.namespace == ns
-    && depRef.instanceName == name;
-  selfByAlias = builtins.elem "storageClasses" (
-    if (instance.aliases or null) == null then [ ] else instance.aliases
-  );
-
   storageClassName =
     let
       named = config.etcd.storage.storageClassName;
     in
-    if selfByRef || (selfByAlias && depRef == null) then
-      scope.fail {
-        package = "mayastor";
-        message = "this instance answers deps.storageClasses itself, so etcd cannot take its class from that dependency. ${onOwnVolume}";
-        fix = "Wire deps.storageClasses to a local provider, for example deps.storageClasses = ref.<ns>.<zfs-localpv instance>, or to an import of the class etcd should use (kix.mkImport { out.storageClassName = \"local-path\"; }).";
-      }
-    else if named != null then
+    if named != null then
       if builtins.elem named ownClasses then
         scope.fail {
           package = "mayastor";

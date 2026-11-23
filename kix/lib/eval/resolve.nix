@@ -125,6 +125,69 @@ rec {
       ) acc nsInsts
     ) null instances;
 
+  # Refuse a `deps.<name>` whose name the instance's package does not take,
+  # on every instance, active or not. Resolution reads only the names the
+  # package takes, so such an entry would be ignored. `phase1Instances`
+  # gives each instance's `discoveredDeps` and the package's `deps`
+  # attribute (`depsEnrichment`).
+  checkDepsKeys =
+    { mergedInstances, phase1Instances }:
+    lib.foldlAttrs (
+      acc: nsName: nsInsts:
+      lib.foldlAttrs (
+        acc: instName: instCfg:
+        let
+          p1 = phase1Instances.${nsName}.${instName};
+          taken = builtins.attrNames p1.discoveredDeps;
+          path = "instances.${nsName}.${instName}.deps";
+          isImport = (instCfg.package._type or "") == "kix-import";
+          # The dependency that took this name before a rename, or null.
+          renamedTo =
+            key: lib.findFirst (arg: (p1.depsEnrichment.${arg}.renamedFrom.name or null) == key) null taken;
+          refuseKey =
+            key:
+            let
+              newName = renamedTo key;
+              renamedFrom = p1.depsEnrichment.${newName}.renamedFrom;
+            in
+            if isImport then
+              fail {
+                id = "K3646";
+                instance = "${nsName}/${instName}";
+                dependency = key;
+                message = "${path}.${key} is set, but an import takes no dependencies, so Kix would ignore it.";
+                fix = "Remove ${path}.${key}. To deploy the import after another instance, list that instance in instances.${nsName}.${instName}.extraDeps.";
+              }
+            else if newName != null then
+              fail {
+                id = lib.removeSuffix "]" (lib.removePrefix "[" renamedFrom.id);
+                instance = "${nsName}/${instName}";
+                dependency = key;
+                message = "${path}.${key} names a dependency that is now called '${newName}'.";
+                fix = "Rename ${path}.${key} to ${path}.${newName}.";
+              }
+            else
+              fail {
+                id = "K3646";
+                instance = "${nsName}/${instName}";
+                dependency = key;
+                message =
+                  "${path}.${key} names a dependency that the instance's package does not take, so Kix would ignore it."
+                  + (
+                    if taken == [ ] then
+                      " The package takes no dependencies."
+                    else
+                      " The package takes: ${builtins.concatStringsSep ", " taken}."
+                  );
+                fix = "Remove ${path}.${key}, or rename it to a dependency the package takes.";
+              };
+        in
+        builtins.foldl' (acc: key: if p1.discoveredDeps ? ${key} then acc else refuseKey key) acc (
+          builtins.attrNames (instCfg.deps or { })
+        )
+      ) acc nsInsts
+    ) null mergedInstances;
+
   # Resolve a package dependency argument against `explicitOverride` or
   # `resolutionIndex`. An instance in another namespace binds only when the
   # override names it, when its package serves the whole cluster
@@ -169,6 +232,10 @@ rec {
           resolutionIndex.byKey.${t.instanceName} or [ ]
         );
 
+      isRequester = namespace: instName: namespace == requesterNamespace && instName == requesterName;
+
+      selfRef = lib.findFirst (r: isRequester r.namespace r.instanceName) null (refsOf explicitOverride);
+
       # Refuse a ref from another namespace to an instance whose package
       # declares `meta.scope = "namespace"`.
       checkRefScope =
@@ -186,7 +253,13 @@ rec {
         else
           t;
     in
-    if explicitOverride != null then
+    if selfRef != null then
+      refuse {
+        message = "${consumerPath}.deps.${argName} names ref.${selfRef.namespace}.${selfRef.instanceName}, the instance itself. An instance cannot be its own dependency.";
+        fix = "Point deps.${argName} to another instance that provides '${argName}', or remove it.";
+      }
+
+    else if explicitOverride != null then
       # Resolve `ref` and `[ ref ... ]` overrides with `direct = false` so they
       # run through the same meta checks as auto-resolved dependencies.
       if isRef explicitOverride then
@@ -219,7 +292,11 @@ rec {
 
     else
       let
-        all = resolutionIndex.byKey.${argName} or [ ];
+        # An instance that answers one of its own dependency names never
+        # binds to itself, so the name falls through to other instances.
+        all = builtins.filter (c: !(isRequester c.namespace c.instName)) (
+          resolutionIndex.byKey.${argName} or [ ]
+        );
         sameNs = builtins.filter (c: c.namespace == requesterNamespace) all;
         foreign = builtins.filter (c: c.namespace != requesterNamespace) all;
         # Foreign instances every namespace may use: the package serves the
