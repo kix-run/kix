@@ -111,8 +111,8 @@ in
       (kix.image.checkRelease {
         inherit (config) image;
         release = "v${release}";
-        reason = "the CRDs under kix/packages/experimental/snapshot-controller/crds are vendored from v${release}";
-        fix = "To move to another release, change release in kix/packages/experimental/snapshot-controller/default.nix and run uv run scripts/vendor-crds.py snapshot-controller.";
+        reason = "the CRDs in kix/packages/experimental/snapshot-controller/crds come from v${release}";
+        fix = "To update this package to another version, change release in kix/packages/experimental/snapshot-controller/default.nix and run uv run scripts/vendor-crds.py snapshot-controller.";
       })
     ];
 

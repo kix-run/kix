@@ -112,7 +112,8 @@ rec {
         in
         if releaseMinor == null || builtins.elem null accepted then
           fail {
-            message = "kix.image.checkRelease: release ${builtins.toJSON release} and also ${builtins.toJSON also} must each name a major.minor version.";
+            message = "kix.image.checkRelease: release (${builtins.toJSON release}) or an entry in also (${builtins.toJSON also}) is missing major and minor version numbers, so Kix cannot check this image tag.";
+            fix = "Pass a version with at least major and minor numbers, such as \"v1.10.0\" for release and \"1.9\" in also.";
           }
         else
           {
@@ -121,12 +122,15 @@ rec {
             message =
               if tagMinor != null && builtins.elem tagMinor accepted then
                 "${path} \"${tag}\" ${
-                  if prefix == "" then "starts with \"v\"" else "has no leading \"v\""
-                }, and upstream tags this image like ${release}."
+                  if prefix == "" then
+                    "starts with \"v\". Kix rejected it because upstream tags this image without a \"v\" prefix, such as \"${release}\"."
+                  else
+                    "has no leading \"v\". Kix rejected it because upstream tags this image with a \"v\" prefix, such as \"${release}\"."
+                }"
               else
-                "${path} \"${tag}\" is not a ${acceptedText} release, and ${reason}.";
+                "${path} \"${tag}\" is not a ${acceptedText} release. Kix rejected it because ${reason}.";
             fix =
-              "Set ${path} to a tag such as ${release}, or remove it."
+              "Set ${path} to a matching tag such as \"${release}\", or remove ${path} to use the default."
               + lib.optionalString (fix != null) " ${fix}";
           };
     };

@@ -309,19 +309,23 @@ in
       && minor.option == "image.tag"
       &&
         minor.message
-        == ''image.tag "v1.11.0" is not a v1.10 release, and the CRDs are vendored from v1.10.0.''
-      && minor.fix == "Set image.tag to a tag such as v1.10.0, or remove it."
+        == ''image.tag "v1.11.0" is not a v1.10 release. Kix rejected it because the CRDs are vendored from v1.10.0.''
+      &&
+        minor.fix
+        == ''Set image.tag to a matching tag such as "v1.10.0", or remove image.tag to use the default.''
       &&
         prefix.message
-        == ''image.tag "1.10.2" has no leading "v", and upstream tags this image like v1.10.0.''
+        == ''image.tag "1.10.2" has no leading "v". Kix rejected it because upstream tags this image with a "v" prefix, such as "v1.10.0".''
       && noPrefix.option == "webhook.image.tag"
       &&
         noPrefix.message
-        == ''webhook.image.tag "v0.15.1" starts with "v", and upstream tags this image like 0.15.1.''
+        == ''webhook.image.tag "v0.15.1" starts with "v". Kix rejected it because upstream tags this image without a "v" prefix, such as "0.15.1".''
       &&
         older.message
-        == ''image.tag "v1.4.0" is not a v1.8, v1.9, or v1.10 release, and the CRDs are vendored from v1.10.0.''
-      && older.fix == "Set image.tag to a tag such as v1.10.0, or remove it. Run the script."
+        == ''image.tag "v1.4.0" is not a v1.8, v1.9, or v1.10 release. Kix rejected it because the CRDs are vendored from v1.10.0.''
+      &&
+        older.fix
+        == ''Set image.tag to a matching tag such as "v1.10.0", or remove image.tag to use the default. Run the script.''
     )
     || throw "kix.image.checkRelease: ${
       builtins.toJSON {

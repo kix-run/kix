@@ -77,8 +77,8 @@ under `rbac/`, the named roles), sort, write. CI runs `--check` on every pull re
 
 1. Move the tag in `crds/sources.txt` (and `rbac/sources.txt`), `release`,
    and the image digests in `default.nix` in the same change. Operator
-   packages refuse an `image.tag` of another major.minor than `release`
-   (`kix.image.checkRelease`),
+   packages use `kix.image.checkRelease` to reject an `image.tag` whose
+   major.minor version differs from `release`,
    and for kubevirt and cdi the kix-lib test
    `kubevirt-cdi-sources-match-release` fails when a sources.txt URL is not
    at `release`, so a half-done bump fails the checks. Operand image

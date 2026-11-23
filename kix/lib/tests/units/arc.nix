@@ -227,7 +227,7 @@ in
         in
         (check tag).assertion
         && !a.assertion
-        && lib.hasPrefix "image.tag \"${tag}\" is not a 0.15 release, and the CRDs under kix/packages/experimental/arc/crds are vendored from 0.15.1." a.message;
+        && lib.hasPrefix "image.tag \"${tag}\" is not a 0.15 release. Kix rejected it because the CRDs in kix/packages/experimental/arc/crds come from 0.15.1." a.message;
     in
     (
       builtins.all accepted [

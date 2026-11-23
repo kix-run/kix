@@ -304,11 +304,11 @@ the defaults fails there.
   has a `meta.version` and an image the user can change (I11). Read the
   image of the main software, never a helper's (I12). The PackageInstance
   record, `kix plan`, and a consumer's `compatibleWith` check then report
-  what the instance runs. `meta.version` is the default release as upstream
-  tags it, and Kix drops a leading `v` when it reads it (M2).
-- When the package vendors CRDs or RBAC from `release`, put
-  `kix.image.checkRelease` in `assertions` for each image of that release
-  (C8).
+  what the instance runs. Set `meta.version` to the default upstream release
+  tag; Kix strips any leading `v` when reading `meta.version` (M2).
+- When the package vendors CRDs or RBAC from `release`, add
+  `kix.image.checkRelease` to `assertions` for every image tied to that
+  release (C8).
 
 ### 6. Secrets
 

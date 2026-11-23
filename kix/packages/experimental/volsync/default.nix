@@ -205,8 +205,8 @@ in
       (kix.image.checkRelease {
         inherit (config) image;
         inherit release;
-        reason = "the CRDs and ClusterRole under kix/packages/experimental/volsync/{crds,rbac} are vendored from v${release}";
-        fix = "To move to another release, change release in kix/packages/experimental/volsync/default.nix and the tag in crds/sources.txt and rbac/sources.txt, then run uv run scripts/vendor-crds.py volsync.";
+        reason = "the CRDs and ClusterRole in kix/packages/experimental/volsync/{crds,rbac} come from v${release}";
+        fix = "To update this package to another version, change release in kix/packages/experimental/volsync/default.nix and the tag in crds/sources.txt and rbac/sources.txt, then run uv run scripts/vendor-crds.py volsync.";
       })
     ];
 

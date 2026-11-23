@@ -205,7 +205,7 @@ meta = {
 
 ### `meta.version`
 
-Set `meta.version` to the software version the package deploys by default, such as `"1.30.6"` for nginx 1.30.6. Define the version once in a local `release` variable and reuse it for the default image tag so the two stay in sync. When the upstream tag starts with `v`, set `meta.version` to the tag as it is. Kix removes the leading `v` when it reads `meta.version`, so `kix list packages`, the `PackageInstance` record, and `compatibleWith` see `1.12.1`, the same form that `kix.image.version` returns:
+Set `meta.version` to the software version the package deploys by default, such as `"1.30.6"` for nginx 1.30.6. Define the version once in a local `release` variable and reuse it for the default image tag so the two stay in sync. If the upstream image tag starts with `v` (such as `"v1.12.1"`), pass `release` directly to `meta.version`. Kix strips the leading `v` when reading `meta.version`, so `kix list packages`, the `PackageInstance` record, and `compatibleWith` all see `"1.12.1"`, matching `kix.image.version`:
 
 ```nix
 let

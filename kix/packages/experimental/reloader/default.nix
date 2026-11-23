@@ -154,8 +154,8 @@ in
       (kix.image.checkRelease {
         inherit (config) image;
         inherit release;
-        reason = "the flags and RBAC rules of this package follow reloader ${release}";
-        fix = "To move to another release, change `release` in kix/packages/experimental/reloader/default.nix and check the flags against that release's internal/pkg/util/util.go and the rules against its chart clusterrole.yaml.";
+        reason = "this package's flags and RBAC rules are written for Reloader ${release}";
+        fix = "To update this package to another version, change release in kix/packages/experimental/reloader/default.nix and check its flags against internal/pkg/util/util.go and its RBAC rules against the chart's clusterrole.yaml for that version.";
       })
     ];
 

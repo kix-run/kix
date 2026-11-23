@@ -237,8 +237,8 @@ in
       (kix.image.checkRelease {
         inherit (config) image;
         inherit release;
-        reason = "the definitions under kix/packages/stable/cnpg-operator/crds and the ClusterRole under rbac are vendored from CloudNativePG ${release}";
-        fix = "To move the package to another release, follow its header.";
+        reason = "the CRDs in kix/packages/stable/cnpg-operator/crds and the ClusterRole in rbac come from CloudNativePG ${release}";
+        fix = "To update this package to another version, follow the instructions at the top of kix/packages/stable/cnpg-operator/default.nix.";
       })
     ];
 

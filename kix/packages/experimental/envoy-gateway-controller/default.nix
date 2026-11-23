@@ -286,8 +286,8 @@ in
       (kix.image.checkRelease {
         inherit (config) image;
         inherit release;
-        reason = "this package bundles CRDs and RBAC manifests from Envoy Gateway ${release}, so another minor version can fail at deploy or at runtime";
-        fix = "Set image.digest to match the new tag.";
+        reason = "this package ships CRDs and RBAC manifests from Envoy Gateway ${release}, and another minor version may fail during deploy or at runtime";
+        fix = "If you set a new tag, also update image.digest to match.";
       })
     ];
 
@@ -296,7 +296,7 @@ in
       repository = "docker.io/envoyproxy/gateway";
       tag = release;
       digest = "sha256:c2243d43518bed91d3ed8c2db849a4b7a14ac9b96eb019f2ab104bb1ca8572b1";
-      description = "Container image for the Envoy Gateway controller, the certificate-generation Job, and the shutdown-manager sidecar in each proxy pod. Its major.minor must be that of ${release}, to match the bundled CRDs and RBAC.";
+      description = "Container image for the Envoy Gateway controller, the certificate-generation Job, and the shutdown-manager sidecar in each proxy pod. Must use the same major.minor version as ${release} to match the bundled CRDs and RBAC.";
     };
 
     operandImages = {

@@ -231,8 +231,8 @@ in
       (kix.image.checkRelease {
         inherit (config) image;
         inherit release;
-        reason = "the CRD and roles under kix/packages/experimental/cdi/{crds,rbac} are vendored from ${release}";
-        fix = "To move to another release, change release in kix/packages/experimental/cdi/default.nix and the tag in crds/sources.txt and rbac/sources.txt, then run uv run scripts/vendor-crds.py cdi.";
+        reason = "the CRD and RBAC roles in kix/packages/experimental/cdi/{crds,rbac} come from ${release}";
+        fix = "To update this package to another version, change release in kix/packages/experimental/cdi/default.nix and the tag in crds/sources.txt and rbac/sources.txt, then run uv run scripts/vendor-crds.py cdi.";
       })
     ]
     ++ map (n: {

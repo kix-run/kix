@@ -122,8 +122,8 @@ in
       (kix.image.checkRelease {
         inherit (config) image;
         inherit release;
-        reason = "the CRDs under kix/packages/experimental/zfs-localpv/crds are vendored from ${release}";
-        fix = "To move to another release, change release in kix/packages/experimental/zfs-localpv/default.nix and run uv run scripts/vendor-crds.py zfs-localpv.";
+        reason = "the CRDs in kix/packages/experimental/zfs-localpv/crds come from ${release}";
+        fix = "To update this package to another version, change release in kix/packages/experimental/zfs-localpv/default.nix and run uv run scripts/vendor-crds.py zfs-localpv.";
       })
     ]
     ++

@@ -576,7 +576,7 @@ in
       };
       movedEnv = envOf moved "kubevirt-operator";
 
-      releaseMessage = "kubevirt/{crds,rbac} are vendored from v1.10.0";
+      releaseMessage = "kubevirt/{crds,rbac} come from v1.10.0";
       refused = {
         older = refusedWith releaseMessage "kubevirt" { image.tag = "v1.4.1"; };
         newer = refusedWith releaseMessage "kubevirt" { image.tag = "v1.11.0"; };

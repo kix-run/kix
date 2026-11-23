@@ -145,8 +145,8 @@ in
       (kix.image.checkRelease {
         inherit (config) image;
         inherit release;
-        reason = "the CRDs and ClusterRole under kix/packages/experimental/prometheus-operator/{crds,rbac} are vendored from ${release}";
-        fix = "To move to another release, change release in kix/packages/experimental/prometheus-operator/default.nix and the tag in crds/sources.txt and rbac/sources.txt, then run uv run scripts/vendor-crds.py prometheus-operator.";
+        reason = "the CRDs and ClusterRole in kix/packages/experimental/prometheus-operator/{crds,rbac} come from ${release}";
+        fix = "To update this package to another version, change release in kix/packages/experimental/prometheus-operator/default.nix and the tag in crds/sources.txt and rbac/sources.txt, then run uv run scripts/vendor-crds.py prometheus-operator.";
       })
       {
         assertion = config.operandImages.prometheus-config-reloader.pullPolicy == null;

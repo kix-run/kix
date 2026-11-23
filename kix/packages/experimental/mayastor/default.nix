@@ -235,8 +235,8 @@ in
             image = lib.getAttrFromPath (lib.splitString "." option) config;
             inherit option;
             release = "v${release}";
-            reason = "the DiskPool CRD version and the RBAC in kix/packages/experimental/mayastor are written for ${release}";
-            fix = "To move to another release, change release in kix/packages/experimental/mayastor/common.nix.";
+            reason = "the DiskPool CRD version and RBAC rules in kix/packages/experimental/mayastor are written for ${release}";
+            fix = "To update this package to another version, change release in kix/packages/experimental/mayastor/common.nix.";
           }
         )
         (

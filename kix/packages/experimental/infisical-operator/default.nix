@@ -244,7 +244,7 @@ in
         inherit (config) image;
         inherit release;
         reason = "the CRDs and RBAC in kix/packages/experimental/infisical-operator are from ${release}";
-        fix = "To move the package to another release, change release in default.nix and the tag in crds/sources.txt, run uv run scripts/vendor-crds.py infisical-operator, and compare the manager ClusterRole with config/rbac/role.yaml at the new tag.";
+        fix = "To update this package to another version, change release in default.nix and the tag in crds/sources.txt, run uv run scripts/vendor-crds.py infisical-operator, and compare the manager ClusterRole against config/rbac/role.yaml at the new tag.";
       })
       {
         assertion = sourceUrls != [ ] && lib.all (lib.hasInfix "/${release}/") sourceUrls;

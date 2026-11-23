@@ -290,8 +290,8 @@ in
         kix.image.checkRelease {
           image = lib.getAttrFromPath (lib.splitString "." option) config;
           inherit option release;
-          reason = "the CRDs and RBAC in kix/packages/experimental/cert-manager are vendored from ${release}";
-          fix = "To move the package to another release, change release in kix/packages/experimental/cert-manager/common.nix and run uv run scripts/vendor-crds.py cert-manager.";
+          reason = "the CRDs and RBAC in kix/packages/experimental/cert-manager come from ${release}";
+          fix = "To update this package to another version, change release in kix/packages/experimental/cert-manager/common.nix and run uv run scripts/vendor-crds.py cert-manager.";
         }
       )
       (

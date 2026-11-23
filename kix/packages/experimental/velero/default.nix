@@ -448,8 +448,8 @@ in
       (kix.image.checkRelease {
         inherit (config) image;
         inherit release;
-        reason = "the CRDs under kix/packages/experimental/velero/crds are vendored from ${release}";
-        fix = "To move to another release, change release in kix/packages/experimental/velero/common.nix and run uv run scripts/vendor-crds.py velero.";
+        reason = "the CRDs in kix/packages/experimental/velero/crds come from ${release}";
+        fix = "To update this package to another version, change release in kix/packages/experimental/velero/common.nix and run uv run scripts/vendor-crds.py velero.";
       })
       {
         assertion = setByPackage bsl == [ ];

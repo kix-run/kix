@@ -170,8 +170,8 @@ in
       (kix.image.checkRelease {
         inherit (config) image;
         inherit release;
-        reason = "the definition under kix/packages/experimental/cnpg-barman-cloud/crds and the roles under rbac are vendored from plugin-barman-cloud ${release}";
-        fix = "To move the package to another release, follow its header.";
+        reason = "the CRD in kix/packages/experimental/cnpg-barman-cloud/crds and the RBAC roles in rbac come from plugin-barman-cloud ${release}";
+        fix = "To update this package to another version, follow the instructions at the top of kix/packages/experimental/cnpg-barman-cloud/default.nix.";
       })
     ]
     # A sidecar that keeps image.tag is covered by the check on image.tag.
@@ -180,7 +180,7 @@ in
         inherit (config.sidecar) image;
         option = "sidecar.image";
         inherit release;
-        reason = "the plugin expects the sidecar of its own release, plugin-barman-cloud ${release}";
+        reason = "the plugin requires a sidecar from the same release (plugin-barman-cloud ${release})";
       }
     );
 

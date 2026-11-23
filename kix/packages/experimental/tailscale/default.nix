@@ -192,8 +192,8 @@ in
       (kix.image.checkRelease {
         inherit (config) image;
         release = tag;
-        reason = "the CRDs under kix/packages/experimental/tailscale/crds and the rules in kix/packages/experimental/tailscale/rbac.nix come from ${tag}";
-        fix = "To move to another release, change release in kix/packages/experimental/tailscale/default.nix and the tag in crds/sources.txt, run uv run scripts/vendor-crds.py tailscale, and compare rbac.nix with that release's operator-rbac.yaml and proxy-rbac.yaml.";
+        reason = "the CRDs in kix/packages/experimental/tailscale/crds and the RBAC rules in kix/packages/experimental/tailscale/rbac.nix come from ${tag}";
+        fix = "To update this package to another version, change release in kix/packages/experimental/tailscale/default.nix and the tag in crds/sources.txt, run uv run scripts/vendor-crds.py tailscale, and compare rbac.nix against operator-rbac.yaml and proxy-rbac.yaml for that version.";
       })
       (reservedKeys "proxyClasses" "scope.mkCR tailscale.out.crds.ProxyClass" (
         builtins.attrNames config.proxyClasses

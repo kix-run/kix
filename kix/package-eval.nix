@@ -688,7 +688,7 @@ let
       lib.assertMsg (!ok)
         "${folderOf name}: meta.version ${builtins.toJSON version} is a version now; remove it from versionExceptions in kix/package-eval.nix and update ${versionExceptions.${name}}"
     else
-      lib.assertMsg ok "${folderOf name}: meta.version ${builtins.toJSON version} is not a version. Use the upstream release the package targets, e.g. \"1.19.6\".";
+      lib.assertMsg ok "${folderOf name}: meta.version ${builtins.toJSON version} is not a valid version string. Set meta.version to the default upstream release version or tag (for example, \"1.19.6\" or \"v1.19.6\"), or omit it when the package deploys no upstream software.";
 
   # Collect the image options of an instance's config: every attribute set
   # with a `repository` and a `tag`, up to three levels deep.

@@ -360,7 +360,7 @@ Packages can read `clusterConfig.k8sVersion` in `build` and compare it against a
 | --- | --- | --- |
 | `kix.version.atLeast` | `version -> bound -> bool or null` | Returns `true` when `version` is `bound` or newer, `false` when older, or `null` when `version` is too imprecise to tell. |
 | `kix.version.atMost` | `version -> bound -> bool or null` | Returns `true` when `version` is `bound` or older, `false` when newer, or `null` when `version` is too imprecise to tell. |
-| `kix.version.ofTag` | `string -> string or null` | Returns the version a tag names, as `kix.image.version` does for an image: `"v1.156.0-cluster"` gives `"1.156.0"`. Use it for a tag that is not part of an image option, such as a version field of a custom resource. |
+| `kix.version.ofTag` | `string -> string or null` | Extracts the version from a tag string using the same rules as `kix.image.version` (for example, `"v1.156.0-cluster"` returns `"1.156.0"`, and `"latest"` returns `null`). Use it for standalone tag strings outside an image option, such as a custom resource's version field. |
 
 Both functions compare up to the segment precision of `bound` (using the [version rules](/docs/reference/package-anatomy/#metaversion)), so `kix.version.atLeast "1.36.2" "1.36"` and `kix.version.atMost "1.36.2" "1.36"` both return `true`. When `version` has fewer numeric segments than `bound` and matches its prefix (such as `"1.36"` against `"1.36.2"`), both return `null`; if an earlier segment already differs (such as `"1.35"` against `"1.36.2"`), they still return `true` or `false`.
 
@@ -389,9 +389,9 @@ imagePullPolicy = config.image.pullPolicy;
 | `kix.image.ref` | `{ repository, tag, digest ? null, ... } -> string` | Formats a container image reference from an image attribute set. Both `repository` and `tag` are required and must be non-empty strings (throws an evaluation error if either is missing or `""`). Renders `"${repository}:${tag}@${digest}"` when `digest` is non-null, or `"${repository}:${tag}"` when `digest` is `null`. |
 | `kix.image.version` | `{ tag ? null, ... } -> string or null` | Returns the version the image's tag names, without a leading `v`, a digest, or a vendor suffix: `"v1.37.1-alpine"` gives `"1.37.1"`. A pre-release suffix stays: `"2.0.0-rc1"` gives `"2.0.0-rc1"`. Returns `null` when the tag names no version, such as `"latest"`. A package publishes the result as `out.version` so that an instance reports the version it runs. |
 | `kix.image.isPinned` | `{ digest ? null, ... } -> bool` | Takes an image attribute set and returns `true` when `image.digest` is non-null (`(image.digest or null) != null`). |
-| `kix.image.checkRelease` | `{ image, release, reason, option ? "image", also ? [ ], fix ? null } -> assertion` | Returns an assertion for the package's `assertions` list. The assertion holds when the image's tag has the major.minor of `release`, or of a minor listed in `also` (such as `"1.9"`), and starts with `v` exactly when `release` does. `option` is the path of the image option, used in the message. `reason` says what the release fixes, such as `"the CRDs under crds are vendored from ${release}"`. The fix tells the user to set a tag such as `release` and then adds `fix`, which can say how to move the package to another release. |
+| `kix.image.checkRelease` | `{ image, release, reason, option ? "image", also ? [ ], fix ? null } -> assertion` | Builds an entry for the package's `assertions` list that checks `image.tag` against `release`. The check passes when `image.tag` has the same major.minor version as `release` (or any major.minor listed in `also`, such as `"1.9"`) and matches `release` on whether the tag starts with `v`. `option` sets the option path reported on failure (`"${option}.tag"`). `reason` explains why the package requires that release (rendered after `"because"`, for example `"the CRDs in kix/packages/experimental/velero/crds come from ${release}"`). Kix suggests setting a matching tag or removing the override to use the default, and appends `fix` when provided (for example, instructions for updating the package to another version). |
 
-A package that vendors CRDs or RBAC rules from one upstream release checks each image that runs that release:
+Use `kix.image.checkRelease` when a package ships CRDs or RBAC rules from a specific upstream release:
 
 ```nix
 assertions =
@@ -400,8 +400,8 @@ assertions =
     (kix.image.checkRelease {
       inherit (config) image;
       inherit release;
-      reason = "the CRDs under kix/packages/experimental/velero/crds are vendored from ${release}";
-      fix = "To move to another release, change release and run uv run scripts/vendor-crds.py velero.";
+      reason = "the CRDs in kix/packages/experimental/velero/crds come from ${release}";
+      fix = "To update this package to another version, change release in kix/packages/experimental/velero/common.nix and run uv run scripts/vendor-crds.py velero.";
     })
   ];
 ```
