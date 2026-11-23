@@ -351,8 +351,8 @@ in
               ];
               operator = "VictoriaMetrics operator ${ns}/${scope.instanceName}";
               summary = "The VictoriaMetrics operator fails to reconcile objects.";
-              impact = "the objects it manages may not match their CRs";
-              nextStep = "Check the operator logs for the object and the error.";
+              impact = "the objects it manages may not match their custom resources";
+              nextStep = "Check the operator logs for the failing object and error.";
             };
           };
         }

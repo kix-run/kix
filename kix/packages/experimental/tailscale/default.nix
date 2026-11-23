@@ -701,8 +701,8 @@ in
             selector = sel;
             operator = operator;
             summary = "The Tailscale operator fails to reconcile resources.";
-            impact = "a proxy or tailnet device may not match its resource";
-            nextStep = "The operator log names the error; a refused OAuth client or a tailnet API error is the usual cause.";
+            impact = "a proxy or tailnet device may not match its Kubernetes resource";
+            nextStep = "Check the operator logs for the error; common causes are rejected OAuth client credentials or tailnet API errors.";
           };
         };
       }

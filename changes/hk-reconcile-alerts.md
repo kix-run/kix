@@ -2,4 +2,4 @@
 kind = "fixed"
 packages = ["victoria-metrics-operator", "experimental/rabbitmq-operator"]
 +++
-`VMOperatorReconcileErrors` (`victoria-metrics-operator`) and `RabbitMQOperatorReconcileErrors` (`rabbitmq-operator`) no longer fire on the optimistic-lock conflicts that a busy, healthy operator retries at once. They now fire when more than 10% of a controller's reconciles fail over 30 minutes, with more than two errors, for 15 minutes. This is the rule that the other operator packages already use. The description now gives the share of reconciles that failed.
+`VMOperatorReconcileErrors` (`victoria-metrics-operator`) and `RabbitMQOperatorReconcileErrors` (`rabbitmq-operator`) no longer trigger false alerts when a busy, healthy operator hits optimistic-lock conflicts and immediately retries them. Matching Kix's other operator packages, both alerts now fire only when a controller's 30-minute reconcile failure rate exceeds 10% (with more than two errors) for 15 minutes, and their descriptions now report the failure percentage.

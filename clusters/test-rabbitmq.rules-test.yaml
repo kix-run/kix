@@ -395,7 +395,7 @@ tests:
               controller: "rabbitmqcluster"
             exp_annotations:
               summary: "The RabbitMQ Cluster Operator fails to reconcile RabbitMQ clusters."
-              description: "The rabbitmqcluster controller of the RabbitMQ Cluster Operator rabbitmq-system/rabbitmq-operator has failed 50% of its reconciles over the last 30 minutes, so a RabbitmqCluster's StatefulSet, Services, or claims may not match its spec. The operator log and the ReconcileSuccess condition of the RabbitmqCluster name the error."
+              description: "The rabbitmqcluster controller of the RabbitMQ Cluster Operator rabbitmq-system/rabbitmq-operator has failed 50% of its reconciles over the last 30 minutes, so a RabbitmqCluster's StatefulSet, Services, or PersistentVolumeClaims may not match its spec. Check the operator logs and the RabbitmqCluster's ReconcileSuccess condition for the error."
   # The error count stays flat.
   - interval: 1m
     input_series:

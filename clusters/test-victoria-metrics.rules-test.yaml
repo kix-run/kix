@@ -469,7 +469,7 @@ tests:
               controller: vmcluster
             exp_annotations:
               summary: "The VictoriaMetrics operator fails to reconcile objects."
-              description: "The vmcluster controller of the VictoriaMetrics operator monitoring-system/vm-operator has failed 50% of its reconciles over the last 30 minutes, so the objects it manages may not match their CRs. Check the operator logs for the object and the error."
+              description: "The vmcluster controller of the VictoriaMetrics operator monitoring-system/vm-operator has failed 50% of its reconciles over the last 30 minutes, so the objects it manages may not match their custom resources. Check the operator logs for the failing object and error."
   # A healthy operator fires nothing.
   - interval: 1m
     input_series:

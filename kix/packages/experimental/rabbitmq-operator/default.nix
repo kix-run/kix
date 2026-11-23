@@ -772,8 +772,8 @@ in
             selector = sel;
             inherit operator;
             summary = "The RabbitMQ Cluster Operator fails to reconcile RabbitMQ clusters.";
-            impact = "a RabbitmqCluster's StatefulSet, Services, or claims may not match its spec";
-            nextStep = "The operator log and the ReconcileSuccess condition of the RabbitmqCluster name the error.";
+            impact = "a RabbitmqCluster's StatefulSet, Services, or PersistentVolumeClaims may not match its spec";
+            nextStep = "Check the operator logs and the RabbitmqCluster's ReconcileSuccess condition for the error.";
           };
         };
       } args

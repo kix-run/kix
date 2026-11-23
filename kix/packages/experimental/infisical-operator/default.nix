@@ -846,7 +846,7 @@ in
             operator = operator;
             summary = "The Infisical operator fails to reconcile its resources.";
             impact = "a Secret or ConfigMap it manages may be stale";
-            nextStep = "The operator log and the conditions of the custom resource name the error, such as an authentication or connection failure.";
+            nextStep = "Check the operator logs and the custom resource's conditions for the error, such as an authentication or connection failure.";
           };
         };
       }

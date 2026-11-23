@@ -2,4 +2,4 @@
 kind = "added"
 library = ["kix.reconcileErrorsAlert"]
 +++
-`kix.reconcileErrorsAlert` returns the reconcile errors alert for an operator built on controller-runtime, for use in the `alerts` of `kix.monitor` or `kix.alerts`. It fires when more than 10% of a controller's reconciles fail over 30 minutes, with more than two errors, so the conflicts that a busy, healthy operator retries do not fire it. The cnpg-operator, arc, infisical-operator, tailscale, rabbitmq-operator, and victoria-metrics-operator packages use it.
+`kix.reconcileErrorsAlert` builds a standard reconcile-error alert for controller-runtime operators, for use in the `alerts` set of `kix.monitor` or `kix.alerts`. The alert fires when a controller's 30-minute reconcile failure rate exceeds 10% (with more than two errors) for 15 minutes, avoiding false alerts when a busy, healthy operator retries optimistic-lock conflicts. `arc`, `cnpg-operator`, `infisical-operator`, `rabbitmq-operator`, `tailscale`, and `victoria-metrics-operator` now use this helper.
