@@ -99,8 +99,8 @@ let
     else if !builtins.isString (value.reason or "") then
       fail {
         instance = where;
-        message = "meta.availability.reason has type ${builtins.typeOf value.reason}, but it must be a string.";
-        fix = "Set meta.availability.reason to a string explaining the limit, for example: meta.availability.reason = \"Single SQLite writer.\";";
+        message = "meta.availability.reason must be a string, got ${builtins.typeOf value.reason}.";
+        fix = "Set meta.availability.reason to a sentence explaining why the package cannot run at a higher level, for example `meta.availability.reason = \"Only one pod can write to the SQLite database at a time.\";`.";
       }
     else
       value.max or null;

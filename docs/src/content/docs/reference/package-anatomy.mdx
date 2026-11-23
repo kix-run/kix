@@ -190,7 +190,7 @@ meta = {
 | `description` | string | None | Non-empty one-line summary of the package. Checked by the `governance.hasDescription` scorecard rule (`info` severity). |
 | `roles` | list of strings | `[ ]` | Platform capabilities provided by this package. |
 | `defaultAliases` | list of strings | `[ ]` | Default dependency-injection names registered when `instances.<name>.aliases` is empty. |
-| `availability` | `{ max; reason?; }` | None | Highest availability level the package supports (`max`: `"none"`, `"pod"`, `"node"`, or `"zone"`), with an optional `reason` string that Kix includes in warnings and errors when the ceiling applies. |
+| `availability` | `{ max; reason?; }` | None | Highest availability level the package supports (`max`: `"none"`, `"pod"`, `"node"`, or `"zone"`), plus an optional `reason` string shown when Kix caps availability or rejects multiple replicas under `"none"`. |
 | `compatibleWith` | attrset of `{ minVersion?; maxVersion?; reason?; }` | `{ }` | Version bounds for upstream dependencies keyed by dependency argument name. |
 | `k8s` | `{ minVersion?; maxVersion?; reason?; supported?; }` | None | Kubernetes version bounds checked against [`k8sVersion`](/docs/reference/cluster-configuration/). Top-level `minVersion` and `maxVersion` fail the build outside that range; `supported = { minVersion?; maxVersion?; source?; }` emits a warning without stopping the build. |
 | `conflictsWith` | list of strings or `{ key; reason; }` | `[ ]` | Packages that cannot coexist with this package (`"<name>"` for same-namespace, `"cluster:<name>"` for cluster-wide), with an optional `reason` included in conflict errors. |
@@ -283,7 +283,7 @@ Each role in `meta.roles` also registers that role name as a dependency alias so
 
 Individual workloads can further clamp their own ceiling by passing `availability.max` to `scope.mkDeployment`, `scope.mkStatefulSet`, `scope.mkJob`, or `scope.mkCronJob`.
 
-Include `reason` alongside `max` (in `meta.availability` or on a workload builder) to explain why the software cannot run at a higher availability level. Kix includes `reason` when it warns that an instance or workload was capped at `max`, and when it rejects a workload with more than one replica under `max = "none"`. Write `reason` as one or more full sentences. Kix shows it as `Reason: <reason>` and adds a final full stop when it has none. A `reason` on a `meta.conflictsWith` entry follows the same form:
+Add `reason` alongside `max` (in `meta.availability` or on a workload builder) to explain why the software cannot run at a higher availability level. Kix includes `reason` when it warns that an instance or workload was capped at `max`, and when it rejects a workload with more than one replica under `max = "none"`. Write `reason` as one or more complete sentences; Kix prints `Reason: <reason>` and adds a final period if missing:
 
 ```nix
 availability = {
@@ -336,13 +336,13 @@ Entries in `meta.conflictsWith` prevent incompatible packages from being deploye
 
 An instance counts when it answers `<pkg>` by its name or its aliases, or when its package lists `<pkg>` in `meta.defaultAliases`. The last case holds even when the instance sets its own `aliases`, so two instances of a singleton package fail whatever aliases they set.
 
-An entry can also be `{ key; reason; }`, where `key` is `"<pkg>"` or `"cluster:<pkg>"` and `reason` explains why the instances cannot coexist. Kix includes `reason` in the conflict error:
+An entry can also be `{ key; reason; }`, where `key` is `"<pkg>"` or `"cluster:<pkg>"` and `reason` (one or more complete sentences) explains why the instances cannot coexist. Kix prints `Reason: <reason>` in the conflict error:
 
 ```nix
 conflictsWith = [
   {
     key = "cluster:tailscale";
-    reason = "The operator watches cluster-wide tailscale.com resources, Services with loadBalancerClass \"tailscale\", and Ingresses with IngressClass \"tailscale\" (matched by name in its DNS-record handler), so two instances would compete for the same objects.";
+    reason = "The operator watches cluster-wide tailscale.com resources, Services with loadBalancerClass \"tailscale\", and Ingresses with IngressClass \"tailscale\" across all namespaces, so two instances would compete for the same objects.";
   }
 ];
 ```

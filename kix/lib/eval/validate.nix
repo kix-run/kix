@@ -476,9 +476,9 @@ rec {
           message = "Duplicate resource: ${id}.${builtBy es}";
           fix =
             if builtins.length (ownerNames es) > 1 then
-              "Remove one of these instances, or configure them to give the resource distinct names. Cluster-scoped resources must have unique names across the entire cluster."
+              "Remove one of these instances, or configure them to use different names for this resource. Two resources of the same kind cannot share a name in the same namespace (or anywhere in the cluster for cluster-scoped resources)."
             else
-              "Give each resource of the same kind a unique name.";
+              "Give each resource of this kind a unique name.";
         }) dups;
 
       # --- 8. managed-by label ---

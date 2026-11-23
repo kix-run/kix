@@ -192,8 +192,9 @@ is a finding from the upstream source, not a default.
    program-wide limit is `meta.availability.max = "none";`; a limit that
    depends on config, wiring, or one workload is `availability.max` on that
    builder (pattern table, "Ceilings"). Both accept an optional `reason`
-   string explaining the limit; Kix includes it in warnings and errors when
-   the ceiling applies, so users see the cause directly. W4 and W5 cover the
+   string explaining why the software cannot run at a higher level. Kix
+   includes `reason` when it warns that availability was capped or rejects
+   more than one replica under `"none"`. W4 and W5 cover the
    singleton form: a literal `replicas = 1` under the `none` ceiling.
 5. Load-serving workloads: O19 (the option form is the pattern table's
    "`pick`" row). Strategy: W8.

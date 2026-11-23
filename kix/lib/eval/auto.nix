@@ -386,7 +386,7 @@ rec {
           );
           fix = builtins.concatStringsSep "\n" (
             [
-              "Declare the package this cluster should use by adding one of these optional instances (created only when something depends on it). Each keeps the namespace and instance name Kix uses for auto-instantiation, preserving any existing instance and its data:"
+              "Declare the package this cluster should use by adding one of these lines. `optional = true` creates the instance only when something depends on it, and the namespace and name match what Kix creates automatically so any existing instance keeps its data:"
             ]
             ++ map (name: "  ${chosenInstanceLine item name}") claimants
             ++ [
@@ -583,7 +583,7 @@ rec {
         name:
         "Declare ${name} once in its own namespace so all consumers share it:"
         + "\n  instances.<namespace>.${name}.package = ${packageSpelling name};"
-        + "\nOr set `autoNamespace = \"<namespace>\";` (or `availablePackages.${name}.namespace`) to place auto-instantiated packages there.";
+        + "\nOr set `availablePackages.${name}.namespace = \"<namespace>\";` to place just this package there, or `autoNamespace = \"<namespace>\";` to place all auto-instantiated packages there.";
 
       # Refuse a package that runs once per cluster when demands would place
       # it in several namespaces. The refusal stops evaluation at once,
@@ -599,7 +599,7 @@ rec {
         lib.optional (builtins.length namespaces > 1 && reason != null) {
           message = builtins.concatStringsSep "\n" (
             [
-              "${name} runs once per cluster (${reason}), but no namespace is set for it, so Kix refused to auto-instantiate separate copies in ${toString (builtins.length namespaces)} namespaces:"
+              "${name} runs once per cluster (${reason}), but no namespace is set for it, so Kix refused to create separate copies in ${toString (builtins.length namespaces)} namespaces:"
             ]
             ++ map (p: "  ${p.ns}/${name}, for dependency '${p.depName}' of ${labelRequester p.requester}") ps
           );

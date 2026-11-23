@@ -149,7 +149,7 @@ in
     conflictsWith = [
       {
         key = "cluster:tailscale";
-        reason = "The operator watches cluster-wide tailscale.com resources, Services with loadBalancerClass \"tailscale\", and Ingresses with IngressClass \"tailscale\" (matched by name in its DNS-record handler), so two instances would compete for the same objects.";
+        reason = "The operator watches cluster-wide tailscale.com resources, Services with loadBalancerClass \"tailscale\", and Ingresses with IngressClass \"tailscale\" across all namespaces, so two instances would compete for the same objects.";
       }
     ];
     annotationDomains = [ "tailscale.com" ];

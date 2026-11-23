@@ -83,7 +83,7 @@ rec {
     instance: addedFor:
     lib.optionalString (
       addedFor != [ ]
-    ) " The cluster definition does not declare ${instanceLabel instance addedFor}.";
+    ) " Kix pulled ${instanceLabel instance addedFor} from availablePackages.";
 
   # Return the error for a required dependency on a cluster role that no
   # instance provides. A provider of a role serves every namespace, so the
@@ -114,9 +114,9 @@ rec {
       fix =
         (
           if claimants == [ ] then
-            "Declare an instance in any namespace of a package with meta.roles = [ \"${role}\" ]."
+            "In any namespace, declare an instance of a package that sets meta.roles = [ \"${role}\" ]."
           else
-            "Declare an instance of a package that provides '${role}' in any namespace:"
+            "In any namespace, declare an instance of a package that provides '${role}':"
             + lib.concatMapStrings (c: "\n  instances.<namespace>.<name>.package = ${c};") claimants
         )
         + "\nIf the cluster already provides '${role}' outside Kix, declare an import with `package = kix.mkImport { roles = [ \"${role}\" ]; ... };` instead.";

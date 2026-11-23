@@ -412,8 +412,8 @@ in
         else if !builtins.isString (a.reason or "") then
           fail {
             instance = where;
-            message = "${subject} availability.reason has type ${builtins.typeOf a.reason}, but it must be a string.";
-            fix = "Set availability.reason to a string explaining the limit, for example: availability.reason = \"Single SQLite writer.\";";
+            message = "${subject} availability.reason must be a string, got ${builtins.typeOf a.reason}.";
+            fix = "Set availability.reason to a sentence explaining why this workload cannot run at a higher level, for example `availability.reason = \"Only one pod can write to the SQLite database at a time.\";`.";
           }
         else
           availabilityLib.checkCeiling {

@@ -119,7 +119,7 @@ in
         addedFor = [ "immich/immich" ];
       };
       declared = missing { argName = "valkeyPassword"; };
-      says = lib.hasInfix "The cluster definition does not declare immich/valkey (auto-instantiated for immich/immich).";
+      says = lib.hasInfix "Kix pulled immich/valkey (auto-instantiated for immich/immich) from availablePackages.";
     in
     (
       lib.hasPrefix "immich/valkey: dependency 'valkeyPassword'" added
@@ -246,7 +246,7 @@ in
     (
       dependencyOf byAlias == [ "gateway" ]
       && dependencyOf byGivenName == [ "edge" ]
-      && lib.hasInfix "kix.expose (a/web): for this dependency" (byAlias.thrown or "")
+      && lib.hasInfix "kix.expose (a/web): `out` from" (byAlias.thrown or "")
     )
     || throw "require: ${byAlias.thrown or ""} / ${byGivenName.thrown or ""}";
 
@@ -266,8 +266,8 @@ in
         }).thrown or "";
     in
     (
-      lib.hasInfix "op runs once per cluster (meta.conflictsWith \"cluster:op\"), but no namespace is set for it, so Kix refused to auto-instantiate separate copies in 2 namespaces" text
-      && lib.hasInfix "Or set `autoNamespace = \"<namespace>\";` (or `availablePackages.op.namespace`) to place auto-instantiated packages there." text
+      lib.hasInfix "op runs once per cluster (meta.conflictsWith \"cluster:op\"), but no namespace is set for it, so Kix refused to create separate copies in 2 namespaces" text
+      && lib.hasInfix "Or set `availablePackages.op.namespace = \"<namespace>\";` to place just this package there, or `autoNamespace = \"<namespace>\";` to place all auto-instantiated packages there." text
       && !(lib.hasInfix "kix: op" text)
     )
     || throw "spread refusal: ${text}";

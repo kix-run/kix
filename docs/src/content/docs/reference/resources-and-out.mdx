@@ -84,7 +84,7 @@ Kix provides five workload builders on `scope`:
 | `scope.mkJob` | `batch/v1` `Job` | Yes (`"none"`, `"pod"`, `"node"`) |
 | `scope.mkCronJob` | `batch/v1` `CronJob` | Yes (`"none"`, `"pod"`, `"node"`) |
 
-A builder that supports `availability.max` also takes `availability.reason`, a sentence that says why the workload cannot run above the ceiling. Kix adds it to the messages about the ceiling (see [`meta.availability`](/docs/reference/package-anatomy/#metaavailability)).
+Builders that support `availability.max` also accept `availability.reason` to explain why the workload cannot run at a higher level. Kix includes `reason` when it caps the workload's availability or rejects multiple replicas under `max = "none"` (see [`meta.availability`](/docs/reference/package-anatomy/#metaavailability)).
 
 Use `scope.mkOptional cond resource` (or `if cond then ... else null`) when a workload or resource is enabled conditionally.
 

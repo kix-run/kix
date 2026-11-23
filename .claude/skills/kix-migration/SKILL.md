@@ -802,7 +802,7 @@ DI resolution priority: (1) explicit dep overrides, (2) same-namespace match, (3
 ### Package Meta
 
 - **`meta.podSecurity`**: `"privileged" | "baseline" | "restricted"`, the Pod Security level the package's pods need (kubevirt: privileged). The namespace carries `pod-security.kubernetes.io/enforce` at the most permissive level any of its instances needs. The build checks every pod template in a namespace with a level and fails on a workload that breaks it, naming the container and field.
-- **`meta.availability.max`** caps the whole instance; a package where only some workloads cannot reach the level puts `availability.max = "none"` on those builder calls (`scope.mkDeployment { availability.max = "none"; ... }`) so a quorum store beside a single-replica controller keeps hard spread. Both forms accept an optional `reason` string explaining the limit; Kix includes it when warning that availability was capped at `max` or failing on multiple replicas under `"none"`.
+- **`meta.availability.max`** caps the whole instance; a package where only some workloads cannot reach the level puts `availability.max = "none"` on those builder calls (`scope.mkDeployment { availability.max = "none"; ... }`) so a quorum store beside a single-replica controller keeps hard spread. Both accept an optional `reason` string explaining why the software cannot run at a higher level. Kix includes `reason` when it warns that availability was capped at `max` or rejects more than one replica under `max = "none"`.
 
 ```nix
 meta = {
@@ -813,7 +813,7 @@ meta = {
   owner = "platform";       # required: "platform" or "app-team"
   conflictsWith = [
     "other-pkg"             # same-namespace mutual exclusion
-    { key = "cluster:myOperator"; reason = "Its admission webhooks run across all namespaces."; }  # cluster-wide: one instance answering this name per cluster; reason goes into the error
+    { key = "cluster:myOperator"; reason = "Its admission webhooks run across all namespaces."; }  # cluster-wide: one instance answering this name per cluster; Kix includes reason in the conflict error
   ];
 };
 ```

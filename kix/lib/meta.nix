@@ -377,9 +377,9 @@ rec {
             + autoAdvice;
           fix =
             if isClusterWide then
-              "Remove either ${namespaceName}/${instanceName} or the conflicting instance(s) so they do not run in the same cluster. If they are copies of the same cluster-wide package, keep one instance and consumers in every namespace will use it."
+              "Remove either ${namespaceName}/${instanceName} or the conflicting instances so only one runs in the cluster (if Kix auto-instantiated one, alias or wire the kept instance as shown above). One declared instance of a cluster-wide package serves every namespace."
             else
-              "Remove ${namespaceName}/${instanceName}, or remove or move the conflicting instance(s) to another namespace.";
+              "Remove ${namespaceName}/${instanceName}, or move or remove the conflicting instances so they do not share a namespace.";
         }
       ) (conflictEntries packageMeta);
 
