@@ -452,7 +452,7 @@ memBytes = kix.parseQuantity "memory" config.resources.requests.memory; # "256Mi
 
 | Helper | Signature | Behavior |
 | --- | --- | --- |
-| `kix.tolerations.problems` | `optionPath -> tolerations -> [ message ]` | Returns an error message for each toleration that Kubernetes would reject: a missing or empty `key` when `operator` is other than `"Exists"`, a `value` set when `operator` is `"Exists"`, or `tolerationSeconds` set when `effect` is other than `"NoExecute"`. Each message identifies the entry as `<optionPath>[<index>]`. |
+| `kix.tolerations.problems` | `{ optionPath, tolerations } -> [ message ]` | Returns an error message for each toleration that Kubernetes would reject: a missing or empty `key` when `operator` is other than `"Exists"`, a `value` set when `operator` is `"Exists"`, or `tolerationSeconds` set when `effect` is other than `"NoExecute"`. Each message identifies the entry as `<optionPath>[<index>]`. |
 | `kix.tolerations.render` | `tolerations -> list` | Strips `null` fields from each toleration so the list can be assigned directly to `spec.tolerations` on a pod spec. |
 
 ```nix
@@ -467,7 +467,10 @@ assertions =
   map (message: {
     assertion = false;
     inherit message;
-  }) (kix.tolerations.problems "config.node.tolerations" config.node.tolerations);
+  }) (kix.tolerations.problems {
+    optionPath = "config.node.tolerations";
+    inherit (config.node) tolerations;
+  });
 
 # In the pod spec:
 tolerations = kix.tolerations.render config.node.tolerations;

@@ -1,5 +1,6 @@
 # Tests for `crRequires` on `scope.mkCRD` and `scope.mkCRDRef`: every custom
-# resource of the kind requires the listed resources, before the CRD.
+# resource of the kind requires the listed resources, and a value that is
+# not a list fails when the kind is declared.
 
 {
   lib,
@@ -93,23 +94,47 @@ let
       crd = hashOf raw.widgetCrd;
     };
 
-  # The check comes before the CRD in the Widget's requires.
-  requiresCheckFirst =
+  # The Widget requires both the check and the kind's declaration.
+  requiresCheck =
     declare:
     let
       e = entriesOf declare;
-      indexOf = entry: lib.lists.findFirstIndex (x: x == entry) null e.dependsOn;
     in
-    indexOf e.check != null && indexOf e.crd != null && indexOf e.check < indexOf e.crd;
+    builtins.elem e.check e.dependsOn && builtins.elem e.crd e.dependsOn;
+
+  # A cluster whose package declares the Widget kind with a crRequires that
+  # is not a list, and builds no Widget.
+  declaredOnly =
+    declare:
+    mkCluster [
+      {
+        namespaces.app = { };
+        instances.app.widgets.package = {
+          meta.version = "test";
+          build =
+            { self, scope, ... }:
+            {
+              widgetCrd = declare scope { };
+              root = self.widgetCrd;
+            };
+        };
+      }
+    ];
+
+  helpers = import ../caught.nix { inherit lib; };
+  refusal =
+    (helpers.caught ../../core/resource.nix { inherit lib; }).validateCrRequires "scope.mkCRD widgets"
+      "example.test/Widget"
+      { };
 in
 {
   lib-crd-cr-requires-on-mkcrd =
-    requiresCheckFirst viaCRD
-    || throw "a Widget built from scope.mkCRD does not require its crRequires before the CRD: ${builtins.toJSON (entriesOf viaCRD)}";
+    requiresCheck viaCRD
+    || throw "a Widget built from scope.mkCRD does not require its crRequires and the CRD: ${builtins.toJSON (entriesOf viaCRD)}";
 
   lib-crd-cr-requires-on-mkcrdref =
-    requiresCheckFirst viaRef
-    || throw "a Widget built from scope.mkCRDRef does not require its crRequires before the CRD marker: ${builtins.toJSON (entriesOf viaRef)}";
+    requiresCheck viaRef
+    || throw "a Widget built from scope.mkCRDRef does not require its crRequires and the CRD marker: ${builtins.toJSON (entriesOf viaRef)}";
 
   # Without crRequires the Widget does not require the check.
   lib-crd-cr-requires-default-empty =
@@ -119,7 +144,21 @@ in
     !(builtins.elem e.check e.dependsOn)
     || throw "a Widget requires the check without crRequires: ${builtins.toJSON e}";
 
-  lib-crd-cr-requires-refuses-non-list =
-    evalFails (build (scope: checks: viaCRD scope (builtins.head checks)))
-    || throw "crRequires that is not a list was accepted";
+  # The refusal names the declaration and the kind.
+  lib-crd-cr-requires-refusal-message =
+    lib.hasInfix
+      "scope.mkCRD widgets: crRequires for example.test/Widget must be a list of resources (got set)"
+      (refusal.thrown or "")
+    || throw "crRequires refusal: ${builtins.toJSON refusal}";
+
+  # Both declarations refuse a crRequires that is not a list even when no
+  # custom resource of the kind is built. The controls with a list build.
+  lib-crd-cr-requires-refused-at-declaration =
+    (
+      evalFails (declaredOnly viaCRD)
+      && evalFails (declaredOnly viaRef)
+      && !(evalFails (declaredOnly (scope: _: viaCRD scope [ ])))
+      && !(evalFails (declaredOnly (scope: _: viaRef scope [ ])))
+    )
+    || throw "a kind declared with a crRequires that is not a list built, or a control failed";
 }

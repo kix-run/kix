@@ -51,7 +51,7 @@ let
   # apiserver would refuse. `optionPath` names the option, such as
   # "config.node.tolerations".
   problems =
-    optionPath: tolerations:
+    { optionPath, tolerations }:
     lib.concatLists (
       lib.imap0 (
         i: t:

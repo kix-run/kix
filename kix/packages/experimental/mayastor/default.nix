@@ -180,8 +180,14 @@ in
           classes = config.volumeSnapshotClasses;
           snapshotController = deps.snapshotController or null;
         }
-        ++ kix.tolerations.problems "config.ioEngine.tolerations" config.ioEngine.tolerations
-        ++ kix.tolerations.problems "config.csiNode.tolerations" config.csiNode.tolerations
+        ++ kix.tolerations.problems {
+          optionPath = "config.ioEngine.tolerations";
+          inherit (config.ioEngine) tolerations;
+        }
+        ++ kix.tolerations.problems {
+          optionPath = "config.csiNode.tolerations";
+          inherit (config.csiNode) tolerations;
+        }
       )
     ++ [
       {

@@ -42,7 +42,12 @@ let
     }).config.v;
 
   tolerations = evalList kix.types.toleration;
-  problems = kix.tolerations.problems "config.tolerations";
+  problems =
+    tolerations:
+    kix.tolerations.problems {
+      optionPath = "config.tolerations";
+      inherit tolerations;
+    };
   has = fragment: builtins.any (lib.hasInfix fragment);
 
   classes = evalAttrs kix.types.volumeSnapshotClass;
@@ -84,6 +89,9 @@ in
         noKey = has "config.tolerations[0] has no key" (
           problems (tolerations [ { effect = "NoSchedule"; } ])
         );
+        # Kubernetes refuses an empty key with operator Equal as it refuses
+        # a missing one.
+        emptyKey = has "config.tolerations[0] has no key" (problems (tolerations [ { key = ""; } ]));
         existsWithValue = has "config.tolerations[0] sets value with operator \"Exists\"" (
           problems (tolerations [
             {

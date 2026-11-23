@@ -63,7 +63,7 @@ let
       ) names;
     in
     lib.optional (names != [ ] && snapshotController == null)
-      "${optionPath} defines ${lib.concatStringsSep ", " names}, but nothing provides the snapshotController role, so Kix cannot build VolumeSnapshotClass resources. Add an instance of packages.experimental.snapshot-controller, or remove ${optionPath}. If your cluster already runs a snapshot controller, include its flavor (such as kix.flavors.rke2) or declare it with kix.mkImport (roles = [ \"snapshotController\" ] and crds)."
+      "${optionPath} defines ${lib.concatStringsSep ", " names}, but nothing provides the snapshotController role, so Kix cannot build VolumeSnapshotClass resources. Add a snapshot-controller instance, or remove ${optionPath}. If your cluster already runs a snapshot controller, use a flavor that provides the role or declare it with kix.mkImport (roles = [ \"snapshotController\" ] and crds)."
     ++
       lib.optional (builtins.length defaults > 1)
         "${

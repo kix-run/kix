@@ -120,7 +120,10 @@ in
           classes = config.volumeSnapshotClasses;
           snapshotController = deps.snapshotController or null;
         }
-        ++ kix.tolerations.problems "config.node.tolerations" config.node.tolerations
+        ++ kix.tolerations.problems {
+          optionPath = "config.node.tolerations";
+          inherit (config.node) tolerations;
+        }
       );
 
   build =
