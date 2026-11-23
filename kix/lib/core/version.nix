@@ -97,14 +97,22 @@ let
     else
       v;
 
-  # Return the major and minor numbers of a version, such as [ 1 19 ] for
-  # `v1.19.6`, or null when `v` is not a version or names no minor.
+  # Return the major and minor numbers a version or tag starts with, such as
+  # [ 1 19 ] for `v1.19.6` or `1.19.6_custom`, or null when it starts with
+  # none. Anything after the minor number, such as a patch number or a
+  # vendor suffix, is ignored.
   minorOf =
     v:
     let
-      parsed = tryParse v;
+      m = if builtins.isString v then builtins.match "[vV]?([0-9]+)\\.([0-9]+)([^0-9].*)?" v else null;
     in
-    if parsed == null || builtins.length parsed.core < 2 then null else lib.take 2 parsed.core;
+    if m == null then
+      null
+    else
+      [
+        (lib.toIntBase10 (builtins.elemAt m 0))
+        (lib.toIntBase10 (builtins.elemAt m 1))
+      ];
 
   # Return `tag` with the version it names replaced by `version`, or null
   # when `tag` names none. The leading `v`, a vendor suffix, and a `+build`

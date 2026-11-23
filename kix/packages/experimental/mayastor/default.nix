@@ -233,8 +233,7 @@ in
           option:
           kix.image.checkRelease {
             image = lib.getAttrFromPath (lib.splitString "." option) config;
-            inherit option;
-            release = "v${release}";
+            inherit option release;
             reason = "the DiskPool CRD version and RBAC rules in kix/packages/experimental/mayastor are written for ${release}";
             fix = "To update this package to another version, change release in kix/packages/experimental/mayastor/common.nix.";
           }

@@ -373,7 +373,7 @@ in
       # may need other RBAC rules or accept other providers.
       (kix.image.checkRelease {
         inherit (config) image;
-        release = "v${release}";
+        inherit release;
         reason = "the ClusterRole rules (sources.nix) and supported providers (providers.nix) match external-dns v${release}";
         fix = "To update this package to another version, change release in kix/packages/experimental/external-dns/default.nix and update sources.nix and providers.nix from that version's chart clusterrole.yaml and pkg/apis/externaldns/types.go.";
       })

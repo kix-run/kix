@@ -110,7 +110,7 @@ in
     [
       (kix.image.checkRelease {
         inherit (config) image;
-        release = "v${release}";
+        inherit release;
         reason = "the CRDs in kix/packages/experimental/snapshot-controller/crds come from v${release}";
         fix = "To update this package to another version, change release in kix/packages/experimental/snapshot-controller/default.nix and run uv run scripts/vendor-crds.py snapshot-controller.";
       })

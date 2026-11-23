@@ -1,0 +1,5 @@
+# 2026-11-23 · `kix/lib/meta.nix` · Only `meta.version` loses its leading `v`, so a reported version can still carry one.
+
+`instanceVersion` (`kix/lib/meta.nix:196`) reports the instance's `version` option, then `out.version`, then `meta.version`. Only `meta.version` passes through `versions.bare` (`packageLib.metaFrom`). A `version` option of `"v1.2.3"` reaches the PackageInstance record with its `v`. gateway-api strips the `v` from its own `out.version` by hand (`kix/packages/experimental/gateway-api/default.nix:204`), and the gatewayApi contract strips it again (`kix/contracts/experimental/gatewayApi.nix:80`). Applying `versions.bare` to the result of `instanceVersion` would give all three sources one form, but a user who sets `version = "v1.2.3"` would then see `1.2.3` in the record, which needs a change record.
+
+Decision required from Adam: should every reported version lose its leading `v` (normalise in `instanceVersion`), or should the instance's `version` option keep the form the user wrote?

@@ -271,8 +271,8 @@ in
     || throw "spec ${builtins.toJSON spec}, meta ${builtins.toJSON peeked}";
 
   # `kix.image.checkRelease` accepts a tag of the release's major.minor, or
-  # of a minor in `also`, written with the release's leading `v` or without
-  # it as the release is.
+  # of a minor in `also`, with or without a leading `v` and with any suffix
+  # after the minor number. A rebuilt image may tag in another form.
   lib-package-version-check-release =
     let
       check =
@@ -288,8 +288,7 @@ in
       passes = release: tag: (check release tag { }).assertion;
       fails = release: tag: !(check release tag { }).assertion;
       minor = check "v1.10.0" "v1.11.0" { };
-      prefix = check "v1.10.0" "1.10.2" { };
-      noPrefix = check "0.15.1" "v0.15.1" { option = "webhook.image"; };
+      other = check "0.15.1" "0.16.0" { option = "webhook.image"; };
       older = check "v1.10.0" "v1.4.0" {
         also = [
           "1.8"
@@ -303,6 +302,12 @@ in
       && passes "v1.10.0" "v1.10.7"
       && passes "v1.10.0" "v1.10.1-alpine"
       && passes "0.15.1" "0.15.9"
+      && passes "v1.10.0" "1.10.2"
+      && passes "0.15.1" "v0.15.1"
+      && passes "1.30.2" "1.30.2_custom"
+      && passes "v1.21.3" "1.21"
+      && fails "v1.10.0" "v1.1.0"
+      && fails "v1.10.0" "v1.100.0"
       && fails "v1.10.0" "latest"
       && fails "v1.10.0" "v1"
       && (check "v1.10.0" "v1.9.2" { also = [ "1.9" ]; }).assertion
@@ -311,28 +316,23 @@ in
         minor.message
         == ''image.tag "v1.11.0" is not a v1.10 release. Kix rejected it because the CRDs are vendored from v1.10.0.''
       &&
-        minor.fix
-        == ''Set image.tag to a matching tag such as "v1.10.0", or remove image.tag to use the default.''
+        minor.fix == "Set image.tag to a tag of the v1.10 release, or remove image.tag to use the default."
+      && other.option == "webhook.image.tag"
       &&
-        prefix.message
-        == ''image.tag "1.10.2" has no leading "v". Kix rejected it because upstream tags this image with a "v" prefix, such as "v1.10.0".''
-      && noPrefix.option == "webhook.image.tag"
-      &&
-        noPrefix.message
-        == ''webhook.image.tag "v0.15.1" starts with "v". Kix rejected it because upstream tags this image without a "v" prefix, such as "0.15.1".''
+        other.message
+        == ''webhook.image.tag "0.16.0" is not a 0.15 release. Kix rejected it because the CRDs are vendored from 0.15.1.''
       &&
         older.message
         == ''image.tag "v1.4.0" is not a v1.8, v1.9, or v1.10 release. Kix rejected it because the CRDs are vendored from v1.10.0.''
       &&
         older.fix
-        == ''Set image.tag to a matching tag such as "v1.10.0", or remove image.tag to use the default. Run the script.''
+        == "Set image.tag to a tag of the v1.8, v1.9, or v1.10 release, or remove image.tag to use the default. Run the script."
     )
     || throw "kix.image.checkRelease: ${
       builtins.toJSON {
         inherit
           minor
-          prefix
-          noPrefix
+          other
           older
           ;
       }

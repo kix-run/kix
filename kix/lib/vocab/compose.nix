@@ -39,13 +39,13 @@ rec {
   image =
     let
       needField =
-        image: field:
+        caller: image: field:
         let
           v = image.${field} or null;
         in
         if v == null || v == "" then
           fail {
-            message = "kix.image.ref: image reference has no '${field}', and got: ${builtins.toJSON image}";
+            message = "${caller}: image reference has no '${field}', and got: ${builtins.toJSON image}";
             fix = "An image needs at least { repository, tag }.";
           }
         else
@@ -59,7 +59,7 @@ rec {
       ref =
         image:
         builtins.unsafeDiscardStringContext (
-          "${needField image "repository"}:${needField image "tag"}"
+          "${needField "kix.image.ref" image "repository"}:${needField "kix.image.ref" image "tag"}"
           + lib.optionalString (image.digest or null != null) "@${image.digest}"
         );
 
@@ -77,11 +77,12 @@ rec {
       isPinned = image: (image.digest or null) != null;
 
       # Return an assertion that the image's tag names the major.minor of
-      # `release`, or one of the minors in `also` (such as "1.9"), and has
-      # the leading `v` exactly when `release` has one. A package puts it
-      # in `assertions` for each image whose files it vendors from
-      # `release`. `reason` says what the release binds, and `fix` says how
-      # to move the package to another release.
+      # `release`, or one of the minors in `also` (such as "1.9"). A leading
+      # `v` and anything after the minor number are ignored, because a user
+      # may point the image at a rebuild that tags in another form. A
+      # package puts it in `assertions` for each image whose files it
+      # vendors from `release`. `reason` says what the release binds, and
+      # `fix` says how to move the package to another release.
       checkRelease =
         {
           image,
@@ -92,7 +93,7 @@ rec {
           fix ? null,
         }:
         let
-          tag = builtins.unsafeDiscardStringContext (needField image "tag");
+          tag = builtins.unsafeDiscardStringContext (needField "kix.image.checkRelease" image "tag");
           releaseMinor = versions.minorOf release;
           prefix = if builtins.match "[vV].*" release == null then "" else builtins.substring 0 1 release;
           minorText = m: prefix + lib.concatMapStringsSep "." toString m;
@@ -106,7 +107,6 @@ rec {
               builtins.head texts
             else
               lib.concatStringsSep ", " (lib.take (n - 1) texts) + ", or ${lib.last texts}";
-          sameForm = (builtins.match "[vV].*" tag != null) == (prefix != "");
           tagMinor = versions.minorOf tag;
           path = "${option}.tag";
         in
@@ -117,20 +117,11 @@ rec {
           }
         else
           {
-            assertion = sameForm && builtins.elem tagMinor accepted;
+            assertion = builtins.elem tagMinor accepted;
             option = path;
-            message =
-              if tagMinor != null && builtins.elem tagMinor accepted then
-                "${path} \"${tag}\" ${
-                  if prefix == "" then
-                    "starts with \"v\". Kix rejected it because upstream tags this image without a \"v\" prefix, such as \"${release}\"."
-                  else
-                    "has no leading \"v\". Kix rejected it because upstream tags this image with a \"v\" prefix, such as \"${release}\"."
-                }"
-              else
-                "${path} \"${tag}\" is not a ${acceptedText} release. Kix rejected it because ${reason}.";
+            message = "${path} \"${tag}\" is not a ${acceptedText} release. Kix rejected it because ${reason}.";
             fix =
-              "Set ${path} to a matching tag such as \"${release}\", or remove ${path} to use the default."
+              "Set ${path} to a tag of the ${acceptedText} release, or remove ${path} to use the default."
               + lib.optionalString (fix != null) " ${fix}";
           };
     };
