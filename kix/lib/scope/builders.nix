@@ -864,6 +864,7 @@ in
               ;
             usesAtLeast = attrs.usesAtLeast or null;
             holdsData = attrs.holdsData or null;
+            crRequires = attrs.crRequires or [ ];
           };
         in
         crdResource

@@ -109,6 +109,8 @@ flake.nix → mkFlake.nix → buildCluster (eval/cluster.nix)
 | `vocab/quantity.nix` | Kubernetes quantity grammar (`kix.types.quantity`) and parser (`kix.parseQuantity`). |
 | `vocab/quota-use.nix` | The least a namespace's objects use of its ResourceQuota, from built-in pod kinds and CRD `usesAtLeast` declarations; `buildCluster` refuses a build whose least use is over a quota. |
 | `vocab/storage-class.nix` | `kix.types.storageClass` and `kix.storage.mkClasses` for StorageClass provider packages. |
+| `vocab/snapshot-class.nix` | `kix.types.volumeSnapshotClass`, `kix.storage.snapshotClassProblems`, and `kix.storage.mkSnapshotClasses` for CSI driver packages. |
+| `vocab/toleration.nix` | `kix.types.toleration` and `kix.tolerations.{problems,render}` for packages with a toleration option. |
 | `vocab/durations.nix` | Prometheus duration type/helpers (`kix.types.promDuration`, `kix.durations.*`) and cron staleness helper (`kix.schedules.staleAfter`). |
 | `vocab/rbac.nix` / `crd.nix` / `fragments.nix` | Pipeable RBAC and CRD builders, and multi-file cluster fragment merging. |
 | `kix/packages/default.nix` | Builds the package set a cluster definition receives as `packages`, by merging the two levels from `by-level.nix` with `core/levels.nix`. A cluster reads `packages.<name>` or `packages.stable.<name>` for a stable package and `packages.experimental.<name>` for an experimental one. The name of a removed experimental package, listed in `removed.toml`, fails with the entry's message. Under `experimental` the name throws. At the top it is a `kix-removed` marker, which `availablePackages` skips and an instance's `package` option refuses. |

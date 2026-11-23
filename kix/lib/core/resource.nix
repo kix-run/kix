@@ -1070,6 +1070,11 @@ rec {
       # versions come from a CustomResourceDefinition spec.
       unservedFix ? null,
       crdScope,
+      # Resources every CR of the kind requires, such as a Job that checks
+      # the operator's admission webhook serves. The package declares them
+      # on `scope.mkCRD` or `scope.mkCRDRef`. They come before the CRD in
+      # each CR's `requires`.
+      crRequires ? [ ],
       # Appended to every CR's `requires` after the CRD (a chart's workloads,
       # any of which can be the CRD's webhook).
       extraRequires ? [ ],
@@ -1113,6 +1118,15 @@ rec {
           }
         else
           holdsData;
+
+      _validatedCrRequires =
+        if builtins.isList crRequires then
+          crRequires
+        else
+          fail {
+            message = "${declaredBy}: crRequires for ${group}/${kind} is a ${builtins.typeOf crRequires}.";
+            fix = "Set crRequires to a list of resources, such as [ self.webhookCheck ].";
+          };
 
       # A CR can override the default version, normally the CRD's storage
       # version, with another served one. `consumer` is "ns/instance" when
@@ -1161,7 +1175,7 @@ rec {
         // {
           apiVersion = "${group}/${checkServed consumer args (args.version or version)}";
           kind = crKind;
-          requires = (args.requires or [ ]) ++ [ crdOrRef ] ++ extraRequires;
+          requires = (args.requires or [ ]) ++ _validatedCrRequires ++ [ crdOrRef ] ++ extraRequires;
         }
         // lib.optionalAttrs (factBehavior != null) { inherit factBehavior; }
         // lib.optionalAttrs (usesAtLeast != null) { inherit usesAtLeast; }
@@ -1259,6 +1273,8 @@ rec {
       usesAtLeast ? null,
       # Whether each CR of the kind holds data; see mkCRDBuilders.
       holdsData ? null,
+      # Resources every CR of the kind requires; see mkCRDBuilders.
+      crRequires ? [ ],
     }:
     let
       declaration = "${site} in ${namespaceName}/${instanceName}";
@@ -1343,7 +1359,7 @@ rec {
         crdOrRef = marker;
         factBehavior = _validatedBehavior;
         readiness = _validatedReadiness;
-        inherit usesAtLeast holdsData;
+        inherit usesAtLeast holdsData crRequires;
         version = _validatedVersion;
         servedVersions = _validatedServed;
         crdScope = _validatedScope;

@@ -357,15 +357,19 @@ in
             };
           } == [ ];
         reservedNames =
-          someMessageHas
-            [ "diskPools.root and volumeSnapshotClasses.meta" "Kix drops parts named root or meta" ]
-            (failedMessages {
+          let
+            messages = failedMessages {
               config = {
                 diskPools.root = pool "node1" "/dev/sdb";
                 volumeSnapshotClasses.meta = { };
               };
               deps = snapshotDep;
-            });
+            };
+          in
+          someMessageHas [ "diskPools.root: Kix drops parts named root or meta" ] messages
+          && someMessageHas [
+            "config.volumeSnapshotClasses.meta: Kix drops parts named root or meta"
+          ] messages;
         ownedResources =
           someMessageHas [ "ioEngine.resources sets cpu" "ioEngine.cpuCount" ]
             (failedMessages {
@@ -376,7 +380,10 @@ in
             default.annotations."snapshot.storage.kubernetes.io/is-default-class" = "true";
           in
           someMessageHas
-            [ "volumeSnapshotClasses a and b are each annotated" "Keep the annotation on one class" ]
+            [
+              "config.volumeSnapshotClasses.a and config.volumeSnapshotClasses.b are each annotated"
+              "Keep the annotation on one class"
+            ]
             (failedMessages {
               config.volumeSnapshotClasses = {
                 a = default;

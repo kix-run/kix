@@ -184,7 +184,4 @@ rec {
         };
       } instanceEnv
     );
-
-  # A toleration from the `tolerations` option type in default.nix.
-  toleration = t: lib.filterAttrs (_: v: v != null) t;
 }

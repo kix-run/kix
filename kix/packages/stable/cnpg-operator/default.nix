@@ -407,18 +407,8 @@ in
           };
         };
 
-        # Each handle adds the webhook check to the requires of every custom
-        # resource built from it.
-        withCheck = args: args // { requires = (args.requires or [ ]) ++ [ self.webhookCheck ]; };
-        gate =
-          crd:
-          crd
-          // {
-            out = crd.out // {
-              cr = args: crd.out.cr (withCheck args);
-              mkCR = consumerScope: args: crd.out.mkCR consumerScope (withCheck args);
-            };
-          };
+        # Every custom resource of a gated kind waits for the webhook check.
+        checked = [ self.webhookCheck ];
       in
       {
         serviceAccount = scope.mkResource {
@@ -449,139 +439,130 @@ in
           };
           # A ScheduledBackup and a Pooler report no conditions; a Pooler's
           # consumers wait on its Service's endpoints instead.
-          scheduledBackups = gate (
-            scope.mkCRD {
-              spec = vendored "scheduledbackups.${group}.json";
-              holdsData = false;
-              usesAtLeast = _: { };
-            }
-          );
-          poolers = gate (
-            scope.mkCRD {
-              spec = vendored "poolers.${group}.json";
-              holdsData = false;
-              # Count `spec.instances` PgBouncer pods (default 1), each with
-              # every container in `spec.template`, and the one Service the
-              # operator makes for the Pooler.
-              usesAtLeast =
-                cr:
-                kix.usage.add [
-                  (kix.usage.times (cr.spec.instances or 1) (
-                    kix.usage.ofPod (cr.spec.template.spec.containers or [ ])
-                  ))
-                  { services = 1; }
-                ];
-            }
-          );
+          scheduledBackups = scope.mkCRD {
+            spec = vendored "scheduledbackups.${group}.json";
+            crRequires = checked;
+            holdsData = false;
+            usesAtLeast = _: { };
+          };
+          poolers = scope.mkCRD {
+            spec = vendored "poolers.${group}.json";
+            crRequires = checked;
+            holdsData = false;
+            # Count `spec.instances` PgBouncer pods (default 1), each with
+            # every container in `spec.template`, and the one Service the
+            # operator makes for the Pooler.
+            usesAtLeast =
+              cr:
+              kix.usage.add [
+                (kix.usage.times (cr.spec.instances or 1) (
+                  kix.usage.ofPod (cr.spec.template.spec.containers or [ ])
+                ))
+                { services = 1; }
+              ];
+          };
           failoverQuorums = scope.mkCRD {
             spec = vendored "failoverquorums.${group}.json";
             holdsData = false;
             usesAtLeast = _: { };
           };
-          clusters = gate (
-            scope.mkCRD {
-              spec = vendored "clusters.${group}.json";
-              readiness = ready;
-              holdsData = true;
-              # The instances dial the hosts a Cluster names (externalClusters).
-              factBehavior = {
-                endpoint = "terminate";
-                podSelector = cr: operandSelectors.cluster cr.metadata.name;
-              };
-              # Count `spec.instances` instance pods, sized by `spec.resources`.
-              # Each instance has one claim for its data, one for
-              # `spec.walStorage` when set, and one per tablespace. A claim
-              # counts only when its size is known. The rw, ro, and r Services
-              # count unless `spec.managed.services` disables them, plus each
-              # additional managed Service. Short-lived init and join Jobs are
-              # excluded.
-              usesAtLeast =
-                cr:
-                let
-                  spec = cr.spec or { };
-                  instances = spec.instances or 1;
-                  sizeOf = storage: storage.size or storage.pvcTemplate.resources.requests.storage or null;
-                  sizes = builtins.filter (size: size != null && size != "") (
-                    map sizeOf (
-                      [ (spec.storage or { }) ]
-                      ++ lib.optional (spec ? walStorage) spec.walStorage
-                      ++ map (t: t.storage or { }) (spec.tablespaces or [ ])
-                    )
-                  );
-                  services = spec.managed.services or { };
-                  disabled = services.disabledDefaultServices or [ ];
-                in
-                kix.usage.add (
-                  [
-                    (kix.usage.times instances (kix.usage.ofPod [ { resources = spec.resources or { }; } ]))
-                    {
-                      services =
-                        builtins.length (
-                          builtins.filter (t: !(builtins.elem t disabled)) [
-                            "rw"
-                            "ro"
-                            "r"
-                          ]
-                        )
-                        + builtins.length (services.additional or [ ]);
-                    }
-                  ]
-                  ++ map (
-                    size:
-                    kix.usage.times instances {
-                      persistentvolumeclaims = 1;
-                      "requests.storage" = size;
-                    }
-                  ) sizes
+          clusters = scope.mkCRD {
+            spec = vendored "clusters.${group}.json";
+            crRequires = checked;
+            readiness = ready;
+            holdsData = true;
+            # The instances dial the hosts a Cluster names (externalClusters).
+            factBehavior = {
+              endpoint = "terminate";
+              podSelector = cr: operandSelectors.cluster cr.metadata.name;
+            };
+            # Count `spec.instances` instance pods, sized by `spec.resources`.
+            # Each instance has one claim for its data, one for
+            # `spec.walStorage` when set, and one per tablespace. A claim
+            # counts only when its size is known. The rw, ro, and r Services
+            # count unless `spec.managed.services` disables them, plus each
+            # additional managed Service. Short-lived init and join Jobs are
+            # excluded.
+            usesAtLeast =
+              cr:
+              let
+                spec = cr.spec or { };
+                instances = spec.instances or 1;
+                sizeOf = storage: storage.size or storage.pvcTemplate.resources.requests.storage or null;
+                sizes = builtins.filter (size: size != null && size != "") (
+                  map sizeOf (
+                    [ (spec.storage or { }) ]
+                    ++ lib.optional (spec ? walStorage) spec.walStorage
+                    ++ map (t: t.storage or { }) (spec.tablespaces or [ ])
+                  )
                 );
-            }
-          );
-          databases = gate (
-            scope.mkCRD {
-              spec = vendored "databases.${group}.json";
-              readiness = applied;
-              holdsData = true;
-              usesAtLeast = _: { };
-            }
-          );
-          databaseRoles = gate (
-            scope.mkCRD {
-              spec = vendored "databaseroles.${group}.json";
-              readiness = applied;
-              holdsData = false;
-              usesAtLeast = _: { };
-            }
-          );
-          publications = gate (
-            scope.mkCRD {
-              spec = vendored "publications.${group}.json";
-              readiness = applied;
-              holdsData = false;
-              usesAtLeast = _: { };
-            }
-          );
-          subscriptions = gate (
-            scope.mkCRD {
-              spec = vendored "subscriptions.${group}.json";
-              readiness = applied;
-              holdsData = false;
-              usesAtLeast = _: { };
-            }
-          );
-          imageCatalogs = gate (
-            scope.mkCRD {
-              spec = vendored "imagecatalogs.${group}.json";
-              holdsData = false;
-              usesAtLeast = _: { };
-            }
-          );
-          clusterImageCatalogs = gate (
-            scope.mkCRD {
-              spec = vendored "clusterimagecatalogs.${group}.json";
-              holdsData = false;
-              usesAtLeast = _: { };
-            }
-          );
+                services = spec.managed.services or { };
+                disabled = services.disabledDefaultServices or [ ];
+              in
+              kix.usage.add (
+                [
+                  (kix.usage.times instances (kix.usage.ofPod [ { resources = spec.resources or { }; } ]))
+                  {
+                    services =
+                      builtins.length (
+                        builtins.filter (t: !(builtins.elem t disabled)) [
+                          "rw"
+                          "ro"
+                          "r"
+                        ]
+                      )
+                      + builtins.length (services.additional or [ ]);
+                  }
+                ]
+                ++ map (
+                  size:
+                  kix.usage.times instances {
+                    persistentvolumeclaims = 1;
+                    "requests.storage" = size;
+                  }
+                ) sizes
+              );
+          };
+          databases = scope.mkCRD {
+            spec = vendored "databases.${group}.json";
+            crRequires = checked;
+            readiness = applied;
+            holdsData = true;
+            usesAtLeast = _: { };
+          };
+          databaseRoles = scope.mkCRD {
+            spec = vendored "databaseroles.${group}.json";
+            crRequires = checked;
+            readiness = applied;
+            holdsData = false;
+            usesAtLeast = _: { };
+          };
+          publications = scope.mkCRD {
+            spec = vendored "publications.${group}.json";
+            crRequires = checked;
+            readiness = applied;
+            holdsData = false;
+            usesAtLeast = _: { };
+          };
+          subscriptions = scope.mkCRD {
+            spec = vendored "subscriptions.${group}.json";
+            crRequires = checked;
+            readiness = applied;
+            holdsData = false;
+            usesAtLeast = _: { };
+          };
+          imageCatalogs = scope.mkCRD {
+            spec = vendored "imagecatalogs.${group}.json";
+            crRequires = checked;
+            holdsData = false;
+            usesAtLeast = _: { };
+          };
+          clusterImageCatalogs = scope.mkCRD {
+            spec = vendored "clusterimagecatalogs.${group}.json";
+            crRequires = checked;
+            holdsData = false;
+            usesAtLeast = _: { };
+          };
         };
 
         defaultMonitoring = scope.mkResource {

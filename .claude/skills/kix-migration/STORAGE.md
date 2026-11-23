@@ -77,13 +77,15 @@ and a driver that is present is not always the default. A consumer wires
 the driver with `deps.storageClasses = ref.<namespace>.<instance>`; a
 cluster that wants the driver as everyone's default sets the instance's
 `aliases = [ "storageClasses" "zfsLocalPv" ]`, keeping the package's own
-alias so its one-instance check still applies. A user-keyed map the
-package renders into a part folder (VolumeSnapshotClasses) refuses the
-keys `root` and `meta`, which Kix does not render as parts. A driver's
-VolumeSnapshotClasses are built with
-`scope.mkCR snapshotController.out.crds.VolumeSnapshotClass { ... }` from
-an optional `snapshotController ? null` dependency, and the package
-refuses VolumeSnapshotClasses when nothing provides the role.
+alias so its one-instance check still applies. A driver's
+VolumeSnapshotClasses are an option of `kix.types.volumeSnapshotClass`
+values, built with `kix.storage.mkSnapshotClasses` from an optional
+`snapshotController ? null` dependency. Its assertions include
+`kix.storage.snapshotClassProblems`, which refuses classes when nothing
+provides the role, more than one default class, and the keys `root` and
+`meta`, which Kix does not render as parts. Node plugin tolerations are
+`kix.types.toleration` values, checked with `kix.tolerations.problems`
+and rendered with `kix.tolerations.render`.
 
 `mayastor` follows the same shape and adds etcd: the etcd class comes
 from `deps.storageClasses` or `etcd.storage.storageClassName`, never from

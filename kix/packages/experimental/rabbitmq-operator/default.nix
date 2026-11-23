@@ -320,17 +320,6 @@ in
           spec.replicas = 1;
         };
 
-        withCheck = args: args // { requires = (args.requires or [ ]) ++ [ self.webhookCheck ]; };
-        gate =
-          crd:
-          crd
-          // {
-            out = crd.out // {
-              cr = args: crd.out.cr (withCheck args);
-              mkCR = consumerScope: args: crd.out.mkCR consumerScope (withCheck args);
-            };
-          };
-
         probe = path: {
           httpGet = {
             inherit path;
@@ -356,7 +345,7 @@ in
             (readJSON ./rbac/role-rabbitmq-cluster-leader-election-role.json).rules;
         };
 
-        crds.rabbitmqClusters = gate (
+        crds.rabbitmqClusters =
           let
             crdSpec = (readJSON ./crds/rabbitmqclusters.rabbitmq.com.json).spec;
             specSchema = (builtins.head crdSpec.versions).schema.openAPIV3Schema.properties.spec.properties;
@@ -365,6 +354,8 @@ in
           in
           scope.mkCRD {
             spec = crdSpec;
+            # Every RabbitmqCluster waits for the webhook check.
+            crRequires = [ self.webhookCheck ];
             # Durable queues and messages live on the server pods' volumes.
             holdsData = true;
             # The condition carries no observedGeneration, so the deploy
@@ -425,8 +416,7 @@ in
                     }
                   )
                 );
-          }
-        );
+          };
 
         issuer = scope.mkCR certCrds.Issuer {
           name = "${name}-selfsigned";

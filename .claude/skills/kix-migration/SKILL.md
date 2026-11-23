@@ -400,10 +400,11 @@ edge but NO netpol hole. Consequences when authoring:
 
   If the operator's admission webhook refuses its own kinds until it is
   ready (cert-manager's `failurePolicy: Fail` webhook before cainjector
-  injects the CA), wrap each CRD handle so `cr` and `mkCR` add the
-  operator's API-check Job to the custom resource's `requires`. See
-  `kix/packages/experimental/cert-manager/crds.nix`. Gate the handles the same way
-  when the operator writes its webhook entries after it reports ready:
+  injects the CA), set `crRequires = [ self.apiCheck ];` on each
+  `scope.mkCRD` or `scope.mkCRDRef`, so every custom resource of the kind
+  requires the operator's API-check Job. See
+  `kix/packages/experimental/cert-manager/crds.nix`. Do the same when the
+  operator writes its webhook entries after it reports ready:
   a CRD reference is satisfied once the definition is Established, which
   can be seconds before the webhook admits anything
   (`stackgres-operator`, `webhookCheck`), or before the operator has

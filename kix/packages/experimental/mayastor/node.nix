@@ -44,7 +44,7 @@ let
   # their placement.
   csiNodePlacement = {
     nodeSelector = config.csiNode.nodeSelector // c.amd64;
-    tolerations = map c.toleration config.csiNode.tolerations;
+    tolerations = kix.tolerations.render config.csiNode.tolerations;
   };
 
   cpuCount = config.ioEngine.cpuCount;
@@ -66,7 +66,7 @@ in
       template.spec = hostNetworkPod // {
         serviceAccount = self.ioEngineServiceAccount;
         nodeSelector = c.ioEngineLabels config // c.amd64;
-        tolerations = map c.toleration config.ioEngine.tolerations;
+        tolerations = kix.tolerations.render config.ioEngine.tolerations;
         initContainers = [
           (c.waitFor config "agent-core" self.agentCoreService.out.fqdn 50051)
           (c.waitFor config "etcd" self.etcdService.out.fqdn 2379)
