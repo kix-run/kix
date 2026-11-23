@@ -545,7 +545,7 @@ Cheap first. Each step assumes the earlier ones pass.
 F=--extra-experimental-features; P=pipe-operators
 git add -A kix/packages/experimental/<pkg> clusters kix/lib/tests                     # 0. the fetcher sees nothing untracked
 nix build .#cluster-<cluster> $F $P                                      # 1. the test cluster, every toggle on (use ./scripts/kix-manifests.sh . <cluster> ./result if it uses Helm); read its traces
-nix build .#checks.x86_64-linux.every-package-evaluates $F $P            # 2. defaults at none and zone, option contract, settings entry
+nix develop -c bash -c 'cd cli && cargo test -p kix-cli --test commands_test -- --ignored flake_checks_evaluate_with_helm'  # 2. every-package-evaluates and each cluster's PackageInstance wiring, with Helm charts rendered: defaults at none and zone, option contract, settings entry
 nix build .#checks.x86_64-linux.kix-lib-tests $F $P                      # 3. unit tests, negative tests with controls
 nix build .#checks.x86_64-linux.rules-cluster-<cluster> $F $P            # 4. promtool check and the .rules-test.yaml (alerts only; use ./scripts/cluster-checks.sh if the cluster uses Helm)
 nix build .#checks.x86_64-linux.{clickhouse,postgres,gateway}-swap $F $P # 5. the contract's swap check (contract changes only)

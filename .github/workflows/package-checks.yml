@@ -1,0 +1,73 @@
+name: Package checks
+
+# The checks that evaluate every package and every test cluster through kix,
+# which renders their Helm charts:
+#
+# - `every_test_cluster_bundles`, which builds and bundles every test
+#   cluster;
+# - `flake_checks_evaluate_with_helm`, which evaluates every cluster's
+#   PackageInstance wiring check and `every-package-evaluates`.
+#
+# Plain `nix flake check` stops at the first chart, and the library tests
+# (lib-tests.yml) and the CLI tests (cli-tests.yml) build neither, so a pull
+# request that changes a package or the library runs these here. Both are
+# kix-cli tests marked `#[ignore]` (cli/README.md, "Bundle acceptance
+# checks"). The fuzz targets read only bundles and plan files, so they run
+# in bundle-checks.yml, on changes to that code.
+#
+# Pull requests and the weekly run only. A push to main would repeat the
+# pull request's run.
+#
+# Same Nix setup as cli-tests.yml, on a Spindle VM whose image ships Nix.
+
+on:
+  pull_request:
+    paths:
+      - 'kix/**'
+      - 'clusters/**'
+      - 'flake.nix'
+      - 'flake.lock'
+      - 'cli/kix-bundle/**'
+      - 'cli/kix-container/**'
+      - 'cli/kix/src/plan/file.rs'
+      - 'cli/kix-core/src/eval/**'
+      - 'cli/kix-cli/src/commands/bundle.rs'
+      - 'cli/kix-cli/tests/commands_test.rs'
+      - 'cli/Cargo.toml'
+      - 'cli/Cargo.lock'
+      - '.github/workflows/package-checks.yml'
+  schedule:
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package-checks:
+    runs-on: [self-hosted, spindle-8c-16g]
+    timeout-minutes: 60
+    env:
+      NIX_CONFIG: |
+        extra-experimental-features = nix-command flakes pipe-operators
+        accept-flake-config = true
+        access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Every test cluster bundles
+        run: |
+          nix develop --command bash -c \
+            'cd cli && cargo test -p kix-cli --test commands_test -- --ignored every_test_cluster_bundles'
+
+      - name: Flake checks evaluate with Helm
+        run: |
+          nix develop --command bash -c \
+            'cd cli && cargo test -p kix-cli --test commands_test -- --ignored flake_checks_evaluate_with_helm'
