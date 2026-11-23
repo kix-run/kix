@@ -152,7 +152,7 @@ fn override_input_words(value: &std::ffi::OsStr) -> miette::Result<Vec<String>> 
     if !words.len().is_multiple_of(2) {
         return Err(miette::miette!(
             "KIX_OVERRIDE_INPUT must contain space-separated `<INPUT> <URL>` pairs, but it has an odd number of words (a missing URL, or a URL with spaces). Nothing was built or changed.\n\
-             Next: set KIX_OVERRIDE_INPUT to `<INPUT> <URL>` pairs, unset it, or pass `--override-input <INPUT> <URL>` instead (use the flag when a URL contains spaces)."
+             Next: give every input in KIX_OVERRIDE_INPUT a URL, unset KIX_OVERRIDE_INPUT, or pass `--override-input <INPUT> <URL>` (required when a URL contains spaces)."
         ));
     }
     Ok(words)
