@@ -252,14 +252,12 @@ rec {
     fail (if builtins.isList e then map fill e else fill e);
 
   # Return the `fail` of the `scope` that the library helper `helper`
-  # received. The helpers named their caller with a `who` string before they
-  # took `scope`, and a call that still passes `who` is refused with the form
-  # to use.
+  # received. Refuse a call that passes `who`, and name the form to use.
   failOf =
     helper:
     { scope, who }:
     if who != null then
-      fail {
+      (if scope == null then fail else scope.fail) {
         id = "K6417";
         message = "kix.${helper} no longer accepts `who`. It reads the instance and package from `scope`.";
         fix = "Remove `who` and pass `inherit scope;`.";

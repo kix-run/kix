@@ -357,7 +357,7 @@ in
         inClusterStore = endpointService != null;
         objectStoreSpec = kix.mergeGuarded {
           inherit scope;
-          what = "backup.extraSpec";
+          option = "backup.extraSpec";
           locked = [
             [
               "configuration"
@@ -508,7 +508,7 @@ in
             ).valueFrom.secretKeyRef;
         importSpec = kix.mergeGuarded {
           inherit scope;
-          what = "import.extraSpec";
+          option = "import.extraSpec";
           locked = [
             [ "type" ]
             [ "databases" ]

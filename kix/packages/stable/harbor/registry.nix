@@ -86,7 +86,7 @@ let
         kix.mergeGuarded
           {
             inherit scope;
-            what = "registry.settings";
+            option = "registry.settings";
             locked = [
               [
                 "storage"

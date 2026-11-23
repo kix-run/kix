@@ -372,7 +372,7 @@ in
           inherit name;
           spec = kix.mergeGuarded {
             inherit scope;
-            what = "alertmanager.extraSpec";
+            option = "alertmanager.extraSpec";
             locked = map lib.toList [
               "configSecret"
               "configRawYaml"

@@ -561,7 +561,8 @@ in
           what: spec:
           kix.mergeGuarded
             {
-              inherit scope what;
+              inherit scope;
+              option = what;
               locked = [
                 [ "targetRef" ]
                 [ "targetRefs" ]
@@ -631,7 +632,7 @@ in
           else
             kix.mergeGuarded {
               inherit scope;
-              what = "proxySpec";
+              option = "proxySpec";
               locked = [
                 [
                   "provider"

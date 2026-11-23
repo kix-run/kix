@@ -359,7 +359,6 @@ in
               "KC_HTTP_MANAGEMENT_HEALTH_ENABLED"
             ];
             from = "the package, so the Service, the probes, the route, and out.issuerUrl match the container";
-            fix = "Remove it from env.";
           }
           {
             vars = {
@@ -382,7 +381,6 @@ in
               "KC_CACHE_CONFIG_FILE"
             ];
             from = "the package, which clusters the replicas through the database (jdbc-ping) on the ports its <instance>-jgroups policy opens";
-            fix = "Remove it from env.";
           }
           {
             vars = lib.optionalAttrs metricsOn { KC_METRICS_ENABLED = "true"; };

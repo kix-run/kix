@@ -342,7 +342,7 @@ in
 
         merged = kix.mergeGuarded {
           inherit scope;
-          what = "settings";
+          option = "settings";
           locked = [
             [
               "extensions"

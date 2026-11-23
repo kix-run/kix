@@ -400,7 +400,7 @@ in
           else
             kix.mergeGuarded {
               inherit scope;
-              what = "settings";
+              option = "settings";
               locked = map (l: lib.splitString "." l.path) lockedPaths;
             } builtinSettings config.settings;
 
@@ -502,7 +502,6 @@ in
                                   FALCO_HOSTNAME.valueFrom.fieldRef.fieldPath = "spec.nodeName";
                                 };
                                 from = "the package, which mounts the host's paths under ${hostRoot} and names each alert's node";
-                                fix = "Remove it from env.";
                               }
                             ];
                           } config.env

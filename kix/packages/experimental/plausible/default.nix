@@ -503,7 +503,6 @@ in
                     "DEFAULT_DATA_DIR"
                   ];
                   from = "the package, so the Service, probes, and mounts match the container, and Erlang distribution stays off";
-                  fix = "Remove it from env.";
                 }
               ];
             } config.env

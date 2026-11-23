@@ -167,7 +167,7 @@ in
 
       sc = kix.storage.mkClasses {
         inherit scope clusterConfig;
-        optionPath = "config.storageClasses";
+        optionPath = "storageClasses";
         classes = config.storageClasses;
         parts = self.classes;
         provisioner = self.csiDriver.out.name;
@@ -192,15 +192,12 @@ in
         ) (builtins.attrValues config.storageClasses)
       );
 
-      ownedEnv =
-        option:
-        lib.mapAttrsToList (
-          var: owned: {
-            vars.${var} = owned.value;
-            inherit (owned) from;
-            fix = "Remove it from ${option}.";
-          }
-        );
+      ownedEnv = lib.mapAttrsToList (
+        var: owned: {
+          vars.${var} = owned.value;
+          inherit (owned) from;
+        }
+      );
       namespaceVar.OPENEBS_NAMESPACE = {
         value = fieldRef "metadata.namespace";
         from = "the pod's namespace, where the driver keeps its ZFS records";
@@ -396,7 +393,7 @@ in
                       OPENEBS_IO_ENABLE_ANALYTICS = "false";
                       OPENEBS_IO_ENABLE_BACKUP_GC = "false";
                     };
-                    owned = ownedEnv "controller.env" (
+                    owned = ownedEnv (
                       namespaceVar
                       // {
                         OPENEBS_CSI_ENDPOINT = {
@@ -513,7 +510,7 @@ in
                       inherit scope;
                       option = "node.env";
                       defaults.ALLOWED_TOPOLOGIES = lib.concatStringsSep "," allowedTopologyKeys;
-                      owned = ownedEnv "node.env" (
+                      owned = ownedEnv (
                         namespaceVar
                         // {
                           OPENEBS_NODE_NAME = {

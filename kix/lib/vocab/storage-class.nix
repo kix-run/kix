@@ -118,6 +118,8 @@ in
   # class or the sole class, and throws when read if the choice is ambiguous.
   # Reading `out.name` from `parts` (such as `self.classes`) preserves
   # `partsOverlays` edits and orders consumers after the StorageClass.
+  # `optionPath` is the option that holds `classes`, as a path in the
+  # instance's `config` without the `config.` prefix, such as "classes".
   mkClasses =
     {
       scope,
@@ -191,7 +193,7 @@ in
     in
     {
       resources = builtins.seq fail (builtins.seq checks (lib.mapAttrs render classes));
-      storageClassName =
+      storageClassName = builtins.seq fail (
         if names == [ ] then
           fail {
             option = optionPath;
@@ -212,6 +214,7 @@ in
             option = optionPath;
             message = "${optionPath} defines ${toString (builtins.length names)} StorageClasses (${namesText}) without a default, so Kix cannot pick one for consumers that omit a StorageClass (`out.storageClassName`).";
             fix = "${lib.toUpper (builtins.substring 0 1 remedies)}${builtins.substring 1 (-1) remedies}.";
-          };
+          }
+      );
     };
 }

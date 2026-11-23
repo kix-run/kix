@@ -149,7 +149,6 @@ let
           {
             names = map (v: v.name) podVars;
             from = "the pod (Downward API), listed first so the variables below can expand them";
-            fix = "Remove it from etcd.env.";
           }
           {
             vars = {

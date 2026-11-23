@@ -398,7 +398,7 @@ in
             kix.mergeGuarded
               {
                 inherit scope;
-                what = "service.spec";
+                option = "service.spec";
                 locked = [
                   [ "selector" ]
                   [ "ports" ]

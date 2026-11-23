@@ -18,7 +18,6 @@ let
   optionsModule = import ./options.nix { inherit lib; };
   monitorModule = import ./monitor.nix { inherit lib; };
   exposeModule = import ./expose.nix { inherit lib; };
-
 in
 
 rec {
@@ -106,21 +105,35 @@ rec {
 
   # Merge `overrides` into `base` with `lib.recursiveUpdate`, failing if
   # `overrides` touches any attribute path in `locked` or replaces a parent of
-  # a locked path with a non-attrset value. `what` is the option that holds
-  # `overrides`, and the error names it. `object` names the Kubernetes object
-  # the merge builds, `{ kind; name; namespace ? null; }`, when the instance
+  # a locked path with a non-attrset value. `option` is the instance option
+  # that holds `overrides`, and the error names it. Set it to null when
+  # `overrides` comes from somewhere else, such as an argument of a function
+  # the package publishes in `out`. `object` names the Kubernetes object the
+  # merge builds, `{ kind; name; namespace ? null; }`, when the instance
   # builds several from one option.
   mergeGuarded =
     {
       scope ? null,
       who ? null,
       locked,
-      what ? "extraSpec",
+      option ? "extraSpec",
+      what ? null,
       object ? null,
     }:
     base: overrides:
     let
-      scopeFail = failOf "mergeGuarded" { inherit scope who; };
+      scopeFail =
+        let
+          f = failOf "mergeGuarded" { inherit scope who; };
+        in
+        if what != null then
+          f {
+            id = "K0998";
+            message = "kix.mergeGuarded takes `option` in place of `what`.";
+            fix = "Rename `what` to `option`.";
+          }
+        else
+          f;
 
       # Return the shortest proper prefix of `path` that `overrides` sets to a
       # non-attrset, or null when none exists.
@@ -150,11 +163,15 @@ rec {
       touched = builtins.filter (d: d != null) (map describe locked);
     in
     if touched != [ ] then
+      let
+        pronoun = if builtins.length touched == 1 then "it" else "them";
+      in
       scopeFail {
-        option = what;
-        inherit object;
-        message = "${what} overrides ${lib.concatStringsSep ", " touched}, which this package sets itself.";
-        fix = "Remove ${if builtins.length touched == 1 then "it" else "them"} from ${what}.";
+        inherit option object;
+        message = "${
+          if option == null then "The overrides set" else "${option} overrides"
+        } ${lib.concatStringsSep ", " touched}, which this package sets itself.";
+        fix = "Remove ${pronoun}${lib.optionalString (option != null) " from ${option}"}.";
       }
     else
       builtins.seq scopeFail (lib.recursiveUpdate base overrides);
@@ -170,8 +187,9 @@ rec {
   # Merge package `defaults`, user `env` (`kix.options.env`), and package-owned
   # variables into an attrset for `kix.mkEnvVars`.
   #
-  # Each entry in `owned` has `{ vars ? { }; names ? [ ]; from; fix; }` or
-  # `{ names; reason; fix ? null; }`. `vars` are added to the result, while
+  # Each entry in `owned` has `{ vars ? { }; names ? [ ]; from; fix ? null; }`
+  # or `{ names; reason; fix ? null; }`. Without `fix`, the error tells the
+  # user to remove the variable from `option`. `vars` are added to the result, while
   # `names` reserves variables delivered via `envFrom` or refused outright.
   # Throws if `env` defines any key in `vars` or `names` (even as null). The
   # error names `option`, the instance option that holds `env`. It says a
@@ -206,7 +224,7 @@ rec {
               else
                 "${if builtins.length h == 1 then "comes" else "come"} from ${group.from}."
             );
-          fix = group.fix or null;
+          fix = group.fix or "Remove ${if builtins.length h == 1 then "it" else "them"} from ${option}.";
         }
       ) owned;
     in

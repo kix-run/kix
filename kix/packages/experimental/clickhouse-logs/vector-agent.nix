@@ -144,7 +144,7 @@ in
     lib.filterAttrsRecursive (_: v: v != null) (
       kix.mergeGuarded {
         inherit scope;
-        what = "settings";
+        option = "settings";
         locked = [
           [ "data_dir" ]
           [

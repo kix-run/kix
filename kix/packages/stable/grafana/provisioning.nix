@@ -220,7 +220,7 @@ let
   ini = lib.mapAttrs (_: lib.filterAttrs (_: v: v != null)) (
     kix.mergeGuarded {
       inherit scope;
-      what = "settings";
+      option = "settings";
       locked = [
         [ "paths" ]
         [
@@ -309,7 +309,6 @@ let
         {
           vars = paths;
           from = "the package, which mounts the data, plugins, and provisioning directories there";
-          fix = "Remove it from env.";
         }
         {
           vars = {
@@ -326,7 +325,6 @@ let
         {
           vars.GF_SERVER_HTTP_PORT = toString httpPort;
           from = "the package, so the Service and probes match the container";
-          fix = "Remove it from env.";
         }
       ]
       ++ lib.optional oidcOn {

@@ -325,7 +325,7 @@ in
           kix.mergeGuarded
             {
               inherit scope;
-              what = "sgConfig";
+              option = "sgConfig";
               locked = [
                 [ "containerRegistry" ]
                 [ "imagePullPolicy" ]

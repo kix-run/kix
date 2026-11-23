@@ -442,7 +442,7 @@ in
           kix.mergeGuarded
             {
               inherit scope;
-              what = "settings";
+              option = "settings";
               locked = lockedPaths {
                 objectStorage = objectStorageOn;
                 inherit inClusterStore;

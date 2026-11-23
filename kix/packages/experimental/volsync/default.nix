@@ -356,6 +356,9 @@ in
 
             spec = kix.mergeGuarded {
               inherit scope;
+              # A consumer passes `extraSpec` to this function, so no option
+              # of this instance holds it.
+              option = null;
               object = {
                 kind = "ReplicationSource";
                 inherit name;

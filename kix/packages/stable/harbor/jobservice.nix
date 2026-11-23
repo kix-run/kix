@@ -103,7 +103,7 @@ let
     kix.mergeGuarded
       {
         inherit scope;
-        what = "jobservice.settings";
+        option = "jobservice.settings";
         locked = [
           [ "protocol" ]
           [ "port" ]

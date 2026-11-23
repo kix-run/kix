@@ -275,7 +275,6 @@ in
               POD_UID = fieldRef "metadata.uid";
             };
             from = "the pod's own metadata";
-            fix = "Remove them from env.";
           }
           {
             vars = {
@@ -283,7 +282,6 @@ in
               XDG_CONFIG_HOME = "/config";
             };
             from = "the package: the operator keeps its tailnet state in a Secret its Role may write and its files in the writable /config volume";
-            fix = "Remove them from env.";
           }
           {
             vars.OPERATOR_INGRESS_CLASS_NAME = self.ingressClass.out.name;

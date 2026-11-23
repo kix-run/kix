@@ -19,7 +19,7 @@
 let
   merge = kixlib.mergeGuarded {
     scope.fail = kixlib.fail;
-    what = "settings";
+    option = "settings";
     locked = [
       [
         "a"

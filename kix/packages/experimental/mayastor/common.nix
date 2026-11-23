@@ -179,7 +179,6 @@ rec {
         owned = lib.optional (owned != { }) {
           vars = owned;
           from = "the pod's Downward API fields, which the package's flags and the program read";
-          fix = "Remove it from ${option}.";
         };
       } instanceEnv
     );

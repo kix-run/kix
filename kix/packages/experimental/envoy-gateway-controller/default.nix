@@ -425,7 +425,7 @@ in
         }
         // kix.mergeGuarded {
           inherit scope;
-          what = "settings";
+          option = "settings";
           locked = lockedSettings;
         } configBase config.settings;
 

@@ -232,7 +232,6 @@ in
                   MB_JETTY_PORT = toString httpPort;
                 };
                 from = "the package, so the Service and probes match the container";
-                fix = "Remove it from env.";
               }
               {
                 vars = lib.optionalAttrs metricsOn { MB_PROMETHEUS_SERVER_PORT = toString metricsPort; };

@@ -532,7 +532,7 @@ in
           key: base:
           kix.mergeGuarded {
             inherit scope;
-            what = "monitors.${key}.endpoint";
+            option = "monitors.${key}.endpoint";
             locked = [
               [ "port" ]
               [ "path" ]

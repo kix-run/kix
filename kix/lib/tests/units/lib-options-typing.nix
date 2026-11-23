@@ -416,8 +416,10 @@ in
 
   # The helpers' refusals name the instance and the package through
   # `scope.fail`, and the option the user set. A mergeEnv group with a
-  # `reason` refuses a variable outright, and a mergeGuarded refusal tells
-  # the user to remove the locked path.
+  # `reason` refuses a variable outright, and a group without `fix` tells
+  # the user to remove it from the option. A mergeGuarded refusal tells the
+  # user to remove the locked path, names `object`, and names no option when
+  # `option` is null. A storage.mkClasses refusal keeps its option.
   lib-options-typing-helper-refusal-records =
     let
       compose = (import ../caught.nix { inherit lib; }).caught ../../vocab/compose.nix { inherit lib; };
@@ -447,9 +449,31 @@ in
       guardedRefusal =
         (compose.mergeGuarded {
           scope = caughtScope;
-          what = "settings";
+          option = "settings";
           locked = [ [ "auth_enabled" ] ];
         } { } { auth_enabled = true; }).thrown;
+      objectRefusal =
+        (compose.mergeGuarded {
+          scope = caughtScope;
+          option = null;
+          object = {
+            kind = "ReplicationSource";
+            name = "db";
+            namespace = "app";
+          };
+          locked = [ [ "trigger" ] ];
+        } { } { trigger = { }; }).thrown;
+      storage = (import ../caught.nix { inherit lib; }).caught ../../vocab/storage-class.nix {
+        inherit lib;
+      };
+      classesRefusal =
+        (storage.mkClasses {
+          scope = caughtScope;
+          clusterConfig = { };
+          optionPath = "classes";
+          classes = { };
+          parts = { };
+        }).storageClassName.thrown;
       expected = {
         env = [
           {
@@ -464,6 +488,7 @@ in
             package = "pkg";
             option = "runners.env";
             message = "runners.env sets DB_HOST, which comes from the database dependency.";
+            fix = "Remove it from runners.env.";
           }
         ];
         guarded = [
@@ -475,16 +500,34 @@ in
             fix = "Remove it from settings.";
           }
         ];
+        object = [
+          {
+            instance = "ns/inst";
+            package = "pkg";
+            object = {
+              kind = "ReplicationSource";
+              name = "db";
+              namespace = "app";
+            };
+            message = "The overrides set trigger, which this package sets itself.";
+            fix = "Remove it.";
+          }
+        ];
+        classesOption = "classes";
       };
       got = {
         env = records envRefusal;
         guarded = records guardedRefusal;
+        object = records objectRefusal;
+        classesOption = (builtins.head (records classesRefusal)).option or null;
       };
     in
     got == expected || throw "helper refusal records: ${builtins.toJSON got}";
 
   # A helper called with `who` is refused with the change record id, and
-  # one called without `scope` is refused too.
+  # the refusal names the instance when the call also passes `scope`. A call
+  # without `scope`, and a mergeGuarded call with `what`, are refused too,
+  # even when nothing else is wrong.
   lib-options-typing-helpers-refuse-who =
     let
       caughtErrors = (import ../caught.nix { inherit lib; }).caught ../../core/error.nix { inherit lib; };
@@ -494,6 +537,26 @@ in
           scope = null;
           who = "pkg ns/inst";
         }).thrown;
+      withWhoAndScope = builtins.head (
+        records
+          (caughtErrors.failOf "guardArgs" {
+            scope = caughtScope;
+            who = "pkg ns/inst";
+          }).thrown
+      );
+      realScope.fail = kixlib.fail;
+      classes =
+        args:
+        kixlib.storage.mkClasses (
+          {
+            scope = realScope;
+            clusterConfig = { };
+            optionPath = "classes";
+            classes.a.annotations = { };
+            parts.a.out.name = "a";
+          }
+          // args
+        );
       withoutScope =
         (caughtErrors.failOf "mergeEnv" {
           scope = null;
@@ -502,6 +565,8 @@ in
     in
     (
       (builtins.head (records withWho)).id or null == "K6417"
+      && withWhoAndScope.id or null == "K6417"
+      && withWhoAndScope.instance or null == "ns/inst"
       && lib.hasInfix "needs `scope`" (builtins.head (records withoutScope)).message
     )
     && throws (
@@ -510,6 +575,29 @@ in
         owned = { };
       } [ ]
     )
+    && throws (
+      kixlib.mergeGuarded {
+        scope = realScope;
+        who = "pkg ns/inst";
+        locked = [ ];
+      } { } { }
+    )
+    && throws (
+      kixlib.mergeGuarded {
+        scope = realScope;
+        what = "settings";
+        locked = [ ];
+      } { } { }
+    )
+    && throws (
+      kixlib.mergeEnv {
+        scope = realScope;
+        who = "pkg ns/inst";
+      } { }
+    )
+    && (classes { }).storageClassName == "a"
+    && throws (classes { who = "pkg ns/inst"; }).storageClassName
+    && throws (classes { who = "pkg ns/inst"; }).resources
     || throw "helpers accepted `who` or a missing scope: ${withWho} ${withoutScope}";
 
   lib-options-typing-check-secret-keys =
