@@ -128,7 +128,7 @@
 }:
 
 let
-  release = "2.48.6";
+  release = "2.48.8";
 
   name = scope.instanceName;
   who = "n8n ${scope.namespaceName}/${name}";
@@ -234,7 +234,7 @@ in
     image = kix.options.image {
       repository = "docker.io/n8nio/n8n";
       tag = release;
-      digest = "sha256:eafe48609be09a2d56dd3628b29932a12c2e81a06ac5a309205652ea36146619";
+      digest = "sha256:e0df076a41076127d5f765e05acb8ba746bddff86442a92269c0f5a7219a7e4b";
       description = "The n8n image, for the main instance, the workers, and the init container that writes the task-runner token.";
     };
 
@@ -291,7 +291,7 @@ in
       image = kix.options.image {
         repository = "docker.io/n8nio/runners";
         tag = release;
-        digest = "sha256:4f99e9d82bb26565eae8cb00b687a26e7ce09a8ab476cb39ac9c1ef2d8ecd132";
+        digest = "sha256:ae28d2510cfe84731825e5bf2fcb675f52a612802fd1ed2bb3f5baedeed9883d";
         tagText = "config.image.tag";
         description = "The task-runner sidecar image. Its version must match the n8n image's, so its tag follows `image.tag`.";
       };

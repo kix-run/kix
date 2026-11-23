@@ -9,7 +9,8 @@
 #
 # Build:   kix build n8n
 # Kind:    a cluster created with `networking.disableDefaultCNI: true`, then
-#          kix deploy n8n --context kind-<name> -y
+#          SOPS_AGE_KEY_FILE=clusters/dev-secrets/age-key.txt \
+#            kix deploy n8n --context kind-<name> -y
 # Reach:   kubectl -n ingress-system port-forward svc/ingress-nginx 8080:80
 #          curl -H 'Host: n8n.localtest.me' localhost:8080/healthz
 
