@@ -9,6 +9,8 @@ on:
   pull_request:
     paths:
       - 'kix/**'
+      # Read by kix/lib/tests/units/cli-fixture.nix.
+      - 'clusters/test-cli-fixture.nix'
       - 'flake.nix'
       - 'flake.lock'
       - '.github/workflows/lib-tests.yml'
@@ -16,6 +18,8 @@ on:
     branches: [main]
     paths:
       - 'kix/**'
+      # Read by kix/lib/tests/units/cli-fixture.nix.
+      - 'clusters/test-cli-fixture.nix'
       - 'flake.nix'
       - 'flake.lock'
       - '.github/workflows/lib-tests.yml'

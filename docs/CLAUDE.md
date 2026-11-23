@@ -81,8 +81,11 @@ little or no Nix experience:
 - Regenerate offline captures with
   `nix run ./docs#regen-captures-offline -- --apply`. Use these for commands
   that need no live Kubernetes API, including `check`, `build`, `graph`, and
-  `list`, as well as intentional failures. CI checks that the committed
-  offline sidecars are current.
+  `list`, as well as intentional failures. Pass `--group <a>/<b>` to
+  regenerate one group. On a pull request, CI checks only the groups
+  whose sidecars the pull request changes, so regenerate a group when you
+  add or change a capture in it. The release regenerates every capture,
+  and until then a capture can show output that main no longer produces.
 - Regenerate live captures with
   `nix run ./docs#regen-captures -- --apply`. This creates a dedicated kind
   cluster and captures commands such as `deploy`, `plan`, `status`, and

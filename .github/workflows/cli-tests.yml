@@ -1,9 +1,14 @@
 name: CLI tests
 
-# Runs the CLI's `cargo test` suite, formatting, clippy, and a security
-# audit of its dependencies on every pull request that can change what the
-# CLI does or prints. On main, the same workflow also builds, signs, and
-# publishes a release when cli/Cargo.toml names a version with no tag yet.
+# Runs the CLI's `cargo test` suite, formatting, and clippy on every pull
+# request that can change what the CLI does or prints. On main, the same
+# workflow also builds, signs, and publishes a release when cli/Cargo.toml
+# names a version with no tag yet.
+#
+# The security audit of cli/Cargo.lock runs in security-audit.yml. Its
+# result changes when RustSec publishes an advisory, whatever the pull
+# request holds, so it has its own triggers. The `release` job below audits
+# the binaries it packages and stops on a known vulnerability.
 #
 # The tests cannot run inside a Nix build: the crane package sets
 # `doCheck = false` because the integration tests need a writable Nix store
@@ -18,19 +23,28 @@ on:
   pull_request:
     paths:
       - 'cli/**'
-      # The snapshot tests build a cluster, so a change to the compiler or
-      # to a package changes their expected output.
+      # The tests build one cluster, clusters/test-cli-fixture.nix, so a
+      # change to the library changes their expected output. That cluster
+      # defines its own packages, which the unit tests in
+      # kix/lib/tests/units/cli-fixture.nix check, so a change to a package
+      # folder or to another cluster cannot change a result here. A test
+      # added under cli/ must build that cluster and no other.
       - 'kix/**'
-      - 'clusters/**'
+      - '!kix/packages/stable/**'
+      - '!kix/packages/experimental/**'
+      - 'clusters/test-cli-fixture.nix'
       - 'flake.nix'
       - 'flake.lock'
       - '.github/workflows/cli-tests.yml'
   push:
     branches: [main]
     paths:
+      # The same paths as for a pull request.
       - 'cli/**'
       - 'kix/**'
-      - 'clusters/**'
+      - '!kix/packages/stable/**'
+      - '!kix/packages/experimental/**'
+      - 'clusters/test-cli-fixture.nix'
       - 'flake.nix'
       - 'flake.lock'
       - '.github/workflows/cli-tests.yml'
@@ -94,24 +108,14 @@ jobs:
           nix develop --command bash -c \
             'cd cli && cargo-clippy --workspace --all-targets -- -D warnings'
 
-      # Includes the four output snapshots under
-      # cli/kix-cli/tests/snapshots/. They capture whole rendered manifests,
+      # Includes the output snapshots under cli/kix-cli/tests/snapshots/.
+      # They capture whole rendered manifests of the fixture cluster,
       # identity hashes included, so a deliberate change to what the
       # compiler emits fails this step. That is the point: refresh them with
       # `INSTA_UPDATE=always cargo test -p kix-cli --test snapshot_test` and
       # commit the result in the same change that moved the output.
       - name: Tests
         run: nix develop --command bash -c 'cd cli && cargo test --workspace'
-
-      # Fails when a dependency in cli/Cargo.lock has a published security
-      # advisory (RustSec). Advisories about unmaintained or unsound crates
-      # are printed as warnings and do not fail the job. The advisory
-      # database is fetched fresh on each run, so a new advisory can fail a
-      # branch that passed yesterday.
-      - name: Security advisories
-        run: |
-          nix shell --inputs-from . nixpkgs#cargo-audit \
-            --command cargo-audit audit --file cli/Cargo.lock
 
       # Evaluating the runtime spec runs the checks in cli/runtime/runtime.nix:
       # that programs.json, which kix compiles in, matches what the runtime

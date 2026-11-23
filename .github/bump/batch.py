@@ -36,8 +36,11 @@ BOT = "kix-run-bump[bot]"
 LABEL = "bump:needs-person"
 BATCH = "bump/batch"
 # Checks that run on every bump. Their presence shows that the checks list
-# is not read before the workflows have started.
-CORE_CHECKS = {"changelog", "change-kind", "lib-tests", "test"}
+# is not read before the workflows have started. Each must be a job of a
+# workflow that runs for a pull request changing only a package folder and
+# a change record. The CLI tests are not one: cli-tests.yml skips package
+# folders.
+CORE_CHECKS = {"changelog", "change-kind", "lib-tests"}
 PASSED = {"success", "skipped", "neutral"}
 # A changed line that names an image's repository or registry.
 IMAGE_SOURCE = re.compile(r"\b(repository|registry)\b")

@@ -1,3 +1,5 @@
 # 2026-11-10 · `.github/workflows/` Documentation captures · The captures job sometimes fails with no failed step, no log, and no runner name.
 
 It happened twice on 2026-11-10: on a pull request for 0.9, and on the 0.9.0 release pull request (run 42867342268, attempt 1). The job ran for about 18 minutes, then reported failure with no step marked failed. `gh run view --log-failed` answered "log not found", and the job had no runner name. Re-running the failed job passed both times. Each time costs a re-run of the slowest check and a person's attention, and a real captures failure could be mistaken for this one. The self-hosted runner pool is the likely place to look.
+
+- Hit again 2026-11-23 on pull request 296 (run 45261876293), 17 minutes into "Offline captures are fresh". This time the job page said "The self-hosted runner lost communication with the server". A rerun was needed.
