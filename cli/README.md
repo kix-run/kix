@@ -113,8 +113,10 @@ looks for a `v<version>` tag in this repository. With none yet, the push is
 a release, and merging a version change is what makes one. Three jobs then
 start at once:
 
-1. The `test` job runs the test suite, and `cargo audit` on
-   `cli/Cargo.lock`. It runs on every change, not only releases.
+1. The `test` job runs the test suite. It runs on every change, not only
+   releases. `cargo audit` on `cli/Cargo.lock` runs in
+   `.github/workflows/security-audit.yml`: on a pull request that changes
+   the lockfile, and once a day on main, where a failure opens an issue.
 2. The `runtime` matrix job builds `.#kix-runtime-spec` for `x86_64-linux`,
    `aarch64-linux`, and `aarch64-darwin`, and runs
    `cli/runtime/assemble.py`. The `aarch64-darwin` entry also builds the

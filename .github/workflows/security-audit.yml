@@ -1,0 +1,100 @@
+name: Security audit
+
+# Checks cli/Cargo.lock against the RustSec advisory database with
+# `cargo audit`. A dependency with a published security advisory fails the
+# job. Advisories about unmaintained or unsound crates are printed as
+# warnings and do not fail it.
+#
+# The result depends on two inputs: the lockfile and the advisory database.
+# A pull request changes only the first, so this runs on a pull request only
+# when it changes the lockfile. The daily run covers the second: it fetches
+# the database fresh, and when a new advisory names a crate Kix already
+# uses, it opens an issue. Other pull requests keep passing in the meantime.
+#
+# A release does not depend on this workflow. The `release` job in
+# cli-tests.yml audits each binary it packages and stops on a known
+# vulnerability.
+#
+# Spindle runs the audit on a VM whose image ships Nix; see
+# .github/workflows/spindle-smoke.yml.
+
+on:
+  pull_request:
+    paths:
+      - 'cli/Cargo.lock'
+      - '.github/workflows/security-audit.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'cli/Cargo.lock'
+      - '.github/workflows/security-audit.yml'
+  schedule:
+    # Daily at 05:17 UTC. The odd minute avoids the top of the hour, when
+    # GitHub delays scheduled runs.
+    - cron: '17 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    runs-on: [self-hosted, spindle-2c-4g]
+    timeout-minutes: 15
+    env:
+      # `extra-` keeps the features the image enabled; same form as
+      # cli-tests.yml.
+      NIX_CONFIG: |
+        extra-experimental-features = nix-command flakes pipe-operators
+        accept-flake-config = true
+        access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # cargo-audit comes from this flake's locked nixpkgs. It fetches the
+      # advisory database on each run.
+      - name: Security advisories
+        run: |
+          nix shell --inputs-from . nixpkgs#cargo-audit \
+            --command cargo-audit audit --file cli/Cargo.lock
+
+  # Opens an issue when the audit fails on main, or adds a comment to the
+  # issue that is already open. A pull request needs no issue, because the
+  # failed check is on the pull request itself.
+  report:
+    needs: [audit]
+    if: failure() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    # GitHub's image ships `gh`. The Spindle image does not.
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title='Security audit: a dependency in cli/Cargo.lock has an advisory'
+          number=$(gh issue list --state open --search "in:title \"$title\"" \
+            --json number,title \
+            --jq "map(select(.title == \"$title\")) | .[0].number // empty")
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body "The audit failed again: $RUN_URL"
+            exit 0
+          fi
+          # The backticks are Markdown for the issue.
+          # shellcheck disable=SC2016
+          {
+            echo "The Security audit workflow failed on main: $RUN_URL"
+            echo
+            echo 'The log of that run names the crate, the advisory, and the version that fixes it.'
+            echo 'To fix it, run `cargo update -p <crate>` in `cli/` and open a pull request.'
+            echo 'The `release` job in `cli-tests.yml` stops while a binary carries the crate.'
+          } > body.md
+          gh issue create --title "$title" --body-file body.md
