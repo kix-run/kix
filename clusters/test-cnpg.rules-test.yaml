@@ -514,7 +514,7 @@ tests:
               controller: "cluster"
             exp_annotations:
               summary: "The CloudNativePG operator fails to reconcile its resources."
-              description: "The cluster controller of the CloudNativePG operator cnpg-system/cnpg-operator has failed 50% of its reconciles over the last 30 minutes, so resources of that kind may not match their specs. Check the operator logs for the failing resource and error."
+              description: "The cluster controller of the CloudNativePG operator cnpg-system/cnpg-operator has failed 50% of its reconciles over the last 30 minutes, so the resources handled by that controller may not match their specs. Check the operator logs for the failing resource and error."
   # The operator answers and reconciles without errors.
   - interval: 1m
     input_series:

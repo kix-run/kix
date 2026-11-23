@@ -58,7 +58,7 @@ tests:
               controller: connector
             exp_annotations:
               summary: "The Tailscale operator fails to reconcile resources."
-              description: "The connector controller of the Tailscale operator tailscale/tailscale has failed 50% of its reconciles over the last 30 minutes, so a proxy or tailnet device may not match its Kubernetes resource. Check the operator logs for the error; common causes are rejected OAuth client credentials or tailnet API errors."
+              description: "The connector controller of the Tailscale operator tailscale/tailscale has failed 50% of its reconciles over the last 30 minutes, so a proxy or tailnet device may not match its Kubernetes resource. Check the operator logs for the error. Common causes are rejected OAuth client credentials or tailnet API errors."
       - eval_time: 25m
         alertname: TailscaleOperatorDown
         exp_alerts: []

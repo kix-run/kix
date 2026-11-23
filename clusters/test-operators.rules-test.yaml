@@ -66,7 +66,7 @@ tests:
               controller: autoscalingrunnerset
             exp_annotations:
               summary: "The Actions Runner Controller fails to reconcile runner sets."
-              description: "The autoscalingrunnerset controller of the Actions Runner Controller arc-systems/arc has failed 50% of its reconciles over the last 30 minutes, so runner sets may not scale. Check the controller logs for the error; common causes are GitHub API errors or rejected credentials."
+              description: "The autoscalingrunnerset controller of the Actions Runner Controller arc-systems/arc has failed 50% of its reconciles over the last 30 minutes, so runner sets may not scale. Check the controller logs for the error. Common causes are GitHub API errors or rejected credentials."
       - eval_time: 25m
         alertname: ArcEphemeralRunnersFailed
         exp_alerts:
@@ -281,7 +281,7 @@ tests:
               controller: "infisicalstaticsecret"
             exp_annotations:
               summary: "The Infisical operator fails to reconcile its resources."
-              description: "The infisicalstaticsecret controller of the Infisical operator infisical/infisical-operator has failed 50% of its reconciles over the last 30 minutes, so a Secret or ConfigMap it manages may be stale. Check the operator logs and the custom resource's conditions for the error, such as an authentication or connection failure."
+              description: "The infisicalstaticsecret controller of the Infisical operator infisical/infisical-operator has failed 50% of its reconciles over the last 30 minutes, so Secrets or ConfigMaps it manages may be out of date. Check the operator logs and the custom resource's conditions for errors such as authentication or connection failures."
   # The operator answers and reconciles without errors.
   - interval: 1m
     input_series:

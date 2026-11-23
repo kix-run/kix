@@ -674,7 +674,7 @@ in
             operator = controller;
             summary = "The Actions Runner Controller fails to reconcile runner sets.";
             impact = "runner sets may not scale";
-            nextStep = "Check the controller logs for the error; common causes are GitHub API errors or rejected credentials.";
+            nextStep = "Check the controller logs for the error. Common causes are GitHub API errors or rejected credentials.";
           };
           # The gauge counts EphemeralRunners in phase Failed. The runner
           # set counts them with its pending and running runners

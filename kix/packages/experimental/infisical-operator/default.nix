@@ -845,8 +845,8 @@ in
             selector = sel;
             operator = operator;
             summary = "The Infisical operator fails to reconcile its resources.";
-            impact = "a Secret or ConfigMap it manages may be stale";
-            nextStep = "Check the operator logs and the custom resource's conditions for the error, such as an authentication or connection failure.";
+            impact = "Secrets or ConfigMaps it manages may be out of date";
+            nextStep = "Check the operator logs and the custom resource's conditions for errors such as authentication or connection failures.";
           };
         };
       }
