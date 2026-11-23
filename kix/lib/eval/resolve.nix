@@ -115,16 +115,16 @@ rec {
           ];
     in
     {
-      message = "dependency '${role}' names a cluster role, and no instance in the cluster provides it.";
+      message = "dependency '${role}' is a cluster role, and no instance in the cluster provides it.";
       fix =
         (
           if claimants == [ ] then
-            "Declare an instance of a package that sets meta.roles = [ \"${role}\" ], in any namespace."
+            "Declare an instance in any namespace of a package with meta.roles = [ \"${role}\" ]."
           else
-            "Declare one instance of a package that provides '${role}', in any namespace:"
+            "Declare an instance of a package that provides '${role}' in any namespace:"
             + lib.concatMapStrings (c: "\n  instances.<namespace>.<name>.package = ${c};") claimants
         )
-        + "\nIf the cluster environment already provides '${role}', declare a kix.mkImport instance with roles = [ \"${role}\" ] instead.";
+        + "\nIf the cluster already provides '${role}' outside Kix, declare an import with `package = kix.mkImport { roles = [ \"${role}\" ]; ... };` instead.";
     };
 
   isRef = v: builtins.isAttrs v && (v._type or "") == "kix-ref";

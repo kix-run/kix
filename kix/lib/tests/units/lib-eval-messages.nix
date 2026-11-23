@@ -112,7 +112,7 @@ in
       text = missing { argName = "gatewayApi"; };
     in
     (
-      lib.hasInfix "dependency 'gatewayApi' names a cluster role" text
+      lib.hasInfix "dependency 'gatewayApi' is a cluster role" text
       && lib.hasInfix "instances.<namespace>.<name>.package = packages.experimental.gateway-api;" text
       && lib.hasInfix "roles = [ \"gatewayApi\" ]" text
       && !(lib.hasInfix "instances.immich.gatewayApi" text)
@@ -157,8 +157,8 @@ in
       failed != [ ]
       && builtins.all (
         a:
-        lib.hasInfix "The package gives this reason: Its CRDs are cluster-wide." a.message
-        && lib.hasPrefix "Keep one instance that answers 'op' in the whole cluster" (a.fix or "")
+        lib.hasInfix "Reason: Its CRDs are cluster-wide." a.message
+        && lib.hasPrefix "Remove either " (a.fix or "")
       ) failed
     )
     || throw "conflict: ${builtins.toJSON failed}";
@@ -212,8 +212,8 @@ in
         }).thrown or "";
     in
     (
-      lib.hasInfix "op runs once per cluster (meta.conflictsWith \"cluster:op\"), and nothing names its namespace. Kix would add it to 2 namespaces" text
-      && lib.hasInfix "Or set autoNamespace to place every package Kix adds there." text
+      lib.hasInfix "op runs once per cluster (meta.conflictsWith \"cluster:op\"), but no namespace is set for it, so Kix refused to auto-instantiate separate copies in 2 namespaces" text
+      && lib.hasInfix "Or set `autoNamespace = \"<namespace>\";` (or `availablePackages.op.namespace`) to place auto-instantiated packages there." text
       && !(lib.hasInfix "kix: op" text)
     )
     || throw "spread refusal: ${text}";

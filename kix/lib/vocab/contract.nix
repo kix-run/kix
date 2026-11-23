@@ -89,8 +89,8 @@ in
       # and leaves the dependency to the record's `dependency` field, which
       # `deps.<name>.assertions` sets.
       consumerError = who: dep: found: {
-        message = "${who}: a dependency resolved to ${providerOf dep}, whose out does not honour the ${name} contract (${here}): ${lib.concatStringsSep "; " found}.";
-        fix = "Set them on that instance's out (a kix.mkImport sets them in `out`), or point the dependency at another ${remedyNoun} with ref.<ns>.<instance> in the consumer's deps.";
+        message = "${who}: for this dependency, `out` on ${providerOf dep} does not satisfy the ${name} contract (${here}): ${lib.concatStringsSep "; " found}.";
+        fix = "Fix the field(s) above in that provider's `out` (for a kix.mkImport instance, set them in `out = { ... };`), or wire a different ${remedyNoun} with `deps.<name> = ref.<namespace>.<instance>;` on the consumer.";
       };
     in
     {

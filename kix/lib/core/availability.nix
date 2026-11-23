@@ -92,13 +92,14 @@ let
     else if unknown != [ ] then
       fail {
         instance = where;
-        message = "meta.availability has unknown key(s) ${lib.concatStringsSep ", " unknown}. The keys are max and reason.";
+        message = "meta.availability has unknown attribute(s): ${lib.concatStringsSep ", " unknown}.";
+        fix = "Use only `max` and `reason` in meta.availability.";
       }
     else if !builtins.isString (value.reason or "") then
       fail {
         instance = where;
-        message = "meta.availability.reason is a ${builtins.typeOf value.reason}.";
-        fix = "Write the reason for the ceiling as a sentence, such as meta.availability.reason = \"The program keeps its state in one SQLite file.\".";
+        message = "meta.availability.reason has type ${builtins.typeOf value.reason}, but it must be a string.";
+        fix = "Set meta.availability.reason to a string explaining the limit, for example: meta.availability.reason = \"Single SQLite writer.\";";
       }
     else
       value.max or null;
@@ -248,7 +249,7 @@ let
         ++ lib.optional capped (
           "availability \"${requested}\" was requested but the package declares "
           + "meta.availability.max = \"${packageCeiling}\", so it runs at \"${packageCeiling}\". "
-          + lib.optionalString (ceilingReason != null) "The package gives this reason: ${ceilingReason} "
+          + lib.optionalString (ceilingReason != null) "Reason: ${ceilingReason} "
           + "This instance does not meet the requested availability level."
         );
     };

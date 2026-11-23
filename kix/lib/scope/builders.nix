@@ -286,9 +286,7 @@ in
               "${workloadKind} '${workloadInput.name or "?"}' supports at most "
               + "\"${workloadCeiling}\" availability (the package sets `availability.max` on it). "
               + "Kix runs this workload at \"${workloadCeiling}\" instead of \"${availability.level}\", so it ${cappedConsequence}. "
-              + lib.optionalString (
-                workloadCeilingReason != null
-              ) "The package gives this reason: ${workloadCeilingReason} "
+              + lib.optionalString (workloadCeilingReason != null) "Reason: ${workloadCeilingReason} "
               + "Other workloads in this instance still run at \"${availability.level}\". "
               + "To run the whole instance at \"${workloadCeiling}\" and silence this warning, set `availability = \"${workloadCeiling}\";` on the instance.";
           };
@@ -405,15 +403,16 @@ in
         else if unknown != [ ] then
           fail {
             instance = where;
-            message = "${subject} availability has unknown key(s) ${lib.concatStringsSep ", " unknown}. The keys are max and reason.";
+            message = "${subject} availability has unknown attribute(s): ${lib.concatStringsSep ", " unknown}.";
+            fix = "Use only `max` and `reason` in availability.";
           }
         else if (a.max or null) == null then
           null
         else if !builtins.isString (a.reason or "") then
           fail {
             instance = where;
-            message = "${subject} availability.reason is a ${builtins.typeOf a.reason}.";
-            fix = "Write the reason for the ceiling as a sentence, such as availability.reason = \"The program keeps its state in one SQLite file.\".";
+            message = "${subject} availability.reason has type ${builtins.typeOf a.reason}, but it must be a string.";
+            fix = "Set availability.reason to a string explaining the limit, for example: availability.reason = \"Single SQLite writer.\";";
           }
         else
           availabilityLib.checkCeiling {

@@ -168,8 +168,8 @@ rec {
         }
       else
         errors.fail {
-          message = "meta.conflictsWith has the entry ${builtins.toJSON e}.";
-          fix = "Write each entry as a key, such as \"cluster:<alias>\", or as { key = \"cluster:<alias>\"; reason = \"<why two instances cannot run together>\"; }.";
+          message = "meta.conflictsWith contains an invalid entry: ${builtins.toJSON e}.";
+          fix = "Write each entry as a string (\"<name>\" or \"cluster:<name>\") or as { key = \"...\"; reason = \"...\"; }.";
         }
     ) (packageMeta.conflictsWith or [ ]);
 
@@ -375,13 +375,13 @@ rec {
           assertion = false;
           message =
             "It conflicts with '${name}' ${scope}. Conflicting instances: ${instances}."
-            + lib.optionalString (entry.reason != null) " The package gives this reason: ${entry.reason}"
+            + lib.optionalString (entry.reason != null) " Reason: ${entry.reason}"
             + autoAdvice;
           fix =
             if isClusterWide then
-              "Keep one instance that answers '${name}' in the whole cluster, and remove the others. Consumers in every namespace then resolve to the one that stays."
+              "Remove either ${namespaceName}/${instanceName} or the conflicting instance(s) so they do not run in the same cluster. If they are copies of the same cluster-wide package, keep one instance and consumers in every namespace will use it."
             else
-              "Keep one instance that answers '${name}' in namespace '${namespaceName}', and remove the others or move them to another namespace.";
+              "Remove ${namespaceName}/${instanceName}, or remove or move the conflicting instance(s) to another namespace.";
         }
       ) (conflictEntries packageMeta);
 

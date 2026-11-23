@@ -483,7 +483,7 @@ in
   lib-availability-ceiling-reason-in-warnings =
     let
       warningsOf = instance: map (w: w.message) (clusterWith [ multiZone ] instance).diagnostics.warnings;
-      saysReason = reason: builtins.any (lib.hasInfix "The package gives this reason: ${reason}");
+      saysReason = reason: builtins.any (lib.hasInfix "Reason: ${reason}");
       fromPackage = warningsOf {
         package = appPackage { } // {
           meta = {

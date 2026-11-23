@@ -662,7 +662,7 @@ in
     in
     (
       fs == [
-        "Duplicate resource: PriorityClass/cluster-scoped/high. Instances a/high, b/high each build it.\nFix: Remove one of these instances, or give the object a different name in one of them. A cluster-scoped object must have a name that is unique in the whole cluster."
+        "Duplicate resource: PriorityClass/cluster-scoped/high. Built by instances: a/high, b/high.\nFix: Remove one of these instances, or configure them to give the resource distinct names. Cluster-scoped resources must have unique names across the entire cluster."
       ]
     )
     || throw "duplicate with owners: ${builtins.toJSON fs}";

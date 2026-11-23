@@ -844,7 +844,7 @@ in
               t:
               aboutScraper "${who} scrapes target ${plain t.namespace}/${plain t.key}. Another ingress policy ${
                 if t.podLabelSets == [ ] then
-                  "may isolate only some of the target's pods, which Kix did not build, depending on labels outside the target's selector"
+                  "may isolate only some of the target's pods (it checks labels outside the target's selector, and Kix did not build those pods)"
                 else
                   "isolates only some of the target's pods"
               }. Without default deny Kix adds scrape ingress only where it can show that every pod is already isolated, so the server cannot reach the isolated pods. Select all of the target's pods in that policy, or turn on networkPolicy.defaultDeny."

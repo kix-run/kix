@@ -468,17 +468,17 @@ rec {
             if names == [ ] then
               ""
             else if builtins.length names == 1 then
-              " Instance ${builtins.head names} builds it ${toString (builtins.length es)} times."
+              " Built ${toString (builtins.length es)} times by instance ${builtins.head names}."
             else
-              " Instances ${builtins.concatStringsSep ", " names} each build it.";
+              " Built by instances: ${builtins.concatStringsSep ", " names}.";
         in
         lib.mapAttrsToList (id: es: {
           message = "Duplicate resource: ${id}.${builtBy es}";
           fix =
             if builtins.length (ownerNames es) > 1 then
-              "Remove one of these instances, or give the object a different name in one of them. A cluster-scoped object must have a name that is unique in the whole cluster."
+              "Remove one of these instances, or configure them to give the resource distinct names. Cluster-scoped resources must have unique names across the entire cluster."
             else
-              "Give each object that this instance builds a different name.";
+              "Give each resource of the same kind a unique name.";
         }) dups;
 
       # --- 8. managed-by label ---

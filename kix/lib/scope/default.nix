@@ -233,8 +233,8 @@ rec {
           let
             nsRes =
               namespaces.${nsName} or (scopeObj.fail {
-                message = "The package asked for namespace '${nsName}' through scope.forNamespace, but the cluster has no namespace '${nsName}'. The cluster has these namespaces: ${builtins.concatStringsSep ", " (builtins.attrNames namespaces)}.";
-                fix = "Check this instance's options for a misspelled namespace, or declare the namespace in the cluster definition:\n  namespaces.${nsName} = { };";
+                message = "scope.forNamespace requested namespace '${nsName}', which does not exist in this cluster. Declared namespaces: ${builtins.concatStringsSep ", " (builtins.attrNames namespaces)}.";
+                fix = "Check this instance's config for a misspelled namespace name, or declare the namespace in the cluster definition:\n  namespaces.${nsName} = { };";
               });
           in
           mkScope {

@@ -380,7 +380,7 @@ rec {
             );
             fix = builtins.concatStringsSep "\n" (
               [
-                "Declare the package this cluster should use as an optional instance (created only when something depends on it). Choose one of these lines. Each uses the namespace and instance name that Kix gives the package when it adds it, so a cluster that already runs the package keeps the same instance and its data:"
+                "Declare the package this cluster should use by adding one of these optional instances (created only when something depends on it). Each keeps the namespace and instance name Kix uses for auto-instantiation, preserving any existing instance and its data:"
               ]
               ++ map (name: "  ${chosenInstanceLine item name}") claimants
               ++ [
@@ -411,7 +411,7 @@ rec {
           id = packageLib.idOf avPkg.package;
           spelling =
             if id == null then
-              "<the package of availablePackages.${name}>"
+              "<package for ${name}>"
             else
               "packages.${builtins.replaceStrings [ "/" ] [ "." ] id}";
           aliases =
@@ -568,9 +568,9 @@ rec {
       # nothing places in a namespace of its own.
       onePerClusterFix =
         name:
-        "Declare ${name} once, in a namespace of its own, and every consumer resolves to it:"
+        "Declare ${name} once in its own namespace so all consumers share it:"
         + "\n  instances.<namespace>.${name}.package = ${packageSpelling name};"
-        + "\nOr set autoNamespace to place every package Kix adds there.";
+        + "\nOr set `autoNamespace = \"<namespace>\";` (or `availablePackages.${name}.namespace`) to place auto-instantiated packages there.";
 
       # Refuse a package that runs once per cluster when demands would place
       # it in several namespaces. The refusal stops evaluation at once,
@@ -586,7 +586,7 @@ rec {
         lib.optional (builtins.length namespaces > 1 && reason != null) {
           message = builtins.concatStringsSep "\n" (
             [
-              "${name} runs once per cluster (${reason}), and nothing names its namespace. Kix would add it to ${toString (builtins.length namespaces)} namespaces, beside the packages that need it:"
+              "${name} runs once per cluster (${reason}), but no namespace is set for it, so Kix refused to auto-instantiate separate copies in ${toString (builtins.length namespaces)} namespaces:"
             ]
             ++ map (p: "  ${p.ns}/${name}, for dependency '${p.depName}' of ${labelRequester p.requester}") ps
           );

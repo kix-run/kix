@@ -190,10 +190,10 @@ meta = {
 | `description` | string | None | Non-empty one-line summary of the package. Checked by the `governance.hasDescription` scorecard rule (`info` severity). |
 | `roles` | list of strings | `[ ]` | Platform capabilities provided by this package. |
 | `defaultAliases` | list of strings | `[ ]` | Default dependency-injection names registered when `instances.<name>.aliases` is empty. |
-| `availability` | `{ max; reason?; }` | None | `max` (`"none"`, `"pod"`, `"node"`, or `"zone"`) is the highest availability level the package supports. `reason` is a sentence that says why, which Kix adds to the messages about the ceiling. |
+| `availability` | `{ max; reason?; }` | None | Highest availability level the package supports (`max`: `"none"`, `"pod"`, `"node"`, or `"zone"`), with an optional `reason` string that Kix includes in warnings and errors when the ceiling applies. |
 | `compatibleWith` | attrset of `{ minVersion?; maxVersion?; reason?; }` | `{ }` | Version bounds for upstream dependencies keyed by dependency argument name. |
 | `k8s` | `{ minVersion?; maxVersion?; reason?; supported?; }` | None | Kubernetes version bounds checked against [`k8sVersion`](/docs/reference/cluster-configuration/). Top-level `minVersion` and `maxVersion` fail the build outside that range; `supported = { minVersion?; maxVersion?; source?; }` emits a warning without stopping the build. |
-| `conflictsWith` | list of strings or `{ key; reason; }` | `[ ]` | Packages that cannot coexist with this package (`"<name>"` for same-namespace, `"cluster:<name>"` for cluster-wide). |
+| `conflictsWith` | list of strings or `{ key; reason; }` | `[ ]` | Packages that cannot coexist with this package (`"<name>"` for same-namespace, `"cluster:<name>"` for cluster-wide), with an optional `reason` included in conflict errors. |
 | `podSecurity` | `"privileged"` \| `"baseline"` \| `"restricted"` | None | Pod Security Standards enforcement level applied to the instance namespace. |
 | `unsafe` | list of strings | `[ ]` | Acknowledged security or architectural exceptions (`"raw-pvc"`, `"host-network"`, `"privileged"`, `"run-as-root"`, `"cluster-admin"`). |
 | `annotationDomains` | list of strings | `[ ]` | Annotation domain prefixes (such as `"cert-manager.io"`) owned and consumed by this package. |
@@ -283,12 +283,12 @@ Each role in `meta.roles` also registers that role name as a dependency alias so
 
 Individual workloads can further clamp their own ceiling by passing `availability.max` to `scope.mkDeployment`, `scope.mkStatefulSet`, `scope.mkJob`, or `scope.mkCronJob`.
 
-Set `reason` beside `max`, in `meta.availability` or on a builder call, to say why the software cannot run above the ceiling. Kix adds it to the error for a workload that runs more replicas than a `"none"` ceiling allows, and to the warnings about a capped level. The reader then knows whether raising the replica count is ever safe without opening the package:
+Include `reason` alongside `max` (in `meta.availability` or on a workload builder) to explain why the software cannot run at a higher availability level. Kix includes `reason` when it warns that an instance or workload was capped at `max`, and when it rejects a workload with more than one replica under `max = "none"`:
 
 ```nix
 availability = {
   max = "none";
-  reason = "The program keeps its state in one SQLite file, which one writer can use at a time.";
+  reason = "The service stores state in a single SQLite file that supports only one writer at a time.";
 };
 ```
 
@@ -336,13 +336,13 @@ Entries in `meta.conflictsWith` prevent incompatible packages from being deploye
 
 An instance counts when it answers `<pkg>` by its name or its aliases, or when its package lists `<pkg>` in `meta.defaultAliases`. The last case holds even when the instance sets its own `aliases`, so two instances of a singleton package fail whatever aliases they set.
 
-An entry may also be `{ key; reason; }`, where `key` is one of the forms above and `reason` is a sentence that says why the instances cannot run together. Kix adds the reason to the error that names the conflicting instances:
+An entry can also be `{ key; reason; }`, where `key` is `"<pkg>"` or `"cluster:<pkg>"` and `reason` explains why the instances cannot coexist. Kix includes `reason` in the conflict error:
 
 ```nix
 conflictsWith = [
   {
     key = "cluster:tailscale";
-    reason = "The tailscale.com CRDs are cluster-wide, the operator serves loadBalancerClass tailscale by that literal name, and its DNS-record handler for Ingresses matches IngressClass tailscale by name.";
+    reason = "The operator watches cluster-wide tailscale.com resources, Services with loadBalancerClass \"tailscale\", and Ingresses with IngressClass \"tailscale\" (matched by name in its DNS-record handler), so two instances would compete for the same objects.";
   }
 ];
 ```
