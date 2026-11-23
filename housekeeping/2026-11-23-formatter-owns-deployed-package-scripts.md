@@ -1,0 +1,5 @@
+# 2026-11-23 · `kix/packages/`, `.github/workflows/lint.yml` · Ruff formats the Python scripts that packages deploy, so a formatter update can force a redeploy.
+
+Six packages read a Python script into a ConfigMap, among them `experimental/plausible` (`default.nix:412`), `victoria-metrics-agent`, and `victoria-metrics-alert`. A change to that text restarts the pod that mounts it, or reruns the health-check Job. The lint job and the dev shell run `ruff format` over these scripts. A `flake.lock` update that brings a newer ruff can then fail the lint job, and a whitespace reformat is the only way to pass it. Users see that reformat as a change record and a restart or a rerun. Plausible uses the `Recreate` strategy, so its restart is a short outage.
+
+Decision required from Adam: keep formatting the package scripts, or run only `ruff check` on `kix/packages/**` and exclude them from `ruff format` in the lint job and in the shell's treefmt config. The reviewer recommends the exclusion, so that a script's deployed text changes only when someone edits it.
