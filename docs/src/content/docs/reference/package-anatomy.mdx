@@ -695,7 +695,7 @@ During package evaluation, Kix also gives structural warnings for common wiring 
 - **Orphaned resources**: A part defined in `build` is not reachable from `root.resource`, `root.requires`, or `root.postHooks`.
 - **Redundant `requires`**: A resource lists a dependency in `requires = [ ... ]` that is already tracked implicitly through `.out` string context in its manifest.
 - **Duplicate `requires`**: The same resource appears more than once in a `requires` list.
-- **Unordered `postHooks`**: A resource in `root.postHooks` does not depend, directly or transitively, on `root.resource` or an entry of `root.requires`. Sharing a dependency with `root`, such as a Secret, does not count. To make the package instance wait for a resource that need not run after `root`, put it in `root.requires`.
+- **Unordered `postHooks`**: A resource in `root.postHooks` does not depend (directly or through another resource) on `root.resource` or any resource in `root.requires`, so Kix could apply it before the package is ready. Sharing a dependency such as a Secret with `root.resource` does not order the hook after `root.resource`. If the package instance should wait for a resource that does not need to run after `root.resource`, put it in `root.requires` instead.
 
 ### `kix.checkPackageOptions` and `kix.packageOptionViolations`
 

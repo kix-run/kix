@@ -83,10 +83,10 @@ instances.mayastor = {
 };
 ```
 
-Kix never makes an instance its own dependency. When the Mayastor instance
-answers `storageClasses` for the cluster (its `aliases` include
-`storageClasses`), etcd still takes its class from another instance that
-answers the name, or from `etcd.storage.storageClassName`.
+If you include `"storageClasses"` in the Mayastor instance's `aliases`, Kix
+still skips Mayastor when resolving Mayastor's own `storageClasses` dependency.
+An instance never depends on itself, so etcd still gets its StorageClass from
+another `storageClasses` provider or from `config.etcd.storage.storageClassName`.
 
 The number of etcd members follows the instance's availability level: one at
 `none`, three above. Three members need three nodes on which the etcd class
