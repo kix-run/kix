@@ -9,6 +9,7 @@
   lib,
   kixKeys,
   mkCluster,
+  evalFails,
   manifests,
   byName,
   ...
@@ -27,6 +28,7 @@ let
       script ? "echo hi",
       image ? "postgres:17",
       reads ? true,
+      rerun ? null,
     }:
     {
       meta.version = "test";
@@ -55,6 +57,7 @@ let
           };
           job = scope.mkJob {
             name = "bootstrap";
+            annotations = lib.optionalAttrs (rerun != null) { ${kixKeys.rerun} = rerun; };
             requires = [ self.upstream ];
             spec.template = {
               metadata.labels = scope.selectorLabels;
@@ -128,6 +131,14 @@ in
   rerun-set-by-mkjob =
     (jobOf { }).metadata.annotations.${kixKeys.rerun} or null == "on-change"
     || throw "scope.mkJob should set the rerun annotation to on-change";
+
+  # A value the package sets is kept, so check 16 refuses an unsupported one
+  # instead of `scope.mkJob` replacing it.
+  rerun-other-value-refused =
+    evalFails (clusterOf {
+      rerun = "always";
+    })
+    || throw "a Job whose rerun annotation has an unsupported value should fail the build";
 
   # Only a resource under the rerun rule carries the stamp.
   rerun-hash-only-on-rerun =
