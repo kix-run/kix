@@ -209,20 +209,17 @@ in
             };
           in
           builds c && etcdClass c == "local";
-        # With the alias and another instance answering storageClasses,
-        # the dependency binds that instance.
-        aliasWithOtherProvider =
-          let
-            c = clusterWith {
-              aliases = [
-                "storageClasses"
-                "mayastor"
-              ];
-              deps = _: { };
-              extra.instances.mayastor.local-path.aliases = [ "storageClasses" ];
-            };
-          in
-          builds c && etcdClass c == "local-path";
+        # With the alias and only an import answering storageClasses, the
+        # dependency stays unbound: the managed instance shadows the import
+        # of its own name, so etcd has no class.
+        aliasWithShadowedImport = evalFails (clusterWith {
+          aliases = [
+            "storageClasses"
+            "mayastor"
+          ];
+          deps = _: { };
+          extra.instances.mayastor.local-path.aliases = [ "storageClasses" ];
+        });
         selfRef = evalFails (clusterWith {
           deps = ref: { storageClasses = ref.mayastor.mayastor; };
         });

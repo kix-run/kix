@@ -302,11 +302,7 @@ rec {
 
     else
       let
-        # An instance that answers one of its own dependency names never
-        # binds to itself, so the name falls through to other instances.
-        all = builtins.filter (c: !(isRequester c.namespace c.instName)) (
-          resolutionIndex.byKey.${argName} or [ ]
-        );
+        all = resolutionIndex.byKey.${argName} or [ ];
         sameNs = builtins.filter (c: c.namespace == requesterNamespace) all;
         foreign = builtins.filter (c: c.namespace != requesterNamespace) all;
         # Foreign instances every namespace may use: the package serves the
@@ -326,10 +322,15 @@ rec {
 
         # Prefer managed instances over imports among the instances this
         # namespace may use, so a managed provider that serves the cluster
-        # shadows a flavour's import in the requester's namespace.
+        # shadows a flavour's import in the requester's namespace. Then drop
+        # the requesting instance, which never binds to itself. A managed
+        # instance that answers its own dependency name still shadows an
+        # import of that name, so it does not bind the import it replaces.
         eligible = sameNs ++ serving;
         managed = builtins.filter (c: !(c.meta.isImport or false)) eligible;
-        candidates = if managed != [ ] then managed else eligible;
+        candidates = builtins.filter (c: !(isRequester c.namespace c.instName)) (
+          if managed != [ ] then managed else eligible
+        );
         own = builtins.filter (c: c.namespace == requesterNamespace) candidates;
         shared = builtins.filter (c: c.namespace != requesterNamespace) candidates;
 

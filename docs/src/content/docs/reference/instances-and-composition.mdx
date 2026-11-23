@@ -159,7 +159,7 @@ Every cluster module receives `ref` in its module arguments. Writing `ref.<names
 - Any value that is not a `ref` (or a list of `ref`s) is passed as-is to the build argument without package view wrapping, compatibility checks, or config injection.
 - Setting `deps.<arg> = null;` behaves the same as leaving `deps.<arg>` unset: Kix falls back to automatic resolution or the build argument's default value.
 - Explicitly wiring `deps.<arg>` suppresses `availablePackages` auto-instantiation for that argument.
-- An instance cannot depend on itself. Automatic resolution skips the instance when its own name, aliases, or roles match `<arg>`, and pointing `deps.<arg>` at the instance itself with `ref` fails evaluation.
+- An instance cannot depend on itself. Automatic resolution skips the instance when its own name, aliases, or roles match `<arg>`, and pointing `deps.<arg>` at the instance itself with `ref` fails evaluation. Managed instances still take precedence over imports, so a managed instance that matches `<arg>` itself does not bind an import of that name.
 
 :::tip[Use it in a task]
 See [Wire cross-namespace dependencies explicitly](/docs/how-to/debug-dependency-wiring/wire-cross-namespace-dependencies-explicitly/) and [Debug a missing dependency](/docs/how-to/debug-dependency-wiring/debug-a-missing-dependency/).

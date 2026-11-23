@@ -129,6 +129,35 @@ in
     lib.hasInfix "dependency 'svc' has no matching instance in namespace 'a'" (result.thrown or "")
     || throw "own alias alone: ${builtins.toJSON result}";
 
+  # A managed provider shadows an import that answers the same name, for
+  # the provider itself too. A managed DNS provider beside a flavour's
+  # platform DNS import therefore binds no `dns` provider, and does not
+  # order its workloads after the import it replaces.
+  dependency-binding-managed-provider-skips-shadowed-import =
+    let
+      result = resolveCaught.resolveArg {
+        argName = "dns";
+        resolutionIndex.byKey.dns = [
+          {
+            namespace = "kube-system";
+            instName = "coredns";
+            meta = { };
+          }
+          {
+            namespace = "kube-system";
+            instName = "platform-dns";
+            meta.isImport = true;
+          }
+        ];
+        requesterNamespace = "kube-system";
+        requesterName = "coredns";
+        requester = "kube-system/coredns";
+        hasDefault = true;
+        explicitOverride = null;
+      };
+    in
+    !(result.found or true) || throw "managed dns provider bound: ${builtins.toJSON result}";
+
   # A ref to the instance itself is refused.
   dependency-binding-self-ref-refused =
     let
@@ -246,4 +275,68 @@ in
   dependency-binding-post-hook-warning =
     (postHookWarned false && !(postHookWarned true))
     || throw "post-hook warning: without root ${builtins.toJSON (postHookWarned false)}, with root ${builtins.toJSON (postHookWarned true)}";
+
+  # A `deps` key on an import is refused, because an import takes no
+  # dependencies.
+  dependency-binding-import-deps-key-refused =
+    let
+      result = resolveCaught.checkDepsKeys {
+        mergedInstances.a.ext = {
+          package = {
+            _type = "kix-import";
+          };
+          deps.svc = null;
+        };
+        phase1Instances.a.ext = {
+          discoveredDeps = { };
+          depsEnrichment = { };
+        };
+      };
+    in
+    lib.hasInfix "[K3646] a/ext: instances.a.ext.deps.svc is set on a kix.mkImport instance." (
+      result.thrown or ""
+    )
+    || throw "import deps key: ${builtins.toJSON result}";
+
+  # A list of refs that includes the instance itself is refused.
+  dependency-binding-self-ref-in-list-refused =
+    let
+      ref = ns: inst: {
+        _type = "kix-ref";
+        namespace = ns;
+        instanceName = inst;
+      };
+      result = resolveCaught.resolveArg {
+        argName = "svc";
+        resolutionIndex.byKey = { };
+        requesterNamespace = "a";
+        requesterName = "app";
+        requester = "a/app";
+        hasDefault = false;
+        explicitOverride = [
+          (ref "a" "svc")
+          (ref "a" "app")
+        ];
+      };
+    in
+    lib.hasInfix "instances.a.app.deps.svc points to ref.a.app, which is the instance itself." (
+      result.thrown or ""
+    )
+    || throw "self ref in list: ${builtins.toJSON result}";
+
+  # When the only instance answering a required name is the one asking,
+  # Kix adds a provider from `availablePackages` and binds it.
+  dependency-binding-own-alias-auto-instantiates =
+    let
+      cluster = mkCluster [
+        {
+          availablePackages.svc.package = provider;
+          instances.a.app = {
+            package = consumer;
+            aliases = [ "svc" ];
+          };
+        }
+      ];
+    in
+    boundBy "app" cluster == "svc" || throw "app bound ${boundBy "app" cluster}";
 }

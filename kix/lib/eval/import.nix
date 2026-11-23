@@ -54,17 +54,8 @@ rec {
         apiVersion
         crds
         ;
-      # An import built from a package answers the names a managed instance
-      # of that package answers.
       meta = {
         inherit roles scope;
-      }
-      // lib.optionalAttrs (from != null) {
-        defaultAliases =
-          (packageLib.metaOf {
-            package = from;
-            kix = kixlib;
-          }).defaultAliases or [ ];
       };
     };
 

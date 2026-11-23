@@ -78,10 +78,9 @@ let
   };
 
   # An import without a password is cluster-scoped, so n8n resolves it
-  # from another namespace. It is built from the valkey package, so it
-  # answers that package's default alias `redis` under another name.
+  # from another namespace.
   importedValkey = out: {
-    instances.cache.valkey.package = eval.mkImport {
+    instances.cache.redis.package = eval.mkImport {
       from = valkeyPackage;
       out = {
         host = "valkey.example.net";
