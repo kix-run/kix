@@ -3,23 +3,29 @@ name: Documentation captures
 # Every code block in the docs that shows command output is generated, not
 # typed: `nix run ./docs#regen-captures-offline` re-runs each command
 # against the example workspace and writes a sidecar under
-# docs/src/command-output/. This job fails when a committed sidecar no
-# longer matches what the command produces, which is what a compiler change
-# that moved the rendered output looks like.
+# docs/src/command-output/. This job fails when a committed sidecar does
+# not match what the command produces.
 #
-# It runs on pull requests so that drift in the docs stops a merge. The
-# Pages deploy job only builds the site, so a stale capture never stops
-# kix.run from deploying.
+# The captures show what a released Kix prints, so the release regenerates
+# all of them, and its pull request is where all of them are checked. A
+# pull request that changes the library, the CLI, or a package leaves the
+# captures alone and does not run this job. Until the next release, a
+# capture can show output that main no longer produces.
 #
-# A pull request that changes only packages, change records, library tests,
-# test clusters or the CLI snapshots does not run it. Package version bumps
-# are such pull requests, and they leave the captures alone: the release
-# regenerates every capture. Until then, a capture that shows a package's output can be out of
-# date, and the next pull request this job checks fails on it.
+# What a run checks:
+#
+#   every capture       a release pull request (the workspace version in
+#                       cli/Cargo.toml changes), a change to the capture
+#                       tool or to the pinned kix-examples revision, and a
+#                       run started by hand that names no group
+#   the changed groups  any other pull request that changes sidecars. A
+#                       group is the folder docs/src/command-output/<a>/<b>.
+#                       The other groups are not checked, so a pull request
+#                       never fails on a capture it did not touch.
 #
 # The fix when this fails is to run
-# `nix run ./docs#regen-captures-offline -- --apply` locally and commit
-# the result, even when the drift came from a package bump.
+# `nix run ./docs#regen-captures-offline -- --apply` locally, or with
+# `--group <a>/<b>` for one group, and commit the result.
 #
 # The captures need the private kix-run/kix-examples repository, which
 # only the KIX_EXAMPLES_TOKEN secret can read. GitHub gives no secrets to a
@@ -29,17 +35,18 @@ name: Documentation captures
 on:
   pull_request:
     paths:
-      - 'docs/**'
-      - 'kix/**'
-      - '!kix/packages/**'
-      - '!kix/lib/tests/**'
-      - 'clusters/**'
-      - '!clusters/test-*'
-      - '!clusters/test-*/**'
-      - 'cli/**'
-      - '!cli/kix-cli/tests/snapshots/**'
+      - 'docs/src/command-output/**'
+      - 'docs/nix/captures-offline.nix'
+      - 'docs/flake.lock'
+      # A release changes the version here.
+      - 'cli/Cargo.toml'
       - '.github/workflows/docs-captures.yml'
   workflow_dispatch:
+    inputs:
+      groups:
+        description: Capture groups to check, separated by spaces, such as how-to/platform-ingress. Empty checks every capture
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -51,6 +58,9 @@ concurrency:
 jobs:
   captures:
     runs-on: [self-hosted, spindle-8c-16g-100d]
+    # A run that checks every capture takes about 15 minutes, most of it
+    # building Kix.
+    timeout-minutes: 45
     env:
       NIX_CONFIG: |
         extra-experimental-features = nix-command flakes pipe-operators
@@ -75,11 +85,61 @@ jobs:
           path: kix
           fetch-depth: 0
 
+      # Decide what to check: every capture, some groups, or nothing. The
+      # header of this file gives the rule.
+      - name: Choose the captures to check
+        if: steps.token.outputs.present == 'true'
+        id: scope
+        working-directory: kix
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          ASKED: ${{ inputs.groups }}
+        run: |
+          version() {
+            nix eval --raw --impure --expr \
+              "(builtins.fromTOML (builtins.readFile $1)).workspace.package.version"
+          }
+          all=false
+          groups=""
+          if [ "$EVENT" != pull_request ]; then
+            read -ra asked <<<"$ASKED"
+            for group in "${asked[@]}"; do
+              [[ "$group" =~ ^[a-z0-9-]+/[a-z0-9-]+$ ]] || { echo "::error::'$group' is not a capture group"; exit 1; }
+            done
+            groups="${asked[*]}"
+            [ -n "$groups" ] || all=true
+          else
+            git show "$BASE:cli/Cargo.toml" > "$RUNNER_TEMP/base-Cargo.toml"
+            if [ "$(version "$RUNNER_TEMP/base-Cargo.toml")" != "$(version "$PWD/cli/Cargo.toml")" ]; then
+              all=true
+            elif git diff --name-only "$BASE...HEAD" -- \
+                docs/nix/captures-offline.nix docs/flake.lock \
+                .github/workflows/docs-captures.yml | grep -q .; then
+              all=true
+            fi
+            # A sidecar is docs/src/command-output/<a>/<b>/<name>.json. A
+            # deleted sidecar names no group to check.
+            groups=$(git diff --name-only --diff-filter=d "$BASE...HEAD" -- docs/src/command-output \
+              | awk -F/ 'NF == 6 { print $4 "/" $5 }' | sort -u | tr '\n' ' ')
+          fi
+          if [ "$all" = true ]; then
+            echo "Checking every capture."
+          elif [ -n "$groups" ]; then
+            echo "Checking these groups: $groups"
+          else
+            echo "::notice title=Documentation captures::This pull request changes no capture, so there is nothing to check."
+          fi
+          {
+            echo "all=$all"
+            echo "groups=$groups"
+          } >> "$GITHUB_OUTPUT"
+
       # The captures must match the kix-examples revision docs/flake.lock
       # pins, which can be ahead of kix-examples' default branch while a
       # paired kix-examples PR is open.
       - name: Read the pinned kix-examples revision
-        if: steps.token.outputs.present == 'true'
+        if: steps.scope.outputs.all == 'true' || steps.scope.outputs.groups != ''
         id: examples-rev
         run: echo "rev=$(nix eval --raw --impure --expr '(builtins.fromJSON (builtins.readFile ./kix/docs/flake.lock)).nodes.kix-examples.locked.rev')" >> "$GITHUB_OUTPUT"
 
@@ -87,7 +147,7 @@ jobs:
       # GITHUB_TOKEN cannot read, so it is checked out with its own token
       # and the flake input is overridden to point at it.
       - name: Checkout kix-examples
-        if: steps.token.outputs.present == 'true'
+        if: steps.scope.outputs.all == 'true' || steps.scope.outputs.groups != ''
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: kix-run/kix-examples
@@ -97,9 +157,26 @@ jobs:
           fetch-depth: 0
 
       - name: Offline captures are fresh
-        if: steps.token.outputs.present == 'true'
+        if: steps.scope.outputs.all == 'true' || steps.scope.outputs.groups != ''
         working-directory: kix
+        env:
+          ALL: ${{ steps.scope.outputs.all }}
+          GROUPS_TO_CHECK: ${{ steps.scope.outputs.groups }}
+          EXAMPLES: git+file://${{ github.workspace }}/kix-examples
         run: |
-          nix run ./docs#regen-captures-offline \
-            --override-input kix-examples "git+file://${{ github.workspace }}/kix-examples" \
-            -- --check
+          check() {
+            nix run ./docs#regen-captures-offline \
+              --override-input kix-examples "$EXAMPLES" -- "$@" --check
+          }
+          if [ "$ALL" = true ]; then
+            check
+            exit
+          fi
+          fail=0
+          read -ra groups <<<"$GROUPS_TO_CHECK"
+          for group in "${groups[@]}"; do
+            echo "::group::$group"
+            check --group "$group" || fail=1
+            echo "::endgroup::"
+          done
+          exit "$fail"
