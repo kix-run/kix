@@ -61,7 +61,7 @@ in
       record = builtins.head (caughtLib.records ((importScope evalCaught).mkSecret.thrown or ""));
     in
     (
-      lib.hasInfix "Kix cannot derive 'out' from 'from' for this kix.mkImport because the package uses scope.mkSecret." record.message
+      lib.hasInfix "The package in 'from' uses scope.mkSecret, which kix.mkImport does not support, so Kix cannot build this import from that package." record.message
       && record.instance == "app/db"
     )
     || throw "import scope mkSecret: ${builtins.toJSON record}";

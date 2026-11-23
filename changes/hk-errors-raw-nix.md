@@ -2,12 +2,12 @@
 kind = "fixed"
 library = ["kix.expose", "kix.mkImport"]
 +++
-`kix.expose` and `kix.mkImport` now report clear Kix errors instead of bare
-missing-attribute messages. When an instance's `ingressNginx` dependency has no
-`out.ingressClassName`, `kix.expose` now names the instance and dependency and
-shows how to set the class name. When a package passed to `kix.mkImport` via
-`from` uses an unsupported `scope` attribute (such as `scope.mkSecret`,
-`scope.mkCRDRef`, or `scope.helm`), Kix now names the import instance and
-attribute and shows how to set `out` directly. Packages evaluated through
-`from` in `kix.mkImport` can now also call `scope.fail`, which reports the
-error on the import instance.
+When an `ingressNginx` dependency does not set `out.ingressClassName`,
+`kix.expose` now names the affected `Ingress`, instance, and dependency, and
+shows how to set the class name. When a package passed in `from` to
+`kix.mkImport` uses an unsupported `scope` field (such as `scope.mkSecret`,
+`scope.mkCRDRef`, or `scope.helm`), Kix now names the import instance and that
+field, and shows how to set `out` directly. A `from` package in `kix.mkImport`
+can now also call `scope.fail` to report an error on the import instance.
+Before, all three cases failed with `attribute '...' missing`, without naming
+the instance or giving a fix.

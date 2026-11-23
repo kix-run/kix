@@ -895,7 +895,7 @@ in
     in
     (
       fails (manifests (mkExposeCluster args))
-      && lib.hasInfix "kix.expose (appns/web): Kix cannot build the Ingress because the ingressNginx dependency has no out.ingressClassName for spec.ingressClassName." record.message
+      && lib.hasInfix "Kix cannot build Ingress appns/web because the ingressNginx dependency does not set out.ingressClassName (the class name for spec.ingressClassName)." record.message
       && record.instance == "appns/web"
       && record.dependency == "ingressNginx"
     )

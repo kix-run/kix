@@ -202,7 +202,7 @@ rec {
         name:
         fail {
           inherit instance;
-          message = "Kix cannot derive 'out' from 'from' for this kix.mkImport because the package uses scope.${name}. Imports represent existing services instead of deploying the package.";
+          message = "The package in 'from' uses scope.${name}, which kix.mkImport does not support, so Kix cannot build this import from that package.";
           fix =
             "Remove 'from' and set 'out' directly:"
             + "\n  kix.mkImport { out = { <field> = \"...\"; }; }"
