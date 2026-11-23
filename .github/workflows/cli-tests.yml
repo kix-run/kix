@@ -23,19 +23,28 @@ on:
   pull_request:
     paths:
       - 'cli/**'
-      # The snapshot tests build a cluster, so a change to the compiler or
-      # to a package changes their expected output.
+      # The tests build one cluster, clusters/test-cli-fixture.nix, so a
+      # change to the library changes their expected output. That cluster
+      # defines its own packages, which the unit tests in
+      # kix/lib/tests/units/cli-fixture.nix check, so a change to a package
+      # folder or to another cluster cannot change a result here. A test
+      # added under cli/ must build that cluster and no other.
       - 'kix/**'
-      - 'clusters/**'
+      - '!kix/packages/stable/**'
+      - '!kix/packages/experimental/**'
+      - 'clusters/test-cli-fixture.nix'
       - 'flake.nix'
       - 'flake.lock'
       - '.github/workflows/cli-tests.yml'
   push:
     branches: [main]
     paths:
+      # The same paths as for a pull request.
       - 'cli/**'
       - 'kix/**'
-      - 'clusters/**'
+      - '!kix/packages/stable/**'
+      - '!kix/packages/experimental/**'
+      - 'clusters/test-cli-fixture.nix'
       - 'flake.nix'
       - 'flake.lock'
       - '.github/workflows/cli-tests.yml'
@@ -99,8 +108,8 @@ jobs:
           nix develop --command bash -c \
             'cd cli && cargo-clippy --workspace --all-targets -- -D warnings'
 
-      # Includes the four output snapshots under
-      # cli/kix-cli/tests/snapshots/. They capture whole rendered manifests,
+      # Includes the output snapshots under cli/kix-cli/tests/snapshots/.
+      # They capture whole rendered manifests of the fixture cluster,
       # identity hashes included, so a deliberate change to what the
       # compiler emits fails this step. That is the point: refresh them with
       # `INSTA_UPDATE=always cargo test -p kix-cli --test snapshot_test` and
