@@ -28,7 +28,7 @@ let
     else if e.operator == "DoesNotExist" then
       !has
     else
-      fail "label selector operator '${toString e.operator}' is not one of In, NotIn, Exists, DoesNotExist";
+      fail "Label selector matchExpressions sets operator '${toString e.operator}', which Kubernetes rejects. Set operator to \"In\", \"NotIn\", \"Exists\", or \"DoesNotExist\".";
 in
 {
   # Return true when `labels` satisfies `selector`. An empty selector matches

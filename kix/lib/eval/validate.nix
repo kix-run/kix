@@ -490,7 +490,7 @@ rec {
           [ ]
         else
           [
-            "${w.kind} ${ns}/${w.metadata.name} selector ${builtins.toJSON selector} does not match pod template labels ${builtins.toJSON templateLabels}"
+            "${w.kind} ${ns}/${w.metadata.name} spec.selector ${builtins.toJSON selector} does not match pod template labels ${builtins.toJSON templateLabels}, so Kubernetes would reject it. Update spec.template.metadata.labels or spec.selector so they match."
           ]
       ) (builtins.filter (r: builtins.elem r.kind workloadKinds.selectorKinds) resources);
 

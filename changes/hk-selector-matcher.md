@@ -1,10 +1,12 @@
 +++
 kind = "fixed"
 +++
-The build checks, the scorecard rules, and the Helm ordering now read a label
-selector's `matchExpressions` as well as its `matchLabels`. Before, they read
-`matchLabels` alone, so a PodDisruptionBudget, a NetworkPolicy, or a
-workload whose selector used `matchExpressions` was checked against the wrong
-pods, and a ServiceMonitor or VMServiceScrape with `matchExpressions` was not
-checked at all. A selector that matches no pods now fails the build with the
-full selector in the message.
+Validation checks, scorecard rules, automatic `PodDisruptionBudget` generation,
+and Helm chart resource ordering now evaluate `matchExpressions` as well as
+`matchLabels` on label selectors. Previously, Kix read `matchLabels` alone, so
+a workload, `NetworkPolicy`, or `PodDisruptionBudget` that used
+`matchExpressions` could match the wrong pods or go unchecked when
+`matchLabels` was empty. `ServiceMonitor` and `VMServiceScrape` selectors with
+`matchExpressions` were also skipped. If a selector using `matchExpressions`
+fails validation or a scorecard rule, `kix check` and `kix build` now report it
+and show the full selector.

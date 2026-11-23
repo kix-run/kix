@@ -26,7 +26,7 @@ This page is maintained alongside `kix/lib/eval/validate.nix`. The test suites i
 | 6 | A `StatefulSet` `serviceName` names a headless `Service` (`clusterIP: None`) in its namespace. | Unset `serviceName` |
 | 7 | No two resources share the same `kind`, `namespace`, and `name`. | |
 | 8 | Every resource carries `app.kubernetes.io/managed-by: kix` in `metadata.labels`. | |
-| 9 | A workload's `selector` (`matchLabels` and `matchExpressions`) matches its pod template labels (`Deployment`, `StatefulSet`, `DaemonSet`, `Job`). | |
+| 9 | A `Deployment`, `StatefulSet`, `DaemonSet`, or `Job` `selector` (`matchLabels` and `matchExpressions`) matches its pod template labels. | |
 | 10 | `Ingress` backends name a `Service` in the same namespace. | |
 | 11 | Every `metadata.namespace` has a corresponding `Namespace` resource in the build. | `_`-prefixed sentinel namespaces used internally for cluster-scoped instances |
 | 12 | A `NetworkPolicy` `podSelector` matches at least one pod template in its namespace. | Empty `podSelector` (`{ }`) |
