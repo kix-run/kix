@@ -1,14 +1,18 @@
 name: Bump detect
 
-# Once a week, compare each package's pinned version with upstream's newest
-# release, and start the bump workflow for the packages that are behind.
+# Once a week, compare each package's pinned version with upstream's
+# releases, and start the bump workflow for the packages that are behind.
 # `.github/bump/sources.toml` names each package's upstream, and
-# `.github/bump/detect.py` does the work. The run's summary lists every
-# package that is behind, and the ones it could not check.
+# `.github/bump/detect.py` does the work. A bump targets the newest release
+# whose images the registry has (`.github/bump/readiness.py`), so no agent
+# starts for a release that cannot be installed yet. The run's summary
+# lists every package that is behind, each release that is waiting on an
+# image, and the packages it could not check.
 #
 # The job runs no agent and holds no secret. Its token can start workflows
-# and read issues and pull requests. It reads only version tags from
-# upstream.
+# and read issues and pull requests. From upstream it reads only version
+# tags, and from each registry only whether an image exists and for which
+# platforms.
 
 on:
   schedule:
@@ -58,7 +62,7 @@ jobs:
         run: |
           [[ "$LIMIT" =~ ^[0-9]+$ ]] || { echo "::error::limit must be a whole number"; exit 1; }
           set +e
-          nix shell nixpkgs#python3 nixpkgs#git -c \
+          nix shell nixpkgs#python3 nixpkgs#git nixpkgs#crane -c \
             python3 .github/bump/detect.py "$RUNNER_TEMP/packages.json" --dispatch "$LIMIT" \
             > "$RUNNER_TEMP/summary.md"
           status=$?

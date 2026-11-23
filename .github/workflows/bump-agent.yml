@@ -46,6 +46,10 @@ on:
       git:
         description: Upstream git repository URL
         required: true
+      newer:
+        description: Newer upstream versions whose images are not published yet, separated by spaces (optional)
+        required: false
+        default: ''
       model:
         description: Model the agent runs. auto picks Opus for a hard bump and Haiku otherwise
         type: choice
@@ -74,6 +78,7 @@ env:
   TARGET: ${{ inputs.target }}
   TAG: ${{ inputs.tag }}
   GIT_URL: ${{ inputs.git }}
+  NEWER: ${{ inputs.newer }}
   MODEL: ${{ inputs.model }}
   EXTRA: ${{ inputs.extra }}
   MINUTES: ${{ inputs.minutes }}
@@ -107,7 +112,8 @@ jobs:
         run: |
           fail() { echo "::error::$1"; exit 1; }
           [[ "$PACKAGE" =~ ^[a-z0-9][a-z0-9.-]*$ ]] || fail "package '$PACKAGE' is not a lowercase name"
-          for v in "$PINNED" "$TARGET" "$TAG"; do
+          read -ra newer <<<"$NEWER"
+          for v in "$PINNED" "$TARGET" "$TAG" "${newer[@]}"; do
             [[ "$v" =~ ^[A-Za-z0-9][A-Za-z0-9._+@-]*$ ]] || fail "'$v' is not a version or tag"
           done
           [[ "$GIT_URL" =~ ^https://[A-Za-z0-9.-]+/[A-Za-z0-9._/-]+$ ]] || fail "'$GIT_URL' is not an https git URL"
@@ -214,9 +220,13 @@ jobs:
             CHECK_MORE+=$'\n\nRun these one at a time, never in parallel. Each run builds the library and runs the test suites, and several at once overload the machine your kind cluster runs on.'
           fi
           [ -n "$EXTRA" ] || EXTRA="No extra instructions for this package."
-          export PKG_DIRS CHECK_MORE EXTRA
+          NEWER_NOTE="No newer release is waiting on its images."
+          if [ -n "$NEWER" ]; then
+            NEWER_NOTE="Upstream has also released ${NEWER// /, }. Those are not the target, because the registry does not have all of their images yet. Do not move to them."
+          fi
+          export PKG_DIRS CHECK_MORE EXTRA NEWER_NOTE
           brief=$(<.github/bump/brief.md)
-          for v in PKG_DIRS PKG_DIR1 OLD TARGET TAG GIT_URL EXTRA BRANCH BASE CLUSTER KUBECONFIG REPORT OUTCOME NAME MINUTES CHECK_MORE; do
+          for v in PKG_DIRS PKG_DIR1 OLD TARGET TAG GIT_URL EXTRA NEWER_NOTE BRANCH BASE CLUSTER KUBECONFIG REPORT OUTCOME NAME MINUTES CHECK_MORE; do
             brief=${brief//"\${$v}"/${!v}}
           done
           printf '%s\n' "$brief" > "$RUNNER_TEMP/brief.md"
@@ -279,10 +289,7 @@ jobs:
           cat "$out/report.md" >> "$GITHUB_STEP_SUMMARY"
           outcome=$(tr -d '[:space:]' < "$RUNNER_TEMP/outcome" 2>/dev/null || true)
           case "$outcome" in
-            upgraded|held|needs-decision|blocked-on-kix) ;;
-            not-ready)
-              echo "::notice title=Not ready::$PACKAGE $TARGET is released, but something the package needs is not published yet. The weekly check starts this bump again."
-              ;;
+            upgraded|held|needs-decision|not-ready|blocked-on-kix) ;;
             *)
               echo "::error::the agent gave no valid outcome (got '$outcome')"
               outcome=invalid
@@ -300,10 +307,7 @@ jobs:
 
   verify:
     needs: agent
-    # A not-ready run opens nothing, so that the weekly check tries again.
-    if: >-
-      needs.agent.outputs.outcome != 'invalid'
-      && needs.agent.outputs.outcome != 'not-ready'
+    if: needs.agent.outputs.outcome != 'invalid'
     runs-on: [self-hosted, spindle-4c-8g-50d, access=isolated]
     timeout-minutes: 60
     env:
@@ -356,12 +360,30 @@ jobs:
           done
           exit "$fail"
 
-      # The agent tests on arm64, and most clusters run amd64.
-      - name: Check every default image has an amd64 build
+      # Detection chose the target, and the branch, the pull request, and
+      # its marker are named for it. A branch that pins another version
+      # would be recorded as this one.
+      - name: Check the package pins the target
+        if: env.OUTCOME == 'upgraded'
+        run: |
+          system=$(nix eval --impure --raw --expr builtins.currentSystem)
+          nix eval --json ".#legacyPackages.$system.kixPackages" > "$RUNNER_TEMP/packages.json"
+          got=$(nix shell nixpkgs#python3 -c \
+            python3 .github/bump/detect.py --pinned "$PACKAGE" "$RUNNER_TEMP/packages.json")
+          if [ "$got" != "$TARGET" ]; then
+            echo "::error::$PACKAGE pins $got after the bump, and the target is $TARGET"
+            exit 1
+          fi
+
+      # The same check detection made on the release's images before the
+      # agent started, now on every image the package pins: linux/amd64,
+      # and each other platform the image at the base commit has.
+      - name: Check every default image can be pulled
         if: env.OUTCOME == 'upgraded'
         run: |
           read -ra dirs <<<"$DIRS"
-          nix shell nixpkgs#crane nixpkgs#python3 -c python3 .github/bump/check-images.py "${dirs[@]}"
+          nix shell nixpkgs#crane nixpkgs#python3 nixpkgs#git -c \
+            python3 .github/bump/readiness.py --base "$BASE" "${dirs[@]}"
 
   publish:
     needs: [agent, verify]
@@ -436,6 +458,10 @@ jobs:
               title="Decide: $PACKAGE $TARGET"
               summary="An agent ($MODEL, \$$cost) stopped at a choice a person must make, in [this workflow run]($RUN_URL). Its report gives the options and a recommendation."
               ;;
+            not-ready)
+              title="Not ready: $PACKAGE $TARGET"
+              summary="An agent ($MODEL, \$$cost) found that something this release needs is not published, in [this workflow run]($RUN_URL). Its report says what is missing. The check that runs before a bump starts (\`.github/bump/readiness.py\`) did not see it, so that check has a gap for this package. Start the workflow again once the release is complete."
+              ;;
             blocked-on-kix)
               title="Blocked on Kix: $PACKAGE $TARGET"
               summary="An agent ($MODEL, \$$cost) found that Kix itself must change before this upgrade, in [this workflow run]($RUN_URL). Its report and housekeeping entry say what."
@@ -445,7 +471,11 @@ jobs:
             # batch.py and bump-detect.yml read both lines.
             echo "<!-- bump-dirs: $DIRS -->"
             echo "<!-- bump-target: $PACKAGE $TARGET -->"
-            echo "\`$PACKAGE\` pins \`$PINNED\`. Upstream's newest release is \`$TARGET\` (tag \`$TAG\`)."
+            echo "\`$PACKAGE\` pins \`$PINNED\`. The target is \`$TARGET\` (tag \`$TAG\`), the newest release whose images are published."
+            if [ -n "$NEWER" ]; then
+              echo
+              echo "Upstream has also released ${NEWER// /, }. The registry does not have all of their images yet, so a later bump takes them."
+            fi
             echo
             echo "$summary"
             echo
@@ -501,8 +531,9 @@ jobs:
           workflow=$(basename "${WORKFLOW_REF%@*}")
           jq -n --arg package "$PACKAGE" --arg dirs "$DIRS" --arg pinned "$PINNED" \
               --arg target "$TARGET" --arg tag "$TAG" --arg git "$GIT_URL" --arg extra "$EXTRA" \
+              --arg newer "$NEWER" \
             '{ref: "main", inputs: {package: $package, dirs: $dirs, pinned: $pinned, target: $target,
-              tag: $tag, git: $git, extra: $extra, model: "opus", minutes: "120"}}' \
+              tag: $tag, git: $git, newer: $newer, extra: $extra, model: "opus", minutes: "120"}}' \
             | curl -sS --fail-with-body -X POST -H "Authorization: Bearer $GH_TOKEN" \
                 -H "Accept: application/vnd.github+json" \
                 "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/workflows/$workflow/dispatches" --data-binary @-

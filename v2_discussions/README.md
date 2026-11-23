@@ -203,6 +203,7 @@ These are archived because they are implemented or deprecated, but they remain t
 
 ### Recently archived (November 2026)
 
+- **172c** Bump to the newest version that can be installed → implemented (2026-11-23). Detection took upstream's newest tag and asked no registry, so an agent ran for a release with no image yet, and an older published release was passed over. Detection now lists the releases, asks the registry for the images of each (`.github/bump/readiness.py`, with the image list from `kix/packages/release-images.nix`), and targets the newest one that is ready. The agent no longer chooses the version. Still open: chart packages are not checked, detection runs weekly, and the release-as-data design (§4.3).
 - **174a** Several Kix versions in one flake → implemented (kix#288, Kix 0.10.0-rc.6, 2026-11-21). Each version of Kix is an input of `flake.nix`, and `[versions]` in `kix.toml` lists the clusters under each. Kix runs the version a cluster's input pins and evaluates with `kix` replaced by that input. `kix upgrade <input>` and `kix upgrade <cluster>` move one input or one cluster. Open questions are in `ROADMAP.md`. **174** One repository, several Kix versions (one project folder for each version) is archived with it as the design that was not built; keep it for the spikes.
 - **164b** Per-cluster Kix versions → superseded by 174 (2026-11-21). The sketch put a per-cluster table in `kix.toml`, which doc 169 removed. Doc 174 gives each group of clusters its own project instead.
 

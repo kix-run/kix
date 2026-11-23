@@ -1,0 +1,44 @@
+name: Bump tests
+
+# Runs the unit tests of the bump scripts in .github/bump/. They ask no
+# registry and no upstream: `test_detect.py` replays recorded answers. The
+# library function the scripts rely on, `versions.retag`, is covered by
+# the library tests.
+
+on:
+  pull_request:
+    paths:
+      - '.github/bump/**'
+      - '.github/workflows/bump-tests.yml'
+  push:
+    branches: [main]
+    paths:
+      - '.github/bump/**'
+      - '.github/workflows/bump-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bump-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: [self-hosted, spindle-2c-4g]
+    timeout-minutes: 10
+    env:
+      # `extra-` keeps the features the image enabled; same form as
+      # cli-tests.yml.
+      NIX_CONFIG: |
+        extra-experimental-features = nix-command flakes pipe-operators
+        accept-flake-config = true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Tests
+        run: |
+          nix shell --inputs-from . nixpkgs#python3 --command \
+            python3 -m unittest discover -v -s .github/bump -p 'test_*.py'
