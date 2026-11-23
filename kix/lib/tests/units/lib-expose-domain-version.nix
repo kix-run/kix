@@ -892,7 +892,7 @@ in
     in
     (
       fails (manifests (mkExposeCluster args))
-      && lib.hasInfix "kix.expose (appns/web): the Ingress needs a class name, and the instance wired as ingressNginx publishes no out.ingressClassName." rendered
+      && lib.hasInfix "kix.expose (appns/web): Kix cannot build the Ingress because the ingressNginx dependency has no out.ingressClassName for spec.ingressClassName." rendered
     )
     || throw "ingress-class-missing: ${rendered}";
 }

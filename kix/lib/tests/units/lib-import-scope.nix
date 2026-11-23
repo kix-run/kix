@@ -72,7 +72,7 @@ in
     let
       thrown = (importScope evalCaught).mkSecret.thrown or "";
     in
-    lib.hasInfix "the package uses scope.mkSecret, which an import does not offer." thrown
+    lib.hasInfix "Kix cannot derive 'out' from 'from' for this kix.mkImport because the package uses scope.mkSecret." thrown
     || throw "import scope mkSecret: ${thrown}";
 
   lib-import-scope-unsupported-builder-fails =

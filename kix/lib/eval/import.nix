@@ -202,11 +202,11 @@ rec {
         name:
         fail {
           inherit instance;
-          message = "kix.mkImport { from = ...; } evaluates the package to derive the import's out, and the package uses scope.${name}, which an import does not offer.";
+          message = "Kix cannot derive 'out' from 'from' for this kix.mkImport because the package uses scope.${name}. Imports represent existing services instead of deploying the package.";
           fix =
-            "Set the import's output fields directly and omit 'from':"
+            "Remove 'from' and set 'out' directly:"
             + "\n  kix.mkImport { out = { <field> = \"...\"; }; }"
-            + "\nList the CRDs the environment installs in kix.mkImport { crds = [ ... ]; }.";
+            + "\nIf this service provides CRDs already installed in the cluster, list them in kix.mkImport { crds = [ ... ]; }.";
         };
 
       scope = lib.genAttrs packageScopeNames unsupported // {

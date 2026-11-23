@@ -548,8 +548,8 @@ rec {
       ingressClassName =
         ingressNginx.out.ingressClassName or (fail {
           dependency = "ingressNginx";
-          message = "kix.expose (${scope.namespaceName}/${name}): the Ingress needs a class name, and the instance wired as ingressNginx publishes no out.ingressClassName.";
-          fix = "Wire an ingress controller package that publishes out.ingressClassName, such as ingress-nginx. For an import, set it in the import's out: kix.mkImport { out.ingressClassName = \"<class>\"; }.";
+          message = "kix.expose (${scope.namespaceName}/${name}): Kix cannot build the Ingress because the ingressNginx dependency has no out.ingressClassName for spec.ingressClassName.";
+          fix = "For an imported controller, set out.ingressClassName in kix.mkImport { out.ingressClassName = \"<class>\"; }. Otherwise, use an ingress controller package that sets out.ingressClassName (such as packages.experimental.ingress-nginx), or set root.out.ingressClassName in a custom package.";
         });
 
       configAnnotations = config.ingress.annotations or { };
