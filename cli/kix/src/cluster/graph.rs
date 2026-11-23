@@ -79,16 +79,7 @@ impl ResourceGraph {
             let from_idx = id_to_node[&id];
 
             if let Some(deps_str) = get_annotation(manifest, keys::DEPENDS_ON) {
-                for dep_entry in deps_str
-                    .split(',')
-                    .map(|s| s.trim())
-                    .filter(|s| !s.is_empty())
-                {
-                    // Dependencies may be bare hashes or prefixed with `requires:` or `extra:`.
-                    let dep_hash = dep_entry
-                        .strip_prefix("requires:")
-                        .or_else(|| dep_entry.strip_prefix("extra:"))
-                        .unwrap_or(dep_entry);
+                for dep_hash in keys::depends_on_hashes(&deps_str) {
                     if let Some(&to_idx) = hash_to_node.get(dep_hash) {
                         // Directed edge from dependent to dependency.
                         graph.add_edge(from_idx, to_idx, ());

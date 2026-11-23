@@ -1,3 +1,0 @@
-# 2026-11-13 · `cli/kix/src/cluster/` · Two functions parse `kix.run/depends-on`, and they disagree on prefixes.
-
-`graph.rs` (lines 87-91) strips only `requires:` and `extra:` from an entry. `observe.rs` `depends_on` (441-448) strips any prefix with `rsplit_once(':')`. A new relation prefix would build edges in `kix status` and none in the deploy graph. One function, such as `keys::depends_on_hashes` in `cli/kix-core/src/manifest/keys.rs`, should own the format. The `namespace/instance` package key is also built twice, in `observe.rs` `package_of` (450-454) and `classify.rs` `package_of` (227-231).

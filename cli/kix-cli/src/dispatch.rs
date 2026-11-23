@@ -421,6 +421,9 @@ pub fn prepare_evaluation(global: &crate::cli::GlobalArgs, cluster: Option<&str>
     }
     // The project's builder decides which Nix every later step runs.
     commands::select_builder(global)?;
+    if let Some(dir) = commands::project_dir(&global.flake) {
+        require_flake(&dir)?;
+    }
     // Stop before any work when Kix has no runtime, or its runtime comes from
     // another release.
     kix::runtime::runtime().map_err(|e| miette::miette!("{e}"))?;
@@ -447,19 +450,29 @@ fn warn_unused_override(global: &crate::cli::GlobalArgs) {
     }
 }
 
-/// Validate cluster name format.
-///
-/// SECURITY: This is the primary defense against Nix expression injection.
-/// The cluster name is spliced into the flake attribute `nix eval` reads
-/// (`kix::eval::nix`) and into the `--apply` expression of `nix eval`
-/// (`cluster_name_command`).
-/// Only alphanumeric characters, hyphens, and underscores are safe.
+/// Refuse to evaluate `dir` when neither it nor any folder above it holds a
+/// `flake.nix`, because Nix would then stop with an error that does not
+/// mention `--flake`. A `flake.nix` in a folder above `dir` is left to Nix,
+/// which looks for one there itself.
+fn require_flake(dir: &std::path::Path) -> Result<()> {
+    if dir.ancestors().any(|d| d.join("flake.nix").is_file()) {
+        return Ok(());
+    }
+    Err(miette::miette!(
+        "no Kix project in {dir}\n  \
+         Nothing was built or changed.\n\n  \
+         Why:\n    \
+         A Kix project is a folder with a `flake.nix`. Neither {dir} nor any folder above it has one.\n\n  \
+         Next:\n    \
+         Change into the folder that holds your project's `flake.nix`, or pass `--flake <path>` to name it, and run the command again.",
+        dir = dir.display()
+    ))
+}
+
+/// Refuse a cluster name that [`kix::eval::nix::is_valid_cluster_name`]
+/// rejects, with a message for the person who typed it.
 fn validate_cluster_name(name: &str) -> Result<()> {
-    if name.is_empty()
-        || !name
-            .chars()
-            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
-    {
+    if !kix::eval::nix::is_valid_cluster_name(name) {
         return Err(miette::miette!(
             "'{}' is not a valid cluster name. Use a name like 'example' or 'nw1', not a file path.",
             name
@@ -695,6 +708,28 @@ mod tests {
         for path in ["rollback", "gc", "compliance audit", "self", "doctor"] {
             assert!(!reads_output(path), "{path}");
         }
+    }
+
+    #[test]
+    fn a_folder_without_a_flake_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("prod");
+        std::fs::create_dir(&project).unwrap();
+        // Skip when a folder above the temporary directory holds a flake.
+        if root
+            .path()
+            .ancestors()
+            .any(|d| d.join("flake.nix").is_file())
+        {
+            return;
+        }
+        let err = require_flake(root.path()).unwrap_err().to_string();
+        assert!(err.contains("--flake <path>"), "{err}");
+        std::fs::write(project.join("flake.nix"), "{}").unwrap();
+        assert!(require_flake(&project).is_ok());
+        let clusters = project.join("clusters");
+        std::fs::create_dir(&clusters).unwrap();
+        assert!(require_flake(&clusters).is_ok());
     }
 
     #[test]

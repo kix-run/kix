@@ -231,10 +231,7 @@ pub fn eval_activation_index(
     input_overrides: &[(String, String)],
     status_fn: &dyn Fn(&str),
 ) -> Result<PathBuf, KixEvalError> {
-    if !cluster_name
-        .chars()
-        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
-    {
+    if !is_valid_cluster_name(cluster_name) {
         return Err(KixEvalError::not_found(cluster_name));
     }
 
@@ -427,6 +424,20 @@ fn system_eval_error(stderr: &str) -> Option<KixEvalError> {
         return Some(KixEvalError::PlaceholderUnderNix { path });
     }
     None
+}
+
+/// Return whether `name` can name a cluster: one or more letters, digits,
+/// hyphens, or underscores.
+///
+/// SECURITY: Kix splices a cluster name into flake attribute paths and into
+/// the Nix string literal of `nix eval --apply`, so this check is the defense
+/// against Nix expression injection. Every function that splices a name
+/// calls it.
+pub fn is_valid_cluster_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
 }
 
 /// Return the flake attribute under `legacyPackages.<system>` that holds the
@@ -912,6 +923,15 @@ pub fn version() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_cluster_name_is_a_plain_word() {
+        assert!(is_valid_cluster_name("nw1"));
+        assert!(is_valid_cluster_name("homelab-kind_2"));
+        for bad in ["", "../x", "a.b", "a b", "x\"; builtins.exec"] {
+            assert!(!is_valid_cluster_name(bad), "{bad}");
+        }
+    }
 
     fn roots() -> Vec<String> {
         vec!["/p".to_string()]

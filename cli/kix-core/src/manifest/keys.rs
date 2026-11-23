@@ -299,6 +299,42 @@ pub fn contains_meta(map: &BTreeMap<String, String>, key: &str) -> bool {
     get_meta(map, key).is_some()
 }
 
+/// Return the identity hashes a [`DEPENDS_ON`] value lists.
+///
+/// Each comma-separated entry is a hash, or a hash after a `<relation>:`
+/// prefix. The library writes `requires:` and `extra:` today. Every relation
+/// is a dependency the deploy orders on, so the prefix is dropped whatever
+/// it says.
+pub fn depends_on_hashes(value: &str) -> impl Iterator<Item = &str> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.rsplit_once(':').map_or(s, |(_, hash)| hash))
+}
+
+/// Return the `namespace/instance` key of the package that stamped
+/// `manifest`, or `None` when it carries no package stamp.
+pub fn package_of(manifest: &Value) -> Option<String> {
+    Some(package_key(
+        get(manifest, PACKAGE_NAMESPACE)?,
+        get(manifest, PACKAGE)?,
+    ))
+}
+
+/// Return the package key [`package_of`] returns, read off a `kube`
+/// annotations map.
+pub fn package_of_meta(annotations: &BTreeMap<String, String>) -> Option<String> {
+    Some(package_key(
+        get_meta(annotations, PACKAGE_NAMESPACE)?,
+        get_meta(annotations, PACKAGE)?,
+    ))
+}
+
+fn package_key(namespace: &str, instance: &str) -> String {
+    format!("{namespace}/{instance}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -342,6 +378,21 @@ mod tests {
         assert!(!is_kix_key("helm.sh/hook"));
         assert!(!is_kix_key("app.kubernetes.io/name"));
     }
+
+    #[test]
+    fn depends_on_drops_any_relation_prefix() {
+        let hashes: Vec<_> = depends_on_hashes(" a,requires:b,, extra:c ,later:d").collect();
+        assert_eq!(hashes, ["a", "b", "c", "d"]);
+    }
+
+    #[test]
+    fn package_key_reads_both_stamps() {
+        let m = json!({"metadata": {"annotations": {PACKAGE: "web", PACKAGE_NAMESPACE: "app"}}});
+        assert_eq!(package_of(&m).as_deref(), Some("app/web"));
+        let map: BTreeMap<String, String> = [(PACKAGE.to_string(), "web".to_string())].into();
+        assert_eq!(package_of_meta(&map), None);
+    }
+
     /// The invariant this module exists for: a Kix domain is spelled in this
     /// file and in `kix/lib/core/annotations.nix`, nowhere else.
     ///
