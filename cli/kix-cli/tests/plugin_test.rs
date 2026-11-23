@@ -184,5 +184,7 @@ fn override_input_in_the_variable_must_be_pairs() {
         .arg("show")
         .assert()
         .failure()
-        .stderr(predicate::str::contains("pairs of an input name and a URL"));
+        .stderr(predicate::str::contains(
+            "space-separated `<INPUT> <URL>` pairs",
+        ));
 }

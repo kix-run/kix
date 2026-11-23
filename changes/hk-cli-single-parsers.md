@@ -1,4 +1,4 @@
 +++
 kind = "fixed"
 +++
-A field listed in `kix.run/cede-fields` is now handed over when the conflict is under a list item that two keys pick, such as a Service port picked by `port` and `protocol`. Before, `kix deploy` stopped on that conflict. Kix also now says that it found no project when it runs in a folder with no `flake.nix`, in that folder or any folder above it, and asks you to change into the project's folder or pass `--flake <path>`. Before, it printed the error from Nix.
+`kix deploy` and `kix plan` now leave fields listed in `ownership.cede` (`kix.run/cede-fields`) with the controller that owns them when a conflict is inside a list item keyed by multiple fields, such as a Service port matched by `port` and `protocol`. Previously, they stopped with a field ownership conflict. Running Kix when neither the current directory (or `--flake` path) nor any parent directory contains `flake.nix` now reports that no Kix project was found and tells you to run from the directory containing `flake.nix` or pass `--flake <path>`.

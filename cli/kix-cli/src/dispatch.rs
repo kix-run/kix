@@ -459,12 +459,8 @@ fn require_flake(dir: &std::path::Path) -> Result<()> {
         return Ok(());
     }
     Err(miette::miette!(
-        "no Kix project in {dir}\n  \
-         Nothing was built or changed.\n\n  \
-         Why:\n    \
-         A Kix project is a folder with a `flake.nix`. Neither {dir} nor any folder above it has one.\n\n  \
-         Next:\n    \
-         Change into the folder that holds your project's `flake.nix`, or pass `--flake <path>` to name it, and run the command again.",
+        "no Kix project found in {dir}: neither it nor any parent directory contains `flake.nix`. Nothing was built or changed.\n\
+         Next: run the command from the directory containing your project's `flake.nix`, or pass `--flake <path>`.",
         dir = dir.display()
     ))
 }

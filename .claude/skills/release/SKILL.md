@@ -134,8 +134,8 @@ same unreleased records, with the version taken from the prerelease.
    `cli/kix/src/cluster/stops.rs`. `kix deploy`, `kix rollback`, and the
    operator then refuse a cluster last deployed by an older Kix when the Kix
    deploying it is newer than that release's minor. Skip this for a prerelease.
-   The test `required_stops_match_the_change_records` fails until the list
-   and the records agree.
+   The test `required_stops_match_the_change_records` fails unless
+   `REQUIRED_STOPS` matches the released change records.
 
 ## 3. Open and merge the pull request
 

@@ -140,13 +140,19 @@ pub fn override_input_env() -> miette::Result<Vec<String>> {
 fn override_input_words(value: &std::ffi::OsStr) -> miette::Result<Vec<String>> {
     let words: Vec<String> = value
         .to_str()
-        .ok_or_else(|| miette::miette!("KIX_OVERRIDE_INPUT is not UTF-8"))?
+        .ok_or_else(|| {
+            miette::miette!(
+                "KIX_OVERRIDE_INPUT is not valid UTF-8. Nothing was built or changed.\n\
+                 Next: set KIX_OVERRIDE_INPUT to space-separated `<INPUT> <URL>` pairs, unset it, or pass `--override-input <INPUT> <URL>`."
+            )
+        })?
         .split_whitespace()
         .map(str::to_owned)
         .collect();
     if !words.len().is_multiple_of(2) {
         return Err(miette::miette!(
-            "KIX_OVERRIDE_INPUT must hold pairs of an input name and a URL, separated by spaces"
+            "KIX_OVERRIDE_INPUT must contain space-separated `<INPUT> <URL>` pairs, but it has an odd number of words (a missing URL, or a URL with spaces). Nothing was built or changed.\n\
+             Next: set KIX_OVERRIDE_INPUT to `<INPUT> <URL>` pairs, unset it, or pass `--override-input <INPUT> <URL>` instead (use the flag when a URL contains spaces)."
         ));
     }
     Ok(words)
