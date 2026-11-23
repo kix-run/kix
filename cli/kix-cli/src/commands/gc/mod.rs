@@ -689,7 +689,7 @@ pub(super) async fn delete_resources(
             }
             Removal::UnknownKind => {
                 eprintln!(
-                    "  {} {}: not deleted because Kubernetes does not recognize this kind. If its CRD was already removed, run `kix gc --full-scan` to scan live resources instead.",
+                    "  {} {}: not deleted because Kubernetes does not recognize this kind. If its CRD was removed, Kubernetes deleted this object with it. `kix gc --full-scan` checks only objects that exist now, so it does not report this.",
                     output::red("!"),
                     rid
                 );
