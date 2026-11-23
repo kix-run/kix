@@ -104,9 +104,9 @@ fn the_libs_fixture_is_this_bundles_build() {
     assert!(graph == fixture && graph.packages.keys().eq(fixture.packages.keys()));
 }
 
-/// A bundle carries the build's warnings to the commands that read it. A
-/// bundle written without them, as the fixture was, reads with none and
-/// writes no `warnings` field.
+/// A bundle carries the build's warnings to the commands that read it,
+/// cleaned as untrusted text. A bundle written without them, as the
+/// fixture was, reads with none and writes no `warnings` field.
 #[test]
 fn a_bundle_carries_the_builds_warnings() {
     let dir = tempfile::tempdir().unwrap();
@@ -124,13 +124,16 @@ fn a_bundle_carries_the_builds_warnings() {
 
     let warning: LibraryRecord = serde_json::from_value(json!({
         "instance": "web/status-page",
-        "message": "a warning",
+        "message": "a warning\u{1b}[2J",
         "fix": "a fix",
     }))
     .unwrap();
     let mut contents = real();
     contents.warnings = vec![warning.clone()];
-    assert_eq!(read_warnings(&written(&contents)), [warning]);
+    // The maker's text arrives with its control characters as code points.
+    let read = read_warnings(&written(&contents));
+    assert_eq!(read, [warning.printable()]);
+    assert_eq!(read[0].message, "a warning⟨U+001B⟩[2J");
 }
 
 fn written(contents: &Contents) -> Vec<u8> {

@@ -395,11 +395,15 @@ in
           r: r._injectedResources or [ ]
         ) _partResourcesFromParts;
 
-        # Collect the warnings the builders attached to the instance's
-        # resources (`_warnings`, `scope/builders.nix`). A resource that two
-        # parts name gives its warnings once.
+        # Collect the warnings attached to every resource the instance ships
+        # (`_warnings`, `core/resource.nix` and `scope/builders.nix`): its
+        # parts, the resources workload interceptors inject, and the
+        # resources instance processors return. A resource that two parts
+        # name gives its warnings once.
         _resourceWarnings = lib.unique (
-          builtins.concatMap (r: r._warnings or [ ]) (_partResourcesFromParts ++ _scopeInjectedResources)
+          builtins.concatMap (r: r._warnings or [ ]) (
+            _partResourcesFromParts ++ _scopeInjectedResources ++ processorResources
+          )
         );
 
         # collectTypedAttrs excludes root, so the root resource must also be

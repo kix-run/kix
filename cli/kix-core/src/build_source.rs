@@ -186,7 +186,13 @@ impl Build {
                 printable(&graph.cluster_name)
             ));
         }
-        let warnings = source.warnings();
+        // Another machine wrote the warnings, so they are shown as
+        // untrusted text.
+        let warnings = source
+            .warnings()
+            .into_iter()
+            .map(LibraryRecord::printable)
+            .collect();
         let origin = Origin::Carried {
             source: Box::new(source),
             sha256,
@@ -418,7 +424,7 @@ mod tests {
         }
         fn warnings(&self) -> Vec<LibraryRecord> {
             vec![LibraryRecord {
-                message: "carried".to_string(),
+                message: "carried\u{1b}[2J".to_string(),
                 ..Default::default()
             }]
         }
@@ -455,7 +461,8 @@ mod tests {
         assert!(carried(&invalid, &graph).is_err());
     }
 
-    /// A carried build has the warnings its source recorded.
+    /// A carried build has the warnings its source recorded, with their
+    /// control characters shown as code points.
     #[test]
     fn a_carried_build_keeps_its_sources_warnings() {
         let graph = fixture();
@@ -465,7 +472,7 @@ mod tests {
             .iter()
             .map(|w| w.message.as_str())
             .collect();
-        assert_eq!(messages, ["carried"]);
+        assert_eq!(messages, ["carried⟨U+001B⟩[2J"]);
     }
 
     /// A build whose cluster name is changed to the one asked for still

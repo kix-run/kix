@@ -167,6 +167,11 @@
 let
   release = "3.2.1";
   name = scope.instanceName;
+
+  # Return whether the clickhouseDatabase dependency's server has more than
+  # one replica, from its `out.replicas`. The build then adds the
+  # `replicate` init container, and `warnings` says so.
+  isReplicated = replicas: replicas != null && replicas != "1";
   who = "plausible ${scope.namespaceName}/${name}";
 
   # The first start runs every PostgreSQL and ClickHouse migration in the
@@ -240,13 +245,10 @@ in
           assertion = false;
           message = "deps.clickhouseDatabase publishes no `replicas`, and Plausible's ClickHouse migrations run differently on one replica and on several. Wire a clickhouse-database instance, or add `replicas` (and `replicaHosts` above one) to the stand-in's out.";
         }
-        ++
-          lib.optional
-            (replicas != null && replicas != "1" && builtins.length replicaHosts != lib.toInt replicas)
-            {
-              assertion = false;
-              message = "deps.clickhouseDatabase reports ${replicas} replicas and ${toString (builtins.length replicaHosts)} replicaHosts. On several replicas Plausible migrates on one replica and then replicates its tables from there, so it needs one address per replica in out.replicaHosts.";
-            }
+        ++ lib.optional (isReplicated replicas && builtins.length replicaHosts != lib.toInt replicas) {
+          assertion = false;
+          message = "deps.clickhouseDatabase reports ${replicas} replicas and ${toString (builtins.length replicaHosts)} replicaHosts. On several replicas Plausible migrates on one replica and then replicates its tables from there, so it needs one address per replica in out.replicaHosts.";
+        }
         ++ lib.optional (!(builtins.elem "ALL" privileges)) {
           assertion = false;
           message = "deps.clickhouseDatabase grants ${
@@ -262,7 +264,7 @@ in
         let
           replicas = dep.out.replicas or null;
         in
-        lib.optional (replicas != null && replicas != "1") {
+        lib.optional (isReplicated replicas) {
           message = "deps.clickhouseDatabase uses a ClickHouse cluster with ${replicas} replicas, while Plausible Community Edition only supports a single ClickHouse server. Kix added the `replicate` init container to run migrations on one replica and convert Plausible's tables into replicated tables (tested with Plausible v${release}).";
           fix = "Use a single-replica ClickHouse server for an upstream-supported setup, or if you keep replicated ClickHouse, test new Plausible versions before upgrading and upgrade only while every replica is running.";
         };
@@ -400,7 +402,7 @@ in
         # replicated and creates them on the others from the same replica.
         # Trying them in order keeps every start on replica 0 while it is
         # up. The server uses the load-balanced Service.
-        replicated = ch.replicas != "1";
+        replicated = isReplicated ch.replicas;
         replicaDir = "/run/plausible-replica";
         replicaHostFile = "${replicaDir}/host";
         # PLAUSIBLE_CH_USERNAME and PLAUSIBLE_CH_PASSWORD come from

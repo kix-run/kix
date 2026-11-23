@@ -9,6 +9,8 @@
   mkCluster,
   baseInstances,
   netpolOn,
+  manifests,
+  ofKind,
   ...
 }:
 
@@ -282,6 +284,61 @@ in
     )
     || throw "custom resource warning: ${builtins.toJSON found}";
 
+  # Two custom resources that name each other, one of them reading a
+  # Service address, still build. The instance checks the custom resources
+  # before its view exists, and the check must not need that view.
+  resource-warnings-custom-resources-name-each-other =
+    let
+      package = {
+        meta.version = "test";
+        build =
+          { self, scope, ... }:
+          {
+            web = scope.mkDeployment {
+              name = "web";
+              spec = {
+                selector.matchLabels = scope.selectorLabels;
+                template.spec.containers = [ container ];
+              };
+            };
+            svc = scope.mkResource {
+              apiVersion = "v1";
+              kind = "Service";
+              name = "backend";
+              spec = {
+                selector = scope.selectorLabels;
+                ports = [ { port = 80; } ];
+              };
+            };
+            widgetCrd = scope.mkCRDRef {
+              group = "example.com";
+              kind = "Widget";
+              plural = "widgets";
+              version = "v1";
+            };
+            a = scope.mkCR self.widgetCrd {
+              name = "a";
+              spec = {
+                peer = self.b.out.name;
+                target = self.svc.out.fqdn;
+              };
+            };
+            b = scope.mkCR self.widgetCrd {
+              name = "b";
+              spec.peer = self.a.name;
+            };
+            root = self.a;
+          };
+      };
+      cluster = mkCluster [
+        baseInstances
+        { instances.appns.probe.package = package; }
+      ];
+      found = find "references a Service address" cluster.instances.appns.probe._diagnostics.warnings;
+    in
+    (builtins.length (ofKind "Widget" (manifests cluster)) == 2 && builtins.length found == 1)
+    || throw "custom resources that name each other: ${builtins.toJSON found}";
+
   # A typed value in a known folder that is not a resource is left out of
   # the build, and the instance warns about it.
   resource-warnings-folder-holds-non-resource =
@@ -334,4 +391,37 @@ in
       && (builtins.head found).clusterOption == "cluster.roles.metricsApi.binding"
     )
     || throw "metrics API warning: ${builtins.toJSON found}";
+
+  # The warnings on a resource an instance processor returns reach the
+  # instance's list, as those on its parts do.
+  resource-warnings-processor-resource =
+    let
+      found = find "from the processor" (
+        (mkCluster [
+          baseInstances
+          {
+            instances.appns.probe.package = packageWith (scope: {
+              main = scope.mkResource {
+                apiVersion = "v1";
+                kind = "ConfigMap";
+                name = "main";
+              };
+            });
+            hooks.instanceProcessors.test-warn = ctx: {
+              resources = lib.optional (ctx.instanceName == "probe") (
+                ctx.emit.mkResource {
+                  apiVersion = "v1";
+                  kind = "ConfigMap";
+                  name = "processed";
+                }
+                // {
+                  _warnings = [ "a warning from the processor" ];
+                }
+              );
+            };
+          }
+        ]).instances.appns.probe._diagnostics.warnings
+      );
+    in
+    builtins.length found == 1 || throw "processor resource warning: ${builtins.toJSON found}";
 }

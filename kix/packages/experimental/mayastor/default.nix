@@ -71,6 +71,17 @@ let
     "operatorDiskpool"
     "metricsExporter"
   ];
+
+  # Return the cluster.nodes that a pool's node is checked against, or null
+  # when Kix does not check it: cluster.nodes is empty, or an autoscaler
+  # adds nodes the cluster definition does not list. The build refuses a
+  # node missing from them, and `warnings` checks its labels.
+  checkedNodes =
+    clusterConfig:
+    let
+      nodes = clusterConfig.cluster.nodes;
+    in
+    if nodes != { } && clusterConfig.cluster.capabilities.nodeAutoscaling != true then nodes else null;
 in
 {
   meta = {
@@ -234,16 +245,14 @@ in
       poolNodes = lib.unique (map (p: p.node) pools);
       encryptedPools = builtins.filter (p: p.encrypted) pools;
 
-      # The build refuses a pool on a node that cluster.nodes does not list.
-      nodes = clusterConfig.cluster.nodes;
-      checkNodes = nodes != { } && clusterConfig.cluster.capabilities.nodeAutoscaling != true;
+      nodes = checkedNodes clusterConfig;
       ioEngineLabels = c.ioEngineLabels config;
       unlabelledPool =
         poolName: pool:
         let
           missing = lib.filterAttrs (k: v: (nodes.${pool.node}.labels.${k} or null) != v) ioEngineLabels;
         in
-        lib.optional (checkNodes && nodes ? ${pool.node} && missing != { }) {
+        lib.optional (nodes != null && nodes ? ${pool.node} && missing != { }) {
           option = "diskPools.${poolName}.node";
           message = "diskPools.${poolName} targets node \"${pool.node}\", but that node's entry in cluster.nodes is missing label(s) ${
             lib.concatStringsSep ", " (lib.mapAttrsToList (k: v: "${k}=${v}") missing)
@@ -298,11 +307,10 @@ in
 
         key = c.poolKey poolEncryptionKey;
 
-        nodes = clusterConfig.cluster.nodes;
-        checkNodes = nodes != { } && clusterConfig.cluster.capabilities.nodeAutoscaling != true;
+        nodes = checkedNodes clusterConfig;
         checkPool =
           poolName: pool:
-          if !checkNodes then
+          if nodes == null then
             pool
           else if !(nodes ? ${pool.node}) then
             scope.fail {
