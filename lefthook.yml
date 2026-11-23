@@ -57,9 +57,12 @@ pre-push:
           echo "$unsigned" | while IFS=' ' read -r hash status msg; do
             echo "  $hash $msg"
           done
-          oldest=$(echo "$unsigned" | tail -n 1 | cut -d ' ' -f 1)
+          # Start the rebase below every unsigned commit. Keep merges, and
+          # sign only the commits no remote has, so main's commits keep
+          # their hashes.
+          base=$(git merge-base --octopus $(echo "$unsigned" | cut -d ' ' -f 1))
           echo ""
-          echo "Sign commits with: git rebase --exec 'git commit --amend --no-edit -S' ${oldest}^"
+          echo "Sign commits with: git rebase --rebase-merges --exec 'git branch -r --contains HEAD | grep -q . || git commit --amend --no-edit -S' ${base}^"
           exit 1
         fi
 
@@ -92,7 +95,8 @@ pre-commit:
       glob: "cli/**/*.rs"
       run: |
         if cargo-clippy --version >/dev/null 2>&1; then
-          export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/kix-cargo-target/$(basename "$PWD")-$(printf %s "$PWD" | sha256sum | cut -c1-12)}"
+          checkout=$(git rev-parse --show-toplevel)
+          export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/kix-cargo-target/$(basename "$checkout")-$(printf %s "$checkout" | sha256sum | cut -c1-12)}"
           (cd cli && cargo-clippy --workspace --all-targets -- -D warnings)
         elif command -v devenv >/dev/null 2>&1; then
           devenv shell -- bash -c 'cd cli && cargo-clippy --workspace --all-targets -- -D warnings'
