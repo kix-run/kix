@@ -4,33 +4,17 @@
 # message in parentheses instead.
 #
 # The check reads one line, or one line and the next, so it misses a
-# message string that holds a `"` or `#`, or one written as an indented
-# string.
+# message string that holds a `#` or an interpolation with a `"` in it,
+# and one written as an indented string.
 
 { lib, ... }:
 
 let
   root = ../../..;
 
-  # Return every .nix file under `dir`, as paths.
-  nixFiles =
-    dir:
-    lib.concatLists (
-      lib.mapAttrsToList (
-        name: type:
-        if type == "directory" then
-          nixFiles (dir + "/${name}")
-        else if type == "regular" && lib.hasSuffix ".nix" name then
-          [ (dir + "/${name}") ]
-        else
-          [ ]
-      ) (builtins.readDir dir)
-    );
+  inherit (import ../source-lines.nix { inherit lib; }) nixFiles code;
 
-  # Return the code part of a line, without a trailing comment.
-  code = line: builtins.head (lib.splitString "#" line);
-
-  call = ''(^|[^A-Za-z0-9_'-])(throw|abort|fail) +"[^"]*" *'';
+  call = ''(^|[^A-Za-z0-9_'-])(throw|abort|fail) +"([^"\\]|\\.)*" *'';
   joinedOnLine = line: builtins.match ".*${call}[+].*" (code line) != null;
   endsOnLine = line: builtins.match ".*${call}" (code line) != null;
   startsWithPlus = line: builtins.match " *[+].*" line != null;
@@ -61,10 +45,12 @@ in
       bad = throw "a ''${x}: " + y;
       worse = scope.fail "a"
         + "b";
+      quoted = throw "set \"x\": " + name;
       # comment: throw "a" + "b"
     '' == [
       "2"
       "3"
+      "5"
     ]
     || throw "the throw-concatenation check misread its sample";
 

@@ -204,8 +204,10 @@ let
     allowedRoutes.namespaces.from = "All";
   };
 
-  # The evaluator loaded so that `kix.fail` returns `{ thrown = ...; }`.
-  evalCaught = (import ../caught.nix { inherit lib; }).loadCaught ../../eval {
+  # The evaluator loaded so that `kix.fail` returns `{ thrown = ...; }`,
+  # with the full text of the error.
+  caughtLib = import ../caught.nix { inherit lib; };
+  evalCaught = caughtLib.loadCaughtFull ../../eval {
     inherit lib;
     k8s = import ../../core { inherit lib; };
     self = ../../../..;
@@ -889,10 +891,13 @@ in
             }
           )
         )).spec.ingressClassName.thrown or "";
+      record = builtins.head (caughtLib.records rendered);
     in
     (
       fails (manifests (mkExposeCluster args))
-      && lib.hasInfix "kix.expose (appns/web): Kix cannot build the Ingress because the ingressNginx dependency has no out.ingressClassName for spec.ingressClassName." rendered
+      && lib.hasInfix "kix.expose (appns/web): Kix cannot build the Ingress because the ingressNginx dependency has no out.ingressClassName for spec.ingressClassName." record.message
+      && record.instance == "appns/web"
+      && record.dependency == "ingressNginx"
     )
     || throw "ingress-class-missing: ${rendered}";
 }

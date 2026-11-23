@@ -546,7 +546,7 @@ rec {
       tlsSecretName = "${name}-tls";
 
       ingressClassName =
-        ingressNginx.out.ingressClassName or (fail {
+        ingressNginx.out.ingressClassName or (scope.fail {
           dependency = "ingressNginx";
           message = "kix.expose (${scope.namespaceName}/${name}): Kix cannot build the Ingress because the ingressNginx dependency has no out.ingressClassName for spec.ingressClassName.";
           fix = "For an imported controller, set out.ingressClassName in kix.mkImport { out.ingressClassName = \"<class>\"; }. Otherwise, use an ingress controller package that sets out.ingressClassName (such as packages.experimental.ingress-nginx), or set root.out.ingressClassName in a custom package.";
