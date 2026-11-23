@@ -41,13 +41,17 @@ Two scripts inspect or validate built manifests:
 Files and directories starting with `test-` define test clusters (except
 `test-secrets/`, which holds encrypted test data). Each cluster file opens with
 a comment explaining what it tests and how to build or deploy it.
-They fall into four categories:
+They fall into five categories:
 
 - **Library features**: dependency resolution, fragments, image pins, secrets,
   bundles, and multi-environment composition.
 - **kind integration tests**: `kind`, `kind-v2`, `kind-port`, and `kind-probe`.
   Integration tests deploy `kind` and upgrade it in place to `kind-v2` or
   `kind-port` (all three set `name = "kind"`).
+- **CLI fixture**: `cli-fixture` is the one cluster the tests under `cli/`
+  build. It defines its two packages in the file and takes nothing from
+  `kix/packages/`, so the CLI tests workflow skips a pull request that
+  changes only a package or another cluster.
 - **Swap fixtures**: each `test-*-swap/` directory pairs one consumer with two
   interchangeable provider packages (such as StackGres and CloudNativePG). The
   `*-swap` checks in `flake.nix` compare the consumer's manifests across both

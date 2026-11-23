@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Report whether a package version bump is complete.
 #
-# A version bump changes files outside the package: snapshots, docs
+# A version bump changes files outside the package: docs
 # excerpts, unit tests that name a version, vendored CRDs. This script runs
 # the checks that find them and prints one line for each. The output of
 # each check goes to a log file, which a failing line names. Run it from
@@ -109,15 +109,9 @@ fi
 system=$("${nix[@]}" eval --impure --raw --expr builtins.currentSystem)
 run "library tests" "${nix[@]}" build ".#checks.$system.kix-lib-tests" --no-link
 
-# Run the snapshot tests every time. Snapshots carry hashes of whole
-# activations, so a bump changes them even when no snapshot names the
-# package's version or digests.
-run "CLI snapshot tests" bash -c \
-  "cd cli && nix --extra-experimental-features 'nix-command flakes pipe-operators' develop .. -c cargo test -p kix-cli --test snapshot_test"
-
 # List the places that still name the old version. Each needs a decision,
 # so the list does not fail the check. Lock files and vendored CRDs name
-# versions of other software, and the snapshot tests cover the snapshots.
+# versions of other software, and the CLI's snapshots hold no package.
 left=$(git grep -nF "$old" HEAD -- . "${history[@]}" \
   ':!*.lock' ':!*/crds/*' ':!*.snap' | sed 's/^HEAD://' | cut -c1-160)
 if [ -n "$left" ]; then

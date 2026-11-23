@@ -9,14 +9,14 @@ fn repo_root() -> String {
     root.display().to_string()
 }
 
-/// The repository flake maps attribute `minimal` to
-/// `clusters/test-minimal.nix`, whose `name` is `test-minimal`. Records carry
+/// The repository flake maps attribute `cli-fixture` to
+/// `clusters/test-cli-fixture.nix`, whose `name` is `test-cli-fixture`. Records carry
 /// that name, so it is what the lookups get.
 #[test]
 fn a_flake_attribute_resolves_to_the_cluster_name() {
     assert_eq!(
-        kix::eval::eval_cluster_name(&repo_root(), "minimal", &[]).unwrap(),
-        Some("test-minimal".to_string())
+        kix::eval::eval_cluster_name(&repo_root(), "cli-fixture", &[]).unwrap(),
+        Some("test-cli-fixture".to_string())
     );
 }
 
@@ -25,7 +25,7 @@ fn a_flake_attribute_resolves_to_the_cluster_name() {
 #[test]
 fn a_name_the_flake_does_not_define_has_no_evaluated_name() {
     assert_eq!(
-        kix::eval::eval_cluster_name(&repo_root(), "test-minimal", &[]).unwrap(),
+        kix::eval::eval_cluster_name(&repo_root(), "test-cli-fixture", &[]).unwrap(),
         None
     );
 }

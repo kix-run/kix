@@ -3,37 +3,41 @@ source: kix-cli/tests/snapshot_test.rs
 expression: stdout
 ---
 CustomResourceDefinition.apiextensions.k8s.io/activations.kix.run
-└── Activation.kix.run/test-minimal-4c1v6l894kxy
+└── Activation.kix.run/test-cli-fixture-6fk674jbv6j1
 CustomResourceDefinition.apiextensions.k8s.io/packageinstances.kix.run
-└── PackageInstance.kix.run/coredns@kube-system
-    └── Activation.kix.run/test-minimal-4c1v6l894kxy
-ClusterRole.rbac.authorization.k8s.io/coredns
-└── ClusterRoleBinding.rbac.authorization.k8s.io/coredns
-    └── PackageInstance.kix.run/coredns@kube-system
-        └── Activation.kix.run/test-minimal-4c1v6l894kxy
-Namespace/kube-system
-├── ServiceAccount/coredns@kube-system
-│   ├── ClusterRoleBinding.rbac.authorization.k8s.io/coredns
-│   │   └── PackageInstance.kix.run/coredns@kube-system
-│   │       └── Activation.kix.run/test-minimal-4c1v6l894kxy
-│   └── Deployment.apps/coredns@kube-system
-│       └── Service/coredns@kube-system
-│           └── PackageInstance.kix.run/coredns@kube-system
-│               └── Activation.kix.run/test-minimal-4c1v6l894kxy
-├── Service/coredns@kube-system
-│   └── PackageInstance.kix.run/coredns@kube-system
-│       └── Activation.kix.run/test-minimal-4c1v6l894kxy
-├── ConfigMap/coredns@kube-system
-│   └── Deployment.apps/coredns@kube-system
-│       └── Service/coredns@kube-system
-│           └── PackageInstance.kix.run/coredns@kube-system
-│               └── Activation.kix.run/test-minimal-4c1v6l894kxy
-├── PodDisruptionBudget.policy/coredns@kube-system
-│   └── PackageInstance.kix.run/coredns@kube-system
-│       └── Activation.kix.run/test-minimal-4c1v6l894kxy
-├── PackageInstance.kix.run/coredns@kube-system
-│   └── Activation.kix.run/test-minimal-4c1v6l894kxy
-└── Deployment.apps/coredns@kube-system
-    └── Service/coredns@kube-system
-        └── PackageInstance.kix.run/coredns@kube-system
-            └── Activation.kix.run/test-minimal-4c1v6l894kxy
+├── PackageInstance.kix.run/web@fixture
+│   └── Activation.kix.run/test-cli-fixture-6fk674jbv6j1
+└── PackageInstance.kix.run/store@fixture
+    └── Activation.kix.run/test-cli-fixture-6fk674jbv6j1
+Namespace/fixture
+├── Service/store@fixture
+│   ├── PackageInstance.kix.run/store@fixture
+│   │   └── Activation.kix.run/test-cli-fixture-6fk674jbv6j1
+│   └── Deployment.apps/web@fixture
+│       └── PackageInstance.kix.run/web@fixture
+│           └── Activation.kix.run/test-cli-fixture-6fk674jbv6j1
+├── ConfigMap/store@fixture
+│   └── Deployment.apps/store@fixture
+│       └── Service/store@fixture
+│           ├── PackageInstance.kix.run/store@fixture
+│           │   └── Activation.kix.run/test-cli-fixture-6fk674jbv6j1
+│           └── Deployment.apps/web@fixture
+│               └── PackageInstance.kix.run/web@fixture
+│                   └── Activation.kix.run/test-cli-fixture-6fk674jbv6j1
+├── PodDisruptionBudget.policy/store@fixture
+│   └── PackageInstance.kix.run/store@fixture
+│       └── Activation.kix.run/test-cli-fixture-6fk674jbv6j1
+├── PackageInstance.kix.run/web@fixture
+│   └── Activation.kix.run/test-cli-fixture-6fk674jbv6j1
+├── PackageInstance.kix.run/store@fixture
+│   └── Activation.kix.run/test-cli-fixture-6fk674jbv6j1
+├── Deployment.apps/web@fixture
+│   └── PackageInstance.kix.run/web@fixture
+│       └── Activation.kix.run/test-cli-fixture-6fk674jbv6j1
+└── Deployment.apps/store@fixture
+    └── Service/store@fixture
+        ├── PackageInstance.kix.run/store@fixture
+        │   └── Activation.kix.run/test-cli-fixture-6fk674jbv6j1
+        └── Deployment.apps/web@fixture
+            └── PackageInstance.kix.run/web@fixture
+                └── Activation.kix.run/test-cli-fixture-6fk674jbv6j1
