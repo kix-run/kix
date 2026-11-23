@@ -682,15 +682,16 @@ prints `check-bump: PASS` and the upgrade deploy below has run.
   platform the old ones did: a release whose image publishing failed is
   followed by a fix release.
 - `.github/workflows/bump-detect.yml` reads `.github/bump/sources.toml` every
-  week to find new upstream releases. It targets the newest release whose
-  images the registry has, for each default image whose tag names the
-  package's version, so keep the version in the tag of every image that
-  follows the release. To skip a specific release, add
+  week to find new upstream releases. It picks the newest release whose images
+  are published in their registries, checking every image option whose default
+  `tag` contains the package's pinned version. Keep the release version in the
+  default `tag` of every image that upgrades with the package so the workflow
+  checks it. To skip a specific release, add
   `"<version>" = "<reason>"` to `skip` in the package's entry. To keep a
   package within its pinned major or minor version, set `track = "major"` or
-  `track = "minor"` with a comment explaining why. When upstream supports
-  moving only one minor version at a time, set `through = "minor"` with a
-  comment that cites the rule.
+  `track = "minor"` with a comment explaining why. If upstream supports
+  upgrading only one minor version at a time, set `through = "minor"` with a
+  comment citing upstream's rule.
 - Read the notes of every release between the pinned version and the
   target. Release notes omit what a package depends on. Also compare
   upstream's own deployment files between the two versions (manifests, Helm
