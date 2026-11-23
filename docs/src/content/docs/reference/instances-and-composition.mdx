@@ -130,7 +130,7 @@ See [Add typed package options](/docs/how-to/author-packages-and-clusters/add-ty
 
 `instances.<namespace>.<name>.deps` overrides automatic dependency resolution for specific build arguments of the package.
 
-Each key in `deps` must match a dependency declared by the package. Any other key fails evaluation with `[K3646]`, including any `deps` key on a `kix.mkImport` instance (imports take no dependencies; use `extraDeps` for deploy ordering). If a package renamed a dependency (`deps.<arg>.renamedFrom`), using the old key fails with an error that gives the new name.
+Every key in `deps` must match a dependency declared by the instance's package, even on inactive `optional = true` instances. If the package renamed that dependency (`deps.<arg>.renamedFrom`), evaluation fails with the rename's change ID and gives the new name. Any other unknown key fails with `[K3646]`. Because a `kix.mkImport` instance takes no dependencies, setting any `deps` key on an import also fails with `[K3646]`; use `extraDeps` to order an import after another instance.
 
 ```nix
 { packages, ref, ... }:
@@ -159,7 +159,7 @@ Every cluster module receives `ref` in its module arguments. Writing `ref.<names
 - Any value that is not a `ref` (or a list of `ref`s) is passed as-is to the build argument without package view wrapping, compatibility checks, or config injection.
 - Setting `deps.<arg> = null;` behaves the same as leaving `deps.<arg>` unset: Kix falls back to automatic resolution or the build argument's default value.
 - Explicitly wiring `deps.<arg>` suppresses `availablePackages` auto-instantiation for that argument.
-- An instance cannot depend on itself. Automatic resolution skips the instance when its own name, aliases, or roles match `<arg>`, and pointing `deps.<arg>` at the instance itself with `ref` fails evaluation. Managed instances still take precedence over imports, so a managed instance that matches `<arg>` itself does not bind an import of that name.
+- An instance cannot depend on itself. Automatic resolution skips the instance when its own name, aliases, or roles match `<arg>`, and referencing the instance itself with `ref` in `deps.<arg>` fails evaluation. Because managed instances take priority over imports, a managed instance that matches `<arg>` does not automatically fall back to a `kix.mkImport` of that name; point `deps.<arg>` to the import with `ref` to use it.
 
 :::tip[Use it in a task]
 See [Wire cross-namespace dependencies explicitly](/docs/how-to/debug-dependency-wiring/wire-cross-namespace-dependencies-explicitly/) and [Debug a missing dependency](/docs/how-to/debug-dependency-wiring/debug-a-missing-dependency/).
@@ -206,7 +206,7 @@ Kix starts from all non-optional instances (`optional = false`) and walks the de
 
 An optional build argument (`{ prometheus ? null, ... }`) never activates a dormant optional instance, and a dormant optional instance or import never answers an optional build argument (the argument receives `null` unless an active instance matches). Note that `extraDeps` or a `ref` in `out` on a `kix.mkImport` instance also does not activate an optional instance.
 
-When activated, the instance is stamped with `kix.run/optional-activated: "true"` on its `PackageInstance` record and deployed normally. When dormant, it emits no manifests and does not resolve its dependencies, so a required dependency with no active provider does not fail the build.
+When activated, the instance is stamped with `kix.run/optional-activated: "true"` on its `PackageInstance` record and deployed normally. When dormant, it emits no manifests, skips dependency resolution, and injects no `deps.<arg>.config` into other instances, so an unmet dependency on a dormant instance does not fail evaluation.
 
 ## availability
 

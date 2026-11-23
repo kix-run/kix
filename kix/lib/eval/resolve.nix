@@ -155,15 +155,15 @@ rec {
                 id = "K3646";
                 instance = "${nsName}/${instName}";
                 dependency = key;
-                message = "${path}.${key} is set on a kix.mkImport instance. Imports represent external services and take no dependencies, so Kix cannot wire '${key}'.";
-                fix = "Remove ${path}.${key}. To deploy this import after another instance, add that instance to instances.${nsName}.${instName}.extraDeps.";
+                message = "${path}.${key} is set on a kix.mkImport instance. Imports describe resources managed outside Kix and take no dependencies, so Kix rejected it.";
+                fix = "Remove ${path}.${key}. To deploy this import after another instance, add ref.<namespace>.<instance> to instances.${nsName}.${instName}.extraDeps.";
               }
             else if newName != null then
               fail {
                 id = lib.removeSuffix "]" (lib.removePrefix "[" renamedFrom.id);
                 instance = "${nsName}/${instName}";
                 dependency = key;
-                message = "${path}.${key} uses an old dependency name. The package renamed it to '${newName}', so Kix cannot wire it.";
+                message = "${path}.${key} uses a dependency name that this package renamed to '${newName}', so Kix rejected it.";
                 fix = "Rename ${path}.${key} to ${path}.${newName}.";
               }
             else
@@ -172,13 +172,10 @@ rec {
                 instance = "${nsName}/${instName}";
                 dependency = key;
                 message =
-                  "${path}.${key} is not a dependency of this instance's package, so Kix cannot wire '${key}'."
-                  + (
-                    if taken == [ ] then
-                      " This package takes no dependencies."
-                    else
-                      " Valid dependencies for this package: ${builtins.concatStringsSep ", " taken}."
-                  );
+                  if taken == [ ] then
+                    "${path}.${key} is set, and this instance's package takes no dependencies, so Kix rejected it."
+                  else
+                    "${path}.${key} is not a dependency of this instance's package, so Kix rejected it. Valid dependencies for this package: ${builtins.concatStringsSep ", " taken}.";
                 fix =
                   if taken == [ ] then
                     "Remove ${path}.${key}."
@@ -261,10 +258,12 @@ rec {
     in
     if selfRef != null then
       refuse {
-        message = "${consumerPath}.deps.${argName} points to ref.${selfRef.namespace}.${selfRef.instanceName}, which is the instance itself. An instance cannot depend on itself, so Kix cannot wire '${argName}'.";
+        message = "${consumerPath}.deps.${argName} ${
+          if builtins.isList explicitOverride then "includes" else "points to"
+        } ref.${selfRef.namespace}.${selfRef.instanceName}, which is the instance itself. An instance cannot depend on itself, so Kix rejected it.";
         fix =
           if builtins.isList explicitOverride then
-            "Remove ref.${selfRef.namespace}.${selfRef.instanceName} from ${consumerPath}.deps.${argName}, or replace it with another instance."
+            "Remove ref.${selfRef.namespace}.${selfRef.instanceName} from ${consumerPath}.deps.${argName}, or replace it with a ref to another instance."
           else
             "Point ${consumerPath}.deps.${argName} to another instance that provides '${argName}', or remove ${consumerPath}.deps.${argName}.";
       }

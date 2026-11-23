@@ -222,7 +222,7 @@ in
       ))
       &&
         lib.hasInfix
-          "[K3646] a/app: instances.a.app.deps.svcc is not a dependency of this instance's package, so Kix cannot wire 'svcc'. Valid dependencies for this package: svc."
+          "[K3646] a/app: instances.a.app.deps.svcc is not a dependency of this instance's package, so Kix rejected it. Valid dependencies for this package: svc."
           (result.thrown or "")
     )
     || throw "undeclared deps key: ${builtins.toJSON result}";
@@ -246,7 +246,7 @@ in
       };
     in
     lib.hasInfix
-      "[K9191] a/app: instances.a.app.deps.valkey uses an old dependency name. The package renamed it to 'redis', so Kix cannot wire it."
+      "[K9191] a/app: instances.a.app.deps.valkey uses a dependency name that this package renamed to 'redis', so Kix rejected it."
       (result.thrown or "")
     || throw "renamed deps key: ${builtins.toJSON result}";
 
@@ -319,7 +319,7 @@ in
         ];
       };
     in
-    lib.hasInfix "instances.a.app.deps.svc points to ref.a.app, which is the instance itself." (
+    lib.hasInfix "instances.a.app.deps.svc includes ref.a.app, which is the instance itself." (
       result.thrown or ""
     )
     || throw "self ref in list: ${builtins.toJSON result}";

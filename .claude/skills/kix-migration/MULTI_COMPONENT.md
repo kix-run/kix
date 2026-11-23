@@ -89,7 +89,7 @@ Reference implementation: `kix/packages/stable/harbor/`.
    ```
    The orphan warning tells you what you forgot.
 
-12. **`root` with `postHooks`**: for Jobs that must run AFTER the package is fully deployed (e.g., webhook cert patching, database migration). If a resource must finish before the package is ready without waiting for `root.resource`, put it in `root.requires`. Post-hooks must depend on `root.resource` or a `root.requires` entry (directly or through another resource) so Kix deploys them after the main package; otherwise Kix emits a warning. The PackageInstance CR depends on them, so the package isn't "done" until post-hooks complete. Jobs use existing readiness (`status.succeeded >= 1`).
+12. **`root` with `postHooks`**: for Jobs that must run after the package's main resources are ready (for example, webhook certificate patching or a migration Job). Each entry in `postHooks` must depend on `root.resource` or an entry in `root.requires` (directly or through another resource) so Kix deploys it after those resources; otherwise Kix emits a warning. If a resource must finish before the instance is ready without waiting for `root.resource`, put it in `root.requires` instead. The `PackageInstance` depends on `postHooks`, so downstream consumers wait until they finish (`status.succeeded >= 1` for Jobs).
     ```nix
     root = {
       resource = self.service;
