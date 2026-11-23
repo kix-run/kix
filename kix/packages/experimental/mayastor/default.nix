@@ -202,7 +202,7 @@ in
         assertion = reservedPools == [ ];
         message = "${
           lib.concatMapStringsSep " and " (n: "diskPools.${n}") reservedPools
-        }: Kix reserves the names \"root\" and \"meta\" and skips resources under those keys, so ${
+        }: Kix reserves the keys \"root\" and \"meta\", so ${
           if builtins.length reservedPools == 1 then "it" else "they"
         } cannot be built. Rename ${if builtins.length reservedPools == 1 then "it" else "them"}.";
       }

@@ -13,7 +13,7 @@ let
       key = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;
-        description = "Taint key to match. Leave `null` with `operator = \"Exists\"` to match all taint keys.";
+        description = "Taint key to match. Leave unset with `operator = \"Exists\"` to match all taint keys.";
       };
       operator = lib.mkOption {
         type = lib.types.enum [
@@ -21,12 +21,12 @@ let
           "Equal"
         ];
         default = "Equal";
-        description = "How to match the taint: `Equal` requires the taint value to match `value`, and `Exists` matches any value for `key`.";
+        description = "How to match the taint: `\"Equal\"` matches `key` and `value`, and `\"Exists\"` matches any value for `key` (or all taints when `key` is unset).";
       };
       value = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;
-        description = "Taint value to match when `operator` is `Equal`. Leave `null` when `operator` is `Exists`.";
+        description = "Taint value to match when `operator` is `\"Equal\"`. Leave unset when `operator` is `\"Exists\"`.";
       };
       effect = lib.mkOption {
         type = lib.types.nullOr (
@@ -37,12 +37,12 @@ let
           ]
         );
         default = null;
-        description = "Taint effect to tolerate. Leave `null` to tolerate all effects.";
+        description = "Taint effect to tolerate. Leave unset to tolerate all effects.";
       };
       tolerationSeconds = lib.mkOption {
         type = lib.types.nullOr lib.types.ints.unsigned;
         default = null;
-        description = "Seconds a pod stays on a node before eviction after a matching `NoExecute` taint is added. Leave `null` to keep the pod on the node indefinitely. Requires `effect = \"NoExecute\"`.";
+        description = "Seconds a pod stays on a node after a matching `NoExecute` taint is added before Kubernetes evicts it. Leave unset to keep the pod on the node indefinitely. Requires `effect = \"NoExecute\"`.";
       };
     };
   };
@@ -59,7 +59,7 @@ let
           at = "${optionPath}[${toString i}]";
         in
         lib.optional ((t.key == null || t.key == "") && t.operator != "Exists")
-          "${at} has no key. Kubernetes rejects a toleration without a key unless operator is \"Exists\" (which matches all taint keys). Set key, or set operator = \"Exists\"."
+          "${at} has a missing or empty key. Kubernetes rejects a toleration without a key unless operator is \"Exists\" (which matches all taints). Set a non-empty key, or set operator = \"Exists\"."
         ++
           lib.optional (t.operator == "Exists" && t.value != null)
             "${at} sets value with operator \"Exists\". Because \"Exists\" matches any taint value, Kubernetes rejects a value field here. Remove value, or set operator = \"Equal\"."

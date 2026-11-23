@@ -77,17 +77,19 @@ and a driver that is present is not always the default. A consumer wires
 the driver with `deps.storageClasses = ref.<namespace>.<instance>`; a
 cluster that wants the driver as everyone's default sets the instance's
 `aliases = [ "storageClasses" "zfsLocalPv" ]`, keeping the package's own
-alias so its one-instance check still applies. For volume snapshots, the
-driver declares a `lib.types.attrsOf kix.types.volumeSnapshotClass` option,
-takes an optional `snapshotController ? null` dependency, and builds the
-classes with `kix.storage.mkSnapshotClasses`. In `assertions`, call
+alias so its one-instance check still applies.
+
+For volume snapshots, the driver declares a
+`lib.types.attrsOf kix.types.volumeSnapshotClass` option, takes an optional
+`snapshotController ? null` dependency, and builds the classes with
+`kix.storage.mkSnapshotClasses`. In `assertions`, call
 `kix.storage.snapshotClassProblems` to reject snapshot classes when nothing
 provides `snapshotController`, when more than one class is marked as the
-default, or when a class uses the reserved key `root` or `meta` (which Kix
-skips when collecting resources). For node plugin tolerations, use
-`lib.types.listOf kix.types.toleration`, validate the list in `assertions`
-with `kix.tolerations.problems`, and format it for the pod spec with
-`kix.tolerations.render`.
+default, or when a class is named `root` or `meta` (keys Kix reserves).
+
+For node plugin tolerations, use `lib.types.listOf kix.types.toleration`,
+validate the list in `assertions` with `kix.tolerations.problems`, and format
+it for the pod spec with `kix.tolerations.render`.
 
 `mayastor` follows the same shape and adds etcd: the etcd class comes
 from `deps.storageClasses` or `etcd.storage.storageClassName`, never from

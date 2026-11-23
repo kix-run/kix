@@ -384,7 +384,7 @@ in
         no-provider =
           refusedWith
             [
-              "volumeSnapshotClasses defines zfs, but nothing provides the snapshotController role"
+              "volumeSnapshotClasses defines zfs, but no instance in the cluster provides a snapshot controller (the snapshotController role)"
             ]
             {
               config = { };
@@ -404,8 +404,8 @@ in
         reserved-keys =
           refusedWith
             [
-              "config.volumeSnapshotClasses.root: Kix reserves the names \"root\" and \"meta\" and skips resources under those keys, so this VolumeSnapshotClass cannot be built. Rename it."
-              "config.volumeSnapshotClasses.meta: Kix reserves the names \"root\" and \"meta\""
+              "config.volumeSnapshotClasses.root: Kix reserves the keys \"root\" and \"meta\", so this VolumeSnapshotClass cannot be built. Rename it."
+              "config.volumeSnapshotClasses.meta: Kix reserves the keys \"root\" and \"meta\""
             ]
             {
               config.volumeSnapshotClasses = {
@@ -413,7 +413,7 @@ in
                 meta = { };
               };
             };
-        toleration-without-key = refusedWith [ "config.node.tolerations[0] has no key" ] {
+        toleration-without-key = refusedWith [ "config.node.tolerations[0] has a missing or empty key" ] {
           config.node.tolerations = [ { effect = "NoSchedule"; } ];
         };
         toleration-exists-with-value =

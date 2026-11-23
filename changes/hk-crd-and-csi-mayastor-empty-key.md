@@ -2,4 +2,4 @@
 kind = "fixed"
 packages = ["experimental/mayastor"]
 +++
-`mayastor` now refuses a toleration in `ioEngine.tolerations` or `csiNode.tolerations` whose `key` is an empty string while `operator` is `"Equal"`, as it already refused one with no key. Kubernetes rejects such a toleration, so a cluster that set one built but failed at deploy. The build now stops with a message that names the entry. Set `key`, or set `operator = "Exists"`.
+If your `mayastor` configuration sets `key = ""` with `operator = "Equal"` in `ioEngine.tolerations` or `csiNode.tolerations`, set a non-empty `key` or set `operator = "Exists"`. Kubernetes rejects an empty `key` unless `operator` is `"Exists"`, so a cluster with that setting previously built and then failed during deploy. `mayastor` now stops the build and names the invalid entry, as it already did when `key` was unset.

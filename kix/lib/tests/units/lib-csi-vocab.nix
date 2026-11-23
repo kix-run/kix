@@ -86,12 +86,14 @@ in
             }
             { operator = "Exists"; }
           ];
-        noKey = has "config.tolerations[0] has no key" (
+        noKey = has "config.tolerations[0] has a missing or empty key" (
           problems (tolerations [ { effect = "NoSchedule"; } ])
         );
         # Kubernetes refuses an empty key with operator Equal as it refuses
         # a missing one.
-        emptyKey = has "config.tolerations[0] has no key" (problems (tolerations [ { key = ""; } ]));
+        emptyKey = has "config.tolerations[0] has a missing or empty key" (
+          problems (tolerations [ { key = ""; } ])
+        );
         existsWithValue = has "config.tolerations[0] sets value with operator \"Exists\"" (
           problems (tolerations [
             {
@@ -121,7 +123,8 @@ in
       cases = {
         valid = classProblems { a = isDefault; } { } == [ ];
         noProvider =
-          has "config.volumeSnapshotClasses defines a, but nothing provides the snapshotController role"
+          has
+            "config.volumeSnapshotClasses defines a, but no instance in the cluster provides a snapshot controller (the snapshotController role)"
             (classProblems { a = { }; } null);
         threeDefaults =
           has
@@ -133,7 +136,7 @@ in
                 c = isDefault;
               } { }
             );
-        reserved = has "config.volumeSnapshotClasses.root: Kix reserves the names \"root\" and \"meta\"" (
+        reserved = has "config.volumeSnapshotClasses.root: Kix reserves the keys \"root\" and \"meta\"" (
           classProblems { root = { }; } { }
         );
       };

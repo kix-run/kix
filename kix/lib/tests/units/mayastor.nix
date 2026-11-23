@@ -366,9 +366,9 @@ in
               deps = snapshotDep;
             };
           in
-          someMessageHas [ "diskPools.root: Kix reserves the names \"root\" and \"meta\"" ] messages
+          someMessageHas [ "diskPools.root: Kix reserves the keys \"root\" and \"meta\"" ] messages
           && someMessageHas [
-            "config.volumeSnapshotClasses.meta: Kix reserves the names \"root\" and \"meta\""
+            "config.volumeSnapshotClasses.meta: Kix reserves the keys \"root\" and \"meta\""
           ] messages;
         ownedResources =
           someMessageHas [ "ioEngine.resources sets cpu" "ioEngine.cpuCount" ]
@@ -393,12 +393,15 @@ in
             });
         snapshotClassesWithoutApi =
           someMessageHas
-            [ "volumeSnapshotClasses defines snap" "nothing provides the snapshotController role" ]
+            [
+              "volumeSnapshotClasses defines snap"
+              "no instance in the cluster provides a snapshot controller (the snapshotController role)"
+            ]
             (failedMessages {
               config.volumeSnapshotClasses.snap = { };
             });
         tolerationWithoutKey =
-          someMessageHas [ "ioEngine.tolerations[0] has no key" "operator = \"Exists\"" ]
+          someMessageHas [ "ioEngine.tolerations[0] has a missing or empty key" "operator = \"Exists\"" ]
             (failedMessages {
               config.ioEngine.tolerations = [ { effect = "NoSchedule"; } ];
             });

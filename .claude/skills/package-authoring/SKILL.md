@@ -95,7 +95,7 @@ rewrites the later ones.
   unchanged. A field it cannot honour means a different alias, not a `null`
   (`v2_discussions/148_clickhouse_packages_plan.md:39`).
 - CRDs: vendor or `mkCRDRef` markers (crd-vendoring skill §1). An operator
-  with admission webhooks sets `crRequires` to a webhook-check Job on every
+  with admission webhooks lists a webhook-check Job in `crRequires` on every
   `scope.mkCRD` or `scope.mkCRDRef` call for the kinds those webhooks admit (C21). Every declaration sets `holdsData`: `true` when deleting a custom
   resource of the kind loses data (a database, a storage pool, a backup),
   `false` otherwise (C24). A stateful package that renders a custom resource

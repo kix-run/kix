@@ -63,17 +63,17 @@ let
       ) names;
     in
     lib.optional (names != [ ] && snapshotController == null)
-      "${optionPath} defines ${lib.concatStringsSep ", " names}, but nothing provides the snapshotController role, so Kix cannot build VolumeSnapshotClass resources. Add a snapshot-controller instance, or remove ${optionPath}. If your cluster already runs a snapshot controller, use a flavor that provides the role or declare it with kix.mkImport (roles = [ \"snapshotController\" ] and crds)."
+      "${optionPath} defines ${lib.concatStringsSep ", " names}, but no instance in the cluster provides a snapshot controller (the snapshotController role), so Kix cannot build VolumeSnapshotClass resources. Add a packages.experimental.snapshot-controller instance, or remove ${optionPath}. If the cluster already runs a snapshot controller outside Kix, use a flavor that declares it or import it with kix.mkImport (setting roles = [ \"snapshotController\" ] and crds with VolumeSnapshotClass)."
     ++
       lib.optional (builtins.length defaults > 1)
         "${
           joinNames (map (n: "${optionPath}.${n}") defaults)
-        } each set ${defaultAnnotation}=\"true\". A CSI driver can have at most one default VolumeSnapshotClass; with more than one default, any VolumeSnapshot without a volumeSnapshotClassName fails. Keep this annotation on at most one class."
+        } each set ${defaultAnnotation}=\"true\". A CSI driver can have at most one default VolumeSnapshotClass. With more than one default, creating a VolumeSnapshot without volumeSnapshotClassName fails. Keep this annotation on at most one class."
     # `instancePartResources` (`eval/helpers.nix`) skips keys named `root` or
     # `meta` at every depth, so a class under either key would not render.
     ++ map (
       n:
-      "${optionPath}.${n}: Kix reserves the names \"root\" and \"meta\" and skips resources under those keys, so this VolumeSnapshotClass cannot be built. Rename it."
+      "${optionPath}.${n}: Kix reserves the keys \"root\" and \"meta\", so this VolumeSnapshotClass cannot be built. Rename it."
     ) (builtins.filter (n: n == "root" || n == "meta") names);
 
   # Build one VolumeSnapshotClass for `driver` per entry of `classes`, keyed
