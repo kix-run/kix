@@ -1,3 +1,0 @@
-# 2026-11-18 · `kix/packages/experimental/keycloak` · The pinned 26.8.0 digest no longer equals what the tag resolves to.
-
-Quay's `quay.io/keycloak/keycloak:26.8.0` now resolves to `sha256:27b3230f…`, built 2026-10-10. The pinned `sha256:b0f60d48…` is the build from 2026-10-01, the release day, and it still pulls. The tag was rebuilt after the pin was written. A bump check that looks up the old tag and compares it with the pinned digest fails for this package, even though the pin is valid. Run `skopeo inspect --raw docker://quay.io/keycloak/keycloak:26.8.0` and compare the digest with the package pin. Pin new digests from the tag only after checking which build the tag now names.

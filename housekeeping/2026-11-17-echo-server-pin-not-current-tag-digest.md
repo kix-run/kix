@@ -1,3 +1,0 @@
-# 2026-11-17 · `kix/packages/stable/echo-server` · The pinned digest for nginx 1.30.5-alpine is not the digest its tag now serves.
-
-The package pinned `sha256:ed04ec1f...` for `1.30.5-alpine`. Docker Hub and the registry both report `sha256:56b8272e...` as the current index for that tag, and the tag was rebuilt on 2026-10-12. So a fresh lookup of the old tag does not reproduce the old pin, and the pinned image is a superseded build. It still runs, because the digest resolves. Check the tag's digest against the pin when a version is bumped. Where to look: `git log -- kix/packages/stable/echo-server`, and the registry manifest for `nginxinc/nginx-unprivileged:1.30.5-alpine`.

@@ -1,3 +1,0 @@
-# 2026-11-11 · `cli/kix-cli/src/commands/upgrade/` · A built object names its instance, never its package, so `kix upgrade` cannot tell which change records affect a project.
-
-Change records name packages under `kix/packages/`, but a build carries only the instance name (`kix.run/package`, PackageInstance `spec.instanceName`), and `kix list packages --cluster -o json` gives only instance names for installed rows. So `kix upgrade` lists every breaking, security, and upgrade record in range and marks with `*` the ones whose package name equals an instance name. An instance renamed with an alias gets no mark even when the record affects it. Look at `plan::likely` and `packages_in_use`.
