@@ -261,13 +261,13 @@ rec {
     if who != null then
       fail {
         id = "K6417";
-        message = "kix.${helper} takes `scope` in place of `who`, and names the instance and its package from it.";
-        fix = "Replace `who = ...` with `inherit scope;`.";
+        message = "kix.${helper} no longer accepts `who`. It reads the instance and package from `scope`.";
+        fix = "Remove `who` and pass `inherit scope;`.";
       }
     else if scope == null then
       fail {
-        message = "kix.${helper} needs `scope`, the instance's scope, to name the instance in its errors.";
-        fix = "Add `inherit scope;` to its arguments.";
+        message = "kix.${helper} was called without `scope`. It needs `scope` to report the instance and package in errors.";
+        fix = "Pass `inherit scope;` to the call.";
       }
     else
       scope.fail;

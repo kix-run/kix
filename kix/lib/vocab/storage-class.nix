@@ -145,7 +145,7 @@ in
         if reserved != [ ] then
           fail {
             option = "${optionPath}.${builtins.head reserved}";
-            message = "${optionPath}.${builtins.head reserved}: Kix drops parts named root or meta, so this StorageClass would not be rendered.";
+            message = "${optionPath}.${builtins.head reserved} uses a name Kix reserves (`root` or `meta`), so Kix would leave this StorageClass out of the build.";
             fix = "Rename it.";
           }
         else if shadowable && annotated != [ ] then
@@ -154,7 +154,7 @@ in
           in
           fail {
             option = "${optionPath}.${k}";
-            message = "${optionPath}.${k} is annotated ${defaultAnnotation}=\"true\", but cluster.roles.storageClasses.binding is \"shadowable\": the environment already has a default StorageClass, so the cluster would have two.";
+            message = "${optionPath}.${k} sets ${defaultAnnotation}=\"true\" while cluster.roles.storageClasses.binding is \"shadowable\". The cluster environment already provides a default StorageClass, so this annotation would create a second default StorageClass.";
             fix = "Remove the annotation; a Kix consumer that needs this class names it, for example persistent-volume-claim config.storageClassName = \"${k}\". If the environment's class is no longer annotated default, set cluster.roles.storageClasses.binding = \"absent\".";
           }
         else
@@ -195,14 +195,14 @@ in
         if names == [ ] then
           fail {
             option = optionPath;
-            message = "out.storageClassName was read, but ${optionPath} defines no classes.";
+            message = "A consumer needs a StorageClass from this instance (`out.storageClassName`), but ${optionPath} defines none. Define at least one StorageClass there, or set a StorageClass on the consumer.";
           }
         else if builtins.length annotated == 1 then
           parts.${builtins.head annotated}.out.name
         else if annotated != [ ] then
           fail {
             option = optionPath;
-            message = "out.storageClassName was read, but ${optionPath} annotates ${builtins.concatStringsSep ", " annotated} as the cluster default.";
+            message = "${optionPath} annotates more than one StorageClass as the cluster default (${builtins.concatStringsSep ", " annotated}), so Kix cannot pick one for `out.storageClassName`.";
             fix = "Keep the annotation on one class.";
           }
         else if builtins.length names == 1 then
@@ -210,7 +210,7 @@ in
         else
           fail {
             option = optionPath;
-            message = "out.storageClassName was read, but ${optionPath} has ${toString (builtins.length names)} classes (${namesText}) and none is chosen for consumers that name no class.";
+            message = "${optionPath} defines ${toString (builtins.length names)} StorageClasses (${namesText}) without a default, so Kix cannot pick one for consumers that omit a StorageClass (`out.storageClassName`).";
             fix = "${lib.toUpper (builtins.substring 0 1 remedies)}${builtins.substring 1 (-1) remedies}.";
           };
     };

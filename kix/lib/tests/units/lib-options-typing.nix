@@ -471,7 +471,7 @@ in
             instance = "ns/inst";
             package = "pkg";
             option = "settings";
-            message = "settings overrides auth_enabled, which the package sets for correctness.";
+            message = "settings overrides auth_enabled, which this package sets itself.";
             fix = "Remove it from settings.";
           }
         ];

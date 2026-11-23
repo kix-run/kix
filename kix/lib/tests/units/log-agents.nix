@@ -223,7 +223,7 @@ let
     && settings ? thrown
     && builtins.all (f: lib.hasInfix f settings.thrown) fragments;
 
-  lockedMessage = what: "settings overrides ${what}, which the package sets for correctness.";
+  lockedMessage = what: "settings overrides ${what}, which this package sets itself.";
 in
 {
   # The default instance pushes to the loki instance's out.serviceUrl,

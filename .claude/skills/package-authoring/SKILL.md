@@ -342,9 +342,9 @@ pattern table has each form.
   literal strings (pattern table) and point at a `secretKeyRef` to a Secret
   managed outside Kix or at the secret dep (S1).
 - Pass `inherit scope;` to `kix.mergeGuarded`, `kix.mergeEnv`, and
-  `kix.guardArgs`, so their errors name the instance and package. Bind
-  `who = "<pkg> ${scope.namespaceName}/${name}"` once in the `let` for the
-  contract helpers that still take it (Pr9).
+  `kix.guardArgs` so their errors include the instance and package. Bind
+  `who = "<pkg> ${scope.namespaceName}/${name}"` once in `let` for contract
+  helpers (`kix.contracts.*`) that take `who` (Pr9).
 
 ### 8. Option surface
 

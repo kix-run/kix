@@ -153,7 +153,7 @@ rec {
       scopeFail {
         option = what;
         inherit object;
-        message = "${what} overrides ${lib.concatStringsSep ", " touched}, which the package sets for correctness.";
+        message = "${what} overrides ${lib.concatStringsSep ", " touched}, which this package sets itself.";
         fix = "Remove ${if builtins.length touched == 1 then "it" else "them"} from ${what}.";
       }
     else

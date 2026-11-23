@@ -312,17 +312,17 @@ in
           )
           {
             names = [ "CLIENT_ID" ];
-            reason = "it selects workload identity federation, which needs serviceaccounts/token RBAC the package does not grant.";
+            reason = "workload identity federation requires serviceaccounts/token RBAC permissions that this package does not grant.";
             fix = "Wire an OAuth client through deps.oauthCredentials.";
           }
           {
             names = [ "APISERVER_PROXY" ];
-            reason = "it turns on the operator's in-process API server proxy, which needs impersonation RBAC the package does not grant.";
-            fix = "Build a kube-apiserver ProxyGroup with out.mkProxyGroup, spec.type = \"kube-apiserver\" and spec.kubeAPIServer.mode = \"noauth\".";
+            reason = "the operator's in-process API server proxy requires impersonation RBAC permissions that this package does not grant.";
+            fix = "Remove APISERVER_PROXY from env. Instead, create a ProxyGroup with out.mkProxyGroup and set spec.type = \"kube-apiserver\" and spec.kubeAPIServer.mode = \"noauth\".";
           }
           {
             names = [ "OPERATOR_DEFAULT_LOAD_BALANCER" ];
-            reason = "it makes the operator claim every LoadBalancer Service without a class, which is the cluster's loadBalancer role.";
+            reason = "Tailscale would claim every LoadBalancer Service that has no loadBalancerClass, taking over Services meant for the cluster's default load balancer (the loadBalancer role).";
             fix = "Set loadBalancerClass = tailscale.out.loadBalancerClass on the Services you want on the tailnet.";
           }
           {
