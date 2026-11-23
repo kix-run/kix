@@ -7,7 +7,7 @@
 }:
 
 rec {
-  release = "2.7.2";
+  release = "2.7.3";
   # The oldest release that reads every server option the package writes.
   minVersion = "2.7";
 
