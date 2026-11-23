@@ -417,3 +417,18 @@ tests:
       - eval_time: 35m
         alertname: RabbitMQOperatorReconcileErrors
         exp_alerts: []
+  # Two of four reconciles fail on an operator that has run for a while. The
+  # share is 50%, but two errors are under the floor, so nothing fires.
+  - interval: 1m
+    input_series:
+      - series: 'controller_runtime_reconcile_total{namespace="rabbitmq-system",service="rabbitmq-operator-metrics",pod="rabbitmq-operator-7d9f8b6c5-abcde",instance="10.0.2.1:8080",controller="rabbitmqcluster"}'
+        values: '10x10 12 14x40'
+      - series: 'controller_runtime_reconcile_errors_total{namespace="rabbitmq-system",service="rabbitmq-operator-metrics",pod="rabbitmq-operator-7d9f8b6c5-abcde",instance="10.0.2.1:8080",controller="rabbitmqcluster"}'
+        values: '5x10 6 7x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: RabbitMQOperatorReconcileErrors
+        exp_alerts: []
+      - eval_time: 38m
+        alertname: RabbitMQOperatorReconcileErrors
+        exp_alerts: []

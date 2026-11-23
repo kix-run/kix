@@ -943,7 +943,7 @@ in
             selector = sel;
             operator = operator;
             summary = "The CloudNativePG operator fails to reconcile its resources.";
-            impact = "resources it manages may not match their specs";
+            impact = "resources of that kind may not match their specs";
             nextStep = "Check the operator logs for the failing resource and error.";
           };
         };

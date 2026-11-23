@@ -81,7 +81,7 @@ in
       reconciles = ''sum by (namespace, job, controller) (increase(controller_runtime_reconcile_total{namespace="ops",job="op"}[30m]))'';
     in
     (
-      alert.expr == "${errors} / ${reconciles} > 0.1 and ${errors} > 2"
+      alert.expr == "${errors} / ${reconciles} > 0.1 and ${errors} > 2.5"
       && alert."for" == "15m"
       && alert.severity == "warning"
       && alert.summary == "The Foo operator fails to reconcile."

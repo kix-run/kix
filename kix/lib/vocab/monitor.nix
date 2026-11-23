@@ -163,7 +163,9 @@ in
   # controller-runtime counts an optimistic-lock conflict as an error and
   # retries at once, so a busy healthy controller shows a few errors. The rule
   # fires on the share of reconciles that fail over 30 minutes, above 10% and
-  # with more than two errors. `selector` scopes both counters to the
+  # with more than two errors. increase() extrapolates to the edges of the
+  # window, so two errors can read as slightly more than 2. The floor sits
+  # halfway between two and three for that reason. `selector` scopes both counters to the
   # instance, and `by` lists the labels that name it. `operator` names the
   # instance in the description, `impact` completes "so ...", and `nextStep`
   # is the sentence that says what to check.
@@ -186,7 +188,7 @@ in
       reconciles = increase "controller_runtime_reconcile_total";
     in
     {
-      expr = "${errors} / ${reconciles} > 0.1 and ${errors} > 2";
+      expr = "${errors} / ${reconciles} > 0.1 and ${errors} > 2.5";
       "for" = "15m";
       severity = "warning";
       inherit summary;
