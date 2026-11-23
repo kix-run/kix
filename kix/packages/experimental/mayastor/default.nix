@@ -254,10 +254,10 @@ in
         in
         lib.optional (nodes != null && nodes ? ${pool.node} && missing != { }) {
           option = "diskPools.${poolName}.node";
-          message = "diskPools.${poolName} targets node \"${pool.node}\", but that node's entry in cluster.nodes is missing label(s) ${
+          message = "diskPools.${poolName} uses node \"${pool.node}\", whose labels in cluster.nodes do not include ${
             lib.concatStringsSep ", " (lib.mapAttrsToList (k: v: "${k}=${v}") missing)
-          } required by the io-engine DaemonSet (ioEngine.nodeSelector). Kix still built the DiskPool, which will stay offline unless io-engine runs on that node.";
-          fix = "Ensure the Kubernetes node has the required label(s) and record them under cluster.nodes in the cluster definition, or change ioEngine.nodeSelector to match the node's labels.";
+          } (required by ioEngine.nodeSelector). Kix still built the DiskPool, which will stay offline unless the io-engine DaemonSet runs on that node.";
+          fix = "Label the Kubernetes node to match ioEngine.nodeSelector and record the labels under cluster.nodes in the cluster definition, or update ioEngine.nodeSelector.";
         };
     in
     lib.concatLists (lib.mapAttrsToList unlabelledPool config.diskPools)

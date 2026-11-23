@@ -210,13 +210,13 @@ in
     { clusterConfig, ... }:
     lib.optional (clusterConfig.cluster.containerd.discardUnpackedLayers == null) {
       clusterOption = "cluster.containerd.discardUnpackedLayers";
-      message = "cluster.containerd.discardUnpackedLayers is not set, so Kix built Spegel without checking whether containerd keeps unpacked image layers on the nodes. If containerd deletes unpacked layers, Spegel has no layers to serve to other nodes.";
-      fix = "If containerd has discard_unpacked_layers = false on every node, set cluster.containerd.discardUnpackedLayers = false. Otherwise set discard_unpacked_layers = false in containerd on every node first, or remove this Spegel instance and set cluster.containerd.discardUnpackedLayers = true.";
+      message = "cluster.containerd.discardUnpackedLayers is not set, so Kix built Spegel without checking whether containerd keeps image layers after unpacking them. If containerd discards layers after unpacking, Spegel has nothing to serve to other nodes.";
+      fix = "Verify that containerd sets discard_unpacked_layers = false on every node, then set cluster.containerd.discardUnpackedLayers = false in the cluster definition. If nodes discard layers after unpacking and you cannot change containerd, remove this Spegel instance and set cluster.containerd.discardUnpackedLayers = true.";
     }
     ++ lib.optional ((clusterConfig.cluster.capabilities.multiNode or null) == null) {
       clusterOption = "cluster.capabilities.multiNode";
-      message = "cluster.capabilities.multiNode is not set, so Kix built Spegel without checking the cluster's node count. Each Spegel pod waits for a peer on another node before reporting ready, so on a single-node cluster the DaemonSet never becomes ready.";
-      fix = "If the cluster has two or more nodes, set cluster.capabilities.multiNode = true. On a single-node cluster, remove this Spegel instance and set cluster.capabilities.multiNode = false.";
+      message = "cluster.capabilities.multiNode is not set, so Kix built Spegel without checking whether the cluster has multiple nodes. Each Spegel pod waits for a peer on another node before reporting ready, so on a single-node cluster the DaemonSet never becomes ready.";
+      fix = "Set cluster.capabilities.multiNode = true in the cluster definition if the cluster has two or more nodes. On a single-node cluster, remove this Spegel instance and set cluster.capabilities.multiNode = false.";
     };
 
   build = [

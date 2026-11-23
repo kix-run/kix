@@ -334,7 +334,7 @@ fn parse_header(bytes: &[u8]) -> Result<Header, BundleError> {
         .is_some_and(|w| w.get().len() > MAX_WARNINGS_BYTES)
     {
         return Err(too_large(format!(
-            "build warnings exceed {MAX_WARNINGS_BYTES} bytes; fix warnings in the cluster and build the bundle again"
+            "the warnings are over {MAX_WARNINGS_BYTES} bytes; fix the warnings in the cluster definition and run `kix bundle` again"
         )));
     }
     let header: Header = serde_json::from_slice(bytes).map_err(unreadable)?;

@@ -569,12 +569,13 @@ rec {
           {
             object = { inherit kind name; };
             message =
-              "${kind}/${name} (${apiVersion}) references a Service address without declaring whether its pods connect to that Service (`factBehavior`). "
-              + "Kix assumed `endpoint = \"conduct\"` (the resource forwards the address rather than connecting to it), so when network policies are enabled Kix does not open traffic from this resource's pods to that Service.";
+              "${kind}/${name} (${apiVersion}) references a Service address without declaring whether pods for this resource connect to that Service (`factBehavior`). "
+              + "Kix assumed this resource only passes the address on (`endpoint = \"conduct\"`). "
+              + "When network policies are enabled, Kix does not allow pods for this resource to connect to that Service.";
             fix =
-              "If pods managed by this custom resource connect to that Service directly, declare `factBehavior = { endpoint = \"terminate\"; podSelector = cr: "
-              + "{ ... }; }`; if the resource only passes the address on, declare `factBehavior = { endpoint = \"conduct\"; }`. "
-              + "Package authors set `factBehavior` on `scope.mkCRD` or `scope.mkCRDRef` (and build the resource with `scope.mkCR <owner>.out.crds.<kind>`); in a cluster definition (such as for Helm charts or raw manifests), set `cluster.factBehavior.\"<group>/${kind}\"`.";
+              "Set `cluster.factBehavior.\"<group>/${kind}\"` in the cluster definition (for Helm charts or raw manifests), or set `factBehavior` on `scope.mkCRD` or `scope.mkCRDRef` and build the resource with `scope.mkCR <owner>.out.crds.<kind>`. "
+              + "Use `{ endpoint = \"terminate\"; podSelector = cr: "
+              + "{ ... }; }` if pods for this resource connect to the Service, or `{ endpoint = \"conduct\"; }` if the resource only passes the address on.";
           }
         else
           null;
