@@ -22,6 +22,10 @@
   ...
 }:
 let
+  platformDns = import ./platform-dns.nix {
+    inherit kix;
+    inherit (config) clusterDomain;
+  };
   inherit (import ../core/error.nix { inherit lib; }) fail;
   cni = config.cluster.flavor.rke2.cni;
   primaries = builtins.filter (c: c != "multus") cni;
@@ -159,17 +163,9 @@ in
     };
 
     instances.kube-system = {
-      platform-dns = {
-        package = kix.mkImport {
-          kind = "Deployment";
-          apiVersion = "apps/v1";
-          roles = [ "dns" ];
-          out = {
-            name = "coredns";
-            fqdn = "kube-dns.kube-system.svc.${config.clusterDomain}";
-          };
-        };
-        optional = true;
+      platform-dns = platformDns {
+        name = "rke2-coredns-rke2-coredns";
+        namespace = "kube-system";
       };
 
       # Expose `out.helmChartConfig` so the `cilium` package can configure

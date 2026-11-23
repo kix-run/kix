@@ -11,6 +11,12 @@
   kix,
   ...
 }:
+let
+  platformDns = import ./platform-dns.nix {
+    inherit kix;
+    inherit (config) clusterDomain;
+  };
+in
 {
   cluster.provider = lib.mkDefault "gke";
 
@@ -54,17 +60,9 @@
   };
 
   instances.kube-system = {
-    platform-dns = {
-      package = kix.mkImport {
-        kind = "Deployment";
-        apiVersion = "apps/v1";
-        roles = [ "dns" ];
-        out = {
-          name = "kube-dns";
-          fqdn = "kube-dns.kube-system.svc.${config.clusterDomain}";
-        };
-      };
-      optional = true;
+    platform-dns = platformDns {
+      name = "kube-dns";
+      namespace = "kube-system";
     };
 
     platform-storage = {

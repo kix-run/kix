@@ -1,0 +1,3 @@
+# 2026-11-23 · `kix/lib/flavors/{gke-autopilot,openshift}.nix` · The `platform-dns` import marker sits in a namespace other than the DNS Service, so `kix deploy` waits for a Service that is not there.
+
+`kix deploy` looks for an imported resource in the namespace of the import's PackageInstance marker (`cli/kix/src/cluster/readiness/imports.rs`). On GKE Autopilot the marker is in `gke-managed` and the Service is `kube-system/kube-dns`. On OpenShift the marker is in `kube-system` and the Service is `openshift-dns/dns-default`. Once a workload activates `platform-dns` on either flavour, the deploy waits for a Service that does not exist in the marker's namespace. An import has no way to name the namespace of the object it stands for.

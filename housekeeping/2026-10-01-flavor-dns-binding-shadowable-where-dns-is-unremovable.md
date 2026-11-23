@@ -1,3 +1,4 @@
 # 2026-10-01 · `kix/lib/flavors/{gke,gke-autopilot,aks}.nix` · The `dns` role is `shadowable` on platforms whose DNS cannot be replaced.
 
 Every flavour binds `cluster.roles.dns` as `shadowable`. On GKE, GKE Autopilot, and AKS the kubelet always points pods at the platform's DNS, so a coredns instance there becomes the `dns` provider for a server no pod queries: workloads order after it and nothing resolves through it. Binding `dns` as `exclusive` on those flavours would refuse a managed DNS provider at evaluation.
+- Decision required from Adam: changing these flavours to `exclusive` stops some existing clusters with an error, so it needs an `error` change record. The error must print the record's id. The error comes from the general role binding check in `kix/lib/eval/hooks.nix`, and nothing tells that check which change record applies, so it cannot print one. Adam needs to decide how such an error gets its id.
