@@ -129,7 +129,7 @@ rec {
         if what != null then
           f {
             id = "K0998";
-            message = "kix.mergeGuarded takes `option` in place of `what`.";
+            message = "kix.mergeGuarded no longer accepts `what`. That argument is now named `option`.";
             fix = "Rename `what` to `option`.";
           }
         else

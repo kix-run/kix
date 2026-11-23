@@ -264,8 +264,8 @@ rec {
       }
     else if scope == null then
       fail {
-        message = "kix.${helper} was called without `scope`. It needs `scope` to report the instance and package in errors.";
-        fix = "Pass `inherit scope;` to the call.";
+        message = "kix.${helper} is missing `scope`. It needs `scope` to report the instance and package in errors.";
+        fix = "Pass `inherit scope;`.";
       }
     else
       scope.fail;
