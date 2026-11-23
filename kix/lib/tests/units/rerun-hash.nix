@@ -127,7 +127,7 @@ in
   # `scope.mkJob` sets the rerun rule, so a package does not write it.
   rerun-set-by-mkjob =
     (jobOf { }).metadata.annotations.${kixKeys.rerun} or null == "on-change"
-    || throw "scope.mkJob should set kix.run/rerun to on-change";
+    || throw "scope.mkJob should set the rerun annotation to on-change";
 
   # Only a resource under the rerun rule carries the stamp.
   rerun-hash-only-on-rerun =
