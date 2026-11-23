@@ -798,13 +798,15 @@ async fn delete_closure(
         .map_err(|e| OperatorError::DiscoveryError(e.to_string()))?;
     for (rid, removal) in removals {
         match removal {
-            Removal::NeverPruned => {
-                tracing::info!(name, resource = %rid, "Kept: never deleted automatically")
-            }
+            Removal::NeverPruned => tracing::info!(
+                name,
+                resource = %rid,
+                "Kept during teardown: Kix never deletes this kind automatically; delete with kubectl if intended"
+            ),
             Removal::UnknownKind => tracing::warn!(
                 name,
                 resource = %rid,
-                "Not deleted: Kubernetes does not recognize this kind"
+                "Skipped during teardown: Kubernetes does not recognize this kind (for example, if its CRD was already removed)"
             ),
             Removal::Pruned(Pruned::Deleted) => tracing::info!(name, resource = %rid, "Deleted"),
             Removal::Pruned(Pruned::Gone) => {}

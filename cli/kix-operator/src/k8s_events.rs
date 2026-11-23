@@ -251,7 +251,9 @@ fn node_event(node: &NodeId, verdict: &Verdict, detail: Option<&NodeDetail>) -> 
             Some(NodeDetail::PendingRestart { message, .. }) => Some(KEvent {
                 type_: EventType::Warning,
                 reason: "RestartPending".into(),
-                note: Some(format!("{resource} is ready, restart pending: {message}")),
+                note: Some(format!(
+                    "{resource} is ready but needs a restart: {message}"
+                )),
                 action: "Ready".into(),
                 secondary: None,
             }),
@@ -442,7 +444,7 @@ mod tests {
         assert_eq!(
             event.note.as_deref(),
             Some(
-                "DaemonSet/io-engine@app is ready, restart pending: 2 pods run the previous template"
+                "DaemonSet/io-engine@app is ready but needs a restart: 2 pods run the previous template"
             )
         );
     }

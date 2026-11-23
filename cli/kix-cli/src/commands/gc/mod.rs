@@ -682,14 +682,14 @@ pub(super) async fn delete_resources(
         match removal {
             Removal::NeverPruned => {
                 eprintln!(
-                    "  {} {}: never deleted automatically; skipping it",
+                    "  {} {}: kept; Kix never deletes this kind automatically (delete with `kubectl` if intended)",
                     output::yellow("!"),
                     rid
                 );
             }
             Removal::UnknownKind => {
                 eprintln!(
-                    "  {} {}: Kubernetes does not recognize this kind; skipping it",
+                    "  {} {}: not deleted because Kubernetes does not recognize this kind. If its CRD was already removed, run `kix gc --full-scan` to scan live resources instead.",
                     output::red("!"),
                     rid
                 );
