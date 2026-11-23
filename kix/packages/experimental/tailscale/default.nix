@@ -6,9 +6,7 @@
 # `tailscale`, and network policies for the operand pods the operator creates
 # in this namespace.
 #
-# A cluster runs one instance: the CRDs are cluster-wide, the operator serves
-# loadBalancerClass `tailscale` by that literal name, and its DNS-record
-# handler for Ingresses matches class name `tailscale` literally.
+# A cluster runs one instance. `meta.conflictsWith` gives the reason.
 #
 # Tailscale setup before first deploy:
 #   - In the tailnet policy file, add `tag:k8s-operator` and `tag:k8s`, with
@@ -148,7 +146,12 @@ in
     description = "Tailscale Kubernetes operator: exposes Services and Ingresses on a tailnet and runs subnet routers, egress proxies, and API server proxies from tailscale.com resources";
     owner = "platform";
     defaultAliases = [ "tailscale" ];
-    conflictsWith = [ "cluster:tailscale" ];
+    conflictsWith = [
+      {
+        key = "cluster:tailscale";
+        reason = "The tailscale.com CRDs are cluster-wide, the operator serves loadBalancerClass tailscale by that literal name, and its DNS-record handler for Ingresses matches IngressClass tailscale by name.";
+      }
+    ];
     annotationDomains = [ "tailscale.com" ];
     podSecurity = "privileged";
     unsafe = [ "privileged" ];

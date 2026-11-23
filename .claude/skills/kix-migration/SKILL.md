@@ -802,7 +802,7 @@ DI resolution priority: (1) explicit dep overrides, (2) same-namespace match, (3
 ### Package Meta
 
 - **`meta.podSecurity`**: `"privileged" | "baseline" | "restricted"`, the Pod Security level the package's pods need (kubevirt: privileged). The namespace carries `pod-security.kubernetes.io/enforce` at the most permissive level any of its instances needs. The build checks every pod template in a namespace with a level and fails on a workload that breaks it, naming the container and field.
-- **`meta.availability.max`** caps the whole instance; a package where only some workloads cannot reach the level puts `availability.max = "none"` on those builder calls (`scope.mkDeployment { availability.max = "none"; ... }`) so a quorum store beside a single-replica controller keeps hard spread.
+- **`meta.availability.max`** caps the whole instance; a package where only some workloads cannot reach the level puts `availability.max = "none"` on those builder calls (`scope.mkDeployment { availability.max = "none"; ... }`) so a quorum store beside a single-replica controller keeps hard spread. Both forms take `reason`, a sentence Kix adds to the replica-guard error and the capped-level warning.
 
 ```nix
 meta = {
@@ -813,7 +813,7 @@ meta = {
   owner = "platform";       # required: "platform" or "app-team"
   conflictsWith = [
     "other-pkg"             # same-namespace mutual exclusion
-    "cluster:myOperator"    # cluster-wide: one instance answering this name per cluster
+    { key = "cluster:myOperator"; reason = "Its webhooks admit every namespace."; }  # cluster-wide: one instance answering this name per cluster; reason goes into the error
   ];
 };
 ```

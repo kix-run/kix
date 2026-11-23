@@ -254,7 +254,7 @@ rec {
             package = normalizedAvail.${name}.package;
             inherit kixlib;
           };
-          clusterConflicts = builtins.filter (lib.hasPrefix "cluster:") (packageMeta.conflictsWith or [ ]);
+          clusterConflicts = builtins.filter (lib.hasPrefix "cluster:") (meta.conflictKeys packageMeta);
           quoted = xs: builtins.concatStringsSep ", " (map builtins.toJSON xs);
         in
         if !(meta.servesCluster { inherit packageMeta context; }) then
@@ -380,13 +380,47 @@ rec {
             );
             fix = builtins.concatStringsSep "\n" (
               [
-                "Declare the package this cluster should use as an optional instance (created only when something depends on it):"
-                "  instances.<namespace>.${item.depName} = { package = packages.<one of the above>; optional = true; };"
+                "Declare the package this cluster should use as an optional instance (created only when something depends on it). Choose one of these lines. Each uses the namespace and instance name that Kix gives the package when it adds it, so a cluster that already runs the package keeps the same instance and its data:"
+              ]
+              ++ map (name: "  ${chosenInstanceLine item name}") claimants
+              ++ [
                 "If the other matching packages are not used in this cluster, remove them from availablePackages."
               ]
               ++ lib.optional (builtins.elem item.depName roles.roleNames) "If the cluster environment already provides '${item.depName}', set `cluster.roles.${item.depName}.binding = \"shadowable\";` (or `\"exclusive\";`) in your cluster definition instead."
             );
           };
+
+      # Return the namespace auto-instantiation gives availablePackages entry
+      # `avPkg` for `item`.
+      catalogNamespace =
+        item: avPkg:
+        if avPkg.namespace != null then
+          avPkg.namespace
+        else if autoNamespace != null then
+          autoNamespace
+        else
+          item.requesterNs;
+
+      # Return the `instances` line that declares availablePackages entry
+      # `name` as an optional instance under the namespace, the name, and the
+      # aliases auto-instantiation gives it for `item`.
+      chosenInstanceLine =
+        item: name:
+        let
+          avPkg = normalizedAvail.${name};
+          id = packageLib.idOf avPkg.package;
+          spelling =
+            if id == null then
+              "<the package of availablePackages.${name}>"
+            else
+              "packages.${builtins.replaceStrings [ "/" ] [ "." ] id}";
+          aliases =
+            lib.optionalString (avPkg.aliases != [ ])
+              " aliases = [ ${
+                 lib.concatMapStringsSep " " builtins.toJSON (lib.remove name (catalogKeys name))
+               } ];";
+        in
+        "instances.${catalogNamespace item avPkg}.${name} = { package = ${spelling}; optional = true;${aliases} };";
 
       catalogInstance =
         item:
@@ -396,13 +430,7 @@ rec {
         in
         {
           inherit canonicalName avPkg;
-          ns =
-            if avPkg.namespace != null then
-              avPkg.namespace
-            else if autoNamespace != null then
-              autoNamespace
-            else
-              item.requesterNs;
+          ns = catalogNamespace item avPkg;
         };
 
       seeds = builtins.concatMap (
@@ -515,7 +543,10 @@ rec {
           parts = lib.splitString "/" r;
           declared = (explicitInstances.${builtins.head parts} or { }) ? ${builtins.elemAt parts 1};
         in
-        if declared then r else "${r} (auto-instantiated)";
+        if declared then
+          r
+        else
+          "${r} (auto-instantiated for ${builtins.concatStringsSep ", " (requestersOf.${r} or [ ])})";
 
       # Reject availablePackages entries that must run once per cluster when
       # demands place them in multiple namespaces. A fixed namespace on the
@@ -533,6 +564,18 @@ rec {
         else
           "packages.${name}";
 
+      # Return the fix for a package that runs once per cluster and that
+      # nothing places in a namespace of its own.
+      onePerClusterFix =
+        name:
+        "Declare ${name} once, in a namespace of its own, and every consumer resolves to it:"
+        + "\n  instances.<namespace>.${name}.package = ${packageSpelling name};"
+        + "\nOr set autoNamespace to place every package Kix adds there.";
+
+      # Refuse a package that runs once per cluster when demands would place
+      # it in several namespaces. The refusal stops evaluation at once,
+      # because the copies in each namespace would otherwise raise their own
+      # conflict and duplicate-resource errors, which hide the cause.
       spreadRefusals = builtins.concatMap (
         name:
         let
@@ -540,15 +583,15 @@ rec {
           namespaces = lib.unique (map (p: p.ns) ps);
           reason = onePerClusterReason name;
         in
-        lib.optional (builtins.length namespaces > 1 && reason != null) ({
+        lib.optional (builtins.length namespaces > 1 && reason != null) {
           message = builtins.concatStringsSep "\n" (
             [
-              "kix: ${name} runs once per cluster (${reason}), but auto-instantiation would place it in ${toString (builtins.length namespaces)} namespaces:"
+              "${name} runs once per cluster (${reason}), and nothing names its namespace. Kix would add it to ${toString (builtins.length namespaces)} namespaces, beside the packages that need it:"
             ]
             ++ map (p: "  ${p.ns}/${name}, for dependency '${p.depName}' of ${labelRequester p.requester}") ps
           );
-          fix = "Declare it once, and every consumer resolves to it:\n  instances.<namespace>.${name}.package = ${packageSpelling name};";
-        })
+          fix = onePerClusterFix name;
+        }
       ) (builtins.attrNames placementsByName);
 
       # Refuse a package that runs once per cluster and would land beside
@@ -575,10 +618,7 @@ rec {
               "Removing that package would then remove ${name} for the whole cluster."
             ]
           );
-          fix =
-            "Declare ${name} once, in a namespace of its own:"
-            + "\n  instances.<namespace>.${name}.package = ${packageSpelling name};"
-            + "\nOr set autoNamespace to place every package Kix adds there.";
+          fix = onePerClusterFix name;
         }
       ) (builtins.attrNames placementsByName);
 

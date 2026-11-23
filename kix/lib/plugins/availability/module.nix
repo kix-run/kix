@@ -287,6 +287,7 @@ in
             {
               level = a.ceiling;
               from = a.ceilingFrom or "package";
+              reason = a.ceilingReason or null;
             };
         # Reject any Deployment or StatefulSet with more than one replica when
         # its ceiling is `none`, including workloads modified by `partsOverlays`.
@@ -308,13 +309,15 @@ in
           r:
           let
             m = r.rawManifest;
+            ceiling = ceilingOf r;
           in
           {
             instance = "${ctx.namespaceName}/${ctx.instanceName}";
             message =
               "${m.kind} '${m.metadata.name}' runs "
-              + "${toString m.spec.replicas} replicas, but ${ceilingSource.${(ceilingOf r).from}} is \"none\", "
-              + "so it supports one pod at a time.";
+              + "${toString m.spec.replicas} replicas, but ${ceilingSource.${ceiling.from}} is \"none\", "
+              + "so it supports one pod at a time."
+              + lib.optionalString (ceiling.reason != null) " The package gives this reason: ${ceiling.reason}";
             fix =
               "Set its replica count to 1. If you maintain the package "
               + "and the program can coordinate several replicas (leader election, an HA mode, a shared "

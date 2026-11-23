@@ -1,0 +1,5 @@
++++
+kind = "added"
+packages = ["experimental/tailscale"]
++++
+A package can say why it limits itself: `meta.availability` and `availability` on a workload builder take `reason` beside `max`, and a `meta.conflictsWith` entry can be `{ key; reason; }`. Kix adds the reason to the errors and warnings about the limit, and `tailscale` gives one for its one-per-cluster rule. Several evaluation errors now say more. A duplicate resource names the instances that build it. An error about an instance that Kix added from `availablePackages` names the instances that needed it. A missing role dependency lists the packages that provide the role. A conflict error says how to fix it. The error for two packages that answer one dependency suggests the instance name Kix already uses, so following it keeps a deployed instance. `scope.forNamespace` names the instance that asked for a missing namespace. An assertion from `deps.<name>.assertions` carries the dependency's name. Scrape warnings in `kix-warnings.json` set `object` and `instance` to the scraper.

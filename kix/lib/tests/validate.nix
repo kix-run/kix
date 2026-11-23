@@ -633,13 +633,39 @@ in
     ]
   );
 
-  v07-duplicate-identity = onlyFailure "Duplicate resource: ConfigMap/a/same" (
+  v07-duplicate-identity = onlyFailure "Duplicate resource: ConfigMap/a/same." (
     base "a"
     ++ [
       (res "ConfigMap" "a" "same" { data.k = "1"; })
       (res "ConfigMap" "a" "same" { data.k = "2"; })
     ]
   );
+
+  # The duplicate-resource failure names each instance that builds the
+  # object, and tells the user to remove one or rename the object.
+  v07-duplicate-identity-names-instances =
+    let
+      ms = [
+        (res "PriorityClass" null "high" { apiVersion = "scheduling.k8s.io/v1"; })
+        (res "PriorityClass" null "high" { apiVersion = "scheduling.k8s.io/v1"; })
+      ];
+      fs = map validate.failureText (
+        validate.crossResourceFailures {
+          manifests = ms;
+          identityHashes = map idOf ms;
+          owners = [
+            "a/high"
+            "b/high"
+          ];
+        }
+      );
+    in
+    (
+      fs == [
+        "Duplicate resource: PriorityClass/cluster-scoped/high. Instances a/high, b/high each build it.\nFix: Remove one of these instances, or give the object a different name in one of them. A cluster-scoped object must have a name that is unique in the whole cluster."
+      ]
+    )
+    || throw "duplicate with owners: ${builtins.toJSON fs}";
 
   v08-managed-by-label = onlyFailure "missing app.kubernetes.io/managed-by=kix" (
     base "a"

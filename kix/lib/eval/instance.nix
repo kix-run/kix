@@ -23,7 +23,6 @@ let
   inherit (resolve)
     resolveArg
     targetsOf
-    describeRequester
     evaluateInstanceConfig
     callPackagePhase1
     buildEntriesOf
@@ -88,6 +87,7 @@ in
             value = peekedPackageMeta.availability or null;
             inherit where;
           };
+          ceilingReason = availabilityLib.ceilingReasonOfMeta (peekedPackageMeta.availability or null);
           inherit where;
         };
 
@@ -100,11 +100,12 @@ in
             };
         };
 
-        requester = describeRequester namespaceName instanceName instCfg;
+        requester = "${namespaceName}/${instanceName}";
+        addedFor = instCfg._autoInstantiatedFor or [ ];
 
         _dnsResolution = resolveArg {
           argName = "dns";
-          inherit resolutionIndex requester;
+          inherit resolutionIndex requester addedFor;
           requesterName = instanceName;
           requesterNamespace = namespaceName;
           hasDefault = true;
@@ -226,6 +227,7 @@ in
             resolutionIndex
             allInstances
             requester
+            addedFor
             depsEnrichment
             ;
           requesterName = instanceName;
@@ -236,7 +238,12 @@ in
         resolutions = lib.mapAttrs (
           argName: depSpec:
           resolveArg {
-            inherit argName resolutionIndex requester;
+            inherit
+              argName
+              resolutionIndex
+              requester
+              addedFor
+              ;
             explicitOverride = deps.${argName} or null;
             requesterName = instanceName;
             requesterNamespace = namespaceName;

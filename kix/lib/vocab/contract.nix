@@ -84,10 +84,13 @@ in
           "the instance it resolved to";
 
       # Return the error, as `kix.fail` takes it, for a consumer whose
-      # dependency `dep` breaks the contract.
+      # dependency `dep` breaks the contract. A consumer may take the
+      # contract under any dependency name, so the text names the provider
+      # and leaves the dependency to the record's `dependency` field, which
+      # `deps.<name>.assertions` sets.
       consumerError = who: dep: found: {
-        message = "${who}: deps.${alias} resolved to ${providerOf dep}, whose out does not honour the ${name} contract (${here}): ${lib.concatStringsSep "; " found}.";
-        fix = "Set them on that instance's out (a kix.mkImport sets them in `out`), or wire another ${remedyNoun} with deps.${alias} = ref.<ns>.<instance>.";
+        message = "${who}: a dependency resolved to ${providerOf dep}, whose out does not honour the ${name} contract (${here}): ${lib.concatStringsSep "; " found}.";
+        fix = "Set them on that instance's out (a kix.mkImport sets them in `out`), or point the dependency at another ${remedyNoun} with ref.<ns>.<instance> in the consumer's deps.";
       };
     in
     {

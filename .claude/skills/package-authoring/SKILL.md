@@ -191,7 +191,9 @@ is a finding from the upstream source, not a default.
    and in the header's `Limits:` line (grafana:67, 425; tempo:37). A
    program-wide limit is `meta.availability.max = "none";`; a limit that
    depends on config, wiring, or one workload is `availability.max` on that
-   builder (pattern table, "Ceilings"). W4 and W5 cover the singleton form:
+   builder (pattern table, "Ceilings"). Either form takes `reason`, a
+   sentence Kix adds to the messages about the ceiling, so a user learns
+   why without opening the package. W4 and W5 cover the singleton form:
    a literal `replicas = 1` under the `none` ceiling.
 5. Load-serving workloads: O19 (the option form is the pattern table's
    "`pick`" row). Strategy: W8.

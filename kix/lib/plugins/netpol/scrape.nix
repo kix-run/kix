@@ -681,6 +681,17 @@ in
           promNs = plain (nsOfRaw prom);
           promName = plain prom.metadata.name;
           who = "${sk.kind} ${promNs}/${promName}";
+          # Return a warning about this scraper as a record whose `object` and
+          # `instance` name the scraper and the instance that built it.
+          aboutScraper = message: {
+            object = {
+              inherit (sk) kind;
+              namespace = promNs;
+              name = promName;
+            };
+            instance = r._builtBy or null;
+            inherit message;
+          };
           stem = sk.stem promName;
           podSelectorDecl = r.factBehavior.podSelector;
           scraperSelector =
@@ -695,11 +706,11 @@ in
           unreadWarnings =
             map (
               o:
-              "${who} selects ${o.kind} ${o.namespace}/${o.name}, whose targets Kix does not read, so no network policy opens them. Under an enforcer the scrape is dropped unless a policy outside the scrape join admits it, such as a networkPolicy.platformIntents entry."
+              aboutScraper "${who} selects ${o.kind} ${o.namespace}/${o.name}, whose targets Kix does not read, so no network policy opens them. Under an enforcer the scrape is dropped unless a policy outside the scrape join admits it, such as a networkPolicy.platformIntents entry."
             ) unreadObjects
             ++ map (
               f:
-              "${who} sets spec.${f}, whose targets Kix does not read, so no network policy opens them. Under an enforcer that traffic is dropped unless a policy outside the scrape join admits it, such as a networkPolicy.platformIntents entry."
+              aboutScraper "${who} sets spec.${f}, whose targets Kix does not read, so no network policy opens them. Under an enforcer that traffic is dropped unless a policy outside the scrape join admits it, such as a networkPolicy.platformIntents entry."
             ) unreadFields;
 
           # Two monitors on one Service are one target with the union of
@@ -831,11 +842,11 @@ in
           warnings = lib.optionals enforced.ingress (
             map (
               t:
-              "${who}: another ingress policy ${
+              aboutScraper "${who} scrapes target ${plain t.namespace}/${plain t.key}. Another ingress policy ${
                 if t.podLabelSets == [ ] then
-                  "may isolate only some of the pods behind target ${plain t.namespace}/${plain t.key}, which Kix did not build, depending on labels outside the target's selector"
+                  "may isolate only some of the target's pods, which Kix did not build, depending on labels outside the target's selector"
                 else
-                  "isolates only some of the pods behind target ${plain t.namespace}/${plain t.key}"
+                  "isolates only some of the target's pods"
               }. Without default deny Kix adds scrape ingress only where it can show that every pod is already isolated, so the server cannot reach the isolated pods. Select all of the target's pods in that policy, or turn on networkPolicy.defaultDeny."
             ) partlyIsolatedTargets
           );

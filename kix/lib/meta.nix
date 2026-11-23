@@ -93,7 +93,8 @@ let
         assertions = builtins.concatMap (c: c.assertions) checks;
       };
 
-  # Return warning `w` with `dependency` set to `name` unless it sets one.
+  # Return warning or assertion `w` with `dependency` set to `name` unless it
+  # sets one.
   aboutDependency =
     name: w:
     {
@@ -138,6 +139,43 @@ rec {
         fix = "Set it to \"cluster\" or \"namespace\", or leave it unset.";
       };
 
+  # Return a package's `meta.conflictsWith` entries as `{ key; reason; }`.
+  # An entry is a key, such as "cluster:tailscale", or `{ key; reason; }`,
+  # where `reason` is a sentence that says why two such instances cannot
+  # run together.
+  conflictEntries =
+    packageMeta:
+    map (
+      e:
+      if builtins.isString e then
+        {
+          key = e;
+          reason = null;
+        }
+      else if
+        builtins.isAttrs e
+        && builtins.isString (e.key or null)
+        && builtins.isString (e.reason or "")
+        &&
+          removeAttrs e [
+            "key"
+            "reason"
+          ] == { }
+      then
+        {
+          inherit (e) key;
+          reason = e.reason or null;
+        }
+      else
+        errors.fail {
+          message = "meta.conflictsWith has the entry ${builtins.toJSON e}.";
+          fix = "Write each entry as a key, such as \"cluster:<alias>\", or as { key = \"cluster:<alias>\"; reason = \"<why two instances cannot run together>\"; }.";
+        }
+    ) (packageMeta.conflictsWith or [ ]);
+
+  # Return the keys of a package's `meta.conflictsWith` entries.
+  conflictKeys = packageMeta: map (e: e.key) (conflictEntries packageMeta);
+
   # Return whether a package serves every namespace. Dependency resolution
   # binds an instance of such a package from any namespace, and
   # auto-instantiation places it once per cluster. A package serves the whole
@@ -156,7 +194,7 @@ rec {
       scope != "namespace"
       && (
         (packageMeta.roles or [ ]) != [ ]
-        || builtins.any (lib.hasPrefix "cluster:") (packageMeta.conflictsWith or [ ])
+        || builtins.any (lib.hasPrefix "cluster:") (conflictKeys packageMeta)
       )
     );
 
@@ -300,8 +338,9 @@ rec {
       versionDiags = [ k8sDiag ] ++ compatDiags;
 
       conflictAssertions = builtins.concatMap (
-        conflict:
+        entry:
         let
+          conflict = entry.key;
           isClusterWide = lib.hasPrefix "cluster:" conflict;
           name = if isClusterWide then lib.removePrefix "cluster:" conflict else conflict;
           isSelf = c: c.instName == instanceName && c.namespace == namespaceName;
@@ -327,15 +366,24 @@ rec {
             + lib.optionalString (isAuto c) " (auto-instantiated for ${builtins.concatStringsSep ", " c.meta.autoInstantiatedFor})";
           instances = builtins.concatStringsSep ", " (map label matching);
           autoAdvice = lib.optionalString (builtins.any isAuto matching) (
-            ". An auto-instantiated instance is created for a required dependency that no declared instance answers. "
+            " An auto-instantiated instance is created for a required dependency that no declared instance answers. "
             + "Make ${namespaceName}/${instanceName} answer '${name}' (instances.${namespaceName}.${instanceName}.aliases), "
             + "or bind the consumers to it with deps.<arg> = ref.${namespaceName}.${instanceName}."
           );
         in
-        lib.optional (matching != [ ]) (
-          failedAssertion "It conflicts with '${name}' ${scope}. Conflicting instances: ${instances}${autoAdvice}"
-        )
-      ) (packageMeta.conflictsWith or [ ]);
+        lib.optional (matching != [ ]) {
+          assertion = false;
+          message =
+            "It conflicts with '${name}' ${scope}. Conflicting instances: ${instances}."
+            + lib.optionalString (entry.reason != null) " The package gives this reason: ${entry.reason}"
+            + autoAdvice;
+          fix =
+            if isClusterWide then
+              "Keep one instance that answers '${name}' in the whole cluster, and remove the others. Consumers in every namespace then resolve to the one that stays."
+            else
+              "Keep one instance that answers '${name}' in namespace '${namespaceName}', and remove the others or move them to another namespace.";
+        }
+      ) (conflictEntries packageMeta);
 
       # Validate `meta.scope` up front, because resolution reads it only for
       # a dependency from another namespace.
@@ -407,7 +455,11 @@ rec {
                 warnings =
                   acc.warnings
                   ++ map (aboutDependency depName) (if enrichment ? warnings then enrichment.warnings dep else [ ]);
-                assertions = acc.assertions ++ (if enrichment ? assertions then enrichment.assertions dep else [ ]);
+                assertions =
+                  acc.assertions
+                  ++ map (aboutDependency depName) (
+                    if enrichment ? assertions then enrichment.assertions dep else [ ]
+                  );
               }
           )
           {

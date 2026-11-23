@@ -16,7 +16,6 @@
   callPackagePhase1,
   discoverBuildDeps,
   resolveDepTargets,
-  describeRequester,
   buildConfigInjections,
   checkRefTargets,
   refsOf,
@@ -460,7 +459,8 @@ in
                 declaredDeps = discoveredDeps;
                 inherit resolutionIndex depsEnrichment;
                 namespace = nsName;
-                requester = describeRequester nsName instName instCfg;
+                requester = "${nsName}/${instName}";
+                addedFor = instCfg._autoInstantiatedFor or [ ];
                 requesterName = instName;
                 explicitOverrides = lib.filterAttrs (_: v: refsOf v != [ ]) (instCfg.deps or { });
               };

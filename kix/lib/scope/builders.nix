@@ -222,6 +222,8 @@ in
           # Highest availability level this workload supports (checked by
           # workloadCeilingOf), or null.
           workloadCeiling ? null,
+          # Why the workload cannot run above `workloadCeiling`, or null.
+          workloadCeilingReason ? null,
         }:
         let
           # Apply a builder ceiling to this workload only. Keep the package's
@@ -240,6 +242,8 @@ in
               packageCeiling == null || availabilityLib.rank workloadCeiling < availabilityLib.rank packageCeiling
             );
           effectiveCeiling = if builderIsLower then workloadCeiling else packageCeiling;
+          ceilingReason =
+            if builderIsLower then workloadCeilingReason else availability.ceilingReason or null;
           ceilingFrom =
             if builderIsLower then
               "builder"
@@ -263,7 +267,7 @@ in
             )
             // {
               ceiling = effectiveCeiling;
-              inherit ceilingFrom;
+              inherit ceilingFrom ceilingReason;
             };
           cappedConsequence =
             {
@@ -282,6 +286,9 @@ in
               "${workloadKind} '${workloadInput.name or "?"}' supports at most "
               + "\"${workloadCeiling}\" availability (the package sets `availability.max` on it). "
               + "Kix runs this workload at \"${workloadCeiling}\" instead of \"${availability.level}\", so it ${cappedConsequence}. "
+              + lib.optionalString (
+                workloadCeilingReason != null
+              ) "The package gives this reason: ${workloadCeilingReason} "
               + "Other workloads in this instance still run at \"${availability.level}\". "
               + "To run the whole instance at \"${workloadCeiling}\" and silence this warning, set `availability = \"${workloadCeiling}\";` on the instance.";
           };
@@ -374,7 +381,12 @@ in
           where = "${namespaceName}/${instanceName}";
           subject = "${kind} '${attrs.name or "?"}'";
           a = attrs.availability;
-          unknown = builtins.attrNames (removeAttrs a [ "max" ]);
+          unknown = builtins.attrNames (
+            removeAttrs a [
+              "max"
+              "reason"
+            ]
+          );
         in
         if !(attrs ? availability) then
           null
@@ -393,10 +405,16 @@ in
         else if unknown != [ ] then
           fail {
             instance = where;
-            message = "${subject} availability has unknown key(s) ${lib.concatStringsSep ", " unknown}. The only key is max.";
+            message = "${subject} availability has unknown key(s) ${lib.concatStringsSep ", " unknown}. The keys are max and reason.";
           }
         else if (a.max or null) == null then
           null
+        else if !builtins.isString (a.reason or "") then
+          fail {
+            instance = where;
+            message = "${subject} availability.reason is a ${builtins.typeOf a.reason}.";
+            fix = "Write the reason for the ceiling as a sentence, such as availability.reason = \"The program keeps its state in one SQLite file.\".";
+          }
         else
           availabilityLib.checkCeiling {
             value = a.max;
@@ -506,6 +524,7 @@ in
             workloadInput = baseArgs;
             workloadKind = kind;
             inherit selector hostNetwork workloadCeiling;
+            workloadCeilingReason = attrs.availability.reason or null;
           });
 
       # Process a CronJob's nested pod template through the same validation,
@@ -571,6 +590,7 @@ in
             workloadInput = baseArgs;
             workloadKind = kind;
             inherit selector hostNetwork workloadCeiling;
+            workloadCeilingReason = attrs.availability.reason or null;
           });
 
       mkJob =
@@ -635,6 +655,7 @@ in
             workloadInput = baseArgs;
             workloadKind = kind;
             inherit selector hostNetwork workloadCeiling;
+            workloadCeilingReason = attrs.availability.reason or null;
           });
 
       # Apply workload validation to chart output. Skip checkNamespacedRefs

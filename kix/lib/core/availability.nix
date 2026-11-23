@@ -69,10 +69,17 @@ let
     };
 
   # Extract `max` from a package's `meta.availability` attrset, or return null.
+  # The attrset may also set `reason`, a sentence that says why the package
+  # cannot run above `max` (`ceilingReasonOfMeta`).
   ceilingOfMeta =
     { value, where }:
     let
-      unknown = builtins.attrNames (removeAttrs value [ "max" ]);
+      unknown = builtins.attrNames (
+        removeAttrs value [
+          "max"
+          "reason"
+        ]
+      );
     in
     if value == null then
       null
@@ -85,10 +92,20 @@ let
     else if unknown != [ ] then
       fail {
         instance = where;
-        message = "meta.availability has unknown key(s) ${lib.concatStringsSep ", " unknown}. The only key is max.";
+        message = "meta.availability has unknown key(s) ${lib.concatStringsSep ", " unknown}. The keys are max and reason.";
+      }
+    else if !builtins.isString (value.reason or "") then
+      fail {
+        instance = where;
+        message = "meta.availability.reason is a ${builtins.typeOf value.reason}.";
+        fix = "Write the reason for the ceiling as a sentence, such as meta.availability.reason = \"The program keeps its state in one SQLite file.\".";
       }
     else
       value.max or null;
+
+  # Return `reason` from a package's `meta.availability` attrset, or null.
+  # `ceilingOfMeta` checks its type.
+  ceilingReasonOfMeta = value: if builtins.isAttrs value then value.reason or null else null;
 
   # Return `{ pick, atLeast }` scoped to `ceiling` (`meta.availability.max`).
   # Fail when a package tests `atLeast` for a level above its own ceiling.
@@ -174,6 +191,8 @@ let
       clusterDefault,
       instanceOverride ? null,
       ceiling ? null,
+      # Why the package cannot run above `ceiling`, or null.
+      ceilingReason ? null,
       where,
     }:
     let
@@ -219,6 +238,7 @@ let
         capped
         ;
       ceiling = packageCeiling;
+      ceilingReason = if packageCeiling == null then null else ceilingReason;
       substrate = sub;
       warnings =
         lib.optional (overSubstrate && !sub.certain) (
@@ -228,6 +248,7 @@ let
         ++ lib.optional capped (
           "availability \"${requested}\" was requested but the package declares "
           + "meta.availability.max = \"${packageCeiling}\", so it runs at \"${packageCeiling}\". "
+          + lib.optionalString (ceilingReason != null) "The package gives this reason: ${ceilingReason} "
           + "This instance does not meet the requested availability level."
         );
     };
@@ -238,6 +259,7 @@ in
     rank
     checkCeiling
     ceilingOfMeta
+    ceilingReasonOfMeta
     underCeiling
     atLeast
     pick
