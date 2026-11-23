@@ -23,6 +23,12 @@ let
   ];
   unbound = mkCluster [ baseInstances ];
 
+  # Read `kix-packages.json` back as the CLI does, so the tests also cover how
+  # the index is serialized. `fromJSON` refuses text that names store paths
+  # with their context attached, and the paths' context does not matter here.
+  indexOf =
+    cluster:
+    builtins.fromJSON (builtins.unsafeDiscardStringContext (builtins.readFile cluster.packageIndex));
   recordOf = cluster: builtins.head (ofKind "Activation" (manifests cluster));
   labelOf = cluster: (recordOf cluster).metadata.labels.${kixKeys.kubernetesUidLabel} or null;
 in
@@ -30,11 +36,13 @@ in
   # An unbound definition writes `uid = null` to the index and no label on
   # its record, so a build made by an older Kix reads the same way.
   lib-cluster-binding-unbound-index-and-record =
-    unbound.packageIndexContent.kubernetes.uid == null && labelOf unbound == null;
+    (indexOf unbound).kubernetes ? uid
+    && (indexOf unbound).kubernetes.uid == null
+    && labelOf unbound == null;
 
   # A bound definition writes the UID to the index and labels its record.
   lib-cluster-binding-bound-index-and-record =
-    bound.packageIndexContent.kubernetes.uid == uid && labelOf bound == uid;
+    (indexOf bound).kubernetes.uid == uid && labelOf bound == uid;
 
   # Only a lowercase UUID is accepted: Kubernetes writes UIDs that way, and
   # a context name or a typo must not pass as a binding.

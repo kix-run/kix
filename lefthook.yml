@@ -47,17 +47,19 @@ pre-push:
   parallel: true
   commands:
     verify-signatures:
+      # Check only the commits no remote has yet. A commit that is already on
+      # a remote, such as one of main's after main is merged into a branch,
+      # cannot be signed without rewriting the remote's history.
       run: |
-        upstream=$(git rev-parse --abbrev-ref '@{upstream}' 2>/dev/null) || exit 0
-        range="${upstream}..HEAD"
-        unsigned=$(git log --pretty=format:'%H %G? %s' "$range" 2>/dev/null | grep -E '^[a-f0-9]+ N ' || true)
+        unsigned=$(git log --pretty=format:'%H %G? %s' HEAD --not --remotes 2>/dev/null | grep -E '^[a-f0-9]+ N ' || true)
         if [ -n "$unsigned" ]; then
           echo "ERROR: Unsigned commits found:"
           echo "$unsigned" | while IFS=' ' read -r hash status msg; do
             echo "  $hash $msg"
           done
+          oldest=$(echo "$unsigned" | tail -n 1 | cut -d ' ' -f 1)
           echo ""
-          echo "Sign commits with: git rebase --exec 'git commit --amend --no-edit -S' $upstream"
+          echo "Sign commits with: git rebase --exec 'git commit --amend --no-edit -S' ${oldest}^"
           exit 1
         fi
 

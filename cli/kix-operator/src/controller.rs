@@ -947,7 +947,10 @@ mod tests {
         let active = json!({
             "apiVersion": keys::API_VERSION,
             "kind": "Activation",
-            "metadata": { "name": "a-old", "labels": { (keys::CLUSTER_LABEL): "a" } },
+            "metadata": {
+                "name": "a-old",
+                "labels": { "app.kubernetes.io/managed-by": "kix", (keys::CLUSTER_LABEL): "a" },
+            },
             "status": { "phase": PHASE_ACTIVE },
         });
         let record = queued(dir.path(), Some(ELSEWHERE), None);
@@ -1103,7 +1106,10 @@ mod tests {
         let active = json!({
             "apiVersion": keys::API_VERSION,
             "kind": "Activation",
-            "metadata": { "name": "a-old", "labels": { (keys::CLUSTER_LABEL): "a" } },
+            "metadata": {
+                "name": "a-old",
+                "labels": { "app.kubernetes.io/managed-by": "kix", (keys::CLUSTER_LABEL): "a" },
+            },
             "status": { "phase": PHASE_ACTIVE },
         });
         let record = queued(dir.path(), Some(HERE), Some("1.30"));

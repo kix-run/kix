@@ -5,9 +5,12 @@ edition.workspace = true
 license.workspace = true
 description = "Kubernetes manifest generator CLI"
 
+# The library of kix-lib is also named `kix`, and both targets would write
+# their docs to `doc/kix/`. The library's docs are the ones other crates use.
 [[bin]]
 name = "kix"
 path = "src/main.rs"
+doc = false
 
 [dependencies]
 kix-lib.workspace = true

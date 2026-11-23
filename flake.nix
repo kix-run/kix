@@ -215,8 +215,12 @@
             # an in-tree target dir is copied verbatim on every change. Same
             # scheme as devenv's, so the two share a directory rather than
             # building two cold copies of the same tree.
+            # The key uses the checkout's root, which is devenv's root too,
+            # so entering the shell from a subdirectory reuses the same dir.
             shellHook = ''
-              export CARGO_TARGET_DIR="''${XDG_CACHE_HOME:-$HOME/.cache}/kix-cargo-target/$(basename "$PWD")-$(printf %s "$PWD" | sha256sum | cut -c1-12)"
+              kix_checkout=$(git rev-parse --show-toplevel 2>/dev/null || printf %s "$PWD")
+              export CARGO_TARGET_DIR="''${XDG_CACHE_HOME:-$HOME/.cache}/kix-cargo-target/$(basename "$kix_checkout")-$(printf %s "$kix_checkout" | sha256sum | cut -c1-12)"
+              unset kix_checkout
               mkdir -p "$CARGO_TARGET_DIR"
 
               # The git hooks name lefthook by store path, which a
