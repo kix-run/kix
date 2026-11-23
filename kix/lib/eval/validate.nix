@@ -23,6 +23,7 @@ let
   validateCrds = import ./validate-crds.nix { inherit lib; };
   validateKeys = import ./validate-keys.nix { inherit lib; };
   kixKeys = kixAnnotations.keys;
+  labelSelector = import ../core/label-selector.nix { inherit lib; };
   inherit (import ../core/util.nix { inherit lib; })
     listOr
     groupOf
@@ -190,22 +191,22 @@ rec {
           [ ]
       ) resources;
       selectsRefPods =
-        ns: selector:
-        builtins.any (w: w.ns == ns && selectorMatchesLabels selector w.labels) refPodSelectors;
+        ns: selector: builtins.any (w: w.ns == ns && selectorMatches selector w.labels) refPodSelectors;
 
       workloads = builtins.filter (r: builtins.elem r.kind workloadKinds.builtKinds) resources;
       nsOf = namespaceOf;
 
       # Check whether `selector` matches any workload pod template in namespace `ns`.
       selectsPodsIn =
-        ns: selector:
-        builtins.any (w: nsOf w == ns && selectorMatchesLabels selector (getPodLabels w)) workloads;
+        ns: selector: builtins.any (w: nsOf w == ns && selectorMatches selector (getPodLabels w)) workloads;
 
       getPodSpec = podSpecReader.podSpecOf;
       getPodLabels = r: (podSpecReader.podTemplateOf r).metadata.labels or { };
 
-      selectorMatchesLabels =
-        selector: labels: builtins.all (k: (labels.${k} or null) == selector.${k}) (lib.attrNames selector);
+      selectorMatches = labelSelector.matches;
+      # Return true when the label map `selector`, such as a Service's
+      # `spec.selector`, matches `labels`.
+      mapMatches = selector: selectorMatches { matchLabels = selector; };
 
       # --- Allowlists for external references ---
 
@@ -264,7 +265,7 @@ rec {
           selector = svc.spec.selector or { };
         in
         selector == { }
-        || builtins.any (sc: selectorMatchesLabels sc selector) systemComponentSelectors
+        || builtins.any (sc: mapMatches sc selector) systemComponentSelectors
         || operandCrPresent svc;
 
       # --- 1. ServiceAccount references ---
@@ -368,7 +369,8 @@ rec {
           let
             selector = svc.spec.selector or { };
             ns = svc.metadata.namespace or "cluster-scoped";
-            matchesAny = selectsPodsIn ns selector || selectsRefPods ns selector;
+            matchesAny =
+              selectsPodsIn ns { matchLabels = selector; } || selectsRefPods ns { matchLabels = selector; };
           in
           if matchesAny then
             [ ]
@@ -472,23 +474,23 @@ rec {
       ) resources;
 
       # --- 9. Selector consistency ---
-      # A workload's spec.selector.matchLabels must be a subset of its
-      # pod template labels, otherwise the workload will never match its pods.
+      # A workload's spec.selector must match its pod template labels,
+      # otherwise the workload will never match its pods.
 
       selectorConsistencyFailures = builtins.concatMap (
         w:
         let
-          selectorLabels = w.spec.selector.matchLabels or { };
+          selector = w.spec.selector or { };
           templateLabels = w.spec.template.metadata.labels or { };
           ns = w.metadata.namespace or "cluster-scoped";
         in
-        if selectorLabels == { } then
+        if labelSelector.isEmpty selector then
           [ ]
-        else if selectorMatchesLabels selectorLabels templateLabels then
+        else if selectorMatches selector templateLabels then
           [ ]
         else
           [
-            "${w.kind} ${ns}/${w.metadata.name} selector ${builtins.toJSON selectorLabels} does not match pod template labels ${builtins.toJSON templateLabels}"
+            "${w.kind} ${ns}/${w.metadata.name} selector ${builtins.toJSON selector} does not match pod template labels ${builtins.toJSON templateLabels}"
           ]
       ) (builtins.filter (r: builtins.elem r.kind workloadKinds.selectorKinds) resources);
 
@@ -589,11 +591,11 @@ rec {
       networkPolicyFailures = builtins.concatMap (
         np:
         let
-          selector = np.spec.podSelector.matchLabels or { };
+          selector = np.spec.podSelector or { };
           ns = np.metadata.namespace or "cluster-scoped";
         in
         # An empty selector matches all pods in the namespace.
-        if selector == { } then
+        if labelSelector.isEmpty selector then
           [ ]
         else if selectsPodsIn ns selector || selectsRefPods ns selector then
           [ ]
@@ -622,7 +624,7 @@ rec {
             tp != null && builtins.isString tp
           ) svcPorts;
           matchedWorkloads = builtins.filter (
-            w: nsOf w == ns && selectorMatchesLabels selector (getPodLabels w)
+            w: nsOf w == ns && mapMatches selector (getPodLabels w)
           ) workloads;
           containerPortNames = builtins.concatMap (
             w:
@@ -652,19 +654,19 @@ rec {
           ) namedTargetPorts
       ) (builtins.filter (r: r.kind == "Service") resources);
 
-      # Validate that each PodDisruptionBudget `matchLabels` selector matches a
+      # Validate that each PodDisruptionBudget selector matches a
       # workload pod template, a ServiceRef selector, or an `operand-of` custom
       # resource.
 
       pdbFailures = builtins.concatMap (
         pdb:
         let
-          selector = pdb.spec.selector.matchLabels or { };
+          selector = pdb.spec.selector or { };
           ns = pdb.metadata.namespace or "cluster-scoped";
           matchesAny = selectsPodsIn ns selector || selectsRefPods ns selector;
           decl = operandOf pdb;
         in
-        if selector == { } || matchesAny || operandCrPresent pdb then
+        if labelSelector.isEmpty selector || matchesAny || operandCrPresent pdb then
           [ ]
         else if decl != null && builtins.length (lib.splitString "/" decl) != 3 then
           [
@@ -694,7 +696,7 @@ rec {
             svc:
             (svc.metadata.namespace or "cluster-scoped") == ns
             && (svc.spec.selector or { }) != { }
-            && selectorMatchesLabels (svc.spec.selector or { }) podLabels
+            && mapMatches (svc.spec.selector or { }) podLabels
           ) (builtins.filter (r: r.kind == "Service") resources);
         in
         map (

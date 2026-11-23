@@ -26,12 +26,12 @@ This page is maintained alongside `kix/lib/eval/validate.nix`. The test suites i
 | 6 | A `StatefulSet` `serviceName` names a headless `Service` (`clusterIP: None`) in its namespace. | Unset `serviceName` |
 | 7 | No two resources share the same `kind`, `namespace`, and `name`. | |
 | 8 | Every resource carries `app.kubernetes.io/managed-by: kix` in `metadata.labels`. | |
-| 9 | A workload's `selector.matchLabels` is a subset of its pod template labels (`Deployment`, `StatefulSet`, `DaemonSet`, `Job`). | |
+| 9 | A workload's `selector` (`matchLabels` and `matchExpressions`) matches its pod template labels (`Deployment`, `StatefulSet`, `DaemonSet`, `Job`). | |
 | 10 | `Ingress` backends name a `Service` in the same namespace. | |
 | 11 | Every `metadata.namespace` has a corresponding `Namespace` resource in the build. | `_`-prefixed sentinel namespaces used internally for cluster-scoped instances |
 | 12 | A `NetworkPolicy` `podSelector` matches at least one pod template in its namespace. | Empty `podSelector` (`{ }`) |
 | 13 | A named `Service` `targetPort` exists on a container of a selected pod template. | Numeric `targetPort` values; Services that match no pod template in the build |
-| 14 | A `PodDisruptionBudget` `selector.matchLabels` matches at least one pod template in its namespace. | PDBs without `matchLabels`; PDBs carrying `kix.run/operand-of` |
+| 14 | A `PodDisruptionBudget` `selector` matches at least one pod template in its namespace. | PDBs with an empty selector; PDBs carrying `kix.run/operand-of` |
 | 15 | A `Job`'s pod template labels do not satisfy any `Service` selector in its namespace (which would route live service traffic to a batch Job pod). | Services without a selector |
 | 16 | The `kix.run/rerun` annotation appears only on `Job` resources and only with the value `"on-change"`. | |
 | 17 | A workload's `priorityClassName` names a `PriorityClass` in the build. | `system-cluster-critical` and `system-node-critical` |

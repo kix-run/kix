@@ -15,6 +15,7 @@
 let
   inherit (import ../../core/error.nix { inherit lib; }) fail;
   avail = import ../../core/availability.nix { inherit lib; };
+  labelSelector = import ../../core/label-selector.nix { inherit lib; };
   caps = config.cluster.capabilities;
 
   # Labels identifying zone and host failure domains. Clusters with custom
@@ -65,17 +66,15 @@ let
         }
       );
 
-  # Return true when a PodDisruptionBudget's selector is a subset of the
+  # Return true when a PodDisruptionBudget's non-empty selector matches the
   # workload's pod template labels.
   isCoveredBy =
     workloadManifest: pdbManifest:
     let
-      want = pdbManifest.spec.selector.matchLabels or null;
-      have = workloadManifest.spec.template.metadata.labels or { };
+      selector = pdbManifest.spec.selector or { };
     in
-    want != null
-    && want != { }
-    && builtins.all (k: (have.${k} or null) == want.${k}) (builtins.attrNames want);
+    !labelSelector.isEmpty selector
+    && labelSelector.matches selector (workloadManifest.spec.template.metadata.labels or { });
 in
 {
   options = {

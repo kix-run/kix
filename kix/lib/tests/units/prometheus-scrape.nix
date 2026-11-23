@@ -568,58 +568,8 @@ let
   };
 
   show = builtins.toJSON;
-  inherit (import ../../plugins/netpol/scrape.nix { inherit lib; }) matchesSelector;
 in
 {
-  prometheus-scrape-label-selector-semantics =
-    let
-      labels = {
-        team = "apps";
-        tier = "web";
-      };
-      cases = [
-        (matchesSelector { } labels)
-        (matchesSelector { matchLabels.team = "apps"; } labels)
-        (!matchesSelector { matchLabels.team = "platform"; } labels)
-        (matchesSelector {
-          matchExpressions = [
-            {
-              key = "team";
-              operator = "In";
-              values = [
-                "apps"
-                "data"
-              ];
-            }
-            {
-              key = "env";
-              operator = "DoesNotExist";
-            }
-          ];
-        } labels)
-        (
-          !matchesSelector {
-            matchExpressions = [
-              {
-                key = "tier";
-                operator = "NotIn";
-                values = [ "web" ];
-              }
-            ];
-          } labels
-        )
-        (matchesSelector {
-          matchExpressions = [
-            {
-              key = "tier";
-              operator = "Exists";
-            }
-          ];
-        } labels)
-      ];
-    in
-    builtins.all (c: c) cases || throw "label selector cases: ${show cases}";
-
   prometheus-scrape-server-egress-has-dns-and-apiserver =
     let
       p = byName "prometheus-server-server-egress" (cnpsOf (clusterWith { }));
