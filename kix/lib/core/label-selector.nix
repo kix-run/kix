@@ -23,11 +23,18 @@ let
   expressionProblem =
     e:
     if !(builtins.isAttrs e) then
-      "matchExpressions holds ${builtins.toJSON e}, which is not an expression."
-    else if !(builtins.isString (e.key or null)) then
-      "a matchExpressions entry has no key."
-    else if !(builtins.elem (e.operator or null) operators) then
-      "the matchExpressions entry for key '${e.key}' sets operator '${toString (e.operator or "")}', which Kubernetes rejects. Set operator to \"In\", \"NotIn\", \"Exists\", or \"DoesNotExist\"."
+      "matchExpressions contains ${builtins.toJSON e}; each entry must be an object with 'key' and 'operator'. Replace it with an entry that sets 'key' to a label name and 'operator' to \"In\", \"NotIn\", \"Exists\", or \"DoesNotExist\"."
+    else if (e.key or null) == null then
+      "matchExpressions entry ${builtins.toJSON e} is missing 'key'. Set 'key' on that entry to the label name to match."
+    else if !(builtins.isString e.key) then
+      "matchExpressions entry ${builtins.toJSON e} sets 'key' to ${builtins.toJSON e.key}; 'key' must be a string. Set 'key' to the label name."
+    else if (e.operator or null) == null then
+      "the matchExpressions entry for key '${e.key}' is missing 'operator'. Set 'operator' to \"In\", \"NotIn\", \"Exists\", or \"DoesNotExist\"."
+    else if !(builtins.elem e.operator operators) then
+      let
+        shown = if builtins.isString e.operator then "'${e.operator}'" else builtins.toJSON e.operator;
+      in
+      "the matchExpressions entry for key '${e.key}' sets operator ${shown}, which Kubernetes rejects. Set 'operator' to \"In\", \"NotIn\", \"Exists\", or \"DoesNotExist\"."
     else
       null;
 

@@ -12,7 +12,7 @@ Whenever you compile or deploy a cluster, Kix runs 25 cross-resource validation 
 - [Labels and Selectors (Kubernetes docs)](https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/): review how Kubernetes connects Services, NetworkPolicies, and PodDisruptionBudgets to pods using label selectors.
 :::
 
-This page is maintained alongside `kix/lib/eval/validate.nix`. The test suites in `kix/lib/tests/validate.nix` (checks 1 through 18, and 25) and `kix/lib/tests/units/lib-reference-checks.nix` (checks 18 through 24) contain passing and failing cases for each check.
+This page is maintained alongside `kix/lib/eval/validate.nix`. The test suites in `kix/lib/tests/validate.nix` (checks 1 through 18 and check 25) and `kix/lib/tests/units/lib-reference-checks.nix` (checks 18 through 24) contain passing and failing cases for each check.
 
 ## Checks
 
@@ -26,7 +26,7 @@ This page is maintained alongside `kix/lib/eval/validate.nix`. The test suites i
 | 6 | A `StatefulSet` `serviceName` names a headless `Service` (`clusterIP: None`) in its namespace. | Unset `serviceName` |
 | 7 | No two resources share the same `kind`, `namespace`, and `name`. | |
 | 8 | Every resource carries `app.kubernetes.io/managed-by: kix` in `metadata.labels`. | |
-| 9 | A `Deployment`, `StatefulSet`, `DaemonSet`, or `Job` `selector` (`matchLabels` and `matchExpressions`) matches its pod template labels. | |
+| 9 | On a `Deployment`, `StatefulSet`, `DaemonSet`, or `Job`, `spec.selector` (`matchLabels` and `matchExpressions`) matches the pod template labels. | |
 | 10 | `Ingress` backends name a `Service` in the same namespace. | |
 | 11 | Every `metadata.namespace` has a corresponding `Namespace` resource in the build. | `_`-prefixed sentinel namespaces used internally for cluster-scoped instances |
 | 12 | A `NetworkPolicy` `podSelector` matches at least one pod template in its namespace. | Empty `podSelector` (`{ }`) |
@@ -42,9 +42,9 @@ This page is maintained alongside `kix/lib/eval/validate.nix`. The test suites i
 | 22 | Every key a container reads by name from a `Secret` or `ConfigMap` (`secretKeyRef`, `configMapKeyRef`, volume or projected `items[].key`, or the first path segment of a `subPath` mount without `items`) is declared on that `Secret` or present in that `ConfigMap`. | References with `optional = true`; whole-object mounts (`envFrom`, volumes without `items` or `subPath`); names wrapped in `kix.untrackedRef`; Secrets without `kix.run/secret-keys` (such as raw Helm chart Secrets); objects ceding `data`, `binaryData`, or `stringData` via `kix.run/cede-fields` |
 | 23 | At most one `PriorityClass` sets `globalDefault: true`, at most one `StorageClass` carries `storageclass.kubernetes.io/is-default-class: "true"` (or the beta `storageclass.beta.kubernetes.io/is-default-class`), and at most one `IngressClass` carries `ingressclass.kubernetes.io/is-default-class: "true"`. | |
 | 24 | A `Job` does not set `spec.ttlSecondsAfterFinished` (so Kubernetes does not delete finished Jobs behind Kix's back and cause later deploys to re-run them). | `CronJob` `spec.jobTemplate` specs (whose Jobs are created and cleaned up by Kubernetes) |
-| 25 | Every `matchExpressions` entry in the selector of a workload, `NetworkPolicy`, `PodDisruptionBudget`, `ServiceMonitor`, `PodMonitor`, `VMServiceScrape`, or `VMPodScrape` has a `key` and an operator of `In`, `NotIn`, `Exists`, or `DoesNotExist`. Kix treats a selector that fails this check as matching nothing, so checks 9, 12, and 14 skip it. | |
+| 25 | Every `matchExpressions` entry in `spec.selector` (on a `Deployment`, `StatefulSet`, `DaemonSet`, `Job`, `PodDisruptionBudget`, `ServiceMonitor`, `PodMonitor`, `VMServiceScrape`, or `VMPodScrape`) or `spec.podSelector` (on a `NetworkPolicy`) is an object with a string `key` and `operator` set to `In`, `NotIn`, `Exists`, or `DoesNotExist`. Checks 9, 12, and 14 skip selectors that fail this check so an invalid selector is reported once. | |
 
-Failures of checks 9, 12, 14, and 25 start with `[K1895]`, the change record for these checks reading `matchExpressions` as well as `matchLabels`.
+Failures from checks 9, 12, 14, and 25 start with `[K1895]`, the change ID for `matchExpressions` validation in the changelog.
 
 ## Check 18 and deploy-time scope verification
 

@@ -503,7 +503,10 @@ rec {
           [ ]
         else
           [
-            "${w.kind} ${ns}/${w.metadata.name} spec.selector ${builtins.toJSON selector} does not match pod template labels ${builtins.toJSON templateLabels}, so Kubernetes would reject it. Update spec.template.metadata.labels or spec.selector so they match."
+            {
+              message = "${w.kind} ${ns}/${w.metadata.name} spec.selector ${builtins.toJSON selector} does not match pod template labels ${builtins.toJSON templateLabels}. Kubernetes rejects a ${w.kind} whose selector does not match its pod template, so Kix stopped the build.";
+              fix = "Update spec.template.metadata.labels or spec.selector on ${w.kind} ${ns}/${w.metadata.name} so spec.selector matches the pod template labels.";
+            }
           ]
       ) (builtins.filter (r: builtins.elem r.kind workloadKinds.selectorKinds) resources);
 
@@ -992,7 +995,7 @@ rec {
           ns = r.metadata.namespace or "cluster-scoped";
         in
         map (problem: {
-          message = "${r.kind} ${ns}/${r.metadata.name or "unnamed"} spec.${field} is not a valid label selector: ${problem}";
+          message = "${r.kind} ${ns}/${r.metadata.name or "unnamed"} has an invalid label selector in spec.${field}, so Kix stopped the build: ${problem}";
         }) (labelSelector.problems (r.spec.${field} or { }))
       ) (builtins.filter (r: selectorPaths ? ${r.kind or ""}) resources);
 

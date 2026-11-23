@@ -797,7 +797,7 @@ in
 
   v25-selector-operator-is-not-valid =
     onlyFailure
-      "[K1895] PodDisruptionBudget a/bad spec.selector is not a valid label selector: the matchExpressions entry for key 'app' sets operator 'Equals'"
+      "[K1895] PodDisruptionBudget a/bad has an invalid label selector in spec.selector, so Kix stopped the build: the matchExpressions entry for key 'app' sets operator 'Equals'"
       (
         base "a"
         ++ [

@@ -98,7 +98,7 @@ When `scorecard.enable = true` and no error-severity finding aborts evaluation, 
 | `resource` | `string \| null` | Kubernetes object name for `manifest` findings or cluster rules that report a specific resource. |
 | `message` | `string` | Diagnostic message from `check` (defaults to `"check failed"` if omitted). |
 | `tags` | `array of string` | Tags copied from the rule definition. |
-| `id` | `string` | Change record id, such as `"K1895"`, when the rule's `check` returned one with the finding. Kix prints it in brackets before the finding. |
+| `id` | `string` | Optional change ID (such as `"K1895"`) that links the finding to a changelog entry. Present only when `check` sets `id` on the finding; Kix prints it in brackets before the message. |
 
 When a finding resolves to `"error"` (which requires `scorecard.maxSeverity = "error"`), Kix converts it into a failed cluster assertion and stops the build. `kix check -o sarif` exports the scorecard report (or the evaluation failure) in SARIF 2.1.0 format.
 
@@ -208,7 +208,7 @@ Defined in `kix.rules.architecture` (`kix/lib/rules/architecture.nix`). These ru
 | `architecture.controllerRequiresCrds` | `package` | `warning` | When a package renders at least one `CustomResourceDefinition` and at least one `Deployment`, `StatefulSet`, or `DaemonSet`, at least one of those workloads must depend on one of the definitions (through `requires`, `extraDeps`, or string context). Listing the definitions in `root.requires` orders consumers after them, not the controller. |
 | `architecture.untrackedReferences` | `cluster` | `info` | Audits every [`kix.untrackedRef`](/docs/reference/composition-helpers/#facts-and-untrackedref) name that does not identify a creator via `{ kind; name; by; }` or a single-owner `{ name; by = "self"; }`. |
 | `architecture.unsafeGrants` | `package` | `info` | Lists every grant in a package's `meta.unsafe` (`"raw-pvc"`, `"host-network"`, `"privileged"`, `"run-as-root"`, `"cluster-admin"`). |
-| `architecture.distinctWorkloadSelectors` | `package` | `error` | Within a package instance, no `Deployment`, `StatefulSet`, `DaemonSet`, or `Job` may have a `spec.selector` (`matchLabels` and `matchExpressions`) that matches another workload's pod template labels. |
+| `architecture.distinctWorkloadSelectors` | `package` | `error` | Within a package instance, no `Deployment`, `StatefulSet`, `DaemonSet`, or `Job` `spec.selector` (`matchLabels` and `matchExpressions`) may match another workload's pod template labels. |
 | `architecture.consistentPortNames` | `package` | `warning` | A named container port must map to the same port number across all workloads in the same package instance. |
 | `architecture.distinctSameKindLabels` | `package` | `error` | When an instance renders multiple `Service` objects, no Service's `metadata.labels` may be equal to or a subset of another Service's `metadata.labels` (add a distinguishing label such as `app.kubernetes.io/component`). |
 | `architecture.selectorCoherence` | `manifest` | `warning` | Every non-empty `Service` selector must carry Nix dependency context from a workload (for example, via `kix.service.fromWorkload` or `workload.out.selector`), unless the Service carries `kix.run/operand-of`. |
