@@ -49,7 +49,7 @@ configMap = scope.mkResource {
 | `requires` | list of resources | `[ ]` | Explicit deployment dependencies that are not already referenced via `.out` string interpolation inside the manifest. |
 | `extraDeps` | list of resources | `[ ]` | Escape-hatch dependencies used when a dependency does not appear in the manifest and `requires` is not applicable. |
 | `extra` | attrset | `{ }` | Top-level manifest fields for kinds that place configuration outside `spec` (such as `rules`, `roleRef`, `subjects`, `webhooks`, or `provisioner`). |
-| `ownership.cede` | list of strings | `[ ]` | Dot-separated field paths (with optional `[*]`, `[<index>]`, or `[<key>="<value>"]` list selectors) ceded to in-cluster controllers for Server-Side Apply (`kix.run/cede-fields`). |
+| `ownership.cede` | list of strings | `[ ]` | Dot-separated field paths (with optional `[*]`, `[<index>]`, `[<key>="<value>"]`, or `[<key>=<value>,<key>=<value>]` list selectors, as described under [`kix.run/cede-fields`](/docs/reference/annotations-crds-and-receipts/#kixruncede-fields)) ceded to in-cluster controllers for Server-Side Apply (`kix.run/cede-fields`). |
 | `factBehavior` | `{ endpoint?: "conduct" \| "terminate" }` | `{ }` | Overrides how the network-policy engine treats endpoints on custom resources (`"conduct"` forwards traffic to backing pods; `"terminate"` stops at the resource). |
 
 ### Rules on `extra`

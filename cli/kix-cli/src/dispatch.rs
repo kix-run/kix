@@ -421,9 +421,6 @@ pub fn prepare_evaluation(global: &crate::cli::GlobalArgs, cluster: Option<&str>
     }
     // The project's builder decides which Nix every later step runs.
     commands::select_builder(global)?;
-    if let Some(dir) = commands::project_dir(&global.flake) {
-        require_flake(&dir)?;
-    }
     // Stop before any work when Kix has no runtime, or its runtime comes from
     // another release.
     kix::runtime::runtime().map_err(|e| miette::miette!("{e}"))?;
@@ -448,21 +445,6 @@ fn warn_unused_override(global: &crate::cli::GlobalArgs) {
             input = chosen.input
         );
     }
-}
-
-/// Refuse to evaluate `dir` when neither it nor any folder above it holds a
-/// `flake.nix`, because Nix would then stop with an error that does not
-/// mention `--flake`. A `flake.nix` in a folder above `dir` is left to Nix,
-/// which looks for one there itself.
-fn require_flake(dir: &std::path::Path) -> Result<()> {
-    if dir.ancestors().any(|d| d.join("flake.nix").is_file()) {
-        return Ok(());
-    }
-    Err(miette::miette!(
-        "no Kix project found in {dir}: neither it nor any parent directory contains `flake.nix`. Nothing was built or changed.\n\
-         Next: run the command from the directory containing your project's `flake.nix`, or pass `--flake <path>`.",
-        dir = dir.display()
-    ))
 }
 
 /// Refuse a cluster name that [`kix::eval::nix::is_valid_cluster_name`]
@@ -704,28 +686,6 @@ mod tests {
         for path in ["rollback", "gc", "compliance audit", "self", "doctor"] {
             assert!(!reads_output(path), "{path}");
         }
-    }
-
-    #[test]
-    fn a_folder_without_a_flake_is_refused() {
-        let root = tempfile::tempdir().unwrap();
-        let project = root.path().join("prod");
-        std::fs::create_dir(&project).unwrap();
-        // Skip when a folder above the temporary directory holds a flake.
-        if root
-            .path()
-            .ancestors()
-            .any(|d| d.join("flake.nix").is_file())
-        {
-            return;
-        }
-        let err = require_flake(root.path()).unwrap_err().to_string();
-        assert!(err.contains("--flake <path>"), "{err}");
-        std::fs::write(project.join("flake.nix"), "{}").unwrap();
-        assert!(require_flake(&project).is_ok());
-        let clusters = project.join("clusters");
-        std::fs::create_dir(&clusters).unwrap();
-        assert!(require_flake(&clusters).is_ok());
     }
 
     #[test]

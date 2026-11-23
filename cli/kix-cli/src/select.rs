@@ -279,23 +279,23 @@ pub fn auto_install_on(value: Option<&OsStr>) -> bool {
 
 /// Return the Kix the project in `scan` uses, or `None` when the command
 /// reads no local project: `--flake` names a remote flake, or the
-/// directory has no `flake.nix`. Refuse a `KIX_OVERRIDE_INPUT` that `main`
-/// would refuse.
-fn project_kix(scan: &Scan) -> miette::Result<Option<(String, Result<ProjectKix, LockError>)>> {
+/// directory has no `flake.nix`. The Kix is an error when the lock cannot be
+/// read, or when `KIX_OVERRIDE_INPUT` is one that `main` would refuse.
+fn project_kix(scan: &Scan) -> Option<(String, miette::Result<ProjectKix>)> {
     let flake = raw_flake(scan, std::env::var_os("KIX_FLAKE").as_deref());
-    let Some(dir) = crate::commands::project_dir(&flake) else {
-        return Ok(None);
-    };
+    let dir = crate::commands::project_dir(&flake)?;
     if !dir.join("flake.nix").is_file() {
-        return Ok(None);
+        return None;
     }
-    Ok(Some(match input_in(&dir, scan) {
+    Some(match input_in(&dir, scan) {
         Ok(input) => {
-            let kix = flake_lock::project_kix_on(&dir, &overrides(scan)?, &input);
+            let kix = overrides(scan).and_then(|overrides| {
+                flake_lock::project_kix_on(&dir, &overrides, &input).map_err(|e| miette!("{e}"))
+            });
             (input, kix)
         }
-        Err(e) => (flake_lock::INPUT.to_string(), Err(e)),
-    }))
+        Err(e) => (flake_lock::INPUT.to_string(), Err(miette!("{e}"))),
+    })
 }
 
 /// Return the input whose Kix runs the command `scan` found, in the project
@@ -345,7 +345,7 @@ pub fn run(args: &[OsString]) -> miette::Result<Outcome> {
     // A chosen Kix never selects again, so it reads no lock.
     let kix = match selected_by {
         Some(_) => None,
-        None => project_kix(&scan)?,
+        None => project_kix(&scan),
     };
     let input = kix
         .as_ref()
@@ -359,7 +359,7 @@ pub fn run(args: &[OsString]) -> miette::Result<Outcome> {
             eprintln!("  {e}");
             return Ok(Outcome::PrintedVersion);
         }
-        Some(Err(e)) => return Err(miette!("{e}")),
+        Some(Err(e)) => return Err(e),
     };
     // Listing the installs is one directory read, and only a project on a
     // release needs it.
