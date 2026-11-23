@@ -113,12 +113,13 @@
 # Upgrades: n8n migrates its database when a pod starts, and every pod
 # takes a lock in the database first, so only one pod migrates. The
 # Recreate strategy stops the old main pod before the new one starts.
-# Upstream documents no way back to an older version. n8n 2.48.6 adds no
-# database migration to 2.48.5. n8n 2.41.5 and 2.48.5 started on a
-# database that 2.48.6 had migrated and read its workflows, credentials,
-# and executions, so going back from 2.48.6 is deploying the previous
-# package. For a larger step back, restore a database backup taken before
-# the upgrade.
+# Upstream documents no way back to an older version. n8n 2.48.8 adds one
+# database migration to 2.48.6, which gives existing custom instance roles
+# the permission to read the migration report. n8n 2.48.6 started on a
+# database that 2.48.8 had migrated and read its workflows, credentials,
+# and executions, and n8n 2.41.5 did the same on a database from 2.48.6, so
+# going back from 2.48.8 is deploying the previous package. For a larger
+# step back, restore a database backup taken before the upgrade.
 
 {
   scope,
