@@ -111,8 +111,10 @@ same unreleased records, with the version taken from the prerelease.
    Package version bumps leave these files alone until a release. Revert any
    file where only a timestamp changed. Check the remaining diff: every
    change should come from the new Kix version (such as `kix --version`), a
-   package bump, or a change record in this release. Without this step, the
-   Documentation captures check fails on the release pull request.
+   package bump, or a change record in this release. Pull requests that
+   change Kix, the Kix library, or a package leave untouched captures for the
+   release. On the release pull request, the Documentation captures check
+   runs on every capture and fails without this step.
 4. The change records. First read the section they make:
    `scripts/change-records.py changelog`. If a bullet reads wrongly, fix
    the wording in its record. Then run
