@@ -240,7 +240,7 @@ in
         config.image.tag = "2.23.1";
       };
     in
-    (says ''image.tag "2.22.5" is not a RabbitMQ Cluster Operator 2.23 release'' got && fine == [ ])
+    (says ''image.tag "2.22.5" is not a 2.23 release'' got && fine == [ ])
     || throw "rabbitmq-operator image refusal: ${builtins.toJSON { inherit got fine; }}";
 
   # Operator variables the package owns or refuses fail the build; another

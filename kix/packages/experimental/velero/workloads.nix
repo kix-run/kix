@@ -23,7 +23,6 @@ let
     componentLabels
     dataPathLabels
     urlPort
-    checkedRef
     renderPolicy
     withDataPathLabels
     checkCloudCredentials
@@ -372,7 +371,7 @@ in
         containers = [
           {
             name = "velero";
-            image = checkedRef config.image;
+            image = kix.image.ref config.image;
             imagePullPolicy = config.image.pullPolicy;
             command = [ "/velero" ];
             args = [
@@ -450,7 +449,7 @@ in
               containers = [
                 {
                   name = "node-agent";
-                  image = checkedRef config.image;
+                  image = kix.image.ref config.image;
                   imagePullPolicy = config.image.pullPolicy;
                   command = [ "/velero" ];
                   args = [

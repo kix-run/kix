@@ -99,8 +99,6 @@ let
   # meta.version, the default image tags, and the tag in crds/sources.txt
   # and rbac/sources.txt.
   release = "v0.16.0";
-  # builtins.splitVersion would read the `v` as a component of its own.
-  minorOf = v: lib.versions.majorMinor (lib.removePrefix "v" v);
 
   name = scope.instanceName;
   ns = scope.namespaceName;
@@ -150,7 +148,7 @@ let
 in
 {
   meta = {
-    version = lib.removePrefix "v" release;
+    version = release;
     description = "Barman Cloud plugin for CloudNativePG: WAL archiving and base backups to object storage";
     owner = "platform";
     defaultAliases = [ "barmanCloud" ];
@@ -168,20 +166,23 @@ in
 
   assertions =
     { config, ... }:
-    let
-      imageTag = builtins.unsafeDiscardStringContext config.image.tag;
-      sidecarTag = builtins.unsafeDiscardStringContext config.sidecar.image.tag;
-    in
     [
-      {
-        assertion = minorOf imageTag == minorOf release;
-        message = "image.tag \"${imageTag}\" is not a plugin-barman-cloud ${minorOf release} release, and the definition under kix/packages/experimental/cnpg-barman-cloud/crds and the roles under rbac are vendored from ${release}. Set image.tag to a ${minorOf release}.x tag, or move the package to another release as its header describes.";
+      (kix.image.checkRelease {
+        inherit (config) image;
+        inherit release;
+        reason = "the definition under kix/packages/experimental/cnpg-barman-cloud/crds and the roles under rbac are vendored from plugin-barman-cloud ${release}";
+        fix = "To move the package to another release, follow its header.";
+      })
+    ]
+    # A sidecar that keeps image.tag is covered by the check on image.tag.
+    ++ lib.optional (config.sidecar.image.tag != config.image.tag) (
+      kix.image.checkRelease {
+        inherit (config.sidecar) image;
+        option = "sidecar.image";
+        inherit release;
+        reason = "the plugin expects the sidecar of its own release, plugin-barman-cloud ${release}";
       }
-      {
-        assertion = minorOf sidecarTag == minorOf release;
-        message = "sidecar.image.tag \"${sidecarTag}\" is not a plugin-barman-cloud ${minorOf release} release, and the plugin expects the sidecar of its own release. Set sidecar.image.tag to a ${minorOf release}.x tag, or leave it to follow image.tag.";
-      }
-    ];
+    );
 
   options = {
     image = kix.options.image {

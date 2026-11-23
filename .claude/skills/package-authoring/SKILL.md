@@ -304,8 +304,11 @@ the defaults fails there.
   has a `meta.version` and an image the user can change (I11). Read the
   image of the main software, never a helper's (I12). The PackageInstance
   record, `kix plan`, and a consumer's `compatibleWith` check then report
-  what the instance runs. `meta.version` is the default release, without a
-  `v` prefix (M2).
+  what the instance runs. `meta.version` is the default release as upstream
+  tags it, and Kix drops a leading `v` when it reads it (M2).
+- When the package vendors CRDs or RBAC from `release`, put
+  `kix.image.checkRelease` in `assertions` for each image of that release
+  (C8).
 
 ### 6. Secrets
 
@@ -444,6 +447,7 @@ The only place in this skill with package line numbers. `pkg:N` is
 | Release binding, digest, `who`, `startupSeconds` in one `let` | metabase:89-97 |
 | Shared release file for a release group | `immich/release.nix`, immich:121 |
 | Running version published from the image (`out.version`) | echo-server:228; among several images, valkey |
+| Image tag checked against the vendored release (`kix.image.checkRelease`) | cnpg-operator:237 |
 | Follower image tag with `tagText` and `mkDefault` | n8n:268-275, 308 |
 | `kix.contracts.secret.helpers.use`, read through the binding | metabase:158-163, 208, 264 |
 | `mergeEnv` defaults and owned groups | metabase:168-232 |

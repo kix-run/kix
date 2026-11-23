@@ -150,7 +150,7 @@ let
 in
 {
   meta = {
-    version = lib.removePrefix "v" release;
+    version = release;
     description = "Traefik proxy as a Gateway API implementation (GatewayClass, Gateway, and data plane)";
     owner = "platform";
     defaultAliases = [ "gateway" ];

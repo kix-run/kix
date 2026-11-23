@@ -225,7 +225,24 @@ in
         assertion = builtins.length defaultSnapshotClasses <= 1;
         message = "volumeSnapshotClasses ${lib.concatStringsSep " and " defaultSnapshotClasses} are each annotated snapshot.storage.kubernetes.io/is-default-class=\"true\". A VolumeSnapshot that names no class then fails, because the snapshot controller refuses to choose between two defaults for one driver. Keep the annotation on one class.";
       }
-    ];
+    ]
+    # A follower that keeps image.tag is covered by the check on image.tag.
+    ++
+      map
+        (
+          option:
+          kix.image.checkRelease {
+            image = lib.getAttrFromPath (lib.splitString "." option) config;
+            inherit option;
+            release = "v${release}";
+            reason = "the DiskPool CRD version and the RBAC in kix/packages/experimental/mayastor are written for ${release}";
+            fix = "To move to another release, change release in kix/packages/experimental/mayastor/common.nix.";
+          }
+        )
+        (
+          [ "image" ]
+          ++ map (f: "${f}.image") (builtins.filter (f: config.${f}.image.tag != config.image.tag) followers)
+        );
 
   warnings =
     { config, ... }:

@@ -354,12 +354,13 @@ Kix models cluster availability across four ordered levels: `"none"` < `"pod"` <
 
 Packages can read `clusterConfig.k8sVersion` in `build` and compare it against a version bound to omit flags, collectors, or RBAC rules that older Kubernetes releases do not support.
 
-### `kix.version.atLeast` and `kix.version.atMost`
+### `kix.version.atLeast`, `kix.version.atMost`, and `kix.version.ofTag`
 
 | Function | Signature | Behavior |
 | --- | --- | --- |
 | `kix.version.atLeast` | `version -> bound -> bool or null` | Returns `true` when `version` is `bound` or newer, `false` when older, or `null` when `version` is too imprecise to tell. |
 | `kix.version.atMost` | `version -> bound -> bool or null` | Returns `true` when `version` is `bound` or older, `false` when newer, or `null` when `version` is too imprecise to tell. |
+| `kix.version.ofTag` | `string -> string or null` | Returns the version a tag names, as `kix.image.version` does for an image: `"v1.156.0-cluster"` gives `"1.156.0"`. Use it for a tag that is not part of an image option, such as a version field of a custom resource. |
 
 Both functions compare up to the segment precision of `bound` (using the [version rules](/docs/reference/package-anatomy/#metaversion)), so `kix.version.atLeast "1.36.2" "1.36"` and `kix.version.atMost "1.36.2" "1.36"` both return `true`. When `version` has fewer numeric segments than `bound` and matches its prefix (such as `"1.36"` against `"1.36.2"`), both return `null`; if an earlier segment already differs (such as `"1.35"` against `"1.36.2"`), they still return `true` or `false`.
 
@@ -374,7 +375,7 @@ served = k8sVersion == null || kix.version.atLeast k8sVersion "1.36" != false;
 
 ## Image and pin helpers
 
-### `kix.image.ref`, `kix.image.version`, and `kix.image.isPinned`
+### `kix.image.ref`, `kix.image.version`, `kix.image.isPinned`, and `kix.image.checkRelease`
 
 Pair `kix.options.image` in `options` with `kix.image.ref` in container specs:
 
@@ -388,6 +389,22 @@ imagePullPolicy = config.image.pullPolicy;
 | `kix.image.ref` | `{ repository, tag, digest ? null, ... } -> string` | Formats a container image reference from an image attribute set. Both `repository` and `tag` are required and must be non-empty strings (throws an evaluation error if either is missing or `""`). Renders `"${repository}:${tag}@${digest}"` when `digest` is non-null, or `"${repository}:${tag}"` when `digest` is `null`. |
 | `kix.image.version` | `{ tag ? null, ... } -> string or null` | Returns the version the image's tag names, without a leading `v`, a digest, or a vendor suffix: `"v1.37.1-alpine"` gives `"1.37.1"`. A pre-release suffix stays: `"2.0.0-rc1"` gives `"2.0.0-rc1"`. Returns `null` when the tag names no version, such as `"latest"`. A package publishes the result as `out.version` so that an instance reports the version it runs. |
 | `kix.image.isPinned` | `{ digest ? null, ... } -> bool` | Takes an image attribute set and returns `true` when `image.digest` is non-null (`(image.digest or null) != null`). |
+| `kix.image.checkRelease` | `{ image, release, reason, option ? "image", also ? [ ], fix ? null } -> assertion` | Returns an assertion for the package's `assertions` list. The assertion holds when the image's tag has the major.minor of `release`, or of a minor listed in `also` (such as `"1.9"`), and starts with `v` exactly when `release` does. `option` is the path of the image option, used in the message. `reason` says what the release fixes, such as `"the CRDs under crds are vendored from ${release}"`. The fix tells the user to set a tag such as `release` and then adds `fix`, which can say how to move the package to another release. |
+
+A package that vendors CRDs or RBAC rules from one upstream release checks each image that runs that release:
+
+```nix
+assertions =
+  { config, ... }:
+  [
+    (kix.image.checkRelease {
+      inherit (config) image;
+      inherit release;
+      reason = "the CRDs under kix/packages/experimental/velero/crds are vendored from ${release}";
+      fix = "To move to another release, change release and run uv run scripts/vendor-crds.py velero.";
+    })
+  ];
+```
 
 ### `kix.pins`
 

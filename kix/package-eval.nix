@@ -683,16 +683,12 @@ let
           inherit (kix) kixlib;
         }).version or null;
       ok = version == null || versions.isVersion version;
-      # `kix.image.version` returns a version without a leading `v`, and
-      # `meta.version` is written the same way so both read alike.
-      bare = version == null || !(lib.hasPrefix "v" version || lib.hasPrefix "V" version);
     in
     if versionExceptions ? ${name} then
       lib.assertMsg (!ok)
         "${folderOf name}: meta.version ${builtins.toJSON version} is a version now; remove it from versionExceptions in kix/package-eval.nix and update ${versionExceptions.${name}}"
     else
-      lib.assertMsg ok "${folderOf name}: meta.version ${builtins.toJSON version} is not a version. Use the upstream release the package targets, e.g. \"1.19.6\"."
-      && lib.assertMsg bare "${folderOf name}: meta.version ${builtins.toJSON version} starts with \"v\". Write it without, e.g. `version = lib.removePrefix \"v\" release;`.";
+      lib.assertMsg ok "${folderOf name}: meta.version ${builtins.toJSON version} is not a version. Use the upstream release the package targets, e.g. \"1.19.6\".";
 
   # Collect the image options of an instance's config: every attribute set
   # with a `repository` and a `tag`, up to three levels deep.

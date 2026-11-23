@@ -107,7 +107,6 @@ let
   # meta.version, the default image.tag, and the tag in crds/sources.txt and
   # rbac/sources.txt.
   release = "2.23.3";
-  minorOf = lib.versions.majorMinor;
 
   name = scope.instanceName;
   ns = scope.namespaceName;
@@ -178,14 +177,13 @@ in
 
   assertions =
     { config, ... }:
-    let
-      imageTag = builtins.unsafeDiscardStringContext config.image.tag;
-    in
     [
-      {
-        assertion = minorOf imageTag == minorOf release;
-        message = "image.tag \"${imageTag}\" is not a RabbitMQ Cluster Operator ${minorOf release} release, and the definition under kix/packages/experimental/rabbitmq-operator/crds and the roles under rbac are vendored from ${release}. Set image.tag to a ${minorOf release}.x tag, or move the package to another release as its header describes.";
-      }
+      (kix.image.checkRelease {
+        inherit (config) image;
+        inherit release;
+        reason = "the definition under kix/packages/experimental/rabbitmq-operator/crds and the roles under rbac are vendored from RabbitMQ Cluster Operator ${release}";
+        fix = "To move the package to another release, follow its header.";
+      })
     ];
 
   options = {

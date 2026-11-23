@@ -99,7 +99,7 @@ let
 in
 {
   meta = {
-    version = lib.removePrefix "v" release;
+    version = release;
     description = "cert-manager: X.509 certificate management for Kubernetes";
     owner = "platform";
     defaultAliases = [ "certManager" ];
@@ -277,6 +277,35 @@ in
 
     metrics = kix.options.monitor;
   };
+
+  # The CRDs and RBAC are vendored from `release`, and a component of
+  # another minor release may need objects or permissions this package does
+  # not render. A component that keeps the controller's tag is covered by
+  # the check on `image.tag`.
+  assertions =
+    { config, ... }:
+    map
+      (
+        option:
+        kix.image.checkRelease {
+          image = lib.getAttrFromPath (lib.splitString "." option) config;
+          inherit option release;
+          reason = "the CRDs and RBAC in kix/packages/experimental/cert-manager are vendored from ${release}";
+          fix = "To move the package to another release, change release in kix/packages/experimental/cert-manager/common.nix and run uv run scripts/vendor-crds.py cert-manager.";
+        }
+      )
+      (
+        [ "image" ]
+        ++
+          builtins.filter
+            (option: (lib.getAttrFromPath (lib.splitString "." option) config).tag != config.image.tag)
+            [
+              "webhook.image"
+              "cainjector.image"
+              "startupapicheck.image"
+              "operandImages.acmesolver"
+            ]
+      );
 
   # A component's tag follows the controller's `image.tag` unless the
   # instance sets that component's tag itself.

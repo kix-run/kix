@@ -65,7 +65,7 @@ in
 
 {
   meta = {
-    version = lib.removePrefix "v" release;
+    version = release;
     description = "VictoriaMetrics Operator: operator.victoriametrics.com CRD controller";
     owner = "platform";
     defaultAliases = [

@@ -86,24 +86,6 @@ let
       usesAtLeast = _: { };
     };
 
-  # The CRDs come from `release`; a controller of another minor release may
-  # not serve the same schema.
-  minorOf = tag: builtins.match "v?([0-9]+)\\.([0-9]+)\\..*" tag;
-  releaseMinor = minorOf release;
-  checkedRef =
-    image:
-    let
-      tag = builtins.unsafeDiscardStringContext image.tag;
-    in
-    if minorOf tag != releaseMinor then
-      scope.fail {
-        package = "snapshot-controller";
-        option = "image.tag";
-        message = "image.tag \"${tag}\" is not a ${lib.concatStringsSep "." releaseMinor} release, and the CRDs under kix/packages/experimental/snapshot-controller/crds are vendored from v${release}.";
-        fix = "To move to another release, change release in kix/packages/experimental/snapshot-controller/default.nix and run uv run scripts/vendor-crds.py snapshot-controller.";
-      }
-    else
-      kix.image.ref image;
 in
 {
   meta = {
@@ -120,6 +102,19 @@ in
       reason = "external-snapshotter v${release} supports Kubernetes 1.25 and later";
     };
   };
+
+  # The CRDs come from `release`, and a controller of another minor release
+  # may not serve the same schema.
+  assertions =
+    { config, ... }:
+    [
+      (kix.image.checkRelease {
+        inherit (config) image;
+        release = "v${release}";
+        reason = "the CRDs under kix/packages/experimental/snapshot-controller/crds are vendored from v${release}";
+        fix = "To move to another release, change release in kix/packages/experimental/snapshot-controller/default.nix and run uv run scripts/vendor-crds.py snapshot-controller.";
+      })
+    ];
 
   options = {
     image = kix.options.image {
@@ -254,7 +249,7 @@ in
               containers = [
                 {
                   name = "snapshot-controller";
-                  image = checkedRef config.image;
+                  image = kix.image.ref config.image;
                   imagePullPolicy = config.image.pullPolicy;
                   inherit args;
                   env = kix.mkEnvVars (kix.mergeEnv { inherit who; } config.env);

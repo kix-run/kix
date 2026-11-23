@@ -64,7 +64,7 @@ in
         containers = [
           {
             name = "agent-core";
-            image = c.imageRef config.agentCore.image;
+            image = kix.image.ref config.agentCore.image;
             imagePullPolicy = config.agentCore.image.pullPolicy;
             args = c.args {
               option = "agentCore.extraArgs";
@@ -94,7 +94,7 @@ in
           }
           {
             name = "agent-ha-cluster";
-            image = c.imageRef config.agentHaCluster.image;
+            image = kix.image.ref config.agentHaCluster.image;
             imagePullPolicy = config.agentHaCluster.image.pullPolicy;
             args = c.args {
               option = "agentHaCluster.extraArgs";
@@ -169,7 +169,7 @@ in
           containers = [
             {
               name = "api-rest";
-              image = c.imageRef config.apiRest.image;
+              image = kix.image.ref config.apiRest.image;
               imagePullPolicy = config.apiRest.image.pullPolicy;
               # --dummy-certificates serves the HTTPS listener (8080), which
               # the package does not expose, with built-in certificates.
@@ -227,7 +227,7 @@ in
         containers = [
           {
             name = "operator-diskpool";
-            image = c.imageRef config.operatorDiskpool.image;
+            image = kix.image.ref config.operatorDiskpool.image;
             imagePullPolicy = config.operatorDiskpool.image.pullPolicy;
             args = c.args {
               option = "operatorDiskpool.extraArgs";
@@ -278,7 +278,7 @@ in
         containers = [
           {
             name = "csi-controller";
-            image = c.imageRef config.csiController.image;
+            image = kix.image.ref config.csiController.image;
             imagePullPolicy = config.csiController.image.pullPolicy;
             args = c.args {
               option = "csiController.extraArgs";

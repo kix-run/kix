@@ -119,22 +119,16 @@ let
   # kubevirt-cdi-sources-match-release).
   release = "v1.10.0";
 
-  # "v1.9.1" -> "v1.9"; null for a tag that is not a vX.Y release.
-  # Upstream tags every release with the leading v.
-  minorOf =
-    tag: lib.mapNullable (m: "v${builtins.head m}") (builtins.match "v([0-9]+\\.[0-9]+)(\\..*)?" tag);
-
-  # Minors image.tag may name: the release's own, and the older steps of
+  # Minors image.tag may name besides the release's own: the older steps of
   # upstream's update path, so that a cluster can walk up one minor per
   # deploy. A minor belongs here only while the vendored CRD and roles hold
   # every field and rule it uses. Check that when `release` moves.
-  acceptedMinors = [
-    "v1.5"
-    "v1.6"
-    "v1.7"
-    "v1.8"
-    "v1.9"
-    (minorOf release)
+  olderMinors = [
+    "1.5"
+    "1.6"
+    "1.7"
+    "1.8"
+    "1.9"
   ];
 
   name = scope.instanceName;
@@ -227,7 +221,7 @@ let
 in
 {
   meta = {
-    version = lib.removePrefix "v" release;
+    version = release;
     description = "KubeVirt, for running virtual machines on Kubernetes: virt-operator and a KubeVirt resource";
     owner = "platform";
     defaultAliases = [ "kubevirt" ];
@@ -266,14 +260,14 @@ in
 
   assertions =
     { config, ... }:
-    let
-      imageTag = builtins.unsafeDiscardStringContext config.image.tag;
-    in
     [
-      {
-        assertion = builtins.elem (minorOf imageTag) acceptedMinors;
-        message = "image.tag \"${imageTag}\" is not a ${lib.concatStringsSep ", " acceptedMinors} release (upstream tags look like ${release}), and the CRD and roles under kix/packages/experimental/kubevirt/{crds,rbac} are vendored from ${release}. Remove image.tag or set a tag of one of those minors. To move to another release, change release in kix/packages/experimental/kubevirt/default.nix and the tag in crds/sources.txt and rbac/sources.txt, then run uv run scripts/vendor-crds.py kubevirt.";
-      }
+      (kix.image.checkRelease {
+        inherit (config) image;
+        inherit release;
+        also = olderMinors;
+        reason = "the CRD and roles under kix/packages/experimental/kubevirt/{crds,rbac} are vendored from ${release}";
+        fix = "To move to another release, change release in kix/packages/experimental/kubevirt/default.nix and the tag in crds/sources.txt and rbac/sources.txt, then run uv run scripts/vendor-crds.py kubevirt.";
+      })
     ]
     ++ map (n: {
       assertion = config.operandImages.${n}.pullPolicy == null;

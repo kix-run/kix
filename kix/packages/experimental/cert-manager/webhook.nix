@@ -167,12 +167,7 @@ in
           containers = [
             {
               name = "cert-manager-webhook";
-              image = kix.image.ref (
-                common.checkRelease who config [
-                  "webhook"
-                  "image"
-                ]
-              );
+              image = kix.image.ref config.webhook.image;
               imagePullPolicy = config.webhook.image.pullPolicy;
               args = [
                 "--v=2"

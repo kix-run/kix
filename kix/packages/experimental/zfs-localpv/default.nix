@@ -63,23 +63,6 @@ let
 
   vendored = file: (builtins.fromJSON (builtins.readFile ./crds/${file})).spec;
 
-  minorOf = tag: builtins.match "v?([0-9]+)\\.([0-9]+)\\..*" tag;
-  releaseMinor = minorOf release;
-  checkedRef =
-    image:
-    let
-      tag = builtins.unsafeDiscardStringContext image.tag;
-    in
-    if minorOf tag != releaseMinor then
-      scope.fail {
-        package = "zfs-localpv";
-        option = "image.tag";
-        message = "image.tag \"${tag}\" is not a ${lib.concatStringsSep "." releaseMinor} release, and the CRDs under kix/packages/experimental/zfs-localpv/crds are vendored from ${release}.";
-        fix = "To move to another release, change release in kix/packages/experimental/zfs-localpv/default.nix and run uv run scripts/vendor-crds.py zfs-localpv.";
-      }
-    else
-      kix.image.ref image;
-
   defaultVscs =
     classes:
     builtins.filter (n: (classes.${n}.annotations.${vscDefaultAnnotation} or null) == "true") (
@@ -135,23 +118,32 @@ in
               if t.effect == null then "null" else t.effect
             }; tolerationSeconds applies only to effect NoExecute. Set effect = \"NoExecute\", or remove tolerationSeconds.";
     in
-    map
-      (message: {
-        assertion = false;
-        inherit message;
+    [
+      (kix.image.checkRelease {
+        inherit (config) image;
+        inherit release;
+        reason = "the CRDs under kix/packages/experimental/zfs-localpv/crds are vendored from ${release}";
+        fix = "To move to another release, change release in kix/packages/experimental/zfs-localpv/default.nix and run uv run scripts/vendor-crds.py zfs-localpv.";
       })
-      (
-        lib.optional (vscNames != [ ] && (deps.snapshotController or null) == null)
-          "volumeSnapshotClasses defines ${lib.concatStringsSep ", " vscNames}, but nothing provides the snapshotController role, so the VolumeSnapshotClass kind has no owner. Add a snapshot-controller instance; on a cluster whose environment runs the controller, use its flavour (rke2 provides the role) or a kix.mkImport with roles = [ \"snapshotController\" ] and its crds; or remove volumeSnapshotClasses."
-        ++
-          lib.optional (builtins.length defaults > 1)
-            "config.volumeSnapshotClasses.${builtins.elemAt defaults 0} and config.volumeSnapshotClasses.${builtins.elemAt defaults 1} are both annotated ${vscDefaultAnnotation}=\"true\". A VolumeSnapshot that names no class then fails, because the snapshot controller does not choose between two defaults for one driver. Keep the annotation on one class."
-        ++ map (
-          n:
-          "config.volumeSnapshotClasses.${n}: kix drops parts named root or meta, so this VolumeSnapshotClass would not be rendered. Rename it."
-        ) (builtins.filter (n: n == "root" || n == "meta") vscNames)
-        ++ lib.concatLists (lib.imap0 tolerationProblems config.node.tolerations)
-      );
+    ]
+    ++
+      map
+        (message: {
+          assertion = false;
+          inherit message;
+        })
+        (
+          lib.optional (vscNames != [ ] && (deps.snapshotController or null) == null)
+            "volumeSnapshotClasses defines ${lib.concatStringsSep ", " vscNames}, but nothing provides the snapshotController role, so the VolumeSnapshotClass kind has no owner. Add a snapshot-controller instance; on a cluster whose environment runs the controller, use its flavour (rke2 provides the role) or a kix.mkImport with roles = [ \"snapshotController\" ] and its crds; or remove volumeSnapshotClasses."
+          ++
+            lib.optional (builtins.length defaults > 1)
+              "config.volumeSnapshotClasses.${builtins.elemAt defaults 0} and config.volumeSnapshotClasses.${builtins.elemAt defaults 1} are both annotated ${vscDefaultAnnotation}=\"true\". A VolumeSnapshot that names no class then fails, because the snapshot controller does not choose between two defaults for one driver. Keep the annotation on one class."
+          ++ map (
+            n:
+            "config.volumeSnapshotClasses.${n}: kix drops parts named root or meta, so this VolumeSnapshotClass would not be rendered. Rename it."
+          ) (builtins.filter (n: n == "root" || n == "meta") vscNames)
+          ++ lib.concatLists (lib.imap0 tolerationProblems config.node.tolerations)
+        );
 
   build =
     {
@@ -374,7 +366,7 @@ in
             ++ [
               {
                 name = "zfs-plugin";
-                image = checkedRef config.image;
+                image = kix.image.ref config.image;
                 imagePullPolicy = config.image.pullPolicy;
                 args = [
                   "--endpoint=$(OPENEBS_CSI_ENDPOINT)"
@@ -489,7 +481,7 @@ in
                 }
                 {
                   name = "zfs-plugin";
-                  image = checkedRef config.image;
+                  image = kix.image.ref config.image;
                   imagePullPolicy = config.image.pullPolicy;
                   args = [
                     "--nodename=$(OPENEBS_NODE_NAME)"

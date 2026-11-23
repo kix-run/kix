@@ -11,6 +11,7 @@
 
 {
   lib,
+  kixlib,
   kixKeys,
   mkCluster,
   netpolOn,
@@ -34,7 +35,7 @@ let
   arcAlone = arcPackage {
     inherit lib;
     scope = { };
-    kix = { };
+    kix = kixlib;
     availability = "none";
   };
 
@@ -211,8 +212,9 @@ in
   # share the release's major.minor.
   arc-image-tag =
     let
-      check = tag: builtins.head (arcAlone.assertions { config.image.tag = tag; });
-      accepted = tag: (check tag).assertion;
+      checks = tag: arcAlone.assertions { config.image = { inherit tag; }; };
+      check = tag: builtins.head (checks tag);
+      accepted = tag: builtins.all (a: a.assertion) (checks tag);
       unparsable =
         tag:
         !(check tag).assertion
@@ -220,9 +222,12 @@ in
         .message;
       otherMinor =
         tag:
-        !(check tag).assertion
-        && lib.hasPrefix "image.tag \"${tag}\" is not a 0.15 release, and the CRDs under kix/packages/experimental/arc/crds are vendored from 0.15.1." (check tag)
-        .message;
+        let
+          a = builtins.elemAt (checks tag) 1;
+        in
+        (check tag).assertion
+        && !a.assertion
+        && lib.hasPrefix "image.tag \"${tag}\" is not a 0.15 release, and the CRDs under kix/packages/experimental/arc/crds are vendored from 0.15.1." a.message;
     in
     (
       builtins.all accepted [
@@ -244,7 +249,7 @@ in
     )
     || throw "arc image tag: ${
       builtins.toJSON (
-        map check [
+        map checks [
           "0.15.1"
           "v0.15.1"
           "0.16.0"

@@ -87,6 +87,25 @@ let
       builtins.elemAt m 0
       + lib.optionalString (suffix != null && prereleaseOf suffix != [ ]) "-${suffix}";
 
+  # Return `v` without its leading `v` or `V` when `v` is a version, and
+  # return any other value unchanged. Kix reports `meta.version` this way,
+  # so a package can set it to an upstream tag such as `v1.19.6`.
+  bare =
+    v:
+    if isVersion v && builtins.match "[vV].*" v != null then
+      builtins.substring 1 (builtins.stringLength v) v
+    else
+      v;
+
+  # Return the major and minor numbers of a version, such as [ 1 19 ] for
+  # `v1.19.6`, or null when `v` is not a version or names no minor.
+  minorOf =
+    v:
+    let
+      parsed = tryParse v;
+    in
+    if parsed == null || builtins.length parsed.core < 2 then null else lib.take 2 parsed.core;
+
   # Return `tag` with the version it names replaced by `version`, or null
   # when `tag` names none. The leading `v`, a vendor suffix, and a `+build`
   # stay as they are, so `retag "v1.30.6-alpine" "1.30.8"` gives
@@ -237,6 +256,8 @@ in
     parse
     ofTag
     retag
+    bare
+    minorOf
     compare
     atLeast
     atMost

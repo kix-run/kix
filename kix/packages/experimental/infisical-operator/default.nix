@@ -184,10 +184,6 @@ let
     };
   };
 
-  # "v0.11.3" -> [ "0" "11" ".3" ]; null when the tag is not a version.
-  versionParts = tag: builtins.match "v?([0-9]+)\\.([0-9]+)(\\..*)?" tag;
-  releaseMinor = lib.take 2 (versionParts release);
-
   # The operator trims a trailing "/" and then "/api" from the address and
   # appends "/api" for API calls. The package does the same, so the default
   # connection and INFISICAL_HOST_API agree.
@@ -205,7 +201,7 @@ let
 in
 {
   meta = {
-    version = lib.removePrefix "v" release;
+    version = release;
     description = "Infisical Kubernetes operator, which syncs secrets between Infisical and Kubernetes Secrets";
     owner = "platform";
     defaultAliases = [ "infisicalOperator" ];
@@ -243,14 +239,13 @@ in
 
   assertions =
     { config, ... }:
-    let
-      imageTag = builtins.unsafeDiscardStringContext config.image.tag;
-    in
     [
-      {
-        assertion = versionParts imageTag != null && lib.take 2 (versionParts imageTag) == releaseMinor;
-        message = "image.tag \"${imageTag}\" is not a v${lib.concatStringsSep "." releaseMinor} release, and the CRDs and RBAC in kix/packages/experimental/infisical-operator are from ${release}. Remove image.tag or set a v${lib.concatStringsSep "." releaseMinor} tag. To move the package to another release, change release in default.nix and the tag in crds/sources.txt, run uv run scripts/vendor-crds.py infisical-operator, and compare the manager ClusterRole with config/rbac/role.yaml at the new tag.";
-      }
+      (kix.image.checkRelease {
+        inherit (config) image;
+        inherit release;
+        reason = "the CRDs and RBAC in kix/packages/experimental/infisical-operator are from ${release}";
+        fix = "To move the package to another release, change release in default.nix and the tag in crds/sources.txt, run uv run scripts/vendor-crds.py infisical-operator, and compare the manager ClusterRole with config/rbac/role.yaml at the new tag.";
+      })
       {
         assertion = sourceUrls != [ ] && lib.all (lib.hasInfix "/${release}/") sourceUrls;
         message = "kix/packages/experimental/infisical-operator/crds/sources.txt fetches CRDs from a tag other than ${release}, the package's release. Set the tag in every URL to ${release} and run uv run scripts/vendor-crds.py infisical-operator.";

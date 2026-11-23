@@ -75,6 +75,60 @@ rec {
 
       # Return true when `image.digest` is present and non-null.
       isPinned = image: (image.digest or null) != null;
+
+      # Return an assertion that the image's tag names the major.minor of
+      # `release`, or one of the minors in `also` (such as "1.9"), and has
+      # the leading `v` exactly when `release` has one. A package puts it
+      # in `assertions` for each image whose files it vendors from
+      # `release`. `reason` says what the release binds, and `fix` says how
+      # to move the package to another release.
+      checkRelease =
+        {
+          image,
+          release,
+          reason,
+          option ? "image",
+          also ? [ ],
+          fix ? null,
+        }:
+        let
+          tag = builtins.unsafeDiscardStringContext (needField image "tag");
+          releaseMinor = versions.minorOf release;
+          prefix = if builtins.match "[vV].*" release == null then "" else builtins.substring 0 1 release;
+          minorText = m: prefix + lib.concatMapStringsSep "." toString m;
+          accepted = map versions.minorOf also ++ [ releaseMinor ];
+          acceptedText =
+            let
+              texts = map minorText accepted;
+              n = builtins.length texts;
+            in
+            if n == 1 then
+              builtins.head texts
+            else
+              lib.concatStringsSep ", " (lib.take (n - 1) texts) + ", or ${lib.last texts}";
+          sameForm = (builtins.match "[vV].*" tag != null) == (prefix != "");
+          tagMinor = versions.minorOf tag;
+          path = "${option}.tag";
+        in
+        if releaseMinor == null || builtins.elem null accepted then
+          fail {
+            message = "kix.image.checkRelease: release ${builtins.toJSON release} and also ${builtins.toJSON also} must each name a major.minor version.";
+          }
+        else
+          {
+            assertion = sameForm && builtins.elem tagMinor accepted;
+            option = path;
+            message =
+              if tagMinor != null && builtins.elem tagMinor accepted then
+                "${path} \"${tag}\" ${
+                  if prefix == "" then "starts with \"v\"" else "has no leading \"v\""
+                }, and upstream tags this image like ${release}."
+              else
+                "${path} \"${tag}\" is not a ${acceptedText} release, and ${reason}.";
+            fix =
+              "Set ${path} to a tag such as ${release}, or remove it."
+              + lib.optionalString (fix != null) " ${fix}";
+          };
     };
 
   port = name: containerPort: {

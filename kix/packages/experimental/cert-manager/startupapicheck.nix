@@ -14,7 +14,6 @@
 let
   common = import ./common.nix { inherit lib; };
   name = scope.instanceName;
-  who = common.who scope;
   labels = (common.labels name).startupapicheck;
 
   inherit (scope.rbac)
@@ -82,12 +81,7 @@ in
           containers = [
             {
               name = "cert-manager-startupapicheck";
-              image = kix.image.ref (
-                common.checkRelease who config [
-                  "startupapicheck"
-                  "image"
-                ]
-              );
+              image = kix.image.ref config.startupapicheck.image;
               imagePullPolicy = config.startupapicheck.image.pullPolicy;
               args = [
                 "check"

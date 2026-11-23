@@ -104,7 +104,7 @@ let
 in
 {
   meta = {
-    version = lib.removePrefix "v" release;
+    version = release;
     description = "VictoriaMetrics alerting: VMAlert and VMAlertmanager";
     owner = "platform";
     defaultAliases = [ "vmAlert" ];

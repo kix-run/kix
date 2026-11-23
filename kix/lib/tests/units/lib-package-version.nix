@@ -16,6 +16,8 @@
 }:
 
 let
+  packageLib = import ../../core/package.nix { inherit lib; };
+
   # A ConfigMap package. `meta.version` and `out.version` are set only when
   # given, so the record sees the same shapes real packages produce.
   # `unreadableImage` publishes a null `out.version`, as a package does for
@@ -240,4 +242,95 @@ in
       };
     in
     (spec.version or null) == "pinned" || throw "spec: ${builtins.toJSON spec}";
+
+  # Kix reads `meta.version` without a leading `v`, so a package can set it
+  # to the upstream tag. The record, the catalog, and `compatibleWith` all
+  # see the bare version.
+  lib-package-version-meta-drops-leading-v =
+    let
+      package = mkPackage { metaVersion = "v1.2.3"; };
+      spec = specOf { inherit package; };
+      metaOf =
+        package:
+        packageLib.metaOf {
+          inherit package;
+          kix = kixlib;
+        };
+      peeked = metaOf package;
+    in
+    (
+      (spec.version or null) == "1.2.3"
+      && peeked.version == "1.2.3"
+      &&
+        (metaOf (mkPackage {
+          metaVersion = "bundled";
+        })).version == "bundled"
+      && consumerBuilds { package = mkPackage { metaVersion = "v1.4.0"; }; }
+      && !(consumerBuilds { package = mkPackage { metaVersion = "v1.6.0"; }; })
+    )
+    || throw "spec ${builtins.toJSON spec}, meta ${builtins.toJSON peeked}";
+
+  # `kix.image.checkRelease` accepts a tag of the release's major.minor, or
+  # of a minor in `also`, written with the release's leading `v` or without
+  # it as the release is.
+  lib-package-version-check-release =
+    let
+      check =
+        release: tag: extra:
+        kixlib.image.checkRelease (
+          {
+            image = { inherit tag; };
+            inherit release;
+            reason = "the CRDs are vendored from ${release}";
+          }
+          // extra
+        );
+      passes = release: tag: (check release tag { }).assertion;
+      fails = release: tag: !(check release tag { }).assertion;
+      minor = check "v1.10.0" "v1.11.0" { };
+      prefix = check "v1.10.0" "1.10.2" { };
+      noPrefix = check "0.15.1" "v0.15.1" { option = "webhook.image"; };
+      older = check "v1.10.0" "v1.4.0" {
+        also = [
+          "1.8"
+          "1.9"
+        ];
+        fix = "Run the script.";
+      };
+    in
+    (
+      passes "v1.10.0" "v1.10.0"
+      && passes "v1.10.0" "v1.10.7"
+      && passes "v1.10.0" "v1.10.1-alpine"
+      && passes "0.15.1" "0.15.9"
+      && fails "v1.10.0" "latest"
+      && fails "v1.10.0" "v1"
+      && (check "v1.10.0" "v1.9.2" { also = [ "1.9" ]; }).assertion
+      && minor.option == "image.tag"
+      &&
+        minor.message
+        == ''image.tag "v1.11.0" is not a v1.10 release, and the CRDs are vendored from v1.10.0.''
+      && minor.fix == "Set image.tag to a tag such as v1.10.0, or remove it."
+      &&
+        prefix.message
+        == ''image.tag "1.10.2" has no leading "v", and upstream tags this image like v1.10.0.''
+      && noPrefix.option == "webhook.image.tag"
+      &&
+        noPrefix.message
+        == ''webhook.image.tag "v0.15.1" starts with "v", and upstream tags this image like 0.15.1.''
+      &&
+        older.message
+        == ''image.tag "v1.4.0" is not a v1.8, v1.9, or v1.10 release, and the CRDs are vendored from v1.10.0.''
+      && older.fix == "Set image.tag to a tag such as v1.10.0, or remove it. Run the script."
+    )
+    || throw "kix.image.checkRelease: ${
+      builtins.toJSON {
+        inherit
+          minor
+          prefix
+          noPrefix
+          older
+          ;
+      }
+    }";
 }

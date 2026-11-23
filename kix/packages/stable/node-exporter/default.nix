@@ -50,7 +50,7 @@ let
 in
 {
   meta = {
-    version = lib.removePrefix "v" release;
+    version = release;
     description = "Prometheus Node Exporter: host-level metrics";
     owner = "platform";
     defaultAliases = [ "nodeExporter" ];
