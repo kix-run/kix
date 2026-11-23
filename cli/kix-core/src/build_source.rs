@@ -72,6 +72,10 @@ pub trait CarriedBuild {
     /// caller can check the local Nix store. Returns an error when the source
     /// holds the build but cannot read it.
     fn deployed_build(&self, identity_hash: &str) -> Result<Option<StoreGraph>, String>;
+
+    /// Return the Kix library's warnings that the machine that made the
+    /// build recorded with it.
+    fn warnings(&self) -> Vec<LibraryRecord>;
 }
 
 /// Source metadata recorded by the machine that produced a build (`source`,
@@ -92,8 +96,8 @@ pub struct Provenance {
 pub struct Build {
     graph: StoreGraph,
     origin: Origin,
-    /// The Kix library's warnings for this build. A carried build has
-    /// none, because the command that made it showed them.
+    /// The Kix library's warnings for this build. A carried build has the
+    /// warnings its source recorded.
     warnings: Vec<LibraryRecord>,
     /// Retired-domain error recorded when the raw build was loaded, if any.
     legacy_domain: Option<LegacyDomainError>,
@@ -182,11 +186,12 @@ impl Build {
                 printable(&graph.cluster_name)
             ));
         }
+        let warnings = source.warnings();
         let origin = Origin::Carried {
             source: Box::new(source),
             sha256,
         };
-        Ok(Build::stamped(graph, origin, Vec::new()))
+        Ok(Build::stamped(graph, origin, warnings))
     }
 
     /// Check the loaded `graph` for a retired domain, then stamp its annotations.
@@ -203,7 +208,7 @@ impl Build {
     }
 
     /// Return the Kix library's warnings for the build, which every command
-    /// that evaluates a build shows. A carried build has none.
+    /// that evaluates or reads a build shows.
     pub fn warnings(&self) -> &[LibraryRecord] {
         &self.warnings
     }
@@ -411,6 +416,12 @@ mod tests {
         fn deployed_build(&self, _identity_hash: &str) -> Result<Option<StoreGraph>, String> {
             Ok(Some(self.0.clone()))
         }
+        fn warnings(&self) -> Vec<LibraryRecord> {
+            vec![LibraryRecord {
+                message: "carried".to_string(),
+                ..Default::default()
+            }]
+        }
     }
 
     /// Build a carried `Build` of `graph` for `cluster` that returns
@@ -442,6 +453,19 @@ mod tests {
         let mut invalid = graph.clone();
         invalid.resources.remove(&invalid.activation_path.clone());
         assert!(carried(&invalid, &graph).is_err());
+    }
+
+    /// A carried build has the warnings its source recorded.
+    #[test]
+    fn a_carried_build_keeps_its_sources_warnings() {
+        let graph = fixture();
+        let build = carried(&graph, &graph).unwrap();
+        let messages: Vec<&str> = build
+            .warnings()
+            .iter()
+            .map(|w| w.message.as_str())
+            .collect();
+        assert_eq!(messages, ["carried"]);
     }
 
     /// A build whose cluster name is changed to the one asked for still

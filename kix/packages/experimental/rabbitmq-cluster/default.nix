@@ -336,6 +336,17 @@ in
     }
   ];
 
+  # The operator writes `disk_free_limit.absolute = 2GB` into every node's
+  # rabbitmq.conf. Below 5GB a fresh volume leaves too little headroom over
+  # twice that limit, where RabbitMQDiskNearAlarm fires.
+  warnings =
+    { config, ... }:
+    lib.optional (kix.parseQuantity "storage" config.storage.size < 5 * 1000 * 1000 * 1000) {
+      option = "storage.size";
+      message = "storage.size is ${toString config.storage.size}, under 5GB. The operator sets RabbitMQ's disk_free_limit to 2GB, so RabbitMQDiskNearAlarm can fire on this volume while the cluster is idle, and a volume of 2GB or less starts in the free disk alarm, which blocks every publisher.";
+      fix = "Set storage.size to at least 5Gi.";
+    };
+
   options = {
     replicas = lib.mkOption {
       type = lib.types.ints.positive;
@@ -507,11 +518,6 @@ in
           inherit who locked;
         } baseSpec config.extraSpec;
 
-        # The operator writes `disk_free_limit.absolute = 2GB` into every
-        # node's rabbitmq.conf. Below 5GB a fresh volume leaves too little
-        # headroom over twice that limit, where RabbitMQDiskNearAlarm fires.
-        smallVolume = kix.parseQuantity "storage" config.storage.size < 5 * 1000 * 1000 * 1000;
-
         # Read only when the scope has an enforcer (kix.operandPolicy).
         netpol = scope.networkPolicyEnforcer.netpol;
         tcp = port: {
@@ -526,15 +532,10 @@ in
         operatorNamespace = (scope.forService rabbitmqOperator).namespaceName;
       in
       {
-        cluster =
-          lib.warnIf smallVolume
-            "${who}: storage.size is ${toString config.storage.size}, under 5GB. The operator sets RabbitMQ's disk_free_limit to 2GB, so RabbitMQDiskNearAlarm can fire on this volume while the cluster is idle, and a volume of 2GB or less starts in the free disk alarm, which blocks every publisher. Use at least 5Gi."
-            (
-              scope.mkCR operator.crds.RabbitmqCluster {
-                inherit name spec;
-                annotations."rabbitmq.com/disable-default-topology-spread-constraints" = "true";
-              }
-            );
+        cluster = scope.mkCR operator.crds.RabbitmqCluster {
+          inherit name spec;
+          annotations."rabbitmq.com/disable-default-topology-spread-constraints" = "true";
+        };
 
         client = scope.mkServiceRef {
           inherit name;

@@ -114,8 +114,8 @@ The package returns an attribute set with the following top-level keys:
 | `config` | attrset or module function | No | Package-level configuration module merged with `options`. Values inside `config` that the author wraps in `lib.mkDefault` are lowered from priority `1000` to `1250` (between option defaults at `1500` and instance or injected `lib.mkDefault` values at `1000`). |
 | `deps` | attrset | No | Per-dependency configuration injection (`config`), `warnings`, and `assertions` keyed by `build` argument name. |
 | `build` | function or list of functions | Yes | One or more functions returning named resource parts and a `root` entry. |
-| `warnings` | `{ config, self, deps }: [ string or attrset ]` | No | Evaluation-time warnings that `kix check`, `kix build`, `kix plan`, and `kix deploy` show. |
-| `assertions` | `{ config, self, deps }: [ { assertion; message; fix ? null; id ? null; option ? null; } ]` | No | Evaluation-time assertions checked before building manifests. |
+| `warnings` | `{ config, self, deps, clusterConfig }: [ string or attrset ]` | No | Evaluation-time warnings that every command that evaluates the cluster shows, and that a bundle carries to `kix plan --bundle` and `kix deploy --bundle`. |
+| `assertions` | `{ config, self, deps, clusterConfig }: [ { assertion; message; fix ? null; id ? null; option ? null; } ]` | No | Evaluation-time assertions checked before building manifests. |
 
 ### The `root` entry and part reachability
 
@@ -623,7 +623,7 @@ Do not call `pkgs.runCommand`, `pkgs.stdenv.mkDerivation`, or `pkgs.writeText` i
 
 ### Top-level `warnings` and `assertions`
 
-A package can define top-level `warnings` and `assertions` functions. Both receive `{ config, self, deps }` after options and `build` parts are wired. Because `deps` only contains bound dependencies, an absent optional dependency is omitted from `deps` (test for it with `!(deps ? <name>)` or `(deps.<name> or null) == null`):
+A package can define top-level `warnings` and `assertions` functions. Both receive `{ config, self, deps, clusterConfig }` after options and `build` parts are wired. `clusterConfig` is the evaluated cluster configuration that `build` functions also receive. Because `deps` only contains bound dependencies, an absent optional dependency is omitted from `deps` (test for it with `!(deps ? <name>)` or `(deps.<name> or null) == null`):
 
 ```nix
 warnings =
@@ -645,7 +645,7 @@ assertions =
   ];
 ```
 
-An assertion takes the same optional fields as `scope.fail` (below): `fix`, `id`, `object`, `option`, `dependency`, and `clusterOption`. A warning is a message, or an attribute set with `message` and the same optional fields. Kix adds the instance to each, so the message does not name it. Failed `assertions` stop evaluation, and Kix lists every failed assertion of the cluster at once. `warnings` do not stop evaluation. `kix check` lists them under its table, and the commands that build a cluster print them to stderr. A field in the wrong form, such as an `id` that is not a change record id, stops evaluation in a warning as it does in an error.
+An assertion takes the same optional fields as `scope.fail` (below): `fix`, `id`, `object`, `option`, `dependency`, and `clusterOption`. A warning is a message, or an attribute set with `message` and the same optional fields. Kix adds the instance to each, so the message does not name it. Failed `assertions` stop evaluation, and Kix lists every failed assertion of the cluster at once. `warnings` do not stop evaluation. `kix check` lists them under its table. The other commands that evaluate a cluster, such as `kix build`, `kix graph`, and `kix list images`, print them to stderr. A bundle carries them, so `kix plan --bundle` and `kix deploy --bundle` print them as well. Return every warning from `warnings`. Kix shows no `builtins.trace` or `lib.warn` line when the build succeeds. A field in the wrong form, such as an `id` that is not a change record id, stops evaluation in a warning as it does in an error.
 
 ### Raising an error with `scope.fail`
 

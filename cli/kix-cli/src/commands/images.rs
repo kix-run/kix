@@ -60,15 +60,7 @@ impl CommandResponse for ImagesResponse {
 }
 
 pub fn run(args: &ListImagesArgs, ctx: &mut CommandContext) -> Result<()> {
-    let spinner = output::spinner(format!("Evaluating cluster '{}'...", args.cluster));
-
-    let cluster_output = ctx.eval_cluster_or_suggest(&args.cluster);
-
-    if let Some(sp) = &spinner {
-        sp.finish_and_clear();
-    }
-
-    let cluster_output = cluster_output?;
+    let cluster_output = ctx.eval_cluster_or_suggest(&args.cluster)?;
 
     let mut image_map: BTreeMap<String, Vec<ImageSource>> = BTreeMap::new();
 

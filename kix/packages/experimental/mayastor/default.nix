@@ -228,13 +228,31 @@ in
     ];
 
   warnings =
-    { config, ... }:
+    { config, clusterConfig, ... }:
     let
       pools = builtins.attrValues config.diskPools;
       poolNodes = lib.unique (map (p: p.node) pools);
       encryptedPools = builtins.filter (p: p.encrypted) pools;
+
+      # The build refuses a pool on a node that cluster.nodes does not list.
+      nodes = clusterConfig.cluster.nodes;
+      checkNodes = nodes != { } && clusterConfig.cluster.capabilities.nodeAutoscaling != true;
+      ioEngineLabels = c.ioEngineLabels config;
+      unlabelledPool =
+        poolName: pool:
+        let
+          missing = lib.filterAttrs (k: v: (nodes.${pool.node}.labels.${k} or null) != v) ioEngineLabels;
+        in
+        lib.optional (checkNodes && nodes ? ${pool.node} && missing != { }) {
+          option = "diskPools.${poolName}.node";
+          message = "diskPools.${poolName} is on node ${pool.node}, whose labels in cluster.nodes lack ${
+            lib.concatStringsSep ", " (lib.mapAttrsToList (k: v: "${k}=${v}") missing)
+          } from ioEngine.nodeSelector, so io-engine may not run there and the pool would not come up.";
+          fix = "Label the node, or ignore this if it is labelled outside the cluster definition.";
+        };
     in
-    lib.optionals (pools != [ ]) (
+    lib.concatLists (lib.mapAttrsToList unlabelledPool config.diskPools)
+    ++ lib.optionals (pools != [ ]) (
       lib.concatLists (
         lib.mapAttrsToList (
           cls: def:
@@ -282,7 +300,6 @@ in
 
         nodes = clusterConfig.cluster.nodes;
         checkNodes = nodes != { } && clusterConfig.cluster.capabilities.nodeAutoscaling != true;
-        ioEngineLabels = c.ioEngineLabels config;
         checkPool =
           poolName: pool:
           if !checkNodes then
@@ -295,14 +312,7 @@ in
               fix = "Name the node that holds the pool's disk.";
             }
           else
-            let
-              missing = lib.filterAttrs (k: v: (nodes.${pool.node}.labels.${k} or null) != v) ioEngineLabels;
-            in
-            lib.warnIf (missing != { })
-              "${who}: diskPools.${poolName} is on node ${pool.node}, whose labels in cluster.nodes lack ${
-                lib.concatStringsSep ", " (lib.mapAttrsToList (k: v: "${k}=${v}") missing)
-              } from ioEngine.nodeSelector, so io-engine may not run there and the pool would not come up. Label the node, or ignore this if it is labelled outside the cluster definition."
-              pool;
+            pool;
       in
       {
         csiDriver = scope.mkClusterResource {

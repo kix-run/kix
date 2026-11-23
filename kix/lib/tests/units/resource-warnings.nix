@@ -1,7 +1,7 @@
 # Tests that the warnings raised while a package builds a resource reach the
 # instance's warning list, which `kix check` shows. The builders attach them
 # to the resource as `_warnings`, and the instance collects them from its
-# parts.
+# parts. A package's own checks return warnings from its `warnings`.
 
 {
   lib,
@@ -224,4 +224,114 @@ in
       found = find "does not publish `out.podSelector`" cluster.instances.appns.web._diagnostics.warnings;
     in
     builtins.length found == 1 || throw "expose warning: ${builtins.toJSON found}";
+
+  # A custom resource that reads a Service address, of a kind that does not
+  # declare how its controller uses the address, warns and names itself.
+  resource-warnings-custom-resource-reads-service-address =
+    let
+      widget =
+        { self, scope, ... }:
+        {
+          web = scope.mkDeployment {
+            name = "web";
+            spec = {
+              selector.matchLabels = scope.selectorLabels;
+              template.spec.containers = [ container ];
+            };
+          };
+          svc = scope.mkResource {
+            apiVersion = "v1";
+            kind = "Service";
+            name = "backend";
+            spec = {
+              selector = scope.selectorLabels;
+              ports = [ { port = 80; } ];
+            };
+          };
+          widgetCrd = scope.mkCRDRef {
+            group = "example.com";
+            kind = "Widget";
+            plural = "widgets";
+            version = "v1";
+          };
+          main = scope.mkCR self.widgetCrd {
+            name = "w";
+            spec.target = self.svc.out.fqdn;
+          };
+          root = self.main;
+        };
+      found = find "references a Service address" (
+        (mkCluster [
+          baseInstances
+          {
+            instances.appns.probe.package = {
+              meta.version = "test";
+              build = widget;
+            };
+          }
+        ]).instances.appns.probe._diagnostics.warnings
+      );
+    in
+    (
+      builtins.length found == 1
+      &&
+        (builtins.head found).object == {
+          kind = "Widget";
+          name = "w";
+        }
+    )
+    || throw "custom resource warning: ${builtins.toJSON found}";
+
+  # A typed value in a known folder that is not a resource is left out of
+  # the build, and the instance warns about it.
+  resource-warnings-folder-holds-non-resource =
+    let
+      found = find "which is not a resource" (
+        warningsOf [ ] (scope: {
+          main = scope.mkResource {
+            apiVersion = "v1";
+            kind = "ConfigMap";
+            name = "main";
+          };
+          secrets.stray = {
+            _type = "kix-test-value";
+          };
+        })
+      );
+    in
+    builtins.length found == 1 || throw "folder warning: ${builtins.toJSON found}";
+
+  # scope.requireMetricsApi returns its warning for the package's
+  # `warnings`, so the warning reaches the instance's list.
+  resource-warnings-require-metrics-api =
+    let
+      package =
+        { scope, ... }:
+        {
+          meta.version = "test";
+          warnings = _: scope.requireMetricsApi "the probe";
+          build =
+            { self, scope, ... }:
+            {
+              main = scope.mkResource {
+                apiVersion = "v1";
+                kind = "ConfigMap";
+                name = "main";
+              };
+              root = self.main;
+            };
+        };
+      found = find "requires the Kubernetes Metrics API" (
+        (mkCluster [
+          baseInstances
+          someCapabilities
+          { instances.appns.probe.package = package; }
+        ]).instances.appns.probe._diagnostics.warnings
+      );
+    in
+    (
+      builtins.length found == 1
+      && (builtins.head found).clusterOption == "cluster.roles.metricsApi.binding"
+    )
+    || throw "metrics API warning: ${builtins.toJSON found}";
 }

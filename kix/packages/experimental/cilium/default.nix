@@ -106,6 +106,23 @@ let
     version = release;
     hash = "sha256-DHWS63UXns9G3T7CIUWRbwFkxEASFOoVr7WyMLHRGiE=";
   };
+
+  # Return how the instance delivers Cilium's configuration, given its
+  # `platform-cilium` dependency or null.
+  deliveryOf =
+    platform-cilium:
+    if platform-cilium == null then
+      "chart"
+    else if ((platform-cilium.out or { }).helmChartConfig or null) != null then
+      "helmChartConfig"
+    else
+      "none";
+
+  # Under "always" every endpoint without an allow rule loses its traffic,
+  # so the default follows whether Kix writes allow rules.
+  enforcementOf =
+    config: netpolEnabled:
+    config.values.policyEnforcementMode or (if netpolEnabled then "always" else "default");
 in
 {
   meta = {
@@ -219,6 +236,31 @@ in
     };
   };
 
+  # A warning because another tool may write the allow rules. Candidate for
+  # an evaluation error with an explicit opt-in for that case.
+  warnings =
+    {
+      config,
+      clusterConfig,
+      deps,
+      ...
+    }:
+    let
+      netpolEnabled = (clusterConfig.networkPolicy or { }).enable or false;
+    in
+    lib.optional
+      (
+        deliveryOf (deps.platform-cilium or null) != "none"
+        && enforcementOf config netpolEnabled == "always"
+        && !netpolEnabled
+        && !(config.values.policyAuditMode or false)
+      )
+      {
+        option = "values.policyEnforcementMode";
+        message = "Cilium enforces policy on every endpoint (policyEnforcementMode = \"always\"), but networkPolicy.enable is false, so Kix writes no allow rules. Every pod without a policy from another source loses all traffic except cluster DNS.";
+        fix = "Enable networkPolicy, set values.policyAuditMode = true, or remove values.policyEnforcementMode.";
+      };
+
   build =
     {
       config,
@@ -228,8 +270,6 @@ in
       ...
     }:
     let
-      who = "cilium ${scope.namespaceName}/${scope.instanceName}";
-
       binding = (clusterConfig.cluster.roles.cni or { }).binding or null;
       podCidr = clusterConfig.cluster.network.podCidr;
       netpolEnabled = (clusterConfig.networkPolicy or { }).enable or false;
@@ -242,13 +282,7 @@ in
         v:
         builtins.isAttrs v && builtins.isString (v.name or null) && builtins.isString (v.namespace or null);
 
-      delivery =
-        if platform-cilium == null then
-          "chart"
-        else if helmChartConfigRef != null then
-          "helmChartConfig"
-        else
-          "none";
+      delivery = deliveryOf platform-cilium;
 
       # The modes Cilium's agent accepts. The build branches on the mode, so
       # an unknown one is refused below.
@@ -257,10 +291,7 @@ in
         "always"
         "never"
       ];
-      # Under "always" every endpoint without an allow rule loses its
-      # traffic, so the default follows whether Kix writes allow rules.
-      effectiveEnforcement =
-        config.values.policyEnforcementMode or (if netpolEnabled then "always" else "default");
+      effectiveEnforcement = enforcementOf config netpolEnabled;
       effectiveAudit = config.values.policyAuditMode or false;
       # The chart's default IPAM mode.
       ipamMode = config.values.ipam.mode or "cluster-pool";
@@ -575,15 +606,6 @@ in
           helmChartConfigParts
         else
           noneParts;
-
-      warnAlwaysWithoutRules =
-        delivery != "none" && effectiveEnforcement == "always" && !netpolEnabled && !effectiveAudit;
     in
-    builtins.seq checks (
-      # A warning because another tool may write the allow rules. Candidate for an
-      # evaluation error with an explicit opt-in for that case.
-      lib.warnIf warnAlwaysWithoutRules
-        "${who}: enforces policy on every endpoint (policyEnforcementMode = \"always\"), but networkPolicy.enable is false, so Kix writes no allow rules. Every pod without a policy from another source loses all traffic except cluster DNS. Enable networkPolicy, set values.policyAuditMode = true, or remove values.policyEnforcementMode."
-        parts
-    );
+    builtins.seq checks parts;
 }

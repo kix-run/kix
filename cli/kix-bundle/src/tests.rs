@@ -104,6 +104,35 @@ fn the_libs_fixture_is_this_bundles_build() {
     assert!(graph == fixture && graph.packages.keys().eq(fixture.packages.keys()));
 }
 
+/// A bundle carries the build's warnings to the commands that read it. A
+/// bundle written without them, as the fixture was, reads with none and
+/// writes no `warnings` field.
+#[test]
+fn a_bundle_carries_the_builds_warnings() {
+    let dir = tempfile::tempdir().unwrap();
+    let read_warnings = |bytes: &[u8]| {
+        let path = dir.path().join("b.kixbundle");
+        std::fs::write(&path, bytes).unwrap();
+        crate::read_build(&path, &[], "kix-enterprise-test")
+            .unwrap()
+            .warnings()
+            .to_vec()
+    };
+    assert!(read_warnings(FIXTURE).is_empty());
+    let plain = written(&real());
+    assert!(!String::from_utf8_lossy(&frames_of(&plain)[0]).contains("warnings"));
+
+    let warning: LibraryRecord = serde_json::from_value(json!({
+        "instance": "web/status-page",
+        "message": "a warning",
+        "fix": "a fix",
+    }))
+    .unwrap();
+    let mut contents = real();
+    contents.warnings = vec![warning.clone()];
+    assert_eq!(read_warnings(&written(&contents)), [warning]);
+}
+
 fn written(contents: &Contents) -> Vec<u8> {
     let mut bytes = Vec::new();
     contents.write(&mut bytes).unwrap();
@@ -1120,8 +1149,9 @@ fn checking_paths_stays_under_its_stated_bound() {
 }
 
 /// A header of up to [`MAX_HEADER_BYTES`] that would parse to many
-/// times its size, as a long receipt, many empty files, or one file's
-/// long list of references, is refused under the stated bound.
+/// times its size, as a long receipt, many empty warnings, many empty
+/// files, or one file's long list of references, is refused under the
+/// stated bound.
 #[test]
 fn a_header_that_parses_large_is_refused_under_the_bound() {
     let header = |opening: &str, item: &str, closing: &str| {
@@ -1131,6 +1161,7 @@ fn a_header_that_parses_large_is_refused_under_the_bound() {
     };
     let cases = [
         header(r#""files":[],"receipt":{"source":{"a":["#, "0", "]}}"),
+        header(r#""files":[],"warnings":["#, r#"{"message":""}"#, "]"),
         header(r#""files":["#, r#"["",0,[]]"#, "]"),
         header(r#""files":[["",0,["#, "0", "]]]"),
     ];

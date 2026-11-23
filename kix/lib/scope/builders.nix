@@ -92,24 +92,29 @@ in
             builtins.seq (validators.checkRawPvc args) (
               builtins.seq loadBalancerWarnings (
                 builtins.seq metricsApiWarnings (
-                  k8s.mkResource (
-                    removeAttrs args [ "labels" ]
+                  (
+                    let
+                      res = k8s.mkResource (
+                        removeAttrs args [ "labels" ]
+                        // {
+                          namespace = namespaceResource;
+                          inherit clusterDomain;
+                          labels = clusterLabels // instanceLabels // labels;
+                          factBehavior = behavior;
+                          requires = (args.requires or [ ]) ++ dnsRequires;
+                        }
+                      );
+                    in
+                    res
                     // {
-                      namespace = namespaceResource;
-                      inherit clusterDomain;
-                      labels = clusterLabels // instanceLabels // labels;
-                      factBehavior = behavior;
-                      requires = (args.requires or [ ]) ++ dnsRequires;
+                      packageLabels = labels;
+                      _builtBy = builtBy;
+                      # Warnings raised while building the resource, outside the
+                      # manifest. `eval/instance.nix` collects them from the
+                      # instance's parts into its warnings.
+                      _warnings = res._warnings ++ loadBalancerWarnings ++ metricsApiWarnings;
                     }
                   )
-                  // {
-                    packageLabels = labels;
-                    _builtBy = builtBy;
-                    # Warnings raised while building the resource, outside the
-                    # manifest. `eval/instance.nix` collects them from the
-                    # instance's parts into its warnings.
-                    _warnings = loadBalancerWarnings ++ metricsApiWarnings;
-                  }
                 )
               )
             )

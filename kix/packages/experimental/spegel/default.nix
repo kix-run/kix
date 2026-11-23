@@ -204,6 +204,21 @@ in
     metrics = kix.options.monitor;
   };
 
+  # The build refuses these two cluster settings when they rule Spegel out.
+  # When one is unset, Kix cannot tell, so it warns.
+  warnings =
+    { clusterConfig, ... }:
+    lib.optional (clusterConfig.cluster.containerd.discardUnpackedLayers == null) {
+      clusterOption = "cluster.containerd.discardUnpackedLayers";
+      message = "cluster.containerd.discardUnpackedLayers is not set, so Kix cannot tell whether containerd keeps the layers Spegel serves.";
+      fix = "Set it to match the nodes' containerd config. Spegel needs discard_unpacked_layers = false.";
+    }
+    ++ lib.optional ((clusterConfig.cluster.capabilities.multiNode or null) == null) {
+      clusterOption = "cluster.capabilities.multiNode";
+      message = "cluster.capabilities.multiNode is not set. A Spegel pod reports ready only once it has a peer, so on one node the DaemonSet never becomes ready.";
+      fix = "Set cluster.capabilities.multiNode to true on a cluster with two or more nodes, or to false on a single-node cluster.";
+    };
+
   build = [
     (
       {
@@ -234,13 +249,7 @@ in
               fix = "Remove the instance, or set multiNode = true on a cluster with two or more nodes.";
             }
           else
-            lib.warnIf (containerd.discardUnpackedLayers == null)
-              "${who}: cluster.containerd.discardUnpackedLayers is not set, so Kix cannot tell whether containerd keeps the layers Spegel serves. Set it to match the nodes' containerd config; Spegel needs discard_unpacked_layers = false."
-              (
-                lib.warnIf (multiNode == null)
-                  "${who}: cluster.capabilities.multiNode is not set. A Spegel pod reports ready only once it has a peer, so on one node the DaemonSet never becomes ready."
-                  null
-              );
+            null;
 
         registryArgs = [
           "registry"

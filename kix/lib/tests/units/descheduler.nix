@@ -188,6 +188,24 @@ let
     )).spec.replicas;
 in
 {
+  # A KubernetesMetrics provider on a cluster that leaves the metricsApi
+  # role unset warns on that role's binding. No provider, no warning.
+  descheduler-metrics-provider-warns =
+    let
+      metricsWarnings =
+        instance:
+        builtins.filter (
+          w: (w.clusterOption or null) == "cluster.roles.metricsApi.binding"
+        ) (descheduler instance).instances.descheduler.descheduler._diagnostics.warnings;
+    in
+    (
+      builtins.length (metricsWarnings {
+        config.policy.metricsProviders = [ { source = "KubernetesMetrics"; } ];
+      }) == 1
+      && metricsWarnings { } == [ ]
+    )
+    || throw "descheduler metrics API warning";
+
   # scheme = "https" and a tlsConfig render on the primary endpoint. Left
   # out, the endpoint is `scheme: http` with no tlsConfig.
   descheduler-monitor-https =

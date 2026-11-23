@@ -271,7 +271,7 @@ A resource's `requires` and `root.requires` order different things. A resource's
 - **Duplicate requires:** same resource listed twice
 - **Orphaned resources:** defined in the package but unreachable from `root`
 
-A package's own `warnings` function returns messages or records with the fields of `scope.fail` (`message`, `fix`, `object`, `option`, `dependency`, `clusterOption`, `id`). Return a warning through `warnings`, not `builtins.trace` or `lib.warn`, which no command shows when the build succeeds.
+A package's own `warnings` function receives `{ config, self, deps, clusterConfig }` and returns messages or records with the fields of `scope.fail` (`message`, `fix`, `object`, `option`, `dependency`, `clusterOption`, `id`). Return a warning through `warnings`, not `builtins.trace` or `lib.warn`, which no command shows when the build succeeds.
 
 Fix all warnings before committing.
 

@@ -17,7 +17,7 @@ let
   kixAnnotations = import ../core/annotations.nix;
   kixKeys = kixAnnotations.keys;
   inherit (k8s) mkPackageInstance;
-  inherit (helpers) collectTypedAttrs;
+  inherit (helpers) collectTypedAttrs knownFolders;
   inherit (scope) mkScope;
   inherit (view) mkPackageView;
   inherit (resolve)
@@ -815,6 +815,7 @@ in
             resolvedDepMeta
             depsEnrichment
             resolvedDeps
+            clusterConfig
             ;
         };
         packageResult = {
@@ -858,7 +859,25 @@ in
             ) postHookWarnings)
             processorWarnings
             _resourceWarnings
+            folderContentWarnings
           ];
+
+        # A known folder (`secrets`, `crds`) renders only resources, so the
+        # build leaves out any other typed value in it.
+        folderContentWarnings = builtins.concatMap (
+          folderName:
+          let
+            contents = parts.${folderName} or null;
+            expected = knownFolders.${folderName}.expectedTypes;
+          in
+          if builtins.isAttrs contents && !(contents ? _type) then
+            map (v: {
+              message = "'${folderName}' holds a value of type '${v._type}', which is not a resource. Kix renders only resources from '${folderName}', so this value is not in the build.";
+              fix = "Build the value with a scope.mk* resource builder, or move it out of '${folderName}'.";
+            }) (builtins.filter (v: !(builtins.elem v._type expected)) (collectTypedAttrs { } contents))
+          else
+            [ ]
+        ) (builtins.attrNames knownFolders);
 
         diagnostics = meta.combineDiagnostics {
           inherit
@@ -874,35 +893,33 @@ in
       in
       builtins.seq _dnsMissing (
         builtins.seq diagnostics.evaluateWarnings (
-          builtins.seq diagnostics.emitAssertionWarnings (
-            let
-              view' = mkPackageView {
-                inherit
-                  parts
-                  instanceName
-                  namespaceName
-                  packageMeta
-                  packageInstance
-                  evaluatedConfig
-                  ;
-                version = instanceVersion;
-                rootOut = (rootRes.out or { }) // packageOut;
-                aliases = if (instCfg.aliases or null) == null then [ ] else instCfg.aliases;
-              };
-            in
-            view'
-            // {
-              _depLinks = directDepLinks;
-              _hookResources = _scopeInjectedResources ++ processorResources;
-              _scorecardFindings = scorecardFindings;
-              inherit _dnsMissing;
-              _diagnostics = {
-                warnings = diagnostics.allWarnings;
-                assertions = diagnostics.allAssertions;
-                inherit (diagnostics) failedAssertions;
-              };
-            }
-          )
+          let
+            view' = mkPackageView {
+              inherit
+                parts
+                instanceName
+                namespaceName
+                packageMeta
+                packageInstance
+                evaluatedConfig
+                ;
+              version = instanceVersion;
+              rootOut = (rootRes.out or { }) // packageOut;
+              aliases = if (instCfg.aliases or null) == null then [ ] else instCfg.aliases;
+            };
+          in
+          view'
+          // {
+            _depLinks = directDepLinks;
+            _hookResources = _scopeInjectedResources ++ processorResources;
+            _scorecardFindings = scorecardFindings;
+            inherit _dnsMissing;
+            _diagnostics = {
+              warnings = diagnostics.allWarnings;
+              assertions = diagnostics.allAssertions;
+              inherit (diagnostics) failedAssertions;
+            };
+          }
         )
       );
 }

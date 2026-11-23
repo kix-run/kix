@@ -257,6 +257,15 @@ in
           assertion = false;
           message = "deps.clickhouseDatabase does not grant ${lib.concatStringsSep ", " missingGrants}, which Plausible's migrations need. The package asks a clickhouse-database for these through its `grants`; a stand-in must grant them on the server and publish them in out.grants.";
         };
+      warnings =
+        dep:
+        let
+          replicas = dep.out.replicas or null;
+        in
+        lib.optional (replicas != null && replicas != "1") {
+          message = "deps.clickhouseDatabase is on a ClickHouse server with ${replicas} replicas. Plausible Community Edition documents a single ClickHouse server; Kix migrates on one replica and converts Plausible's tables to replicated ones in the `replicate` init container, which Plausible does not support. It was tested with Plausible v${release}.";
+          fix = "Before upgrading Plausible, test the new version on a replicated ClickHouse, and upgrade only while every replica is up.";
+        };
     };
   };
 
@@ -724,15 +733,12 @@ in
 
           replicateScript =
             if replicated then
-              lib.warn
-                "${who}: deps.clickhouseDatabase is on a ClickHouse server with ${ch.replicas} replicas. Plausible Community Edition documents a single ClickHouse server; Kix migrates on one replica and converts Plausible's tables to replicated ones in the `replicate` init container, which Plausible does not support. It was tested with Plausible v${release}. Before upgrading Plausible, test the new version on a replicated ClickHouse, and upgrade only while every replica is up."
-                scope.mkResource
-                {
-                  apiVersion = "v1";
-                  kind = "ConfigMap";
-                  name = "${name}-replicate";
-                  data."replicate.py" = replicatePy;
-                }
+              scope.mkResource {
+                apiVersion = "v1";
+                kind = "ConfigMap";
+                name = "${name}-replicate";
+                data."replicate.py" = replicatePy;
+              }
             else
               null;
 
