@@ -632,7 +632,6 @@ in
             # Job when its own content changes. The checksum annotations below
             # put the content of the webhook and of what serves it into that
             # content, so the check runs again when any of them changes.
-            annotations.${kix.keys.rerun} = kix.keyValues.rerunOnChange;
             requires = builtins.attrValues self.webhookCheckRole;
             spec = {
               # The kubelet restarts the container with a growing delay (10 s

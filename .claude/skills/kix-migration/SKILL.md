@@ -286,7 +286,7 @@ Fix all warnings before committing.
 | `scope.mkDeployment` | Create a Deployment: auto-sets apiVersion/kind, copies `selector.matchLabels` to template labels |
 | `scope.mkStatefulSet` | Same as mkDeployment but for StatefulSets |
 | `scope.mkDaemonSet` | Same as mkDeployment but for DaemonSets |
-| `scope.mkJob` | Same for Jobs; the selector may be omitted (template labels are used). Never set `spec.ttlSecondsAfterFinished` (the build refuses it): a finished Job stays until a later build drops it and prune deletes it. A Job's pod template is immutable, so give a Job whose content changes a fixed name and `annotations.${kix.keys.rerun} = kix.keyValues.rerunOnChange` (stackgres-database, ingress-nginx, openbao). Kix reruns the Job when its own manifest changes or when a Kix-built Secret or ConfigMap referenced by the pod through `out` changes (the Kix library includes those reads in `kix.run/rerun-hash`). Add a `checksum/<name>` pod annotation set to `out.contentHash` only for resources the Job reaches over the network or the Kubernetes API, and make every step safe to run twice. Never put a hash of the content in the name: a renamed Job is a removed object plus an added one, and the old Job stays until it is pruned |
+| `scope.mkJob` | Same for Jobs; the selector may be omitted (template labels are used). Never set `spec.ttlSecondsAfterFinished` (the build refuses it): a finished Job stays until a later build drops it and prune deletes it. A Job's pod template is immutable, so `scope.mkJob` puts `kix.run/rerun: on-change` on every Job; do not write it yourself, and give the Job a fixed name. Kix reruns the Job when its own manifest changes or when a Kix-built Secret or ConfigMap referenced by the pod through `out` changes (the Kix library includes those reads in `kix.run/rerun-hash`). Add a `checksum/<name>` pod annotation set to `out.contentHash` only for resources the Job reaches over the network or the Kubernetes API, and make every step safe to run twice. Never put a hash of the content in the name: a renamed Job is a removed object plus an added one, and the old Job stays until it is pruned |
 | `scope.selectorLabels` | Default selector labels for this instance. Overridable per-instance via `selectorLabels` in cluster config. |
 | `scope.mkSecret`, `scope.mkSecretRef` | Secret primitives with enriched `out` API. **Read `SECRETS.md` for the full API, gotchas, and usage patterns.** |
 | `scope.forNamespace nsName` | Get a scope for a different namespace (cross-namespace resources) |
@@ -582,12 +582,11 @@ Kix stamps its own keys under a domain it owns. **Never spell that domain in a
 package.** Use `kix.keys.<name>`, which comes from `kix/lib/core/annotations.nix`:
 
 ```nix
-annotations.${kix.keys.rerun} = kix.keyValues.rerunOnChange;
 annotations.${kix.keys.operandOf} = "monitoring.coreos.com/Prometheus/${name}";
 labels.${kix.keys.derived} = "true";
 ```
 
-Common names: `rerun`, `operandOf`, `monitorsExternalService`, `derived`,
+Common names: `operandOf`, `monitorsExternalService`, `derived`,
 `policyType`, `role`, `dbCluster`, `sopsSource`. The full set
 is the `keys` attribute in `kix/lib/core/annotations.nix`.
 

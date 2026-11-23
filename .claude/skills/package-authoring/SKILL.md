@@ -413,15 +413,16 @@ stack trace (`docs/src/content/docs/reference/package-anatomy.mdx`,
 Kubernetes may run a Job's pod more than once on its own: it retries a
 failed pod up to `backoffLimit`, restarts the container under
 `restartPolicy = "OnFailure"`, and starts a new pod after an eviction or a
-node drain, possibly after the work finished. Kix runs a Job under
-`kix.run/rerun` again when its own content changes. So every Job a package
+node drain, possibly after the work finished. `scope.mkJob` puts every Job
+under `kix.run/rerun`, so Kix runs it again when its content changes (a
+package does not set that annotation itself). So every Job a package
 writes must give the same result when it runs again. Check whether the work
 is done and stop early, or make each step idempotent (`IF NOT EXISTS`, an
 existence check before `CREATE`, an upsert, `kubectl annotate --overwrite`).
 Never generate a secret or append to a log in the Job without checking first
 (stackgres-database's bootstrap script is the model).
 
-A Job with `kix.run/rerun` reruns when its own manifest changes, including
+A Job reruns when its own manifest changes, including
 any `checksum/*` annotations on its pod template. It also reruns when a
 Kix-built Secret or ConfigMap read by its pod (through a volume, `env`, or
 `envFrom`) changes; the Kix library includes those reads in
@@ -453,7 +454,7 @@ The only place in this skill with package line numbers. `pkg:N` is
 | `mergeGuarded` on `settings` or `extraSpec` | tempo:386; cnpg-cluster:323, 430, 514 |
 | Migrations at start: Recreate, deadline from `startupSeconds`, probes | metabase:94-97, 252-256, 284-304 |
 | Config injection into a dependency | metabase:109-112; stackgres-database:120-125; cnpg-database:94-115 |
-| Contracts: consumer `assertions`, provider `check` | metabase:112; stackgres-database:554; keycloak:559; tempo:631 |
+| Contracts: consumer `assertions`, provider `check` | metabase:112; stackgres-database:553; keycloak:559; tempo:631 |
 | `pick` as an option default with `defaultText` | `cnpg-cluster/options.nix`:12-18 |
 | `pick` inline, header names the instance override (O19) | keycloak:256, header 74-76 |
 | `atLeast` | valkey:122 |
@@ -466,7 +467,7 @@ The only place in this skill with package line numbers. `pkg:N` is
 | Checksum annotations from `out.contentHash`, `enableServiceLinks = false` | metabase:258-271 |
 | Facade: consumer-namespace Secret, server-namespace Job | clickhouse-database:1-36; stackgres-database |
 | Facade resources in the server's namespace named with the consumer's namespace | clickhouse-database:356 (`serverSideName`) |
-| A Job that runs again when its content changes: a fixed name, `kix.run/rerun` (never a hash in the name), and `checksum/*` only for resources reached over the network or the Kubernetes API | stackgres-database:449-465; clickhouse-database:506-523 |
+| A Job that runs again when its content changes: a fixed name (never a hash in the name), `kix.run/rerun` from `scope.mkJob`, and `checksum/*` only for resources reached over the network or the Kubernetes API | stackgres-database:449-464; clickhouse-database:506-522 |
 | Privileges injected into a facade, with the upstream file for each, and asserted on `out` | plausible:183-195, 213-253 |
 | Migrations in an init container sharing the server's env and mounts (`kix.withMountsOn [ "migrate" "plausible" ]`) | plausible:620-626, 693; vaultwarden:180-202, 277 |
 | One volume written by an init container and read by the main containers (two mount records, one `readOnly`) | n8n:499-513, 679-680 |

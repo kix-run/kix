@@ -453,7 +453,6 @@ in
       bootstrapJob = backendScope.mkJob {
         name = "${serverSideName}-bootstrap";
         labels = labels;
-        annotations.${kix.keys.rerun} = kix.keyValues.rerunOnChange;
         spec = {
           backoffLimit = 20;
           template = {

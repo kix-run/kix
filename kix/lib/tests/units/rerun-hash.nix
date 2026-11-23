@@ -1,8 +1,9 @@
-# Tests for `kix.run/rerun-hash` on a Job under `kix.run/rerun`. The deploy
-# engine reruns such a Job only when this hash changes. It follows the Job's
-# own manifest and the content of the Kix-built Secrets and ConfigMaps its pod
-# reads. It ignores changes elsewhere in the graph, such as a namespace label
-# or a resource the Job only waits for.
+# Tests for `kix.run/rerun` and `kix.run/rerun-hash` on a Job. `scope.mkJob`
+# puts every Job under the rerun rule, and the deploy engine reruns the Job
+# only when this hash changes. The hash follows the Job's own manifest and the
+# content of the Kix-built Secrets and ConfigMaps its pod reads. It ignores
+# changes elsewhere in the graph, such as a namespace label or a resource the
+# Job only waits for.
 
 {
   lib,
@@ -54,7 +55,6 @@ let
           };
           job = scope.mkJob {
             name = "bootstrap";
-            annotations.${kixKeys.rerun} = "on-change";
             requires = [ self.upstream ];
             spec.template = {
               metadata.labels = scope.selectorLabels;
@@ -123,6 +123,11 @@ in
       stampOf args == builtins.unsafeDiscardStringContext out.contentHash
       || throw "the stamp should equal out.contentHash"
     );
+
+  # `scope.mkJob` sets the rerun rule, so a package does not write it.
+  rerun-set-by-mkjob =
+    (jobOf { }).metadata.annotations.${kixKeys.rerun} or null == "on-change"
+    || throw "scope.mkJob should set kix.run/rerun to on-change";
 
   # Only a resource under the rerun rule carries the stamp.
   rerun-hash-only-on-rerun =
