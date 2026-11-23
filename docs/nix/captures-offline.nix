@@ -12,8 +12,9 @@
 #      `docs/src/command-output/`. Diffs are printed; `--apply` writes
 #      them, `--check` exits non-zero on any diff.
 #
-# Used by CI's `pages.yml` (`--check`) to gate stale sidecars and by
-# maintainers locally (`--apply`) to regenerate them. Mirrors
+# Used by CI's `docs-captures.yml` (`--check`) on a release pull request
+# and on the groups a pull request changes, and by maintainers locally
+# (`--apply`) to regenerate them. Mirrors
 # `captures-live.nix`'s shape; the only fundamental difference is no
 # kind cluster: `kix` is invoked against the workspace directly, with
 # its `kix` input repointed via `--override-input` so the eval stays clear

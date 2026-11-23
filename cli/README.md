@@ -83,6 +83,12 @@ reads plan files through `kix::plan::file`.
   positional names, whether an argument takes a value or is required, and
   enum values. It leaves out descriptions. Refresh it with
   `INSTA_UPDATE=always cargo test -p kix-cli cli_surface`.
+- The tests that run `kix` against this repository build one cluster,
+  `cli-fixture` (`clusters/test-cli-fixture.nix`), which defines its own
+  packages. `.github/workflows/cli-tests.yml` therefore skips a pull
+  request that changes only a package folder or another cluster. A new
+  test builds `cli-fixture` too. A test that needs a real package belongs
+  in `kix/lib/tests/` or in a test cluster that Change kind builds.
 - `scripts/change-kind.py`, run by `.github/workflows/change-kind.yml`,
   builds the clusters in its `CLUSTERS` list with the head's `kix` at a
   pull request's base, and at `--head-build`: a head checkout whose
@@ -113,8 +119,10 @@ looks for a `v<version>` tag in this repository. With none yet, the push is
 a release, and merging a version change is what makes one. Three jobs then
 start at once:
 
-1. The `test` job runs the test suite, and `cargo audit` on
-   `cli/Cargo.lock`. It runs on every change, not only releases.
+1. The `test` job runs the test suite. It runs on every change, not only
+   releases. `cargo audit` on `cli/Cargo.lock` runs in
+   `.github/workflows/security-audit.yml`: on a pull request that changes
+   the lockfile, and once a day on main, where a failure opens an issue.
 2. The `runtime` matrix job builds `.#kix-runtime-spec` for `x86_64-linux`,
    `aarch64-linux`, and `aarch64-darwin`, and runs
    `cli/runtime/assemble.py`. The `aarch64-darwin` entry also builds the

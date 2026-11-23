@@ -29,7 +29,12 @@ fn diff_from_empty_manifest_dir_adds_everything() {
     fs::create_dir_all(&snapshot_dir).unwrap();
 
     kix()
-        .args(["diff", "minimal", "--from", snapshot_dir.to_str().unwrap()])
+        .args([
+            "diff",
+            "cli-fixture",
+            "--from",
+            snapshot_dir.to_str().unwrap(),
+        ])
         .assert()
         .code(2)
         .stdout(predicate::str::contains("added"));
@@ -46,7 +51,7 @@ fn diff_from_own_audit_export_is_identical() {
     kix()
         .args([
             "export",
-            "minimal",
+            "cli-fixture",
             "--with-kix-metadata",
             "--out",
             export_dir.to_str().unwrap(),
@@ -55,7 +60,12 @@ fn diff_from_own_audit_export_is_identical() {
         .success();
 
     kix()
-        .args(["diff", "minimal", "--from", export_dir.to_str().unwrap()])
+        .args([
+            "diff",
+            "cli-fixture",
+            "--from",
+            export_dir.to_str().unwrap(),
+        ])
         .assert()
         .success()
         .stdout(predicate::str::contains("No differences"));
@@ -63,11 +73,11 @@ fn diff_from_own_audit_export_is_identical() {
 
 #[test]
 fn diff_from_self_is_identical() {
-    let index = kix::eval::nix::eval_activation_index(repo_root(), "minimal", &[], &|_| {})
+    let index = kix::eval::nix::eval_activation_index(repo_root(), "cli-fixture", &[], &|_| {})
         .expect("the cluster evaluates");
 
     kix()
-        .args(["diff", "minimal", "--from", index.to_str().unwrap()])
+        .args(["diff", "cli-fixture", "--from", index.to_str().unwrap()])
         .assert()
         .success()
         .stdout(predicate::str::contains("No differences"));
