@@ -206,7 +206,7 @@ in
         inherit (config) image;
         inherit release;
         reason = "the CRDs and ClusterRole in kix/packages/experimental/volsync/{crds,rbac} come from v${release}";
-        fix = "To update this package to another version, change release in kix/packages/experimental/volsync/default.nix and the tag in crds/sources.txt and rbac/sources.txt, then run uv run scripts/vendor-crds.py volsync.";
+        fix = "To update this package to another version, change release in kix/packages/experimental/volsync/default.nix and the tag in crds/sources.txt and rbac/sources.txt, and then run uv run scripts/vendor-crds.py volsync.";
       })
     ];
 

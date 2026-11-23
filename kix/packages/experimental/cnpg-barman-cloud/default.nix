@@ -170,7 +170,7 @@ in
       (kix.image.checkRelease {
         inherit (config) image;
         inherit release;
-        reason = "the CRD in kix/packages/experimental/cnpg-barman-cloud/crds and the RBAC roles in rbac come from plugin-barman-cloud ${release}";
+        reason = "the CRD in kix/packages/experimental/cnpg-barman-cloud/crds and the RBAC roles in its rbac directory come from plugin-barman-cloud ${release}";
         fix = "To update this package to another version, follow the instructions at the top of kix/packages/experimental/cnpg-barman-cloud/default.nix.";
       })
     ]

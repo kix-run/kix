@@ -375,7 +375,7 @@ in
         inherit (config) image;
         inherit release;
         reason = "the ClusterRole rules (sources.nix) and supported providers (providers.nix) match external-dns v${release}";
-        fix = "To update this package to another version, change release in kix/packages/experimental/external-dns/default.nix and update sources.nix and providers.nix from that version's chart clusterrole.yaml and pkg/apis/externaldns/types.go.";
+        fix = "To update this package to another version, change release in kix/packages/experimental/external-dns/default.nix and update sources.nix and providers.nix from clusterrole.yaml in that version's chart and pkg/apis/externaldns/types.go.";
       })
       {
         assertion = s.complete || s.dep != null || config.secretEnv != { };

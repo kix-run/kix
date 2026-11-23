@@ -316,7 +316,8 @@ in
         minor.message
         == ''image.tag "v1.11.0" is not a v1.10 release. Kix rejected it because the CRDs are vendored from v1.10.0.''
       &&
-        minor.fix == "Set image.tag to a tag of the v1.10 release, or remove image.tag to use the default."
+        minor.fix
+        == "Set image.tag to a tag from the v1.10 release series, or remove image.tag to use the default."
       && other.option == "webhook.image.tag"
       &&
         other.message
@@ -326,7 +327,7 @@ in
         == ''image.tag "v1.4.0" is not a v1.8, v1.9, or v1.10 release. Kix rejected it because the CRDs are vendored from v1.10.0.''
       &&
         older.fix
-        == "Set image.tag to a tag of the v1.8, v1.9, or v1.10 release, or remove image.tag to use the default. Run the script."
+        == "Set image.tag to a tag from the v1.8, v1.9, or v1.10 release series, or remove image.tag to use the default. Run the script."
     )
     || throw "kix.image.checkRelease: ${
       builtins.toJSON {

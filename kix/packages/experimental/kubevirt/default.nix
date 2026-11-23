@@ -266,7 +266,7 @@ in
         inherit release;
         also = olderMinors;
         reason = "the CRD and RBAC roles in kix/packages/experimental/kubevirt/{crds,rbac} come from ${release}";
-        fix = "To update this package to another version, change release in kix/packages/experimental/kubevirt/default.nix and the tag in crds/sources.txt and rbac/sources.txt, then run uv run scripts/vendor-crds.py kubevirt.";
+        fix = "To update this package to another version, change release in kix/packages/experimental/kubevirt/default.nix and the tag in crds/sources.txt and rbac/sources.txt, and then run uv run scripts/vendor-crds.py kubevirt.";
       })
     ]
     ++ map (n: {

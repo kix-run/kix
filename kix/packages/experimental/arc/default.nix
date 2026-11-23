@@ -272,7 +272,7 @@ in
         in
         {
           assertion = controllerParses imageTag;
-          message = "image.tag \"${imageTag}\" is not a version the controller can parse. Kix rejected it because the controller writes this tag to every runner set's version label and deletes any runner set whose label it cannot parse. Set image.tag to major.minor.patch numbers without a \"v\" prefix or leading zeros (such as \"${release}\"), or remove image.tag to use the default.";
+          message = "image.tag \"${imageTag}\" is not a version the controller can parse. Kix rejected it because the controller writes this tag to every runner set's version label and deletes any runner set whose label it cannot parse. Set image.tag to a major.minor.patch version without a \"v\" prefix or leading zeros (such as \"${release}\"), or remove image.tag to use the default.";
         }
       )
       (kix.image.checkRelease {

@@ -181,7 +181,7 @@ in
       (kix.image.checkRelease {
         inherit (config) image;
         inherit release;
-        reason = "the CRD in kix/packages/experimental/rabbitmq-operator/crds and the RBAC roles in rbac come from RabbitMQ Cluster Operator ${release}";
+        reason = "the CRD in kix/packages/experimental/rabbitmq-operator/crds and the RBAC roles in its rbac directory come from RabbitMQ Cluster Operator ${release}";
         fix = "To update this package to another version, follow the instructions at the top of kix/packages/experimental/rabbitmq-operator/default.nix.";
       })
     ];

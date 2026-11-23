@@ -45,7 +45,7 @@ rec {
         in
         if v == null || v == "" then
           fail {
-            message = "${caller}: image reference has no '${field}', and got: ${builtins.toJSON image}";
+            message = "${caller}: '${field}' is missing or empty in image ${builtins.toJSON image}.";
             fix = "An image needs at least { repository, tag }.";
           }
         else
@@ -121,7 +121,7 @@ rec {
             option = path;
             message = "${path} \"${tag}\" is not a ${acceptedText} release. Kix rejected it because ${reason}.";
             fix =
-              "Set ${path} to a tag of the ${acceptedText} release, or remove ${path} to use the default."
+              "Set ${path} to a tag from the ${acceptedText} release series, or remove ${path} to use the default."
               + lib.optionalString (fix != null) " ${fix}";
           };
     };
