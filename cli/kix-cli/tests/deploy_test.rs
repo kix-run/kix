@@ -33,7 +33,7 @@ fn deploy_dry_run_shows_plan() {
     let cache = common::tempdir();
     kix()
         .env("XDG_CACHE_HOME", cache.path())
-        .args(["deploy", "example", "--dry-run", "--yes", "--offline"])
+        .args(["deploy", "cli-fixture", "--dry-run", "--yes", "--offline"])
         .assert()
         .code(2)
         .stderr(predicate::str::contains("Warnings from the Kix library"))
@@ -47,7 +47,7 @@ fn deploy_dry_run_shows_plan() {
 #[test]
 fn apply_is_refused() {
     kix()
-        .args(["apply", "example", "--dry-run", "--yes", "--offline"])
+        .args(["apply", "cli-fixture", "--dry-run", "--yes", "--offline"])
         .assert()
         .code(1)
         .stderr(predicate::str::contains("[K9947]"))
@@ -63,7 +63,7 @@ fn plan_save_writes_the_plan_file() {
     let cache = common::tempdir();
     kix()
         .env("XDG_CACHE_HOME", cache.path())
-        .args(["plan", "example", "--offline", "--out"])
+        .args(["plan", "cli-fixture", "--offline", "--out"])
         .arg(&path)
         .assert()
         .code(2)
@@ -117,7 +117,7 @@ fn plan_save_writes_the_plan_file() {
 fn plan_refuses_json_and_points_at_save() {
     for format in ["json", "yaml"] {
         kix()
-            .args(["plan", "example", "--offline", "-o", format])
+            .args(["plan", "cli-fixture", "--offline", "-o", format])
             .assert()
             .code(1)
             .stderr(predicate::str::contains("--out"));
@@ -132,7 +132,7 @@ fn deploy_plan_refuses_json_and_a_changed_plan_file() {
     let json = dir.path().join("plan.json");
     std::fs::write(&json, "{}").unwrap();
     kix()
-        .args(["deploy", "example", "--dry-run", "--plan"])
+        .args(["deploy", "cli-fixture", "--dry-run", "--plan"])
         .arg(&json)
         .assert()
         .code(1)
@@ -142,7 +142,7 @@ fn deploy_plan_refuses_json_and_a_changed_plan_file() {
     let cache = common::tempdir();
     kix()
         .env("XDG_CACHE_HOME", cache.path())
-        .args(["plan", "example", "--offline", "--out"])
+        .args(["plan", "cli-fixture", "--offline", "--out"])
         .arg(&saved)
         .assert()
         .code(2);
@@ -151,17 +151,18 @@ fn deploy_plan_refuses_json_and_a_changed_plan_file() {
     bytes[last] ^= 1;
     std::fs::write(&saved, bytes).unwrap();
     kix()
-        .args(["deploy", "example", "--dry-run", "--plan"])
+        .args(["deploy", "cli-fixture", "--dry-run", "--plan"])
         .arg(&saved)
         .assert()
         .code(1)
         .stderr(predicate::str::contains("cannot read the plan"));
 }
 
-/// Flake attribute `minimal` builds the cluster named `test-minimal`. The
-/// local activation cache, like the Activation records, is keyed by that
-/// name, so a deploy of `minimal` finds the build cached as `test-minimal`
-/// and plans against it instead of reporting a first deploy.
+/// Flake attribute `cli-fixture` builds the cluster named
+/// `test-cli-fixture`. The local activation cache, like the Activation
+/// records, is keyed by that name, so a deploy of `cli-fixture` finds the
+/// build cached as `test-cli-fixture` and plans against it instead of
+/// reporting a first deploy.
 #[test]
 fn deploy_reads_the_cache_under_the_cluster_name_not_the_attribute() {
     let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -169,21 +170,21 @@ fn deploy_reads_the_cache_under_the_cluster_name_not_the_attribute() {
         .unwrap()
         .parent()
         .unwrap();
-    let index = kix::eval::nix::eval_activation_index(repo, "minimal", &[], &|_| {})
+    let index = kix::eval::nix::eval_activation_index(repo, "cli-fixture", &[], &|_| {})
         .expect("the cluster evaluates");
 
     let cache = common::tempdir();
     let activations = cache.path().join("kix/activations");
     std::fs::create_dir_all(&activations).unwrap();
     std::fs::write(
-        activations.join("test-minimal.path"),
+        activations.join("test-cli-fixture.path"),
         index.to_string_lossy().as_bytes(),
     )
     .unwrap();
 
     kix()
         .env("XDG_CACHE_HOME", cache.path())
-        .args(["deploy", "minimal", "--dry-run", "--yes", "--offline"])
+        .args(["deploy", "cli-fixture", "--dry-run", "--yes", "--offline"])
         .assert()
         .success()
         .stdout(predicate::str::contains(
@@ -202,7 +203,7 @@ fn the_json_deploy_log_has_stdout_to_itself() {
         .env("XDG_CACHE_HOME", cache.path())
         .args([
             "deploy",
-            "example",
+            "cli-fixture",
             "--offline",
             "--yes",
             "--log-format",
@@ -218,7 +219,7 @@ fn the_json_deploy_log_has_stdout_to_itself() {
             .unwrap_or_else(|e| panic!("stdout line is not JSON ({e}): {line}"));
     }
     let stderr = String::from_utf8(out.stderr).unwrap();
-    assert!(stderr.contains("Cluster example:"), "{stderr}");
+    assert!(stderr.contains("Cluster test-cli-fixture:"), "{stderr}");
     assert!(
         stderr.contains("No previous deployment in local cache. First deploy."),
         "{stderr}"
@@ -231,7 +232,14 @@ fn the_json_deploy_log_has_stdout_to_itself() {
 #[test]
 fn deploy_dry_run_refuses_json_in_its_own_name() {
     kix()
-        .args(["deploy", "example", "--dry-run", "--offline", "-o", "json"])
+        .args([
+            "deploy",
+            "cli-fixture",
+            "--dry-run",
+            "--offline",
+            "-o",
+            "json",
+        ])
         .assert()
         .code(1)
         .stderr(predicate::str::contains(
@@ -247,7 +255,7 @@ fn plan_markdown_lists_library_warnings() {
     let cache = common::tempdir();
     kix()
         .env("XDG_CACHE_HOME", cache.path())
-        .args(["plan", "example", "--offline", "-o", "markdown"])
+        .args(["plan", "cli-fixture", "--offline", "-o", "markdown"])
         .assert()
         .code(2)
         .stdout(predicate::str::contains(

@@ -757,10 +757,6 @@ prints `check-bump: PASS` and the upgrade deploy below has run.
 `scripts/check-bump.sh` finds these and lists every place the old version
 still appears. Update each place, or say why it stays.
 
-- `cli/kix-cli/tests/snapshots/` when the package is in the example
-  cluster. The snapshots hold hashes that change too, so regenerate them
-  instead of editing them directly. From `cli/`: `nix develop .. -c env
-  INSTA_UPDATE=always cargo test -p kix-cli --test snapshot_test`.
 - `docs/src/command-output/`: leave these files alone. Each Kix release
   regenerates the captured command output in the docs, so
   `scripts/check-bump.sh` skips them.
