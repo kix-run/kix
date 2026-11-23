@@ -393,7 +393,7 @@ in
         two-defaults =
           refusedWith
             [
-              "config.volumeSnapshotClasses.a and config.volumeSnapshotClasses.b are each annotated snapshot.storage.kubernetes.io/is-default-class"
+              "config.volumeSnapshotClasses.a and config.volumeSnapshotClasses.b each set snapshot.storage.kubernetes.io/is-default-class"
             ]
             {
               config.volumeSnapshotClasses = {
@@ -404,8 +404,8 @@ in
         reserved-keys =
           refusedWith
             [
-              "config.volumeSnapshotClasses.root: Kix drops parts named root or meta, so this VolumeSnapshotClass would not be rendered. Rename it."
-              "config.volumeSnapshotClasses.meta: Kix drops parts named root or meta"
+              "config.volumeSnapshotClasses.root: Kix reserves the names \"root\" and \"meta\" and skips resources under those keys, so this VolumeSnapshotClass cannot be built. Rename it."
+              "config.volumeSnapshotClasses.meta: Kix reserves the names \"root\" and \"meta\""
             ]
             {
               config.volumeSnapshotClasses = {
@@ -417,7 +417,7 @@ in
           config.node.tolerations = [ { effect = "NoSchedule"; } ];
         };
         toleration-exists-with-value =
-          refusedWith [ "config.node.tolerations[0] sets value with operator Exists" ]
+          refusedWith [ "config.node.tolerations[0] sets value with operator \"Exists\"" ]
             {
               config.node.tolerations = [
                 {
@@ -428,7 +428,7 @@ in
               ];
             };
         toleration-seconds-without-noexecute =
-          refusedWith [ "config.node.tolerations[1] sets tolerationSeconds with effect NoSchedule" ]
+          refusedWith [ "config.node.tolerations[1] sets tolerationSeconds while effect is NoSchedule" ]
             {
               config.node.tolerations = [
                 { operator = "Exists"; }

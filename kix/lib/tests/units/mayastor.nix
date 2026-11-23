@@ -366,9 +366,9 @@ in
               deps = snapshotDep;
             };
           in
-          someMessageHas [ "diskPools.root: Kix drops parts named root or meta" ] messages
+          someMessageHas [ "diskPools.root: Kix reserves the names \"root\" and \"meta\"" ] messages
           && someMessageHas [
-            "config.volumeSnapshotClasses.meta: Kix drops parts named root or meta"
+            "config.volumeSnapshotClasses.meta: Kix reserves the names \"root\" and \"meta\""
           ] messages;
         ownedResources =
           someMessageHas [ "ioEngine.resources sets cpu" "ioEngine.cpuCount" ]
@@ -381,8 +381,8 @@ in
           in
           someMessageHas
             [
-              "config.volumeSnapshotClasses.a and config.volumeSnapshotClasses.b are each annotated"
-              "Keep the annotation on one class"
+              "config.volumeSnapshotClasses.a and config.volumeSnapshotClasses.b each set"
+              "Keep this annotation on at most one class"
             ]
             (failedMessages {
               config.volumeSnapshotClasses = {
@@ -403,7 +403,7 @@ in
               config.ioEngine.tolerations = [ { effect = "NoSchedule"; } ];
             });
         tolerationExistsWithValue =
-          someMessageHas [ "csiNode.tolerations[1] sets value with operator Exists" ]
+          someMessageHas [ "csiNode.tolerations[1] sets value with operator \"Exists\"" ]
             (failedMessages {
               config.csiNode.tolerations = [
                 { operator = "Exists"; }

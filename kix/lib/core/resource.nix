@@ -1124,7 +1124,7 @@ rec {
           crRequires
         else
           fail {
-            message = "${declaredBy}: crRequires for ${group}/${kind} is a ${builtins.typeOf crRequires}.";
+            message = "${declaredBy}: crRequires for ${group}/${kind} must be a list of resources (got ${builtins.typeOf crRequires}).";
             fix = "Set crRequires to a list of resources, such as [ self.webhookCheck ].";
           };
 

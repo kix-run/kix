@@ -13,7 +13,7 @@ let
       key = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;
-        description = "Taint key. Null with operator `Exists` tolerates every taint.";
+        description = "Taint key to match. Leave `null` with `operator = \"Exists\"` to match all taint keys.";
       };
       operator = lib.mkOption {
         type = lib.types.enum [
@@ -21,12 +21,12 @@ let
           "Equal"
         ];
         default = "Equal";
-        description = "`Exists` matches any value of the key. `Equal` matches `value`.";
+        description = "How to match the taint: `Equal` requires the taint value to match `value`, and `Exists` matches any value for `key`.";
       };
       value = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;
-        description = "Taint value for operator `Equal`.";
+        description = "Taint value to match when `operator` is `Equal`. Leave `null` when `operator` is `Exists`.";
       };
       effect = lib.mkOption {
         type = lib.types.nullOr (
@@ -37,12 +37,12 @@ let
           ]
         );
         default = null;
-        description = "Taint effect to tolerate. Null tolerates every effect.";
+        description = "Taint effect to tolerate. Leave `null` to tolerate all effects.";
       };
       tolerationSeconds = lib.mkOption {
         type = lib.types.nullOr lib.types.ints.unsigned;
         default = null;
-        description = "For effect `NoExecute`, how long the pod stays bound after the taint appears. Null keeps it bound.";
+        description = "Seconds a pod stays on a node before eviction after a matching `NoExecute` taint is added. Leave `null` to keep the pod on the node indefinitely. Requires `effect = \"NoExecute\"`.";
       };
     };
   };
@@ -59,15 +59,15 @@ let
           at = "${optionPath}[${toString i}]";
         in
         lib.optional ((t.key == null || t.key == "") && t.operator != "Exists")
-          "${at} has no key, which the apiserver accepts only with operator Exists (tolerate every taint). Set key, or set operator = \"Exists\"."
+          "${at} has no key. Kubernetes rejects a toleration without a key unless operator is \"Exists\" (which matches all taint keys). Set key, or set operator = \"Exists\"."
         ++
           lib.optional (t.operator == "Exists" && t.value != null)
-            "${at} sets value with operator Exists, which matches any value, so the apiserver refuses it. Remove value, or set operator = \"Equal\"."
+            "${at} sets value with operator \"Exists\". Because \"Exists\" matches any taint value, Kubernetes rejects a value field here. Remove value, or set operator = \"Equal\"."
         ++
           lib.optional (t.tolerationSeconds != null && t.effect != "NoExecute")
-            "${at} sets tolerationSeconds with effect ${
+            "${at} sets tolerationSeconds while effect is ${
               if t.effect == null then "unset" else t.effect
-            }, and the apiserver accepts tolerationSeconds only with effect NoExecute. Set effect = \"NoExecute\", or remove tolerationSeconds."
+            }. Kubernetes allows tolerationSeconds only when effect is \"NoExecute\". Set effect = \"NoExecute\", or remove tolerationSeconds."
       ) tolerations
     );
 

@@ -84,7 +84,7 @@ in
         noKey = has "config.tolerations[0] has no key" (
           problems (tolerations [ { effect = "NoSchedule"; } ])
         );
-        existsWithValue = has "config.tolerations[0] sets value with operator Exists" (
+        existsWithValue = has "config.tolerations[0] sets value with operator \"Exists\"" (
           problems (tolerations [
             {
               key = "k";
@@ -93,7 +93,7 @@ in
             }
           ])
         );
-        secondsWithoutNoExecute = has "config.tolerations[1] sets tolerationSeconds with effect unset" (
+        secondsWithoutNoExecute = has "config.tolerations[1] sets tolerationSeconds while effect is unset" (
           problems (tolerations [
             { operator = "Exists"; }
             {
@@ -117,7 +117,7 @@ in
             (classProblems { a = { }; } null);
         threeDefaults =
           has
-            "config.volumeSnapshotClasses.a, config.volumeSnapshotClasses.b, and config.volumeSnapshotClasses.c are each annotated"
+            "config.volumeSnapshotClasses.a, config.volumeSnapshotClasses.b, and config.volumeSnapshotClasses.c each set"
             (
               classProblems {
                 a = isDefault;
@@ -125,7 +125,7 @@ in
                 c = isDefault;
               } { }
             );
-        reserved = has "config.volumeSnapshotClasses.root: Kix drops parts named root or meta" (
+        reserved = has "config.volumeSnapshotClasses.root: Kix reserves the names \"root\" and \"meta\"" (
           classProblems { root = { }; } { }
         );
       };

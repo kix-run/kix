@@ -26,12 +26,12 @@ let
           "Retain"
         ];
         default = "Delete";
-        description = "Whether deleting a VolumeSnapshot deletes the snapshot the driver made.";
+        description = "What happens to the underlying snapshot when its VolumeSnapshot is deleted: `Delete` deletes it, and `Retain` keeps it.";
       };
       parameters = lib.mkOption {
         type = lib.types.attrsOf lib.types.str;
         default = { };
-        description = "Driver parameters of the class. Omitted from the manifest when empty.";
+        description = "Driver-specific snapshot parameters. Omitted from the manifest when empty.";
       };
       labels = lib.mkOption {
         type = lib.types.attrsOf lib.types.str;
@@ -41,7 +41,7 @@ let
       annotations = lib.mkOption {
         type = lib.types.attrsOf lib.types.str;
         default = { };
-        description = "Annotations on the VolumeSnapshotClass. `\"${defaultAnnotation}\" = \"true\"` marks it as the default class for this driver's volumes.";
+        description = "Annotations on the VolumeSnapshotClass. Setting `\"${defaultAnnotation}\" = \"true\"` makes this the default snapshot class for this driver's volumes.";
       };
     };
   };
@@ -63,17 +63,17 @@ let
       ) names;
     in
     lib.optional (names != [ ] && snapshotController == null)
-      "${optionPath} defines ${lib.concatStringsSep ", " names}, but nothing provides the snapshotController role, so the VolumeSnapshotClass kind has no owner. Add a snapshot-controller instance. On a cluster whose environment runs the controller, use its flavour (rke2 provides the role) or a kix.mkImport with roles = [ \"snapshotController\" ] and its crds. Or remove ${optionPath}."
+      "${optionPath} defines ${lib.concatStringsSep ", " names}, but nothing provides the snapshotController role, so Kix cannot build VolumeSnapshotClass resources. Add an instance of packages.experimental.snapshot-controller, or remove ${optionPath}. If your cluster already runs a snapshot controller, include its flavor (such as kix.flavors.rke2) or declare it with kix.mkImport (roles = [ \"snapshotController\" ] and crds)."
     ++
       lib.optional (builtins.length defaults > 1)
         "${
           joinNames (map (n: "${optionPath}.${n}") defaults)
-        } are each annotated ${defaultAnnotation}=\"true\". A VolumeSnapshot that names no class then fails, because the snapshot controller does not choose between two defaults for one driver. Keep the annotation on one class."
+        } each set ${defaultAnnotation}=\"true\". A CSI driver can have at most one default VolumeSnapshotClass; with more than one default, any VolumeSnapshot without a volumeSnapshotClassName fails. Keep this annotation on at most one class."
     # `instancePartResources` (`eval/helpers.nix`) skips keys named `root` or
     # `meta` at every depth, so a class under either key would not render.
     ++ map (
       n:
-      "${optionPath}.${n}: Kix drops parts named root or meta, so this VolumeSnapshotClass would not be rendered. Rename it."
+      "${optionPath}.${n}: Kix reserves the names \"root\" and \"meta\" and skips resources under those keys, so this VolumeSnapshotClass cannot be built. Rename it."
     ) (builtins.filter (n: n == "root" || n == "meta") names);
 
   # Build one VolumeSnapshotClass for `driver` per entry of `classes`, keyed

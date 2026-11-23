@@ -448,12 +448,12 @@ memBytes = kix.parseQuantity "memory" config.resources.requests.memory; # "256Mi
 
 ### Tolerations (`kix.types.toleration` and `kix.tolerations`)
 
-`kix.types.toleration` is a submodule option type with the fields of a Kubernetes toleration: `key`, `operator` (`"Equal"` by default, or `"Exists"`), `value`, `effect`, and `tolerationSeconds`. Each field except `operator` defaults to `null`. The API server refuses some combinations of these fields, and an option type cannot check them, so a package also checks the list in its `assertions` and renders it with `kix.tolerations.render`:
+`kix.types.toleration` is a submodule option type for Kubernetes pod tolerations. It defines `key`, `operator` (`"Equal"` by default, or `"Exists"`), `value`, `effect`, and `tolerationSeconds` (all `null` by default except `operator`). Because Kubernetes rejects certain combinations of these fields across an entry, validate the list in `assertions` with `kix.tolerations.problems` and format it for the pod spec with `kix.tolerations.render`:
 
 | Helper | Signature | Behavior |
 | --- | --- | --- |
-| `kix.tolerations.problems` | `optionPath -> tolerations -> [ message ]` | Returns one message for each toleration the API server would refuse: no key with an operator other than `Exists`, a value with operator `Exists`, or `tolerationSeconds` with an effect other than `NoExecute`. Each message names the entry as `<optionPath>[<index>]`. |
-| `kix.tolerations.render` | `tolerations -> list` | Returns the tolerations as a pod spec lists them, without the fields left at `null`. |
+| `kix.tolerations.problems` | `optionPath -> tolerations -> [ message ]` | Returns an error message for each toleration that Kubernetes would reject: a missing or empty `key` when `operator` is other than `"Exists"`, a `value` set when `operator` is `"Exists"`, or `tolerationSeconds` set when `effect` is other than `"NoExecute"`. Each message identifies the entry as `<optionPath>[<index>]`. |
+| `kix.tolerations.render` | `tolerations -> list` | Strips `null` fields from each toleration so the list can be assigned directly to `spec.tolerations` on a pod spec. |
 
 ```nix
 options.node.tolerations = lib.mkOption {
@@ -475,12 +475,12 @@ tolerations = kix.tolerations.render config.node.tolerations;
 
 ### VolumeSnapshotClasses (`kix.types.volumeSnapshotClass` and `kix.storage`)
 
-A CSI driver package offers its VolumeSnapshotClasses as an option of type `lib.types.attrsOf kix.types.volumeSnapshotClass`, keyed by class name. Each class has `deletionPolicy` (`"Delete"` by default, or `"Retain"`), `parameters`, `labels`, and `annotations`. The VolumeSnapshotClass kind belongs to the package that provides the `snapshotController` role, so the driver takes it as an optional dependency, `snapshotController ? null`.
+CSI driver packages expose `VolumeSnapshotClass` settings as an option of type `lib.types.attrsOf kix.types.volumeSnapshotClass`, keyed by class name. Each entry accepts `deletionPolicy` (`"Delete"` by default, or `"Retain"`), `parameters`, `labels`, and `annotations`. Because the `snapshotController` role provider supplies the `VolumeSnapshotClass` CRD, take `snapshotController ? null` as an optional `build` dependency:
 
 | Helper | Signature | Behavior |
 | --- | --- | --- |
-| `kix.storage.snapshotClassProblems` | `{ optionPath, classes, snapshotController } -> [ message ]` | Returns a message when classes are defined and `snapshotController` is `null`, when more than one class has the annotation `snapshot.storage.kubernetes.io/is-default-class = "true"`, and for each class named `root` or `meta`, which Kix does not render. Use it in `assertions` with `snapshotController = deps.snapshotController or null`. |
-| `kix.storage.mkSnapshotClasses` | `{ scope, snapshotController, driver, classes, requires ? [ ] } -> attrset` | Builds one VolumeSnapshotClass for the CSI driver named `driver` from each entry of `classes`, keyed like `classes`, with `scope.mkCR snapshotController.out.crds.VolumeSnapshotClass`. Returns `{ }` when `snapshotController` is `null`. |
+| `kix.storage.snapshotClassProblems` | `{ optionPath, classes, snapshotController } -> [ message ]` | Returns error messages when `classes` is non-empty while `snapshotController` is `null`, when more than one class sets `snapshot.storage.kubernetes.io/is-default-class = "true"`, or when a class is named `root` or `meta` (reserved keys that Kix skips when collecting resources). Call this in `assertions` with `snapshotController = deps.snapshotController or null`. |
+| `kix.storage.mkSnapshotClasses` | `{ scope, snapshotController, driver, classes, requires ? [ ] } -> attrset` | Builds a `VolumeSnapshotClass` resource for each entry in `classes` (preserving the same attribute keys) via `scope.mkCR snapshotController.out.crds.VolumeSnapshotClass`, setting `driver` on each class. Returns `{ }` when `snapshotController` is `null`. |
 
 ```nix
 snapshotClasses = kix.storage.mkSnapshotClasses {
