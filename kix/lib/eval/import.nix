@@ -4,13 +4,14 @@
   rbac,
   kixlib,
   helpers,
+  mkScope,
   evaluateInstanceConfig,
   buildEntriesOf,
   discoverBuildDeps,
 }:
 
 let
-  inherit (import ../core/error.nix { inherit lib; }) fail;
+  inherit (import ../core/error.nix { inherit lib; }) fail failFor;
   meta = import ../meta.nix { inherit lib; };
   packageLib = import ../core/package.nix { inherit lib; };
   kixAnnotations = import ../core/annotations.nix;
@@ -184,8 +185,33 @@ rec {
           };
         };
 
-      scope = {
+      instance = "${namespaceName}/${instanceName}";
+
+      # Every name the package scope offers. The import scope implements
+      # some of them and refuses the rest with an error that names the
+      # import and the scope attribute.
+      packageScopeNames = builtins.attrNames (mkScope {
+        inherit
+          instanceName
+          namespaceName
+          namespaceResource
+          clusterDomain
+          ;
+      });
+      unsupported =
+        name:
+        fail {
+          inherit instance;
+          message = "kix.mkImport { from = ...; } evaluates the package to derive the import's out, and the package uses scope.${name}, which an import does not offer.";
+          fix =
+            "Set the import's output fields directly and omit 'from':"
+            + "\n  kix.mkImport { out = { <field> = \"...\"; }; }"
+            + "\nList the CRDs the environment installs in kix.mkImport { crds = [ ... ]; }.";
+        };
+
+      scope = lib.genAttrs packageScopeNames unsupported // {
         inherit instanceName namespaceName selectorLabels;
+        fail = failFor instance;
         labelStyle = "kix";
         namespace = namespaceResource;
         mkResource = mkRes namespaceResource;

@@ -545,6 +545,13 @@ rec {
       hasTls = useIngress && clusterIssuer != null;
       tlsSecretName = "${name}-tls";
 
+      ingressClassName =
+        ingressNginx.out.ingressClassName or (fail {
+          dependency = "ingressNginx";
+          message = "kix.expose (${scope.namespaceName}/${name}): the Ingress needs a class name, and the instance wired as ingressNginx publishes no out.ingressClassName.";
+          fix = "Wire an ingress controller package that publishes out.ingressClassName, such as ingress-nginx. For an import, set it in the import's out: kix.mkImport { out.ingressClassName = \"<class>\"; }.";
+        });
+
       configAnnotations = config.ingress.annotations or { };
       routeAnnotations = defaultAnnotations // configAnnotations;
       extraHosts = config.ingress.extraHosts or [ ];
@@ -889,7 +896,7 @@ rec {
                   inherit name;
                   annotations = routeAnnotations;
                   spec = {
-                    ingressClassName = ingressNginx.out.ingressClassName;
+                    inherit ingressClassName;
                     rules = multiPathRules;
                   }
                   // lib.optionalAttrs hasTls {
@@ -907,7 +914,7 @@ rec {
                   {
                     inherit name;
                     host = effectiveHost;
-                    className = ingressNginx.out.ingressClassName;
+                    className = ingressClassName;
                     tls = lib.optional hasTls {
                       inherit hosts;
                       secretName = tlsSecretName;
