@@ -245,10 +245,10 @@ in
         in
         lib.optional (checkNodes && nodes ? ${pool.node} && missing != { }) {
           option = "diskPools.${poolName}.node";
-          message = "diskPools.${poolName} is on node ${pool.node}, whose labels in cluster.nodes lack ${
+          message = "diskPools.${poolName} targets node \"${pool.node}\", but that node's entry in cluster.nodes is missing label(s) ${
             lib.concatStringsSep ", " (lib.mapAttrsToList (k: v: "${k}=${v}") missing)
-          } from ioEngine.nodeSelector, so io-engine may not run there and the pool would not come up.";
-          fix = "Label the node, or ignore this if it is labelled outside the cluster definition.";
+          } required by the io-engine DaemonSet (ioEngine.nodeSelector). Kix still built the DiskPool, which will stay offline unless io-engine runs on that node.";
+          fix = "Ensure the Kubernetes node has the required label(s) and record them under cluster.nodes in the cluster definition, or change ioEngine.nodeSelector to match the node's labels.";
         };
     in
     lib.concatLists (lib.mapAttrsToList unlabelledPool config.diskPools)

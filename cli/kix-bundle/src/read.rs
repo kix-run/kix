@@ -334,7 +334,7 @@ fn parse_header(bytes: &[u8]) -> Result<Header, BundleError> {
         .is_some_and(|w| w.get().len() > MAX_WARNINGS_BYTES)
     {
         return Err(too_large(format!(
-            "the warnings are over {MAX_WARNINGS_BYTES} bytes"
+            "build warnings exceed {MAX_WARNINGS_BYTES} bytes; fix warnings in the cluster and build the bundle again"
         )));
     }
     let header: Header = serde_json::from_slice(bytes).map_err(unreadable)?;

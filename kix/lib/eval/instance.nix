@@ -872,8 +872,8 @@ in
           in
           if builtins.isAttrs contents && !(contents ? _type) then
             map (v: {
-              message = "'${folderName}' holds a value of type '${v._type}', which is not a resource. Kix renders only resources from '${folderName}', so this value is not in the build.";
-              fix = "Build the value with a scope.mk* resource builder, or move it out of '${folderName}'.";
+              message = "Build folder '${folderName}' contains a value with _type '${v._type}', which is not a resource. Kix renders only resources from '${folderName}', so it omitted this value from the build.";
+              fix = "Build the value with a `scope.mk*` resource builder (such as `scope.mkSecret` or `scope.mkCRD`), or move it out of '${folderName}'.";
             }) (builtins.filter (v: !(builtins.elem v._type expected)) (collectTypedAttrs { } contents))
           else
             [ ]

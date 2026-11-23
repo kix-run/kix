@@ -569,14 +569,12 @@ rec {
           {
             object = { inherit kind name; };
             message =
-              "${kind}/${name} (${apiVersion}) references a Service address but does not declare how its controller uses it. "
-              + "Kix assumes endpoint = \"conduct\" (the resource passes the address to other resources).";
+              "${kind}/${name} (${apiVersion}) references a Service address without declaring whether its pods connect to that Service (`factBehavior`). "
+              + "Kix assumed `endpoint = \"conduct\"` (the resource forwards the address rather than connecting to it), so when network policies are enabled Kix does not open traffic from this resource's pods to that Service.";
             fix =
-              "If pods created by this controller connect to the address "
-              + "directly, build the custom resource with `scope.mkCR <owner>.out.crds.<kind>` "
-              + "and declare `factBehavior = { endpoint = \"terminate\"; podSelector = cr: "
-              + "{ ... }; }` on the owner's mkCRD/mkCRDRef. For resources built without a typed builder (Helm or "
-              + "raw kind strings), set `cluster.factBehavior.\"<group>/${kind}\"`.";
+              "If pods managed by this custom resource connect to that Service directly, declare `factBehavior = { endpoint = \"terminate\"; podSelector = cr: "
+              + "{ ... }; }`; if the resource only passes the address on, declare `factBehavior = { endpoint = \"conduct\"; }`. "
+              + "Package authors set `factBehavior` on `scope.mkCRD` or `scope.mkCRDRef` (and build the resource with `scope.mkCR <owner>.out.crds.<kind>`); in a cluster definition (such as for Helm charts or raw manifests), set `cluster.factBehavior.\"<group>/${kind}\"`.";
           }
         else
           null;

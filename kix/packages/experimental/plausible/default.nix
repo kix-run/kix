@@ -263,8 +263,8 @@ in
           replicas = dep.out.replicas or null;
         in
         lib.optional (replicas != null && replicas != "1") {
-          message = "deps.clickhouseDatabase is on a ClickHouse server with ${replicas} replicas. Plausible Community Edition documents a single ClickHouse server; Kix migrates on one replica and converts Plausible's tables to replicated ones in the `replicate` init container, which Plausible does not support. It was tested with Plausible v${release}.";
-          fix = "Before upgrading Plausible, test the new version on a replicated ClickHouse, and upgrade only while every replica is up.";
+          message = "deps.clickhouseDatabase uses a ClickHouse cluster with ${replicas} replicas, while Plausible Community Edition only supports a single ClickHouse server. Kix added the `replicate` init container to run migrations on one replica and convert Plausible's tables into replicated tables (tested with Plausible v${release}).";
+          fix = "Use a single-replica ClickHouse server for an upstream-supported setup, or if you keep replicated ClickHouse, test new Plausible versions before upgrading and upgrade only while every replica is running.";
         };
     };
   };

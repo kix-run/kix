@@ -343,8 +343,8 @@ in
     { config, ... }:
     lib.optional (kix.parseQuantity "storage" config.storage.size < 5 * 1000 * 1000 * 1000) {
       option = "storage.size";
-      message = "storage.size is ${toString config.storage.size}, under 5GB. The operator sets RabbitMQ's disk_free_limit to 2GB, so RabbitMQDiskNearAlarm can fire on this volume while the cluster is idle, and a volume of 2GB or less starts in the free disk alarm, which blocks every publisher.";
-      fix = "Set storage.size to at least 5Gi.";
+      message = "storage.size is ${toString config.storage.size} (under 5 GB), which Kix kept on the RabbitmqCluster. Because the RabbitMQ operator sets disk_free_limit.absolute to 2 GB, RabbitMQDiskNearAlarm can fire even while the cluster is idle. At 2 GB or less, RabbitMQ starts in a disk alarm and blocks all publishers.";
+      fix = "Set storage.size to at least \"5Gi\".";
     };
 
   options = {

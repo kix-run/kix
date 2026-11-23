@@ -257,8 +257,8 @@ in
       )
       {
         option = "values.policyEnforcementMode";
-        message = "Cilium enforces policy on every endpoint (policyEnforcementMode = \"always\"), but networkPolicy.enable is false, so Kix writes no allow rules. Every pod without a policy from another source loses all traffic except cluster DNS.";
-        fix = "Enable networkPolicy, set values.policyAuditMode = true, or remove values.policyEnforcementMode.";
+        message = "values.policyEnforcementMode is \"always\", but networkPolicy.enable is false. Kix still configured Cilium in \"always\" enforcement mode without generating pod network policies, so Cilium blocks all traffic for any pod without a policy from outside Kix (except cluster DNS when clusterDnsEgress is true).";
+        fix = "Set networkPolicy.enable = true in the cluster definition, set values.policyAuditMode = true, or remove values.policyEnforcementMode.";
       };
 
   build =
