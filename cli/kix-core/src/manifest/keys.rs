@@ -244,6 +244,10 @@ pub const SOPS_DIGEST: &str = key!("sops-digest");
 /// it.
 pub const CONTENT_HASH: &str = key!("content-hash");
 
+/// Where each key of a Secret gets its value: comma-separated `key=source`
+/// pairs, where the source is `inline`, `plain`, `sops`, or `controller`.
+pub const SECRET_SOURCES: &str = key!("secret-sources");
+
 /// Comma-separated keys a Secret carries. The deploy takes the keys from the
 /// SOPS file instead; tests stamp it to show that.
 #[cfg(any(test, feature = "test-util"))]

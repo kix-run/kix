@@ -300,7 +300,7 @@ If you pass Flux's encrypted `Secret` manifest to `scope.mkSecret`, `kix plan` a
 
    Open `secrets/api-credentials.enc.yaml` before committing and confirm that `username` and `password` show `ENC[...]` values.
 
-### Adopt `api` and restore `Secret` data after releasing Flux
+### Adopt `api` and release Flux's fields
 
 1. Enable `instances.api.api` in `clusters/test.nix`, suspend the `api` `Kustomization`, run a dry run, and deploy:
 
@@ -317,20 +317,21 @@ If you pass Flux's encrypted `Secret` manifest to `scope.mkSecret`, `kix plan` a
 
    `kix deploy test` decrypts and writes both keys (`Secret/api-credentials@api> hydrated 2 keys from SOPS` in line-log output). Delete the `api` `Kustomization` from Git while it stays suspended.
 
-2. Clear `kustomize-controller` field ownership on the `api` resources, then run `kix deploy test --reconcile` right away to restore the `Secret` data.
+2. Clear `kustomize-controller` field ownership on the `api` resources.
 
-   Kix sends `Secret` values through Kubernetes's write-only `stringData` field, so the `kix` field manager never owns `data` on the live `Secret`; `kustomize-controller` still owns `data`. When the empty apply removes `kustomize-controller`, Kubernetes deletes `data` and leaves the `Secret` empty. Any pod starting while `data` is empty will fail. Running pods keep working because they read their environment variables at startup, and `kix status test` still reports every resource `ok`; only `kix plan test --reconcile` reveals the missing keys (`+ $.data: {"password":"(secret, not shown)","username":"(secret, not shown)"}`).
+   Kix writes `Secret` values under `data`, so after `kix deploy test` the `kix` field manager owns every key of `api-credentials` alongside `kustomize-controller`. When the empty apply removes `kustomize-controller`, the keys stay because Kix still owns them.
 
-   Preview `release-flux-api.yaml` with `--dry-run=server -o yaml` first. You will see `data` disappear in the preview. Apply the stub file, run `kix deploy test --reconcile` immediately afterward to write the keys back, and verify with `kix plan test --reconcile`:
+   Preview `release-flux-api.yaml` with `--dry-run=server -o yaml` first and check that `data` still holds `username` and `password`. Then apply the stub file and verify with `kix plan test --reconcile`:
 
    <Command
      commands={[
        "kubectl apply --server-side --field-manager=kustomize-controller -f release-flux-api.yaml --dry-run=server -o yaml",
        "kubectl apply --server-side --field-manager=kustomize-controller -f release-flux-api.yaml",
-       "kix deploy test --reconcile",
        "kix plan test --reconcile",
      ]}
    />
+
+   If an older release of Kix deployed the `Secret`, it owns the keys under the write-only `stringData` field instead, and the preview shows `data` disappear. Run `kix deploy test --reconcile` first so that Kix writes the `Secret` again and owns its keys under `data`, then preview again.
 
 ## Detach Namespaces from `infra` and uninstall Flux
 

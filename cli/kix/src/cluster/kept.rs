@@ -67,12 +67,12 @@ pub enum NotKept {
 ///   CRD stores a zero value as sent, so this rule does not apply to custom
 ///   resources.
 /// - both values are the same resource quantity or the same number.
-/// - a Secret's `stringData` value is stored base64-encoded under `data`.
 /// - a list item Kix sent sits elsewhere in the stored list, perhaps with
 ///   fields the server added.
 /// - the field is at or under a path `sent` cedes in `kix.run/cede-fields`.
 ///
-/// Values of a Secret's `data` and `stringData` are never returned.
+/// `sent` is the manifest as the apply sent it, so a Secret's values are
+/// under `data`. Secret values are never returned.
 pub fn not_kept(sent: &Value, stored: &Value) -> Vec<NotKeptField> {
     // The server answers in the version the request names. Another version
     // would make every renamed field look dropped.
@@ -82,7 +82,7 @@ pub fn not_kept(sent: &Value, stored: &Value) -> Vec<NotKeptField> {
     }
     let builtin = types::is_known_api(sent);
     let secret = types::is_secret(sent);
-    let (sent_view, from_string_data) = sent_view(sent, stored, secret);
+    let sent_view = sent_view(sent, stored, secret);
     let stored_view = stored_view(stored, secret);
     let rule = Rule { builtin };
     let ceded = ceded_fields(sent);
@@ -94,11 +94,6 @@ pub fn not_kept(sent: &Value, stored: &Value) -> Vec<NotKeptField> {
     ));
     found.retain(|f| !ceded.iter().any(|c| cedes(c, &f.path)));
     for f in &mut found {
-        if let Some(key) = f.path.strip_prefix("$.data.")
-            && from_string_data.iter().any(|k| k == key)
-        {
-            f.path = format!("$.stringData.{key}");
-        }
         let max = crate::plan::MAX_SHOWN_VALUE_BYTES;
         f.sent = crate::plan::shown_value(secret, &f.path, &f.sent, None, max);
         let sent = f.sent.clone();
@@ -291,13 +286,12 @@ fn same_number(a: &Value, b: &Value) -> bool {
     }
 }
 
-/// Return the parts of `sent` the server stores, and the Secret keys that came
-/// from `stringData`.
+/// Return the parts of `sent` the server stores.
 ///
 /// `status` is left out because an apply does not write it. A namespace on an
 /// object the server stores without one (a cluster-scoped kind) is left out
-/// too. A Secret's `stringData` is merged into `data` as the server does.
-fn sent_view(sent: &Value, stored: &Value, secret: bool) -> (Value, Vec<String>) {
+/// too.
+fn sent_view(sent: &Value, stored: &Value, secret: bool) -> Value {
     let mut view = comparable(sent);
     hash::strip_kix_annotations(&mut view);
     if stored.pointer("/metadata/namespace").is_none()
@@ -305,24 +299,10 @@ fn sent_view(sent: &Value, stored: &Value, secret: bool) -> (Value, Vec<String>)
     {
         meta.remove("namespace");
     }
-    let mut from_string_data = Vec::new();
     if secret && let Some(obj) = view.as_object_mut() {
-        if let Some(Value::Object(strings)) = obj.remove("stringData") {
-            let data = obj
-                .entry("data")
-                .or_insert_with(|| Value::Object(Map::new()));
-            if let Some(data) = data.as_object_mut() {
-                for (k, v) in strings {
-                    let text = v.as_str().map(str::to_string).unwrap_or(v.to_string());
-                    let encoded = base64::engine::general_purpose::STANDARD.encode(text);
-                    data.insert(k.clone(), Value::String(encoded));
-                    from_string_data.push(k);
-                }
-            }
-        }
         canonical_data(obj);
     }
-    (view, from_string_data)
+    view
 }
 
 /// Return the parts of `stored` an apply writes.
@@ -503,7 +483,7 @@ mod tests {
     }
 
     #[test]
-    fn secret_string_data_stored_as_data_is_kept_and_values_never_show() {
+    fn secret_data_is_kept_and_values_never_show() {
         let secret = |body: Value| {
             let mut s = json!({"apiVersion": "v1", "kind": "Secret",
                 "metadata": {"name": "s", "namespace": "app"}, "type": "Opaque"});
@@ -512,7 +492,7 @@ mod tests {
                 .extend(body.as_object().unwrap().clone());
             s
         };
-        let sent = secret(json!({"stringData": {"password": "hunter2"}, "data": {"k": "YWJj\n"}}));
+        let sent = secret(json!({"data": {"password": "aHVudGVyMg==", "k": "YWJj\n"}}));
         let stored = served(&secret(
             json!({"data": {"password": "aHVudGVyMg==", "k": "YWJj"}}),
         ));
@@ -527,7 +507,7 @@ mod tests {
             assert!(!text.contains(leaked), "{leaked} in {text}");
         }
         assert_eq!(found.len(), 1, "{found:?}");
-        assert_eq!(found[0].path, "$.stringData.password");
+        assert_eq!(found[0].path, "$.data.password");
         assert_eq!(found[0].change, NotKept::Changed);
     }
 
