@@ -1252,8 +1252,8 @@ fn a_prune_waits_for_finalizers() {
 
 /// Verify that a deploy waits for an object of the build that is being
 /// deleted, then creates it again. A ConfigMap held by a finalizer is
-/// deleted. `kix plan --reconcile` lists it as being deleted, in text and
-/// JSON. `kix deploy --reconcile` waits until the finalizer is removed and
+/// deleted. `kix plan --reconcile` lists it as being deleted, in its text
+/// and in the plan file. `kix deploy --reconcile` waits until the finalizer is removed and
 /// then creates the ConfigMap, which then has no `deletionTimestamp`.
 ///
 /// The kind cluster is `$KIX_KIND_CLUSTER` (default `kix-apply-wait`); the
@@ -1332,22 +1332,19 @@ fn a_deploy_waits_for_an_object_being_deleted_then_creates_it() {
         "the plan does not list the ConfigMap being deleted:\n{text}"
     );
     assert!(text.contains("waiting for example.com/hold"), "{text}");
-    let out = assert_cmd::Command::cargo_bin("kix")
-        .unwrap()
-        .env("NO_COLOR", "true")
-        .arg("--flake")
-        .arg(flake.path())
-        .args(["--context", &ctx])
-        .args(["plan", "hold", "--reconcile", "-o", "json"])
-        .output()
-        .expect("kix should run");
-    let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|e| {
-        panic!(
-            "{e}: {}{}",
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr)
-        )
-    });
+    let plan_file = flake.path().join("hold.kixplan");
+    let (_, text) = flake.kix(
+        &ctx,
+        &[
+            "plan",
+            "hold",
+            "--reconcile",
+            "--out",
+            plan_file.to_str().unwrap(),
+        ],
+    );
+    assert!(plan_file.exists(), "{text}");
+    let doc = saved_plan(&plan_file);
     let listed = &doc["being_deleted"];
     assert_eq!(
         listed[0]["resource"], "ConfigMap/hold-test-config@hold-test",
