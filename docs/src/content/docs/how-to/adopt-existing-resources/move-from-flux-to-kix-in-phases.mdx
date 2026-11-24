@@ -275,7 +275,7 @@ In `packages/api.nix`, `scope.mkSecret { name = "api-credentials"; keys = [ "use
 Flux encrypts a complete Kubernetes `Secret` manifest. Kix expects a SOPS file that decrypts to a flat key-value map.
 
 :::caution
-Convert the Flux SOPS file before you run `kix deploy`. If you pass Flux's encrypted `Secret` manifest directly to `scope.mkSecret`, `kix deploy` succeeds without error and writes `apiVersion`, `kind`, `metadata`, `stringData`, and `type` as keys in the `Secret`. Existing pods stay up only because Flux's old `username` and `password` entries remain on the live `Secret` until you release Flux's field ownership.
+If you pass Flux's encrypted `Secret` manifest to `scope.mkSecret`, `kix plan` and `kix deploy` stop with error `[K6746]` naming the `metadata` key before applying that `Secret`. The `Secret` on the cluster is left unchanged. Follow the steps below to convert the Flux SOPS file before you run `kix deploy`, and see [Convert a SOPS file from Flux](/docs/how-to/platform-capabilities/use-sops-backed-secrets-if-production-ready/#convert-a-sops-file-from-flux) for a general description.
 :::
 
 1. Add a creation rule in `.sops.yaml` for Kix's secret files without `encrypted_regex`. A Flux repository usually sets `encrypted_regex: ^(data|stringData)$`, which leaves flat keys such as `username` and `password` in plain text:
