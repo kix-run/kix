@@ -604,7 +604,6 @@ in
         certgen = scope.mkJob {
           name = "${name}-certgen";
           labels = certgenLabels;
-          annotations.${kix.keys.rerun} = kix.keyValues.rerunOnChange;
           requires = builtins.attrValues self.certgenRole;
           spec = {
             backoffLimit = 3;

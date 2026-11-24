@@ -160,7 +160,6 @@ in
       {
         name = "${name}-reconcile";
         labels = labelsFor "reconcile";
-        annotations.${kix.keys.rerun} = kix.keyValues.rerunOnChange;
         requires = [ self.statefulSet ];
         spec = {
           # The container restarts with the kubelet's back-off, so six

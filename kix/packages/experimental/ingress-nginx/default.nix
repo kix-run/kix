@@ -612,7 +612,6 @@ in
             name = jobName;
             labels = admissionLabels;
             inherit requires;
-            annotations.${kix.keys.rerun} = kix.keyValues.rerunOnChange;
             spec = {
               template = {
                 metadata = {

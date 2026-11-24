@@ -508,7 +508,6 @@ in
           {
             name = "${serverSideName}-bootstrap";
             inherit labels;
-            annotations.${kix.keys.rerun} = kix.keyValues.rerunOnChange;
             spec = {
               backoffLimit = 10;
               template = {

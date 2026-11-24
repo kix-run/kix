@@ -611,6 +611,11 @@ in
 
           workloadCeiling = workloadCeilingOf kind attrs;
 
+          # A Job's pod template is immutable, so a changed Job that kept its
+          # name could never be applied. Every Job therefore carries the rerun
+          # rule, and the deploy recreates it when its content changes. A value
+          # the package sets wins, so the cross-resource check still refuses
+          # one it does not support.
           baseArgs =
             removeAttrs attrs [
               "spec"
@@ -620,6 +625,10 @@ in
               inherit apiVersion kind;
               spec = finalSpec;
               labels = selector // (attrs.labels or { });
+              annotations = {
+                ${kixKeys.rerun} = kixAnnotations.values.rerunOnChange;
+              }
+              // (attrs.annotations or { });
             };
         in
         withChecks
