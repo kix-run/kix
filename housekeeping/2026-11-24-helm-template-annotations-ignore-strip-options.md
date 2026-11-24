@@ -1,0 +1,3 @@
+# 2026-11-24 · `kix/lib/helm.nix` · `importChart` strips chart pod-template annotations even when `strip.helmAnnotations = false` or `preserveAnnotationPrefixes` matches them.
+
+Kix always removes pod-template annotations such as `checksum/config` from rendered chart workloads, ignoring both `strip.helmAnnotations = false` and `preserveAnnotationPrefixes = [ "checksum/" ]`. `importChart` runs `effectiveStripAnnotations` only on top-level `metadata.annotations`, while `cleanSpec` calls `stripHelmAnnotations` directly on `spec.template.metadata.annotations`. Setting `strip.defaultStrategy = false` is the only way to skip `cleanSpec`, and doing so also keeps default rollout strategy blocks. Whether chart pods still roll when their ConfigMap changes was not tested.

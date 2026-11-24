@@ -1,0 +1,3 @@
+# 2026-11-24 · `kix/lib/scorecard.nix` · Indexing an attribute set by a manifest field in a cluster scorecard rule fails evaluation with a store-path error.
+
+A cluster rule that builds a lookup table with `builtins.listToAttrs` keyed by `metadata.name` or indexes `classes.${w.spec.template.spec.priorityClassName}` stops evaluation with `the string 'batch' is not allowed to refer to a store path`. Strings inside `allResources` still carry Nix string context from `.out` references, so rule authors have to search lists with `builtins.filter` and `==` instead. The example in `docs/src/content/docs/reference/scorecard-and-rules.mdx` works around this behavior.

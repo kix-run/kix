@@ -120,7 +120,8 @@ in
 | `helmVersion` | `"3"` or `"4"` | `"4"` | Major version of the Helm in the Kix runtime used to render the chart (`"4"` is `4.3.1`, `"3"` is `3.19.1`; see [Helm versions](#helm-versions)). |
 | `includeCrds` | bool | `true` | Passes `--include-crds` and wraps rendered CRDs with `scope.mkCRD`. |
 | `includeHooks` | bool | `true` | When `false`, passes `--no-hooks` to `helm template`. Chart test hooks (`helm.sh/hook` containing `"test"`) are always dropped when wrapping resources. |
-| `extraFlags` | list of strings | `[ ]` | Extra CLI arguments passed to `helm template`, one argument per list element (cannot contain `--values`, `--namespace`, `--kube-version`, or `--include-crds`). |
+| `extraFlags` | list of strings | `[ ]` | Extra CLI arguments appended to `helm template`, one argument per list element (for example, `[ "--api-versions" "monitoring.coreos.com/v1" ]`). Do not pass `--values`, `--namespace`, `--include-crds`, or `--no-hooks` here: Kix passes those flags itself and does not filter `extraFlags`. Set `--kube-version` with `kubeVersion` instead. |
+| `kubeVersion` | string or `null` | `null` | Kubernetes version passed to `helm template --kube-version` to set `.Capabilities.KubeVersion`. When `null`, Helm uses its built-in default (see [Helm versions](/docs/reference/helm-and-imports/#helm-versions)). |
 | `strip` | `{ helmAnnotations ? true; helmLabels ? true; defaultStrategy ? true; }` | `{ }` | Normalization booleans controlling whether Kix strips `meta.helm.sh/*`, `helm.sh/*`, and `checksum/*` annotations (`helmAnnotations`), `app.kubernetes.io/managed-by` and `helm.sh/chart` labels (`helmLabels`), and default `RollingUpdate` strategy blocks (`defaultStrategy`). To filter or modify rendered resources, use `patchResources`. |
 | `preserveAnnotationPrefixes` | list of strings | `[ ]` | Keeps matching annotation prefixes (such as `"argocd.argoproj.io/"`) when `strip.helmAnnotations` is enabled. |
 | `patchResources` | `list -> list` | `lib.id` | Transforms the list of parsed chart resource attribute sets (after `List` expansion and test-hook filtering) before DAG reconstruction and `scope.mk*` wrapping. |
@@ -138,6 +139,39 @@ Raw Helm YAML files have no deployment ordering between objects. When `scope.hel
 - `Ingress`, `HTTPRoute`, `ServiceMonitor`, and webhook configurations depend on their target `Service`.
 
 Use `extraEdges` when a chart has a runtime dependency that is not visible in standard Kubernetes reference fields (for example, an application `Deployment` that expects a chart `Job` to initialize an external schema).
+
+### Cross-package wiring and network policy
+
+| Wiring | Network policy | Deploy ordering |
+| --- | --- | --- |
+| Reference in `values` only | None. Kix serializes `values` to JSON before `helm template`, stripping dependency metadata. Chart workloads receive only DNS egress. | None. |
+| `deps = [ dep ]` (`dep` must also be an argument of `build`) | Attaches top-level strings in `dep.out` (`out.name`, `out.fqdn`, and `out.url`) to every chart workload. When network policy is enabled, Kix generates egress from each chart workload to `dep`'s Service pods on the target port, plus matching ingress on `dep`. | When network policy is enabled, chart workloads wait for cluster DNS and their generated policies, which apply after `dep`'s Service. When network policy is disabled, chart workloads wait only for cluster DNS. Chart workloads never wait for `dep`'s Deployment or StatefulSet. |
+| `networkDeps = [ ... ]` (`dep` must also be an argument of `build`) | Attaches nested output strings (such as `dep.out.byKind.<Kind>.<name>`) to every chart workload so Kix generates the same egress and ingress policies. | Same as `deps`: orders chart workloads after cluster DNS (and after the target Service when network policy is enabled), never after `dep`'s workloads. |
+
+`kix.helmChart` does not accept `deps` or `networkDeps`. To connect a chart to another package, wrap it in a package that calls `scope.helm.importChart`:
+
+```nix
+build =
+  { backend, ... }:
+  let
+    rendered = scope.helm.importChart {
+      inherit chart scope;
+      releaseName = "web";
+      values = {
+        backendHost = backend.out.fqdn;
+        networkPolicy.enabled = false;
+      };
+      # Lets Kix derive egress from the chart's workloads to backend.
+      deps = [ backend ];
+    };
+  in
+  rendered.mkParts { root = rendered.get "Service" "web"; };
+```
+
+If a chart renders its own `NetworkPolicy` templates, Kix applies them alongside its generated `CiliumNetworkPolicy` objects, and Cilium enforces both. Disable the chart's built-in policies in either of two ways:
+
+- **Chart `values`:** Turn them off through the chart's own option when available, such as `values.networkPolicy.enabled = false` (check the chart's `values.yaml` for the exact key).
+- **`patchResources`:** Filter them out after rendering with `patchResources = builtins.filter (r: r.kind != "NetworkPolicy");` on `scope.helm.importChart` or `kix.helmChart`.
 
 ### Collection methods on `importChart` results
 
@@ -176,6 +210,32 @@ crdList = scope.helm.importChartCrds {
 `kix.helmChart`, `scope.helm.importChart`, and `scope.helm.importChartCrds` render charts with **Helm 4** (`4.3.1`) by default. If an upstream chart relies on template behavior that changed in Helm 4, set `helmVersion = "3";` to render that chart with **Helm 3** (`3.19.1`). Upstream Helm 3 receives security fixes until 10 February 2027. Passing any other major version fails evaluation and lists the shipped versions.
 
 The exact Helm release for each major version is pinned in `kix/lib/helm-versions.json` and shipped with Kix. A new version of Kix can change a Helm version in the Kix runtime (for example, a Helm security or patch update). Because `helm template` output feeds into resource identity hashes (`kix.run/identity-hash`), the Kix library and Kix must name the same Helm version. Each cluster pinned to a version of Kix builds with the matching version of the Kix library, and Kix stops when they differ (see [When the Kix library does not match Kix](/docs/how-to/start-and-inspect/install-and-run-the-kix-cli/#when-the-kix-library-does-not-match-kix)). [`kix upgrade`](/docs/reference/cli/upgrade/) updates the Kix library tag in `flake.nix` and `flake.lock` when upgrading to a new version of Kix.
+
+#### How `helm template` affects chart features
+
+Kix renders charts offline by running `helm template` with an isolated empty home directory, never contacting a cluster:
+
+```text
+helm template <releaseName> <chart> --values values.json --namespace <namespace> [--include-crds] [--no-hooks] [--kube-version <v>] [<extraFlags>...]
+```
+
+Kix passes `--include-crds` when `includeCrds = true` (the default), `--no-hooks` when `includeHooks = false`, `--kube-version <v>` when `kubeVersion` is set on `scope.helm.importChart`, and then any `extraFlags`.
+
+| Chart feature | Behavior in Kix | How to configure |
+| --- | --- | --- |
+| Hooks | Kix renders hooks by default (`includeHooks = true`), drops test hooks (`helm.sh/hook` containing `test`), and strips `helm.sh/*` annotations (`strip.helmAnnotations = true`). Remaining hook objects are applied as ordinary resources: Kix ignores hook phases (`pre-install`, `post-upgrade`, and so on), weights, and delete policies, and chart workloads do not wait for hook Jobs automatically. Kix also strips `ttlSecondsAfterFinished` from Jobs and skips unchanged resources on later deploys, so finished hook Jobs stay on the cluster and do not rerun. | On `scope.helm.importChart`, pass `extraEdges = [ { from = { kind = "Deployment"; name = "my-app"; }; to = { kind = "Job"; name = "my-app-migrate"; }; } ];` to make a workload wait for a migration Job, or set `includeHooks = false` to omit hooks. On `kix.helmChart` (which lacks `includeHooks` and `extraEdges`), filter hooks out with `patchResources` or use `scope.helm.importChart`. |
+| `lookup` | Always returns an empty map (`{}`) in both Helm `3.19.1` and `4.3.1`. Templates that branch on `lookup` (for example, to reuse an existing generated password) take the empty branch on every build. | Not configurable; Kix cannot query cluster resources from `lookup` today. |
+| `.Release.IsInstall` / `.Release.IsUpgrade` | `.Release.IsInstall` is always `true`, and `.Release.IsUpgrade` is always `false`. | Not configurable. |
+| `.Capabilities.KubeVersion` | Uses Helm's compiled-in default (`v1.37.0` in Helm `4.3.1`, `v1.34.0` in Helm `3.19.1`) unless overridden, and does not track the cluster's Kubernetes version. `scope.helm.importChartCrds` always passes `--kube-version 1.32.0`. | Set `kubeVersion` on `scope.helm.importChart` (`kix.helmChart` has no `kubeVersion` argument). |
+| `.Capabilities.APIVersions` | Contains only built-in Kubernetes API groups (such as `apps/v1`). Custom resource groups (such as `monitoring.coreos.com/v1`) are absent, so `.Capabilities.APIVersions.Has` checks for CRDs evaluate to `false`. | Pass `extraFlags = [ "--api-versions" "monitoring.coreos.com/v1" ];` on `scope.helm.importChart`. When the CRD belongs to another Kix package, build the custom resource in Kix instead (for example, with `kix.monitor`), because a chart-rendered custom resource lacks a dependency link to the other package's CRD and fails [validation check 21](/docs/reference/validation-checks/#check-21-custom-resources-and-their-crd-declarations). |
+| CRDs in `crds/` | Helm never templates files in `crds/`. By default (`includeCrds = true`), Kix passes `--include-crds` and manages those CRDs like any other resource: creating them on first deploy and updating them via server-side apply when they change (unlike [upstream `helm install`](https://helm.sh/docs/chart_best_practices/custom_resource_definitions/), which skips existing CRDs and never upgrades or deletes them). Kix never deletes CRDs automatically during prune or `kix gc`. Templated CRDs under `templates/` are always included. | Set `includeCrds = false` to omit files in `crds/`. |
+
+#### Adopting a chart written for Helm 3
+
+- **Chart compatibility:** Kix renders charts with Helm 4 (`4.3.1`) by default. According to the upstream [Helm overview](https://helm.sh/docs/overview/), charts deployable with Helm 3 should be deployable with Helm 4, and `apiVersion: v2` charts in `Chart.yaml` continue to work.
+- **Default `KubeVersion`:** Helm `4.3.1` defaults `.Capabilities.KubeVersion` to `v1.37.0` (up from `v1.34.0` in Helm `3.19.1`). If a chart sets a `kubeVersion` constraint in `Chart.yaml` or branches on `.Capabilities.KubeVersion`, set `kubeVersion` on `scope.helm.importChart` to match your cluster's Kubernetes version.
+- **Install-time Helm 4 changes:** Helm 4 moved post-renderers into plugins and made server-side apply the default for new installs ([Helm overview](https://helm.sh/docs/overview/)). Neither change affects Kix, which runs `helm template` without post-renderers and applies manifests itself.
+- **Pinning Helm 3:** If a chart renders differently under Helm 4, set `helmVersion = "3";` to render it with Helm `3.19.1`.
 
 ### How project builders fetch and render charts
 

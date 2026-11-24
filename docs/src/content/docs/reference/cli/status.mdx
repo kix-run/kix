@@ -55,6 +55,8 @@ current deploy is the cluster's `Active` or `Degraded`
 | `drift` | Does the object still hold what Kix applied? | The fields Kix owns no longer hash to the object's `kix.run/applied-hash` stamp. |
 | `readiness` | Is the object ready? | It is not ready by the rules [`kix deploy`](/docs/reference/cli/deploy/) waits on, such as a Deployment with fewer ready replicas than it wants. |
 
+`kix status` checks only the objects listed in the current deploy record. It never reports extra objects on the cluster, whether orphaned from an earlier deploy or created outside Kix. See [Objects Kix did not apply](/docs/reference/cli/diff/#objects-kix-did-not-apply).
+
 A missing object is a problem under every check, because no check can run on
 an object that is gone. `kix status --check drift` and
 `kix status --check readiness` therefore also report missing objects.
