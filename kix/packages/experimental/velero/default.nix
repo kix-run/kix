@@ -488,7 +488,7 @@ in
         gcp = "Google Cloud";
         azure = "Azure";
       };
-      cloudName = cloud: cloudNames.${cloud} or "no cloud Kix knows";
+      cloudName = cloud: cloudNames.${cloud} or "an unsupported cloud";
       # strconv.ParseBool, which the Azure plugin reads useAAD with.
       useAAD = builtins.elem (bsl.config.useAAD or "") [
         "1"
@@ -565,10 +565,10 @@ in
       {
         assertion = identity == null || vslCloud == null || vslCloud == bslCloud;
         option = "volumeSnapshotLocation.provider";
-        message = "volumeSnapshotLocation.provider is \"${
+        message = "VolumeSnapshotLocation/default sets volumeSnapshotLocation.provider to \"${
           if vsl == null then "" else vsl.provider
-        }\" (${cloudName vslCloud}), but deps.cloudCredentials is a cloud identity for ${cloudName bslCloud}, the cloud of the backup location. Velero runs both locations under one ServiceAccount, which carries one identity.";
-        fix = "Use a snapshot provider for ${cloudName bslCloud}, or pass a Secret instance in deps.cloudCredentials.";
+        }\" (${cloudName vslCloud}), while BackupStorageLocation/default and deps.cloudCredentials use a cloud identity for ${cloudName bslCloud}. Velero runs both locations under one ServiceAccount, which can hold only one cloud identity, so Kix rejected this configuration.";
+        fix = "Set volumeSnapshotLocation.provider to a snapshot provider for ${cloudName bslCloud}, remove volumeSnapshotLocation, or pass a Secret instance in deps.cloudCredentials.";
       }
       # The Azure volume snapshotter reads AZURE_SUBSCRIPTION_ID and
       # AZURE_RESOURCE_GROUP only from a credentials file
@@ -577,8 +577,8 @@ in
       {
         assertion = identity == null || vslCloud != "azure";
         option = "volumeSnapshotLocation";
-        message = "volumeSnapshotLocation uses the Azure plugin, which reads the disks' subscription and resource group only from a credentials file. With a cloud identity in deps.cloudCredentials, the package mounts no credentials file, so the snapshotter would fail to start.";
-        fix = "Remove volumeSnapshotLocation and back up volumes with CSI snapshots (features = [ \"EnableCSI\" ]) or file-system backup, or pass a Secret instance with an Azure credentials file in deps.cloudCredentials.";
+        message = "VolumeSnapshotLocation/default uses the Azure plugin, which reads the disk subscription and resource group only from a mounted credentials file. When deps.cloudCredentials is a cloud identity, no credentials file is mounted, so Kix rejected volumeSnapshotLocation because the snapshot plugin would fail to start.";
+        fix = "Remove volumeSnapshotLocation and use CSI snapshots (features = [ \"EnableCSI\" ]) or file-system backups instead, or pass a Secret instance with key \"cloud\" in deps.cloudCredentials.";
       }
       # Without a key file, the GCP plugin signs download URLs through the
       # IAM API as the account in `serviceAccount`, and refuses to start
@@ -587,8 +587,8 @@ in
       {
         assertion = identity == null || bslCloud != "gcp" || bsl.config ? serviceAccount;
         option = "backupStorageLocation.config.serviceAccount";
-        message = "deps.cloudCredentials is a Google Cloud identity, and backupStorageLocation.config does not set serviceAccount. Without a key file, the GCP plugin signs download URLs as that Google service account and refuses to start without it.";
-        fix = "Set backupStorageLocation.config.serviceAccount to a Google service account email. Use the one in kix.cloudIdentity.gcp { serviceAccount = ...; }, or with kix.cloudIdentity.gcp { } one that the Kubernetes ServiceAccount may sign as (roles/iam.serviceAccountTokenCreator).";
+        message = "BackupStorageLocation/default does not set backupStorageLocation.config.serviceAccount, which Velero's GCP plugin requires when deps.cloudCredentials is a Google Cloud identity. Without a JSON key file, the plugin needs that Google service account email to sign download URLs and fails to start if it is unset, so Kix rejected this configuration.";
+        fix = "Set backupStorageLocation.config.serviceAccount to a Google service account email. If you set serviceAccount in kix.cloudIdentity.gcp { serviceAccount = \"...\"; }, use that same email. If you use kix.cloudIdentity.gcp { }, pass a Google service account on which Velero's Kubernetes ServiceAccount has roles/iam.serviceAccountTokenCreator.";
       }
       # The Azure plugin reads the account's resource group and subscription
       # from the location's config or the credentials file
@@ -604,10 +604,10 @@ in
             && (useAAD || (bsl.config ? resourceGroup && bsl.config ? subscriptionId))
           );
         option = "backupStorageLocation.config";
-        message = "deps.cloudCredentials is an Azure identity, so the package mounts no credentials file, and the Azure plugin reads the storage account settings only from backupStorageLocation.config. It sets ${
+        message = "BackupStorageLocation/default is missing required Azure storage settings in backupStorageLocation.config (currently sets ${
           if bsl.config == { } then "nothing" else lib.concatStringsSep ", " (builtins.attrNames bsl.config)
-        }.";
-        fix = "Set storageAccount, and either useAAD = \"true\" (the identity needs the Storage Blob Data Contributor role on the account) or resourceGroup and subscriptionId (the identity needs permission to list the account keys).";
+        }). Without a mounted credentials file, Velero's Azure plugin needs storageAccount and either useAAD = \"true\" or both resourceGroup and subscriptionId, so Kix rejected this configuration.";
+        fix = "In backupStorageLocation.config, set storageAccount and either useAAD = \"true\" (requires the Storage Blob Data Contributor role on the storage account) or both resourceGroup and subscriptionId (requires permission to list the storage account keys).";
       }
       (dataPathLabelCollisions "nodeAgent.settings" config.nodeAgent.settings)
       (dataPathLabelCollisions "repositoryMaintenance.settings" config.repositoryMaintenance.settings)

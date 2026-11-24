@@ -2,4 +2,4 @@
 kind = "fixed"
 library = ["deps"]
 +++
-A plain value in `deps.<name>`, such as a cloud identity, now works for a required dependency even when the package's build reads `config`. Before, evaluation failed with "dependency '<name>' has no matching instance".
+No changes are required. Passing a direct value (such as a cloud identity from `kix.cloudIdentity.*`) to a required dependency in `deps.<name>` now succeeds when the package's `build` reads `config`. Previously, evaluation failed with "dependency '<name>' has no matching instance".

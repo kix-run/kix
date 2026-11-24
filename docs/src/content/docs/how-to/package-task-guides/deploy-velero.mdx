@@ -239,71 +239,76 @@ afterwards.
 
 ## Use a cloud identity instead of keys
 
-On EKS, GKE, or AKS, Velero can authenticate with its Kubernetes
-ServiceAccount instead of a stored key. Pass a cloud identity to
-`deps.cloudCredentials` in place of the Secret instance. You still need the
-`velero-repo-credentials` Secret for the repository key.
+On EKS, GKE, or AKS, Velero can authenticate to cloud storage with its
+Kubernetes ServiceAccount instead of a stored key. Pass a cloud identity to
+`deps.cloudCredentials` in place of the `velero-credentials` Secret reference.
+You still need the `velero-repo-credentials` Secret for the backup repository
+encryption key.
 
-With a cloud identity, the package mounts no credentials file and names no
-`credential` on the backup or snapshot location. Each object-store plugin then
-uses its cloud SDK's default credentials, which the cloud's webhook or agent
-gives the pod. The server, the node agent, and the pods Velero launches for
-file-system backups, the CSI data mover, and repository maintenance all run as
-the one ServiceAccount, `<instance>-server`, so one identity covers them all.
+Kix binds the identity to the `<instance>-server` ServiceAccount, which is
+shared by the server, the node agent, and the pods Velero launches for
+file-system backups, the CSI data mover, and repository maintenance. Kix omits
+the credentials file mount and leaves `credential` unset on the backup and
+snapshot locations, so Velero's plugins authenticate with the pod's cloud
+identity through their cloud SDKs.
 
-The identity's cloud must match the backup location's provider:
-`kix.cloudIdentity.aws` for `velero.io/aws`, `kix.cloudIdentity.gcp` for
-`velero.io/gcp`, and `kix.cloudIdentity.azure` for `velero.io/azure`. An
-identity for another cloud fails evaluation, and so does an identity with an
-`objectStorage` dependency, because a store inside the cluster does not
-accept a cloud identity.
+Match the identity to `backupStorageLocation.provider`: `kix.cloudIdentity.aws`
+for `velero.io/aws`, `kix.cloudIdentity.gcp` for `velero.io/gcp`, and
+`kix.cloudIdentity.azure` for `velero.io/azure`. If `volumeSnapshotLocation` is
+set and its provider is one of those three Velero cloud plugins, it must use the
+same cloud; Kix does not check snapshot providers from other plugins. Evaluation
+fails if the clouds do not match, or if you combine a cloud identity with
+`deps.objectStorage` (in-cluster object stores require Secret credentials).
 
 For AWS S3 on EKS, pass `kix.cloudIdentity.aws`:
 
 <Snippet {...veleroEksIdentity} />
 
-For Google Cloud Storage on GKE, install the GCP plugin and pass
-`kix.cloudIdentity.gcp`. Without a key file, the plugin signs download URLs
-(for `velero backup download` and `velero backup logs`) as the Google service
-account in the location's `serviceAccount` setting, and refuses to start
-without one, so Kix requires it. With `kix.cloudIdentity.gcp { }`, which
-grants IAM roles directly to the Kubernetes ServiceAccount, name a Google
-service account that the Kubernetes ServiceAccount may sign as
-(`roles/iam.serviceAccountTokenCreator`).
+For Google Cloud Storage on GKE, add the GCP plugin in `extraPlugins`, pass
+`kix.cloudIdentity.gcp`, and set `backupStorageLocation.config.serviceAccount`
+to a Google service account email. Without a JSON key file, the GCP plugin uses
+`config.serviceAccount` to sign URLs for `velero backup download` and
+`velero backup logs`, and fails to start if it is unset. If you set
+`serviceAccount` in `kix.cloudIdentity.gcp { serviceAccount = "..."; }`, pass
+the same email here. If you grant IAM roles directly to the Kubernetes
+ServiceAccount (`kix.cloudIdentity.gcp { }`), pass a Google service account on
+which the Kubernetes ServiceAccount has `roles/iam.serviceAccountTokenCreator`:
 
 <Snippet {...veleroGkeIdentity} />
 
-For Azure Blob Storage on AKS, install the Azure plugin and pass
-`kix.cloudIdentity.azure`. Without a credentials file, the plugin reads the
-storage account settings from the location. Set `storageAccount`, and either
-`useAAD = "true"` (the identity needs the Storage Blob Data Contributor role on
-the account) or `resourceGroup` and `subscriptionId` (the identity needs
-permission to list the account keys).
+For Azure Blob Storage on AKS, add the Azure plugin in `extraPlugins` and pass
+`kix.cloudIdentity.azure`. Without a credentials file, the Azure plugin reads
+storage account details from `backupStorageLocation.config`. Set
+`storageAccount`, plus either `useAAD = "true"` (grant the identity the
+`Storage Blob Data Contributor` role on the storage account) or both
+`resourceGroup` and `subscriptionId` (grant the identity permission to list the
+storage account keys):
 
 <Snippet {...veleroAksIdentity} />
 
-On AKS, Kix adds the `azure.workload.identity/use: "true"` label to the server
-and node agent pods, and to `podLabels` in the node agent and repository
-maintenance settings. Velero copies that label to the pods it launches only
-when those settings set no `podLabels`, and the package always sets some.
+On AKS, Kix adds `azure.workload.identity/use: "true"` to the server and node
+agent pods, and includes it in `nodeAgent.settings.podLabels` and
+`repositoryMaintenance.settings.podLabels` so the pods Velero launches receive
+the identity too. Velero copies that label automatically only when `podLabels`
+is empty, and this package always sets network-policy labels there.
 
-The Azure volume snapshotter reads the disks' subscription and resource group
-only from a credentials file, so an Azure `volumeSnapshotLocation` with a cloud
-identity fails evaluation. Back up volumes with CSI snapshots or file-system
-backup instead. A snapshot location for a cloud other than the identity's also
-fails evaluation.
+Velero's Azure volume snapshot plugin reads the disk subscription and resource
+group only from a credentials file, so Kix rejects an Azure
+`volumeSnapshotLocation` when `deps.cloudCredentials` is a cloud identity. Back
+up AKS volumes with [CSI snapshots](#csi-snapshots) (`features = [ "EnableCSI" ]`)
+or file-system backups instead.
 
-Kix does not create cloud IAM resources. In your cloud account, grant access
-to the bucket to the ServiceAccount `<namespace>/<instance>-server`
-(`system:serviceaccount:<namespace>:<instance>-server`) through an AWS IAM role
-trust policy (or an EKS Pod Identity association), a Google Cloud IAM binding,
-or an Azure federated credential. See
+Kix does not create cloud IAM resources. In your cloud account, grant bucket
+access and allow the ServiceAccount `<namespace>/<instance>-server`
+(`system:serviceaccount:<namespace>:<instance>-server`) to use the identity
+through an AWS IAM role trust policy (or EKS Pod Identity association), a Google
+Cloud IAM binding, or an Azure federated credential. See
 [Cloud identities](/docs/reference/instances-and-composition/#cloud-identities)
-for how each flavor delivers the identity and for self-managed clusters.
+for per-flavor details and self-managed clusters.
 
-When the identity changes, Kix restarts the server and node agent pods. A pod
-that Velero launched before the change keeps the old identity until it
-finishes.
+When you change the cloud identity, Kix restarts the server and node agent pods
+on the next deploy. Any backup, restore, or maintenance pod that Velero started
+before the deploy finishes with the previous identity.
 
 ## Upgrades
 

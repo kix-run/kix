@@ -201,8 +201,8 @@ in
       direct = _: ci.gcp { };
     in
     (
-      refusedWith "does not set serviceAccount" (on gcp { })
-      && refusedWith "does not set serviceAccount" (on direct { })
+      refusedWith "does not set backupStorageLocation.config.serviceAccount" (on gcp { })
+      && refusedWith "does not set backupStorageLocation.config.serviceAccount" (on direct { })
       && failedOf (on direct { backupStorageLocation.config.serviceAccount = googleAccount; }) == [ ]
     )
     || throw "velero gcp signing account: ${builtins.toJSON (messagesOf (on gcp { }))}";
@@ -248,7 +248,9 @@ in
       viaAAD.backupStorageLocation.config.useAAD = "true";
     in
     (
-      refusedWith "reads the storage account settings only from backupStorageLocation.config" (on { })
+      refusedWith
+        "BackupStorageLocation/default is missing required Azure storage settings in backupStorageLocation.config"
+        (on { })
       && failedOf (on viaAAD) == [ ]
       &&
         failedOf (on {
@@ -257,9 +259,9 @@ in
             subscriptionId = clientId;
           };
         }) == [ ]
-      && refusedWith "reads the disks' subscription and resource group only from a credentials file" (
-        on (viaAAD // { volumeSnapshotLocation.provider = "velero.io/azure"; })
-      )
+      &&
+        refusedWith "reads the disk subscription and resource group only from a mounted credentials file"
+          (on (viaAAD // { volumeSnapshotLocation.provider = "velero.io/azure"; }))
     )
     || throw "velero azure settings: ${builtins.toJSON (messagesOf (on { }))}";
 
@@ -341,9 +343,12 @@ in
           ++ inClusterStore
         )
       ))
-      && refusedWith "but deps.cloudCredentials is a cloud identity for AWS" (awsWith {
-        volumeSnapshotLocation.provider = "velero.io/gcp";
-      })
+      &&
+        refusedWith
+          "while BackupStorageLocation/default and deps.cloudCredentials use a cloud identity for AWS"
+          (awsWith {
+            volumeSnapshotLocation.provider = "velero.io/gcp";
+          })
       &&
         failedOf (awsWith {
           volumeSnapshotLocation.provider = "aws";
