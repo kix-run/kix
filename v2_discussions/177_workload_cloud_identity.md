@@ -1,6 +1,6 @@
 # 177: Workload cloud identity
 
-**Status:** Draft (RFC with a recommended design and a phased plan)
+**Status:** Draft. Phases 0 and 1 of the recommended design (D) are built in #330.
 **Related:** `129_scaling_axes_fleet_and_linking.md` (names cloud identity as the first new role), `127_compiler_target_model.md`, `167_secrets_only_through_dependencies.md`, `103_permissioned_identity.md`, `archive/128_capability_ownership_decomposition.md`
 
 ## 1. The request
@@ -129,207 +129,182 @@ it expects to exist.
 | At deploy (later phase) | Check that the new pod carries the injected variables (`AWS_ROLE_ARN`, `AWS_CONTAINER_CREDENTIALS_FULL_URI`, `AZURE_CLIENT_ID`). That proves the webhook or agent acted, without any cloud call. |
 | Out of reach | The role's trust policy and permissions, the OIDC provider registration, the Pod Identity association, the GKE IAM binding, the Azure federated credential. Kix can print the exact subject each one must name. |
 
-## 6. Three designs
+## 6. The designs
 
 The sketches use external-dns on EKS with IRSA.
 
 ### A. Shared option and a known-domain registry
 
-Each flavor registers its cloud's annotation domain. `kix.options` gains
-one shared ServiceAccount option that every package adopts.
+Each flavor registers its cloud's annotation domain, and every package gains
+one shared ServiceAccount option:
 
 ```nix
-# package
-options.serviceAccount = kix.options.serviceAccount;   # { annotations; podLabels; }
-serviceAccount = scope.mkResource ({
-  apiVersion = "v1"; kind = "ServiceAccount"; inherit name;
-} // lib.optionalAttrs (config.serviceAccount.annotations != { }) {
-  inherit (config.serviceAccount) annotations;
-});
-
-# cluster
 instances.dns.external-dns.config.serviceAccount.annotations."eks.amazonaws.com/role-arn" =
   "arn:aws:iam::111122223333:role/external-dns";
 ```
 
-Every field is a standard Kubernetes field, the strongest reading of "don't
-invent new fields". It prevents no mistake: a mistyped key, a missing Azure
-pod label, and a pod that never restarts all pass. Pod Identity and GKE
-direct access leave Kix knowing nothing. Fifty packages need the option.
+Every field is a standard Kubernetes field. It prevents no mistake: a
+mistyped key, a missing Azure pod label, and a pod that never restarts all
+pass, Pod Identity and GKE direct access leave Kix knowing nothing, and fifty
+packages need the option.
 
-### B. A cloud-neutral value on the ServiceAccount
+### B. A cloud-neutral string on the ServiceAccount
 
-The package passes an opaque string to a ServiceAccount builder, and the
-flavor decides what it means.
+One string cannot hold Azure's client and tenant, or GKE's "no value", and
+the compiler would branch on `cluster.provider`, which `modules.nix` forbids.
 
-```nix
-# package
-options.cloudIdentity = lib.mkOption { type = lib.types.nullOr lib.types.str; default = null; };
-serviceAccount = scope.mkServiceAccount { inherit name; cloudIdentity = config.cloudIdentity; };
+### D. The identity is the credentials dependency (recommended)
 
-# cluster
-instances.dns.external-dns.config.cloudIdentity = "arn:aws:iam::111122223333:role/external-dns";
-```
-
-One string cannot hold Azure's client and tenant, or GKE's "no value". The
-compiler would branch on `cluster.provider`, which `modules.nix` forbids.
-The option is still per package, and the neutral value buys no portability
-(section 3).
-
-### C. A typed identity on the instance, rendered by a role provider (recommended)
-
-The cluster author sets one attribute on the instance, in the cloud's own
-words. A `cloudIdentity` role resolves to the provider that renders it. The
-package binds it to a ServiceAccount with one call and never sees the cloud.
-
-```nix
-# package: own ServiceAccount (16 of 21 surveyed projects)
-serviceAccount =
-  { apiVersion = "v1"; kind = "ServiceAccount"; inherit name; }
-  |> scope.cloudIdentity.bind
-  |> scope.mkResource;
-
-# package: refuse "neither" and "both"
-_credentials = kix.cloudIdentity.orSecret {
-  identity = scope.cloudIdentity;
-  secret = deps.providerCredentials or null;
-  what = "the ${config.provider} provider";
-};
-
-# package: ServiceAccount made by an operator (CloudNativePG)
-spec.serviceAccountTemplate.metadata.annotations = scope.cloudIdentity.serviceAccountAnnotations;
-spec.inheritFromIAMRole = scope.cloudIdentity.cloud == "aws";
-```
+The mechanism comes from the flavor through a `cloudIdentity` role. The value
+comes through `deps`, where a package already receives its credentials
+Secret. `deps.<name>` already accepts a plain value, so no second instance is
+needed. The identity and the Secret fallback differ in one right-hand side:
 
 ```nix
 # cluster, EKS
 imports = [ kix.flavors.eks ];
 instances.dns.external-dns = {
   package = packages.experimental.external-dns;
+  deps.providerCredentials = kix.cloudIdentity.aws {
+    roleArn = "arn:aws:iam::111122223333:role/external-dns";
+  };
+  # or the Secret: deps.providerCredentials = ref.dns.aws-keys;
   config.provider = "aws";
-  cloudIdentity.aws.roleArn = "arn:aws:iam::111122223333:role/external-dns";
 };
 
 # GKE (direct access, or a linked service account), and AKS
-cloudIdentity.gcp = { };
-cloudIdentity.gcp.serviceAccount = "dns@project.iam.gserviceaccount.com";
-cloudIdentity.azure.clientId = "00000000-0000-0000-0000-000000000000";
+deps.providerCredentials = kix.cloudIdentity.gcp { };
+deps.providerCredentials = kix.cloudIdentity.gcp { serviceAccount = "dns@project.iam.gserviceaccount.com"; };
+deps.providerCredentials = kix.cloudIdentity.azure { clientId = "00000000-0000-0000-0000-000000000000"; };
 
 # self-managed cluster: the cluster author states the mechanism once
 instances.kube-system.cloud-identity.package = kix.mkImport {
   roles = [ "cloudIdentity" ];
-  out.cloudIdentity = kix.cloudIdentity.irsa { };          # or .projectedToken { audience = "sts.amazonaws.com"; }
+  annotationDomains = [ "irsa.example.com" ];
+  out.cloudIdentity = kix.cloudIdentity.irsa { annotationPrefix = "irsa.example.com"; };
 };
 ```
 
-A provider's `out.cloudIdentity` is a small record: the cloud it accepts
-and a `render` function from the value and the subject to ServiceAccount
-annotations, pod labels, pod spec additions, extra resources, egress rules,
-and the sentence that says what must exist outside. Kix ships the
-constructors (`irsa`, `eksPodIdentity`, `gke`, `azureWorkloadId`,
-`projectedToken`). The `eks`, `gke`, and `aks` flavors place a default
-import, the way they place `platform-dns`. A Kix package for a self-hosted
-webhook claims the role and takes precedence, which also orders it before
-its consumers.
+```nix
+# package
+build = { self, config, providerCredentials ? null, ... }:
+  let
+    credentials = kix.cloudIdentity.use {
+      inherit scope;
+      dep = providerCredentials;          # an identity, a Secret instance, or null
+      cloud = "aws";                      # the cloud its software calls
+    };
+  in {
+    serviceAccount =
+      { apiVersion = "v1"; kind = "ServiceAccount"; inherit name; }
+      |> credentials.bind
+      |> scope.mkResource;
+    # envFrom credentials.secret when it is not null
+  };
+```
 
-The attribute is `cloudIdentity` because "identity" already means the
-content hash in Kix ("identity hash", "workload identity" in `builders.nix`).
+The constructors (`aws`, `gcp`, `azure`) check their fields, so a mistyped
+key names the field. `scope.mkResource` renders a bound identity through the
+mechanism of the role's provider, which `findRoleProvider` reaches without
+the package naming it, adds the provider's root as a dependency, and the
+workload builders stamp the pods. A provider's `out.cloudIdentity` is a
+mechanism record (`irsa`, `eksPodIdentity`, `gke`, `azureWorkloadId`). The
+flavors place it as an import; a Kix package for a self-hosted webhook
+claims the role and takes precedence. `cloud` stays because it catches a
+real mistake that the cluster's mechanism cannot: external-dns writing to
+Cloud DNS from an EKS cluster with an AWS identity.
 
-**Against "don't invent new fields".** C invents one instance attribute and
-no manifest field. The value uses each cloud's nouns, so nothing is
-translated. Like `availability` and `kix.expose`, it is an intent that the
-environment renders into standard fields. It passes "automation over
-brevity" because each part prevents a named mistake (section 7), and
-"resources are rich objects" because the workload builder reads
-`out.cloudIdentity` from the ServiceAccount in the pod spec.
+**Against "don't invent new fields".** D adds no instance key and no
+manifest field. The value uses each cloud's nouns. Like a Secret instance,
+it is a dependency that the environment renders into standard fields.
+
+### C. A typed identity on the instance (rejected after it was built)
+
+C put the value in a new instance attribute, `cloudIdentity.aws.roleArn`,
+and handed it to the package as `scope.cloudIdentity`; a helper,
+`orSecret`, refused an instance with both an identity and a Secret, and
+`eval/instance.nix` gained two checks: no provider, and a package that
+bound nothing. It renders the same annotations, label, and stamp as D, and
+was built first. It lost because:
+
+- `cloudIdentity` on an instance and `scope.cloudIdentity` are library
+  surface that could only be removed in a minor release, and a new instance
+  key is the kind of invented field the DSL avoids.
+- D gets three checks from machinery that exists. "Both" cannot be
+  written. "The package has not adopted it" is the existing refusal of a
+  dependency the package does not take (`[K3646]`). "Neither" is a missing
+  dependency, which a package asserts where some modes need none.
+- C gives one identity per instance; D gives a package with two
+  ServiceAccounts two dependencies.
+
+C kept one thing D loses: a paste-in overlay that binds the identity for a
+package that has not adopted it. Under D such a package takes the raw
+annotation through `partsOverlays`, which the scorecard now accepts, but its
+pods do not restart when the role changes.
 
 ### The cases
 
-| Case | A | B | C |
-|---|---|---|---|
-| EKS IRSA | Works. The author types the key. | Works | Annotation, restart stamp, STS egress |
-| EKS Pod Identity | Nothing to write. No record. | Renders nothing. No record. | No annotation. Restart stamp, egress to the node agent, the subject printed, and optionally the ACK object. |
-| GKE direct | Same as above | Cannot say "no value" | Same as above with the metadata server |
-| GKE linked | Works | Works | Annotation |
-| AKS | Needs a second option for the pod label | Works | Annotation and pod label |
-| Self-managed, webhook | Works. The domain is registered by hand. | No provider to pick | The webhook package or an import is the provider |
-| Self-managed, no webhook | Not covered | Not covered | The provider adds the token volume and variables |
-| No identity, Secret fallback | No check | No check | `orSecret` refuses neither and both. An identity on a cluster with no provider is an error. |
+| Case | A | D |
+|---|---|---|
+| EKS IRSA | Works. The author types the key. | Annotation, restart stamp |
+| EKS Pod Identity | Nothing to write. No record. | No annotation. The record and the stamp. |
+| GKE direct / linked | Nothing, or the annotation | The record, or the annotation, and the stamp |
+| AKS | Needs a second option for the pod label | Annotation and pod label |
+| Self-managed, webhook | Domain registered by hand | An import is the provider |
+| Self-managed, no webhook | Not covered | A later mechanism adds the token volume |
+| Secret fallback | No check | The same dependency, a `ref` |
 
 ### Also considered
 
-- **Identity as a dependency instance**, like the secret contract of doc
-  167. A dependency cannot read its consumer's ServiceAccount name, so the
-  consumer would still render everything, and each workload would need two
-  instances.
+- **A second instance per identity**, like `secret-ref`. It works, and an
+  earlier draft of this doc dismissed the dependency shape for the wrong
+  reason: it assumed the identity had to be an instance, and that the
+  consumer would then render everything. A plain value in `deps` needs no
+  instance, and the consumer renders nothing: `bind` and the builders do.
+  An instance buys nothing, because its subject is one ServiceAccount and it
+  cannot be shared.
+- **A table on the flavor** (`cluster.cloudIdentity."ns/name".aws...`). It
+  is C with the value moved away from the instance, and needs a check that
+  each key names an instance.
 - **Apply the identity to an instance's only ServiceAccount with no package
-  change.** A resource is sealed when it is built, before Kix can count the
-  instance's ServiceAccounts, and the operator-made ServiceAccounts of
-  section 3 need the package to place the value anyway.
+  change.** A resource is sealed when it is built, so nothing outside the
+  package can patch it.
 - **A cloud-neutral name mapped to a role by a naming rule.** It hides the
-  one value a reviewer must see, and the clouds share no naming scheme.
+  one value a reviewer must see.
 
 ## 7. What rides on the declaration
 
-| Concern | What C does |
+| Concern | What D does |
 |---|---|
-| Scorecard | The flavor or the webhook package owns the annotation domain, so the ownership warning goes away with no per-cluster setting. |
-| Egress | The provider's rules join the workload's generated policy when an enforcer exists: TCP 443 to the world for IRSA and Azure, the node agent for Pod Identity, the metadata server for GKE. Cilium treats a node-local address as the `host` entity; whether default-deny blocks `169.254.170.23` was not confirmed and needs a test on a real cluster. |
-| Identity or Secret | `kix.cloudIdentity.orSecret` in the package. The package review checklist asks for it in every package whose software calls a cloud API. |
-| Restart | The workload builder stamps `checksum/cloud-identity` on the pod template of every workload that runs as a bound ServiceAccount. A changed principal or mechanism rolls the pods. The stamp and the Azure pod label go in through the builder, because the interceptor hook's `podSpec` channel reaches `spec.template.spec` only. |
-| `kix diff` | The annotation, the label, and the stamp show as ordinary changes. For the mechanisms that emit nothing, the stamp is the only trace, so the ServiceAccount also carries `kix.run/cloud-identity` with the declared value. |
-| Ordering | A webhook that is a Kix instance becomes a dependency of every bound workload. |
-| What must exist outside | A build error or `kix` listing prints the subject for each instance: `system:serviceaccount:dns:external-dns` and the role. A later phase can write the list as JSON for a Terraform module to read. |
+| Scorecard | The flavor's import declares the annotation domain (`kix.mkImport` `annotationDomains`), so the warning goes away with no per-cluster setting. |
+| Egress | Later: the mechanism's rules join the workload's generated policy when an enforcer exists. Whether Cilium default-deny blocks `169.254.170.23` needs a test on a real cluster. |
+| Identity or Secret | One dependency holds either. A package asserts "neither" only for the modes that need credentials. |
+| Restart | The workload builder stamps `checksum/cloud-identity` on every pod template that names a bound ServiceAccount, because the interceptor hook's `podSpec` channel reaches `spec.template.spec` only. |
+| `kix diff` | The annotation, the label, and the stamp show as ordinary changes; the ServiceAccount also carries `kix.run/cloud-identity`. |
+| Ordering | The bound ServiceAccount depends on the role provider's root. |
+| What must exist outside | Later: the subject of each identity as JSON for a Terraform module. |
 
 ## 8. Migration and change kinds
 
 | Step | Change | Record |
 |---|---|---|
-| Flavors register their cloud's annotation domain | A warning stops. No manifest changes. | `fixed` |
-| Role, instance attribute, `scope.cloudIdentity`, constructors | New surface. The flavor's import adds a marker object to existing EKS, GKE, and AKS clusters, so the change-kind check will list changed manifests. | `added`, plus a `note` for the marker |
-| external-dns adopts it and drops `serviceAccountAnnotations` | Experimental package. The old option is refused with an error that names `cloudIdentity` and the record id. A user who moves over gets the same annotation plus the restart stamp, which rolls the pods once; the record says so. | `error`, listed under experimental breaks; a patch release may carry it |
-| victoria-metrics-operator | Stable package. Removing its option is an `error` record in a minor release (0.11). The option is generic and undocumented, so it could also stay. | `error` in 0.11, or none |
-| Velero, cert-manager, Loki, Tempo, Harbor, external-secrets, cnpg-cluster, stackgres-object-storage adopt it | Additive in each package | `added` each |
+| Flavors declare their cloud's annotation domain | A warning stops. | `fixed` |
+| Role, constructors, `use`, mechanisms, flavor imports | New surface. The flavor's import adds a marker object to existing EKS, GKE, and AKS clusters. | `added`, plus a `note` |
+| A package's `assertions` see plain `deps` values | They did not before. | `changed` |
+| external-dns takes an identity in `providerCredentials` and drops `serviceAccountAnnotations` | Experimental. The old option is refused with an error naming the new line. A cloud provider with no credentials is refused. | two `error` records |
+| victoria-metrics-operator | Stable. Its option goes in 0.11. | `error` in 0.11 |
+| Velero, cert-manager, Loki, Tempo, Harbor, external-secrets, cnpg-cluster, stackgres-object-storage | Additive in each package | `added` each |
 
 ## 9. Recommendation and plan
 
-Build C, in four phases. Phase 0 stands alone and removes the complaint.
-
-**Phase 0, half a day.** `kix/lib/flavors/eks.nix`, `gke.nix`,
-`gke-autopilot.nix`, and `aks.nix` add their cloud's domain to
-`scorecard.knownAnnotationDomains` (a list option, so a cluster's entries
-still merge). One unit test per flavor. Rewrite "Use workload identity" in
-the external-dns guide, and update `reference/flavors-and-capabilities.mdx`
-and `reference/cluster-configuration.mdx`. Record: `fixed`.
-
-**Phase 1, about 500 lines of library, 300 of tests, two or three pull
-requests.** The first useful slice is IRSA on external-dns.
-
-- `kix/lib/eval/roles.nix`: role `cloudIdentity`, contract `[ "cloudIdentity" ]`.
-- `kix/lib/vocab/cloud-identity.nix`: value validation, the `irsa`, `gke`,
-  and `azureWorkloadId` constructors, `orSecret`.
-- `kix/lib/modules.nix`, `kix/lib/eval/instance.nix`, `kix/lib/scope/`: the
-  instance attribute and `scope.cloudIdentity` (`bind`, `isSet`, `cloud`,
-  `serviceAccountAnnotations`, `podLabels`).
-- `kix/lib/scope/builders.nix`: the pod label, the stamp, and the provider
-  dependency, read from the bound ServiceAccount.
-- Flavor imports for `eks`, `gke`, `gke-autopilot`, `aks`. external-dns
-  adopts it. `kix/lib/architecture.md` gains the role.
-- Tests in `kix/lib/tests/units/`: each provider's rendering, no provider,
-  wrong cloud, unbound identity, `orSecret`, the restart stamp.
-- Docs: `instances-and-composition.mdx`, `flavors-and-capabilities.mdx`,
-  `composition-helpers.mdx`, `resources-and-out.mdx`, a new how-to "Give a
-  workload a cloud identity", and the docs ledger. Skills:
-  `package-authoring` (a pattern row), `package-review` (two checklist
-  items), `kix-migration`. `ROADMAP.md`. Run the copy pass.
-
-**Phase 2, one small pull request per package.** The packages in section 8,
-with the per-cloud application switch each one needs. Add the egress rules
-through a workload interceptor.
-
-**Phase 3, on demand.** `eksPodIdentity` with the optional ACK object and
-`projectedToken`. The deploy-time check of injected variables. The JSON
-list of subjects. A package for the self-hosted AWS or Azure webhook.
+Build D. **Phase 0** (the domain declarations) and **phase 1** (the role,
+constructors, `use`, the mechanisms for EKS, GKE, and AKS, and
+external-dns) are built in #330. **Phase 2**, one pull request per package:
+the packages in section 8, with their per-cloud application switch, the
+operator path (`kix.cloudIdentity.annotationsFor`), and egress. **Phase 3**,
+on demand: a per-instance mechanism on EKS, the ACK Pod Identity object,
+`projectedToken`, the deploy-time check of injected variables, and the JSON
+list of subjects.
 
 ## 10. Should we build this now
 
@@ -340,8 +315,8 @@ cloud users. Against that: doc 129 calls most cloud flavors guesses, and
 the evaluator is the first recorded request.
 
 **What it costs.** Phase 0 is a few lines. Phase 1 is about a week with
-tests and docs, and adds a role, an instance attribute, and a scope handle
-that every later package review must know.
+tests and docs, and adds a role, three value constructors, and one package
+helper (`use`) that every later package review must know.
 
 **The cheapest step that removes the complaint** is phase 0: the warning
 goes, and the guide stops telling a new user to silence the scorecard. The
@@ -357,10 +332,10 @@ until a user asks for a package or for Pod Identity.
 1. **Build the full design or only the small fix?** The small fix teaches
    the EKS, GKE, and AKS presets that the cloud reads its own annotations,
    so the warning stops. Users still type the raw annotation into a
-   per-package option. The full design gives every instance one setting for
-   its cloud role, and Kix writes the annotation, the Azure pod label, and
-   a pod restart when the role changes. *Recommended: the small fix now,
-   the full design next.*
+   per-package option. The full design lets a package's credentials
+   dependency hold the cloud role in place of a Secret, and Kix writes the
+   annotation, the Azure pod label, and a pod restart when the role
+   changes. *Recommended and built: both.*
 2. **Should the setting use each cloud's own words, or one neutral name?**
    With cloud words, the cluster author writes an AWS role ARN on AWS and a
    client ID on Azure, and a cluster that changes cloud edits the setting.
@@ -382,12 +357,11 @@ until a user asks for a package or for Pod Identity.
    Otherwise the link is made by Terraform or by hand, and Kix prints the
    namespace and ServiceAccount name to use. *Recommended: print only, and
    add the custom resource when a user who runs that controller asks.*
-5. **Should an instance that is given a cloud role fail the build when its
-   package has not been taught about cloud roles?** Failing is safe: the
-   author learns at once that nothing would happen. It also means a package
-   Kix has not updated cannot use the feature except through the existing
-   escape hatch that edits a package's objects. *Recommended: fail, with an
-   error that shows the escape hatch.*
+5. **Should an identity given to a package that has not adopted cloud
+   identity fail the build?** It does, with the existing error for a
+   dependency the package does not take. Such a package can still get the
+   raw annotation through an overlay, without the restart.
+   *Recommended: keep it.*
 6. **Remove the two existing annotation options?** external-dns is
    experimental, so its option can go in any release with an error naming
    the new setting. The VictoriaMetrics operator is stable, so its option
