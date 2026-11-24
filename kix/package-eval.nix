@@ -850,7 +850,7 @@ let
     let
       result = evaluatePackageIn {
         module = withoutDefaultLimits;
-        where = "with cluster.defaultLimits.cpu and .memory \"none\"";
+        where = "with cluster.defaultLimits.cpu = \"none\" and cluster.defaultLimits.memory = \"none\"";
       } name package;
     in
     if refusesWithoutDefaultLimits ? ${name} then

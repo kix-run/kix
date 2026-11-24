@@ -42,7 +42,7 @@ kix.buildCluster {
 | --- | --- | --- | --- |
 | [`cluster.availability`](#cluster-availability) | submodule | derived from capabilities | Cluster-wide availability target and read-only substrate ceiling. |
 | [`cluster.topology`](#cluster-topology) | submodule | zone and host keys | Node label keys used for derived pod topology spread. |
-| [`cluster.defaultLimits`](#default-resource-limits) | submodule | `{ cpu = "package"; memory = "package"; }` | Whether packages give containers their default CPU and memory limits. |
+| [`cluster.defaultLimits`](#default-resource-limits) | submodule | `{ cpu = "package"; memory = "package"; }` | Whether packages apply their default CPU and memory limits. |
 | [`cluster.capabilities`](#cluster-capabilities-and-nodes) | submodule | `null` per field (or flavor default) | Substrate capabilities such as `multiNode`, `availabilityZones`, `daemonSets`, and `privilegedContainers`. |
 | [`cluster.nodes`](#cluster-capabilities-and-nodes) | `attrsOf submodule` | `{ }` | Optional static node inventory (`roles`, `cpu`, `memory`, `labels`, `taints`). |
 | [`cluster.provider`](#cluster-capabilities-and-nodes) | `nullOr str` | `null` (or flavor default) | Display name of the Kubernetes distribution or cloud provider. |
@@ -133,34 +133,34 @@ Packages whose pods are created by an operator rather than a Kix Deployment or S
 
 ## Default resource limits
 
-`cluster.defaultLimits` controls whether packages apply their default CPU and memory limits (declared with [`kix.options.resources`](/docs/reference/package-anatomy/#kixoptions-helpers)) across the cluster. Each field takes `"package"`, which keeps each package's default limit, or `"none"`, which leaves it out.
+`cluster.defaultLimits` controls whether packages apply their default CPU and memory limits (declared with [`kix.options.resources`](/docs/reference/package-anatomy/#kixoptions-helpers)) across the cluster.
 
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `cluster.defaultLimits.cpu` | `"package" \| "none"` | `"package"` | The CPU limit packages give containers by default. |
-| `cluster.defaultLimits.memory` | `"package" \| "none"` | `"package"` | The memory limit packages give containers by default. |
+| `cluster.defaultLimits.cpu` | `"package" \| "none"` | `"package"` | Keep each package's default CPU limit (`"package"`) or omit it (`"none"`). |
+| `cluster.defaultLimits.memory` | `"package" \| "none"` | `"package"` | Keep each package's default memory limit (`"package"`) or omit it (`"none"`). |
 
-Many operators disable default CPU limits because CPU limits throttle containers even when the node has idle CPU, while CPU requests still guarantee each container's share:
+Many operators disable default CPU limits because CPU limits throttle containers even when a node has idle CPU, while CPU requests still guarantee each container's share:
 
 ```nix
 cluster.defaultLimits.cpu = "none";
 ```
 
-When a field is `"none"`, `kix.options.resources` omits that default limit and keeps all resource requests. Limits set on an instance still apply (for example, `instances.web.app.config.resources.limits.cpu = "2";`). The [`reliability.boundedResources`](/docs/reference/scorecard-and-rules/) scorecard rule also skips checking for a disabled limit.
+Setting a field to `"none"` omits that default limit while keeping all resource requests and any limits set on an instance (for example, `instances.web.app.config.resources.limits.cpu = "2";`). The [`reliability.boundedResources`](/docs/reference/scorecard-and-rules/#built-in-reliability-rules) scorecard rule also skips checking for a disabled limit.
 
-:::caution[Keep memory limits]
-Keep `cluster.defaultLimits.memory = "package"` unless you intend to run without memory limits. Memory cannot be throttled: a leaking container without a limit can exhaust a node's memory and cause the kernel to kill other workloads on that node. Memory limits are commonly set equal to the memory request.
+:::caution[Keep memory limits enabled]
+Kubernetes cannot throttle memory. Without a memory limit, a leaking container can exhaust a node's memory and cause the kernel to kill other pods on that node. Leave `cluster.defaultLimits.memory` at `"package"` unless you set `resources.limits.memory` per instance or deliberately run without memory limits.
 :::
 
-`cluster.defaultLimits` affects only defaults declared through `kix.options.resources`. Limits written directly into a container spec, the memory limit of each `kix.healthCheck` probe Job, and limits rendered by an imported Helm chart remain unchanged. Built manifests do not mark whether a limit came from a package default.
+`cluster.defaultLimits` applies only to defaults declared with `kix.options.resources`. It does not change limits set on an instance, limits written directly in a container spec, the memory limit on [`kix.healthCheck`](/docs/reference/composition-helpers/#healthcheck) probe Jobs, or limits rendered by imported Helm charts.
 
-Some packages read their own memory limit. With `cluster.defaultLimits.memory = "none"`, they behave as follows unless you set `resources.limits.memory` on the instance:
+Some packages derive settings from their own memory limit. When `cluster.defaultLimits.memory` is `"none"` and an instance does not set `resources.limits.memory`, those packages behave as follows:
 
-- `experimental/clickhouse` and `experimental/clickhouse-cluster` refuse to build, because ClickHouse sizes its memory cap from the container limit. Set `resources.limits.memory` on each such instance.
-- `valkey` leaves out `maxmemory`, so Valkey keeps accepting writes until the node runs out of memory.
-- `experimental/nats` and `experimental/spegel` leave out `GOMEMLIMIT`, so the Go runtime does not try to stay under a memory size.
-- `experimental/metabase` leaves out its `-XX:MaxRAMPercentage=50` heap setting, so the JVM uses its default heap size.
-- `experimental/mayastor` keeps a memory limit on io-engine equal to its memory request, because io-engine needs the Guaranteed QoS class to get exclusive CPU cores.
+- `experimental/clickhouse` and `experimental/clickhouse-cluster` fail to build, because ClickHouse sizes its memory cap from the container limit and falls back to the node's total RAM without one. Set `config.resources.limits.memory` on each instance.
+- `valkey` omits `maxmemory`, so Valkey accepts writes until the node runs out of memory.
+- `experimental/nats` and `experimental/spegel` omit `GOMEMLIMIT`, leaving the Go runtime without a soft memory target.
+- `experimental/metabase` omits `-XX:MaxRAMPercentage=50` from `JAVA_OPTS`, so the JVM falls back to its default heap sizing.
+- `experimental/mayastor` still sets `io-engine`'s memory limit equal to its memory request, because `io-engine` requires the `Guaranteed` QoS class for exclusive CPU cores.
 
 ## Cluster capabilities and nodes
 
