@@ -1,3 +1,0 @@
-# 2026-11-24 · `kix/lib/vocab/compose.nix` · The `after` argument of `kix.mergeArgs` has one caller and a plain string in it overrides the user without an error.
-
-Only `kix/packages/stable/node-exporter/default.nix` passes `after`. It does so to keep `--collector.textfile.directory` behind `extraArgs`, which avoids one restart of the exporter for instances that set `extraArgs` and turn on `textfileCollector`. The function's comment says `extraArgs` may set the flag of a plain string again. Most programs let the last word win, so a plain string or a `defaults` entry in `after` beats the same flag in the user's arguments, and `kix.mergeArgs` does not refuse it.

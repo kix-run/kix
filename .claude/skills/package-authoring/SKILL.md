@@ -345,9 +345,11 @@ pattern table has each form.
   (declaring each owned flag once, with its value and reason, in `args`), and
   `kix.mergeEnv` owned groups (E3, E6, E8; pattern table).
 - `kix.mergeArgs` requires `parser`. Check how the upstream program parses
-  flags at the pinned version, set the matching parser (`"gnu"`, `"go"`,
-  `"go-arg"`, or `"paerser"`), and cite the upstream file in a comment at the
-  call.
+  flags at the pinned version, set the matching parser (`"gnu"`,
+  `"component-base"`, `"go"`, `"go-arg"`, or `"paerser"`), and cite the
+  upstream file in a comment at the call. A pflag program that starts
+  through component-base `cli.Run`, or calls `SetNormalizeFunc` with
+  `WordSepNormalizeFunc`, takes `"component-base"`.
 - `env` accepts strings, so refuse the program's credential variables as
   literal strings (pattern table) and point at a `secretKeyRef` to a Secret
   managed outside Kix or at the secret dep (S1).
@@ -470,8 +472,9 @@ The only place in this skill with package line numbers. `pkg:N` is
 | URL-shaped credential through `$(VAR)` | vaultwarden:143-147, 212-233 |
 | `mergeArgs`, owned flags stated once with their values | `cert-manager/controller.nix`:381-401 |
 | `mergeArgs`, refused flags from owned env groups | keycloak:404-429 |
-| `mergeArgs` with `defaults` that `extraArgs` can override, and `after` | node-exporter:108-148; a default kept first, `victoria-metrics-operator/operator.nix`:303-317 |
+| `mergeArgs` with `defaults` that `extraArgs` can override | node-exporter:108-143; a default kept first, `victoria-metrics-operator/operator.nix`:303-317 |
 | `mergeArgs` with `parser = "go"`, `parser = "paerser"`, and `families` | loki:344; traefik:429, 495 |
+| `mergeArgs` with `parser = "component-base"` | descheduler:265-272 |
 | `mergeArgs` with a flag and its value as two words, written as a list item of `flags` | `clickhouse-logs/vector-agent.nix`:213-229; several values, spegel:301-303 |
 | `mergeArgs` on an attribute set of flags | victoria-metrics-agent:189-210 |
 | `argValues` to read what `extraArgs` gives a flag | external-dns:398; reloader:106-110 |

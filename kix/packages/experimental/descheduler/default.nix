@@ -263,10 +263,13 @@ in
         leaderElection = "leader election keeps one replica active, and the leader-election Role only grants access to Lease \"${name}\" in namespace \"${scope.namespaceName}\".";
         metricsServer = "the probes and the ServiceMonitor connect to the HTTPS server on 0.0.0.0:${toString metricsPort}.";
         # The descheduler parses flags with cobra and pflag
-        # (cmd/descheduler/app/server.go upstream).
+        # (cmd/descheduler/app/server.go upstream) and starts through
+        # component-base `cli.Run` (cmd/descheduler/descheduler.go), which
+        # reads `_` in a flag name as `-`.
         args = kix.mergeArgs {
           inherit scope;
-          parser = "gnu";
+          parser = "component-base";
+          id = "K9425";
           args = [
             {
               flags = [ "--policy-config-file=${policyDir}/policy.yaml" ];
