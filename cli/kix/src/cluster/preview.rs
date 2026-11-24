@@ -159,11 +159,7 @@ impl Refusal {
             | ApplyError::ImmutableConflict { source, .. }
             | ApplyError::CrdStoredVersion { source, .. }
             | ApplyError::BookkeepingAnnotationsFailed { source, .. } => source,
-            ApplyError::ExpectationUnmet { .. }
-            | ApplyError::NoNamespace { .. }
-            | ApplyError::BeingDeleted { .. }
-            | ApplyError::StillBeingDeleted { .. }
-            | ApplyError::Interrupted { .. } => {
+            ApplyError::ExpectationUnmet { .. } | ApplyError::NoNamespace { .. } => {
                 return Refusal::Other {
                     message: err.to_string(),
                 };

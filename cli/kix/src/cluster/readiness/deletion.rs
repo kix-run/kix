@@ -5,8 +5,8 @@
 //! `metadata.finalizers` is removed, usually by the controller that added it
 //! once its cleanup is done. [`wait_gone`] decides when a deletion is done.
 //! Every path that deletes an object of a build calls it: deploy's prune,
-//! `kix gc`, the operator's teardown, the delete before an in-place
-//! recreate, and an apply onto an object that is already being deleted.
+//! `kix gc`, the operator's teardown, and the delete before an in-place
+//! recreate.
 //! `kix migrate domain` waits for the retired CustomResourceDefinitions it
 //! deletes by name through its own retry loop instead: it is a one-off
 //! layer that is removed once no cluster needs it, and it tests its steps
@@ -155,9 +155,6 @@ pub enum DeletePath {
     /// The delete before Kix creates an object again (an immutable field
     /// changed, or a Job runs again).
     Recreate,
-    /// An object of the build that was already being deleted when Kix
-    /// came to apply it.
-    Apply,
 }
 
 /// Return the message for an object whose delete did not finish within the
@@ -201,13 +198,6 @@ pub fn stuck_message(rid: &ResourceId, stuck: &Stuck, path: DeletePath) -> Strin
                 "Kix deleted {rid} to recreate it (because an immutable field changed or a Job \
                  must run again), held no other objects back, and has not created the new \
                  {rid} yet."
-            ),
-        ),
-        DeletePath::Apply => (
-            format!("Run the same command again once {rid} is gone, or pass a longer `--timeout`."),
-            format!(
-                "{rid} was already being deleted when Kix came to apply it; Kix waited for the \
-                 delete to finish so it could create {rid}, and Kix has not applied {rid} yet."
             ),
         ),
     };
@@ -535,7 +525,6 @@ mod tests {
             DeletePath::Gc,
             DeletePath::Operator,
             DeletePath::Recreate,
-            DeletePath::Apply,
         ] {
             let m = message(path);
             assert!(m.starts_with("[K2794] "), "{m}");
@@ -549,6 +538,5 @@ mod tests {
         let recreate = message(DeletePath::Recreate);
         assert!(recreate.contains("has not created the new"), "{recreate}");
         assert!(!recreate.contains("depending on"), "{recreate}");
-        assert!(!message(DeletePath::Apply).contains("depending on"));
     }
 }

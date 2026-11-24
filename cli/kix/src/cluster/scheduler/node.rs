@@ -317,13 +317,7 @@ async fn apply_or_recreate(
             Err(e) => Err(apply_failed(format!("rerun ({reason}) failed: {e}"))),
         };
     }
-    let node = NodeId::Resource(rid.clone());
-    let on_status = |msg: &str| ctx.progress.set_status(&node, msg);
-    match ctx
-        .resources
-        .apply(manifest, ctx.timeout, &ctx.cancel, &on_status)
-        .await
-    {
+    match ctx.resources.apply(manifest).await {
         Ok(result) => Ok((result, None)),
         Err(ApplyError::ImmutableConflict { source, .. }) if ctx.orphan_set.contains(rid) => {
             let reason = source.to_string();

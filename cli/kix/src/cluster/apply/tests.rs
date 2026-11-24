@@ -430,21 +430,6 @@ fn live_detect_unchanged_resource() {
     assert!(matches!(&actions[0], ChangeAction::Skip(_)));
 }
 
-/// An unchanged object that is being deleted is written again, so the
-/// deploy waits for it to go and creates it, instead of skipping it and
-/// leaving it to vanish.
-#[test]
-fn live_detect_unchanged_object_being_deleted_is_written() {
-    let desired = vec![manifest("Deployment", "app", "default", "id1", "")];
-    let mut live = vec![live_object("Deployment", "app", "default", "id1")];
-    live[0].metadata.deletion_timestamp =
-        Some(serde_json::from_value(serde_json::json!("2026-11-24T15:54:00Z")).unwrap());
-
-    let actions = detect_changes_live(&desired, &live);
-    assert_eq!(actions.len(), 1);
-    assert!(matches!(&actions[0], ChangeAction::Apply(_)), "{actions:?}");
-}
-
 /// Same as `detect_changed_owner_stamp` against live objects, the rule the
 /// operator and a plan without the old build use.
 #[test]
@@ -1298,48 +1283,4 @@ fn a_kind_of_one_name_in_another_group_is_another_object() {
     let actions = detect_changes_live(std::slice::from_ref(&new), &[live]);
     assert_eq!(apply_ids(&actions), vec!["Certificate.b.example/tls@app"]);
     assert_eq!(orphan(&actions), vec![ResourceId::from_value(&old)]);
-}
-
-/// An apply onto an object that is being deleted is refused before the
-/// patch, because the object would be gone after the deploy. The message
-/// names the finalizer it waits for.
-#[tokio::test]
-async fn an_object_being_deleted_is_not_applied() {
-    use crate::cluster::{discovery, fake_api::FakeApi};
-
-    let api = FakeApi::new([serde_json::json!({
-        "apiVersion": "v1",
-        "kind": "ConfigMap",
-        "metadata": {
-            "name": "cm",
-            "namespace": "app",
-            "deletionTimestamp": "2026-11-24T15:54:00Z",
-            "finalizers": ["test.kix.run/hold"],
-        },
-    })]);
-    let client = api.client();
-    let discovery = discovery::discover_resources(&client).await.unwrap();
-    let (ar, scope) = discovery
-        .iter()
-        .find(|(ar, _)| ar.kind == "ConfigMap")
-        .unwrap();
-    let cm = serde_json::json!({
-        "apiVersion": "v1",
-        "kind": "ConfigMap",
-        "metadata": { "name": "cm", "namespace": "app" },
-        "data": { "k": "v" },
-    });
-    let err = super::apply_resource(&client, ar, scope.clone(), &cm, false, None, None, false)
-        .await
-        .unwrap_err();
-    assert!(
-        matches!(&err, super::ApplyError::BeingDeleted { reason, uid: Some(_), .. }
-            if reason == "being deleted, waiting for test.kix.run/hold"),
-        "{err}"
-    );
-    assert!(
-        !api.requests().iter().any(|r| r.starts_with("PATCH")),
-        "{:?}",
-        api.requests()
-    );
 }
