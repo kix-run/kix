@@ -1,0 +1,5 @@
++++
+kind = "added"
+packages = ["experimental/keda"]
++++
+You can now deploy KEDA 2.21.1 with the experimental `keda` package (`packages.experimental.keda`) to autoscale Deployments, StatefulSets, and Jobs from external metrics and event queues. Each cluster can run one `keda` instance, which deploys the operator, the `external.metrics.k8s.io` metrics API server, and the admission webhooks, and generates and rotates its own TLS certificates. Leave `spec.replicas` unset on any Deployment or StatefulSet that KEDA scales so `kix deploy` does not reset the live replica count. Create `ScaledObject`, `ScaledJob`, `TriggerAuthentication`, and `ClusterTriggerAuthentication` resources with `scope.mkCR` and `keda.out.crds.<Kind>`. When one of these resources uses a Service address from another package's `out` (such as `prometheus.out.serviceUrl`), Kix deploys the custom resource after that Service and, when generated network policy is enabled, allows the KEDA operator to reach it. See the "Autoscale workloads with KEDA" how-to guide for examples.
