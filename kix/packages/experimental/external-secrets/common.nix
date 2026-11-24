@@ -73,7 +73,7 @@ rec {
     dep:
     kix.cloudIdentity.useIdentity {
       inherit scope dep;
-      secretGoesTo = "the `auth` of each SecretStore or ClusterSecretStore (such as `auth.secretRef`, or `authSecretRef` on Azure) built with `out.mkSecretStore` or `out.mkClusterSecretStore`";
+      secretGoesTo = "the instance that builds each `SecretStore` or `ClusterSecretStore` (referenced in `auth.secretRef`, or `authSecretRef` on Azure)";
     };
 
   serviceAccount =
