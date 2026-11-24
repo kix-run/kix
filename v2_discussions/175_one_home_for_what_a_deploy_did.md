@@ -534,23 +534,23 @@ and does not count as a writer.
 
 To settle by reading or testing before any code:
 
-2. Test what happens to objects applied under today's manager name when a
+1. Test what happens to objects applied under today's manager name when a
    Kix cluster starts to apply under its own name, and how the old entry is
    removed. The rest of the field manager test passed (section 4.7).
-3. Measure on a cluster larger than 334 objects. The sizes and timings in
+2. Measure on a cluster larger than 334 objects. The sizes and timings in
    section 4.8 come from one small cluster on kind.
-4. Decide the lease duration and the holder's margin.
-5. Say what the next deploy does after a restore that drops `status`: how
+3. Decide the lease duration and the holder's margin.
+4. Say what the next deploy does after a restore that drops `status`: how
     the head finds `current` when no record has a phase.
-6. Say what `kix status` and `kix plan` show when a record is `Deploying`
+5. Say what `kix status` and `kix plan` show when a record is `Deploying`
     and the lock may be dead, since one read cannot tell.
-7. Say which head an Activation with no `kix.run/cluster` label uses. It
+6. Say which head an Activation with no `kix.run/cluster` label uses. It
     takes its own name as the Kix cluster today.
-8. Say who installs the two CRDs on a cluster that only the operator
+7. Say who installs the two CRDs on a cluster that only the operator
     deploys. The operator leaves CRDs out of its reconcile.
-9. Find the new home for the cleanup of retired annotation keys
+8. Find the new home for the cleanup of retired annotation keys
    (section 4.6).
-10. Confirm that a saved plan binds to nothing but what section 4.4 lists.
+9. Confirm that a saved plan binds to nothing but what section 4.4 lists.
 
 Not in this document: the planner itself (review theme 4), replacing an
 object that cannot change in place (theme 6), and readiness (theme 7). Each
