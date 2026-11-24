@@ -246,7 +246,12 @@ impl KubeResources {
         None
     }
 
-    fn api_for(&self, ar: &ApiResource, scope: &Scope, rid: &ResourceId) -> Api<DynamicObject> {
+    pub(super) fn api_for(
+        &self,
+        ar: &ApiResource,
+        scope: &Scope,
+        rid: &ResourceId,
+    ) -> Api<DynamicObject> {
         discovery::api_for(&self.client, ar, scope, rid)
     }
 
