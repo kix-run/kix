@@ -4,6 +4,7 @@
 let
   versions = import ./core/version.nix { inherit lib; };
   errors = import ./core/error.nix { inherit lib; };
+  defaultLimits = import ./core/default-limits.nix;
 
   isMoved = package: (package._type or "") == "kix-moved";
   isRemoved = package: (package._type or "") == "kix-removed";
@@ -575,6 +576,40 @@ in
         description = ''
           Whether DaemonSets can be deployed. False on GKE Autopilot where
           the platform manages all node-level daemons. null = unknown.
+        '';
+      };
+    };
+
+    cluster.defaultLimits = {
+      cpu = lib.mkOption {
+        type = lib.types.enum defaultLimits.modes;
+        default = defaultLimits.default.cpu;
+        description = ''
+          Whether packages apply their default CPU limits across the cluster.
+          `"package"` keeps each package's default CPU limit. `"none"` drops
+          default CPU limits declared with `kix.options.resources`, keeps all
+          CPU requests and any `limits.cpu` set on an instance, and tells the
+          `reliability.boundedResources` scorecard rule not to require
+          `limits.cpu`. Many clusters set `"none"` because CPU limits throttle
+          containers even when a node has idle CPU, while CPU requests still
+          guarantee each container's share.
+        '';
+      };
+      memory = lib.mkOption {
+        type = lib.types.enum defaultLimits.modes;
+        default = defaultLimits.default.memory;
+        description = ''
+          Whether packages apply their default memory limits across the
+          cluster. `"package"` keeps each package's default memory limit.
+          `"none"` drops default memory limits declared with
+          `kix.options.resources`, keeps all memory requests and any
+          `limits.memory` set on an instance, and tells the
+          `reliability.boundedResources` scorecard rule not to require
+          `limits.memory`. Keep this set to `"package"` unless you set
+          `limits.memory` per instance or intend to run without memory limits.
+          Kubernetes cannot throttle memory, so a container without a memory
+          limit can exhaust a node's memory and cause the kernel to kill other
+          pods on that node.
         '';
       };
     };

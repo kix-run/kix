@@ -434,7 +434,13 @@ impl SecretHydrator for ScriptedOps {
 
 #[async_trait]
 impl ResourceIo for ScriptedOps {
-    async fn apply(&self, manifest: &Value) -> Result<ApplyResult, ApplyError> {
+    async fn apply(
+        &self,
+        manifest: &Value,
+        _timeout: Duration,
+        _cancel: &CancelToken,
+        _on_status: OnStatus<'_>,
+    ) -> Result<ApplyResult, ApplyError> {
         let rid = ResourceId::from_value(manifest);
         let _in_flight = InFlightApply::enter(self);
         self.record(Call::ApplyStart(rid.clone()));

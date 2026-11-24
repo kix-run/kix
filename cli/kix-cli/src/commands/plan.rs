@@ -607,6 +607,9 @@ pub(crate) fn fill_checks(
     doc.conflicts = Checked::found(conflicts);
     doc.admission = Checked::found(admission);
     doc.not_checked = not_checked;
+    doc.being_deleted = kix::plan::server::being_deleted(answers, |rid| {
+        build.iter().find(|m| ResourceId::from_value(m) == *rid)
+    });
     doc.prune = Checked::found(prune_entries(checked, &prune_answers));
 }
 

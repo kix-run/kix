@@ -1249,3 +1249,172 @@ fn a_prune_waits_for_finalizers() {
         assert!(!gone.status.success(), "{name} is still on the cluster");
     }
 }
+
+/// Verify that a deploy waits for an object of the build that is being
+/// deleted, then creates it again. A ConfigMap held by a finalizer is
+/// deleted. `kix plan --reconcile` lists it as being deleted, in its text
+/// and in the plan file. `kix deploy --reconcile` waits until the finalizer is removed and
+/// then creates the ConfigMap, which then has no `deletionTimestamp`.
+///
+/// The kind cluster is `$KIX_KIND_CLUSTER` (default `kix-apply-wait`); the
+/// test creates and deletes it.
+#[test]
+#[ignore] // Run explicitly: cargo test --test kind_integration_test -- --ignored
+fn a_deploy_waits_for_an_object_being_deleted_then_creates_it() {
+    if !has_kind() || !has_kubectl() {
+        eprintln!("skipping: kind or kubectl not available");
+        return;
+    }
+    let kind_cluster =
+        std::env::var("KIX_KIND_CLUSTER").unwrap_or_else(|_| "kix-apply-wait".into());
+    let ctx = format!("kind-{kind_cluster}");
+    kind_delete(&kind_cluster);
+    clear_activation_cache("hold");
+    assert!(kind_create(&kind_cluster), "failed to create kind cluster");
+    struct Cleanup(String);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            kind_delete(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(kind_cluster.clone());
+
+    let flake = TwoClusters::new();
+    let flake_nix = std::fs::read_to_string(flake.path().join("flake.nix"))
+        .unwrap()
+        .replace(
+            "sweep-b = ./b.nix;",
+            "sweep-b = ./b.nix;\n        hold = ./hold-cluster.nix;",
+        );
+    flake.write("flake.nix", &flake_nix);
+    flake.write("hold.nix", HOLD_NIX);
+    write_hold_cluster(flake.path(), true);
+
+    let (ok, out) = flake.kix(&ctx, &["deploy", "hold", "--yes"]);
+    assert!(ok, "{out}");
+    let cm = ["-n", "hold-test", "configmap", "hold-test-config"];
+    let patch = kubectl(
+        &ctx,
+        &[
+            "patch",
+            cm[0],
+            cm[1],
+            cm[2],
+            cm[3],
+            "--type=merge",
+            "-p",
+            r#"{"metadata":{"finalizers":["example.com/hold"]}}"#,
+        ],
+    );
+    assert!(patch.status.success(), "{patch:?}");
+    let delete = kubectl(
+        &ctx,
+        &["delete", cm[0], cm[1], cm[2], cm[3], "--wait=false"],
+    );
+    assert!(delete.status.success(), "{delete:?}");
+    let old_uid = kubectl_stdout(
+        &ctx,
+        &[
+            "get",
+            cm[0],
+            cm[1],
+            cm[2],
+            cm[3],
+            "-o",
+            "jsonpath={.metadata.uid}",
+        ],
+    );
+    assert!(!old_uid.is_empty());
+
+    let (_, text) = flake.kix(&ctx, &["plan", "hold", "--reconcile"]);
+    assert!(
+        text.contains("being deleted on the cluster"),
+        "the plan does not list the ConfigMap being deleted:\n{text}"
+    );
+    assert!(text.contains("waiting for example.com/hold"), "{text}");
+    let plan_file = flake.path().join("hold.kixplan");
+    let (_, text) = flake.kix(
+        &ctx,
+        &[
+            "plan",
+            "hold",
+            "--reconcile",
+            "--out",
+            plan_file.to_str().unwrap(),
+        ],
+    );
+    assert!(plan_file.exists(), "{text}");
+    let doc = saved_plan(&plan_file);
+    let listed = &doc["being_deleted"];
+    assert_eq!(
+        listed[0]["resource"], "ConfigMap/hold-test-config@hold-test",
+        "{listed}"
+    );
+    assert_eq!(listed[0]["finalizers"][0], "example.com/hold", "{listed}");
+    assert_eq!(listed[0]["holds_data"], false, "{listed}");
+
+    let mut deploy = std::process::Command::new(assert_cmd::cargo::cargo_bin("kix"))
+        .env("NO_COLOR", "true")
+        .arg("--flake")
+        .arg(flake.path())
+        .args(["--context", &ctx])
+        .args(["deploy", "hold", "--reconcile", "--yes", "--timeout", "2m"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("kix should run");
+    std::thread::sleep(std::time::Duration::from_secs(15));
+    assert!(
+        deploy.try_wait().unwrap().is_none(),
+        "the deploy finished while the ConfigMap was still being deleted"
+    );
+    let unpatch = kubectl(
+        &ctx,
+        &[
+            "patch",
+            cm[0],
+            cm[1],
+            cm[2],
+            cm[3],
+            "--type=merge",
+            "-p",
+            r#"{"metadata":{"finalizers":null}}"#,
+        ],
+    );
+    assert!(unpatch.status.success(), "{unpatch:?}");
+    let out = deploy.wait_with_output().unwrap();
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    eprintln!("$ kix deploy hold --reconcile --yes --timeout 2m\n{text}");
+    assert!(out.status.success(), "{text}");
+    let new_uid = kubectl_stdout(
+        &ctx,
+        &[
+            "get",
+            cm[0],
+            cm[1],
+            cm[2],
+            cm[3],
+            "-o",
+            "jsonpath={.metadata.uid}",
+        ],
+    );
+    assert!(!new_uid.is_empty(), "the ConfigMap was not created again");
+    assert_ne!(new_uid, old_uid, "the ConfigMap is still the old object");
+    let deleting = kubectl_stdout(
+        &ctx,
+        &[
+            "get",
+            cm[0],
+            cm[1],
+            cm[2],
+            cm[3],
+            "-o",
+            "jsonpath={.metadata.deletionTimestamp}",
+        ],
+    );
+    assert!(deleting.is_empty(), "the new ConfigMap is being deleted");
+}
