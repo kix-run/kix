@@ -89,6 +89,7 @@ PackageInstance kind is not changed.
    deployed.
 10. The first deploy by the new Kix removes the two old notes from every
     object (section 7). Pods of operators that copy annotations restart once.
+11. The first of the two releases is a required stop (section 7).
 
 Decision 1 reverses a rule the CLI states today: live state is read "never to
 decide" (`cli/README.md`, "Baseline: what a plan compares against"). That
@@ -522,13 +523,11 @@ and one list per kind.
 
 ## 8. Open questions
 
-For Adam:
-
-1. **Is a required stop acceptable for the first of the two releases?**
-   Decision 9 needs it (section 7).
+Nothing is waiting for Adam.
 
 Settled on 2026-11-24: the old notes are removed on the first deploy
-(decision 10), the field manager test comes first (decision 6), the
+(decision 10), the first release is a required stop (decision 11), the
+field manager test comes first (decision 6), the
 repair takes the lock (decision 7), no revision history (decision 8), and an
 older `kix gc` is stopped (decision 9). The repair yields to a waiting deploy
 and does not count as a writer.
