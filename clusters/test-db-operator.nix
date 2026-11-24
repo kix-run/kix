@@ -46,7 +46,7 @@ let
       };
       # The consumer holds the database to the contract every PostgreSQL
       # database provider answers.
-      deps.database.assertions = dep: kix.contracts.postgresDatabase.assertions "psql-check" dep;
+      deps.database.assertions = kix.contracts.postgresDatabase.assertions;
       build =
         {
           self,

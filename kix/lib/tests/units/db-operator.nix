@@ -76,7 +76,7 @@ let
         description = "PostgreSQL consumer stand-in";
         owner = "app-team";
       };
-      deps.database.assertions = dep: kix.contracts.postgresDatabase.assertions "consumer" dep;
+      deps.database.assertions = kix.contracts.postgresDatabase.assertions;
       build =
         { self, database, ... }:
         {

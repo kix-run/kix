@@ -121,7 +121,6 @@
 let
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "db-operator-database ${ns}/${name}";
 
   # The database and its role (GenerateDatabaseSecretData and
   # GenerateDatabaseUsername upstream).
@@ -303,7 +302,6 @@ in
     let
       crds =
         dbOperator.out.crds or (scope.fail {
-          package = "db-operator-database";
           dependency = "dbOperator";
           message = "deps.dbOperator is missing out.crds (for example, because it uses kix.mkImport instead of packages.experimental.db-operator), so Kix cannot create the Database resource.";
           fix = "Point deps.dbOperator at a packages.experimental.db-operator instance: deps.dbOperator = ref.<namespace>.<instance>.";
@@ -319,7 +317,6 @@ in
           dbInstance
         else
           scope.fail {
-            package = "db-operator-database";
             dependency = "dbInstance";
             message = "deps.dbInstance is missing out.name, out.fqdn, out.port, or out.engine = \"postgres\" (for example, because it points directly at a PostgreSQL server instead of a db-operator-instance), so Kix rejected this Database.";
             fix = "Point deps.dbInstance at the packages.experimental.db-operator-instance that registers your PostgreSQL server: deps.dbInstance = ref.<namespace>.<instance>.";
@@ -387,7 +384,7 @@ in
         resource = self.credentials;
         requires = [ self.database ];
 
-        out = kix.contracts.postgresDatabase.check who {
+        out = kix.contracts.postgresDatabase.check scope {
           host = self.server.fqdn;
           port = self.server.port;
           database = dbName;

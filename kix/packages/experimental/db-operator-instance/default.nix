@@ -130,7 +130,6 @@
 let
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "db-operator-instance ${ns}/${name}";
 
   # Secret data keys, as Kubernetes admits them.
   secretKey = lib.types.strMatching "[-._a-zA-Z0-9]+";
@@ -188,7 +187,6 @@ in
     let
       crds =
         dbOperator.out.crds or (scope.fail {
-          package = "db-operator-instance";
           dependency = "dbOperator";
           message = "deps.dbOperator is missing out.crds (for example, because it uses kix.mkImport instead of packages.experimental.db-operator), so Kix cannot create the DbInstance resource.";
           fix = "Point deps.dbOperator at a packages.experimental.db-operator instance: deps.dbOperator = ref.<namespace>.<instance>.";
@@ -199,7 +197,6 @@ in
           postgres.out
         else
           scope.fail {
-            package = "db-operator-instance";
             dependency = "postgres";
             message = "deps.postgres is missing out.fqdn or out.port, so Kix cannot configure the DbInstance endpoint.";
             fix = "Point deps.postgres at a PostgreSQL server instance (such as cnpg-cluster, stackgres-cluster, or service-ref), or at a kix.mkImport that sets out.fqdn and out.port.";
@@ -213,7 +210,6 @@ in
           null
         else
           scope.fail {
-            package = "db-operator-instance";
             dependency = "postgres";
             message = "deps.postgres sets out.external to ${builtins.toJSON external} instead of true or false, so Kix rejected this DbInstance.";
             fix = "Set out.external = true on kix.mkImport for a PostgreSQL server outside the cluster, or set out.external = false (or omit it) for a server in the cluster.";
@@ -224,14 +220,13 @@ in
           lib.toInt port
         else
           scope.fail {
-            package = "db-operator-instance";
             dependency = "postgres";
             message = "deps.postgres sets out.port to \"${port}\", which is not a TCP port number, so Kix rejected this DbInstance.";
             fix = "Set out.port on deps.postgres to an integer or a numeric string, such as 5432 or \"5432\".";
           };
 
       admin = kix.contracts.secret.helpers.use {
-        inherit who;
+        inherit scope;
         arg = "adminCredentials";
         dep = adminCredentials;
         keys = [

@@ -364,7 +364,6 @@ in
 
         certCrds =
           certManager.out.crds or (scope.fail {
-            package = "db-operator";
             dependency = "certManager";
             message = "deps.certManager is missing out.crds (for example, because it uses kix.mkImport instead of packages.experimental.cert-manager), so Kix cannot create the webhook's Issuer and Certificate.";
             fix = "Point deps.certManager at a packages.experimental.cert-manager instance: deps.certManager = ref.<namespace>.<instance>.";
