@@ -2,4 +2,4 @@
 kind = "note"
 packages = ["node-exporter"]
 +++
-`node-exporter` now passes `--collector.textfile.directory` before the flags in `extraArgs` instead of after them. This changes the argument list of the DaemonSet only for an instance that sets a non-empty `extraArgs` and keeps `textfileCollector.enabled` on, which is the default. On the first deploy after you upgrade, Kubernetes restarts the exporter pod on each node of such an instance once. Other instances do not change. You do not need to change anything.
+No configuration changes are needed. If a `node-exporter` instance sets a non-empty `extraArgs` and leaves `textfileCollector.enabled` on (the default), the first deploy after you upgrade restarts its pod on each node once. `node-exporter` now passes `--collector.textfile.directory` before `extraArgs` instead of after it, which reorders the DaemonSet's container arguments on those instances. Other `node-exporter` instances do not change.

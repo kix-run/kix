@@ -347,9 +347,10 @@ pattern table has each form.
 - `kix.mergeArgs` requires `parser`. Check how the upstream program parses
   flags at the pinned version, set the matching parser (`"gnu"`,
   `"component-base"`, `"go"`, `"go-arg"`, or `"paerser"`), and cite the
-  upstream file in a comment at the call. A pflag program that starts
-  through component-base `cli.Run`, or calls `SetNormalizeFunc` with
-  `WordSepNormalizeFunc`, takes `"component-base"`.
+  upstream file in a comment at the call. Use `"component-base"` when a
+  pflag program runs through Kubernetes component-base `cli.Run` or passes
+  `WordSepNormalizeFunc` to `SetNormalizeFunc`, because it treats `_` and
+  `-` as the same character in flag names.
 - `env` accepts strings, so refuse the program's credential variables as
   literal strings (pattern table) and point at a `secretKeyRef` to a Secret
   managed outside Kix or at the secret dep (S1).
