@@ -54,12 +54,12 @@ on the first real request.
 
 ## Compression
 
-Kix asks the API server for gzip-compressed responses. The API server
-compresses only large responses, such as a list of many objects. Watch
-requests are never compressed.
+Kix asks the API server for gzip-compressed responses on every request except
+watches. The API server compresses only large responses, such as a list of
+many resources.
 
-To turn compression off for one cluster, set `disable-compression: true` on
-that cluster in your kubeconfig:
+To turn off compression for a cluster, set `disable-compression: true` on that
+cluster in your kubeconfig:
 
 ```yaml
 clusters:
@@ -69,9 +69,9 @@ clusters:
       disable-compression: true
 ```
 
-The operator reads a kubeconfig only when its container has one, through
-`KUBECONFIG` or `~/.kube/config`. Otherwise it connects with its service
-account, and nothing turns compression off.
+The Kix operator connects with its service account unless its container has a
+kubeconfig at `KUBECONFIG` or `~/.kube/config`. Without a kubeconfig, the
+operator has no setting to turn off compression.
 
 ## Listing managed resources
 
