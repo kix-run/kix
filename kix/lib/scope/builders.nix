@@ -844,26 +844,30 @@ in
           readiness = k8s.validateReadiness "mkCRD ${instanceName}" "${group}/${crKind}" (
             attrs.readiness or null
           );
+          declaredBy = "scope.mkCRD ${plural}.${group} in ${namespaceName}/${instanceName}";
+          crRequires = k8s.validateCrRequires declaredBy "${group}/${crKind}" (attrs.crRequires or [ ]);
 
-          crdResource = builtins.seq readiness (scopeMkClusterResource {
-            apiVersion = "apiextensions.k8s.io/v1";
-            kind = "CustomResourceDefinition";
-            name = "${plural}.${group}";
-            inherit labels;
-            ownership = attrs.ownership or { };
-            extra = {
-              spec = crdSpec;
-            }
-            // lib.optionalAttrs (annotations != { }) {
-              metadata = { inherit annotations; };
-            };
-          });
+          crdResource = builtins.seq readiness (
+            builtins.seq crRequires (scopeMkClusterResource {
+              apiVersion = "apiextensions.k8s.io/v1";
+              kind = "CustomResourceDefinition";
+              name = "${plural}.${group}";
+              inherit labels;
+              ownership = attrs.ownership or { };
+              extra = {
+                spec = crdSpec;
+              }
+              // lib.optionalAttrs (annotations != { }) {
+                metadata = { inherit annotations; };
+              };
+            })
+          );
 
           crdBuilders = k8s.mkCRDBuilders {
             crdOrRef = crdResource;
             group = group;
             kind = crKind;
-            declaredBy = "scope.mkCRD ${plural}.${group} in ${namespaceName}/${instanceName}";
+            inherit declaredBy crRequires;
             inherit
               version
               servedVersions

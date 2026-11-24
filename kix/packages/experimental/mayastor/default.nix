@@ -165,44 +165,31 @@ in
         ) shared
       );
 
-      reserved = builtins.filter (n: n == "root" || n == "meta");
-      reservedNames =
-        map (n: "diskPools.${n}") (reserved (builtins.attrNames config.diskPools))
-        ++ map (n: "volumeSnapshotClasses.${n}") (
-          reserved (builtins.attrNames config.volumeSnapshotClasses)
-        );
-
-      tolerationErrors =
-        option:
-        lib.concatLists (
-          lib.imap0 (
-            i: t:
-            let
-              at = "${option}[${toString i}]";
-            in
-            lib.optional (t.key == null && t.operator != "Exists")
-              "${at} has no key, which the apiserver accepts only with operator Exists (tolerate every taint). Set key, or set operator = \"Exists\"."
-            ++
-              lib.optional (t.operator == "Exists" && t.value != null)
-                "${at} sets value with operator Exists, which matches any value; the apiserver refuses it. Remove value, or set operator = \"Equal\"."
-            ++
-              lib.optional (t.tolerationSeconds != null && t.effect != "NoExecute")
-                "${at} sets tolerationSeconds, which the apiserver accepts only with effect NoExecute. Set effect = \"NoExecute\", or remove tolerationSeconds."
-          ) (lib.attrByPath (lib.splitString "." option) [ ] config)
-        );
-      badTolerations = tolerationErrors "ioEngine.tolerations" ++ tolerationErrors "csiNode.tolerations";
-
-      defaultSnapshotClasses = builtins.attrNames (
-        lib.filterAttrs (
-          _: v: (v.annotations."snapshot.storage.kubernetes.io/is-default-class" or null) == "true"
-        ) config.volumeSnapshotClasses
+      reservedPools = builtins.filter (n: n == "root" || n == "meta") (
+        builtins.attrNames config.diskPools
       );
     in
-    [
-      {
-        assertion = badTolerations == [ ];
-        message = lib.concatStringsSep " " badTolerations;
-      }
+    map
+      (message: {
+        assertion = false;
+        inherit message;
+      })
+      (
+        kix.storage.snapshotClassProblems {
+          optionPath = "config.volumeSnapshotClasses";
+          classes = config.volumeSnapshotClasses;
+          snapshotController = deps.snapshotController or null;
+        }
+        ++ kix.tolerations.problems {
+          optionPath = "config.ioEngine.tolerations";
+          inherit (config.ioEngine) tolerations;
+        }
+        ++ kix.tolerations.problems {
+          optionPath = "config.csiNode.tolerations";
+          inherit (config.csiNode) tolerations;
+        }
+      )
+    ++ [
       {
         assertion = owned == [ ];
         message = "ioEngine.resources sets ${lib.concatStringsSep ", " owned}, which the package sets: CPU from ioEngine.cpuCount and 2 MiB hugepages from ioEngine.hugepages2Mi. Set those options instead.";
@@ -212,18 +199,12 @@ in
         message = "diskPools name the same disk more than once: ${sharedText}. A disk belongs to one pool; Mayastor refuses the second as claimed. The comparison is by text, so two paths to one disk (a by-id link and its /dev name) are not detected.";
       }
       {
-        assertion = reservedNames == [ ];
-        message = "${lib.concatStringsSep " and " reservedNames}: Kix drops parts named root or meta, so ${
-          if builtins.length reservedNames == 1 then "it" else "they"
-        } would not be rendered. Rename ${if builtins.length reservedNames == 1 then "it" else "them"}.";
-      }
-      {
-        assertion = config.volumeSnapshotClasses == { } || (deps.snapshotController or null) != null;
-        message = "volumeSnapshotClasses defines ${lib.concatStringsSep ", " (builtins.attrNames config.volumeSnapshotClasses)}, but nothing provides the snapshotController role, so the VolumeSnapshotClass kind has no owner. Add a snapshot-controller instance, or on a cluster whose environment runs the controller use a flavour or an import that provides the role, or remove volumeSnapshotClasses.";
-      }
-      {
-        assertion = builtins.length defaultSnapshotClasses <= 1;
-        message = "volumeSnapshotClasses ${lib.concatStringsSep " and " defaultSnapshotClasses} are each annotated snapshot.storage.kubernetes.io/is-default-class=\"true\". A VolumeSnapshot that names no class then fails, because the snapshot controller refuses to choose between two defaults for one driver. Keep the annotation on one class.";
+        assertion = reservedPools == [ ];
+        message = "${
+          lib.concatMapStringsSep " and " (n: "diskPools.${n}") reservedPools
+        }: Kix reserves the keys \"root\" and \"meta\", so ${
+          if builtins.length reservedPools == 1 then "it" else "they"
+        } cannot be built. Rename ${if builtins.length reservedPools == 1 then "it" else "them"}.";
       }
     ];
 
@@ -319,23 +300,12 @@ in
 
         classes = sc.resources;
 
-        snapshotClasses =
-          if snapshotController == null then
-            { }
-          else
-            lib.mapAttrs (
-              className: cls:
-              scope.mkCR snapshotController.out.crds.VolumeSnapshotClass {
-                name = className;
-                inherit (cls) labels annotations;
-                extra = {
-                  driver = self.csiDriver.out.name;
-                  inherit (cls) deletionPolicy;
-                }
-                // lib.optionalAttrs (cls.parameters != { }) { inherit (cls) parameters; };
-                requires = [ self.csiController ];
-              }
-            ) config.volumeSnapshotClasses;
+        snapshotClasses = kix.storage.mkSnapshotClasses {
+          inherit scope snapshotController;
+          driver = self.csiDriver.out.name;
+          classes = config.volumeSnapshotClasses;
+          requires = [ self.csiController ];
+        };
 
         diskPoolCrd = scope.mkCRDRef {
           group = "openebs.io";

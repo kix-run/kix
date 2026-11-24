@@ -79,12 +79,6 @@ let
       }
     else
       kix.image.ref image;
-
-  defaultVscs =
-    classes:
-    builtins.filter (n: (classes.${n}.annotations.${vscDefaultAnnotation} or null) == "true") (
-      builtins.attrNames classes
-    );
 in
 {
   meta = {
@@ -115,42 +109,21 @@ in
 
   assertions =
     { config, deps, ... }:
-    let
-      vscNames = builtins.attrNames config.volumeSnapshotClasses;
-      defaults = defaultVscs config.volumeSnapshotClasses;
-
-      tolerationProblems =
-        i: t:
-        let
-          at = "config.node.tolerations.${toString i}";
-        in
-        lib.optional ((t.key == null || t.key == "") && t.operator != "Exists")
-          "${at} has no key and operator ${t.operator}; a toleration without a key must use operator Exists. Set key, or set operator = \"Exists\"."
-        ++
-          lib.optional (t.operator == "Exists" && t.value != null)
-            "${at} sets value with operator Exists, which matches any value. Remove value, or set operator = \"Equal\"."
-        ++
-          lib.optional (t.tolerationSeconds != null && t.effect != "NoExecute")
-            "${at} sets tolerationSeconds with effect ${
-              if t.effect == null then "null" else t.effect
-            }; tolerationSeconds applies only to effect NoExecute. Set effect = \"NoExecute\", or remove tolerationSeconds.";
-    in
     map
       (message: {
         assertion = false;
         inherit message;
       })
       (
-        lib.optional (vscNames != [ ] && (deps.snapshotController or null) == null)
-          "volumeSnapshotClasses defines ${lib.concatStringsSep ", " vscNames}, but nothing provides the snapshotController role, so the VolumeSnapshotClass kind has no owner. Add a snapshot-controller instance; on a cluster whose environment runs the controller, use its flavour (rke2 provides the role) or a kix.mkImport with roles = [ \"snapshotController\" ] and its crds; or remove volumeSnapshotClasses."
-        ++
-          lib.optional (builtins.length defaults > 1)
-            "config.volumeSnapshotClasses.${builtins.elemAt defaults 0} and config.volumeSnapshotClasses.${builtins.elemAt defaults 1} are both annotated ${vscDefaultAnnotation}=\"true\". A VolumeSnapshot that names no class then fails, because the snapshot controller does not choose between two defaults for one driver. Keep the annotation on one class."
-        ++ map (
-          n:
-          "config.volumeSnapshotClasses.${n}: kix drops parts named root or meta, so this VolumeSnapshotClass would not be rendered. Rename it."
-        ) (builtins.filter (n: n == "root" || n == "meta") vscNames)
-        ++ lib.concatLists (lib.imap0 tolerationProblems config.node.tolerations)
+        kix.storage.snapshotClassProblems {
+          optionPath = "config.volumeSnapshotClasses";
+          classes = config.volumeSnapshotClasses;
+          snapshotController = deps.snapshotController or null;
+        }
+        ++ kix.tolerations.problems {
+          optionPath = "config.node.tolerations";
+          inherit (config.node) tolerations;
+        }
       );
 
   build =
@@ -590,7 +563,7 @@ in
             }
             // lib.optionalAttrs (config.node.nodeSelector != { }) { inherit (config.node) nodeSelector; }
             // lib.optionalAttrs (config.node.tolerations != [ ]) {
-              tolerations = map (lib.filterAttrs (_: v: v != null)) config.node.tolerations;
+              tolerations = kix.tolerations.render config.node.tolerations;
             };
           };
         };
@@ -598,21 +571,12 @@ in
 
       classes = sc.resources;
 
-      snapshotClasses = lib.optionalAttrs hasSnapshotApi (
-        lib.mapAttrs (
-          className: cls:
-          scope.mkCR snapshotController.out.crds.VolumeSnapshotClass {
-            name = className;
-            inherit (cls) labels annotations;
-            extra = {
-              driver = self.csiDriver.out.name;
-              inherit (cls) deletionPolicy;
-            }
-            // lib.optionalAttrs (cls.parameters != { }) { inherit (cls) parameters; };
-            requires = [ self.controller ];
-          }
-        ) config.volumeSnapshotClasses
-      );
+      snapshotClasses = kix.storage.mkSnapshotClasses {
+        inherit scope snapshotController;
+        driver = self.csiDriver.out.name;
+        classes = config.volumeSnapshotClasses;
+        requires = [ self.controller ];
+      };
 
       root = {
         resource = self.controller;

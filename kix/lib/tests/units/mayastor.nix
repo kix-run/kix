@@ -357,15 +357,19 @@ in
             };
           } == [ ];
         reservedNames =
-          someMessageHas
-            [ "diskPools.root and volumeSnapshotClasses.meta" "Kix drops parts named root or meta" ]
-            (failedMessages {
+          let
+            messages = failedMessages {
               config = {
                 diskPools.root = pool "node1" "/dev/sdb";
                 volumeSnapshotClasses.meta = { };
               };
               deps = snapshotDep;
-            });
+            };
+          in
+          someMessageHas [ "diskPools.root: Kix reserves the keys \"root\" and \"meta\"" ] messages
+          && someMessageHas [
+            "config.volumeSnapshotClasses.meta: Kix reserves the keys \"root\" and \"meta\""
+          ] messages;
         ownedResources =
           someMessageHas [ "ioEngine.resources sets cpu" "ioEngine.cpuCount" ]
             (failedMessages {
@@ -376,7 +380,10 @@ in
             default.annotations."snapshot.storage.kubernetes.io/is-default-class" = "true";
           in
           someMessageHas
-            [ "volumeSnapshotClasses a and b are each annotated" "Keep the annotation on one class" ]
+            [
+              "config.volumeSnapshotClasses.a and config.volumeSnapshotClasses.b each set"
+              "Keep this annotation on at most one class"
+            ]
             (failedMessages {
               config.volumeSnapshotClasses = {
                 a = default;
@@ -386,17 +393,20 @@ in
             });
         snapshotClassesWithoutApi =
           someMessageHas
-            [ "volumeSnapshotClasses defines snap" "nothing provides the snapshotController role" ]
+            [
+              "volumeSnapshotClasses defines snap"
+              "no instance in the cluster provides a snapshot controller (the snapshotController role)"
+            ]
             (failedMessages {
               config.volumeSnapshotClasses.snap = { };
             });
         tolerationWithoutKey =
-          someMessageHas [ "ioEngine.tolerations[0] has no key" "operator = \"Exists\"" ]
+          someMessageHas [ "ioEngine.tolerations[0] has a missing or empty key" "operator = \"Exists\"" ]
             (failedMessages {
               config.ioEngine.tolerations = [ { effect = "NoSchedule"; } ];
             });
         tolerationExistsWithValue =
-          someMessageHas [ "csiNode.tolerations[1] sets value with operator Exists" ]
+          someMessageHas [ "csiNode.tolerations[1] sets value with operator \"Exists\"" ]
             (failedMessages {
               config.csiNode.tolerations = [
                 { operator = "Exists"; }

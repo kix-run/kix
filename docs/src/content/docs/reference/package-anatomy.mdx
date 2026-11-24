@@ -446,6 +446,54 @@ cpuMillis = kix.parseQuantity "cpu" config.resources.requests.cpu; # "250m" -> 2
 memBytes = kix.parseQuantity "memory" config.resources.requests.memory; # "256Mi" -> 268435456
 ```
 
+### Tolerations (`kix.types.toleration` and `kix.tolerations`)
+
+`kix.types.toleration` is a submodule option type for Kubernetes pod tolerations. Each entry defines `key` (`nullOr str`), `operator` (`"Equal"` by default, or `"Exists"`), `value` (`nullOr str`), `effect` (`"NoSchedule"`, `"PreferNoSchedule"`, `"NoExecute"`, or `null`), and `tolerationSeconds` (`nullOr ints.unsigned`). Every field except `operator` defaults to `null`. Because Kubernetes rejects some combinations of these fields, validate the list in `assertions` with `kix.tolerations.problems` and format it for the pod spec with `kix.tolerations.render`:
+
+| Helper | Signature | Behavior |
+| --- | --- | --- |
+| `kix.tolerations.problems` | `{ optionPath, tolerations } -> [ message ]` | Returns an error message for each toleration that Kubernetes would reject: a missing or empty `key` when `operator` is not `"Exists"`, `value` set when `operator` is `"Exists"`, or `tolerationSeconds` set when `effect` is not `"NoExecute"`. Each message identifies the entry as `<optionPath>[<index>]`. |
+| `kix.tolerations.render` | `tolerations -> list` | Strips `null` fields from each toleration so you can assign the list directly to `spec.tolerations` on a pod spec. |
+
+```nix
+options.node.tolerations = lib.mkOption {
+  type = lib.types.listOf kix.types.toleration;
+  default = [ ];
+  description = "Taints the node plugin tolerates.";
+};
+
+assertions =
+  { config, ... }:
+  map (message: {
+    assertion = false;
+    inherit message;
+  }) (kix.tolerations.problems {
+    optionPath = "config.node.tolerations";
+    inherit (config.node) tolerations;
+  });
+
+# In the pod spec:
+tolerations = kix.tolerations.render config.node.tolerations;
+```
+
+### VolumeSnapshotClasses (`kix.types.volumeSnapshotClass` and `kix.storage`)
+
+CSI driver packages expose `VolumeSnapshotClass` settings as an option of type `lib.types.attrsOf kix.types.volumeSnapshotClass`, keyed by class name. Each entry accepts `deletionPolicy` (`"Delete"` by default, or `"Retain"`) plus `parameters`, `labels`, and `annotations` (each `attrsOf str`, default `{ }`). The provider of the `snapshotController` role supplies the `VolumeSnapshotClass` CRD, so take `snapshotController ? null` as an optional `build` argument:
+
+| Helper | Signature | Behavior |
+| --- | --- | --- |
+| `kix.storage.snapshotClassProblems` | `{ optionPath, classes, snapshotController } -> [ message ]` | Returns error messages when `classes` is non-empty and `snapshotController` is `null`, when more than one class sets `annotations."snapshot.storage.kubernetes.io/is-default-class" = "true"`, or when a class is named `root` or `meta` (keys Kix reserves). Call this in `assertions` with `snapshotController = deps.snapshotController or null`. |
+| `kix.storage.mkSnapshotClasses` | `{ scope, snapshotController, driver, classes, requires ? [ ] } -> attrset` | Builds a `VolumeSnapshotClass` resource for each entry in `classes` (under the same attribute keys) using `scope.mkCR snapshotController.out.crds.VolumeSnapshotClass`, setting `driver` on each class and omitting `parameters` when empty. Returns `{ }` when `snapshotController` is `null`. |
+
+```nix
+snapshotClasses = kix.storage.mkSnapshotClasses {
+  inherit scope snapshotController;
+  driver = self.csiDriver.out.name;
+  classes = config.volumeSnapshotClasses;
+  requires = [ self.controller ];
+};
+```
+
 ### Escape hatches and guard helpers
 
 Packages often expose an escape hatch option (`extraSpec`, `extraEnv`, `extraArgs`, or `settings`) so cluster operators can set fields not covered by first-class options. Use Kix's guard helpers to merge operator overrides while protecting invariants owned by the package:

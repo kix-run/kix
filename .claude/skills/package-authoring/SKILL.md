@@ -95,8 +95,8 @@ rewrites the later ones.
   unchanged. A field it cannot honour means a different alias, not a `null`
   (`v2_discussions/148_clickhouse_packages_plan.md:39`).
 - CRDs: vendor or `mkCRDRef` markers (crd-vendoring skill §1). An operator
-  with admission webhooks gets a gate Job on every handle on either route
-  (C21). Every declaration sets `holdsData`: `true` when deleting a custom
+  with admission webhooks lists a webhook-check Job in `crRequires` on every
+  `scope.mkCRD` or `scope.mkCRDRef` call for the kinds those webhooks admit (C21). Every declaration sets `holdsData`: `true` when deleting a custom
   resource of the kind loses data (a database, a storage pool, a backup),
   `false` otherwise (C24). A stateful package that renders a custom resource
   of a kind without it fails to build.
@@ -106,7 +106,7 @@ rewrites the later ones.
   that serves it, so the API server never calls a webhook whose pods are not
   ready. When it does (it writes its certificate into `caBundle` at startup,
   as CloudNativePG does), the workload requires the configuration, and every
-  CRD handle makes its custom resources wait for a check Job (`cnpg-operator`,
+  CRD declaration lists a webhook-check Job in `crRequires` (`cnpg-operator`,
   C21). Either way, the deploy's dry run treats an unreachable webhook as not
   checked only when the deploy writes the webhook's Service or another object
   of the package; otherwise the deploy stops before it writes anything (C26).

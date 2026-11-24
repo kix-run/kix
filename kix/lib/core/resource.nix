@@ -1053,6 +1053,19 @@ rec {
       // lib.optionalAttrs (observedGeneration != null) { inherit observedGeneration; }
       // lib.optionalAttrs (pendingRestart != null) { pendingRestart = normalizedPendingRestart; };
 
+  # Return `crRequires` when it is a list, and stop the build otherwise.
+  # `scope.mkCRD` and `scope.mkCRDRef` call it when the kind is declared, so
+  # a wrong value fails even when no custom resource of the kind is built.
+  validateCrRequires =
+    declaredBy: groupKind: crRequires:
+    if builtins.isList crRequires then
+      crRequires
+    else
+      fail {
+        message = "${declaredBy}: crRequires for ${groupKind} must be a list of resources (got ${builtins.typeOf crRequires}).";
+        fix = "Set crRequires to a list of resources, such as [ self.webhookCheck ].";
+      };
+
   mkCRDBuilders =
     {
       crdOrRef,
@@ -1070,6 +1083,11 @@ rec {
       # versions come from a CustomResourceDefinition spec.
       unservedFix ? null,
       crdScope,
+      # Resources every CR of the kind requires, such as a Job that checks
+      # the operator's admission webhook serves. The package declares them
+      # on `scope.mkCRD` or `scope.mkCRDRef`. They come before the CRD in
+      # each CR's `requires`.
+      crRequires ? [ ],
       # Appended to every CR's `requires` after the CRD (a chart's workloads,
       # any of which can be the CRD's webhook).
       extraRequires ? [ ],
@@ -1113,6 +1131,8 @@ rec {
           }
         else
           holdsData;
+
+      _validatedCrRequires = validateCrRequires declaredBy "${group}/${kind}" crRequires;
 
       # A CR can override the default version, normally the CRD's storage
       # version, with another served one. `consumer` is "ns/instance" when
@@ -1161,7 +1181,7 @@ rec {
         // {
           apiVersion = "${group}/${checkServed consumer args (args.version or version)}";
           kind = crKind;
-          requires = (args.requires or [ ]) ++ [ crdOrRef ] ++ extraRequires;
+          requires = (args.requires or [ ]) ++ _validatedCrRequires ++ [ crdOrRef ] ++ extraRequires;
         }
         // lib.optionalAttrs (factBehavior != null) { inherit factBehavior; }
         // lib.optionalAttrs (usesAtLeast != null) { inherit usesAtLeast; }
@@ -1259,6 +1279,8 @@ rec {
       usesAtLeast ? null,
       # Whether each CR of the kind holds data; see mkCRDBuilders.
       holdsData ? null,
+      # Resources every CR of the kind requires; see mkCRDBuilders.
+      crRequires ? [ ],
     }:
     let
       declaration = "${site} in ${namespaceName}/${instanceName}";
@@ -1321,7 +1343,10 @@ rec {
         else
           [ installedBy ];
 
-      _validated = builtins.seq _validatedServed (builtins.seq _validatedScope _validatedReadiness);
+      _validatedCrRequires = validateCrRequires declaration "${group}/${kind}" crRequires;
+      _validated = builtins.seq _validatedServed (
+        builtins.seq _validatedScope (builtins.seq _validatedCrRequires _validatedReadiness)
+      );
 
       marker = builtins.seq _validated (
         mkImportMarker { inherit mkResource namespaceName; } {
@@ -1344,6 +1369,7 @@ rec {
         factBehavior = _validatedBehavior;
         readiness = _validatedReadiness;
         inherit usesAtLeast holdsData;
+        crRequires = _validatedCrRequires;
         version = _validatedVersion;
         servedVersions = _validatedServed;
         crdScope = _validatedScope;

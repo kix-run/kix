@@ -19,45 +19,6 @@ let
       memory = "128Mi";
     };
   };
-
-  toleration = lib.types.submodule {
-    options = {
-      key = lib.mkOption {
-        type = lib.types.nullOr lib.types.str;
-        default = null;
-        description = "Taint key. Null with operator `Exists` tolerates every taint.";
-      };
-      operator = lib.mkOption {
-        type = lib.types.enum [
-          "Exists"
-          "Equal"
-        ];
-        default = "Equal";
-        description = "`Exists` matches any value; `Equal` matches `value`.";
-      };
-      value = lib.mkOption {
-        type = lib.types.nullOr lib.types.str;
-        default = null;
-        description = "Taint value for operator `Equal`.";
-      };
-      effect = lib.mkOption {
-        type = lib.types.nullOr (
-          lib.types.enum [
-            "NoSchedule"
-            "PreferNoSchedule"
-            "NoExecute"
-          ]
-        );
-        default = null;
-        description = "Taint effect to tolerate. Null tolerates every effect.";
-      };
-      tolerationSeconds = lib.mkOption {
-        type = lib.types.nullOr lib.types.ints.unsigned;
-        default = null;
-        description = "For effect `NoExecute`, how long the pod stays bound after the taint appears. Null keeps it bound.";
-      };
-    };
-  };
 in
 {
   image = kix.options.image {
@@ -144,35 +105,7 @@ in
   };
 
   volumeSnapshotClasses = lib.mkOption {
-    type = lib.types.attrsOf (
-      lib.types.submodule {
-        options = {
-          deletionPolicy = lib.mkOption {
-            type = lib.types.enum [
-              "Delete"
-              "Retain"
-            ];
-            default = "Delete";
-            description = "What happens to the ZFS snapshot when its VolumeSnapshot is deleted.";
-          };
-          parameters = lib.mkOption {
-            type = lib.types.attrsOf lib.types.str;
-            default = { };
-            description = "Driver-specific snapshot parameters. Omitted from the manifest when empty.";
-          };
-          labels = lib.mkOption {
-            type = lib.types.attrsOf lib.types.str;
-            default = { };
-            description = "Labels on the VolumeSnapshotClass.";
-          };
-          annotations = lib.mkOption {
-            type = lib.types.attrsOf lib.types.str;
-            default = { };
-            description = "Annotations on the VolumeSnapshotClass. `\"${vscDefaultAnnotation}\" = \"true\"` marks it as the default class for this driver's volumes.";
-          };
-        };
-      }
-    );
+    type = lib.types.attrsOf kix.types.volumeSnapshotClass;
     default = { };
     example = lib.literalExpression ''
       { zfs.annotations."${vscDefaultAnnotation}" = "true"; }
@@ -246,7 +179,7 @@ in
       description = "Node labels the node plugin is limited to, for clusters where only some nodes have a ZFS pool.";
     };
     tolerations = lib.mkOption {
-      type = lib.types.listOf toleration;
+      type = lib.types.listOf kix.types.toleration;
       default = [ ];
       description = "Taints the node plugin tolerates, for tainted storage nodes.";
     };
