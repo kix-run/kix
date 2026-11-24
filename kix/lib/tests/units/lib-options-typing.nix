@@ -600,6 +600,70 @@ in
     && throws (classes { who = "pkg ns/inst"; }).resources
     || throw "helpers accepted `who` or a missing scope: ${withWho} ${withoutScope}";
 
+  # A package run through `kix.mkImport { from = ...; }` gets a scope with
+  # `fail`, so the helpers work in an import as they do in an instance.
+  lib-options-typing-helpers-in-import =
+    let
+      imported =
+        { scope, kix, ... }:
+        {
+          meta.version = "test";
+          build =
+            { self, ... }:
+            {
+              service = scope.mkResource {
+                apiVersion = "v1";
+                kind = "Service";
+                name = "cache";
+                spec =
+                  kix.mergeGuarded
+                    {
+                      inherit scope;
+                      locked = [ [ "ports" ] ];
+                    }
+                    {
+                      ports = [
+                        {
+                          name = "tcp";
+                          port = 6379;
+                        }
+                      ];
+                    }
+                    { };
+              };
+              root = self.service;
+            };
+        };
+      consumer = {
+        meta.version = "test";
+        build =
+          {
+            self,
+            scope,
+            cache,
+            ...
+          }:
+          {
+            cm = scope.mkResource {
+              apiVersion = "v1";
+              kind = "ConfigMap";
+              name = "cache-consumer";
+              extra.data.name = cache.out.name;
+            };
+            root = self.cm;
+          };
+      };
+      cm = lib.findFirst (m: m.kind == "ConfigMap" && m.metadata.name == "cache-consumer") null (
+        manifests (mkCluster [
+          {
+            instances.cache.cache.package = eval.mkImport { from = imported; };
+            instances.app.consumer.package = consumer;
+          }
+        ])
+      );
+    in
+    (cm.data.name or null == "cache") || throw "helper in an import: ${builtins.toJSON cm}";
+
   lib-options-typing-check-secret-keys =
     let
       check =

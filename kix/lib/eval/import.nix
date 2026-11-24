@@ -10,7 +10,7 @@
 }:
 
 let
-  inherit (import ../core/error.nix { inherit lib; }) fail;
+  inherit (import ../core/error.nix { inherit lib; }) fail failFor;
   meta = import ../meta.nix { inherit lib; };
   packageLib = import ../core/package.nix { inherit lib; };
   kixAnnotations = import ../core/annotations.nix;
@@ -184,8 +184,11 @@ rec {
           };
         };
 
+      instance = "${namespaceName}/${instanceName}";
+
       scope = {
         inherit instanceName namespaceName selectorLabels;
+        fail = failFor { inherit instance; };
         labelStyle = "kix";
         namespace = namespaceResource;
         mkResource = mkRes namespaceResource;
