@@ -1,0 +1,3 @@
+# 2026-11-24 · `kix/lib/scope/builders.nix` · No builder references a ConfigMap that an operator writes, so pods cannot read one by key.
+
+`scope.mkSecretRef` covers a Secret written outside Kix, with declared keys for check 22 and a deploy-time wait. There is no ConfigMap twin. DB Operator writes a ConfigMap `<instance>-credentials` (DB_CONN, DB_PORT, SSL_MODE, and every non-secret credential template) beside its Secret, and db-operator-database cannot publish it, so a consumer can read those keys only through `kix.untrackedRef`, which check 22 and the deploy do not verify. db-operator-database writes every template into the Secret for this reason.

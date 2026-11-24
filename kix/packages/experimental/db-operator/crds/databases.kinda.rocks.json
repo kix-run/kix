@@ -1,0 +1,318 @@
+{
+  "apiVersion": "apiextensions.k8s.io/v1",
+  "kind": "CustomResourceDefinition",
+  "metadata": {
+    "annotations": {
+      "controller-gen.kubebuilder.io/version": "v0.23.0"
+    },
+    "name": "databases.kinda.rocks"
+  },
+  "spec": {
+    "group": "kinda.rocks",
+    "names": {
+      "kind": "Database",
+      "listKind": "DatabaseList",
+      "plural": "databases",
+      "shortNames": [
+        "db"
+      ],
+      "singular": "database"
+    },
+    "scope": "Namespaced",
+    "versions": [
+      {
+        "additionalPrinterColumns": [
+          {
+            "description": "current db status",
+            "jsonPath": ".status.status",
+            "name": "Status",
+            "type": "boolean"
+          },
+          {
+            "description": "If database is protected to not get deleted.",
+            "jsonPath": ".spec.deletionProtected",
+            "name": "Protected",
+            "type": "boolean"
+          },
+          {
+            "description": "instance reference",
+            "jsonPath": ".spec.instance",
+            "name": "DBInstance",
+            "type": "string"
+          },
+          {
+            "description": "db-operator version of last full reconcile",
+            "jsonPath": ".status.operatorVersion",
+            "name": "OperatorVersion",
+            "type": "string"
+          },
+          {
+            "description": "time since creation of resource",
+            "jsonPath": ".metadata.creationTimestamp",
+            "name": "Age",
+            "type": "date"
+          }
+        ],
+        "name": "v1beta1",
+        "schema": {
+          "openAPIV3Schema": {
+            "description": "Database is the Schema for the databases API",
+            "properties": {
+              "apiVersion": {
+                "description": "APIVersion defines the versioned schema of this representation of an object.\nServers should convert recognized schemas to the latest internal value, and\nmay reject unrecognized values.\nMore info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+                "type": "string"
+              },
+              "kind": {
+                "description": "Kind is a string value representing the REST resource this object represents.\nServers may infer this from the endpoint the client submits requests to.\nCannot be updated.\nIn CamelCase.\nMore info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+                "type": "string"
+              },
+              "metadata": {
+                "type": "object"
+              },
+              "spec": {
+                "description": "Desired configuration of the database and its primary user.",
+                "properties": {
+                  "backup": {
+                    "description": "Scheduled database dumps.",
+                    "properties": {
+                      "cron": {
+                        "description": "CronJob schedule expression.",
+                        "type": "string"
+                      },
+                      "enable": {
+                        "description": "Creates a CronJob that dumps the database on the configured schedule.",
+                        "type": "boolean"
+                      },
+                      "envFromSecret": {
+                        "description": "Name of a Secret whose data is exposed to the backup container as environment variables.",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "cron",
+                      "enable"
+                    ],
+                    "type": "object"
+                  },
+                  "cleanup": {
+                    "description": "Adds this Database as an owner of the Kubernetes resources it creates.\nKubernetes garbage collection then removes those resources with the Database.",
+                    "type": "boolean"
+                  },
+                  "credentials": {
+                    "description": "Generated credential data and Secret metadata.",
+                    "properties": {
+                      "metadata": {
+                        "description": "Labels and annotations on the generated credential Secret.",
+                        "properties": {
+                          "extraAnnotations": {
+                            "additionalProperties": {
+                              "type": "string"
+                            },
+                            "description": "Annotations to merge into the generated credential Secret.\nValues in this map replace existing values for the same keys.",
+                            "type": "object"
+                          },
+                          "extraLabels": {
+                            "additionalProperties": {
+                              "type": "string"
+                            },
+                            "description": "Labels to merge into the generated credential Secret.\nValues in this map replace existing values for the same keys.",
+                            "type": "object"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "templates": {
+                        "description": "Additional data entries for generated Secrets and ConfigMaps.",
+                        "items": {
+                          "description": "One generated credential entry.",
+                          "properties": {
+                            "name": {
+                              "description": "Data key written to the generated Secret or ConfigMap.",
+                              "type": "string"
+                            },
+                            "secret": {
+                              "description": "Writes the entry to a Secret when true and to a ConfigMap when false.\nDbUser templates must set this field to true.",
+                              "type": "boolean"
+                            },
+                            "template": {
+                              "description": "Go template evaluated with database connection values and template helper functions.",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "secret",
+                            "template"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "deletionProtected": {
+                    "description": "Keeps the database and its primary user in the database backend\nwhen the Database resource is deleted.",
+                    "type": "boolean"
+                  },
+                  "existingUser": {
+                    "description": "Name of an existing database user to use as the primary user.\nThe operator grants and revokes permissions for this user but does not create or delete it.",
+                    "type": "string"
+                  },
+                  "extraGrants": {
+                    "description": "Grants other existing database users access to this database.\nThe referenced DbInstance must set allowExtraGrants to true.",
+                    "items": {
+                      "properties": {
+                        "accessType": {
+                          "description": "Access level to grant. Supported values are readOnly and readWrite.",
+                          "type": "string"
+                        },
+                        "user": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "accessType",
+                        "user"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "instance": {
+                    "description": "Name of the cluster-scoped DbInstance that hosts the database.\nThis field is immutable.",
+                    "type": "string"
+                  },
+                  "postgres": {
+                    "description": "Settings that apply only to PostgreSQL databases.",
+                    "properties": {
+                      "dropPublicSchema": {
+                        "description": "Removes the public schema after the database is created.",
+                        "type": "boolean"
+                      },
+                      "extensions": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
+                      "schemas": {
+                        "description": "Schemas to create. The primary user receives full access to each schema.",
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
+                      "template": {
+                        "description": "PostgreSQL template database used to create this database.\nThis field is immutable.",
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "secretName": {
+                    "description": "Name of the Secret that stores the generated database credentials.",
+                    "type": "string"
+                  },
+                  "secretsTemplates": {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "description": "Legacy credential templates indexed by Secret data key.\nIt cannot be used with credentials.templates.\n\nDeprecated: Use credentials.templates instead.",
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "deletionProtected",
+                  "instance",
+                  "secretName"
+                ],
+                "type": "object"
+              },
+              "status": {
+                "description": "Observed state of the database.",
+                "properties": {
+                  "database": {
+                    "type": "string"
+                  },
+                  "engine": {
+                    "type": "string"
+                  },
+                  "extraGrants": {
+                    "description": "Records the grants applied during the last successful reconciliation.",
+                    "items": {
+                      "properties": {
+                        "accessType": {
+                          "description": "Access level to grant. Supported values are readOnly and readWrite.",
+                          "type": "string"
+                        },
+                        "user": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "accessType",
+                        "user"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "monitorUserSecret": {
+                    "type": "string"
+                  },
+                  "operatorVersion": {
+                    "description": "The db-operator version that last completed reconciliation.",
+                    "type": "string"
+                  },
+                  "proxyStatus": {
+                    "description": "Connection proxy state and service details.",
+                    "properties": {
+                      "serviceName": {
+                        "type": "string"
+                      },
+                      "sqlPort": {
+                        "format": "int32",
+                        "type": "integer"
+                      },
+                      "status": {
+                        "description": "True when the proxy is ready.",
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "serviceName",
+                      "sqlPort",
+                      "status"
+                    ],
+                    "type": "object"
+                  },
+                  "status": {
+                    "description": "True after the database reconciles successfully.",
+                    "type": "boolean"
+                  },
+                  "user": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "database",
+                  "engine",
+                  "status",
+                  "user"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "served": true,
+        "storage": true,
+        "subresources": {
+          "status": {}
+        }
+      }
+    ]
+  }
+}

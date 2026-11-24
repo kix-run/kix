@@ -146,6 +146,16 @@ let
     config.size = "1Gi";
   };
 
+  # The admin login of a DB Operator DbInstance.
+  dbAdminCredentials = {
+    package = packages.secret;
+    aliases = [ "adminCredentials" ];
+    config.stringData = {
+      username = "postgres";
+      password = "password";
+    };
+  };
+
   # A `valkeyPassword` secret for packages that connect to valkey.
   valkeyPassword = {
     package = packages.secret;
@@ -236,6 +246,17 @@ let
       postgres.package = packages.cnpg-cluster;
       prometheus-operator.package = packages.prometheus-operator;
     };
+    # The DbInstance the database is created on serves the whole cluster,
+    # so it is added from the catalog in a namespace of its own, and its
+    # admin login is declared there.
+    db-operator-database = {
+      config = {
+        extensions = [ "citext" ];
+        templates.DATABASE_URL = "postgresql://{{ .Username }}:{{ .Password }}@{{ .Hostname }}:{{ .Port }}/{{ .Database }}";
+      };
+      module = _: { instances.db-operator-instance.admin-credentials = dbAdminCredentials; };
+    };
+    db-operator-instance.instances.admin-credentials = dbAdminCredentials;
     # CloudNativePG finds a plugin only in its own namespace, so the
     # operator is declared beside the plugin.
     cnpg-barman-cloud.instances.cnpg-operator.package = packages.cnpg-operator;

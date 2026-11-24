@@ -1,0 +1,7 @@
+# The controller's ClusterRole (generated from the kubebuilder markers in
+# internal/controller) and its leader-election Role, at the same tag as
+# crds/sources.txt. default.nix binds them to the controller's
+# ServiceAccount. The webhook server makes no Kubernetes API calls, so it
+# gets no role.
+https://raw.githubusercontent.com/db-operator/db-operator/2.47.0/config/rbac/role.yaml ClusterRole/manager-role
+https://raw.githubusercontent.com/db-operator/db-operator/2.47.0/config/rbac/leader_election_role.yaml Role/leader-election-role

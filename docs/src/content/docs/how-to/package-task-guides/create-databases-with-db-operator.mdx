@@ -1,0 +1,325 @@
+---
+title: "Create databases with DB Operator"
+description: "Install DB Operator, register a PostgreSQL server, and create databases and login roles for each application."
+---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import dbOperatorInstance from '/src/snippets/clusters/test-db-operator/dbOperatorInstance.json';
+import dbOperatorServer from '/src/snippets/clusters/test-db-operator/dbOperatorServer.json';
+import dbOperatorDatabase from '/src/snippets/clusters/test-db-operator/dbOperatorDatabase.json';
+
+Use `packages.experimental.db-operator`,
+`packages.experimental.db-operator-instance`, and
+`packages.experimental.db-operator-database` to create a PostgreSQL database,
+login role, and credentials `Secret` for each application with
+[DB Operator](https://github.com/db-operator/db-operator) 2.47.0.
+
+Your cluster needs a `packages.experimental.cert-manager` instance (see
+[Configure cert-manager issuers](/docs/how-to/package-task-guides/configure-cert-manager-issuers/))
+and a PostgreSQL server, either in the cluster (`cnpg-cluster` or
+`stackgres-cluster`) or outside it. You also need a PostgreSQL admin account
+that can create roles, databases, and any extensions your applications use.
+
+## Add DB Operator
+
+Install one `db-operator` instance in its own namespace:
+
+<Snippet {...dbOperatorInstance} />
+
+Run one `db-operator` instance per cluster; it manages databases across all
+namespaces. The package deploys the controller and admission webhook, uses your
+cluster's `cert-manager` instance (found automatically or set with
+`deps.certManager`) to issue a self-signed webhook certificate, and waits for
+the webhook to respond before applying any `DbInstance`, `Database`, or `DbUser`
+resources.
+
+All `config` fields shown above are optional:
+
+- `metrics.enabled` (default `true`): creates a `ServiceMonitor` and three
+  Prometheus alert rules (`DbOperatorDown`, `DbOperatorReconcileErrors`, and
+  `DbOperatorDatabaseFailing`) when the cluster includes a Prometheus provider
+  such as `prometheus-operator`. `DbOperatorDatabaseFailing` fires when a
+  `Database` that was ready in the last 6 hours has been unready for 15 minutes.
+- `resources`: CPU and memory requests and limits for the controller
+  (`webhook.resources` sets them for the webhook server). The controller caches
+  every `Secret` and `ConfigMap` in the cluster. Measured resident memory was
+  about 48 MiB idle with a few dozen Secrets and about 185 MB with 10,000
+  Secrets of 8 KiB each, or about 11 KB per 8 KiB Secret. Starting with those
+  10,000 Secrets reached a 158 MiB cgroup peak. The default memory limit is
+  `512Mi` (upstream's chart sets no limit, and `config/manager/manager.yaml`
+  sets `128Mi` with a TODO to size it). Raise `resources.limits.memory` on
+  clusters with more or larger Secrets and ConfigMaps, or when the controller
+  is OOM-killed.
+- `settings`: merged into the controller's `config.yaml` over the defaults
+  `databaseAwareness = true` and `serverVersionTTL = "1h"`. Changing `settings`
+  restarts the controller pods.
+- `env` and `webhook.env`: pass extra `DBO_*` environment variables to the
+  controller and webhook server. Kix rejects variables that the package sets or
+  reserves: `DBO_CONFIG`, `DBO_WATCH_NAMESPACES`, `DBO_ENABLE_LEADER_ELECTION`,
+  `DBO_METRICS_ADDR`, and `DBO_PROBE_ADDR`.
+
+## Register a PostgreSQL server
+
+Add a `db-operator-instance` in the namespace that holds the server's admin
+`Secret`. Here, `ref.data.pg` is a `packages.cnpg-cluster` instance in the
+`data` namespace with `extraSpec.enableSuperuserAccess = true`, which tells
+CloudNativePG to write a `pg-superuser` `Secret`:
+
+<Snippet {...dbOperatorServer} />
+
+`db-operator-instance` finds `dbOperator` automatically and takes two explicit
+dependencies:
+
+- `postgres`: the PostgreSQL server. Pass any instance that publishes `out.fqdn`
+  and `out.port`, such as `cnpg-cluster`, `stackgres-cluster` (see
+  [Deploy StackGres](/docs/how-to/package-task-guides/deploy-stackgres/)),
+  `service-ref`, or `kix.mkImport`.
+- `adminCredentials`: a secret in the same namespace with the admin username and
+  password. Here, `pg-superuser` uses `packages.secret-ref` to point to
+  CloudNativePG's `pg-superuser` `Secret` (`secret-ref` defaults to the Kix
+  instance's name). By default, `db-operator-instance` reads the `username` and
+  `password` keys. If your `Secret` uses different keys (such as
+  `"superuser-username"` and `"superuser-password"` for StackGres), set
+  `auth.usernameKey` and `auth.passwordKey`. The account must be able to create
+  roles, databases, and requested extensions, such as the `postgres` superuser.
+
+Give each `db-operator-instance` a name that is unique across the whole cluster,
+because the `DbInstance` resource it creates is cluster-scoped.
+
+By default, any namespace can create databases on the server. In the snippet
+above, `extraSpec.namespaceFilters = [ "^apps$" ]` limits the server to the
+`apps` namespace. Each filter is a Go regular expression matched anywhere in the
+namespace name, so `"apps"` also matches `myapps` and `apps-staging`. Anchor
+exact names with `^` and `$`. If you create a `Database` in an excluded
+namespace, it never becomes ready and `kix deploy` eventually times out.
+
+When `deps.postgres` publishes `out.tls = true` (as `cnpg-cluster` does),
+`db-operator-instance` turns on TLS with `skip-verify = true`, because DB
+Operator 2.47 cannot load custom CA certificates for database servers. If your
+server uses a certificate signed by a public CA, set
+`extraSpec.endpoint.sslConnection.skip-verify = false`.
+
+### Use a server outside the cluster
+
+To register a PostgreSQL server outside the cluster, declare it with
+[`kix.mkImport`](/docs/reference/helm-and-imports/) and set `external = true`:
+
+```nix
+instances.data.pg.package = kix.mkImport {
+  out = {
+    fqdn = "db.example.com";
+    port = "5432";
+    tls = true;
+    external = true;
+  };
+};
+```
+
+When network policies are enabled, `external = true` lets DB Operator's
+controller pods reach any external IP address on that TCP port (Kubernetes
+network policies cannot filter by external DNS name). Without `external = true`,
+default-deny network policies block the operator from reaching the server and
+the `DbInstance` never becomes ready. Kix does not add egress rules from your
+application pods to an external database server; if your cluster enforces
+default-deny egress, add egress rules for those applications yourself.
+
+Note a bug in DB Operator 2.47: although `DbInstance` health checks respect
+`sslConnection`, DB Operator connects with `sslmode=disable` (without TLS) when
+creating and configuring each `Database`. If your PostgreSQL server rejects
+unencrypted connections, as many managed PostgreSQL services do, the
+`DbInstance` becomes ready and every `Database` on it fails.
+
+## Create an application database
+
+In the application's namespace (here `apps`), add a `db-operator-database`
+instance and point `deps.dbInstance` at your server (`dbOperator` is found
+automatically):
+
+<Snippet {...dbOperatorDatabase} />
+
+DB Operator creates the PostgreSQL database `<namespace>-<instance>`
+(`apps-app-db` here) as the admin login (`postgres` here), so the admin owns
+the database. It creates a login role with the same name and grants it all
+privileges on the database, `public`, and each schema in `postgres.schemas`.
+The role can create tables in those schemas without owning the database or
+schemas. DB Operator generates the role's password and writes a `Secret` and
+`ConfigMap` named `<instance>-credentials` (`app-db-credentials`) in the same
+namespace. The `Secret` holds `POSTGRES_DB`, `POSTGRES_USER`,
+`POSTGRES_PASSWORD`, `username`, `password`, and one key for each entry in
+`templates`.
+
+Keep `<namespace>-<instance>` to 63 bytes or fewer (Kix rejects longer names
+because PostgreSQL truncates identifiers at 63 bytes). Also avoid hyphen
+collisions on the same `DbInstance`. Instance `c` in namespace `a-b` and
+instance `b-c` in namespace `a` on the same `DbInstance` both get database and
+role `a-b-c`. Both `Database` resources share one database and one role, and
+each application can read the other's tables. Each `Database`'s `Secret` holds
+a different password. Each reconcile of either `Database` sets the role's
+password to the one in its own `Secret`, so the application whose `Database`
+reconciled last can log in and the other gets `"password authentication
+failed"`. Which application wins changes over time, for example after the
+controller restarts. Both `Database` resources report ready the whole time, and
+Kix cannot detect this during `kix check`.
+
+All `config` fields shown above are optional:
+
+- `extensions`: PostgreSQL extensions to enable in this database at the server's
+  default version (each extension must already be installed on the server). Kix
+  rejects pinned extension versions.
+- `templates`: extra keys added to the credentials `Secret`, each rendered as a
+  Go template. Templates can use the fields `.Username`, `.Password`,
+  `.Hostname`, `.Port`, `.Database`, and `.Protocol`, and the functions
+  `.Secret`, `.ConfigMap`, `.Query`, and `.InstanceVar`; Kix rejects any other
+  field during `kix check`. DB Operator inserts values without escaping, so
+  special characters in a generated password can break a URL template.
+- `extraSpec`: additional fields merged into the `Database` spec, such as
+  `postgres.schemas`. Kix rejects `instance`, `secretName`, `existingUser`,
+  `credentials.templates`, `secretsTemplates`, and `postgres.extensions` here
+  because the package sets them.
+
+By default, `deletionProtected` is `true`. Removing a `db-operator-database`
+instance and deploying with `--prune` deletes the `Database` resource. The
+PostgreSQL database, the login role, and the data stay on the server. The
+`<instance>-credentials` `Secret` keeps all its keys (including any `templates`
+keys), and the `ConfigMap` also stays. DB Operator removes only its
+`kinda.rocks/used-by-kind` and `kinda.rocks/used-by-name` labels from the
+`Secret`. Adding the same instance back later adopts that `Secret` and keeps
+the password, so the application finds its old data. Set
+`extraSpec.deletionProtected = false` if you want DB Operator to drop the
+database and role when the `Database` resource is deleted.
+
+## Connect an application to the database
+
+Application packages that take a `database` dependency, such as `metabase`,
+`keycloak`, `vaultwarden`, `n8n`, and `harbor`, work with `db-operator-database`
+without changes. Put the `db-operator-database` in the application's namespace
+(or set `deps.database = ref.apps.app-db`) so Kix connects it through
+`kix.contracts.postgresDatabase`, which publishes the same `out` fields as
+`cnpg-database` and `stackgres-database` (`out.host`, `out.port`,
+`out.database`, `out.username`, `out.credentials`, `out.extensions`, and
+`out.tls`).
+
+Two package-specific notes:
+
+- `harbor` needs to know whether PostgreSQL uses TLS, so either use a server
+  that publishes `out.tls` (`true` or `false`, as `cnpg-cluster` does) or set
+  `database.sslmode` on the `harbor` instance.
+- `immich` requests a pinned version of the `vchord` extension, which DB
+  Operator cannot pin. Kix rejects `immich` with `db-operator-database` during
+  `kix check`; use `cnpg-database` or `stackgres-database` for `immich`.
+
+:::note[Explanation]
+See [Dependency contracts](/docs/explanation/dependency-contracts/) for how Kix
+decouples application packages from database providers through
+`kix.contracts.postgresDatabase`.
+:::
+
+In a custom package, read connection fields from `database.out` and secret keys
+with `database.out.credentials.out.keyRef` (or `database.out.credentials.out.mkEnv`):
+
+```nix
+env = kix.mkEnvVars {
+  PGHOST = database.out.host;
+  PGPORT = database.out.port;
+  PGDATABASE = database.out.database;
+  PGSSLMODE = if database.out.tls or null == true then "require" else "prefer";
+  PGUSER = database.out.credentials.out.keyRef "username";
+  PGPASSWORD = database.out.credentials.out.keyRef "password";
+};
+```
+
+During `kix check`, Kix verifies that workloads read only keys declared on the
+credentials `Secret`. During `kix deploy`, Kix waits for DB Operator to create
+the `Secret` with all declared keys before starting workloads that read it.
+Because DB Operator generates the password inside the cluster rather than at
+build time, rotating the password in the `Secret` does not restart application
+pods automatically; restart them yourself after a password change.
+
+When [network policies](/docs/explanation/network-policy/) are enabled
+(`networkPolicy.enable = true`), Kix generates rules allowing traffic from the
+Kubernetes API server to the webhook on TCP 9443, and from the operator
+controller and applications that use the database to in-cluster PostgreSQL
+servers.
+
+## Remove or rename instances
+
+- **Removing a server or the operator.** Remove the `db-operator-database`
+  instances first, run `kix deploy <cluster> --prune`, and wait until
+  `kubectl get database -A` no longer lists them before removing
+  `db-operator-instance` or `db-operator`. The `Database`'s finalizer needs
+  its `DbInstance`. `kix deploy --prune` deletes a `Database` before its
+  `DbInstance`. With the controller running, the `Database` usually finishes
+  first, but `kix deploy --prune` does not wait for it. If the controller is
+  slow, restarting, or scaled to zero (as during an upgrade), the `DbInstance`
+  disappears first and the `Database` stays in `Terminating` with finalizer
+  `db.<instance>`, logging `DbInstance.kinda.rocks "<name>" not found` on
+  every retry. If `db-operator` (the controller) is removed while `Database`
+  resources still exist, nothing removes their finalizers, so they also stay
+  in `Terminating`. `kix status` does not list a `Database` once it leaves the
+  cluster definition. To recover, add whatever was removed (the
+  `db-operator-instance`, the `db-operator`, or both) back to the cluster
+  definition, deploy, wait until the `Database` resources are gone (about 50
+  seconds, set by the controller's retry delay), and then remove it again and
+  deploy with `--prune`.
+- **Narrowing namespace filters.** Remove `db-operator-database` instances in
+  namespaces you plan to exclude, deploy with `--prune`, and wait until their
+  `Database` resources are gone before narrowing `extraSpec.namespaceFilters`.
+  The controller checks `namespaceFilters` before handling a deletion.
+  Narrowing `extraSpec.namespaceFilters` and removing the `Database` instances
+  in the excluded namespaces in one deploy leaves those `Database` resources in
+  `Terminating` with `"namespace <ns> is not allowed on the instance"`. To
+  recover, widen the filters again, deploy, wait until the `Database` resources
+  are gone, and then narrow the filters.
+- **Renaming or switching a server.** Do not rename a `db-operator-instance`
+  while `db-operator-database` instances still reference it, or point an
+  existing `db-operator-database` at another `deps.dbInstance`. DB Operator's
+  admission webhook rejects changes to `spec.instance` on an existing
+  `Database`, so `kix deploy` fails when applying it.
+- **Renaming or moving a database.** Renaming a `db-operator-database` instance
+  or moving it to another namespace creates a new, empty PostgreSQL database and
+  role (`<namespace>-<instance>`). The old database and role stay on the server.
+- **Pre-existing `<instance>-credentials` Secrets.** Make sure no `Secret` named
+  `<instance>-credentials` already exists in the namespace before deploying a
+  new `db-operator-database`. Otherwise, DB Operator reuses that `Secret` and
+  reads the database and role names from its `POSTGRES_DB` and `POSTGRES_USER`
+  keys, which may differ from the `<namespace>-<instance>` name Kix passes to
+  applications in `out.database` and `out.username`.
+
+## Check and deploy
+
+Check and deploy your cluster:
+
+<Command
+  commands={[
+    "kix check <cluster>",
+    "kix deploy <cluster>",
+  ]}
+/>
+
+Verify the `DbInstance`, the `Database`, and the credentials `Secret`:
+
+<Command
+  commands={[
+    "kubectl get dbinstance pg-instance",
+    "kubectl get database -n apps app-db",
+    "kubectl get secret -n apps app-db-credentials",
+  ]}
+/>
+
+Confirm that `pg-instance` shows `true` in the `READY` column, `app-db` shows
+`true` in the `STATUS` column, and `app-db-credentials` exists in `apps`.
+
+If a `DbInstance` stays unready, inspect its `CredentialsFound`,
+`EndpointFound`, and `Healthy` conditions and check the controller logs:
+
+<Command
+  commands={[
+    "kubectl describe dbinstance <name>",
+    "kubectl logs -n db-operator deploy/db-operator-controller",
+  ]}
+/>
+
+If a `Database` stays `false` in `STATUS`, inspect its `Events` for the error:
+
+<Command commands={["kubectl describe database -n <ns> <name>"]} />

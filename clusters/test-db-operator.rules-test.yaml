@@ -1,0 +1,98 @@
+# promtool unit tests for the db-operator alert rules test-db-operator.nix
+# renders. The rules-cluster-db-operator check runs them from the rendered
+# rules, so each rule_files entry is <namespace>/<file> in the cluster's
+# manifests.
+rule_files:
+  - db-operator/db-operator-alerts-prometheusrule.yaml
+evaluation_interval: 1m
+tests:
+  # The one controller replica stops answering.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="db-operator",service="db-operator-metrics",pod="db-operator-controller-6c9d8b7f5-abcde",instance="10.0.3.1:60000"}'
+        values: '1 1 0x15'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: DbOperatorDown
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "db-operator"
+              service: "db-operator-metrics"
+            exp_annotations:
+              summary: "DB Operator controller is down."
+              description: "No controller pod of the DB Operator instance db-operator/db-operator has answered a Prometheus scrape for 10 minutes. Existing databases keep serving traffic, while new or changed Database, DbUser, and DbInstance resources are not applied. Check Deployment db-operator/db-operator-controller and its pod logs."
+  # The controller answers, and its database controller fails one reconcile
+  # in two.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="db-operator",service="db-operator-metrics",pod="db-operator-controller-6c9d8b7f5-abcde",instance="10.0.3.1:60000"}'
+        values: '1x30'
+      - series: 'controller_runtime_reconcile_errors_total{namespace="db-operator",service="db-operator-metrics",pod="db-operator-controller-6c9d8b7f5-abcde",instance="10.0.3.1:60000",controller="database"}'
+        values: '0+1x30'
+      - series: 'controller_runtime_reconcile_total{namespace="db-operator",service="db-operator-metrics",pod="db-operator-controller-6c9d8b7f5-abcde",instance="10.0.3.1:60000",controller="database"}'
+        values: '0+2x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: DbOperatorDown
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: DbOperatorReconcileErrors
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "db-operator"
+              service: "db-operator-metrics"
+              controller: "database"
+            exp_annotations:
+              summary: "DB Operator is failing to reconcile resources."
+              description: "The database controller of the DB Operator instance db-operator/db-operator has failed 50% of its reconciles over the last 30 minutes, so Database, DbUser, or DbInstance changes may not be applied to the database server. Check the logs of Deployment db-operator/db-operator-controller and the Events on the failing resource."
+  # A busy, healthy controller retries a conflict now and then, one
+  # reconcile in a hundred. That is below the 10% share, so nothing fires.
+  - interval: 1m
+    input_series:
+      - series: 'controller_runtime_reconcile_total{namespace="db-operator",service="db-operator-metrics",pod="db-operator-controller-6c9d8b7f5-abcde",instance="10.0.3.1:60000",controller="database"}'
+        values: '0+10x40'
+      - series: 'controller_runtime_reconcile_errors_total{namespace="db-operator",service="db-operator-metrics",pod="db-operator-controller-6c9d8b7f5-abcde",instance="10.0.3.1:60000",controller="database"}'
+        values: '0+0.1x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: DbOperatorReconcileErrors
+        exp_alerts: []
+  # The Database apps/app-db is ready for 30 minutes and then fails. A
+  # second Database has never been ready, which the deploy reports, so it
+  # does not fire.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="db-operator",service="db-operator-metrics",pod="db-operator-controller-6c9d8b7f5-abcde",instance="10.0.3.1:60000"}'
+        values: '1x60'
+      - series: 'db_operator_database_status{namespace="db-operator",service="db-operator-metrics",pod="db-operator-controller-6c9d8b7f5-abcde",instance="10.0.3.1:60000",db_namespace="apps",dbinstance="pg-instance",database="app-db"}'
+        values: '1x30 0x30'
+      - series: 'db_operator_database_status{namespace="db-operator",service="db-operator-metrics",pod="db-operator-controller-6c9d8b7f5-abcde",instance="10.0.3.1:60000",db_namespace="apps",dbinstance="pg-instance",database="new-db"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: DbOperatorDatabaseFailing
+        exp_alerts: []
+      - eval_time: 50m
+        alertname: DbOperatorDatabaseFailing
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "db-operator"
+              service: "db-operator-metrics"
+              db_namespace: "apps"
+              dbinstance: "pg-instance"
+              database: "app-db"
+            exp_annotations:
+              summary: "A DB Operator Database is no longer ready."
+              description: "Database apps/app-db on DbInstance pg-instance was ready in the last 6 hours and has been unready for 15 minutes. The DB Operator instance db-operator/db-operator cannot reach the server, sign in, or apply changes to this Database, and applications using it may fail to connect. Check Events on the Database and the logs of Deployment db-operator/db-operator-controller."
+  # A Database that stays ready does not fire.
+  - interval: 1m
+    input_series:
+      - series: 'db_operator_database_status{namespace="db-operator",service="db-operator-metrics",pod="db-operator-controller-6c9d8b7f5-abcde",instance="10.0.3.1:60000",db_namespace="apps",dbinstance="pg-instance",database="app-db"}'
+        values: '1x60'
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: DbOperatorDatabaseFailing
+        exp_alerts: []
