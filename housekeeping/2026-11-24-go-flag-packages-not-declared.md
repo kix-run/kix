@@ -1,3 +1,0 @@
-# 2026-11-24 · `kix/packages` · No one has checked how the programs behind most `kix.guardArgs` callers parse flags.
-
-Every caller that sets no `parser` gets `"gnu"`, and nobody has compared that with the upstream program. 27 calls in 25 files set no parser. `grep -rn "kix.guardArgs" kix/packages` lists 33 calls in 31 files, and 6 of them set `parser`. If the program uses Go's `flag` package, which reads `-flag` as `--flag`, then `extraArgs = [ "-leader-elect=false" ]` passes the guard. Likely candidates: volsync, arc, and snapshot-controller (controller-runtime or CSI sidecar programs), plus prometheus-operator and the zfs-localpv CSI sidecars. None of them has been checked. Check each program's `main.go` and set `parser = "go"` where it holds.

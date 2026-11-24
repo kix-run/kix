@@ -184,22 +184,29 @@ in
         ...
       }:
       let
-        # Stream-parse scrape responses instead of buffering them whole;
-        # bounds vmagent memory on large targets (k8s-stack chart default).
-        baseArgs = {
-          "promscrape.streamParse" = "true";
-        };
-        # The operator turns `spec.remoteWrite` and the scrape objects it
-        # selects into these two flags, and an `extraArgs` entry would replace
-        # either one.
-        extraArgs = kix.guardArgs {
+        # vmagent parses flags with Go's flag package (lib/envflag
+        # upstream).
+        extraArgs = kix.mergeArgs {
           inherit scope;
-          owned = {
-            "remoteWrite.url" =
-              "the vmCluster dependency sets it to the cluster's insert Service, which the network policy also opens. Change the vmCluster dependency instead.";
-            "promscrape.config" =
-              "the operator points it at the scrape configuration it generates from the scrape objects the agent selects. Remove it.";
-          };
+          parser = "go";
+          args = [
+            # Stream-parse scrape responses instead of buffering them whole;
+            # bounds vmagent memory on large targets (k8s-stack chart
+            # default).
+            { defaults."promscrape.streamParse" = "true"; }
+            # The operator turns `spec.remoteWrite` and the scrape objects
+            # it selects into these two flags, and an `extraArgs` entry
+            # would replace either one.
+            {
+              names = [ "remoteWrite.url" ];
+              from = "the vmCluster dependency, which also configures the network policy";
+              fix = "Remove it from extraArgs, and wire a different cluster through deps.vmCluster if needed.";
+            }
+            {
+              names = [ "promscrape.config" ];
+              reason = "the VictoriaMetrics operator generates this flag from the ServiceMonitors and PodMonitors the agent selects.";
+            }
+          ];
         } config.extraArgs;
         baseSpec = {
           replicaCount = config.replicaCount;
@@ -212,7 +219,7 @@ in
             if config.scrapeInterval == null then vmCluster.out.scrapeInterval else config.scrapeInterval;
           selectAllByDefault = config.selectAllByDefault;
           resources = config.resources;
-          extraArgs = baseArgs // extraArgs;
+          inherit extraArgs;
         }
         // operandPlacement {
           inherit availability;

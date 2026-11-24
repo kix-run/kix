@@ -185,23 +185,32 @@ in
         }
       ];
 
-      args = [
-        "--cert-dir=${certDir}"
-        "--secure-port=${toString securePort}"
-        "--kubelet-preferred-address-types=InternalIP,ExternalIP,Hostname"
-        "--kubelet-use-node-status-port"
-        "--metric-resolution=15s"
-      ]
-      ++ kix.guardArgs {
+      # metrics-server parses flags with cobra and pflag
+      # (cmd/metrics-server/app/start.go upstream).
+      args = kix.mergeArgs {
         inherit scope;
-        owned = {
-          "--secure-port" =
-            "the Service, the probes, and the network policy use ${toString securePort}; remove it.";
-          "--cert-dir" =
-            "the serving certificate is written to the emptyDir at ${certDir}, the only writable path; remove it.";
-          "--bind-address" = "the probes and the API server reach the pod address; remove it.";
-          "--kubelet-port" = "the network policy admits kubelets on ${toString kubeletPort} only; remove it.";
-        };
+        parser = "gnu";
+        args = [
+          {
+            flags = [ "--cert-dir=${certDir}" ];
+            reason = "the serving certificate is written to the emptyDir volume at ${certDir}, the only writable path in the container.";
+          }
+          {
+            flags = [ "--secure-port=${toString securePort}" ];
+            reason = "the Service, probes, and network policy use port ${toString securePort}.";
+          }
+          "--kubelet-preferred-address-types=InternalIP,ExternalIP,Hostname"
+          "--kubelet-use-node-status-port"
+          "--metric-resolution=15s"
+          {
+            names = [ "--bind-address" ];
+            reason = "the probes and the Kubernetes API server connect to the pod IP.";
+          }
+          {
+            names = [ "--kubelet-port" ];
+            reason = "the network policy allows traffic to kubelets on port ${toString kubeletPort} only.";
+          }
+        ];
       } config.extraArgs;
     in
     {

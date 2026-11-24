@@ -32,22 +32,31 @@ let
         fix = "Remove it; the operator keeps the kubelet targets in Endpoints (--kubelet-endpoints, on by default).";
       }
     else
-      baseArgs;
+      mergedArgs;
 
-  baseArgs = [
-    "--web.listen-address=:${toString httpPort}"
-    "--kubelet-service=${kubeletService.namespace}/${kubeletService.name}"
-    "--prometheus-config-reloader=${kix.image.ref config.operandImages.prometheus-config-reloader}"
-  ]
-  ++ kix.guardArgs {
+  # The operator parses flags with Go's flag package (cmd/operator/main.go
+  # upstream).
+  mergedArgs = kix.mergeArgs {
     inherit scope;
-    owned = {
-      "--web.listen-address" =
-        "the probes and the metrics Service use port ${toString httpPort}; remove it.";
-      "--kubelet-service" = "out.kubeletService names the Service it maintains; remove it.";
-      "--prometheus-config-reloader" =
-        "it is operandImages.prometheus-config-reloader; set that option instead.";
-    };
+    parser = "go";
+    id = "K8006";
+    args = [
+      {
+        flags = [ "--web.listen-address=:${toString httpPort}" ];
+        reason = "the probes and the metrics Service use port ${toString httpPort}.";
+      }
+      {
+        flags = [ "--kubelet-service=${kubeletService.namespace}/${kubeletService.name}" ];
+        reason = "kubelet ServiceMonitors scrape Service ${kubeletService.namespace}/${kubeletService.name} (published on out.kubeletService).";
+      }
+      {
+        flags = [
+          "--prometheus-config-reloader=${kix.image.ref config.operandImages.prometheus-config-reloader}"
+        ];
+        from = "the operandImages.prometheus-config-reloader option";
+        fix = "Remove it from extraArgs and set operandImages.prometheus-config-reloader instead.";
+      }
+    ];
   } config.extraArgs;
 
   env = kix.mkEnvVars (kix.mergeEnv { inherit scope; } config.env);

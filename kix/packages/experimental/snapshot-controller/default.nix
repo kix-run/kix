@@ -183,22 +183,32 @@ in
           }
         ];
 
-        args = [
-          "--v=2"
-          "--leader-election=true"
-          "--http-endpoint=:${toString httpPort}"
-          "--feature-gates=CSIVolumeGroupSnapshot=false"
-        ]
-        ++ kix.guardArgs {
+        # The controller parses flags with Go's flag package
+        # (cmd/snapshot-controller/main.go upstream).
+        args = kix.mergeArgs {
           inherit scope;
-          owned = {
-            "--leader-election" =
-              "leader election keeps one active controller while the instance's availability level runs several; remove it.";
-            "--leader-election-namespace" =
-              "the Role that lets the controller manage its Lease exists only in the instance's namespace; remove it.";
-            "--http-endpoint" = "the probes and the metrics Service use :${toString httpPort}; remove it.";
-            "--metrics-path" = "the ServiceMonitor scrapes /metrics; remove it.";
-          };
+          parser = "go";
+          id = "K8006";
+          args = [
+            "--v=2"
+            {
+              flags = [ "--leader-election=true" ];
+              reason = "leader election keeps one controller active when multiple replicas run.";
+            }
+            {
+              flags = [ "--http-endpoint=:${toString httpPort}" ];
+              reason = "the probes and the metrics Service use port ${toString httpPort}.";
+            }
+            "--feature-gates=CSIVolumeGroupSnapshot=false"
+            {
+              names = [ "--leader-election-namespace" ];
+              reason = "the leader-election Role grants access only in namespace \"${scope.namespaceName}\".";
+            }
+            {
+              names = [ "--metrics-path" ];
+              reason = "the ServiceMonitor scrapes /metrics.";
+            }
+          ];
         } config.extraArgs;
 
         crds = [

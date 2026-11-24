@@ -1,5 +1,5 @@
 +++
 kind = "added"
-library = ["kix.guardArgs"]
+library = ["kix.mergeArgs"]
 +++
-`kix.guardArgs` accepts four new optional arguments for package authors: `parser`, `ownedFamilies`, `defaults`, and `id`. Set `parser` to `"go"` for programs that use Go's `flag` package (treating `-flag` and `--flag` as the same flag), `"paerser"` for Traefik (matching like `"go"` and ignoring letter case), or keep the default `"gnu"`. Use `ownedFamilies` to reject both a flag and any `<flag>.<name>` sub-flags, `defaults` to pass default flags that are omitted when overridden, and `id` to attach a change record ID (such as `"K4740"`) to rejected-flag errors.
+Package authors can use `kix.mergeArgs` to build a container's argument list (or flag attribute set) from the package's flags and `extraArgs`, stopping the build when `extraArgs` sets a flag the package reserves. Its required `parser` argument matches flags the way the program reads them: `"gnu"` (getopt, clap, pflag, and kingpin), `"go"` (Go's `flag` package, where `-flag` and `--flag` are the same), `"go-arg"` (alexflint/go-arg, which accepts any number of leading dashes), or `"paerser"` (Traefik, which matches like `"go"` and ignores letter case). Entries in `args` and `after` can pass unlocked flags, `{ defaults = ...; }` flags that `extraArgs` replaces, or reserved flags (`flags`, `names`, and `<flag>.<name>` `families`) with `from` or `reason` and an optional `fix`. Set `id` to attach a change ID (such as `"K4740"`) to rejected-flag errors.

@@ -242,37 +242,52 @@ let
 
   matchEndpoint = builtins.match "(\\[[^]]*]|[^]/:?#[]+)(:([0-9]+))?";
 
-  # Tempo parses flags with Go's flag package.
+  # Tempo applies flags after the config file, so a flag that sets a locked
+  # path overrides it.
   ownedFlags =
     let
-      locks = path: "it sets ${path}, which the package locks; remove it.";
-      secret =
-        path:
-        "it puts ${path}, a credential, on the command line; put the keys in the storageCredentials Secret and remove the flag.";
+      locks = path: flag: {
+        names = [ flag ];
+        reason = "it overrides ${path} in tempo.yaml, which this package sets itself.";
+      };
+      secret = path: flag: {
+        names = [ flag ];
+        reason = "passing ${path} as a flag exposes a credential in Kix's local store and the pod spec.";
+        fix = "Remove it from extraArgs and store the S3 credentials in the storageCredentials Secret instead.";
+      };
     in
-    {
-      "-config.file" = "the package renders the file from settings; change settings instead.";
-      "-config.expand-env" = "settings and env rely on variable expansion; remove it.";
-      "-target" = "the package runs every Tempo component in its one pod; remove it.";
-      "-auth.enabled" = locks "auth_enabled";
-      "-multitenancy.enabled" = locks "multitenancy_enabled";
-      "-http-api-prefix" = locks "http_api_prefix";
-      "-server.http-listen-port" = locks "server.http_listen_port";
-      "-storage.trace.backend" = locks "storage.trace.backend";
-      "-storage.trace.local.path" = locks "storage.trace.local.path";
-      "-live-store.wal.path" = locks "live_store.wal.path";
-      "-live-store.shutdown_marker_dir" = locks "live_store.shutdown_marker_dir";
-      "-backend-scheduler.local-work-path" = locks "backend_scheduler.local_work_path";
-      "-storage.trace.s3.bucket" =
-        "it sets storage.trace.s3.bucket, which objectStorage.bucket owns; remove it.";
-      "-storage.trace.s3.endpoint" =
-        "it sets storage.trace.s3.endpoint, from which the package derives the store's network policy; set the endpoint in settings or wire endpointService, and remove the flag.";
-      "-storage.trace.s3.access_key" = secret "storage.trace.s3.access_key";
-      "-storage.trace.s3.secret_key" = secret "storage.trace.s3.secret_key";
-      "-storage.trace.s3.session_token" = secret "storage.trace.s3.session_token";
-      "-storage.trace.s3.sse.encryption-key" =
-        "it puts storage.trace.s3.sse.encryption_key, a credential, on the command line, and the package has no way to pass an SSE-C key from a Secret; remove the flag.";
-    };
+    [
+      {
+        names = [ "-target" ];
+        reason = "this package runs Tempo in single-binary mode inside one pod.";
+      }
+      (locks "auth_enabled" "-auth.enabled")
+      (locks "multitenancy_enabled" "-multitenancy.enabled")
+      (locks "http_api_prefix" "-http-api-prefix")
+      (locks "server.http_listen_port" "-server.http-listen-port")
+      (locks "storage.trace.backend" "-storage.trace.backend")
+      (locks "storage.trace.local.path" "-storage.trace.local.path")
+      (locks "live_store.wal.path" "-live-store.wal.path")
+      (locks "live_store.shutdown_marker_dir" "-live-store.shutdown_marker_dir")
+      (locks "backend_scheduler.local_work_path" "-backend-scheduler.local-work-path")
+      {
+        names = [ "-storage.trace.s3.bucket" ];
+        from = "the objectStorage.bucket option";
+        fix = "Remove it from extraArgs and set objectStorage.bucket instead.";
+      }
+      {
+        names = [ "-storage.trace.s3.endpoint" ];
+        reason = "setting storage.trace.s3.endpoint by flag bypasses the network policy derived from settings and deps.endpointService.";
+        fix = "Remove it from extraArgs, and set settings.storage.trace.s3.endpoint or wire deps.endpointService instead.";
+      }
+      (secret "storage.trace.s3.access_key" "-storage.trace.s3.access_key")
+      (secret "storage.trace.s3.secret_key" "-storage.trace.s3.secret_key")
+      (secret "storage.trace.s3.session_token" "-storage.trace.s3.session_token")
+      {
+        names = [ "-storage.trace.s3.sse.encryption-key" ];
+        reason = "passing storage.trace.s3.sse.encryption_key as a flag exposes a credential in Kix's local store and the pod spec, and this package does not support SSE-C keys.";
+      }
+    ];
 in
 {
   meta = {
@@ -492,15 +507,24 @@ in
             else
               443;
 
-        args = [
-          "-config.file=${configDir}/tempo.yaml"
-          "-config.expand-env=true"
-        ]
-        ++ kix.guardArgs {
+        # Tempo parses flags with Go's flag package (cmd/tempo/main.go
+        # upstream).
+        args = kix.mergeArgs {
           inherit scope;
           parser = "go";
           id = "K4740";
-          owned = ownedFlags;
+          args = [
+            {
+              flags = [ "-config.file=${configDir}/tempo.yaml" ];
+              from = "the settings option, which builds tempo.yaml";
+              fix = "Remove it from extraArgs and configure Tempo in settings instead.";
+            }
+            {
+              flags = [ "-config.expand-env=true" ];
+              reason = "Tempo must expand environment variables referenced in settings.";
+            }
+          ]
+          ++ ownedFlags;
         } config.extraArgs;
 
         env = kix.mergeEnv {

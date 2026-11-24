@@ -401,24 +401,31 @@ in
           }
         );
 
-        ownedFlags = lib.foldl' (
-          acc: g:
-          acc
-          // lib.genAttrs (map flagOf (builtins.attrNames (g.vars or { }) ++ g.names or [ ])) (
-            _: "it comes from ${g.from}. Remove it from extraArgs."
-          )
-        ) { } ownedGroups;
+        # kc.sh reads an option as a flag or as its KC_ variable, so each
+        # owned variable's flag is refused too. Keycloak parses flags with
+        # picocli, which reads an option only in its `--name` form
+        # (ConfigArgsConfigSource.java upstream).
+        ownedFlags = map (g: {
+          names = map flagOf (builtins.attrNames (g.vars or { }) ++ g.names or [ ]);
+          inherit (g) from;
+        }) ownedGroups;
 
-        args = [
-          "start"
-        ]
-        ++ kix.guardArgs {
+        args = kix.mergeArgs {
           inherit scope;
-          owned = ownedFlags // {
-            "--optimized" =
-              "Keycloak must run its build step at start, because the stock image is built for other build-time options. Remove it from extraArgs.";
-            "--hostname" = "it comes from the route. Set env.KC_HOSTNAME instead.";
-          };
+          parser = "gnu";
+          args = [
+            "start"
+            {
+              names = [ "--optimized" ];
+              reason = "Keycloak must run its build step at startup so its database, health, and metrics settings take effect.";
+            }
+            {
+              names = [ "--hostname" ];
+              from = "the instance's Ingress or Gateway route (or env.KC_HOSTNAME)";
+              fix = "Remove it from extraArgs, and set ingress.host (or cluster.domain) or env.KC_HOSTNAME instead.";
+            }
+          ]
+          ++ ownedFlags;
         } config.extraArgs;
 
         realmPath =

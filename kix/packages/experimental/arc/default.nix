@@ -345,39 +345,46 @@ in
           };
         };
 
-        baseArgs = [
-          "--auto-scaling-runner-set-only"
-          "--enable-leader-election"
-          "--leader-election-id=${name}"
-          "--log-level=info"
-          "--log-format=text"
-          "--metrics-addr=:${toString metricsPort}"
-          "--listener-metrics-addr=:${toString metricsPort}"
-          "--listener-metrics-endpoint=/metrics"
-          "--health-probe-bind-address=:${toString healthPort}"
-        ]
-        ++ map (p: "--exclude-label-propagation-prefix=${p}") excludedLabelPrefixes;
-
-        args =
-          baseArgs
-          ++ kix.guardArgs {
-            inherit scope;
-            owned = {
-              "--metrics-addr" =
-                "the metrics Service and ServiceMonitor use port ${toString metricsPort}; remove it.";
-              "--listener-metrics-addr" =
-                "the listener PodMonitor scrapes port ${toString metricsPort}; remove it.";
-              "--listener-metrics-endpoint" = "the listener PodMonitor scrapes /metrics; remove it.";
-              "--health-probe-bind-address" =
-                "the liveness and readiness probes use port ${toString healthPort}; remove it.";
-              "--enable-leader-election" =
-                "availability can run several replicas, which need leader election; remove it.";
-              "--leader-election-id" =
-                "the lease is named after the instance, which the leader-election Role covers; remove it.";
-              "--auto-scaling-runner-set-only" =
-                "the controller's RBAC covers AutoscalingRunnerSets only; remove it.";
-            };
-          } config.extraArgs;
+        # The controller parses flags with Go's flag package (main.go
+        # upstream).
+        args = kix.mergeArgs {
+          inherit scope;
+          parser = "go";
+          id = "K8006";
+          args = [
+            {
+              flags = [ "--auto-scaling-runner-set-only" ];
+              reason = "the controller's RBAC grants permissions for AutoscalingRunnerSets only.";
+            }
+            {
+              flags = [ "--enable-leader-election" ];
+              reason = "leader election keeps one controller active when multiple replicas run.";
+            }
+            {
+              flags = [ "--leader-election-id=${name}" ];
+              reason = "the leader-election Role in namespace \"${ns}\" grants access to Lease \"${name}\" only.";
+            }
+            "--log-level=info"
+            "--log-format=text"
+            {
+              flags = [ "--metrics-addr=:${toString metricsPort}" ];
+              reason = "the metrics Service and ServiceMonitor use port ${toString metricsPort}.";
+            }
+            {
+              flags = [ "--listener-metrics-addr=:${toString metricsPort}" ];
+              reason = "the listener PodMonitor scrapes port ${toString metricsPort}.";
+            }
+            {
+              flags = [ "--listener-metrics-endpoint=/metrics" ];
+              reason = "the listener PodMonitor scrapes /metrics.";
+            }
+            {
+              flags = [ "--health-probe-bind-address=:${toString healthPort}" ];
+              reason = "the liveness and readiness probes use port ${toString healthPort}.";
+            }
+          ]
+          ++ map (p: "--exclude-label-propagation-prefix=${p}") excludedLabelPrefixes;
+        } config.extraArgs;
 
         env = kix.mkEnvVars (
           kix.mergeEnv {

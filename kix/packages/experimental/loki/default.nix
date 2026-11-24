@@ -186,24 +186,30 @@ let
   ];
 
   # Loki applies flags after the config file, so a flag that sets a locked
-  # path overrides it. Loki parses flags with Go's flag package.
+  # path overrides it.
   ownedFlags =
     let
-      locks = path: "it sets ${path}, which the package locks; remove it.";
+      locks = path: names: {
+        inherit names;
+        reason = "it overrides ${path} in config.yaml, which this package sets itself.";
+      };
     in
-    {
-      "-config.file" = "the package renders the file from settings; change settings instead.";
-      "-config.expand-env" = "settings and env rely on variable expansion; remove it.";
-      "-target" = "the package runs every Loki component in its one pod; remove it.";
-      "-auth.enabled" = locks "auth_enabled";
-      "-server.http-listen-port" = locks "server.http_listen_port";
-      "-common.path-prefix" = locks "common.path_prefix";
-      "-common.storage.filesystem.chunk-directory" = locks "common.storage.filesystem";
-      "-common.storage.filesystem.rules-directory" = locks "common.storage.filesystem";
-      "-common.storage.ring.instance-addr" = locks "common.instance_addr";
-      "-common.storage.ring.store" = locks "common.ring.kvstore";
-      "-common.storage.ring.replication-factor" = locks "common.replication_factor";
-    };
+    [
+      {
+        names = [ "-target" ];
+        reason = "this package runs Loki in single-binary mode inside one pod.";
+      }
+      (locks "auth_enabled" [ "-auth.enabled" ])
+      (locks "server.http_listen_port" [ "-server.http-listen-port" ])
+      (locks "common.path_prefix" [ "-common.path-prefix" ])
+      (locks "common.storage.filesystem" [
+        "-common.storage.filesystem.chunk-directory"
+        "-common.storage.filesystem.rules-directory"
+      ])
+      (locks "common.instance_addr" [ "-common.storage.ring.instance-addr" ])
+      (locks "common.ring.kvstore" [ "-common.storage.ring.store" ])
+      (locks "common.replication_factor" [ "-common.storage.ring.replication-factor" ])
+    ];
 
   # The rendered config.yaml: `settings` over `builtinConfig`, nulls removed.
   mergeSettings =
@@ -333,14 +339,23 @@ in
       let
         mergedConfig = mergeSettings config;
 
-        args = [
-          "-config.file=${configDir}/config.yaml"
-          "-config.expand-env=true"
-        ]
-        ++ kix.guardArgs {
+        # Loki parses flags with Go's flag package (pkg/util/cfg/flag.go
+        # upstream).
+        args = kix.mergeArgs {
           inherit scope;
           parser = "go";
-          owned = ownedFlags;
+          args = [
+            {
+              flags = [ "-config.file=${configDir}/config.yaml" ];
+              from = "the settings option, which builds config.yaml";
+              fix = "Remove it from extraArgs and configure Loki in settings instead.";
+            }
+            {
+              flags = [ "-config.expand-env=true" ];
+              reason = "Loki must expand environment variables referenced in settings.";
+            }
+          ]
+          ++ ownedFlags;
         } config.extraArgs;
       in
       {

@@ -52,26 +52,37 @@ let
   generators = group "generators.external-secrets.io" [ ];
   coord = group "coordination.k8s.io" [ "leases" ];
 
-  controllerArgs = [
-    "--enable-leader-election=true"
-    "--metrics-addr=:${toString ports.metrics}"
-    "--live-addr=:${toString ports.controllerHealth}"
-  ]
-  ++ kix.guardArgs {
+  # The controller parses flags with cobra and pflag (cmd/controller/root.go
+  # upstream).
+  controllerArgs = kix.mergeArgs {
     inherit scope;
-    owned = {
-      "--enable-leader-election" =
-        "the package always enables leader election, so instances above availability none run one active controller; remove it.";
-      "--leader-election-id" =
-        "the leader-election Role grants the lease ${controllerLeaseName} only; remove it.";
-      "--metrics-addr" =
-        "the container's metrics port and the metrics Service use :${toString ports.metrics}; remove it.";
-      "--metrics-secure" = "the ServiceMonitor scrapes plain HTTP; remove it.";
-      "--metrics-auth" =
-        "the ServiceMonitor scrapes without a token and the package grants no TokenReview RBAC; remove it.";
-      "--live-addr" =
-        "the liveness and readiness probes use :${toString ports.controllerHealth}; remove it.";
-    };
+    parser = "gnu";
+    args = [
+      {
+        flags = [ "--enable-leader-election=true" ];
+        reason = "leader election keeps one controller active when multiple replicas run.";
+      }
+      {
+        flags = [ "--metrics-addr=:${toString ports.metrics}" ];
+        reason = "the container's metrics port and the metrics Service use port ${toString ports.metrics}.";
+      }
+      {
+        flags = [ "--live-addr=:${toString ports.controllerHealth}" ];
+        reason = "the liveness and readiness probes use port ${toString ports.controllerHealth}.";
+      }
+      {
+        names = [ "--leader-election-id" ];
+        reason = "the leader-election Role only grants access to Lease \"${controllerLeaseName}\".";
+      }
+      {
+        names = [ "--metrics-secure" ];
+        reason = "the ServiceMonitor scrapes metrics over plain HTTP.";
+      }
+      {
+        names = [ "--metrics-auth" ];
+        reason = "the ServiceMonitor scrapes metrics without a token, and the controller's RBAC does not grant TokenReview permissions.";
+      }
+    ];
   } config.extraArgs;
 
   # From deploy/charts/external-secrets/templates/rbac.yaml at the

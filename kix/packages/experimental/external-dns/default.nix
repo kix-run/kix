@@ -132,23 +132,6 @@ let
   describeKeySets = sets: lib.concatMapStringsSep ", or " (lib.concatStringsSep " and ") sets;
   listOrNone = names: if names == [ ] then "nothing" else lib.concatStringsSep ", " names;
 
-  # The value of `flag` in `args`, in either the `--flag=value` or the
-  # `--flag value` form, for every occurrence.
-  flagValues =
-    flag: args:
-    let
-      indexed = lib.imap0 (i: arg: { inherit i arg; }) args;
-    in
-    builtins.concatMap (
-      { i, arg }:
-      if lib.hasPrefix "${flag}=" arg then
-        [ (lib.removePrefix "${flag}=" arg) ]
-      else if arg == flag && i + 1 < builtins.length args then
-        [ (builtins.elemAt args (i + 1)) ]
-      else
-        [ ]
-    ) indexed;
-
   # What the instance supplies for the provider's credential variables:
   # the mapped variables or, without `secretEnv`, the Secret's keys, plus
   # the string values in `env`. A `valueFrom` entry in `env` is not counted,
@@ -412,7 +395,7 @@ in
   warnings =
     { config, ... }:
     let
-      crdRegistry = builtins.elem "crd" (flagValues "--registry" config.extraArgs);
+      crdRegistry = builtins.elem "crd" (kix.argValues { parser = "gnu"; } "--registry" config.extraArgs);
       listenerSets = builtins.any (
         arg: arg == "--gateway-listener-sets" || arg == "--gateway-listener-sets=true"
       ) config.extraArgs;
@@ -503,36 +486,60 @@ in
           } config.env
         );
 
-        # kingpin refuses a repeated single-value flag at startup, and
-        # `--source` here would bypass the RBAC derived from `sources`.
-        args = [
-          "--provider=${config.provider}"
-          "--policy=${config.policy}"
-          "--txt-owner-id=${config.txtOwnerId}"
-          "--interval=${config.interval}"
-          "--metrics-address=:${toString metricsPort}"
-        ]
-        ++ map (s: "--source=${s}") selected
-        ++ kix.guardArgs {
+        # external-dns parses flags with kingpin (pkg/apis/externaldns/types.go
+        # upstream), which refuses a repeated single-value flag at startup.
+        args = kix.mergeArgs {
           inherit scope;
-          owned = {
-            "--provider" = "set the provider option.";
-            "--policy" = "set the policy option.";
-            "--txt-owner-id" = "set the txtOwnerId option.";
-            "--interval" = "set the interval option.";
-            "--source" = "add it to sources, which also grants its RBAC.";
-            "--metrics-address" =
-              "the probes, the metrics Service, and the ServiceMonitor use :${toString metricsPort}; remove it.";
-            "--once" =
-              "external-dns exits after one synchronization, and the Deployment restarts it every time; remove it.";
-          }
-          // lib.genAttrs (map (flag: "--${flag}") secretFlags) (
+          parser = "gnu";
+          args = [
+            {
+              flags = [ "--provider=${config.provider}" ];
+              from = "the provider option";
+              fix = "Remove it from extraArgs and set provider instead.";
+            }
+            {
+              flags = [ "--policy=${config.policy}" ];
+              from = "the policy option";
+              fix = "Remove it from extraArgs and set policy instead.";
+            }
+            {
+              flags = [ "--txt-owner-id=${config.txtOwnerId}" ];
+              from = "the txtOwnerId option";
+              fix = "Remove it from extraArgs and set txtOwnerId instead.";
+            }
+            {
+              flags = [ "--interval=${config.interval}" ];
+              from = "the interval option";
+              fix = "Remove it from extraArgs and set interval instead.";
+            }
+            {
+              flags = [ "--metrics-address=:${toString metricsPort}" ];
+              reason = "the probes, metrics Service, and ServiceMonitor use port ${toString metricsPort}.";
+            }
+            # `--source` in extraArgs would bypass the RBAC derived from
+            # `sources`.
+            {
+              flags = map (s: "--source=${s}") selected;
+              names = [ "--source" ];
+              from = "the sources option";
+              fix = "Remove it from extraArgs and add the source to sources instead, which also grants the required RBAC.";
+            }
+            {
+              names = [ "--once" ];
+              reason = "--once makes external-dns exit after a single sync, causing the Deployment to restart it in a loop.";
+            }
+          ]
+          ++ map (
             flag:
             let
-              var = flagEnvVar (lib.removePrefix "--" flag);
+              var = flagEnvVar flag;
             in
-            "its value is a credential, which would be stored in the Nix store and the pod's arguments. Put it in the providerCredentials Secret under the key ${var}, or map it with secretEnv.${var} = \"<key>\"."
-          );
+            {
+              names = [ "--${flag}" ];
+              reason = "passing a credential as a flag exposes it in Kix's local store and the pod spec.";
+              fix = "Remove --${flag} from extraArgs, and store the credential in the providerCredentials Secret under key ${var} (or map it with secretEnv.${var} = \"<key>\").";
+            }
+          ) secretFlags;
         } config.extraArgs;
 
         probe = {

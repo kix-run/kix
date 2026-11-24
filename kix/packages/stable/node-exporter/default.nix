@@ -103,22 +103,48 @@ in
     (
       { self, config, ... }:
       let
-        ownedArgs = kix.guardArgs {
+        # node_exporter parses flags with kingpin (node_exporter.go
+        # upstream).
+        args = kix.mergeArgs {
           inherit scope;
-          # Filesystems and mount points that are not host storage. extraArgs
-          # replaces either value by setting the same flag.
-          defaults = [
-            "--collector.filesystem.fs-types-exclude=^(autofs|binfmt_misc|bpf|cgroup2?|configfs|debugfs|devpts|devtmpfs|fusectl|hugetlbfs|iso9660|mqueue|nsfs|overlay|proc|procfs|pstore|rpc_pipefs|securityfs|selinuxfs|squashfs|sysfs|tracefs)$"
-            "--collector.filesystem.mount-points-exclude=^/(dev|proc|sys|var/lib/docker/.+|var/lib/kubelet/.+)($|/)"
+          parser = "gnu";
+          args = [
+            {
+              flags = [ "--web.listen-address=:${toString port}" ];
+              reason = "the probes and the Service use port ${toString port}.";
+            }
+            {
+              flags = [ "--path.sysfs=/host/sys" ];
+              reason = "the package mounts the host's /sys at /host/sys.";
+            }
+            {
+              flags = [ "--path.rootfs=/host/root" ];
+              reason = "the package mounts the host's / at /host/root.";
+            }
+            {
+              flags = [ "--path.procfs=/host/proc" ];
+              reason = "the package mounts the host's /proc at /host/proc.";
+            }
+            # Filesystems and mount points that are not host storage.
+            # extraArgs replaces either value by setting the same flag.
+            {
+              defaults = [
+                "--collector.filesystem.fs-types-exclude=^(autofs|binfmt_misc|bpf|cgroup2?|configfs|debugfs|devpts|devtmpfs|fusectl|hugetlbfs|iso9660|mqueue|nsfs|overlay|proc|procfs|pstore|rpc_pipefs|securityfs|selinuxfs|squashfs|sysfs|tracefs)$"
+                "--collector.filesystem.mount-points-exclude=^/(dev|proc|sys|var/lib/docker/.+|var/lib/kubelet/.+)($|/)"
+              ];
+            }
           ];
-          owned = {
-            "--web.listen-address" = "the probes and the Service use port ${toString port}; remove it.";
-            "--path.sysfs" = "the package mounts the host's /sys at /host/sys; remove it.";
-            "--path.rootfs" = "the package mounts the host's / at /host/root; remove it.";
-            "--path.procfs" = "the package mounts the host's /proc at /host/proc; remove it.";
-            "--collector.textfile.directory" =
-              "the package mounts the textfile directory when textfileCollector.enabled is on; remove it.";
-          };
+          # Keep this flag behind extraArgs. Moving it changes the pod
+          # template of an instance that sets extraArgs, which restarts the
+          # exporter on every node when a cluster upgrades Kix.
+          after = [
+            {
+              flags = lib.optional config.textfileCollector.enabled "--collector.textfile.directory=${textfileDirectory}";
+              names = [ "--collector.textfile.directory" ];
+              from = "the textfileCollector.enabled option (mounted at ${textfileDirectory} when enabled)";
+              fix = "Remove it from extraArgs and set textfileCollector.enabled instead.";
+            }
+          ];
         } config.extraArgs;
 
         hostMount = mountName: hostPath: {
@@ -180,14 +206,7 @@ in
                   name = "node-exporter";
                   image = kix.image.ref config.image;
                   imagePullPolicy = config.image.pullPolicy;
-                  args = [
-                    "--web.listen-address=:${toString port}"
-                    "--path.sysfs=/host/sys"
-                    "--path.rootfs=/host/root"
-                    "--path.procfs=/host/proc"
-                  ]
-                  ++ ownedArgs
-                  ++ lib.optional config.textfileCollector.enabled "--collector.textfile.directory=${textfileDirectory}";
+                  inherit args;
                   ports = [ (kix.port "metrics" port) ];
                   resources = config.resources;
                   securityContext = {

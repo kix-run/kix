@@ -495,17 +495,23 @@ in
               name = "otel-collector";
               image = kix.image.ref config.image;
               imagePullPolicy = config.image.pullPolicy;
-              args = [
-                "--config=${configDir}/${configFile}"
-              ]
-              ++ kix.guardArgs {
+              # The collector parses flags with cobra and pflag
+              # (otelcol/command.go upstream).
+              args = kix.mergeArgs {
                 inherit scope;
-                owned = {
-                  "--config" =
-                    "the package's merged settings are the collector's only configuration; put configuration in settings.";
-                  "--set" =
-                    "it overrides configuration paths after the package's checks; put configuration in settings.";
-                };
+                parser = "gnu";
+                args = [
+                  {
+                    flags = [ "--config=${configDir}/${configFile}" ];
+                    from = "the settings option";
+                    fix = "Remove it from extraArgs and configure the collector in settings instead.";
+                  }
+                  {
+                    names = [ "--set" ];
+                    reason = "--set overrides configuration fields at startup, bypassing this package's checks on settings.";
+                    fix = "Remove --set from extraArgs and configure the collector in settings instead.";
+                  }
+                ];
               } config.extraArgs;
               env = kix.mkEnvVars (kix.mergeEnv { inherit scope; } config.env);
               ports = [

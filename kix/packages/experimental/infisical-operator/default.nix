@@ -321,30 +321,33 @@ in
           } config.env
         );
 
-        args = [
-          "--leader-elect"
-          "--health-probe-bind-address=:${toString healthPort}"
-          "--metrics-bind-address=:${toString metricsPort}"
-          # The operator serves metrics over TLS with a self-signed
-          # certificate and no authentication, so plain HTTP exposes nothing
-          # more and the ServiceMonitor needs no TLS settings.
-          "--metrics-secure=false"
-        ]
         # The operator parses flags with Go's flag package (cmd/main.go
         # upstream).
-        ++ kix.guardArgs {
+        args = kix.mergeArgs {
           inherit scope;
           parser = "go";
           id = "K4740";
-          owned = {
-            "--leader-elect" =
-              "the package always enables leader election, so instances above availability none run one active controller; remove it.";
-            "--health-probe-bind-address" =
-              "the liveness and readiness probes use :${toString healthPort}; remove it.";
-            "--metrics-bind-address" =
-              "the container's metrics port and the metrics Service use :${toString metricsPort}; remove it.";
-            "--metrics-secure" = "the ServiceMonitor scrapes plain HTTP; remove it.";
-          };
+          args = [
+            {
+              flags = [ "--leader-elect" ];
+              reason = "leader election keeps one controller active when multiple replicas run.";
+            }
+            {
+              flags = [ "--health-probe-bind-address=:${toString healthPort}" ];
+              reason = "the liveness and readiness probes use port ${toString healthPort}.";
+            }
+            {
+              flags = [ "--metrics-bind-address=:${toString metricsPort}" ];
+              reason = "the container's metrics port and the metrics Service use port ${toString metricsPort}.";
+            }
+            # The operator serves metrics over TLS with a self-signed
+            # certificate and no authentication, so plain HTTP exposes nothing
+            # more and the ServiceMonitor needs no TLS settings.
+            {
+              flags = [ "--metrics-secure=false" ];
+              reason = "the ServiceMonitor scrapes metrics over plain HTTP.";
+            }
+          ];
         } config.extraArgs;
 
         egressProblem = egress.check {

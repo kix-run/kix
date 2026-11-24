@@ -1,0 +1,3 @@
+# 2026-11-24 · `kix/packages/experimental/prometheus-operator/operator.nix` · The package matches `--kubelet-endpointslice` with its own pattern.
+
+`endpointSliceArgs` finds the flag in `extraArgs` with `builtins.match "--?kubelet-endpointslice(=.*)?"` and lets only `--kubelet-endpointslice=false` through. The flag is a boolean, and the package accepts one of its values, so neither `kix.mergeArgs` (which refuses a flag whatever its value) nor `kix.argValues` (which reads the next word as the value of a flag written without `=`) can express the rule. The pattern does not follow the `parser` the package declares, so a change to how `"go"` reads flags would not reach it.

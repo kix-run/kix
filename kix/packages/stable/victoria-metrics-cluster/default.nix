@@ -317,43 +317,55 @@ in
         # The VMCluster CR has no dedup field, so the interval travels as a
         # flag. `extraSpec` cannot reach it (kix.mergeGuarded below) and the
         # component `extraArgs` options may not set it.
-        dedupArgs = {
-          "dedup.minScrapeInterval" = config.scrapeInterval;
+        dedup = {
+          flags."dedup.minScrapeInterval" = config.scrapeInterval;
+          reason = "vmselect and vmstorage must use the same deduplication interval from scrapeInterval.";
+          fix = "Remove dedup.minScrapeInterval and set scrapeInterval instead.";
         };
         # The operator turns spec fields into component flags, and an
         # `extraArgs` key of the same name replaces the generated flag.
         # Each component refuses the flags behind its spec fields, and the
         # listen address of the two Services the package's out URLs name.
-        ownedByComponent =
-          let
-            dedup = {
-              "dedup.minScrapeInterval" =
-                "it follows scrapeInterval so that vmselect and vmstorage agree. Set scrapeInterval instead.";
-            };
-            specFields = {
-              retentionPeriod = "the operator sets it from the retentionPeriod option. Set retentionPeriod instead.";
-              replicationFactor = "it follows the replicationFactor option, which defaults from the availability level, so that vminsert, vmselect, and vmstorage agree. Set replicationFactor instead.";
-            };
-          in
+        specFields = [
           {
-            vmstorage = dedup // specFields;
-            vmselect =
-              dedup
-              // specFields
-              // {
-                httpListenAddr = "the Service and out.serviceUrl use port 8481. Remove it.";
-              };
-            vminsert = specFields // {
-              httpListenAddr = "the Service, out.remoteWriteUrl, and out.insertBaseUrl use port 8480. Remove it.";
-            };
-          };
+            names = [ "retentionPeriod" ];
+            from = "the retentionPeriod option";
+            fix = "Remove retentionPeriod and set the retentionPeriod option instead.";
+          }
+          {
+            names = [ "replicationFactor" ];
+            reason = "vminsert, vmselect, and vmstorage must share the same replicationFactor.";
+            fix = "Remove replicationFactor and set the replicationFactor option instead.";
+          }
+        ];
+        ownedByComponent = {
+          vmstorage = [ dedup ] ++ specFields;
+          vmselect = [
+            dedup
+          ]
+          ++ specFields
+          ++ [
+            {
+              names = [ "httpListenAddr" ];
+              reason = "the vmselect Service and query URL (out.serviceUrl) use port 8481.";
+            }
+          ];
+          vminsert = specFields ++ [
+            {
+              names = [ "httpListenAddr" ];
+              reason = "the vminsert Service and remote-write URLs (out.remoteWriteUrl and out.insertBaseUrl) use port 8480.";
+            }
+          ];
+        };
+        # vminsert, vmselect, and vmstorage parse flags with Go's flag
+        # package (lib/envflag upstream).
         componentArgs =
           component:
-          lib.optionalAttrs (component != "vminsert") dedupArgs
-          // kix.guardArgs {
+          kix.mergeArgs {
             inherit scope;
+            parser = "go";
             option = "${component}.extraArgs";
-            owned = ownedByComponent.${component};
+            args = ownedByComponent.${component};
           } config.${component}.extraArgs;
 
         # Explicit option > storageClasses dep > cluster default class.

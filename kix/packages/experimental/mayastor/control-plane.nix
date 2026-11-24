@@ -68,16 +68,24 @@ in
             imagePullPolicy = config.agentCore.image.pullPolicy;
             args = c.args {
               option = "agentCore.extraArgs";
-              base = [
-                "--store=${ep.etcdStore}"
-                "--grpc-server-addr=[::]:50051"
+              args = [
+                {
+                  flags = [ "--store=${ep.etcdStore}" ];
+                  reason = "agent-core must connect to this instance's etcd Service.";
+                }
+                {
+                  flags = [ "--grpc-server-addr=[::]:50051" ];
+                  reason = "the agent-core Service and its clients use port 50051.";
+                }
+                {
+                  names = [ "-s" ];
+                  reason = "-s is the short form of --store, which connects agent-core to this instance's etcd Service.";
+                }
+                {
+                  names = [ "-g" ];
+                  reason = "-g is the short form of --grpc-server-addr, and the agent-core Service uses port 50051.";
+                }
               ];
-              owned = {
-                "--store" = "the package points it at this instance's etcd; remove it.";
-                "-s" = "the package sets --store to this instance's etcd; remove it.";
-                "--grpc-server-addr" = "the agent-core Service and its clients use port 50051; remove it.";
-                "-g" = "the package sets --grpc-server-addr, which the agent-core Service uses; remove it.";
-              };
             } config.agentCore.extraArgs;
             env = c.env {
               option = "agentCore.env";
@@ -98,19 +106,32 @@ in
             imagePullPolicy = config.agentHaCluster.image.pullPolicy;
             args = c.args {
               option = "agentHaCluster.extraArgs";
-              base = [
-                "--grpc-endpoint=[::]:50052"
-                "--store=${ep.etcdUrl}"
-                "--core-grpc=https://127.0.0.1:50051"
+              args = [
+                {
+                  flags = [ "--grpc-endpoint=[::]:50052" ];
+                  reason = "the agent-core Service and agent-ha-node use port 50052.";
+                }
+                {
+                  flags = [ "--store=${ep.etcdUrl}" ];
+                  reason = "agent-ha-cluster must connect to this instance's etcd Service.";
+                }
+                {
+                  flags = [ "--core-grpc=https://127.0.0.1:50051" ];
+                  reason = "agent-core listens on 127.0.0.1:50051 in the same pod.";
+                }
+                {
+                  names = [ "-g" ];
+                  reason = "-g is the short form of --grpc-endpoint, and the agent-core Service uses port 50052.";
+                }
+                {
+                  names = [ "-s" ];
+                  reason = "-s is the short form of --store, which connects agent-ha-cluster to this instance's etcd Service.";
+                }
+                {
+                  names = [ "-c" ];
+                  reason = "-c is the short form of --core-grpc, and agent-core runs in the same pod.";
+                }
               ];
-              owned = {
-                "--grpc-endpoint" = "the agent-core Service and agent-ha-node use port 50052; remove it.";
-                "-g" = "the package sets --grpc-endpoint, which the agent-core Service uses; remove it.";
-                "--store" = "the package points it at this instance's etcd; remove it.";
-                "-s" = "the package sets --store to this instance's etcd; remove it.";
-                "--core-grpc" = "agent-core runs in the same pod; remove it.";
-                "-c" = "the package sets --core-grpc to agent-core in the same pod; remove it.";
-              };
             } config.agentHaCluster.extraArgs;
             env = c.env {
               option = "agentHaCluster.env";
@@ -175,21 +196,30 @@ in
               # the package does not expose, with built-in certificates.
               args = c.args {
                 option = "apiRest.extraArgs";
-                base = [
-                  "--http=[::]:8081"
-                  "--no-auth"
-                  "--dummy-certificates"
-                  "--core-grpc=${ep.coreGrpc}"
+                args = [
+                  {
+                    flags = [ "--http=[::]:8081" ];
+                    reason = "the api-rest Service, the probes, and every client use port 8081.";
+                  }
+                  {
+                    flags = [ "--no-auth" ];
+                    reason = "in-cluster clients connect to api-rest without a token.";
+                  }
+                  {
+                    flags = [ "--dummy-certificates" ];
+                    names = [ "-d" ];
+                    reason = "api-rest serves HTTP on port 8081 only, so its unused HTTPS listener on port 8080 uses built-in dummy certificates.";
+                  }
+                  {
+                    flags = [ "--core-grpc=${ep.coreGrpc}" ];
+                    reason = "api-rest must connect to this instance's agent-core Service.";
+                  }
+                  {
+                    names = [ "-z" ];
+                    reason = "-z is the short form of --core-grpc, which connects api-rest to this instance's agent-core Service.";
+                  }
+                  { defaults = [ "--core-health-freq=20s" ]; }
                 ];
-                tunables = [ "--core-health-freq=20s" ];
-                owned = {
-                  "--http" = "the api-rest Service, the probes, and every client use port 8081; remove it.";
-                  "--core-grpc" = "the package points it at this instance's agent-core; remove it.";
-                  "-z" = "the package sets --core-grpc to this instance's agent-core; remove it.";
-                  "--no-auth" = "the package sets it; clients send no token.";
-                  "--dummy-certificates" = "the package sets it.";
-                  "-d" = "the package sets --dummy-certificates.";
-                };
               } config.apiRest.extraArgs;
               env = c.env {
                 option = "apiRest.env";
@@ -231,17 +261,24 @@ in
             imagePullPolicy = config.operatorDiskpool.image.pullPolicy;
             args = c.args {
               option = "operatorDiskpool.extraArgs";
-              base = [
-                "--endpoint=${ep.rest}"
-                "--namespace=${ns}"
+              args = [
+                {
+                  flags = [ "--endpoint=${ep.rest}" ];
+                  reason = "the DiskPool operator must connect to this instance's api-rest Service.";
+                }
+                {
+                  flags = [ "--namespace=${ns}" ];
+                  reason = "the operator's RBAC and DiskPool resources are scoped to namespace \"${ns}\".";
+                }
+                {
+                  names = [ "-e" ];
+                  reason = "-e is the short form of --endpoint, which connects the operator to this instance's api-rest Service.";
+                }
+                {
+                  names = [ "-n" ];
+                  reason = "-n is the short form of --namespace, and the operator's RBAC and DiskPools are in namespace \"${ns}\".";
+                }
               ];
-              owned = {
-                "--endpoint" = "the package points it at this instance's api-rest; remove it.";
-                "-e" = "the package sets --endpoint to this instance's api-rest; remove it.";
-                "--namespace" =
-                  "the operator reads DiskPools in this instance's namespace, where its RBAC and the package's DiskPools are; remove it.";
-                "-n" = "the package sets --namespace to this instance's namespace; remove it.";
-              };
             } config.operatorDiskpool.extraArgs;
             env = c.env {
               option = "operatorDiskpool.env";
@@ -282,16 +319,24 @@ in
             imagePullPolicy = config.csiController.image.pullPolicy;
             args = c.args {
               option = "csiController.extraArgs";
-              base = [
-                "--csi-socket=${csiSocket}"
-                "--rest-endpoint=${ep.rest}"
+              args = [
+                {
+                  flags = [ "--csi-socket=${csiSocket}" ];
+                  reason = "the CSI sidecar containers connect to ${csiSocket}.";
+                }
+                {
+                  flags = [ "--rest-endpoint=${ep.rest}" ];
+                  reason = "the CSI controller must connect to this instance's api-rest Service.";
+                }
+                {
+                  names = [ "-c" ];
+                  reason = "-c is the short form of --csi-socket, and the CSI sidecar containers connect to ${csiSocket}.";
+                }
+                {
+                  names = [ "-r" ];
+                  reason = "-r is the short form of --rest-endpoint, which connects the CSI controller to this instance's api-rest Service.";
+                }
               ];
-              owned = {
-                "--csi-socket" = "the CSI sidecars dial this socket; remove it.";
-                "-c" = "the package sets --csi-socket, which the CSI sidecars dial; remove it.";
-                "--rest-endpoint" = "the package points it at this instance's api-rest; remove it.";
-                "-r" = "the package sets --rest-endpoint to this instance's api-rest; remove it.";
-              };
             } config.csiController.extraArgs;
             env = c.env {
               option = "csiController.env";

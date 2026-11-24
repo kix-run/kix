@@ -209,15 +209,23 @@ in
           name = "vector";
           image = kix.image.ref config.image;
           imagePullPolicy = config.image.pullPolicy;
-          args = [
-            "--config"
-            configPath
-          ]
-          ++ kix.guardArgs {
+          # Vector parses flags with clap (src/cli.rs upstream).
+          args = kix.mergeArgs {
             inherit scope;
-            owned = lib.genAttrs configFlags (
-              _: "the package's merged settings are Vector's only config source; put configuration in settings."
-            );
+            parser = "gnu";
+            args = [
+              {
+                flags = [
+                  [
+                    "--config"
+                    configPath
+                  ]
+                ];
+                names = configFlags;
+                reason = "Vector reads its configuration from the file built from settings.";
+                fix = "Remove it from extraArgs and configure Vector in settings instead.";
+              }
+            ];
           } config.extraArgs;
           env = kix.mkEnvVars (
             kix.mergeEnv {

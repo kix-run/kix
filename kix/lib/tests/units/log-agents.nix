@@ -2,14 +2,14 @@
 # Vector agent they share (clickhouse-logs/vector-agent.nix): the locked
 # `settings` paths, the refused flags and env variables, the deps.loki
 # guard, the monitoring module's lokiLogs guard, the priorityClass
-# dependency, and the one-letter flags kix.guardArgs refuses. loki-logs runs
+# dependency, and the one-letter flags kix.mergeArgs refuses. loki-logs runs
 # in namespace `logs` next to a loki instance, clickhouse-logs in `chlogs`.
 #
 # builtins.tryEval drops the text of a `throw`. To read a refusal's message,
 # `caught` loads a file through builtins.scopedImport with `throw` bound to
 # a function that returns `{ thrown = <message>; }`, and so does the
 # `kix.fail` they call (see caught.nix). The packages are loaded
-# that way and given a kix whose mergeGuarded, guardArgs and mergeEnv come
+# that way and given a kix whose mergeGuarded, mergeArgs and mergeEnv come
 # from vocab/compose.nix loaded the same way, so a refusal renders its
 # message into the manifests: the ConfigMap's vector.yaml becomes
 # `{ "thrown": ... }`, a refused argument list becomes one `refused: ...`
@@ -39,10 +39,10 @@ let
   compose = caught ../../vocab/compose.nix { inherit lib; };
   renderingKix = {
     mergeGuarded = compose.mergeGuarded;
-    guardArgs =
+    mergeArgs =
       args: extraArgs:
       let
-        r = compose.guardArgs args extraArgs;
+        r = compose.mergeArgs args extraArgs;
       in
       if builtins.isAttrs r then [ "refused: ${r.thrown}" ] else r;
     mergeEnv =
@@ -570,30 +570,38 @@ in
 
   # A one-letter owned flag also refuses its attached-value form; a long
   # flag that starts with the same letter, and the other letter case, pass.
-  log-agents-guard-args-short-flags =
+  log-agents-merge-args-short-flags =
     let
-      guard = compose.guardArgs {
+      args = [
+        {
+          names = [ "-c" ];
+          reason = "the package renders the config.";
+        }
+      ];
+      guard = compose.mergeArgs {
         scope.fail = (caught ../../core/error.nix { inherit lib; }).fail;
-        owned."-c" = "remove it.";
+        parser = "gnu";
+        inherit args;
       };
       passes =
-        args:
-        kixlib.guardArgs {
+        extraArgs:
+        kixlib.mergeArgs {
           scope.fail = kixlib.fail;
-          owned."-c" = "remove it.";
-        } args == args;
+          parser = "gnu";
+          inherit args;
+        } extraArgs == extraArgs;
     in
     (
-      guard [ "-c/etc/x" ] == {
-        thrown = "extraArgs sets \"-c/etc/x\", which this package does not accept: remove it.";
-      }
+      lib.hasPrefix
+        "extraArgs sets \"-c/etc/x\", which this package does not accept: the package renders the config."
+        (guard [ "-c/etc/x" ]).thrown
       && builtins.isAttrs (guard [ "-c" ])
       && builtins.isAttrs (guard [ "-c=/x" ])
       && passes [ "--cache" ]
       && passes [ "-C/x" ]
       && passes [ "-v" ]
     )
-    || throw "guardArgs short flags: ${builtins.toJSON (guard [ "-c/etc/x" ])}";
+    || throw "mergeArgs short flags: ${builtins.toJSON (guard [ "-c/etc/x" ])}";
 
   # A cluster that declares a Kubernetes version Vector does not support is
   # refused with the change record's id, by both packages that run the

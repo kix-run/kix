@@ -421,21 +421,35 @@ in
           ];
         };
 
-        # redis_exporter parses flags with Go's flag package.
-        exporterOwned = {
-          "--redis.addr" = "the exporter reads the local valkey-server; remove it.";
-          "--redis.user" = "the exporter authenticates with the valkeyPassword password; remove it.";
-          "--redis.password" = "the exporter authenticates with the valkeyPassword password; remove it.";
-          "--redis.password-file" = "the exporter authenticates with the valkeyPassword password; remove it.";
-          "--web.listen-address" =
-            "the metrics Service and probes use port ${toString ports.metrics}; remove it.";
-          "--web.telemetry-path" = "the ServiceMonitor scrapes /metrics; remove it.";
-        };
-        exporterArgs = kix.guardArgs {
+        # redis_exporter parses flags with Go's flag package (main.go
+        # upstream).
+        exporterArgs = kix.mergeArgs {
           inherit scope;
           parser = "go";
           option = "metrics.extraArgs";
-          owned = exporterOwned;
+          args = [
+            {
+              names = [ "--redis.addr" ];
+              reason = "the exporter scrapes the valkey-server container in the same pod.";
+            }
+            {
+              names = [
+                "--redis.user"
+                "--redis.password"
+                "--redis.password-file"
+              ];
+              from = "the valkeyPassword secret dependency";
+              fix = "Remove it from metrics.extraArgs. To change the password, update the Secret wired to deps.valkeyPassword.";
+            }
+            {
+              names = [ "--web.listen-address" ];
+              reason = "the metrics Service and probes use port ${toString ports.metrics}.";
+            }
+            {
+              names = [ "--web.telemetry-path" ];
+              reason = "the ServiceMonitor scrapes /metrics.";
+            }
+          ];
         } config.metrics.extraArgs;
 
         metricsContainer = {

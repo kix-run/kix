@@ -428,38 +428,70 @@ in
               }
               (lib.filterAttrs (_: v: v != null) config.service.spec);
 
-        args = [
-          "/nginx-ingress-controller"
-          "--publish-service=$(POD_NAMESPACE)/${self.service.out.name}"
-          "--election-id=${name}-leader"
-          "--controller-class=${controllerValue}"
-          "--ingress-class=${config.ingressClassName}"
-          "--configmap=$(POD_NAMESPACE)/${self.configmap.out.name}"
-          "--validating-webhook=:8443"
-          "--validating-webhook-certificate=/usr/local/certificates/cert"
-          "--validating-webhook-key=/usr/local/certificates/key"
-        ]
-        # Upstream's default is false, which serves only Go runtime metrics
-        # on :10254. The flag follows the toggle alone, so adding a
-        # prometheus instance does not restart the controller.
-        ++ lib.optional config.metrics.enabled "--enable-metrics=true"
-        ++ kix.guardArgs {
+        # The controller parses flags with pflag (pkg/flags/flags.go
+        # upstream).
+        args = kix.mergeArgs {
           inherit scope;
-          owned = {
-            "--enable-metrics" = "the package sets it from metrics.enabled; set that instead.";
-            "--http-port" = "the Service, container ports, and network policy use port 80; remove it.";
-            "--https-port" = "the Service, container ports, and network policy use port 443; remove it.";
-            "--healthz-port" = "the probes and the metrics Service use port 10254; remove it.";
-            "--publish-service" = "the package points it at the controller Service; remove it.";
-            "--election-id" = "the package derives it from the instance name; remove it.";
-            "--controller-class" =
-              "the package derives it from ingressClassName; set ingressClassName instead.";
-            "--ingress-class" = "the package sets it to ingressClassName; set ingressClassName instead.";
-            "--configmap" = "the package points it at its ConfigMap; set settings instead.";
-            "--validating-webhook" = "the package serves the admission webhook on :8443; remove it.";
-            "--validating-webhook-certificate" = "the package mounts the admission certificate; remove it.";
-            "--validating-webhook-key" = "the package mounts the admission certificate; remove it.";
-          };
+          parser = "gnu";
+          args = [
+            "/nginx-ingress-controller"
+            {
+              flags = [ "--publish-service=$(POD_NAMESPACE)/${self.service.out.name}" ];
+              reason = "Ingress status must publish the address of this instance's Service.";
+            }
+            {
+              flags = [ "--election-id=${name}-leader" ];
+              reason = "the leader-election Role only allows updating Lease \"${name}-leader\".";
+            }
+            {
+              flags = [ "--controller-class=${controllerValue}" ];
+              from = "the ingressClassName option";
+              fix = "Remove it from extraArgs and set ingressClassName instead.";
+            }
+            {
+              flags = [ "--ingress-class=${config.ingressClassName}" ];
+              from = "the ingressClassName option";
+              fix = "Remove it from extraArgs and set ingressClassName instead.";
+            }
+            {
+              flags = [ "--configmap=$(POD_NAMESPACE)/${self.configmap.out.name}" ];
+              from = "the settings option, which builds the controller's ConfigMap";
+              fix = "Remove it from extraArgs and set settings instead.";
+            }
+            {
+              flags = [ "--validating-webhook=:8443" ];
+              reason = "the admission webhook Service connects to port 8443.";
+            }
+            {
+              flags = [ "--validating-webhook-certificate=/usr/local/certificates/cert" ];
+              reason = "the admission TLS certificate is mounted at /usr/local/certificates/cert.";
+            }
+            {
+              flags = [ "--validating-webhook-key=/usr/local/certificates/key" ];
+              reason = "the admission TLS private key is mounted at /usr/local/certificates/key.";
+            }
+            {
+              names = [ "--http-port" ];
+              reason = "the Service, container ports, and network policy use port 80.";
+            }
+            {
+              names = [ "--https-port" ];
+              reason = "the Service, container ports, and network policy use port 443.";
+            }
+            {
+              names = [ "--healthz-port" ];
+              reason = "the probes and the metrics Service use port 10254.";
+            }
+            # Upstream's default is false, which serves only Go runtime
+            # metrics on :10254. The flag follows the toggle alone, so adding
+            # a prometheus instance does not restart the controller.
+            {
+              flags = lib.optional config.metrics.enabled "--enable-metrics=true";
+              names = [ "--enable-metrics" ];
+              from = "the metrics.enabled option";
+              fix = "Remove it from extraArgs and set metrics.enabled instead.";
+            }
+          ];
         } config.extraArgs;
 
         env = kix.mkEnvVars (
