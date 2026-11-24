@@ -1,5 +1,6 @@
 //! Server-side apply execution, conflict classification, and bookkeeping annotations.
 
+use std::borrow::Cow;
 use std::collections::HashSet;
 
 use super::super::errors::FailureClass;
@@ -32,6 +33,15 @@ pub enum ApplyError {
         "field ownership conflict on {resource} (not updated). Another field manager owns fields that Kix sets; run the command again with `--force-conflicts` to take ownership, or declare those fields on {resource} with `ownership.cede` if the other manager should keep owning them. Kubernetes reported: {}", reported(.source)
     )]
     Conflict {
+        resource: String,
+        #[source]
+        source: kube::Error,
+    },
+
+    #[error(
+        "[K9044] field ownership conflict on {resource} (not updated). Another field manager owns keys in `data` with different values, so Kix did not overwrite them. Run the command again with `--force-conflicts` to write the build's values, or copy the cluster's values into `stringData` or the SOPS file and deploy again. Kubernetes reported: {}", reported(.source)
+    )]
+    SecretDataConflict {
         resource: String,
         #[source]
         source: kube::Error,
@@ -266,6 +276,7 @@ pub(crate) async fn apply_resource(
         });
     }
     let api: Api<DynamicObject> = super::super::discovery::api_for(client, ar, &scope, &rid);
+    let manifest = &*string_data_as_data(manifest);
 
     // Default to non-force SSA so ownership conflicts return their field paths
     // and current manager. --force-conflicts opts into taking ownership.
@@ -316,7 +327,7 @@ pub(crate) async fn apply_resource(
                     let echo = apply_patch(&api, &name, &pp, &stripped, &rid).await?;
                     (echo, Some(stripped))
                 }
-                None => return Err(ApplyError::Conflict { resource, source }),
+                None => return Err(conflict_error(&rid, resource, source)),
             }
         }
         Err(e) => return Err(e),
@@ -382,6 +393,73 @@ pub(crate) async fn apply_resource(
         preview,
         not_kept,
     })
+}
+
+/// Return `manifest` with a Secret's `stringData` written into `data` as
+/// base64, the form the API server stores. A key in both takes its
+/// `stringData` value, as it does on the server.
+///
+/// Every apply and dry run sends this form. The server never stores
+/// `stringData`, so a field manager that applies it owns no stored field.
+/// Sent as `data`, each key belongs to Kix: a key removed from the build is
+/// removed from the cluster, and a key another manager changed is a conflict.
+/// Any other manifest is returned unchanged, and so is a Secret whose
+/// `stringData` or `data` is not a map of strings, which the server refuses
+/// with its own message.
+pub(crate) fn string_data_as_data(manifest: &Value) -> Cow<'_, Value> {
+    use base64::Engine as _;
+
+    if !crate::manifest::types::is_secret(manifest) {
+        return Cow::Borrowed(manifest);
+    }
+    let Some(Value::Object(strings)) = manifest.get("stringData") else {
+        return Cow::Borrowed(manifest);
+    };
+    let data_is_map = matches!(
+        manifest.get("data"),
+        None | Some(Value::Null | Value::Object(_))
+    );
+    if !data_is_map || !strings.values().all(Value::is_string) {
+        return Cow::Borrowed(manifest);
+    }
+    let mut data = match manifest.get("data") {
+        Some(Value::Object(data)) => data.clone(),
+        _ => serde_json::Map::new(),
+    };
+    for (key, value) in strings {
+        let text = value.as_str().unwrap_or_default();
+        let encoded = base64::engine::general_purpose::STANDARD.encode(text);
+        data.insert(key.clone(), Value::String(encoded));
+    }
+    let mut out = manifest.clone();
+    if let Some(obj) = out.as_object_mut() {
+        obj.remove("stringData");
+        if !strings.is_empty() {
+            obj.insert("data".into(), Value::Object(data));
+        }
+    }
+    Cow::Owned(out)
+}
+
+/// Return the error for a conflict that no ceded field explains. A conflict
+/// on a Secret's `data` gets [`ApplyError::SecretDataConflict`], which says
+/// what overwriting the other manager's values means.
+pub(super) fn conflict_error(
+    rid: &ResourceId,
+    resource: String,
+    source: kube::Error,
+) -> ApplyError {
+    let on_data = match &source {
+        kube::Error::Api(resp) => conflict_paths(&resp.message)
+            .iter()
+            .any(|p| p == ".data" || p.starts_with(".data.")),
+        _ => false,
+    };
+    if on_data && rid.group_kind() == crate::manifest::kinds::SECRET {
+        ApplyError::SecretDataConflict { resource, source }
+    } else {
+        ApplyError::Conflict { resource, source }
+    }
 }
 
 /// Send the SSA patch and classify a failure: 409 conflicts become

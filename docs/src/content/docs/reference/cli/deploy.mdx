@@ -76,7 +76,9 @@ Set `KIX_TUI_HEIGHT` to a number of rows to cap the live view of
    Unchanged resources are skipped. A deploy with nothing to change exits
    without applying. When a Secret carries `kix.run/sops-source`, the deploy
    decrypts the SOPS file and keeps any plain keys already in the Secret's
-   `stringData` or `data`. Before the record is created, the run stops if the
+   `stringData` or `data`. Kix converts any `stringData` entries and sends all
+   Secret values base64-encoded under `data`, so Kix owns each key on the
+   cluster. Before the record is created, the run stops if the
    cluster serves a resource's kind as namespaced and its manifest has no
    `metadata.namespace`, naming each such resource. Cross-resource
    [check 18](/docs/reference/validation-checks/)
