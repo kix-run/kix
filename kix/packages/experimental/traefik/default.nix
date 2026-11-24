@@ -427,20 +427,10 @@ in
               }
               (lib.filterAttrs (_: v: v != null) config.service.spec);
 
-        # Traefik matches flag names in any case, accepts one or two leading
-        # dashes (paerser flag/flagparser.go), and turns a provider on when
-        # any key under it is set, so kix.guardArgs, which matches exact
-        # flags, cannot express these rules. flagOf gives "--<lowercase
-        # name>" for a flag and null for a value argument.
-        flagOf =
-          arg:
-          let
-            name = builtins.head (lib.splitString "=" arg);
-          in
-          if lib.hasPrefix "-" name then
-            "--${lib.toLower (lib.removePrefix "-" (lib.removePrefix "-" name))}"
-          else
-            null;
+        # Traefik's flag parser (paerser flag/flagparser.go) matches flag
+        # names in any case and accepts one or two leading dashes. A provider
+        # turns on when any key under it is set, so those are refused as
+        # families.
         ownedFlags =
           lib.listToAttrs (
             map (
@@ -468,7 +458,6 @@ in
             "--configfile" =
               "with a configuration file Traefik ignores every flag, including the ones the package sets; use extraArgs instead.";
           };
-        # Any key under these turns the provider on.
         refusedFamilies = {
           "--providers.kubernetescrd" =
             "Traefik's CRD provider needs Traefik's CRDs and RBAC, which the package does not install; route through the Gateway with kix.expose.";
@@ -478,34 +467,6 @@ in
             "the ingress-nginx provider needs RBAC the package does not grant; route through the Gateway with kix.expose.";
           "--providers.knative" = "the Knative provider needs RBAC the package does not grant; remove it.";
         };
-        reasonFor =
-          arg:
-          let
-            flag = flagOf arg;
-            family = lib.findFirst (f: flag == f || lib.hasPrefix "${f}." flag) null (
-              builtins.attrNames refusedFamilies
-            );
-          in
-          if flag == null then
-            null
-          else if ownedFlags ? ${flag} then
-            "which this package does not accept: ${ownedFlags.${flag}}"
-          else if family != null then
-            "which this package does not accept: ${refusedFamilies.${family}}"
-          else
-            null;
-        argProblems = builtins.concatMap (
-          arg:
-          let
-            reason = reasonFor arg;
-          in
-          lib.optional (reason != null) {
-            package = "traefik";
-            option = "extraArgs";
-            message = "extraArgs sets \"${arg}\", ${reason}";
-          }
-        ) config.extraArgs;
-
         args = [
           "--global.checkNewVersion=false"
           "--entryPoints.traefik.address=:${toString internalPort}"
@@ -523,7 +484,12 @@ in
         # The flag follows the toggle alone, so adding a prometheus instance
         # does not restart Traefik.
         ++ lib.optional config.metrics.enabled "--metrics.prometheus=true"
-        ++ config.extraArgs;
+        ++ kix.guardArgs {
+          inherit scope;
+          parser = "paerser";
+          owned = ownedFlags;
+          ownedFamilies = refusedFamilies;
+        } config.extraArgs;
 
         traefikEnv = builtins.filter (lib.hasPrefix "TRAEFIK_") (builtins.attrNames config.env);
         env =
@@ -615,8 +581,6 @@ in
             message = p;
           }) listenerProblems
         )
-      else if argProblems != [ ] then
-        scope.fail argProblems
       else
         {
           serviceAccount = scope.mkResource {

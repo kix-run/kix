@@ -115,22 +115,11 @@ rec {
     };
   };
 
-  # Package defaults for upstream tunables that `extraArgs` may replace. The
-  # binaries refuse a single-value flag given twice, so a default is
-  # dropped when `extraArgs` sets the same flag (`flag` or `flag=...`).
-  dropOverridden =
-    defaults: extraArgs:
-    builtins.filter (
-      d:
-      let
-        flag = builtins.head (lib.splitString "=" d);
-      in
-      !(builtins.any (a: a == flag || lib.hasPrefix "${flag}=" a) extraArgs)
-    ) defaults;
-
   # A component's flags: the package's owned flags, the tunable defaults
   # `extraArgs` does not replace, then `extraArgs`. `owned` maps each owned
-  # flag to the reason shown when `extraArgs` sets it.
+  # flag to the reason shown when `extraArgs` sets it. The binaries refuse
+  # a single-value flag given twice, so `extraArgs` replaces a tunable
+  # rather than repeating it.
   args =
     {
       option,
@@ -140,9 +129,9 @@ rec {
     }:
     extraArgs:
     base
-    ++ dropOverridden tunables extraArgs
     ++ kix.guardArgs {
       inherit scope option owned;
+      defaults = tunables;
     } extraArgs;
 
   fieldRef = path: { valueFrom.fieldRef.fieldPath = path; };

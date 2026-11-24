@@ -158,18 +158,17 @@ in
           "volumeattachments"
         ];
         servedCollectors = builtins.filter served defaultCollectors;
-        # `--resources` in `extraArgs` replaces the package's choice.
-        choosesCollectors = builtins.any (lib.hasPrefix "--resources") config.extraArgs;
 
         args = [
           "--port=${toString metricsPort}"
           "--telemetry-port=${toString telemetryPort}"
         ]
-        ++ lib.optional (
-          !choosesCollectors && servedCollectors != defaultCollectors
-        ) "--resources=${lib.concatStringsSep "," servedCollectors}"
         ++ kix.guardArgs {
           inherit scope;
+          # `--resources` in `extraArgs` replaces the package's choice.
+          defaults = lib.optional (
+            servedCollectors != defaultCollectors
+          ) "--resources=${lib.concatStringsSep "," servedCollectors}";
           owned = {
             "--port" = "the probes and the Service use port ${toString metricsPort}; remove it.";
             "--telemetry-port" = "the Service uses port ${toString telemetryPort}; remove it.";

@@ -1,4 +1,0 @@
-# 2026-10-01 · `kix/lib/vocab/compose.nix` · `kix.guardArgs` misses an owned flag written with one dash.
-
-`guardArgs` matches an argument only when it equals `--flag` or starts with `--flag=`. Programs that parse flags with Go's `flag` package, such as controller-runtime operators (`cmd/main.go` in the Infisical operator), accept `-flag` as the same flag. So `extraArgs = [ "-leader-elect=false" ]` or `[ "-metrics-bind-address=:9090" ]` passes the guard in `infisical-operator` and overrides a flag the package derives ports and leader election from. Any package that guards Go flags has the same gap.
-- Hit again 2026-10-02 by `kix/packages/mayastor`: Rust (clap) short options take their value without `=` (`-Rhttps://...`, `-y/path`), so `extraArgs = [ "-Rx" ]` passes the guard on io-engine's owned `-R`.
