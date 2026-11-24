@@ -1,0 +1,3 @@
+# 2026-11-24 · `cli/kix/src/cluster/client.rs` · Kix's Kubernetes client sends no User-Agent header, so an API server audit log cannot tell Kix's requests from another client's.
+
+Seen in the audit log of a kind cluster during `kix deploy` and `kix status`: every request from Kix has an empty User-Agent. Counting Kix's requests needed the user name and the time window of the command. The release downloader does set one (`kix/<version>`, `cli/kix/src/release/download.rs`). An operator of a shared cluster who reads the audit log or the API server's per-client metrics cannot attribute load to Kix or to a version of Kix.

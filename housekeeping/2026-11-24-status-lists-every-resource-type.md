@@ -1,0 +1,3 @@
+# 2026-11-24 · `cli/kix/src/cluster/inventory.rs` · `kix status` lists every resource type the API server serves, not only the kinds Kix manages.
+
+Measured on kind with the `homelab-kind` cluster: the build has 32 kinds, and `kix status` sent list requests for 100 resource types (`fetch_parallel` walks all of discovery). On a cluster with many CRDs the number grows with the CRDs installed, whoever installed them. The Activation records name every object Kix made, with its kind since 0.10, so the kinds to list are known before the sweep. The sweep also finds objects that carry Kix's label and that no record names, which is what `kix gc --hard` needs, so the two uses may want different sweeps.
