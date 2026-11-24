@@ -241,8 +241,9 @@ def record_paths(root: pathlib.Path) -> list[tuple[pathlib.Path, str | None]]:
 
 
 # An id as an error carries it: in brackets in a message, such as `[K0001]`,
-# or as the `id` field of a `kix.fail` error, such as `id = "K0001";`.
-ID_IN_SOURCE_RE = re.compile(r'\[(K\d{4})\]|\bid\s*=\s*"\[?(K\d{4})\]?"')
+# as the `id` field of a `kix.fail` error, such as `id = "K0001";`, or as the
+# `id` field of a Rust struct, such as `id: "K0001",`.
+ID_IN_SOURCE_RE = re.compile(r'\[(K\d{4})\]|\bid\s*[=:]\s*"\[?(K\d{4})\]?"')
 
 
 def ids_in_source(root: pathlib.Path) -> set[str]:

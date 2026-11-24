@@ -551,6 +551,12 @@ class PullRequestTest(RepoTest):
             '{ scope }: scope.fail { id = "K0007"; message = "gone"; }\n',
         )
         self.assertEqual(self.repo.run("check")[0], 0)
+        self.repo.write("kix/packages/stable/caddy/default.nix", "{}\n")
+        self.repo.write(
+            "cli/kix-cli/src/removed.rs",
+            'const GONE: Removed = Removed { old: "kix gone", id: "K0007" };\n',
+        )
+        self.assertEqual(self.repo.run("check")[0], 0)
 
     def test_a_security_bullet_carries_the_workaround(self):
         self.repo.write(

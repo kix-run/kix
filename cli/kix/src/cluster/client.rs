@@ -18,7 +18,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
     task::{Context, Poll},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use bytes::Bytes;
@@ -29,6 +29,7 @@ use kube::{
     client::{Body, ClientBuilder},
     config::{KubeConfigOptions, Kubeconfig},
 };
+use tokio::time::Instant;
 use tower::{BoxError, Layer, Service, ServiceExt, buffer::Buffer};
 
 use super::errors::{FailureClass, FetchError, RequestTimeout, classify_status, error_chain_find};

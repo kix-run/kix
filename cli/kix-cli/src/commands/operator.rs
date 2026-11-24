@@ -202,7 +202,7 @@ pub async fn watch_activation_progress(
 ) -> Result<Reconciled> {
     let poll_interval = Duration::from_secs(2);
     let timeout = Duration::from_secs(600);
-    let start = std::time::Instant::now();
+    let start = tokio::time::Instant::now();
 
     let mut progress = Progress::default();
 
@@ -274,7 +274,7 @@ pub async fn watch_activation_progress(
 pub async fn wait_for_deletion(records: &Records, activation_name: &str) -> Result<()> {
     let poll_interval = Duration::from_secs(2);
     let timeout = Duration::from_secs(300);
-    let start = std::time::Instant::now();
+    let start = tokio::time::Instant::now();
 
     loop {
         if start.elapsed() > timeout {

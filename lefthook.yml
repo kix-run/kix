@@ -47,17 +47,22 @@ pre-push:
   parallel: true
   commands:
     verify-signatures:
+      # Check only the commits no remote has yet. A commit that is already on
+      # a remote, such as one of main's after main is merged into a branch,
+      # cannot be signed without rewriting the remote's history.
       run: |
-        upstream=$(git rev-parse --abbrev-ref '@{upstream}' 2>/dev/null) || exit 0
-        range="${upstream}..HEAD"
-        unsigned=$(git log --pretty=format:'%H %G? %s' "$range" 2>/dev/null | grep -E '^[a-f0-9]+ N ' || true)
+        unsigned=$(git log --pretty=format:'%H %G? %s' HEAD --not --remotes 2>/dev/null | grep -E '^[a-f0-9]+ N ' || true)
         if [ -n "$unsigned" ]; then
           echo "ERROR: Unsigned commits found:"
           echo "$unsigned" | while IFS=' ' read -r hash status msg; do
             echo "  $hash $msg"
           done
+          # Start the rebase below every unsigned commit. Keep merges, and
+          # sign only the commits no remote has, so main's commits keep
+          # their hashes.
+          base=$(git merge-base --octopus $(echo "$unsigned" | cut -d ' ' -f 1))
           echo ""
-          echo "Sign commits with: git rebase --exec 'git commit --amend --no-edit -S' $upstream"
+          echo "Sign commits with: git rebase --rebase-merges --exec 'git branch -r --contains HEAD | grep -q . || git commit --amend --no-edit -S' ${base}^"
           exit 1
         fi
 
@@ -90,7 +95,8 @@ pre-commit:
       glob: "cli/**/*.rs"
       run: |
         if cargo-clippy --version >/dev/null 2>&1; then
-          export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/kix-cargo-target/$(basename "$PWD")-$(printf %s "$PWD" | sha256sum | cut -c1-12)}"
+          checkout=$(git rev-parse --show-toplevel)
+          export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/kix-cargo-target/$(basename "$checkout")-$(printf %s "$checkout" | sha256sum | cut -c1-12)}"
           (cd cli && cargo-clippy --workspace --all-targets -- -D warnings)
         elif command -v devenv >/dev/null 2>&1; then
           devenv shell -- bash -c 'cd cli && cargo-clippy --workspace --all-targets -- -D warnings'
