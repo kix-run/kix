@@ -60,7 +60,9 @@
 #   };
 #
 # `out.identityCloud` is the identity's cloud (`"aws"`, `"gcp"`, `"azure"`),
-# or null without one.
+# or null without one. `out.mkSecretStore` and `out.mkClusterSecretStore`
+# refuse a store that uses the controller's credentials for another cloud
+# than the identity's. Without an identity, any such store builds.
 #
 # A store may instead reference a ServiceAccount of its own
 # (`auth.jwt.serviceAccountRef` for AWS, `auth.workloadIdentity` for Google
@@ -435,6 +437,45 @@ in
           else
             result;
 
+        identityCloud = (c.controllerCredentialsOf controllerCredentials).cloud;
+
+        # Return the cloud a store calls with the controller's own
+        # credentials, or null when it names its own credentials or
+        # ServiceAccount. AWS and gcpsm stores do so without `auth`, and an
+        # Azure store with `authType: WorkloadIdentity` and no
+        # `serviceAccountRef`.
+        ambientCloudOf =
+          spec:
+          let
+            p = spec.provider or { };
+          in
+          if p ? aws && !(p.aws ? auth) then
+            "aws"
+          else if p ? gcpsm && !(p.gcpsm ? auth) then
+            "gcp"
+          else if
+            p ? azurekv
+            && (p.azurekv.authType or null) == "WorkloadIdentity"
+            && !(p.azurekv ? serviceAccountRef)
+          then
+            "azure"
+          else
+            null;
+
+        # Return `result` unless the store calls another cloud than the
+        # controller's identity. The error goes through the consumer's
+        # scope, so it names the instance that builds the store.
+        checkAmbientCloud =
+          consumerScope: args: result:
+          let
+            problem = kix.cloudIdentity.ambientProblem {
+              cloud = ambientCloudOf (args.spec or { });
+              holderName = "${scope.namespaceName}/${scope.instanceName}";
+              inherit identityCloud;
+            };
+          in
+          if problem == null then result else consumerScope.fail problem;
+
         # Refuses a generic target and sets empty template metadata when the
         # spec has none (see out.mkExternalSecret in the header).
         pinExternalSecret =
@@ -553,7 +594,7 @@ in
 
             # The cloud of the controller's identity, or null. A store that
             # names no credentials calls its cloud as this identity.
-            identityCloud = (c.controllerCredentialsOf controllerCredentials).cloud;
+            inherit identityCloud;
 
             crds = builtins.listToAttrs (
               map (spec: lib.nameValuePair (kindOf spec) self.crds.${pluralOf spec}) (
@@ -564,13 +605,13 @@ in
             mkSecretStore =
               consumerScope: args:
               checkStoreSelectors (crName consumerScope "SecretStore" args) false args (
-                (crdOf self "SecretStore").out.mkCR consumerScope args
+                checkAmbientCloud consumerScope args ((crdOf self "SecretStore").out.mkCR consumerScope args)
               );
 
             mkClusterSecretStore =
               consumerScope: args:
               checkStoreSelectors "ClusterSecretStore ${args.name}" true args (
-                (crdOf self "ClusterSecretStore").out.mkCR consumerScope args
+                checkAmbientCloud consumerScope args ((crdOf self "ClusterSecretStore").out.mkCR consumerScope args)
               );
 
             mkExternalSecret =

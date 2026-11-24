@@ -869,4 +869,72 @@ in
       store = byName "aws" (ofKind "SecretStore" (manifests c));
     in
     !(store.spec.provider.aws ? auth) || throw "ambient store: ${builtins.toJSON store}";
+
+  # A store that calls its cloud with the controller's credentials is
+  # refused when the controller's identity is for another cloud, and builds
+  # when the clouds match. A store that names its own ServiceAccount is not
+  # checked.
+  external-secrets-cloud-identity-ambient-store-cloud =
+    let
+      providers = {
+        aws.aws = {
+          service = "SecretsManager";
+          region = "eu-central-1";
+        };
+        gcp.gcpsm.projectID = "my-project";
+        azure.azurekv = {
+          vaultUrl = "https://example.vault.azure.net";
+          authType = "WorkloadIdentity";
+        };
+        azureOwnAccount.azurekv = {
+          vaultUrl = "https://example.vault.azure.net";
+          authType = "WorkloadIdentity";
+          serviceAccountRef.name = "tenant";
+        };
+      };
+      withStore =
+        flavorName: credentials: kind: provider:
+        clusterWith {
+          modules = [ (flavor flavorName) ];
+          deps = _: { controllerCredentials = credentials; };
+          consumer = mkConsumer {
+            extraParts =
+              { scope, externalSecrets, ... }:
+              {
+                ambientStore = externalSecrets.out.${kind} scope {
+                  name = "ambient";
+                  spec.provider = provider;
+                };
+              };
+          };
+        };
+      aws = ci.aws { inherit roleArn; };
+      gcp = ci.gcp { };
+      azure = ci.azure { inherit clientId; };
+      cases = {
+        aws = {
+          bad = withStore "eks" aws "mkSecretStore" providers.gcp;
+          good = withStore "eks" aws "mkSecretStore" providers.aws;
+        };
+        gcp = {
+          bad = withStore "gke" gcp "mkSecretStore" providers.azure;
+          good = withStore "gke" gcp "mkSecretStore" providers.gcp;
+        };
+        azure = {
+          bad = withStore "aks" azure "mkSecretStore" providers.aws;
+          good = withStore "aks" azure "mkSecretStore" providers.azure;
+        };
+        clusterStore = {
+          bad = withStore "eks" aws "mkClusterSecretStore" providers.azure;
+          good = withStore "eks" aws "mkClusterSecretStore" providers.aws;
+        };
+        ownServiceAccount = {
+          bad = withStore "eks" aws "mkSecretStore" providers.gcp;
+          good = withStore "eks" aws "mkSecretStore" providers.azureOwnAccount;
+        };
+      };
+      wrong = builtins.attrNames (lib.filterAttrs (_: c: !(evalFails c.bad) || evalFails c.good) cases);
+    in
+    wrong == [ ]
+    || throw "ambient store cloud: bad case built or good case failed: ${builtins.toJSON wrong}";
 }

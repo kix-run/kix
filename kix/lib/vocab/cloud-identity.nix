@@ -20,7 +20,8 @@
 # - `out.identityCloud`: a package that owns the ServiceAccount and cannot
 #   know the cloud publishes `credentials.cloud` from `useIdentity`. A
 #   dependent that reaches a cloud with the pod's own credentials passes
-#   that instance to `ambientProblem` as `holder`.
+#   that instance to `ambientProblem` as `holder`. A builder in the owner's
+#   own `out` passes its instance's name and identity cloud instead.
 # - `out.ambientCloud`: a package that picks the cloud and lets the pods
 #   use their own credentials publishes that cloud (`"aws"`, `"gcp"`,
 #   `"azure"`), or null when it reads a Secret. A dependent that owns the
@@ -346,23 +347,55 @@ let
       };
 
   # Compare `cloud`, the cloud that an object reaches with the pod's own
-  # credentials, with the cloud identity of `holder`, the dependency whose
-  # pods make the call and which publishes `out.identityCloud`. Return a
-  # `{ message; fix; }` that names `holder` and both clouds when they differ,
-  # or null. A holder without an identity is never refused, because its
-  # pods may use the node's credentials.
+  # credentials, with the cloud identity of the instance whose pods make the
+  # call. Name that instance in one of two forms. `holder` is a dependency
+  # that publishes `out.identityCloud`. `holderName` ("namespace/instance")
+  # and `identityCloud` serve a package that checks its own instance, such
+  # as a builder in its own `out`. Return a `{ message; fix; }` that names
+  # the holder and both clouds when they differ, or null. A holder without
+  # an identity is never refused, because its pods may use the node's
+  # credentials.
   ambientProblem =
-    { cloud, holder }:
+    args:
     let
-      held = holder.out.identityCloud or null;
-      holderName = "${holder._meta.namespaceName}/${holder._meta.instanceName}";
+      hasHolder = args ? holder;
+      hasDirect = args ? holderName || args ? identityCloud;
     in
-    if cloud == null || held == null || held == cloud then
+    if
+      !(args ? cloud)
+      || hasHolder == hasDirect
+      || (hasDirect && !(args ? holderName && args ? identityCloud))
+    then
+      errors.fail {
+        message = "`kix.cloudIdentity.ambientProblem` takes `cloud` and either `holder` or both `holderName` and `identityCloud`, but got ${
+          if builtins.attrNames args == [ ] then
+            "no arguments"
+          else
+            "`${lib.concatStringsSep "`, `" (builtins.attrNames args)}`"
+        }.";
+        fix = "Pass `{ cloud; holder; }` with the dependency whose pods make the call, or `{ cloud; holderName; identityCloud; }` for the package's own instance.";
+      }
+    else if hasHolder then
+      ambientProblemOf {
+        inherit (args) cloud;
+        holderName = "${args.holder._meta.namespaceName}/${args.holder._meta.instanceName}";
+        identityCloud = args.holder.out.identityCloud or null;
+      }
+    else
+      ambientProblemOf { inherit (args) cloud holderName identityCloud; };
+
+  ambientProblemOf =
+    {
+      cloud,
+      holderName,
+      identityCloud,
+    }:
+    if cloud == null || identityCloud == null || identityCloud == cloud then
       null
     else
       {
-        message = "This instance uses the pod credentials of `${holderName}` to call ${clouds.${cloud}}, but `${holderName}` has a cloud identity for ${clouds.${held}}, so Kix rejected this configuration.";
-        fix = "Change the cloud identity on `${holderName}` to `kix.cloudIdentity.${cloud} { ... }`, or change this instance's `config` to use ${clouds.${held}}.";
+        message = "This instance uses the pod credentials of `${holderName}` to call ${clouds.${cloud}}, but `${holderName}` has a cloud identity for ${clouds.${identityCloud}}, so Kix rejected this configuration.";
+        fix = "Change the cloud identity on `${holderName}` to `kix.cloudIdentity.${cloud} { ... }`, or change this instance's `config` to use ${clouds.${identityCloud}}.";
       };
 
   # Return the ServiceAccount annotations and pod labels of `identity` for a

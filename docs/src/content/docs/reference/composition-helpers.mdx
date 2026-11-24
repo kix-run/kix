@@ -472,6 +472,18 @@ When the package that chooses the cloud depends on the ServiceAccount owner, cal
 
 `ambientProblem` returns `{ message, fix }` when `cloud` and `holder.out.identityCloud` are both non-null and differ, or `null` otherwise (including when `holder` has no cloud identity, since pods may fall back to node credentials). Wrap a non-null result with `// { assertion = false; }` in the package's `assertions` list.
 
+A builder in the ServiceAccount package's own `out` has no dependency value for its own instance. Such a builder (for example, `out.mkSecretStore` in `external-secrets`, which a consumer calls) passes the instance's name and identity cloud directly instead of `holder`:
+
+```nix
+kix.cloudIdentity.ambientProblem {
+  inherit cloud;
+  holderName = "${scope.namespaceName}/${scope.instanceName}";
+  identityCloud = credentials.cloud;
+}
+```
+
+Both forms return the same result and message. Give either `holder` or both `holderName` and `identityCloud`; any other combination fails evaluation. Raise a non-null result with the consumer's `scope.fail`, so the error names the consumer's instance.
+
 #### Choosing a helper
 
 | Situation | Helper |
