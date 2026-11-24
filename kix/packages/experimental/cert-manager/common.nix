@@ -41,6 +41,21 @@ in
     };
   };
 
+  # Read `deps.controllerIdentity`, the cloud identity of the controller's
+  # ServiceAccount. The controller binds it, and the instance publishes its
+  # cloud as `out.identityCloud` for cluster-issuer to check.
+  controllerCredentials =
+    {
+      kix,
+      scope,
+      controllerIdentity,
+    }:
+    kix.cloudIdentity.useIdentity {
+      inherit scope;
+      dep = controllerIdentity;
+      secretGoesTo = "`deps.issuerCredentials` of a cluster-issuer instance";
+    };
+
   webhookServiceName = instanceName: "${instanceName}-webhook";
   # The webhook writes its serving CA here; cainjector copies it into the
   # webhook configurations.

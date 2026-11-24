@@ -9,6 +9,7 @@ import acmeClusterIssuer from '/src/snippets/clusters/test-doc-how-tos/acmeClust
 import stagingClusterIssuer from '/src/snippets/clusters/test-doc-how-tos/stagingClusterIssuer.json';
 import importedClusterIssuer from '/src/snippets/clusters/test-doc-how-tos/importedClusterIssuer.json';
 import selfSignedClusterIssuer from '/src/snippets/how-to/homelab/cluster-kind-tls/selfSignedClusterIssuer.json';
+import eksCertManager from '/src/snippets/clusters/test-cloud-identity-eks/eksCertManager.json';
 
 Kix separates the cert-manager controller from issuer configuration. Install
 `cert-manager`, then add one `cluster-issuer` instance for each ClusterIssuer.
@@ -63,6 +64,50 @@ the spec path and the accepted values. A field set to `null` is left out.
 
 external-dns reads its Cloudflare token from a Secret in its own namespace.
 Give that Secret the same key, so one source feeds both.
+
+## Use a cloud identity for DNS-01
+
+On EKS, GKE, or AKS, cert-manager can call Route 53, Cloud DNS, or Azure DNS
+with a cloud role instead of a static key. The role belongs to the
+cert-manager controller's ServiceAccount, so give it to the `cert-manager`
+instance as `deps.controllerIdentity`, and leave the key fields out of the
+solver:
+
+<Snippet {...eksCertManager} />
+
+Kix writes the role on the controller's ServiceAccount and adds
+`checksum/cloud-identity` to the controller's pod template, so changing the
+role restarts the controller. On AKS, the controller pods also get the
+`azure.workload.identity/use: "true"` label. Use
+`kix.cloudIdentity.gcp { ... }` on GKE and `kix.cloudIdentity.azure { ... }`
+on AKS ([Cloud identities](/docs/reference/instances-and-composition/#cloud-identities)).
+
+A solver uses the controller's credentials when it sets no key:
+
+| Solver | Key fields left out |
+| --- | --- |
+| `dns01.route53` | `accessKeyID`, `accessKeyIDSecretRef`, `secretAccessKeySecretRef`, and `auth` |
+| `dns01.cloudDNS` | `serviceAccountSecretRef` |
+| `dns01.azureDNS` | `clientID` and `clientSecretSecretRef` |
+
+cert-manager allows these credentials for ClusterIssuers by default, and the
+package does not turn them on for namespaced Issuers. A keyless solver for a
+cloud other than the controller's identity fails the build and names the
+solver and the cert-manager instance. Without `deps.controllerIdentity`, the
+controller uses the node's credentials and Kix checks nothing. A solver that
+sets a key reads it from `deps.issuerCredentials` as before, beside a
+controller with a cloud identity or without one.
+
+A cloud identity is always set on cert-manager, never on an issuer. Kix
+refuses a cloud identity in `deps.issuerCredentials` and a Secret in
+`deps.controllerIdentity`, and each error names the other dependency.
+
+Kix does not create the cloud role. Grant it the DNS permissions that
+cert-manager lists for your provider, and trust the controller's
+ServiceAccount, `system:serviceaccount:cert-manager:cert-manager` for the
+instance above. To use a second AWS role for one issuer, set the Route 53
+solver's `role` field. cert-manager assumes that role with the controller's
+credentials.
 
 ## Add a staging issuer
 

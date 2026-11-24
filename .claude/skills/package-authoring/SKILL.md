@@ -506,7 +506,7 @@ The only place in this skill with package line numbers. `pkg:N` is
 | One alias, two implementations, a contract file | `kix/contracts/experimental/clickhouse.nix`; clickhouse:101, clickhouse-cluster:90 |
 | Renamed dependency with `renamedFrom` | immich:209-212; `kix/contracts/stable/redis.nix` (`helpers.renamedFrom`) |
 | Credentials dependency accepting either a Secret or a cloud identity (`kix.cloudIdentity.use` and `credentials.bind`) | external-dns:164-168, 607-614; `providers.nix` (`cloud`) |
-| Cloud identity when one package owns the ServiceAccount and another chooses the cloud (`kix.cloudIdentity.useIdentity`, `ambientProblem`, `out.identityCloud`, `out.ambientCloud`) | `kix/lib/tests/units/cloud-identity.nix` (`holderPackage`, `callerPackage`, `storagePackage`, `databasePackage`) |
+| Cloud identity when one package owns the ServiceAccount and another chooses the cloud (`kix.cloudIdentity.useIdentity`, `ambientProblem`, `out.identityCloud`, `out.ambientCloud`) | cert-manager common.nix:44-58, controller.nix:18 and 256, default.nix:405-406 (`useIdentity`, `out.identityCloud`); cluster-issuer:138-185 and 353-375 (`ambientProblem` per keyless solver), 388-393 (`use` with `cloud = null` and `identityGoesTo`); `kix/lib/tests/units/cloud-identity.nix` (`storagePackage`, `databasePackage` for `out.ambientCloud`) |
 
 Always declare a cloud identity dependency on the package that owns the
 ServiceAccount, because a ServiceAccount carries a single identity:

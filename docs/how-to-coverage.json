@@ -534,7 +534,8 @@
         "acmeClusterIssuer",
         "stagingClusterIssuer",
         "selfSignedClusterIssuer",
-        "importedClusterIssuer"
+        "importedClusterIssuer",
+        "eksCertManager"
       ],
       "packages": [
         "experimental/cert-manager",

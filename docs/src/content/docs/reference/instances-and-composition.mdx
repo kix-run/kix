@@ -184,6 +184,8 @@ instances.external-dns.route53 = {
 
 The cluster's `cloudIdentity` role provider controls how Kix renders the identity. The `eks`, `gke`, `gke-autopilot`, and `aks` flavors declare this provider automatically ([Flavors and capabilities](/docs/reference/flavors-and-capabilities/#cloud-identity)). Kix also writes `kix.run/cloud-identity` (containing the identity and mechanism as JSON) on the ServiceAccount, orders the ServiceAccount after the `cloudIdentity` provider, and adds `checksum/cloud-identity` to every pod template referencing that ServiceAccount so changing the identity restarts the pods.
 
+Some packages take the cloud identity on a dependency of its own, because a different package selects the cloud. For example, `cert-manager` accepts the identity on `deps.controllerIdentity` for its controller's ServiceAccount, while each `cluster-issuer` instance selects Route 53, Cloud DNS, or Azure DNS on a DNS-01 solver and holds any static key Secret on `deps.issuerCredentials`. Configure a solver without key fields to use the controller's credentials. If the solver's cloud does not match the controller's cloud identity, evaluation fails. If the controller has no cloud identity, it falls back to the node's credentials. See [Configure cert-manager issuers](/docs/how-to/package-task-guides/configure-cert-manager-issuers/#use-a-cloud-identity-for-dns-01).
+
 Kix does not create cloud IAM resources. Configure the AWS IAM role trust policy (or EKS Pod Identity association), Google Cloud IAM binding, or Azure federated credential outside Kix for `system:serviceaccount:<namespace>:<serviceaccount-name>`.
 
 Evaluation fails when:
