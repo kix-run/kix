@@ -285,25 +285,25 @@ in
           parser = "gnu";
           args = [
             {
-              owned = [ "--leader-elect" ];
+              flags = [ "--leader-elect" ];
               reason = "leader election keeps one operator active when multiple replicas run.";
             }
             {
-              owned = [ "--health-probe-bind-address=:${toString healthPort}" ];
+              flags = [ "--health-probe-bind-address=:${toString healthPort}" ];
               reason = "the probes use port ${toString healthPort}.";
             }
             {
-              owned = [ "--metrics-bind-address=:${toString metricsPort}" ];
+              flags = [ "--metrics-bind-address=:${toString metricsPort}" ];
               reason = "the metrics Service uses port ${toString metricsPort}.";
             }
             # The operator's HTTPS metrics use a self-signed certificate;
             # the ServiceMonitor scrapes plain HTTP.
             {
-              owned = [ "--metrics-secure=false" ];
+              flags = [ "--metrics-secure=false" ];
               reason = "the ServiceMonitor scrapes metrics over plain HTTP.";
             }
             {
-              owned = map (m: "--${m}-container-image=${image}") movers;
+              flags = map (m: "--${m}-container-image=${image}") movers;
               from = "the image option (also published in out.extraImages for mover Jobs)";
               fix = "Set image instead.";
             }

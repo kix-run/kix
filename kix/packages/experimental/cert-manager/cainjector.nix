@@ -203,7 +203,7 @@ in
                 args = [
                   "--v=2"
                   {
-                    owned = [ "--leader-election-namespace=${ns}" ];
+                    flags = [ "--leader-election-namespace=${ns}" ];
                     reason = "the leader-election Role grants access only in namespace \"${ns}\".";
                   }
                 ];

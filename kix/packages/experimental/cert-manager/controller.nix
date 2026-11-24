@@ -384,15 +384,15 @@ in
                 args = [
                   "--v=2"
                   {
-                    owned = [ "--cluster-resource-namespace=$(POD_NAMESPACE)" ];
+                    flags = [ "--cluster-resource-namespace=$(POD_NAMESPACE)" ];
                     reason = "out.clusterResourceNamespace directs consumers to place ClusterIssuer Secrets in namespace \"${ns}\".";
                   }
                   {
-                    owned = [ "--leader-election-namespace=${ns}" ];
+                    flags = [ "--leader-election-namespace=${ns}" ];
                     reason = "the leader-election Role grants access only in namespace \"${ns}\".";
                   }
                   {
-                    owned = [ "--acme-http01-solver-image=${acmesolverImage}" ];
+                    flags = [ "--acme-http01-solver-image=${acmesolverImage}" ];
                     from = "the operandImages.acmesolver option";
                     fix = "Set operandImages.acmesolver instead.";
                   }

@@ -493,33 +493,33 @@ in
           parser = "gnu";
           args = [
             {
-              owned = [ "--provider=${config.provider}" ];
+              flags = [ "--provider=${config.provider}" ];
               from = "the provider option";
               fix = "Set provider instead.";
             }
             {
-              owned = [ "--policy=${config.policy}" ];
+              flags = [ "--policy=${config.policy}" ];
               from = "the policy option";
               fix = "Set policy instead.";
             }
             {
-              owned = [ "--txt-owner-id=${config.txtOwnerId}" ];
+              flags = [ "--txt-owner-id=${config.txtOwnerId}" ];
               from = "the txtOwnerId option";
               fix = "Set txtOwnerId instead.";
             }
             {
-              owned = [ "--interval=${config.interval}" ];
+              flags = [ "--interval=${config.interval}" ];
               from = "the interval option";
               fix = "Set interval instead.";
             }
             {
-              owned = [ "--metrics-address=:${toString metricsPort}" ];
+              flags = [ "--metrics-address=:${toString metricsPort}" ];
               reason = "the probes, metrics Service, and ServiceMonitor use port ${toString metricsPort}.";
             }
             # `--source` in extraArgs would bypass the RBAC derived from
             # `sources`.
             {
-              owned = map (s: "--source=${s}") selected;
+              flags = map (s: "--source=${s}") selected;
               names = [ "--source" ];
               from = "the sources option";
               fix = "Set sources instead, which also grants the required RBAC.";

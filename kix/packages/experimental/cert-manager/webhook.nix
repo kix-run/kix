@@ -177,20 +177,20 @@ in
                 args = [
                   "--v=2"
                   {
-                    owned = [ "--secure-port=${toString securePort}" ];
+                    flags = [ "--secure-port=${toString securePort}" ];
                     from = "the webhook.securePort option, which also sets the container port and Service targetPort";
                     fix = "Set webhook.securePort instead.";
                   }
                   {
-                    owned = [ "--dynamic-serving-ca-secret-namespace=$(POD_NAMESPACE)" ];
+                    flags = [ "--dynamic-serving-ca-secret-namespace=$(POD_NAMESPACE)" ];
                     reason = "the CA injection annotation and the dynamic-serving Role expect the CA Secret in namespace \"${ns}\".";
                   }
                   {
-                    owned = [ "--dynamic-serving-ca-secret-name=${caSecret}" ];
+                    flags = [ "--dynamic-serving-ca-secret-name=${caSecret}" ];
                     reason = "the CA injection annotation and the dynamic-serving Role point to Secret \"${caSecret}\".";
                   }
                   {
-                    owned = [
+                    flags = [
                       "--dynamic-serving-dns-names=${serviceName}"
                       "--dynamic-serving-dns-names=${serviceName}.$(POD_NAMESPACE)"
                       "--dynamic-serving-dns-names=${serviceName}.$(POD_NAMESPACE).svc"

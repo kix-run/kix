@@ -353,33 +353,33 @@ in
           id = "K8006";
           args = [
             {
-              owned = [ "--auto-scaling-runner-set-only" ];
+              flags = [ "--auto-scaling-runner-set-only" ];
               reason = "the controller's RBAC grants permissions for AutoscalingRunnerSets only.";
             }
             {
-              owned = [ "--enable-leader-election" ];
+              flags = [ "--enable-leader-election" ];
               reason = "leader election keeps one controller active when multiple replicas run.";
             }
             {
-              owned = [ "--leader-election-id=${name}" ];
+              flags = [ "--leader-election-id=${name}" ];
               reason = "this package names the leader-election Lease \"${name}\" in namespace \"${ns}\", where the leader-election Role grants access.";
             }
             "--log-level=info"
             "--log-format=text"
             {
-              owned = [ "--metrics-addr=:${toString metricsPort}" ];
+              flags = [ "--metrics-addr=:${toString metricsPort}" ];
               reason = "the metrics Service and ServiceMonitor use port ${toString metricsPort}.";
             }
             {
-              owned = [ "--listener-metrics-addr=:${toString metricsPort}" ];
+              flags = [ "--listener-metrics-addr=:${toString metricsPort}" ];
               reason = "the listener PodMonitor scrapes port ${toString metricsPort}.";
             }
             {
-              owned = [ "--listener-metrics-endpoint=/metrics" ];
+              flags = [ "--listener-metrics-endpoint=/metrics" ];
               reason = "the listener PodMonitor scrapes /metrics.";
             }
             {
-              owned = [ "--health-probe-bind-address=:${toString healthPort}" ];
+              flags = [ "--health-probe-bind-address=:${toString healthPort}" ];
               reason = "the liveness and readiness probes use port ${toString healthPort}.";
             }
           ]

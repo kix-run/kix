@@ -42,15 +42,15 @@ let
     id = "K8006";
     args = [
       {
-        owned = [ "--web.listen-address=:${toString httpPort}" ];
+        flags = [ "--web.listen-address=:${toString httpPort}" ];
         reason = "the probes and the metrics Service use port ${toString httpPort}.";
       }
       {
-        owned = [ "--kubelet-service=${kubeletService.namespace}/${kubeletService.name}" ];
+        flags = [ "--kubelet-service=${kubeletService.namespace}/${kubeletService.name}" ];
         reason = "consumers read out.kubeletService, which points to Service ${kubeletService.namespace}/${kubeletService.name}.";
       }
       {
-        owned = [
+        flags = [
           "--prometheus-config-reloader=${kix.image.ref config.operandImages.prometheus-config-reloader}"
         ];
         from = "the operandImages.prometheus-config-reloader option";

@@ -306,11 +306,11 @@ in
         args = [
           { defaults = [ "--zap-log-level=info" ]; }
           {
-            owned = [ "--leader-elect" ];
+            flags = [ "--leader-elect" ];
             reason = "leader election keeps one replica active when multiple replicas run.";
           }
           {
-            owned = [ "--health-probe-bind-address=:8081" ];
+            flags = [ "--health-probe-bind-address=:8081" ];
             reason = "the liveness and readiness probes use port 8081.";
           }
         ];

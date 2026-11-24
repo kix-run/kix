@@ -269,17 +269,17 @@ in
           parser = "gnu";
           args = [
             {
-              owned = [ "--policy-config-file=${policyDir}/policy.yaml" ];
+              flags = [ "--policy-config-file=${policyDir}/policy.yaml" ];
               from = "the policy option";
               fix = "Set policy instead.";
             }
             {
-              owned = [ "--descheduling-interval=${config.deschedulingInterval}" ];
+              flags = [ "--descheduling-interval=${config.deschedulingInterval}" ];
               from = "the deschedulingInterval option";
               fix = "Set deschedulingInterval instead.";
             }
             {
-              owned = [
+              flags = [
                 "--leader-elect=true"
                 "--leader-elect-resource-name=${name}"
                 # Upstream defaults the Lease to kube-system; the instance's
@@ -291,7 +291,7 @@ in
             }
             "--v=3"
             {
-              owned = lib.optional (!config.metrics.enabled) "--disable-metrics";
+              flags = lib.optional (!config.metrics.enabled) "--disable-metrics";
               names = [ "--disable-metrics" ];
               from = "the metrics.enabled option";
               fix = "Set metrics.enabled instead.";

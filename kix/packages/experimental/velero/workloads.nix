@@ -163,11 +163,11 @@ let
   # with cobra and pflag (pkg/cmd/velero/velero.go upstream). Both containers
   # refuse every flag either of them owns.
   metricsAddressArg = {
-    owned = [ "--metrics-address=:${toString metricsPort}" ];
+    flags = [ "--metrics-address=:${toString metricsPort}" ];
     reason = "the probes and the metrics Service use port ${toString metricsPort}.";
   };
   featureArgs = {
-    owned = lib.optional (
+    flags = lib.optional (
       config.features != [ ]
     ) "--features=${lib.concatStringsSep "," config.features}";
     names = [ "--features" ];
@@ -177,7 +177,7 @@ let
   # Return the entry of a flag that names a ConfigMap the package builds
   # from `option`. `configMap` is null when the package builds none.
   configMapArg = flag: option: configMap: {
-    owned = lib.optional (configMap != null) "${flag}=${configMap.out.name}";
+    flags = lib.optional (configMap != null) "${flag}=${configMap.out.name}";
     names = [ flag ];
     from = "the ${option} option";
     fix = "Set ${option} instead.";

@@ -346,11 +346,11 @@ in
                   option = "controller.extraArgs";
                   args = [
                     {
-                      owned = [ "--endpoint=$(OPENEBS_CSI_ENDPOINT)" ];
+                      flags = [ "--endpoint=$(OPENEBS_CSI_ENDPOINT)" ];
                       reason = "the CSI sidecar containers connect to the plugin at $(OPENEBS_CSI_ENDPOINT).";
                     }
                     {
-                      owned = [ "--plugin=$(OPENEBS_CONTROLLER_DRIVER)" ];
+                      flags = [ "--plugin=$(OPENEBS_CONTROLLER_DRIVER)" ];
                       reason = "this container must run zfs-plugin in controller mode.";
                     }
                     {
@@ -468,15 +468,15 @@ in
                     option = "node.extraArgs";
                     args = [
                       {
-                        owned = [ "--nodename=$(OPENEBS_NODE_NAME)" ];
+                        flags = [ "--nodename=$(OPENEBS_NODE_NAME)" ];
                         reason = "the CSI node ID must match the Kubernetes node name.";
                       }
                       {
-                        owned = [ "--endpoint=$(OPENEBS_CSI_ENDPOINT)" ];
+                        flags = [ "--endpoint=$(OPENEBS_CSI_ENDPOINT)" ];
                         reason = "kubelet and the node-driver-registrar sidecar connect to the plugin at $(OPENEBS_CSI_ENDPOINT).";
                       }
                       {
-                        owned = [ "--plugin=$(OPENEBS_NODE_DRIVER)" ];
+                        flags = [ "--plugin=$(OPENEBS_NODE_DRIVER)" ];
                         reason = "this container must run zfs-plugin in node mode.";
                       }
                       {

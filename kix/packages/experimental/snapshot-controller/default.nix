@@ -192,11 +192,11 @@ in
           args = [
             "--v=2"
             {
-              owned = [ "--leader-election=true" ];
+              flags = [ "--leader-election=true" ];
               reason = "leader election keeps one controller active when multiple replicas run.";
             }
             {
-              owned = [ "--http-endpoint=:${toString httpPort}" ];
+              flags = [ "--http-endpoint=:${toString httpPort}" ];
               reason = "the probes and the metrics Service use port ${toString httpPort}.";
             }
             "--feature-gates=CSIVolumeGroupSnapshot=false"

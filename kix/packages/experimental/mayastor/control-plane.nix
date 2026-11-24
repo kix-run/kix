@@ -70,11 +70,11 @@ in
               option = "agentCore.extraArgs";
               args = [
                 {
-                  owned = [ "--store=${ep.etcdStore}" ];
+                  flags = [ "--store=${ep.etcdStore}" ];
                   reason = "agent-core must connect to this instance's etcd Service.";
                 }
                 {
-                  owned = [ "--grpc-server-addr=[::]:50051" ];
+                  flags = [ "--grpc-server-addr=[::]:50051" ];
                   reason = "the agent-core Service and its clients use port 50051.";
                 }
                 {
@@ -108,15 +108,15 @@ in
               option = "agentHaCluster.extraArgs";
               args = [
                 {
-                  owned = [ "--grpc-endpoint=[::]:50052" ];
+                  flags = [ "--grpc-endpoint=[::]:50052" ];
                   reason = "the agent-core Service and agent-ha-node use port 50052.";
                 }
                 {
-                  owned = [ "--store=${ep.etcdUrl}" ];
+                  flags = [ "--store=${ep.etcdUrl}" ];
                   reason = "agent-ha-cluster must connect to this instance's etcd Service.";
                 }
                 {
-                  owned = [ "--core-grpc=https://127.0.0.1:50051" ];
+                  flags = [ "--core-grpc=https://127.0.0.1:50051" ];
                   reason = "agent-core listens on 127.0.0.1:50051 in the same pod.";
                 }
                 {
@@ -198,20 +198,20 @@ in
                 option = "apiRest.extraArgs";
                 args = [
                   {
-                    owned = [ "--http=[::]:8081" ];
+                    flags = [ "--http=[::]:8081" ];
                     reason = "the api-rest Service, the probes, and every client use port 8081.";
                   }
                   {
-                    owned = [ "--no-auth" ];
+                    flags = [ "--no-auth" ];
                     reason = "in-cluster clients connect to api-rest without a token.";
                   }
                   {
-                    owned = [ "--dummy-certificates" ];
+                    flags = [ "--dummy-certificates" ];
                     names = [ "-d" ];
                     reason = "this package does not expose the HTTPS listener on port 8080 and uses built-in certificates for it.";
                   }
                   {
-                    owned = [ "--core-grpc=${ep.coreGrpc}" ];
+                    flags = [ "--core-grpc=${ep.coreGrpc}" ];
                     reason = "api-rest must connect to this instance's agent-core Service.";
                   }
                   {
@@ -263,11 +263,11 @@ in
               option = "operatorDiskpool.extraArgs";
               args = [
                 {
-                  owned = [ "--endpoint=${ep.rest}" ];
+                  flags = [ "--endpoint=${ep.rest}" ];
                   reason = "the DiskPool operator must connect to this instance's api-rest Service.";
                 }
                 {
-                  owned = [ "--namespace=${ns}" ];
+                  flags = [ "--namespace=${ns}" ];
                   reason = "the operator's RBAC and DiskPool resources are scoped to namespace \"${ns}\".";
                 }
                 {
@@ -321,11 +321,11 @@ in
               option = "csiController.extraArgs";
               args = [
                 {
-                  owned = [ "--csi-socket=${csiSocket}" ];
+                  flags = [ "--csi-socket=${csiSocket}" ];
                   reason = "the CSI sidecar containers connect to ${csiSocket}.";
                 }
                 {
-                  owned = [ "--rest-endpoint=${ep.rest}" ];
+                  flags = [ "--rest-endpoint=${ep.rest}" ];
                   reason = "the CSI controller must connect to this instance's api-rest Service.";
                 }
                 {

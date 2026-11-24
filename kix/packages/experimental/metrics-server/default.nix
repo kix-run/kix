@@ -192,11 +192,11 @@ in
         parser = "gnu";
         args = [
           {
-            owned = [ "--cert-dir=${certDir}" ];
+            flags = [ "--cert-dir=${certDir}" ];
             reason = "the serving certificate is written to the emptyDir volume at ${certDir}, the only writable path in the container.";
           }
           {
-            owned = [ "--secure-port=${toString securePort}" ];
+            flags = [ "--secure-port=${toString securePort}" ];
             reason = "the Service, probes, and network policy use port ${toString securePort}.";
           }
           "--kubelet-preferred-address-types=InternalIP,ExternalIP,Hostname"

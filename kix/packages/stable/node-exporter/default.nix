@@ -110,19 +110,19 @@ in
           parser = "gnu";
           args = [
             {
-              owned = [ "--web.listen-address=:${toString port}" ];
+              flags = [ "--web.listen-address=:${toString port}" ];
               reason = "the probes and the Service use port ${toString port}.";
             }
             {
-              owned = [ "--path.sysfs=/host/sys" ];
+              flags = [ "--path.sysfs=/host/sys" ];
               reason = "the package mounts the host's /sys at /host/sys.";
             }
             {
-              owned = [ "--path.rootfs=/host/root" ];
+              flags = [ "--path.rootfs=/host/root" ];
               reason = "the package mounts the host's / at /host/root.";
             }
             {
-              owned = [ "--path.procfs=/host/proc" ];
+              flags = [ "--path.procfs=/host/proc" ];
               reason = "the package mounts the host's /proc at /host/proc.";
             }
             # Filesystems and mount points that are not host storage.
@@ -139,7 +139,7 @@ in
           # exporter on every node when a cluster upgrades Kix.
           after = [
             {
-              owned = lib.optional config.textfileCollector.enabled "--collector.textfile.directory=${textfileDirectory}";
+              flags = lib.optional config.textfileCollector.enabled "--collector.textfile.directory=${textfileDirectory}";
               names = [ "--collector.textfile.directory" ];
               from = "the textfileCollector.enabled option (mounted at ${textfileDirectory} when enabled)";
               fix = "Set textfileCollector.enabled instead.";

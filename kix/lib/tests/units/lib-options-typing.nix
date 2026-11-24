@@ -348,7 +348,8 @@ in
 
   # mergeArgs passes the package's words in order, the user's words after
   # them, and `after` behind those. A plain word may be set again, an owned
-  # flag may not, and a value word in `owned` reserves nothing.
+  # flag may not, and the value words of a flag written as a list reserve
+  # nothing.
   lib-options-typing-merge-args =
     let
       merge = kixlib.mergeArgs {
@@ -358,21 +359,23 @@ in
           "serve"
           "--v=2"
           {
-            owned = [
-              "--config"
-              "/etc/app.yaml"
+            flags = [
+              [
+                "--config"
+                "/etc/app.yaml"
+              ]
             ];
             names = [ "-c" ];
             reason = "the package renders the file.";
           }
           {
-            owned = [ "--ingress-class=kix" ];
+            flags = [ "--ingress-class=kix" ];
             from = "the ingressClassName option";
           }
         ];
         after = [
           {
-            owned = [ "--port=80" ];
+            flags = [ "--port=80" ];
             reason = "the Service uses port 80.";
           }
         ];
@@ -445,7 +448,7 @@ in
           inherit parser;
           args = [
             {
-              owned = [ "--leader-elect" ];
+              flags = [ "--leader-elect" ];
               names = [
                 "-config.file"
                 "-v"
@@ -490,7 +493,7 @@ in
         parser = "paerser";
         args = [
           {
-            owned = [ "--Ping=true" ];
+            flags = [ "--Ping=true" ];
             reason = "the probes use /ping.";
           }
           {
@@ -550,7 +553,7 @@ in
             args = [
               { defaults = [ "--retries=3" ]; }
               {
-                owned = [ "--port=80" ];
+                flags = [ "--port=80" ];
                 reason = "the Service uses port 80.";
               }
               {
@@ -597,7 +600,7 @@ in
           parser = "go";
           args = [
             {
-              owned."dedup.minScrapeInterval" = "30s";
+              flags."dedup.minScrapeInterval" = "30s";
               reason = "it follows scrapeInterval.";
             }
             {
@@ -628,7 +631,7 @@ in
           id = "K0001";
           args = [
             {
-              owned = [ "--leader-elect" ];
+              flags = [ "--leader-elect" ];
               reason = "the package sets it.";
             }
           ];
@@ -654,28 +657,46 @@ in
               // args
             ) extraArgs).thrown
         )).message;
-      owned = entry: {
-        args = [ (entry // { reason = "the package sets it."; }) ];
+      entry = e: {
+        args = [ (e // { reason = "the package sets it."; }) ];
       };
       cases = {
         "is missing `parser`" = message { parser = null; } [ ];
         "does not support parser \"zsh\"" = message { parser = "zsh"; } [ ];
         "cannot read \"leader-elect\" in `names`" = message (
-          { parser = "go"; } // owned { names = [ "leader-elect" ]; }
+          { parser = "go"; } // entry { names = [ "leader-elect" ]; }
         ) [ ];
-        "cannot read \"/etc/x\" (the first item in `owned`)" = message (owned {
-          owned = [ "/etc/x" ];
+        "cannot read \"leader-elect\" in `names` as a flag under parser \"gnu\"" = message (entry {
+          names = [ "leader-elect" ];
         }) [ ];
+        "cannot read \"providers\" in `families` as a flag under parser \"gnu\"" = message (entry {
+          families = [ "providers" ];
+        }) [ ];
+        "cannot read \"/etc/x\" in `flags`" = message (entry {
+          flags = [
+            "--config"
+            "/etc/x"
+          ];
+        }) [ ];
+        "cannot read \"config\" in `flags`" = message (entry {
+          flags = [
+            [
+              "config"
+              "/etc/x"
+            ]
+          ];
+        }) [ ];
+        "an empty list as an item of `flags`" = message (entry { flags = [ [ ] ]; }) [ ];
         "cannot read \"300\" in `defaults`" = message { args = [ { defaults = [ "300" ]; } ]; } [ ];
         "passes `defaults` as an attribute set" = message { args = [ { defaults.a = "1"; } ]; } [ ];
         "passes `defaults` as a list" = message { args = [ { defaults = [ "--a=1" ]; } ]; } { };
-        "passes `owned` as a list" = message (owned { owned = [ "--a=1" ]; }) { };
+        "passes `flags` as a list" = message (entry { flags = [ "--a=1" ]; }) { };
         "is a string, while extraArgs is an attribute set" = message { args = [ "--a=1" ]; } { };
         "must set either `reason` or `from` (not both)" = message {
-          args = [ { owned = [ "--a" ]; } ];
+          args = [ { flags = [ "--a" ]; } ];
         } [ ];
-        "sets unknown attribute `flags`" = message (owned {
-          flags = [ "--a" ];
+        "sets unknown attribute `owned`" = message (entry {
+          owned = [ "--a" ];
         }) [ ];
       };
       wrong = lib.filterAttrs (expected: got: !lib.hasInfix expected got) cases;
@@ -817,7 +838,12 @@ in
         none = [ ];
       };
     in
-    (got == expected && throws (values "zsh" "--a" [ ]) && throws (values "go" "a" [ ]))
+    (
+      got == expected
+      && throws (values "zsh" "--a" [ ])
+      && throws (values "go" "a" [ ])
+      && throws (values "gnu" "registry" [ ])
+    )
     || throw "argValues: ${builtins.toJSON got}";
 
   # kix.guardArgs is refused with its change record id and names

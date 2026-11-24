@@ -502,7 +502,7 @@ in
                 parser = "gnu";
                 args = [
                   {
-                    owned = [ "--config=${configDir}/${configFile}" ];
+                    flags = [ "--config=${configDir}/${configFile}" ];
                     reason = "this package renders the collector configuration from the settings option.";
                     fix = "Configure the collector in settings instead.";
                   }

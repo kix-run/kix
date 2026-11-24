@@ -242,7 +242,7 @@ in
           args = [
             "--log-format=json"
             {
-              owned = [ "--enable-ha=true" ];
+              flags = [ "--enable-ha=true" ];
               reason = "leader election keeps one replica restarting workloads when multiple replicas run.";
             }
             # With --sync-after-restart and --reload-on-create, the leader's
@@ -250,7 +250,7 @@ in
             # strategy then restarts only workloads whose stored
             # STAKATER_<NAME>_SECRET hash differs from the Secret's.
             {
-              owned = [
+              flags = [
                 "--reload-strategy=env-vars"
                 "--reload-on-create=true"
                 "--sync-after-restart=true"
@@ -261,11 +261,11 @@ in
             # every replay would run it again. Job pods read the Secret when
             # they start.
             {
-              owned = [ "--ignored-workload-types=jobs,cronjobs" ];
+              flags = [ "--ignored-workload-types=jobs,cronjobs" ];
               reason = "reloading a CronJob starts an extra Job on every leader replay, and Job pods already read the current Secret when they start.";
             }
             {
-              owned = [ "--resources-to-ignore=configmaps" ];
+              flags = [ "--resources-to-ignore=configmaps" ];
               reason = "this package watches Secrets only; Kix-built ConfigMaps roll their workloads through checksum/<name> pod annotations.";
             }
           ]

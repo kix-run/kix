@@ -215,9 +215,11 @@ in
             parser = "gnu";
             args = [
               {
-                owned = [
-                  "--config"
-                  configPath
+                flags = [
+                  [
+                    "--config"
+                    configPath
+                  ]
                 ];
                 names = configFlags;
                 reason = "this package renders Vector's configuration from the settings option.";

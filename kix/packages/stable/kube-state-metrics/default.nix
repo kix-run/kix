@@ -166,11 +166,11 @@ in
           parser = "gnu";
           args = [
             {
-              owned = [ "--port=${toString metricsPort}" ];
+              flags = [ "--port=${toString metricsPort}" ];
               reason = "the probes and the Service use port ${toString metricsPort}.";
             }
             {
-              owned = [ "--telemetry-port=${toString telemetryPort}" ];
+              flags = [ "--telemetry-port=${toString telemetryPort}" ];
               reason = "the Service uses port ${toString telemetryPort}.";
             }
             # `--resources` in `extraArgs` replaces the package's choice.

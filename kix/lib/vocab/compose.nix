@@ -75,6 +75,12 @@ let
         else
           nameOf word;
 
+      # Return the name of a flag the package names in `names`, in
+      # `families`, or to `kix.argValues`, or null when it has no leading
+      # dash. A name without one would match no word the program reads as
+      # that flag.
+      declaredName = flag: if !isAttrs && !lib.hasPrefix "-" flag then null else nameOf flag;
+
       sets = name: word: nameOf word == name || (isShortName name && lib.hasPrefix name word);
 
       under =
@@ -395,15 +401,22 @@ rec {
   #   `extraArgs` sets the same flag, for a program that refuses a flag
   #   given twice. Write each default as one word. Under "gnu", a default
   #   with one dash is a one-letter flag.
-  # - `{ owned ? [ ]; names ? [ ]; families ? [ ]; reason; fix ? null; }`,
-  #   or the same with `from` in place of `reason`. The words in `owned` are
-  #   passed as written, and `extraArgs` may not set their flags. A word in
-  #   `owned` that starts with a dash names a flag, read as a default is.
-  #   Any other word is a value of the flag before it. `names` reserves
-  #   flags the package does not pass here, such as the short form of an
-  #   owned flag or a flag the package does not support. `families` reserves
-  #   a flag and every flag under it (`<flag>.<name>`), for a program that
-  #   turns a feature on when any of its settings is set.
+  # - `{ flags ? [ ]; names ? [ ]; families ? [ ]; reason; fix ? null; }`,
+  #   or the same with `from` in place of `reason`. The package owns the
+  #   flags in `flags`. They are passed as written, and `extraArgs` may not
+  #   set them. Each item of `flags` is one word that names a flag, read as
+  #   a default is, or a list such as `[ "--config" "/etc/app.yaml" ]`. The
+  #   first word of a list names the flag, and the other words are its
+  #   values. `names` reserves flags the package does not pass here, such as
+  #   the short form of an owned flag or a flag the package does not
+  #   support. `families` reserves a flag and every flag under it
+  #   (`<flag>.<name>`), for a program that turns a feature on when any of
+  #   its settings is set.
+  #
+  # A flag the package passes only under a condition is written twice in
+  # its entry, as `flags = lib.optional <condition> "--flag=value"` and as
+  # `names = [ "--flag" ]`. Without the name, `extraArgs` may set the flag
+  # whenever the condition is false, and nothing reports it.
   #
   # The error names `option`, the instance option that holds `extraArgs`,
   # and the word the user wrote. It says the flag comes `from` somewhere, or
@@ -415,7 +428,7 @@ rec {
   #
   # `extraArgs` is either a list of command-line words or an attribute set
   # of flags keyed by flag name, the form a VictoriaMetrics resource's
-  # `extraArgs` takes. For an attribute set, `owned` and `defaults` are
+  # `extraArgs` takes. For an attribute set, `flags` and `defaults` are
   # attribute sets of flag values, a string entry is refused, keys match
   # once their leading dashes are removed, and order has no meaning.
   mergeArgs =
@@ -441,7 +454,7 @@ rec {
       entries = args ++ after;
 
       groupKeys = [
-        "owned"
+        "flags"
         "names"
         "families"
         "reason"
@@ -476,8 +489,8 @@ rec {
           }"
         else if (entry ? reason) == (entry ? from) then
           "must set either `reason` or `from` (not both)"
-        else if entry ? owned && builtins.isAttrs entry.owned != isAttrs then
-          wrongForm "owned"
+        else if entry ? flags && builtins.isAttrs entry.flags != isAttrs then
+          wrongForm "flags"
         else
           null;
       entryLines = builtins.concatMap (
@@ -489,7 +502,7 @@ rec {
           message = "kix.mergeArgs received an invalid entry ${
             builtins.toJSON (if builtins.isFunction entry then "<function>" else entry)
           }: it ${problem}.";
-          fix = "Pass each entry as a flag string (when ${option} is a list), `{ defaults = ...; }`, or `{ owned ? ...; names ? ...; families ? ...; }` with either `reason` or `from`.";
+          fix = "Pass each entry as a flag string (when ${option} is a list), `{ defaults = ...; }`, or `{ flags ? ...; names ? ...; families ? ...; }` with either `reason` or `from`.";
         }
       ) entries;
 
@@ -498,8 +511,12 @@ rec {
         builtins.filter (e: builtins.isAttrs e && e ? defaults) entries
       );
 
+      # Return the word of an item of `flags` that names its flag. An item
+      # is one word, or a list of the flag and its values.
+      flagWord = item: if builtins.isList item then builtins.head item else item;
+      flagItems = group: if isAttrs then builtins.attrNames (group.flags or { }) else group.flags or [ ];
+
       # Each flag or family a group reserves, with the group it belongs to.
-      # A word in `owned` that names no flag is a value and reserves nothing.
       rulesOf =
         group:
         let
@@ -515,21 +532,12 @@ rec {
               name = nameOf flag;
             }) flags;
         in
-        builtins.filter (r: r.name != null) (
-          rules "owned" matcher.sets matcher.wordName (keysOf (group.owned or [ ]))
+        rules "flags" matcher.sets matcher.wordName (
+          map flagWord (builtins.filter (item: item != [ ]) (flagItems group))
         )
-        ++ rules "names" matcher.sets matcher.nameOf (group.names or [ ])
-        ++ rules "families" matcher.under matcher.nameOf (group.families or [ ]);
+        ++ rules "names" matcher.sets matcher.declaredName (group.names or [ ])
+        ++ rules "families" matcher.under matcher.declaredName (group.families or [ ]);
       allRules = builtins.concatMap rulesOf groups;
-
-      # The first word of each `owned` list when it names no flag.
-      strayValues = builtins.concatMap (
-        group:
-        let
-          words = keysOf (group.owned or [ ]);
-        in
-        lib.optional (words != [ ] && matcher.wordName (builtins.head words) == null) (builtins.head words)
-      ) groups;
 
       authorLines =
         if parser == null then
@@ -553,13 +561,17 @@ rec {
             message = "kix.mergeArgs cannot read \"${d}\" in `defaults` as a flag, so Kix cannot check ${option}.";
             fix = "Write each default as one string starting with `-` or `--`, such as \"--flag=value\" instead of separate \"--flag\" and \"value\" items.";
           }) (builtins.filter (d: matcher.wordName d == null) defaultWords)
-          ++ map (word: {
-            message = "kix.mergeArgs cannot read \"${word}\" (the first item in `owned`) as a flag, so Kix cannot check ${option}.";
-            fix = "Start each `owned` list with a flag, such as `[ \"--config\" \"/etc/app.yaml\" ]`.";
-          }) strayValues
+          ++ lib.optional (builtins.any (group: builtins.elem [ ] (flagItems group)) groups) {
+            message = "kix.mergeArgs received an empty list as an item of `flags`, so Kix cannot check ${option}.";
+            fix = "Write a flag and its values in the list, such as `[ \"--config\" \"/etc/app.yaml\" ]`, or remove the list.";
+          }
           ++ map (r: {
             message = "kix.mergeArgs cannot read \"${r.flag}\" in `${r.source}` as a flag under parser \"${parser}\", so Kix cannot check ${option}.";
-            fix = "Start each flag name in `names` and `families` with `-` or `--`, such as \"--leader-elect\".";
+            fix =
+              if r.source == "flags" then
+                "Write each item of `flags` as one string starting with `-` or `--`, such as \"--flag=value\". Write a flag with separate value words as a list, such as `[ \"--config\" \"/etc/app.yaml\" ]`."
+              else
+                "Start each flag name in `names` and `families` with `-` or `--`, such as \"--leader-elect\".";
           }) (builtins.filter (r: r.name == null) allRules);
 
       # Each word the user wrote with the first rule it breaks.
@@ -595,13 +607,13 @@ rec {
         else if e ? defaults then
           builtins.filter (d: !replaced d) e.defaults
         else
-          e.owned or [ ]
+          lib.concatMap lib.toList (e.flags or [ ])
       );
       # Return the flags that the entries pass under `key`.
       flags = key: lib.foldl' (acc: e: acc // e.${key} or { }) { } entries;
       result =
         if isAttrs then
-          lib.filterAttrs (d: _: !replaced d) (flags "defaults") // extraArgs // flags "owned"
+          lib.filterAttrs (d: _: !replaced d) (flags "defaults") // extraArgs // flags "flags"
         else
           words args ++ extraArgs ++ words after;
     in
@@ -625,7 +637,7 @@ rec {
     let
       isAttrs = builtins.isAttrs args;
       matcher = flagMatcher { inherit parser isAttrs; };
-      name = matcher.nameOf flag;
+      name = matcher.declaredName flag;
       step =
         acc: word:
         let
@@ -670,7 +682,7 @@ rec {
     (if scope == null then fail else scope.fail) {
       id = "K5396";
       message = "kix.guardArgs was removed and replaced by kix.mergeArgs, which builds the full argument list from the package's flags and extraArgs.";
-      fix = "Replace kix.guardArgs with kix.mergeArgs, set `parser`, and pass the package's flags (including `{ owned = [ ... ]; reason = \"...\"; }` entries) in `args`.";
+      fix = "Replace kix.guardArgs with kix.mergeArgs, set `parser`, and pass the package's flags (including `{ flags = [ ... ]; reason = \"...\"; }` entries) in `args`.";
     };
 
   # Validate that a secret dependency `dep` declares all required `keys` (and

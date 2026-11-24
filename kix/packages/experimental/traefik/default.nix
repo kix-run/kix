@@ -432,20 +432,20 @@ in
           args = [
             "--global.checkNewVersion=false"
             {
-              owned = [ "--entryPoints.traefik.address=:${toString internalPort}" ];
+              flags = [ "--entryPoints.traefik.address=:${toString internalPort}" ];
               reason = "the probes and the metrics Service use port ${toString internalPort}.";
             }
             {
-              owned = [ "--ping=true" ];
+              flags = [ "--ping=true" ];
               names = [ "--ping.entrypoint" ];
               reason = "the probes use /ping on the internal entrypoint.";
             }
             {
-              owned = [ "--providers.kubernetesGateway=true" ];
+              flags = [ "--providers.kubernetesGateway=true" ];
               reason = "this package runs Traefik as a Gateway API controller.";
             }
             {
-              owned = [
+              flags = [
                 "--providers.kubernetesGateway.labelSelector=${
                   lib.concatStringsSep "," (lib.mapAttrsToList (k: v: "${k}=${v}") selectorLabels)
                 }"
@@ -453,7 +453,7 @@ in
               reason = "Traefik must select this instance's GatewayClass.";
             }
             {
-              owned = [
+              flags = [
                 "--providers.kubernetesGateway.statusAddress.service.name=${self.service.out.name}"
                 "--providers.kubernetesGateway.statusAddress.service.namespace=${scope.namespaceName}"
               ];
@@ -463,7 +463,7 @@ in
           # Traefik matches a listener to an entrypoint by the address suffix
           # ":<port>", so the address carries no "/tcp".
           ++ map (ep: {
-            owned = [ "--entryPoints.${ep.name}.address=:${toString ep.port}" ];
+            flags = [ "--entryPoints.${ep.name}.address=:${toString ep.port}" ];
             from = "the listener on port ${toString ep.port} in listeners";
             fix = "Edit listeners instead.";
           }) entryPoints
@@ -471,7 +471,7 @@ in
             # The flag follows the toggle alone, so adding a prometheus
             # instance does not restart Traefik.
             {
-              owned = lib.optional config.metrics.enabled "--metrics.prometheus=true";
+              flags = lib.optional config.metrics.enabled "--metrics.prometheus=true";
               names = [ "--metrics.prometheus" ];
               from = "the metrics.enabled option";
               fix = "Set metrics.enabled instead.";

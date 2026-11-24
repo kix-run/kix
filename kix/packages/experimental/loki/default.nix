@@ -346,12 +346,12 @@ in
           parser = "go";
           args = [
             {
-              owned = [ "-config.file=${configDir}/config.yaml" ];
+              flags = [ "-config.file=${configDir}/config.yaml" ];
               reason = "this package renders config.yaml from settings.";
               fix = "Configure Loki in settings instead.";
             }
             {
-              owned = [ "-config.expand-env=true" ];
+              flags = [ "-config.expand-env=true" ];
               reason = "Loki must expand environment variables referenced in settings.";
             }
           ]

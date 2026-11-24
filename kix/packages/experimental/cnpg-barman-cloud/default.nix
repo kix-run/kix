@@ -284,27 +284,27 @@ in
         args = [
           "operator"
           {
-            owned = [ "--server-cert=/server/tls.crt" ];
+            flags = [ "--server-cert=/server/tls.crt" ];
             reason = "the package mounts the server certificate from its cert-manager Certificate at /server/tls.crt.";
           }
           {
-            owned = [ "--server-key=/server/tls.key" ];
+            flags = [ "--server-key=/server/tls.key" ];
             reason = "the package mounts the server private key from its cert-manager Certificate at /server/tls.key.";
           }
           {
-            owned = [ "--client-cert=/client/tls.crt" ];
+            flags = [ "--client-cert=/client/tls.crt" ];
             reason = "the package mounts the client certificate for the CloudNativePG operator at /client/tls.crt and references that Secret on the plugin Service.";
           }
           {
-            owned = [ "--server-address=:${toString grpcPort}" ];
+            flags = [ "--server-address=:${toString grpcPort}" ];
             reason = "the Service and the readiness probe use port ${toString grpcPort}.";
           }
           {
-            owned = [ "--health-probe-bind-address=:${toString healthPort}" ];
+            flags = [ "--health-probe-bind-address=:${toString healthPort}" ];
             reason = "the liveness probe uses port ${toString healthPort}.";
           }
           {
-            owned = [ "--leader-elect" ];
+            flags = [ "--leader-elect" ];
             reason = "leader election keeps one reconciler active when multiple replicas run.";
           }
           {

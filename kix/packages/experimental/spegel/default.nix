@@ -256,49 +256,49 @@ in
           args = [
             "registry"
             {
-              owned = [ "--registry-addr=:${toString registryPort}" ];
+              flags = [ "--registry-addr=:${toString registryPort}" ];
               reason = "the NodePort Service, probes, and network policy use port ${toString registryPort}.";
             }
             {
-              owned = [ "--router-addr=:${toString routerPort}" ];
+              flags = [ "--router-addr=:${toString routerPort}" ];
               reason = "peers connect to each other on port ${toString routerPort}.";
             }
             {
-              owned = [ "--metrics-addr=:${toString metricsPort}" ];
+              flags = [ "--metrics-addr=:${toString metricsPort}" ];
               reason = "the metrics Service uses port ${toString metricsPort}.";
             }
             {
-              owned = [ "--containerd-sock=${containerd.socket}" ];
+              flags = [ "--containerd-sock=${containerd.socket}" ];
               from = "cluster.containerd.socket, which the pod mounts";
               fix = "Set cluster.containerd.socket in the cluster definition instead.";
             }
             {
-              owned = [ "--containerd-content-path=${containerd.contentPath}" ];
+              flags = [ "--containerd-content-path=${containerd.contentPath}" ];
               from = "cluster.containerd.contentPath, which the pod mounts";
               fix = "Set cluster.containerd.contentPath in the cluster definition instead.";
             }
             # Spegel compares it with the path containerd 2.4 and later
             # reports, and refuses to start when they differ.
             {
-              owned = [ "--containerd-registry-config-path=${containerd.registryConfigPath}" ];
+              flags = [ "--containerd-registry-config-path=${containerd.registryConfigPath}" ];
               from = "cluster.containerd.registryConfigPath, which the init container writes";
               fix = "Set cluster.containerd.registryConfigPath in the cluster definition instead.";
             }
             {
-              owned = [ "--bootstrap-kind=dns" ];
+              flags = [ "--bootstrap-kind=dns" ];
               reason = "Spegel pods discover peers through this instance's DNS bootstrap Service.";
             }
             {
-              owned = [ "--dns-bootstrap-domain=${self.bootstrap.out.fqdn}" ];
+              flags = [ "--dns-bootstrap-domain=${self.bootstrap.out.fqdn}" ];
               reason = "this flag must match the DNS name of this instance's bootstrap Service.";
             }
             {
-              owned = [ "--data-dir=${dataDir}" ];
+              flags = [ "--data-dir=${dataDir}" ];
               reason = "the pod mounts ${dataDir} from the host.";
             }
             "--debug-web-enabled=false"
             {
-              owned = lib.optionals (config.mirroredRegistries != [ ]) (
+              flags = lib.optional (config.mirroredRegistries != [ ]) (
                 [ "--mirrored-registries" ] ++ config.mirroredRegistries
               );
               names = [ "--mirrored-registries" ];

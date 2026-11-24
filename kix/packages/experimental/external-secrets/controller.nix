@@ -59,15 +59,15 @@ let
     parser = "gnu";
     args = [
       {
-        owned = [ "--enable-leader-election=true" ];
+        flags = [ "--enable-leader-election=true" ];
         reason = "leader election keeps one controller active when multiple replicas run.";
       }
       {
-        owned = [ "--metrics-addr=:${toString ports.metrics}" ];
+        flags = [ "--metrics-addr=:${toString ports.metrics}" ];
         reason = "the container's metrics port and the metrics Service use port ${toString ports.metrics}.";
       }
       {
-        owned = [ "--live-addr=:${toString ports.controllerHealth}" ];
+        flags = [ "--live-addr=:${toString ports.controllerHealth}" ];
         reason = "the liveness and readiness probes use port ${toString ports.controllerHealth}.";
       }
       {

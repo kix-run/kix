@@ -81,37 +81,37 @@ in
               option = "ioEngine.extraArgs";
               args = [
                 {
-                  owned = [ "--grpc-ip=$(MY_POD_IP)" ];
+                  flags = [ "--grpc-ip=$(MY_POD_IP)" ];
                   reason = "io-engine listens on the pod's IP.";
                 }
                 {
-                  owned = [ "--grpc-port=10124" ];
+                  flags = [ "--grpc-port=10124" ];
                   reason = "agent-core and the metrics exporter reach io-engine on port 10124.";
                 }
                 {
-                  owned = [ "-N$(MY_NODE_NAME)" ];
+                  flags = [ "-N$(MY_NODE_NAME)" ];
                   reason = "io-engine registers under its Kubernetes node name, which DiskPools reference.";
                 }
                 {
-                  owned = [ "-R${ep.coreGrpc}" ];
+                  flags = [ "-R${ep.coreGrpc}" ];
                   reason = "io-engine must connect to this instance's agent-core Service.";
                 }
                 {
-                  owned = [ "-y${hostDir}/io-engine/config.yaml" ];
+                  flags = [ "-y${hostDir}/io-engine/config.yaml" ];
                   reason = "io-engine reads its configuration from ${hostDir}/io-engine/config.yaml on the node.";
                   fix = "Edit ${hostDir}/io-engine/config.yaml on the node instead, and remove -y from ioEngine.extraArgs.";
                 }
                 {
-                  owned = [ "-l${lib.concatMapStringsSep "," toString (lib.range 1 cpuCount)}" ];
+                  flags = [ "-l${lib.concatMapStringsSep "," toString (lib.range 1 cpuCount)}" ];
                   from = "the ioEngine.cpuCount option, which also sets the container's CPU request and limit";
                   fix = "Set ioEngine.cpuCount instead, or set core_list in ${hostDir}/io-engine/config.yaml on the node.";
                 }
                 {
-                  owned = [ "-p=${ep.etcdStore}" ];
+                  flags = [ "-p=${ep.etcdStore}" ];
                   reason = "io-engine must connect to this instance's etcd Service.";
                 }
                 {
-                  owned = [ "--ptpl-dir=${hostDir}/io-engine/ptpl/" ];
+                  flags = [ "--ptpl-dir=${hostDir}/io-engine/ptpl/" ];
                   reason = "persistent reservation state is stored in ${hostDir}/io-engine/ptpl/ on the node.";
                 }
                 {
@@ -198,15 +198,15 @@ in
               option = "metricsExporter.extraArgs";
               args = [
                 {
-                  owned = [ "--metrics-endpoint=[::]:9502" ];
+                  flags = [ "--metrics-endpoint=[::]:9502" ];
                   reason = "the metrics Service and ServiceMonitor use port 9502.";
                 }
                 {
-                  owned = [ "--grpc-port=10124" ];
+                  flags = [ "--grpc-port=10124" ];
                   reason = "io-engine listens on port 10124 in the same pod.";
                 }
                 {
-                  owned = [ "--rest-endpoint=${ep.rest}" ];
+                  flags = [ "--rest-endpoint=${ep.rest}" ];
                   reason = "the metrics exporter must connect to this instance's api-rest Service.";
                 }
                 {
@@ -267,34 +267,34 @@ in
                 option = "csiNode.extraArgs";
                 args = [
                   {
-                    owned = [ "--csi-socket=/csi/csi.sock" ];
+                    flags = [ "--csi-socket=/csi/csi.sock" ];
                     reason = "the node-driver-registrar sidecar and agent-ha-node connect to /csi/csi.sock.";
                   }
                   {
-                    owned = [ "--node-name=$(MY_NODE_NAME)" ];
+                    flags = [ "--node-name=$(MY_NODE_NAME)" ];
                     reason = "the plugin registers under its Kubernetes node name.";
                   }
                   {
-                    owned = [ "--rest-endpoint=${ep.rest}" ];
+                    flags = [ "--rest-endpoint=${ep.rest}" ];
                     reason = "the CSI node plugin must connect to this instance's api-rest Service.";
                   }
                   "--enable-rest"
                   "--enable-registration"
                   {
-                    owned = [ "--grpc-ip=$(MY_POD_IP)" ];
+                    flags = [ "--grpc-ip=$(MY_POD_IP)" ];
                     reason = "the plugin listens on the pod's IP.";
                   }
                   {
-                    owned = [ "--grpc-port=10199" ];
+                    flags = [ "--grpc-port=10199" ];
                     reason = "agent-core reaches the plugin on port 10199.";
                   }
                   {
-                    owned = [ "--kubelet-path=${kubeletDir}" ];
+                    flags = [ "--kubelet-path=${kubeletDir}" ];
                     from = "the csiNode.kubeletDir option";
                     fix = "Set csiNode.kubeletDir instead.";
                   }
                   {
-                    owned = [ "--nvme-nr-io-queues=${toString cpuCount}" ];
+                    flags = [ "--nvme-nr-io-queues=${toString cpuCount}" ];
                     from = "the ioEngine.cpuCount option";
                     fix = "Set ioEngine.cpuCount instead.";
                   }
@@ -420,23 +420,23 @@ in
                 option = "agentHaNode.extraArgs";
                 args = [
                   {
-                    owned = [ "--node-name=$(MY_NODE_NAME)" ];
+                    flags = [ "--node-name=$(MY_NODE_NAME)" ];
                     reason = "agent-ha-node must register under the same Kubernetes node name as the CSI node plugin.";
                   }
                   {
-                    owned = [ "--csi-socket=/csi/csi.sock" ];
+                    flags = [ "--csi-socket=/csi/csi.sock" ];
                     reason = "the CSI node plugin listens on /csi/csi.sock.";
                   }
                   {
-                    owned = [ "--grpc-ip=$(MY_POD_IP)" ];
+                    flags = [ "--grpc-ip=$(MY_POD_IP)" ];
                     reason = "agent-ha-node listens on the pod's IP.";
                   }
                   {
-                    owned = [ "--grpc-port=50053" ];
+                    flags = [ "--grpc-port=50053" ];
                     reason = "agent-core reaches agent-ha-node on port 50053.";
                   }
                   {
-                    owned = [ "--cluster-agent=${ep.clusterAgent}" ];
+                    flags = [ "--cluster-agent=${ep.clusterAgent}" ];
                     reason = "agent-ha-node must connect to this instance's agent-ha-cluster Service.";
                   }
                   {

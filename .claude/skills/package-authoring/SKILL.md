@@ -472,7 +472,7 @@ The only place in this skill with package line numbers. `pkg:N` is
 | `mergeArgs`, refused flags from owned env groups | keycloak:404-429 |
 | `mergeArgs` with `defaults` that `extraArgs` can override, and `after` | node-exporter:108-148; a default kept first, `victoria-metrics-operator/operator.nix`:303-317 |
 | `mergeArgs` with `parser = "go"`, `parser = "paerser"`, and `families` | loki:344; traefik:429, 495 |
-| `mergeArgs` with a flag and its value as two words | `clickhouse-logs/vector-agent.nix`:213-227 |
+| `mergeArgs` with a flag and its value as two words, written as a list item of `flags` | `clickhouse-logs/vector-agent.nix`:213-229; several values, spegel:301-303 |
 | `mergeArgs` on an attribute set of flags | victoria-metrics-agent:189-210 |
 | `argValues` to read what `extraArgs` gives a flag | external-dns:398; reloader:106-110 |
 | `mergeGuarded` on `settings` or `extraSpec` | tempo:447; cnpg-cluster:323, 430, 514 |

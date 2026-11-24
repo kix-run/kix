@@ -515,12 +515,12 @@ in
           id = "K4740";
           args = [
             {
-              owned = [ "-config.file=${configDir}/tempo.yaml" ];
+              flags = [ "-config.file=${configDir}/tempo.yaml" ];
               reason = "this package renders tempo.yaml from settings.";
               fix = "Configure Tempo in settings instead.";
             }
             {
-              owned = [ "-config.expand-env=true" ];
+              flags = [ "-config.expand-env=true" ];
               reason = "Tempo must expand environment variables referenced in settings.";
             }
           ]

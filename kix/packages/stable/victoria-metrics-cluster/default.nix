@@ -318,7 +318,7 @@ in
         # flag. `extraSpec` cannot reach it (kix.mergeGuarded below) and the
         # component `extraArgs` options may not set it.
         dedup = {
-          owned."dedup.minScrapeInterval" = config.scrapeInterval;
+          flags."dedup.minScrapeInterval" = config.scrapeInterval;
           reason = "vmselect and vmstorage must use the same deduplication interval from scrapeInterval.";
           fix = "Set scrapeInterval instead.";
         };
