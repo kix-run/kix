@@ -45,6 +45,7 @@ let
       kixlib
       helpers
       ;
+    inherit (scopeMod) mkScope;
     inherit (resolve)
       evaluateInstanceConfig
       buildEntriesOf

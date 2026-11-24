@@ -12,23 +12,7 @@ let
     ../../../modules
   ];
 
-  # Return every .nix file under `dir`, as paths.
-  nixFiles =
-    dir:
-    lib.concatLists (
-      lib.mapAttrsToList (
-        name: type:
-        if type == "directory" then
-          nixFiles (dir + "/${name}")
-        else if type == "regular" && lib.hasSuffix ".nix" name then
-          [ (dir + "/${name}") ]
-        else
-          [ ]
-      ) (builtins.readDir dir)
-    );
-
-  # Return the code part of a line, without a trailing comment.
-  code = line: builtins.head (lib.splitString "#" line);
+  inherit (import ../source-lines.nix { inherit lib; }) nixFiles code;
 
   # Return true when a line calls the `throw` builtin.
   throws = line: builtins.match ".*(^|[^A-Za-z0-9_'-])throw([^A-Za-z0-9_'-]|$).*" (code line) != null;

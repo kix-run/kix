@@ -51,6 +51,14 @@ let
     builtins.scopedImport {
       import = p: if baseNameOf p == "error.nix" then caughtSentences p else loadCaught p;
     } path;
+
+  # Like `loadCaught`, with `thrown` holding the full text, so `records`
+  # can read the fields of each error.
+  loadCaughtFull =
+    path:
+    builtins.scopedImport {
+      import = p: if baseNameOf p == "error.nix" then caught p else loadCaughtFull p;
+    } path;
 in
 {
   inherit
@@ -59,5 +67,6 @@ in
     records
     sentences
     loadCaught
+    loadCaughtFull
     ;
 }

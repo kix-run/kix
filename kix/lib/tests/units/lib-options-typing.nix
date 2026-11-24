@@ -1606,4 +1606,38 @@ in
       );
     in
     cm.data == { a = "3"; } || throw "instance eval: ${builtins.toJSON cm}";
+
+  # A submodule option with no default that the instance does not set stops
+  # evaluation with the module system's error, which names the option. An
+  # empty attribute set in its place would fail with a missing attribute,
+  # which `builtins.tryEval` cannot catch, so this test would abort the run.
+  lib-options-typing-unset-submodule-option-fails =
+    let
+      package = {
+        meta.version = "test";
+        options.endpoint = lib.mkOption {
+          type = lib.types.submodule {
+            options.host = lib.mkOption { type = lib.types.str; };
+          };
+        };
+        build =
+          {
+            self,
+            scope,
+            config,
+            ...
+          }:
+          {
+            root = self.cm;
+            cm = scope.mkResource {
+              apiVersion = "v1";
+              kind = "ConfigMap";
+              name = "endpoint";
+              data.host = config.endpoint.host;
+            };
+          };
+      };
+    in
+    throws (manifests (mkCluster [ { instances.appns.app.package = package; } ]))
+    || throw "an unset submodule option evaluated";
 }
