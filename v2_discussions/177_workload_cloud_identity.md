@@ -60,7 +60,7 @@ selectors and delivers them through a CSI socket. This doc leaves both out.
 A survey of 21 projects (sources in section 12) found:
 
 - About 16 attach the identity to their own ServiceAccount: external-dns,
-  cert-manager, Velero, Loki, Tempo, Mimir, Harbor's registry, Karpenter,
+  cert-manager, Velero, Loki, Tempo, Mimir, Harbor's registry (on GCS only, see section 8), Karpenter,
   the AWS Load Balancer Controller, the CSI drivers, cluster-autoscaler,
   Thanos. Two CSI drivers have two ServiceAccounts.
 - Five attach it to a ServiceAccount that an operator creates or that a
@@ -306,15 +306,20 @@ pods do not restart when the role changes.
 | Role, constructors, `use`, flavor imports, webhook modules | New surface. The flavor's import adds a marker object to existing EKS, GKE, and AKS clusters. | `added`, plus a `note` |
 | A package's `assertions` see plain `deps` values | They did not before. | `changed` |
 | external-dns takes an identity in `providerCredentials` and drops `serviceAccountAnnotations` | Experimental. The old option is refused with an error naming the new line. A cloud provider with no credentials is refused. | two `error` records |
-| Velero, cert-manager, Tempo, Harbor, external-secrets, cnpg-cluster, stackgres-object-storage | Additive in each package | `added` each |
+| Velero, cert-manager, Tempo, external-secrets, cnpg-cluster, stackgres-object-storage | Additive in each package | `added` each |
 
-Two packages are not on this list. The VictoriaMetrics operator pod calls no
+Three packages are not on this list. The VictoriaMetrics operator pod calls no
 cloud API, so its `serviceAccountAnnotations` option is a general
 pass-through and stays. The pod that does call one is the backup sidecar in
 the vmstorage pods of `victoria-metrics-cluster`, which can take a cloud
 identity when a user asks for it. Kix's `loki` package keeps its data on a
 volume and calls no cloud API, so it takes a cloud identity once it has an
-object store.
+object store. Kix's `harbor` package also keeps its registry data on a
+volume, and refuses every object storage driver. Harbor 2.15.5 builds its
+registry from `goharbor/distribution` `v2.8.3-harbor.4`. The S3 driver there
+cannot use a web identity token, so IRSA and EKS Pod Identity fail, and the
+Azure driver needs an account key. Harbor stays off the list until Harbor
+ships a registry whose S3 and Azure drivers use the ambient identity.
 
 ## 9. Recommendation and plan
 
