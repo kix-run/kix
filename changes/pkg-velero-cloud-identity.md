@@ -1,0 +1,5 @@
++++
+kind = "added"
+packages = ["experimental/velero"]
++++
+`velero` now accepts a cloud identity in `deps.cloudCredentials` instead of a Secret: `kix.cloudIdentity.aws`, `kix.cloudIdentity.gcp`, or `kix.cloudIdentity.azure`, matching the cloud of `backupStorageLocation.provider`. With a cloud identity, the package mounts no credentials file and names no `credential` on the locations, so the Velero plugins use their cloud SDK's default credentials. The server, the node agent, and the pods Velero launches run as one ServiceAccount, which the identity is bound to. On AKS, the package also adds the `azure.workload.identity/use` label to the node agent and repository maintenance `podLabels`. Evaluation fails if a Google Cloud identity has no `backupStorageLocation.config.serviceAccount`, if an Azure identity lacks `storageAccount` and either `useAAD = "true"` or both `resourceGroup` and `subscriptionId`, if an Azure identity is used with an Azure `volumeSnapshotLocation`, if a snapshot location uses a different cloud, or if an identity is used with an `objectStorage` dependency.

@@ -8,6 +8,9 @@ import Snippet from '/src/components/Snippet.astro';
 import veleroInstance from '/src/snippets/how-to/package-stacks/velero-cluster/veleroInstance.json';
 import check from '/src/command-output/how-to/package-velero/check.json';
 import backupConfiguration from '/src/command-output/how-to/package-velero/backup-configuration.json';
+import veleroEksIdentity from '/src/snippets/clusters/test-cloud-identity-velero-eks/veleroEksIdentity.json';
+import veleroGkeIdentity from '/src/snippets/clusters/test-cloud-identity-velero-gke/veleroGkeIdentity.json';
+import veleroAksIdentity from '/src/snippets/clusters/test-cloud-identity-velero-aks/veleroAksIdentity.json';
 
 Use the `velero` package to deploy the Velero server and node agent, connect
 them to S3-compatible object storage, and schedule recurring backups.
@@ -234,18 +237,73 @@ afterwards.
   schedules created with `out.mkSchedule` use `metrics.otherSchedulesMaxAge`
   (default `50h`).
 
-## Cloud identity instead of keys
+## Use a cloud identity instead of keys
 
-The package always mounts the `cloudCredentials` Secret and names it in the
-backup location. The AWS plugin reads that file as an AWS config file too, so
-on EKS it can hold a profile with `role_arn` and `web_identity_token_file`
-instead of keys. Add the role annotation to the `serviceAccount` part with a
-[parts overlay](/docs/how-to/adopt-existing-resources/patch-package-output-with-overlays/).
-Velero copies its own pods' `azure.workload.identity/use` label to the pods it
-launches only when no `podLabels` are set, and the package sets them. Add the
-label to `nodeAgent.settings.podLabels` and
-`repositoryMaintenance.settings.podLabels` for those pods, and to the server
-and node agent pods with a parts overlay.
+On EKS, GKE, or AKS, Velero can authenticate with its Kubernetes
+ServiceAccount instead of a stored key. Pass a cloud identity to
+`deps.cloudCredentials` in place of the Secret instance. You still need the
+`velero-repo-credentials` Secret for the repository key.
+
+With a cloud identity, the package mounts no credentials file and names no
+`credential` on the backup or snapshot location. Each object-store plugin then
+uses its cloud SDK's default credentials, which the cloud's webhook or agent
+gives the pod. The server, the node agent, and the pods Velero launches for
+file-system backups, the CSI data mover, and repository maintenance all run as
+the one ServiceAccount, `<instance>-server`, so one identity covers them all.
+
+The identity's cloud must match the backup location's provider:
+`kix.cloudIdentity.aws` for `velero.io/aws`, `kix.cloudIdentity.gcp` for
+`velero.io/gcp`, and `kix.cloudIdentity.azure` for `velero.io/azure`. An
+identity for another cloud fails evaluation, and so does an identity with an
+`objectStorage` dependency, because a store inside the cluster does not
+accept a cloud identity.
+
+For AWS S3 on EKS, pass `kix.cloudIdentity.aws`:
+
+<Snippet {...veleroEksIdentity} />
+
+For Google Cloud Storage on GKE, install the GCP plugin and pass
+`kix.cloudIdentity.gcp`. Without a key file, the plugin signs download URLs
+(for `velero backup download` and `velero backup logs`) as the Google service
+account in the location's `serviceAccount` setting, and refuses to start
+without one, so Kix requires it. With `kix.cloudIdentity.gcp { }`, which
+grants IAM roles directly to the Kubernetes ServiceAccount, name a Google
+service account that the Kubernetes ServiceAccount may sign as
+(`roles/iam.serviceAccountTokenCreator`).
+
+<Snippet {...veleroGkeIdentity} />
+
+For Azure Blob Storage on AKS, install the Azure plugin and pass
+`kix.cloudIdentity.azure`. Without a credentials file, the plugin reads the
+storage account settings from the location. Set `storageAccount`, and either
+`useAAD = "true"` (the identity needs the Storage Blob Data Contributor role on
+the account) or `resourceGroup` and `subscriptionId` (the identity needs
+permission to list the account keys).
+
+<Snippet {...veleroAksIdentity} />
+
+On AKS, Kix adds the `azure.workload.identity/use: "true"` label to the server
+and node agent pods, and to `podLabels` in the node agent and repository
+maintenance settings. Velero copies that label to the pods it launches only
+when those settings set no `podLabels`, and the package always sets some.
+
+The Azure volume snapshotter reads the disks' subscription and resource group
+only from a credentials file, so an Azure `volumeSnapshotLocation` with a cloud
+identity fails evaluation. Back up volumes with CSI snapshots or file-system
+backup instead. A snapshot location for a cloud other than the identity's also
+fails evaluation.
+
+Kix does not create cloud IAM resources. In your cloud account, grant access
+to the bucket to the ServiceAccount `<namespace>/<instance>-server`
+(`system:serviceaccount:<namespace>:<instance>-server`) through an AWS IAM role
+trust policy (or an EKS Pod Identity association), a Google Cloud IAM binding,
+or an Azure federated credential. See
+[Cloud identities](/docs/reference/instances-and-composition/#cloud-identities)
+for how each flavor delivers the identity and for self-managed clusters.
+
+When the identity changes, Kix restarts the server and node agent pods. A pod
+that Velero launched before the change keeps the old identity until it
+finishes.
 
 ## Upgrades
 

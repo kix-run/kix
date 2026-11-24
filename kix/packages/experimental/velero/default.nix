@@ -38,7 +38,8 @@
 # traffic from the `dataPathEgress` and `externalStoreEgress` policies.
 #
 # Dependencies:
-#   cloudCredentials (required)  a secret or secret-ref in one of two forms:
+#   cloudCredentials (required)  a secret or secret-ref in one of two forms,
+#                                or a cloud identity:
 #                                - key `cloud`, the object-store credentials
 #                                  file, mounted at /credentials and named by
 #                                  the locations;
@@ -48,7 +49,10 @@
 #                                  locations name no credential, and the AWS
 #                                  plugin and kopia read the pair from the
 #                                  environment. A changed pair reaches the
-#                                  server and node-agent when they restart.
+#                                  server and node-agent when they restart;
+#                                - `kix.cloudIdentity.aws`, `gcp`, or `azure`
+#                                  for the cloud of the location's provider,
+#                                  bound to the one ServiceAccount (below).
 #   repositoryPassword           a secret or secret-ref named
 #                                velero-repo-credentials with key
 #                                `repository-password`, the kopia repository
@@ -104,10 +108,43 @@
 # Velero's own configuration; `extraPlugins` adds plugin images; instance
 # `partsOverlays` covers the rest.
 #
+# A cloud identity in cloudCredentials binds to the `<instance>-server`
+# ServiceAccount, which the server, node-agent, and every pod they launch
+# run as. The package then mounts no credentials file and names no
+# `credential` on the locations, so the plugins and kopia use their SDK's
+# default credentials. Velero copies `azure.workload.identity/use` to the
+# pods it launches only when the node-agent and maintenance `podLabels` are
+# empty, and the package always sets them, so it adds the identity's pod
+# labels there. Without a credentials file, each plugin needs settings on
+# the location, which the build checks:
+#   - GCP: `config.serviceAccount`, the Google service account the plugin
+#     signs download URLs as.
+#   - Azure: `config.storageAccount`, and `useAAD = "true"` or
+#     `resourceGroup` and `subscriptionId`. An Azure snapshot location is
+#     refused, because its snapshotter reads the subscription only from a
+#     credentials file.
+# An identity with an in-cluster `objectStorage` is refused, and so is a
+# snapshot location for another cloud.
+#
+#   instances.velero.velero = {
+#     package = packages.experimental.velero;
+#     deps.cloudCredentials = kix.cloudIdentity.aws {
+#       roleArn = "arn:aws:iam::111122223333:role/velero";
+#     };
+#     config.backupStorageLocation = {
+#       objectStorage.bucket = "my-cluster-backups";
+#       config.region = "us-east-1";
+#     };
+#   };
+#
 # Known limits:
-# - A cloud identity (EKS IRSA, Azure workload identity) needs a profile in
-#   the `cloud` credentials file and a ServiceAccount annotation added with
-#   `partsOverlays`.
+# - With a cloud identity, the Azure plugin reads the cloud name only from a
+#   credentials file and so assumes the public cloud. For another Azure
+#   cloud, set the location's `storageAccountURI` and
+#   `activeDirectoryAuthorityURI`.
+# - With a cloud identity, the egress policy opens only the store's port
+#   (443 by default) outside the cluster, which covers AWS STS and Entra ID.
+#   It does not open the GKE metadata server.
 # - With the key pair form, the AWS SDK prefers the pair in the environment
 #   to a location's own credentials file. Another location with a
 #   `credential` must set `config.profile` (for example "default") for its
@@ -138,6 +175,8 @@ let
     cronType
     podLabelsOption
     dataPathLabelCollisions
+    providerCloud
+    identityCloud
     ;
 in
 {
@@ -423,10 +462,42 @@ in
   };
 
   assertions =
-    { config, ... }:
+    {
+      config,
+      deps ? { },
+      ...
+    }:
     let
       bsl = config.backupStorageLocation;
       vsl = config.volumeSnapshotLocation;
+      # `use` has already refused an identity for a cloud other than the
+      # default location's, so `bslCloud` is the identity's cloud.
+      identity =
+        (kix.cloudIdentity.use {
+          inherit scope;
+          dep = deps.cloudCredentials or null;
+          cloud = identityCloud {
+            inherit config;
+            objectStorage = deps.objectStorage or null;
+          };
+        }).identity;
+      bslCloud = providerCloud bsl.provider;
+      vslCloud = if vsl == null then null else providerCloud vsl.provider;
+      cloudNames = {
+        aws = "AWS";
+        gcp = "Google Cloud";
+        azure = "Azure";
+      };
+      cloudName = cloud: cloudNames.${cloud} or "no cloud Kix knows";
+      # strconv.ParseBool, which the Azure plugin reads useAAD with.
+      useAAD = builtins.elem (bsl.config.useAAD or "") [
+        "1"
+        "t"
+        "T"
+        "TRUE"
+        "true"
+        "True"
+      ];
       templates = map (s: s.template) (builtins.attrValues config.schedules);
       fsBackupPolicies = builtins.filter (p: p.action.type == "fs-backup") config.volumePolicies;
       needsNodeAgent =
@@ -488,6 +559,55 @@ in
           else
             lib.concatStringsSep ", " (builtins.attrNames config.schedules)
         }.";
+      }
+      # One ServiceAccount carries one identity, so a snapshot location of
+      # another of the three clouds cannot use it.
+      {
+        assertion = identity == null || vslCloud == null || vslCloud == bslCloud;
+        option = "volumeSnapshotLocation.provider";
+        message = "volumeSnapshotLocation.provider is \"${
+          if vsl == null then "" else vsl.provider
+        }\" (${cloudName vslCloud}), but deps.cloudCredentials is a cloud identity for ${cloudName bslCloud}, the cloud of the backup location. Velero runs both locations under one ServiceAccount, which carries one identity.";
+        fix = "Use a snapshot provider for ${cloudName bslCloud}, or pass a Secret instance in deps.cloudCredentials.";
+      }
+      # The Azure volume snapshotter reads AZURE_SUBSCRIPTION_ID and
+      # AZURE_RESOURCE_GROUP only from a credentials file
+      # (velero-plugin-for-microsoft-azure volume_snapshotter.go Init), and
+      # a cloud identity mounts none.
+      {
+        assertion = identity == null || vslCloud != "azure";
+        option = "volumeSnapshotLocation";
+        message = "volumeSnapshotLocation uses the Azure plugin, which reads the disks' subscription and resource group only from a credentials file. With a cloud identity in deps.cloudCredentials, the package mounts no credentials file, so the snapshotter would fail to start.";
+        fix = "Remove volumeSnapshotLocation and back up volumes with CSI snapshots (features = [ \"EnableCSI\" ]) or file-system backup, or pass a Secret instance with an Azure credentials file in deps.cloudCredentials.";
+      }
+      # Without a key file, the GCP plugin signs download URLs through the
+      # IAM API as the account in `serviceAccount`, and refuses to start
+      # without it (velero-plugin-for-gcp object_store.go
+      # initFromComputeEngine).
+      {
+        assertion = identity == null || bslCloud != "gcp" || bsl.config ? serviceAccount;
+        option = "backupStorageLocation.config.serviceAccount";
+        message = "deps.cloudCredentials is a Google Cloud identity, and backupStorageLocation.config does not set serviceAccount. Without a key file, the GCP plugin signs download URLs as that Google service account and refuses to start without it.";
+        fix = "Set backupStorageLocation.config.serviceAccount to a Google service account email. Use the one in kix.cloudIdentity.gcp { serviceAccount = ...; }, or with kix.cloudIdentity.gcp { } one that the Kubernetes ServiceAccount may sign as (roles/iam.serviceAccountTokenCreator).";
+      }
+      # The Azure plugin reads the account's resource group and subscription
+      # from the location's config or the credentials file
+      # (pkg/util/azure/storage.go upstream). With useAAD it talks to the
+      # blob service directly; without it, it lists the account keys
+      # through Azure Resource Manager, which needs both.
+      {
+        assertion =
+          identity == null
+          || bslCloud != "azure"
+          || (
+            bsl.config ? storageAccount
+            && (useAAD || (bsl.config ? resourceGroup && bsl.config ? subscriptionId))
+          );
+        option = "backupStorageLocation.config";
+        message = "deps.cloudCredentials is an Azure identity, so the package mounts no credentials file, and the Azure plugin reads the storage account settings only from backupStorageLocation.config. It sets ${
+          if bsl.config == { } then "nothing" else lib.concatStringsSep ", " (builtins.attrNames bsl.config)
+        }.";
+        fix = "Set storageAccount, and either useAAD = \"true\" (the identity needs the Storage Blob Data Contributor role on the account) or resourceGroup and subscriptionId (the identity needs permission to list the account keys).";
       }
       (dataPathLabelCollisions "nodeAgent.settings" config.nodeAgent.settings)
       (dataPathLabelCollisions "repositoryMaintenance.settings" config.repositoryMaintenance.settings)

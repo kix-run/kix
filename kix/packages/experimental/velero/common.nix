@@ -171,12 +171,15 @@ rec {
   cronType = lib.types.strMatching "((CRON_TZ|TZ)=[^ ]+ +)?(@.+|[^ ]+( +[^ ]+){4})";
 
   # Package config the node-agent and maintenance ConfigMaps carry, with the
-  # data-path labels added.
+  # data-path labels and `identityLabels` added. Velero copies the
+  # `azure.workload.identity/use` label from its own workloads to the pods
+  # it launches only when `podLabels` is empty, and the data-path labels
+  # make it non-empty, so the identity's pod labels are written here.
   withDataPathLabels =
-    settings:
+    identityLabels: settings:
     lib.filterAttrs (_: v: v != null) settings
     // {
-      podLabels = settings.podLabels // dataPathLabels;
+      podLabels = settings.podLabels // identityLabels // dataPathLabels;
     };
 
   podLabelsOption = lib.mkOption {
@@ -198,9 +201,64 @@ rec {
         + "those pods by it. Remove ${if builtins.length hits == 1 then "it" else "them"}.";
     };
 
-  # The cloudCredentials dependency in one of two forms: a credentials file
-  # in key `cloud`, or an AWS key pair the pods read as environment
-  # variables. `envKeys` is null for the file form.
+  # Return the cloud whose API a location's provider calls, or null for a
+  # plugin outside the three Velero maintains. Velero adds the `velero.io/`
+  # prefix to a provider name that has none.
+  providerCloud =
+    provider:
+    {
+      "velero.io/aws" = "aws";
+      "velero.io/gcp" = "gcp";
+      "velero.io/azure" = "azure";
+    }
+    .${if lib.hasInfix "/" provider then provider else "velero.io/${provider}"} or null;
+
+  # Return the cloud a cloud identity in cloudCredentials must belong to:
+  # the cloud of the default location's provider, or null when the store is
+  # an in-cluster `objectStorage` dependency, which no cloud identity reaches.
+  identityCloud =
+    { config, objectStorage }:
+    if objectStorage != null then null else providerCloud config.backupStorageLocation.provider;
+
+  # Read the cloudCredentials dependency: a cloud identity, a credentials
+  # file in key `cloud`, or an AWS key pair the pods read as environment
+  # variables. Return `{ identity; bind; dep; file; envKeys; }`. `dep` is
+  # the Secret, or null with an identity. `file` is true for the file form,
+  # and `envKeys` names the key pair, or is null.
+  readCloudCredentials =
+    {
+      cloudCredentials,
+      config,
+      objectStorage,
+    }:
+    let
+      credentials = kix.cloudIdentity.use {
+        inherit scope;
+        dep = cloudCredentials;
+        cloud = identityCloud { inherit config objectStorage; };
+      };
+      secret = checkCloudCredentials credentials.secret;
+    in
+    {
+      inherit (credentials) identity bind;
+    }
+    // (
+      if credentials.identity != null then
+        {
+          dep = null;
+          file = false;
+          envKeys = null;
+        }
+      else
+        {
+          inherit (secret) dep envKeys;
+          file = secret.envKeys == null;
+        }
+    );
+
+  # The cloudCredentials dependency, when it is a Secret, in one of two
+  # forms: a credentials file in key `cloud`, or an AWS key pair the pods
+  # read as environment variables. `envKeys` is null for the file form.
   checkCloudCredentials =
     cloudCredentials:
     let
