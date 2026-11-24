@@ -1381,6 +1381,11 @@ in
 
       _clusterHookChecksRun = hooks.runChecks clusterHookChecks;
 
+      # Packages read `cluster.defaultLimits` only through
+      # `kix.options.resources`, so check its type here even when no
+      # package declares resources.
+      _defaultLimitsCheck = builtins.deepSeq cfg.cluster.defaultLimits null;
+
     in
     builtins.seq _instancePinsCheck (
       builtins.seq _refTargetsCheck (
@@ -1388,48 +1393,50 @@ in
           builtins.seq _extraDepsCheck (
             builtins.seq _rolesValidation (
               builtins.seq _roleBindingsCheck (
-                builtins.seq _annotationDomainsCheck (
-                  builtins.seq _clusterHookChecksRun (
-                    builtins.seq clusterDiagnostics.evaluateExtraWarnings (
-                      builtins.seq clusterDiagnostics.assertionCheck {
-                        _type = "k8s-cluster-v2";
-                        inherit name;
+                builtins.seq _defaultLimitsCheck (
+                  builtins.seq _annotationDomainsCheck (
+                    builtins.seq _clusterHookChecksRun (
+                      builtins.seq clusterDiagnostics.evaluateExtraWarnings (
+                        builtins.seq clusterDiagnostics.assertionCheck {
+                          _type = "k8s-cluster-v2";
+                          inherit name;
 
-                        inherit clusterInstances;
-                        instances = clusterInstances;
+                          inherit clusterInstances;
+                          instances = clusterInstances;
 
-                        namespaces = nsResources;
+                          namespaces = nsResources;
 
-                        inherit
-                          activation
-                          activationIndex
-                          activationFiles
-                          packageIndex
-                          packageIndexContent
-                          info
-                          extraImages
-                          imageSources
-                          ;
+                          inherit
+                            activation
+                            activationIndex
+                            activationFiles
+                            packageIndex
+                            packageIndexContent
+                            info
+                            extraImages
+                            imageSources
+                            ;
 
-                        interfaces = if platformSide == null then { } else platformSide.interfaces;
+                          interfaces = if platformSide == null then { } else platformSide.interfaces;
 
-                        diagnostics = {
-                          warnings = libraryWarnings;
-                          inherit (clusterDiagnostics) assertions failedAssertions;
-                        };
-
-                        out = {
-                          maintenance = {
-                            enable = cfg.cluster.maintenance.enable or false;
-                            reason = cfg.cluster.maintenance.reason or null;
-                            until = cfg.cluster.maintenance.until or null;
+                          diagnostics = {
+                            warnings = libraryWarnings;
+                            inherit (clusterDiagnostics) assertions failedAssertions;
                           };
-                        };
 
-                        inherit scorecardReport;
+                          out = {
+                            maintenance = {
+                              enable = cfg.cluster.maintenance.enable or false;
+                              reason = cfg.cluster.maintenance.reason or null;
+                              until = cfg.cluster.maintenance.until or null;
+                            };
+                          };
 
-                        rawManifests = rawManifestList;
-                      }
+                          inherit scorecardReport;
+
+                          rawManifests = rawManifestList;
+                        }
+                      )
                     )
                   )
                 )

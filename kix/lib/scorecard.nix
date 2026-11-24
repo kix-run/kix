@@ -214,10 +214,7 @@ rec {
       meta ? { },
       acceptedSecretSources ? null,
       # The cluster's `cluster.defaultLimits`.
-      defaultLimits ? {
-        cpu = true;
-        memory = true;
-      },
+      defaultLimits ? (import ./core/default-limits.nix).default,
     }:
     let
       manifestRules = builtins.filter (r: (r.rule.level or "") == "manifest") (flattenRules rules);

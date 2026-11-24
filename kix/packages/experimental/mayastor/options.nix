@@ -116,8 +116,8 @@ in
       default = "2Gi";
       description = "2 MiB hugepages io-engine requests and limits. Each io-engine node must allocate them before the kubelet starts.";
     };
-    resources = resourcesOption "io-engine" { memory = "1Gi"; } { memory = "1Gi"; } // {
-      description = "Memory of io-engine. Its CPU comes from `ioEngine.cpuCount` and its hugepages from `ioEngine.hugepages2Mi`; setting either here is refused.";
+    resources = resourcesOption "io-engine" { memory = "1Gi"; } { } // {
+      description = "Memory of io-engine. Its memory limit is its memory request unless `limits.memory` is set here. Its CPU comes from `ioEngine.cpuCount` and its hugepages from `ioEngine.hugepages2Mi`; setting either here is refused.";
     };
     nodeSelector = lib.mkOption {
       type = lib.types.nullOr (lib.types.attrsOf lib.types.str);

@@ -91,11 +91,7 @@ in
           inherit where;
         };
 
-        defaultLimits =
-          clusterConfig.cluster.defaultLimits or {
-            cpu = true;
-            memory = true;
-          };
+        defaultLimits = clusterConfig.cluster.defaultLimits or (import ../core/default-limits.nix).default;
 
         # Give the package a `kix.options.resources` whose default limits
         # follow `cluster.defaultLimits`.

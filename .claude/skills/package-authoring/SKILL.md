@@ -522,7 +522,9 @@ Mandatory:
 
 1. `kix/packages/experimental/<pkg>/default.nix`.
 2. `kix/package-eval.nix`: a `settings` entry when the package needs deps or
-   config to evaluate at `none` and `zone` (`:105`; keycloak at `:312-330`).
+   config to evaluate at `none` and `zone` (`:105`; keycloak at `:312-330`),
+   and a `refusesWithoutDefaultLimits` entry when the package refuses to
+   build with no memory limit.
 3. `clusters/test-<pkg>.nix`: every toggle on, each optional dependency
    present at least once, a `cilium` instance and `networkPolicy.enable = true`
    so the kind deploy runs under default deny, and the bring-up, build, and
@@ -576,7 +578,7 @@ F=--extra-experimental-features; P=pipe-operators
 git add -A kix/packages/experimental/<pkg> clusters kix/lib/tests                     # 0. the fetcher sees nothing untracked
 nix build .#cluster-<cluster> $F $P                                      # 1. the test cluster, every toggle on (use ./scripts/kix-manifests.sh . <cluster> ./result if it uses Helm); read its traces
 nix build .#checks.x86_64-linux.kix-lib-tests $F $P                      # 2. unit tests, negative tests with controls
-nix develop -c bash -c 'cd cli && cargo test -p kix-cli --test commands_test -- --ignored flake_checks_evaluate_with_helm'  # 3. every-package-evaluates (defaults at none and zone, option contract, settings entry) and each cluster's PackageInstance wiring, with Helm charts rendered. Builds Kix and evaluates every cluster (about 10 minutes on 8 cores)
+nix develop -c bash -c 'cd cli && cargo test -p kix-cli --test commands_test -- --ignored flake_checks_evaluate_with_helm'  # 3. every-package-evaluates (defaults at none and zone and with every default limit off, option contract, settings entry) and each cluster's PackageInstance wiring, with Helm charts rendered. Builds Kix and evaluates every cluster (about 10 minutes on 8 cores)
 nix build .#checks.x86_64-linux.rules-cluster-<cluster> $F $P            # 4. promtool check and the .rules-test.yaml (alerts only; use ./scripts/cluster-checks.sh if the cluster uses Helm)
 nix build .#checks.x86_64-linux.{clickhouse,postgres,gateway}-swap $F $P # 5. the contract's swap check (contract changes only)
 nix shell nixpkgs#uv -c uv run --frozen scripts/vendor-crds.py --check   # 6. CRDs only
@@ -584,8 +586,9 @@ nix run .#kix -- check homelab-kind                                       # 7. s
 ```
 
 `<cluster>` is the key under `clusters` in `flake.nix`. When `every-package-evaluates`
-fails, `evaluate level name` (`kix/package-eval.nix:742`) evaluates one
-package at one level. From the worktree root, with `$PWD` absolute:
+fails, `evaluate level name` (`kix/package-eval.nix:950`) evaluates one
+package at one level, and `evaluateWithoutDefaultLimits name` evaluates it
+with every default limit off. From the worktree root, with `$PWD` absolute:
 
 ```bash
 nix eval --impure --raw $F $P --expr "let f = builtins.getFlake \"$PWD\"; lib = f.inputs.nixpkgs.lib;

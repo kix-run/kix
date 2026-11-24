@@ -149,9 +149,9 @@
           '';
       });
       # Evaluate every directory under kix/packages/stable/ in a synthetic cluster of
-      # its own (kix/package-eval.nix), once at availability "none" and once at
-      # "zone", so a package that no cluster names still runs through the
-      # validators and the scorecard.
+      # its own (kix/package-eval.nix), once at availability "none", once at
+      # "zone", and once with every default limit off, so a package that no
+      # cluster names still runs through the validators and the scorecard.
       packageEval = lib.genAttrs systems (system: {
         every-package-evaluates =
           let
@@ -163,8 +163,8 @@
           in
           pkgs.runCommand "every-package-evaluates" { } ''
             echo "${
-              toString (builtins.length result.names / builtins.length result.levels)
-            } kix packages evaluated at availability ${lib.concatStringsSep " and " result.levels}."
+              toString (builtins.length result.names / (builtins.length result.levels + 1))
+            } kix packages evaluated at availability ${lib.concatStringsSep " and " result.levels}, and once more without default limits."
             echo "Skipped: ${
               if result.skip == { } then "none" else lib.concatStringsSep ", " (builtins.attrNames result.skip)
             }"

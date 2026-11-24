@@ -5,10 +5,7 @@
 # result to the package as `kix.options.resources`.
 {
   lib,
-  defaultLimits ? {
-    cpu = true;
-    memory = true;
-  },
+  defaultLimits ? (import ../core/default-limits.nix).default,
 }:
 
 let
@@ -182,8 +179,8 @@ in
   # Package defaults may set `cpu`, `memory`, and `ephemeral-storage`.
   # Instances may also set `hugepages-<size>` and extended resources (such as
   # `nvidia.com/gpu`) or set a field to null to clear its default. A default
-  # CPU or memory limit is dropped when the cluster turns that default off
-  # in `cluster.defaultLimits`. A limit the instance sets stays.
+  # CPU or memory limit is dropped when the cluster sets that field of
+  # `cluster.defaultLimits` to "none". A limit the instance sets stays.
   resources =
     {
       requests ? { },
@@ -199,7 +196,7 @@ in
       badDefaults = builtins.filter (k: !(builtins.elem k known)) (
         builtins.attrNames requests ++ builtins.attrNames limits
       );
-      defaultedLimits = lib.filterAttrs (name: _: defaultLimits.${name} or true) limits;
+      defaultedLimits = lib.filterAttrs (name: _: (defaultLimits.${name} or "package") != "none") limits;
       side =
         defaults:
         lib.mkOption {

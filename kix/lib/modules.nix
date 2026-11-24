@@ -4,6 +4,7 @@
 let
   versions = import ./core/version.nix { inherit lib; };
   errors = import ./core/error.nix { inherit lib; };
+  defaultLimits = import ./core/default-limits.nix;
 
   isMoved = package: (package._type or "") == "kix-moved";
   isRemoved = package: (package._type or "") == "kix-removed";
@@ -581,31 +582,33 @@ in
 
     cluster.defaultLimits = {
       cpu = lib.mkOption {
-        type = lib.types.bool;
-        default = true;
+        type = lib.types.enum defaultLimits.modes;
+        default = defaultLimits.default.cpu;
         description = ''
-          Whether packages apply their default CPU limits to containers.
-          When `false`, `kix.options.resources` omits a package's default
-          CPU limit while keeping its CPU request and any `limits.cpu` set
-          on an instance. CPU limits throttle containers even when the node
-          has idle CPU, while CPU requests still guarantee each container's
-          share. Setting `false` also stops the `reliability.boundedResources`
-          scorecard rule from reporting missing `limits.cpu`.
+          The CPU limit packages give containers by default. "package"
+          keeps the default CPU limit of each package. "none" makes
+          `kix.options.resources` omit a package's default CPU limit while
+          keeping its CPU request and any `limits.cpu` set on an instance.
+          CPU limits throttle containers even when the node has idle CPU,
+          while CPU requests still guarantee each container's share. With
+          "none", the `reliability.boundedResources` scorecard rule also
+          stops reporting missing `limits.cpu`.
         '';
       };
       memory = lib.mkOption {
-        type = lib.types.bool;
-        default = true;
+        type = lib.types.enum defaultLimits.modes;
+        default = defaultLimits.default.memory;
         description = ''
-          Whether packages apply their default memory limits to containers.
-          When `false`, `kix.options.resources` omits a package's default
-          memory limit while keeping its memory request and any
-          `limits.memory` set on an instance. Setting `false` also stops the
-          `reliability.boundedResources` scorecard rule from reporting
-          missing `limits.memory`. Keep this `true` unless you intend to run
-          without memory limits: memory cannot be throttled, so a leaking
-          container without a limit can exhaust node memory and cause the
-          kernel to kill other workloads. Memory limits are commonly set
+          The memory limit packages give containers by default. "package"
+          keeps the default memory limit of each package. "none" makes
+          `kix.options.resources` omit a package's default memory limit
+          while keeping its memory request and any `limits.memory` set on
+          an instance. With "none", the `reliability.boundedResources`
+          scorecard rule also stops reporting missing `limits.memory`.
+          Keep "package" unless you intend to run without memory limits:
+          memory cannot be throttled, so a leaking container without a
+          limit can exhaust node memory and cause the kernel to kill other
+          workloads. Memory limits are commonly set
           equal to the memory request.
         '';
       };
