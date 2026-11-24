@@ -1,4 +1,4 @@
-# 178: Custom resources a Helm chart renders, and the package that declares their kind
+# 179: Custom resources a Helm chart renders, and the package that declares their kind
 
 **Status:** Deferred (the maintainer decided on 2026-11-24: record the use case, do not build it now)
 **Related:** `../archive/87_helm_integration_v2.md`, `../archive/86_helm_dag_reconstruction.md`, `../archive/117_kube_prometheus_stack_wrapping_validation.md` (row G), `../146_crd_vendoring_and_upgrades.md`, `../147_operator_semantics_in_core_rules.md`, `housekeeping/2026-10-02-chart-cannot-render-another-packages-kinds.md`
