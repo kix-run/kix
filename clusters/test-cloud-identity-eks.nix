@@ -7,6 +7,11 @@
 #   `checksum/cloud-identity`, so a changed role rolls the pod.
 # - `external-dns-keys/route53` reads AWS access keys from a Secret created
 #   outside Kix instead. The two differ only in `deps.providerCredentials`.
+# - `tracing/tempo` writes trace blocks to an S3 bucket as an IAM role
+#   through `deps.storageCredentials`. Its ServiceAccount carries the role
+#   ARN, its pod template carries `checksum/cloud-identity`, and its
+#   container has no AWS key variables. `tracing/gp3` imports the EBS
+#   StorageClass that its claim uses.
 # - `annotated/app` writes the IRSA annotation on its ServiceAccount itself.
 #   The eks flavor declares the `eks.amazonaws.com` annotation domain, so
 #   the scorecard accepts it.
@@ -79,6 +84,34 @@ kix.buildCluster {
               extraArgs = [ "--domain-filter=example.com" ];
             };
           };
+        };
+
+        instances.tracing = {
+          gp3.package = kix.mkImport {
+            kind = "StorageClass";
+            apiVersion = "storage.k8s.io/v1";
+            roles = [ "storageClasses" ];
+            out = {
+              name = "gp3";
+              storageClassName = "gp3";
+            };
+          };
+          storage = {
+            package = packages.persistent-volume-claim;
+            config.size = "10Gi";
+          };
+          # region:eksIrsaTempo
+          tempo = {
+            package = packages.experimental.tempo;
+            deps.storageCredentials = kix.cloudIdentity.aws {
+              roleArn = "arn:aws:iam::111122223333:role/tempo";
+            };
+            config = {
+              objectStorage.bucket = "traces";
+              settings.storage.trace.s3.endpoint = "s3.eu-west-1.amazonaws.com";
+            };
+          };
+          # endregion:eksIrsaTempo
         };
 
         instances.annotated.app.package = annotatedServiceAccount;

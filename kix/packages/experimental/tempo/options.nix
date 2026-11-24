@@ -102,7 +102,7 @@ in
             lib.mkOption {
               type = lib.types.nullOr lib.types.nonEmptyStr;
               default = null;
-              description = "Key of the `storageCredentials` Secret holding `${s}`; null reads `${s}`.";
+              description = "Key of the `storageCredentials` Secret holding `${s}`; null reads `${s}`. Refused when `storageCredentials` is an IAM role.";
             }
           );
         };
@@ -114,6 +114,9 @@ in
       instead of on the claim, which keeps the write-ahead logs. Requires the
       `storageCredentials` dependency and either `endpointService` or
       `settings.storage.trace.s3.endpoint` (`host[:port]`, no scheme).
+      `storageCredentials` is a Secret with the S3 keys, or, for a store
+      outside the cluster such as AWS S3, an IAM role:
+      `deps.storageCredentials = kix.cloudIdentity.aws { roleArn = "..."; }`.
     '';
   };
 

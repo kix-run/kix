@@ -163,7 +163,7 @@ Every cluster module receives `ref` in its module arguments. Writing `ref.<names
 
 ### Cloud identities
 
-Packages that call AWS, Google Cloud, or Azure APIs (such as `external-dns`) can accept a cloud identity instead of a Secret instance on the same dependency:
+Packages that call AWS, Google Cloud, or Azure APIs can accept a cloud identity instead of a Secret instance on the same dependency. `external-dns` takes one in `providerCredentials`. `tempo` takes an AWS IAM role in `storageCredentials` for an S3 bucket outside the cluster:
 
 ```nix
 instances.external-dns.route53 = {
