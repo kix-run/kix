@@ -2,4 +2,4 @@
 kind = "added"
 library = ["kix.guardArgs"]
 +++
-`kix.guardArgs` takes four new arguments. `parser` says how the program reads its flags: `"gnu"` (the default, unchanged), `"go"` for Go's `flag` package, which reads `-flag` and `--flag` as the same flag, or `"paerser"` for Traefik, which also ignores letter case. `ownedFamilies` refuses a flag and every flag under it, `defaults` lists flags the package passes unless `extraArgs` sets the same flag, and `id` adds a change record id to each refusal.
+`kix.guardArgs` accepts four new optional arguments for package authors: `parser`, `ownedFamilies`, `defaults`, and `id`. Set `parser` to `"go"` for programs that use Go's `flag` package (treating `-flag` and `--flag` as the same flag), `"paerser"` for Traefik (matching like `"go"` and ignoring letter case), or keep the default `"gnu"`. Use `ownedFamilies` to reject both a flag and any `<flag>.<name>` sub-flags, `defaults` to pass default flags that are omitted when overridden, and `id` to attach a change record ID (such as `"K4740"`) to rejected-flag errors.

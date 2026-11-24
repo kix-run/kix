@@ -413,21 +413,23 @@ rec {
           if builtins.isAttrs defaults' != isAttrs then
             [
               {
-                message = "kix.guardArgs cannot merge defaults with the flags to check: the flags are ${
-                  if isAttrs then "an attrset" else "a list"
-                }, but defaults is ${if isAttrs then "a list" else "an attrset"}.";
+                message = "kix.guardArgs received ${
+                  if isAttrs then "an attribute set" else "a list"
+                } of flags, but defaults is ${
+                  if isAttrs then "a list" else "an attribute set"
+                }, so Kix cannot merge them.";
                 fix = "Pass defaults as a list of flag strings when checking a list, or as an attribute set when checking an attribute set.";
               }
             ]
           else
             map (d: {
-              message = "kix.guardArgs cannot parse \"${d}\" in defaults as a flag, so Kix cannot check the flags.";
-              fix = "Start each entry in defaults with - or -- and attach any value in the same string, such as \"--flag=value\" instead of separate \"--flag\" and \"value\" items.";
+              message = "kix.guardArgs cannot read \"${d}\" in defaults as a flag, so Kix cannot check the flags.";
+              fix = "Write each entry in defaults as one string starting with - or --, such as \"--flag=value\" instead of separate \"--flag\" and \"value\" items.";
             }) (builtins.filter (d: defaultName d == null) defaultWords)
         )
         ++ map (r: {
-          message = "kix.guardArgs cannot match \"${r.flag}\" in owned or ownedFamilies because parser \"${parser}\" does not parse it as a flag.";
-          fix = "Write the flag name in owned or ownedFamilies with a - or -- prefix, such as \"--leader-elect\".";
+          message = "kix.guardArgs cannot read \"${r.flag}\" in owned or ownedFamilies as a flag under parser \"${parser}\", so Kix cannot check the flags.";
+          fix = "Start each flag name in owned and ownedFamilies with - or --, such as \"--leader-elect\".";
         }) (builtins.filter (r: r.name == null) allRules);
 
       # Each word the user wrote with the first rule it breaks.
