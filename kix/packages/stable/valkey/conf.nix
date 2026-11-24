@@ -49,24 +49,39 @@ in
     description = "string without line breaks";
   };
 
-  # Refusal messages for one map of directives, one per offending key. A
-  # key is a directive name: lower case letters, digits, and hyphens.
+  # Return the errors, as `scope.fail` takes them, for one map of
+  # directives at `option`, one per offending key. A key is a directive
+  # name: lower case letters, digits, and hyphens.
   refusals =
-    who: option: reserved: settings:
+    option: reserved: settings:
     builtins.concatMap (
       key:
       let
         lower = lib.toLower key;
       in
       if reserved ? ${lower} then
-        [ "${who}: ${option}.${key} is set by the package: ${reserved.${lower}}. Remove it." ]
+        [
+          {
+            inherit option;
+            message = "${option}.${key} cannot be set here because ${reserved.${lower}}.";
+            fix = "Remove `${key}` from `${option}`.";
+          }
+        ]
       else if builtins.match "[a-z0-9-]+" lower == null then
         [
-          "${who}: ${option}.${builtins.toJSON key} is not a directive name. Use the name alone, in lower case letters, digits, and hyphens, and put the arguments in the value."
+          {
+            inherit option;
+            message = "${option}.${builtins.toJSON key} is not a valid Valkey directive name.";
+            fix = "Use only the directive name as the key (lowercase letters, digits, and hyphens), and put its arguments in the value.";
+          }
         ]
       else if lower != key then
         [
-          "${who}: ${option}.${key} is not lower case. Valkey matches directive names case-insensitively, so write it as ${option}.${lower}."
+          {
+            inherit option;
+            message = "${option}.${key} must be lowercase; Valkey ignores case in directive names, so mixed case can duplicate a directive in ${option}.";
+            fix = "Rename `${key}` to `${lower}` in `${option}`.";
+          }
         ]
       else
         [ ]

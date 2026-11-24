@@ -262,7 +262,6 @@ in
 
         certCrds =
           certManager.out.crds or (scope.fail {
-            package = "rabbitmq-operator";
             message = "the certManager dependency has no out.crds, as with an import.";
             fix = "Wire a managed cert-manager instance with deps.certManager = ref.<namespace>.<instance>.";
           });

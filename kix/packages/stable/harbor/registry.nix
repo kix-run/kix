@@ -76,7 +76,6 @@ let
   registryConfig =
     if badStorageKeys != [ ] then
       scope.fail {
-        package = "harbor";
         option = "registry.settings.storage";
         message = "registry.settings.storage sets ${lib.concatStringsSep ", " badStorageKeys}, a storage driver or an unknown key.";
         fix = "This package stores blobs on the storage claim with the filesystem driver; object storage is not supported. registry.settings.storage accepts cache, maintenance, delete, redirect, and tag.";

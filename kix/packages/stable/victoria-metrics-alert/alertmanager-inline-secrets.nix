@@ -87,7 +87,6 @@ if found == [ ] then
   settings
 else
   fail {
-    package = "victoria-metrics-alert";
     option = "settings";
     message = "${lib.concatStringsSep ", " found} ${
       if builtins.length found == 1 then "holds a credential" else "hold credentials"

@@ -135,7 +135,6 @@ let
     in
     if !(builtins.isString url) || m == null || lib.hasInfix "{{" authority then
       fail {
-        package = "victoria-metrics-alert";
         message = "${where} is ${builtins.toJSON url}, and Kix cannot read the port Alertmanager dials from it.";
         fix = "Write the scheme, host, and port literally (https://host[:port]/path), or use the key's `_file` form where the integration has one, for which the egress policy opens port 443.";
       }
@@ -153,7 +152,6 @@ let
     in
     if m == null then
       fail {
-        package = "victoria-metrics-alert";
         message = "${where} is \"${smarthost}\", which has no port.";
         fix = "Write it as host:port.";
       }
@@ -179,7 +177,6 @@ let
       where = "settings.receivers \"${receiver.name or "?"}\" ${type}[${toString i}]";
       integration =
         integrations.${type} or (fail {
-          package = "victoria-metrics-alert";
           message = "${where}: Alertmanager has no integration `${type}`, so it refuses the configuration.";
           fix = "The integrations are ${
             lib.concatStringsSep ", " (
@@ -201,7 +198,6 @@ let
       in
       if smarthost == null then
         fail {
-          package = "victoria-metrics-alert";
           message = "${where} has no smarthost and settings.global.smtp_smarthost is unset, so Alertmanager refuses the configuration.";
           fix = "Set one of them to host:port.";
         }
@@ -215,7 +211,6 @@ let
       [ fallback ]
     else
       fail {
-        package = "victoria-metrics-alert";
         message = "${where} sets none of ${sources}, so Alertmanager refuses the configuration.";
         fix = "Set one of them.";
       };

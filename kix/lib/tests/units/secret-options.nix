@@ -136,7 +136,7 @@ in
   secret-options-helper-refuses-a-non-secret =
     !(builtins.tryEval (
       kixlib.contracts.secret.helpers.use {
-        who = "test";
+        scope.fail = kixlib.fail;
         arg = "password";
         dep = {
           out.name = "x";

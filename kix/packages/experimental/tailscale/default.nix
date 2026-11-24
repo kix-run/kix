@@ -85,7 +85,6 @@ let
 
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "tailscale ${ns}/${name}";
 
   metricsPort = 8080;
 
@@ -246,7 +245,7 @@ in
         hasMetrics = config.metrics.enabled && prometheus != null;
 
         creds = kix.contracts.secret.helpers.use {
-          inherit who;
+          inherit scope;
           arg = "oauthCredentials";
           dep = oauthCredentials;
           keys = [
@@ -583,7 +582,6 @@ in
               // lib.optionalAttrs (connector.proxyClass != null) {
                 proxyClass =
                   (self.proxyClasses.${connector.proxyClass} or (scope.fail {
-                    package = "tailscale";
                     option = "connectors.${cName}.proxyClass";
                     message = "connectors.${cName}.proxyClass = \"${connector.proxyClass}\" names no entry in proxyClasses (declared: ${declaredProxyClasses config}).";
                     fix = "Declare proxyClasses.${connector.proxyClass}, or build the Connector with out.mkConnector and a ProxyClass passed as <resource>.out.name.";

@@ -113,7 +113,6 @@ in
           storageClasses.out.storageClassName
         else
           scope.fail {
-            package = "persistent-volume-claim";
             option = "storageClassName";
             message = "no StorageClass for this claim.";
             fix = "Set config.storageClassName, or give the cluster a storageClasses provider: a flavor whose environment has a default class, a storage-classes instance, a CSI driver instance with aliases = [ \"storageClasses\" ], or an import of the environment's class: instances.kube-system.platform-storage.package = kix.mkImport { kind = \"StorageClass\"; apiVersion = \"storage.k8s.io/v1\"; roles = [ \"storageClasses\" ]; out = { name = \"<class>\"; storageClassName = \"<class>\"; }; }.";
@@ -122,21 +121,18 @@ in
       checks =
         if repeated != [ ] then
           scope.fail {
-            package = "persistent-volume-claim";
             option = "accessModes";
             message = "accessModes lists ${builtins.head repeated} more than once.";
             fix = "List each mode once.";
           }
         else if builtins.elem "ReadWriteOncePod" modes && builtins.length modes > 1 then
           scope.fail {
-            package = "persistent-volume-claim";
             option = "accessModes";
             message = "accessModes ${modesText} combines ReadWriteOncePod with other modes; the apiserver refuses that.";
             fix = "Use [ \"ReadWriteOncePod\" ] alone.";
           }
         else if kix.parseQuantity "storage" config.size == 0 then
           scope.fail {
-            package = "persistent-volume-claim";
             option = "size";
             message = "size = \"${size}\" is less than one byte.";
             fix = "Request a positive size, such as \"1Gi\".";

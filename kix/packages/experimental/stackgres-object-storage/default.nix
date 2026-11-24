@@ -70,7 +70,6 @@
 
 let
   name = scope.instanceName;
-  who = "stackgres-object-storage ${scope.namespaceName}/${name}";
 
   # The credentials block of each type and the selectors it takes
   # (crds/SGObjectStorage.yaml).
@@ -244,7 +243,6 @@ in
       _inClusterType =
         if inCluster && config.type != "s3Compatible" then
           scope.fail {
-            package = "stackgres-object-storage";
             dependency = "endpointService";
             message = "deps.endpointService is wired, and type is \"${config.type}\". Only s3Compatible takes an endpoint.";
             fix = "Set type = \"s3Compatible\", or remove the dependency.";
@@ -253,7 +251,7 @@ in
           null;
       keys = selectorKeys config;
       creds = kix.contracts.secret.helpers.use {
-        inherit who;
+        inherit scope;
         arg = "storageCredentials";
         dep = storageCredentials;
         keys = builtins.attrValues keys;
@@ -271,7 +269,6 @@ in
         // lib.optionalAttrs inCluster {
           endpoint =
             (endpointService.out.url or (scope.fail {
-              package = "stackgres-object-storage";
               dependency = "endpointService";
               message = "deps.endpointService has no out.url.";
               fix = "Wire an instance whose root is its S3 Service.";
@@ -312,7 +309,6 @@ in
           443
         else if endpointParts == null then
           scope.fail {
-            package = "stackgres-object-storage";
             option = "extraSpec.${config.type}.endpoint";
             message = "extraSpec.${config.type}.endpoint \"${endpoint}\" is not a URL such as https://s3.example.com.";
           }
@@ -327,7 +323,6 @@ in
       objectStorage =
         scope.mkCR
           (stackgresOperator.out.crds.SGObjectStorage or (scope.fail {
-            package = "stackgres-object-storage";
             message = "the stackgresOperator dependency has no out.crds.SGObjectStorage.";
             fix = "Wire a stackgres-operator instance, or an import that declares the SGObjectStorage CRD in its crds.";
           })

@@ -497,7 +497,6 @@ in
             v
           else
             scope.fail {
-              package = "loki";
               option = "settings.${lib.concatStringsSep "." path}";
               message = "settings.${lib.concatStringsSep "." path} must be ${expected} (it is ${builtins.toJSON v}).";
             };

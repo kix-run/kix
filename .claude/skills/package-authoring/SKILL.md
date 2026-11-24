@@ -347,10 +347,15 @@ pattern table has each form.
 - `env` accepts strings, so refuse the program's credential variables as
   literal strings (pattern table) and point at a `secretKeyRef` to a Secret
   managed outside Kix or at the secret dep (S1).
-- Pass `inherit scope;` to `kix.mergeGuarded`, `kix.mergeEnv`, and
-  `kix.guardArgs` so their errors include the instance and package. Bind
-  `who = "<pkg> ${scope.namespaceName}/${name}"` once in `let` for contract
-  helpers (`kix.contracts.*`) that take `who` (Pr9).
+- Pass `inherit scope;` to `kix.mergeGuarded`, `kix.mergeEnv`,
+  `kix.guardArgs`, `kix.checkSecretKeys`, and contract helpers that take an
+  attribute set (such as `kix.contracts.secret.helpers.use`,
+  `kix.contracts.smtp.helpers.settings`, and
+  `kix.contracts.oidc.helpers.client`). Pass `scope` to `<contract>.check`,
+  `<contract>.require`, `<contract>.requireAs`, and
+  `kix.contracts.redis.helpers.requirePlaintext`, and pass only the
+  dependency to `<contract>.assertions`, so errors report the instance and
+  package automatically (Pr9).
 
 ### 8. Option surface
 
@@ -450,7 +455,7 @@ The only place in this skill with package line numbers. `pkg:N` is
 
 | Pattern | Reference |
 |---|---|
-| Release binding, digest, `who`, `startupSeconds` in one `let` | metabase:89-97 |
+| Release binding, digest, `startupSeconds` in one `let` | metabase:105-111 |
 | Shared release file for a release group | `immich/release.nix`, immich:121 |
 | Running version published from the image (`out.version`) | echo-server:228; among several images, valkey |
 | Image tag checked against the vendored release (`kix.image.checkRelease`) | cnpg-operator:237 |

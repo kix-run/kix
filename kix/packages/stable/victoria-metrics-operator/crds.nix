@@ -51,7 +51,6 @@ let
       null
     else
       scope.fail {
-        package = "victoria-metrics-operator";
         message = "kinds.nix no longer covers the operator's startup indexer set. Missing: ${builtins.concatStringsSep ", " missingIndexed}.";
         fix = "The operator crashes at startup (\"cannot register status condition indexers\") when any of these CRDs is absent; restore them in kinds.nix.";
       };
@@ -416,7 +415,6 @@ let
       null
     else if !builtins.pathExists path then
       scope.fail {
-        package = "victoria-metrics-operator";
         message = "${def.kind} has a consumer surface but no vendored schema at crds/${def.plural}.${vmGroup}.json.";
         fix = "Add it to crds/sources.txt and run scripts/vendor-crds.py.";
       }

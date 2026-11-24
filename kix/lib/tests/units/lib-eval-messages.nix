@@ -55,6 +55,7 @@ let
   gatewayLike = contractCaught.mkContract {
     name = "gateway";
     alias = "gateway";
+    path = "contracts.gateway";
     here = "test";
     fields.gatewayRef = {
       shape = "a string";
@@ -237,18 +238,63 @@ in
 
   # A contract error raised through `require` names the dependency by the
   # contract's alias, and through `requireAs` by the name the consumer gives.
+  # Both name the instance and its package from `scope`. Text in place of
+  # `scope` is refused with the change record id.
   lib-eval-messages-require-names-dependency =
     let
-      dependencyOf = r: map (e: e.dependency or null) (helpers.records (r.thrown or ""));
-      byAlias = gatewayLike.require "kix.expose (a/web)" { out = { }; };
-      byGivenName = gatewayLike.requireAs "edge" "kix.expose (a/web)" { out = { }; };
+      scope.fail = (helpers.caught ../../core/error.nix { inherit lib; }).failFor {
+        instance = "a/web";
+        package = "web";
+      };
+      recordsOf = r: helpers.records (r.thrown or "");
+      byAlias = gatewayLike.require scope { out = { }; };
+      byGivenName = gatewayLike.requireAs "edge" scope { out = { }; };
+      byText = gatewayLike.require "kix.expose (a/web)" { out = { }; };
+      fields = e: {
+        inherit (e) instance package dependency;
+      };
     in
     (
-      dependencyOf byAlias == [ "gateway" ]
-      && dependencyOf byGivenName == [ "edge" ]
-      && lib.hasInfix "kix.expose (a/web): `out` from" (byAlias.thrown or "")
+      map fields (recordsOf byAlias) == [
+        {
+          instance = "a/web";
+          package = "web";
+          dependency = "gateway";
+        }
+      ]
+      && map (e: e.dependency) (recordsOf byGivenName) == [ "edge" ]
+      && lib.hasPrefix "`out` from" (builtins.head (recordsOf byAlias)).message
+      && map (e: e.id) (recordsOf byText) == [ "K6417" ]
     )
-    || throw "require: ${byAlias.thrown or ""} / ${byGivenName.thrown or ""}";
+    || throw "require: ${byAlias.thrown or ""} / ${byGivenName.thrown or ""} / ${byText.thrown or ""}";
+
+  # A contract function that takes `scope` or the dependency refuses text in
+  # its place, the `who` of the removed form, with the change record id.
+  lib-eval-messages-contract-who-refusals =
+    let
+      contracts = helpers.loadCaughtFull ../../../contracts/default.nix { inherit lib; };
+      idsOf = r: map (e: e.id or null) (helpers.records (r.thrown or ""));
+      got = {
+        check = idsOf (gatewayLike.check "kix.expose (a/web)" { });
+        assertions = idsOf (gatewayLike.assertions "a/web");
+        requirePlaintext = idsOf (contracts.redis.helpers.requirePlaintext "a/web" { out = { }; });
+        errorsFor = idsOf (
+          contracts.experimental.gatewayApi.helpers.errorsFor {
+            who = "a/web";
+            gatewayApi = null;
+            kinds = [ ];
+            minVersion = "1.0";
+          }
+        );
+      };
+    in
+    got == {
+      check = [ "K6417" ];
+      assertions = [ "K6417" ];
+      requirePlaintext = [ "K6417" ];
+      errorsFor = [ "K6417" ];
+    }
+    || throw "contract who refusals: ${builtins.toJSON got}";
 
   # A package that runs once per cluster, demanded from two namespaces, is
   # refused with the same message form and fix as the refusal beside one

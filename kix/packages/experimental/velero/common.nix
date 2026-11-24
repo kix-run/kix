@@ -17,7 +17,6 @@ rec {
 
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "velero ${ns}/${name}";
 
   # Each workload, and each metrics Service, carries its own component, so
   # no selector claims another component's pods and a ServiceMonitor built
@@ -37,7 +36,6 @@ rec {
     in
     if m == null then
       scope.fail {
-        package = "velero";
         option = "backupStorageLocation.config.s3Url";
         message = "s3Url \"${url}\" is not an http or https URL, so the package cannot tell which port the store listens on.";
         fix = "Write it as https://<host>[:<port>].";
@@ -207,7 +205,7 @@ rec {
     cloudCredentials:
     let
       dep = kix.contracts.secret.helpers.use {
-        inherit who;
+        inherit scope;
         arg = "cloudCredentials";
         dep = cloudCredentials;
         anyOf = [
@@ -220,7 +218,6 @@ rec {
     in
     if isFile && builtins.any (k: builtins.elem k declared) awsKeyPair then
       scope.fail {
-        package = "velero";
         message = "deps.cloudCredentials resolved to secret \"${dep.out.name}\", which declares both `cloud` and ${lib.concatStringsSep ", " awsKeyPair}. Velero would read the key pair and ignore the file.";
         fix = "Keep one form.";
       }

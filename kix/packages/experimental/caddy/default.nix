@@ -69,7 +69,6 @@
 
 let
   name = scope.instanceName;
-  who = "caddy ${scope.namespaceName}/${name}";
   release = "2.11.9";
 
   # Stateless and serving user traffic: two replicas once a pod restart
@@ -112,7 +111,6 @@ in
       {
         assertion = config.replicaCount == null;
         id = "K6965";
-        package = "caddy";
         option = "replicaCount";
         message = "replicaCount was removed.";
         fix = "Set config.replicas instead.";
@@ -120,7 +118,6 @@ in
       {
         assertion = config.configSecretName == null;
         id = "K2263";
-        package = "caddy";
         option = "configSecretName";
         message = "configSecretName was removed.";
         fix = "Give the Caddyfile through the caddyfile dependency, a secret with the key Caddyfile, such as a packages.secret instance with aliases = [ \"caddyfile\" ].";
@@ -240,7 +237,7 @@ in
     }:
     let
       caddyfileSecret = kix.contracts.secret.helpers.use {
-        inherit who;
+        inherit scope;
         arg = "caddyfile";
         dep = caddyfile;
         keys = [ "Caddyfile" ];

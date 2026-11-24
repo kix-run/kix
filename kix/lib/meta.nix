@@ -474,8 +474,9 @@ rec {
   # An assertion is `{ assertion; message; fix ? null; id ? null; option ?
   # null; }`, with the fields `kix.fail` takes (`core/error.nix`). A warning
   # is a message or a record with those fields. Each assertion and warning
-  # gets `instance` set to the instance that raised it, so the code that
-  # raises one leaves the instance out of its text.
+  # gets `instance` set to the instance that raised it, and `package` to the
+  # id of its package when it has one, so the code that raises one leaves
+  # both out of its text.
   #
   # `scorecardWarnings` are left out of `allWarnings`, because the scorecard
   # report already carries them as findings and the CLI shows that report.
@@ -487,17 +488,21 @@ rec {
     {
       instanceName,
       namespaceName,
+      packageId ? null,
       metaResult,
       packageResult,
       structuralWarnings,
       scorecardWarnings ? [ ],
     }:
     let
-      instance = "${namespaceName}/${instanceName}";
-      allWarnings = map (errors.warning instance) (
+      where = {
+        instance = "${namespaceName}/${instanceName}";
+        package = packageId;
+      };
+      allWarnings = map (errors.warningFor where) (
         metaResult.warnings ++ structuralWarnings ++ packageResult.warnings
       );
-      allAssertions = map (a: { inherit instance; } // a) (
+      allAssertions = map (a: lib.filterAttrs (_: v: v != null) where // a) (
         metaResult.assertions ++ packageResult.assertions
       );
       failedAssertions = builtins.filter (a: !a.assertion) allAssertions;

@@ -172,7 +172,6 @@ let
   # one replica, from its `out.replicas`. The build then adds the
   # `replicate` init container, and `warnings` says so.
   isReplicated = replicas: replicas != null && replicas != "1";
-  who = "plausible ${scope.namespaceName}/${name}";
 
   # The first start runs every PostgreSQL and ClickHouse migration in the
   # init container. The progress deadline covers init containers too.
@@ -219,7 +218,7 @@ in
     database = {
       # Plausible's first PostgreSQL migration runs CREATE EXTENSION citext.
       config.extensions = [ "citext" ];
-      assertions = dep: kix.contracts.postgresDatabase.assertions who dep;
+      assertions = kix.contracts.postgresDatabase.assertions;
     };
 
     clickhouseDatabase = {
@@ -309,7 +308,7 @@ in
       }:
       let
         skb = kix.contracts.secret.helpers.use {
-          inherit who;
+          inherit scope;
           arg = "secretKeyBase";
           dep = secretKeyBase;
           keys = [ "key" ];
@@ -320,14 +319,13 @@ in
         relay =
           if smtpPassword != null then
             scope.fail {
-              package = "plausible";
               dependency = "smtpPassword";
               message = "deps.smtpPassword was replaced by deps.smtp.";
               fix = "Declare the mail server as a kix.mkImport in this namespace whose out sets host, port, tls, from, and credentials = ref.<ns>.<secret>, a secret with keys `username` and `password`. Remove the SMTP_* variables from env.";
             }
           else
             kix.contracts.smtp.helpers.settings {
-              inherit who smtp;
+              inherit scope smtp;
               inherit (config.mail) from;
             };
 
@@ -337,7 +335,6 @@ in
         _relayCheck =
           if relay != null && relay.credentials != null && relay.tls == "starttls" then
             scope.fail {
-              package = "plausible";
               dependency = "smtp";
               message = "deps.smtp uses tls = \"starttls\" with credentials. Plausible's mailer (Bamboo.Mua) sends the password without TLS when the server does not offer STARTTLS, so it would leak to anyone who can strip STARTTLS on the way.";
               fix = "Use the server's implicit TLS port: tls = \"implicit\" and port = \"465\" on the SMTP instance.";
@@ -363,7 +360,6 @@ in
         _credentialCheck =
           if literalCredentials != [ ] then
             scope.fail {
-              package = "plausible";
               option = "env";
               message = "env sets ${lib.concatStringsSep ", " literalCredentials} to a literal string, which would land in Kix's local store and the rendered Deployment.";
               fix = "Pass a secretKeyRef source to a Secret managed outside Kix (kix.untrackedRef).";

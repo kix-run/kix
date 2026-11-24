@@ -69,7 +69,6 @@ let
   release = "0.45.2";
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "falco ${ns}/${name}";
 
   # The webserver serves /healthz and, with metrics, /metrics.
   port = 8765;
@@ -294,7 +293,6 @@ in
         hasRules = config.rules != { };
 
         refusal = import ./platform.nix { inherit lib; } {
-          inherit who;
           inherit (clusterConfig.cluster) capabilities provider;
         };
 
@@ -394,7 +392,6 @@ in
         falcoConfig =
           if refusals != [ ] then
             scope.fail {
-              package = "falco";
               message = "${lib.concatStringsSep " " refusals}";
             }
           else
@@ -460,7 +457,7 @@ in
         daemonset =
           if refusal != null then
             scope.fail {
-              package = "falco";
+              clusterOption = "cluster.capabilities";
               message = refusal;
             }
           else

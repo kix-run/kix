@@ -176,7 +176,6 @@ in
           alertmanager.out
         else
           scope.fail {
-            package = "prometheus";
             message = "deps.alertmanager resolved to an instance whose out has no namespace and portName, so spec.alerting cannot name its Service.";
             fix = "Wire an alertmanager instance from packages.experimental.alertmanager. For an Alertmanager outside the cluster, give its address in extraSpec.additionalAlertManagerConfigs and let the kix.mkImport answer another alias, so this instance does not bind it.";
           };

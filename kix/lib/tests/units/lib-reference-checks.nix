@@ -1827,6 +1827,7 @@ in
         namespaceName = "edge";
         mkDeployment = d: d;
         selectorLabels = { };
+        inherit (kixlib) fail;
       };
       pkg = import ../../../packages/experimental/cloudflared {
         scope = stubScope;

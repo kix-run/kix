@@ -172,7 +172,6 @@
 let
   release = "26.8.2";
   name = scope.instanceName;
-  who = "keycloak ${scope.namespaceName}/${name}";
 
   # Covers the build step that `start` runs on every boot and the first
   # start's schema creation.
@@ -211,7 +210,7 @@ in
     };
   };
 
-  deps.database.assertions = dep: kix.contracts.postgresDatabase.assertions who dep;
+  deps.database.assertions = kix.contracts.postgresDatabase.assertions;
 
   options = {
     image = kix.options.image {
@@ -261,7 +260,7 @@ in
         # Keycloak keeps each realm's mail settings, sender and login
         # included, in the realm. The dependency only opens the network
         # path to the server.
-        relay = kix.contracts.smtp.helpers.server { inherit who smtp; };
+        relay = kix.contracts.smtp.helpers.server { inherit scope smtp; };
         # Only `metrics.enabled` decides KC_METRICS_ENABLED. Wiring a
         # prometheus dependency changes the Service and the ServiceMonitor
         # but not the pod template, so it does not restart Keycloak.
@@ -276,7 +275,7 @@ in
         scraped = metricsOn && prometheus != null;
 
         admin = kix.contracts.secret.helpers.use {
-          inherit who;
+          inherit scope;
           arg = "bootstrapAdmin";
           dep = bootstrapAdmin;
           keys = [
@@ -294,7 +293,6 @@ in
               lib.removeSuffix "/" config.env.KC_HOSTNAME
             else
               scope.fail {
-                package = "keycloak";
                 option = "env.KC_HOSTNAME";
                 message = "env.KC_HOSTNAME must be a URL with a scheme, such as \"https://auth.example.com\"; got ${builtins.toJSON config.env.KC_HOSTNAME}. Keycloak builds its issuer URLs from it.";
               }
@@ -302,7 +300,6 @@ in
             self.exposure.urlOrNull
           else
             scope.fail {
-              package = "keycloak";
               message = "Keycloak needs its public URL, and nothing routes to this instance.";
               fix = "Set ingress.host (or cluster.domain) with an ingress controller or a gateway in the cluster, or set env.KC_HOSTNAME to the URL clients reach, such as \"https://auth.example.com\".";
             };
@@ -430,7 +427,6 @@ in
             "/realms/${realm}"
           else
             scope.fail {
-              package = "keycloak";
               message = "${field} takes a realm name without '/', '?', '#', or spaces; got ${builtins.toJSON realm}.";
             };
 
@@ -586,7 +582,7 @@ in
         root = {
           resource = self.service;
           requires = builtins.filter (p: p != null) [ self.peers ];
-          out = kix.contracts.experimental.oidcProvider.check who {
+          out = kix.contracts.experimental.oidcProvider.check scope {
             version = kix.image.version config.image;
             url = hostname;
             issuerUrl = realm: "${hostname}${realmPath "out.issuerUrl" realm}";

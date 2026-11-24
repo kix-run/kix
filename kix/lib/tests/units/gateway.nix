@@ -23,6 +23,8 @@
 
 let
   contract = kixlib.contracts.gateway;
+  # A consumer or provider scope whose `fail` throws.
+  scope.fail = kixlib.fail;
   envoyGateway = import ../../../packages/experimental/envoy-gateway;
   traefik = import ../../../packages/experimental/traefik;
 
@@ -132,17 +134,17 @@ in
   # included; one without listeners, or with only one of podSelector and
   # podNamespace, is refused.
   gateway-check-requires-every-field =
-    contract.check "provider gwns/gw" providerOut == providerOut
-    && contract.check "provider gwns/gw" (
+    contract.check scope providerOut == providerOut
+    && contract.check scope (
       providerOut
       // {
         podSelector = null;
         podNamespace = null;
       }
     ) ? podSelector
-    && !succeeds (contract.check "provider gwns/gw" importOut)
-    && !succeeds (contract.check "provider gwns/gw" (providerOut // { podNamespace = null; }))
-    && !succeeds (contract.check "provider gwns/gw" (providerOut // { podSelector = { }; }));
+    && !succeeds (contract.check scope importOut)
+    && !succeeds (contract.check scope (providerOut // { podNamespace = null; }))
+    && !succeeds (contract.check scope (providerOut // { podSelector = { }; }));
 
   # A consumer accepts an import with only gatewayRef and refuses one
   # without it. A present optional field is still checked.
@@ -157,8 +159,8 @@ in
     && lib.hasInfix "listeners is not" (
       builtins.head (contract.problems (importOut // { listeners = "http"; }))
     )
-    && succeeds (contract.require "x" (depOf importOut))
-    && !succeeds (contract.require "x" (depOf { }));
+    && succeeds (contract.require scope (depOf importOut))
+    && !succeeds (contract.require scope (depOf { }));
 
   # An instance claims to be a gateway through out.gatewayRef or the
   # `gateway` alias on the instance or in its package's defaultAliases.

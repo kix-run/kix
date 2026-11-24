@@ -188,7 +188,6 @@ in
   podSpec =
     {
       scope,
-      who,
       name,
       config,
       self,

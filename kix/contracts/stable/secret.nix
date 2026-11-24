@@ -11,7 +11,7 @@
 # A secret dependency has no fixed name: Grafana's is `grafanaAdmin`, caddy's
 # is `caddyfile`. `alias` is `secret`, the default alias of the source
 # packages, and `helpers.use` names the consumer's own argument in its
-# messages.
+# errors.
 {
   lib,
   compose,
@@ -19,7 +19,7 @@
   ...
 }:
 let
-  inherit (import ../../lib/core/error.nix { inherit lib; }) fail;
+  inherit (import ../../lib/core/error.nix { inherit lib; }) failOf;
   isFunction = builtins.isFunction;
 
   fields = {
@@ -70,9 +70,11 @@ let
       # `arg`, against the contract and the keys the package reads, and
       # return it. A null `dep` (an optional dependency left unset) passes.
       # Read the Secret through the returned value so the checks run first.
+      # The error names the instance in `scope` and `arg` as its dependency.
       use =
         {
-          who,
+          scope ? null,
+          who ? null,
           arg,
           dep,
           keys ? [ ],
@@ -89,18 +91,24 @@ let
               "the ${kind}${lib.optionalString (builtins.isString name) " ${name}"}"
             else
               "something else";
+          scopeFail = failOf "contracts.secret.helpers.use" { inherit scope who; };
         in
         if dep == null then
-          null
+          builtins.seq scopeFail null
         else if found != [ ] then
-          fail {
-            message = "${who}: deps.${arg} must be a secret, but it is ${what}.";
+          scopeFail {
+            dependency = arg;
+            message =
+              if what == "something else" then
+                "deps.${arg} is not a valid secret (`kix.contracts.secret`): ${lib.concatStringsSep "; " found}."
+              else
+                "deps.${arg} expects a secret, but got ${what}.";
             fix = "Wire a secret instance, such as packages.secret (plain text or a SOPS file) or packages.secret-ref (a Secret something else writes), with deps.${arg} = ref.<ns>.<instance>.";
           }
         else
           compose.checkSecretKeys {
             inherit
-              who
+              scope
               arg
               dep
               keys

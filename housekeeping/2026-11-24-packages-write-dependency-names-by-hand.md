@@ -1,0 +1,3 @@
+# 2026-11-24 · `kix/contracts/`, `kix/packages/` · Packages and contract helpers write a dependency's name by hand, so an error can name the wrong dependency.
+
+About 25 package files pass `arg = "<name>"` to `kix.contracts.secret.helpers.use`, callers pass the name to `requireAs`, and the contract helpers fix `dependency = "smtp"`, `"oidc"`, and `"redis"` in their errors. A package that takes a contract under a second name gets an error whose `dependency` field names the wrong dependency. Helpers also receive their error context in three shapes: an attribute `scope` (`helpers.use`, `checkSecretKeys`), a positional `scope` (`check`, `require`, `requirePlaintext`), and a bare `fail` (`mergeCollide`, stackgres-operator's `resolvePostgres`).

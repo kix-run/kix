@@ -949,7 +949,21 @@ rec {
                 };
 
               effectiveOut = autoOut // out;
-              collision = helpers.mergeCollide "importChart (${releaseName}): extraParts names a part the chart already renders (or names root). Rename the extra part";
+              collision = helpers.mergeCollide {
+                inherit (scope) fail;
+                error = names: {
+                  message =
+                    if names == "root" then
+                      "importChart (${releaseName}): `extraParts` cannot define `root`, because `mkParts` builds `root` itself."
+                    else
+                      "importChart (${releaseName}): `extraParts` defines ${names}, which collides with a resource part rendered by the chart.";
+                  fix =
+                    if names == "root" then
+                      "Remove `root` from `extraParts`, and pass `root`, `extraRequires`, or `out` directly to `mkParts`."
+                    else
+                      "Rename ${names} in `extraParts`.";
+                };
+              };
             in
             collision (collision attrs extraParts) {
               root = {

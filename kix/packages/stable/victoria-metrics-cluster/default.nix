@@ -378,7 +378,6 @@ in
             storage.volumeClaimTemplate.spec =
               if config.vmstorage.storage ? storageClassName then
                 scope.fail {
-                  package = "victoria-metrics-cluster";
                   option = "vmstorage.storage.storageClassName";
                   message = "vmstorage.storage sets storageClassName, which the package derives from vmstorage.storageClassName, the storageClasses dependency, or the cluster default.";
                   fix = "Set vmstorage.storageClassName instead.";
@@ -450,7 +449,6 @@ in
             443
           else if m == null then
             scope.fail {
-              package = "victoria-metrics-cluster";
               option = "extraSpec.vmstorage.vmBackup.customS3Endpoint";
               message = "extraSpec.vmstorage.vmBackup.customS3Endpoint \"${endpoint}\" is not an http or https URL, so the package cannot tell which port vmbackupmanager reaches.";
               fix = "Write it as https://<host>[:<port>].";

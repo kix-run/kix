@@ -47,11 +47,11 @@ Each stable contract is one file in `kix/contracts/stable/`, and the file name i
 | `name` | `string` | The contract's name in error messages, such as `"Redis"`. |
 | `alias` | `string` | Default dependency argument name (`"database"`, `"redis"`, `"smtp"`, `"oidc"`, `"oidcProvider"`, `"gateway"`, `"otlp"`, `"clickhouse"`, or `"secret"`). |
 | `fields` | `attrset` | Map of field names to `{ required; shape; test; }` definitions. A `credentials` field also lists its Secret key names in `fields.credentials.keys`. |
-| `check` | `who -> out -> out` | Provider-side validator. Verifies that `root.out` defines **every** field in `fields` (both required and optional) with a valid shape, and returns `out` (or throws an evaluation error naming `who` and the missing or malformed fields). |
+| `check` | `scope -> out -> out` | Provider-side validator. Verifies that `root.out` defines **every** field in `fields` (both required and optional) with a valid shape and returns `out`, or fails through `scope.fail` listing the missing or invalid fields. |
 | `problems` | `out -> [ string ]` | Consumer-side problem finder. Checks that all `required = true` fields are present and valid, and validates the shape of any `required = false` fields that are present on `out`. |
-| `assertions` | `who -> dep -> [ { assertion; message; } ]` | Consumer-side assertion builder for `deps.<alias>.assertions`. Because a `kix.mkImport` stand-in is checked as a consumer dependency, it only needs to set the `required = true` fields (plus any optional fields the consumer requires). |
-| `require` | `who -> dep -> dep` | Eager consumer-side validator (used by `kix.expose` for `kix.contracts.gateway`, and called internally by `kix.contracts.smtp.helpers.server` and `kix.contracts.oidc.helpers.client`). Validates `dep.out` with `problems` and returns `dep`, or throws an evaluation error with `dependency` set to `alias`. |
-| `requireAs` | `dependency -> who -> dep -> dep` | Like `require`, for a consumer whose dependency argument is not named `alias`. Sets `dependency` on the error to the given name. |
+| `assertions` | `dep -> [ { assertion; message; } ]` | Consumer-side assertion builder for `deps.<alias>.assertions`, such as `deps.database.assertions = kix.contracts.postgresDatabase.assertions;`. Kix attaches `instance`, `package`, and `dependency` to each assertion automatically. Because `kix.mkImport` instances are checked on the consumer side, they only need to define `required = true` fields (plus any optional fields the consumer reads). |
+| `require` | `scope -> dep -> dep` | Eager consumer-side validator (used by `kix.expose` for `kix.contracts.gateway`, and called by `kix.contracts.smtp.helpers.server` and `kix.contracts.oidc.helpers.client`). Validates `dep.out` with `problems` and returns `dep`, or fails through `scope.fail` with `dependency` set to `alias`. |
+| `requireAs` | `dependency -> scope -> dep -> dep` | Like `require`, for a consumer whose dependency argument is not named `alias`. Sets `dependency` on the error to the given name. |
 | `helpers` | `attrset` | The contract's own functions and values for its consumers, such as `kix.contracts.redis.helpers.usesSentinel`. An empty attribute set when the contract has none. |
 | `options` | option attrset, a function that returns one, or `null` | The option set a consumer package adds to its own `options`, such as `kix.contracts.smtp.options`. `null` when the contract has none. |
 
@@ -94,7 +94,7 @@ A secret dependency has no fixed name: Grafana's is `grafanaAdmin`, caddy's is `
 | `keys` | No | `list` of `str` or `null` | The keys the Secret holds. |
 | `sops` | No | `{ source; digest; }` | The SOPS file that Kix fills the Secret from, and its SHA-256, set only when it does. |
 
-A consumer checks the dependency with `kix.contracts.secret.helpers.use { who; arg; dep; keys ? [ ]; anyOf ? null; }`, which returns `dep` or throws an error that names `deps.<arg>`. See [`kix.contracts.secret.helpers.use`](/docs/reference/package-anatomy/#kixcontractssecrethelpersuse).
+A consumer checks the dependency with `kix.contracts.secret.helpers.use { scope; arg; dep; keys ? [ ]; anyOf ? null; }`, which returns `dep` or fails through `scope.fail` with `dependency` set to `arg`. See [`kix.contracts.secret.helpers.use`](/docs/reference/package-anatomy/#kixcontractssecrethelpersuse).
 
 ---
 
@@ -140,7 +140,7 @@ A consumer checks the dependency with `kix.contracts.secret.helpers.use { who; a
 | --- | --- | --- |
 | `kix.contracts.redis.fields.credentials.keys` | `[ "password" ]` | Required key names when `out.credentials` is present. |
 | `kix.contracts.redis.helpers.usesSentinel` | `dep -> bool` | Returns `true` when `dep.out.sentinel` is non-null. |
-| `kix.contracts.redis.helpers.requirePlaintext` | `who -> dep -> dep` | Throws an evaluation error if `dep.out.tls` is `true`, and returns `dep` otherwise. Used by `harbor` and `immich`, whose Redis clients in the package do not connect over TLS (`n8n` supports `tls = true`). |
+| `kix.contracts.redis.helpers.requirePlaintext` | `scope -> dep -> dep` | Fails through `scope.fail` (with `dependency = "redis"`) if `dep.out.tls` is `true`; otherwise returns `dep`. Used by `harbor` and `immich`, which do not support Redis over TLS (`n8n` supports `tls = true`). |
 | `kix.contracts.redis.helpers.renamedFrom` | `{ name = "valkey"; id; }` | The name this dependency had in earlier releases. `harbor`, `immich`, and `n8n` set it as [`deps.redis.renamedFrom`](/docs/reference/package-anatomy/#enriching-dependencies-with-depsarg), so the error for a missing `redis` dependency says that it was named `valkey`. |
 
 ### Importing an external Redis server
@@ -168,8 +168,8 @@ A consumer checks the dependency with `kix.contracts.secret.helpers.use { who; a
 
 | Helper | Signature | Behavior |
 | --- | --- | --- |
-| `kix.contracts.smtp.helpers.settings` | `{ who, smtp, from ? null } -> attrset or null` | Returns `null` when `smtp` is `null`. Otherwise validates `smtp` and returns `{ host; port; portNumber; tls; external; from; credentials; }`, where `port` is a string, `portNumber` is an integer, `from` is the `from` argument (if non-null) or `smtp.out.from`, and `credentials` is `smtp.out.credentials` or `null`. Refuses `tls = "none"` when `external` is `true`, and refuses a server when both `from` and `smtp.out.from` are `null`. |
-| `kix.contracts.smtp.helpers.server` | `{ who, smtp } -> attrset or null` | Validates `smtp` with the same rules and return shape as `settings`, except `from` may be `null`. Used by packages such as `keycloak` that configure sender addresses inside application realms rather than at the container level. |
+| `kix.contracts.smtp.helpers.settings` | `{ scope, smtp, from ? null } -> attrset or null` | Returns `null` when `smtp` is `null`. Otherwise validates `smtp` and returns `{ host; port; portNumber; tls; external; from; credentials; }`, where `port` is a string, `portNumber` is an integer, `from` is the `from` argument (if non-null) or `smtp.out.from`, and `credentials` is `smtp.out.credentials` or `null`. Fails through `scope.fail` if `external` is `true` with `tls = "none"`, or if both `from` and `smtp.out.from` are `null`. |
+| `kix.contracts.smtp.helpers.server` | `{ scope, smtp } -> attrset or null` | Validates `smtp` with the same rules and return shape as `settings`, except `from` may be `null`. Used by packages such as `keycloak` that configure sender addresses inside application realms rather than at the container level. |
 | `kix.contracts.smtp.helpers.egressPolicy` | `{ scope, name, selector, smtp } -> resource or null` | Returns a network policy opening TCP egress on `smtp.portNumber` to `"world"` for pods matching `selector`, or `null` when `smtp` is `null` or `smtp.external` is `false`. |
 | `kix.contracts.smtp.fields.credentials.keys` | `[ "username" "password" ]` | Required key names when `out.credentials` is present. |
 | `kix.contracts.smtp.options` | option attrset | Declares `from` (`nullOr str` containing `@`, default `null`) for `options.mail = kix.contracts.smtp.options;`. |
@@ -212,7 +212,7 @@ Two kinds of instance satisfy `oidc`, both placed in the application's namespace
 
 | Helper | Signature | Behavior |
 | --- | --- | --- |
-| `kix.contracts.oidc.helpers.client` | `{ who, oidc, options } -> attrset or null` | Checks `options` (`config.oidc`) and throws a migration error if the removed `enabled` or `realm` options are set. Returns `null` when `oidc` is `null`, or `{ issuerUrl; endpoints; credentials; }` when bound (evaluating `.endpoints` throws an error if the provider did not publish `out.endpoints`). |
+| `kix.contracts.oidc.helpers.client` | `{ scope, oidc, options } -> attrset or null` | Validates `options` (`config.oidc`), failing through `scope.fail` if the removed `enabled` or `realm` options are set. Returns `null` when `oidc` is `null`, or `{ issuerUrl; endpoints; credentials; }` when bound (reading `.endpoints` fails through `scope.fail` if the provider omits `out.endpoints`). |
 | `kix.contracts.oidc.options` | `{ scopes, autoLogin ? null } -> option attrset` | Declares `scopes` (`listOf str` that must include `"openid"`, defaulting to `scopes`) and, when `autoLogin != null`, `autoLogin` (`bool`, default `false`). |
 | `kix.contracts.oidc.fields.credentials.keys` | `[ "clientId" "clientSecret" ]` | Required key names on `out.credentials`. |
 | `kix.contracts.oidc.helpers.endpointKeys` | `[ "authorizationUrl" "tokenUrl" "userinfoUrl" ]` | Required attribute names when `out.endpoints` is set. |
@@ -258,7 +258,7 @@ When the external identity provider has a single issuer URL, declare a `kix.mkIm
 ### `gateway` helper functions
 
 `kix.expose` reads its gateway through `require` and the `claims` helper:
-- **`kix.contracts.gateway.require who dep`**: Validates `dep.out` (requiring `gatewayRef` and checking that `podSelector` and `podNamespace` are either both set or both `null`) and returns `dep`.
+- **`kix.contracts.gateway.require scope dep`**: Validates `dep.out` (requiring `gatewayRef` and checking that `podSelector` and `podNamespace` are either both set or both `null`) and returns `dep`.
 - **`kix.contracts.gateway.helpers.claims dep`**: Returns `true` when `dep` declares the `"gateway"` alias or publishes `out.gatewayRef`. `kix.expose` uses this check so an unrelated application instance named `gateway` in the same namespace is not mistaken for a Gateway API controller.
 
 ---

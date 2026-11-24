@@ -101,7 +101,6 @@ let
   release = "13.3.1";
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "grafana ${ns}/${name}";
 
   httpPort = 3000;
 
@@ -159,7 +158,7 @@ in
         relay =
           let
             r = kix.contracts.smtp.helpers.settings {
-              inherit who smtp;
+              inherit scope smtp;
               inherit (config.mail) from;
             };
           in
@@ -167,14 +166,12 @@ in
             null
           else if r.tls == "implicit" && r.portNumber != 465 then
             scope.fail {
-              package = "grafana";
               dependency = "smtp";
               message = "deps.smtp uses tls = \"implicit\" on port ${r.port}. Grafana's mailer uses implicit TLS only on port 465, so it would speak plain SMTP to this port.";
               fix = "Use the server's port 465, or its STARTTLS port with tls = \"starttls\".";
             }
           else if r.tls != "implicit" && r.portNumber == 465 then
             scope.fail {
-              package = "grafana";
               dependency = "smtp";
               message = "deps.smtp uses tls = \"${r.tls}\" on port 465. Grafana's mailer always uses implicit TLS on port 465.";
               fix = "Set tls = \"implicit\" on the SMTP instance.";
@@ -183,14 +180,14 @@ in
             r;
 
         oidcProviderInfo = kix.contracts.oidc.helpers.client {
-          inherit who oidc;
+          inherit scope oidc;
           options = config.oidc;
         };
         oidcOn = oidcProviderInfo != null;
         oidcCredentials = oidcProviderInfo.credentials;
 
         admin = kix.contracts.secret.helpers.use {
-          inherit who;
+          inherit scope;
           arg = "grafanaAdmin";
           dep = grafanaAdmin;
           keys = [

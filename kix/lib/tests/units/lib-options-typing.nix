@@ -872,17 +872,30 @@ in
     in
     (cm.data.name or null == "cache") || throw "helper in an import: ${builtins.toJSON cm}";
 
+  # checkSecretKeys passes a secret that declares the keys, and refuses one
+  # that does not with an error that names the instance, its package, and
+  # the dependency. A call with `who` is refused with the change record id.
   lib-options-typing-check-secret-keys =
     let
+      records = (import ../caught.nix { inherit lib; }).records;
       check =
         args:
         kixlib.checkSecretKeys (
           {
-            who = "pkg ns/inst";
+            scope.fail = kixlib.fail;
             arg = "creds";
           }
           // args
         );
+      missing = builtins.head (
+        records
+          (kixlib.checkSecretKeys {
+            scope = caughtScope;
+            arg = "creds";
+            dep = secretDep [ "a" ];
+            keys = [ "b" ];
+          }).thrown
+      );
       both = secretDep [
         "a"
         "b"
@@ -931,8 +944,26 @@ in
           dep = null;
           keys = [ "a" ];
         } == null
+      &&
+        {
+          inherit (missing) instance package dependency;
+        } == {
+          instance = "ns/inst";
+          package = "pkg";
+          dependency = "creds";
+        }
+      # Only an error with the change record id throws through this scope,
+      # so `throws` passes only for the refusal of `who`.
+      && throws (
+        kixlib.checkSecretKeys {
+          scope.fail = e: if (e.id or null) == "K6417" then throw "K6417" else e;
+          who = "pkg ns/inst";
+          arg = "creds";
+          dep = null;
+        }
+      )
     )
-    || throw "checkSecretKeys passed or refused the wrong secrets";
+    || throw "checkSecretKeys passed or refused the wrong secrets: ${builtins.toJSON missing}";
 
   lib-options-typing-contract-rule1 =
     let

@@ -63,7 +63,6 @@ let
   valkeyConfOf =
     cluster: (byName "valkey-config" (ofKind "ConfigMap" (manifests cluster))).data."valkey.conf";
 
-  who = "valkey cache/valkey";
   # A package shaped like valkey: a main build entry with a Deployment and
   # its Service, and a kix.monitor entry.
   listBuildPackage =
@@ -184,12 +183,12 @@ in
     in
     (evalFails direct && evalFails auto) || throw "a missing dependency evaluated";
 
-  # Each refused directive gets one message that starts with the instance
-  # and names the option path; an ordinary directive passes.
+  # Each refused directive gets one error that names the option and the
+  # directive's path; an ordinary directive passes.
   valkey-reserved-directives =
     let
-      settingsOf = conf.refusals who "settings" (conf.reservedSettings 6379);
-      primaryOf = conf.refusals who "sentinel.primarySettings" conf.reservedPrimarySettings;
+      settingsOf = conf.refusals "settings" (conf.reservedSettings 6379);
+      primaryOf = conf.refusals "sentinel.primarySettings" conf.reservedPrimarySettings;
       got = {
         port = settingsOf { port = 1; };
         PORT = settingsOf { PORT = 1; };
@@ -206,18 +205,22 @@ in
         };
       };
       says =
-        phrase: messages: builtins.length messages == 1 && lib.hasInfix phrase (builtins.head messages);
+        phrase: errors: builtins.length errors == 1 && lib.hasInfix phrase (builtins.head errors).message;
     in
     (
-      says "valkey cache/valkey: settings.port is set by the package: the Services and probes use port 6379. Remove it." got.port
-      && says "settings.PORT is set by the package" got.PORT
-      && says "settings.bind is set by the package" got.bind
-      && says "settings.masteruser is set by the package: replicas authenticate" got.masteruser
-      && says "settings.rename-command is set by the package" got.rename
-      && says "settings.Appendonly is not lower case" got.upper
-      && says ''settings."appendonly yes\nport" is not a directive name'' got.notName
-      && says "sentinel.primarySettings.monitor is set by the package" got.monitor
-      && says "sentinel.primarySettings.rename-command is set by the package" got.primaryRename
+      says "settings.port cannot be set here because the Services and probes use port 6379." got.port
+      && (builtins.head got.port).fix == "Remove `port` from `settings`."
+      && (builtins.head got.port).option == "settings"
+      && (builtins.head got.monitor).option == "sentinel.primarySettings"
+      && says "settings.PORT cannot be set here" got.PORT
+      && says "settings.bind cannot be set here" got.bind
+      && says "settings.masteruser cannot be set here because replicas authenticate" got.masteruser
+      && says "settings.rename-command cannot be set here" got.rename
+      && says "settings.Appendonly must be lowercase" got.upper
+      && (builtins.head got.upper).fix == "Rename `Appendonly` to `appendonly` in `settings`."
+      && says ''settings."appendonly yes\nport" is not a valid Valkey directive name'' got.notName
+      && says "sentinel.primarySettings.monitor cannot be set here" got.monitor
+      && says "sentinel.primarySettings.rename-command cannot be set here" got.primaryRename
       && got.ordinary == [ ]
     )
     || throw "valkey refusals: ${builtins.toJSON got}";

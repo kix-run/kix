@@ -297,7 +297,6 @@ in
           out
         else
           scope.fail {
-            package = "cluster-issuer";
             message = "deps.certManager resolved to an instance whose out has no clusterIssuerSpecSchema, clusterResourceNamespace, or crds.ClusterIssuer, such as a kix.mkImport. This package needs the cert-manager package.";
             fix = "For a cert-manager installed outside Kix, declare the existing ClusterIssuer as a kix.mkImport { out.withCert = ...; } instance with aliases = [ \"clusterIssuer\" ] instead.";
           };
@@ -449,7 +448,6 @@ in
         else
           scope.fail (
             map (message: {
-              package = "cluster-issuer";
               inherit message;
             }) errors
           );

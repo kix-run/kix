@@ -104,7 +104,6 @@
 let
   release = "0.65.6";
   name = scope.instanceName;
-  who = "metabase ${scope.namespaceName}/${name}";
 
   # The first start creates Metabase's schema. A pod killed during a
   # migration can leave the application database corrupt, so the startup
@@ -125,7 +124,7 @@ in
   deps.database = {
     # Metabase's first migration runs CREATE EXTENSION citext.
     config.extensions = [ "citext" ];
-    assertions = dep: kix.contracts.postgresDatabase.assertions who dep;
+    assertions = kix.contracts.postgresDatabase.assertions;
   };
   # endregion:postgresDatabaseAssertions
 
@@ -173,7 +172,7 @@ in
         metricsOn = config.metrics.enabled;
         scraped = metricsOn && prometheus != null;
         ek = kix.contracts.secret.helpers.use {
-          inherit who;
+          inherit scope;
           arg = "encryptionKey";
           dep = encryptionKey;
           keys = [ "key" ];

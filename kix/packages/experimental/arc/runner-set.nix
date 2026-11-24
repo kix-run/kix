@@ -196,7 +196,6 @@ rec {
     in
     if problem != null then
       consumerScope.fail {
-        package = "arc";
         message = "AutoscalingRunnerSet ${namespace}/${name}: ${problem}";
       }
     else

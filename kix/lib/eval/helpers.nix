@@ -1,8 +1,5 @@
 { lib }:
 
-let
-  inherit (import ../core/error.nix { inherit lib; }) fail;
-in
 rec {
   # The built-in kinds Kubernetes serves cluster-scoped. helm.nix renders
   # these without a namespace, and validate.nix resolves references to them
@@ -29,15 +26,16 @@ rec {
     "VolumeAttachment"
   ];
 
+  # Return `a // b`, or report the names both sets define through `fail`.
+  # `error` takes those names as text and returns the record `fail` takes,
+  # so the caller's `fail` names the instance and its package.
   mergeCollide =
-    context: a: b:
+    { fail, error }:
+    a: b:
     let
-      collisions = builtins.intersectAttrs a b;
+      collisions = builtins.attrNames (builtins.intersectAttrs a b);
     in
-    if collisions == { } then
-      a // b
-    else
-      fail "${context}: key collision on ${builtins.concatStringsSep ", " (builtins.attrNames collisions)}";
+    if collisions == [ ] then a // b else fail (error (builtins.concatStringsSep ", " collisions));
 
   collectTypedAttrs =
     {
