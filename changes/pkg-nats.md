@@ -1,0 +1,5 @@
++++
+kind = "added"
+packages = ["experimental/nats"]
++++
+The new experimental `nats` package (`packages.experimental.nats`) deploys NATS 2.15.3 with JetStream persistence as a StatefulSet with one volume per pod. Add a `natsAuth` secret in the same namespace with `username` and `password` keys for client login. Each instance runs one standalone server by default (at availability level `none`), or an odd-numbered cluster of 3 or more servers when `clustered = true` (at `pod`, `node`, or `zone`). Kix rejects availability levels that conflict with `clustered` because NATS cannot convert a server with stored streams between standalone and clustered modes in place. Applications in the same namespace, or in another namespace via `ref`, read `out.url` or `out.host` to connect on client port 4222 and `out.monitoringHost` to query HTTP monitoring on port 8222. When generated network policy is enabled, Kix opens only the port each consumer reads. Each pod runs a `prometheus-nats-exporter` sidecar (with Prometheus alerts when the cluster has a `prometheus` provider), and `kix deploy` runs a post-deploy check that publishes and reads back a test message.
