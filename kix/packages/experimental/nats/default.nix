@@ -289,26 +289,45 @@ in
       {
         assertion = config.clustered || !multi;
         option = "clustered";
-        message = "`clustered` is `false` (1 standalone server), which conflicts with availability level `${availability}` (multiple replicas). Kix stopped before changing the cluster, so any running server and its JetStream streams are untouched. Kix never turns on `clustered` automatically because switching in place fails in `nats-server` 2.15.3. Kubernetes starts two new clustered servers, but they cannot elect a JetStream metadata leader while pod `${name}-0` runs standalone. They never become ready, and Kubernetes never restarts `${name}-0`. `kix deploy` fails after 180 seconds with no readiness progress on every run. Pod `${name}-0` keeps serving its streams until its next restart, such as an eviction or node drain. It then starts clustered, marks its stored streams as orphaned, and deletes them about 30 seconds later.";
-        fix = "To keep one standalone server, set `instances.${scope.namespaceName}.${name}.availability = \"none\";`. For a new instance with no data, set `instances.${scope.namespaceName}.${name}.config.clustered = true;`. To migrate an existing server and keep its data: 1. Back up every stream with `nats stream backup`. 2. Delete every stream with `nats stream rm`. 3. Delete the StatefulSet with `kubectl delete statefulset -n ${scope.namespaceName} ${name}` (its PersistentVolumeClaims stay, so every server starts clustered at once). 4. Set `instances.${scope.namespaceName}.${name}.config.clustered = true;` and run `kix deploy`. 5. Restore every stream with `nats stream restore`.";
+        message = "`clustered` is `false` (1 standalone server), which conflicts with availability level `${availability}` (multiple replicas). Kix stopped before changing the cluster, so any running server and its JetStream streams are untouched. Kix does not turn on `clustered` automatically because `nats-server` 2.15.3 cannot convert a standalone JetStream server in place: new pods cannot elect a leader while `${name}-0` runs standalone, `kix deploy` times out, and when `${name}-0` next restarts it marks its stored streams as orphaned and deletes them.";
+        fix = ''
+          Choose one:
+          - Keep one standalone server: set `instances.${scope.namespaceName}.${name}.availability = "none";`.
+          - Start a new NATS cluster (no existing streams): set `instances.${scope.namespaceName}.${name}.config.clustered = true;`.
+          - Migrate a standalone server that holds streams:
+            1. Back up every stream with `nats stream backup`, then delete it with `nats stream rm`.
+            2. Delete the StatefulSet with `kubectl delete statefulset -n ${scope.namespaceName} ${name}` (its PersistentVolumeClaims stay, so all pods start clustered together).
+            3. Set `instances.${scope.namespaceName}.${name}.config.clustered = true;` and run `kix deploy`.
+            4. Restore every stream with `nats stream restore`.'';
       }
       {
         assertion = !config.clustered || multi;
         option = "clustered";
-        message = "`clustered` is `true` (3 or more servers), which conflicts with availability level `none` (1 replica). Kix stopped before changing the cluster, so any running servers and their JetStream streams are untouched. Kix never turns off `clustered` automatically because switching in place fails in `nats-server` 2.15.3. The remaining server restarts standalone, refuses to recover any stream with more than one replica, and fails its health check. Its pod never becomes ready, and the stream files stay on the volumes.";
-        fix = "To run a NATS cluster, set `instances.${scope.namespaceName}.${name}.availability` to `\"pod\"`, `\"node\"`, or `\"zone\"`, or raise `cluster.availability.default`. For a new standalone server with no data, set `instances.${scope.namespaceName}.${name}.config.clustered = false;`. To switch an existing cluster to a standalone server and keep its data: 1. Back up every stream with `nats stream backup`. 2. Delete every stream with `nats stream rm`. 3. Set `instances.${scope.namespaceName}.${name}.config.clustered = false;` and run `kix deploy`. 4. Restore every stream with `nats stream restore`.";
+        message = "`clustered` is `true` (3 or more servers), which conflicts with availability level `none` (1 replica). Kix stopped before changing the cluster, so any running servers and their JetStream streams are untouched. Kix does not turn off `clustered` automatically because `nats-server` 2.15.3 cannot convert a JetStream cluster to a standalone server in place: `${name}-0` refuses to load multi-replica streams and fails its health check, leaving the pod unready while stream files remain on the volumes.";
+        fix = ''
+          Choose one:
+          - Run a NATS cluster: set `instances.${scope.namespaceName}.${name}.availability` to `"pod"`, `"node"`, or `"zone"`, or raise `cluster.availability.default`.
+          - Start a new standalone server (no existing streams): set `instances.${scope.namespaceName}.${name}.config.clustered = false;`.
+          - Migrate an existing cluster to a standalone server:
+            1. Back up every stream with `nats stream backup`, then delete it with `nats stream rm`.
+            2. Set `instances.${scope.namespaceName}.${name}.config.clustered = false;` (and `availability = "none"` if needed) and run `kix deploy`.
+            3. Restore every stream with `nats stream restore`.'';
       }
       {
         assertion = config.clustered || n == 1;
         option = "replicas";
-        message = "`replicas` is ${toString n}, which is invalid when `clustered` is `false` (standalone mode runs 1 pod). Kix stopped before deploying anything.";
-        fix = "To run one standalone server, remove `replicas` or set `replicas = 1;`. To run a NATS cluster, set `clustered = true;` with an availability level of `pod`, `node`, or `zone`. Switching a running standalone instance to clustered in place makes the deploy fail and later deletes its streams. To keep its data, back up every stream with `nats stream backup`, then delete every stream with `nats stream rm`. Delete the StatefulSet with `kubectl delete statefulset -n ${scope.namespaceName} ${name}` (its PersistentVolumeClaims stay). Then set `clustered = true;`, run `kix deploy`, and restore every stream with `nats stream restore`.";
+        message = "`replicas` is ${toString n}, but standalone mode (`clustered = false`) runs 1 server pod. Kix stopped before changing the cluster.";
+        fix = ''
+          Choose one:
+          - Run one standalone server: remove `replicas` or set `replicas = 1;`.
+          - Start a new NATS cluster (no existing streams): set `clustered = true;` with availability `"pod"`, `"node"`, or `"zone"`.
+          - Migrate a standalone server that holds streams: back up every stream with `nats stream backup`, delete every stream with `nats stream rm`, delete the StatefulSet with `kubectl delete statefulset -n ${scope.namespaceName} ${name}` (its PersistentVolumeClaims stay), set `clustered = true;` with availability `"pod"`, `"node"`, or `"zone"`, run `kix deploy`, and restore every stream with `nats stream restore`.'';
       }
       {
         assertion = !config.clustered || (n >= 3 && lib.mod n 2 == 1);
         option = "replicas";
-        message = "`replicas` is ${toString n}, but `clustered = true` requires an odd number of at least 3. JetStream requires a majority quorum, and an even server count tolerates no more failures than the next lower odd count. Kix stopped before deploying anything.";
-        fix = "Set `replicas` to an odd number of 3 or more, such as 3 or 5.";
+        message = "`replicas` is ${toString n}, but `clustered = true` requires an odd number of at least 3. Clustered JetStream needs at least 3 servers to form a majority quorum, and an even count tolerates no more server failures than the next lower odd count. Kix stopped before changing the cluster.";
+        fix = "Set `replicas` to an odd number of at least 3 (such as `3`, which tolerates 1 lost server, or `5`, which tolerates 2).";
       }
     ];
 
@@ -329,7 +348,7 @@ in
     clustered = lib.mkOption {
       type = lib.types.bool;
       default = false;
-      description = "Run a NATS cluster of `replicas` servers (`true`) or one standalone server (`false`). The availability level never sets `clustered` automatically: Kix rejects `false` at `pod`, `node`, or `zone`, and rejects `true` at `none`. NATS cannot switch an instance with data between standalone and clustered modes in place without deleting or stranding JetStream streams. Back up every stream with `nats stream backup` first, change `clustered` and deploy, then restore them with `nats stream restore`.";
+      description = "Run a NATS cluster of `replicas` servers (`true`) or one standalone server (`false`). Availability levels do not change `clustered` automatically: Kix rejects `false` at `pod`, `node`, or `zone`, and rejects `true` at `none`. NATS cannot convert a server with stored streams between standalone and clustered modes in place. To migrate an instance with data, back up every stream (`nats stream backup`), delete every stream (`nats stream rm`), delete the StatefulSet when moving from standalone to clustered (its PersistentVolumeClaims stay), change `clustered` and deploy, then restore the streams (`nats stream restore`).";
     };
 
     replicas = lib.mkOption {
@@ -348,7 +367,7 @@ in
       size = lib.mkOption {
         type = kix.types.quantity;
         default = "10Gi";
-        description = "Size of each pod's `/data` PersistentVolumeClaim when JetStream is enabled. Also sets the default `settings.jetstream.max_file_store`. Kubernetes does not allow changing a StatefulSet's `volumeClaimTemplates` in place, and existing claims keep their original size.";
+        description = "Size of each pod's `/data` PersistentVolumeClaim when JetStream is enabled. Also sets the default `settings.jetstream.max_file_store`. Kubernetes cannot resize a StatefulSet's `volumeClaimTemplates` in place, so changing `storage.size` does not resize existing PersistentVolumeClaims.";
       };
       storageClassName = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
@@ -364,11 +383,11 @@ in
         max_payload = 8388608;
         jetstream.max_memory_store = 1073741824;
       };
-      description = "Extra `nats.conf` settings merged over this package's defaults. Keys in `settings`, `settings.cluster`, and `settings.jetstream` must be lowercase. When NATS accepts multiple names for a setting (such as `max_file_store` and `max_file`), use the canonical name (`max_file_store`). Kix rejects settings that this package manages or does not support: ports and listen addresses, `server_name`, `pid_file`, lame duck timings, `ports_file_dir`, log files and syslog, the profiling port, client TLS, `authorization`, `accounts`, JWT authentication, leaf nodes, gateways, WebSocket, and MQTT. `settings.cluster` is allowed only when `clustered` is `true`, and rejects `name`, `port`, `listen`, `host`, `net`, `routes`, `authorization`, and `tls`. `settings.jetstream` is allowed only when `jetstream.enabled` is `true`, and rejects `store_dir`, `enabled`, and encryption settings (`key`, `prev_key`, `cipher`, and `tpm`).";
+      description = "Extra `nats.conf` settings merged over this package's defaults. Keys in `settings`, `settings.cluster`, and `settings.jetstream` must be lowercase. When NATS accepts aliases for a key (such as `max_file` for `max_file_store`), use `max_file_store` (the primary name). Kix rejects top-level settings that this package manages (ports, listen addresses, `client_advertise`, `http_base_path`, `server_name`, `pid_file`, lame duck timings, `store_dir`, log files, syslog, `ports_file_dir`, and client authentication) or does not support (remote syslog, the profiling port, client TLS, NATS accounts, JWT authentication, leaf nodes, gateways, WebSocket, and MQTT). `settings.cluster` is allowed only when `clustered` is `true`, and rejects `name`, `port`, `listen`, `host`, `net`, `routes`, `authorization`, and `tls`. `settings.jetstream` is allowed only when `jetstream.enabled` is `true`, and rejects `store_dir`, `enabled`, and encryption settings (`key`, `prev_key`, `cipher`, and `tpm`).";
     };
 
     env = kix.options.env // {
-      description = "Extra environment variables for the `nats` container. `GOMEMLIMIT` defaults to 80% of `resources.limits.memory` and can be overridden here. Kix rejects `POD_NAME`, `NATS_USER`, `NATS_PASSWORD`, `AUTH_USER`, and `AUTH_PASSWORD`, which this package sets automatically.";
+      description = "Extra environment variables for the `nats` container. `GOMEMLIMIT` defaults to 80% of `resources.limits.memory`; set `env.GOMEMLIMIT` to override it. Kix rejects `POD_NAME`, `NATS_USER`, `NATS_PASSWORD`, `AUTH_USER`, and `AUTH_PASSWORD`, which this package sets itself.";
     };
 
     # Upstream's chart README recommends equal requests and limits for CPU
@@ -886,7 +905,7 @@ in
               "for" = "10m";
               severity = "warning";
               summary = "NATS JetStream file storage is nearly full";
-              description = "Pod {{ $labels.pod }} (${instance}) is using {{ $value | humanizePercentage }} of `max_file_store`. At 100%, publishes to file-backed streams fail. Lower stream retention limits, or raise `settings.jetstream.max_file_store` if the `/data` volume has room (`storage.size` cannot be updated in place on an existing StatefulSet).";
+              description = "Pod {{ $labels.pod }} (${instance}) is using {{ $value | humanizePercentage }} of `max_file_store`. At 100%, publishes to file-backed streams fail. Lower stream retention limits, or raise `settings.jetstream.max_file_store` if the `/data` volume has free space. Kubernetes cannot change a StatefulSet's `volumeClaimTemplates` in place, so changing `storage.size` does not resize existing PersistentVolumeClaims.";
             };
           };
       } args

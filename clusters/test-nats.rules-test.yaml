@@ -165,5 +165,5 @@ tests:
               instance: "10.0.0.1:7777"
               server_id: "S0"
             exp_annotations:
-              description: "Pod nats-0 (NATS messaging-prod/nats) is using 95% of `max_file_store`. At 100%, publishes to file-backed streams fail. Lower stream retention limits, or raise `settings.jetstream.max_file_store` if the `/data` volume has room (`storage.size` cannot be updated in place on an existing StatefulSet)."
+              description: "Pod nats-0 (NATS messaging-prod/nats) is using 95% of `max_file_store`. At 100%, publishes to file-backed streams fail. Lower stream retention limits, or raise `settings.jetstream.max_file_store` if the `/data` volume has free space. Kubernetes cannot change a StatefulSet's `volumeClaimTemplates` in place, so changing `storage.size` does not resize existing PersistentVolumeClaims."
               summary: "NATS JetStream file storage is nearly full"

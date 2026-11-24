@@ -5,7 +5,7 @@ description: "Deploy a standalone or clustered NATS server with JetStream persis
 
 import Command from '/src/components/Command.astro';
 
-Use `packages.experimental.nats` to deploy NATS 2.15.3 (`nats:2.15.3-alpine`) with JetStream persistence. Each instance creates a StatefulSet, a client Service (`<instance>`) on port 4222, a headless Service (`<instance>-headless`) on port 8222 for pod DNS and monitoring, and a ConfigMap for `nats.conf`. Because this package is experimental, breaking changes may ship in any Kix release.
+Use `packages.experimental.nats` to deploy NATS 2.15.3 (`nats:2.15.3-alpine`) with JetStream persistence. Each instance creates a StatefulSet, a client Service (`<instance>`) on port 4222, a headless Service (`<instance>-headless`) on port 8222 for pod DNS and HTTP monitoring, and a ConfigMap for `nats.conf`. Because this package is experimental, breaking changes may ship in any release.
 
 ## Add a NATS instance and login secret
 
@@ -25,40 +25,44 @@ instances.messaging = {
 };
 ```
 
-Client authentication is always on. Every instance requires a `natsAuth` secret dependency (such as `packages.secret` or `packages.secret-ref`) in the same namespace with `username` and `password` keys, or `kix check` fails. `nats-server` reads those credentials from environment variables, keeping them out of the ConfigMap. Updating a `packages.secret` login restarts the NATS pods automatically, whereas updating an external Secret through `packages.secret-ref` does not.
+Client authentication is always on. Every instance requires a `natsAuth` secret (such as `packages.secret` or `packages.secret-ref`) in the same namespace with `username` and `password` keys, or `kix check` fails. `nats-server` reads those credentials from environment variables so they stay out of the ConfigMap. Changing a `packages.secret` login restarts the NATS pods automatically. Changing an external Secret referenced with `packages.secret-ref` does not restart them.
 
-Do not use single quotes (`'`) in the username or password. `nats-server` reads the Secret value byte for byte, so a trailing newline becomes part of the password. If the password starts with a bcrypt prefix (`$2a$`, `$2b$`, `$2x$`, or `$2y$` followed by two digits), `nats-server` verifies logins against that bcrypt hash.
+Do not put single quotes (`'`) in `username` or `password`. `nats-server` uses the Secret value byte for byte, so a trailing newline becomes part of the password. If `password` starts with a bcrypt hash prefix (`$2a$`, `$2b$`, `$2x$`, or `$2y$` followed by two digits), `nats-server` checks client passwords against that hash.
 
-Cluster routes on port 6222 and the HTTP monitoring endpoint on port 8222 do not use authentication. Port 8222 exposes subjects, client addresses, and connection names. Enable [generated network policy](/docs/how-to/platform-capabilities/enable-generated-network-policy/) (`networkPolicy.enable = true`) to restrict port 6222 to the NATS pods and port 8222 to pods that read the monitoring address; without network policy enforcement, any pod in the cluster can reach both ports. Because this package configures no NATS system account, CLI commands that need one (such as `nats server list` and `nats server report`) are rejected. Query the HTTP endpoints on port 8222 instead.
+Cluster routes on port 6222 (when clustered) and HTTP monitoring on port 8222 do not use authentication. Port 8222 exposes subjects, client addresses, and connection names, and port 6222 carries cluster traffic. Turn on [generated network policy](/docs/how-to/platform-capabilities/enable-generated-network-policy/) (`networkPolicy.enable = true`) to restrict port 6222 to the NATS pods and port 8222 to pods that read the monitoring address. Without network policy enforcement, any pod in the cluster can reach both ports.
 
-You can run multiple NATS instances in one cluster. Because the package creates no cluster-scoped resources, instances in different namespaces can both be named `nats`. To run more than one NATS instance in the same namespace, give each a distinct instance name, wire each instance's login secret with `deps.natsAuth = ref.<namespace>.<secret-instance>`, and set `deps.nats = ref.<namespace>.<instance>` on every consumer in that namespace so Kix knows which NATS instance to use.
+This package configures no NATS system account, so `nats` CLI commands that require one (such as `nats server list` and `nats server report`) are rejected. Query the HTTP endpoints on port 8222 instead.
+
+You can run multiple NATS instances in one cluster. Instances in different namespaces can share the name `nats`. To run more than one NATS instance in the same namespace, give each a distinct name, point each instance at its login secret with `deps.natsAuth = ref.<namespace>.<secret-instance>`, and set `deps.nats = ref.<namespace>.<instance>` on every consumer in that namespace so Kix knows which NATS instance to connect to.
 
 ## Choose the topology and storage
 
 Set `clustered` to choose between a standalone server and a NATS cluster:
 
 - **Standalone (`clustered = false`, default):** runs 1 server (`replicas` must be `1`) and requires availability level `none`.
-- **Clustered (`clustered = true`):** runs an odd number of at least 3 servers (`replicas` defaults to `3`; `5` tolerates two lost servers) because JetStream requires a majority quorum. Requires availability level `pod`, `node`, or `zone`. Clustered pods connect to each other on port 6222 through `<instance>-headless`, naming the cluster after the instance and each server after its pod.
+- **Clustered (`clustered = true`):** runs an odd number of at least 3 servers (`replicas` defaults to `3`; `5` tolerates two lost servers) because JetStream requires a majority quorum. Requires availability level `pod`, `node`, or `zone`. Pods connect to each other on port 6222 through `<instance>-headless`. The NATS cluster is named after the instance, and each server is named after its pod.
 
-An instance inherits `cluster.availability.default` unless you set `instances.<namespace>.<instance>.availability`. [Availability levels](/docs/explanation/availability-levels/) never flip `clustered` automatically, and `kix check` rejects any mismatch before deploying so running instances and their data stay untouched. For example, if you raise `cluster.availability.default` from `none` to `pod`, `kix check` stops on every standalone NATS instance until you choose how to handle it:
+An instance inherits `cluster.availability.default` unless you set `instances.<namespace>.<instance>.availability`. [Availability levels](/docs/explanation/availability-levels/) never change `clustered` automatically, and `kix check` rejects any mismatch before deploying so running servers and their streams stay untouched. For example, if you raise `cluster.availability.default` from `none` to `pod`, `kix check` stops on every standalone NATS instance until you choose how to handle it:
 
 - **Keep an existing server standalone:** set `instances.<namespace>.<instance>.availability = "none"`.
-- **Start a new cluster with no existing data:** set `clustered = true`.
+- **Start a new cluster with no existing streams:** set `clustered = true`.
 - **Migrate an instance that already holds streams (either direction):**
   1. Back up every stream with `nats stream backup`.
   2. Delete every stream with `nats stream rm`.
-  3. When going from standalone to clustered, delete the StatefulSet with `kubectl delete statefulset -n <namespace> <instance>`. Its PersistentVolumeClaims stay, and every server then starts clustered at once.
+  3. When moving from standalone to clustered, delete the StatefulSet with `kubectl delete statefulset -n <namespace> <instance>`. Its PersistentVolumeClaims stay, so all pods start clustered together.
   4. Change `clustered` (and the availability level if needed), then run `kix deploy`.
   5. Restore every stream with `nats stream restore`.
 
 :::caution
-NATS cannot convert a JetStream server between standalone and clustered modes in place. `kix check` and `kix plan` cannot see whether a running instance holds streams, so they pass a change to `clustered` with no warning. With `nats-server` 2.15.3:
+NATS cannot convert a JetStream server between standalone and clustered modes in place. `kix check` and `kix plan` cannot see whether a running instance holds streams, so they allow a valid change to `clustered` without warning. With `nats-server` 2.15.3:
 
-- **Standalone to clustered:** the StatefulSet starts `nats-1` and `nats-2` clustered. They cannot elect a JetStream metadata leader while `nats-0` still runs standalone, so they never become ready and the StatefulSet never replaces `nats-0`. `kix deploy` fails after 180 seconds with no readiness progress, and fails the same way when run again. `nats-0` keeps serving its streams intact until it next restarts, for example on an eviction or a node drain. It then starts clustered, marks its stored streams as orphaned, and deletes them about 30 seconds later.
-- **Clustered to standalone:** `nats-0` restarts standalone, refuses to recover any stream with more than one replica, and fails `/healthz`, so its pod never becomes ready. The stream files stay on the volumes.
+- **Standalone to clustered:** Kubernetes starts `nats-1` and `nats-2` in clustered mode. They cannot elect a JetStream metadata leader while `nats-0` still runs standalone, so they never become ready and Kubernetes never replaces `nats-0`. `kix deploy` times out after 180 seconds, and every retry fails the same way. `nats-0` keeps serving its streams until something restarts the pod, such as an eviction or node drain. When `nats-0` restarts in clustered mode, it marks its stored streams as orphaned and deletes them about 30 seconds later.
+- **Clustered to standalone:** `nats-0` restarts in standalone mode, refuses to load any stream with more than one replica, and fails `/healthz`, so its pod never becomes ready. The stream files remain on the volumes (including the retained PersistentVolumeClaims for `nats-1` and `nats-2`).
 :::
 
-JetStream is enabled by default (`jetstream.enabled = true`) and mounts a PersistentVolumeClaim at `/data` on each pod (set `jetstream.enabled = false` for in-memory core NATS with no volumes). `storage.size` defaults to `10Gi` and sets both the PVC request and the default `settings.jetstream.max_file_store`. Kubernetes does not allow changing a StatefulSet's `volumeClaimTemplates` in place, so existing PersistentVolumeClaims keep their original size if `storage.size` changes. Set `storage.storageClassName` to pick a StorageClass explicitly; when `null`, Kix uses the cluster's `storageClasses` provider if configured, or falls back to the cluster's default StorageClass. Memory-backed streams are disabled by default (`max_memory_store = 0`); set `settings.jetstream.max_memory_store` to allow them.
+JetStream is on by default (`jetstream.enabled = true`) and mounts a PersistentVolumeClaim at `/data` on each pod. Set `jetstream.enabled = false` to run in-memory core NATS with no volumes. Memory-backed JetStream streams are off by default (`max_memory_store = 0`); set `settings.jetstream.max_memory_store` to allow them.
+
+`storage.size` defaults to `10Gi` and sets both the volume request and the default `settings.jetstream.max_file_store`. Kubernetes cannot resize a StatefulSet's `volumeClaimTemplates` in place, so changing `storage.size` does not resize existing PersistentVolumeClaims. Set `storage.storageClassName` to choose a StorageClass. When it is `null`, Kix uses the cluster's `storageClasses` provider if one is configured, or falls back to the cluster's default StorageClass.
 
 Configure availability, clustering, storage, and `nats.conf` settings on the instance:
 
@@ -77,11 +81,11 @@ instances.messaging.nats = {
 };
 ```
 
-`settings` merges lowercase `nats.conf` keys over the package defaults. When NATS accepts aliases for a key (such as `max_file_store` and `max_file`), use the canonical name (`max_file_store`). Kix rejects keys that this package manages or does not support, including ports and listen addresses, `server_name`, `pid_file`, lame duck timings, `store_dir`, log files and syslog, `ports_file_dir`, the profiling port, client TLS, `authorization`, `accounts`, JWT authentication, leaf nodes, gateways, WebSocket, MQTT, JetStream encryption settings, and cluster `name`, `routes`, `authorization`, and `tls`.
+`settings` merges lowercase `nats.conf` keys over the package defaults. When NATS accepts aliases for a key (such as `max_file` for `max_file_store`), use `max_file_store` (the primary name). Kix rejects settings that this package manages itself (ports, listen addresses, `client_advertise`, `http_base_path`, `server_name`, `pid_file`, lame duck timings, `store_dir`, log files, syslog, `ports_file_dir`, client authentication, and cluster `name` and `routes`) as well as features this package does not support (client and route TLS, route `authorization`, NATS accounts, JWT authentication, remote syslog, the profiling port, leaf nodes, gateways, WebSocket, MQTT, and JetStream encryption).
 
-`resources` defaults to `500m` CPU and `1Gi` memory (requests equal to limits) for development. For production JetStream clusters, upstream NATS recommends equal requests and limits of at least `2` CPU and `8Gi` memory. `GOMEMLIMIT` defaults to 80% of `resources.limits.memory` and can be overridden in `env`.
+`resources` defaults to `500m` CPU and `1Gi` memory (requests equal to limits) for development. For production JetStream clusters, upstream NATS recommends equal requests and limits of at least `2` CPU and `8Gi` memory. `GOMEMLIMIT` defaults to 80% of `resources.limits.memory`; set `env.GOMEMLIMIT` to override it.
 
-Each pod runs a `prometheus-nats-exporter` sidecar by default (`metrics.enabled = true`), so adding a `prometheus` provider later does not restart the NATS pods. When a `prometheus` provider is present, Kix creates a metrics Service, a ServiceMonitor, and five alerts: missing server metrics, failing `/healthz`, JetStream file storage above 90%, connections above 90% of `max_connections`, and slow consumers dropping messages. Set `metrics.enabled = false` to remove the sidecar (this restarts the pods).
+Each pod runs a `prometheus-nats-exporter` sidecar by default (`metrics.enabled = true`), so adding a `prometheus` provider later does not restart the NATS pods. When a `prometheus` provider is configured, Kix creates a metrics Service, a ServiceMonitor, and Prometheus alerts for missing server metrics, failing `/healthz`, connections above 90% of `max_connections`, slow consumers dropping messages, and (when JetStream is enabled) file storage above 90% of `max_file_store`. Set `metrics.enabled = false` to remove the sidecar; changing `metrics.enabled` restarts the pods.
 
 ## Connect an application
 
@@ -96,7 +100,7 @@ A package that depends on NATS takes a `nats` build argument and reads `nats.out
 | `out.jetstream` | `true` when JetStream is enabled |
 | `out.version` | NATS version parsed from `image.tag` (for example, `"2.15.3"`) |
 
-In the same namespace, Kix wires the `nats` dependency automatically through its default alias. Pass the client URL and login credentials to your application container:
+In the same namespace, Kix connects the `nats` dependency automatically when there is one NATS instance. Pass the client URL and login credentials to your application container:
 
 ```nix title="package default.nix"
 build =
@@ -123,7 +127,7 @@ build =
   };
 ```
 
-To connect from another namespace, point `deps.nats` at the NATS instance with `ref.<namespace>.<instance>` and create a matching login secret in the consumer's own namespace. Kubernetes Pods can read Secrets only from their own namespace, so Kix fails the build if a consumer in another namespace reads `nats.out.credentials`:
+To connect from another namespace, point `deps.nats` at the NATS instance with `ref.<namespace>.<instance>` and create a matching login secret in the consumer's own namespace. Kubernetes Pods can read Secrets only in their own namespace, so `kix check` fails if a consumer in another namespace reads `nats.out.credentials`:
 
 ```nix title="cluster.nix"
 instances.apps = {
@@ -156,7 +160,7 @@ env = kix.mkEnvVars {
 };
 ```
 
-Pods that do not reference the instance cannot reach any NATS port. If you pass `out.monitoringHost` inside a custom resource read by an external operator (such as a KEDA `ScaledObject` with a NATS JetStream trigger, since Kix does not yet include a KEDA package), tell Kix which pods connect to that resource with [`cluster.factBehavior`](/docs/reference/cluster-configuration/#cluster-factbehavior), or open port 8222 to the operator's pods with [`networkPolicy.platformIntents`](/docs/how-to/platform-capabilities/declare-platform-intents-for-non-kix-managed-pods/).
+Pods that do not depend on the NATS instance cannot reach any of its ports. If you pass `out.monitoringHost` in a custom resource read by an external operator (such as a KEDA `ScaledObject` with a NATS JetStream trigger), tell Kix which operator pods connect to that resource with [`cluster.factBehavior`](/docs/reference/cluster-configuration/#cluster-factbehavior), or allow access on port 8222 with [`networkPolicy.platformIntents`](/docs/how-to/platform-capabilities/declare-platform-intents-for-non-kix-managed-pods/).
 
 ## Deploy and connect
 
@@ -173,7 +177,7 @@ Deploy the cluster and check the instance status:
   ]}
 />
 
-Each pod runs HTTP probes on port 8222: `/healthz` for startup (up to 15 minutes for JetStream recovery), `/healthz?js-server-only=true` for readiness, and `/healthz?js-enabled-only=true` for liveness, so a server whose streams lag stays in Service endpoints and is not restarted. On shutdown, a `preStop` hook puts `nats-server` into lame duck mode: it stops accepting new connections, waits 10 seconds, and drains existing clients over the rest of its 30-second window so they reconnect to another server.
+Each pod runs HTTP probes on port 8222: `/healthz` for startup (allowing up to 15 minutes for JetStream recovery), `/healthz?js-server-only=true` for readiness, and `/healthz?js-enabled-only=true` for liveness. Those query flags keep a server in the Service and prevent restarts when its streams fall behind. On shutdown, a `preStop` hook puts `nats-server` into lame duck mode: it stops accepting new connections, waits 10 seconds, and closes existing client connections over the remaining 20 seconds so clients reconnect to another server.
 
 After the pods become ready, a post-deploy Job connects through the client Service, publishes and reads back a test message, queries JetStream account info when JetStream is enabled, and verifies that unauthenticated connections are rejected. If this Job fails, `kix deploy` fails. Set `healthCheck.enabled = false` to skip it.
 

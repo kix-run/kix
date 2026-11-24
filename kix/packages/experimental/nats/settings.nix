@@ -18,63 +18,63 @@ let
   topEntries = ports: [
     {
       keys = [ "port" ];
-      set = "this package listens for clients on port ${toString ports.client} so the client Service, health check, and `out.port` match.";
+      set = "Clients connect on port ${toString ports.client} so the client Service, health check, and `out.port` match.";
     }
     {
       keys = [ "listen" ];
-      set = "this package listens for clients on port ${toString ports.client} so the client Service, health check, and `out.port` match.";
+      set = "Clients connect on port ${toString ports.client} so the client Service, health check, and `out.port` match.";
     }
     {
       keys = [
         "host"
         "net"
       ];
-      set = "the server must listen on all network interfaces so Kubernetes Services and probes can reach it.";
+      set = "`nats-server` must listen on all network interfaces so Kubernetes Services and pod probes can reach it.";
     }
     {
       keys = [ "client_advertise" ];
-      set = "clients connect through the client Service, so pods do not advertise individual pod addresses.";
+      set = "Clients connect through the client Service, so pods do not advertise individual pod addresses.";
     }
     {
       keys = [
         "http_port"
         "monitor_port"
       ];
-      set = "the pod probes, monitoring Service, and metrics exporter all use port ${toString ports.monitor}.";
+      set = "Pod probes, the headless Service (`out.monitoringHost`), and the metrics exporter all use port ${toString ports.monitor}.";
     }
     {
       keys = [ "http" ];
-      set = "the pod probes, monitoring Service, and metrics exporter all use port ${toString ports.monitor}.";
+      set = "Pod probes, the headless Service (`out.monitoringHost`), and the metrics exporter all use port ${toString ports.monitor}.";
     }
     {
       keys = [
         "https"
         "https_port"
       ];
-      set = "the pod probes and metrics exporter read the monitoring endpoint over plain HTTP.";
+      set = "Pod probes and the metrics exporter read the monitoring endpoint over plain HTTP on port ${toString ports.monitor}.";
     }
     {
       keys = [ "http_base_path" ];
-      set = "the pod probes check `/healthz` at the root path `/`.";
+      set = "Pod probes request `/healthz` at the root path `/`.";
     }
     {
       keys = [ "server_name" ];
-      set = "this package names each server after its pod so JetStream keeps its peer identity across restarts.";
+      set = "Each server is named after its pod so JetStream keeps the same peer identity across restarts.";
     }
     {
       keys = [
         "pid_file"
         "pidfile"
       ];
-      set = "the `preStop` hook reads `/var/run/nats/nats.pid` to drain connections before shutdown.";
+      set = "The `preStop` hook reads `/var/run/nats/nats.pid` to drain client connections before shutdown.";
     }
     {
       keys = [ "lame_duck_duration" ];
-      set = "lame duck mode lasts at most 30 seconds, of which the first 10 seconds are the grace period before clients are closed, and `terminationGracePeriodSeconds` is set to 60 to leave room for it.";
+      set = "On shutdown, `nats-server` waits 10 seconds and drains clients within a 30-second lame duck window that fits inside the pod's 60-second termination grace period.";
     }
     {
       keys = [ "lame_duck_grace_period" ];
-      set = "lame duck mode lasts at most 30 seconds, of which the first 10 seconds are the grace period before clients are closed, and `terminationGracePeriodSeconds` is set to 60 to leave room for it.";
+      set = "On shutdown, `nats-server` waits 10 seconds and drains clients within a 30-second lame duck window that fits inside the pod's 60-second termination grace period.";
     }
     {
       keys = [
@@ -89,21 +89,21 @@ let
         "logfile"
         "log_file"
       ];
-      set = "the container's root filesystem is read-only, and `nats-server` logs to standard output for `kubectl logs`.";
+      set = "The container's root filesystem is read-only, and `nats-server` logs to standard output for `kubectl logs`.";
     }
     {
       keys = [
         "logfile_size_limit"
         "log_size_limit"
       ];
-      set = "the container's root filesystem is read-only, and `nats-server` logs to standard output for `kubectl logs`.";
+      set = "The container's root filesystem is read-only, and `nats-server` logs to standard output for `kubectl logs`.";
     }
     {
       keys = [
         "logfile_max_num"
         "log_max_num"
       ];
-      set = "the container's root filesystem is read-only, and `nats-server` logs to standard output for `kubectl logs`.";
+      set = "The container's root filesystem is read-only, and `nats-server` logs to standard output for `kubectl logs`.";
     }
     {
       keys = [ "syslog" ];
@@ -111,44 +111,44 @@ let
     }
     {
       keys = [ "remote_syslog" ];
-      unsupported = "remote syslog is not supported because generated network policies do not open egress to a syslog server.";
+      unsupported = "Generated network policies do not allow outbound traffic to a syslog server, and `nats-server` logs to standard output.";
     }
     {
       keys = [ "ports_file_dir" ];
-      set = "the container's root filesystem is read-only, and Kubernetes Services already expose the server's fixed ports.";
+      set = "The container's root filesystem is read-only, and Kubernetes Services expose the server's fixed ports.";
     }
     {
       keys = [ "prof_port" ];
-      unsupported = "the Go profiling port is not supported because no Service or network policy exposes it.";
+      unsupported = "No Service or network policy exposes the Go profiling port.";
     }
     {
       keys = [ "tls" ];
-      unsupported = "client TLS is not supported; `out.url` and the post-deploy health check connect over plain `nats://`.";
+      unsupported = "Clients and the post-deploy health check connect over plain `nats://` (`out.url`).";
     }
     {
       keys = [ "allow_non_tls" ];
-      unsupported = "client TLS is not supported; `out.url` and the post-deploy health check connect over plain `nats://`.";
+      unsupported = "Clients and the post-deploy health check connect over plain `nats://` (`out.url`).";
     }
     {
       keys = [ "authorization" ];
-      set = "client authentication is configured from the `natsAuth` secret dependency.";
-      instead = "Change client credentials in the `natsAuth` secret or via `deps.natsAuth`.";
+      set = "Client login comes from the `natsAuth` secret dependency.";
+      instead = "Set `username` and `password` in the `natsAuth` secret, or point `deps.natsAuth` at another secret.";
     }
     {
       keys = [ "no_auth_user" ];
-      set = "client authentication is configured from the `natsAuth` secret dependency.";
-      instead = "Change client credentials in the `natsAuth` secret or via `deps.natsAuth`.";
+      set = "Client login comes from the `natsAuth` secret dependency.";
+      instead = "Set `username` and `password` in the `natsAuth` secret, or point `deps.natsAuth` at another secret.";
     }
     {
       keys = [ "accounts" ];
-      unsupported = "NATS accounts are not supported; all clients authenticate with the login in `deps.natsAuth`.";
+      unsupported = "All clients share the single login from `deps.natsAuth`, without NATS accounts.";
     }
     {
       keys = [
         "system_account"
         "system"
       ];
-      unsupported = "NATS accounts are not supported; all clients authenticate with the login in `deps.natsAuth`.";
+      unsupported = "All clients share the single login from `deps.natsAuth`, without NATS accounts.";
     }
     {
       keys = [
@@ -159,7 +159,7 @@ let
         "root_operators"
         "root_operator"
       ];
-      unsupported = "decentralized JWT authentication is not supported; clients authenticate with the `natsAuth` secret dependency.";
+      unsupported = "Decentralized JWT authentication is unavailable; clients log in with the `username` and `password` in `deps.natsAuth`.";
     }
     {
       keys = [
@@ -167,52 +167,52 @@ let
         "account_resolver"
         "accounts_resolver"
       ];
-      unsupported = "decentralized JWT authentication is not supported; clients authenticate with the `natsAuth` secret dependency.";
+      unsupported = "Decentralized JWT authentication is unavailable; clients log in with the `username` and `password` in `deps.natsAuth`.";
     }
     {
       keys = [ "resolver_tls" ];
-      unsupported = "decentralized JWT authentication is not supported; clients authenticate with the `natsAuth` secret dependency.";
+      unsupported = "Decentralized JWT authentication is unavailable; clients log in with the `username` and `password` in `deps.natsAuth`.";
     }
     {
       keys = [ "resolver_preload" ];
-      unsupported = "decentralized JWT authentication is not supported; clients authenticate with the `natsAuth` secret dependency.";
+      unsupported = "Decentralized JWT authentication is unavailable; clients log in with the `username` and `password` in `deps.natsAuth`.";
     }
     {
       keys = [ "resolver_pinned_accounts" ];
-      unsupported = "decentralized JWT authentication is not supported; clients authenticate with the `natsAuth` secret dependency.";
+      unsupported = "Decentralized JWT authentication is unavailable; clients log in with the `username` and `password` in `deps.natsAuth`.";
     }
     {
       keys = [ "default_sentinel" ];
-      unsupported = "decentralized JWT authentication is not supported; clients authenticate with the `natsAuth` secret dependency.";
+      unsupported = "Decentralized JWT authentication is unavailable; clients log in with the `username` and `password` in `deps.natsAuth`.";
     }
     {
       keys = [
         "trusted"
         "trusted_keys"
       ];
-      unsupported = "decentralized JWT authentication is not supported; clients authenticate with the `natsAuth` secret dependency.";
+      unsupported = "Decentralized JWT authentication is unavailable; clients log in with the `username` and `password` in `deps.natsAuth`.";
     }
     {
       keys = [
         "leafnodes"
         "leaf"
       ];
-      unsupported = "leaf nodes are not supported because no Service or network policy exposes a leaf node port.";
+      unsupported = "No Service or network policy exposes a leaf node port.";
     }
     {
       keys = [ "gateway" ];
-      unsupported = "gateways are not supported because no Service or network policy exposes a gateway port.";
+      unsupported = "No Service or network policy exposes a gateway port.";
     }
     {
       keys = [
         "websocket"
         "ws"
       ];
-      unsupported = "WebSocket connections are not supported because no Service or network policy exposes a WebSocket port.";
+      unsupported = "No Service or network policy exposes a WebSocket port.";
     }
     {
       keys = [ "mqtt" ];
-      unsupported = "MQTT is not supported because no Service or network policy exposes an MQTT port.";
+      unsupported = "No Service or network policy exposes an MQTT port.";
     }
     {
       keys = [
@@ -256,34 +256,34 @@ let
   clusterEntries = ports: [
     {
       keys = [ "name" ];
-      set = "this package names the NATS cluster after the instance.";
+      set = "The NATS cluster is named after the instance.";
     }
     {
       keys = [ "port" ];
-      set = "the cluster routes use port ${toString ports.cluster}.";
+      set = "Cluster routes between pods use port ${toString ports.cluster}.";
     }
     {
       keys = [ "listen" ];
-      set = "the cluster routes use port ${toString ports.cluster}.";
+      set = "Cluster routes between pods use port ${toString ports.cluster}.";
     }
     {
       keys = [
         "host"
         "net"
       ];
-      set = "the server must listen on all network interfaces so peer pods can connect over cluster routes.";
+      set = "`nats-server` must listen on all network interfaces so peer pods can connect on port ${toString ports.cluster}.";
     }
     {
       keys = [ "routes" ];
-      set = "this package generates the route list automatically from the StatefulSet replicas and headless Service.";
+      set = "This package builds the route list from `replicas` and the headless Service.";
     }
     {
       keys = [ "authorization" ];
-      unsupported = "cluster route authentication is not supported.";
+      unsupported = "Cluster routes on port ${toString ports.cluster} connect without credentials; set `networkPolicy.enable = true` to restrict port ${toString ports.cluster} to the instance's own pods.";
     }
     {
       keys = [ "tls" ];
-      unsupported = "cluster route TLS is not supported.";
+      unsupported = "Cluster routes between pods connect over plain TCP on port ${toString ports.cluster}.";
     }
     {
       keys = [
@@ -308,8 +308,8 @@ let
         "enabled"
         "enable"
       ];
-      set = "JetStream is turned on or off with the `jetstream.enabled` option.";
-      instead = "Set `jetstream.enabled` on the instance instead.";
+      set = "The `jetstream.enabled` option controls whether JetStream runs.";
+      instead = "Set `jetstream.enabled` on the instance.";
     }
     {
       keys = [
@@ -317,7 +317,7 @@ let
         "ek"
         "encryption_key"
       ];
-      unsupported = "JetStream encryption at rest is not supported because values in `settings` are stored in plain text in a ConfigMap.";
+      unsupported = "Values in `settings` are stored in plain text in a ConfigMap, so JetStream encryption keys cannot be placed here.";
     }
     {
       keys = [
@@ -325,15 +325,15 @@ let
         "prev_ek"
         "prev_encryption_key"
       ];
-      unsupported = "JetStream encryption at rest is not supported because values in `settings` are stored in plain text in a ConfigMap.";
+      unsupported = "Values in `settings` are stored in plain text in a ConfigMap, so JetStream encryption keys cannot be placed here.";
     }
     {
       keys = [ "cipher" ];
-      unsupported = "JetStream encryption at rest is not supported.";
+      unsupported = "JetStream encryption at rest is unavailable because `settings` is stored in plain text in a ConfigMap.";
     }
     {
       keys = [ "tpm" ];
-      unsupported = "TPM-sealed JetStream encryption keys are not supported because values in `settings` are stored in plain text in a ConfigMap.";
+      unsupported = "JetStream encryption at rest is unavailable because `settings` is stored in plain text in a ConfigMap.";
     }
     {
       keys = [
@@ -376,28 +376,28 @@ let
         if lib.toLower k != k then
           {
             option = shown k;
-            message = "`${shown k}` uses uppercase letters, so Kix cannot build `nats.conf`. NATS ignores letter case in config keys, so `settings`, `settings.cluster`, and `settings.jetstream` accept lowercase keys only.";
-            fix = "Rename the key to `${lib.toLower k}`.";
+            message = "`${shown k}` must be lowercase, so Kix did not build `nats.conf`. NATS ignores case in config keys, so mixed case can duplicate a key.";
+            fix = "Rename `${shown k}` to `${shown (lib.toLower k)}`.";
           }
         else if !(table ? ${k}) then
           null
         else if e ? set then
           {
             option = shown k;
-            message = "`${shown k}` conflicts with a setting managed by this package, so Kix cannot build `nats.conf`: ${e.set}";
-            fix = "Remove `${shown k}` from `settings`." + lib.optionalString (e ? instead) " ${e.instead}";
+            message = "`${shown k}` cannot be set in `settings`, so Kix did not build `nats.conf`. ${e.set}";
+            fix = "Remove `${shown k}`." + lib.optionalString (e ? instead) " ${e.instead}";
           }
         else if e ? unsupported then
           {
             option = shown k;
-            message = "`${shown k}` is not supported by this package, so Kix cannot build `nats.conf`: ${e.unsupported}";
-            fix = "Remove `${shown k}` from `settings`." + lib.optionalString (e ? instead) " ${e.instead}";
+            message = "This package does not support `${shown k}`, so Kix did not build `nats.conf`. ${e.unsupported}";
+            fix = "Remove `${shown k}`." + lib.optionalString (e ? instead) " ${e.instead}";
           }
         else if k != canonical then
           {
             option = shown k;
-            message = "`${shown k}` is an alias for `${canonical}`, so Kix cannot build `nats.conf`. If both names appear in one file, `nats-server` can pick a different value on each restart.";
-            fix = "Rename the key to `${canonical}`.";
+            message = "`${shown k}` is an alias for `${shown canonical}`, so Kix did not build `nats.conf`. Allowing both names in `settings` can make `nats-server` pick a different value on each restart.";
+            fix = "Rename `${shown k}` to `${shown canonical}`.";
           }
         else
           null;
@@ -424,10 +424,10 @@ in
           [
             {
               option = "settings.${key}";
-              message = "`settings.${key}` cannot be set while ${what}, so Kix cannot build `nats.conf`.";
+              message = "`settings.${key}` is set while ${what}, so Kix did not build `nats.conf`.";
               fix =
                 if key == "cluster" then
-                  "Remove `settings.cluster`, or set `clustered = true` to run a NATS cluster."
+                  "Remove `settings.cluster`, or set `clustered = true` (with availability `pod`, `node`, or `zone`) to run a NATS cluster."
                 else
                   "Remove `settings.jetstream`, or set `jetstream.enabled = true`.";
             }
@@ -436,12 +436,12 @@ in
           [
             {
               option = "settings.${key}";
-              message = "`settings.${key}` must be a `{ ... }` block of settings so Kix can merge it into `nats.conf`; Kix rejected the non-block value.";
+              message = "`settings.${key}` must be a `{ ... }` block of settings, so Kix did not build `nats.conf`.";
               fix =
                 if key == "jetstream" then
-                  "Set individual keys inside `settings.${key} = { ... };`, or set `jetstream.enabled` on the instance to turn JetStream on or off."
+                  "Put JetStream settings inside `settings.jetstream = { ... };`, or set `jetstream.enabled` on the instance to turn JetStream on or off."
                 else
-                  "Set individual keys inside `settings.${key} = { ... };`.";
+                  "Put cluster settings inside `settings.cluster = { ... };`, or set `clustered` on the instance to turn clustering on or off.";
             }
           ]
         else
