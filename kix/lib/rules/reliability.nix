@@ -28,7 +28,7 @@ in
   # Accept a missing CPU or memory limit when the cluster sets that field of
   # `cluster.defaultLimits` to "none".
   boundedResources = {
-    description = "Every container should set CPU and memory requests and limits, unless disabled by cluster.defaultLimits";
+    description = "Every container should set CPU and memory requests and any limits not turned off by cluster.defaultLimits";
     level = "manifest";
     severity = "warning";
     tags = [

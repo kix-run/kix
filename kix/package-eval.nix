@@ -855,7 +855,7 @@ let
     in
     if refusesWithoutDefaultLimits ? ${name} then
       assert lib.assertMsg (!(builtins.tryEval result).success)
-        "${folderOf name} now builds with cluster.defaultLimits.memory = \"none\"; remove it from refusesWithoutDefaultLimits in kix/package-eval.nix.";
+        "${folderOf name} now builds with cluster.defaultLimits.cpu = \"none\" and cluster.defaultLimits.memory = \"none\". Remove ${name} from refusesWithoutDefaultLimits in kix/package-eval.nix.";
       name
     else
       result;

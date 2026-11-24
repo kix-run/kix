@@ -523,8 +523,8 @@ Mandatory:
 1. `kix/packages/experimental/<pkg>/default.nix`.
 2. `kix/package-eval.nix`: a `settings` entry when the package needs deps or
    config to evaluate at `none` and `zone` (`:105`; keycloak at `:312-330`),
-   and a `refusesWithoutDefaultLimits` entry when the package refuses to
-   build without a memory limit.
+   and a `refusesWithoutDefaultLimits` entry when the package or one of its
+   dependencies requires a default limit to build.
 3. `clusters/test-<pkg>.nix`: every toggle on, each optional dependency
    present at least once, a `cilium` instance and `networkPolicy.enable = true`
    so the kind deploy runs under default deny, and the bring-up, build, and

@@ -586,13 +586,13 @@ in
         default = defaultLimits.default.cpu;
         description = ''
           Whether packages apply their default CPU limits across the cluster.
-          `"package"` keeps each package's default CPU limit. `"none"` omits
-          default CPU limits declared with `kix.options.resources`, while
-          keeping all CPU requests and any `limits.cpu` set on an instance.
-          `"none"` also tells the `reliability.boundedResources` scorecard
-          rule not to report missing `limits.cpu`. Many clusters set `"none"`
-          because CPU limits throttle containers even when a node has idle
-          CPU, while CPU requests still guarantee each container's share.
+          `"package"` keeps each package's default CPU limit. `"none"` drops
+          default CPU limits declared with `kix.options.resources`, keeps all
+          CPU requests and any `limits.cpu` set on an instance, and tells the
+          `reliability.boundedResources` scorecard rule not to require
+          `limits.cpu`. Many clusters set `"none"` because CPU limits throttle
+          containers even when a node has idle CPU, while CPU requests still
+          guarantee each container's share.
         '';
       };
       memory = lib.mkOption {
@@ -601,15 +601,15 @@ in
         description = ''
           Whether packages apply their default memory limits across the
           cluster. `"package"` keeps each package's default memory limit.
-          `"none"` omits default memory limits declared with
-          `kix.options.resources`, while keeping all memory requests and any
-          `limits.memory` set on an instance. `"none"` also tells the
-          `reliability.boundedResources` scorecard rule not to report missing
-          `limits.memory`. Leave this set to `"package"` unless you set
-          `limits.memory` per instance or deliberately run without memory
-          limits: Kubernetes cannot throttle memory, so an unbounded
-          container can exhaust node memory and trigger the kernel OOM killer
-          against other pods.
+          `"none"` drops default memory limits declared with
+          `kix.options.resources`, keeps all memory requests and any
+          `limits.memory` set on an instance, and tells the
+          `reliability.boundedResources` scorecard rule not to require
+          `limits.memory`. Keep this set to `"package"` unless you set
+          `limits.memory` per instance or intend to run without memory limits.
+          Kubernetes cannot throttle memory, so a container without a memory
+          limit can exhaust a node's memory and cause the kernel to kill other
+          pods on that node.
         '';
       };
     };

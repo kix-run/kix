@@ -392,14 +392,14 @@ in
         scope.fail {
           option = "resources.limits.memory";
           message =
-            "resources.limits.memory is unset"
+            "resources.limits.memory is not set"
             + (
               if clusterConfig.cluster.defaultLimits.memory == "none" then
-                " because cluster.defaultLimits.memory is \"none\"."
+                " (cluster.defaultLimits.memory = \"none\" removed the package default)."
               else
                 "."
             )
-            + " ClickHouse sizes its memory cap from the container's memory limit and falls back to the node's total RAM without one, so this instance cannot build without a memory limit.";
+            + " ClickHouse calculates its memory cap from the container's memory limit, and without one it uses the node's full RAM.";
           fix =
             if clusterConfig.cluster.defaultLimits.memory == "none" then
               "Set config.resources.limits.memory on this instance, or set cluster.defaultLimits.memory = \"package\"."
