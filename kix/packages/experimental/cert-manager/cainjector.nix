@@ -16,7 +16,6 @@ let
   common = import ./common.nix { inherit lib; };
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = common.who scope;
   labels = (common.labels name).cainjector;
   metricsOn = config.metrics.enabled && prometheus != null;
 

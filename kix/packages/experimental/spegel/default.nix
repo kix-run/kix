@@ -107,7 +107,6 @@ let
 
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "spegel ${ns}/${name}";
 
   registryPort = 5000;
   routerPort = 5001;

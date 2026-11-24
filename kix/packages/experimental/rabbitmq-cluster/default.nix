@@ -168,7 +168,6 @@
 let
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "rabbitmq-cluster ${ns}/${name}";
 
   # meta.version and the default image tag: the RabbitMQ release the
   # cluster runs.

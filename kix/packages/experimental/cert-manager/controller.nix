@@ -17,7 +17,6 @@ let
   labels = (common.labels name).controller;
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = common.who scope;
   metricsOn = config.metrics.enabled && prometheus != null;
   acmesolverImage = kix.image.ref config.operandImages.acmesolver;
 

@@ -59,7 +59,7 @@
 
 let
   c = import ./common.nix { inherit lib kix scope; };
-  inherit (c) release who;
+  inherit (c) release;
 
   followers = [
     "agentCore"
