@@ -415,8 +415,8 @@ in
             if mappedKeys != [ ] then
               scope.fail {
                 option = "objectStorage.credentialKeys";
-                message = "objectStorage.credentialKeys sets ${lib.concatStringsSep ", " mappedKeys}, and storageCredentials is an IAM role, which has no Secret keys to map.";
-                fix = "Remove objectStorage.credentialKeys, or set deps.storageCredentials to a Secret instance with the S3 keys.";
+                message = "objectStorage.credentialKeys sets ${lib.concatStringsSep ", " mappedKeys}, but deps.storageCredentials is an AWS IAM role, which has no Secret keys to map, so Kix rejected this instance.";
+                fix = "Remove objectStorage.credentialKeys to authenticate with the IAM role, or point deps.storageCredentials = ref.<namespace>.<instance> at a secret or secret-ref instance holding the S3 keys.";
               }
             else
               null
@@ -429,7 +429,7 @@ in
                   scope.fail {
                     option = "objectStorage";
                     message = "objectStorage is set and no storageCredentials dependency resolved in namespace ${scope.namespaceName}.";
-                    fix = "Add a secret or secret-ref instance there with the keys ${lib.concatStringsSep " and " (builtins.attrValues credentialKeys)} and the alias storageCredentials, set deps.storageCredentials = kix.cloudIdentity.aws { roleArn = \"...\"; } for AWS S3, or set objectStorage = null.";
+                    fix = "Set deps.storageCredentials = ref.<namespace>.<instance> to a secret or secret-ref instance with keys ${lib.concatStringsSep " and " (builtins.attrValues credentialKeys)} (or add one in that namespace with aliases = [ \"storageCredentials\" ]). For an external AWS S3 bucket, set deps.storageCredentials = kix.cloudIdentity.aws { roleArn = \"...\"; } instead, or set objectStorage = null.";
                   }
                 else
                   access.secret;
@@ -583,8 +583,8 @@ in
                     "AWS_SECRET_KEY"
                     "AWS_SESSION_TOKEN"
                   ];
-                  reason = "storageCredentials is an IAM role, and Tempo's S3 client uses a static key from the AWS key variables before it tries the role.";
-                  fix = "Remove the AWS key variables from env, or set deps.storageCredentials to a Secret instance with the S3 keys.";
+                  reason = "deps.storageCredentials is an AWS IAM role, and AWS credential variables in env override the IAM role in Tempo's S3 client.";
+                  fix = "Remove AWS credential variables from env to authenticate with the IAM role. To use S3 access keys instead, remove those variables from env and point deps.storageCredentials = ref.<namespace>.<instance> at a secret or secret-ref instance holding the S3 keys.";
                 }
               ]
             else
