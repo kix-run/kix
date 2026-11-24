@@ -25,10 +25,10 @@ let
     inherit (config) clusterDomain;
   };
   platformCloudIdentity = import ./cloud-identity.nix { inherit kix; };
-  cloudIdentity = import ../vocab/cloud-identity.nix { inherit lib; };
+  cloudIdentityMechanisms = import ../vocab/cloud-identity-mechanisms.nix { inherit lib; };
   mechanisms = {
-    irsa = cloudIdentity.irsa { };
-    pod-identity = cloudIdentity.eksPodIdentity { };
+    irsa = cloudIdentityMechanisms.irsa { };
+    pod-identity = cloudIdentityMechanisms.eksPodIdentity { };
   };
 in
 {
@@ -36,14 +36,14 @@ in
     type = lib.types.enum (builtins.attrNames mechanisms);
     default = "irsa";
     description = ''
-      How pods on this EKS cluster assume AWS IAM roles configured with
+      How pods on this EKS cluster assume AWS IAM roles from
       `kix.cloudIdentity.aws { roleArn = "..."; }`. `"irsa"` (IAM roles for
-      service accounts) sets the `eks.amazonaws.com/role-arn` annotation on the
-      ServiceAccount. `"pod-identity"` (EKS Pod Identity) leaves off that
-      annotation; instead, install the EKS Pod Identity Agent add-on and create
-      an EKS Pod Identity association outside Kix to link the ServiceAccount to
-      the IAM role. Both settings add `checksum/cloud-identity` to pod
-      templates so changing the role restarts the pods.
+      service accounts) writes `eks.amazonaws.com/role-arn` on the
+      ServiceAccount. `"pod-identity"` (EKS Pod Identity) omits that
+      annotation; install the EKS Pod Identity Agent add-on and create an EKS
+      Pod Identity association in AWS to link the ServiceAccount to the role.
+      Both modes add `checksum/cloud-identity` to pod templates so changing the
+      role restarts pods.
     '';
   };
 

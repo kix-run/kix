@@ -1,23 +1,23 @@
-# Define workload cloud identity: the values a cluster author gives a
-# package's credentials dependency (`kix.cloudIdentity.aws`, `gcp`,
-# `azure`), the mechanisms that deliver them (`irsa`, `eksPodIdentity`,
-# `gke`, `azureWorkloadId`), and `use`, which a package calls on that
-# dependency.
+# Define the role a workload gets in a cloud: the values a cluster author
+# gives a package's credentials dependency (`kix.cloudIdentity.aws`, `gcp`,
+# `azure`), `use`, which a package calls on that dependency, and
+# `annotationsFor`, for a ServiceAccount an operator creates.
 #
 # The cluster author writes the principal in its cloud's own terms as the
 # value of a dependency, where a Secret instance would otherwise go:
 # `deps.providerCredentials = kix.cloudIdentity.aws { roleArn = "..."; };`.
-# The instance that claims the `cloudIdentity` role (a flavour's import, or
-# a package that runs the webhook) carries one mechanism in
-# `out.cloudIdentity`. The scope's `sealResource` renders a bound
-# ServiceAccount through it (`scope/builders.nix`).
+# How the cluster delivers it is chosen with the cluster: a flavor, or a
+# module such as `kix.modules.experimental.irsa-webhook`, puts a mechanism
+# (`cloud-identity-mechanisms.nix`) in the `out.cloudIdentity` of the
+# instance that claims the `cloudIdentity` role. The scope's `sealResource`
+# renders a bound ServiceAccount through it (`scope/builders.nix`).
 { lib }:
 
 let
   kixKeys = (import ../core/annotations.nix).keys;
   errors = import ../core/error.nix { inherit lib; };
 
-  mechanismType = "kix-cloud-identity-mechanism";
+  inherit (import ./cloud-identity-mechanisms.nix { inherit lib; }) mechanismType;
   identityType = "kix-cloud-identity";
 
   # How a message names each cloud.
@@ -58,8 +58,8 @@ let
     in
     if !builtins.isAttrs args then
       {
-        message = "`${call}` expects settings in `{ ... }`, got type `${builtins.typeOf args}`, so Kix rejected this cloud identity.";
-        fix = "Pass the settings inside braces: `${call} { ${template} }`.";
+        message = "`${call}` expects an attribute set `{ ... }`, but got a value of type `${builtins.typeOf args}`, so Kix rejected this cloud identity.";
+        fix = "Pass the fields in braces: `${call} { ${template} }`.";
       }
     else if unknown != [ ] then
       {
@@ -68,7 +68,7 @@ let
       }
     else if missing != [ ] then
       {
-        message = "`${call}` is missing required field ${quoted missing}, so Kix rejected it. Kix needs this field to configure ${clouds.${cloud}} authentication on the ServiceAccount.";
+        message = "`${call}` is missing required field ${quoted missing}. Kix rejected this cloud identity because ${clouds.${cloud}} authentication requires it.";
         fix = "Add ${
           lib.concatMapStringsSep " and " (f: "`${f} = \"...\";`") missing
         } to `${call} { ... }`.";
@@ -80,25 +80,25 @@ let
       }
     else if cloud == "aws" && !(matches roleArnPattern args.roleArn) then
       {
-        message = "`kix.cloudIdentity.aws` field `roleArn` is \"${args.roleArn}\", which is not a valid AWS IAM role ARN. Kix rejected it because AWS would refuse credentials to the pods.";
+        message = "`kix.cloudIdentity.aws` field `roleArn` is \"${args.roleArn}\", which is not a valid AWS IAM role ARN, so Kix rejected this cloud identity.";
         fix = "Set `roleArn` to a full IAM role ARN with a 12-digit AWS account ID, such as `\"arn:aws:iam::111122223333:role/external-dns\"`.";
       }
     else if
       cloud == "gcp" && args ? serviceAccount && !(matches googleAccountPattern args.serviceAccount)
     then
       {
-        message = "`kix.cloudIdentity.gcp` field `serviceAccount` is \"${args.serviceAccount}\", which is not a valid Google service account email. Kix rejected it because Google Cloud would refuse credentials to the pods.";
-        fix = "Set `serviceAccount` to a full Google service account email, such as `\"external-dns@my-project.iam.gserviceaccount.com\"`, or omit `serviceAccount` (`kix.cloudIdentity.gcp { }`) if IAM roles are granted directly to the Kubernetes ServiceAccount.";
+        message = "`kix.cloudIdentity.gcp` field `serviceAccount` is \"${args.serviceAccount}\", which is not a valid Google Cloud service account email, so Kix rejected this cloud identity.";
+        fix = "Set `serviceAccount` to a `<name>@<project>.iam.gserviceaccount.com` email, such as `\"external-dns@my-project.iam.gserviceaccount.com\"`, or omit `serviceAccount` (`kix.cloudIdentity.gcp { }`) when granting IAM roles directly to the Kubernetes ServiceAccount.";
       }
     else if cloud == "azure" && !(matches guidPattern args.clientId) then
       {
-        message = "`kix.cloudIdentity.azure` field `clientId` is \"${args.clientId}\", which is not a valid GUID. Kix rejected it because Microsoft Entra Workload ID would refuse tokens to the pods.";
-        fix = "Set `clientId` to the client ID (GUID) of the Azure managed identity or app registration, such as `\"00000000-0000-0000-0000-000000000000\"`.";
+        message = "`kix.cloudIdentity.azure` field `clientId` is \"${args.clientId}\", which is not a valid GUID, so Kix rejected this cloud identity.";
+        fix = "Set `clientId` to the 36-character GUID of your Azure managed identity or app registration, such as `\"00000000-0000-0000-0000-000000000000\"`.";
       }
     else if cloud == "azure" && args ? tenantId && !(matches guidPattern args.tenantId) then
       {
-        message = "`kix.cloudIdentity.azure` field `tenantId` is \"${args.tenantId}\", which is not a valid GUID. Kix rejected it because Microsoft Entra Workload ID could not look up the tenant.";
-        fix = "Set `tenantId` to the Azure tenant ID (GUID), or remove `tenantId` to use the cluster's default tenant.";
+        message = "`kix.cloudIdentity.azure` field `tenantId` is \"${args.tenantId}\", which is not a valid GUID, so Kix rejected this cloud identity.";
+        fix = "Set `tenantId` to your 36-character Azure tenant ID (GUID), or omit `tenantId` to use the cluster's default tenant.";
       }
     else
       null;
@@ -110,7 +110,7 @@ let
     inherit cloud;
     # How a message that expected another kind of dependency names this
     # value.
-    description = "the ${clouds.${cloud}} cloud identity `kix.cloudIdentity.${cloud} { ... }`";
+    description = "a cloud identity for ${clouds.${cloud}} (`kix.cloudIdentity.${cloud} { ... }`)";
     value = if builtins.isAttrs args then args else { };
     problem = argsProblem cloud args;
   };
@@ -124,101 +124,6 @@ let
   gcp = mkIdentity "gcp";
   azure = mkIdentity "azure";
 
-  # Return a mechanism record. `render` takes the value of the mechanism's
-  # cloud and returns the ServiceAccount annotations and pod labels it needs.
-  mkMechanism =
-    {
-      cloud,
-      name,
-      description,
-      annotationDomains,
-      render,
-    }:
-    {
-      _type = mechanismType;
-      inherit
-        cloud
-        name
-        description
-        annotationDomains
-        render
-        ;
-    };
-
-  # Return the IAM roles for service accounts (IRSA) mechanism, which EKS
-  # and the self-hosted amazon-eks-pod-identity-webhook read from a
-  # ServiceAccount annotation. The self-hosted webhook takes the prefix as
-  # its `--annotation-prefix` flag.
-  irsa =
-    {
-      annotationPrefix ? "eks.amazonaws.com",
-    }:
-    mkMechanism {
-      cloud = "aws";
-      name = "irsa";
-      description = "IAM roles for service accounts (IRSA)";
-      annotationDomains = [ annotationPrefix ];
-      render = value: {
-        serviceAccountAnnotations."${annotationPrefix}/role-arn" = value.roleArn;
-        podLabels = { };
-      };
-    };
-
-  # Return the EKS Pod Identity mechanism. The link between the
-  # ServiceAccount and the role is an association in the EKS API, which Kix
-  # does not create, so it renders nothing the cloud reads. The record and
-  # the restart stamp still follow the declared role.
-  eksPodIdentity =
-    { }:
-    mkMechanism {
-      cloud = "aws";
-      name = "eks-pod-identity";
-      description = "EKS Pod Identity";
-      annotationDomains = [ ];
-      render = _: {
-        serviceAccountAnnotations = { };
-        podLabels = { };
-      };
-    };
-
-  # Return the GKE Workload Identity Federation mechanism. With no Google
-  # service account it renders nothing, because Google grants IAM roles to
-  # the Kubernetes ServiceAccount itself.
-  gke =
-    { }:
-    mkMechanism {
-      cloud = "gcp";
-      name = "gke";
-      description = "GKE Workload Identity Federation";
-      annotationDomains = [ "iam.gke.io" ];
-      render = value: {
-        serviceAccountAnnotations = lib.optionalAttrs (value.serviceAccount != null) {
-          "iam.gke.io/gcp-service-account" = value.serviceAccount;
-        };
-        podLabels = { };
-      };
-    };
-
-  # Return the Microsoft Entra Workload ID mechanism. Its webhook acts only
-  # on pods that carry the `azure.workload.identity/use` label.
-  azureWorkloadId =
-    { }:
-    mkMechanism {
-      cloud = "azure";
-      name = "azure-workload-id";
-      description = "Microsoft Entra Workload ID";
-      annotationDomains = [ "azure.workload.identity" ];
-      render = value: {
-        serviceAccountAnnotations = {
-          "azure.workload.identity/client-id" = value.clientId;
-        }
-        // lib.optionalAttrs (value.tenantId != null) {
-          "azure.workload.identity/tenant-id" = value.tenantId;
-        };
-        podLabels."azure.workload.identity/use" = "true";
-      };
-    };
-
   # Render `identity` through the mechanism of the `cloudIdentity` role's
   # provider (`{ ns; inst; out; }`, or null). Return `{ problem; }` with a
   # `{ message; fix; }` when the cluster cannot deliver it, or the
@@ -230,29 +135,27 @@ let
       mechanism = if provider == null then null else provider.out.cloudIdentity or null;
       providerName = "${provider.ns}/${provider.inst}";
       call = "kix.cloudIdentity.${identity.cloud}";
+      # How a cluster chooses a mechanism for each cloud.
+      setUp = {
+        aws = "On EKS, include `kix.flavors.eks` in `modules`. On a self-managed cluster running `amazon-eks-pod-identity-webhook`, add `kix.modules.experimental.irsa-webhook` to `modules`.";
+        gcp = "On GKE, include `kix.flavors.gke` or `kix.flavors.gke-autopilot` in `modules`. Kix does not yet support Google Cloud workload identity outside GKE.";
+        azure = "On AKS, include `kix.flavors.aks` in `modules`. On a self-managed cluster running the Azure Workload Identity webhook, add `kix.modules.experimental.azure-workload-identity-webhook` to `modules`.";
+      };
       problem =
         if mechanism == null then
           {
-            message = "This instance uses `${call}`, but the cluster has no `cloudIdentity` provider, so Kix cannot configure ${clouds.${identity.cloud}} authentication on its ServiceAccount and pods.";
-            fix =
-              "On a managed cloud cluster, add `kix.flavors.eks`, `kix.flavors.gke`, `kix.flavors.gke-autopilot`, or `kix.flavors.aks` to `modules` in your cluster definition."
-              + " On a self-managed cluster, declare a `cloudIdentity` import using `kix.cloudIdentity.irsa { }`, `kix.cloudIdentity.gke { }`, or `kix.cloudIdentity.azureWorkloadId { }`; for example, for AWS IRSA:"
-              + "\n  instances.kube-system.cloud-identity.package = kix.mkImport {"
-              + "\n    roles = [ \"cloudIdentity\" ];"
-              + "\n    annotationDomains = [ \"eks.amazonaws.com\" ];"
-              + "\n    out.cloudIdentity = kix.cloudIdentity.irsa { };"
-              + "\n  };"
-              + "\nIf this cluster does not support cloud identities, pass a Secret instance (`ref.<namespace>.<instance>`) instead.";
+            message = "This instance uses `${call}`, but this cluster is not configured for cloud identities, so Kix could not configure ${clouds.${identity.cloud}} authentication on its ServiceAccount and pods.";
+            fix = "${setUp.${identity.cloud}} If this cluster does not support cloud identities, pass a Secret instance (`ref.<namespace>.<instance>`) instead.";
           }
         else if (mechanism._type or null) != mechanismType then
           {
-            message = "`${providerName}` claims the `cloudIdentity` role, but its `out.cloudIdentity` is not a `kix.cloudIdentity` mechanism, so Kix cannot configure cloud authentication on this instance's ServiceAccount and pods.";
-            fix = "Set `out.cloudIdentity` on `${providerName}` to `kix.cloudIdentity.irsa { }`, `kix.cloudIdentity.eksPodIdentity { }`, `kix.cloudIdentity.gke { }`, or `kix.cloudIdentity.azureWorkloadId { }`.";
+            message = "`${providerName}` claims the `cloudIdentity` role, but its `out.cloudIdentity` is not a supported cloud identity mechanism, so Kix rejected it.";
+            fix = "Remove `\"cloudIdentity\"` from `roles` on `${providerName}`, and use a built-in cloud flavor (`kix.flavors.eks`, `gke`, `gke-autopilot`, or `aks`) or a webhook module (`kix.modules.experimental.irsa-webhook` or `azure-workload-identity-webhook`) instead.";
           }
         else if mechanism.cloud != identity.cloud then
           {
-            message = "This instance uses `${call}`, which does not match this cluster's cloud. `${providerName}` configures the cluster for ${clouds.${mechanism.cloud}} with ${mechanism.description}, so Kix can only attach ${clouds.${mechanism.cloud}} identities to pods here.";
-            fix = "Pass a Secret instance (`ref.<namespace>.<instance>`) instead. If this instance should authenticate with this cluster's cloud identity, switch the dependency to `kix.cloudIdentity.${mechanism.cloud} { ... }` (and update the instance's provider setting if needed); if the cluster runs on another cloud, update `${providerName}` or the cluster flavor.";
+            message = "This instance uses `${call}`, but `${providerName}` configures this cluster for ${clouds.${mechanism.cloud}} with ${mechanism.description}. Kix rejected this cloud identity because this cluster can only issue ${clouds.${mechanism.cloud}} pod identities.";
+            fix = "To call ${clouds.${identity.cloud}} from this cluster, pass a Secret instance (`ref.<namespace>.<instance>`) instead. To use this cluster's ${clouds.${mechanism.cloud}} pod identities, change the dependency to `kix.cloudIdentity.${mechanism.cloud} { ... }` (and update the instance's `config` if needed). If the cluster itself runs on ${clouds.${identity.cloud}}, change the cluster flavor or `${providerName}`.";
           }
         else
           null;
@@ -316,13 +219,13 @@ let
       fail (
         if cloud == null then
           {
-            message = "This instance passes `${call} { ... }`, which this package does not accept for its current configuration, so Kix rejected it. Its pods do not authenticate with a cloud ServiceAccount identity.";
-            fix = "Set that dependency to a Secret instance (`ref.<namespace>.<instance>`), or remove it.";
+            message = "With its current configuration, this package does not authenticate with a cloud identity, so Kix rejected `${call} { ... }`.";
+            fix = "Pass a Secret instance (`ref.<namespace>.<instance>`) instead, or remove the dependency.";
           }
         else
           {
-            message = "This instance passes `${call} { ... }`, while the package is configured to call the ${clouds.${cloud}} API, so Kix rejected it. ${clouds.${dep.cloud}} credentials cannot authenticate to ${clouds.${cloud}}.";
-            fix = "Set that dependency to `kix.cloudIdentity.${cloud} { ... }` or to a Secret instance (`ref.<namespace>.<instance>`) with ${clouds.${cloud}} credentials, or update the instance's configuration to match the cloud identity.";
+            message = "This instance passes `${call} { ... }` (${clouds.${dep.cloud}}), but it is configured to call ${clouds.${cloud}}, so Kix rejected the mismatched cloud identity.";
+            fix = "Change the dependency to `kix.cloudIdentity.${cloud} { ... }` or to a Secret instance (`ref.<namespace>.<instance>`) with ${clouds.${cloud}} credentials, or change the instance's `config` to use ${clouds.${dep.cloud}}.";
           }
       )
     else
@@ -371,9 +274,5 @@ in
     use
     annotationsFor
     render
-    irsa
-    eksPodIdentity
-    gke
-    azureWorkloadId
     ;
 }

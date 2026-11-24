@@ -10,6 +10,7 @@
   lib,
   eval,
   kixlib,
+  publicKix,
   kixKeys,
   mkCluster,
   manifests,
@@ -26,6 +27,7 @@ let
   secretRefPackage = import ../../../packages/stable/secret-ref;
   ci = kixlib.cloudIdentity;
   vocab = import ../../vocab/cloud-identity.nix { inherit lib; };
+  mechanisms = import ../../vocab/cloud-identity-mechanisms.nix { inherit lib; };
 
   helpers = import ../caught.nix { inherit lib; };
   # The evaluator loaded so that a failed assertion does not stop the
@@ -457,26 +459,77 @@ in
     )
     || throw "aks: ${builtins.toJSON r}";
 
-  # A self-managed cluster declares its webhook's prefix, and the role ARN
-  # lands under it.
-  cloud-identity-self-managed-prefix =
+  # On a self-managed cluster, the webhook modules choose the mechanism
+  # beside the flavor: the IRSA module writes the role ARN under its default
+  # prefix or the one the cluster sets, and the Azure module writes the
+  # client ID and the pod label.
+  cloud-identity-self-managed-modules =
     let
-      r = rendered (
-        workerOn (
-          irsa
-          // {
-            flavorName = "kubeadm";
-            extra.instances.kube-system.cloud-identity.package = eval.mkImport {
-              roles = [ "cloudIdentity" ];
-              annotationDomains = [ "irsa.example.com" ];
-              out.cloudIdentity = ci.irsa { annotationPrefix = "irsa.example.com"; };
-            };
-          }
-        )
+      irsaModule = ../../../modules/experimental/irsa-webhook.nix;
+      azureModule = ../../../modules/experimental/azure-workload-identity-webhook.nix;
+      onKubeadm =
+        extra: identity:
+        rendered (workerOn {
+          flavorName = "kubeadm";
+          inherit identity extra;
+        });
+      defaultPrefix = onKubeadm { imports = [ irsaModule ]; } (ci.aws { inherit roleArn; });
+      ownPrefix = onKubeadm {
+        imports = [ irsaModule ];
+        irsaWebhook.annotationPrefix = "irsa.example.com";
+      } (ci.aws { inherit roleArn; });
+      azure = onKubeadm { imports = [ azureModule ]; } (
+        ci.azure { clientId = "00000000-0000-0000-0000-000000000001"; }
       );
     in
-    (r.serviceAccount.annotations."irsa.example.com/role-arn" == roleArn)
-    || throw "self-managed: ${builtins.toJSON r.serviceAccount}";
+    (
+      defaultPrefix.serviceAccount.annotations."eks.amazonaws.com/role-arn" == roleArn
+      && ownPrefix.serviceAccount.annotations."irsa.example.com/role-arn" == roleArn
+      && azure.deployment.labels."azure.workload.identity/use" == "true"
+    )
+    || throw "self-managed: ${builtins.toJSON ownPrefix.serviceAccount}";
+
+  # `kix.cloudIdentity` holds only what a cluster author gives a workload
+  # and what a package reads. The mechanisms stay inside the library.
+  cloud-identity-public-names =
+    builtins.attrNames ci == [
+      "annotationsFor"
+      "aws"
+      "azure"
+      "gcp"
+      "use"
+    ]
+    || throw "kix.cloudIdentity: ${builtins.toJSON (builtins.attrNames ci)}";
+
+  # The layout the docs show: one external-dns definition shared by two
+  # cluster files. The EKS cluster gives it an IAM role and the kind cluster
+  # a Secret instance; the shared file names neither.
+  cloud-identity-shared-layout =
+    let
+      packages = import ../../../packages { inherit lib; };
+      build =
+        file:
+        manifests (
+          import (../../../../clusters/test-cloud-identity-layout + "/${file}") {
+            kix = publicKix;
+            inherit packages;
+          }
+        );
+      eks = build "eks.nix";
+      kind = build "kind.nix";
+      sa = ms: (byName "route53" (ofKind "ServiceAccount" ms)).metadata.annotations or { };
+      pod = ms: (byName "route53" (ofKind "Deployment" ms)).spec.template;
+      shared = builtins.readFile ../../../../clusters/test-cloud-identity-layout/external-dns.nix;
+    in
+    (
+      (sa eks)."eks.amazonaws.com/role-arn" == "arn:aws:iam::111122223333:role/external-dns"
+      && (pod eks).metadata.annotations ? "checksum/cloud-identity"
+      && !(sa kind ? "eks.amazonaws.com/role-arn")
+      && (builtins.head (pod kind).spec.containers) ? envFrom
+      && !(lib.hasInfix "providerCredentials =" shared)
+      && !(lib.hasInfix "cloudIdentity" shared)
+    )
+    || throw "shared layout: eks ${builtins.toJSON (sa eks)}, kind ${builtins.toJSON (sa kind)}";
 
   # A package with two ServiceAccounts takes two dependencies, and each
   # ServiceAccount gets its own role and each pod its own stamp.
@@ -639,8 +692,9 @@ in
     (
       evalFails (mkCluster (workerOn (irsa // { flavorName = "kubeadm"; })))
       && !(evalFails (mkCluster (workerOn irsa)))
-      && lib.hasInfix "has no `cloudIdentity` provider" problem.message
+      && lib.hasInfix "not configured for cloud identities" problem.message
       && lib.hasInfix "kix.flavors.eks" problem.fix
+      && lib.hasInfix "kix.modules.experimental.irsa-webhook" problem.fix
     )
     || throw "no provider: ${builtins.toJSON problem}";
 
@@ -654,7 +708,7 @@ in
           provider = {
             ns = "kube-system";
             inst = "cloud-identity";
-            out.cloudIdentity = ci.irsa { };
+            out.cloudIdentity = mechanisms.irsa { };
           };
         }).problem;
     in
@@ -679,8 +733,8 @@ in
       none = useFailure (ci.aws { inherit roleArn; }) null;
     in
     (
-      lib.hasInfix "call the AWS API" other
-      && lib.hasInfix "does not accept for its current configuration" none
+      lib.hasInfix "configured to call AWS" other
+      && lib.hasInfix "does not authenticate with a cloud identity" none
       && useFailure (ci.aws { inherit roleArn; }) "aws" == ""
       && evalFails (
         mkCluster (workerOn {

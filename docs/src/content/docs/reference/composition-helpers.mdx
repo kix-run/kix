@@ -413,20 +413,13 @@ build =
 | --- | --- |
 | `secret` | `dep` when `dep` is not a cloud identity (such as a Secret instance or `null`); `null` when `dep` is a cloud identity. |
 | `identity` | `dep` when `dep` is a cloud identity; `null` otherwise. |
-| `bind` | Function over ServiceAccount builder arguments. When `identity` is non-null, `scope.mkResource` renders the identity through the cluster's `cloudIdentity` role provider (adding the cloud's annotations, `kix.run/cloud-identity`, and a deploy-order dependency on the provider), and workload builders (`scope.mkDeployment`, `mkStatefulSet`, `mkDaemonSet`, `mkJob`, and `mkCronJob`) add `checksum/cloud-identity` and any required pod labels to every pod template with `serviceAccount = self.<part>`. When `identity` is `null`, `bind` returns its arguments unchanged. |
+| `bind` | Function that transforms ServiceAccount arguments before `scope.mkResource`. When `identity` is non-null, `scope.mkResource` writes the cloud's ServiceAccount annotations and `kix.run/cloud-identity`, and orders the ServiceAccount after the cluster's `cloudIdentity` provider. Workload builders (`scope.mkDeployment`, `mkStatefulSet`, `mkDaemonSet`, `mkJob`, and `mkCronJob`) then add `checksum/cloud-identity` and any required pod labels to every pod template with `serviceAccount = self.<part>`. When `identity` is `null`, `bind` returns its arguments unchanged. |
 
 If a package builds two ServiceAccounts with separate identities, declare two dependencies and call `kix.cloudIdentity.use` once for each.
 
-When an operator creates the ServiceAccount from a custom resource (so `credentials.bind` cannot modify it), accept the `cloudIdentity` role provider as a build argument (`cloudIdentity`) and, when `credentials.identity != null`, call `kix.cloudIdentity.annotationsFor { inherit scope; identity = credentials.identity; provider = cloudIdentity; }`. It returns `{ serviceAccountAnnotations, podLabels }` to pass into the custom resource. Because Kix does not build those pod templates, changing the identity does not add a `checksum/cloud-identity` annotation to restart the operator's pods.
+When an operator creates the ServiceAccount from a custom resource, `credentials.bind` cannot modify it. Instead, take `cloudIdentity` as a build argument and, when `credentials.identity != null`, call `kix.cloudIdentity.annotationsFor { inherit scope; identity = credentials.identity; provider = cloudIdentity; }`. Pass the returned `{ serviceAccountAnnotations, podLabels }` into the custom resource. Because the operator creates those pods, Kix does not add `checksum/cloud-identity` to restart them automatically when the identity changes.
 
-Packages or `kix.mkImport` instances that claim the `cloudIdentity` role set `out.cloudIdentity` to one of these mechanisms:
-
-| Constructor | Cloud | Arguments | Rendered metadata |
-| --- | --- | --- | --- |
-| `kix.cloudIdentity.irsa` | `"aws"` | `{ annotationPrefix ? "eks.amazonaws.com" }` | ServiceAccount annotations `<annotationPrefix>/role-arn` and `kix.run/cloud-identity`; pod template annotation `checksum/cloud-identity`. |
-| `kix.cloudIdentity.eksPodIdentity` | `"aws"` | `{ }` | ServiceAccount annotation `kix.run/cloud-identity` and pod template annotation `checksum/cloud-identity` (EKS links the ServiceAccount to the role through an external EKS Pod Identity association). |
-| `kix.cloudIdentity.gke` | `"gcp"` | `{ }` | ServiceAccount annotations `iam.gke.io/gcp-service-account` (when `serviceAccount` is set) and `kix.run/cloud-identity`; pod template annotation `checksum/cloud-identity`. |
-| `kix.cloudIdentity.azureWorkloadId` | `"azure"` | `{ }` | ServiceAccount annotations `azure.workload.identity/client-id`, `azure.workload.identity/tenant-id` (when `tenantId` is set), and `kix.run/cloud-identity`; pod template label `azure.workload.identity/use: "true"` and annotation `checksum/cloud-identity`. |
+The cluster's flavor or cloud identity module (such as `kix.modules.experimental.irsa-webhook`) selects the delivery mechanism, keeping packages portable across clusters ([Flavors and capabilities](/docs/reference/flavors-and-capabilities/#cloud-identity)).
 
 ---
 

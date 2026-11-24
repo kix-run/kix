@@ -377,8 +377,8 @@ in
         assertion = config.serviceAccountAnnotations == null;
         id = "K0771";
         option = "serviceAccountAnnotations";
-        message = "`config.serviceAccountAnnotations` was removed, so Kix rejected this instance. Pass cloud identities through `deps.providerCredentials` instead.";
-        fix = "Remove `config.serviceAccountAnnotations` and set `deps.providerCredentials` to `kix.cloudIdentity.aws { roleArn = \"arn:aws:iam::111122223333:role/external-dns\"; }`, `kix.cloudIdentity.gcp { serviceAccount = \"...\"; }` (or `kix.cloudIdentity.gcp { }`), or `kix.cloudIdentity.azure { clientId = \"...\"; }`. For other ServiceAccount annotations, use `partsOverlays` on the instance.";
+        message = "`config.serviceAccountAnnotations` was removed, so Kix rejected this instance. Configure cloud identities through `deps.providerCredentials` instead.";
+        fix = "Remove `config.serviceAccountAnnotations`. For cloud authentication, set `deps.providerCredentials` to `kix.cloudIdentity.aws { roleArn = \"arn:aws:iam::111122223333:role/external-dns\"; }`, `kix.cloudIdentity.gcp { serviceAccount = \"...\"; }` (or `kix.cloudIdentity.gcp { }`), or `kix.cloudIdentity.azure { clientId = \"...\"; }`. For custom ServiceAccount annotations, use `partsOverlays`.";
       }
       # A provider on a cloud authenticates with the identity or the Secret
       # in providerCredentials, and needs one of them.
@@ -386,7 +386,7 @@ in
         assertion = !(providers.${config.provider} ? cloud) || (deps.providerCredentials or null) != null;
         id = "K1798";
         dependency = "providerCredentials";
-        message = "`config.provider` is \"${config.provider}\", which requires `deps.providerCredentials`, so Kix rejected this instance. Without credentials, external-dns cannot authenticate to manage DNS records.";
+        message = "`config.provider` is \"${config.provider}\", but `deps.providerCredentials` is unset. Kix rejected this instance because external-dns needs cloud credentials to manage DNS records.";
         fix = "Set `deps.providerCredentials` to `kix.cloudIdentity.${
           providers.${config.provider}.cloud or "aws"
         } { ... }` or to a Secret instance (`ref.<namespace>.<instance>`) in the same namespace.";

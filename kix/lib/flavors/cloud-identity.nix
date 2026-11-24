@@ -1,5 +1,6 @@
 # Return the `cloud-identity` instance for a platform that gives pods a cloud
-# identity through `mechanism`, such as `kix.cloudIdentity.irsa { }`.
+# identity through `mechanism`, one of `../vocab/cloud-identity-mechanisms.nix`.
+# The cloud flavors and the webhook modules in `kix/modules/experimental` use it.
 #
 # The import claims the `cloudIdentity` role, so a cloud identity that an
 # instance gives its package as a dependency renders through `mechanism`. It also declares the

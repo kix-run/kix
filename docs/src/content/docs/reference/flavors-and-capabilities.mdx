@@ -159,11 +159,11 @@ The `eks`, `gke`, `gke-autopilot`, and `aks` flavors configure how Kix renders a
 
 | Flavor | Mechanism | Annotation domain | Rendered metadata |
 | --- | --- | --- | --- |
-| `eks` | `kix.cloudIdentity.irsa { }`, or `kix.cloudIdentity.eksPodIdentity { }` when `cluster.flavor.eks.cloudIdentity = "pod-identity"` | `eks.amazonaws.com` | ServiceAccount annotations `eks.amazonaws.com/role-arn` (IRSA only) and `kix.run/cloud-identity`; pod template annotation `checksum/cloud-identity`. |
-| `gke`, `gke-autopilot` | `kix.cloudIdentity.gke { }` | `iam.gke.io` | ServiceAccount annotations `iam.gke.io/gcp-service-account` (when `serviceAccount` is set) and `kix.run/cloud-identity`; pod template annotation `checksum/cloud-identity`. |
-| `aks` | `kix.cloudIdentity.azureWorkloadId { }` | `azure.workload.identity` | ServiceAccount annotations `azure.workload.identity/client-id`, `azure.workload.identity/tenant-id` (when set), and `kix.run/cloud-identity`; pod template label `azure.workload.identity/use: "true"` and annotation `checksum/cloud-identity`. |
+| `eks` | IAM roles for service accounts (IRSA), or EKS Pod Identity when `cluster.flavor.eks.cloudIdentity = "pod-identity"` | `eks.amazonaws.com` | ServiceAccount annotations `eks.amazonaws.com/role-arn` (IRSA only) and `kix.run/cloud-identity`; pod template annotation `checksum/cloud-identity`. |
+| `gke`, `gke-autopilot` | Workload Identity Federation for GKE | `iam.gke.io` | ServiceAccount annotations `iam.gke.io/gcp-service-account` (when `serviceAccount` is set) and `kix.run/cloud-identity`; pod template annotation `checksum/cloud-identity`. |
+| `aks` | Microsoft Entra Workload ID | `azure.workload.identity` | ServiceAccount annotations `azure.workload.identity/client-id`, `azure.workload.identity/tenant-id` (when set), and `kix.run/cloud-identity`; pod template label `azure.workload.identity/use: "true"` and annotation `checksum/cloud-identity`. |
 
-Other flavors do not declare a `cloudIdentity` provider. To configure one on a self-managed cluster, see [Cloud identities](/docs/reference/instances-and-composition/#cloud-identities).
+Other flavors do not configure cloud identities by default. On a self-managed cluster running the AWS or Azure workload identity webhook, add `kix.modules.experimental.irsa-webhook` or `kix.modules.experimental.azure-workload-identity-webhook` to `modules` alongside the flavor (see [Cloud identities](/docs/reference/instances-and-composition/#cloud-identities)).
 
 ## Storage and DNS defaults
 

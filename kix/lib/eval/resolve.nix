@@ -184,6 +184,8 @@ rec {
           # The dependency that took this name before a rename, or null.
           renamedTo =
             key: lib.findFirst (arg: (p1.depsEnrichment.${arg}.renamedFrom.name or null) == key) null taken;
+          howDepsBind = "A package only accepts dependencies listed as arguments to its `build` function, so a cluster file cannot add new ones.";
+          whereListed = "To see what a built-in Kix package takes, check its `default.nix`; most list their dependencies under \"Dependencies:\" in the comment at the top.";
           refuseKey =
             key:
             let
@@ -212,17 +214,31 @@ rec {
                 instance = "${nsName}/${instName}";
                 dependency = key;
                 message =
-                  if taken == [ ] then
-                    "${path}.${key} is set, and this instance's package takes no dependencies, so Kix rejected it."
-                  else
-                    "${path}.${key} is not a dependency of this instance's package, so Kix rejected it. Valid dependencies for this package: ${builtins.concatStringsSep ", " taken}.";
+                  (
+                    if taken == [ ] then
+                      "`${path}.${key}` is set, but this package takes no dependencies, so Kix rejected it instead of ignoring the value."
+                    else
+                      "`${path}.${key}` is set, but this package has no `${key}` dependency, so Kix rejected it instead of ignoring the value."
+                  )
+                  + (
+                    if taken == [ ] then
+                      ""
+                    else if builtins.length taken == 1 then
+                      " The only dependency this package takes is `${builtins.head taken}`."
+                    else
+                      " This package takes: ${builtins.concatStringsSep ", " taken}."
+                  );
                 fix =
                   if taken == [ ] then
-                    "Remove ${path}.${key}."
-                  else if builtins.length taken == 1 then
-                    "Rename ${path}.${key} to ${path}.${builtins.head taken}, or remove ${path}.${key}."
+                    "Remove `${path}.${key}`. ${howDepsBind} To make a custom package accept `${key}`, add `${key}` to its `build` arguments."
                   else
-                    "Rename ${path}.${key} to one of the listed dependencies, or remove ${path}.${key}.";
+                    (
+                      if builtins.length taken == 1 then
+                        "Rename `${path}.${key}` to `${path}.${builtins.head taken}`"
+                      else
+                        "Rename `${path}.${key}` to one of the listed dependencies"
+                    )
+                    + ", or remove `${path}.${key}`. ${howDepsBind} ${whereListed} To make a custom package accept `${key}`, add `${key}` to its `build` arguments.";
               };
         in
         builtins.foldl' (acc: key: if p1.discoveredDeps ? ${key} then acc else refuseKey key) acc (

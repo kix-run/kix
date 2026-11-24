@@ -161,9 +161,9 @@ it; restart the Deployment after a rotation:
 
 ## Use a cloud identity
 
-On AWS, Google Cloud, or Azure, external-dns can authenticate through its pod's
-ServiceAccount instead of a stored API key. Set `deps.providerCredentials` to a
-cloud identity instead of a Secret instance.
+On AWS, Google Cloud, or Azure, external-dns can authenticate with its Kubernetes
+ServiceAccount instead of a stored API key. Pass a cloud identity to
+`deps.providerCredentials`.
 
 For AWS Route 53 on EKS, pass `kix.cloudIdentity.aws`:
 
@@ -171,29 +171,33 @@ For AWS Route 53 on EKS, pass `kix.cloudIdentity.aws`:
 
 For Google Cloud DNS or Azure DNS:
 
-- **GKE:** Set `config.provider = "google"` and `deps.providerCredentials = kix.cloudIdentity.gcp { serviceAccount = "dns@project.iam.gserviceaccount.com"; };` (or `kix.cloudIdentity.gcp { }` when granting IAM roles directly to the Kubernetes ServiceAccount), and add `--google-project=<project>` to `extraArgs`.
-- **AKS:** Set `config.provider` to `"azure"`, `"azure-dns"`, or `"azure-private-dns"`, and set `deps.providerCredentials = kix.cloudIdentity.azure { clientId = "<guid>"; };` (plus optional `tenantId`). Also mount `/etc/kubernetes/azure.json` containing the tenant, subscription, resource group, and `useWorkloadIdentityExtension: true` via `partsOverlays`.
+- **GKE:** Set `config.provider = "google"`, add `"--google-project=<project>"` to `config.extraArgs`, and set `deps.providerCredentials` to `kix.cloudIdentity.gcp { serviceAccount = "dns@project.iam.gserviceaccount.com"; }`. If you grant IAM roles directly to the Kubernetes ServiceAccount, pass `kix.cloudIdentity.gcp { }` instead.
+- **AKS:** Set `config.provider` to `"azure"`, `"azure-dns"`, or `"azure-private-dns"`, and set `deps.providerCredentials = kix.cloudIdentity.azure { clientId = "<guid>"; };` (with optional `tenantId`). Use `partsOverlays` to mount `/etc/kubernetes/azure.json` with your tenant, subscription, resource group, and `useWorkloadIdentityExtension: true`.
 
-In your cloud account, grant DNS permissions to ServiceAccount
-`<namespace>/<instance>` (`system:serviceaccount:<namespace>:<instance>`) using
-an AWS IAM role and OIDC trust policy (or an EKS Pod Identity association), a
-Google Cloud IAM binding, or an Azure federated credential. Kix does not create
-cloud IAM resources.
+Kix does not create cloud IAM resources. In your cloud account, grant DNS
+permissions to ServiceAccount `<namespace>/<instance>`
+(`system:serviceaccount:<namespace>:<instance>`) through an AWS IAM role trust
+policy (or an EKS Pod Identity association), a Google Cloud IAM binding, or an
+Azure federated credential.
 
-The `eks`, `gke`, `gke-autopilot`, and `aks` flavors configure how Kix renders
-the identity automatically. Kix writes the cloud's ServiceAccount annotations
-(and, on AKS, the `azure.workload.identity/use: "true"` pod label) and restarts
-the pod whenever the identity changes. On EKS, Kix writes the IAM roles for
-service accounts (IRSA) annotation by default; set
-`cluster.flavor.eks.cloudIdentity = "pod-identity"` to use EKS Pod Identity
-instead. For self-managed clusters, see
+The `eks`, `gke`, `gke-autopilot`, and `aks` flavors enable cloud identities
+automatically. Kix adds the required ServiceAccount annotations (and the
+`azure.workload.identity/use: "true"` pod label on AKS) and restarts the pod
+whenever the identity changes. On EKS, Kix uses IAM roles for service accounts
+(IRSA) by default; set `cluster.flavor.eks.cloudIdentity = "pod-identity"` to
+use EKS Pod Identity instead. For self-managed clusters, see
 [Cloud identities](/docs/reference/instances-and-composition/#cloud-identities).
 
 The `aws`, `aws-sd`, `google`, `azure`, `azure-dns`, and `azure-private-dns`
-providers require `deps.providerCredentials` (either a cloud identity for the
-matching cloud or a Secret instance). Other providers do not accept a cloud
-identity. `deps.providerCredentials` replaces the removed
+providers require `deps.providerCredentials`, set to either a matching cloud
+identity or a Secret instance. Other providers do not accept a cloud identity.
+`deps.providerCredentials` replaces the removed
 `config.serviceAccountAnnotations` option (`[K0771]`).
+
+To share one external-dns definition across clusters that use cloud identities
+and clusters that use Secrets, set `deps.providerCredentials` in each cluster
+file. See
+[Keep credentials in the cluster file](/docs/how-to/start-and-inspect/select-and-configure-a-cluster-flavor/#keep-credentials-in-the-cluster-file).
 
 ## Allow the provider through network policy
 

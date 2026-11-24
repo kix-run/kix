@@ -73,7 +73,7 @@ instances.apps.photos.package = packages.experimental.immich;
 - **A removed package**: `packages.experimental.<name>` and `packages.<name>` fail with an error that gives the change record's id and what to do instead.
 - **A shared name**: An experimental package may have the same name as a stable package. It is then a rework of that package, and replaces it in a minor release.
 - **Contracts**: A stable package reads only stable [dependency contracts](/docs/reference/dependency-contracts/#shared-contract-attributes-and-methods). An experimental package may read both stable and experimental contracts.
-- **Modules**: The monitoring module is experimental and is written `kix.modules.experimental.monitoring` (`kix/modules/experimental/monitoring.nix`). `kix.modules.monitoring` fails with `[K0549]`.
+- **Modules**: All cluster modules are experimental (`kix/modules/experimental/`): `kix.modules.experimental.monitoring`, `kix.modules.experimental.irsa-webhook`, and `kix.modules.experimental.azure-workload-identity-webhook`. `kix.modules.monitoring` fails with `[K0549]`.
 - **Automatic instances**: [`availablePackages = packages`](/docs/reference/cluster-configuration/#availablepackages) offers only the stable packages. Name each experimental package that Kix may add.
 
 These packages are stable: `cnpg-cluster`, `cnpg-operator`, `echo-server`, `grafana`, `harbor`, `kube-state-metrics`, `node-exporter`, `persistent-volume-claim`, `priority-class`, `secret`, `secret-ref`, `storage-classes`, `valkey`, `victoria-metrics-agent`, `victoria-metrics-alert`, `victoria-metrics-cluster`, and `victoria-metrics-operator`. Every other package is experimental. A package becomes stable once it has run in production long enough to settle.
@@ -178,7 +178,7 @@ instances.external-dns.route53 = {
 
 | Constructor | Fields | What Kix writes on the ServiceAccount and pods |
 | --- | --- | --- |
-| `kix.cloudIdentity.aws` | `roleArn` (IAM role ARN) | `eks.amazonaws.com/role-arn` on the ServiceAccount by default on EKS. With `cluster.flavor.eks.cloudIdentity = "pod-identity"`, Kix omits the AWS annotation so EKS Pod Identity can link the ServiceAccount through an external association. |
+| `kix.cloudIdentity.aws` | `roleArn` (IAM role ARN) | `<annotationPrefix>/role-arn` (`eks.amazonaws.com/role-arn` by default) on the ServiceAccount. With `cluster.flavor.eks.cloudIdentity = "pod-identity"`, Kix omits this annotation because EKS Pod Identity links the ServiceAccount through an AWS association. |
 | `kix.cloudIdentity.gcp` | optional `serviceAccount` (Google service account email) | `iam.gke.io/gcp-service-account` on the ServiceAccount when `serviceAccount` is set. `kix.cloudIdentity.gcp { }` omits the Google annotation when IAM roles are granted directly to the Kubernetes ServiceAccount. |
 | `kix.cloudIdentity.azure` | `clientId`, optional `tenantId` (GUIDs) | `azure.workload.identity/client-id` (and `azure.workload.identity/tenant-id` when set) on the ServiceAccount, plus label `azure.workload.identity/use: "true"` on the pods. |
 
@@ -186,9 +186,13 @@ The cluster's `cloudIdentity` role provider controls how Kix renders the identit
 
 Kix does not create cloud IAM resources. Configure the AWS IAM role trust policy (or EKS Pod Identity association), Google Cloud IAM binding, or Azure federated credential outside Kix for `system:serviceaccount:<namespace>:<serviceaccount-name>`.
 
-Evaluation fails if an identity has an unknown, missing, or invalid field; if the cluster has no `cloudIdentity` provider; if the identity's cloud does not match the cluster's `cloudIdentity` provider or the cloud API the package calls; or if the package does not declare that dependency (`[K3646]`).
+Evaluation fails when:
+- an identity has an unknown, missing, or malformed field;
+- the cluster has no `cloudIdentity` provider;
+- the identity's cloud does not match the cluster's `cloudIdentity` provider or the cloud API the package calls; or
+- the package does not accept that dependency (`[K3646]`).
 
-If a package does not yet support `kix.cloudIdentity`, add the cloud's annotation directly to its ServiceAccount with `partsOverlays`. The cloud flavors declare their annotation domains, so the scorecard accepts the annotation without warning (note that changing an annotation in `partsOverlays` does not automatically restart pods):
+If a package does not yet accept `kix.cloudIdentity`, add the cloud's annotation to its ServiceAccount with `partsOverlays`. The cloud flavors declare their annotation domains, so the scorecard allows the annotation without warning. Changing a ServiceAccount annotation in `partsOverlays` does not restart pods automatically:
 
 ```nix
 partsOverlays = [
@@ -203,15 +207,20 @@ partsOverlays = [
 ];
 ```
 
-On a self-managed cluster (for example, one federated to AWS with the self-hosted `amazon-eks-pod-identity-webhook`), declare the `cloudIdentity` provider with `kix.mkImport` and match `annotationPrefix` to the webhook's `--annotation-prefix` flag. If a managed package in the cluster claims the `cloudIdentity` role, it overrides the import.
+On a self-managed cluster running a workload identity webhook, add the matching module alongside the cluster flavor:
 
 ```nix
-instances.kube-system.cloud-identity.package = kix.mkImport {
-  roles = [ "cloudIdentity" ];
-  annotationDomains = [ "irsa.example.com" ];
-  out.cloudIdentity = kix.cloudIdentity.irsa { annotationPrefix = "irsa.example.com"; };
-};
+modules = [
+  kix.flavors.kubeadm
+  kix.modules.experimental.irsa-webhook   # runs amazon-eks-pod-identity-webhook
+  # Only when the webhook runs with another --annotation-prefix:
+  { irsaWebhook.annotationPrefix = "irsa.example.com"; }
+];
 ```
+
+Use `kix.modules.experimental.azure-workload-identity-webhook` on self-managed clusters running the Azure Workload Identity webhook. Kix does not yet include a module for Google Cloud identities outside GKE.
+
+To share a workload definition across clusters that use cloud identities and clusters that use Secrets, set `deps.providerCredentials` in each cluster file. See [Keep credentials in the cluster file](/docs/how-to/start-and-inspect/select-and-configure-a-cluster-flavor/#keep-credentials-in-the-cluster-file).
 
 :::tip[Use it in a task]
 See [Wire cross-namespace dependencies explicitly](/docs/how-to/debug-dependency-wiring/wire-cross-namespace-dependencies-explicitly/) and [Debug a missing dependency](/docs/how-to/debug-dependency-wiring/debug-a-missing-dependency/).

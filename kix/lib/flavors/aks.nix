@@ -19,7 +19,7 @@ let
     inherit (config) clusterDomain;
   };
   platformCloudIdentity = import ./cloud-identity.nix { inherit kix; };
-  cloudIdentity = import ../vocab/cloud-identity.nix { inherit lib; };
+  mechanisms = import ../vocab/cloud-identity-mechanisms.nix { inherit lib; };
 in
 {
   cluster.provider = lib.mkDefault "aks";
@@ -59,7 +59,7 @@ in
       namespace = "kube-system";
     };
 
-    cloud-identity = platformCloudIdentity { mechanism = cloudIdentity.azureWorkloadId { }; };
+    cloud-identity = platformCloudIdentity { mechanism = mechanisms.azureWorkloadId { }; };
 
     platform-storage = {
       package = kix.mkImport {

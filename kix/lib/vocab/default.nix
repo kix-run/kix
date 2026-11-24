@@ -40,10 +40,10 @@ compose
   tolerations = {
     inherit (toleration) problems render;
   };
-  # Cloud identities: the values a cluster author gives a credentials
-  # dependency (`aws`, `gcp`, `azure`), `use`, which a package calls on that
-  # dependency, and the mechanisms the `cloudIdentity` role's provider puts in
-  # its `out` (`vocab/cloud-identity.nix`).
+  # The role a workload gets in a cloud: the values a cluster author gives a
+  # credentials dependency (`aws`, `gcp`, `azure`), `use`, which a package
+  # calls on that dependency, and `annotationsFor` (`vocab/cloud-identity.nix`).
+  # How a cluster delivers it is the flavor's or a module's business.
   cloudIdentity = {
     inherit (cloudIdentity)
       aws
@@ -51,10 +51,6 @@ compose
       azure
       use
       annotationsFor
-      irsa
-      eksPodIdentity
-      gke
-      azureWorkloadId
       ;
   };
 

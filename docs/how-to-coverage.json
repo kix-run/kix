@@ -1068,7 +1068,10 @@
       "scenario": "application",
       "status": "implemented",
       "snippets": [
-        "kindFlavor"
+        "kindFlavor",
+        "sharedExternalDns",
+        "eksCluster",
+        "kindCluster"
       ],
       "unverifiedNixBlocks": 4
     },

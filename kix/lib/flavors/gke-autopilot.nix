@@ -20,7 +20,7 @@ let
     inherit (config) clusterDomain;
   };
   platformCloudIdentity = import ./cloud-identity.nix { inherit kix; };
-  cloudIdentity = import ../vocab/cloud-identity.nix { inherit lib; };
+  mechanisms = import ../vocab/cloud-identity-mechanisms.nix { inherit lib; };
 in
 {
   cluster.provider = lib.mkDefault "gke-autopilot";
@@ -59,7 +59,7 @@ in
       namespace = "kube-system";
     };
 
-    cloud-identity = platformCloudIdentity { mechanism = cloudIdentity.gke { }; };
+    cloud-identity = platformCloudIdentity { mechanism = mechanisms.gke { }; };
 
     platform-storage = {
       package = kix.mkImport {
