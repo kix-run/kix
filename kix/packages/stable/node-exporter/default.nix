@@ -103,19 +103,14 @@ in
     (
       { self, config, ... }:
       let
-        setsFlag = flag: lib.any (arg: arg == flag || lib.hasPrefix "${flag}=" arg) config.extraArgs;
-
-        # Filesystems and mount points that are not host storage. Dropped
-        # when extraArgs sets the same flag, so that it replaces the value.
-        filesystemExcludes = lib.filterAttrs (flag: _: !setsFlag flag) {
-          "--collector.filesystem.fs-types-exclude" =
-            "^(autofs|binfmt_misc|bpf|cgroup2?|configfs|debugfs|devpts|devtmpfs|fusectl|hugetlbfs|iso9660|mqueue|nsfs|overlay|proc|procfs|pstore|rpc_pipefs|securityfs|selinuxfs|squashfs|sysfs|tracefs)$";
-          "--collector.filesystem.mount-points-exclude" =
-            "^/(dev|proc|sys|var/lib/docker/.+|var/lib/kubelet/.+)($|/)";
-        };
-
         ownedArgs = kix.guardArgs {
           inherit scope;
+          # Filesystems and mount points that are not host storage. extraArgs
+          # replaces either value by setting the same flag.
+          defaults = [
+            "--collector.filesystem.fs-types-exclude=^(autofs|binfmt_misc|bpf|cgroup2?|configfs|debugfs|devpts|devtmpfs|fusectl|hugetlbfs|iso9660|mqueue|nsfs|overlay|proc|procfs|pstore|rpc_pipefs|securityfs|selinuxfs|squashfs|sysfs|tracefs)$"
+            "--collector.filesystem.mount-points-exclude=^/(dev|proc|sys|var/lib/docker/.+|var/lib/kubelet/.+)($|/)"
+          ];
           owned = {
             "--web.listen-address" = "the probes and the Service use port ${toString port}; remove it.";
             "--path.sysfs" = "the package mounts the host's /sys at /host/sys; remove it.";
@@ -191,7 +186,6 @@ in
                     "--path.rootfs=/host/root"
                     "--path.procfs=/host/proc"
                   ]
-                  ++ lib.mapAttrsToList (flag: value: "${flag}=${value}") filesystemExcludes
                   ++ ownedArgs
                   ++ lib.optional config.textfileCollector.enabled "--collector.textfile.directory=${textfileDirectory}";
                   ports = [ (kix.port "metrics" port) ];

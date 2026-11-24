@@ -330,8 +330,12 @@ in
           # more and the ServiceMonitor needs no TLS settings.
           "--metrics-secure=false"
         ]
+        # The operator parses flags with Go's flag package (cmd/main.go
+        # upstream).
         ++ kix.guardArgs {
           inherit scope;
+          parser = "go";
+          id = "K4740";
           owned = {
             "--leader-elect" =
               "the package always enables leader election, so instances above availability none run one active controller; remove it.";

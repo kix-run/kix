@@ -284,71 +284,182 @@ rec {
         defaults // env // lib.foldl' (acc: group: acc // group.vars or { }) { } owned
       );
 
-  # Validate that `args` does not set any CLI flag in `owned`, and return
-  # `args` unchanged.
+  # Validate that `args` does not set any CLI flag in `owned` or
+  # `ownedFamilies`, and return the `defaults` that `args` does not replace,
+  # followed by `args`.
   #
-  # `owned` maps each refused flag to the reason and the remedy. The message
-  # reads `<option> sets "<flag>", which this package does not accept:
-  # <reason>`, so a reason fits a flag the package sets itself and a flag it
-  # does not support. The error names the instance and its package from
-  # `scope`.
+  # `parser` says how the program reads its flags. It decides which word
+  # sets which flag for `owned`, `ownedFamilies`, and `defaults` alike:
+  #
+  # - "gnu" (the default) fits getopt, clap, pflag, and kingpin. A word sets
+  #   a flag when it equals the flag or starts with `<flag>=`. A one-letter
+  #   flag such as `-c` also matches a word with its value attached
+  #   (`-c/etc/x`), and so also matches `-vmodule=x` when `-v` is owned.
+  # - "go" fits Go's `flag` package, which reads `-flag` and `--flag` as the
+  #   same flag. A word sets the flag named by its text after one or two
+  #   dashes and before any `=`.
+  # - "paerser" fits Traefik's flag parser, which reads flags as "go" does
+  #   and ignores the letter case of the name.
+  #
+  # `owned` maps each refused flag to the reason and the remedy.
+  # `ownedFamilies` does the same for a flag and every flag under it
+  # (`<flag>.<name>`), for a program that turns a feature on when any of
+  # its settings is set. The message reads `<option> sets "<word>", which
+  # this package does not accept: <reason>`, so a reason fits a flag the
+  # package sets itself and a flag it does not support. The error names the
+  # instance and its package from `scope`. Set `id` to a change record id
+  # for the releases after a package's guard starts refusing a spelling it
+  # used to pass.
+  #
+  # `defaults` holds flags the package passes unless `args` sets the same
+  # flag, for a program that refuses a flag given twice. Write each default
+  # as one word, such as `--flag=value`. Under "gnu", a default with one
+  # dash is a one-letter flag.
   #
   # `args` is either a list of command-line words or an attrset of flags
   # keyed by flag name, the form a VictoriaMetrics CR's `extraArgs` takes.
-  # List words match an owned flag exactly, as `--flag=value`, or as a short
-  # flag with an attached value (such as `-c/etc/x`, which also matches
-  # multi-character single-dash Go flags like `-vmodule=x` when `-v` is
-  # owned). Attrset keys match an owned name exactly once their leading
-  # dashes are removed.
+  # For an attrset, `defaults` is an attrset too, and keys match once their
+  # leading dashes are removed.
   guardArgs =
     {
       scope ? null,
       who ? null,
       option ? "extraArgs",
-      owned,
+      parser ? "gnu",
+      owned ? { },
+      ownedFamilies ? { },
+      defaults ? null,
+      id ? null,
     }:
     args:
     let
       scopeFail = failOf "guardArgs" { inherit scope who; };
-      isShortFlag = flag: builtins.match "-[^-]" flag != null;
-      flagOf =
-        arg:
-        lib.findFirst (
-          flag: arg == flag || lib.hasPrefix "${flag}=" arg || (isShortFlag flag && lib.hasPrefix flag arg)
-        ) null (builtins.attrNames owned);
-      # An attrset key names the flag without dashes, but a key written with
-      # them still reaches the program, so the match ignores leading dashes.
-      flagOfKey = key: builtins.head (builtins.match "-*(.*)" key);
-      # Each hit as the text the user wrote and the owned flag it matched.
-      hits =
-        if builtins.isAttrs args then
-          builtins.concatMap (
-            key:
-            lib.optional (owned ? ${flagOfKey key}) {
-              written = key;
-              flag = flagOfKey key;
-            }
-          ) (builtins.attrNames args)
+      isAttrs = builtins.isAttrs args;
+      parsers = [
+        "gnu"
+        "go"
+        "paerser"
+      ];
+      goName =
+        word:
+        let
+          m = builtins.match "--?([^-=][^=]*)(=.*)?" word;
+        in
+        if m == null then null else builtins.head m;
+      # Return the name of the flag `word` sets, or null when the parser
+      # reads it as a value. An attrset key names the flag without dashes,
+      # but a key written with them still reaches the program.
+      nameOf =
+        word:
+        let
+          n =
+            if isAttrs then
+              builtins.head (builtins.match "-*(.*)" word)
+            else if parser == "gnu" then
+              builtins.head (lib.splitString "=" word)
+            else
+              goName word;
+        in
+        if n != null && parser == "paerser" then lib.toLower n else n;
+      isShortName = name: !isAttrs && parser == "gnu" && builtins.match "-[^-]" name != null;
+      sets = name: word: nameOf word == name || (isShortName name && lib.hasPrefix name word);
+      under =
+        name: word:
+        sets name word
+        || (
+          let
+            n = nameOf word;
+          in
+          n != null && lib.hasPrefix "${name}." n
+        );
+      # Return the name of the flag a default sets, or null when it is no
+      # flag.
+      defaultName =
+        word:
+        if isAttrs then
+          nameOf word
+        else if !lib.hasPrefix "-" word then
+          null
+        else if parser == "gnu" && builtins.match "-[^-].*" word != null then
+          builtins.substring 0 2 word
         else
-          builtins.concatMap (
-            arg:
-            let
-              flag = flagOf arg;
-            in
-            lib.optional (flag != null) {
-              written = arg;
-              inherit flag;
-            }
-          ) args;
-      lines = map (
-        { written, flag }:
-        {
-          inherit option;
-          message = "${option} sets \"${written}\", which this package does not accept: ${owned.${flag}}";
+          nameOf word;
+
+      defaults' =
+        if defaults != null then
+          defaults
+        else if isAttrs then
+          { }
+        else
+          [ ];
+      written = if isAttrs then builtins.attrNames args else args;
+      defaultWords = if builtins.isAttrs defaults' then builtins.attrNames defaults' else defaults';
+
+      # Each owned flag or family as its name and reason.
+      rules =
+        test: table:
+        lib.mapAttrsToList (flag: reason: {
+          inherit flag reason test;
+          name = nameOf flag;
+        }) table;
+      allRules = rules sets owned ++ rules under ownedFamilies;
+
+      authorLines =
+        lib.optional (!builtins.elem parser parsers) {
+          message = "kix.guardArgs does not support parser \"${toString parser}\", so Kix cannot check the flags.";
+          fix = "Set parser to one of: ${lib.concatMapStringsSep ", " (p: "\"${p}\"") parsers}.";
         }
-      ) hits;
+        ++ (
+          if builtins.isAttrs defaults' != isAttrs then
+            [
+              {
+                message = "kix.guardArgs received ${
+                  if isAttrs then "an attribute set" else "a list"
+                } of flags, but defaults is ${
+                  if isAttrs then "a list" else "an attribute set"
+                }, so Kix cannot merge them.";
+                fix = "Pass defaults as a list of flag strings when checking a list, or as an attribute set when checking an attribute set.";
+              }
+            ]
+          else
+            map (d: {
+              message = "kix.guardArgs cannot read \"${d}\" in defaults as a flag, so Kix cannot check the flags.";
+              fix = "Write each entry in defaults as one string starting with - or --, such as \"--flag=value\" instead of separate \"--flag\" and \"value\" items.";
+            }) (builtins.filter (d: defaultName d == null) defaultWords)
+        )
+        ++ map (r: {
+          message = "kix.guardArgs cannot read \"${r.flag}\" in owned or ownedFamilies as a flag under parser \"${parser}\", so Kix cannot check the flags.";
+          fix = "Start each flag name in owned and ownedFamilies with - or --, such as \"--leader-elect\".";
+        }) (builtins.filter (r: r.name == null) allRules);
+
+      # Each word the user wrote with the first rule it breaks.
+      hits = builtins.concatMap (
+        word:
+        let
+          rule = lib.findFirst (r: r.test r.name word) null allRules;
+        in
+        lib.optional (rule != null) (
+          {
+            inherit option;
+            message = "${option} sets \"${word}\", which this package does not accept: ${rule.reason}";
+          }
+          // lib.optionalAttrs (id != null) { inherit id; }
+        )
+      ) written;
+
+      replaced = d: builtins.any (sets (defaultName d)) written;
+      result =
+        if isAttrs then
+          removeAttrs defaults' (builtins.filter replaced defaultWords) // args
+        else
+          builtins.filter (d: !replaced d) defaults' ++ args;
     in
-    if lines != [ ] then scopeFail lines else builtins.seq scopeFail args;
+    if authorLines != [ ] then
+      scopeFail authorLines
+    else if hits != [ ] then
+      scopeFail hits
+    else
+      builtins.seq scopeFail result;
 
   # Validate that a secret dependency `dep` declares all required `keys` (and
   # at least one key group in `anyOf` when set) in `dep.out.keys`, then return

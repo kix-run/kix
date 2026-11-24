@@ -186,25 +186,24 @@ let
   ];
 
   # Loki applies flags after the config file, so a flag that sets a locked
-  # path overrides it. Go's flag package reads the `-` and `--` spellings.
+  # path overrides it. Loki parses flags with Go's flag package.
   ownedFlags =
     let
       locks = path: "it sets ${path}, which the package locks; remove it.";
-      flags = {
-        "-config.file" = "the package renders the file from settings; change settings instead.";
-        "-config.expand-env" = "settings and env rely on variable expansion; remove it.";
-        "-target" = "the package runs every Loki component in its one pod; remove it.";
-        "-auth.enabled" = locks "auth_enabled";
-        "-server.http-listen-port" = locks "server.http_listen_port";
-        "-common.path-prefix" = locks "common.path_prefix";
-        "-common.storage.filesystem.chunk-directory" = locks "common.storage.filesystem";
-        "-common.storage.filesystem.rules-directory" = locks "common.storage.filesystem";
-        "-common.storage.ring.instance-addr" = locks "common.instance_addr";
-        "-common.storage.ring.store" = locks "common.ring.kvstore";
-        "-common.storage.ring.replication-factor" = locks "common.replication_factor";
-      };
     in
-    flags // lib.mapAttrs' (flag: lib.nameValuePair "-${flag}") flags;
+    {
+      "-config.file" = "the package renders the file from settings; change settings instead.";
+      "-config.expand-env" = "settings and env rely on variable expansion; remove it.";
+      "-target" = "the package runs every Loki component in its one pod; remove it.";
+      "-auth.enabled" = locks "auth_enabled";
+      "-server.http-listen-port" = locks "server.http_listen_port";
+      "-common.path-prefix" = locks "common.path_prefix";
+      "-common.storage.filesystem.chunk-directory" = locks "common.storage.filesystem";
+      "-common.storage.filesystem.rules-directory" = locks "common.storage.filesystem";
+      "-common.storage.ring.instance-addr" = locks "common.instance_addr";
+      "-common.storage.ring.store" = locks "common.ring.kvstore";
+      "-common.storage.ring.replication-factor" = locks "common.replication_factor";
+    };
 
   # The rendered config.yaml: `settings` over `builtinConfig`, nulls removed.
   mergeSettings =
@@ -340,6 +339,7 @@ in
         ]
         ++ kix.guardArgs {
           inherit scope;
+          parser = "go";
           owned = ownedFlags;
         } config.extraArgs;
       in

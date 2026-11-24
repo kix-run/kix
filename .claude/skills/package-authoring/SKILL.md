@@ -460,14 +460,16 @@ The only place in this skill with package line numbers. `pkg:N` is
 | Discrete database variables through `keyRef`, owned `_FILE` twins | metabase:187-203 |
 | URL-shaped credential through `$(VAR)` | vaultwarden:143-147, 212-233 |
 | `guardArgs`, owned flags from owned env groups | keycloak:398 |
-| `mergeGuarded` on `settings` or `extraSpec` | tempo:386; cnpg-cluster:323, 430, 514 |
+| `guardArgs` with `defaults` that `extraArgs` can override | node-exporter:106 |
+| `guardArgs` with `parser = "go"`, `parser = "paerser"`, and `ownedFamilies` | loki:340; traefik:487 |
+| `mergeGuarded` on `settings` or `extraSpec` | tempo:442; cnpg-cluster:323, 430, 514 |
 | Migrations at start: Recreate, deadline from `startupSeconds`, probes | metabase:94-97, 252-256, 284-304 |
 | Config injection into a dependency | metabase:109-112; stackgres-database:120-125; cnpg-database:94-115 |
-| Contracts: consumer `assertions`, provider `check` | metabase:112; stackgres-database:553; keycloak:559; tempo:631 |
+| Contracts: consumer `assertions`, provider `check` | metabase:112; stackgres-database:553; keycloak:559; tempo:707 |
 | `pick` as an option default with `defaultText` | `cnpg-cluster/options.nix`:12-18 |
 | `pick` inline, header names the instance override (O19) | keycloak:256, header 74-76 |
 | `atLeast` | valkey:122 |
-| Ceilings: package-wide, per builder | tempo:276; valkey:561, `harbor/registry.nix`:245, `harbor/jobservice.nix`:338 |
+| Ceilings: package-wide, per builder | tempo:284; valkey:555, `harbor/registry.nix`:245, `harbor/jobservice.nix`:338 |
 | `kix.expose`, `exposure.urlOrNull` | metabase:172-175, 367 |
 | Metrics toggle that does not restart the workload | metabase:152-157; keycloak header 30-35 |
 | `kix.monitor` with alerts | openbao:393; clickhouse:626-636 and `alerts.nix` |
