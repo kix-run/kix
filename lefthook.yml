@@ -124,14 +124,14 @@ pre-commit:
       run: nix run --inputs-from . nixpkgs#deadnix -- --fail --no-lambda-pattern-names {staged_files}
 
     format-python:
-      glob: "scripts/**/*.py"
+      glob: "*.py"
       run: |
         if command -v devenv >/dev/null 2>&1; then
           devenv shell -- treefmt {staged_files}
         elif command -v ruff >/dev/null 2>&1; then
-          ruff format --check {staged_files}
+          ruff check {staged_files} && ruff format --check {staged_files}
         else
-          nix shell --inputs-from . nixpkgs#ruff -c ruff format --check {staged_files}
+          nix shell --inputs-from . nixpkgs#ruff -c sh -c 'ruff check "$@" && ruff format --check "$@"' ruff {staged_files}
         fi
 
     # Type-check the landing page. This is the check the Pages deploy runs

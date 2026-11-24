@@ -43,7 +43,7 @@ def pinned_version() -> str:
     text = (PKG / "default.nix").read_text()
     match = re.search(r'^\s*release = "([^"]+)";', text, re.MULTILINE)
     if not match:
-        sys.exit("could not find `release = \"...\";` in default.nix")
+        sys.exit('could not find `release = "...";` in default.nix')
     return match.group(1)
 
 

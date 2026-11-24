@@ -71,10 +71,12 @@ reads plan files through `kix::plan::file`.
   with `./seed.py <bundle>... seeds` (`kix bundle` of the test clusters), and
   run with `cargo fuzz run -s none -O <target> seeds/raw` (or `seeds/frames`)
   `-- -fork=4 -max_total_time=300 -max_len=2500000 -rss_limit_mb=4096`.
-- `.github/workflows/bundle-checks.yml` runs each fuzz target and
-  `every_test_cluster_bundles` on pull requests that change the bundle code
-  (20 seconds per target), and weekly (two minutes per target). Every
-  release pull request runs them.
+- `.github/workflows/bundle-checks.yml` runs each fuzz target on pull
+  requests that change the bundle code (20 seconds per target), and weekly
+  (two minutes per target). `.github/workflows/package-checks.yml` runs
+  `every_test_cluster_bundles` and `flake_checks_evaluate_with_helm` on pull
+  requests that change `kix/`, `clusters/`, the flake, or the bundle code,
+  and weekly. Every release pull request runs both workflows.
 
 ### Compatibility checks
 
