@@ -184,9 +184,10 @@ in
 {
   # By default, at availability none: one server, no cluster block,
   # JetStream on a 10Gi claim, max_file_store at the claim size, memory
-  # streams off, and a headless Service with the client port only. With
+  # streams off, and a headless Service with the monitoring port only. With
   # `clustered` at zone: three servers, routes to each pod over the
-  # headless Service, and the route port.
+  # headless Service, which still lists the monitoring port only and is the
+  # StatefulSet's governing Service.
   nats-topology =
     let
       oneAll = ms (natsCluster { });
@@ -215,7 +216,7 @@ in
           max_memory_store = 0;
         }
       && (builtins.head one.spec.volumeClaimTemplates).spec.resources.requests.storage == "10Gi"
-      && headlessPorts oneAll == [ ports.client ]
+      && headlessPorts oneAll == [ ports.monitor ]
       && one.spec.podManagementPolicy == "Parallel"
       && lib.hasPrefix "docker.io/library/nats:2.15.3-alpine@sha256:" (containerOf "nats" one).image
       && three.spec.replicas == 3
@@ -230,11 +231,8 @@ in
             2
           ];
         }
-      &&
-        headlessPorts threeAll == [
-          ports.client
-          ports.cluster
-        ]
+      && headlessPorts threeAll == [ ports.monitor ]
+      && three.spec.serviceName == "nats-headless"
     )
     || throw "nats topology: ${
       builtins.toJSON {
@@ -279,7 +277,7 @@ in
       clientEnv.NATS_URL.value == "nats://nats.messaging.svc.cluster.local:4222"
       && clientEnv.NATS_HOST.value == "nats.messaging.svc.cluster.local"
       && clientEnv.NATS_PORT.value == "4222"
-      && pollerEnv.MONITOR.value == "nats-monitor.messaging.svc.cluster.local:8222"
+      && pollerEnv.MONITOR.value == "nats-headless.messaging.svc.cluster.local:8222"
       && ingressPortsFrom "consumer" (ms client) == [ 4222 ]
       && ingressPortsFrom "consumer" (ms poller) == [ 8222 ]
       && ingressPortsFrom "consumer" (ms remoteClient) == [ 4222 ]
@@ -534,8 +532,11 @@ in
         builtins.toJSON standaloneFix
       )
       && lib.hasInfix "nats stream backup" standaloneFix
+      && lib.hasInfix "nats stream rm" standaloneFix
+      && lib.hasInfix "kubectl delete statefulset -n messaging nats" standaloneFix
       && lib.hasInfix "nats stream restore" standaloneFix
-      && lib.hasInfix ''instances.messaging.nats.availability = \"pod\";'' (builtins.toJSON clusteredFix)
+      && lib.hasInfix "`instances.messaging.nats.availability` to `\"pod\"`" clusteredFix
+      && lib.hasInfix "nats stream rm" clusteredFix
       # The defaults at none build one standalone server; at zone the build
       # fails until `clustered` is set, and then builds three.
       && !evalFails (natsCluster { })

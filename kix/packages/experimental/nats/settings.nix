@@ -260,11 +260,11 @@ let
     }
     {
       keys = [ "port" ];
-      set = "the headless Service and cluster routes use port ${toString ports.cluster}.";
+      set = "the cluster routes use port ${toString ports.cluster}.";
     }
     {
       keys = [ "listen" ];
-      set = "the headless Service and cluster routes use port ${toString ports.cluster}.";
+      set = "the cluster routes use port ${toString ports.cluster}.";
     }
     {
       keys = [
@@ -427,7 +427,7 @@ in
               message = "`settings.${key}` cannot be set while ${what}, so Kix cannot build `nats.conf`.";
               fix =
                 if key == "cluster" then
-                  "Remove `settings.cluster`, or set `replicas = 3` to run a NATS cluster."
+                  "Remove `settings.cluster`, or set `clustered = true` to run a NATS cluster."
                 else
                   "Remove `settings.jetstream`, or set `jetstream.enabled = true`.";
             }
@@ -448,6 +448,6 @@ in
           blockProblems [ "settings" key ] entries settings.${key};
     in
     blockProblems [ "settings" ] (topEntries ports) settings
-    ++ sub "cluster" clustered "`replicas` is 1 (single-server mode)" (clusterEntries ports)
+    ++ sub "cluster" clustered "`clustered` is `false` (one standalone server)" (clusterEntries ports)
     ++ sub "jetstream" jetstream "`jetstream.enabled` is `false`" jetstreamEntries;
 }

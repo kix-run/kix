@@ -5,7 +5,7 @@ description: "Deploy a standalone or clustered NATS server with JetStream persis
 
 import Command from '/src/components/Command.astro';
 
-Use `packages.experimental.nats` to deploy NATS 2.15.3 (`nats:2.15.3-alpine`) with JetStream persistence. Each instance creates a StatefulSet, a client Service (`<instance>`) on port 4222, a monitoring Service (`<instance>-monitor`) on port 8222, a headless Service (`<instance>-headless`) for pod discovery, and a ConfigMap for `nats.conf`. Because this package is experimental, breaking changes may ship in any Kix release.
+Use `packages.experimental.nats` to deploy NATS 2.15.3 (`nats:2.15.3-alpine`) with JetStream persistence. Each instance creates a StatefulSet, a client Service (`<instance>`) on port 4222, a headless Service (`<instance>-headless`) on port 8222 for pod DNS and monitoring, and a ConfigMap for `nats.conf`. Because this package is experimental, breaking changes may ship in any Kix release.
 
 ## Add a NATS instance and login secret
 
@@ -44,13 +44,18 @@ An instance inherits `cluster.availability.default` unless you set `instances.<n
 
 - **Keep an existing server standalone:** set `instances.<namespace>.<instance>.availability = "none"`.
 - **Start a new cluster with no existing data:** set `clustered = true`.
-- **Migrate a server that already holds streams (either direction):** back up every stream with `nats stream backup`, change `clustered` and deploy, then restore the streams with `nats stream restore`.
+- **Migrate an instance that already holds streams (either direction):**
+  1. Back up every stream with `nats stream backup`.
+  2. Delete every stream with `nats stream rm`.
+  3. When going from standalone to clustered, delete the StatefulSet with `kubectl delete statefulset -n <namespace> <instance>`. Its PersistentVolumeClaims stay, and every server then starts clustered at once.
+  4. Change `clustered` (and the availability level if needed), then run `kix deploy`.
+  5. Restore every stream with `nats stream restore`.
 
 :::caution
-NATS cannot convert a JetStream server between standalone and clustered modes in place:
+NATS cannot convert a JetStream server between standalone and clustered modes in place. `kix check` and `kix plan` cannot see whether a running instance holds streams, so they pass a change to `clustered` with no warning. With `nats-server` 2.15.3:
 
-- **Standalone to clustered:** in `nats-server` 2.15.3, a standalone server restarted in clustered mode marks its stored streams as orphaned and deletes them about 30 seconds after startup.
-- **Clustered to standalone:** a cluster shrunk to one standalone server refuses to recover multi-replica streams and fails `/healthz`, so its pod never becomes ready (stream files remain on the volumes).
+- **Standalone to clustered:** the StatefulSet starts `nats-1` and `nats-2` clustered. They cannot elect a JetStream metadata leader while `nats-0` still runs standalone, so they never become ready and the StatefulSet never replaces `nats-0`. `kix deploy` fails after 180 seconds with no readiness progress, and fails the same way when run again. `nats-0` keeps serving its streams intact until it next restarts, for example on an eviction or a node drain. It then starts clustered, marks its stored streams as orphaned, and deletes them about 30 seconds later.
+- **Clustered to standalone:** `nats-0` restarts standalone, refuses to recover any stream with more than one replica, and fails `/healthz`, so its pod never becomes ready. The stream files stay on the volumes.
 :::
 
 JetStream is enabled by default (`jetstream.enabled = true`) and mounts a PersistentVolumeClaim at `/data` on each pod (set `jetstream.enabled = false` for in-memory core NATS with no volumes). `storage.size` defaults to `10Gi` and sets both the PVC request and the default `settings.jetstream.max_file_store`. Kubernetes does not allow changing a StatefulSet's `volumeClaimTemplates` in place, so existing PersistentVolumeClaims keep their original size if `storage.size` changes. Set `storage.storageClassName` to pick a StorageClass explicitly; when `null`, Kix uses the cluster's `storageClasses` provider if configured, or falls back to the cluster's default StorageClass. Memory-backed streams are disabled by default (`max_memory_store = 0`); set `settings.jetstream.max_memory_store` to allow them.
@@ -86,7 +91,7 @@ A package that depends on NATS takes a `nats` build argument and reads `nats.out
 |---|---|
 | `out.url` | `nats://<client-service>:4222` |
 | `out.host`, `out.port` | Client Service DNS name and port `"4222"` |
-| `out.monitoringHost`, `out.monitoringPort` | Monitoring Service DNS name and port `"8222"` |
+| `out.monitoringHost`, `out.monitoringPort` | Headless Service DNS name and monitoring port `"8222"` |
 | `out.credentials` | The `natsAuth` secret (same-namespace consumers only) |
 | `out.jetstream` | `true` when JetStream is enabled |
 | `out.version` | NATS version parsed from `image.tag` (for example, `"2.15.3"`) |

@@ -2,8 +2,8 @@
 # StatefulSet on the official image.
 #
 # Installs the StatefulSet with a volume per pod for JetStream, a client
-# Service on port 4222, a monitoring Service on port 8222, a headless
-# Service for the pods' stable names and the cluster routes on port 6222,
+# Service on port 4222, a headless Service on the monitoring port 8222 that
+# gives the pods their stable names for the cluster routes on port 6222,
 # and a ConfigMap holding nats.conf. One replica runs a single server; more
 # than one runs a NATS cluster whose servers route to each other.
 #
@@ -97,7 +97,8 @@
 #
 # Network policy: a consumer that reads `out.url` or `out.host` gets the
 # client port, 4222, and one that reads `out.monitoringHost` gets the
-# monitoring port, 8222, because each comes from its own Service. That
+# monitoring port, 8222, because each comes from its own Service and each
+# Service lists one port. That
 # holds for a consumer in another namespace, and for the pods a custom
 # resource's definition names in `factBehavior` when the resource carries
 # the address. The pods of an instance reach each other on every port,
@@ -137,9 +138,13 @@
 #   out.url                 nats://<out.host>:4222, for a client's server
 #                           list.
 #   out.monitoringHost, out.monitoringPort
-#                           the monitoring Service and its port, "8222",
-#                           for a poller such as KEDA's NATS JetStream
-#                           scaler.
+#                           the headless Service and the monitoring port,
+#                           "8222", for a poller such as KEDA's NATS
+#                           JetStream scaler. The name resolves to every
+#                           server, ready or not, and
+#                           `<pod>.<out.monitoringHost>` to one server,
+#                           which KEDA's scaler uses to find the leader of
+#                           a consumer on a cluster.
 #   out.credentials         the natsAuth secret (keys `username` and
 #                           `password`), for consumers in this namespace.
 #   out.jetstream           whether JetStream is on.
@@ -154,17 +159,30 @@
 #
 # Limits:
 #   - Switching `clustered` on an instance that holds data loses its
-#     JetStream streams, which is why the mode is a choice of its own.
-#     Switched on, the servers start clustered, and nats-0 marks the
-#     streams it stored as orphaned and deletes them about 30 seconds after
-#     it starts. Switched off, nats-0 starts standalone, refuses to recover
-#     any stream with more than one replica, and fails /healthz, so the pod
-#     never becomes ready; the files stay on the volumes, and streams with
-#     one replica on nats-1 and nats-2 stay on their retained claims. Both
-#     were observed with nats-server 2.15.3, and a server with a cluster
-#     block and no peer never starts JetStream (server/raft.go waits for a
-#     route), so one clustered server is no way around it. Back up streams
-#     (`nats stream backup`) before switching, and restore them after.
+#     JetStream streams, which is why the mode is a choice of its own. A
+#     level that disagrees with `clustered` is refused, so raising or
+#     lowering the availability level alone changes nothing. The package
+#     cannot see the running instance, so `kix check` and `kix plan` pass a
+#     deliberate switch with no warning. Observed with nats-server 2.15.3:
+#     switched on, the StatefulSet starts nats-1 and nats-2 clustered. They
+#     cannot elect a JetStream metadata leader while nats-0 still runs
+#     standalone, so they never become ready and the StatefulSet never
+#     replaces nats-0. The deploy fails after 180 seconds with no readiness
+#     progress, and fails the same way when run again. nats-0 keeps serving
+#     its streams intact until it next restarts, for example on an eviction
+#     or a node drain. It then starts clustered, marks the streams it stored
+#     as orphaned, and deletes them about 30 seconds later. Switched off,
+#     nats-0 starts standalone, refuses to recover any stream with more than
+#     one replica, and fails /healthz, so the pod never becomes ready. The
+#     files stay on the volumes, and streams with one replica on nats-1 and
+#     nats-2 stay on their retained claims. A server with a cluster block
+#     and no peer never starts JetStream (server/raft.go waits for a route),
+#     so one clustered server is no way around it. To switch an instance
+#     with data, back up every stream (`nats stream backup`) and delete it
+#     (`nats stream rm`). When switching on, also delete the StatefulSet
+#     (its volume claims stay) so that every server starts clustered. Then
+#     change `clustered` and the level, deploy, and restore the streams
+#     (`nats stream restore`).
 #   - Scaling a JetStream cluster down leaves the removed servers in the
 #     metadata group until `nats server raft peer-remove` removes each.
 #   - Kix waits at most five minutes for a resource to become ready, so a
@@ -204,7 +222,6 @@ let
   release = "v2.15.3";
 
   name = scope.instanceName;
-  who = "nats ${scope.namespaceName}/${name}";
 
   ports = {
     client = 4222;
@@ -272,20 +289,20 @@ in
       {
         assertion = config.clustered || !multi;
         option = "clustered";
-        message = "`clustered` is `false` (1 standalone server), which conflicts with availability level `${availability}` (multiple replicas). Kix stopped before deploying anything, so any running instance and its JetStream data are unchanged. Kix never turns on `clustered` automatically because NATS cannot convert a standalone JetStream server to a cluster in place. In `nats-server` 2.15.3, a standalone server restarted in clustered mode marks its stored streams as orphaned and deletes them about 30 seconds after startup.";
-        fix = "To keep one standalone server, set `instances.${scope.namespaceName}.${name}.availability = \"none\";`. For a new instance with no data, set `instances.${scope.namespaceName}.${name}.config.clustered = true;`. To migrate an existing instance with data, back up every stream with `nats stream backup`, set `instances.${scope.namespaceName}.${name}.config.clustered = true;`, deploy, and restore the streams with `nats stream restore`.";
+        message = "`clustered` is `false` (1 standalone server), which conflicts with availability level `${availability}` (multiple replicas). Kix stopped before changing the cluster, so any running server and its JetStream streams are untouched. Kix never turns on `clustered` automatically because switching in place fails in `nats-server` 2.15.3. Kubernetes starts two new clustered servers, but they cannot elect a JetStream metadata leader while pod `${name}-0` runs standalone. They never become ready, and Kubernetes never restarts `${name}-0`. `kix deploy` fails after 180 seconds with no readiness progress on every run. Pod `${name}-0` keeps serving its streams until its next restart, such as an eviction or node drain. It then starts clustered, marks its stored streams as orphaned, and deletes them about 30 seconds later.";
+        fix = "To keep one standalone server, set `instances.${scope.namespaceName}.${name}.availability = \"none\";`. For a new instance with no data, set `instances.${scope.namespaceName}.${name}.config.clustered = true;`. To migrate an existing server and keep its data: 1. Back up every stream with `nats stream backup`. 2. Delete every stream with `nats stream rm`. 3. Delete the StatefulSet with `kubectl delete statefulset -n ${scope.namespaceName} ${name}` (its PersistentVolumeClaims stay, so every server starts clustered at once). 4. Set `instances.${scope.namespaceName}.${name}.config.clustered = true;` and run `kix deploy`. 5. Restore every stream with `nats stream restore`.";
       }
       {
         assertion = !config.clustered || multi;
         option = "clustered";
-        message = "`clustered` is `true` (3 or more servers), which conflicts with availability level `none` (1 replica). Kix stopped before deploying anything, so any running instance and its JetStream data are unchanged. NATS cannot convert a JetStream cluster to a standalone server in place. In `nats-server` 2.15.3, a cluster shrunk to one standalone server refuses to recover multi-replica streams and fails `/healthz`, so its pod never becomes ready (stream files remain on the volumes).";
-        fix = "To run a NATS cluster, set `instances.${scope.namespaceName}.${name}.availability = \"pod\";` (or `\"node\"` or `\"zone\"`), or raise `cluster.availability.default`. For a new standalone server with no data, set `instances.${scope.namespaceName}.${name}.config.clustered = false;`. To switch an existing cluster with data to a standalone server, back up every stream with `nats stream backup`, set `instances.${scope.namespaceName}.${name}.config.clustered = false;`, deploy, and restore the streams with `nats stream restore`.";
+        message = "`clustered` is `true` (3 or more servers), which conflicts with availability level `none` (1 replica). Kix stopped before changing the cluster, so any running servers and their JetStream streams are untouched. Kix never turns off `clustered` automatically because switching in place fails in `nats-server` 2.15.3. The remaining server restarts standalone, refuses to recover any stream with more than one replica, and fails its health check. Its pod never becomes ready, and the stream files stay on the volumes.";
+        fix = "To run a NATS cluster, set `instances.${scope.namespaceName}.${name}.availability` to `\"pod\"`, `\"node\"`, or `\"zone\"`, or raise `cluster.availability.default`. For a new standalone server with no data, set `instances.${scope.namespaceName}.${name}.config.clustered = false;`. To switch an existing cluster to a standalone server and keep its data: 1. Back up every stream with `nats stream backup`. 2. Delete every stream with `nats stream rm`. 3. Set `instances.${scope.namespaceName}.${name}.config.clustered = false;` and run `kix deploy`. 4. Restore every stream with `nats stream restore`.";
       }
       {
         assertion = config.clustered || n == 1;
         option = "replicas";
         message = "`replicas` is ${toString n}, which is invalid when `clustered` is `false` (standalone mode runs 1 pod). Kix stopped before deploying anything.";
-        fix = "To run one standalone server, remove `replicas` or set `replicas = 1;`. To run a NATS cluster, set `clustered = true;` with an availability level of `pod`, `node`, or `zone`. Switching an existing standalone instance in place deletes its stored streams: if it holds data, back up every stream with `nats stream backup` first and restore them with `nats stream restore` after deploying.";
+        fix = "To run one standalone server, remove `replicas` or set `replicas = 1;`. To run a NATS cluster, set `clustered = true;` with an availability level of `pod`, `node`, or `zone`. Switching a running standalone instance to clustered in place makes the deploy fail and later deletes its streams. To keep its data, back up every stream with `nats stream backup`, then delete every stream with `nats stream rm`. Delete the StatefulSet with `kubectl delete statefulset -n ${scope.namespaceName} ${name}` (its PersistentVolumeClaims stay). Then set `clustered = true;`, run `kix deploy`, and restore every stream with `nats stream restore`.";
       }
       {
         assertion = !config.clustered || (n >= 3 && lib.mod n 2 == 1);
@@ -418,7 +435,7 @@ in
         scrape = config.metrics.enabled && prometheus != null;
 
         auth = kix.contracts.secret.helpers.use {
-          inherit who;
+          inherit scope;
           arg = "natsAuth";
           dep = natsAuth;
           keys = [
@@ -617,20 +634,6 @@ in
           securityContext = hardening;
         };
 
-        headlessPorts = [
-          {
-            name = "nats";
-            port = ports.client;
-            targetPort = ports.client;
-            protocol = "TCP";
-          }
-        ]
-        ++ lib.optional clustered {
-          name = "cluster";
-          port = ports.cluster;
-          targetPort = ports.cluster;
-          protocol = "TCP";
-        };
       in
       {
         configMap = scope.mkResource {
@@ -703,10 +706,21 @@ in
           ]
           |> scope.mkStatefulSet;
 
-        # The routes in nats.conf read this Service's `out.fqdn`, so it is
+        # The StatefulSet's governing Service, so `<pod>.<out.fqdn>` names
+        # one server. The routes in nats.conf read its `out.fqdn`, so it is
         # applied before the StatefulSet and selects through `rawSelector`;
         # `out.selector` would recurse. It publishes unready addresses so a
         # starting server resolves its peers.
+        #
+        # It is also the monitoring address in `out`. KEDA's NATS JetStream
+        # scaler, given a cluster, reads the server names from the route
+        # URLs in /varz and asks `<server name>.<its endpoint's host>` for
+        # each server's /jsz (pkg/scalers/nats_jetstream_scaler.go
+        # upstream). Only the governing Service makes that name resolve.
+        # The Service lists the monitoring port alone, so a consumer that
+        # reads its address gets port 8222 and not the client or route
+        # port. Pod DNS records do not depend on the ports, and the
+        # instance's pods reach each other on every port.
         headlessService = scope.mkResource {
           apiVersion = "v1";
           kind = "Service";
@@ -716,7 +730,15 @@ in
             clusterIP = "None";
             publishNotReadyAddresses = true;
             selector = self.statefulSet.rawSelector;
-            ports = headlessPorts;
+            ports = [
+              {
+                name = "monitor";
+                port = ports.monitor;
+                targetPort = ports.monitor;
+                protocol = "TCP";
+                appProtocol = "http";
+              }
+            ];
           };
         };
 
@@ -732,25 +754,6 @@ in
                 targetPort = ports.client;
                 protocol = "TCP";
                 appProtocol = "tcp";
-              }
-            ];
-          }
-          |> scope.mkResource;
-
-        # A Service of its own, so that reading its address opens the
-        # monitoring port and not the client port.
-        monitoringService =
-          self.statefulSet
-          |> kix.service.fromWorkload {
-            name = "${name}-monitor";
-            labels."app.kubernetes.io/component" = "monitor";
-            ports = [
-              {
-                name = "monitor";
-                port = ports.monitor;
-                targetPort = ports.monitor;
-                protocol = "TCP";
-                appProtocol = "http";
               }
             ];
           }
@@ -784,7 +787,7 @@ in
               scheme = "nats";
               port = ports.client;
             };
-            monitoringHost = self.monitoringService.out.fqdn;
+            monitoringHost = self.headlessService.out.fqdn;
             monitoringPort = toString ports.monitor;
             credentials = auth;
             inherit jetstream;
@@ -794,7 +797,6 @@ in
           # keeps them in the build.
           requires = builtins.filter (r: r != null) [
             self.headlessService
-            self.monitoringService
             self.metricsService
           ];
         };
