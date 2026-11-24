@@ -760,8 +760,8 @@ in
 
   p14-pdb-selects-pod-template = clean (base "a" ++ [ (pdb "a" "web" podLabels { }) ]);
 
-  # matchExpressions-only selectors have no matchLabels to resolve.
-  p14b-pdb-without-matchlabels-is-skipped = clean (
+  # A matchExpressions-only selector is resolved like any other.
+  p14b-pdb-matchexpressions-selects-pod-template = clean (
     base "a"
     ++ [
       (pdb "a" "expr" { } {
@@ -777,6 +777,74 @@ in
       })
     ]
   );
+
+  v14d-pdb-matchexpressions-selects-nothing = onlyFailure "PodDisruptionBudget a/expr selector" (
+    base "a"
+    ++ [
+      (pdb "a" "expr" { } {
+        spec.selector = {
+          matchExpressions = [
+            {
+              key = "app";
+              operator = "NotIn";
+              values = [ "web" ];
+            }
+          ];
+        };
+      })
+    ]
+  );
+
+  v25-selector-operator-is-not-valid =
+    onlyFailure
+      "[K1895] PodDisruptionBudget a/bad has an invalid label selector in spec.selector, so Kix stopped the build: the matchExpressions entry for key 'app' sets operator 'Equals'"
+      (
+        base "a"
+        ++ [
+          (pdb "a" "bad" { } {
+            spec.selector.matchExpressions = [
+              {
+                key = "app";
+                operator = "Equals";
+                values = [ "web" ];
+              }
+            ];
+          })
+        ]
+      );
+
+  v12c-networkpolicy-matchexpressions-selects-nothing =
+    onlyFailure "[K1895] NetworkPolicy a/np podSelector"
+      (
+        base "a"
+        ++ [
+          (res "NetworkPolicy" "a" "np" {
+            apiVersion = "networking.k8s.io/v1";
+            spec.podSelector.matchExpressions = [
+              {
+                key = "app";
+                operator = "DoesNotExist";
+              }
+            ];
+          })
+        ]
+      );
+
+  v09b-selector-expression-outside-template-labels =
+    onlyFailure "does not match pod template labels"
+      (
+        base "a"
+        ++ [
+          (deployment "a" "api" {
+            spec.selector.matchExpressions = [
+              {
+                key = "tier";
+                operator = "Exists";
+              }
+            ];
+          })
+        ]
+      );
 
   p14c-pdb-over-ref-pods = clean (
     base "a"
