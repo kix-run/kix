@@ -329,16 +329,49 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
 /// holds back what it depends on as in the default mode.
 fn live_order(live: &[kube::api::DynamicObject], entries: &[GarbageEntry]) -> DeleteOrder {
     let ids: HashSet<&ResourceId> = entries.iter().map(|g| &g.id).collect();
-    let manifests: Vec<Value> = live
-        .iter()
-        .map(kix::manifest::types::to_manifest_value)
-        .collect();
+    let manifests: Vec<Value> = live.iter().map(ordering_stub).collect();
     let mut order = DeleteOrder::of_manifests(&manifests);
     order.retain(|rid| ids.contains(rid));
     for entry in entries {
         order.push(entry.id.clone());
     }
     order
+}
+
+/// Return the parts of a live object that ordering reads: its identity and
+/// its `kix.run/identity-hash` and `kix.run/depends-on` annotations. Leaving
+/// out the rest keeps Secret data and managed fields out of memory.
+fn ordering_stub(obj: &kube::api::DynamicObject) -> Value {
+    let rid = kix::cluster::drift::resource_id(obj);
+    let mut annotations = serde_json::Map::new();
+    for key in [keys::IDENTITY_HASH, keys::DEPENDS_ON] {
+        if let Some(value) = obj
+            .metadata
+            .annotations
+            .as_ref()
+            .and_then(|a| keys::get_meta(a, key))
+        {
+            annotations.insert(key.to_string(), Value::String(value.to_string()));
+        }
+    }
+    let api_version = obj
+        .data
+        .get("apiVersion")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| obj.types.as_ref().map(|t| t.api_version.clone()))
+        .unwrap_or_else(|| {
+            if rid.group.is_empty() {
+                "v1".to_string()
+            } else {
+                format!("{}/v1", rid.group)
+            }
+        });
+    let mut metadata = serde_json::json!({ "name": rid.name, "annotations": annotations });
+    if rid.namespace != kix::manifest::types::CLUSTER_SCOPED {
+        metadata["namespace"] = Value::String(rid.namespace.clone());
+    }
+    serde_json::json!({ "apiVersion": api_version, "kind": rid.kind, "metadata": metadata })
 }
 
 /// Return `126 objects still in use`: the objects of the current build, which
@@ -716,6 +749,7 @@ pub(super) async fn delete_resources(
     order: DeleteOrder,
 ) -> Result<Deletions> {
     let mut done = Deletions::default();
+    let mut stuck_any = false;
     let mut waiting: std::collections::HashMap<ResourceId, String> = Default::default();
     let mut report = |rid: &ResourceId, step: Step<'_>| {
         let removal = match step {
@@ -762,24 +796,21 @@ pub(super) async fn delete_resources(
                 eprintln!(
                     "  {} {}",
                     output::red("!"),
-                    readiness::stuck_message(rid, stuck, DeletePath::Gc)
+                    readiness::stuck_message(rid, stuck)
                 );
+                stuck_any = true;
                 done.failed += 1;
             }
-            Removal::HeldBack(stuck) => {
+            Removal::HeldBack { by, shared } => {
                 println!(
                     "  {} {}",
                     output::yellow("="),
-                    readiness::held_back_reason(rid, stuck, DeletePath::Gc)
+                    readiness::held_back_reason(rid, by, DeletePath::Gc, *shared)
                 );
                 done.held += 1;
             }
             Removal::Cycle => {
-                eprintln!(
-                    "  {} {}",
-                    output::yellow("!"),
-                    readiness::cycle_reason(rid, DeletePath::Gc)
-                );
+                eprintln!("  {} {}", output::yellow("!"), readiness::cycle_reason(rid));
                 done.held += 1;
             }
             Removal::Cancelled => done.held += 1,
@@ -799,5 +830,9 @@ pub(super) async fn delete_resources(
     )
     .await
     .map_err(|e| miette!("{e}"))?;
+    if stuck_any {
+        eprintln!();
+        eprintln!("{}", readiness::stuck_explanation(DeletePath::Gc));
+    }
     Ok(done)
 }

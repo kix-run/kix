@@ -326,7 +326,7 @@ pub(crate) enum RecreateError {
     /// apply would fail with the same immutable-field 422.
     #[error(
         "{}",
-        super::readiness::stuck_message(.rid, .stuck, super::readiness::DeletePath::Recreate)
+        super::readiness::stuck_message(.rid, .stuck)
     )]
     StillExists { rid: ResourceId, stuck: Stuck },
     /// The cancel token fired while the deleted object was still there.

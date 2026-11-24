@@ -187,9 +187,10 @@ pub enum Removal {
     Pruned(Pruned),
     /// The object was still being deleted when the wait ended.
     Stuck(Stuck),
-    /// Not deleted, because this object's delete did not finish and it
-    /// depends on the object ([`DeleteOrder::hold_back`]).
-    HeldBack(ResourceId),
+    /// Not deleted, because `by`, which depends on it, is still on the
+    /// cluster ([`DeleteOrder::hold_back`]). `shared` says that `by` stays
+    /// because another Kix cluster still deploys it.
+    HeldBack { by: ResourceId, shared: bool },
     /// Not deleted, because it is part of a dependency cycle or something in
     /// one depends on it ([`Walked::Cycle`]).
     Cycle,
@@ -201,17 +202,29 @@ pub enum Removal {
 }
 
 impl Removal {
-    /// Return whether the object may still be on the cluster because a
-    /// delete failed, did not finish, or was not attempted.
-    pub fn unfinished(&self) -> bool {
-        matches!(
-            self,
+    /// Return whether the object is still on the cluster after this attempt,
+    /// so what it depends on must stay too.
+    pub fn still_live(&self) -> bool {
+        match self {
+            Removal::NeverPruned | Removal::UnknownKind => false,
+            Removal::Pruned(pruned) => matches!(pruned, Pruned::Kept(_) | Pruned::Changed(_)),
             Removal::Stuck(_)
-                | Removal::HeldBack(_)
-                | Removal::Cycle
-                | Removal::Cancelled
-                | Removal::Failed(_)
-        )
+            | Removal::HeldBack { .. }
+            | Removal::Cycle
+            | Removal::Cancelled
+            | Removal::Failed(_) => true,
+        }
+    }
+
+    /// Return whether the object is still on the cluster and still this Kix
+    /// cluster's to delete, so a teardown is not done. An object another Kix
+    /// cluster still deploys, and what it holds back, belongs to that
+    /// cluster.
+    pub fn unfinished(&self) -> bool {
+        match self {
+            Removal::Pruned(Pruned::Kept(_)) | Removal::HeldBack { shared: true, .. } => false,
+            other => other.still_live(),
+        }
     }
 }
 
@@ -272,6 +285,7 @@ pub async fn delete_in_order(
         propagation_policy: Some(PropagationPolicy::Background),
         ..DeleteParams::default()
     };
+    let mut shared: std::collections::HashSet<ResourceId> = std::collections::HashSet::new();
     // Deletes run concurrently and report while they wait, so the reporter
     // is shared behind a lock that no one holds across an await.
     let report = std::sync::Mutex::new(report);
@@ -315,11 +329,19 @@ pub async fn delete_in_order(
             DELETE_CONCURRENCY,
             cancel,
             start,
-            Removal::unfinished,
+            Removal::still_live,
             |rid, walked| {
                 let removal = match walked {
-                    Walked::Done(removal) => removal,
-                    Walked::HeldBack(stuck) => Removal::HeldBack(stuck.clone()),
+                    Walked::Done(removal) => {
+                        if matches!(removal, Removal::Pruned(Pruned::Kept(_))) {
+                            shared.insert(rid.clone());
+                        }
+                        removal
+                    }
+                    Walked::HeldBack(by) => Removal::HeldBack {
+                        by: by.clone(),
+                        shared: shared.contains(by),
+                    },
                     Walked::Cycle => Removal::Cycle,
                     Walked::NotStarted => Removal::Cancelled,
                 };
@@ -328,7 +350,9 @@ pub async fn delete_in_order(
             },
         )
         .await;
-    removals.sort_by_key(|(rid, _)| ids.iter().position(|r| r == rid));
+    let position: std::collections::HashMap<&ResourceId, usize> =
+        ids.iter().enumerate().map(|(i, rid)| (rid, i)).collect();
+    removals.sort_by_key(|(rid, _)| position.get(rid).copied());
     Ok(removals)
 }
 
@@ -655,7 +679,9 @@ mod tests {
             panic!("{removals:?}");
         };
         assert_eq!(stuck.finalizers, vec!["test.kix.run/hold".to_string()]);
-        assert!(matches!(by_name("needed"), Removal::HeldBack(r) if r.name == "cm"));
+        assert!(
+            matches!(by_name("needed"), Removal::HeldBack { by, shared: false } if by.name == "cm")
+        );
         assert!(matches!(
             by_name("other"),
             Removal::Pruned(Pruned::Deleted { .. })
@@ -673,5 +699,168 @@ mod tests {
             .filter(|r| r.starts_with("DELETE"))
             .collect();
         assert_eq!(deletes.len(), 2, "{deletes:?}");
+    }
+
+    /// A ConfigMap `cm` that depends on Secret `needed`, both named by
+    /// cluster `a`'s record, plus the record.
+    fn pair(cm_finalizers: &[&str]) -> (FakeApi, DeleteOrder) {
+        let object = |kind: &str, name: &str, hash: &str, deps: &str, finalizers: &[&str]| {
+            json!({
+                "apiVersion": "v1",
+                "kind": kind,
+                "metadata": {
+                    "name": name,
+                    "namespace": "app",
+                    "finalizers": finalizers,
+                    "annotations": {
+                        (keys::ACTIVATIONS): "a1",
+                        (keys::IDENTITY_HASH): hash,
+                        (keys::DEPENDS_ON): deps,
+                    },
+                },
+            })
+        };
+        let cm = object("ConfigMap", "cm", "hash_cm", "hash_s", cm_finalizers);
+        let secret = object("Secret", "needed", "hash_s", "", &[]);
+        let order = DeleteOrder::of_manifests(&[cm.clone(), secret.clone()]);
+        let api = FakeApi::new([record("a", "a1", lifecycle::PHASE_ACTIVE), cm, secret]);
+        (api, order)
+    }
+
+    async fn walk(
+        api: &FakeApi,
+        order: DeleteOrder,
+        cancel: &CancelToken,
+    ) -> Vec<(ResourceId, Removal)> {
+        delete_in_order(
+            &api.client(),
+            "a",
+            order,
+            Duration::from_secs(10),
+            cancel,
+            &mut |_, _| {},
+        )
+        .await
+        .unwrap()
+    }
+
+    fn removal<'a>(removals: &'a [(ResourceId, Removal)], name: &str) -> &'a Removal {
+        &removals.iter().find(|(r, _)| r.name == name).unwrap().1
+    }
+
+    /// A dependent whose delete request fails holds back what it depends on.
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_delete_holds_back_what_it_needs() {
+        let (api, order) = pair(&[]);
+        api.fail_next("/api/v1/namespaces/app/configmaps/cm", 1, 500);
+        let removals = walk(&api, order, &CancelToken::new()).await;
+        assert!(
+            matches!(removal(&removals, "cm"), Removal::Failed(_)),
+            "{removals:?}"
+        );
+        assert!(matches!(
+            removal(&removals, "needed"),
+            Removal::HeldBack { shared: false, .. }
+        ));
+        assert_eq!(api.names("Secret"), vec!["needed"]);
+    }
+
+    /// A dependent that changed between the read and the delete is still on
+    /// the cluster: it holds back what it depends on, and the teardown is not
+    /// done.
+    #[tokio::test(start_paused = true)]
+    async fn a_changed_dependent_holds_back_what_it_needs() {
+        let (api, order) = pair(&[]);
+        api.after_get("cm", |o| {
+            o["data"] = json!({ "touched": "by its controller" });
+        });
+        let removals = walk(&api, order, &CancelToken::new()).await;
+        let cm = removal(&removals, "cm");
+        assert!(
+            matches!(cm, Removal::Pruned(Pruned::Changed(_))),
+            "{removals:?}"
+        );
+        assert!(cm.unfinished());
+        assert!(removal(&removals, "needed").unfinished());
+        assert_eq!(api.names("Secret"), vec!["needed"]);
+    }
+
+    /// A dependent another Kix cluster still deploys holds back what it
+    /// depends on, and neither blocks the teardown.
+    #[tokio::test(start_paused = true)]
+    async fn a_shared_dependent_holds_back_without_blocking() {
+        let (api, order) = pair(&[]);
+        api.insert(record("b", "b1", lifecycle::PHASE_ACTIVE));
+        api.patch_object("ConfigMap", "cm", |o| {
+            o["metadata"]["annotations"][keys::ACTIVATIONS] = json!("a1,b1");
+        });
+        let removals = walk(&api, order, &CancelToken::new()).await;
+        let cm = removal(&removals, "cm");
+        assert!(
+            matches!(cm, Removal::Pruned(Pruned::Kept(_))),
+            "{removals:?}"
+        );
+        assert!(!cm.unfinished());
+        let needed = removal(&removals, "needed");
+        assert!(
+            matches!(needed, Removal::HeldBack { shared: true, .. }),
+            "{removals:?}"
+        );
+        assert!(!needed.unfinished());
+    }
+
+    /// A cancel while a delete waits stops the walk: the object waited for
+    /// and the one behind it are reported cancelled, and both stay.
+    #[tokio::test(start_paused = true)]
+    async fn a_cancel_mid_walk_stops_it() {
+        let (api, order) = pair(&["test.kix.run/hold"]);
+        let cancel = CancelToken::new();
+        let stopper = {
+            let cancel = cancel.clone();
+            async move {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                cancel.cancel();
+            }
+        };
+        let (removals, ()) = tokio::join!(walk(&api, order, &cancel), stopper);
+        assert!(
+            matches!(removal(&removals, "cm"), Removal::Cancelled),
+            "{removals:?}"
+        );
+        assert!(
+            matches!(removal(&removals, "needed"), Removal::Cancelled),
+            "{removals:?}"
+        );
+        assert_eq!(api.names("Secret"), vec!["needed"]);
+    }
+
+    /// More deletes than run at once still all happen, and stuck ones wait
+    /// side by side: 70 objects that keep their finalizer for the whole
+    /// budget take two budgets, not seventy.
+    #[tokio::test(start_paused = true)]
+    async fn more_deletes_than_the_limit_all_run() {
+        let mut objects = vec![record("a", "a1", lifecycle::PHASE_ACTIVE)];
+        let mut ids = Vec::new();
+        for i in 0..70 {
+            let name = format!("cm{i}");
+            objects.push(json!({
+                "apiVersion": "v1",
+                "kind": "ConfigMap",
+                "metadata": {
+                    "name": name,
+                    "namespace": "app",
+                    "finalizers": ["test.kix.run/hold"],
+                    "annotations": { (keys::ACTIVATIONS): "a1" },
+                },
+            }));
+            ids.push(ResourceId::new("", "ConfigMap", "app", &name));
+        }
+        let api = FakeApi::new(objects);
+        let start = tokio::time::Instant::now();
+        let removals = walk(&api, DeleteOrder::unordered(ids), &CancelToken::new()).await;
+        assert_eq!(removals.len(), 70);
+        assert!(removals.iter().all(|(_, r)| matches!(r, Removal::Stuck(_))));
+        let waited = start.elapsed();
+        assert!(waited < Duration::from_secs(30), "waited {waited:?}");
     }
 }

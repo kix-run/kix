@@ -548,8 +548,9 @@ impl DeleteOrder {
     /// an outcome left the object on the cluster, everything it depends on is
     /// held back. Because a stuck object holds back everything below it, a
     /// chain of dependencies waits on at most one delete that never
-    /// finishes, so the time a walk spends on stuck deletes is about one
-    /// wait budget, however many there are.
+    /// finishes. Stuck deletes wait side by side, `limit` at a time, so the
+    /// time a walk spends on them is about one wait budget for every `limit`
+    /// of them, plus the deletes that finish along the longest chain.
     ///
     /// `report` hears of each object once, in the order things happen. Once
     /// `cancel` fires, nothing new starts, and the objects not started are

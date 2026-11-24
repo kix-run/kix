@@ -96,6 +96,9 @@ pub struct Context {
     /// stops at its next step and leaves its record `Deploying`, and the
     /// next operator start resumes it.
     pub shutdown: CancelToken,
+    /// The one Event recorder every reconcile reports through
+    /// ([`crate::k8s_events::recorder`]).
+    pub events: Arc<kube::runtime::events::Recorder>,
 }
 
 /// Errors from the operator reconcile loop.
@@ -399,14 +402,7 @@ async fn start_queued(
     // Kubernetes version this cluster does not run fails the same
     // way. Only a Queued record gets these checks: an Active record
     // keeps being repaired after a Kubernetes upgrade.
-    let events = || {
-        K8sEventObserver::new(
-            ctx.client.clone(),
-            activation,
-            keys::API_VERSION,
-            Some(name.to_string()),
-        )
-    };
+    let events = || K8sEventObserver::new(ctx.events.clone(), activation, keys::API_VERSION);
     let index = index_of(activation)?;
     match check_binding(&ctx.client, &index).await? {
         Binding::Accepted => {}
@@ -678,10 +674,9 @@ async fn run_reconcile(
     let observer: Arc<dyn DeployObserver> = Arc::new(CompositeObserver::new(vec![
         Arc::new(OperatorObserver::new(name)) as Arc<dyn DeployObserver>,
         Arc::new(K8sEventObserver::new(
-            ctx.client.clone(),
+            ctx.events.clone(),
             activation,
             keys::API_VERSION,
-            Some(name.to_string()),
         )) as Arc<dyn DeployObserver>,
     ]));
     let result = plan.run(manage_lifecycle, config, observer).await;
@@ -752,14 +747,9 @@ async fn handle_delete(
             if let Err(e @ OperatorError::DeletionUnfinished { .. }) = &deleted
                 && !ctx.shutdown.is_cancelled()
             {
-                K8sEventObserver::new(
-                    ctx.client.clone(),
-                    activation,
-                    keys::API_VERSION,
-                    Some(name.to_string()),
-                )
-                .warn_now("DeletionUnfinished", &e.to_string())
-                .await;
+                K8sEventObserver::new(ctx.events.clone(), activation, keys::API_VERSION)
+                    .warn_now("DeletionUnfinished", &e.to_string())
+                    .await;
             }
             deleted?;
         }
@@ -810,6 +800,7 @@ async fn delete_closure(
     const NAMED: usize = 5;
     let mut unfinished = 0usize;
     let mut leftovers: Vec<String> = Vec::new();
+    let mut stuck_any = false;
     let mut report = |rid: &ResourceId, step: Step<'_>| {
         let removal = match step {
             Step::Waiting(status) => {
@@ -827,7 +818,10 @@ async fn delete_closure(
                 Removal::Stuck(stuck) => {
                     format!("waiting for {}", stuck.finalizers.join(", "))
                 }
-                Removal::HeldBack(stuck) => format!("{stuck} still needs it"),
+                Removal::HeldBack { by, .. } => format!("{by} still needs it"),
+                Removal::Pruned(Pruned::Changed(_)) => {
+                    "changed while being deleted; tried again on the next attempt".to_string()
+                }
                 Removal::Cycle => "in a dependency cycle".to_string(),
                 Removal::Cancelled => "not deleted before the operator stopped".to_string(),
                 Removal::Failed(e) => e.to_string(),
@@ -854,23 +848,21 @@ async fn delete_closure(
                 let reason = kept.kept_reason().unwrap_or_default();
                 tracing::info!(name, resource = %rid, "prune: {reason}");
             }
-            Removal::Stuck(stuck) => tracing::warn!(
+            Removal::Stuck(stuck) => {
+                stuck_any = true;
+                tracing::warn!(name, resource = %rid, "{}", readiness::stuck_message(rid, stuck))
+            }
+            Removal::HeldBack { by, shared } => tracing::info!(
                 name,
                 resource = %rid,
                 "{}",
-                readiness::stuck_message(rid, stuck, DeletePath::Operator)
-            ),
-            Removal::HeldBack(stuck) => tracing::info!(
-                name,
-                resource = %rid,
-                "{}",
-                readiness::held_back_reason(rid, stuck, DeletePath::Operator)
+                readiness::held_back_reason(rid, by, DeletePath::Teardown, *shared)
             ),
             Removal::Cycle => tracing::warn!(
                 name,
                 resource = %rid,
                 "{}",
-                readiness::cycle_reason(rid, DeletePath::Operator)
+                readiness::cycle_reason(rid)
             ),
             Removal::Cancelled => {}
             Removal::Failed(e) => {
@@ -888,6 +880,13 @@ async fn delete_closure(
     )
     .await
     .map_err(|e| OperatorError::DiscoveryError(e.to_string()))?;
+    if stuck_any {
+        tracing::warn!(
+            name,
+            "{}",
+            readiness::stuck_explanation(DeletePath::Teardown)
+        );
+    }
     if unfinished > 0 {
         let more = leftovers.len().saturating_sub(NAMED);
         leftovers.truncate(NAMED);
@@ -1009,6 +1008,7 @@ mod tests {
             records,
             required_stops: stops::required_stops(),
             shutdown: CancelToken::new(),
+            events: crate::k8s_events::recorder(api.client(), None),
         });
         let activation: DynamicObject = serde_json::from_value(queued).unwrap();
         reconcile_activation(Arc::new(activation), ctx.clone())
@@ -1099,6 +1099,7 @@ mod tests {
             records,
             required_stops: stops::required_stops(),
             shutdown: CancelToken::new(),
+            events: crate::k8s_events::recorder(api.client(), None),
         });
         let activation: DynamicObject = serde_json::from_value(record).unwrap();
         let err = reconcile_activation(Arc::new(activation), ctx.clone())
@@ -1138,6 +1139,7 @@ mod tests {
             records,
             required_stops,
             shutdown: CancelToken::new(),
+            events: crate::k8s_events::recorder(api.client(), None),
         });
         let name = record["metadata"]["name"].as_str().unwrap().to_string();
         let activation: DynamicObject = serde_json::from_value(record).unwrap();
@@ -1605,5 +1607,66 @@ mod tests {
             "{err}"
         );
         assert!(start.elapsed() < Duration::from_secs(1));
+    }
+
+    /// The operator's one recorder turns a repeated warning on the same
+    /// Activation into a count on one Event, so a teardown that keeps
+    /// failing does not add an Event at every retry.
+    #[tokio::test]
+    async fn a_repeated_teardown_warning_is_one_event() {
+        use kix::cluster::fake_api::FakeApi;
+        let api = FakeApi::new([]);
+        let recorder = crate::k8s_events::recorder(api.client(), None);
+        let activation: DynamicObject = serde_json::from_value(json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": "Activation",
+            "metadata": { "name": "b", "uid": "uid-b" },
+        }))
+        .unwrap();
+        for _ in 0..3 {
+            K8sEventObserver::new(recorder.clone(), &activation, keys::API_VERSION)
+                .warn_now("DeletionUnfinished", "1 object(s) are still on the cluster")
+                .await;
+        }
+        assert_eq!(api.names("Event").len(), 1, "{:?}", api.requests());
+    }
+
+    /// A teardown that did not finish is retried after the error requeue.
+    #[test]
+    fn an_unfinished_teardown_is_requeued() {
+        let activation: Arc<DynamicObject> = Arc::new(
+            serde_json::from_value(json!({
+                "apiVersion": keys::API_VERSION,
+                "kind": "Activation",
+                "metadata": { "name": "b" },
+            }))
+            .unwrap(),
+        );
+        let err = OperatorError::DeletionUnfinished {
+            count: 1,
+            leftovers: "ConfigMap/held@app (waiting for test.kix.run/hold)".into(),
+        };
+        let api = kix::cluster::fake_api::FakeApi::new([]);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let ctx = runtime.block_on(async {
+            let client = api.client();
+            let discovery = kix::cluster::discovery::discover_resources(&client)
+                .await
+                .unwrap();
+            Arc::new(Context {
+                records: Records::open_installed(&client, &discovery).unwrap(),
+                client,
+                required_stops: Vec::new(),
+                shutdown: CancelToken::new(),
+                events: crate::k8s_events::recorder(api.client(), None),
+            })
+        });
+        assert_eq!(
+            error_policy(activation, &err, ctx),
+            Action::requeue(ERROR_REQUEUE_INTERVAL)
+        );
     }
 }

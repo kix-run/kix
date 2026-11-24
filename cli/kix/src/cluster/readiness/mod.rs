@@ -37,8 +37,8 @@ use crate::manifest::types::ResourceId;
 
 pub use declared::{check_readiness, declared_rule, is_immediate_kind, not_ready_reason};
 pub use deletion::{
-    DeletePath, Deletion, STUCK_DELETE_ID, Stuck, cycle_reason, deletion_reason, held_back_reason,
-    stuck_message,
+    DeletePath, Deletion, Runner, STUCK_DELETE_ID, Stuck, cycle_reason, deletion_reason,
+    held_back_reason, stuck_explanation, stuck_message,
 };
 pub use imports::{ImportTarget, MalformedMarker, import_target_from_manifest};
 pub use terminal::{

@@ -88,29 +88,53 @@ starts again, it resumes every `Deploying` record started in operator mode.
 ## When an Activation record is deleted
 
 When an `Active`, `Deploying`, or `Degraded` Activation record is deleted, the
-operator deletes that record's resources before removing its finalizer
-(`kix.run/operator-gc`). It waits up to 300 seconds (5 minutes) for each
-resource to be removed from the cluster. If any resource fails to delete, is
-still being deleted when the wait ends, is held back by a stuck dependent, or
-is in a dependency cycle, the operator keeps `kix.run/operator-gc` on the
-Activation record, posts a Warning Event with reason `DeletionUnfinished`
-listing the remaining resources, and retries every 30 seconds. Run
-`kubectl describe activation <name>` to read the Event. If the operator stops
-during cleanup, it interrupts the wait and retries the next time it starts.
+operator deletes that build's resources before removing its `kix.run/operator-gc`
+finalizer (keeping Namespaces, CustomResourceDefinitions, and resources still
+deployed by another Kix cluster). It deletes dependents before their
+dependencies, up to 64 independent resources in parallel, and waits up to 300
+seconds (5 minutes) for each resource to disappear from the cluster.
 
-To let cleanup finish, resolve the resources named in the Event: start the
-controller or operator responsible for a stuck finalizer, or remove that
-resource's finalizers with the `kubectl patch` command printed in the operator
-log. To abandon cleanup instead, remove the operator's finalizer from the
-Activation record:
+Cleanup is unfinished if any resource belonging to this Kix cluster:
+
+- fails to delete, or changed while being deleted,
+- is still on the cluster after the 300-second wait,
+- is held back because a resource still on the cluster depends on it, or
+- is part of, or depends on, a dependency cycle.
+
+When cleanup is unfinished, the operator keeps `kix.run/operator-gc` on the
+Activation record, posts a `DeletionUnfinished` Warning Event naming up to five
+remaining resources, and retries 30 seconds after the attempt finishes. Repeated
+retries update the count on the same Event; run `kubectl describe activation <name>`
+to read it. Because a stuck resource waits out the 300-second limit before the
+30-second pause, each retry cycle takes about 5.5 minutes; a delete that fails
+immediately, such as a permission error, retries every 30 seconds. If the
+operator stops during cleanup, it cancels the active wait and tries again the
+next time it starts.
+
+To let cleanup finish, inspect `kubectl describe activation <name>` and the
+operator logs, then clear the blocking resources: fix any permission error,
+start the controller responsible for a stuck finalizer, follow the log
+instructions for built-in Kubernetes protection finalizers, or run the
+`kubectl patch` command printed in the operator log to remove a controller
+finalizer and skip its external cleanup.
+
+To abandon cleanup instead and let Kubernetes delete the Activation record,
+remove `kix.run/operator-gc` from the record:
 
 ```sh
-kubectl patch activation <name> --type=merge -p '{"metadata":{"finalizers":null}}'
+kubectl patch activation <name> --type=json -p '[{"op":"test","path":"/metadata/finalizers/0","value":"kix.run/operator-gc"},{"op":"remove","path":"/metadata/finalizers/0"}]'
 ```
 
-Kubernetes then deletes the Activation record immediately. Any resources the
-operator had not deleted remain on the cluster without a deployment record
-naming them; run `kix gc <cluster> --full-scan` to find them.
+The `test` operation checks that `kix.run/operator-gc` is at index `0`, so the
+patch fails safely if another finalizer comes first. If it fails, run
+`kubectl get activation <name> -o jsonpath='{.metadata.finalizers}'` and replace
+`0` in both paths with the 0-based index of `kix.run/operator-gc`.
+
+Kubernetes deletes the Activation record once no finalizers remain on it. If a
+cleanup attempt is already running, it finishes first and may delete a few more
+resources. Any resources the operator did not delete stay on the cluster without
+an Activation record naming them; run `kix gc <cluster> --full-scan` to find
+them.
 
 ## Waiting for the operator
 

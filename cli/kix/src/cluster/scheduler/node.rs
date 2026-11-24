@@ -15,8 +15,8 @@ use chrono::Utc;
 use super::super::apply::{ApplyAction, ApplyError, ApplyResult, ChangeAction};
 use super::super::cancel::CancelToken;
 use super::super::graph::DeleteOrder;
-use super::super::ops::{ResourceIo, SecretHydrator};
-use super::super::readiness::{self, ReadinessResult};
+use super::super::ops::{RecreateError, ResourceIo, SecretHydrator};
+use super::super::readiness::{self, DeletePath, ReadinessResult, Runner};
 use super::super::secrets;
 use super::super::stream::{
     DeployEvent, DeployObserver, NodeDetail, NodeId, Phase, TransitionKind, Verdict,
@@ -33,6 +33,8 @@ pub(super) struct NodeCtx {
     pub(super) dry_run: bool,
     pub(super) progress: Arc<Progress>,
     pub(super) observer: Arc<dyn DeployObserver>,
+    /// Who runs the deploy, for the next step a message gives.
+    pub(super) runner: Runner,
 }
 
 impl NodeCtx {
@@ -79,10 +81,18 @@ async fn recreate(
     if let Some(refusal) = recreate_refusal(rid) {
         return Err(refusal);
     }
-    ctx.resources
+    match ctx
+        .resources
         .recreate_in_place(manifest, ctx.timeout, &ctx.cancel)
         .await
-        .map_err(|e| e.to_string())
+    {
+        Ok(result) => Ok(result),
+        Err(e @ RecreateError::StillExists { .. }) => Err(format!(
+            "{e}\n\n{}",
+            readiness::stuck_explanation(DeletePath::Recreate(ctx.runner))
+        )),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 /// Return an error message if `rid` is a protected kind that Kix must not

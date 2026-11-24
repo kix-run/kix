@@ -535,3 +535,77 @@ mod hard_scope_tests {
         assert!(shared.is_empty());
     }
 }
+
+mod live_order_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn live(kind: &str, name: &str, hash: &str, deps: &str) -> kube::api::DynamicObject {
+        serde_json::from_value(json!({
+            "apiVersion": "v1",
+            "kind": kind,
+            "metadata": {
+                "name": name,
+                "namespace": "app",
+                "annotations": {
+                    (keys::IDENTITY_HASH): hash,
+                    (keys::DEPENDS_ON): deps,
+                },
+            },
+            "data": { "secret": "c2VjcmV0" },
+        }))
+        .unwrap()
+    }
+
+    fn entry(kind: &str, name: &str) -> GarbageEntry {
+        GarbageEntry {
+            id: ResourceId::new("", kind, "app", name),
+            identity_hash: None,
+            package: None,
+            package_namespace: None,
+            activations: None,
+            reason: GarbageReason::HashNotExpected,
+            deleting: None,
+        }
+    }
+
+    /// A full scan orders its garbage by the live objects' dependencies, also
+    /// through an object it keeps: `cm` needs `kept`, which needs `secret`,
+    /// so a stuck `cm` holds `secret` back.
+    #[test]
+    fn a_full_scan_orders_by_live_dependencies() {
+        let objects = [
+            live("ConfigMap", "cm", "h_cm", "h_kept"),
+            live("ConfigMap", "kept", "h_kept", "h_secret"),
+            live("Secret", "secret", "h_secret", ""),
+        ];
+        let mut order = live_order(
+            &objects,
+            &[entry("Secret", "secret"), entry("ConfigMap", "cm")],
+        );
+        let names: Vec<&str> = order.ids().iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, vec!["cm", "secret"]);
+        order.hold_back(&ResourceId::new("", "ConfigMap", "app", "cm"));
+        assert!(
+            order
+                .held_by(&ResourceId::new("", "Secret", "app", "secret"))
+                .is_some()
+        );
+    }
+
+    /// The ordering keeps only names and the two dependency annotations, so
+    /// no Secret data is copied.
+    #[test]
+    fn the_ordering_stub_carries_no_data() {
+        let stub = ordering_stub(&live("Secret", "s", "h_s", ""));
+        assert!(stub.get("data").is_none(), "{stub}");
+        assert_eq!(
+            stub["metadata"]["annotations"][keys::IDENTITY_HASH],
+            json!("h_s")
+        );
+        assert_eq!(
+            ResourceId::from_value(&stub),
+            ResourceId::new("", "Secret", "app", "s")
+        );
+    }
+}

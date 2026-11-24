@@ -48,7 +48,7 @@ use super::cancel::CancelToken;
 use super::graph::Walked;
 use super::ops::{Cluster, DeployRecord, RecordWriteError, ResourceIo};
 use super::prune_guard::Pruned;
-use super::readiness::{self, DeletePath, Deletion};
+use super::readiness::{self, DeletePath, Deletion, Runner};
 use super::stream::{
     CancelReason, DeployEvent, DeployObserver, DeployResult, NodeDetail, NodeFailure, NodeId,
     Phase, TransitionKind, Verdict,
@@ -353,6 +353,11 @@ impl<'a> Run<'a> {
             dry_run,
             progress: progress.clone(),
             observer: observer.clone(),
+            runner: if config.names_flags {
+                Runner::Cli
+            } else {
+                Runner::Operator
+            },
         });
         Self {
             config,
@@ -1124,6 +1129,17 @@ impl<'a> Run<'a> {
             detail: None,
         };
         let mut result = std::mem::take(&mut self.result);
+        let path = DeletePath::Prune(if self.config.names_flags {
+            Runner::Cli
+        } else {
+            Runner::Operator
+        });
+        // Objects another Kix cluster still deploys: what they depend on is
+        // kept, without blocking anything.
+        let mut shared: HashSet<ResourceId> = HashSet::new();
+        // The explanation of a delete that did not finish goes with the first
+        // one only, so many stuck objects make one explanation.
+        let mut explained = false;
         let start = |rid: &ResourceId| {
             let (resources, observer, progress, cancel) = (
                 resources.clone(),
@@ -1173,7 +1189,9 @@ impl<'a> Run<'a> {
                 self.config.concurrency,
                 &cancel,
                 start,
-                |p| matches!(p, Pruning::Unfinished(_)),
+                // Every object still on the cluster after its delete attempt
+                // holds back what it depends on.
+                |p| matches!(p, Pruning::Unfinished(_) | Pruning::Kept(_)),
                 |rid, walked| match walked {
                     Walked::Done(Pruning::Gone) => {
                         result.pruned += 1;
@@ -1184,15 +1202,29 @@ impl<'a> Run<'a> {
                         // belongs to this cluster, so preserve its source
                         // build for the next prune. An object shared with
                         // another Kix cluster is managed by that cluster.
-                        if matches!(outcome, Pruned::Changed(_)) {
-                            orphans_left = true;
+                        match &outcome {
+                            Pruned::Changed(_) => orphans_left = true,
+                            Pruned::Kept(_) => {
+                                shared.insert(rid.clone());
+                            }
+                            _ => {}
                         }
                         emit(DeployEvent::PruneKept {
                             resource: rid.clone(),
                             reason: outcome.kept_reason().unwrap_or_default(),
                         });
                     }
-                    Walked::Done(Pruning::Unfinished(Unfinished::Failed(message))) => {
+                    Walked::Done(Pruning::Unfinished(
+                        unfinished @ (Unfinished::Failed(_) | Unfinished::Stuck(_)),
+                    )) => {
+                        let message = match unfinished {
+                            Unfinished::Stuck(message) if !explained => {
+                                explained = true;
+                                format!("{message}\n\n{}", readiness::stuck_explanation(path))
+                            }
+                            Unfinished::Stuck(message) | Unfinished::Failed(message) => message,
+                            Unfinished::Cancelled => String::new(),
+                        };
                         orphans_left = true;
                         result.failed += 1;
                         result.failures.push(NodeFailure {
@@ -1221,14 +1253,19 @@ impl<'a> Run<'a> {
                         orphans_left = true;
                         emit(DeployEvent::PruneKept {
                             resource: rid.clone(),
-                            reason: readiness::held_back_reason(rid, stuck, DeletePath::Prune),
+                            reason: readiness::held_back_reason(
+                                rid,
+                                stuck,
+                                path,
+                                shared.contains(stuck),
+                            ),
                         });
                     }
                     Walked::Cycle => {
                         orphans_left = true;
                         emit(DeployEvent::PruneKept {
                             resource: rid.clone(),
-                            reason: readiness::cycle_reason(rid, DeletePath::Prune),
+                            reason: readiness::cycle_reason(rid),
                         });
                     }
                 },
@@ -1311,8 +1348,11 @@ enum Pruning {
 enum Unfinished {
     /// The cancel token fired during the wait.
     Cancelled,
-    /// The delete failed or the object stayed, with the message to report.
+    /// The delete failed, with the message to report.
     Failed(String),
+    /// The object was still being deleted when the wait ended, with the
+    /// message to report.
+    Stuck(String),
 }
 
 /// Wait for the orphan `rid` with uid `uid`, deleted by this prune or
@@ -1349,11 +1389,7 @@ async fn wait_gone(
         .await
     {
         Ok(Deletion::Gone) => Ok(()),
-        Ok(Deletion::Stuck(stuck)) => Err(Unfinished::Failed(readiness::stuck_message(
-            rid,
-            &stuck,
-            DeletePath::Prune,
-        ))),
+        Ok(Deletion::Stuck(stuck)) => Err(Unfinished::Stuck(readiness::stuck_message(rid, &stuck))),
         Ok(Deletion::Cancelled) => Err(Unfinished::Cancelled),
         Err(e) => Err(Unfinished::Failed(format!(
             "Kix deleted {rid}, then could not read it to confirm that it is gone, so the delete failed: {e}"
