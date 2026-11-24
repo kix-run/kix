@@ -66,7 +66,15 @@ impl DryRun {
 
 #[async_trait]
 impl ResourceIo for DryRun {
-    async fn apply(&self, manifest: &Value) -> Result<ApplyResult, ApplyError> {
+    /// An object being deleted is previewed as a recreate: the deploy waits
+    /// for it to be gone, then creates it.
+    async fn apply(
+        &self,
+        manifest: &Value,
+        _timeout: Duration,
+        _cancel: &CancelToken,
+        _on_status: OnStatus<'_>,
+    ) -> Result<ApplyResult, ApplyError> {
         let rid = ResourceId::from_value(manifest);
         // A dry run creates no CRD, so discovery cannot gain a kind during
         // one and a cache miss is final.
@@ -79,6 +87,22 @@ impl ResourceIo for DryRun {
             return Err(e);
         };
         let applied = self.resources.apply_as(&ar, scope, manifest).await;
+        if let Err(ApplyError::BeingDeleted { .. }) = &applied {
+            let live = self.resources.get_live(&rid).await.ok().flatten();
+            self.journal.record(
+                rid,
+                DryRunOutcome::Recreated {
+                    live,
+                    result: None,
+                    not_kept: Vec::new(),
+                },
+            );
+            return Ok(ApplyResult {
+                action: ApplyAction::Created,
+                preview: None,
+                not_kept: Vec::new(),
+            });
+        }
         match &applied {
             Ok(ApplyResult {
                 preview: Some(preview),
@@ -238,7 +262,16 @@ mod tests {
             "kind": "Widget",
             "metadata": { "name": "w" },
         });
-        assert!(dry.apply(&manifest).await.is_err());
+        assert!(
+            dry.apply(
+                &manifest,
+                Duration::from_secs(1),
+                &CancelToken::new(),
+                &|_| {}
+            )
+            .await
+            .is_err()
+        );
         let answers = dry.take_answers();
         assert_eq!(answers.len(), 1);
         assert!(matches!(

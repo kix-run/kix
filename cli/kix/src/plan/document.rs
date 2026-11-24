@@ -88,6 +88,12 @@ pub struct Plan {
     /// a mutating admission webhook changes. Left out when there are none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub not_kept: Vec<FieldNotKept>,
+    /// Objects of the build that are being deleted on the cluster, from the
+    /// dry run of `kix plan`. The deploy waits until each is gone, then
+    /// creates it again from the build, so the new object keeps nothing
+    /// that the old one held. Left out when there are none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub being_deleted: Vec<BeingDeleted>,
     /// Resources that leave the build, and what the deploy does with each.
     pub prune: Checked<PruneEntry>,
     /// Objects the dry run could not check, and why. Their entries in
@@ -642,6 +648,20 @@ pub struct FieldNotKept {
     pub stored: Option<Value>,
 }
 
+/// An object of the build that is being deleted on the cluster. The deploy
+/// waits until it is gone, then creates it again.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct BeingDeleted {
+    pub resource: String,
+    /// The object's `metadata.deletionTimestamp`.
+    pub since: String,
+    /// The finalizers the delete waits for. Empty when none are left.
+    pub finalizers: Vec<String>,
+    /// Whether the object may hold data, such as a PersistentVolumeClaim or
+    /// a database custom resource. The new object starts without it.
+    pub holds_data: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct PruneEntry {
     pub resource: String,
@@ -745,6 +765,7 @@ impl Plan {
             drift: Checked::not_checked(reason),
             drift_unchecked: 0,
             not_kept: Vec::new(),
+            being_deleted: Vec::new(),
             prune: Checked::not_checked(reason),
             not_checked: Vec::new(),
             readiness: Checked::not_checked(NotCheckedReason::NotPreviewable),
@@ -762,6 +783,7 @@ impl Plan {
             || p.cluster_level.is_some()
             || p.activation.is_some()
             || !self.migrations.items().is_empty()
+            || !self.being_deleted.is_empty()
             || self
                 .prune
                 .items()

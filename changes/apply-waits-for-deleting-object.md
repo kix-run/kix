@@ -1,0 +1,4 @@
++++
+kind = "fixed"
++++
+When an object the deploy writes is being deleted on the cluster (it has a `deletionTimestamp`, usually because a finalizer is still running), `kix deploy`, `kix rollback`, and the Kix operator no longer apply onto it and report success while it disappears. Kix now waits until the old object is gone, then creates it from the build, so the new object keeps nothing the old one held: a PersistentVolumeClaim starts with an empty volume. If the object is still there when the wait ends, the run fails with `[K2794]`. `kix plan` lists these objects in a new section, and in JSON as `being_deleted` (`resource`, `since`, `finalizers`, `holds_data`), marking each object that may hold data. The command line sees such an object only when it writes it anyway: a changed object, or every object with `--reconcile`. The Kix operator also writes an unchanged object that is being deleted.

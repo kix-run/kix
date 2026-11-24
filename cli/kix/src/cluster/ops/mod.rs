@@ -79,7 +79,16 @@ pub(crate) type OnStatus<'a> = &'a (dyn Fn(&str) + Send + Sync);
 #[async_trait]
 pub(crate) trait ResourceIo: Send + Sync + 'static {
     /// Server-side apply one manifest, resolving its kind from discovery.
-    async fn apply(&self, manifest: &Value) -> Result<ApplyResult, ApplyError>;
+    /// When the live object is being deleted, wait for it to be gone
+    /// ([`super::readiness::wait_gone`], `timeout` as its budget, reporting
+    /// to `on_status`), then create it.
+    async fn apply(
+        &self,
+        manifest: &Value,
+        timeout: Duration,
+        cancel: &CancelToken,
+        on_status: OnStatus<'_>,
+    ) -> Result<ApplyResult, ApplyError>;
 
     /// Read the live object, returning `Ok(None)` when absent. Performs a real
     /// read even during a dry run.

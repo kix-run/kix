@@ -352,14 +352,19 @@ impl ResourceIo for KubeResources {
             .map_err(ReadError::Get)
     }
 
-    async fn apply(&self, manifest: &Value) -> Result<ApplyResult, ApplyError> {
+    async fn apply(
+        &self,
+        manifest: &Value,
+        timeout: Duration,
+        cancel: &CancelToken,
+        on_status: OnStatus<'_>,
+    ) -> Result<ApplyResult, ApplyError> {
         let (ar, scope) = self.resolve_kind(manifest).await?;
         // Wait for any untracked resources expected by the manifest
         // (`kix.run/expects`, see `core/markers.nix`). The creator dependency
         // is already Ready, and this verifies that the expected object exists.
-        let cancel = CancelToken::new();
         if let Err((expected, detail)) =
-            readiness::wait_for_expectations(&self.client, manifest, EXPECTS_TIMEOUT, &cancel).await
+            readiness::wait_for_expectations(&self.client, manifest, EXPECTS_TIMEOUT, cancel).await
         {
             return Err(ApplyError::ExpectationUnmet {
                 resource: ResourceId::from_value(manifest).display_id(),
@@ -367,7 +372,25 @@ impl ResourceIo for KubeResources {
                 detail,
             });
         }
-        self.apply_as(&ar, scope, manifest).await
+        let uid = match self.apply_as(&ar, scope.clone(), manifest).await {
+            Err(ApplyError::BeingDeleted { uid, .. }) => uid,
+            other => return other,
+        };
+        let rid = ResourceId::from_value(manifest);
+        let api = self.api_for(&ar, &scope, &rid);
+        match readiness::wait_gone(&api, &rid.name, uid.as_deref(), timeout, cancel, on_status)
+            .await
+        {
+            Ok(Deletion::Gone) => self.apply_as(&ar, scope, manifest).await,
+            Ok(Deletion::Stuck(stuck)) => Err(ApplyError::StillBeingDeleted { rid, stuck }),
+            Ok(Deletion::Cancelled) => Err(ApplyError::Interrupted {
+                resource: rid.display_id(),
+            }),
+            Err(source) => Err(ApplyError::PatchFailed {
+                resource: rid.display_id(),
+                source,
+            }),
+        }
     }
 
     async fn get_live(&self, rid: &ResourceId) -> Result<Option<Value>, ReadError> {
@@ -555,6 +578,88 @@ mod prune_tests {
         let err = ops.prune(&rid).await.unwrap_err().to_string();
         assert!(err.contains("kix migrate domain"), "{err}");
         assert_eq!(api.names("ClusterRole"), vec!["mine"]);
+    }
+}
+
+#[cfg(test)]
+mod apply_tests {
+    use super::*;
+    use crate::cluster::fake_api::FakeApi;
+    use serde_json::json;
+
+    fn held_config_map() -> Value {
+        json!({
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {
+                "name": "cm",
+                "namespace": "app",
+                "deletionTimestamp": "2026-11-24T15:54:00Z",
+                "finalizers": ["example.com/hold"],
+            },
+            "data": { "old": "yes" },
+        })
+    }
+
+    fn desired() -> Value {
+        json!({
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": { "name": "cm", "namespace": "app" },
+            "data": { "new": "yes" },
+        })
+    }
+
+    async fn ops(api: &FakeApi) -> KubeResources {
+        let client = api.client();
+        let discovery = discovery::discover_resources(&client).await.unwrap();
+        KubeResources::new(client, discovery, "a".into(), None, false)
+    }
+
+    /// An apply onto an object being deleted waits for it to be gone, then
+    /// creates the new object.
+    #[tokio::test(start_paused = true)]
+    async fn an_apply_waits_for_the_object_being_deleted_then_creates_it() {
+        let api = FakeApi::new([held_config_map()]);
+        let ops = ops(&api).await;
+        let remover = {
+            let api = api.clone();
+            async move {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                api.remove_finalizers("ConfigMap", "cm");
+            }
+        };
+        let (manifest, cancel) = (desired(), CancelToken::new());
+        let applied = ops.apply(&manifest, Duration::from_secs(60), &cancel, &|_| {});
+        let (applied, ()) = tokio::join!(applied, remover);
+        assert_eq!(applied.unwrap().action, apply::ApplyAction::Created);
+        let cm = api.object("ConfigMap", "cm").unwrap();
+        assert_eq!(cm["data"], json!({ "new": "yes" }));
+        assert!(cm["metadata"]["deletionTimestamp"].is_null());
+    }
+
+    /// An object that stays past the wait is not applied, and the error is
+    /// the stuck message, naming the finalizer.
+    #[tokio::test(start_paused = true)]
+    async fn an_apply_onto_an_object_that_stays_reports_it_stuck() {
+        let api = FakeApi::new([held_config_map()]);
+        let ops = ops(&api).await;
+        let err = ops
+            .apply(
+                &desired(),
+                Duration::from_secs(10),
+                &CancelToken::new(),
+                &|_| {},
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.starts_with("[K2794] "), "{err}");
+        assert!(err.contains("waiting for example.com/hold"), "{err}");
+        assert_eq!(
+            api.object("ConfigMap", "cm").unwrap()["data"],
+            json!({ "old": "yes" })
+        );
     }
 }
 
