@@ -190,10 +190,10 @@ meta = {
 | `description` | string | None | Non-empty one-line summary of the package. Checked by the `governance.hasDescription` scorecard rule (`info` severity). |
 | `roles` | list of strings | `[ ]` | Platform capabilities provided by this package. |
 | `defaultAliases` | list of strings | `[ ]` | Default dependency-injection names registered when `instances.<name>.aliases` is empty. |
-| `availability.max` | `"none"` \| `"pod"` \| `"node"` \| `"zone"` | None | Highest availability level the package supports. |
+| `availability` | `{ max; reason?; }` | None | Highest availability level the package supports (`max`: `"none"`, `"pod"`, `"node"`, or `"zone"`), plus an optional `reason` string shown when Kix caps availability or rejects multiple replicas under `"none"`. |
 | `compatibleWith` | attrset of `{ minVersion?; maxVersion?; reason?; }` | `{ }` | Version bounds for upstream dependencies keyed by dependency argument name. |
 | `k8s` | `{ minVersion?; maxVersion?; reason?; supported?; }` | None | Kubernetes version bounds checked against [`k8sVersion`](/docs/reference/cluster-configuration/). Top-level `minVersion` and `maxVersion` fail the build outside that range; `supported = { minVersion?; maxVersion?; source?; }` emits a warning without stopping the build. |
-| `conflictsWith` | list of strings | `[ ]` | Packages that cannot coexist with this package (`"<name>"` for same-namespace, `"cluster:<name>"` for cluster-wide). |
+| `conflictsWith` | list of strings or `{ key; reason; }` | `[ ]` | Packages that cannot coexist with this package (`"<name>"` for same-namespace, `"cluster:<name>"` for cluster-wide), with an optional `reason` included in conflict errors. |
 | `podSecurity` | `"privileged"` \| `"baseline"` \| `"restricted"` | None | Pod Security Standards enforcement level applied to the instance namespace. |
 | `unsafe` | list of strings | `[ ]` | Acknowledged security or architectural exceptions (`"raw-pvc"`, `"host-network"`, `"privileged"`, `"run-as-root"`, `"cluster-admin"`). |
 | `annotationDomains` | list of strings | `[ ]` | Annotation domain prefixes (such as `"cert-manager.io"`) owned and consumed by this package. |
@@ -283,6 +283,15 @@ Each role in `meta.roles` also registers that role name as a dependency alias so
 
 Individual workloads can further clamp their own ceiling by passing `availability.max` to `scope.mkDeployment`, `scope.mkStatefulSet`, `scope.mkJob`, or `scope.mkCronJob`.
 
+Add `reason` alongside `max` (in `meta.availability` or on a workload builder) to explain why the software cannot run at a higher availability level. Kix includes `reason` when it warns that an instance or workload was capped at `max`, and when it rejects a workload with more than one replica under `max = "none"`. Write `reason` as one or more complete sentences; Kix prints `Reason: <reason>` and adds a final period if missing:
+
+```nix
+availability = {
+  max = "none";
+  reason = "The service stores state in a single SQLite file that supports only one writer at a time.";
+};
+```
+
 ### `meta.compatibleWith` and `meta.k8s`
 
 `meta.compatibleWith.<dep>` checks the `meta.version` of the bound `<dep>` provider at evaluation time:
@@ -326,6 +335,17 @@ Entries in `meta.conflictsWith` prevent incompatible packages from being deploye
 - Listing the package's own name in `"cluster:<self>"` enforces a cluster-wide singleton.
 
 An instance counts when it answers `<pkg>` by its name or its aliases, or when its package lists `<pkg>` in `meta.defaultAliases`. The last case holds even when the instance sets its own `aliases`, so two instances of a singleton package fail whatever aliases they set.
+
+An entry can also be `{ key; reason; }`, where `key` is `"<pkg>"` or `"cluster:<pkg>"` and `reason` (one or more complete sentences) explains why the instances cannot coexist. Kix prints `Reason: <reason>` in the conflict error:
+
+```nix
+conflictsWith = [
+  {
+    key = "cluster:tailscale";
+    reason = "The operator watches cluster-wide tailscale.com resources, Services with loadBalancerClass \"tailscale\", and Ingresses with IngressClass \"tailscale\" across all namespaces, so two instances would compete for the same objects.";
+  }
+];
+```
 
 ### `meta.podSecurity` and `meta.unsafe`
 
@@ -595,7 +615,7 @@ deps.postgres = {
 | `deps.<arg>` field | Type | Description |
 | --- | --- | --- |
 | `config` | attrset or `consumerConfig: attrset` | Configuration module injected into the upstream provider instance. Throws an error if the provider instance's `config` in the cluster definition locked the target option with `kix.mkLocked`. |
-| `assertions` | `dep: [ { assertion; message; } ]` | Assertions evaluated only when `<arg>` is non-null. |
+| `assertions` | `dep: [ { assertion; message; } ]` | Assertions evaluated only when `<arg>` is non-null. Kix sets `dependency` to `<arg>` unless the assertion sets it. |
 | `warnings` | `dep: [ string or attrset ]` | Warnings evaluated only when `<arg>` is non-null. Each takes the fields of a package's top-level `warnings`, and Kix sets `dependency` to `<arg>` unless the warning sets it. |
 | `renamedFrom` | `{ name; id; }` | The name this dependency had in earlier releases, and a change id such as `"K1234"`. When no instance matches the dependency, the error carries `id` and adds a sentence saying that the dependency was named `name` in earlier releases. |
 

@@ -101,7 +101,6 @@ let
       callPackagePhase1
       discoverBuildDeps
       resolveDepTargets
-      describeRequester
       buildConfigInjections
       checkRefTargets
       checkDepsKeys
@@ -139,7 +138,6 @@ in
     buildResolutionIndex
     resolveArg
     checkRefTargets
-    describeRequester
     extractDeferredDefs
     evaluateInstanceConfig
     evaluateInstanceModules

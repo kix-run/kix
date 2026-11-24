@@ -169,11 +169,10 @@ in
     (data.host or null == "cache.cache.svc.cluster.local" && data.port or null == "6379")
     || throw "import of a list build: consumer data ${builtins.toJSON data}";
 
-  # The not-found error names the requester as "<ns>/<instance>", and adds
-  # "(auto-instantiated)" when the requester came from availablePackages.
-  # tryEval drops the message, so the test checks the failures and
-  # describeRequester's text; the full message was confirmed by hand.
-  valkey-missing-dep-names-requester =
+  # A missing dependency fails the build for a declared requester and for
+  # one that auto-instantiation added. tryEval drops the message, so
+  # lib-eval-messages checks its text through resolveArg.
+  valkey-missing-dep-fails-declared-and-added =
     let
       direct = mkCluster [ { instances.app.cache.package = secretConsumer; } ];
       auto = mkCluster [
@@ -182,21 +181,8 @@ in
           instances.app.consumer.package = cacheConsumer;
         }
       ];
-      described = [
-        (eval.describeRequester "app" "cache" { })
-        (eval.describeRequester "app" "cache" { _autoInstantiated = true; })
-      ];
     in
-    (
-      evalFails direct
-      && evalFails auto
-      &&
-        described == [
-          "app/cache"
-          "app/cache (auto-instantiated)"
-        ]
-    )
-    || throw "requester in resolution errors: ${builtins.toJSON described}";
+    (evalFails direct && evalFails auto) || throw "a missing dependency evaluated";
 
   # Each refused directive gets one message that starts with the instance
   # and names the option path; an ordinary directive passes.

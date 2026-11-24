@@ -2,8 +2,10 @@
 
 let
   inherit (import ../core/error.nix { inherit lib; }) fail;
+  inherit (import ../core/util.nix { inherit lib; }) instanceLabel;
   packageLib = import ../core/package.nix { inherit lib; };
   inherit (packageLib) systemArgNames;
+  roles = import ./roles.nix { inherit lib; };
 
   systemBuildArgNames = [
     "self"
@@ -74,13 +76,51 @@ rec {
       inherit byKey byDefaultAlias;
     };
 
-  # Format an instance identifier for resolution error messages, noting
-  # auto-instantiated instances that do not appear in the cluster config.
-  describeRequester =
-    namespaceName: instanceName: instCfg:
-    "${namespaceName}/${instanceName}${
-      lib.optionalString (instCfg._autoInstantiated or false) " (auto-instantiated)"
-    }";
+  # Return the sentence that tells a reader why an instance they did not
+  # declare exists, or "" for a declared instance. `addedFor` lists the
+  # instances whose dependencies made auto-instantiation add it.
+  addedForNote =
+    instance: addedFor:
+    lib.optionalString (
+      addedFor != [ ]
+    ) " Kix pulled ${instanceLabel instance addedFor} from availablePackages.";
+
+  # Return the error for a required dependency on a cluster role that no
+  # instance provides. A provider of a role serves every namespace, so the
+  # fix may declare it in any namespace. It lists the packages of Kix's own
+  # set that claim the role in `meta.roles`.
+  missingRole =
+    role:
+    let
+      byLevel = import ../../packages/by-level.nix { inherit lib; };
+      claims =
+        package:
+        builtins.elem role (
+          (packageLib.metaOf {
+            inherit package;
+            kix = kixlib;
+          }).roles or [ ]
+        );
+      claimants =
+        builtins.concatMap
+          (level: map packageLib.spellingOf (builtins.filter claims (builtins.attrValues byLevel.${level})))
+          [
+            "stable"
+            "experimental"
+          ];
+    in
+    {
+      message = "dependency '${role}' is a cluster role, and no instance in the cluster provides it.";
+      fix =
+        (
+          if claimants == [ ] then
+            "In any namespace, declare an instance of a package that sets meta.roles = [ \"${role}\" ]."
+          else
+            "In any namespace, declare an instance of a package that provides '${role}':"
+            + lib.concatMapStrings (c: "\n  instances.<namespace>.<name>.package = ${c};") claimants
+        )
+        + "\nIf the cluster already provides '${role}' outside Kix, declare an import with `package = kix.mkImport { roles = [ \"${role}\" ]; ... };` instead.";
+    };
 
   isRef = v: builtins.isAttrs v && (v._type or "") == "kix-ref";
 
@@ -205,18 +245,33 @@ rec {
       requesterNamespace,
       hasDefault,
       explicitOverride,
+      # The requesting instance, as `<namespace>/<name>`.
       requester ? null,
       # The requesting instance's name, for the `instances.<ns>.<name>` path
       # in messages.
       requesterName ? null,
+      # The instances whose dependencies made auto-instantiation add the
+      # requester, as `<namespace>/<name>`. Empty for a declared instance.
+      addedFor ? [ ],
       # `{ name; id; }` from the package's `deps.<arg>.renamedFrom`, when the
       # dependency had another name in an earlier release. `id` is the id of
       # the change record for the rename, such as "K1234".
       renamedFrom ? null,
     }:
     let
-      # Fail with `e`, naming the requesting instance.
-      refuse = e: fail ({ instance = requester; } // e);
+      # Fail with `e`, naming the requesting instance and, for an instance
+      # that auto-instantiation added, the instances that needed it.
+      refuse =
+        e:
+        fail (
+          {
+            instance = requester;
+          }
+          // e
+          // {
+            message = e.message + addedForNote requester addedFor;
+          }
+        );
       label = c: "${c.namespace}/${c.instName}";
       labels = cs: builtins.concatStringsSep ", " (map label cs);
       depLine = c: "  deps.${argName} = ref.${c.namespace}.${c.instName};";
@@ -397,6 +452,9 @@ rec {
 
       else if builtins.length nameable > 1 then
         refuse (several nameable)
+
+      else if roles.registry ? ${argName} then
+        refuse (missingRole argName)
 
       else
         refuse {
@@ -685,6 +743,7 @@ rec {
       allInstances,
       requester ? null,
       requesterName ? null,
+      addedFor ? [ ],
       # The package's `deps` attribute, read for `renamedFrom`.
       depsEnrichment ? { },
     }:
@@ -701,6 +760,7 @@ rec {
             explicitOverride
             requester
             requesterName
+            addedFor
             ;
           renamedFrom = depsEnrichment.${argName}.renamedFrom or null;
           requesterNamespace = namespace;
@@ -730,6 +790,7 @@ rec {
       explicitOverrides,
       requester ? null,
       requesterName ? null,
+      addedFor ? [ ],
       # The package's `deps` attribute, read for `renamedFrom`.
       depsEnrichment ? { },
     }:
@@ -745,6 +806,7 @@ rec {
             explicitOverride
             requester
             requesterName
+            addedFor
             ;
           renamedFrom = depsEnrichment.${argName}.renamedFrom or null;
           requesterNamespace = namespace;

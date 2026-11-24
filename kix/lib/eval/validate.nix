@@ -465,10 +465,30 @@ rec {
 
       duplicateFailures =
         let
-          counts = lib.mapAttrs (_: builtins.length) (builtins.groupBy resourceId resources);
-          dups = lib.filterAttrs (_: c: c > 1) counts;
+          dups = lib.filterAttrs (_: es: builtins.length es > 1) (
+            builtins.groupBy (e: resourceId e.r) entries
+          );
+          ownerNames = es: lib.unique (map (e: e.owner) (builtins.filter (e: e.owner != null) es));
+          builtBy =
+            es:
+            let
+              names = ownerNames es;
+            in
+            if names == [ ] then
+              ""
+            else if builtins.length names == 1 then
+              " Built ${toString (builtins.length es)} times by instance ${builtins.head names}."
+            else
+              " Built by instances: ${builtins.concatStringsSep ", " names}.";
         in
-        map (id: "Duplicate resource: ${id}") (lib.attrNames dups);
+        lib.mapAttrsToList (id: es: {
+          message = "Duplicate resource: ${id}.${builtBy es}";
+          fix =
+            if builtins.length (ownerNames es) > 1 then
+              "Remove one of these instances, or configure them to use different names for this resource. Two resources of the same kind cannot share a name in the same namespace (or anywhere in the cluster for cluster-scoped resources)."
+            else
+              "Give each resource of this kind a unique name.";
+        }) dups;
 
       # --- 8. managed-by label ---
 

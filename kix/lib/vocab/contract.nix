@@ -41,7 +41,9 @@ in
   #   checks on optional fields when present).
   # - `assertions who dep`: build the module assertion list for a consumer
   #   dependency `dep`.
-  # - `require who dep`: validate `dep` eagerly and return `dep`, or fail.
+  # - `requireAs dependency who dep`: validate `dep`, which the consumer
+  #   takes as dependency `dependency`, eagerly and return `dep`, or fail.
+  # - `require who dep`: `requireAs` for a dependency named `alias`.
   # - `helpers`: the functions and values this contract gives its consumers.
   # - `options`: the option set, or the function that builds one, that a
   #   consumer adds to its own options. Null when the contract has none.
@@ -84,11 +86,23 @@ in
           "the instance it resolved to";
 
       # Return the error, as `kix.fail` takes it, for a consumer whose
-      # dependency `dep` breaks the contract.
+      # dependency `dep` breaks the contract. A consumer may take the
+      # contract under any dependency name, so the text names the provider
+      # and leaves the dependency to the record's `dependency` field, which
+      # `deps.<name>.assertions` and `requireAs` set.
       consumerError = who: dep: found: {
-        message = "${who}: deps.${alias} resolved to ${providerOf dep}, whose out does not honour the ${name} contract (${here}): ${lib.concatStringsSep "; " found}.";
-        fix = "Set them on that instance's out (a kix.mkImport sets them in `out`), or wire another ${remedyNoun} with deps.${alias} = ref.<ns>.<instance>.";
+        message = "${who}: `out` from ${providerOf dep} does not satisfy the ${name} contract (${here}): ${lib.concatStringsSep "; " found}.";
+        fix = "For a kix.mkImport provider, set the fields listed above in its `out = { ... };`. Otherwise, point this instance at a different ${remedyNoun} with `deps.<name> = ref.<namespace>.<instance>;`, or fix `root.out` in the provider package.";
       };
+
+      # Validate a consumer dependency `dep` eagerly and return `dep`, or fail.
+      # The error names `dep` as dependency `dependency`.
+      requireAs =
+        dependency: who: dep:
+        let
+          found = problemsWith false (dep.out or { });
+        in
+        if found == [ ] then dep else fail ({ inherit dependency; } // consumerError who dep found);
     in
     {
       inherit
@@ -97,6 +111,7 @@ in
         fields
         helpers
         options
+        requireAs
         ;
 
       # Return the contract problems a consumer reports for `out`.
@@ -125,12 +140,8 @@ in
         in
         lib.optional (found != [ ]) ({ assertion = false; } // consumerError who dep found);
 
-      # Validate a consumer dependency `dep` eagerly and return `dep`, or fail.
-      require =
-        who: dep:
-        let
-          found = problemsWith false (dep.out or { });
-        in
-        if found == [ ] then dep else fail (consumerError who dep found);
+      # Like `requireAs`, for a consumer that takes the contract under its
+      # alias.
+      require = requireAs alias;
     };
 }

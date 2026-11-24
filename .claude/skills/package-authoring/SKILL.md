@@ -191,8 +191,11 @@ is a finding from the upstream source, not a default.
    and in the header's `Limits:` line (grafana:67, 425; tempo:37). A
    program-wide limit is `meta.availability.max = "none";`; a limit that
    depends on config, wiring, or one workload is `availability.max` on that
-   builder (pattern table, "Ceilings"). W4 and W5 cover the singleton form:
-   a literal `replicas = 1` under the `none` ceiling.
+   builder (pattern table, "Ceilings"). Both accept an optional `reason`
+   string explaining why the software cannot run at a higher level. Kix
+   includes `reason` when it warns that availability was capped or rejects
+   more than one replica under `"none"`. W4 and W5 cover the
+   singleton form: a literal `replicas = 1` under the `none` ceiling.
 5. Load-serving workloads: O19 (the option form is the pattern table's
    "`pick`" row). Strategy: W8.
 6. Operator-placed operands map the level into the CR (`instances`,
@@ -245,7 +248,7 @@ the defaults fails there.
   result of `mkContract { name; alias; fields; remedyNoun ? ; extraProblems ? ;
   helpers ? { }; options ? null; }`. Every contract then has the same parts:
   `name`, `alias`, `fields`, `problems`, `check`, `assertions`, `require`,
-  `helpers`, and `options`. A field without `required` is required. The
+  `requireAs`, `helpers`, and `options`. A field without `required` is required. The
   contract's own functions go under `helpers`
   (`kix/contracts/stable/redis.nix`).
 - A package that renames a dependency sets `deps.<arg>.renamedFrom = { name

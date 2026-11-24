@@ -54,6 +54,7 @@ let
     "options"
     "problems"
     "require"
+    "requireAs"
   ];
   # The names refused since 0.10 (kix/contracts/moved.nix) sit beside a
   # contract's parts until they are removed.
