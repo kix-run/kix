@@ -66,15 +66,14 @@ rec {
   ];
 
   # Read the `controllerCredentials` dependency. The controller calls the
-  # cloud that each store names, which no package option records, so the
-  # package takes an identity for AWS, Google Cloud, or Azure. The cluster's
-  # mechanism still refuses a cloud the cluster cannot issue. A Secret
-  # instance comes back as `secret`, which the assertions refuse.
+  # cloud that each store names, so only a store knows the cloud, and the
+  # package publishes the identity's cloud as `out.identityCloud`. Upstream
+  # reads static keys only from a store's spec, so a Secret is refused.
   controllerCredentialsOf =
     dep:
-    kix.cloudIdentity.use {
+    kix.cloudIdentity.useIdentity {
       inherit scope dep;
-      cloud = dep.cloud or null;
+      secretGoesTo = "the `auth` of each SecretStore or ClusterSecretStore (such as `auth.secretRef`, or `authSecretRef` on Azure) built with `out.mkSecretStore` or `out.mkClusterSecretStore`";
     };
 
   serviceAccount =

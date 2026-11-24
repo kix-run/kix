@@ -176,7 +176,7 @@ let
     };
   };
 
-  # The package's assertions read only `config`, `deps`, `lib`, and `kix`.
+  # The package's assertions read only `config`, `lib`, and `kix`.
   assertionsOf =
     (operatorPackage {
       inherit lib;
@@ -189,7 +189,6 @@ let
     map (a: a.message) (
       builtins.filter (a: !a.assertion) (assertionsOf {
         inherit config;
-        deps = { };
       })
     );
   defaultConfig = {
@@ -803,22 +802,71 @@ in
     wrong == [ ]
     || throw "external-secrets cloud identity refusals: bad case built or good case failed: ${builtins.toJSON wrong}";
 
-  # The Secret refusal names the dependency and points at the store's
+  # The Secret refusal names the instance it got and points at the store's
   # auth.secretRef.
   external-secrets-cloud-identity-secret-message =
     let
-      failed = builtins.filter (a: !a.assertion) (assertionsOf {
-        config = defaultConfig;
-        deps.controllerCredentials = {
-          out.name = "aws-keys";
+      common = import ../../../packages/experimental/external-secrets/common.nix {
+        inherit lib;
+        kix = kixlib;
+        scope = {
+          instanceName = "external-secrets";
+          namespaceName = "external-secrets";
+          fail = e: { failed = e; };
         };
-      });
-      text = lib.concatMapStringsSep " " (a: a.message + " " + (a.fix or "")) failed;
+      };
+      r = common.controllerCredentialsOf {
+        _meta = {
+          namespaceName = "external-secrets";
+          instanceName = "aws-keys";
+        };
+        out.name = "aws-keys";
+      };
+      text = if r ? failed then r.failed.message + " " + (r.failed.fix or "") else "";
     in
-    (
-      builtins.length failed == 1
-      && lib.hasInfix "deps.controllerCredentials" text
-      && lib.hasInfix "auth.secretRef" text
-    )
+    (lib.hasInfix "but got `external-secrets/aws-keys`" text && lib.hasInfix "auth.secretRef" text)
     || throw "secret message: ${text}";
+
+  # `out.identityCloud` is the cloud of the controller's identity, and null
+  # without one.
+  external-secrets-cloud-identity-out =
+    let
+      cloudOf = c: c.instances.external-secrets.external-secrets.out.identityCloud;
+      clouds = {
+        aws = cloudOf (onFlavor "eks" (_: ci.aws { inherit roleArn; }));
+        gcp = cloudOf (onFlavor "gke" (_: ci.gcp { }));
+        azure = cloudOf (onFlavor "aks" (_: ci.azure { inherit clientId; }));
+        none = cloudOf cluster;
+      };
+    in
+    clouds == {
+      aws = "aws";
+      gcp = "gcp";
+      azure = "azure";
+      none = null;
+    }
+    || throw "identityCloud: ${builtins.toJSON clouds}";
+
+  # Without controllerCredentials, a store that names no credentials still
+  # builds, because the controller pods may use the node's credentials.
+  external-secrets-cloud-identity-ambient-store-without-identity =
+    let
+      c = clusterWith {
+        consumer = mkConsumer {
+          extraParts =
+            { scope, externalSecrets, ... }:
+            {
+              awsStore = externalSecrets.out.mkSecretStore scope {
+                name = "aws";
+                spec.provider.aws = {
+                  service = "SecretsManager";
+                  region = "eu-central-1";
+                };
+              };
+            };
+        };
+      };
+      store = byName "aws" (ofKind "SecretStore" (manifests c));
+    in
+    !(store.spec.provider.aws ? auth) || throw "ambient store: ${builtins.toJSON store}";
 }

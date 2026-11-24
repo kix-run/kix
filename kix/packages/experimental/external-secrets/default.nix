@@ -48,7 +48,9 @@
 # `azurekv` store sets `authType: WorkloadIdentity` and no
 # `serviceAccountRef`. Every store in the cluster that names no credentials
 # then acts as this identity, so any namespace that can create a SecretStore
-# can read what the role can read.
+# can read what the role can read. Without controllerCredentials, such a
+# store uses whatever credentials the controller pods find, such as the
+# node's role.
 #
 #   instances.external-secrets.external-secrets = {
 #     package = packages.experimental.external-secrets;
@@ -57,14 +59,26 @@
 #     };
 #   };
 #
-# Upstream recommends that each store reference a ServiceAccount of its own
-# instead (`auth.jwt.serviceAccountRef` for AWS, `auth.workloadIdentity` for
-# Google Cloud, `serviceAccountRef` for Azure). The controller then reads
-# that ServiceAccount's annotations and requests its token itself, without
-# the cluster's webhook or node agent. The package does not build this mode
-# yet. The controller reads only `eks.amazonaws.com/role-arn` on AWS, so
-# the mode fails on EKS Pod Identity and with a self-managed webhook's own
-# annotation prefix. Write the ServiceAccount's annotations by hand.
+# `out.identityCloud` is the identity's cloud (`"aws"`, `"gcp"`, `"azure"`),
+# or null without one.
+#
+# A store may instead reference a ServiceAccount of its own
+# (`auth.jwt.serviceAccountRef` for AWS, `auth.workloadIdentity` for Google
+# Cloud, `serviceAccountRef` for Azure), which upstream recommends when
+# several teams share the controller. The controller then reads that
+# ServiceAccount's annotations and requests its token itself. No pod runs as
+# it, so the cluster's cloud identity mechanism plays no part, and Kix's
+# cloud identities do not apply. The consumer package writes the
+# annotations External Secrets reads on the ServiceAccount it builds, as
+# plain annotations: `eks.amazonaws.com/role-arn` on AWS,
+# `iam.gke.io/gcp-service-account` on Google Cloud, and
+# `azure.workload.identity/client-id` (with `azure.workload.identity/tenant-id`
+# or the store's `tenantId`) on Azure. The eks, gke, gke-autopilot, and aks
+# flavors declare their own cloud's annotation domain. On another cluster,
+# add the domain to `scorecard.knownAnnotationDomains`.
+# The package does not declare them, because a package that declares a
+# domain owns it, and every other package that writes it would then have
+# to depend on external-secrets.
 #
 # Network policy: the intents open TCP 443 to destinations outside the
 # cluster for provider APIs, and admit the API server to TCP 10250 for the
@@ -286,9 +300,8 @@ in
   };
 
   assertions =
-    { config, deps, ... }:
+    { config, ... }:
     let
-      credentials = c.controllerCredentialsOf (deps.controllerCredentials or null);
       generic = builtins.filter (
         a:
         a == "--unsafe-allow-generic-targets"
@@ -306,14 +319,6 @@ in
       {
         assertion = generic == [ ];
         message = "extraArgs sets ${lib.concatStringsSep ", " generic}, which lets ExternalSecrets write ConfigMaps and custom resources. The package grants the controller no RBAC for them and out.mkExternalSecret refuses spec.target.manifest. Remove the flag; create generic targets outside Kix.";
-      }
-      # Upstream reads static cloud keys only from a store's spec
-      # (`auth.secretRef`), never from the controller's environment.
-      {
-        assertion = credentials.secret == null;
-        dependency = "controllerCredentials";
-        message = "`deps.controllerCredentials` accepts only a cloud identity for the controller's ServiceAccount, so Kix rejected this instance. External Secrets reads static keys from Secrets referenced in each `SecretStore` or `ClusterSecretStore`.";
-        fix = "Set `deps.controllerCredentials` to `kix.cloudIdentity.aws { roleArn = \"...\"; }`, `kix.cloudIdentity.gcp { ... }`, or `kix.cloudIdentity.azure { clientId = \"...\"; }`. To use static keys instead, remove `deps.controllerCredentials` and reference the Secret in the store's spec (such as `auth.secretRef`, or `authSecretRef` on Azure) with `out.mkSecretStore` or `out.mkClusterSecretStore`.";
       }
     ];
 
@@ -390,7 +395,12 @@ in
     ./webhook.nix
 
     (
-      { self, config, ... }:
+      {
+        self,
+        config,
+        controllerCredentials ? null,
+        ...
+      }:
       let
         # Builder errors go through this instance's `scope.fail` and name
         # the consumer's custom resource in the message.
@@ -540,6 +550,10 @@ in
 
           out = {
             version = kix.image.version config.image;
+
+            # The cloud of the controller's identity, or null. A store that
+            # names no credentials calls its cloud as this identity.
+            identityCloud = (c.controllerCredentialsOf controllerCredentials).cloud;
 
             crds = builtins.listToAttrs (
               map (spec: lib.nameValuePair (kindOf spec) self.crds.${pluralOf spec}) (
