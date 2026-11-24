@@ -1,0 +1,32 @@
+{
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRole",
+  "metadata": {
+    "labels": {
+      "app.kubernetes.io/name": "keda-operator",
+      "app.kubernetes.io/part-of": "keda-operator",
+      "app.kubernetes.io/version": "2.21.1",
+      "rbac.authorization.k8s.io/aggregate-to-admin": "true",
+      "rbac.authorization.k8s.io/aggregate-to-edit": "true"
+    },
+    "name": "keda:edit"
+  },
+  "rules": [
+    {
+      "apiGroups": [
+        "keda.sh",
+        "eventing.keda.sh"
+      ],
+      "resources": [
+        "*"
+      ],
+      "verbs": [
+        "create",
+        "delete",
+        "deletecollection",
+        "patch",
+        "update"
+      ]
+    }
+  ]
+}

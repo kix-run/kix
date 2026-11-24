@@ -1,0 +1,104 @@
+# promtool unit tests for the keda alert rules test-keda.nix renders.
+# The rules-cluster-keda check runs them from the rendered rules, so the
+# rule_files entry is <namespace>/<file> in the cluster's manifests.
+rule_files:
+  - keda/keda-alerts-prometheusrule.yaml
+evaluation_interval: 1m
+tests:
+  # No operator replica answers a scrape.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="keda",service="keda-operator-metrics",pod="keda-operator-0",instance="10.0.3.1:8080"}'
+        values: '0x15'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: KedaOperatorDown
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "keda"
+              service: "keda-operator-metrics"
+            exp_annotations:
+              summary: "The KEDA operator is down."
+              description: "Prometheus could not scrape any replica of the KEDA operator keda/keda for 10 minutes. While the operator is down, KEDA cannot scale workloads to or from zero, and its HorizontalPodAutoscalers receive no external metrics. Check the operator Deployment and pod logs in namespace keda."
+  # The operator is not scraped at all: absent() keeps namespace and service.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="other",service="unrelated",pod="x",instance="10.0.9.9:80"}'
+        values: '1x15'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: KedaOperatorDown
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "keda"
+              service: "keda-operator-metrics"
+            exp_annotations:
+              summary: "The KEDA operator is down."
+              description: "Prometheus could not scrape any replica of the KEDA operator keda/keda for 10 minutes. While the operator is down, KEDA cannot scale workloads to or from zero, and its HorizontalPodAutoscalers receive no external metrics. Check the operator Deployment and pod logs in namespace keda."
+  # A prometheus trigger of ScaledObject app/worker fails on every poll.
+  - interval: 1m
+    input_series:
+      - series: 'keda_scaler_detail_errors_total{namespace="keda",service="keda-operator-metrics",pod="keda-operator-0",instance="10.0.3.1:8080",exported_namespace="app",scaledObject="worker",scaler="prometheusScaler",triggerIndex="0",metric="s0-prometheus",type="scaledobject"}'
+        values: '0+2x30'
+      - series: 'up{namespace="keda",service="keda-operator-metrics",pod="keda-operator-0",instance="10.0.3.1:8080"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: KedaScalerErrors
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "keda"
+              service: "keda-operator-metrics"
+              exported_namespace: "app"
+              scaledObject: "worker"
+              scaler: "prometheusScaler"
+              type: "scaledobject"
+            exp_annotations:
+              summary: "A KEDA trigger cannot read its source."
+              description: "The prometheusScaler trigger on scaledobject app/worker has failed to read its source for 15 minutes, so the KEDA operator keda/keda cannot scale from this trigger. Check the KEDA operator logs for the connection or authentication error, and verify that network policy allows the operator pods to reach the source."
+      - eval_time: 25m
+        alertname: KedaOperatorDown
+        exp_alerts: []
+  # The trigger failed once and then recovered.
+  - interval: 1m
+    input_series:
+      - series: 'keda_scaler_detail_errors_total{namespace="keda",service="keda-operator-metrics",pod="keda-operator-0",instance="10.0.3.1:8080",exported_namespace="app",scaledObject="worker",scaler="prometheusScaler",triggerIndex="0",metric="s0-prometheus",type="scaledobject"}'
+        values: '0 1x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: KedaScalerErrors
+        exp_alerts: []
+  # Half of the ScaledObject controller's reconciles fail.
+  - interval: 1m
+    input_series:
+      - series: 'controller_runtime_reconcile_total{namespace="keda",service="keda-operator-metrics",pod="keda-operator-0",instance="10.0.3.1:8080",controller="scaledobject"}'
+        values: '0+2x40'
+      - series: 'controller_runtime_reconcile_errors_total{namespace="keda",service="keda-operator-metrics",pod="keda-operator-0",instance="10.0.3.1:8080",controller="scaledobject"}'
+        values: '0+1x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: KedaOperatorReconcileErrors
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "keda"
+              service: "keda-operator-metrics"
+              controller: "scaledobject"
+            exp_annotations:
+              summary: "The KEDA operator is failing to reconcile resources."
+              description: "The scaledobject controller of the KEDA operator keda/keda has failed 50% of its reconciles over the last 30 minutes, so ScaledObjects or ScaledJobs managed by that controller may be out of date. Check the operator logs for the failing resource and error."
+  # A busy, healthy operator retries a conflict now and then, one reconcile
+  # in a hundred. Below the 10% share, so nothing fires.
+  - interval: 1m
+    input_series:
+      - series: 'controller_runtime_reconcile_total{namespace="keda",service="keda-operator-metrics",pod="keda-operator-0",instance="10.0.3.1:8080",controller="scaledobject"}'
+        values: '0+10x40'
+      - series: 'controller_runtime_reconcile_errors_total{namespace="keda",service="keda-operator-metrics",pod="keda-operator-0",instance="10.0.3.1:8080",controller="scaledobject"}'
+        values: '0+0.1x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: KedaOperatorReconcileErrors
+        exp_alerts: []

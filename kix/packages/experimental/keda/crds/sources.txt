@@ -1,0 +1,4 @@
+# The KEDA release's CRD manifest at `release` in default.nix (also the tag
+# in rbac/sources.txt). The operator installs no definitions of its own, so
+# the package applies these.
+https://github.com/kedacore/keda/releases/download/v2.21.1/keda-2.21.1-crds.yaml

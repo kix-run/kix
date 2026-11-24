@@ -518,6 +518,15 @@
       ]
     },
     {
+      "page": "package-task-guides/autoscale-workloads-with-keda",
+      "scenario": "package-stacks",
+      "status": "implemented",
+      "snippets": [
+        "kedaInstance",
+        "kedaScaledObject"
+      ]
+    },
+    {
       "page": "package-task-guides/configure-cert-manager-issuers",
       "scenario": "package-stacks",
       "status": "implemented",

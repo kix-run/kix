@@ -1,0 +1,3 @@
+# 2026-11-24 · `kix/packages/experimental/keda` · A ScaledObject whose trigger fails on every poll deploys as ready.
+
+The keda package judges a ScaledObject by its `Ready` condition, and KEDA kept `Ready=True` on a ScaledObject whose trigger never read its source. On kind, a nats-jetstream trigger failed every poll with "no such host" while `kix deploy keda` reported `ScaledObject.keda.sh/worker@app> ready` and the HPA showed `<unknown>/5`. Only the KedaScalerErrors alert, after 15 minutes, would report it. KEDA records each trigger's failures under `status.health.<metric>` (`status: Failing`, `numberOfFailures`), keyed by a metric name the package does not know ahead, so a readiness rule on it is not a plain condition or path check.
