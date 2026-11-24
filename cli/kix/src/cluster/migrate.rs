@@ -142,7 +142,7 @@ fn marked_holds_data(manifest: &Value) -> Option<bool> {
 /// answers when present. Without it, a known kind holds data only when it
 /// declares storage. Kix cannot see where an unmarked custom resource keeps
 /// its data, so it assumes that one may.
-fn may_hold_data(manifest: &Value) -> bool {
+pub fn may_hold_data(manifest: &Value) -> bool {
     marked_holds_data(manifest)
         .unwrap_or_else(|| holds_data(manifest) || !types::is_known_api(manifest))
 }
