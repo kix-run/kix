@@ -368,8 +368,8 @@ in
         problem
         // {
           assertion = false;
-          message = "`${path}` sets no credentials of its own. ${problem.message}";
-          fix = "${problem.fix} To use a static key instead, set the solver's key fields and pass the Secret in `deps.issuerCredentials`.";
+          message = "DNS-01 solver `${path}` has no credential fields set. ${problem.message}";
+          fix = "${problem.fix} To use static credentials instead, set the solver's credential fields and wire a Secret instance (`ref.<namespace>.<instance>`) to `deps.issuerCredentials`.";
         }
       )
     ) (ambientSolversOf config.spec);
@@ -389,7 +389,7 @@ in
         inherit scope;
         dep = issuerCredentials;
         cloud = null;
-        identityGoesTo = "`deps.controllerIdentity` of the cert-manager instance `${certManager._meta.namespaceName}/${certManager._meta.instanceName}`";
+        identityGoesTo = "`deps.controllerIdentity` on `cert-manager` instance `${certManager._meta.namespaceName}/${certManager._meta.instanceName}` and omit the credential fields on the DNS-01 solver";
       };
       secret = credentials.secret;
 
