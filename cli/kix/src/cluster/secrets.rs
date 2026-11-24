@@ -28,13 +28,13 @@ pub(crate) enum SecretError {
     /// `sops` exited with [`SOPS_NO_DATA_KEY`]: no key the file is encrypted
     /// to gave it the data key. `message` is what `sops` wrote to stderr.
     #[error(
-        "cannot decrypt SOPS file {}: no key here can decrypt it\n  \
-         `sops` tried every key the file is encrypted to and none worked. The process that runs this deploy has no matching key, or it could not reach the key service the file uses. \
-         For `kix deploy --operator`, that process is the Kix operator in the cluster, not your machine.\n\n  \
+        "cannot decrypt SOPS file {}: `sops` could not get a decryption key\n  \
+         Kix did not apply this Secret, and any existing Secret on the cluster is unchanged. \
+         No matching key is configured, or `sops` could not reach or use the key service (age, PGP, cloud KMS, or Vault).\n\n  \
          Next:\n    \
-         Give that process the key, then deploy again. The Kix operator retries on its own every 30 seconds. \
-         See https://kix.run/docs/reference/cli/operator-mode/#secrets-from-sops-files.\n\n  \
-         sops said:\n    {}",
+         - For `kix plan`, `kix deploy`, or `kix rollback`: set `SOPS_AGE_KEY_FILE` (or configure your cloud KMS, Vault, or PGP key) on the machine running `kix`, then run the command again.\n    \
+         - With `--operator`: configure the key on the Kix operator pod; the operator retries every 30 seconds. See https://kix.run/docs/reference/cli/operator-mode/#secrets-from-sops-files.\n\n  \
+         sops error:\n    {}",
         sops_file_name(path),
         message.replace('\n', "\n    ")
     )]
@@ -1104,13 +1104,13 @@ mod tests {
         let text = err.to_string();
         assert!(
             text.starts_with(
-                "cannot decrypt SOPS file app-db.sops.yaml: no key here can decrypt it"
+                "cannot decrypt SOPS file app-db.sops.yaml: `sops` could not get a decryption key"
             ),
             "{text}"
         );
         assert!(text.contains("Kix operator"), "{text}");
         assert!(
-            text.contains("sops said:\n    Failed to get the data key"),
+            text.contains("sops error:\n    Failed to get the data key"),
             "{text}"
         );
 

@@ -1,4 +1,4 @@
 +++
 kind = "changed"
 +++
-When `sops` finds no key that decrypts a SOPS file, `kix deploy`, `kix plan`, `kix rollback`, and the Kix operator now name the file, say that the process running the deploy has no matching key or cannot reach the key service, and point to the docs. For `kix deploy --operator`, that process is the operator, which needs the key in its own pod. The operator still retries every 30 seconds until it has the key.
+`kix plan`, `kix deploy`, `kix rollback`, and the Kix operator now show a clearer error when `sops` cannot get a decryption key for a SOPS file. The error names the file and explains that either no matching key is configured or `sops` could not reach or use the key service. It also shows how to configure the key on your machine or on the Kix operator pod, and links to the operator SOPS documentation. In operator mode, the operator still retries every 30 seconds until it can decrypt the file.

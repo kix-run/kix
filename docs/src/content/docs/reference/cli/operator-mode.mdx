@@ -89,58 +89,56 @@ starts again, it resumes every `Deploying` record started in operator mode.
 
 ## Secrets from SOPS files
 
-The operator decrypts each SOPS file itself, inside the cluster, when it
-applies the Secret built from that file. It runs the `sops` that ships with
-Kix, and `sops` reads its keys from the operator's environment. The keys on
-the machine that ran `kix deploy --operator` never reach the operator. To
-deploy a build with SOPS-backed Secrets, the operator's pod needs a key that
-can decrypt every SOPS file in the build: the age identity, or credentials for
-the cloud KMS or Vault key the file is encrypted to.
+The Kix operator decrypts each SOPS file inside the cluster right before it
+applies the Secret. It runs the `sops` in the Kix runtime, which reads keys and
+credentials from the operator container's environment. Keys on the machine that
+runs `kix deploy --operator` never reach the cluster, so the operator pod must
+have a key or credentials that can decrypt every SOPS file in the build.
 
-Kix does not provide a manifest for the operator yet, so no Kix option gives
-it the key. Add the key to the operator's container in the Deployment you
-write, in the form `sops` reads. For an age identity, keep the identity in a
-Kubernetes Secret, mount it, and point `SOPS_AGE_KEY_FILE` at it:
+Configure the key on the `kix-operator` container in your operator Deployment:
 
-```yaml
-# Part of the operator Deployment's pod template
-spec:
-  containers:
-    - name: kix-operator
-      env:
-        - name: SOPS_AGE_KEY_FILE
-          value: /var/run/kix-sops/age-key.txt
-      volumeMounts:
-        - name: sops-age
-          mountPath: /var/run/kix-sops
-          readOnly: true
-  volumes:
-    - name: sops-age
-      secret:
-        secretName: kix-operator-sops-age
-```
+- **Age identity:** Create a Kubernetes Secret in the operator's namespace from
+  your identity file, mount it into the container, and point `SOPS_AGE_KEY_FILE`
+  at it:
 
-Create that Secret in the operator's namespace from the identity file:
+  <Command
+    commands={[
+      "kubectl create secret generic kix-operator-sops-age --namespace <operator-namespace> --from-file=age-key.txt",
+    ]}
+  />
 
-<Command
-  commands={[
-    "kubectl create secret generic kix-operator-sops-age --namespace <operator-namespace> --from-file=age-key.txt",
-  ]}
-/>
+  ```yaml
+  # Part of the operator Deployment's pod template
+  spec:
+    containers:
+      - name: kix-operator
+        env:
+          - name: SOPS_AGE_KEY_FILE
+            value: /var/run/kix-sops/age-key.txt
+        volumeMounts:
+          - name: sops-age
+            mountPath: /var/run/kix-sops
+            readOnly: true
+    volumes:
+      - name: sops-age
+        secret:
+          secretName: kix-operator-sops-age
+  ```
 
-For a cloud KMS or Vault key, give the operator's pod credentials that may
-decrypt with that key, such as a workload identity, in the environment
-variables `sops` documents for that service.
+- **Cloud KMS or Vault:** Grant the operator pod access to decrypt with that
+  key, such as through a cloud workload identity or the environment variables
+  `sops` uses for that service.
 
-When the operator cannot decrypt a file, the deploy stops at that Secret. The
-Activation record stays `Deploying`. The operator posts a `NodeFailed` Warning
-Event on the record whose message names the SOPS file, and tries the deploy
-again every 30 seconds. `kix deploy --operator` keeps waiting until its
-600-second limit. Once the operator's pod has the key, the next try decrypts
-the file and the deploy finishes without a new request. The operator cannot
-yet tell a missing key from a key service it cannot reach, so it never marks
-the record `Failed` for this. Run `kubectl describe activation <name>` to read
-the Event.
+If the operator cannot decrypt a SOPS file, the deploy stops at that Secret and
+leaves the Activation record `Deploying`. The operator posts a `NodeFailed`
+Warning Event naming the SOPS file (inspect it with
+`kubectl describe activation <name>`) and retries every 30 seconds. The
+operator never marks a record `Failed` when a deploy stops at a failed
+resource, whether for a missing SOPS key, an unreachable key service, or a
+readiness failure.
+`kix deploy --operator` waits up to 600 seconds before timing out locally. Once
+the operator pod has access to the key, the next retry decrypts the file and
+finishes the deploy automatically.
 
 ## When an Activation record is deleted
 
@@ -226,8 +224,8 @@ A timeout ends the CLI only. The operator keeps working on the record.
 - The operator can read the store path the CLI wrote. It loads manifests from
   `spec.source.path`, so the build must be present in the store the operator
   reads, not only on the machine that ran the CLI.
-- For a build with SOPS-backed Secrets, the operator's pod holds a key that
-  decrypts each SOPS file (see [Secrets from SOPS files](#secrets-from-sops-files)).
+- For builds with SOPS-backed Secrets, the operator pod has keys or credentials
+  that can decrypt every SOPS file (see [Secrets from SOPS files](#secrets-from-sops-files)).
 
 ## Exit status
 
