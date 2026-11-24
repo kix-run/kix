@@ -1,3 +1,3 @@
-# 2026-11-24 · `ROADMAP.md` · The `kix export` item describes a `--for exit|audit` flag that the CLI does not have.
+# 2026-11-24 · `ROADMAP.md` · `ROADMAP.md` still documents the removed `kix export --for` flag.
 
-The CLI has `--with-kix-metadata` (`cli/kix-cli/src/cli/build.rs`). A reader who copies the roadmap's flag gets an argument error.
+`ROADMAP.md` describes `kix export --for exit` and `kix export --for audit`, which Kix does not accept. Running `kix export --for ...` fails with an argument error; the current flag for keeping Kix metadata is `--with-kix-metadata` (`cli/kix-cli/src/cli/build.rs`).
