@@ -186,6 +186,8 @@ The cluster's `cloudIdentity` role provider controls how Kix renders the identit
 
 Kix does not create cloud IAM resources. Configure the AWS IAM role trust policy (or EKS Pod Identity association), Google Cloud IAM binding, or Azure federated credential outside Kix for `system:serviceaccount:<namespace>:<serviceaccount-name>`.
 
+The identity goes on the instance whose pods call the cloud. When another instance chooses the cloud, that instance keeps any Secret and the software's own setting for pod credentials. For example, StackGres backups take the identity in `deps.backupIdentity` on each `stackgres-cluster` instance, and the `stackgres-object-storage` instance sets `useIAMRole` or `fetchCredentialsFromMetadataService` instead of a Secret ([Deploy StackGres](/docs/how-to/package-task-guides/deploy-stackgres/#back-up-with-a-cloud-identity)). An operator creates those pods, so Kix cannot restart them when the identity changes.
+
 Evaluation fails when:
 - an identity has an unknown, missing, or malformed field;
 - the cluster has no `cloudIdentity` provider;
