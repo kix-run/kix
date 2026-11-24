@@ -243,37 +243,37 @@ let
 
   matchEndpoint = builtins.match "(\\[[^]]*]|[^]/:?#[]+)(:([0-9]+))?";
 
+  # Tempo parses flags with Go's flag package.
   ownedFlags =
     let
       locks = path: "it sets ${path}, which the package locks; remove it.";
       secret =
         path:
         "it puts ${path}, a credential, on the command line; put the keys in the storageCredentials Secret and remove the flag.";
-      flags = {
-        "-config.file" = "the package renders the file from settings; change settings instead.";
-        "-config.expand-env" = "settings and env rely on variable expansion; remove it.";
-        "-target" = "the package runs every Tempo component in its one pod; remove it.";
-        "-auth.enabled" = locks "auth_enabled";
-        "-multitenancy.enabled" = locks "multitenancy_enabled";
-        "-http-api-prefix" = locks "http_api_prefix";
-        "-server.http-listen-port" = locks "server.http_listen_port";
-        "-storage.trace.backend" = locks "storage.trace.backend";
-        "-storage.trace.local.path" = locks "storage.trace.local.path";
-        "-live-store.wal.path" = locks "live_store.wal.path";
-        "-live-store.shutdown_marker_dir" = locks "live_store.shutdown_marker_dir";
-        "-backend-schedulerbackend-scheduler.local-work-path" = locks "backend_scheduler.local_work_path";
-        "-storage.trace.s3.bucket" =
-          "it sets storage.trace.s3.bucket, which objectStorage.bucket owns; remove it.";
-        "-storage.trace.s3.endpoint" =
-          "it sets storage.trace.s3.endpoint, from which the package derives the store's network policy; set the endpoint in settings or wire endpointService, and remove the flag.";
-        "-storage.trace.s3.access_key" = secret "storage.trace.s3.access_key";
-        "-storage.trace.s3.secret_key" = secret "storage.trace.s3.secret_key";
-        "-storage.trace.s3.session_token" = secret "storage.trace.s3.session_token";
-        "-storage.trace.s3.sse.encryption-key" =
-          "it puts storage.trace.s3.sse.encryption_key, a credential, on the command line, and the package has no way to pass an SSE-C key from a Secret; remove the flag.";
-      };
     in
-    flags // lib.mapAttrs' (flag: lib.nameValuePair "-${flag}") flags;
+    {
+      "-config.file" = "the package renders the file from settings; change settings instead.";
+      "-config.expand-env" = "settings and env rely on variable expansion; remove it.";
+      "-target" = "the package runs every Tempo component in its one pod; remove it.";
+      "-auth.enabled" = locks "auth_enabled";
+      "-multitenancy.enabled" = locks "multitenancy_enabled";
+      "-http-api-prefix" = locks "http_api_prefix";
+      "-server.http-listen-port" = locks "server.http_listen_port";
+      "-storage.trace.backend" = locks "storage.trace.backend";
+      "-storage.trace.local.path" = locks "storage.trace.local.path";
+      "-live-store.wal.path" = locks "live_store.wal.path";
+      "-live-store.shutdown_marker_dir" = locks "live_store.shutdown_marker_dir";
+      "-backend-schedulerbackend-scheduler.local-work-path" = locks "backend_scheduler.local_work_path";
+      "-storage.trace.s3.bucket" =
+        "it sets storage.trace.s3.bucket, which objectStorage.bucket owns; remove it.";
+      "-storage.trace.s3.endpoint" =
+        "it sets storage.trace.s3.endpoint, from which the package derives the store's network policy; set the endpoint in settings or wire endpointService, and remove the flag.";
+      "-storage.trace.s3.access_key" = secret "storage.trace.s3.access_key";
+      "-storage.trace.s3.secret_key" = secret "storage.trace.s3.secret_key";
+      "-storage.trace.s3.session_token" = secret "storage.trace.s3.session_token";
+      "-storage.trace.s3.sse.encryption-key" =
+        "it puts storage.trace.s3.sse.encryption_key, a credential, on the command line, and the package has no way to pass an SSE-C key from a Secret; remove the flag.";
+    };
 in
 {
   meta = {
@@ -512,6 +512,7 @@ in
         ]
         ++ kix.guardArgs {
           inherit scope;
+          parser = "go";
           owned = ownedFlags;
         } config.extraArgs;
 

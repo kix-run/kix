@@ -361,6 +361,199 @@ in
     )
     || throw "guardArgs passed or refused the wrong arguments";
 
+  # Without `parser`, a list word matches the flag as written, as
+  # `<flag>=`, or as a one-letter flag with its value attached. A one-dash
+  # spelling of a two-dash flag passes, and a one-dash owned flag matches
+  # itself.
+  lib-options-typing-guard-args-gnu-default =
+    let
+      guard = kixlib.guardArgs {
+        scope.fail = kixlib.fail;
+        owned = {
+          "--leader-elect" = "remove it.";
+          "-v" = "remove it.";
+          "-config.file" = "remove it.";
+        };
+      };
+    in
+    (
+      guard [ "-leader-elect=false" ] == [ "-leader-elect=false" ]
+      && guard [ "--Leader-elect" ] == [ "--Leader-elect" ]
+      && throws (guard [ "--leader-elect" ])
+      && throws (guard [ "-vmodule=x" ])
+      && throws (guard [ "-v2" ])
+      && throws (guard [ "-config.file=/x" ])
+    )
+    || throw "guardArgs gnu default changed meaning";
+
+  # Under "go", `-flag` and `--flag` are one flag, whichever spelling is
+  # owned. A longer flag and a value word pass, and a one-letter flag takes
+  # no attached value.
+  lib-options-typing-guard-args-go =
+    let
+      guard = kixlib.guardArgs {
+        scope.fail = kixlib.fail;
+        parser = "go";
+        owned = {
+          "--leader-elect" = "remove it.";
+          "-config.file" = "remove it.";
+          "-v" = "remove it.";
+        };
+      };
+    in
+    (
+      guard [
+        "-leader-elected"
+        "leader-elect"
+        "-vmodule=x"
+        "---leader-elect"
+      ] == [
+        "-leader-elected"
+        "leader-elect"
+        "-vmodule=x"
+        "---leader-elect"
+      ]
+      && throws (guard [ "-leader-elect=false" ])
+      && throws (guard [ "--leader-elect" ])
+      && throws (guard [ "--config.file=/x" ])
+      && throws (guard [ "-config.file" ])
+      && throws (guard [ "--v=2" ])
+    )
+    || throw "guardArgs go parser passed or refused the wrong arguments";
+
+  # Under "paerser", flag names match in any case, and a family refuses
+  # its flag and every flag under it, but not a longer name beside it.
+  lib-options-typing-guard-args-paerser =
+    let
+      guard = kixlib.guardArgs {
+        scope.fail = kixlib.fail;
+        parser = "paerser";
+        owned."--ping" = "remove it.";
+        ownedFamilies."--providers.kubernetesCRD" = "route through the Gateway.";
+      };
+    in
+    (
+      guard [
+        "--ping.entrypoint=web"
+        "--providers.kubernetescrdx=a"
+        "ping"
+      ] == [
+        "--ping.entrypoint=web"
+        "--providers.kubernetescrdx=a"
+        "ping"
+      ]
+      && throws (guard [ "-PING=false" ])
+      && throws (guard [ "--providers.kubernetescrd" ])
+      && throws (guard [ "-Providers.KubernetesCrd.namespaces=a" ])
+    )
+    || throw "guardArgs paerser parser passed or refused the wrong arguments";
+
+  # `defaults` come first, and a default is dropped when the user sets the
+  # same flag, matched as the owned check matches. Under "gnu" a one-dash
+  # default is a one-letter flag. An attrset takes attrset defaults.
+  lib-options-typing-guard-args-defaults =
+    let
+      guard =
+        args:
+        kixlib.guardArgs (
+          {
+            scope.fail = kixlib.fail;
+          }
+          // args
+        );
+    in
+    (
+      guard
+        {
+          defaults = [
+            "--retries=3"
+            "-p/data"
+            "--freq=20s"
+          ];
+        }
+        [
+          "--retries"
+          "5"
+          "-p/tmp"
+        ] == [
+        "--freq=20s"
+        "--retries"
+        "5"
+        "-p/tmp"
+      ]
+      &&
+        guard {
+          defaults = [ "--retries=3" ];
+        } [ "--retries-max=5" ] == [
+          "--retries=3"
+          "--retries-max=5"
+        ]
+      &&
+        guard {
+          parser = "go";
+          defaults = [ "--zap-log-level=info" ];
+        } [ "-zap-log-level=debug" ] == [ "-zap-log-level=debug" ]
+      &&
+        guard {
+          parser = "paerser";
+          defaults = [ "--log.level=INFO" ];
+        } [ "--LOG.LEVEL=DEBUG" ] == [ "--LOG.LEVEL=DEBUG" ]
+      &&
+        guard {
+          owned."dedup.minScrapeInterval" = "remove it.";
+          defaults = {
+            "search.maxQueryDuration" = "60s";
+            "search.maxSeries" = "1000";
+          };
+        } { "-search.maxSeries" = "10"; } == {
+          "search.maxQueryDuration" = "60s";
+          "-search.maxSeries" = "10";
+        }
+      && guard { } [ ] == [ ]
+      && guard { } { } == { }
+    )
+    || throw "guardArgs defaults: ${
+      builtins.toJSON (
+        guard
+          {
+            defaults = [
+              "--retries=3"
+              "-p/data"
+              "--freq=20s"
+            ];
+          }
+          [
+            "--retries"
+            "5"
+            "-p/tmp"
+          ]
+      )
+    }";
+
+  # A call the parser cannot read is refused even when the user's
+  # arguments are fine.
+  lib-options-typing-guard-args-refuses-bad-calls =
+    let
+      guard =
+        args:
+        kixlib.guardArgs (
+          {
+            scope.fail = kixlib.fail;
+          }
+          // args
+        );
+    in
+    throws (guard { parser = "zsh"; } [ ])
+    && throws (
+      guard {
+        parser = "go";
+        owned."leader-elect" = "remove it.";
+      } [ ]
+    )
+    && throws (guard { defaults = [ "300" ]; } [ ])
+    && throws (guard { defaults.a = "1"; } [ ])
+    && throws (guard { defaults = [ "--a=1" ]; } { });
+
   # An attrset of flags (a VictoriaMetrics CR's extraArgs) is refused on an
   # owned key, matched exactly after its leading dashes, and comes back
   # unchanged otherwise. The refusal names the option, the key as written,

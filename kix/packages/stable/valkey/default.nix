@@ -424,25 +424,19 @@ in
           ];
         };
 
-        # redis_exporter parses flags with Go's flag package, which takes
-        # both `-flag` and `--flag`.
-        exporterOwned =
-          lib.concatMapAttrs
-            (flag: reason: {
-              "-${flag}" = reason;
-              "--${flag}" = reason;
-            })
-            {
-              "redis.addr" = "the exporter reads the local valkey-server; remove it.";
-              "redis.user" = "the exporter authenticates with the valkeyPassword password; remove it.";
-              "redis.password" = "the exporter authenticates with the valkeyPassword password; remove it.";
-              "redis.password-file" = "the exporter authenticates with the valkeyPassword password; remove it.";
-              "web.listen-address" =
-                "the metrics Service and probes use port ${toString ports.metrics}; remove it.";
-              "web.telemetry-path" = "the ServiceMonitor scrapes /metrics; remove it.";
-            };
+        # redis_exporter parses flags with Go's flag package.
+        exporterOwned = {
+          "--redis.addr" = "the exporter reads the local valkey-server; remove it.";
+          "--redis.user" = "the exporter authenticates with the valkeyPassword password; remove it.";
+          "--redis.password" = "the exporter authenticates with the valkeyPassword password; remove it.";
+          "--redis.password-file" = "the exporter authenticates with the valkeyPassword password; remove it.";
+          "--web.listen-address" =
+            "the metrics Service and probes use port ${toString ports.metrics}; remove it.";
+          "--web.telemetry-path" = "the ServiceMonitor scrapes /metrics; remove it.";
+        };
         exporterArgs = kix.guardArgs {
           inherit scope;
+          parser = "go";
           option = "metrics.extraArgs";
           owned = exporterOwned;
         } config.metrics.extraArgs;
