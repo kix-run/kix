@@ -118,34 +118,6 @@ fn check_format(cli: &Cli, matches: &clap::ArgMatches) -> miette::Result<()> {
     ))
 }
 
-/// Populate `global.override_input` from `KIX_OVERRIDE_INPUT` when
-/// `--override-input` is not passed on the command line.
-///
-/// Handled outside clap because configuring a space delimiter on the argument
-/// would also split `--override-input` flag values containing spaces (such as
-/// `path:` URLs).
-fn override_input_from_env(global: &mut cli::GlobalArgs) -> miette::Result<()> {
-    if !global.override_input.is_empty() {
-        return Ok(());
-    }
-    let Some(var) = std::env::var_os("KIX_OVERRIDE_INPUT") else {
-        return Ok(());
-    };
-    let words: Vec<String> = var
-        .to_str()
-        .ok_or_else(|| miette::miette!("KIX_OVERRIDE_INPUT is not UTF-8"))?
-        .split_whitespace()
-        .map(str::to_owned)
-        .collect();
-    if !words.len().is_multiple_of(2) {
-        return Err(miette::miette!(
-            "KIX_OVERRIDE_INPUT must hold pairs of an input name and a URL, separated by spaces"
-        ));
-    }
-    global.override_input = words;
-    Ok(())
-}
-
 fn main() -> miette::Result<()> {
     let exit = match run() {
         Ok(exit) => exit,
@@ -194,7 +166,9 @@ fn run() -> miette::Result<Exit> {
     if let Some(removed) = removed::refused(&cli.command).or_else(removed::refused_variable) {
         return Ok(removed.refuse());
     }
-    override_input_from_env(&mut cli.global)?;
+    if cli.global.override_input.is_empty() {
+        cli.global.override_input = cli::override_input_env()?;
+    }
     check_format(&cli, &matches)?;
     init_tracing(cli.global.verbose, cli.global.quiet);
     output::init_color(&cli.global);

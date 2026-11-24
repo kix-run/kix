@@ -143,7 +143,6 @@ let
 
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "infisical-operator ${ns}/${name}";
 
   metricsPort = 8080;
   healthPort = 8081;
@@ -184,10 +183,6 @@ let
     };
   };
 
-  # "v0.11.3" -> [ "0" "11" ".3" ]; null when the tag is not a version.
-  versionParts = tag: builtins.match "v?([0-9]+)\\.([0-9]+)(\\..*)?" tag;
-  releaseMinor = lib.take 2 (versionParts release);
-
   # The operator trims a trailing "/" and then "/api" from the address and
   # appends "/api" for API calls. The package does the same, so the default
   # connection and INFISICAL_HOST_API agree.
@@ -205,7 +200,7 @@ let
 in
 {
   meta = {
-    version = lib.removePrefix "v" release;
+    version = release;
     description = "Infisical Kubernetes operator, which syncs secrets between Infisical and Kubernetes Secrets";
     owner = "platform";
     defaultAliases = [ "infisicalOperator" ];
@@ -243,14 +238,13 @@ in
 
   assertions =
     { config, ... }:
-    let
-      imageTag = builtins.unsafeDiscardStringContext config.image.tag;
-    in
     [
-      {
-        assertion = versionParts imageTag != null && lib.take 2 (versionParts imageTag) == releaseMinor;
-        message = "image.tag \"${imageTag}\" is not a v${lib.concatStringsSep "." releaseMinor} release, and the CRDs and RBAC in kix/packages/experimental/infisical-operator are from ${release}. Remove image.tag or set a v${lib.concatStringsSep "." releaseMinor} tag. To move the package to another release, change release in default.nix and the tag in crds/sources.txt, run uv run scripts/vendor-crds.py infisical-operator, and compare the manager ClusterRole with config/rbac/role.yaml at the new tag.";
-      }
+      (kix.image.checkRelease {
+        inherit (config) image;
+        inherit release;
+        reason = "the CRDs and RBAC in kix/packages/experimental/infisical-operator are from ${release}";
+        fix = "To update this package to another version, change release in default.nix and the tag in crds/sources.txt, run uv run scripts/vendor-crds.py infisical-operator, and compare the manager ClusterRole against config/rbac/role.yaml at the new tag.";
+      })
       {
         assertion = sourceUrls != [ ] && lib.all (lib.hasInfix "/${release}/") sourceUrls;
         message = "kix/packages/experimental/infisical-operator/crds/sources.txt fetches CRDs from a tag other than ${release}, the package's release. Set the tag in every URL to ${release} and run uv run scripts/vendor-crds.py infisical-operator.";
@@ -316,7 +310,7 @@ in
 
         env = kix.mkEnvVars (
           kix.mergeEnv {
-            inherit who;
+            inherit scope;
             owned = [
               {
                 vars.INFISICAL_HOST_API = "${addr}/api";
@@ -327,30 +321,37 @@ in
           } config.env
         );
 
-        args = [
-          "--leader-elect"
-          "--health-probe-bind-address=:${toString healthPort}"
-          "--metrics-bind-address=:${toString metricsPort}"
-          # The operator serves metrics over TLS with a self-signed
-          # certificate and no authentication, so plain HTTP exposes nothing
-          # more and the ServiceMonitor needs no TLS settings.
-          "--metrics-secure=false"
-        ]
-        ++ kix.guardArgs {
-          inherit who;
-          owned = {
-            "--leader-elect" =
-              "the package always enables leader election, so instances above availability none run one active controller; remove it.";
-            "--health-probe-bind-address" =
-              "the liveness and readiness probes use :${toString healthPort}; remove it.";
-            "--metrics-bind-address" =
-              "the container's metrics port and the metrics Service use :${toString metricsPort}; remove it.";
-            "--metrics-secure" = "the ServiceMonitor scrapes plain HTTP; remove it.";
-          };
+        # The operator parses flags with Go's flag package (cmd/main.go
+        # upstream).
+        args = kix.mergeArgs {
+          inherit scope;
+          parser = "go";
+          id = "K4740";
+          args = [
+            {
+              flags = [ "--leader-elect" ];
+              reason = "leader election keeps one controller active when multiple replicas run.";
+            }
+            {
+              flags = [ "--health-probe-bind-address=:${toString healthPort}" ];
+              reason = "the liveness and readiness probes use port ${toString healthPort}.";
+            }
+            {
+              flags = [ "--metrics-bind-address=:${toString metricsPort}" ];
+              reason = "the container's metrics port and the metrics Service use port ${toString metricsPort}.";
+            }
+            # The operator serves metrics over TLS with a self-signed
+            # certificate and no authentication, so plain HTTP exposes nothing
+            # more and the ServiceMonitor needs no TLS settings.
+            {
+              flags = [ "--metrics-secure=false" ];
+              reason = "the ServiceMonitor scrapes metrics over plain HTTP.";
+            }
+          ];
         } config.extraArgs;
 
         egressProblem = egress.check {
-          inherit who clusterConfig;
+          inherit clusterConfig;
           address = addr;
           namespace = ns;
           intentName = "${name}-egress";
@@ -454,8 +455,8 @@ in
             }
           );
 
-        # Builder errors name this instance (`who`) and the consumer's
-        # custom resource.
+        # Builder errors go through this instance's `scope.fail` and name
+        # the consumer's custom resource in the message.
         crName =
           consumerScope: kind: args:
           "${kind} ${consumerScope.namespaceName}/${args.name}";
@@ -487,13 +488,11 @@ in
           in
           if spec ? managedSecretReference then
             scope.fail {
-              package = "infisical-operator";
               message = "${what} sets managedSecretReference, which upstream is deprecating and rejects alongside managedKubeSecretReferences.";
               fix = "Move it into managedKubeSecretReferences.";
             }
           else if secretRefs == [ ] && configMapRefs == [ ] then
             scope.fail {
-              package = "infisical-operator";
               message = "${what} sets no managedKubeSecretReferences or managedKubeConfigMapReferences, so the operator has nowhere to write.";
               fix = "Add one.";
             }
@@ -521,7 +520,6 @@ in
           in
           if (spec.targets or [ ]) == [ ] then
             scope.fail {
-              package = "infisical-operator";
               message = "${
                 crName consumerScope "InfisicalStaticSecret" args
               } sets no targets, so the operator has nowhere to write.";
@@ -554,7 +552,6 @@ in
                 target =
                   if targets == [ ] then
                     scope.fail {
-                      package = "infisical-operator";
                       message = "${what} writes no Secret, so its out.secretRef has nothing to reference.";
                       fix = "Add a Secret target.";
                     }
@@ -563,19 +560,16 @@ in
                       builtins.head targets
                     else
                       scope.fail {
-                        package = "infisical-operator";
                         message = "out.secretRef of ${what} needs a name, because the custom resource has more than one Secret target.";
                         fix = "Pass name = one of: ${listed}.";
                       }
                   else
                     lib.findFirst (t: t.name == name) (scope.fail {
-                      package = "infisical-operator";
                       message = "out.secretRef of ${what} names Secret \"${name}\", which is not one of its targets; targets are: ${listed}.";
                     }) targets;
               in
               if target.namespace != consumerScope.namespaceName then
                 scope.fail {
-                  package = "infisical-operator";
                   message = "out.secretRef of ${what} builds a reference in ${consumerScope.namespaceName}; the target ${target.name} is in ${target.namespace}.";
                   fix = "Build the reference from an instance in ${target.namespace}.";
                 }
@@ -747,11 +741,13 @@ in
         # That stays possible when a later deploy changes `address` for a
         # running operator.
         connection =
-          assert lib.assertMsg (egressProblem == null) egressProblem;
-          self.crds.infisicalConnections.out.mkCR scope {
-            name = "default";
-            spec.address = addr;
-          };
+          if egressProblem != null then
+            scope.fail egressProblem
+          else
+            self.crds.infisicalConnections.out.mkCR scope {
+              name = "default";
+              spec.address = addr;
+            };
 
         root = {
           resource = self.deployment;
@@ -816,7 +812,6 @@ in
             mkInfisicalDynamicSecret =
               _: _:
               scope.fail {
-                package = "infisical-operator";
                 message = "there is no InfisicalDynamicSecret builder. The operator copies the custom resource's annotations, Kix's included, onto the lease Secret it creates and has no setting to stop it.";
                 fix = "Create InfisicalDynamicSecrets outside Kix.";
               };
@@ -828,8 +823,6 @@ in
     (
       let
         sel = ''namespace="${ns}",service="${metricsServiceName}"'';
-        reconcileErrors = "sum by (namespace, service, controller) (increase(controller_runtime_reconcile_errors_total{${sel}}[30m]))";
-        reconciles = "sum by (namespace, service, controller) (increase(controller_runtime_reconcile_total{${sel}}[30m]))";
         operator = "Infisical operator ${ns}/${name}";
       in
       kix.monitor {
@@ -843,15 +836,12 @@ in
             summary = "The Infisical operator is down.";
             description = "No replica of the ${operator} has answered a scrape for 10 minutes. Secrets and ConfigMaps it synced keep their values, but changes made in Infisical do not reach them. Check the operator Deployment in ${ns}.";
           };
-          InfisicalOperatorReconcileErrors = {
-            # controller-runtime counts an optimistic-lock conflict as an error
-            # and retries at once, so a busy healthy controller shows a few.
-            # Alert on the share of reconciles that fail, with a floor.
-            expr = "${reconcileErrors} / ${reconciles} > 0.1 and ${reconcileErrors} > 2";
-            "for" = "15m";
-            severity = "warning";
+          InfisicalOperatorReconcileErrors = kix.reconcileErrorsAlert {
+            selector = sel;
+            operator = operator;
             summary = "The Infisical operator fails to reconcile its resources.";
-            description = "The {{ $labels.controller }} controller of the ${operator} has failed {{ $value | humanizePercentage }} of its reconciles over the last 30 minutes, so a Secret or ConfigMap it manages may be stale. The operator log and the conditions of the custom resource name the error, such as an authentication or connection failure.";
+            impact = "Secrets or ConfigMaps it manages may be out of date";
+            nextStep = "Check the operator logs and the custom resource's conditions for errors such as authentication or connection failures.";
           };
         };
       }

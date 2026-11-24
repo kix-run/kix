@@ -134,7 +134,7 @@ let
           group_filter="$1"
           ;;
         -h|--help)
-          cat <<USAGE
+          cat <<'USAGE'
     regen-captures-offline: capture every `offline` step in
     docs/nix/captures.nix, diff against the checked-in sidecars,
     optionally apply.

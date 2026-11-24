@@ -55,7 +55,6 @@ let
 
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "zfs-localpv ${ns}/${name}";
 
   driverName = "zfs.csi.openebs.io";
   socketDir = "/var/lib/csi/sockets/pluginproxy";
@@ -63,28 +62,6 @@ let
 
   vendored = file: (builtins.fromJSON (builtins.readFile ./crds/${file})).spec;
 
-  minorOf = tag: builtins.match "v?([0-9]+)\\.([0-9]+)\\..*" tag;
-  releaseMinor = minorOf release;
-  checkedRef =
-    image:
-    let
-      tag = builtins.unsafeDiscardStringContext image.tag;
-    in
-    if minorOf tag != releaseMinor then
-      scope.fail {
-        package = "zfs-localpv";
-        option = "image.tag";
-        message = "image.tag \"${tag}\" is not a ${lib.concatStringsSep "." releaseMinor} release, and the CRDs under kix/packages/experimental/zfs-localpv/crds are vendored from ${release}.";
-        fix = "To move to another release, change release in kix/packages/experimental/zfs-localpv/default.nix and run uv run scripts/vendor-crds.py zfs-localpv.";
-      }
-    else
-      kix.image.ref image;
-
-  defaultVscs =
-    classes:
-    builtins.filter (n: (classes.${n}.annotations.${vscDefaultAnnotation} or null) == "true") (
-      builtins.attrNames classes
-    );
 in
 {
   meta = {
@@ -115,43 +92,31 @@ in
 
   assertions =
     { config, deps, ... }:
-    let
-      vscNames = builtins.attrNames config.volumeSnapshotClasses;
-      defaults = defaultVscs config.volumeSnapshotClasses;
-
-      tolerationProblems =
-        i: t:
-        let
-          at = "config.node.tolerations.${toString i}";
-        in
-        lib.optional ((t.key == null || t.key == "") && t.operator != "Exists")
-          "${at} has no key and operator ${t.operator}; a toleration without a key must use operator Exists. Set key, or set operator = \"Exists\"."
-        ++
-          lib.optional (t.operator == "Exists" && t.value != null)
-            "${at} sets value with operator Exists, which matches any value. Remove value, or set operator = \"Equal\"."
-        ++
-          lib.optional (t.tolerationSeconds != null && t.effect != "NoExecute")
-            "${at} sets tolerationSeconds with effect ${
-              if t.effect == null then "null" else t.effect
-            }; tolerationSeconds applies only to effect NoExecute. Set effect = \"NoExecute\", or remove tolerationSeconds.";
-    in
-    map
-      (message: {
-        assertion = false;
-        inherit message;
+    [
+      (kix.image.checkRelease {
+        inherit (config) image;
+        inherit release;
+        reason = "the CRDs in kix/packages/experimental/zfs-localpv/crds come from ${release}";
+        fix = "To update this package to another version, change release in kix/packages/experimental/zfs-localpv/default.nix and run uv run scripts/vendor-crds.py zfs-localpv.";
       })
-      (
-        lib.optional (vscNames != [ ] && (deps.snapshotController or null) == null)
-          "volumeSnapshotClasses defines ${lib.concatStringsSep ", " vscNames}, but nothing provides the snapshotController role, so the VolumeSnapshotClass kind has no owner. Add a snapshot-controller instance; on a cluster whose environment runs the controller, use its flavour (rke2 provides the role) or a kix.mkImport with roles = [ \"snapshotController\" ] and its crds; or remove volumeSnapshotClasses."
-        ++
-          lib.optional (builtins.length defaults > 1)
-            "config.volumeSnapshotClasses.${builtins.elemAt defaults 0} and config.volumeSnapshotClasses.${builtins.elemAt defaults 1} are both annotated ${vscDefaultAnnotation}=\"true\". A VolumeSnapshot that names no class then fails, because the snapshot controller does not choose between two defaults for one driver. Keep the annotation on one class."
-        ++ map (
-          n:
-          "config.volumeSnapshotClasses.${n}: kix drops parts named root or meta, so this VolumeSnapshotClass would not be rendered. Rename it."
-        ) (builtins.filter (n: n == "root" || n == "meta") vscNames)
-        ++ lib.concatLists (lib.imap0 tolerationProblems config.node.tolerations)
-      );
+    ]
+    ++
+      map
+        (message: {
+          assertion = false;
+          inherit message;
+        })
+        (
+          kix.storage.snapshotClassProblems {
+            optionPath = "config.volumeSnapshotClasses";
+            classes = config.volumeSnapshotClasses;
+            snapshotController = deps.snapshotController or null;
+          }
+          ++ kix.tolerations.problems {
+            optionPath = "config.node.tolerations";
+            inherit (config.node) tolerations;
+          }
+        );
 
   build =
     {
@@ -167,8 +132,8 @@ in
       pluginDir = "${kubeletDir}/plugins/zfs-localpv";
 
       sc = kix.storage.mkClasses {
-        inherit scope clusterConfig who;
-        optionPath = "config.storageClasses";
+        inherit scope clusterConfig;
+        optionPath = "storageClasses";
         classes = config.storageClasses;
         parts = self.classes;
         provisioner = self.csiDriver.out.name;
@@ -193,15 +158,12 @@ in
         ) (builtins.attrValues config.storageClasses)
       );
 
-      ownedEnv =
-        option:
-        lib.mapAttrsToList (
-          var: owned: {
-            vars.${var} = owned.value;
-            inherit (owned) from;
-            fix = "Remove it from ${option}.";
-          }
-        );
+      ownedEnv = lib.mapAttrsToList (
+        var: owned: {
+          vars.${var} = owned.value;
+          inherit (owned) from;
+        }
+      );
       namespaceVar.OPENEBS_NAMESPACE = {
         value = fieldRef "metadata.namespace";
         from = "the pod's namespace, where the driver keeps its ZFS records";
@@ -374,29 +336,38 @@ in
             ++ [
               {
                 name = "zfs-plugin";
-                image = checkedRef config.image;
+                image = kix.image.ref config.image;
                 imagePullPolicy = config.image.pullPolicy;
-                args = [
-                  "--endpoint=$(OPENEBS_CSI_ENDPOINT)"
-                  "--plugin=$(OPENEBS_CONTROLLER_DRIVER)"
-                ]
-                ++ kix.guardArgs {
-                  inherit who;
+                # zfs-plugin parses flags with cobra and pflag (cmd/main.go
+                # upstream).
+                args = kix.mergeArgs {
+                  inherit scope;
+                  parser = "gnu";
                   option = "controller.extraArgs";
-                  owned = {
-                    "--endpoint" = "the sidecars reach the plugin on the socket the package sets; remove it.";
-                    "--plugin" = "it selects the controller code path; remove it.";
-                    "--name" = "the driver name must equal the CSIDriver ${driverName}; remove it.";
-                  };
+                  args = [
+                    {
+                      flags = [ "--endpoint=$(OPENEBS_CSI_ENDPOINT)" ];
+                      reason = "the CSI sidecar containers connect to the plugin at $(OPENEBS_CSI_ENDPOINT).";
+                    }
+                    {
+                      flags = [ "--plugin=$(OPENEBS_CONTROLLER_DRIVER)" ];
+                      reason = "this container must run zfs-plugin in controller mode.";
+                    }
+                    {
+                      names = [ "--name" ];
+                      reason = "the driver name must match CSIDriver \"${driverName}\".";
+                    }
+                  ];
                 } config.controller.extraArgs;
                 env = kix.mkEnvVars (
                   kix.mergeEnv {
-                    inherit who;
+                    inherit scope;
+                    option = "controller.env";
                     defaults = {
                       OPENEBS_IO_ENABLE_ANALYTICS = "false";
                       OPENEBS_IO_ENABLE_BACKUP_GC = "false";
                     };
-                    owned = ownedEnv "controller.env" (
+                    owned = ownedEnv (
                       namespaceVar
                       // {
                         OPENEBS_CSI_ENDPOINT = {
@@ -489,30 +460,37 @@ in
                 }
                 {
                   name = "zfs-plugin";
-                  image = checkedRef config.image;
+                  image = kix.image.ref config.image;
                   imagePullPolicy = config.image.pullPolicy;
-                  args = [
-                    "--nodename=$(OPENEBS_NODE_NAME)"
-                    "--endpoint=$(OPENEBS_CSI_ENDPOINT)"
-                    "--plugin=$(OPENEBS_NODE_DRIVER)"
-                  ]
-                  ++ kix.guardArgs {
-                    inherit who;
+                  args = kix.mergeArgs {
+                    inherit scope;
+                    parser = "gnu";
                     option = "node.extraArgs";
-                    owned = {
-                      "--nodename" =
-                        "the plugin's node ID must be the Kubernetes node name, which the package passes; remove it.";
-                      "--endpoint" =
-                        "the registrar and the kubelet reach the plugin on the socket the package sets; remove it.";
-                      "--plugin" = "it selects the node code path; remove it.";
-                      "--name" = "the driver name must equal the CSIDriver ${driverName}; remove it.";
-                    };
+                    args = [
+                      {
+                        flags = [ "--nodename=$(OPENEBS_NODE_NAME)" ];
+                        reason = "the CSI node ID must match the Kubernetes node name.";
+                      }
+                      {
+                        flags = [ "--endpoint=$(OPENEBS_CSI_ENDPOINT)" ];
+                        reason = "kubelet and the node-driver-registrar sidecar connect to the plugin at $(OPENEBS_CSI_ENDPOINT).";
+                      }
+                      {
+                        flags = [ "--plugin=$(OPENEBS_NODE_DRIVER)" ];
+                        reason = "this container must run zfs-plugin in node mode.";
+                      }
+                      {
+                        names = [ "--name" ];
+                        reason = "the driver name must match CSIDriver \"${driverName}\".";
+                      }
+                    ];
                   } config.node.extraArgs;
                   env = kix.mkEnvVars (
                     kix.mergeEnv {
-                      inherit who;
+                      inherit scope;
+                      option = "node.env";
                       defaults.ALLOWED_TOPOLOGIES = lib.concatStringsSep "," allowedTopologyKeys;
-                      owned = ownedEnv "node.env" (
+                      owned = ownedEnv (
                         namespaceVar
                         // {
                           OPENEBS_NODE_NAME = {
@@ -590,7 +568,7 @@ in
             }
             // lib.optionalAttrs (config.node.nodeSelector != { }) { inherit (config.node) nodeSelector; }
             // lib.optionalAttrs (config.node.tolerations != [ ]) {
-              tolerations = map (lib.filterAttrs (_: v: v != null)) config.node.tolerations;
+              tolerations = kix.tolerations.render config.node.tolerations;
             };
           };
         };
@@ -598,21 +576,12 @@ in
 
       classes = sc.resources;
 
-      snapshotClasses = lib.optionalAttrs hasSnapshotApi (
-        lib.mapAttrs (
-          className: cls:
-          scope.mkCR snapshotController.out.crds.VolumeSnapshotClass {
-            name = className;
-            inherit (cls) labels annotations;
-            extra = {
-              driver = self.csiDriver.out.name;
-              inherit (cls) deletionPolicy;
-            }
-            // lib.optionalAttrs (cls.parameters != { }) { inherit (cls) parameters; };
-            requires = [ self.controller ];
-          }
-        ) config.volumeSnapshotClasses
-      );
+      snapshotClasses = kix.storage.mkSnapshotClasses {
+        inherit scope snapshotController;
+        driver = self.csiDriver.out.name;
+        classes = config.volumeSnapshotClasses;
+        requires = [ self.controller ];
+      };
 
       root = {
         resource = self.controller;

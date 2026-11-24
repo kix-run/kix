@@ -185,10 +185,13 @@ let
     in
     "${text}\n${marker}${builtins.toJSON payload}";
 
-  withInstance =
-    instance: e:
-    lib.optionalAttrs (instance != null) { inherit instance; }
-    // (if builtins.isString e then { message = e; } else e);
+  # Return error `e` as an attribute set, with each non-null field of
+  # `defaults` set unless `e` sets it.
+  withDefaults =
+    defaults: e:
+    lib.filterAttrs (_: v: v != null) defaults // (if builtins.isString e then { message = e; } else e);
+
+  withInstance = instance: withDefaults { inherit instance; };
 in
 rec {
   inherit marker fields describe;
@@ -234,10 +237,54 @@ rec {
   failAll = args: throw (text args);
 
   # Return `scope.fail` for an instance: `fail` with `instance` set to
-  # "<namespace>/<name>" on every error that does not set it.
+  # "<namespace>/<name>", and `package` to the id of the package it runs, on
+  # every error that does not set them. `package` is null for a package
+  # outside Kix's own set, and the errors then name none.
   failFor =
-    instance: e:
-    fail (if builtins.isList e then map (withInstance instance) e else withInstance instance e);
+    {
+      instance,
+      package ? null,
+    }:
+    e:
+    let
+      fill = withDefaults { inherit instance package; };
+    in
+    fail (if builtins.isList e then map fill e else fill e);
+
+  # Refuse a call to the library helper `helper` that passes `who`, and
+  # name the form to use. `reason` says where the helper finds the instance
+  # now, `fix` says what to pass instead, and `failWith` is the `fail` that
+  # reports it.
+  refuseWho =
+    {
+      helper,
+      reason ? "It reads the instance and package from `scope`.",
+      fix ? "Remove `who` and pass `inherit scope;`.",
+      failWith ? fail,
+    }:
+    failWith {
+      id = "K6417";
+      message = "kix.${helper} no longer accepts `who`. ${reason}";
+      inherit fix;
+    };
+
+  # Return the `fail` of the `scope` that the library helper `helper`
+  # received. Refuse a call that passes `who`, and name the form to use.
+  failOf =
+    helper:
+    { scope, who }:
+    if who != null then
+      refuseWho {
+        inherit helper;
+        failWith = if scope == null then fail else scope.fail;
+      }
+    else if scope == null then
+      fail {
+        message = "kix.${helper} is missing `scope`. It needs `scope` to report the instance and package in errors.";
+        fix = "Pass `inherit scope;`.";
+      }
+    else
+      scope.fail;
 
   # Return the error record of a failed assertion: its fields without
   # `assertion`, with `instance` set unless it sets one.
@@ -247,10 +294,18 @@ rec {
   # `kix.fail` takes. `instance` is set unless `w` sets one, and may be null
   # for a warning about the whole cluster. A field in the wrong form stops
   # evaluation with the same error `kix.fail` gives for it.
-  warning =
-    instance: w:
+  warning = instance: warningFor { inherit instance; };
+
+  # Return warning `w` as a record, with `instance` and `package` set unless
+  # `w` sets them, as `failFor` does for an error.
+  warningFor =
+    {
+      instance,
+      package ? null,
+    }:
+    w:
     let
-      e = withInstance instance w;
+      e = withDefaults { inherit instance package; } w;
       checked = check e;
     in
     if checked.problems == [ ] then checked.record else fail e;

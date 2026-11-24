@@ -1,0 +1,3 @@
+# 2026-11-23 · `kix/lib/core/label-selector.nix` · The selector checks print change record id K1895 on every failure, which should stop after one minor release.
+
+Checks 9, 12, 14, and 25 in `eval/validate.nix` and the rules `architecture.distinctWorkloadSelectors` and `architecture.monitorSelectorMatchesService` add `recordId` to each failure, because reading `matchExpressions` made them refuse selectors that built before. The id also appears on failures that have nothing to do with `matchExpressions`, such as a `matchLabels` selector that matches no pods. Once the release that carries K1895 is one minor release old, remove `recordId` and the code that adds it (`withSelectorRecord` in `eval/validate.nix`, the two `id =` lines in `rules/architecture.nix`).

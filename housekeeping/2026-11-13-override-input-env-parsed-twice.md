@@ -1,3 +1,0 @@
-# 2026-11-13 · `cli/kix-cli/src/select.rs` · `KIX_OVERRIDE_INPUT` is parsed twice, and the two parsers treat bad input differently.
-
-`select::overrides` (lines 232-245) drops an odd last word and reads a value that is not UTF-8 as empty. `main.rs` (119-140) refuses both. So the version check before the command can run with different overrides than the command itself. `select::VALUE_FLAGS` (62) is also a copy of clap's global flags that take a value, and no test ties the two, so a new global flag with a value would make `select` misread the arguments. Share one parser, and add a test that compares `VALUE_FLAGS` with the clap definition.

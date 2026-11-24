@@ -51,7 +51,6 @@
 }:
 let
   name = scope.instanceName;
-  who = "tempo ${scope.namespaceName}/${name}";
   release = "3.1.1";
 
   httpPort = 3200;
@@ -243,37 +242,52 @@ let
 
   matchEndpoint = builtins.match "(\\[[^]]*]|[^]/:?#[]+)(:([0-9]+))?";
 
+  # Tempo applies flags after the config file, so a flag that sets a locked
+  # path overrides it.
   ownedFlags =
     let
-      locks = path: "it sets ${path}, which the package locks; remove it.";
-      secret =
-        path:
-        "it puts ${path}, a credential, on the command line; put the keys in the storageCredentials Secret and remove the flag.";
-      flags = {
-        "-config.file" = "the package renders the file from settings; change settings instead.";
-        "-config.expand-env" = "settings and env rely on variable expansion; remove it.";
-        "-target" = "the package runs every Tempo component in its one pod; remove it.";
-        "-auth.enabled" = locks "auth_enabled";
-        "-multitenancy.enabled" = locks "multitenancy_enabled";
-        "-http-api-prefix" = locks "http_api_prefix";
-        "-server.http-listen-port" = locks "server.http_listen_port";
-        "-storage.trace.backend" = locks "storage.trace.backend";
-        "-storage.trace.local.path" = locks "storage.trace.local.path";
-        "-live-store.wal.path" = locks "live_store.wal.path";
-        "-live-store.shutdown_marker_dir" = locks "live_store.shutdown_marker_dir";
-        "-backend-schedulerbackend-scheduler.local-work-path" = locks "backend_scheduler.local_work_path";
-        "-storage.trace.s3.bucket" =
-          "it sets storage.trace.s3.bucket, which objectStorage.bucket owns; remove it.";
-        "-storage.trace.s3.endpoint" =
-          "it sets storage.trace.s3.endpoint, from which the package derives the store's network policy; set the endpoint in settings or wire endpointService, and remove the flag.";
-        "-storage.trace.s3.access_key" = secret "storage.trace.s3.access_key";
-        "-storage.trace.s3.secret_key" = secret "storage.trace.s3.secret_key";
-        "-storage.trace.s3.session_token" = secret "storage.trace.s3.session_token";
-        "-storage.trace.s3.sse.encryption-key" =
-          "it puts storage.trace.s3.sse.encryption_key, a credential, on the command line, and the package has no way to pass an SSE-C key from a Secret; remove the flag.";
+      locks = path: flag: {
+        names = [ flag ];
+        reason = "it overrides ${path} in tempo.yaml, which this package sets itself.";
+      };
+      secret = path: flag: {
+        names = [ flag ];
+        reason = "passing ${path} as a flag exposes a credential in Kix's local store and the pod spec.";
+        fix = "Remove it from extraArgs and store the S3 credentials in the storageCredentials Secret instead.";
       };
     in
-    flags // lib.mapAttrs' (flag: lib.nameValuePair "-${flag}") flags;
+    [
+      {
+        names = [ "-target" ];
+        reason = "this package runs Tempo in single-binary mode inside one pod.";
+      }
+      (locks "auth_enabled" "-auth.enabled")
+      (locks "multitenancy_enabled" "-multitenancy.enabled")
+      (locks "http_api_prefix" "-http-api-prefix")
+      (locks "server.http_listen_port" "-server.http-listen-port")
+      (locks "storage.trace.backend" "-storage.trace.backend")
+      (locks "storage.trace.local.path" "-storage.trace.local.path")
+      (locks "live_store.wal.path" "-live-store.wal.path")
+      (locks "live_store.shutdown_marker_dir" "-live-store.shutdown_marker_dir")
+      (locks "backend_scheduler.local_work_path" "-backend-scheduler.local-work-path")
+      {
+        names = [ "-storage.trace.s3.bucket" ];
+        from = "the objectStorage.bucket option";
+        fix = "Remove it from extraArgs and set objectStorage.bucket instead.";
+      }
+      {
+        names = [ "-storage.trace.s3.endpoint" ];
+        reason = "setting storage.trace.s3.endpoint by flag bypasses the network policy derived from settings and deps.endpointService.";
+        fix = "Remove it from extraArgs, and set settings.storage.trace.s3.endpoint or wire deps.endpointService instead.";
+      }
+      (secret "storage.trace.s3.access_key" "-storage.trace.s3.access_key")
+      (secret "storage.trace.s3.secret_key" "-storage.trace.s3.secret_key")
+      (secret "storage.trace.s3.session_token" "-storage.trace.s3.session_token")
+      {
+        names = [ "-storage.trace.s3.sse.encryption-key" ];
+        reason = "passing storage.trace.s3.sse.encryption_key as a flag exposes a credential in Kix's local store and the pod spec, and this package does not support SSE-C keys.";
+      }
+    ];
 in
 {
   meta = {
@@ -334,14 +348,12 @@ in
         settings =
           if backslashes != [ ] then
             scope.fail {
-              package = "tempo";
               option = "settings";
               message = "${lib.concatStringsSep ", " backslashes} holds a backslash. Tempo expands environment variables in its config file and reads a backslash as an escape, which breaks the file.";
               fix = "Remove the backslash from the value.";
             }
           else if generatorSettings != [ ] then
             scope.fail {
-              package = "tempo";
               option = "settings";
               message = "settings sets ${
                 lib.concatMapStringsSep ", " (lib.concatStringsSep ".") generatorSettings
@@ -350,7 +362,6 @@ in
             }
           else if inlineCredentials != [ ] then
             scope.fail {
-              package = "tempo";
               option = "settings";
               message = "settings sets ${
                 lib.concatMapStringsSep ", " (
@@ -370,12 +381,11 @@ in
           s: if os.credentialKeys.${s} != null then os.credentialKeys.${s} else s
         );
         credentials = kix.contracts.secret.helpers.use {
-          inherit who;
+          inherit scope;
           arg = "storageCredentials";
           dep =
             if storageCredentials == null then
               scope.fail {
-                package = "tempo";
                 option = "objectStorage";
                 message = "objectStorage is set and no storageCredentials dependency resolved in namespace ${scope.namespaceName}.";
                 fix = "Add a secret or secret-ref instance there with the keys ${lib.concatStringsSep " and " (builtins.attrValues credentialKeys)} and the alias storageCredentials, or set objectStorage = null.";
@@ -390,7 +400,6 @@ in
           if !objectStorageOn then
             if endpointService != null then
               scope.fail {
-                package = "tempo";
                 message = "deps.endpointService is wired and objectStorage is null, so Tempo keeps its blocks on the claim and never reads the store.";
                 fix = "Set objectStorage.bucket, or remove deps.endpointService.";
               }
@@ -401,7 +410,6 @@ in
               inherit (os) bucket;
               endpoint = lib.removePrefix "${endpointScheme}://" (
                 (endpointService.out.url or (scope.fail {
-                  package = "tempo";
                   message = "deps.endpointService has no out.url.";
                   fix = "Wire an instance whose root is its S3 Service.";
                 })
@@ -412,7 +420,6 @@ in
             }
           else if os.endpointScheme != null then
             scope.fail {
-              package = "tempo";
               option = "objectStorage.endpointScheme";
               message = "objectStorage.endpointScheme is set and no endpointService dependency resolved, so nothing reads it.";
               fix = "Wire the in-cluster store with deps.endpointService = ref.<namespace>.<instance>, or remove objectStorage.endpointScheme and set settings.storage.trace.s3.insecure for a store outside the cluster.";
@@ -425,14 +432,12 @@ in
             null
           else if prometheusServer == null then
             scope.fail {
-              package = "tempo";
               option = "metricsGenerator.enabled";
               message = "metricsGenerator.enabled is true and no prometheusServer dependency resolved.";
               fix = "Wire an instance that takes Prometheus remote write, such as a victoria-metrics-cluster, with deps.prometheusServer = ref.<namespace>.<instance>, or set metricsGenerator.enabled = false.";
             }
           else
             prometheusServer.out.remoteWriteUrl or (scope.fail {
-              package = "tempo";
               dependency = "prometheusServer";
               message = "deps.prometheusServer resolved to an instance without out.remoteWriteUrl, so the metrics generator has nowhere to write. The prometheus package does not take remote write.";
               fix = "Wire a victoria-metrics-cluster instance with deps.prometheusServer = ref.<namespace>.<instance>, or set out.remoteWriteUrl in the kix.mkImport that answers prometheusServer.";
@@ -441,8 +446,8 @@ in
         mergedConfig = lib.filterAttrsRecursive (_: v: v != null) (
           kix.mergeGuarded
             {
-              inherit who;
-              what = "settings";
+              inherit scope;
+              option = "settings";
               locked = lockedPaths {
                 objectStorage = objectStorageOn;
                 inherit inClusterStore;
@@ -464,7 +469,6 @@ in
               s3 = mergedConfig.storage.trace.s3;
               endpoint =
                 s3.endpoint or (scope.fail {
-                  package = "tempo";
                   option = "settings.storage.trace.s3.endpoint";
                   message = "objectStorage is set with no endpointService dependency and no settings.storage.trace.s3.endpoint, and Tempo's S3 client has no default endpoint.";
                   fix = "Set settings.storage.trace.s3.endpoint to the store's host[:port] (s3.<region>.amazonaws.com for AWS S3), or wire a store in the cluster with deps.endpointService = ref.<namespace>.<instance>.";
@@ -476,14 +480,12 @@ in
             in
             if m == null then
               scope.fail {
-                package = "tempo";
                 option = "settings.storage.trace.s3.endpoint";
                 message = "settings.storage.trace.s3.endpoint ${builtins.toJSON endpoint} is not host[:port].";
                 fix = "Tempo's S3 client reads the address without a scheme and takes TLS from storage.trace.s3.insecure; write it as s3.example.com or s3.example.com:9000.";
               }
             else if !builtins.isBool insecure then
               scope.fail {
-                package = "tempo";
                 option = "settings.storage.trace.s3.insecure";
                 message = "settings.storage.trace.s3.insecure is ${builtins.toJSON insecure}, and Tempo reads a boolean.";
                 fix = "Set it to true for a store that serves plain HTTP, or remove it.";
@@ -494,7 +496,6 @@ in
               || (!lib.hasInfix "." host && !lib.hasPrefix "[" host)
             then
               scope.fail {
-                package = "tempo";
                 option = "settings.storage.trace.s3.endpoint";
                 message = "settings.storage.trace.s3.endpoint \"${endpoint}\" names a Service in the cluster, and the pod gets network policy only to stores outside it.";
                 fix = "Wire the store with deps.endpointService = ref.<namespace>.<instance> and remove the endpoint; set objectStorage.endpointScheme = \"https\" if it serves TLS.";
@@ -506,17 +507,28 @@ in
             else
               443;
 
-        args = [
-          "-config.file=${configDir}/tempo.yaml"
-          "-config.expand-env=true"
-        ]
-        ++ kix.guardArgs {
-          inherit who;
-          owned = ownedFlags;
+        # Tempo parses flags with Go's flag package (cmd/tempo/main.go
+        # upstream).
+        args = kix.mergeArgs {
+          inherit scope;
+          parser = "go";
+          id = "K4740";
+          args = [
+            {
+              flags = [ "-config.file=${configDir}/tempo.yaml" ];
+              from = "the settings option, which builds tempo.yaml";
+              fix = "Remove it from extraArgs and configure Tempo in settings instead.";
+            }
+            {
+              flags = [ "-config.expand-env=true" ];
+              reason = "Tempo must expand environment variables referenced in settings.";
+            }
+          ]
+          ++ ownedFlags;
         } config.extraArgs;
 
         env = kix.mergeEnv {
-          inherit who;
+          inherit scope;
           owned = lib.optional objectStorageOn {
             vars = {
               AWS_ACCESS_KEY_ID = credentials.out.keyRef credentialKeys.accessKeyId;
@@ -703,7 +715,7 @@ in
           requires = builtins.filter (part: part != null) [
             self.storeEgress
           ];
-          out = kix.contracts.experimental.otlpEndpoint.check who {
+          out = kix.contracts.experimental.otlpEndpoint.check scope {
             otlpGrpcUrl = self.otlpService.out.url { port = otlpGrpcPort; };
             otlpHttpUrl = self.otlpService.out.url { port = otlpHttpPort; };
             tls = false;

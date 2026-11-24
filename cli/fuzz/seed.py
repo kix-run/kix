@@ -27,7 +27,10 @@ for path in map(pathlib.Path, bundles):
     for k in range(count):
         stored, _ = struct.unpack_from("<II", data, table + 8 * k)
         frame = subprocess.run(
-            ["zstd", "-dc"], input=data[offset : offset + stored], capture_output=True, check=True
+            ["zstd", "-dc"],
+            input=data[offset : offset + stored],
+            capture_output=True,
+            check=True,
         ).stdout
         frames.append(frame)
         offset += stored

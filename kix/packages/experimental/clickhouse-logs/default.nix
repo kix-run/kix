@@ -49,7 +49,6 @@
 }:
 let
   name = scope.instanceName;
-  who = "clickhouse-logs ${scope.namespaceName}/${name}";
   table = "logs";
   vectorAgent = import ./vector-agent.nix { inherit lib kix; };
   credentialsPath = "/etc/vector-credentials";
@@ -217,7 +216,7 @@ in
         };
 
         mergedSettings = vectorAgent.mergeConfig {
-          inherit who;
+          inherit scope;
           sink = "clickhouse";
           locked = [
             [
@@ -282,7 +281,6 @@ in
                 spec = vectorAgent.podSpec {
                   inherit
                     scope
-                    who
                     name
                     config
                     self

@@ -1,0 +1,3 @@
+# 2026-11-23 · `kix/packages/experimental/cilium/netpol-rules.nix` · cilium's intent-rule errors still write `package = "cilium"` by hand, which is the wrong id for an experimental package.
+
+`translateIntentRules` reports a rule without `to` or `from`, or with an unknown target, through plain `kix.fail` with `package = "cilium"`. The id of the package is `experimental/cilium`. The rule belongs to the instance that asked for the policy, but the enforcer's `netpol` functions receive no `scope`, so the error cannot name that instance. Passing the caller's `scope` (or its `fail`) into `translateIntentRules` and the other `netpol` builders would let the record carry the instance and its package, and drop the hand-written field.

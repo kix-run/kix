@@ -69,7 +69,6 @@ let
   release = "0.45.2";
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "falco ${ns}/${name}";
 
   # The webserver serves /healthz and, with metrics, /metrics.
   port = 8765;
@@ -294,7 +293,6 @@ in
         hasRules = config.rules != { };
 
         refusal = import ./platform.nix { inherit lib; } {
-          inherit who;
           inherit (clusterConfig.cluster) capabilities provider;
         };
 
@@ -394,13 +392,12 @@ in
         falcoConfig =
           if refusals != [ ] then
             scope.fail {
-              package = "falco";
               message = "${lib.concatStringsSep " " refusals}";
             }
           else
             kix.mergeGuarded {
-              inherit who;
-              what = "settings";
+              inherit scope;
+              option = "settings";
               locked = map (l: lib.splitString "." l.path) lockedPaths;
             } builtinSettings config.settings;
 
@@ -460,7 +457,7 @@ in
         daemonset =
           if refusal != null then
             scope.fail {
-              package = "falco";
+              clusterOption = "cluster.capabilities";
               message = refusal;
             }
           else
@@ -493,7 +490,7 @@ in
                         ];
                         env = kix.mkEnvVars (
                           kix.mergeEnv {
-                            inherit who;
+                            inherit scope;
                             owned = [
                               {
                                 vars = {
@@ -502,7 +499,6 @@ in
                                   FALCO_HOSTNAME.valueFrom.fieldRef.fieldPath = "spec.nodeName";
                                 };
                                 from = "the package, which mounts the host's paths under ${hostRoot} and names each alert's node";
-                                fix = "Remove it from env.";
                               }
                             ];
                           } config.env

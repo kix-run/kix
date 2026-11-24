@@ -1,0 +1,8 @@
+# The kubebuilder CRD bases at `release` in default.nix (also the tag in
+# rbac/sources.txt). The operator installs no definitions of its own, so the
+# package applies these. Upstream's Helm chart adds a conversion webhook to
+# databases.kinda.rocks, but that definition serves one version, so the API
+# server never calls it, and the package leaves it out.
+https://raw.githubusercontent.com/db-operator/db-operator/2.47.0/config/crd/bases/kinda.rocks_dbinstances.yaml
+https://raw.githubusercontent.com/db-operator/db-operator/2.47.0/config/crd/bases/kinda.rocks_databases.yaml
+https://raw.githubusercontent.com/db-operator/db-operator/2.47.0/config/crd/bases/kinda.rocks_dbusers.yaml

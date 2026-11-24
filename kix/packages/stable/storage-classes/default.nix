@@ -72,17 +72,15 @@
       ...
     }:
     let
-      who = "storage-classes ${scope.namespaceName}/${scope.instanceName}";
       sc = kix.storage.mkClasses {
-        inherit scope clusterConfig who;
-        optionPath = "config.classes";
+        inherit scope clusterConfig;
+        optionPath = "classes";
         classes = config.classes;
         parts = self.classes;
       };
     in
     if config.classes == { } then
       scope.fail {
-        package = "storage-classes";
         option = "classes";
         message = "config.classes is empty.";
         fix = "Declare at least one StorageClass, for example classes.local-path = { provisioner = \"rancher.io/local-path\"; volumeBindingMode = \"WaitForFirstConsumer\"; }.";

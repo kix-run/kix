@@ -194,7 +194,8 @@ let
       resource = resourceName;
       message = finding.message or "check failed";
       inherit tags;
-    };
+    }
+    // lib.optionalAttrs (finding ? id) { inherit (finding) id; };
 
 in
 rec {
@@ -470,9 +471,7 @@ rec {
     let
       errors = builtins.filter (f: f.severity == "error") findings;
       nonErrors = builtins.filter (f: f.severity != "error") findings;
-    in
-    {
-      warnings = map (
+      text =
         f:
         let
           loc = lib.concatStringsSep "/" (
@@ -483,21 +482,18 @@ rec {
             ]
           );
         in
-        "[scorecard:${f.rule}] ${loc}: ${f.message}"
-      ) nonErrors;
-      assertions = map (f: {
-        assertion = false;
-        message =
-          let
-            loc = lib.concatStringsSep "/" (
-              builtins.filter (x: x != null) [
-                f.namespace
-                f.instance
-                f.resource
-              ]
-            );
-          in
-          "[scorecard:${f.rule}] ${loc}: ${f.message}";
-      }) errors;
+        "[scorecard:${f.rule}] ${loc}: ${f.message}";
+    in
+    {
+      # An error record prints its id first, so a warning does the same.
+      warnings = map (f: lib.optionalString (f ? id) "[${f.id}] " + text f) nonErrors;
+      assertions = map (
+        f:
+        {
+          assertion = false;
+          message = text f;
+        }
+        // lib.optionalAttrs (f ? id) { inherit (f) id; }
+      ) errors;
     };
 }

@@ -68,7 +68,61 @@ impl std::fmt::Display for LibraryObject {
     }
 }
 
+/// The most characters [`LibraryRecord::printable`] shows on one line of a
+/// field. A message line from the library is under a thousand.
+const MAX_LINE_CHARS: usize = 4096;
+
+/// Return `s` with each line made safe to show, as
+/// [`crate::text::printable_up_to`] does. Line breaks stay, because a
+/// message or a fix may span lines.
+fn printable_lines(s: &str) -> String {
+    s.split('\n')
+        .map(|line| crate::text::printable_up_to(line, MAX_LINE_CHARS))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 impl LibraryRecord {
+    /// Return the record with every field made safe to show on a terminal,
+    /// for a record that another machine wrote, such as a bundle's. The
+    /// destructuring names every field, so a new field does not compile
+    /// until it is cleaned here too.
+    pub fn printable(self) -> LibraryRecord {
+        let LibraryRecord {
+            id,
+            instance,
+            package,
+            object,
+            option,
+            dependency,
+            cluster_option,
+            message,
+            fix,
+        } = self;
+        let clean = |s: Option<String>| s.as_deref().map(printable_lines);
+        LibraryRecord {
+            id: clean(id),
+            instance: clean(instance),
+            package: clean(package),
+            object: object.map(
+                |LibraryObject {
+                     kind,
+                     namespace,
+                     name,
+                 }| LibraryObject {
+                    kind: printable_lines(&kind),
+                    namespace: clean(namespace),
+                    name: printable_lines(&name),
+                },
+            ),
+            option: clean(option),
+            dependency: clean(dependency),
+            cluster_option: clean(cluster_option),
+            message: printable_lines(&message),
+            fix: clean(fix),
+        }
+    }
+
     /// Return the first line: the id, the instance and package, and the
     /// first line of the message.
     fn headline(&self) -> String {
@@ -145,6 +199,27 @@ pub fn read_warnings(path: Option<&PathBuf>) -> Vec<LibraryRecord> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A record from another machine shows its control characters as code
+    /// points in every field, and keeps its line breaks.
+    #[test]
+    fn a_printable_record_escapes_control_characters() {
+        let w = warning(serde_json::json!({
+            "instance": "shop/\u{1b}[2Jdb",
+            "object": {"kind": "Job", "name": "\u{1b}]0;x\u{7}"},
+            "message": "first\u{1b}[31m\nsecond\r",
+            "fix": "\u{202e}reversed",
+        }))
+        .printable();
+        let text = w.describe("  ");
+        assert!(
+            !text.chars().any(|c| c.is_control() && c != '\n'),
+            "{text:?}"
+        );
+        assert!(text.contains("⟨U+001B⟩"), "{text}");
+        assert!(text.contains("⟨U+202E⟩"), "{text}");
+        assert_eq!(w.message, "first⟨U+001B⟩[31m\nsecond⟨U+000D⟩");
+    }
 
     fn warning(json: serde_json::Value) -> LibraryRecord {
         serde_json::from_value(json).unwrap()

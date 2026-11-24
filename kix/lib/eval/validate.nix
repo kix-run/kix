@@ -23,6 +23,7 @@ let
   validateCrds = import ./validate-crds.nix { inherit lib; };
   validateKeys = import ./validate-keys.nix { inherit lib; };
   kixKeys = kixAnnotations.keys;
+  labelSelector = import ../core/label-selector.nix { inherit lib; };
   inherit (import ../core/util.nix { inherit lib; })
     listOr
     groupOf
@@ -34,7 +35,14 @@ let
 in
 rec {
   # Return a failure of `crossResourceFailures` as one text, for tests.
-  failureText = f: if builtins.isString f then f else "${f.message}\nFix: ${f.fix}";
+  failureText =
+    f:
+    if builtins.isString f then
+      f
+    else
+      lib.optionalString (f ? id) "[${f.id}] "
+      + f.message
+      + lib.optionalString (f ? fix) "\nFix: ${f.fix}";
 
   crossResourceFailures =
     {
@@ -190,22 +198,22 @@ rec {
           [ ]
       ) resources;
       selectsRefPods =
-        ns: selector:
-        builtins.any (w: w.ns == ns && selectorMatchesLabels selector w.labels) refPodSelectors;
+        ns: selector: builtins.any (w: w.ns == ns && selectorMatches selector w.labels) refPodSelectors;
 
       workloads = builtins.filter (r: builtins.elem r.kind workloadKinds.builtKinds) resources;
       nsOf = namespaceOf;
 
       # Check whether `selector` matches any workload pod template in namespace `ns`.
       selectsPodsIn =
-        ns: selector:
-        builtins.any (w: nsOf w == ns && selectorMatchesLabels selector (getPodLabels w)) workloads;
+        ns: selector: builtins.any (w: nsOf w == ns && selectorMatches selector (getPodLabels w)) workloads;
 
       getPodSpec = podSpecReader.podSpecOf;
       getPodLabels = r: (podSpecReader.podTemplateOf r).metadata.labels or { };
 
-      selectorMatchesLabels =
-        selector: labels: builtins.all (k: (labels.${k} or null) == selector.${k}) (lib.attrNames selector);
+      selectorMatches = labelSelector.matches;
+      # Return true when the label map `selector`, such as a Service's
+      # `spec.selector`, matches `labels`.
+      mapMatches = selector: selectorMatches { matchLabels = selector; };
 
       # --- Allowlists for external references ---
 
@@ -264,7 +272,7 @@ rec {
           selector = svc.spec.selector or { };
         in
         selector == { }
-        || builtins.any (sc: selectorMatchesLabels sc selector) systemComponentSelectors
+        || builtins.any (sc: mapMatches sc selector) systemComponentSelectors
         || operandCrPresent svc;
 
       # --- 1. ServiceAccount references ---
@@ -368,7 +376,8 @@ rec {
           let
             selector = svc.spec.selector or { };
             ns = svc.metadata.namespace or "cluster-scoped";
-            matchesAny = selectsPodsIn ns selector || selectsRefPods ns selector;
+            matchesAny =
+              selectsPodsIn ns { matchLabels = selector; } || selectsRefPods ns { matchLabels = selector; };
           in
           if matchesAny then
             [ ]
@@ -456,10 +465,30 @@ rec {
 
       duplicateFailures =
         let
-          counts = lib.mapAttrs (_: builtins.length) (builtins.groupBy resourceId resources);
-          dups = lib.filterAttrs (_: c: c > 1) counts;
+          dups = lib.filterAttrs (_: es: builtins.length es > 1) (
+            builtins.groupBy (e: resourceId e.r) entries
+          );
+          ownerNames = es: lib.unique (map (e: e.owner) (builtins.filter (e: e.owner != null) es));
+          builtBy =
+            es:
+            let
+              names = ownerNames es;
+            in
+            if names == [ ] then
+              ""
+            else if builtins.length names == 1 then
+              " Built ${toString (builtins.length es)} times by instance ${builtins.head names}."
+            else
+              " Built by instances: ${builtins.concatStringsSep ", " names}.";
         in
-        map (id: "Duplicate resource: ${id}") (lib.attrNames dups);
+        lib.mapAttrsToList (id: es: {
+          message = "Duplicate resource: ${id}.${builtBy es}";
+          fix =
+            if builtins.length (ownerNames es) > 1 then
+              "Remove one of these instances, or configure them to use different names for this resource. Two resources of the same kind cannot share a name in the same namespace (or anywhere in the cluster for cluster-scoped resources)."
+            else
+              "Give each resource of this kind a unique name.";
+        }) dups;
 
       # --- 8. managed-by label ---
 
@@ -471,24 +500,33 @@ rec {
           [ "${r.kind} ${resourceId r} is missing app.kubernetes.io/managed-by=kix label" ]
       ) resources;
 
+      # Checks 9, 12, 14, and 25 read `matchExpressions`, so a selector that
+      # built before can fail them now. Their failures carry the id of the
+      # change record that tells users what to change.
+      withSelectorRecord =
+        f: (if builtins.isString f then { message = f; } else f) // { id = labelSelector.recordId; };
+
       # --- 9. Selector consistency ---
-      # A workload's spec.selector.matchLabels must be a subset of its
-      # pod template labels, otherwise the workload will never match its pods.
+      # A workload's spec.selector must match its pod template labels,
+      # otherwise the workload will never match its pods.
 
       selectorConsistencyFailures = builtins.concatMap (
         w:
         let
-          selectorLabels = w.spec.selector.matchLabels or { };
+          selector = w.spec.selector or { };
           templateLabels = w.spec.template.metadata.labels or { };
           ns = w.metadata.namespace or "cluster-scoped";
         in
-        if selectorLabels == { } then
+        if labelSelector.isEmpty selector || labelSelector.problems selector != [ ] then
           [ ]
-        else if selectorMatchesLabels selectorLabels templateLabels then
+        else if selectorMatches selector templateLabels then
           [ ]
         else
           [
-            "${w.kind} ${ns}/${w.metadata.name} selector ${builtins.toJSON selectorLabels} does not match pod template labels ${builtins.toJSON templateLabels}"
+            {
+              message = "${w.kind} ${ns}/${w.metadata.name} spec.selector ${builtins.toJSON selector} does not match pod template labels ${builtins.toJSON templateLabels}. Kubernetes rejects a ${w.kind} whose selector does not match its pod template, so Kix stopped the build.";
+              fix = "Update spec.template.metadata.labels or spec.selector on ${w.kind} ${ns}/${w.metadata.name} so spec.selector matches the pod template labels.";
+            }
           ]
       ) (builtins.filter (r: builtins.elem r.kind workloadKinds.selectorKinds) resources);
 
@@ -589,11 +627,12 @@ rec {
       networkPolicyFailures = builtins.concatMap (
         np:
         let
-          selector = np.spec.podSelector.matchLabels or { };
+          selector = np.spec.podSelector or { };
           ns = np.metadata.namespace or "cluster-scoped";
         in
-        # An empty selector matches all pods in the namespace.
-        if selector == { } then
+        # An empty selector matches all pods in the namespace. Check 25
+        # reports a malformed one.
+        if labelSelector.isEmpty selector || labelSelector.problems selector != [ ] then
           [ ]
         else if selectsPodsIn ns selector || selectsRefPods ns selector then
           [ ]
@@ -622,7 +661,7 @@ rec {
             tp != null && builtins.isString tp
           ) svcPorts;
           matchedWorkloads = builtins.filter (
-            w: nsOf w == ns && selectorMatchesLabels selector (getPodLabels w)
+            w: nsOf w == ns && mapMatches selector (getPodLabels w)
           ) workloads;
           containerPortNames = builtins.concatMap (
             w:
@@ -652,19 +691,24 @@ rec {
           ) namedTargetPorts
       ) (builtins.filter (r: r.kind == "Service") resources);
 
-      # Validate that each PodDisruptionBudget `matchLabels` selector matches a
+      # Validate that each PodDisruptionBudget selector matches a
       # workload pod template, a ServiceRef selector, or an `operand-of` custom
       # resource.
 
       pdbFailures = builtins.concatMap (
         pdb:
         let
-          selector = pdb.spec.selector.matchLabels or { };
+          selector = pdb.spec.selector or { };
           ns = pdb.metadata.namespace or "cluster-scoped";
           matchesAny = selectsPodsIn ns selector || selectsRefPods ns selector;
           decl = operandOf pdb;
         in
-        if selector == { } || matchesAny || operandCrPresent pdb then
+        if
+          labelSelector.isEmpty selector
+          || labelSelector.problems selector != [ ]
+          || matchesAny
+          || operandCrPresent pdb
+        then
           [ ]
         else if decl != null && builtins.length (lib.splitString "/" decl) != 3 then
           [
@@ -694,7 +738,7 @@ rec {
             svc:
             (svc.metadata.namespace or "cluster-scoped") == ns
             && (svc.spec.selector or { }) != { }
-            && selectorMatchesLabels (svc.spec.selector or { }) podLabels
+            && mapMatches (svc.spec.selector or { }) podLabels
           ) (builtins.filter (r: r.kind == "Service") resources);
         in
         map (
@@ -949,6 +993,32 @@ rec {
         "Job ${ns}/${job.metadata.name} sets ttlSecondsAfterFinished, so Kubernetes would delete it after it finishes and Kix would run it again on the next deploy. Remove ttlSecondsAfterFinished. Kix deletes the Job when a later build no longer contains it."
       ) (builtins.filter (r: r.kind == "Job" && (r.spec or { }) ? ttlSecondsAfterFinished) resources);
 
+      # --- 25. Label selectors are well-formed ---
+      # Report each selector that Kubernetes would reject, on the kinds whose
+      # selectors the checks above, the scorecard rules, and the Helm ordering
+      # read. `matches` treats such a selector as matching nothing.
+
+      selectorPaths = {
+        NetworkPolicy = "podSelector";
+        PodDisruptionBudget = "selector";
+        ServiceMonitor = "selector";
+        PodMonitor = "selector";
+        VMServiceScrape = "selector";
+        VMPodScrape = "selector";
+      }
+      // lib.genAttrs workloadKinds.selectorKinds (_: "selector");
+
+      selectorProblemFailures = builtins.concatMap (
+        r:
+        let
+          field = selectorPaths.${r.kind};
+          ns = r.metadata.namespace or "cluster-scoped";
+        in
+        map (problem: {
+          message = "${r.kind} ${ns}/${r.metadata.name or "unnamed"} has an invalid label selector in spec.${field}, so Kix stopped the build: ${problem}";
+        }) (labelSelector.problems (r.spec.${field} or { }))
+      ) (builtins.filter (r: selectorPaths ? ${r.kind or ""}) resources);
+
       allFailures =
         saFailures
         ++ roleRefFailures
@@ -958,12 +1028,12 @@ rec {
         ++ serviceNameFailures
         ++ duplicateFailures
         ++ managedByFailures
-        ++ selectorConsistencyFailures
+        ++ map withSelectorRecord selectorConsistencyFailures
         ++ ingressFailures
         ++ uniqueNamespaceFailures
-        ++ networkPolicyFailures
+        ++ map withSelectorRecord networkPolicyFailures
         ++ portNameFailures
-        ++ pdbFailures
+        ++ map withSelectorRecord pdbFailures
         ++ jobEndpointFailures
         ++ rerunFailures
         ++ priorityClassFailures
@@ -973,7 +1043,8 @@ rec {
         ++ customResourceFailures
         ++ keyFailures
         ++ defaultFailures
-        ++ jobTtlFailures;
+        ++ jobTtlFailures
+        ++ map withSelectorRecord selectorProblemFailures;
     in
     allFailures;
 }

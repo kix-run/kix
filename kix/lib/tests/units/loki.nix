@@ -18,8 +18,8 @@
 
 let
   merge = kixlib.mergeGuarded {
-    who = "test ns/inst";
-    what = "settings";
+    scope.fail = kixlib.fail;
+    option = "settings";
     locked = [
       [
         "a"

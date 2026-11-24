@@ -105,7 +105,6 @@
 let
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "cnpg-database ${ns}/${name}";
 
   # A plain name or `{ name; version; }`, as stackgres-database takes it.
   normalizeExtension =
@@ -133,7 +132,6 @@ let
         in
         if builtins.length versions > 1 then
           scope.fail {
-            package = "cnpg-database";
             message = "extension ${extName} is requested at versions ${lib.concatStringsSep " and " versions}, by the instance's `extensions` and a consumer's deps.database.config.extensions.";
             fix = "Request one version, or none to take the operand image's default.";
           }
@@ -266,7 +264,6 @@ in
           postgres.out
         else
           scope.fail {
-            package = "cnpg-database";
             message = "the postgres dependency publishes no out.clusterName, as with an import or a stackgres-cluster. This package creates a DatabaseRole and a Database for a cnpg-cluster.";
             fix = "Wire one, or a cnpg-pooler in front of one, with deps.postgres = ref.<namespace>.<instance>.";
           };
@@ -275,7 +272,6 @@ in
           cnpgOperator.out.crds
         else
           scope.fail {
-            package = "cnpg-database";
             message = "the cnpgOperator dependency publishes no out.crds, as with an import.";
             fix = "Wire a managed cnpg-operator instance with deps.cnpgOperator = ref.<namespace>.<instance>.";
           };
@@ -286,7 +282,6 @@ in
         if config.password != null then
           scope.fail {
             id = "K9503";
-            package = "cnpg-database";
             option = "password";
             message = "password was removed, because it put the password in plain text in Kix's local store and in the built Secrets.";
             fix = passwordAdvice;
@@ -294,14 +289,12 @@ in
         else if config.passwordSource != null || config.passwordHash != null then
           scope.fail {
             id = "K6023";
-            package = "cnpg-database";
             option = "passwordSource";
             message = "passwordSource and passwordHash were removed.";
             fix = "${passwordAdvice} Use the same file.";
           }
         else if password == null then
           scope.fail {
-            package = "cnpg-database";
             message = "has no `password` dependency.";
             fix = passwordAdvice;
           }
@@ -316,7 +309,7 @@ in
         let
           dep = builtins.seq _passwordCheck (
             kix.contracts.secret.helpers.use {
-              inherit who;
+              inherit scope;
               arg = "password";
               dep = password;
               keys = [ "password" ];
@@ -329,7 +322,6 @@ in
             dep
           else
             scope.fail {
-              package = "cnpg-database";
               message = "deps.password resolved to secret \"${dep.out.name}\", which Kix does not fill from a SOPS file, so it is also the credentials Secret the app reads.";
               fix = "Add `username` (equal to user, \"${userName}\") to that secret and to its keys, or use a packages.secret with a SOPS source.";
             }
@@ -458,13 +450,13 @@ in
       # region:postgresDatabaseCheck
       root = {
         resource = credentials;
-        # `postHooks` puts the Database, and the role and Secret it
+        # `requires` puts the Database, and the role and Secret it
         # requires, in this instance's own closure even when no consumer
         # reads `out.host`. `credentials` does not reference them and can be
         # applied first.
-        postHooks = [ self.database ];
+        requires = [ self.database ];
 
-        out = kix.contracts.postgresDatabase.check who {
+        out = kix.contracts.postgresDatabase.check scope {
           host = self.pg.fqdn;
           port = self.pg.port;
           database = dbName;

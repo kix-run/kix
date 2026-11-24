@@ -61,6 +61,7 @@ in
     {
       instanceName,
       namespaceName,
+      packageId ? null,
       capabilities,
       roleStatus ? (_: "unknown"),
       # Validated unsafe grants from peeked package meta (kix/lib/unsafe.nix).
@@ -68,7 +69,10 @@ in
     }:
     let
       # Fail with `e`, naming this instance.
-      failHere = failFor "${namespaceName}/${instanceName}";
+      failHere = failFor {
+        instance = "${namespaceName}/${instanceName}";
+        package = packageId;
+      };
 
       # Validate a required cluster capability. Throw when the capability is
       # false, return a warning when it is null, and skip checks when
@@ -100,8 +104,9 @@ in
         else
           [ ];
 
-      # Check that the cluster provides `metrics.k8s.io` for `subject`. Return
-      # a list holding a warning when the metricsApi role is unset.
+      # Check that the cluster provides `metrics.k8s.io` for `subject`. Fail
+      # when the metricsApi role is absent, and return a list holding a
+      # warning when it is unset.
       metricsApiWarnings =
         subject:
         let
@@ -131,14 +136,8 @@ in
         else
           [ ];
 
-      # Check that the cluster provides `metrics.k8s.io` for `subject`, for a
-      # package to call directly. It returns null, so it has no value to carry
-      # a warning in, and prints the warning as a trace.
-      requireMetricsApi =
-        subject:
-        builtins.foldl' (
-          acc: w: builtins.trace "warning: instance '${instanceName}': ${w.message}\nFix: ${w.fix}" acc
-        ) null (metricsApiWarnings subject);
+      # A package returns the result from its top-level `warnings`.
+      requireMetricsApi = metricsApiWarnings;
 
       _checkDuplicateNames =
         { includeEnv }:

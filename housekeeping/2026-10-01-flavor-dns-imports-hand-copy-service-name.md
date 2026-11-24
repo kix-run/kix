@@ -1,4 +1,0 @@
-# 2026-10-01 · `kix/lib/flavors/*.nix` · The flavours' `platform-dns` imports spell out the DNS Service address by hand, and `out.name` names a different object.
-
-Each flavour's `kix.mkImport` sets `out.fqdn = "kube-dns.kube-system.svc.${config.clusterDomain}"` (openshift: `dns-default.openshift-dns`) and `out.name = "coredns"`, which names the Deployment while the fqdn names the Service. Twelve copies can drift, and a consumer reading `out.name` for the Service gets the wrong object. A `scope.mkServiceRef`-style import would derive both from one Service name and namespace.
-- Hit again 2026-10-01 while reworking the rke2 flavour: RKE2's bundled CoreDNS is the Deployment and Service `rke2-coredns-rke2-coredns` (rke2-coredns chart), so both `out.name = "coredns"` and `out.fqdn = "kube-dns.kube-system..."` in `kix/lib/flavors/rke2.nix` name objects RKE2 does not create.

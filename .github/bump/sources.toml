@@ -142,6 +142,10 @@ tags = '^pgbouncer_(\d+_\d+_\d+)$'
 packages = ["experimental.coredns"]
 repo = "https://github.com/coredns/coredns"
 
+[db-operator]
+packages = ["experimental.db-operator"]
+repo = "https://github.com/db-operator/db-operator"
+
 [descheduler]
 packages = ["experimental.descheduler"]
 repo = "https://github.com/kubernetes-sigs/descheduler"

@@ -126,8 +126,9 @@ pub fn spinner(msg: impl Into<Cow<'static, str>>) -> Option<indicatif::ProgressB
 }
 
 /// Print the Kix library's warnings for a build to stderr, even under `-q`.
-/// Every command that evaluates a build calls this, except `kix check`,
-/// which lists them in its own output.
+/// `commands::build_flake`, `CommandContext::eval_cluster_or_suggest`, and
+/// `commands::read_bundle` call it, so every command that evaluates or reads
+/// a build shows them. `kix check` lists them in its own output instead.
 pub fn library_warnings(warnings: &[kix::eval::library_record::LibraryRecord]) {
     if !warnings.is_empty() {
         eprintln!("{}", kix::eval::library_record::describe_warnings(warnings));

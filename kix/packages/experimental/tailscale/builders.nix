@@ -2,26 +2,27 @@
 {
   lib,
   kix,
-  who,
   ns,
   managedLabels,
   config,
   self,
 }:
 let
-  inherit (import ../../../lib/core/error.nix { inherit lib; }) fail;
-
   isTracked = v: builtins.isString v && builtins.hasContext v;
   trackedFix = "pass <resource>.out.name, which also orders the custom resource after it, or kix.untrackedRef \"<name>\" for an object Kix does not build.";
 
-  callSite =
-    builder: consumerScope: subject:
-    "${builder} ${subject}, called by ${consumerScope.namespaceName}/${consumerScope.instanceName}";
+  # Return where a builder runs: its name and subject as text, and the
+  # `fail` of the calling instance, which names that instance and its
+  # package.
+  callSite = builder: consumerScope: subject: {
+    inherit (consumerScope) fail;
+    what = "${builder} ${subject}";
+  };
 
   # Return the Service ports matching `refs` (by port number or name), or all
   # ports when `refs` is null.
   servicePorts =
-    what: service: refs:
+    site: service: refs:
     let
       declared = service.rawManifest.spec.ports or [ ];
       pick =
@@ -30,11 +31,10 @@ let
           matched = builtins.filter (p: (p.port or null) == ref || (p.name or null) == ref) declared;
         in
         if matched == [ ] then
-          fail {
-            package = "tailscale";
-            message = "${what}: Service ${service.name} has no port ${toString ref}. Its ports are ${
+          site.fail {
+            message = "${site.what}: Service ${service.name} does not declare port ${toString ref} (declared port numbers: ${
               builtins.toJSON (map (p: p.port or null) declared)
-            }.";
+            }). Pass a port number or port name declared in the Service's `spec.ports`.";
           }
         else
           matched;
@@ -44,14 +44,13 @@ let
   # Require a non-empty Service selector so a backend policy never matches all
   # pods in the caller's namespace.
   selectorOf =
-    what: service:
+    site: service:
     let
       selector = service.rawManifest.spec.selector or null;
     in
     if selector == null || selector == { } then
-      fail {
-        package = "tailscale";
-        message = "${what}: Service ${service.name} has no selector, so a policy over its pods would admit the proxies to every pod in its namespace.";
+      site.fail {
+        message = "${site.what}: Service ${service.name} has no pod selector (`spec.selector`), so Kix cannot scope an ingress network policy to its backend pods (an empty selector would allow Tailscale proxies to reach every pod in the namespace).";
         fix = "Pass a Service that selects its backend pods.";
       }
     else
@@ -63,15 +62,15 @@ let
   # it would be the backend's first ingress policy and close it to every
   # other client.
   backendPolicy =
-    what: consumerScope:
+    site: consumerScope:
     {
       service,
       refs,
       policyName,
     }:
     let
-      selector = selectorOf what service;
-      ports = servicePorts what service refs;
+      selector = selectorOf site service;
+      ports = servicePorts site service refs;
       enforcer = consumerScope.networkPolicyEnforcer;
     in
     builtins.seq selector (
@@ -117,20 +116,19 @@ let
     };
 
   backendPort =
-    what: service: port:
+    site: service: port:
     let
       declared = service.rawManifest.spec.ports or [ ];
     in
     if port != null then
-      (builtins.head (servicePorts what service [ port ])).port
+      (builtins.head (servicePorts site service [ port ])).port
     else if service ? out.port then
       builtins.fromJSON (builtins.unsafeDiscardStringContext service.out.port)
     else if builtins.length declared == 1 then
       (builtins.head declared).port
     else
-      fail {
-        package = "tailscale";
-        message = "${what}: Service ${service.name} has ${toString (builtins.length declared)} ports.";
+      site.fail {
+        message = "${site.what}: `port` is unset and Service ${service.name} declares ${toString (builtins.length declared)} ports, so Kix cannot choose a default backend port.";
         fix = "Pass port.";
       };
 
@@ -146,7 +144,7 @@ let
       spec ? { },
     }:
     let
-      what = callSite "mkIngress" consumerScope name;
+      site = callSite "mkIngress" consumerScope name;
       ruleHosts = builtins.filter (h: h != null) (map (r: r.host or null) (spec.rules or [ ]));
       refusal =
         if lib.hasInfix "." hostname then
@@ -161,7 +159,7 @@ let
           "spec sets defaultBackend, which the package sets from service and port; remove it."
         else
           null;
-      defaultPort = backendPort what service port;
+      defaultPort = backendPort site service port;
       serviceName = builtins.unsafeDiscardStringContext service.name;
       pathPorts = builtins.concatMap (
         path:
@@ -175,9 +173,8 @@ let
         then
           [ ]
         else if portRef == null then
-          fail {
-            package = "tailscale";
-            message = "${what}: a path to Service ${serviceName} names no port.";
+          site.fail {
+            message = "${site.what}: an HTTP path in `spec.rules` points to Service ${serviceName} without specifying a port.";
             fix = "Set backend.service.port.number or .name.";
           }
         else
@@ -185,9 +182,8 @@ let
       ) (builtins.concatMap (rule: (rule.http or { }).paths or [ ]) (spec.rules or [ ]));
     in
     if refusal != null then
-      fail {
-        package = "tailscale";
-        message = "${what}: ${refusal}";
+      site.fail {
+        message = "${site.what}: ${refusal}";
       }
     else
       {
@@ -206,7 +202,7 @@ let
             };
           };
         };
-        policy = backendPolicy what consumerScope {
+        policy = backendPolicy site consumerScope {
           inherit service;
           refs = [ defaultPort ] ++ pathPorts;
           policyName = "${name}-ingress";
@@ -214,11 +210,10 @@ let
       };
 
   refuseUntracked =
-    what: field: value: fix:
+    site: field: value: fix:
     if value != null && !(isTracked value) then
-      fail {
-        package = "tailscale";
-        message = "${what}: ${field} = \"${value}\" is a plain string.";
+      site.fail {
+        message = "${site.what}: ${field} is a plain string (\"${value}\") rather than a resource reference, so Kix cannot deploy the referenced object first.";
         inherit fix;
       }
     else
@@ -231,24 +226,23 @@ let
   proxyClassCheck =
     builder: consumerScope: args:
     let
-      what = callSite builder consumerScope (args.name or "?");
+      site = callSite builder consumerScope (args.name or "?");
       proxyClass = (args.spec or { }).proxyClass or null;
     in
-    refuseUntracked what "spec.proxyClass" proxyClass trackedFix;
+    refuseUntracked site "spec.proxyClass" proxyClass trackedFix;
 
   proxyGroupCheck =
     consumerScope: args:
     let
       spec = args.spec or { };
-      what = callSite "mkProxyGroup" consumerScope (args.name or "?");
+      site = callSite "mkProxyGroup" consumerScope (args.name or "?");
     in
     builtins.seq (proxyClassCheck "mkProxyGroup" consumerScope args) (
       if
         (spec.type or null) == "kube-apiserver" && ((spec.kubeAPIServer or { }).mode or "auth") != "noauth"
       then
-        fail {
-          package = "tailscale";
-          message = "${what}: a kube-apiserver ProxyGroup runs in auth mode unless kubeAPIServer.mode is set. Auth mode needs the kube-apiserver-auth-proxy ServiceAccount and impersonation RBAC, which this package does not create.";
+        site.fail {
+          message = "${site.what}: this package only supports `kube-apiserver` ProxyGroups in `noauth` mode (`spec.kubeAPIServer.mode` defaults to `auth` when unset), because it does not create the `kube-apiserver-auth-proxy` ServiceAccount or impersonation RBAC.";
           fix = "Set spec.kubeAPIServer.mode = \"noauth\".";
         }
       else
@@ -259,7 +253,7 @@ let
   mkRecorder =
     consumerScope: args:
     let
-      what = callSite "mkRecorder" consumerScope (args.name or "?");
+      site = callSite "mkRecorder" consumerScope (args.name or "?");
       field = "spec.storage.s3.credentials.secret.name";
       secretName =
         ((((args.spec or { }).storage or { }).s3 or { }).credentials or { }).secret.name or null;
@@ -272,14 +266,13 @@ let
       };
     in
     builtins.seq
-      (refuseUntracked what field secretName
+      (refuseUntracked site field secretName
         "the operator reads it from namespace ${ns}. Pass kix.untrackedRef \"<name>\" for a Secret there that Kix does not build, or call mkRecorder from an instance in ${ns} and pass the out.name of a Secret it builds or depends on."
       )
       (
         if otherNamespace then
-          fail {
-            package = "tailscale";
-            message = "${what}: ${field} names a Secret, which the operator reads from namespace ${ns}, so a Recorder with S3 credentials is built by an instance in ${ns}.";
+          site.fail {
+            message = "${site.what}: this instance is in namespace ${consumerScope.namespaceName}, while the Tailscale operator reads the Secret named by ${field} from namespace ${ns}. A Recorder with S3 credentials must be built from an instance in ${ns}.";
             fix = "Call mkRecorder from an instance in ${ns} and pass the out.name of a Secret it builds or depends on, or kix.untrackedRef \"<name>\" for a Secret there that Kix does not build.";
           }
         else

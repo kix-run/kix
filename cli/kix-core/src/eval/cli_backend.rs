@@ -209,10 +209,7 @@ impl Builder for LocalBuilder {
         flake_path: &Path,
         cluster_name: &str,
     ) -> Result<ClusterPackageInfo, KixEvalError> {
-        if !cluster_name
-            .chars()
-            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
-        {
+        if !nix::is_valid_cluster_name(cluster_name) {
             return Err(KixEvalError::not_found(cluster_name));
         }
 
@@ -310,10 +307,7 @@ pub fn cluster_name_command(
     input_overrides: &[(String, String)],
 ) -> Result<Option<Command>, KixEvalError> {
     // `attr` is spliced into a Nix string literal below.
-    if !attr
-        .chars()
-        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
-    {
+    if !nix::is_valid_cluster_name(attr) {
         return Ok(None);
     }
     let flake_attr = format!(

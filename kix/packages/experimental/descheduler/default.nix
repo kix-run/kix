@@ -213,6 +213,14 @@ in
         ++ policyLib.checkPolicy config.policy
       );
 
+  # A KubernetesMetrics provider makes the descheduler read metrics.k8s.io,
+  # which the cluster's metricsApi role must serve.
+  warnings =
+    { config, ... }:
+    lib.optionals (config.policy.metricsProviders != [ ]) (
+      scope.requireMetricsApi "policy.metricsProviders (KubernetesMetrics)"
+    );
+
   build = [
     (
       {
@@ -222,7 +230,6 @@ in
         ...
       }:
       let
-        who = "descheduler ${scope.namespaceName}/${name}";
 
         inherit (scope.rbac)
           core
@@ -253,37 +260,51 @@ in
           }
         ];
 
-        baseArgs = [
-          "--policy-config-file=${policyDir}/policy.yaml"
-          "--descheduling-interval=${config.deschedulingInterval}"
-          "--leader-elect=true"
-          "--leader-elect-resource-name=${name}"
-          # Upstream defaults the Lease to kube-system; the instance's
-          # namespace keeps the Lease and its Role with the instance.
-          "--leader-elect-resource-namespace=${scope.namespaceName}"
-          "--v=3"
-        ]
-        ++ lib.optional (!config.metrics.enabled) "--disable-metrics";
-
-        leaderElection = "leader election follows the instance's availability level; remove it.";
-        args =
-          baseArgs
-          ++ kix.guardArgs {
-            inherit who;
-            owned = {
-              "--policy-config-file" = "set policy instead.";
-              "--descheduling-interval" = "set deschedulingInterval instead.";
-              "--leader-elect" = leaderElection;
-              "--leader-elect-resource-name" = leaderElection;
-              "--leader-elect-resource-namespace" = leaderElection;
-              "--leader-elect-resource-lock" = leaderElection;
-              "--secure-port" =
-                "the probes and the ServiceMonitor need the metrics server on 0.0.0.0:${toString metricsPort}; remove it.";
-              "--bind-address" =
-                "the probes and the ServiceMonitor need the metrics server on 0.0.0.0:${toString metricsPort}; remove it.";
-              "--disable-metrics" = "set metrics.enabled = false instead.";
-            };
-          } config.extraArgs;
+        leaderElection = "leader election keeps one replica active, and the leader-election Role only grants access to Lease \"${name}\" in namespace \"${scope.namespaceName}\".";
+        metricsServer = "the probes and the ServiceMonitor connect to the HTTPS server on 0.0.0.0:${toString metricsPort}.";
+        # The descheduler parses flags with cobra and pflag
+        # (cmd/descheduler/app/server.go upstream).
+        args = kix.mergeArgs {
+          inherit scope;
+          parser = "gnu";
+          args = [
+            {
+              flags = [ "--policy-config-file=${policyDir}/policy.yaml" ];
+              from = "the policy option";
+              fix = "Remove it from extraArgs and set policy instead.";
+            }
+            {
+              flags = [ "--descheduling-interval=${config.deschedulingInterval}" ];
+              from = "the deschedulingInterval option";
+              fix = "Remove it from extraArgs and set deschedulingInterval instead.";
+            }
+            {
+              flags = [
+                "--leader-elect=true"
+                "--leader-elect-resource-name=${name}"
+                # Upstream defaults the Lease to kube-system; the instance's
+                # namespace keeps the Lease and its Role with the instance.
+                "--leader-elect-resource-namespace=${scope.namespaceName}"
+              ];
+              names = [ "--leader-elect-resource-lock" ];
+              reason = leaderElection;
+            }
+            "--v=3"
+            {
+              flags = lib.optional (!config.metrics.enabled) "--disable-metrics";
+              names = [ "--disable-metrics" ];
+              from = "the metrics.enabled option";
+              fix = "Remove it from extraArgs and set metrics.enabled instead.";
+            }
+            {
+              names = [
+                "--secure-port"
+                "--bind-address"
+              ];
+              reason = metricsServer;
+            }
+          ];
+        } config.extraArgs;
       in
       {
         serviceAccount = scope.mkResource {
@@ -292,24 +313,12 @@ in
           inherit name;
         };
 
-        # A KubernetesMetrics provider makes the descheduler read
-        # metrics.k8s.io, which the cluster's metricsApi role must serve.
-        policyConfigMap =
-          builtins.seq
-            (
-              if config.policy.metricsProviders != [ ] then
-                scope.requireMetricsApi "policy.metricsProviders (KubernetesMetrics)"
-              else
-                null
-            )
-            (
-              scope.mkResource {
-                apiVersion = "v1";
-                kind = "ConfigMap";
-                name = "${name}-policy";
-                data."policy.yaml" = builtins.toJSON (policyLib.render config.policy);
-              }
-            );
+        policyConfigMap = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ConfigMap";
+          name = "${name}-policy";
+          data."policy.yaml" = builtins.toJSON (policyLib.render config.policy);
+        };
 
         policyMount = kix.mount.configMap self.policyConfigMap {
           mountPath = policyDir;

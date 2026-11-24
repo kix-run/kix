@@ -17,7 +17,7 @@ mod terminal;
 #[cfg(test)]
 mod tests;
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use kube::{
@@ -27,6 +27,7 @@ use kube::{
 };
 use serde_json::Value;
 use thiserror::Error;
+use tokio::time::Instant;
 
 use super::cancel::CancelToken;
 use super::discovery;

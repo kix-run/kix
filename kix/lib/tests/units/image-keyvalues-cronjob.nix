@@ -41,7 +41,7 @@ let
   # One workload of `kind` named `name`, built through the scope builder.
   workloadPackage =
     kind: name:
-    { kix, ... }:
+    { ... }:
     {
       meta.version = "test";
       build =
@@ -65,7 +65,6 @@ let
             if kind == "Job" then
               scope.mkJob {
                 inherit name;
-                annotations.${kix.keys.rerun} = kix.keyValues.rerunOnChange;
                 spec.template = podTemplate;
               }
             else
@@ -145,8 +144,8 @@ in
     )
     || throw "kix.options.image required form: given ${builtins.toJSON given}, partial ${builtins.toJSON partial}, option default ${builtins.toJSON optionDefault}";
 
-  # A package stamps the rerun annotation with kix.keyValues, and the
-  # cross-resource check for kix.run/rerun accepts the value.
+  # kix.keyValues names the rerun value that scope.mkJob writes, and the
+  # cross-resource check for kix.run/rerun accepts it.
   image-keyvalues-cronjob-keyvalues-rerun =
     let
       cluster = clusterWith "Job" "migrate";

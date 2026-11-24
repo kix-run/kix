@@ -23,12 +23,12 @@ use serde_json::Value;
 
 pub use ssa::{ApplyAction, ApplyError, ApplyPreview, namespaceless};
 pub(crate) use ssa::{
-    ApplyResult, Seg, apply_resource, ceded_fields, record_activation_on_skipped,
+    ApplyResult, Seg, apply_resource, ceded_fields, conflict_paths, record_activation_on_skipped,
 };
 #[cfg(test)]
 use ssa::{
-    conflict_paths, is_immutable_field_message, is_stored_version_message, merge_activation_set,
-    parse_path, without_ceded_conflicts,
+    is_immutable_field_message, is_stored_version_message, merge_activation_set, parse_path,
+    without_ceded_conflicts,
 };
 
 /// Return `true` if `manifest` is a `Job` with `kix.run/rerun: on-change`.

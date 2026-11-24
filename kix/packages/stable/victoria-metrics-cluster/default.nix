@@ -85,11 +85,10 @@ let
   inherit (import ../victoria-metrics-operator/operand-placement.nix { inherit lib kix; })
     operandPlacement
     ;
-  who = "victoria-metrics-cluster ${scope.namespaceName}/${name}";
 in
 {
   meta = {
-    version = lib.removePrefix "v" release;
+    version = release;
     description = "VictoriaMetrics cluster: vmstorage, vmselect and vminsert through a VMCluster CR";
     owner = "platform";
     defaultAliases = [
@@ -318,43 +317,55 @@ in
         # The VMCluster CR has no dedup field, so the interval travels as a
         # flag. `extraSpec` cannot reach it (kix.mergeGuarded below) and the
         # component `extraArgs` options may not set it.
-        dedupArgs = {
-          "dedup.minScrapeInterval" = config.scrapeInterval;
+        dedup = {
+          flags."dedup.minScrapeInterval" = config.scrapeInterval;
+          reason = "vmselect and vmstorage must use the same deduplication interval from scrapeInterval.";
+          fix = "Remove dedup.minScrapeInterval and set scrapeInterval instead.";
         };
         # The operator turns spec fields into component flags, and an
         # `extraArgs` key of the same name replaces the generated flag.
         # Each component refuses the flags behind its spec fields, and the
         # listen address of the two Services the package's out URLs name.
-        ownedByComponent =
-          let
-            dedup = {
-              "dedup.minScrapeInterval" =
-                "it follows scrapeInterval so that vmselect and vmstorage agree. Set scrapeInterval instead.";
-            };
-            specFields = {
-              retentionPeriod = "the operator sets it from the retentionPeriod option. Set retentionPeriod instead.";
-              replicationFactor = "it follows the replicationFactor option, which defaults from the availability level, so that vminsert, vmselect, and vmstorage agree. Set replicationFactor instead.";
-            };
-          in
+        specFields = [
           {
-            vmstorage = dedup // specFields;
-            vmselect =
-              dedup
-              // specFields
-              // {
-                httpListenAddr = "the Service and out.serviceUrl use port 8481. Remove it.";
-              };
-            vminsert = specFields // {
-              httpListenAddr = "the Service, out.remoteWriteUrl, and out.insertBaseUrl use port 8480. Remove it.";
-            };
-          };
+            names = [ "retentionPeriod" ];
+            from = "the retentionPeriod option";
+            fix = "Remove retentionPeriod and set the retentionPeriod option instead.";
+          }
+          {
+            names = [ "replicationFactor" ];
+            reason = "vminsert, vmselect, and vmstorage must share the same replicationFactor.";
+            fix = "Remove replicationFactor and set the replicationFactor option instead.";
+          }
+        ];
+        ownedByComponent = {
+          vmstorage = [ dedup ] ++ specFields;
+          vmselect = [
+            dedup
+          ]
+          ++ specFields
+          ++ [
+            {
+              names = [ "httpListenAddr" ];
+              reason = "the vmselect Service and query URL (out.serviceUrl) use port 8481.";
+            }
+          ];
+          vminsert = specFields ++ [
+            {
+              names = [ "httpListenAddr" ];
+              reason = "the vminsert Service and remote-write URLs (out.remoteWriteUrl and out.insertBaseUrl) use port 8480.";
+            }
+          ];
+        };
+        # vminsert, vmselect, and vmstorage parse flags with Go's flag
+        # package (lib/envflag upstream).
         componentArgs =
           component:
-          lib.optionalAttrs (component != "vminsert") dedupArgs
-          // kix.guardArgs {
-            inherit who;
+          kix.mergeArgs {
+            inherit scope;
+            parser = "go";
             option = "${component}.extraArgs";
-            owned = ownedByComponent.${component};
+            args = ownedByComponent.${component};
           } config.${component}.extraArgs;
 
         # Explicit option > storageClasses dep > cluster default class.
@@ -379,7 +390,6 @@ in
             storage.volumeClaimTemplate.spec =
               if config.vmstorage.storage ? storageClassName then
                 scope.fail {
-                  package = "victoria-metrics-cluster";
                   option = "vmstorage.storage.storageClassName";
                   message = "vmstorage.storage sets storageClassName, which the package derives from vmstorage.storageClassName, the storageClasses dependency, or the cluster default.";
                   fix = "Set vmstorage.storageClassName instead.";
@@ -409,7 +419,7 @@ in
         };
 
         spec = kix.mergeGuarded {
-          inherit who;
+          inherit scope;
           # Everything here is computed (the storage class from the
           # dep, the dedup flag) or has an option of its own.
           locked = [
@@ -451,7 +461,6 @@ in
             443
           else if m == null then
             scope.fail {
-              package = "victoria-metrics-cluster";
               option = "extraSpec.vmstorage.vmBackup.customS3Endpoint";
               message = "extraSpec.vmstorage.vmBackup.customS3Endpoint \"${endpoint}\" is not an http or https URL, so the package cannot tell which port vmbackupmanager reaches.";
               fix = "Write it as https://<host>[:<port>].";
@@ -593,7 +602,7 @@ in
             remoteWriteUrl = "http://${self.insertService.out.fqdn}:8480/insert/0/prometheus/api/v1/write";
             insertBaseUrl = "http://${self.insertService.out.fqdn}:8480/insert/0/prometheus";
             inherit (config) scrapeInterval;
-            version = kix.image.version { tag = config.clusterVersion; };
+            version = kix.version.ofTag config.clusterVersion;
             # Operand images are reconciled by the operator, not in any
             # Kix-generated pod spec.
             extraImages = [

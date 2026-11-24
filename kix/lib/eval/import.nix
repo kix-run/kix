@@ -4,13 +4,14 @@
   rbac,
   kixlib,
   helpers,
+  mkScope,
   evaluateInstanceConfig,
   buildEntriesOf,
   discoverBuildDeps,
 }:
 
 let
-  inherit (import ../core/error.nix { inherit lib; }) fail;
+  inherit (import ../core/error.nix { inherit lib; }) fail failFor;
   meta = import ../meta.nix { inherit lib; };
   packageLib = import ../core/package.nix { inherit lib; };
   kixAnnotations = import ../core/annotations.nix;
@@ -184,8 +185,33 @@ rec {
           };
         };
 
-      scope = {
+      instance = "${namespaceName}/${instanceName}";
+
+      # Every name the package scope offers. The import scope implements
+      # some of them and refuses the rest with an error that names the
+      # import and the scope attribute.
+      packageScopeNames = builtins.attrNames (mkScope {
+        inherit
+          instanceName
+          namespaceName
+          namespaceResource
+          clusterDomain
+          ;
+      });
+      unsupported =
+        name:
+        fail {
+          inherit instance;
+          message = "The package in 'from' uses scope.${name}, which kix.mkImport does not support, so Kix cannot build this import from that package.";
+          fix =
+            "Remove 'from' and set 'out' directly:"
+            + "\n  kix.mkImport { out = { <field> = \"...\"; }; }"
+            + "\nIf this service provides CRDs already installed in the cluster, list them in kix.mkImport { crds = [ ... ]; }.";
+        };
+
+      scope = lib.genAttrs packageScopeNames unsupported // {
         inherit instanceName namespaceName selectorLabels;
+        fail = failFor { inherit instance; };
         labelStyle = "kix";
         namespace = namespaceResource;
         mkResource = mkRes namespaceResource;
@@ -294,6 +320,10 @@ rec {
     let
       importDef = instCfg.package;
 
+      # Report an error about this import, naming it in the record's
+      # `instance` field.
+      failHere = failFor { instance = "${namespaceName}/${instanceName}"; };
+
       derived =
         if importDef.from != null then
           let
@@ -312,8 +342,7 @@ rec {
             );
             mkDepProxy =
               depName:
-              fail {
-                instance = "${namespaceName}/${instanceName}";
+              failHere {
                 message = "kix.mkImport { from = ...; } tried to read dependency '${depName}' while deriving 'out' from the package. Imports represent external services and do not resolve package dependencies.";
                 fix =
                   "Set the output fields that depend on '${depName}' directly in instances.${namespaceName}.${instanceName}.package:"
@@ -373,22 +402,31 @@ rec {
               self:
               builtins.foldl' (
                 acc: fn:
-                helpers.mergeCollide
-                  "Import instance '${instanceName}': two build entries define the same part. Duplicated part"
-                  acc
-                  (callBuildFn self fn)
+                helpers.mergeCollide {
+                  fail = failHere;
+                  error = names: {
+                    message = "In the package passed to `mkImport.from`, multiple `build` entries define the same part (${names}).";
+                    fix = "Give each part in that package's `build` list a unique name.";
+                  };
+                } acc (callBuildFn self fn)
               ) { } (buildEntriesOf raw.build)
             );
 
             rawRoot =
-              parts.root or (fail "Import instance '${instanceName}': package build must define 'root'");
+              parts.root or (failHere {
+                message = "The package passed to `mkImport.from` does not define a `root` part in `build`, so Kix cannot derive `out` from it.";
+                fix = "Return a `root` part from that package's `build`, or remove `from` and set `out = { ... };` directly on `kix.mkImport`.";
+              });
             rootRes =
               if rawRoot ? resource then
                 rawRoot.resource
               else if rawRoot ? _type then
                 rawRoot
               else
-                fail "Import instance '${instanceName}': root must be a resource or { resource, requires }";
+                failHere {
+                  message = "In the package passed to `mkImport.from`, `build.root` is neither a Kix resource nor `{ resource = ...; ... }`, so Kix cannot derive `out` from it.";
+                  fix = "Set `root` in that package's `build` to a resource (such as `self.service`) or `{ resource = ...; out = { ... }; }`, or remove `from` and set `out` directly on `kix.mkImport`.";
+                };
           in
           {
             out = (rootRes.out or { }) // importDef.out;
@@ -430,7 +468,6 @@ rec {
         "usesAtLeast"
         "holdsData"
       ];
-      who = "Import instance '${namespaceName}/${instanceName}'";
       checkCrdEntry =
         entry:
         let
@@ -442,15 +479,18 @@ rec {
           ];
         in
         if !builtins.isAttrs entry then
-          fail "${who}: each mkImport crds entry is an attribute set of scope.mkCRDRef arguments; got ${builtins.typeOf entry}."
+          failHere {
+            message = "Each entry in `mkImport` `crds` must be an attribute set, but got ${builtins.typeOf entry}.";
+            fix = "Write each `crds` entry as `{ group = \"...\"; kind = \"...\"; plural = \"...\"; version = \"...\"; }`.";
+          }
         else if missing != [ ] then
-          fail {
-            message = "${who}: a mkImport crds entry is missing ${builtins.concatStringsSep ", " missing}.";
+          failHere {
+            message = "An entry in `mkImport` `crds` is missing required field(s): ${builtins.concatStringsSep ", " missing}.";
             fix = "Give group, kind, plural, and version as the CustomResourceDefinition declares them.";
           }
         else if unknown != [ ] then
-          fail {
-            message = "${who}: mkImport crds entry ${entry.group}/${entry.kind} has unknown keys ${builtins.concatStringsSep ", " unknown}. The environment installs an import's CRDs, so installedBy does not apply.";
+          failHere {
+            message = "Entry ${entry.group}/${entry.kind} in `mkImport` `crds` sets unsupported attribute(s): ${builtins.concatStringsSep ", " unknown} (`mkImport` represents CRDs already installed in the cluster, so `installedBy` is not supported).";
             fix = "Use only these keys: ${builtins.concatStringsSep ", " crdHandleArgs}.";
           }
         else
@@ -478,15 +518,18 @@ rec {
             if builtins.isList importDef.crds then
               map checkCrdEntry importDef.crds
             else
-              fail "${who}: mkImport crds is a list of scope.mkCRDRef argument sets; got ${builtins.typeOf importDef.crds}.";
+              failHere {
+                message = "`crds` on `kix.mkImport` must be a list of CRD attribute sets, but got ${builtins.typeOf importDef.crds}.";
+                fix = "Pass a list such as `crds = [ { group = \"...\"; kind = \"...\"; plural = \"...\"; version = \"...\"; } ];`.";
+              };
           kinds = map (e: e.kind) entries;
           repeated = lib.unique (builtins.filter (k: lib.count (x: x == k) kinds > 1) kinds);
         in
         if repeated == [ ] then
           entries
         else
-          fail {
-            message = "${who}: mkImport crds declares ${builtins.concatStringsSep ", " repeated} more than once. out.crds holds one handle per kind.";
+          failHere {
+            message = "`crds` on `kix.mkImport` lists kind ${builtins.concatStringsSep ", " repeated} more than once, and `out.crds` can only expose one CRD per kind.";
             fix = "Keep one entry for each kind.";
           };
       crdHandleList = map (entry: {
@@ -495,10 +538,13 @@ rec {
       }) crdEntries;
       crdHandles = builtins.foldl' (
         acc: h:
-        helpers.mergeCollide
-          "${who}: mkImport crds declares a kind the package's out.crds already has. Kind"
-          acc
-          { ${h.kind} = h.handle; }
+        helpers.mergeCollide {
+          fail = failHere;
+          error = names: {
+            message = "`crds` on `kix.mkImport` declares kind ${names}, which is already defined in `out.crds` (from `from` or `out`).";
+            fix = "Remove the ${names} entry from `crds` on this `kix.mkImport` if the definition in `out.crds` is sufficient, or omit `from` and declare the import's `out` and `crds` directly.";
+          };
+        } acc { ${h.kind} = h.handle; }
       ) (derived.out.crds or { }) crdHandleList;
 
       isRef = v: builtins.isAttrs v && (v._type or "") == "kix-ref";
@@ -514,15 +560,15 @@ rec {
           refText = "ref.${entry.namespace}.${entry.instanceName}";
         in
         if entry.namespace == namespaceName && entry.instanceName == instanceName then
-          fail {
-            message = "${who}: out.${path} names ${refText}, the import itself.";
+          failHere {
+            message = "out.${path} points to ${refText}, which is this import instance itself.";
             fix = "Point out.${path} at another instance, or remove it.";
           }
         else if isInstanceActive entry.namespace entry.instanceName then
           allInstances.${entry.namespace}.${entry.instanceName}
         else
-          fail {
-            message = "${who}: out.${path} names ${refText}, which is not an active instance. A ref in out does not activate an optional instance.";
+          failHere {
+            message = "out.${path} references ${refText}, which is either undeclared or inactive (`optional = true`). References inside an import's `out` do not activate optional instances.";
             fix = "Declare it under instances.${entry.namespace}.${entry.instanceName}, or set optional = false on it.";
           };
 
@@ -616,8 +662,8 @@ rec {
           if isInstanceActive entry.namespace entry.instanceName then
             allInstances.${entry.namespace}.${entry.instanceName}.root
           else
-            fail {
-              message = "${who}: extraDeps names ref.${entry.namespace}.${entry.instanceName}, an optional instance that is not active. Kix renders no marker for it, so the import's marker would wait for a resource that is never deployed. An extraDeps ref does not activate its target.";
+            failHere {
+              message = "extraDeps references ref.${entry.namespace}.${entry.instanceName}, which is an inactive optional instance (`optional = true`). References in `extraDeps` do not activate optional instances, so this import would wait at deploy time for an instance that Kix does not deploy.";
               fix = "Set optional = false on instances.${entry.namespace}.${entry.instanceName}, or remove the entry.";
             }
         else

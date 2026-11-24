@@ -15,9 +15,11 @@ on:
       - CLI tests
       - Copy pass
       - CRD vendoring check
+      - Docs site
       - Documentation captures
       - Library tests
       - Lint
+      - Package checks
     types: [completed]
   workflow_dispatch:
 

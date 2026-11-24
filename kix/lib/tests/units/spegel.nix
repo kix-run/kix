@@ -100,6 +100,26 @@ in
     };
   };
 
+  # With both facts unknown the instance warns about each, naming the
+  # cluster option to set. With both set right it does not warn.
+  spegel-unknown-node-facts-warn =
+    let
+      optionsWarned =
+        module:
+        map (w: w.clusterOption or null)
+          (cluster { inherit module; }).instances.spegel.spegel._diagnostics.warnings;
+      unknown = optionsWarned {
+        cluster.capabilities.multiNode = lib.mkForce null;
+        cluster.containerd.discardUnpackedLayers = lib.mkForce null;
+      };
+    in
+    (
+      builtins.elem "cluster.containerd.discardUnpackedLayers" unknown
+      && builtins.elem "cluster.capabilities.multiNode" unknown
+      && optionsWarned servable == [ ]
+    )
+    || throw "spegel node fact warnings: ${builtins.toJSON unknown}";
+
   # k3s and RKE2 leave registryMirror unknown, since their embedded
   # Spegel is off by default, and point the package at their containerd.
   # A cluster that turns the embedded mirror on binds the role exclusive,

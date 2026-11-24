@@ -99,7 +99,6 @@ let
   release = "v0.35.0";
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "alertmanager ${ns}/${name}";
 
   defaultSettings = import ../../stable/victoria-metrics-alert/alertmanager-default-settings.nix;
 
@@ -127,7 +126,7 @@ let
 in
 {
   meta = {
-    version = lib.removePrefix "v" release;
+    version = release;
     description = "Alertmanager: alert routing and deduplication";
     owner = "platform";
     defaultAliases = [ "alertmanager" ];
@@ -207,13 +206,12 @@ in
       configDep =
         if alertmanagerConfig != null && config.settings != null then
           scope.fail {
-            package = "alertmanager";
             message = "both settings and the alertmanagerConfig dependency are set, and each supplies the whole configuration file.";
             fix = "Remove one.";
           }
         else
           kix.contracts.secret.helpers.use {
-            inherit who;
+            inherit scope;
             arg = "alertmanagerConfig";
             dep = alertmanagerConfig;
             keys = [ "alertmanager.yaml" ];
@@ -268,7 +266,7 @@ in
       };
 
       spec = kix.mergeGuarded {
-        inherit who;
+        inherit scope;
         locked = [
           [ "image" ]
           [ "version" ]

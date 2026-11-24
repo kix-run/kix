@@ -172,7 +172,6 @@
 let
   release = "26.8.2";
   name = scope.instanceName;
-  who = "keycloak ${scope.namespaceName}/${name}";
 
   # Covers the build step that `start` runs on every boot and the first
   # start's schema creation.
@@ -211,7 +210,7 @@ in
     };
   };
 
-  deps.database.assertions = dep: kix.contracts.postgresDatabase.assertions who dep;
+  deps.database.assertions = kix.contracts.postgresDatabase.assertions;
 
   options = {
     image = kix.options.image {
@@ -261,7 +260,7 @@ in
         # Keycloak keeps each realm's mail settings, sender and login
         # included, in the realm. The dependency only opens the network
         # path to the server.
-        relay = kix.contracts.smtp.helpers.server { inherit who smtp; };
+        relay = kix.contracts.smtp.helpers.server { inherit scope smtp; };
         # Only `metrics.enabled` decides KC_METRICS_ENABLED. Wiring a
         # prometheus dependency changes the Service and the ServiceMonitor
         # but not the pod template, so it does not restart Keycloak.
@@ -276,7 +275,7 @@ in
         scraped = metricsOn && prometheus != null;
 
         admin = kix.contracts.secret.helpers.use {
-          inherit who;
+          inherit scope;
           arg = "bootstrapAdmin";
           dep = bootstrapAdmin;
           keys = [
@@ -294,7 +293,6 @@ in
               lib.removeSuffix "/" config.env.KC_HOSTNAME
             else
               scope.fail {
-                package = "keycloak";
                 option = "env.KC_HOSTNAME";
                 message = "env.KC_HOSTNAME must be a URL with a scheme, such as \"https://auth.example.com\"; got ${builtins.toJSON config.env.KC_HOSTNAME}. Keycloak builds its issuer URLs from it.";
               }
@@ -302,7 +300,6 @@ in
             self.exposure.urlOrNull
           else
             scope.fail {
-              package = "keycloak";
               message = "Keycloak needs its public URL, and nothing routes to this instance.";
               fix = "Set ingress.host (or cluster.domain) with an ingress controller or a gateway in the cluster, or set env.KC_HOSTNAME to the URL clients reach, such as \"https://auth.example.com\".";
             };
@@ -359,7 +356,6 @@ in
               "KC_HTTP_MANAGEMENT_HEALTH_ENABLED"
             ];
             from = "the package, so the Service, the probes, the route, and out.issuerUrl match the container";
-            fix = "Remove it from env.";
           }
           {
             vars = {
@@ -382,7 +378,6 @@ in
               "KC_CACHE_CONFIG_FILE"
             ];
             from = "the package, which clusters the replicas through the database (jdbc-ping) on the ports its <instance>-jgroups policy opens";
-            fix = "Remove it from env.";
           }
           {
             vars = lib.optionalAttrs metricsOn { KC_METRICS_ENABLED = "true"; };
@@ -398,7 +393,7 @@ in
 
         env = kix.mkEnvVars (
           kix.mergeEnv {
-            inherit who;
+            inherit scope;
             owned = ownedGroups;
           } config.env
           // {
@@ -406,24 +401,31 @@ in
           }
         );
 
-        ownedFlags = lib.foldl' (
-          acc: g:
-          acc
-          // lib.genAttrs (map flagOf (builtins.attrNames (g.vars or { }) ++ g.names or [ ])) (
-            _: "it comes from ${g.from}. Remove it from extraArgs."
-          )
-        ) { } ownedGroups;
+        # kc.sh reads an option as a flag or as its KC_ variable, so each
+        # owned variable's flag is refused too. Keycloak parses flags with
+        # picocli, which reads an option only in its `--name` form
+        # (ConfigArgsConfigSource.java upstream).
+        ownedFlags = map (g: {
+          names = map flagOf (builtins.attrNames (g.vars or { }) ++ g.names or [ ]);
+          inherit (g) from;
+        }) ownedGroups;
 
-        args = [
-          "start"
-        ]
-        ++ kix.guardArgs {
-          inherit who;
-          owned = ownedFlags // {
-            "--optimized" =
-              "Keycloak must run its build step at start, because the stock image is built for other build-time options. Remove it from extraArgs.";
-            "--hostname" = "it comes from the route. Set env.KC_HOSTNAME instead.";
-          };
+        args = kix.mergeArgs {
+          inherit scope;
+          parser = "gnu";
+          args = [
+            "start"
+            {
+              names = [ "--optimized" ];
+              reason = "Keycloak must run its build step at startup so its database, health, and metrics settings take effect.";
+            }
+            {
+              names = [ "--hostname" ];
+              from = "the instance's Ingress or Gateway route (or env.KC_HOSTNAME)";
+              fix = "Remove it from extraArgs, and set ingress.host (or cluster.domain) or env.KC_HOSTNAME instead.";
+            }
+          ]
+          ++ ownedFlags;
         } config.extraArgs;
 
         realmPath =
@@ -432,7 +434,6 @@ in
             "/realms/${realm}"
           else
             scope.fail {
-              package = "keycloak";
               message = "${field} takes a realm name without '/', '?', '#', or spaces; got ${builtins.toJSON realm}.";
             };
 
@@ -588,7 +589,7 @@ in
         root = {
           resource = self.service;
           requires = builtins.filter (p: p != null) [ self.peers ];
-          out = kix.contracts.experimental.oidcProvider.check who {
+          out = kix.contracts.experimental.oidcProvider.check scope {
             version = kix.image.version config.image;
             url = hostname;
             issuerUrl = realm: "${hostname}${realmPath "out.issuerUrl" realm}";

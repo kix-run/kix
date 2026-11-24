@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use serde_json::json;
 
 use kix::build_source::{Build, CarriedBuild, Provenance};
+use kix::eval::library_record::LibraryRecord;
 use kix::eval::stamp::stamp_annotations;
 use kix::eval::store_graph::{StoreGraph, store_hash};
 use kix::text::printable;
@@ -118,6 +119,11 @@ impl CarriedBuild for BundleSource {
         made.source
             .insert("bundle".to_string(), json!({ "kixRev": header.kix_rev }));
         made
+    }
+
+    /// Return the warnings recorded in the bundle header.
+    fn warnings(&self) -> Vec<LibraryRecord> {
+        self.bundle.header().warnings.clone()
     }
 
     /// Read and verify the `--deployed-bundle` file on each call so only one

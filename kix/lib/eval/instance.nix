@@ -17,13 +17,12 @@ let
   kixAnnotations = import ../core/annotations.nix;
   kixKeys = kixAnnotations.keys;
   inherit (k8s) mkPackageInstance;
-  inherit (helpers) collectTypedAttrs;
+  inherit (helpers) collectTypedAttrs knownFolders;
   inherit (scope) mkScope;
   inherit (view) mkPackageView;
   inherit (resolve)
     resolveArg
     targetsOf
-    describeRequester
     evaluateInstanceConfig
     callPackagePhase1
     buildEntriesOf
@@ -88,6 +87,7 @@ in
             value = peekedPackageMeta.availability or null;
             inherit where;
           };
+          ceilingReason = availabilityLib.ceilingReasonOfMeta (peekedPackageMeta.availability or null);
           inherit where;
         };
 
@@ -100,21 +100,29 @@ in
             };
         };
 
-        requester = describeRequester namespaceName instanceName instCfg;
+        requester = "${namespaceName}/${instanceName}";
+        addedFor = instCfg._autoInstantiatedFor or [ ];
 
         _dnsResolution = resolveArg {
           argName = "dns";
-          inherit resolutionIndex requester;
+          inherit resolutionIndex requester addedFor;
           requesterName = instanceName;
           requesterNamespace = namespaceName;
           hasDefault = true;
           explicitOverride = null;
         };
+        # Return whether this instance answers `dns` itself. The resolver
+        # never binds an instance to itself, so the DNS provider finds no
+        # other provider and still counts as DNS for the cluster.
+        _answersDns = builtins.any (c: c.namespace == namespaceName && c.instName == instanceName) (
+          resolutionIndex.byKey.dns or [ ]
+        );
         # Missing DNS prevents Kix from ordering workloads after a DNS provider.
         # The cluster reports it once as a warning. An inactive optional
         # instance answering `dns`, such as a flavour's platform-dns import,
         # declares DNS without ordering on it.
-        _dnsMissing = !_dnsResolution.found && !((clusterCtx.inactiveOptionalKeys or { }) ? dns);
+        _dnsMissing =
+          !_dnsResolution.found && !_answersDns && !((clusterCtx.inactiveOptionalKeys or { }) ? dns);
         _dnsRoot =
           if !_dnsResolution.found || (_dnsResolution.direct or false) then
             null
@@ -122,11 +130,9 @@ in
             let
               dnsInst = allInstances.${_dnsResolution.namespace}.${_dnsResolution.instanceName};
             in
-            if _dnsResolution.namespace == namespaceName && _dnsResolution.instanceName == instanceName then
-              null
             # Depend on the provider's root resource rather than its PackageInstance (`dnsInst.root`).
             # Import instances have no parts, so their marker in `root` is the only resource to depend on.
-            else if dnsInst ? raw then
+            if dnsInst ? raw then
               dnsInst.raw.root.resource or dnsInst.raw.root
             else if dnsInst ? root then
               dnsInst.root
@@ -183,6 +189,7 @@ in
             availability
             ;
           networkPolicyEnforcer = _networkPolicyEnforcer;
+          packageId = packageLib.idOf instCfg.package;
           namespaces = nsResources;
           labelStyle = instCfg.labelStyle;
           selectorLabelsOverride = instCfg.selectorLabels;
@@ -213,7 +220,7 @@ in
           instance = where;
         };
 
-        packageMeta = raw.meta or { };
+        packageMeta = packageLib.metaFrom raw;
 
         discoveredDeps = discoverBuildDeps raw.build;
         depsEnrichment = raw.deps or { };
@@ -226,6 +233,7 @@ in
             resolutionIndex
             allInstances
             requester
+            addedFor
             depsEnrichment
             ;
           requesterName = instanceName;
@@ -236,7 +244,12 @@ in
         resolutions = lib.mapAttrs (
           argName: depSpec:
           resolveArg {
-            inherit argName resolutionIndex requester;
+            inherit
+              argName
+              resolutionIndex
+              requester
+              addedFor
+              ;
             explicitOverride = deps.${argName} or null;
             requesterName = instanceName;
             requesterNamespace = namespaceName;
@@ -324,10 +337,13 @@ in
             # partsOverlays use `//` so they can replace existing parts.
             merged = builtins.foldl' (
               acc: fn:
-              helpers.mergeCollide
-                "${namespaceName}/${instanceName}: two build entries define the same part, and the later one would silently replace the earlier. Rename one of them (kix.expose takes partName and exposurePart; kix.monitor takes monitorPart and rulesPart), or use partsOverlays to replace a part on purpose. Duplicated part"
-                acc
-                (callBuildFn self fn)
+              helpers.mergeCollide {
+                inherit (scope') fail;
+                error = names: {
+                  message = "Multiple `build` entries define the same part (${names}), and Kix does not allow one `build` entry to overwrite another.";
+                  fix = "Give each part a unique name (for example, set `partName` or `exposurePart` on `kix.expose`, or `monitorPart` or `rulesPart` on `kix.monitor`), or use `partsOverlays` on the instance to modify an existing part.";
+                };
+              } acc (callBuildFn self fn)
             ) { } rawBuildEntries;
           in
           if boundOverlays != [ ] then
@@ -395,11 +411,15 @@ in
           r: r._injectedResources or [ ]
         ) _partResourcesFromParts;
 
-        # Collect the warnings the builders attached to the instance's
-        # resources (`_warnings`, `scope/builders.nix`). A resource that two
-        # parts name gives its warnings once.
+        # Collect the warnings attached to every resource the instance ships
+        # (`_warnings`, `core/resource.nix` and `scope/builders.nix`): its
+        # parts, the resources workload interceptors inject, and the
+        # resources instance processors return. A resource that two parts
+        # name gives its warnings once.
         _resourceWarnings = lib.unique (
-          builtins.concatMap (r: r._warnings or [ ]) (_partResourcesFromParts ++ _scopeInjectedResources)
+          builtins.concatMap (r: r._warnings or [ ]) (
+            _partResourcesFromParts ++ _scopeInjectedResources ++ processorResources
+          )
         );
 
         # collectTypedAttrs excludes root, so the root resource must also be
@@ -451,7 +471,10 @@ in
           manifestDeps ++ requiresDeps ++ extraDepsDeps;
 
         forwardRoots = [ rootRes ] ++ packageRequires ++ postHooks;
-        forwardClosure =
+
+        # Return `roots` and every resource they reach through `getForwardDeps`.
+        closureOf =
+          roots:
           let
             go =
               {
@@ -484,8 +507,10 @@ in
           go {
             seen = { };
             result = [ ];
-            queue = forwardRoots;
+            queue = roots;
           };
+
+        forwardClosure = closureOf forwardRoots;
 
         forwardPaths = builtins.listToAttrs (
           map (r: {
@@ -792,18 +817,18 @@ in
           r: !(builtins.hasAttr (builtins.unsafeDiscardStringContext r.outPath) reachablePaths)
         ) allPartResources;
 
+        # A post-hook runs after the package only when it reaches root or a
+        # `root.requires` entry through its own dependencies.
         postHookWarnings =
           let
-            nonPostHookForwardPaths = builtins.removeAttrs forwardPaths (
-              map (r: builtins.unsafeDiscardStringContext r.outPath) postHooks
-            );
+            plainPath = r: builtins.unsafeDiscardStringContext r.outPath;
+            mainRootPaths = map plainPath ([ rootRes ] ++ packageRequires);
             hookMissingDep =
               hook:
               let
-                deps = getForwardDeps hook;
-                depPaths = map (d: builtins.unsafeDiscardStringContext d.outPath) deps;
+                reached = map plainPath (closureOf (getForwardDeps hook));
               in
-              !(builtins.any (p: builtins.hasAttr p nonPostHookForwardPaths) depPaths);
+              !(builtins.any (p: builtins.elem p reached) mainRootPaths);
           in
           builtins.filter hookMissingDep postHooks;
 
@@ -815,6 +840,7 @@ in
             resolvedDepMeta
             depsEnrichment
             resolvedDeps
+            clusterConfig
             ;
         };
         packageResult = {
@@ -858,9 +884,28 @@ in
             ) postHookWarnings)
             processorWarnings
             _resourceWarnings
+            folderContentWarnings
           ];
 
+        # A known folder (`secrets`, `crds`) renders only resources, so the
+        # build leaves out any other typed value in it.
+        folderContentWarnings = builtins.concatMap (
+          folderName:
+          let
+            contents = parts.${folderName} or null;
+            expected = knownFolders.${folderName}.expectedTypes;
+          in
+          if builtins.isAttrs contents && !(contents ? _type) then
+            map (v: {
+              message = "The '${folderName}' set in `build` contains a value with _type '${v._type}', which is not a resource. Kix left this value out of the build because '${folderName}' only holds resources.";
+              fix = "Create a resource with a `scope.mk*` builder (such as `scope.mkSecret` or `scope.mkCRD`), or move this value outside '${folderName}' in `build`.";
+            }) (builtins.filter (v: !(builtins.elem v._type expected)) (collectTypedAttrs { } contents))
+          else
+            [ ]
+        ) (builtins.attrNames knownFolders);
+
         diagnostics = meta.combineDiagnostics {
+          packageId = packageLib.idOf instCfg.package;
           inherit
             instanceName
             namespaceName
@@ -874,35 +919,34 @@ in
       in
       builtins.seq _dnsMissing (
         builtins.seq diagnostics.evaluateWarnings (
-          builtins.seq diagnostics.emitAssertionWarnings (
-            let
-              view' = mkPackageView {
-                inherit
-                  parts
-                  instanceName
-                  namespaceName
-                  packageMeta
-                  packageInstance
-                  evaluatedConfig
-                  ;
-                version = instanceVersion;
-                rootOut = (rootRes.out or { }) // packageOut;
-                aliases = if (instCfg.aliases or null) == null then [ ] else instCfg.aliases;
-              };
-            in
-            view'
-            // {
-              _depLinks = directDepLinks;
-              _hookResources = _scopeInjectedResources ++ processorResources;
-              _scorecardFindings = scorecardFindings;
-              inherit _dnsMissing;
-              _diagnostics = {
-                warnings = diagnostics.allWarnings;
-                assertions = diagnostics.allAssertions;
-                inherit (diagnostics) failedAssertions;
-              };
-            }
-          )
+          let
+            view' = mkPackageView {
+              inherit (scope') fail;
+              inherit
+                parts
+                instanceName
+                namespaceName
+                packageMeta
+                packageInstance
+                evaluatedConfig
+                ;
+              version = instanceVersion;
+              rootOut = (rootRes.out or { }) // packageOut;
+              aliases = if (instCfg.aliases or null) == null then [ ] else instCfg.aliases;
+            };
+          in
+          view'
+          // {
+            _depLinks = directDepLinks;
+            _hookResources = _scopeInjectedResources ++ processorResources;
+            _scorecardFindings = scorecardFindings;
+            inherit _dnsMissing;
+            _diagnostics = {
+              warnings = diagnostics.allWarnings;
+              assertions = diagnostics.allAssertions;
+              inherit (diagnostics) failedAssertions;
+            };
+          }
         )
       );
 }

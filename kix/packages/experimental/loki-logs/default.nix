@@ -43,7 +43,6 @@
 }:
 let
   name = scope.instanceName;
-  who = "loki-logs ${scope.namespaceName}/${name}";
   vectorAgent = import ../clickhouse-logs/vector-agent.nix { inherit lib kix; };
 in
 {
@@ -98,7 +97,6 @@ in
       let
         lokiUrl =
           loki.out.serviceUrl or (scope.fail {
-            package = "loki-logs";
             message = "deps.loki resolved to an instance with no out.serviceUrl (the base URL of Loki's HTTP API), so the agent has nowhere to push.";
             fix = "Point deps.loki at a loki instance.";
           });
@@ -131,7 +129,7 @@ in
         };
 
         mergedSettings = vectorAgent.mergeConfig {
-          inherit who;
+          inherit scope;
           sink = "loki";
         } builtinSettings config.settings;
       in
@@ -165,7 +163,6 @@ in
                   vectorAgent.podSpec {
                     inherit
                       scope
-                      who
                       name
                       config
                       self

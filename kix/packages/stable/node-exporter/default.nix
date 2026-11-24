@@ -44,13 +44,12 @@ let
   release = "v1.12.1";
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "node-exporter ${ns}/${name}";
   port = 9100;
   textfileDirectory = "/var/lib/node_exporter/textfile_collector";
 in
 {
   meta = {
-    version = lib.removePrefix "v" release;
+    version = release;
     description = "Prometheus Node Exporter: host-level metrics";
     owner = "platform";
     defaultAliases = [ "nodeExporter" ];
@@ -104,27 +103,48 @@ in
     (
       { self, config, ... }:
       let
-        setsFlag = flag: lib.any (arg: arg == flag || lib.hasPrefix "${flag}=" arg) config.extraArgs;
-
-        # Filesystems and mount points that are not host storage. Dropped
-        # when extraArgs sets the same flag, so that it replaces the value.
-        filesystemExcludes = lib.filterAttrs (flag: _: !setsFlag flag) {
-          "--collector.filesystem.fs-types-exclude" =
-            "^(autofs|binfmt_misc|bpf|cgroup2?|configfs|debugfs|devpts|devtmpfs|fusectl|hugetlbfs|iso9660|mqueue|nsfs|overlay|proc|procfs|pstore|rpc_pipefs|securityfs|selinuxfs|squashfs|sysfs|tracefs)$";
-          "--collector.filesystem.mount-points-exclude" =
-            "^/(dev|proc|sys|var/lib/docker/.+|var/lib/kubelet/.+)($|/)";
-        };
-
-        ownedArgs = kix.guardArgs {
-          inherit who;
-          owned = {
-            "--web.listen-address" = "the probes and the Service use port ${toString port}; remove it.";
-            "--path.sysfs" = "the package mounts the host's /sys at /host/sys; remove it.";
-            "--path.rootfs" = "the package mounts the host's / at /host/root; remove it.";
-            "--path.procfs" = "the package mounts the host's /proc at /host/proc; remove it.";
-            "--collector.textfile.directory" =
-              "the package mounts the textfile directory when textfileCollector.enabled is on; remove it.";
-          };
+        # node_exporter parses flags with kingpin (node_exporter.go
+        # upstream).
+        args = kix.mergeArgs {
+          inherit scope;
+          parser = "gnu";
+          args = [
+            {
+              flags = [ "--web.listen-address=:${toString port}" ];
+              reason = "the probes and the Service use port ${toString port}.";
+            }
+            {
+              flags = [ "--path.sysfs=/host/sys" ];
+              reason = "the package mounts the host's /sys at /host/sys.";
+            }
+            {
+              flags = [ "--path.rootfs=/host/root" ];
+              reason = "the package mounts the host's / at /host/root.";
+            }
+            {
+              flags = [ "--path.procfs=/host/proc" ];
+              reason = "the package mounts the host's /proc at /host/proc.";
+            }
+            # Filesystems and mount points that are not host storage.
+            # extraArgs replaces either value by setting the same flag.
+            {
+              defaults = [
+                "--collector.filesystem.fs-types-exclude=^(autofs|binfmt_misc|bpf|cgroup2?|configfs|debugfs|devpts|devtmpfs|fusectl|hugetlbfs|iso9660|mqueue|nsfs|overlay|proc|procfs|pstore|rpc_pipefs|securityfs|selinuxfs|squashfs|sysfs|tracefs)$"
+                "--collector.filesystem.mount-points-exclude=^/(dev|proc|sys|var/lib/docker/.+|var/lib/kubelet/.+)($|/)"
+              ];
+            }
+          ];
+          # Keep this flag behind extraArgs. Moving it changes the pod
+          # template of an instance that sets extraArgs, which restarts the
+          # exporter on every node when a cluster upgrades Kix.
+          after = [
+            {
+              flags = lib.optional config.textfileCollector.enabled "--collector.textfile.directory=${textfileDirectory}";
+              names = [ "--collector.textfile.directory" ];
+              from = "the textfileCollector.enabled option (mounted at ${textfileDirectory} when enabled)";
+              fix = "Remove it from extraArgs and set textfileCollector.enabled instead.";
+            }
+          ];
         } config.extraArgs;
 
         hostMount = mountName: hostPath: {
@@ -186,15 +206,7 @@ in
                   name = "node-exporter";
                   image = kix.image.ref config.image;
                   imagePullPolicy = config.image.pullPolicy;
-                  args = [
-                    "--web.listen-address=:${toString port}"
-                    "--path.sysfs=/host/sys"
-                    "--path.rootfs=/host/root"
-                    "--path.procfs=/host/proc"
-                  ]
-                  ++ lib.mapAttrsToList (flag: value: "${flag}=${value}") filesystemExcludes
-                  ++ ownedArgs
-                  ++ lib.optional config.textfileCollector.enabled "--collector.textfile.directory=${textfileDirectory}";
+                  inherit args;
                   ports = [ (kix.port "metrics" port) ];
                   resources = config.resources;
                   securityContext = {

@@ -161,7 +161,6 @@ let
   inherit (c)
     release
     tag
-    who
     svc
     alerts
     ;
@@ -231,9 +230,9 @@ in
     ];
   };
 
-  deps.database.assertions = dep: kix.contracts.postgresDatabase.assertions who dep;
+  deps.database.assertions = kix.contracts.postgresDatabase.assertions;
   deps.redis = {
-    assertions = dep: kix.contracts.redis.assertions who dep;
+    assertions = kix.contracts.redis.assertions;
     renamedFrom = kix.contracts.redis.helpers.renamedFrom;
   };
 

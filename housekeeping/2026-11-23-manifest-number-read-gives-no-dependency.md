@@ -1,0 +1,3 @@
+# 2026-11-23 · `kix/lib/core/resource.nix` · A package that reads a number or a boolean from another resource's `.manifest` gets no dependency on it, and nothing reports that.
+
+`attachCtxDeep` attaches the resource's string context to every string in `.manifest`. A number or a boolean cannot carry string context, so a package that reads `other.manifest.spec.replicas` builds a resource that Kix does not order after `other`. Kix used to print a trace for each such read, which no command showed and which made most of the library tests' 19,037 trace lines, so it was removed. Only `docs/src/content/docs/reference/resources-and-out.mdx` now states the rule. A fix could give `.manifest` no numbers at all, or report such reads as warnings on the reading instance.

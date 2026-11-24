@@ -40,6 +40,9 @@ rec {
       # `namespaceName` and keeps this, so a resource built into another
       # namespace still records this instance as its builder.
       homeNamespaceName ? namespaceName,
+      # Id of the package the instance runs (`core/package.nix`, `idOf`),
+      # or null for a package outside Kix's own set.
+      packageId ? null,
       namespaces ? { },
       clusterLabels ? { },
       labelStyle ? "kix",
@@ -96,6 +99,7 @@ rec {
         inherit
           instanceName
           namespaceName
+          packageId
           capabilities
           roleStatus
           ;
@@ -161,11 +165,16 @@ rec {
         mkResource = scopeMkResource;
 
         # Stop evaluation with an error for a person to fix, naming this
-        # instance (`core/error.nix`). Takes what `kix.fail` takes.
-        fail = errors.failFor "${homeNamespaceName}/${instanceName}";
+        # instance and its package (`core/error.nix`). Takes what `kix.fail`
+        # takes.
+        fail = errors.failFor {
+          instance = "${homeNamespaceName}/${instanceName}";
+          package = packageId;
+        };
 
-        # Verify that the cluster serves `metrics.k8s.io` for `subject`. Packages
-        # whose workloads read the metrics API without an HPA call this directly.
+        # Check that the cluster serves `metrics.k8s.io` for `subject`, and
+        # return a list of warnings. A package whose workloads read the
+        # metrics API without an HPA returns the list from its `warnings`.
         requireMetricsApi = validators.requireMetricsApi;
 
         # Hook emission facade passed to hooks as `ctx.emit`. Not part of the
@@ -232,13 +241,16 @@ rec {
           nsName:
           let
             nsRes =
-              namespaces.${nsName}
-                or (errors.fail "scope.forNamespace: namespace '${nsName}' does not exist in the cluster");
+              namespaces.${nsName} or (scopeObj.fail {
+                message = "scope.forNamespace requested namespace '${nsName}', which does not exist in this cluster. Declared namespaces: ${builtins.concatStringsSep ", " (builtins.attrNames namespaces)}.";
+                fix = "Check this instance's config for a misspelled namespace name, or declare the namespace in the cluster definition:\n  namespaces.${nsName} = { };";
+              });
           in
           mkScope {
             inherit
               instanceName
               homeNamespaceName
+              packageId
               namespaces
               clusterLabels
               labelStyle

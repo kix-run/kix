@@ -1,0 +1,3 @@
+# 2026-11-24 · `kix/packages/experimental` · Nothing records when the `id` lines come off six `kix.mergeArgs` calls.
+
+`id = "K8006"` is set in `arc/default.nix`, `prometheus-operator/operator.nix`, `snapshot-controller/default.nix`, and `spegel/default.nix`. `id = "K4740"` is set in `tempo/default.nix` and `infisical-operator/default.nix`. The id prints on every refusal from the call, including the `--` forms these packages always refused. The rule keeps a refusal's id for at least one minor release. After that the id misleads a user, because it points at a record about one-dash spellings. No file, test, or release step says which release removes the six lines.

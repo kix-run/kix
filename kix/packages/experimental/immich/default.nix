@@ -117,7 +117,6 @@
 
 let
   name = scope.instanceName;
-  who = "immich ${scope.namespaceName}/${name}";
   release = import ./release.nix;
   owner = "app-team";
 
@@ -147,7 +146,6 @@ let
   depOut =
     depName: dep: field:
     dep.out.${field} or (scope.fail {
-      package = "immich";
       message = "deps.${depName} publishes no out.${field}.";
       fix = "An import standing in for it sets ${importFields.${depName}}.";
     });
@@ -198,7 +196,7 @@ in
         published = map extensionName (dep.out.extensions or [ ]);
         missing = builtins.filter (e: !(builtins.elem e published)) (map extensionName requiredExtensions);
       in
-      kix.contracts.postgresDatabase.assertions who dep
+      kix.contracts.postgresDatabase.assertions dep
       ++ lib.optional (dep.out ? extensions && missing != [ ]) {
         assertion = false;
         message = "the database needs the postgres extensions ${
@@ -207,7 +205,7 @@ in
       };
 
     redis = {
-      assertions = dep: kix.contracts.redis.assertions who dep;
+      assertions = kix.contracts.redis.assertions;
       renamedFrom = kix.contracts.redis.helpers.renamedFrom;
     };
 
@@ -327,7 +325,7 @@ in
         hasMetrics = config.metrics.enabled && prometheus != null;
 
         oidcProviderInfo = kix.contracts.oidc.helpers.client {
-          inherit who oidc;
+          inherit scope oidc;
           options = config.oidc;
         };
         oidcOn = oidcProviderInfo != null;
@@ -341,7 +339,7 @@ in
           };
         };
         relay = kix.contracts.smtp.helpers.settings {
-          inherit who smtp;
+          inherit scope smtp;
           inherit (config.mail) from;
         };
         mailLogin = relay != null && relay.credentials != null;
@@ -351,7 +349,6 @@ in
         relayCheck =
           if mailLogin && relay.tls == "starttls" then
             scope.fail {
-              package = "immich";
               message = "deps.smtp uses tls = \"starttls\" with credentials. Immich's mailer (nodemailer) sends the password without TLS when the server does not offer STARTTLS, so it would leak to anyone who can strip STARTTLS on the way.";
               fix = "Use the server's implicit TLS port: tls = \"implicit\" and port = \"465\" on the SMTP instance.";
             }
@@ -399,7 +396,6 @@ in
         mlUrl =
           if mlVersion != null && serverVersion != null && mlVersion != serverVersion then
             scope.fail {
-              package = "immich";
               option = "image.tag";
               message = "immich-server runs release ${serverVersion} (image.tag ${imageTag}) but its machineLearning dependency runs ${mlVersion}. Immich publishes both images under one tag.";
               fix = "Set image.tag to the same release on both instances.";
@@ -421,7 +417,7 @@ in
         # ignores the other REDIS_* variables, so the password goes into that
         # JSON. The container builds REDIS_URL from REDIS_SENTINEL_OPTIONS and
         # REDIS_PASSWORD at start, which keeps the password in its Secret.
-        redisServer = kix.contracts.redis.helpers.requirePlaintext who redis;
+        redisServer = kix.contracts.redis.helpers.requirePlaintext scope redis;
         useSentinel = kix.contracts.redis.helpers.usesSentinel redisServer;
         sentinelStart = ''
           REDIS_URL="ioredis://$(node -e 'const o = JSON.parse(process.env.REDIS_SENTINEL_OPTIONS); if (process.env.REDIS_PASSWORD) o.password = process.env.REDIS_PASSWORD; process.stdout.write(Buffer.from(JSON.stringify(o)).toString("base64"))')"
@@ -512,14 +508,12 @@ in
           in
           if lib.hasAttrByPath [ "notifications" "smtp" "transport" "password" ] config.settings then
             scope.fail {
-              package = "immich";
               option = "settings";
               message = "settings sets notifications.smtp.transport.password, which the config ConfigMap would hold.";
               fix = "Wire the mail server through deps.smtp instead, whose credentials hold the username and password.";
             }
           else if mailHits != [ ] then
             scope.fail {
-              package = "immich";
               option = "settings";
               message = "settings sets ${
                 lib.concatMapStringsSep ", " (lib.concatStringsSep ".") mailHits
@@ -528,14 +522,12 @@ in
             }
           else if lib.hasAttrByPath [ "oauth" "clientSecret" ] config.settings then
             scope.fail {
-              package = "immich";
               option = "settings";
               message = "settings sets oauth.clientSecret, which the config ConfigMap would hold.";
               fix = "Wire the client through deps.oidc instead, whose credentials hold the client id and secret.";
             }
           else if oidcHits != [ ] then
             scope.fail {
-              package = "immich";
               option = "settings";
               message = "settings sets ${
                 lib.concatMapStringsSep ", " (lib.concatStringsSep ".") oidcHits
@@ -547,7 +539,6 @@ in
           else
             scope.fail (
               map (p: {
-                package = "immich";
                 option = "settings";
                 message = "settings sets ${lib.concatStringsSep "." p}, which follows the optional machineLearning dependency.";
                 fix = "Remove it from settings. ${mlFix}";
@@ -555,7 +546,7 @@ in
             );
 
         env = kix.mergeEnv {
-          inherit who;
+          inherit scope;
           defaults = lib.optionalAttrs hasMetrics { IMMICH_TELEMETRY_INCLUDE = "all"; };
           owned = [
             {
@@ -773,7 +764,6 @@ in
                 ${if config.initChownData then "initContainers" else null} = lib.singleton (
                   if nonRootFailsBuild clusterConfig then
                     scope.fail {
-                      package = "immich";
                       option = "initChownData";
                       message = chownHint;
                     }

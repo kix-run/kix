@@ -114,8 +114,8 @@ The package returns an attribute set with the following top-level keys:
 | `config` | attrset or module function | No | Package-level configuration module merged with `options`. Values inside `config` that the author wraps in `lib.mkDefault` are lowered from priority `1000` to `1250` (between option defaults at `1500` and instance or injected `lib.mkDefault` values at `1000`). |
 | `deps` | attrset | No | Per-dependency configuration injection (`config`), `warnings`, and `assertions` keyed by `build` argument name. |
 | `build` | function or list of functions | Yes | One or more functions returning named resource parts and a `root` entry. |
-| `warnings` | `{ config, self, deps }: [ string or attrset ]` | No | Evaluation-time warnings that `kix check`, `kix build`, `kix plan`, and `kix deploy` show. |
-| `assertions` | `{ config, self, deps }: [ { assertion; message; fix ? null; id ? null; option ? null; } ]` | No | Evaluation-time assertions checked before building manifests. |
+| `warnings` | `{ config, self, deps, clusterConfig }: [ string or attrset ]` | No | Warnings shown when Kix evaluates the cluster or reads a bundle with `--bundle`. |
+| `assertions` | `{ config, self, deps, clusterConfig }: [ { assertion; message; fix ? null; id ? null; option ? null; } ]` | No | Evaluation-time assertions checked before building manifests. |
 
 ### The `root` entry and part reachability
 
@@ -190,10 +190,10 @@ meta = {
 | `description` | string | None | Non-empty one-line summary of the package. Checked by the `governance.hasDescription` scorecard rule (`info` severity). |
 | `roles` | list of strings | `[ ]` | Platform capabilities provided by this package. |
 | `defaultAliases` | list of strings | `[ ]` | Default dependency-injection names registered when `instances.<name>.aliases` is empty. |
-| `availability.max` | `"none"` \| `"pod"` \| `"node"` \| `"zone"` | None | Highest availability level the package supports. |
+| `availability` | `{ max; reason?; }` | None | Highest availability level the package supports (`max`: `"none"`, `"pod"`, `"node"`, or `"zone"`), plus an optional `reason` string shown when Kix caps availability or rejects multiple replicas under `"none"`. |
 | `compatibleWith` | attrset of `{ minVersion?; maxVersion?; reason?; }` | `{ }` | Version bounds for upstream dependencies keyed by dependency argument name. |
 | `k8s` | `{ minVersion?; maxVersion?; reason?; supported?; }` | None | Kubernetes version bounds checked against [`k8sVersion`](/docs/reference/cluster-configuration/). Top-level `minVersion` and `maxVersion` fail the build outside that range; `supported = { minVersion?; maxVersion?; source?; }` emits a warning without stopping the build. |
-| `conflictsWith` | list of strings | `[ ]` | Packages that cannot coexist with this package (`"<name>"` for same-namespace, `"cluster:<name>"` for cluster-wide). |
+| `conflictsWith` | list of strings or `{ key; reason; }` | `[ ]` | Packages that cannot coexist with this package (`"<name>"` for same-namespace, `"cluster:<name>"` for cluster-wide), with an optional `reason` included in conflict errors. |
 | `podSecurity` | `"privileged"` \| `"baseline"` \| `"restricted"` | None | Pod Security Standards enforcement level applied to the instance namespace. |
 | `unsafe` | list of strings | `[ ]` | Acknowledged security or architectural exceptions (`"raw-pvc"`, `"host-network"`, `"privileged"`, `"run-as-root"`, `"cluster-admin"`). |
 | `annotationDomains` | list of strings | `[ ]` | Annotation domain prefixes (such as `"cert-manager.io"`) owned and consumed by this package. |
@@ -205,7 +205,7 @@ meta = {
 
 ### `meta.version`
 
-Set `meta.version` to the software version the package deploys by default, such as `"1.30.6"` for nginx 1.30.6. Define the version once in a local `release` variable and reuse it for the default image tag so the two stay in sync. Keep `meta.version` without a leading `v` so it matches `kix.image.version`. When the image tag starts with `v`, strip it with `lib.removePrefix "v" release`:
+Set `meta.version` to the software version the package deploys by default, such as `"1.30.6"` for nginx 1.30.6. Define the version once in a local `release` variable and reuse it for the default image tag so the two stay in sync. If the upstream image tag starts with `v` (such as `"v1.12.1"`), pass `release` directly to `meta.version`. Kix strips the leading `v` when reading `meta.version`, so `kix list packages`, the `PackageInstance` record, and `compatibleWith` all see `"1.12.1"`, matching `kix.image.version`:
 
 ```nix
 let
@@ -213,7 +213,7 @@ let
 in
 {
   meta = {
-    version = lib.removePrefix "v" release;
+    version = release;
     ...
   };
 
@@ -283,6 +283,15 @@ Each role in `meta.roles` also registers that role name as a dependency alias so
 
 Individual workloads can further clamp their own ceiling by passing `availability.max` to `scope.mkDeployment`, `scope.mkStatefulSet`, `scope.mkJob`, or `scope.mkCronJob`.
 
+Add `reason` alongside `max` (in `meta.availability` or on a workload builder) to explain why the software cannot run at a higher availability level. Kix includes `reason` when it warns that an instance or workload was capped at `max`, and when it rejects a workload with more than one replica under `max = "none"`. Write `reason` as one or more complete sentences; Kix prints `Reason: <reason>` and adds a final period if missing:
+
+```nix
+availability = {
+  max = "none";
+  reason = "The service stores state in a single SQLite file that supports only one writer at a time.";
+};
+```
+
 ### `meta.compatibleWith` and `meta.k8s`
 
 `meta.compatibleWith.<dep>` checks the `meta.version` of the bound `<dep>` provider at evaluation time:
@@ -326,6 +335,17 @@ Entries in `meta.conflictsWith` prevent incompatible packages from being deploye
 - Listing the package's own name in `"cluster:<self>"` enforces a cluster-wide singleton.
 
 An instance counts when it answers `<pkg>` by its name or its aliases, or when its package lists `<pkg>` in `meta.defaultAliases`. The last case holds even when the instance sets its own `aliases`, so two instances of a singleton package fail whatever aliases they set.
+
+An entry can also be `{ key; reason; }`, where `key` is `"<pkg>"` or `"cluster:<pkg>"` and `reason` (one or more complete sentences) explains why the instances cannot coexist. Kix prints `Reason: <reason>` in the conflict error:
+
+```nix
+conflictsWith = [
+  {
+    key = "cluster:tailscale";
+    reason = "The operator watches cluster-wide tailscale.com resources, Services with loadBalancerClass \"tailscale\", and Ingresses with IngressClass \"tailscale\" across all namespaces, so two instances would compete for the same objects.";
+  }
+];
+```
 
 ### `meta.podSecurity` and `meta.unsafe`
 
@@ -446,32 +466,91 @@ cpuMillis = kix.parseQuantity "cpu" config.resources.requests.cpu; # "250m" -> 2
 memBytes = kix.parseQuantity "memory" config.resources.requests.memory; # "256Mi" -> 268435456
 ```
 
+### Tolerations (`kix.types.toleration` and `kix.tolerations`)
+
+`kix.types.toleration` is a submodule option type for Kubernetes pod tolerations. Each entry defines `key` (`nullOr str`), `operator` (`"Equal"` by default, or `"Exists"`), `value` (`nullOr str`), `effect` (`"NoSchedule"`, `"PreferNoSchedule"`, `"NoExecute"`, or `null`), and `tolerationSeconds` (`nullOr ints.unsigned`). Every field except `operator` defaults to `null`. Because Kubernetes rejects some combinations of these fields, validate the list in `assertions` with `kix.tolerations.problems` and format it for the pod spec with `kix.tolerations.render`:
+
+| Helper | Signature | Behavior |
+| --- | --- | --- |
+| `kix.tolerations.problems` | `{ optionPath, tolerations } -> [ message ]` | Returns an error message for each toleration that Kubernetes would reject: a missing or empty `key` when `operator` is not `"Exists"`, `value` set when `operator` is `"Exists"`, or `tolerationSeconds` set when `effect` is not `"NoExecute"`. Each message identifies the entry as `<optionPath>[<index>]`. |
+| `kix.tolerations.render` | `tolerations -> list` | Strips `null` fields from each toleration so you can assign the list directly to `spec.tolerations` on a pod spec. |
+
+```nix
+options.node.tolerations = lib.mkOption {
+  type = lib.types.listOf kix.types.toleration;
+  default = [ ];
+  description = "Taints the node plugin tolerates.";
+};
+
+assertions =
+  { config, ... }:
+  map (message: {
+    assertion = false;
+    inherit message;
+  }) (kix.tolerations.problems {
+    optionPath = "config.node.tolerations";
+    inherit (config.node) tolerations;
+  });
+
+# In the pod spec:
+tolerations = kix.tolerations.render config.node.tolerations;
+```
+
+### VolumeSnapshotClasses (`kix.types.volumeSnapshotClass` and `kix.storage`)
+
+CSI driver packages expose `VolumeSnapshotClass` settings as an option of type `lib.types.attrsOf kix.types.volumeSnapshotClass`, keyed by class name. Each entry accepts `deletionPolicy` (`"Delete"` by default, or `"Retain"`) plus `parameters`, `labels`, and `annotations` (each `attrsOf str`, default `{ }`). The provider of the `snapshotController` role supplies the `VolumeSnapshotClass` CRD, so take `snapshotController ? null` as an optional `build` argument:
+
+| Helper | Signature | Behavior |
+| --- | --- | --- |
+| `kix.storage.snapshotClassProblems` | `{ optionPath, classes, snapshotController } -> [ message ]` | Returns error messages when `classes` is non-empty and `snapshotController` is `null`, when more than one class sets `annotations."snapshot.storage.kubernetes.io/is-default-class" = "true"`, or when a class is named `root` or `meta` (keys Kix reserves). Call this in `assertions` with `snapshotController = deps.snapshotController or null`. |
+| `kix.storage.mkSnapshotClasses` | `{ scope, snapshotController, driver, classes, requires ? [ ] } -> attrset` | Builds a `VolumeSnapshotClass` resource for each entry in `classes` (under the same attribute keys) using `scope.mkCR snapshotController.out.crds.VolumeSnapshotClass`, setting `driver` on each class and omitting `parameters` when empty. Returns `{ }` when `snapshotController` is `null`. |
+
+```nix
+snapshotClasses = kix.storage.mkSnapshotClasses {
+  inherit scope snapshotController;
+  driver = self.csiDriver.out.name;
+  classes = config.volumeSnapshotClasses;
+  requires = [ self.controller ];
+};
+```
+
 ### Escape hatches and guard helpers
 
 Packages often expose an escape hatch option (`extraSpec`, `extraEnv`, `extraArgs`, or `settings`) so cluster operators can set fields not covered by first-class options. Use Kix's guard helpers to merge operator overrides while protecting invariants owned by the package:
 
 | Helper | Signature | Behavior |
 | --- | --- | --- |
-| `kix.mergeGuarded` | `{ who, locked, what ? "extraSpec" } base overrides` | Recursively merges `overrides` onto `base`, but throws an evaluation error naming `who` and `what` if `overrides` touches any attribute path (a list of path segments, such as `[ [ "replicas" ] [ "selector" ] ]` or `[ [ "template" "spec" "serviceAccountName" ] ]`) listed in `locked`, or replaces a parent of a locked path with a non-attrset value. |
-| `kix.mergeEnv` | `{ who, owned ? [ ], defaults ? { } } userEnv` | Validates that `userEnv` does not set any environment variable claimed by `owned` (where each entry is `{ vars ? { }; names ? [ ]; from; fix; }`, even as `null`), and returns the merged attribute set `defaults // userEnv // <all owned.vars>` ready to pass to `kix.mkEnvVars`. |
-| `kix.guardArgs` | `{ who, option ? "extraArgs", owned } userArgs` | Validates CLI flags and returns `userArgs` unchanged. `userArgs` can be a list of flag strings (matching `--flag`, `--flag=value`, or a one-letter `-f` with an attached value) or an attrset keyed by flag name, like a VictoriaMetrics CR's `extraArgs` (matching each key with or without leading dashes). `owned` maps each refused flag to its reason and fix; the error reads `<who>: <option> sets "<flag>", which this package does not accept: <reason>`. |
+| `kix.mergeGuarded` | `{ scope, locked, option ? "extraSpec", object ? null } base overrides` | Recursively merges `overrides` into `base`. Fails evaluation if `overrides` sets any path in `locked` (a list of path-segment lists, such as `[ [ "replicas" ] [ "selector" ] ]` or `[ [ "template" "spec" "serviceAccountName" ] ]`) or replaces an ancestor of a locked path with a non-attribute-set value such as `null`. On conflict, Kix fails with `option` set on the error and tells the user to remove the locked field from that option. Set `option = null` when `overrides` comes from a function argument (such as a builder in `out`) rather than an instance option. Pass `object` (`{ kind; name; namespace ? null; }`) to name the affected Kubernetes resource, such as when one option configures several resources or a builder in `out` creates one. |
+| `kix.mergeEnv` | `{ scope, option ? "env", owned ? [ ], defaults ? { } } userEnv` | Checks that `userEnv` does not set any environment variable claimed in `owned` (even to `null`), then returns `defaults // userEnv // <all owned.vars>` for `kix.mkEnvVars`. Each `owned` entry is `{ vars ? { }; names ? [ ]; from; fix ? null; }` for variables the package provides, or `{ names; reason; fix ? null; }` for variables the package rejects outright. If `userEnv` sets a claimed variable, Kix fails with `option` set on the error and reports `<option> sets <VAR>, which comes from <from>.` or `<option> sets <VAR>, which this package does not accept: <reason>`. If `fix` is omitted, the error tells the user to remove the variable from `option`. |
+| `kix.mergeArgs` | `{ scope, parser, option ? "extraArgs", args ? [ ], after ? [ ], id ? null } userArgs` | Builds the container's argument list (`args`, then `userArgs`, then `after`) and stops the build if `userArgs` sets a reserved flag. Set `parser` to match how the program reads flags: `"gnu"` (getopt, clap, pflag, kingpin) matches `--flag`, `--flag=value`, or a single-letter `-f` with an attached value; `"go"` (Go's `flag` package) treats `-flag` and `--flag` as the same flag; `"go-arg"` (alexflint/go-arg) matches like `"go"` with any number of leading dashes; `"paerser"` (Traefik) matches like `"go"` and ignores letter case. Each item in `args` and `after` is one of three forms: a plain string (passed as written; `userArgs` may repeat it), `{ defaults = [ "--flag=value" ]; }` (passed unless `userArgs` sets the same flag; write each flag and value as one string), or `{ flags ? [ ]; names ? [ ]; families ? [ ]; reason; fix ? null; }` (or `from` instead of `reason`). Kix passes `flags` to the container and rejects them in `userArgs`; write each item as `"--flag=value"` or as a list `[ "--config" path ]` where the first item is the flag name and the rest are its values. `names` rejects extra flag names without passing them (such as short aliases, unsupported flags, or a conditional flag in `flags = lib.optional <cond> "--flag=value"` that must stay blocked when `<cond>` is false). `families` rejects a flag and every `<flag>.<name>` sub-flag. When `userArgs` sets a reserved flag, Kix sets `option` on the error, reports `<option> sets "<word>", which comes from <from>.` or `<option> sets "<word>", which this package does not accept: <reason>`, shows `fix` (or tells the user to remove the flag from `option`), and notes that [`partsOverlays`](/docs/reference/instances-and-composition/#partsoverlays) can modify the built resource after the package's checks. When `userArgs` is an attribute set (such as `extraArgs` on a VictoriaMetrics custom resource), `flags` and `defaults` must also be attribute sets of flag values, plain string entries are rejected, and keys match with or without leading dashes. Set `id` to a change ID (such as `"K4740"`) when a package starts rejecting a flag or spelling it previously accepted. |
+| `kix.argValues` | `{ parser } flag userArgs -> [ value ]` | Returns all values passed for `flag` in `userArgs`, in order, using the same `parser` rules as `kix.mergeArgs`. Reads values after `=`, attached to a single-letter flag (under `"gnu"`), or from the next list item. Only call `kix.argValues` for flags that take a value: if `flag` appears without `=`, Kix treats the next list item as its value. When `userArgs` is an attribute set, returns the values of all keys matching `flag`. |
+
+Pass `inherit scope;` to `kix.mergeGuarded`, `kix.mergeEnv`, and `kix.mergeArgs`. All three report errors through `scope.fail`, which sets `instance` and `package` in Kix's error output and in `kix check -o json`.
+
+`kix.mergeArgs` replaces `kix.guardArgs`; calling `kix.guardArgs` stops the build with `[K5396]`.
 
 ```nix
 # Guarding CLI flags and environment variables owned by typed options
-args = [
-  "--storage.tsdb.retention.time=${config.retention}"
-  "--web.listen-address=:9090"
-] ++ kix.guardArgs {
-  who = "prometheus";
-  owned = {
-    "--storage.tsdb.retention.time" = "set retention instead.";
-    "--web.listen-address" = "the Service and the probes use port 9090; remove it.";
-  };
+args = kix.mergeArgs {
+  inherit scope;
+  parser = "gnu";
+  args = [
+    {
+      flags = [ "--storage.tsdb.retention.time=${config.retention}" ];
+      from = "the retention option";
+      fix = "Remove it from extraArgs and set retention instead.";
+    }
+    {
+      flags = [ "--web.listen-address=:9090" ];
+      reason = "the Service and the probes use port 9090.";
+    }
+  ];
 } config.extraArgs;
 
 env = kix.mkEnvVars (
   kix.mergeEnv {
-    who = "myapp";
+    inherit scope;
+    option = "extraEnv";
     defaults = { LOG_FORMAT = "json"; };
     owned = [
       {
@@ -544,7 +623,7 @@ deps.postgres = {
 | `deps.<arg>` field | Type | Description |
 | --- | --- | --- |
 | `config` | attrset or `consumerConfig: attrset` | Configuration module injected into the upstream provider instance. Throws an error if the provider instance's `config` in the cluster definition locked the target option with `kix.mkLocked`. |
-| `assertions` | `dep: [ { assertion; message; } ]` | Assertions evaluated only when `<arg>` is non-null. |
+| `assertions` | `dep: [ { assertion; message; } ]` | Assertions evaluated only when `<arg>` is non-null. Kix sets `dependency` to `<arg>` unless the assertion sets it. |
 | `warnings` | `dep: [ string or attrset ]` | Warnings evaluated only when `<arg>` is non-null. Each takes the fields of a package's top-level `warnings`, and Kix sets `dependency` to `<arg>` unless the warning sets it. |
 | `renamedFrom` | `{ name; id; }` | The name this dependency had in earlier releases, and a change id such as `"K1234"`. When no instance matches the dependency, the error carries `id` and adds a sentence saying that the dependency was named `name` in earlier releases. |
 
@@ -552,12 +631,13 @@ deps.postgres = {
 
 `kix.contracts.*` provides shared contract validators (`postgresDatabase`, `redis`, `smtp`, `oidc`, and `gateway` under `kix.contracts.<name>`, and `oidcProvider`, `otlpEndpoint`, and `clickhouse` under `kix.contracts.experimental.<name>`) that verify the `out` surface passed between providers (including `kix.mkImport` stand-ins) and consumers:
 
-- **Provider validation (`check`)**: A provider passes its `root.out` through `kix.contracts.<name>.check who { ... }` (or `kix.contracts.experimental.<name>.check who { ... }`), which verifies every required and optional contract field and returns `out`.
-- **Consumer validation (`assertions` or helper functions)**: A consumer checks a bound dependency in `deps.<alias>.assertions` with `kix.contracts.<name>.assertions who` or `kix.contracts.experimental.<name>.assertions who` (or reads it through a contract helper such as `kix.contracts.smtp.helpers.settings`, `kix.contracts.smtp.helpers.server`, `kix.contracts.oidc.helpers.client`, or `kix.contracts.gateway.require`), which checks all required contract fields and validates the shape of any present optional fields.
+- **Provider validation (`check`)**: A provider passes `root.out` through `kix.contracts.<name>.check scope { ... }` (or `kix.contracts.experimental.<name>.check scope { ... }`), which validates every required and optional field and returns `out`.
+- **Consumer validation (`assertions` or helper functions)**: A consumer sets `deps.<alias>.assertions` to `kix.contracts.<name>.assertions` (or `kix.contracts.experimental.<name>.assertions`), or reads the dependency through a contract helper such as `kix.contracts.smtp.helpers.settings`, `kix.contracts.smtp.helpers.server`, `kix.contracts.oidc.helpers.client`, or `kix.contracts.gateway.require`. Consumer checks require all `required = true` fields and validate any optional fields that are present.
+- **Automatic error context**: Contract checks that take `scope` fail through `scope.fail`, and Kix attaches `instance`, `package`, and `dependency` to failed dependency assertions automatically, so error messages should not repeat the instance or package name.
 - **Credentials on contracts (`out.credentials`)**: Every contract that carries a login places the secret or secret instance at `out.credentials` (read via `dep.out.credentials.out.keyRef "<key>"`) rather than taking a second secret dependency.
 
 ```nix
-deps.database.assertions = kix.contracts.postgresDatabase.assertions "vaultwarden";
+deps.database.assertions = kix.contracts.postgresDatabase.assertions;
 ```
 
 :::note[Reference]
@@ -623,7 +703,7 @@ Do not call `pkgs.runCommand`, `pkgs.stdenv.mkDerivation`, or `pkgs.writeText` i
 
 ### Top-level `warnings` and `assertions`
 
-A package can define top-level `warnings` and `assertions` functions. Both receive `{ config, self, deps }` after options and `build` parts are wired. Because `deps` only contains bound dependencies, an absent optional dependency is omitted from `deps` (test for it with `!(deps ? <name>)` or `(deps.<name> or null) == null`):
+A package can define top-level `warnings` and `assertions` functions. Both receive `{ config, self, deps, clusterConfig }` after options and `build` parts are wired. `clusterConfig` is the same evaluated cluster configuration passed to `build`. Because `deps` only contains bound dependencies, an absent optional dependency is omitted from `deps` (test for it with `!(deps ? <name>)` or `(deps.<name> or null) == null`):
 
 ```nix
 warnings =
@@ -645,7 +725,7 @@ assertions =
   ];
 ```
 
-An assertion takes the same optional fields as `scope.fail` (below): `fix`, `id`, `object`, `option`, `dependency`, and `clusterOption`. A warning is a message, or an attribute set with `message` and the same optional fields. Kix adds the instance to each, so the message does not name it. Failed `assertions` stop evaluation, and Kix lists every failed assertion of the cluster at once. `warnings` do not stop evaluation. `kix check` lists them under its table, and the commands that build a cluster print them to stderr. A field in the wrong form, such as an `id` that is not a change record id, stops evaluation in a warning as it does in an error.
+An assertion takes the same optional fields as `scope.fail` (below): `fix`, `id`, `object`, `option`, `dependency`, and `clusterOption`. A warning is a message, or an attribute set with `message` and the same optional fields. Kix adds the instance to each, so the message does not name it. Failed `assertions` stop evaluation, and Kix lists every failed assertion of the cluster at once. `warnings` do not stop evaluation. `kix check` lists them under its table, and every other command that evaluates a cluster or reads a bundle with `--bundle` prints them to stderr. Return warnings from `warnings` or `deps.<name>.warnings`; Kix hides `builtins.trace` and `lib.warn` output when evaluation succeeds. A field in the wrong form, such as an `id` that is not a change record id, stops evaluation in a warning as it does in an error.
 
 ### Raising an error with `scope.fail`
 
@@ -674,7 +754,7 @@ _passwordCheck =
 | `dependency` | No | The dependency to change, as its name in the instance's `deps`, such as `"database"`. |
 | `clusterOption` | No | The cluster option to change, as a path in the cluster definition, such as `"cluster.domain"`. |
 | `instance` | No | Set by `scope.fail` to `<namespace>/<instance>`. |
-| `package` | No | The package's name. |
+| `package` | No | The package's name, such as `"harbor"` or `"experimental/coredns"`. Set automatically by `scope.fail` for built-in packages. |
 
 `option`, `dependency`, and `clusterOption` name settings a person can change in a cluster definition. A package's `meta` is not an instance option, so leave `option` out when an error is about `meta`. An `option` must not start with `config.`, `deps.`, or `meta.`, and a `clusterOption` must not start with `instances.`. Kix leaves out a field in the wrong form, or one it does not take, and adds a line to the message that says why. A warning with such a field stops evaluation with that error. Start `fix` with a capital letter.
 
@@ -695,7 +775,7 @@ During package evaluation, Kix also gives structural warnings for common wiring 
 - **Orphaned resources**: A part defined in `build` is not reachable from `root.resource`, `root.requires`, or `root.postHooks`.
 - **Redundant `requires`**: A resource lists a dependency in `requires = [ ... ]` that is already tracked implicitly through `.out` string context in its manifest.
 - **Duplicate `requires`**: The same resource appears more than once in a `requires` list.
-- **Unordered `postHooks`**: A resource in `root.postHooks` does not depend on `root.resource` (either directly or transitively).
+- **Unordered `postHooks`**: A resource in `root.postHooks` does not depend (directly or through another resource) on `root.resource` or any entry in `root.requires`, so Kix can deploy it before the main resources are ready. Referencing a Secret or ConfigMap that `root.resource` also uses does not order the hook after `root.resource`. If a resource must finish before the instance is ready without waiting for `root.resource`, put it in `root.requires` instead.
 
 ### `kix.checkPackageOptions` and `kix.packageOptionViolations`
 
@@ -714,7 +794,7 @@ kix.checkPackageOptions {
 
 A package takes every secret value through a secret dependency, never through an option, so the cluster chooses where the value comes from: `packages.secret` (plain text or a SOPS file), `packages.secret-ref` (a Secret that something else writes), or another source package. A test in the Kix repository fails any package that Kix ships if one of its options holds a secret or a path to one.
 
-Wrap the dependency with `kix.contracts.secret.helpers.use` before reading its keys. It checks that the dependency honours the secret contract (`kix.contracts.secret`: `out.name`, `out.keyRef`, `out.mkEnv`, `out.envFrom`, `out.volume`), and that `dep.out.keys` declares all required `keys` and at least one complete key group in `anyOf`. Then it returns `dep`, or throws an evaluation error that names the dependency. `kix.checkSecretKeys` takes the same arguments and checks the keys only.
+Wrap the dependency with `kix.contracts.secret.helpers.use` before reading its keys. It checks that `dep` satisfies `kix.contracts.secret` (`out.name`, `out.keyRef`, `out.mkEnv`, `out.envFrom`, and `out.volume`) and that `dep.out.keys` declares every key in `keys` and at least one full group in `anyOf`. When valid, it returns `dep`; otherwise it fails through `scope.fail` with `dependency` set to `arg`. `kix.checkSecretKeys` takes the same arguments and checks only the keys.
 
 ```nix
 build =
@@ -726,7 +806,7 @@ build =
   }:
   let
     checkedSecret = kix.contracts.secret.helpers.use {
-      who = "myapp";
+      inherit scope;
       arg = "credentialsSecret";
       dep = credentialsSecret;
       keys = [ "username" ];
@@ -743,7 +823,7 @@ build =
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `who` | string | Required | Consumer package name used in error messages. |
+| `scope` | scope | Required | The consumer's `scope`, used to report the instance and package through `scope.fail`. Passing the removed `who` argument fails with `[K6417]`. |
 | `arg` | string | Required | Dependency argument name. |
 | `dep` | resource or `null` | Required | Bound Secret dependency. Returned unchanged when `dep` is `null` or when all key requirements are satisfied (or if `dep.out.keys` is not set). |
 | `keys` | list of strings | `[ ]` | Keys that must all be present in `dep.out.keys`. |

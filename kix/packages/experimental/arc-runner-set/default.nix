@@ -67,7 +67,6 @@ let
 
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "arc-runner-set ${ns}/${name}";
 
   # Paths of the runner set spec that options and dependencies set.
   locked = [
@@ -198,7 +197,7 @@ in
     }:
     let
       creds = kix.contracts.secret.helpers.use {
-        inherit who;
+        inherit scope;
         arg = "githubConfigSecret";
         dep = githubConfigSecret;
         anyOf = [
@@ -211,7 +210,7 @@ in
         ];
       };
 
-      env = kix.mkEnvVars (kix.mergeEnv { inherit who; } config.env);
+      env = kix.mkEnvVars (kix.mergeEnv { inherit scope; } config.env);
       runner = {
         name = "runner";
         image = kix.image.ref config.image;
@@ -254,7 +253,7 @@ in
       };
 
       spec = lib.recursiveUpdate (kix.mergeGuarded {
-        inherit who locked;
+        inherit scope locked;
       } baseSpec extraWithoutContainers) { template.spec = { inherit containers; }; };
 
       parts =

@@ -16,6 +16,8 @@
 
 let
   contract = kixlib.contracts.postgresDatabase;
+  # A consumer or provider scope whose `fail` throws.
+  scope.fail = kixlib.fail;
   secretPackage = import ../../../packages/stable/secret;
 
   # A credentials Secret as mkSecret publishes it.
@@ -142,35 +144,34 @@ in
   # A provider out with every field passes `check` unchanged; one without
   # `username` or `tls` is refused, since only an import may omit them.
   postgres-database-check-requires-every-field =
-    contract.check "provider data/app-db" providerOut == providerOut
-    && !(builtins.tryEval (contract.check "provider data/app-db" importOut)).success
-    && !(builtins.tryEval (contract.check "provider data/app-db" (providerOut // { tls = "yes"; })))
-    .success
-    && contract.check "provider data/app-db" (providerOut // { tls = null; }) ? tls;
+    contract.check scope providerOut == providerOut
+    && !(builtins.tryEval (contract.check scope importOut)).success
+    && !(builtins.tryEval (contract.check scope (providerOut // { tls = "yes"; }))).success
+    && contract.check scope (providerOut // { tls = null; }) ? tls;
 
   # A consumer's assertion accepts an import with only the connection
   # fields, and refuses one without `credentials` with a message naming the
-  # consumer, the provider instance, and the field.
+  # provider instance and the field. Kix names the consumer on the record.
+  # A `who` text in place of the dependency is refused with the change
+  # record id.
   postgres-database-assertions-name-instance-and-field =
     let
       missing = messagesOf (
-        contract.assertions "metabase bi/metabase" (
-          depOf (builtins.removeAttrs importOut [ "credentials" ])
-        )
+        contract.assertions (depOf (builtins.removeAttrs importOut [ "credentials" ]))
       );
     in
-    messagesOf (contract.assertions "metabase bi/metabase" (depOf importOut)) == [ ]
-    && messagesOf (contract.assertions "metabase bi/metabase" (depOf providerOut)) == [ ]
+    messagesOf (contract.assertions (depOf importOut)) == [ ]
+    && messagesOf (contract.assertions (depOf providerOut)) == [ ]
     && builtins.length missing == 1
-    && lib.hasInfix "metabase bi/metabase" (builtins.head missing)
     && lib.hasInfix "data/app-db" (builtins.head missing)
-    && lib.hasInfix "credentials is missing" (builtins.head missing);
+    && lib.hasInfix "credentials is missing" (builtins.head missing)
+    && !(builtins.tryEval (contract.assertions "metabase bi/metabase")).success;
 
   # An optional field is still checked when present, and a credentials
   # Secret that declares keys must declare username and password.
   postgres-database-assertions-check-present-fields =
     let
-      one = out: messagesOf (contract.assertions "app" (depOf out));
+      one = out: messagesOf (contract.assertions (depOf out));
     in
     builtins.length (one (importOut // { tls = "yes"; })) == 1
     && lib.hasInfix "tls is not" (builtins.head (one (importOut // { tls = "yes"; })))
@@ -196,7 +197,6 @@ in
     contractMessages providerOut == [ ]
     && builtins.length noHost == 1
     && lib.hasInfix "host is missing" (builtins.head noHost)
-    && lib.hasInfix "${pname} apps/${pname}" (builtins.head noHost)
   ) (builtins.attrNames consumers);
 
   # Harbor reads the role from out.credentials, so an import without

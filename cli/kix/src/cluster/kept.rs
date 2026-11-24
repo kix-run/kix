@@ -227,7 +227,11 @@ fn cedes(ceded: &[Seg], path: &str) -> bool {
             (Seg::Field(f), DiffSeg::Field(g)) => f == g,
             (Seg::Any, DiffSeg::Item(_)) => true,
             (Seg::Index(i), DiffSeg::Item(k)) => i.to_string() == *k,
-            (Seg::Key(_, v), DiffSeg::Item(k)) => v == k,
+            (Seg::Key(keys), DiffSeg::Item(k)) => match keys.as_slice() {
+                [(_, Value::String(v))] => v == k,
+                [(_, v)] => serde_json::from_str::<Value>(k).is_ok_and(|k| k == *v),
+                _ => false,
+            },
             _ => false,
         })
 }

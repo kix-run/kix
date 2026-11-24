@@ -17,14 +17,8 @@ let
   labels = (common.labels name).controller;
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = common.who scope;
   metricsOn = config.metrics.enabled && prometheus != null;
-  acmesolverImage = kix.image.ref (
-    common.checkRelease who config [
-      "operandImages"
-      "acmesolver"
-    ]
-  );
+  acmesolverImage = kix.image.ref config.operandImages.acmesolver;
 
   inherit (scope.rbac)
     group
@@ -380,23 +374,29 @@ in
           containers = [
             {
               name = "cert-manager-controller";
-              image = kix.image.ref (common.checkRelease who config [ "image" ]);
+              image = kix.image.ref config.image;
               imagePullPolicy = config.image.pullPolicy;
-              args = [
-                "--v=2"
-                "--cluster-resource-namespace=$(POD_NAMESPACE)"
-                "--leader-election-namespace=${ns}"
-                "--acme-http01-solver-image=${acmesolverImage}"
-              ]
-              ++ kix.guardArgs {
-                inherit who;
-                owned = {
-                  "--cluster-resource-namespace" =
-                    "the controller reads ClusterIssuer Secrets from the instance's namespace (out.clusterResourceNamespace); remove it.";
-                  "--leader-election-namespace" =
-                    "the leader-election Role lives in the instance's namespace; remove it.";
-                  "--acme-http01-solver-image" = "set operandImages.acmesolver instead.";
-                };
+              # The controller parses flags with cobra and pflag
+              # (cmd/controller/app/start.go upstream).
+              args = kix.mergeArgs {
+                inherit scope;
+                parser = "gnu";
+                args = [
+                  "--v=2"
+                  {
+                    flags = [ "--cluster-resource-namespace=$(POD_NAMESPACE)" ];
+                    reason = "ClusterIssuer Secrets are created in namespace \"${ns}\", so the controller must read them from there.";
+                  }
+                  {
+                    flags = [ "--leader-election-namespace=${ns}" ];
+                    reason = "the leader-election Role grants access only in namespace \"${ns}\".";
+                  }
+                  {
+                    flags = [ "--acme-http01-solver-image=${acmesolverImage}" ];
+                    from = "the operandImages.acmesolver option";
+                    fix = "Remove it from extraArgs and set operandImages.acmesolver instead.";
+                  }
+                ];
               } config.extraArgs;
               ports = [
                 {
@@ -415,7 +415,7 @@ in
               # Kubernetes leaves an undefined variable unexpanded.
               env = kix.mkEnvVars (
                 kix.mergeEnv {
-                  inherit who;
+                  inherit scope;
                   owned = [
                     {
                       vars.POD_NAMESPACE.valueFrom.fieldRef.fieldPath = "metadata.namespace";

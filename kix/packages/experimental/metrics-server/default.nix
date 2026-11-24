@@ -84,7 +84,6 @@ let
   release = "0.9.1";
 
   name = scope.instanceName;
-  who = "metrics-server ${scope.namespaceName}/${name}";
   securePort = 10250;
   # The kubelet's default port; see the known limits in the header.
   kubeletPort = 10250;
@@ -186,23 +185,32 @@ in
         }
       ];
 
-      args = [
-        "--cert-dir=${certDir}"
-        "--secure-port=${toString securePort}"
-        "--kubelet-preferred-address-types=InternalIP,ExternalIP,Hostname"
-        "--kubelet-use-node-status-port"
-        "--metric-resolution=15s"
-      ]
-      ++ kix.guardArgs {
-        inherit who;
-        owned = {
-          "--secure-port" =
-            "the Service, the probes, and the network policy use ${toString securePort}; remove it.";
-          "--cert-dir" =
-            "the serving certificate is written to the emptyDir at ${certDir}, the only writable path; remove it.";
-          "--bind-address" = "the probes and the API server reach the pod address; remove it.";
-          "--kubelet-port" = "the network policy admits kubelets on ${toString kubeletPort} only; remove it.";
-        };
+      # metrics-server parses flags with cobra and pflag
+      # (cmd/metrics-server/app/start.go upstream).
+      args = kix.mergeArgs {
+        inherit scope;
+        parser = "gnu";
+        args = [
+          {
+            flags = [ "--cert-dir=${certDir}" ];
+            reason = "the serving certificate is written to the emptyDir volume at ${certDir}, the only writable path in the container.";
+          }
+          {
+            flags = [ "--secure-port=${toString securePort}" ];
+            reason = "the Service, probes, and network policy use port ${toString securePort}.";
+          }
+          "--kubelet-preferred-address-types=InternalIP,ExternalIP,Hostname"
+          "--kubelet-use-node-status-port"
+          "--metric-resolution=15s"
+          {
+            names = [ "--bind-address" ];
+            reason = "the probes and the Kubernetes API server connect to the pod IP.";
+          }
+          {
+            names = [ "--kubelet-port" ];
+            reason = "the network policy allows traffic to kubelets on port ${toString kubeletPort} only.";
+          }
+        ];
       } config.extraArgs;
     in
     {
@@ -247,7 +255,7 @@ in
                   image = kix.image.ref config.image;
                   imagePullPolicy = config.image.pullPolicy;
                   inherit args;
-                  env = kix.mkEnvVars (kix.mergeEnv { inherit who; } config.env);
+                  env = kix.mkEnvVars (kix.mergeEnv { inherit scope; } config.env);
                   ports = [ (kix.port "https" securePort) ];
                   livenessProbe = {
                     httpGet = {

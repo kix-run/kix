@@ -57,6 +57,97 @@ At the `manifest` and `package` levels, `resources` includes all resources shipp
 See [Add scorecard rules](/docs/how-to/policy-ci-and-compliance/add-scorecard-rules/) to write custom rules and test them with `kix check`.
 :::
 
+## Rules that follow references between objects
+
+Manifest-, package-, and namespace-level rules see only one resource, instance, or namespace at a time. To follow a reference from one object to another (for example, resolving a workload's `priorityClassName` to its `PriorityClass` object), write a rule with `level = "cluster"`. Cluster rules receive `allResources`: a list of every rendered manifest across all active instances in the build.
+
+Scorecard rules run during evaluation and never contact the cluster, so `allResources` omits anything outside the build:
+- Built-in Kubernetes objects that no manifest declares, such as the `system-cluster-critical` (`2000000000`) and `system-node-critical` (`2000001000`) PriorityClasses.
+- Objects created outside Kix, or external objects represented by `kix.mkImport` markers (which carry no resource fields such as a PriorityClass `value`).
+- Pods created at runtime by operators, along with any other live cluster state.
+
+### Example: cap PriorityClass values in a namespace
+
+In a cluster module with `kix` in scope, this rule enforces a maximum `PriorityClass` value of `1000` on workloads in namespace `apps`:
+
+```nix
+scorecard = {
+  enable = true;
+  maxSeverity = "error";
+  rules = kix.rules // {
+    organization.priorityCeiling = {
+      description = "Pods in namespace apps must not resolve to a PriorityClass above 1000";
+      level = "cluster";
+      severity = "error";
+      check =
+        { allResources, ... }:
+        let
+          namespace = "apps";
+          ceiling = 1000;
+          # Kubernetes creates these two classes itself, so no build contains them.
+          builtInClasses = [
+            { metadata.name = "system-cluster-critical"; value = 2000000000; }
+            { metadata.name = "system-node-critical"; value = 2000001000; }
+          ];
+          classes = builtInClasses ++ builtins.filter (r: (r.kind or "") == "PriorityClass") allResources;
+          globalDefaults = builtins.filter (c: c.globalDefault or false) classes;
+          podSpecOf =
+            r:
+            if r.kind == "CronJob" then
+              r.spec.jobTemplate.spec.template.spec or { }
+            else
+              r.spec.template.spec or { };
+          workloads = builtins.filter (
+            r:
+            builtins.elem (r.kind or "") [ "Deployment" "StatefulSet" "DaemonSet" "Job" "CronJob" ]
+            && (r.metadata.namespace or null) == namespace
+          ) allResources;
+          check =
+            w:
+            let
+              named = (podSpecOf w).priorityClassName or null;
+              # A pod that names no class gets the globalDefault class.
+              class = if named != null then builtins.filter (c: c.metadata.name == named) classes else globalDefaults;
+              finding = message: [ { inherit namespace message; resource = w.metadata.name; } ];
+            in
+            if named == null && class == [ ] then
+              [ ]
+            else if class == [ ] then
+              finding "${w.kind} ${w.metadata.name} names PriorityClass ${named}, which is not in the build, so the rule cannot read its value"
+            else if (builtins.head class).value > ceiling then
+              finding "${w.kind} ${w.metadata.name} resolves to PriorityClass ${(builtins.head class).metadata.name} with value ${toString (builtins.head class).value}, above ${toString ceiling}"
+            else
+              [ ];
+        in
+        builtins.concatMap check workloads;
+    };
+  };
+};
+```
+
+Setting `scorecard.rules` replaces the built-in `kix.rules` set, so merge custom rules with `kix.rules // { ... }` to keep the built-in checks. Findings at `severity = "error"` fail the build only when `scorecard.maxSeverity = "error"`.
+
+Three details in `check` handle how Kubernetes and Kix represent PriorityClasses:
+
+- **Built-in PriorityClasses:** `builtInClasses` lists `system-cluster-critical` and `system-node-critical` directly because Kubernetes creates them outside the build. If a workload names any other class missing from the build, the rule reports a finding because it cannot check that class's `value`.
+- **`globalDefault` fallback:** When a workload omits `priorityClassName`, Kubernetes assigns the cluster's `globalDefault` PriorityClass if one exists, so the rule falls back to `globalDefaults`.
+- **Comparing names with `==` instead of attribute lookup:** When a package sets `priorityClassName = priorityClass.out.name`, that string carries Kix's dependency metadata. Search matching resources with `builtins.filter` and `==` rather than indexing an attribute set (`classes.${name}`), which fails evaluation with an error stating that the string `"is not allowed to refer to a store path"`.
+
+When Deployment `app` in namespace `apps` sets `priorityClassName` from a `packages.priority-class` instance `batch` with `config.value = 500`, `kix check` passes:
+
+```text
+TOOL       RESULT  DETAILS
+eval       pass    31 manifests evaluated, 1 warnings
+scorecard  pass    0 errors, 10 warnings, 6 info
+```
+
+Raising `config.value` to `5000` fails `kix check`:
+
+```text
+cluster 'evalq' has 1 problem:
+  - [scorecard:organization.priorityCeiling] apps/app: Deployment app resolves to PriorityClass batch with value 5000, above 1000
+```
+
 ## Finding schema
 
 When `scorecard.enable = true` and no error-severity finding aborts evaluation, Kix writes the scorecard report to `kix-scorecard.json` in the cluster build output.
@@ -98,6 +189,7 @@ When `scorecard.enable = true` and no error-severity finding aborts evaluation, 
 | `resource` | `string \| null` | Kubernetes object name for `manifest` findings or cluster rules that report a specific resource. |
 | `message` | `string` | Diagnostic message from `check` (defaults to `"check failed"` if omitted). |
 | `tags` | `array of string` | Tags copied from the rule definition. |
+| `id` | `string` | Optional change ID (such as `"K1895"`) that links the finding to a changelog entry. Present only when `check` sets `id` on the finding; Kix prints it in brackets before the message. |
 
 When a finding resolves to `"error"` (which requires `scorecard.maxSeverity = "error"`), Kix converts it into a failed cluster assertion and stops the build. `kix check -o sarif` exports the scorecard report (or the evaluation failure) in SARIF 2.1.0 format.
 
@@ -207,7 +299,7 @@ Defined in `kix.rules.architecture` (`kix/lib/rules/architecture.nix`). These ru
 | `architecture.controllerRequiresCrds` | `package` | `warning` | When a package renders at least one `CustomResourceDefinition` and at least one `Deployment`, `StatefulSet`, or `DaemonSet`, at least one of those workloads must depend on one of the definitions (through `requires`, `extraDeps`, or string context). Listing the definitions in `root.requires` orders consumers after them, not the controller. |
 | `architecture.untrackedReferences` | `cluster` | `info` | Audits every [`kix.untrackedRef`](/docs/reference/composition-helpers/#facts-and-untrackedref) name that does not identify a creator via `{ kind; name; by; }` or a single-owner `{ name; by = "self"; }`. |
 | `architecture.unsafeGrants` | `package` | `info` | Lists every grant in a package's `meta.unsafe` (`"raw-pvc"`, `"host-network"`, `"privileged"`, `"run-as-root"`, `"cluster-admin"`). |
-| `architecture.distinctWorkloadSelectors` | `package` | `error` | Within an instance, no workload's `spec.selector.matchLabels` (on `Deployment`, `StatefulSet`, `DaemonSet`, or `Job`) may be a subset of another workload's pod template labels. |
+| `architecture.distinctWorkloadSelectors` | `package` | `error` | Within a package instance, no `Deployment`, `StatefulSet`, `DaemonSet`, or `Job` `spec.selector` (`matchLabels` and `matchExpressions`) may match another workload's pod template labels. |
 | `architecture.consistentPortNames` | `package` | `warning` | A named container port must map to the same port number across all workloads in the same package instance. |
 | `architecture.distinctSameKindLabels` | `package` | `error` | When an instance renders multiple `Service` objects, no Service's `metadata.labels` may be equal to or a subset of another Service's `metadata.labels` (add a distinguishing label such as `app.kubernetes.io/component`). |
 | `architecture.selectorCoherence` | `manifest` | `warning` | Every non-empty `Service` selector must carry Nix dependency context from a workload (for example, via `kix.service.fromWorkload` or `workload.out.selector`), unless the Service carries `kix.run/operand-of`. |

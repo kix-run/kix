@@ -44,7 +44,7 @@ let
   # their placement.
   csiNodePlacement = {
     nodeSelector = config.csiNode.nodeSelector // c.amd64;
-    tolerations = map c.toleration config.csiNode.tolerations;
+    tolerations = kix.tolerations.render config.csiNode.tolerations;
   };
 
   cpuCount = config.ioEngine.cpuCount;
@@ -66,7 +66,7 @@ in
       template.spec = hostNetworkPod // {
         serviceAccount = self.ioEngineServiceAccount;
         nodeSelector = c.ioEngineLabels config // c.amd64;
-        tolerations = map c.toleration config.ioEngine.tolerations;
+        tolerations = kix.tolerations.render config.ioEngine.tolerations;
         initContainers = [
           (c.waitFor config "agent-core" self.agentCoreService.out.fqdn 50051)
           (c.waitFor config "etcd" self.etcdService.out.fqdn 2379)
@@ -74,43 +74,68 @@ in
         containers = [
           {
             name = "io-engine";
-            image = c.imageRef config.image;
+            image = kix.image.ref config.image;
             imagePullPolicy = config.image.pullPolicy;
             command = [ "io-engine" ];
             args = c.args {
               option = "ioEngine.extraArgs";
-              base = [
-                "--grpc-ip=$(MY_POD_IP)"
-                "--grpc-port=10124"
-                "-N$(MY_NODE_NAME)"
-                "-R${ep.coreGrpc}"
-                "-y${hostDir}/io-engine/config.yaml"
-                "-l${lib.concatMapStringsSep "," toString (lib.range 1 cpuCount)}"
-                "-p=${ep.etcdStore}"
-                "--ptpl-dir=${hostDir}/io-engine/ptpl/"
+              args = [
+                {
+                  flags = [ "--grpc-ip=$(MY_POD_IP)" ];
+                  reason = "io-engine listens on the pod's IP.";
+                }
+                {
+                  flags = [ "--grpc-port=10124" ];
+                  reason = "agent-core and the metrics exporter reach io-engine on port 10124.";
+                }
+                {
+                  flags = [ "-N$(MY_NODE_NAME)" ];
+                  reason = "io-engine registers under its Kubernetes node name, which DiskPools reference.";
+                }
+                {
+                  flags = [ "-R${ep.coreGrpc}" ];
+                  reason = "io-engine must connect to this instance's agent-core Service.";
+                }
+                {
+                  flags = [ "-y${hostDir}/io-engine/config.yaml" ];
+                  reason = "io-engine reads its configuration from ${hostDir}/io-engine/config.yaml on the node.";
+                  fix = "Remove -y from ioEngine.extraArgs, and edit ${hostDir}/io-engine/config.yaml on the node instead.";
+                }
+                {
+                  flags = [ "-l${lib.concatMapStringsSep "," toString (lib.range 1 cpuCount)}" ];
+                  from = "the ioEngine.cpuCount option, which also sets the container's CPU request and limit";
+                  fix = "Remove -l from ioEngine.extraArgs, and set ioEngine.cpuCount (or set core_list in ${hostDir}/io-engine/config.yaml on the node) instead.";
+                }
+                {
+                  flags = [ "-p=${ep.etcdStore}" ];
+                  reason = "io-engine must connect to this instance's etcd Service.";
+                }
+                {
+                  flags = [ "--ptpl-dir=${hostDir}/io-engine/ptpl/" ];
+                  reason = "persistent reservation state is stored in ${hostDir}/io-engine/ptpl/ on the node.";
+                }
+                {
+                  names = [
+                    "--grpc-endpoint"
+                    "-g"
+                  ];
+                  reason = "this package sets the listen address with --grpc-ip and --grpc-port.";
+                }
+                {
+                  names = [ "-m" ];
+                  reason = "this package selects CPU cores with -l from ioEngine.cpuCount, which also sets the container's CPU request and limit.";
+                  fix = "Remove -m from ioEngine.extraArgs, and set ioEngine.cpuCount (or set core_list in ${hostDir}/io-engine/config.yaml on the node) instead.";
+                }
+                {
+                  defaults = [
+                    "--api-versions=v1"
+                    "--tgt-crdt=30"
+                    "--ps-retries=300"
+                    "--pool-io-error-threshold=64"
+                    "--pool-io-stall-deadline=110s110s"
+                  ];
+                }
               ];
-              tunables = [
-                "--api-versions=v1"
-                "--tgt-crdt=30"
-                "--ps-retries=300"
-                "--pool-io-error-threshold=64"
-                "--pool-io-stall-deadline=110s110s"
-              ];
-              owned = {
-                "--grpc-ip" = "io-engine listens on the pod's IP; remove it.";
-                "--grpc-port" = "agent-core and the metrics exporter reach io-engine on port 10124; remove it.";
-                "--grpc-endpoint" = "the package sets --grpc-ip and --grpc-port; remove it.";
-                "-g" = "the package sets --grpc-ip and --grpc-port; remove it.";
-                "-N" = "io-engine registers under its Kubernetes node name, which DiskPools name; remove it.";
-                "-R" = "the package points it at this instance's agent-core; remove it.";
-                "-y" = "the config file lives in the io-engine host directory; edit that file instead.";
-                "-l" =
-                  "the cores follow ioEngine.cpuCount, which also sets the CPU request; set that, or core_list in the node's config.yaml.";
-                "-m" =
-                  "the package sets the cores with -l from ioEngine.cpuCount, which also sets the CPU request; set that, or core_list in the node's config.yaml.";
-                "-p" = "the package points it at this instance's etcd; remove it.";
-                "--ptpl-dir" = "the reservation state lives in the io-engine host directory; remove it.";
-              };
             } config.ioEngine.extraArgs;
             env = c.env {
               option = "ioEngine.env";
@@ -167,21 +192,28 @@ in
           }
           {
             name = "metrics-exporter-io-engine";
-            image = c.imageRef config.metricsExporter.image;
+            image = kix.image.ref config.metricsExporter.image;
             imagePullPolicy = config.metricsExporter.image.pullPolicy;
             args = c.args {
               option = "metricsExporter.extraArgs";
-              base = [
-                "--metrics-endpoint=[::]:9502"
-                "--grpc-port=10124"
-                "--rest-endpoint=${ep.rest}"
+              args = [
+                {
+                  flags = [ "--metrics-endpoint=[::]:9502" ];
+                  reason = "the metrics Service and ServiceMonitor use port 9502.";
+                }
+                {
+                  flags = [ "--grpc-port=10124" ];
+                  reason = "io-engine listens on port 10124 in the same pod.";
+                }
+                {
+                  flags = [ "--rest-endpoint=${ep.rest}" ];
+                  reason = "the metrics exporter must connect to this instance's api-rest Service.";
+                }
+                {
+                  names = [ "-m" ];
+                  reason = "-m is the short form of --metrics-endpoint, and the metrics Service and ServiceMonitor use port 9502.";
+                }
               ];
-              owned = {
-                "--metrics-endpoint" = "the metrics Service and ServiceMonitor use port 9502; remove it.";
-                "-m" = "the package sets --metrics-endpoint, which the metrics Service uses; remove it.";
-                "--grpc-port" = "io-engine in the same pod listens on 10124; remove it.";
-                "--rest-endpoint" = "the package points it at this instance's api-rest; remove it.";
-              };
             } config.metricsExporter.extraArgs;
             env = c.env {
               option = "metricsExporter.env";
@@ -229,40 +261,67 @@ in
           containers = [
             {
               name = "csi-node";
-              image = c.imageRef config.csiNode.image;
+              image = kix.image.ref config.csiNode.image;
               imagePullPolicy = config.csiNode.image.pullPolicy;
               args = c.args {
                 option = "csiNode.extraArgs";
-                base = [
-                  "--csi-socket=/csi/csi.sock"
-                  "--node-name=$(MY_NODE_NAME)"
-                  "--rest-endpoint=${ep.rest}"
+                args = [
+                  {
+                    flags = [ "--csi-socket=/csi/csi.sock" ];
+                    reason = "the node-driver-registrar sidecar and agent-ha-node connect to /csi/csi.sock.";
+                  }
+                  {
+                    flags = [ "--node-name=$(MY_NODE_NAME)" ];
+                    reason = "the plugin registers under its Kubernetes node name.";
+                  }
+                  {
+                    flags = [ "--rest-endpoint=${ep.rest}" ];
+                    reason = "the CSI node plugin must connect to this instance's api-rest Service.";
+                  }
                   "--enable-rest"
                   "--enable-registration"
-                  "--grpc-ip=$(MY_POD_IP)"
-                  "--grpc-port=10199"
-                  "--kubelet-path=${kubeletDir}"
-                  "--nvme-nr-io-queues=${toString cpuCount}"
+                  {
+                    flags = [ "--grpc-ip=$(MY_POD_IP)" ];
+                    reason = "the plugin listens on the pod's IP.";
+                  }
+                  {
+                    flags = [ "--grpc-port=10199" ];
+                    reason = "agent-core reaches the plugin on port 10199.";
+                  }
+                  {
+                    flags = [ "--kubelet-path=${kubeletDir}" ];
+                    from = "the csiNode.kubeletDir option";
+                    fix = "Remove it from csiNode.extraArgs and set csiNode.kubeletDir instead.";
+                  }
+                  {
+                    flags = [ "--nvme-nr-io-queues=${toString cpuCount}" ];
+                    from = "the ioEngine.cpuCount option";
+                    fix = "Remove it from csiNode.extraArgs and set ioEngine.cpuCount instead.";
+                  }
+                  {
+                    names = [ "-c" ];
+                    reason = "-c is the short form of --csi-socket, and the registrar sidecar and agent-ha-node connect to /csi/csi.sock.";
+                  }
+                  {
+                    names = [ "-n" ];
+                    reason = "-n is the short form of --node-name, and the plugin must register under its Kubernetes node name.";
+                  }
+                  {
+                    names = [
+                      "--grpc-endpoint"
+                      "-g"
+                    ];
+                    reason = "this package sets the listen address with --grpc-ip and --grpc-port.";
+                  }
+                  {
+                    defaults = [
+                      "--nvme-io-timeout=110s10s"
+                      "--nvme-core-io-timeout=110s10s"
+                      "--nvme-ctrl-loss-tmo=1980"
+                      "--nvme-connect-fallback=true"
+                    ];
+                  }
                 ];
-                tunables = [
-                  "--nvme-io-timeout=110s10s"
-                  "--nvme-core-io-timeout=110s10s"
-                  "--nvme-ctrl-loss-tmo=1980"
-                  "--nvme-connect-fallback=true"
-                ];
-                owned = {
-                  "--csi-socket" = "the registrar and agent-ha-node dial this socket; remove it.";
-                  "-c" = "the package sets --csi-socket, which the registrar and agent-ha-node dial; remove it.";
-                  "--node-name" = "the plugin registers under its Kubernetes node name; remove it.";
-                  "-n" = "the package sets --node-name to the Kubernetes node name; remove it.";
-                  "--rest-endpoint" = "the package points it at this instance's api-rest; remove it.";
-                  "--grpc-ip" = "the plugin listens on the pod's IP; remove it.";
-                  "--grpc-port" = "agent-core reaches the plugin on port 10199; remove it.";
-                  "--grpc-endpoint" = "the package sets --grpc-ip and --grpc-port; remove it.";
-                  "-g" = "the package sets --grpc-ip and --grpc-port; remove it.";
-                  "--kubelet-path" = "it follows csiNode.kubeletDir; set that.";
-                  "--nvme-nr-io-queues" = "it follows ioEngine.cpuCount; set that.";
-                };
               } config.csiNode.extraArgs;
               env = c.env {
                 option = "csiNode.env";
@@ -355,28 +414,47 @@ in
           containers = [
             {
               name = "agent-ha-node";
-              image = c.imageRef config.agentHaNode.image;
+              image = kix.image.ref config.agentHaNode.image;
               imagePullPolicy = config.agentHaNode.image.pullPolicy;
               args = c.args {
                 option = "agentHaNode.extraArgs";
-                base = [
-                  "--node-name=$(MY_NODE_NAME)"
-                  "--csi-socket=/csi/csi.sock"
-                  "--grpc-ip=$(MY_POD_IP)"
-                  "--grpc-port=50053"
-                  "--cluster-agent=${ep.clusterAgent}"
+                args = [
+                  {
+                    flags = [ "--node-name=$(MY_NODE_NAME)" ];
+                    reason = "agent-ha-node must register under the same Kubernetes node name as the CSI node plugin.";
+                  }
+                  {
+                    flags = [ "--csi-socket=/csi/csi.sock" ];
+                    reason = "the CSI node plugin listens on /csi/csi.sock.";
+                  }
+                  {
+                    flags = [ "--grpc-ip=$(MY_POD_IP)" ];
+                    reason = "agent-ha-node listens on the pod's IP.";
+                  }
+                  {
+                    flags = [ "--grpc-port=50053" ];
+                    reason = "agent-core reaches agent-ha-node on port 50053.";
+                  }
+                  {
+                    flags = [ "--cluster-agent=${ep.clusterAgent}" ];
+                    reason = "agent-ha-node must connect to this instance's agent-ha-cluster Service.";
+                  }
+                  {
+                    names = [ "-n" ];
+                    reason = "-n is the short form of --node-name, which must match the CSI node plugin's node name.";
+                  }
+                  {
+                    names = [
+                      "--grpc-endpoint"
+                      "-g"
+                    ];
+                    reason = "this package sets the listen address with --grpc-ip and --grpc-port.";
+                  }
+                  {
+                    names = [ "-c" ];
+                    reason = "-c is the short form of --cluster-agent, which connects agent-ha-node to this instance's agent-ha-cluster Service.";
+                  }
                 ];
-                owned = {
-                  "--node-name" = "it must equal the CSI node plugin's node name; remove it.";
-                  "-n" = "the package sets --node-name to the Kubernetes node name; remove it.";
-                  "--csi-socket" = "the CSI node plugin listens on this socket; remove it.";
-                  "--grpc-ip" = "agent-ha-node listens on the pod's IP; remove it.";
-                  "--grpc-port" = "agent-core reaches agent-ha-node on port 50053; remove it.";
-                  "--grpc-endpoint" = "the package sets --grpc-ip and --grpc-port; remove it.";
-                  "-g" = "the package sets --grpc-ip and --grpc-port; remove it.";
-                  "--cluster-agent" = "the package points it at this instance's agent-ha-cluster; remove it.";
-                  "-c" = "the package sets --cluster-agent to this instance's agent-ha-cluster; remove it.";
-                };
               } config.agentHaNode.extraArgs;
               env = c.env {
                 option = "agentHaNode.env";

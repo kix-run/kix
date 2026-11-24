@@ -58,7 +58,6 @@
 let
   release = "2026.11.2";
   name = scope.instanceName;
-  who = "cloudflared ${scope.namespaceName}/${name}";
 in
 {
   meta = {
@@ -114,7 +113,7 @@ in
     }:
     let
       token = kix.contracts.secret.helpers.use {
-        inherit who;
+        inherit scope;
         arg = "tunnelToken";
         dep = tunnelToken;
         keys = [ "token" ];

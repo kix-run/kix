@@ -93,8 +93,7 @@ in
     owner = "app-team";
   };
 
-  deps.database.assertions =
-    dep: kix.contracts.postgresDatabase.assertions "vaultwarden ${scope.namespaceName}/${name}" dep;
+  deps.database.assertions = kix.contracts.postgresDatabase.assertions;
 
   # Printed on the build that passes too, as the reminder to undo the
   # override afterwards.
@@ -167,7 +166,7 @@ in
       }:
       let
         relay = kix.contracts.smtp.helpers.settings {
-          who = "vaultwarden ${scope.namespaceName}/${name}";
+          inherit scope;
           inherit smtp;
           inherit (config.mail) from;
         };
@@ -228,7 +227,6 @@ in
                 ${if config.initChownData then "initContainers" else null} = lib.singleton (
                   if nonRootFailsBuild clusterConfig then
                     scope.fail {
-                      package = "vaultwarden";
                       option = "initChownData";
                       message = chownOverrideHint;
                     }
@@ -267,7 +265,7 @@ in
                         })
                         ++ kix.mkEnvVars (
                           kix.mergeEnv {
-                            who = "vaultwarden ${scope.namespaceName}/${name}";
+                            inherit scope;
                             defaults = {
                               SIGNUPS_ALLOWED = "false";
                               INVITATIONS_ALLOWED = "true";

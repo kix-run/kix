@@ -183,7 +183,6 @@ in
       externalSecret =
         if !(operatorOut ? mkExternalSecret) then
           scope.fail {
-            package = "external-secret";
             message = "the externalSecrets dependency has no out.mkExternalSecret, so it is not an external-secrets instance.";
             fix = "Wire packages.experimental.external-secrets as externalSecrets.";
           }

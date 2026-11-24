@@ -82,6 +82,6 @@ Supporting files in this directory:
    checkout.
 4. Run `nix run .#kix -- check <key>`.
 
-On pull requests that change `clusters/` or `flake.nix`, the `Bundle checks`
-workflow runs `every_test_cluster_bundles`
+On pull requests that change `clusters/`, `kix/`, or `flake.nix`, the
+`Package checks` workflow runs `every_test_cluster_bundles`
 (`cli/kix-cli/tests/commands_test.rs`) to build and bundle every cluster.

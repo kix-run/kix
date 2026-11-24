@@ -108,7 +108,7 @@ let
 in
 {
   meta = {
-    version = lib.removePrefix "v" release;
+    version = release;
     description = "Kubernetes Gateway API standard-channel CRDs (gateway.networking.k8s.io)";
     owner = "platform";
     # The role admits one managed claimant per cluster, which keeps a
@@ -197,24 +197,21 @@ in
       root = {
         resource = self.crds.gateways;
         requires = builtins.attrValues self.crds ++ [ self.safeUpgradesBinding ];
-        out =
-          kix.contracts.experimental.gatewayApi.check
-            "gateway-api ${scope.namespaceName}/${scope.instanceName}"
-            {
-              version = lib.removePrefix "v" release;
-              crds = {
-                GatewayClass = self.crds.gatewayClasses;
-                Gateway = self.crds.gateways;
-                ListenerSet = self.crds.listenerSets;
-                HTTPRoute = self.crds.httpRoutes;
-                GRPCRoute = self.crds.grpcRoutes;
-                TLSRoute = self.crds.tlsRoutes;
-                TCPRoute = self.crds.tcpRoutes;
-                UDPRoute = self.crds.udpRoutes;
-                ReferenceGrant = self.crds.referenceGrants;
-                BackendTLSPolicy = self.crds.backendTlsPolicies;
-              };
-            };
+        out = kix.contracts.experimental.gatewayApi.check scope {
+          version = lib.removePrefix "v" release;
+          crds = {
+            GatewayClass = self.crds.gatewayClasses;
+            Gateway = self.crds.gateways;
+            ListenerSet = self.crds.listenerSets;
+            HTTPRoute = self.crds.httpRoutes;
+            GRPCRoute = self.crds.grpcRoutes;
+            TLSRoute = self.crds.tlsRoutes;
+            TCPRoute = self.crds.tcpRoutes;
+            UDPRoute = self.crds.udpRoutes;
+            ReferenceGrant = self.crds.referenceGrants;
+            BackendTLSPolicy = self.crds.backendTlsPolicies;
+          };
+        };
       };
     };
 }

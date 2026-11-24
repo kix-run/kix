@@ -19,6 +19,34 @@ finalizer removes that record's resources.
 This page is hand-maintained. Check `cli/kix-cli/src/commands/operator.rs`,
 `cli/kix-operator/src/main.rs`, and the command files when in doubt.
 
+## What the operator does today
+
+:::caution[Work in progress]
+The Kix operator is a work in progress, and operator mode is currently
+push-based. The operator cannot pull and build from a Git repository on its own
+yet; pull-based Git sync is planned.
+:::
+
+- **Installation:** The release archive includes `kix-operator` alongside
+  `kix`, but Kix does not yet provide a package or manifest to deploy
+  `kix-operator` in a cluster.
+- **What runs where:** You run `kix deploy --operator`,
+  `kix rollback --operator`, and `kix gc --operator` on your machine or in CI.
+  `kix` evaluates and builds the cluster, shows the plan, and writes an
+  Activation record (`activations.kix.run`) whose `spec.source.path` points to
+  the build in Kix's local store. Inside the cluster, `kix-operator` watches
+  Activation records, reads the built manifests from `spec.source.path`, and
+  applies them with the same engine as [`kix deploy`](/docs/reference/cli/deploy/).
+  Because the operator never clones a Git repository, evaluates `.nix` files, or
+  builds anything, the build at `spec.source.path` must already exist in the
+  store the operator reads.
+- **Drift repair:** While an Activation is `Active`, `kix-operator` re-applies
+  drifted resources and deletes Kix-managed resources removed from the build.
+  It checks every 300 seconds by default (override with the
+  `KIX_REQUEUE_INTERVAL_SECS` environment variable).
+- **Deploying from Git today:** Run `kix deploy` (with or without `--operator`)
+  from CI after a merge.
+
 ## Commands
 
 | Command | With `--operator` |

@@ -99,12 +99,9 @@ let
   # meta.version, the default image tags, and the tag in crds/sources.txt
   # and rbac/sources.txt.
   release = "v0.16.0";
-  # builtins.splitVersion would read the `v` as a component of its own.
-  minorOf = v: lib.versions.majorMinor (lib.removePrefix "v" v);
 
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "cnpg-barman-cloud ${ns}/${name}";
 
   readJSON = file: builtins.fromJSON (builtins.readFile file);
 
@@ -150,7 +147,7 @@ let
 in
 {
   meta = {
-    version = lib.removePrefix "v" release;
+    version = release;
     description = "Barman Cloud plugin for CloudNativePG: WAL archiving and base backups to object storage";
     owner = "platform";
     defaultAliases = [ "barmanCloud" ];
@@ -168,20 +165,23 @@ in
 
   assertions =
     { config, ... }:
-    let
-      imageTag = builtins.unsafeDiscardStringContext config.image.tag;
-      sidecarTag = builtins.unsafeDiscardStringContext config.sidecar.image.tag;
-    in
     [
-      {
-        assertion = minorOf imageTag == minorOf release;
-        message = "image.tag \"${imageTag}\" is not a plugin-barman-cloud ${minorOf release} release, and the definition under kix/packages/experimental/cnpg-barman-cloud/crds and the roles under rbac are vendored from ${release}. Set image.tag to a ${minorOf release}.x tag, or move the package to another release as its header describes.";
+      (kix.image.checkRelease {
+        inherit (config) image;
+        inherit release;
+        reason = "the CRD in kix/packages/experimental/cnpg-barman-cloud/crds and the RBAC roles in its rbac directory come from plugin-barman-cloud ${release}";
+        fix = "To update this package to another version, follow the instructions at the top of kix/packages/experimental/cnpg-barman-cloud/default.nix.";
+      })
+    ]
+    # A sidecar that keeps image.tag is covered by the check on image.tag.
+    ++ lib.optional (config.sidecar.image.tag != config.image.tag) (
+      kix.image.checkRelease {
+        inherit (config.sidecar) image;
+        option = "sidecar.image";
+        inherit release;
+        reason = "the plugin requires a sidecar from the same release (plugin-barman-cloud ${release})";
       }
-      {
-        assertion = minorOf sidecarTag == minorOf release;
-        message = "sidecar.image.tag \"${sidecarTag}\" is not a plugin-barman-cloud ${minorOf release} release, and the plugin expects the sidecar of its own release. Set sidecar.image.tag to a ${minorOf release}.x tag, or leave it to follow image.tag.";
-      }
-    ];
+    );
 
   options = {
     image = kix.options.image {
@@ -242,7 +242,6 @@ in
           cnpgOperator.out
         else
           scope.fail {
-            package = "cnpg-barman-cloud";
             message = "the cnpgOperator dependency has no out.podSelector, as with an import. The package opens the operator's traffic to the plugin from it.";
             fix = "Wire a managed cnpg-operator instance with deps.cnpgOperator = ref.${ns}.<instance>.";
           };
@@ -250,7 +249,6 @@ in
       _sameNamespace =
         if operatorNamespace != ns then
           scope.fail {
-            package = "cnpg-barman-cloud";
             message = "the cnpgOperator dependency runs in namespace ${operatorNamespace}, and CloudNativePG finds plugins only by Services in its own namespace.";
             fix = "Move this instance to ${operatorNamespace}.";
           }
@@ -259,7 +257,6 @@ in
 
       certCrds =
         certManager.out.crds or (scope.fail {
-          package = "cnpg-barman-cloud";
           message = "the certManager dependency has no out.crds, as with an import.";
           fix = "Wire a managed cert-manager instance with deps.certManager = ref.<namespace>.<instance>.";
         });
@@ -268,7 +265,7 @@ in
 
       env = kix.mkEnvVars (
         kix.mergeEnv {
-          inherit who;
+          inherit scope;
           owned = [
             {
               vars.SIDECAR_IMAGE = sidecarImage;
@@ -279,30 +276,42 @@ in
         } config.env
       );
 
-      args = [
-        "operator"
-        "--server-cert=/server/tls.crt"
-        "--server-key=/server/tls.key"
-        "--client-cert=/client/tls.crt"
-        "--server-address=:${toString grpcPort}"
-        "--health-probe-bind-address=:${toString healthPort}"
-        "--leader-elect"
-      ]
-      ++ kix.guardArgs {
-        inherit who;
-        owned = {
-          "--server-cert" =
-            "the package mounts the server certificate from the Certificate it issues; remove it.";
-          "--server-key" = "the package mounts the server key from the Certificate it issues; remove it.";
-          "--client-cert" =
-            "the package issues the client certificate the operator presents and names it on the Service; remove it.";
-          "--server-address" =
-            "the Service and the readiness probe use port ${toString grpcPort}; remove it.";
-          "--health-probe-bind-address" = "the liveness probe uses port ${toString healthPort}; remove it.";
-          "--leader-elect" = "the package always enables leader election; remove it.";
-          "--plugin-path" =
-            "the operator dials the plugin over TCP through its Service, not through a socket; remove it.";
-        };
+      # The operator parses flags with cobra and pflag
+      # (internal/cmd/operator/main.go upstream).
+      args = kix.mergeArgs {
+        inherit scope;
+        parser = "gnu";
+        args = [
+          "operator"
+          {
+            flags = [ "--server-cert=/server/tls.crt" ];
+            reason = "the server certificate from cert-manager is mounted at /server/tls.crt.";
+          }
+          {
+            flags = [ "--server-key=/server/tls.key" ];
+            reason = "the server private key from cert-manager is mounted at /server/tls.key.";
+          }
+          {
+            flags = [ "--client-cert=/client/tls.crt" ];
+            reason = "the client certificate for the CloudNativePG operator is mounted at /client/tls.crt, and the plugin Service points to that Secret.";
+          }
+          {
+            flags = [ "--server-address=:${toString grpcPort}" ];
+            reason = "the Service and the readiness probe use port ${toString grpcPort}.";
+          }
+          {
+            flags = [ "--health-probe-bind-address=:${toString healthPort}" ];
+            reason = "the liveness probe uses port ${toString healthPort}.";
+          }
+          {
+            flags = [ "--leader-elect" ];
+            reason = "leader election keeps one replica active when multiple replicas run.";
+          }
+          {
+            names = [ "--plugin-path" ];
+            reason = "--plugin-path switches the plugin to a Unix socket, and the CloudNativePG operator connects to it over TCP through its Service.";
+          }
+        ];
       } config.extraArgs;
 
       certSecret =
@@ -330,7 +339,6 @@ in
         in
         if literal != [ ] then
           scope.fail {
-            package = "cnpg-barman-cloud";
             message = "${what} names Secret \"${first.name}\" at ${first.path} by a literal string, so Kix neither orders the store after the Secret nor checks that it holds key \"${first.key}\".";
             fix = "Use (<secret dependency>.out.keyRef \"${first.key}\").valueFrom.secretKeyRef, or, for a Secret created outside Kix, name = kix.untrackedRef { name = \"${first.name}\"; kind = \"Secret\"; }.";
           }

@@ -1,9 +1,9 @@
 ---
 title: "Validation checks"
-description: "The 24 always-on checks that verify cross-resource references, selectors, and CRD ordering on every build."
+description: "The 25 always-on checks that verify cross-resource references, selectors, and CRD ordering on every build."
 ---
 
-Whenever you compile or deploy a cluster, Kix runs 24 cross-resource validation checks across all rendered manifests to catch wiring mistakes that would otherwise fail in Kubernetes. Because these checks guard against broken references (such as a Service pointing to a missing port, a workload mounting a nonexistent ConfigMap, or a custom resource deployed before its CRD), they are always active and cannot be turned off.
+Whenever you compile or deploy a cluster, Kix runs 25 cross-resource validation checks across all rendered manifests to catch wiring mistakes that would otherwise fail in Kubernetes. Because these checks guard against broken references (such as a Service pointing to a missing port, a workload mounting a nonexistent ConfigMap, or a custom resource deployed before its CRD), they are always active and cannot be turned off.
 
 :::note[Helpful background]
 - [05. Basic graph and deploy loop](/docs/tutorials/05-basic-graph-and-deploy-loop/): see how `kix check` validates a cluster before deployment.
@@ -12,7 +12,7 @@ Whenever you compile or deploy a cluster, Kix runs 24 cross-resource validation 
 - [Labels and Selectors (Kubernetes docs)](https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/): review how Kubernetes connects Services, NetworkPolicies, and PodDisruptionBudgets to pods using label selectors.
 :::
 
-This page is maintained alongside `kix/lib/eval/validate.nix`. The test suites in `kix/lib/tests/validate.nix` (checks 1 through 18) and `kix/lib/tests/units/lib-reference-checks.nix` (checks 18 through 24) contain passing and failing cases for each check.
+This page is maintained alongside `kix/lib/eval/validate.nix`. The test suites in `kix/lib/tests/validate.nix` (checks 1 through 18 and check 25) and `kix/lib/tests/units/lib-reference-checks.nix` (checks 18 through 24) contain passing and failing cases for each check.
 
 ## Checks
 
@@ -26,12 +26,12 @@ This page is maintained alongside `kix/lib/eval/validate.nix`. The test suites i
 | 6 | A `StatefulSet` `serviceName` names a headless `Service` (`clusterIP: None`) in its namespace. | Unset `serviceName` |
 | 7 | No two resources share the same `kind`, `namespace`, and `name`. | |
 | 8 | Every resource carries `app.kubernetes.io/managed-by: kix` in `metadata.labels`. | |
-| 9 | A workload's `selector.matchLabels` is a subset of its pod template labels (`Deployment`, `StatefulSet`, `DaemonSet`, `Job`). | |
+| 9 | On a `Deployment`, `StatefulSet`, `DaemonSet`, or `Job`, `spec.selector` (`matchLabels` and `matchExpressions`) matches the pod template labels. | |
 | 10 | `Ingress` backends name a `Service` in the same namespace. | |
 | 11 | Every `metadata.namespace` has a corresponding `Namespace` resource in the build. | `_`-prefixed sentinel namespaces used internally for cluster-scoped instances |
 | 12 | A `NetworkPolicy` `podSelector` matches at least one pod template in its namespace. | Empty `podSelector` (`{ }`) |
 | 13 | A named `Service` `targetPort` exists on a container of a selected pod template. | Numeric `targetPort` values; Services that match no pod template in the build |
-| 14 | A `PodDisruptionBudget` `selector.matchLabels` matches at least one pod template in its namespace. | PDBs without `matchLabels`; PDBs carrying `kix.run/operand-of` |
+| 14 | A `PodDisruptionBudget` `selector` matches at least one pod template in its namespace. | PDBs with an empty selector; PDBs carrying `kix.run/operand-of` |
 | 15 | A `Job`'s pod template labels do not satisfy any `Service` selector in its namespace (which would route live service traffic to a batch Job pod). | Services without a selector |
 | 16 | The `kix.run/rerun` annotation appears only on `Job` resources and only with the value `"on-change"`. | |
 | 17 | A workload's `priorityClassName` names a `PriorityClass` in the build. | `system-cluster-critical` and `system-node-critical` |
@@ -42,6 +42,9 @@ This page is maintained alongside `kix/lib/eval/validate.nix`. The test suites i
 | 22 | Every key a container reads by name from a `Secret` or `ConfigMap` (`secretKeyRef`, `configMapKeyRef`, volume or projected `items[].key`, or the first path segment of a `subPath` mount without `items`) is declared on that `Secret` or present in that `ConfigMap`. | References with `optional = true`; whole-object mounts (`envFrom`, volumes without `items` or `subPath`); names wrapped in `kix.untrackedRef`; Secrets without `kix.run/secret-keys` (such as raw Helm chart Secrets); objects ceding `data`, `binaryData`, or `stringData` via `kix.run/cede-fields` |
 | 23 | At most one `PriorityClass` sets `globalDefault: true`, at most one `StorageClass` carries `storageclass.kubernetes.io/is-default-class: "true"` (or the beta `storageclass.beta.kubernetes.io/is-default-class`), and at most one `IngressClass` carries `ingressclass.kubernetes.io/is-default-class: "true"`. | |
 | 24 | A `Job` does not set `spec.ttlSecondsAfterFinished` (so Kubernetes does not delete finished Jobs behind Kix's back and cause later deploys to re-run them). | `CronJob` `spec.jobTemplate` specs (whose Jobs are created and cleaned up by Kubernetes) |
+| 25 | Every `matchExpressions` entry in `spec.selector` (on a `Deployment`, `StatefulSet`, `DaemonSet`, `Job`, `PodDisruptionBudget`, `ServiceMonitor`, `PodMonitor`, `VMServiceScrape`, or `VMPodScrape`) or `spec.podSelector` (on a `NetworkPolicy`) is an object with a string `key` and `operator` set to `In`, `NotIn`, `Exists`, or `DoesNotExist`. Checks 9, 12, and 14 skip selectors that fail this check so an invalid selector is reported once. | |
+
+Failures from checks 9, 12, 14, and 25 start with `[K1895]`, the change ID for `matchExpressions` validation in the changelog.
 
 ## Check 18 and deploy-time scope verification
 
@@ -71,7 +74,7 @@ Check 22 compares named key reads against:
 - `kix.run/import-secret-keys` on external Secret markers built with `scope.mkSecretRef`; and
 - `data` and `binaryData` keys on `ConfigMap` resources in the build.
 
-If a `scope.mkSecretRef` sets `keys = [ ]`, any container that references a specific key by name fails check 22. List the expected keys in `keys` so both check 22 and `kix deploy`'s pre-wave readiness check can verify them.
+If a `scope.mkSecretRef` sets `keys = [ ]`, any container that references a specific key by name fails check 22. List the expected keys in `keys` so both check 22 and `kix deploy`'s pre-wave readiness check can verify them. When an operator creates the Secret at runtime, pass the custom resource in `requires` on `scope.mkSecretRef` so `kix deploy` applies that custom resource before waiting for the Secret. See [Example: a Secret an operator writes at runtime](/docs/reference/secrets-crds-and-rbac/#example-a-secret-an-operator-writes-at-runtime).
 
 ## How names and selectors resolve
 

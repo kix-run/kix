@@ -279,8 +279,9 @@ pub fn auto_install_on(value: Option<&OsStr>) -> bool {
 
 /// Return the Kix the project in `scan` uses, or `None` when the command
 /// reads no local project: `--flake` names a remote flake, or the
-/// directory has no `flake.nix`.
-fn project_kix(scan: &Scan) -> Option<(String, Result<ProjectKix, LockError>)> {
+/// directory has no `flake.nix`. The Kix is an error when the lock cannot be
+/// read, or when `KIX_OVERRIDE_INPUT` is one that `main` would refuse.
+fn project_kix(scan: &Scan) -> Option<(String, miette::Result<ProjectKix>)> {
     let flake = raw_flake(scan, std::env::var_os("KIX_FLAKE").as_deref());
     let dir = crate::commands::project_dir(&flake)?;
     if !dir.join("flake.nix").is_file() {
@@ -288,10 +289,12 @@ fn project_kix(scan: &Scan) -> Option<(String, Result<ProjectKix, LockError>)> {
     }
     Some(match input_in(&dir, scan) {
         Ok(input) => {
-            let kix = flake_lock::project_kix_on(&dir, &overrides(scan), &input);
+            let kix = overrides(scan).and_then(|overrides| {
+                flake_lock::project_kix_on(&dir, &overrides, &input).map_err(|e| miette!("{e}"))
+            });
             (input, kix)
         }
-        Err(e) => (flake_lock::INPUT.to_string(), Err(e)),
+        Err(e) => (flake_lock::INPUT.to_string(), Err(miette!("{e}"))),
     })
 }
 
@@ -321,19 +324,14 @@ fn input_in(dir: &Path, scan: &Scan) -> Result<String, LockError> {
 
 /// Return the `--override-input` pairs, or else the pairs in
 /// `KIX_OVERRIDE_INPUT`, as `main` reads them.
-fn overrides(scan: &Scan) -> Vec<(String, String)> {
+fn overrides(scan: &Scan) -> miette::Result<Vec<(String, String)>> {
     if !scan.overrides.is_empty() {
-        return scan.overrides.clone();
+        return Ok(scan.overrides.clone());
     }
-    let words: Vec<String> = std::env::var("KIX_OVERRIDE_INPUT")
-        .unwrap_or_default()
-        .split_whitespace()
-        .map(str::to_owned)
-        .collect();
-    words
+    Ok(crate::cli::override_input_env()?
         .chunks_exact(2)
         .map(|c| (c[0].clone(), c[1].clone()))
-        .collect()
+        .collect())
 }
 
 /// Run the version of Kix the project in `args` uses, and print the version
@@ -361,7 +359,7 @@ pub fn run(args: &[OsString]) -> miette::Result<Outcome> {
             eprintln!("  {e}");
             return Ok(Outcome::PrintedVersion);
         }
-        Some(Err(e)) => return Err(miette!("{e}")),
+        Some(Err(e)) => return Err(e),
     };
     // Listing the installs is one directory read, and only a project on a
     // release needs it.

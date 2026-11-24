@@ -1,13 +1,15 @@
 { lib, helpers }:
 
 let
-  inherit (import ../core/error.nix { inherit lib; }) fail;
-  inherit (helpers) mergeCollide collectTypedAttrs knownFolders;
+  inherit (helpers) mergeCollide knownFolders;
 in
 
 {
+  # Build the view other instances read of an instance. `fail` is the
+  # instance's `scope.fail`, which names it and its package in an error.
   mkPackageView =
     {
+      fail,
       parts,
       rootOut,
       instanceName,
@@ -19,8 +21,6 @@ in
       evaluatedConfig ? { },
     }:
     let
-      ctx = "instance '${instanceName}'";
-
       # Omit known folders (`crds`, `secrets`) that `rootOut` also defines so
       # `rootOut` takes precedence in the package view without triggering a
       # collision. The folder's resources are still emitted because emission
@@ -62,33 +62,27 @@ in
         in
         if v != null && builtins.isAttrs v && v ? _type then
           fail {
-            instance = "${namespaceName}/${instanceName}";
             message = "'${folderName}' is a resource directly instead of an attribute set of resources.";
             fix = "Use '${folderName}.someName = ...' instead.";
           }
         else
           acc
       ) null (builtins.attrNames knownFolders);
-
-      _folderContentChecks = builtins.foldl' (
-        acc: folderName:
-        let
-          spec = knownFolders.${folderName};
-          contents = parts.${folderName} or { };
-          typed = collectTypedAttrs { } contents;
-          bad = builtins.filter (r: !(builtins.elem (r._type or "") spec.expectedTypes)) typed;
-        in
-        lib.foldl' (
-          inner: r:
-          builtins.trace "warning: ${ctx}.${folderName} contains ${r.kind or "?"}/${r.name or "?"}; unexpected _type '${r._type or "unknown"}'" inner
-        ) acc bad
-      ) null (builtins.attrNames knownFolders);
-
     in
     builtins.seq _folderStructureChecks (
-      builtins.seq _folderContentChecks (
-        mergeCollide "${ctx}: folder key collides with root.out" folders autoKeys
-        |> mergeCollide "${ctx}: package key collides with system key" system
-      )
+      mergeCollide {
+        inherit fail;
+        error = names: {
+          message = "Both `build` (as a part group) and `root.out` define ${names}, which collide because Kix exposes both on the instance.";
+          fix = "Rename ${names} in `build` or in `root.out`.";
+        };
+      } folders autoKeys
+      |> mergeCollide {
+        inherit fail;
+        error = names: {
+          message = "`build` or `root.out` defines ${names}, which is reserved by Kix on every instance.";
+          fix = "Rename ${names} in `build` or `root.out`. Reserved instance attributes: ${lib.concatStringsSep ", " (builtins.attrNames system)}.";
+        };
+      } system
     );
 }

@@ -13,6 +13,7 @@ let
   kinds = import ../core/workload-kinds.nix { inherit lib; };
   inherit (import ../core/pod-spec.nix { inherit lib; }) podSpecOf podTemplateOf;
   inherit (import ../core/util.nix { inherit lib; }) listOr;
+  labelSelector = import ../core/label-selector.nix { inherit lib; };
 
   # Every built-in kind that creates pods.
   workloadKinds = kinds.podKinds;
@@ -266,8 +267,8 @@ in
       }) (meta.unsafe or [ ]);
   };
 
-  # Reject workloads whose `spec.selector.matchLabels` is a subset of another
-  # workload's pod template labels in the same instance.
+  # Reject workloads whose `spec.selector` matches another workload's pod
+  # template labels in the same instance.
   distinctWorkloadSelectors = {
     description = "One workload's selector must not also match another workload's pods";
     level = "package";
@@ -284,8 +285,6 @@ in
         # no selector with which to claim other pods.
         targetKinds = kinds.builtKinds;
         podLabels = r: (podTemplateOf r).metadata.labels or { };
-        subsetOf =
-          needle: hay: builtins.all (k: (hay.${k} or null) == needle.${k}) (builtins.attrNames needle);
         rid = r: "${r.kind or "?"}/${r.metadata.name or "?"}";
         sameIdentity =
           a: b:
@@ -298,10 +297,15 @@ in
       builtins.concatMap (
         a:
         let
-          selector = a.spec.selector.matchLabels or { };
-          claims = b: !(sameIdentity a b) && selector != { } && subsetOf selector (podLabels b);
+          selector = a.spec.selector or { };
+          claims =
+            b:
+            !(sameIdentity a b)
+            && !labelSelector.isEmpty selector
+            && labelSelector.matches selector (podLabels b);
         in
         map (b: {
+          id = labelSelector.recordId;
           message =
             "${rid a} selects on ${builtins.toJSON selector}, which also matches the pods of ${rid b}. "
             + "Both pod sets answer to that selector, so readiness, Services, PodDisruptionBudgets and "
@@ -386,8 +390,7 @@ in
       { resources, instanceName, ... }:
       let
         labelSelectedKinds = [ "Service" ];
-        subsetOf =
-          needle: hay: builtins.all (k: (hay.${k} or null) == needle.${k}) (builtins.attrNames needle);
+        subsetOf = needle: labelSelector.matches { matchLabels = needle; };
         rid = r: "${r.kind or "?"}/${r.metadata.name or "?"}";
         sameIdentity =
           a: b:
@@ -496,7 +499,7 @@ in
   # not pod selectors. Require one matching Service with a compatible port.
   #
   # Check only monitors whose target namespaces all contain active Kix
-  # instances. Skip matchExpressions and namespaces with incomplete visibility.
+  # instances. Skip namespaces with incomplete visibility.
   #
   # Namespace ownership is an approximation because external controllers may
   # create Services in managed namespaces. Set the monitorsExternalService
@@ -565,9 +568,6 @@ in
           ]
         ) allResources;
 
-        subsetOf =
-          needle: hay: builtins.all (k: (hay.${k} or null) == needle.${k}) (builtins.attrNames needle);
-
         # Return the target namespaces for a monitor, or null when `any = true`
         # selects all namespaces (including namespaces outside Kix that this
         # rule cannot verify). An empty selector defaults to the monitor's own
@@ -618,15 +618,14 @@ in
           mon:
           let
             sel = mon.spec.selector or { };
-            matchLabels = sel.matchLabels or { };
             targets = targetNamespaces mon;
             allTargetsManaged =
               targets != null && targets != [ ] && builtins.all (ns: builtins.elem ns managedNamespaces) targets;
             candidates = builtins.filter (svc: builtins.elem (svc.metadata.namespace or null) targets) services;
-            matched = builtins.filter (svc: subsetOf matchLabels (svc.metadata.labels or { })) candidates;
+            matched = builtins.filter (svc: labelSelector.matches sel (svc.metadata.labels or { })) candidates;
             scraped = builtins.filter (scrapesService mon) matched;
             external = (mon.metadata.annotations.${kixKeys.monitorsExternalService} or "") == "true";
-            skip = external || sel ? matchExpressions || matchLabels == { } || !allTargetsManaged;
+            skip = external || labelSelector.isEmpty sel || !allTargetsManaged;
             monId = "${mon.kind or "?"}/${mon.metadata.name or "?"}";
             svcId = svc: "${svc.metadata.namespace or "?"}/${svc.metadata.name or "?"}";
           in
@@ -639,7 +638,7 @@ in
                 resource = monId;
                 message =
                   "${mon.kind or "?"} '${mon.metadata.name or "?"}' selects "
-                  + "{ ${lib.concatStringsSep ", " (lib.mapAttrsToList (k: v: "${k}=${toString v}") matchLabels)} }, "
+                  + "{ ${labelSelector.describe sel} }, "
                   + "but no Service in namespace(s) ${lib.concatStringsSep ", " targets} carries those labels, "
                   + "so this monitor finds nothing and its jobs are silently missing. "
                   + "A monitor's selector is compared with the labels on the Service itself "
@@ -691,7 +690,7 @@ in
           else
             [ ];
       in
-      builtins.concatMap checkMonitor monitors;
+      map (f: f // { id = labelSelector.recordId; }) (builtins.concatMap checkMonitor monitors);
   };
 
   # Report monitorsExternalService exemptions at info severity so reviewers

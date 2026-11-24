@@ -18,12 +18,10 @@ let
   inherit (c)
     name
     ns
-    who
     metricsPort
     componentLabels
     dataPathLabels
     urlPort
-    checkedRef
     renderPolicy
     withDataPathLabels
     checkCloudCredentials
@@ -38,7 +36,7 @@ let
   repoPassword =
     let
       checked = kix.contracts.secret.helpers.use {
-        inherit who;
+        inherit scope;
         arg = "repositoryPassword";
         dep = repositoryPassword;
         keys = [ "repository-password" ];
@@ -47,7 +45,6 @@ let
     if repositoryPassword == null then
       if config.nodeAgent.enabled then
         scope.fail {
-          package = "velero";
           dependency = "repositoryPassword";
           message = "node-agent is on and no repositoryPassword dependency resolved, so Velero would encrypt the kopia repositories with the key compiled into every Velero binary.";
           fix = "Add a secret or secret-ref instance named ${repoSecretName} in ${ns} with key repository-password and alias repositoryPassword, or set nodeAgent.enabled = false.";
@@ -56,7 +53,6 @@ let
         null
     else if checked.out.name != repoSecretName then
       scope.fail {
-        package = "velero";
         dependency = "repositoryPassword";
         message = "deps.repositoryPassword resolved to secret \"${checked.out.name}\", but Velero reads the repository key only from a Secret named ${repoSecretName} in ${ns}.";
         fix = "Rename that instance.";
@@ -163,16 +159,28 @@ let
     failureThreshold = 5;
   };
 
-  featureArgs = lib.optional (
-    config.features != [ ]
-  ) "--features=${lib.concatStringsSep "," config.features}";
-
-  ownedArgs = {
-    "--features" = "set the features option.";
-    "--metrics-address" = "the probes and the metrics Service use :${toString metricsPort}; remove it.";
-    "--node-agent-configmap" = "set nodeAgent.settings.";
-    "--repo-maintenance-job-configmap" = "set repositoryMaintenance.settings.";
-    "--global-backup-volume-policies-configmap" = "set volumePolicies.";
+  # The velero binary runs the server and the node agent, and parses flags
+  # with cobra and pflag (pkg/cmd/velero/velero.go upstream). Both containers
+  # refuse every flag either of them owns.
+  metricsAddressArg = {
+    flags = [ "--metrics-address=:${toString metricsPort}" ];
+    reason = "the probes and the metrics Service use port ${toString metricsPort}.";
+  };
+  featureArgs = {
+    flags = lib.optional (
+      config.features != [ ]
+    ) "--features=${lib.concatStringsSep "," config.features}";
+    names = [ "--features" ];
+    from = "the features option";
+    fix = "Remove --features and set features instead.";
+  };
+  # Return the entry of a flag that names a ConfigMap the package builds
+  # from `option`. `configMap` is null when the package builds none.
+  configMapArg = flag: option: configMap: {
+    flags = lib.optional (configMap != null) "${flag}=${configMap.out.name}";
+    names = [ flag ];
+    from = "the ${option} option";
+    fix = "Remove ${flag} and set ${option} instead.";
   };
 
   plugins =
@@ -372,28 +380,28 @@ in
         containers = [
           {
             name = "velero";
-            image = checkedRef config.image;
+            image = kix.image.ref config.image;
             imagePullPolicy = config.image.pullPolicy;
             command = [ "/velero" ];
-            args = [
-              "server"
-              "--metrics-address=:${toString metricsPort}"
-            ]
-            ++ featureArgs
-            ++ lib.optional (
-              self.volumePolicies != null
-            ) "--global-backup-volume-policies-configmap=${self.volumePolicies.out.name}"
-            ++ lib.optional (
-              self.repositoryMaintenanceConfig != null
-            ) "--repo-maintenance-job-configmap=${self.repositoryMaintenanceConfig.out.name}"
-            ++ kix.guardArgs {
-              inherit who;
+            args = kix.mergeArgs {
+              inherit scope;
+              parser = "gnu";
               option = "server.extraArgs";
-              owned = ownedArgs;
+              args = [
+                "server"
+                metricsAddressArg
+                featureArgs
+                (configMapArg "--global-backup-volume-policies-configmap" "volumePolicies" self.volumePolicies)
+                (configMapArg "--repo-maintenance-job-configmap" "repositoryMaintenance.settings"
+                  self.repositoryMaintenanceConfig
+                )
+                (configMapArg "--node-agent-configmap" "nodeAgent.settings" null)
+              ];
             } config.server.extraArgs;
             env = kix.mkEnvVars (
               kix.mergeEnv {
-                inherit who;
+                inherit scope;
+                option = "server.env";
                 owned = ownedEnv { LD_LIBRARY_PATH = "/plugins"; };
               } config.server.env
             );
@@ -450,24 +458,27 @@ in
               containers = [
                 {
                   name = "node-agent";
-                  image = checkedRef config.image;
+                  image = kix.image.ref config.image;
                   imagePullPolicy = config.image.pullPolicy;
                   command = [ "/velero" ];
-                  args = [
-                    "node-agent"
-                    "server"
-                    "--metrics-address=:${toString metricsPort}"
-                  ]
-                  ++ featureArgs
-                  ++ [ "--node-agent-configmap=${self.nodeAgentConfig.out.name}" ]
-                  ++ kix.guardArgs {
-                    inherit who;
+                  args = kix.mergeArgs {
+                    inherit scope;
+                    parser = "gnu";
                     option = "nodeAgent.extraArgs";
-                    owned = ownedArgs;
+                    args = [
+                      "node-agent"
+                      "server"
+                      metricsAddressArg
+                      featureArgs
+                      (configMapArg "--node-agent-configmap" "nodeAgent.settings" self.nodeAgentConfig)
+                      (configMapArg "--global-backup-volume-policies-configmap" "volumePolicies" null)
+                      (configMapArg "--repo-maintenance-job-configmap" "repositoryMaintenance.settings" null)
+                    ];
                   } config.nodeAgent.extraArgs;
                   env = kix.mkEnvVars (
                     kix.mergeEnv {
-                      inherit who;
+                      inherit scope;
+                      option = "nodeAgent.env";
                       owned = ownedEnv { NODE_NAME.valueFrom.fieldRef.fieldPath = "spec.nodeName"; };
                     } config.nodeAgent.env
                   );

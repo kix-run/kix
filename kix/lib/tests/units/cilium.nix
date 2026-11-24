@@ -632,14 +632,28 @@ in
     || throw "rke2 canal default: refusal or control wrong";
 
   # An explicit "always" with network policy off warns and still builds,
-  # with the cluster DNS egress policy.
+  # with the cluster DNS egress policy. Audit mode leaves out the warning.
   cilium-always-without-netpol-evaluates =
     let
       cluster = rke2CiliumCluster { config.values.policyEnforcementMode = "always"; };
+      audited = rke2CiliumCluster {
+        config.values = {
+          policyEnforcementMode = "always";
+          policyAuditMode = true;
+        };
+      };
       values = valuesOf cluster;
+      enforcementWarnings =
+        c:
+        builtins.filter (
+          w: (w.option or null) == "values.policyEnforcementMode"
+        ) c.instances.kube-system.cilium._diagnostics.warnings;
     in
     (
-      values.policyEnforcementMode == "always" && hasName "cilium-cluster-dns-egress" (manifests cluster)
+      values.policyEnforcementMode == "always"
+      && hasName "cilium-cluster-dns-egress" (manifests cluster)
+      && builtins.length (enforcementWarnings cluster) == 1
+      && enforcementWarnings audited == [ ]
     )
     || throw "explicit always without netpol: ${builtins.toJSON values}";
 

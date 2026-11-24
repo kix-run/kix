@@ -35,7 +35,6 @@
 # controller needs both to deregister the scale set from GitHub.
 {
   lib,
-  who,
   ns,
   self,
   config,
@@ -197,7 +196,6 @@ rec {
     in
     if problem != null then
       consumerScope.fail {
-        package = "arc";
         message = "AutoscalingRunnerSet ${namespace}/${name}: ${problem}";
       }
     else

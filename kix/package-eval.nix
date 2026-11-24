@@ -146,6 +146,16 @@ let
     config.size = "1Gi";
   };
 
+  # The admin login of a DB Operator DbInstance.
+  dbAdminCredentials = {
+    package = packages.secret;
+    aliases = [ "adminCredentials" ];
+    config.stringData = {
+      username = "postgres";
+      password = "password";
+    };
+  };
+
   # A `valkeyPassword` secret for packages that connect to valkey.
   valkeyPassword = {
     package = packages.secret;
@@ -236,6 +246,17 @@ let
       postgres.package = packages.cnpg-cluster;
       prometheus-operator.package = packages.prometheus-operator;
     };
+    # The DbInstance the database is created on serves the whole cluster,
+    # so it is added from the catalog in a namespace of its own, and its
+    # admin login is declared there.
+    db-operator-database = {
+      config = {
+        extensions = [ "citext" ];
+        templates.DATABASE_URL = "postgresql://{{ .Username }}:{{ .Password }}@{{ .Hostname }}:{{ .Port }}/{{ .Database }}";
+      };
+      module = _: { instances.db-operator-instance.admin-credentials = dbAdminCredentials; };
+    };
+    db-operator-instance.instances.admin-credentials = dbAdminCredentials;
     # CloudNativePG finds a plugin only in its own namespace, so the
     # operator is declared beside the plugin.
     cnpg-barman-cloud.instances.cnpg-operator.package = packages.cnpg-operator;
@@ -683,16 +704,12 @@ let
           inherit (kix) kixlib;
         }).version or null;
       ok = version == null || versions.isVersion version;
-      # `kix.image.version` returns a version without a leading `v`, and
-      # `meta.version` is written the same way so both read alike.
-      bare = version == null || !(lib.hasPrefix "v" version || lib.hasPrefix "V" version);
     in
     if versionExceptions ? ${name} then
       lib.assertMsg (!ok)
         "${folderOf name}: meta.version ${builtins.toJSON version} is a version now; remove it from versionExceptions in kix/package-eval.nix and update ${versionExceptions.${name}}"
     else
-      lib.assertMsg ok "${folderOf name}: meta.version ${builtins.toJSON version} is not a version. Use the upstream release the package targets, e.g. \"1.19.6\"."
-      && lib.assertMsg bare "${folderOf name}: meta.version ${builtins.toJSON version} starts with \"v\". Write it without, e.g. `version = lib.removePrefix \"v\" release;`.";
+      lib.assertMsg ok "${folderOf name}: meta.version ${builtins.toJSON version} is not a valid version string. Set meta.version to the default upstream release version or tag (for example, \"1.19.6\" or \"v1.19.6\"), or omit it when the package deploys no upstream software.";
 
   # Collect the image options of an instance's config: every attribute set
   # with a `repository` and a `tag`, up to three levels deep.

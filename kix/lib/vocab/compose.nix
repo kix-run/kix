@@ -3,7 +3,7 @@
 { lib }:
 
 let
-  inherit (import ../core/error.nix { inherit lib; }) fail;
+  inherit (import ../core/error.nix { inherit lib; }) fail failOf;
   markers = import ../core/markers.nix { inherit lib; };
 
   kixAnnotations = import ../core/annotations.nix;
@@ -18,6 +18,95 @@ let
   optionsModule = import ./options.nix { inherit lib; };
   monitorModule = import ./monitor.nix { inherit lib; };
   exposeModule = import ./expose.nix { inherit lib; };
+
+  argParsers = [
+    "gnu"
+    "go"
+    "go-arg"
+    "paerser"
+  ];
+  parserList = lib.concatMapStringsSep ", " (p: "\"${p}\"") argParsers;
+
+  overlayHint = "To modify the built resource after the package's checks, use partsOverlays on the instance.";
+
+  # Return how `parser` matches words to command-line flags, for
+  # `kix.mergeArgs` and `kix.argValues`. `isAttrs` says the flags are the
+  # keys of an attribute set, which name a flag without dashes, though a key
+  # written with them still reaches the program.
+  flagMatcher =
+    { parser, isAttrs }:
+    let
+      dashes = if parser == "go-arg" then "-+" else "--?";
+      dashedName =
+        word:
+        let
+          m = builtins.match "${dashes}([^-=][^=]*)(=.*)?" word;
+        in
+        if m == null then null else builtins.head m;
+      isShortName = name: !isAttrs && parser == "gnu" && builtins.match "-[^-]" name != null;
+    in
+    rec {
+      # Return the name of the flag `word` sets, or null when the parser
+      # reads it as a value.
+      nameOf =
+        word:
+        let
+          n =
+            if isAttrs then
+              builtins.head (builtins.match "-*(.*)" word)
+            else if parser == "gnu" then
+              builtins.head (lib.splitString "=" word)
+            else
+              dashedName word;
+        in
+        if n != null && parser == "paerser" then lib.toLower n else n;
+
+      # Return the name of the flag that a word the package passes sets, or
+      # null when it is a value. Under "gnu", a word with one dash sets a
+      # one-letter flag.
+      wordName =
+        word:
+        if isAttrs then
+          nameOf word
+        else if !lib.hasPrefix "-" word then
+          null
+        else if parser == "gnu" && builtins.match "-[^-].*" word != null then
+          builtins.substring 0 2 word
+        else
+          nameOf word;
+
+      # Return the name of a flag the package names in `names`, in
+      # `families`, or to `kix.argValues`, or null when it has no leading
+      # dash. A name without one would match no word the program reads as
+      # that flag.
+      declaredName = flag: if !isAttrs && !lib.hasPrefix "-" flag then null else nameOf flag;
+
+      sets = name: word: nameOf word == name || (isShortName name && lib.hasPrefix name word);
+
+      under =
+        name: word:
+        sets name word
+        || (
+          let
+            n = nameOf word;
+          in
+          n != null && lib.hasPrefix "${name}." n
+        );
+
+      # Return the value that `word` carries for the flag `name` it sets,
+      # or null when the value is the next word.
+      attachedValue =
+        name: word:
+        let
+          beforeEquals = builtins.stringLength (builtins.head (lib.splitString "=" word));
+        in
+        if isShortName name && word != name && !lib.hasPrefix "${name}=" word then
+          builtins.substring 2 (-1) word
+        else if beforeEquals < builtins.stringLength word then
+          builtins.substring (beforeEquals + 1) (-1) word
+        else
+          null;
+    };
 in
 
 rec {
@@ -39,13 +128,13 @@ rec {
   image =
     let
       needField =
-        image: field:
+        caller: image: field:
         let
           v = image.${field} or null;
         in
         if v == null || v == "" then
           fail {
-            message = "kix.image.ref: image reference has no '${field}', and got: ${builtins.toJSON image}";
+            message = "${caller}: '${field}' is missing or empty in image ${builtins.toJSON image}.";
             fix = "An image needs at least { repository, tag }.";
           }
         else
@@ -59,7 +148,7 @@ rec {
       ref =
         image:
         builtins.unsafeDiscardStringContext (
-          "${needField image "repository"}:${needField image "tag"}"
+          "${needField "kix.image.ref" image "repository"}:${needField "kix.image.ref" image "tag"}"
           + lib.optionalString (image.digest or null != null) "@${image.digest}"
         );
 
@@ -75,6 +164,55 @@ rec {
 
       # Return true when `image.digest` is present and non-null.
       isPinned = image: (image.digest or null) != null;
+
+      # Return an assertion that the image's tag names the major.minor of
+      # `release`, or one of the minors in `also` (such as "1.9"). A leading
+      # `v` and anything after the minor number are ignored, because a user
+      # may point the image at a rebuild that tags in another form. A
+      # package puts it in `assertions` for each image whose files it
+      # vendors from `release`. `reason` says what the release binds, and
+      # `fix` says how to move the package to another release.
+      checkRelease =
+        {
+          image,
+          release,
+          reason,
+          option ? "image",
+          also ? [ ],
+          fix ? null,
+        }:
+        let
+          tag = builtins.unsafeDiscardStringContext (needField "kix.image.checkRelease" image "tag");
+          releaseMinor = versions.minorOf release;
+          prefix = if builtins.match "[vV].*" release == null then "" else builtins.substring 0 1 release;
+          minorText = m: prefix + lib.concatMapStringsSep "." toString m;
+          accepted = map versions.minorOf also ++ [ releaseMinor ];
+          acceptedText =
+            let
+              texts = map minorText accepted;
+              n = builtins.length texts;
+            in
+            if n == 1 then
+              builtins.head texts
+            else
+              lib.concatStringsSep ", " (lib.take (n - 1) texts) + ", or ${lib.last texts}";
+          tagMinor = versions.minorOf tag;
+          path = "${option}.tag";
+        in
+        if releaseMinor == null || builtins.elem null accepted then
+          fail {
+            message = "kix.image.checkRelease: release (${builtins.toJSON release}) or an entry in also (${builtins.toJSON also}) is missing major and minor version numbers, so Kix cannot check this image tag.";
+            fix = "Pass a version with at least major and minor numbers, such as \"v1.10.0\" for release and \"1.9\" in also.";
+          }
+        else
+          {
+            assertion = builtins.elem tagMinor accepted;
+            option = path;
+            message = "${path} \"${tag}\" is not a ${acceptedText} release. Kix rejected it because ${reason}.";
+            fix =
+              "Set ${path} to a tag from the ${acceptedText} release series, or remove ${path} to use the default."
+              + lib.optionalString (fix != null) " ${fix}";
+          };
     };
 
   port = name: containerPort: {
@@ -105,15 +243,36 @@ rec {
 
   # Merge `overrides` into `base` with `lib.recursiveUpdate`, failing if
   # `overrides` touches any attribute path in `locked` or replaces a parent of
-  # a locked path with a non-attrset value.
+  # a locked path with a non-attrset value. `option` is the instance option
+  # that holds `overrides`, and the error names it. Set it to null when
+  # `overrides` comes from somewhere else, such as an argument of a function
+  # the package publishes in `out`. `object` names the Kubernetes object the
+  # merge builds, `{ kind; name; namespace ? null; }`, when the instance
+  # builds several from one option.
   mergeGuarded =
     {
-      who,
+      scope ? null,
+      who ? null,
       locked,
-      what ? "extraSpec",
+      option ? "extraSpec",
+      what ? null,
+      object ? null,
     }:
     base: overrides:
     let
+      scopeFail =
+        let
+          f = failOf "mergeGuarded" { inherit scope who; };
+        in
+        if what != null then
+          f {
+            id = "K0998";
+            message = "kix.mergeGuarded no longer accepts `what`. That argument is now named `option`.";
+            fix = "Rename `what` to `option`.";
+          }
+        else
+          f;
+
       # Return the shortest proper prefix of `path` that `overrides` sets to a
       # non-attrset, or null when none exists.
       replacingAncestor =
@@ -142,13 +301,18 @@ rec {
       touched = builtins.filter (d: d != null) (map describe locked);
     in
     if touched != [ ] then
-      fail {
-        option = what;
-        message = "${who}: ${what} overrides ${lib.concatStringsSep ", " touched}, which the package sets for correctness.";
-        fix = "Use the option that owns it.";
+      let
+        pronoun = if builtins.length touched == 1 then "it" else "them";
+      in
+      scopeFail {
+        inherit option object;
+        message = "${
+          if option == null then "The overrides set" else "${option} overrides"
+        } ${lib.concatStringsSep ", " touched}, which this package sets itself.";
+        fix = "Remove ${pronoun}${lib.optionalString (option != null) " from ${option}"}.";
       }
     else
-      lib.recursiveUpdate base overrides;
+      builtins.seq scopeFail (lib.recursiveUpdate base overrides);
 
   # Validate Kubernetes resource quantities (`vocab/quantity.nix`).
   types.quantity = quantity.type;
@@ -161,18 +325,25 @@ rec {
   # Merge package `defaults`, user `env` (`kix.options.env`), and package-owned
   # variables into an attrset for `kix.mkEnvVars`.
   #
-  # Each entry in `owned` has `{ vars ? { }; names ? [ ]; from; fix; }`. `vars`
-  # are added to the result, while `names` reserves variables delivered via
-  # `envFrom`. Throws if `env` defines any key in `vars` or `names` (even as
-  # null).
+  # Each entry in `owned` has `{ vars ? { }; names ? [ ]; from; fix ? null; }`
+  # or `{ names; reason; fix ? null; }`. Without `fix`, the error tells the
+  # user to remove the variable from `option`. `vars` are added to the result, while
+  # `names` reserves variables delivered via `envFrom` or refused outright.
+  # Throws if `env` defines any key in `vars` or `names` (even as null). The
+  # error names `option`, the instance option that holds `env`. It says a
+  # variable comes `from` somewhere, or that the package does not accept it
+  # and why, when the group gives a `reason`.
   mergeEnv =
     {
-      who,
+      scope ? null,
+      who ? null,
+      option ? "env",
       owned ? [ ],
       defaults ? { },
     }:
     env:
     let
+      scopeFail = failOf "mergeEnv" { inherit scope who; };
       hits =
         group:
         builtins.filter (n: env ? ${n}) (builtins.attrNames (group.vars or { }) ++ group.names or [ ]);
@@ -182,88 +353,351 @@ rec {
           h = hits group;
         in
         lib.optional (h != [ ]) {
-          option = "env";
-          message = "${who}: env sets ${lib.concatStringsSep ", " h}, which ${
-            if builtins.length h == 1 then "comes" else "come"
-          } from ${group.from}.";
-          fix = group.fix;
+          inherit option;
+          message =
+            "${option} sets ${lib.concatStringsSep ", " h}, which "
+            + (
+              if group ? reason then
+                "this package does not accept: ${group.reason}"
+              else
+                "${if builtins.length h == 1 then "comes" else "come"} from ${group.from}."
+            );
+          fix = group.fix or "Remove ${if builtins.length h == 1 then "it" else "them"} from ${option}.";
         }
       ) owned;
     in
     if lines != [ ] then
-      fail lines
+      scopeFail lines
     else
-      defaults // env // lib.foldl' (acc: group: acc // group.vars or { }) { } owned;
+      builtins.seq scopeFail (
+        defaults // env // lib.foldl' (acc: group: acc // group.vars or { }) { } owned
+      );
 
-  # Validate that `args` does not set any CLI flag in `owned`, and return
-  # `args` unchanged.
+  # Merge the package's command-line arguments with the user's `extraArgs`
+  # and return the container's whole argument list. Refuse an `extraArgs`
+  # that sets a flag the package owns.
   #
-  # `owned` maps each refused flag to the reason and the remedy. The message
-  # reads `<who>: <option> sets "<flag>", which this package does not accept:
-  # <reason>`, so a reason fits a flag the package sets itself and a flag it
-  # does not support.
+  # `parser` says how the program reads its flags, and every call states it:
   #
-  # `args` is either a list of command-line words or an attrset of flags
-  # keyed by flag name, the form a VictoriaMetrics CR's `extraArgs` takes.
-  # List words match an owned flag exactly, as `--flag=value`, or as a short
-  # flag with an attached value (such as `-c/etc/x`, which also matches
-  # multi-character single-dash Go flags like `-vmodule=x` when `-v` is
-  # owned). Attrset keys match an owned name exactly once their leading
-  # dashes are removed.
+  # - "gnu" fits getopt, clap, pflag, and kingpin. A word sets a flag when
+  #   it equals the flag or starts with `<flag>=`. A one-letter flag such as
+  #   `-c` also matches a word with its value attached (`-c/etc/x`), and so
+  #   also matches `-vmodule=x` when `-v` is owned.
+  # - "go" fits Go's `flag` package, which reads `-flag` and `--flag` as the
+  #   same flag. A word sets the flag named by its text after one or two
+  #   dashes and before any `=`.
+  # - "go-arg" fits alexflint/go-arg, which reads flags as "go" does and
+  #   accepts any number of leading dashes.
+  # - "paerser" fits Traefik's flag parser, which reads flags as "go" does
+  #   and ignores the letter case of the name.
+  #
+  # `args` lists what the package passes, in order. The user's `extraArgs`
+  # follow it, and `after` lists what the package passes behind them. Each
+  # entry is one of:
+  #
+  # - A string. It is passed as written, and `extraArgs` may set the same
+  #   flag again.
+  # - `{ defaults = [ "--flag=value" ]; }`. Each word is passed unless
+  #   `extraArgs` sets the same flag, for a program that refuses a flag
+  #   given twice. Write each default as one word. Under "gnu", a default
+  #   with one dash is a one-letter flag.
+  # - `{ flags ? [ ]; names ? [ ]; families ? [ ]; reason; fix ? null; }`,
+  #   or the same with `from` in place of `reason`. The package owns the
+  #   flags in `flags`. They are passed as written, and `extraArgs` may not
+  #   set them. Each item of `flags` is one word that names a flag, read as
+  #   a default is, or a list such as `[ "--config" "/etc/app.yaml" ]`. The
+  #   first word of a list names the flag, and the other words are its
+  #   values. `names` reserves flags the package does not pass here, such as
+  #   the short form of an owned flag or a flag the package does not
+  #   support. `families` reserves a flag and every flag under it
+  #   (`<flag>.<name>`), for a program that turns a feature on when any of
+  #   its settings is set.
+  #
+  # A flag the package passes only under a condition is written twice in
+  # its entry, as `flags = lib.optional <condition> "--flag=value"` and as
+  # `names = [ "--flag" ]`. Without the name, `extraArgs` may set the flag
+  # whenever the condition is false, and nothing reports it.
+  #
+  # The error names `option`, the instance option that holds `extraArgs`,
+  # and the word the user wrote. It says the flag comes `from` somewhere, or
+  # that the package does not accept it and why, when the entry gives a
+  # `reason`. Without `fix`, the error tells the user to remove the flag
+  # from `option`. Every error adds that `partsOverlays` can still change
+  # the built resource. Set `id` to a change record id for the releases
+  # after a package starts refusing a spelling it used to pass.
+  #
+  # `extraArgs` is either a list of command-line words or an attribute set
+  # of flags keyed by flag name, the form a VictoriaMetrics resource's
+  # `extraArgs` takes. For an attribute set, `flags` and `defaults` are
+  # attribute sets of flag values, a string entry is refused, keys match
+  # once their leading dashes are removed, and order has no meaning.
+  mergeArgs =
+    {
+      scope ? null,
+      option ? "extraArgs",
+      parser ? null,
+      args ? [ ],
+      after ? [ ],
+      id ? null,
+    }:
+    extraArgs:
+    let
+      scopeFail = failOf "mergeArgs" {
+        inherit scope;
+        who = null;
+      };
+      isAttrs = builtins.isAttrs extraArgs;
+      matcher = flagMatcher { inherit parser isAttrs; };
+      written = if isAttrs then builtins.attrNames extraArgs else extraArgs;
+      form = if isAttrs then "an attribute set" else "a list";
+      keysOf = v: if builtins.isAttrs v then builtins.attrNames v else v;
+      entries = args ++ after;
+
+      groupKeys = [
+        "flags"
+        "names"
+        "families"
+        "reason"
+        "from"
+        "fix"
+      ];
+      # Return what is wrong with the form of `entry`, or null.
+      entryProblem =
+        entry:
+        let
+          unknown = builtins.attrNames (removeAttrs entry groupKeys);
+          wrongForm =
+            key:
+            "passes `${key}` as ${if isAttrs then "a list" else "an attribute set"}, but ${option} is ${form}";
+        in
+        if builtins.isString entry then
+          if isAttrs then "is a string, but ${option} is ${form}" else null
+        else if !builtins.isAttrs entry then
+          "has type ${builtins.typeOf entry}; expected a string or an attribute set"
+        else if entry ? defaults then
+          if builtins.attrNames entry != [ "defaults" ] then
+            "sets attributes other than `defaults`"
+          else if builtins.isAttrs entry.defaults != isAttrs then
+            wrongForm "defaults"
+          else
+            null
+        else if unknown != [ ] then
+          "sets unknown attribute${lib.optionalString (builtins.length unknown != 1) "s"} ${
+            lib.concatMapStringsSep ", " (k: "`${k}`") unknown
+          }"
+        else if (entry ? reason) && (entry ? from) then
+          "sets both `reason` and `from` (choose one)"
+        else if !(entry ? reason) && !(entry ? from) then
+          "is missing `reason` or `from`"
+        else if entry ? flags && builtins.isAttrs entry.flags != isAttrs then
+          wrongForm "flags"
+        else
+          null;
+      entryLines = builtins.concatMap (
+        entry:
+        let
+          problem = entryProblem entry;
+        in
+        lib.optional (problem != null) {
+          message = "kix.mergeArgs received an invalid entry ${
+            builtins.toJSON (if builtins.isFunction entry then "<function>" else entry)
+          }: it ${problem}.";
+          fix =
+            if isAttrs then
+              "Pass each entry as `{ defaults = { ... }; }` or `{ flags ? { ... }; names ? [ ... ]; families ? [ ... ]; fix ? \"...\"; }` with either `reason` or `from`."
+            else
+              "Pass each entry as a flag string, `{ defaults = [ ... ]; }`, or `{ flags ? [ ... ]; names ? [ ... ]; families ? [ ... ]; fix ? \"...\"; }` with either `reason` or `from`.";
+        }
+      ) entries;
+
+      groups = builtins.filter (e: builtins.isAttrs e && !(e ? defaults)) entries;
+      defaultWords = builtins.concatMap (e: keysOf e.defaults) (
+        builtins.filter (e: builtins.isAttrs e && e ? defaults) entries
+      );
+
+      # Return the word of an item of `flags` that names its flag. An item
+      # is one word, or a list of the flag and its values.
+      flagWord = item: if builtins.isList item then builtins.head item else item;
+      flagItems = group: if isAttrs then builtins.attrNames (group.flags or { }) else group.flags or [ ];
+
+      # Each flag or family a group reserves, with the group it belongs to.
+      rulesOf =
+        group:
+        let
+          rules =
+            source: test: nameOf: flags:
+            map (flag: {
+              inherit
+                group
+                source
+                test
+                flag
+                ;
+              name = nameOf flag;
+            }) flags;
+        in
+        rules "flags" matcher.sets matcher.wordName (
+          map flagWord (builtins.filter (item: item != [ ]) (flagItems group))
+        )
+        ++ rules "names" matcher.sets matcher.declaredName (group.names or [ ])
+        ++ rules "families" matcher.under matcher.declaredName (group.families or [ ]);
+      allRules = builtins.concatMap rulesOf groups;
+
+      authorLines =
+        if parser == null then
+          [
+            {
+              message = "kix.mergeArgs is missing `parser`, so Kix does not know how the program parses flags.";
+              fix = "Set `parser` to one of: ${parserList}.";
+            }
+          ]
+        else if !builtins.elem parser argParsers then
+          [
+            {
+              message = "kix.mergeArgs does not support parser \"${toString parser}\", so Kix cannot check ${option}.";
+              fix = "Set `parser` to one of: ${parserList}.";
+            }
+          ]
+        else if entryLines != [ ] then
+          entryLines
+        else
+          map (d: {
+            message = "kix.mergeArgs cannot read \"${d}\" in `defaults` as a flag, so Kix cannot check ${option}.";
+            fix = "Write each default as one string starting with `-` or `--`, such as \"--flag=value\" instead of separate \"--flag\" and \"value\" items.";
+          }) (builtins.filter (d: matcher.wordName d == null) defaultWords)
+          ++ lib.optional (builtins.any (group: builtins.elem [ ] (flagItems group)) groups) {
+            message = "kix.mergeArgs received an empty list as an item of `flags`, so Kix cannot check ${option}.";
+            fix = "Write a flag and its values in the list, such as `[ \"--config\" \"/etc/app.yaml\" ]`, or remove the list.";
+          }
+          ++ map (r: {
+            message = "kix.mergeArgs cannot read \"${r.flag}\" in `${r.source}` as a flag under parser \"${parser}\", so Kix cannot check ${option}.";
+            fix =
+              if r.source == "flags" then
+                "Write each item of `flags` as one string starting with `-` or `--` (such as \"--flag=value\"), or pass a flag and its values as a list (such as `[ \"--config\" \"/etc/app.yaml\" ]`)."
+              else
+                "Start each flag name in `${r.source}` with `-` or `--`, such as \"--leader-elect\".";
+          }) (builtins.filter (r: r.name == null) allRules);
+
+      # Each word the user wrote with the first rule it breaks.
+      hits = builtins.concatMap (
+        word:
+        let
+          rule = lib.findFirst (r: r.test r.name word) null allRules;
+          inherit (rule) group;
+        in
+        lib.optional (rule != null) (
+          {
+            inherit option;
+            message =
+              "${option} sets \"${word}\", which "
+              + (
+                if group ? reason then
+                  "this package does not accept: ${group.reason}"
+                else
+                  "comes from ${group.from}."
+              );
+            fix = "${group.fix or "Remove it from ${option}."} ${overlayHint}";
+          }
+          // lib.optionalAttrs (id != null) { inherit id; }
+        )
+      ) written;
+
+      replaced = d: builtins.any (matcher.sets (matcher.wordName d)) written;
+      # Return the words that the entries in `list` pass.
+      words = builtins.concatMap (
+        e:
+        if builtins.isString e then
+          [ e ]
+        else if e ? defaults then
+          builtins.filter (d: !replaced d) e.defaults
+        else
+          lib.concatMap lib.toList (e.flags or [ ])
+      );
+      # Return the flags that the entries pass under `key`.
+      flags = key: lib.foldl' (acc: e: acc // e.${key} or { }) { } entries;
+      result =
+        if isAttrs then
+          lib.filterAttrs (d: _: !replaced d) (flags "defaults") // extraArgs // flags "flags"
+        else
+          words args ++ extraArgs ++ words after;
+    in
+    if authorLines != [ ] then
+      scopeFail authorLines
+    else if hits != [ ] then
+      scopeFail hits
+    else
+      builtins.seq scopeFail result;
+
+  # Return the values `args` gives `flag`, one for each time it sets the
+  # flag, matched as `kix.mergeArgs` matches under the same `parser`. A
+  # value is the text after `=`, the text attached to a one-letter flag
+  # under "gnu", or else the next word. Ask only for a flag that takes a
+  # value, because the next word after a flag that takes none is not its
+  # value. For an attribute set of flags, return the values of the keys
+  # that name `flag`.
+  argValues =
+    { parser }:
+    flag: args:
+    let
+      isAttrs = builtins.isAttrs args;
+      matcher = flagMatcher { inherit parser isAttrs; };
+      name = matcher.declaredName flag;
+      step =
+        acc: word:
+        let
+          value = matcher.attachedValue name word;
+        in
+        if acc.takesNext then
+          {
+            takesNext = false;
+            values = acc.values ++ [ word ];
+          }
+        else if !matcher.sets name word then
+          acc
+        else if value == null then
+          acc // { takesNext = true; }
+        else
+          acc // { values = acc.values ++ [ value ]; };
+    in
+    if !builtins.elem parser argParsers then
+      fail {
+        message = "kix.argValues does not support parser \"${toString parser}\", so Kix cannot read flag \"${flag}\".";
+        fix = "Set `parser` to one of: ${parserList}.";
+      }
+    else if name == null then
+      fail {
+        message = "kix.argValues cannot read \"${flag}\" as a flag under parser \"${parser}\".";
+        fix = "Start the flag name with `-` or `--`, such as \"--namespaces\".";
+      }
+    else if isAttrs then
+      builtins.attrValues (lib.filterAttrs (key: _: matcher.sets name key) args)
+    else
+      (lib.foldl' step {
+        takesNext = false;
+        values = [ ];
+      } args).values;
+
+  # Refuse a call to the function `kix.mergeArgs` replaced.
   guardArgs =
     {
-      who,
-      option ? "extraArgs",
-      owned,
+      scope ? null,
+      ...
     }:
-    args:
-    let
-      isShortFlag = flag: builtins.match "-[^-]" flag != null;
-      flagOf =
-        arg:
-        lib.findFirst (
-          flag: arg == flag || lib.hasPrefix "${flag}=" arg || (isShortFlag flag && lib.hasPrefix flag arg)
-        ) null (builtins.attrNames owned);
-      # An attrset key names the flag without dashes, but a key written with
-      # them still reaches the program, so the match ignores leading dashes.
-      flagOfKey = key: builtins.head (builtins.match "-*(.*)" key);
-      # Each hit as the text the user wrote and the owned flag it matched.
-      hits =
-        if builtins.isAttrs args then
-          builtins.concatMap (
-            key:
-            lib.optional (owned ? ${flagOfKey key}) {
-              written = key;
-              flag = flagOfKey key;
-            }
-          ) (builtins.attrNames args)
-        else
-          builtins.concatMap (
-            arg:
-            let
-              flag = flagOf arg;
-            in
-            lib.optional (flag != null) {
-              written = arg;
-              inherit flag;
-            }
-          ) args;
-      lines = map (
-        { written, flag }:
-        {
-          inherit option;
-          message = "${who}: ${option} sets \"${written}\", which this package does not accept: ${owned.${flag}}";
-        }
-      ) hits;
-    in
-    if lines != [ ] then fail lines else args;
+    (if scope == null then fail else scope.fail) {
+      id = "K5396";
+      message = "kix.guardArgs was removed. kix.mergeArgs replaces it and builds the full argument list (or flag attribute set) in one call.";
+      fix = "Assign `kix.mergeArgs { inherit scope; parser = \"...\"; args = [ ... ]; } config.extraArgs` directly instead of concatenating base flags, and declare reserved flags as `{ flags = [ ... ]; reason = \"...\"; }` (or `from = \"...\";`) entries in `args`.";
+    };
 
   # Validate that a secret dependency `dep` declares all required `keys` (and
   # at least one key group in `anyOf` when set) in `dep.out.keys`, then return
   # `dep`. Read `keyRef` through the returned value so validation runs first.
+  # `arg` is the name the package takes `dep` under, and the error names it
+  # as the dependency of the instance in `scope`.
   checkSecretKeys =
     {
-      who,
+      scope ? null,
+      who ? null,
       arg,
       dep,
       keys ? [ ],
@@ -279,12 +713,14 @@ rec {
         lib.optional (missingKeys != [ ]) (lib.concatStringsSep ", " missingKeys)
         ++ lib.optional (!groupMet) "one of ${lib.concatMapStringsSep " or " showGroup anyOf}";
       declaredText = if declared == [ ] then "no keys" else lib.concatStringsSep ", " declared;
+      scopeFail = failOf "checkSecretKeys" { inherit scope who; };
     in
     if dep == null || wanted == [ ] then
-      dep
+      builtins.seq scopeFail dep
     else
-      fail {
-        message = "${who}: deps.${arg} resolved to secret \"${dep.out.name}\", which declares ${declaredText}; this package reads ${lib.concatStringsSep " and " wanted}.";
+      scopeFail {
+        dependency = arg;
+        message = "deps.${arg} resolved to secret \"${dep.out.name}\", which declares ${declaredText}; this package reads ${lib.concatStringsSep " and " wanted}.";
         fix = "Add them to that instance's keys (a SOPS secret lists them in keys), or wire another secret with deps.${arg} = ref.<ns>.<instance>.";
       };
 
@@ -466,5 +902,6 @@ rec {
   inherit (monitorModule)
     monitor
     alerts
+    reconcileErrorsAlert
     ;
 }

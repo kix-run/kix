@@ -106,6 +106,23 @@ let
     version = release;
     hash = "sha256-DHWS63UXns9G3T7CIUWRbwFkxEASFOoVr7WyMLHRGiE=";
   };
+
+  # Return how the instance delivers Cilium's configuration, given its
+  # `platform-cilium` dependency or null.
+  deliveryOf =
+    platform-cilium:
+    if platform-cilium == null then
+      "chart"
+    else if ((platform-cilium.out or { }).helmChartConfig or null) != null then
+      "helmChartConfig"
+    else
+      "none";
+
+  # Under "always" every endpoint without an allow rule loses its traffic,
+  # so the default follows whether Kix writes allow rules.
+  enforcementOf =
+    config: netpolEnabled:
+    config.values.policyEnforcementMode or (if netpolEnabled then "always" else "default");
 in
 {
   meta = {
@@ -219,6 +236,31 @@ in
     };
   };
 
+  # A warning because another tool may write the allow rules. Candidate for
+  # an evaluation error with an explicit opt-in for that case.
+  warnings =
+    {
+      config,
+      clusterConfig,
+      deps,
+      ...
+    }:
+    let
+      netpolEnabled = (clusterConfig.networkPolicy or { }).enable or false;
+    in
+    lib.optional
+      (
+        deliveryOf (deps.platform-cilium or null) != "none"
+        && enforcementOf config netpolEnabled == "always"
+        && !netpolEnabled
+        && !(config.values.policyAuditMode or false)
+      )
+      {
+        option = "values.policyEnforcementMode";
+        message = "values.policyEnforcementMode is \"always\", while networkPolicy.enable is false. Kix configured Cilium to enforce network policies on every pod and generated no pod network policies. Unless another tool installs network policies, Cilium will block all pod traffic (except cluster DNS when clusterDnsEgress is true).";
+        fix = "Set networkPolicy.enable = true in the cluster definition so Kix generates pod policies, set values.policyAuditMode = true to log without blocking traffic, or remove values.policyEnforcementMode.";
+      };
+
   build =
     {
       config,
@@ -228,8 +270,6 @@ in
       ...
     }:
     let
-      who = "cilium ${scope.namespaceName}/${scope.instanceName}";
-
       binding = (clusterConfig.cluster.roles.cni or { }).binding or null;
       podCidr = clusterConfig.cluster.network.podCidr;
       netpolEnabled = (clusterConfig.networkPolicy or { }).enable or false;
@@ -242,13 +282,7 @@ in
         v:
         builtins.isAttrs v && builtins.isString (v.name or null) && builtins.isString (v.namespace or null);
 
-      delivery =
-        if platform-cilium == null then
-          "chart"
-        else if helmChartConfigRef != null then
-          "helmChartConfig"
-        else
-          "none";
+      delivery = deliveryOf platform-cilium;
 
       # The modes Cilium's agent accepts. The build branches on the mode, so
       # an unknown one is refused below.
@@ -257,10 +291,7 @@ in
         "always"
         "never"
       ];
-      # Under "always" every endpoint without an allow rule loses its
-      # traffic, so the default follows whether Kix writes allow rules.
-      effectiveEnforcement =
-        config.values.policyEnforcementMode or (if netpolEnabled then "always" else "default");
+      effectiveEnforcement = enforcementOf config netpolEnabled;
       effectiveAudit = config.values.policyAuditMode or false;
       # The chart's default IPAM mode.
       ipamMode = config.values.ipam.mode or "cluster-pool";
@@ -320,53 +351,45 @@ in
       checks =
         if binding == null then
           scope.fail {
-            package = "cilium";
             clusterOption = "cluster.roles.cni.binding";
             message = "installs or uses Cilium as the pod network, but cluster.roles.cni.binding is unset, so Kix cannot tell whether the cluster already runs a CNI.";
             fix = "Use a flavour, or set cluster.roles.cni.binding = \"absent\" on a cluster created without a CNI (kind with disableDefaultCNI).";
           }
         else if platform-cilium != null && !(environmentOut ? helmChartConfig) then
           scope.fail {
-            package = "cilium";
             message = "dependency platform-cilium has no out.helmChartConfig.";
             fix = "Set it to { name; namespace; }, the HelmChartConfig the environment's helm-controller merges into its Cilium chart, or to null if the environment reads none.";
           }
         else if helmChartConfigRef != null && !(isHelmChartConfigRef helmChartConfigRef) then
           scope.fail {
-            package = "cilium";
             message = "dependency platform-cilium has out.helmChartConfig = ${builtins.toJSON helmChartConfigRef}.";
             fix = "It takes { name; namespace; } as strings, or null.";
           }
         else if platform-cilium != null && binding != "shadowable" then
           scope.fail {
-            package = "cilium";
             clusterOption = "cluster.roles.cni.binding";
             message = "dependency platform-cilium says the environment installed Cilium, but cluster.roles.cni.binding is ${builtins.toJSON binding}. An environment-installed Cilium is a shadowable cni binding: the environment runs the CNI and this instance configures or uses it.";
             fix = "Set cluster.roles.cni.binding = \"shadowable\", or remove the platform-cilium import so the instance installs the chart.";
           }
         else if binding == "shadowable" && platform-cilium == null then
           scope.fail {
-            package = "cilium";
             clusterOption = "cluster.roles.cni.binding";
             message = "cluster.roles.cni.binding is \"shadowable\", but no platform-cilium dependency says the environment's CNI is Cilium.";
             fix = "If it is, declare it: on RKE2 set cluster.flavor.rke2.cni = [ \"cilium\" ]; elsewhere add instances.<namespace>.platform-cilium.package = kix.mkImport { roles = [ \"cni\" ]; out.helmChartConfig = null; }. If an import for the environment's Cilium already exists under another name, point this instance at it with deps.platform-cilium = ref.<namespace>.<instance> instead of adding a second import. An import declared with optional = true answers this optional dependency only after something else activates it, so remove optional = true from it. If it is another CNI, a cilium instance cannot stand for it: remove the instance, or set the binding to \"exclusive\".";
           }
         else if delivery == "helmChartConfig" && scope.namespaceName != helmChartConfigRef.namespace then
           scope.fail {
-            package = "cilium";
             message = "writes HelmChartConfig ${helmChartConfigRef.name}, which the environment reads only in namespace ${helmChartConfigRef.namespace}.";
             fix = "Declare the instance under instances.${helmChartConfigRef.namespace}.";
           }
         else if delivery == "none" && config.values != { } then
           scope.fail {
-            package = "cilium";
             option = "values";
             message = "does not install or configure Cilium: the platform-cilium dependency's out.helmChartConfig is null, so the environment's Cilium keeps its own settings and `values` would be ignored.";
             fix = "Remove `values`, or set the import's out.helmChartConfig if the environment merges a HelmChartConfig into its Cilium chart (on RKE2: cluster.flavor.rke2.cni = [ \"cilium\" ]).";
           }
         else if delivery != "helmChartConfig" && config.failurePolicy != null then
           scope.fail {
-            package = "cilium";
             option = "failurePolicy";
             message =
               if delivery == "chart" then
@@ -381,21 +404,18 @@ in
           }
         else if !(builtins.elem effectiveEnforcement enforcementModes) then
           scope.fail {
-            package = "cilium";
             option = "values.policyEnforcementMode";
             message = "values.policyEnforcementMode is ${builtins.toJSON effectiveEnforcement}.";
             fix = "Cilium accepts \"default\", \"always\", or \"never\".";
           }
         else if !(builtins.isBool effectiveAudit) then
           scope.fail {
-            package = "cilium";
             option = "values.policyAuditMode";
             message = "values.policyAuditMode is ${builtins.toJSON effectiveAudit}.";
             fix = "It takes true or false.";
           }
         else if delivery == "chart" && ipamMode == "cluster-pool" && podCidr == null then
           scope.fail {
-            package = "cilium";
             clusterOption = "cluster.network.podCidr";
             message = "installs Cilium with cluster-pool IPAM and needs the pod range.";
             fix = "Set cluster.network.podCidr to the range the cluster assigns pods: kind's networking.podSubnet, RKE2's cluster-cidr (default 10.42.0.0/16), kubeadm's --pod-network-cidr. The kind, k3s, and rke2 flavours set their defaults. Or select another IPAM mode in values.ipam.mode.";
@@ -575,15 +595,6 @@ in
           helmChartConfigParts
         else
           noneParts;
-
-      warnAlwaysWithoutRules =
-        delivery != "none" && effectiveEnforcement == "always" && !netpolEnabled && !effectiveAudit;
     in
-    builtins.seq checks (
-      # A warning because another tool may write the allow rules. Candidate for an
-      # evaluation error with an explicit opt-in for that case.
-      lib.warnIf warnAlwaysWithoutRules
-        "${who}: enforces policy on every endpoint (policyEnforcementMode = \"always\"), but networkPolicy.enable is false, so Kix writes no allow rules. Every pod without a policy from another source loses all traffic except cluster DNS. Enable networkPolicy, set values.policyAuditMode = true, or remove values.policyEnforcementMode."
-        parts
-    );
+    builtins.seq checks parts;
 }
