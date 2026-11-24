@@ -42,7 +42,6 @@ let
       bsl.config
     else if bsl.config ? s3Url then
       scope.fail {
-        package = "velero";
         option = "backupStorageLocation.config.s3Url";
         message = "backupStorageLocation.config.s3Url is set to \"${bsl.config.s3Url}\", and the objectStorage dependency supplies the store's URL. Velero would dial the address in s3Url, and no network policy would open it.";
         fix = "Remove s3Url to use the dependency's Service, or stop wiring an objectStorage dependency to use a store outside the cluster.";
@@ -51,7 +50,6 @@ let
       {
         s3Url =
           (objectStorage.out.url or (scope.fail {
-            package = "velero";
             message = "deps.objectStorage has no out.url.";
             fix = "Wire an instance whose root is its S3 Service.";
           })
@@ -73,7 +71,6 @@ let
       derived
     else
       scope.fail {
-        package = "velero";
         option = "metrics.maxBackupAge.${scheduleName}";
         message = "schedules.${scheduleName}.schedule \"${schedule.schedule}\" does not show how often it runs, so VeleroBackupMissing has no threshold for it.";
         fix = "Set metrics.maxBackupAge.${scheduleName} to twice the longest gap between two runs plus the time a backup takes, such as \"64d\" for a monthly schedule.";

@@ -157,15 +157,13 @@ in
         ...
       }:
       let
-        who = "filebrowser ${scope.namespaceName}/${name}";
         userNames = builtins.attrNames config.users;
         usersSecret = kix.contracts.secret.helpers.use {
-          inherit who;
+          inherit scope;
           arg = "filebrowserUsers";
           dep =
             if userNames != [ ] && filebrowserUsers == null then
               scope.fail {
-                package = "filebrowser";
                 option = "users";
                 message = "`users` lists ${lib.concatStringsSep ", " userNames}, and their passwords come from deps.filebrowserUsers, which is not wired.";
                 fix = "Add a secret instance with alias filebrowserUsers and one key per user.";

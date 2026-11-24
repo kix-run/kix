@@ -225,7 +225,6 @@ in
           postgres.out
         else
           scope.fail {
-            package = "cnpg-pooler";
             message = "the postgres dependency publishes no out.clusterName, as with an import or a stackgres-cluster. A Pooler fronts a cnpg-cluster.";
             fix = "Wire one with deps.postgres = ref.${ns}.<instance>.";
           };
@@ -234,7 +233,6 @@ in
           cnpgOperator.out
         else
           scope.fail {
-            package = "cnpg-pooler";
             message = "the cnpgOperator dependency publishes no out.crds, as with an import.";
             fix = "Wire a managed cnpg-operator instance with deps.cnpgOperator = ref.<namespace>.<instance>.";
           };
@@ -243,7 +241,6 @@ in
       _sameNamespace =
         if clusterNamespace != ns then
           scope.fail {
-            package = "cnpg-pooler";
             message = "the postgres dependency runs in namespace ${clusterNamespace}, and CloudNativePG reads a Pooler's Cluster from the Pooler's own namespace.";
             fix = "Move this instance to ${clusterNamespace}.";
           }

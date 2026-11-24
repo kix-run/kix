@@ -162,7 +162,6 @@ let
     in
     if !builtins.pathExists path then
       scope.fail {
-        package = "clickhouse-operator";
         message = "${def.kind} has no vendored CRD document at schemas/${def.plural}.json.";
         fix = "Run scripts/vendor-clickhouse-crd-schemas.py.";
       }
@@ -188,7 +187,6 @@ let
       version
     else
       scope.fail {
-        package = "clickhouse-operator";
         message = "kinds.nix and schemas/${def.plural}.json disagree on ${def.kind} (group, kind, plural, short names, or version).";
         fix = "Fix kinds.nix to match the vendored upstream document.";
       };

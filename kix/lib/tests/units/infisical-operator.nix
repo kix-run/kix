@@ -373,7 +373,6 @@ in
       external = "http://infisical.example:8080";
       inCluster = "https://infisical.infisical.svc";
       message = egress.check {
-        who = "infisical-operator infisical/infisical-operator";
         clusterConfig = {
           clusterDomain = "cluster.test";
           networkPolicy = {

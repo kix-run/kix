@@ -328,7 +328,6 @@ in
           in
           if builtins.stringLength value > 250 then
             scope.fail {
-              package = "ingress-nginx";
               option = "ingressClassName";
               message = "The IngressClass controller value \"${value}\" is longer than the API server's 250-character limit.";
               fix = "Shorten ingressClassName.";
@@ -347,14 +346,12 @@ in
         settings =
           if snippets != null && snippets != "true" && snippets != "false" then
             scope.fail {
-              package = "ingress-nginx";
               option = "settings.\"allow-snippet-annotations\"";
               message = "settings.\"allow-snippet-annotations\" is \"${snippets}\".";
               fix = "Use \"true\" or \"false\".";
             }
           else if snippets == "true" && riskLevel != "critical" then
             scope.fail {
-              package = "ingress-nginx";
               option = "settings.\"allow-snippet-annotations\"";
               message = "settings.\"allow-snippet-annotations\" is \"true\", but snippet annotations are Critical risk and the admission webhook rejects them unless settings.\"annotations-risk-level\" is \"Critical\".";
               fix = "Set both, or neither.";
@@ -376,20 +373,17 @@ in
           if serviceSpecOwnedHits != [ ] then
             scope.fail (
               map (k: {
-                package = "ingress-nginx";
                 option = "service.spec.${k}";
                 message = "service.spec.${k} is set by the package, which ${serviceSpecOwned.${k}}";
               }) serviceSpecOwnedHits
             )
           else if serviceType == "ClusterIP" && nodePortsSet != { } then
             scope.fail {
-              package = "ingress-nginx";
               option = "service.nodePorts";
               message = "service.nodePorts sets ${lib.concatStringsSep ", " (builtins.attrNames nodePortsSet)}, which needs service.spec.type NodePort or LoadBalancer; the type is ClusterIP.";
             }
           else if serviceType == "ClusterIP" && config.service.spec.externalTrafficPolicy != null then
             scope.fail {
-              package = "ingress-nginx";
               option = "service.spec.externalTrafficPolicy";
               message = "service.spec.externalTrafficPolicy applies to NodePort and LoadBalancer Services, and the API server rejects it on ClusterIP.";
               fix = "Change service.spec.type or remove it.";

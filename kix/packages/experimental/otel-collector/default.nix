@@ -105,7 +105,6 @@
 let
   release = "0.165.0";
   name = scope.instanceName;
-  who = "otel-collector ${scope.namespaceName}/${name}";
 
   grpcPort = 4317;
   httpPort = 4318;
@@ -122,7 +121,7 @@ in
     owner = "platform";
   };
 
-  deps.otlp.assertions = dep: kix.contracts.experimental.otlpEndpoint.assertions who dep;
+  deps.otlp.assertions = kix.contracts.experimental.otlpEndpoint.assertions;
 
   options = {
     image = kix.options.image {
@@ -445,7 +444,6 @@ in
             collectorConfig
           else
             scope.fail {
-              package = "otel-collector";
               message = "${lib.concatStringsSep " " refusals}";
             };
 
@@ -454,7 +452,6 @@ in
           builtins.attrValues pipelines
         );
         notServed = scope.fail {
-          package = "otel-collector";
           message = "no pipeline lists the otlp receiver, so nothing answers on its OTLP addresses.";
           fix = "Add a pipeline that receives from otlp (deps.otlp adds one), or send to another endpoint.";
         };
@@ -467,7 +464,6 @@ in
             }
           else
             scope.fail {
-              package = "otel-collector";
               option = "settings.service.extensions";
               message = "settings.service.extensions must be a list of extension names; got ${builtins.typeOf userExtensions}.";
             };
@@ -565,13 +561,11 @@ in
       in
       if !builtins.isAttrs pipelines then
         scope.fail {
-          package = "otel-collector";
           option = "settings.service.pipelines";
           message = "settings.service.pipelines must be an attribute set of pipelines; got ${builtins.typeOf pipelines}.";
         }
       else if pipelines == { } then
         scope.fail {
-          package = "otel-collector";
           message = "the collector has no pipeline and would refuse to start.";
           fix = "Wire an OTLP endpoint with deps.otlp, set events.enabled, or define service.pipelines in settings.";
         }
@@ -648,7 +642,7 @@ in
             # them; `check` would force them here.
             out =
               if otlpServed then
-                kix.contracts.experimental.otlpEndpoint.check who {
+                kix.contracts.experimental.otlpEndpoint.check scope {
                   otlpGrpcUrl = self.service.out.url { port = grpcPort; };
                   otlpHttpUrl = self.service.out.url { port = httpPort; };
                   tls = false;

@@ -8,7 +8,6 @@
   # `address` is the normalised address, `scheme://host[:port][/path]`.
   check =
     {
-      who,
       clusterConfig,
       address,
       namespace,
@@ -98,9 +97,9 @@
     if !enforced || platformIntentCovers then
       null
     else if parsed == null then
-      "${who}: this cluster enforces egress policy, and the package cannot read a host and port from address ${address}, so it cannot tell whether the operator may reach it. Use a host name, or add a networkPolicy.platformIntents entry with namespace = \"${namespace}\", podSelector = ${selectorText}, and an egress rule that reaches the address."
+      "This cluster enforces egress policy, and the package cannot read a host and port from address ${address}, so it cannot tell whether the operator may reach it. Use a host name, or add a networkPolicy.platformIntents entry with namespace = \"${namespace}\", podSelector = ${selectorText}, and an egress rule that reaches the address."
     else if port == 443 && !inCluster then
       null
     else
-      "${who}: this cluster enforces egress policy, and the package's network intent opens only TCP 443 to destinations outside the cluster, so the operator cannot reach ${address} and the default InfisicalConnection would never become ready. ${remedy}";
+      "This cluster enforces egress policy, and the package's network intent opens only TCP 443 to destinations outside the cluster, so the operator cannot reach ${address} and the default InfisicalConnection would never become ready. ${remedy}";
 }

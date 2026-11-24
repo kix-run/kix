@@ -13,7 +13,6 @@ rec {
 
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "openbao ${ns}/${name}";
 
   ports = {
     api = 8200;

@@ -1,7 +1,3 @@
-# 2026-11-23 · `kix/packages/` · About 70 package files still pass `package = "<name>"` to `scope.fail`, although `scope.fail` now fills in the package id.
+# 2026-11-23 · `kix/packages/experimental/cilium/netpol-rules.nix` · cilium's intent-rule errors still write `package = "cilium"` by hand, which is the wrong id for an experimental package.
 
-`grep -rn 'package = "' kix/packages` lists about 230 such fields. They
-are redundant, and for an experimental package they are wrong: the id is
-`experimental/<name>`, and the hand-written field wins over it. Several
-packages, such as spegel, cilium, and rabbitmq-cluster, also build warning
-and error text from their own `who` prefix instead of the record fields.
+`translateIntentRules` reports a rule without `to` or `from`, or with an unknown target, through plain `kix.fail` with `package = "cilium"`. The id of the package is `experimental/cilium`. The rule belongs to the instance that asked for the policy, but the enforcer's `netpol` functions receive no `scope`, so the error cannot name that instance. Passing the caller's `scope` (or its `fail`) into `translateIntentRules` and the other `netpol` builders would let the record carry the instance and its package, and drop the hand-written field.

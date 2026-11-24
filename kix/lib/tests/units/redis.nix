@@ -15,6 +15,8 @@
 
 let
   contract = kixlib.contracts.redis;
+  # A consumer or provider scope whose `fail` throws.
+  scope.fail = kixlib.fail;
   valkeyPackage = import ../../../packages/stable/valkey;
   secretPackage = import ../../../packages/stable/secret;
 
@@ -114,8 +116,8 @@ in
         };
       };
     in
-    contract.helpers.requirePlaintext "app" (dep false) == dep false
-    && !(builtins.tryEval (contract.helpers.requirePlaintext "app" (dep true))).success;
+    contract.helpers.requirePlaintext scope (dep false) == dep false
+    && !(builtins.tryEval (contract.helpers.requirePlaintext scope (dep true))).success;
 
   # Standalone valkey publishes `sentinel = null`; with Sentinel, its port
   # and primary set. Both publish the password secret as credentials.

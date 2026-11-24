@@ -151,7 +151,6 @@ let
     dir: crName:
     if builtins.stringLength crName > maxNameLength then
       scope.fail {
-        package = "volsync";
         message = "the VolSync resource \"${crName}\" has a name longer than ${toString maxNameLength} characters, so VolSync hashes its mover Job's name and Kix cannot select the mover pods for network policy.";
         fix = "Shorten the name.";
       }
@@ -275,7 +274,6 @@ in
 
         snapshotCrd =
           snapshotController.out.crds.VolumeSnapshot or (scope.fail {
-            package = "volsync";
             message = "the snapshotController dependency has no out.crds.VolumeSnapshot.";
             fix = "Wire a snapshot-controller instance, or an import that claims the snapshotController role with its crds.";
           });
@@ -324,7 +322,6 @@ in
             fail =
               msg:
               scope.fail {
-                package = "volsync";
                 message = "${what}: ${msg}";
               };
 

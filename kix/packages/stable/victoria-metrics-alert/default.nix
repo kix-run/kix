@@ -82,7 +82,6 @@ let
   release = "v1.156.0";
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "victoria-metrics-alert ${ns}/${name}";
 
   inherit (import ../victoria-metrics-operator/cr-image.nix { inherit lib kix; })
     crImage
@@ -265,13 +264,12 @@ in
         configDep =
           if builtins.length configRoutes > 1 then
             scope.fail {
-              package = "victoria-metrics-alert";
               message = "${lib.concatStringsSep " and " configRoutes} are set, and each supplies the whole Alertmanager configuration.";
               fix = "Keep one.";
             }
           else
             kix.contracts.secret.helpers.use {
-              inherit who;
+              inherit scope;
               arg = "alertmanagerConfig";
               dep = alertmanagerConfig;
               keys = [ "alertmanager.yaml" ];

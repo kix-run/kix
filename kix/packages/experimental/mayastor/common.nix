@@ -14,7 +14,6 @@ rec {
 
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "mayastor ${ns}/${name}";
 
   # Each workload selects on its own component, so no selector claims
   # another component's pods.
@@ -48,7 +47,7 @@ rec {
   poolKey =
     dep:
     kix.contracts.secret.helpers.use {
-      inherit who dep;
+      inherit scope dep;
       arg = "poolEncryptionKey";
       keys = [ "encryption_parameters" ];
     };

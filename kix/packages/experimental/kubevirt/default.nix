@@ -430,7 +430,6 @@ in
           what = "VirtualMachine \"${vmName}\" in ${consumer}";
           spec =
             args.spec or (scope.fail {
-              package = "kubevirt";
               message = "out.mkVirtualMachine: ${what} has no spec.";
               fix = "Pass spec with runStrategy and template.";
             });
@@ -438,7 +437,6 @@ in
           refusal =
             reason:
             scope.fail {
-              package = "kubevirt";
               message = "${what} ${reason}.";
               fix = "${accepted}.";
             };
@@ -465,7 +463,6 @@ in
               [ ]
             else if cdi == null then
               scope.fail {
-                package = "kubevirt";
                 message = "${what} has dataVolumeTemplates, and the cluster has no cdi instance to import them.";
                 fix = "Add a cdi instance (instances.cdi.cdi.package = packages.experimental.cdi).";
               }

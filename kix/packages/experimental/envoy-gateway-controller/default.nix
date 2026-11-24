@@ -456,7 +456,7 @@ in
         };
 
         gatewayCrds = kix.contracts.experimental.gatewayApi.helpers.crdsFor {
-          who = "${ns}/${name}";
+          inherit scope;
           inherit gatewayApi;
           # The controller needs these; it detects the other kinds at start.
           kinds = [

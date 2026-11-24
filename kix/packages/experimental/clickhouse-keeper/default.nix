@@ -255,7 +255,6 @@ in
       # every ReplicatedMergeTree table on the servers goes read-only with them.
       if lib.mod config.replicas 2 == 0 then
         scope.fail {
-          package = "clickhouse-keeper";
           option = "replicas";
           message = "replicas is ${toString config.replicas}. A Keeper quorum needs a majority, so an even count survives no more losses than one fewer replica.";
           fix = "Set config.replicas to 1 or an odd number (3 survives the loss of one).";

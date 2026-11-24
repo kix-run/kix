@@ -13,7 +13,7 @@
   ...
 }:
 let
-  inherit (import ../../lib/core/error.nix { inherit lib; }) fail;
+  inherit (import ../../lib/core/error.nix { inherit lib; }) refuseWho;
 
   isString = builtins.isString;
   isPort = v: isString v && builtins.match "[0-9]+" v != null;
@@ -67,13 +67,19 @@ mkContract {
     # Return whether the server behind `dep` publishes Sentinel.
     usesSentinel = dep: (dep.out.sentinel or null) != null;
 
-    # Refuse a server with TLS for a consumer that cannot connect over it, and
-    # return `dep`.
+    # Refuse a server with TLS for the consumer in `scope`, which cannot
+    # connect over it, and return `dep`.
     requirePlaintext =
-      who: dep:
-      if dep.out.tls or false then
-        fail {
-          message = "${who}: the redis dependency serves TLS, which this package cannot connect to.";
+      scope: dep:
+      if builtins.isString scope then
+        refuseWho {
+          helper = "contracts.redis.helpers.requirePlaintext";
+          fix = "Pass `scope` in place of the text.";
+        }
+      else if dep.out.tls or false then
+        scope.fail {
+          dependency = "redis";
+          message = "The redis dependency serves TLS, which this package cannot connect to.";
           fix = "Wire a server without TLS, or one that also listens without it.";
         }
       else

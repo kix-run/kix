@@ -51,7 +51,6 @@
 }:
 let
   name = scope.instanceName;
-  who = "tempo ${scope.namespaceName}/${name}";
   release = "3.1.1";
 
   httpPort = 3200;
@@ -334,14 +333,12 @@ in
         settings =
           if backslashes != [ ] then
             scope.fail {
-              package = "tempo";
               option = "settings";
               message = "${lib.concatStringsSep ", " backslashes} holds a backslash. Tempo expands environment variables in its config file and reads a backslash as an escape, which breaks the file.";
               fix = "Remove the backslash from the value.";
             }
           else if generatorSettings != [ ] then
             scope.fail {
-              package = "tempo";
               option = "settings";
               message = "settings sets ${
                 lib.concatMapStringsSep ", " (lib.concatStringsSep ".") generatorSettings
@@ -350,7 +347,6 @@ in
             }
           else if inlineCredentials != [ ] then
             scope.fail {
-              package = "tempo";
               option = "settings";
               message = "settings sets ${
                 lib.concatMapStringsSep ", " (
@@ -370,12 +366,11 @@ in
           s: if os.credentialKeys.${s} != null then os.credentialKeys.${s} else s
         );
         credentials = kix.contracts.secret.helpers.use {
-          inherit who;
+          inherit scope;
           arg = "storageCredentials";
           dep =
             if storageCredentials == null then
               scope.fail {
-                package = "tempo";
                 option = "objectStorage";
                 message = "objectStorage is set and no storageCredentials dependency resolved in namespace ${scope.namespaceName}.";
                 fix = "Add a secret or secret-ref instance there with the keys ${lib.concatStringsSep " and " (builtins.attrValues credentialKeys)} and the alias storageCredentials, or set objectStorage = null.";
@@ -390,7 +385,6 @@ in
           if !objectStorageOn then
             if endpointService != null then
               scope.fail {
-                package = "tempo";
                 message = "deps.endpointService is wired and objectStorage is null, so Tempo keeps its blocks on the claim and never reads the store.";
                 fix = "Set objectStorage.bucket, or remove deps.endpointService.";
               }
@@ -401,7 +395,6 @@ in
               inherit (os) bucket;
               endpoint = lib.removePrefix "${endpointScheme}://" (
                 (endpointService.out.url or (scope.fail {
-                  package = "tempo";
                   message = "deps.endpointService has no out.url.";
                   fix = "Wire an instance whose root is its S3 Service.";
                 })
@@ -412,7 +405,6 @@ in
             }
           else if os.endpointScheme != null then
             scope.fail {
-              package = "tempo";
               option = "objectStorage.endpointScheme";
               message = "objectStorage.endpointScheme is set and no endpointService dependency resolved, so nothing reads it.";
               fix = "Wire the in-cluster store with deps.endpointService = ref.<namespace>.<instance>, or remove objectStorage.endpointScheme and set settings.storage.trace.s3.insecure for a store outside the cluster.";
@@ -425,14 +417,12 @@ in
             null
           else if prometheusServer == null then
             scope.fail {
-              package = "tempo";
               option = "metricsGenerator.enabled";
               message = "metricsGenerator.enabled is true and no prometheusServer dependency resolved.";
               fix = "Wire an instance that takes Prometheus remote write, such as a victoria-metrics-cluster, with deps.prometheusServer = ref.<namespace>.<instance>, or set metricsGenerator.enabled = false.";
             }
           else
             prometheusServer.out.remoteWriteUrl or (scope.fail {
-              package = "tempo";
               dependency = "prometheusServer";
               message = "deps.prometheusServer resolved to an instance without out.remoteWriteUrl, so the metrics generator has nowhere to write. The prometheus package does not take remote write.";
               fix = "Wire a victoria-metrics-cluster instance with deps.prometheusServer = ref.<namespace>.<instance>, or set out.remoteWriteUrl in the kix.mkImport that answers prometheusServer.";
@@ -464,7 +454,6 @@ in
               s3 = mergedConfig.storage.trace.s3;
               endpoint =
                 s3.endpoint or (scope.fail {
-                  package = "tempo";
                   option = "settings.storage.trace.s3.endpoint";
                   message = "objectStorage is set with no endpointService dependency and no settings.storage.trace.s3.endpoint, and Tempo's S3 client has no default endpoint.";
                   fix = "Set settings.storage.trace.s3.endpoint to the store's host[:port] (s3.<region>.amazonaws.com for AWS S3), or wire a store in the cluster with deps.endpointService = ref.<namespace>.<instance>.";
@@ -476,14 +465,12 @@ in
             in
             if m == null then
               scope.fail {
-                package = "tempo";
                 option = "settings.storage.trace.s3.endpoint";
                 message = "settings.storage.trace.s3.endpoint ${builtins.toJSON endpoint} is not host[:port].";
                 fix = "Tempo's S3 client reads the address without a scheme and takes TLS from storage.trace.s3.insecure; write it as s3.example.com or s3.example.com:9000.";
               }
             else if !builtins.isBool insecure then
               scope.fail {
-                package = "tempo";
                 option = "settings.storage.trace.s3.insecure";
                 message = "settings.storage.trace.s3.insecure is ${builtins.toJSON insecure}, and Tempo reads a boolean.";
                 fix = "Set it to true for a store that serves plain HTTP, or remove it.";
@@ -494,7 +481,6 @@ in
               || (!lib.hasInfix "." host && !lib.hasPrefix "[" host)
             then
               scope.fail {
-                package = "tempo";
                 option = "settings.storage.trace.s3.endpoint";
                 message = "settings.storage.trace.s3.endpoint \"${endpoint}\" names a Service in the cluster, and the pod gets network policy only to stores outside it.";
                 fix = "Wire the store with deps.endpointService = ref.<namespace>.<instance> and remove the endpoint; set objectStorage.endpointScheme = \"https\" if it serves TLS.";
@@ -703,7 +689,7 @@ in
           requires = builtins.filter (part: part != null) [
             self.storeEgress
           ];
-          out = kix.contracts.experimental.otlpEndpoint.check who {
+          out = kix.contracts.experimental.otlpEndpoint.check scope {
             otlpGrpcUrl = self.otlpService.out.url { port = otlpGrpcPort; };
             otlpHttpUrl = self.otlpService.out.url { port = otlpHttpPort; };
             tls = false;

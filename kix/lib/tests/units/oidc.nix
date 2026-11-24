@@ -24,6 +24,8 @@
 
 let
   contract = kixlib.contracts.experimental.oidcProvider;
+  # A consumer or provider scope whose `fail` throws.
+  scope.fail = kixlib.fail;
   secretPackage = import ../../../packages/stable/secret;
   keycloakPackage = import ../../../packages/experimental/keycloak;
   grafanaPackage = import ../../../packages/stable/grafana;
@@ -50,8 +52,7 @@ let
     };
   };
   messagesOf = assertions: map (a: a.message) (builtins.filter (a: !a.assertion) assertions);
-  checks =
-    out: (builtins.tryEval (builtins.deepSeq (contract.check "provider auth/sso" out) true)).success;
+  checks = out: (builtins.tryEval (builtins.deepSeq (contract.check scope out) true)).success;
 
   # The instances an application needs to sign in: the provider stand-in in
   # `auth`, and in the application's namespace an oidc-client for realm
@@ -393,7 +394,7 @@ in
   # one without `endpoints`, with an issuer that is no URL, or with an
   # endpoint set missing a key is refused.
   oidc-contract-check-requires-every-field =
-    builtins.deepSeq (contract.check "provider auth/sso" providerOut) true
+    builtins.deepSeq (contract.check scope providerOut) true
     && !checks { inherit (providerOut) issuerUrl; }
     && !checks (providerOut // { issuerUrl = _: "auth.example.com"; })
     && !checks (providerOut // { issuerUrl = "https://auth.example.com"; })
@@ -405,22 +406,21 @@ in
     );
 
   # A consumer accepts a stand-in with only `issuerUrl` and refuses one
-  # without it, naming the consumer, the provider instance, and the field.
+  # without it, naming the provider instance and the field.
   oidc-contract-assertions-name-instance-and-field =
     let
       missing = messagesOf (
-        contract.assertions "app apps/app" (depOf {
+        contract.assertions (depOf {
           url = "https://x";
         })
       );
     in
     messagesOf (
-      contract.assertions "app apps/app" (depOf {
+      contract.assertions (depOf {
         inherit (providerOut) issuerUrl;
       })
     ) == [ ]
     && builtins.length missing == 1
-    && lib.hasInfix "app apps/app" (builtins.head missing)
     && lib.hasInfix "auth/sso" (builtins.head missing)
     && lib.hasInfix "issuerUrl is missing" (builtins.head missing);
 

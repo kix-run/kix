@@ -164,15 +164,14 @@ in
     clickhouse.assertions =
       dep:
       let
-        who = "clickhouse-database '${name}'";
-        contractProblems = contract.assertions who dep;
+        contractProblems = contract.assertions dep;
       in
       if contractProblems != [ ] then
         contractProblems
       else
         lib.optional (lib.versionOlder dep.out.version supportedFrom) {
           assertion = false;
-          message = "${who} needs ClickHouse ${supportedFrom} or newer for the SQL its bootstrap runs, and the clickhouse instance it resolved to is ${dep.out.version}.";
+          message = "This instance needs ClickHouse ${supportedFrom} or newer for the SQL its bootstrap runs, and the clickhouse instance it resolved to is ${dep.out.version}.";
         };
   };
 
@@ -281,7 +280,6 @@ in
       ...
     }:
     let
-      who = "clickhouse-database ${scope.namespaceName}/${name}";
 
       passwordAdvice = "Give the password as the dependency `password`: a packages.secret instance in this namespace with source set to a SOPS file that holds `password`, and keys = [ \"password\" ], wired with deps.password = ref.<namespace>.<instance>. A secret that Kix does not fill from a SOPS file, such as a secret-ref or an external-secret, must also hold `username`, equal to the database's user, and list it in keys.";
 
@@ -289,7 +287,6 @@ in
         if config.password != null then
           scope.fail {
             id = "K9503";
-            package = "clickhouse-database";
             option = "password";
             message = "password was removed, because it put the password in plain text in Kix's local store and in the built Secrets.";
             fix = passwordAdvice;
@@ -297,15 +294,13 @@ in
         else if config.passwordSource != null || config.passwordHash != null then
           scope.fail {
             id = "K6023";
-            package = "clickhouse-database";
             option = "passwordSource";
             message = "passwordSource and passwordHash were removed.";
             fix = "${passwordAdvice} Use the same file.";
           }
         else if password == null then
           scope.fail {
-            package = "clickhouse-database";
-            message = "has no `password` dependency.";
+            message = "This instance has no `password` dependency.";
             fix = passwordAdvice;
           }
         else
@@ -319,7 +314,7 @@ in
         let
           dep = builtins.seq _passwordCheck (
             kix.contracts.secret.helpers.use {
-              inherit who;
+              inherit scope;
               arg = "password";
               dep = password;
               keys = [ "password" ];
@@ -332,7 +327,6 @@ in
             dep
           else
             scope.fail {
-              package = "clickhouse-database";
               message = "deps.password resolved to secret \"${dep.out.name}\", which Kix does not fill from a SOPS file, so it is also the credentials Secret the app reads.";
               fix = "Add `username` (equal to user, \"${config.user}\") to that secret and to its keys, or use a packages.secret with a SOPS source.";
             }
@@ -344,7 +338,6 @@ in
       _grantsCheck =
         if badGrantKeys != [ ] then
           scope.fail {
-            package = "clickhouse-database";
             option = "grants";
             message = "grants keys must be `<database>.<table>`, each side `*` or a plain identifier, and these are not: ${lib.concatStringsSep ", " badGrantKeys}.";
           }

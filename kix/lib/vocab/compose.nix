@@ -353,9 +353,12 @@ rec {
   # Validate that a secret dependency `dep` declares all required `keys` (and
   # at least one key group in `anyOf` when set) in `dep.out.keys`, then return
   # `dep`. Read `keyRef` through the returned value so validation runs first.
+  # `arg` is the name the package takes `dep` under, and the error names it
+  # as the dependency of the instance in `scope`.
   checkSecretKeys =
     {
-      who,
+      scope ? null,
+      who ? null,
       arg,
       dep,
       keys ? [ ],
@@ -371,12 +374,14 @@ rec {
         lib.optional (missingKeys != [ ]) (lib.concatStringsSep ", " missingKeys)
         ++ lib.optional (!groupMet) "one of ${lib.concatMapStringsSep " or " showGroup anyOf}";
       declaredText = if declared == [ ] then "no keys" else lib.concatStringsSep ", " declared;
+      scopeFail = failOf "checkSecretKeys" { inherit scope who; };
     in
     if dep == null || wanted == [ ] then
-      dep
+      builtins.seq scopeFail dep
     else
-      fail {
-        message = "${who}: deps.${arg} resolved to secret \"${dep.out.name}\", which declares ${declaredText}; this package reads ${lib.concatStringsSep " and " wanted}.";
+      scopeFail {
+        dependency = arg;
+        message = "deps.${arg} resolved to secret \"${dep.out.name}\", which declares ${declaredText}; this package reads ${lib.concatStringsSep " and " wanted}.";
         fix = "Add them to that instance's keys (a SOPS secret lists them in keys), or wire another secret with deps.${arg} = ref.<ns>.<instance>.";
       };
 

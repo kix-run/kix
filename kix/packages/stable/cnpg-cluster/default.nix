@@ -74,7 +74,6 @@
 let
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "cnpg-cluster ${ns}/${name}";
 
   supportedRelease = "1.30";
 
@@ -133,7 +132,6 @@ let
     in
     if m == null then
       scope.fail {
-        package = "cnpg-cluster";
         option = "backup.extraSpec.configuration.endpointURL";
         message = "backup.extraSpec.configuration.endpointURL \"${url}\" is not an http or https URL, so the package cannot tell which port the store listens on.";
         fix = "Write it as https://<host>[:<port>].";
@@ -268,7 +266,6 @@ in
             cnpgOperator.out
           else
             scope.fail {
-              package = "cnpg-cluster";
               dependency = "cnpgOperator";
               message = "the cnpgOperator dependency has no out.operandSelectors, as with an import.";
               fix = "This package reads the operator's CRD handle and pod labels from it. Wire a managed cnpg-operator instance with deps.cnpgOperator = ref.<namespace>.<instance>.";
@@ -318,14 +315,12 @@ in
         plugin =
           if barmanCloud == null then
             scope.fail {
-              package = "cnpg-cluster";
               option = "backup";
               message = "backup is set and no barmanCloud dependency resolved.";
               fix = "Add a cnpg-barman-cloud instance in the operator's namespace, or set backup = null.";
             }
           else if !(barmanCloud.out ? mkObjectStore) then
             scope.fail {
-              package = "cnpg-cluster";
               dependency = "barmanCloud";
               message = "the barmanCloud dependency has no out.mkObjectStore, as with an import.";
               fix = "Wire a cnpg-barman-cloud instance with deps.barmanCloud = ref.<namespace>.<instance>.";
@@ -339,12 +334,11 @@ in
           )
           // lib.optionalAttrs (bk.credentialKeys.region != null) { region = bk.credentialKeys.region; };
         credentials = kix.contracts.secret.helpers.use {
-          inherit who;
+          inherit scope;
           arg = "storageCredentials";
           dep =
             if storageCredentials == null then
               scope.fail {
-                package = "cnpg-cluster";
                 dependency = "storageCredentials";
                 message = "backup is set and no storageCredentials dependency resolved in namespace ${ns}.";
                 fix = "Add a secret or secret-ref instance there with the keys ${lib.concatStringsSep " and " (builtins.attrValues credentialKeys)} and the alias storageCredentials, or set backup = null.";
@@ -384,7 +378,6 @@ in
           // lib.optionalAttrs inClusterStore {
             endpointURL =
               (endpointService.out.url or (scope.fail {
-                package = "cnpg-cluster";
                 dependency = "endpointService";
                 message = "deps.endpointService has no out.url.";
                 fix = "Wire an instance whose root is its S3 Service.";
@@ -400,7 +393,6 @@ in
         _endpointScheme =
           if !inClusterStore && bk.endpointScheme != null then
             scope.fail {
-              package = "cnpg-cluster";
               option = "backup.endpointScheme";
               message = "backup.endpointScheme is set and no endpointService dependency resolved, so nothing reads it.";
               fix = "Wire the in-cluster store with deps.endpointService = ref.<namespace>.<instance>, or remove backup.endpointScheme and give the scheme in backup.extraSpec.configuration.endpointURL.";
@@ -417,7 +409,6 @@ in
             in
             if urlHostInCluster clusterConfig.clusterDomain url then
               scope.fail {
-                package = "cnpg-cluster";
                 option = "backup.extraSpec.configuration.endpointURL";
                 message = "backup.extraSpec.configuration.endpointURL \"${url}\" names a Service in the cluster, and the instance pods get network policy only to stores outside it.";
                 fix = "Wire the store with deps.endpointService = ref.<namespace>.<instance> and remove endpointURL; set backup.endpointScheme = \"https\" if it serves TLS.";
@@ -433,21 +424,18 @@ in
         source =
           if importSource == null then
             scope.fail {
-              package = "cnpg-cluster";
               dependency = "importSource";
               message = "import is set and no importSource dependency resolved.";
               fix = "Wire the server to copy from with deps.importSource = ref.<namespace>.<instance>. For a server Kix does not manage, add a service-ref instance for its Service.";
             }
           else if !(importSource.out ? fqdn && importSource.out ? port) then
             scope.fail {
-              package = "cnpg-cluster";
               dependency = "importSource";
               message = "the importSource dependency has no out.fqdn and out.port, so the package cannot tell where the source listens.";
               fix = "Wire a cnpg-cluster, a stackgres-cluster, or a service-ref instance.";
             }
           else if (importSource.out.tls or null) == false && builtins.elem im.sslMode tlsModes then
             scope.fail {
-              package = "cnpg-cluster";
               option = "import.sslMode";
               message = "import.sslMode is ${im.sslMode}, which needs TLS, and the importSource dependency serves none (out.tls is false).";
               fix = "Turn on TLS at the source, or set import.sslMode = \"disable\".";
@@ -460,12 +448,11 @@ in
           "verify-full"
         ];
         importCredentials = kix.contracts.secret.helpers.use {
-          inherit who;
+          inherit scope;
           arg = "importPassword";
           dep =
             if importPassword == null then
               scope.fail {
-                package = "cnpg-cluster";
                 dependency = "importPassword";
                 message = "import is set and no importPassword dependency resolved in namespace ${ns}.";
                 fix = "Add a secret or secret-ref instance there with the key ${im.passwordKey} and wire it with deps.importPassword = ref.${ns}.<instance>.";
@@ -482,7 +469,6 @@ in
           if importCa == null then
             if verifiesSource then
               scope.fail {
-                package = "cnpg-cluster";
                 dependency = "importCa";
                 message = "import.sslMode is ${im.sslMode}, which checks the source's certificate, and no importCa dependency resolved.";
                 fix = "Wire a secret with ca.crt, the CA that signed the source's certificate, with deps.importCa = ref.${ns}.<instance>, or set import.sslMode = \"require\" to encrypt without checking.";
@@ -491,7 +477,6 @@ in
               null
           else if !verifiesSource then
             scope.fail {
-              package = "cnpg-cluster";
               option = "import.sslMode";
               message = "the importCa dependency is wired and import.sslMode is ${im.sslMode}, which does not check the source's certificate.";
               fix = "Set import.sslMode = \"verify-full\", or remove deps.importCa.";
@@ -499,7 +484,7 @@ in
           else
             (
               (kix.contracts.secret.helpers.use {
-                inherit who;
+                inherit scope;
                 arg = "importCa";
                 dep = importCa;
                 keys = [ "ca.crt" ];
@@ -580,28 +565,24 @@ in
         _unownedPaths =
           if config.extraSpec ? imageCatalogRef then
             scope.fail {
-              package = "cnpg-cluster";
               option = "extraSpec.imageCatalogRef";
               message = "extraSpec sets imageCatalogRef, and the package sets imageName from the image option.";
               fix = "Set image instead.";
             }
           else if (config.extraSpec.affinity or { }) ? enablePodAntiAffinity then
             scope.fail {
-              package = "cnpg-cluster";
               option = "extraSpec.affinity.enablePodAntiAffinity";
               message = "extraSpec sets affinity.enablePodAntiAffinity, which the package sets to false: the pods spread by the topologySpreadConstraints derived from the availability level.";
               fix = "Remove it, or set topologySpreadConstraints in extraSpec.";
             }
           else if !importOn && (importSource != null || importPassword != null || importCa != null) then
             scope.fail {
-              package = "cnpg-cluster";
               option = "import";
               message = "an importSource, importPassword, or importCa dependency is wired and import is null, so nothing reads it.";
               fix = "Set import, or remove the import dependencies.";
             }
           else if backupOn && (config.extraSpec.backup or { }) ? barmanObjectStore then
             scope.fail {
-              package = "cnpg-cluster";
               option = "extraSpec.backup.barmanObjectStore";
               message = "extraSpec sets backup.barmanObjectStore while the backup option enables the Barman Cloud plugin as WAL archiver, and CloudNativePG refuses both on one Cluster.";
               fix = "Remove backup.barmanObjectStore and configure the store through the backup option.";

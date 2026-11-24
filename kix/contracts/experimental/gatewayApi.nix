@@ -14,7 +14,7 @@
   ...
 }:
 let
-  inherit (import ../../lib/core/error.nix { inherit lib; }) fail;
+  inherit (import ../../lib/core/error.nix { inherit lib; }) failOf refuseWho;
   kixKeys = (import ../../lib/core/annotations.nix).keys;
 
   fields = {
@@ -54,11 +54,11 @@ mkContract {
   inherit fields;
 
   helpers = rec {
-    # Return the errors, as `kix.fail` takes them, that `crdsFor` raises for
-    # these arguments, or [ ] when the provider serves the consumer.
+    # Return the errors, as `scope.fail` takes them, that `crdsFor` raises
+    # for these arguments, or [ ] when the provider serves the consumer.
     errorsFor =
       {
-        who,
+        who ? null,
         gatewayApi,
         kinds,
         minVersion,
@@ -87,17 +87,15 @@ mkContract {
             "${gatewayApi._meta.namespaceName or "?"}/${gatewayApi._meta.instanceName or "?"}"
           else
             "the gatewayApi provider";
-        error = e: [
-          (
-            {
-              instance = who;
-              dependency = "gatewayApi";
-            }
-            // e
-          )
-        ];
+        error = e: [ ({ dependency = "gatewayApi"; } // e) ];
       in
-      if gatewayApi == null then
+      if who != null then
+        refuseWho {
+          helper = "contracts.experimental.gatewayApi.helpers.errorsFor";
+          reason = "The `scope.fail` that reports the errors names the instance and its package.";
+          fix = "Remove `who`.";
+        }
+      else if gatewayApi == null then
         error {
           id = "K5531";
           message = "this instance requires the Kubernetes Gateway API CRDs (gateway.networking.k8s.io), but nothing in the cluster provides the 'gatewayApi' role.";
@@ -145,14 +143,22 @@ mkContract {
 
     # Return `gatewayApi.out.crds` for a Gateway API implementation that
     # builds or watches `kinds` and needs Gateway API `minVersion` or later,
-    # or fail with the first of `errorsFor`. `who` names the consumer
-    # instance as <namespace>/<name>. `gatewayApi` is the consumer's
-    # dependency, null when nothing answers the role.
+    # or fail with the first of `errorsFor`. `scope` is the consumer's.
+    # `gatewayApi` is the consumer's dependency, null when nothing answers
+    # the role.
     crdsFor =
-      args:
+      {
+        scope ? null,
+        who ? null,
+        ...
+      }@args:
       let
-        errors = errorsFor args;
+        scopeFail = failOf "contracts.experimental.gatewayApi.helpers.crdsFor" { inherit scope who; };
+        errors = errorsFor (removeAttrs args [ "scope" ]);
       in
-      if errors == [ ] then args.gatewayApi.out.crds else fail (builtins.head errors);
+      if builtins.seq scopeFail errors == [ ] then
+        args.gatewayApi.out.crds
+      else
+        scopeFail (builtins.head errors);
   };
 }

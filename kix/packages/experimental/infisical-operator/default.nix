@@ -143,7 +143,6 @@ let
 
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "infisical-operator ${ns}/${name}";
 
   metricsPort = 8080;
   healthPort = 8081;
@@ -345,7 +344,7 @@ in
         } config.extraArgs;
 
         egressProblem = egress.check {
-          inherit who clusterConfig;
+          inherit clusterConfig;
           address = addr;
           namespace = ns;
           intentName = "${name}-egress";
@@ -449,8 +448,8 @@ in
             }
           );
 
-        # Builder errors name this instance (`who`) and the consumer's
-        # custom resource.
+        # Builder errors go through this instance's `scope.fail` and name
+        # the consumer's custom resource in the message.
         crName =
           consumerScope: kind: args:
           "${kind} ${consumerScope.namespaceName}/${args.name}";
@@ -482,13 +481,11 @@ in
           in
           if spec ? managedSecretReference then
             scope.fail {
-              package = "infisical-operator";
               message = "${what} sets managedSecretReference, which upstream is deprecating and rejects alongside managedKubeSecretReferences.";
               fix = "Move it into managedKubeSecretReferences.";
             }
           else if secretRefs == [ ] && configMapRefs == [ ] then
             scope.fail {
-              package = "infisical-operator";
               message = "${what} sets no managedKubeSecretReferences or managedKubeConfigMapReferences, so the operator has nowhere to write.";
               fix = "Add one.";
             }
@@ -516,7 +513,6 @@ in
           in
           if (spec.targets or [ ]) == [ ] then
             scope.fail {
-              package = "infisical-operator";
               message = "${
                 crName consumerScope "InfisicalStaticSecret" args
               } sets no targets, so the operator has nowhere to write.";
@@ -549,7 +545,6 @@ in
                 target =
                   if targets == [ ] then
                     scope.fail {
-                      package = "infisical-operator";
                       message = "${what} writes no Secret, so its out.secretRef has nothing to reference.";
                       fix = "Add a Secret target.";
                     }
@@ -558,19 +553,16 @@ in
                       builtins.head targets
                     else
                       scope.fail {
-                        package = "infisical-operator";
                         message = "out.secretRef of ${what} needs a name, because the custom resource has more than one Secret target.";
                         fix = "Pass name = one of: ${listed}.";
                       }
                   else
                     lib.findFirst (t: t.name == name) (scope.fail {
-                      package = "infisical-operator";
                       message = "out.secretRef of ${what} names Secret \"${name}\", which is not one of its targets; targets are: ${listed}.";
                     }) targets;
               in
               if target.namespace != consumerScope.namespaceName then
                 scope.fail {
-                  package = "infisical-operator";
                   message = "out.secretRef of ${what} builds a reference in ${consumerScope.namespaceName}; the target ${target.name} is in ${target.namespace}.";
                   fix = "Build the reference from an instance in ${target.namespace}.";
                 }
@@ -742,11 +734,13 @@ in
         # That stays possible when a later deploy changes `address` for a
         # running operator.
         connection =
-          assert lib.assertMsg (egressProblem == null) egressProblem;
-          self.crds.infisicalConnections.out.mkCR scope {
-            name = "default";
-            spec.address = addr;
-          };
+          if egressProblem != null then
+            scope.fail egressProblem
+          else
+            self.crds.infisicalConnections.out.mkCR scope {
+              name = "default";
+              spec.address = addr;
+            };
 
         root = {
           resource = self.deployment;
@@ -811,7 +805,6 @@ in
             mkInfisicalDynamicSecret =
               _: _:
               scope.fail {
-                package = "infisical-operator";
                 message = "there is no InfisicalDynamicSecret builder. The operator copies the custom resource's annotations, Kix's included, onto the lease Secret it creates and has no setting to stop it.";
                 fix = "Create InfisicalDynamicSecrets outside Kix.";
               };

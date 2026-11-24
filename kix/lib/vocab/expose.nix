@@ -194,11 +194,7 @@ let
       hasGateway = gateway != null && gatewayContract.helpers.claims gateway;
       # Validate the gateway contract when `listener` is forced by the
       # HTTPRoute.
-      checkedGateway =
-        if hasGateway then
-          gatewayContract.require "kix.expose (${scope.namespaceName}/${name})" gateway
-        else
-          null;
+      checkedGateway = if hasGateway then gatewayContract.require scope gateway else null;
       hasIngress = ingressNginx != null;
       mode =
         if hasGateway then
@@ -567,7 +563,7 @@ rec {
             host:
             gatewayListener {
               inherit name host scope;
-              gateway = gatewayContract.require "kix.expose (${scope.namespaceName}/${name})" gateway;
+              gateway = gatewayContract.require scope gateway;
             }
           ) extraHosts
         else

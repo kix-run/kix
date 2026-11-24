@@ -9,7 +9,6 @@
 rec {
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "harbor ${ns}/${name}";
   release = "2.15.5";
   tag = "v${release}";
 
@@ -143,13 +142,13 @@ rec {
       # a missing key fails here with the secret's name, before any
       # `keyRef` throws.
       secrets = kix.contracts.secret.helpers.use {
-        inherit who;
+        inherit scope;
         arg = "harborSecrets";
         dep = harborSecrets;
         keys = secretKeys;
       };
       ca = kix.contracts.secret.helpers.use {
-        inherit who;
+        inherit scope;
         arg = "caBundle";
         dep = caBundle;
         keys = [ "ca.crt" ];
@@ -165,14 +164,13 @@ rec {
           creds
         else
           scope.fail {
-            package = "harbor";
             dependency = "database";
             message = "the database dependency's credentials Secret \"${creds.out.name}\" declares ${
               if declared == [ ] then "no keys" else lib.concatStringsSep ", " declared
             }; this package reads its `username` and `password` keys.";
             fix = "Wire a database whose out.credentials declares both.";
           };
-      redisServer = kix.contracts.redis.helpers.requirePlaintext who redis;
+      redisServer = kix.contracts.redis.helpers.requirePlaintext scope redis;
       valkeySecret = redisServer.out.credentials or null;
 
       # A pod template annotation that changes with a Secret's content,
@@ -202,7 +200,6 @@ rec {
           "disable"
         else
           scope.fail {
-            package = "harbor";
             option = "database.sslmode";
             message = "the database dependency does not say whether it serves TLS (it publishes no out.tls).";
             fix = "Set database.sslmode to \"require\" for a server with TLS, or \"disable\" for one without.";

@@ -349,8 +349,8 @@ in
     (
       { self, config, ... }:
       let
-        # Builder errors name this instance (`who`) and the consumer's
-        # custom resource.
+        # Builder errors go through this instance's `scope.fail` and name
+        # the consumer's custom resource in the message.
         crName =
           consumerScope: kind: args:
           "${kind} ${consumerScope.namespaceName}/${args.name}";
@@ -371,13 +371,11 @@ in
           in
           if literal != [ ] then
             scope.fail {
-              package = "external-secrets";
               message = "${what} names Secret \"${first.name}\" at ${first.path} by a literal string, so Kix neither orders the store after the Secret nor checks that it holds key \"${first.key}\".";
               fix = "Use (<secret dependency>.out.keyRef \"${first.key}\").valueFrom.secretKeyRef, or, for a Secret created outside Kix, name = kix.untrackedRef { name = \"${first.name}\"; kind = \"Secret\"; }.";
             }
           else if needNamespace && noNamespace != [ ] then
             scope.fail {
-              package = "external-secrets";
               message = "${what} names Secret \"${firstNoNamespace.name}\" at ${firstNoNamespace.path} without a namespace, so the controller reads it from the namespace of each ExternalSecret that uses the store, and Kix can neither order the store after it nor check its keys.";
               fix = "Add namespace = scope.namespaceName to the selector (the namespace of this instance's secret dependency).";
             }
@@ -395,7 +393,6 @@ in
           in
           if target ? manifest then
             scope.fail {
-              package = "external-secrets";
               message = "${what} sets spec.target.manifest, a generic target. The controller writes one only with --unsafe-allow-generic-targets, and the package grants it no RBAC for ConfigMaps or custom resources.";
               fix = "Write a Secret target, or create this ExternalSecret outside Kix.";
             }
@@ -445,13 +442,11 @@ in
               in
               if policy == "None" then
                 scope.fail {
-                  package = "external-secrets";
                   message = "out.secretRef of ${what} is not available, because creationPolicy None writes no Secret.";
                   fix = "Use another creationPolicy, or reference the Secret through its own dependency.";
                 }
               else if unknown != [ ] then
                 scope.fail {
-                  package = "external-secrets";
                   message = "out.secretRef of ${what} declares ${lib.concatStringsSep ", " unknown}, which the ExternalSecret does not write. It writes ${lib.concatStringsSep ", " knownKeys}.";
                   fix = "Declare only those keys, or add the missing ones to spec.data or spec.target.template.data.";
                 }

@@ -110,7 +110,6 @@ let
     in
     if bare != [ ] then
       scope.fail {
-        package = "reloader";
         option = "extraArgs";
         message = "extraArgs passes ${flag} without \"=\".";
         fix = "Write ${flag}=<a,b>.";
@@ -277,7 +276,6 @@ in
         _flagsCheck = builtins.deepSeq read (
           if watched != [ ] && ignored != [ ] then
             scope.fail {
-              package = "reloader";
               option = "extraArgs";
               message = "extraArgs sets both --namespaces and --namespaces-to-ignore. reloader ignores --namespaces-to-ignore when --namespaces is set.";
               fix = "Remove one.";
@@ -339,27 +337,23 @@ in
           in
           if kind == "Secret" || kind == "ConfigMap" then
             scope.fail {
-              package = "reloader";
               message = "${prefix} got ${kind} '${r.out.name or "?"}', whose content is part of the build.";
               fix = "Put \"checksum/<name>\" = <ref>.out.contentHash on the pod template instead, so the rollout appears in the deploy plan. reloader would restart the workload a second time.";
             }
           else if !(kind == "PackageInstance" && r ? out.keyRef) then
             scope.fail {
-              package = "reloader";
               message = "${prefix} takes Secrets from scope.mkSecretRef or a secret-ref dependency; got ${
                 if kind != null then kind else r._type or (builtins.typeOf r)
               }.";
             }
           else if labelSelector != [ ] then
             scope.fail {
-              package = "reloader";
               option = "extraArgs";
               message = "${prefix}: reloader watches only Secrets labelled ${lib.concatStringsSep "," labelSelector}, and Kix cannot check that Secret ${shown}, created outside Kix, carries them.";
               fix = "Remove --resource-label-selector to use withReloadOn.";
             }
           else if (watched != [ ] && !builtins.elem namespace watched) || builtins.elem namespace ignored then
             scope.fail {
-              package = "reloader";
               option = "extraArgs";
               message = "${prefix}: Secret ${shown} is in a namespace this reloader does not watch (extraArgs ${
                 if watched != [ ] then
@@ -393,22 +387,18 @@ in
           in
           if !builtins.isList refs || refs == [ ] then
             scope.fail {
-              package = "reloader";
               message = "${prefix} needs a non-empty list of Secrets.";
             }
           else if args ? _type then
             scope.fail {
-              package = "reloader";
               message = "${prefix} takes builder args; pipe them through it before scope.mkDeployment.";
             }
           else if args ? spec.jobTemplate || restartPolicy == "Never" || restartPolicy == "OnFailure" then
             scope.fail {
-              package = "reloader";
               message = "${prefix}: Job and CronJob pods read the Secret when they start; this reloader ignores them (--ignored-workload-types).";
             }
           else if !(args ? spec.template) then
             scope.fail {
-              package = "reloader";
               message = "${prefix}: reloader restarts only Deployments, DaemonSets, and StatefulSets, and these args have no spec.template.";
               fix = "Pass the builder args of one of those kinds.";
             }

@@ -1,0 +1,3 @@
+# 2026-11-24 · `kix/lib/core/resource.nix`, `kix/lib/eval/import.nix` · Errors about CRD handles and `mkImport` entries name the instance in the message text instead of in the record's `instance` field.
+
+`core/resource.nix` (around line 1294) builds `who = "<site> <group>/<kind> in <ns>/<instance>"` and calls plain `fail`, and `eval/import.nix` (around line 459) does the same with `who = "Import instance '<ns>/<instance>'"` for its `crds` and `out` checks. `kix check -o json` then gives these errors no `instance` or `package` field, unlike the errors of `scope.fail` and the contract helpers. Both places know the instance, so they could report through a `failFor` with it.

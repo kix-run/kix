@@ -306,7 +306,6 @@ in
       message =
         capabilities:
         platformRefusal {
-          who = "falco security/falco";
           inherit capabilities;
           provider = "gke-autopilot";
         };
@@ -336,7 +335,7 @@ in
         ];
       }))
       && lib.hasInfix "daemonSets = false and privilegedContainers = false (provider gke-autopilot)" both
-      && lib.hasPrefix "falco security/falco: " both
+      && lib.hasPrefix "cluster.capabilities sets " both
       # The fix names no other platform, so it reads right on OpenShift.
       && !(lib.hasInfix "GKE" both)
       && lib.hasInfix "set the capability to true" both

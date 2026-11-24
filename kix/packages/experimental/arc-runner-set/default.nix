@@ -67,7 +67,6 @@ let
 
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "arc-runner-set ${ns}/${name}";
 
   # Paths of the runner set spec that options and dependencies set.
   locked = [
@@ -198,7 +197,7 @@ in
     }:
     let
       creds = kix.contracts.secret.helpers.use {
-        inherit who;
+        inherit scope;
         arg = "githubConfigSecret";
         dep = githubConfigSecret;
         anyOf = [

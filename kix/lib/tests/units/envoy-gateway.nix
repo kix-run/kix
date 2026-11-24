@@ -222,7 +222,6 @@ in
   envoy-gateway-needs-gateway-api =
     let
       errors = contract.helpers.errorsFor {
-        who = "${ns}/eg";
         gatewayApi = null;
         kinds = [
           "GatewayClass"
@@ -393,7 +392,6 @@ in
       errorsWith =
         args: kinds:
         contract.helpers.errorsFor {
-          who = "${ns}/eg";
           gatewayApi = importOut args;
           inherit kinds;
           minVersion = "1.6";

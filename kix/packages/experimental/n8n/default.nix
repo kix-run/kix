@@ -132,7 +132,6 @@ let
   release = "2.48.8";
 
   name = scope.instanceName;
-  who = "n8n ${scope.namespaceName}/${name}";
 
   httpPort = 5678;
   # n8n's default broker port on a worker in external task-runner mode.
@@ -176,7 +175,6 @@ let
           lib.toIntBase10 v
         else
           scope.fail {
-            package = "n8n";
             option = "env.${var}";
             message = "env.${var} is \"${v}\". n8n reads it as a whole number of MiB (for example \"64\").";
           };
@@ -213,7 +211,7 @@ in
     network.intents.workflows.egress = [ { to = "world"; } ];
   };
 
-  deps.database.assertions = dep: kix.contracts.postgresDatabase.assertions who dep;
+  deps.database.assertions = kix.contracts.postgresDatabase.assertions;
 
   # n8n has no Sentinel client, and with Sentinel the valkey Service also
   # routes to read-only replicas, so n8n asks its valkey for a standalone
@@ -224,7 +222,7 @@ in
     # An import is not reached by the injection above.
     assertions =
       dep:
-      kix.contracts.redis.assertions who dep
+      kix.contracts.redis.assertions dep
       ++ lib.optional (kix.contracts.redis.helpers.usesSentinel dep) {
         assertion = false;
         message = "n8n needs a standalone valkey with one pod: it has no Sentinel client, so its queue writes would reach read-only replicas through the valkey Service. Wire a valkey with sentinel.enabled = false.";
@@ -354,7 +352,7 @@ in
         exposure = self.exposure;
 
         ek = kix.contracts.secret.helpers.use {
-          inherit who;
+          inherit scope;
           arg = "encryptionKey";
           dep = encryptionKey;
           keys = [ "key" ];

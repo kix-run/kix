@@ -47,7 +47,6 @@ let
     in
     if m == null then
       fail {
-        package = "stackgres-operator";
         message = "kix/packages/experimental/stackgres-operator/versions.properties: \"${entry}\" is not <version>-build-<build>.";
       }
     else
@@ -109,11 +108,11 @@ in
 
   # The images StackGres runs for an SGCluster at `version` ("17" or
   # "17.11"), from `registry` (the operator's registry prefix) and
-  # `operatorTag`. Throws with `who` as the prefix when the table has no
-  # such release.
+  # `operatorTag`. Reports through `fail`, the calling instance's
+  # `scope.fail`, when the table has no such release.
   resolvePostgres =
     {
-      who,
+      fail,
       version,
       registry,
       operatorTag,
@@ -139,12 +138,14 @@ in
     in
     if version == "latest" then
       fail {
-        message = "${who}: postgres.version \"latest\" would move the cluster to a new major when the operator is upgraded, and a major upgrade needs an SGDbOps of type majorVersionUpgrade.";
+        option = "postgres.version";
+        message = "postgres.version \"latest\" would move the cluster to a new major when the operator is upgraded, and a major upgrade needs an SGDbOps of type majorVersionUpgrade.";
         fix = "Pin a major such as \"17\".";
       }
     else if matching == [ ] then
       fail {
-        message = "${who}: postgres.version \"${version}\" is not a PostgreSQL release that StackGres ${release} ships.";
+        option = "postgres.version";
+        message = "postgres.version \"${version}\" is not a PostgreSQL release that StackGres ${release} ships.";
         fix =
           if builtins.elem askedMajor majors then
             "PostgreSQL ${askedMajor} minors it ships: ${minorsOf askedMajor}."
@@ -153,7 +154,8 @@ in
       }
     else if builtins.elem pg.version unpublished then
       fail {
-        message = "${who}: postgres.version \"${version}\" selects PostgreSQL ${pg.version} (build ${pg.build}), whose StackGres images quay.io does not publish, so the pods could not start.";
+        option = "postgres.version";
+        message = "postgres.version \"${version}\" selects PostgreSQL ${pg.version} (build ${pg.build}), whose StackGres images quay.io does not publish, so the pods could not start.";
         fix = "Pin another minor: ${minorsOf pg.major}.";
       }
     else

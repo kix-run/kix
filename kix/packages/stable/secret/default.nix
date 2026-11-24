@@ -62,7 +62,6 @@
         if config.hash != null then
           scope.fail {
             id = "K4732";
-            package = "secret";
             option = "hash";
             message = "`hash` was removed. Kix now computes a digest of the SOPS file itself.";
             fix = "Delete the `hash` line from the instance's config.";

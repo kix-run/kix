@@ -311,7 +311,6 @@ in
             pool
           else if !(nodes ? ${pool.node}) then
             scope.fail {
-              package = "mayastor";
               option = "diskPools.${poolName}.node";
               message = "diskPools.${poolName}.node is \"${pool.node}\", which is not in cluster.nodes (${lib.concatStringsSep ", " (builtins.attrNames nodes)}).";
               fix = "Name the node that holds the pool's disk.";
@@ -383,7 +382,6 @@ in
                     encryptionConfig.source.secret.name =
                       if key == null then
                         scope.fail {
-                          package = "mayastor";
                           option = "diskPools.${poolName}.encrypted";
                           message = "diskPools.${poolName}.encrypted is true, but the poolEncryptionKey dependency is not wired.";
                           fix = "Wire a secret with key encryption_parameters through deps.poolEncryptionKey = ref.<ns>.<instance>, or set encrypted = false.";

@@ -87,11 +87,11 @@
 #   out.podSelector   the operator pods' labels.
 #   out.release       the StackGres release.
 #   out.version       the StackGres version `image.tag` names.
-#   out.resolvePostgres { who; version; }
+#   out.resolvePostgres { scope; version; }
 #                     { major; minor; images } for an SGCluster at `version`,
-#                     with images from this operator's registry. Throws,
-#                     prefixed with `who`, for `latest` or a release the table
-#                     does not ship.
+#                     with images from this operator's registry. Fails
+#                     through `scope.fail` for `latest` or a release the
+#                     table does not ship.
 #   out.kubectlImages the kubectl images the operator's backup and
 #                     major-upgrade Jobs run: one when the cluster sets
 #                     k8sVersion, else every candidate.
@@ -1008,9 +1008,10 @@ in
               k8sVersion = clusterConfig.k8sVersion or null;
             };
             resolvePostgres =
-              { who, version }:
+              { scope, version }:
               resolvePostgres {
-                inherit who version registry;
+                inherit (scope) fail;
+                inherit version registry;
                 operatorTag = imageTag;
               };
           };

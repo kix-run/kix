@@ -399,10 +399,13 @@ rec {
               self:
               builtins.foldl' (
                 acc: fn:
-                helpers.mergeCollide
-                  "Import instance '${instanceName}': two build entries define the same part. Duplicated part"
-                  acc
-                  (callBuildFn self fn)
+                helpers.mergeCollide {
+                  inherit (importScope) fail;
+                  error = names: {
+                    message = "Two build entries of the package in `from` define the part ${names}.";
+                    fix = "Give each part one build entry.";
+                  };
+                } acc (callBuildFn self fn)
               ) { } (buildEntriesOf raw.build)
             );
 
@@ -521,10 +524,13 @@ rec {
       }) crdEntries;
       crdHandles = builtins.foldl' (
         acc: h:
-        helpers.mergeCollide
-          "${who}: mkImport crds declares a kind the package's out.crds already has. Kind"
-          acc
-          { ${h.kind} = h.handle; }
+        helpers.mergeCollide {
+          fail = failFor { instance = "${namespaceName}/${instanceName}"; };
+          error = names: {
+            message = "mkImport crds declares ${names}, a kind the package's out.crds already has.";
+            fix = "Remove the crds entry for ${names}, or the kind from the package's out.crds.";
+          };
+        } acc { ${h.kind} = h.handle; }
       ) (derived.out.crds or { }) crdHandleList;
 
       isRef = v: builtins.isAttrs v && (v._type or "") == "kix-ref";

@@ -98,7 +98,6 @@ let
   controllerName = "traefik.io/gateway-controller";
 
   name = scope.instanceName;
-  who = "traefik ${scope.namespaceName}/${name}";
   # Cluster-scoped RBAC carries the namespace too, so instances with the
   # same name in two namespaces do not collide.
   clusterName = "${scope.namespaceName}-${name}";
@@ -393,14 +392,12 @@ in
           if serviceSpecOwnedHits != [ ] then
             scope.fail (
               map (k: {
-                package = "traefik";
                 option = "service.spec.${k}";
                 message = "service.spec.${k} is set by the package, which ${serviceSpecOwned.${k}}";
               }) serviceSpecOwnedHits
             )
           else if serviceType == "ClusterIP" && config.service.spec.externalTrafficPolicy != null then
             scope.fail {
-              package = "traefik";
               option = "service.spec.externalTrafficPolicy";
               message = "service.spec.externalTrafficPolicy applies to NodePort and LoadBalancer Services, and the API server rejects it on ClusterIP.";
               fix = "Change service.spec.type or remove it.";
@@ -500,7 +497,6 @@ in
             reason = reasonFor arg;
           in
           lib.optional (reason != null) {
-            package = "traefik";
             option = "extraArgs";
             message = "extraArgs sets \"${arg}\", ${reason}";
           }
@@ -529,7 +525,6 @@ in
         env =
           if traefikEnv != [ ] then
             scope.fail {
-              package = "traefik";
               option = "env";
               message = "env sets ${lib.concatStringsSep ", " traefikEnv}, which Traefik ignores because it reads its configuration from flags.";
               fix = "Pass the setting in extraArgs.";
@@ -583,7 +578,7 @@ in
         # Traefik's Gateway provider does not start while any watched kind
         # is missing, so the Deployment requires each CRD.
         crds = kix.contracts.experimental.gatewayApi.helpers.crdsFor {
-          who = "${scope.namespaceName}/${name}";
+          inherit scope;
           inherit gatewayApi;
           kinds = [
             "GatewayClass"
@@ -611,7 +606,6 @@ in
       if listenerProblems != [ ] then
         scope.fail (
           map (p: {
-            package = "traefik";
             message = p;
           }) listenerProblems
         )
@@ -750,7 +744,7 @@ in
             requires = builtins.filter (r: r != null) [
               self.gateway
             ];
-            out = kix.contracts.gateway.check who {
+            out = kix.contracts.gateway.check scope {
               gatewayRef = {
                 name = self.gateway.out.name;
                 namespace = scope.namespaceName;

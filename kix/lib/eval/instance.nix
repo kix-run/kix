@@ -337,10 +337,13 @@ in
             # partsOverlays use `//` so they can replace existing parts.
             merged = builtins.foldl' (
               acc: fn:
-              helpers.mergeCollide
-                "${namespaceName}/${instanceName}: two build entries define the same part, and the later one would silently replace the earlier. Rename one of them (kix.expose takes partName and exposurePart; kix.monitor takes monitorPart and rulesPart), or use partsOverlays to replace a part on purpose. Duplicated part"
-                acc
-                (callBuildFn self fn)
+              helpers.mergeCollide {
+                inherit (scope') fail;
+                error = names: {
+                  message = "Two build entries define the part ${names}, and the later one would silently replace the earlier.";
+                  fix = "Rename one of them (kix.expose takes partName and exposurePart; kix.monitor takes monitorPart and rulesPart), or use partsOverlays to replace a part on purpose.";
+                };
+              } acc (callBuildFn self fn)
             ) { } rawBuildEntries;
           in
           if boundOverlays != [ ] then
@@ -902,6 +905,7 @@ in
         ) (builtins.attrNames knownFolders);
 
         diagnostics = meta.combineDiagnostics {
+          packageId = packageLib.idOf instCfg.package;
           inherit
             instanceName
             namespaceName
@@ -917,6 +921,7 @@ in
         builtins.seq diagnostics.evaluateWarnings (
           let
             view' = mkPackageView {
+              inherit (scope') fail;
               inherit
                 parts
                 instanceName

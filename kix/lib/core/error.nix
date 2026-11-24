@@ -251,16 +251,32 @@ rec {
     in
     fail (if builtins.isList e then map fill e else fill e);
 
+  # Refuse a call to the library helper `helper` that passes `who`, and
+  # name the form to use. `reason` says where the helper finds the instance
+  # now, `fix` says what to pass instead, and `failWith` is the `fail` that
+  # reports it.
+  refuseWho =
+    {
+      helper,
+      reason ? "It reads the instance and package from `scope`.",
+      fix ? "Remove `who` and pass `inherit scope;`.",
+      failWith ? fail,
+    }:
+    failWith {
+      id = "K6417";
+      message = "kix.${helper} no longer accepts `who`. ${reason}";
+      inherit fix;
+    };
+
   # Return the `fail` of the `scope` that the library helper `helper`
   # received. Refuse a call that passes `who`, and name the form to use.
   failOf =
     helper:
     { scope, who }:
     if who != null then
-      (if scope == null then fail else scope.fail) {
-        id = "K6417";
-        message = "kix.${helper} no longer accepts `who`. It reads the instance and package from `scope`.";
-        fix = "Remove `who` and pass `inherit scope;`.";
+      refuseWho {
+        inherit helper;
+        failWith = if scope == null then fail else scope.fail;
       }
     else if scope == null then
       fail {
@@ -278,10 +294,18 @@ rec {
   # `kix.fail` takes. `instance` is set unless `w` sets one, and may be null
   # for a warning about the whole cluster. A field in the wrong form stops
   # evaluation with the same error `kix.fail` gives for it.
-  warning =
-    instance: w:
+  warning = instance: warningFor { inherit instance; };
+
+  # Return warning `w` as a record, with `instance` and `package` set unless
+  # `w` sets them, as `failFor` does for an error.
+  warningFor =
+    {
+      instance,
+      package ? null,
+    }:
+    w:
     let
-      e = withInstance instance w;
+      e = withDefaults { inherit instance package; } w;
       checked = check e;
     in
     if checked.problems == [ ] then checked.record else fail e;

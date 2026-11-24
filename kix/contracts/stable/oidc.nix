@@ -18,7 +18,7 @@
   ...
 }:
 let
-  inherit (import ../../lib/core/error.nix { inherit lib; }) fail;
+  inherit (import ../../lib/core/error.nix { inherit lib; }) failOf;
 
   isUrl = v: builtins.isString v && builtins.match "https?://[^/]+(/.*)?" v != null;
 
@@ -67,26 +67,33 @@ let
       # `oidc` option set, checked for the removed `enabled` and `realm`.
       client =
         {
-          who,
+          scope ? null,
+          who ? null,
           oidc,
           options,
         }:
-        if (options.enabled or null) != null || (options.realm or null) != null then
-          removedOptionsError who
-        else if oidc == null then
-          null
-        else
-          let
-            out = (contract.require who oidc).out;
-          in
-          {
-            inherit (out) issuerUrl credentials;
-            endpoints =
-              out.endpoints or (fail {
-                message = "${who}: deps.oidc publishes no out.endpoints, the authorization, token, and userinfo URLs this application needs.";
-                fix = "Set out.endpoints on that instance (an oidc-client on keycloak sets them, and a kix.mkImport sets them in `out`).";
-              });
-          };
+        let
+          scopeFail = failOf "contracts.oidc.helpers.client" { inherit scope who; };
+        in
+        builtins.seq scopeFail (
+          if (options.enabled or null) != null || (options.realm or null) != null then
+            removedOptionsError scopeFail
+          else if oidc == null then
+            null
+          else
+            let
+              out = (contract.require scope oidc).out;
+            in
+            {
+              inherit (out) issuerUrl credentials;
+              endpoints =
+                out.endpoints or (scopeFail {
+                  dependency = "oidc";
+                  message = "deps.oidc publishes no out.endpoints, the authorization, token, and userinfo URLs this application needs.";
+                  fix = "Set out.endpoints on that instance (an oidc-client on keycloak sets them, and a kix.mkImport sets them in `out`).";
+                });
+            }
+        );
     };
 
     # Build the `oidc` option set for a consumer package. Pass `autoLogin =
@@ -129,9 +136,10 @@ let
   };
 
   removedOptionsError =
-    who:
-    fail {
-      message = "${who}: oidc.enabled and oidc.realm were removed. Single sign-on is on when this instance has an `oidc` dependency.";
+    scopeFail:
+    scopeFail {
+      option = "oidc";
+      message = "oidc.enabled and oidc.realm were removed. Single sign-on is on when this instance has an `oidc` dependency.";
       fix = "In this namespace, add an oidc-client instance with config.realm set to the realm, deps.oidcProvider naming the provider, and the client secret (keys clientId and clientSecret) as its oidcClient dependency. For a provider outside the cluster, a kix.mkImport whose out sets issuerUrl and credentials = ref.<namespace>.<secret> also works. Then remove oidc.enabled and oidc.realm.";
     };
 in

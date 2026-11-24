@@ -42,7 +42,6 @@ let
   release = "9.1.3";
 
   name = scope.instanceName;
-  who = "valkey ${scope.namespaceName}/${name}";
 
   ports = {
     valkey = 6379;
@@ -276,7 +275,7 @@ in
         scrape = config.metrics.enabled && prometheus != null;
 
         password = kix.contracts.secret.helpers.use {
-          inherit who;
+          inherit scope;
           arg = "valkeyPassword";
           dep = valkeyPassword;
           keys = [ "password" ];
@@ -307,14 +306,12 @@ in
         } config.sentinel.primarySettings;
 
         refused =
-          conf.refusals who "settings" (conf.reservedSettings ports.valkey) config.settings
+          conf.refusals "settings" (conf.reservedSettings ports.valkey) config.settings
           ++
-            conf.refusals who "sentinel.primarySettings" conf.reservedPrimarySettings
+            conf.refusals "sentinel.primarySettings" conf.reservedPrimarySettings
               config.sentinel.primarySettings;
 
-        valkeyConf = lib.throwIf (refused != [ ]) (lib.concatStringsSep "\n" refused) (
-          conf.render lib.id valkeyDirectives
-        );
+        valkeyConf = if refused != [ ] then scope.fail refused else conf.render lib.id valkeyDirectives;
 
         sentinelConf = conf.render (k: "sentinel ${k} ${primarySet}") primaryDirectives;
 
@@ -647,7 +644,7 @@ in
 
         root = {
           resource = self.mainService;
-          out = kix.contracts.redis.check who ({
+          out = kix.contracts.redis.check scope ({
             host = self.mainService.out.fqdn;
             port = toString ports.valkey;
             credentials = password;

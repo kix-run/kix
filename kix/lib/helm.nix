@@ -949,7 +949,13 @@ rec {
                 };
 
               effectiveOut = autoOut // out;
-              collision = helpers.mergeCollide "importChart (${releaseName}): extraParts names a part the chart already renders (or names root). Rename the extra part";
+              collision = helpers.mergeCollide {
+                inherit (scope) fail;
+                error = names: {
+                  message = "importChart (${releaseName}): extraParts names ${names}, a part the chart already renders or `root`.";
+                  fix = "Rename the extra part.";
+                };
+              };
             in
             collision (collision attrs extraParts) {
               root = {

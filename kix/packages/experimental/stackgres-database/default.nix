@@ -96,7 +96,6 @@
 
 let
   name = scope.instanceName;
-  who = "stackgres-database ${scope.namespaceName}/${name}";
 
   # A plain name or `{ name; version; }`, as stackgres-cluster takes it.
   normalizeExtension =
@@ -239,7 +238,6 @@ in
         in
         if missing != [ ] then
           scope.fail {
-            package = "stackgres-database";
             message = "needs extensions ${lib.concatStringsSep ", " missing} on its postgres dependency, which publishes out.extensions = [ ${lib.concatStringsSep " " published} ].";
             fix = "On a stackgres-cluster they are forwarded automatically. On an import, install them and list them in its out.extensions.";
           }
@@ -252,7 +250,6 @@ in
         if config.password != null then
           scope.fail {
             id = "K9503";
-            package = "stackgres-database";
             option = "password";
             message = "password was removed, because it put the password in plain text in Kix's local store and in the built Secrets.";
             fix = passwordAdvice;
@@ -260,14 +257,12 @@ in
         else if config.passwordSource != null || config.passwordHash != null then
           scope.fail {
             id = "K6023";
-            package = "stackgres-database";
             option = "passwordSource";
             message = "passwordSource and passwordHash were removed.";
             fix = "${passwordAdvice} Use the same file.";
           }
         else if password == null then
           scope.fail {
-            package = "stackgres-database";
             message = "has no `password` dependency.";
             fix = passwordAdvice;
           }
@@ -282,7 +277,7 @@ in
         let
           dep = builtins.seq _passwordCheck (
             kix.contracts.secret.helpers.use {
-              inherit who;
+              inherit scope;
               arg = "password";
               dep = password;
               keys = [ "password" ];
@@ -295,7 +290,6 @@ in
             dep
           else
             scope.fail {
-              package = "stackgres-database";
               message = "deps.password resolved to secret \"${dep.out.name}\", which Kix does not fill from a SOPS file, so it is also the credentials Secret the app reads.";
               fix = "Add `username` (equal to user, \"${userName}\") to that secret and to its keys, or use a packages.secret with a SOPS source.";
             }
@@ -559,7 +553,7 @@ in
           # and can be applied before the Job runs.
           requires = [ bootstrapJob ];
 
-          out = kix.contracts.postgresDatabase.check who {
+          out = kix.contracts.postgresDatabase.check scope {
             host = self.pg.fqdn;
             port = self.pg.port;
             database = dbName;

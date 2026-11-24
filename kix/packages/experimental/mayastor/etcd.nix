@@ -55,7 +55,6 @@ let
     if named != null then
       if builtins.elem named ownClasses then
         scope.fail {
-          package = "mayastor";
           option = "etcd.storage.storageClassName";
           message = "config.etcd.storage.storageClassName is \"${named}\", one of this instance's own StorageClasses. ${onOwnVolume}";
           fix = storageFix;
@@ -64,7 +63,6 @@ let
         named
     else if storageClasses == null then
       scope.fail {
-        package = "mayastor";
         message = "etcd needs a StorageClass that is not Mayastor's, and nothing provides the storageClasses dependency.";
         fix = storageFix;
       }
@@ -73,7 +71,6 @@ let
       || (storageClasses.out.provisioner or null) == self.csiDriver.out.name
     then
       scope.fail {
-        package = "mayastor";
         message = "the storageClasses dependency gives etcd the class \"${storageClasses.out.storageClassName}\", which Mayastor provisions. ${onOwnVolume}";
         fix = storageFix;
       }
