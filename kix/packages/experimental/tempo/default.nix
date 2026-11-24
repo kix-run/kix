@@ -248,18 +248,18 @@ let
     let
       locks = path: flag: {
         names = [ flag ];
-        reason = "it sets ${path}, which the package locks.";
+        reason = "it overrides ${path} in tempo.yaml, which this package sets itself.";
       };
       secret = path: flag: {
         names = [ flag ];
-        reason = "it puts ${path}, a credential, on the command line.";
-        fix = "Put the keys in the storageCredentials Secret and remove the flag from extraArgs.";
+        reason = "passing ${path} as a flag exposes a credential in Kix's local store and the pod spec.";
+        fix = "Store the S3 credentials in the storageCredentials Secret instead, and remove the flag from extraArgs.";
       };
     in
     [
       {
         names = [ "-target" ];
-        reason = "the package runs every Tempo component in its one pod.";
+        reason = "this package runs Tempo in single-binary mode inside one pod.";
       }
       (locks "auth_enabled" "-auth.enabled")
       (locks "multitenancy_enabled" "-multitenancy.enabled")
@@ -272,19 +272,20 @@ let
       (locks "backend_scheduler.local_work_path" "-backend-scheduler.local-work-path")
       {
         names = [ "-storage.trace.s3.bucket" ];
-        reason = "it sets storage.trace.s3.bucket, which objectStorage.bucket owns.";
+        from = "the objectStorage.bucket option";
+        fix = "Set objectStorage.bucket instead.";
       }
       {
         names = [ "-storage.trace.s3.endpoint" ];
-        reason = "it sets storage.trace.s3.endpoint, from which the package derives the store's network policy.";
-        fix = "Set the endpoint in settings or wire endpointService, and remove the flag from extraArgs.";
+        reason = "setting storage.trace.s3.endpoint by flag bypasses the network policy derived from settings and deps.endpointService.";
+        fix = "Set settings.storage.trace.s3.endpoint or wire deps.endpointService instead, and remove the flag from extraArgs.";
       }
       (secret "storage.trace.s3.access_key" "-storage.trace.s3.access_key")
       (secret "storage.trace.s3.secret_key" "-storage.trace.s3.secret_key")
       (secret "storage.trace.s3.session_token" "-storage.trace.s3.session_token")
       {
         names = [ "-storage.trace.s3.sse.encryption-key" ];
-        reason = "it puts storage.trace.s3.sse.encryption_key, a credential, on the command line, and the package has no way to pass an SSE-C key from a Secret.";
+        reason = "passing storage.trace.s3.sse.encryption_key as a flag exposes a credential in Kix's local store and the pod spec, and this package does not support SSE-C keys.";
       }
     ];
 in
@@ -515,12 +516,12 @@ in
           args = [
             {
               owned = [ "-config.file=${configDir}/tempo.yaml" ];
-              reason = "the package renders the file from settings.";
-              fix = "Change settings instead.";
+              reason = "this package renders tempo.yaml from settings.";
+              fix = "Configure Tempo in settings instead.";
             }
             {
               owned = [ "-config.expand-env=true" ];
-              reason = "settings and env rely on variable expansion.";
+              reason = "Tempo must expand environment variables referenced in settings.";
             }
           ]
           ++ ownedFlags;

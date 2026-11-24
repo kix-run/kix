@@ -417,12 +417,12 @@ in
             "start"
             {
               names = [ "--optimized" ];
-              reason = "Keycloak must run its build step at start, because the stock image is built for other build-time options.";
+              reason = "Keycloak must run its build step at startup so build-time settings (such as PostgreSQL, health, and metrics) take effect over the stock image.";
             }
             {
               names = [ "--hostname" ];
-              from = "the route";
-              fix = "Set env.KC_HOSTNAME instead.";
+              from = "the instance's route or env.KC_HOSTNAME";
+              fix = "Set ingress.host or env.KC_HOSTNAME instead.";
             }
           ]
           ++ ownedFlags;

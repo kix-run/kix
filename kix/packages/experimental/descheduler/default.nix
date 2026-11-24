@@ -260,8 +260,8 @@ in
           }
         ];
 
-        leaderElection = "leader election follows the instance's availability level.";
-        metricsServer = "the probes and the ServiceMonitor need the metrics server on 0.0.0.0:${toString metricsPort}.";
+        leaderElection = "leader election keeps one descheduler active on Lease \"${name}\" in namespace \"${scope.namespaceName}\", where its Role grants access.";
+        metricsServer = "the probes and the ServiceMonitor connect to the HTTPS server on 0.0.0.0:${toString metricsPort}.";
         # The descheduler parses flags with cobra and pflag
         # (cmd/descheduler/app/server.go upstream).
         args = kix.mergeArgs {
@@ -294,7 +294,7 @@ in
               owned = lib.optional (!config.metrics.enabled) "--disable-metrics";
               names = [ "--disable-metrics" ];
               from = "the metrics.enabled option";
-              fix = "Set metrics.enabled = false instead.";
+              fix = "Set metrics.enabled instead.";
             }
             {
               names = [

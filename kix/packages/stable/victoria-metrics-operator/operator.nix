@@ -311,7 +311,7 @@ in
           }
           {
             owned = [ "--health-probe-bind-address=:8081" ];
-            reason = "the liveness and readiness probes use :8081.";
+            reason = "the liveness and readiness probes use port 8081.";
           }
         ];
       } config.extraArgs;

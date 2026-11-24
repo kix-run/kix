@@ -60,11 +60,11 @@ let
   refusedFlags = [
     {
       names = [ "--auto-reload-all" ];
-      reason = "the package leaves it off, because it would also restart workloads for Kix-built Secrets, which roll through a checksum/<name> pod annotation.";
+      reason = "--auto-reload-all would also restart workloads for Kix-built Secrets, which already roll through checksum/<name> pod annotations.";
     }
     {
       names = [ "--webhook-url" ];
-      reason = "the package leaves it unset, because with it reloader sends a webhook instead of restarting workloads.";
+      reason = "setting --webhook-url makes reloader send a webhook instead of restarting workloads.";
     }
     {
       names = [
@@ -79,21 +79,21 @@ let
         "--pause-deployment-annotation"
         "--pause-deployment-time-annotation"
       ];
-      reason = "withReloadOn and meta.annotationDomains use the default annotation names.";
+      reason = "out.withReloadOn and Kix's annotation checks expect the default annotation names.";
     }
     # Flags the package neither sets nor supports: each needs RBAC the
     # package does not grant.
     {
       names = [ "--namespace-selector" ];
-      reason = "reloader then reads Namespaces, which the package's RBAC does not allow.";
+      reason = "--namespace-selector requires permission to read Namespaces, which this package's RBAC does not grant.";
     }
     {
       names = [ "--is-Argo-Rollouts" ];
-      reason = "reloader then updates argoproj.io Rollouts, which the package's RBAC does not allow.";
+      reason = "--is-Argo-Rollouts requires permission to update argoproj.io Rollouts, which this package's RBAC does not grant.";
     }
     {
       names = [ "--enable-csi-integration" ];
-      reason = "reloader then watches secrets-store.csi.x-k8s.io resources, which the package's RBAC does not allow.";
+      reason = "--enable-csi-integration requires permission to watch secrets-store.csi.x-k8s.io resources, which this package's RBAC does not grant.";
     }
   ];
 
@@ -243,7 +243,7 @@ in
             "--log-format=json"
             {
               owned = [ "--enable-ha=true" ];
-              reason = "every replica is a leader-election candidate, so only the leader restarts workloads.";
+              reason = "leader election keeps one replica restarting workloads when multiple replicas run.";
             }
             # With --sync-after-restart and --reload-on-create, the leader's
             # initial list counts as a change to every Secret. The env-vars
@@ -255,18 +255,18 @@ in
                 "--reload-on-create=true"
                 "--sync-after-restart=true"
               ];
-              reason = "the package sets it so that each new leader replays every Secret and restarts only the workloads whose Secret changed.";
+              reason = "these flags let a new leader replay every Secret while restarting only workloads whose Secret changed.";
             }
             # A reload of a CronJob creates a Job and stores no hash, so
             # every replay would run it again. Job pods read the Secret when
             # they start.
             {
               owned = [ "--ignored-workload-types=jobs,cronjobs" ];
-              reason = "a reload of a CronJob would run a Job at every replay, and Job pods read the Secret when they start.";
+              reason = "reloading a CronJob starts an extra Job on every leader replay, and Job pods already read the current Secret when they start.";
             }
             {
               owned = [ "--resources-to-ignore=configmaps" ];
-              reason = "the package watches Secrets only; a Kix-built ConfigMap rolls its workload through a checksum/<name> pod annotation.";
+              reason = "this package watches Secrets only; Kix-built ConfigMaps roll their workloads through checksum/<name> pod annotations.";
             }
           ]
           ++ refusedFlags;

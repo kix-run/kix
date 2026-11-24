@@ -71,7 +71,7 @@ in
               args = [
                 {
                   owned = [ "--store=${ep.etcdStore}" ];
-                  reason = "the package points it at this instance's etcd.";
+                  reason = "agent-core must connect to this instance's etcd Service.";
                 }
                 {
                   owned = [ "--grpc-server-addr=[::]:50051" ];
@@ -79,11 +79,11 @@ in
                 }
                 {
                   names = [ "-s" ];
-                  reason = "the package sets --store to this instance's etcd.";
+                  reason = "-s is the short form of --store, which connects agent-core to this instance's etcd Service.";
                 }
                 {
                   names = [ "-g" ];
-                  reason = "the package sets --grpc-server-addr, which the agent-core Service uses.";
+                  reason = "-g is the short form of --grpc-server-addr, and the agent-core Service uses port 50051.";
                 }
               ];
             } config.agentCore.extraArgs;
@@ -113,23 +113,23 @@ in
                 }
                 {
                   owned = [ "--store=${ep.etcdUrl}" ];
-                  reason = "the package points it at this instance's etcd.";
+                  reason = "agent-ha-cluster must connect to this instance's etcd Service.";
                 }
                 {
                   owned = [ "--core-grpc=https://127.0.0.1:50051" ];
-                  reason = "agent-core runs in the same pod.";
+                  reason = "agent-core listens on 127.0.0.1:50051 in the same pod.";
                 }
                 {
                   names = [ "-g" ];
-                  reason = "the package sets --grpc-endpoint, which the agent-core Service uses.";
+                  reason = "-g is the short form of --grpc-endpoint, and the agent-core Service uses port 50052.";
                 }
                 {
                   names = [ "-s" ];
-                  reason = "the package sets --store to this instance's etcd.";
+                  reason = "-s is the short form of --store, which connects agent-ha-cluster to this instance's etcd Service.";
                 }
                 {
                   names = [ "-c" ];
-                  reason = "the package sets --core-grpc to agent-core in the same pod.";
+                  reason = "-c is the short form of --core-grpc, and agent-core runs in the same pod.";
                 }
               ];
             } config.agentHaCluster.extraArgs;
@@ -203,20 +203,20 @@ in
                   }
                   {
                     owned = [ "--no-auth" ];
-                    from = "the package, and clients send no token";
+                    reason = "in-cluster clients connect to api-rest without a token.";
                   }
                   {
                     owned = [ "--dummy-certificates" ];
                     names = [ "-d" ];
-                    from = "the package";
+                    reason = "this package does not expose the HTTPS listener on port 8080 and uses built-in certificates for it.";
                   }
                   {
                     owned = [ "--core-grpc=${ep.coreGrpc}" ];
-                    reason = "the package points it at this instance's agent-core.";
+                    reason = "api-rest must connect to this instance's agent-core Service.";
                   }
                   {
                     names = [ "-z" ];
-                    reason = "the package sets --core-grpc to this instance's agent-core.";
+                    reason = "-z is the short form of --core-grpc, which connects api-rest to this instance's agent-core Service.";
                   }
                   { defaults = [ "--core-health-freq=20s" ]; }
                 ];
@@ -264,19 +264,19 @@ in
               args = [
                 {
                   owned = [ "--endpoint=${ep.rest}" ];
-                  reason = "the package points it at this instance's api-rest.";
+                  reason = "the DiskPool operator must connect to this instance's api-rest Service.";
                 }
                 {
                   owned = [ "--namespace=${ns}" ];
-                  reason = "the operator reads DiskPools in this instance's namespace, where its RBAC and the package's DiskPools are.";
+                  reason = "the operator's RBAC and DiskPool resources are scoped to namespace \"${ns}\".";
                 }
                 {
                   names = [ "-e" ];
-                  reason = "the package sets --endpoint to this instance's api-rest.";
+                  reason = "-e is the short form of --endpoint, which connects the operator to this instance's api-rest Service.";
                 }
                 {
                   names = [ "-n" ];
-                  reason = "the package sets --namespace to this instance's namespace.";
+                  reason = "-n is the short form of --namespace, and the operator's RBAC and DiskPools are in namespace \"${ns}\".";
                 }
               ];
             } config.operatorDiskpool.extraArgs;
@@ -322,19 +322,19 @@ in
               args = [
                 {
                   owned = [ "--csi-socket=${csiSocket}" ];
-                  reason = "the CSI sidecars dial this socket.";
+                  reason = "the CSI sidecar containers connect to ${csiSocket}.";
                 }
                 {
                   owned = [ "--rest-endpoint=${ep.rest}" ];
-                  reason = "the package points it at this instance's api-rest.";
+                  reason = "the CSI controller must connect to this instance's api-rest Service.";
                 }
                 {
                   names = [ "-c" ];
-                  reason = "the package sets --csi-socket, which the CSI sidecars dial.";
+                  reason = "-c is the short form of --csi-socket, and the CSI sidecar containers connect to ${csiSocket}.";
                 }
                 {
                   names = [ "-r" ];
-                  reason = "the package sets --rest-endpoint to this instance's api-rest.";
+                  reason = "-r is the short form of --rest-endpoint, which connects the CSI controller to this instance's api-rest Service.";
                 }
               ];
             } config.csiController.extraArgs;

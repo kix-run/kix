@@ -347,15 +347,15 @@ in
                   args = [
                     {
                       owned = [ "--endpoint=$(OPENEBS_CSI_ENDPOINT)" ];
-                      reason = "the sidecars reach the plugin on the socket the package sets.";
+                      reason = "the CSI sidecar containers connect to the plugin at $(OPENEBS_CSI_ENDPOINT).";
                     }
                     {
                       owned = [ "--plugin=$(OPENEBS_CONTROLLER_DRIVER)" ];
-                      reason = "it selects the controller code path.";
+                      reason = "this container must run zfs-plugin in controller mode.";
                     }
                     {
                       names = [ "--name" ];
-                      reason = "the driver name must equal the CSIDriver ${driverName}.";
+                      reason = "the driver name must match CSIDriver \"${driverName}\".";
                     }
                   ];
                 } config.controller.extraArgs;
@@ -469,19 +469,19 @@ in
                     args = [
                       {
                         owned = [ "--nodename=$(OPENEBS_NODE_NAME)" ];
-                        reason = "the plugin's node ID must be the Kubernetes node name, which the package passes.";
+                        reason = "the CSI node ID must match the Kubernetes node name.";
                       }
                       {
                         owned = [ "--endpoint=$(OPENEBS_CSI_ENDPOINT)" ];
-                        reason = "the registrar and the kubelet reach the plugin on the socket the package sets.";
+                        reason = "kubelet and the node-driver-registrar sidecar connect to the plugin at $(OPENEBS_CSI_ENDPOINT).";
                       }
                       {
                         owned = [ "--plugin=$(OPENEBS_NODE_DRIVER)" ];
-                        reason = "it selects the node code path.";
+                        reason = "this container must run zfs-plugin in node mode.";
                       }
                       {
                         names = [ "--name" ];
-                        reason = "the driver name must equal the CSIDriver ${driverName}.";
+                        reason = "the driver name must match CSIDriver \"${driverName}\".";
                       }
                     ];
                   } config.node.extraArgs;

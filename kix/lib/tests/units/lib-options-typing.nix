@@ -20,7 +20,7 @@ let
   evalFails' = ms: throws ms;
 
   # The sentence every mergeArgs refusal ends with.
-  overlayHint = "An overlay in the instance's partsOverlays can still change the built resource, and Kix does not check what it changes.";
+  overlayHint = "To override the built resource directly, use partsOverlays on the instance, which runs after the package's checks.";
 
   # A scope whose `fail` returns `{ thrown; }` instead of throwing, as the
   # scope of instance ns/inst of package `pkg`.
@@ -660,19 +660,21 @@ in
       cases = {
         "is missing `parser`" = message { parser = null; } [ ];
         "does not support parser \"zsh\"" = message { parser = "zsh"; } [ ];
-        "cannot read \"leader-elect\" in names" = message (
+        "cannot read \"leader-elect\" in `names`" = message (
           { parser = "go"; } // owned { names = [ "leader-elect" ]; }
         ) [ ];
-        "cannot read \"/etc/x\", the first word of an `owned` list" = message (owned {
+        "cannot read \"/etc/x\" (the first item in `owned`)" = message (owned {
           owned = [ "/etc/x" ];
         }) [ ];
-        "cannot read \"300\" in defaults" = message { args = [ { defaults = [ "300" ]; } ]; } [ ];
-        "gives `defaults` as an attribute set" = message { args = [ { defaults.a = "1"; } ]; } [ ];
-        "gives `defaults` as a list" = message { args = [ { defaults = [ "--a=1" ]; } ]; } { };
-        "gives `owned` as a list" = message (owned { owned = [ "--a=1" ]; }) { };
-        "is a word, and extraArgs is an attribute set" = message { args = [ "--a=1" ]; } { };
-        "needs either `reason` or `from`" = message { args = [ { owned = [ "--a" ]; } ]; } [ ];
-        "sets `flags`, which kix.mergeArgs does not read" = message (owned {
+        "cannot read \"300\" in `defaults`" = message { args = [ { defaults = [ "300" ]; } ]; } [ ];
+        "passes `defaults` as an attribute set" = message { args = [ { defaults.a = "1"; } ]; } [ ];
+        "passes `defaults` as a list" = message { args = [ { defaults = [ "--a=1" ]; } ]; } { };
+        "passes `owned` as a list" = message (owned { owned = [ "--a=1" ]; }) { };
+        "is a string, while extraArgs is an attribute set" = message { args = [ "--a=1" ]; } { };
+        "must set either `reason` or `from` (not both)" = message {
+          args = [ { owned = [ "--a" ]; } ];
+        } [ ];
+        "sets unknown attribute `flags`" = message (owned {
           flags = [ "--a" ];
         }) [ ];
       };

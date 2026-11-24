@@ -319,7 +319,7 @@ in
         # component `extraArgs` options may not set it.
         dedup = {
           owned."dedup.minScrapeInterval" = config.scrapeInterval;
-          reason = "it follows scrapeInterval so that vmselect and vmstorage agree.";
+          reason = "vmselect and vmstorage must use the same deduplication interval from scrapeInterval.";
           fix = "Set scrapeInterval instead.";
         };
         # The operator turns spec fields into component flags, and an
@@ -329,12 +329,12 @@ in
         specFields = [
           {
             names = [ "retentionPeriod" ];
-            reason = "the operator sets it from the retentionPeriod option.";
+            from = "the retentionPeriod option";
             fix = "Set retentionPeriod instead.";
           }
           {
             names = [ "replicationFactor" ];
-            reason = "it follows the replicationFactor option, which defaults from the availability level, so that vminsert, vmselect, and vmstorage agree.";
+            reason = "vminsert, vmselect, and vmstorage must share the same replicationFactor.";
             fix = "Set replicationFactor instead.";
           }
         ];

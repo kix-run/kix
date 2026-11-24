@@ -257,44 +257,44 @@ in
             "registry"
             {
               owned = [ "--registry-addr=:${toString registryPort}" ];
-              reason = "the NodePort, the probes, and the network policy use ${toString registryPort}.";
+              reason = "the NodePort Service, probes, and network policy use port ${toString registryPort}.";
             }
             {
               owned = [ "--router-addr=:${toString routerPort}" ];
-              reason = "the peers reach each other on ${toString routerPort}.";
+              reason = "peers connect to each other on port ${toString routerPort}.";
             }
             {
               owned = [ "--metrics-addr=:${toString metricsPort}" ];
-              reason = "the metrics Service uses ${toString metricsPort}.";
+              reason = "the metrics Service uses port ${toString metricsPort}.";
             }
             {
               owned = [ "--containerd-sock=${containerd.socket}" ];
-              reason = "the package mounts cluster.containerd.socket.";
-              fix = "Set cluster.containerd.socket instead.";
+              from = "cluster.containerd.socket, which the pod mounts";
+              fix = "Set cluster.containerd.socket in the cluster definition instead.";
             }
             {
               owned = [ "--containerd-content-path=${containerd.contentPath}" ];
-              reason = "the package mounts cluster.containerd.contentPath.";
-              fix = "Set cluster.containerd.contentPath instead.";
+              from = "cluster.containerd.contentPath, which the pod mounts";
+              fix = "Set cluster.containerd.contentPath in the cluster definition instead.";
             }
             # Spegel compares it with the path containerd 2.4 and later
             # reports, and refuses to start when they differ.
             {
               owned = [ "--containerd-registry-config-path=${containerd.registryConfigPath}" ];
-              reason = "the init container writes cluster.containerd.registryConfigPath.";
-              fix = "Set cluster.containerd.registryConfigPath instead.";
+              from = "cluster.containerd.registryConfigPath, which the init container writes";
+              fix = "Set cluster.containerd.registryConfigPath in the cluster definition instead.";
             }
             {
               owned = [ "--bootstrap-kind=dns" ];
-              reason = "the pods find each other through the bootstrap Service.";
+              reason = "Spegel pods discover peers through this instance's DNS bootstrap Service.";
             }
             {
               owned = [ "--dns-bootstrap-domain=${self.bootstrap.out.fqdn}" ];
-              reason = "the package names the bootstrap Service.";
+              reason = "this flag must match the DNS name of this instance's bootstrap Service.";
             }
             {
               owned = [ "--data-dir=${dataDir}" ];
-              reason = "the package mounts ${dataDir} from the host.";
+              reason = "the pod mounts ${dataDir} from the host.";
             }
             "--debug-web-enabled=false"
             {
@@ -302,12 +302,12 @@ in
                 [ "--mirrored-registries" ] ++ config.mirroredRegistries
               );
               names = [ "--mirrored-registries" ];
-              reason = "the init container writes the mirror configuration from it as well.";
+              from = "the mirroredRegistries option, which the init container also uses to write mirror configuration";
               fix = "Set mirroredRegistries instead.";
             }
             {
               names = [ "--containerd-namespace" ];
-              reason = "kubelet pulls into containerd's k8s.io namespace.";
+              reason = "kubelet pulls images into containerd's k8s.io namespace.";
             }
             {
               names = [
@@ -315,7 +315,7 @@ in
                 "--http-bootstrap-cert-dir"
                 "--static-bootstrap-peers"
               ];
-              reason = "the pods find each other through the bootstrap Service.";
+              reason = "Spegel pods discover peers through this instance's DNS bootstrap Service.";
             }
           ];
         } config.extraArgs;

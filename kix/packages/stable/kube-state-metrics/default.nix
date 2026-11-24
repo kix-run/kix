@@ -184,7 +184,7 @@ in
                 "--shard"
                 "--total-shards"
               ];
-              reason = "the package runs one unsharded replica.";
+              reason = "this package runs a single unsharded kube-state-metrics replica.";
             }
           ];
         } config.extraArgs;

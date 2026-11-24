@@ -495,26 +495,26 @@ in
             {
               owned = [ "--provider=${config.provider}" ];
               from = "the provider option";
-              fix = "Set the provider option.";
+              fix = "Set provider instead.";
             }
             {
               owned = [ "--policy=${config.policy}" ];
               from = "the policy option";
-              fix = "Set the policy option.";
+              fix = "Set policy instead.";
             }
             {
               owned = [ "--txt-owner-id=${config.txtOwnerId}" ];
               from = "the txtOwnerId option";
-              fix = "Set the txtOwnerId option.";
+              fix = "Set txtOwnerId instead.";
             }
             {
               owned = [ "--interval=${config.interval}" ];
               from = "the interval option";
-              fix = "Set the interval option.";
+              fix = "Set interval instead.";
             }
             {
               owned = [ "--metrics-address=:${toString metricsPort}" ];
-              reason = "the probes, the metrics Service, and the ServiceMonitor use :${toString metricsPort}.";
+              reason = "the probes, metrics Service, and ServiceMonitor use port ${toString metricsPort}.";
             }
             # `--source` in extraArgs would bypass the RBAC derived from
             # `sources`.
@@ -522,11 +522,11 @@ in
               owned = map (s: "--source=${s}") selected;
               names = [ "--source" ];
               from = "the sources option";
-              fix = "Add it to sources, which also grants its RBAC.";
+              fix = "Set sources instead, which also grants the required RBAC.";
             }
             {
               names = [ "--once" ];
-              reason = "external-dns exits after one synchronization, and the Deployment restarts it every time.";
+              reason = "--once makes external-dns exit after a single sync, causing the Deployment to restart it in a loop.";
             }
           ]
           ++ map (
@@ -536,8 +536,8 @@ in
             in
             {
               names = [ "--${flag}" ];
-              reason = "its value is a credential, which would be stored in the Nix store and the pod's arguments.";
-              fix = "Put it in the providerCredentials Secret under the key ${var}, or map it with secretEnv.${var} = \"<key>\".";
+              reason = "passing a credential as a flag exposes it in Kix's local store and the pod spec.";
+              fix = "Store the credential in the providerCredentials Secret under key ${var} (or map it with secretEnv.${var} = \"<key>\"), and remove --${flag} from extraArgs.";
             }
           ) secretFlags;
         } config.extraArgs;

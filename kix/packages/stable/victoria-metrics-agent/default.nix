@@ -199,12 +199,12 @@ in
             # would replace either one.
             {
               names = [ "remoteWrite.url" ];
-              reason = "the vmCluster dependency sets it to the cluster's insert Service, which the network policy also opens.";
-              fix = "Change the vmCluster dependency instead.";
+              from = "the vmCluster dependency, which also configures the network policy";
+              fix = "Wire a different cluster through deps.vmCluster instead.";
             }
             {
               names = [ "promscrape.config" ];
-              reason = "the operator points it at the scrape configuration it generates from the scrape objects the agent selects.";
+              reason = "the VictoriaMetrics operator generates this flag from the ServiceMonitors and PodMonitors the agent selects.";
             }
           ];
         } config.extraArgs;

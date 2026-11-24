@@ -141,7 +141,8 @@ in
             {
               owned = lib.optional config.textfileCollector.enabled "--collector.textfile.directory=${textfileDirectory}";
               names = [ "--collector.textfile.directory" ];
-              reason = "the package mounts the textfile directory when textfileCollector.enabled is on.";
+              from = "the textfileCollector.enabled option (mounted at ${textfileDirectory} when enabled)";
+              fix = "Set textfileCollector.enabled instead.";
             }
           ];
         } config.extraArgs;

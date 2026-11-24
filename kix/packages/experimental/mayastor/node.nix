@@ -90,41 +90,41 @@ in
                 }
                 {
                   owned = [ "-N$(MY_NODE_NAME)" ];
-                  reason = "io-engine registers under its Kubernetes node name, which DiskPools name.";
+                  reason = "io-engine registers under its Kubernetes node name, which DiskPools reference.";
                 }
                 {
                   owned = [ "-R${ep.coreGrpc}" ];
-                  reason = "the package points it at this instance's agent-core.";
+                  reason = "io-engine must connect to this instance's agent-core Service.";
                 }
                 {
                   owned = [ "-y${hostDir}/io-engine/config.yaml" ];
-                  reason = "the config file lives in the io-engine host directory.";
-                  fix = "Edit that file instead.";
+                  reason = "io-engine reads its configuration from ${hostDir}/io-engine/config.yaml on the node.";
+                  fix = "Edit ${hostDir}/io-engine/config.yaml on the node instead, and remove -y from ioEngine.extraArgs.";
                 }
                 {
                   owned = [ "-l${lib.concatMapStringsSep "," toString (lib.range 1 cpuCount)}" ];
-                  reason = "the cores follow ioEngine.cpuCount, which also sets the CPU request.";
-                  fix = "Set ioEngine.cpuCount, or core_list in the node's config.yaml.";
+                  from = "the ioEngine.cpuCount option, which also sets the container's CPU request and limit";
+                  fix = "Set ioEngine.cpuCount instead, or set core_list in ${hostDir}/io-engine/config.yaml on the node.";
                 }
                 {
                   owned = [ "-p=${ep.etcdStore}" ];
-                  reason = "the package points it at this instance's etcd.";
+                  reason = "io-engine must connect to this instance's etcd Service.";
                 }
                 {
                   owned = [ "--ptpl-dir=${hostDir}/io-engine/ptpl/" ];
-                  reason = "the reservation state lives in the io-engine host directory.";
+                  reason = "persistent reservation state is stored in ${hostDir}/io-engine/ptpl/ on the node.";
                 }
                 {
                   names = [
                     "--grpc-endpoint"
                     "-g"
                   ];
-                  reason = "the package sets --grpc-ip and --grpc-port.";
+                  reason = "this package sets the listen address with --grpc-ip and --grpc-port.";
                 }
                 {
                   names = [ "-m" ];
-                  reason = "the package sets the cores with -l from ioEngine.cpuCount, which also sets the CPU request.";
-                  fix = "Set ioEngine.cpuCount, or core_list in the node's config.yaml.";
+                  reason = "this package selects CPU cores with -l from ioEngine.cpuCount, which also sets the container's CPU request and limit.";
+                  fix = "Set ioEngine.cpuCount instead, or set core_list in ${hostDir}/io-engine/config.yaml on the node.";
                 }
                 {
                   defaults = [
@@ -203,15 +203,15 @@ in
                 }
                 {
                   owned = [ "--grpc-port=10124" ];
-                  reason = "io-engine in the same pod listens on 10124.";
+                  reason = "io-engine listens on port 10124 in the same pod.";
                 }
                 {
                   owned = [ "--rest-endpoint=${ep.rest}" ];
-                  reason = "the package points it at this instance's api-rest.";
+                  reason = "the metrics exporter must connect to this instance's api-rest Service.";
                 }
                 {
                   names = [ "-m" ];
-                  reason = "the package sets --metrics-endpoint, which the metrics Service uses.";
+                  reason = "-m is the short form of --metrics-endpoint, and the metrics Service and ServiceMonitor use port 9502.";
                 }
               ];
             } config.metricsExporter.extraArgs;
@@ -268,7 +268,7 @@ in
                 args = [
                   {
                     owned = [ "--csi-socket=/csi/csi.sock" ];
-                    reason = "the registrar and agent-ha-node dial this socket.";
+                    reason = "the node-driver-registrar sidecar and agent-ha-node connect to /csi/csi.sock.";
                   }
                   {
                     owned = [ "--node-name=$(MY_NODE_NAME)" ];
@@ -276,7 +276,7 @@ in
                   }
                   {
                     owned = [ "--rest-endpoint=${ep.rest}" ];
-                    reason = "the package points it at this instance's api-rest.";
+                    reason = "the CSI node plugin must connect to this instance's api-rest Service.";
                   }
                   "--enable-rest"
                   "--enable-registration"
@@ -300,18 +300,18 @@ in
                   }
                   {
                     names = [ "-c" ];
-                    reason = "the package sets --csi-socket, which the registrar and agent-ha-node dial.";
+                    reason = "-c is the short form of --csi-socket, and the registrar sidecar and agent-ha-node connect to /csi/csi.sock.";
                   }
                   {
                     names = [ "-n" ];
-                    reason = "the package sets --node-name to the Kubernetes node name.";
+                    reason = "-n is the short form of --node-name, and the plugin must register under its Kubernetes node name.";
                   }
                   {
                     names = [
                       "--grpc-endpoint"
                       "-g"
                     ];
-                    reason = "the package sets --grpc-ip and --grpc-port.";
+                    reason = "this package sets the listen address with --grpc-ip and --grpc-port.";
                   }
                   {
                     defaults = [
@@ -421,11 +421,11 @@ in
                 args = [
                   {
                     owned = [ "--node-name=$(MY_NODE_NAME)" ];
-                    reason = "it must equal the CSI node plugin's node name.";
+                    reason = "agent-ha-node must register under the same Kubernetes node name as the CSI node plugin.";
                   }
                   {
                     owned = [ "--csi-socket=/csi/csi.sock" ];
-                    reason = "the CSI node plugin listens on this socket.";
+                    reason = "the CSI node plugin listens on /csi/csi.sock.";
                   }
                   {
                     owned = [ "--grpc-ip=$(MY_POD_IP)" ];
@@ -437,22 +437,22 @@ in
                   }
                   {
                     owned = [ "--cluster-agent=${ep.clusterAgent}" ];
-                    reason = "the package points it at this instance's agent-ha-cluster.";
+                    reason = "agent-ha-node must connect to this instance's agent-ha-cluster Service.";
                   }
                   {
                     names = [ "-n" ];
-                    reason = "the package sets --node-name to the Kubernetes node name.";
+                    reason = "-n is the short form of --node-name, which must match the CSI node plugin's node name.";
                   }
                   {
                     names = [
                       "--grpc-endpoint"
                       "-g"
                     ];
-                    reason = "the package sets --grpc-ip and --grpc-port.";
+                    reason = "this package sets the listen address with --grpc-ip and --grpc-port.";
                   }
                   {
                     names = [ "-c" ];
-                    reason = "the package sets --cluster-agent to this instance's agent-ha-cluster.";
+                    reason = "-c is the short form of --cluster-agent, which connects agent-ha-node to this instance's agent-ha-cluster Service.";
                   }
                 ];
               } config.agentHaNode.extraArgs;

@@ -330,22 +330,22 @@ in
           args = [
             {
               owned = [ "--leader-elect" ];
-              reason = "the package always enables leader election, so instances above availability none run one active controller.";
+              reason = "leader election keeps one controller active when multiple replicas run.";
             }
             {
               owned = [ "--health-probe-bind-address=:${toString healthPort}" ];
-              reason = "the liveness and readiness probes use :${toString healthPort}.";
+              reason = "the liveness and readiness probes use port ${toString healthPort}.";
             }
             {
               owned = [ "--metrics-bind-address=:${toString metricsPort}" ];
-              reason = "the container's metrics port and the metrics Service use :${toString metricsPort}.";
+              reason = "the container's metrics port and the metrics Service use port ${toString metricsPort}.";
             }
             # The operator serves metrics over TLS with a self-signed
             # certificate and no authentication, so plain HTTP exposes nothing
             # more and the ServiceMonitor needs no TLS settings.
             {
               owned = [ "--metrics-secure=false" ];
-              reason = "the ServiceMonitor scrapes plain HTTP.";
+              reason = "the ServiceMonitor scrapes metrics over plain HTTP.";
             }
           ];
         } config.extraArgs;

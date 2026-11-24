@@ -430,7 +430,7 @@ in
           args = [
             {
               names = [ "--redis.addr" ];
-              reason = "the exporter reads the local valkey-server.";
+              reason = "the exporter scrapes the valkey-server container in the same pod.";
             }
             {
               names = [
@@ -438,7 +438,8 @@ in
                 "--redis.password"
                 "--redis.password-file"
               ];
-              reason = "the exporter authenticates with the valkeyPassword password.";
+              from = "the valkeyPassword secret dependency";
+              fix = "Remove it from metrics.extraArgs, or change the password through deps.valkeyPassword.";
             }
             {
               names = [ "--web.listen-address" ];

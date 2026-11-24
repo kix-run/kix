@@ -442,7 +442,7 @@ in
             }
             {
               owned = [ "--providers.kubernetesGateway=true" ];
-              reason = "the package turns the Gateway provider on.";
+              reason = "this package runs Traefik as a Gateway API controller.";
             }
             {
               owned = [
@@ -450,22 +450,22 @@ in
                   lib.concatStringsSep "," (lib.mapAttrsToList (k: v: "${k}=${v}") selectorLabels)
                 }"
               ];
-              reason = "the package selects this instance's GatewayClass.";
+              reason = "Traefik must select this instance's GatewayClass.";
             }
             {
               owned = [
                 "--providers.kubernetesGateway.statusAddress.service.name=${self.service.out.name}"
                 "--providers.kubernetesGateway.statusAddress.service.namespace=${scope.namespaceName}"
               ];
-              reason = "the package points it at the Traefik Service.";
+              reason = "Gateway status must publish the address of this instance's Service.";
             }
           ]
           # Traefik matches a listener to an entrypoint by the address suffix
           # ":<port>", so the address carries no "/tcp".
           ++ map (ep: {
             owned = [ "--entryPoints.${ep.name}.address=:${toString ep.port}" ];
-            reason = "the package derives it from the listener on port ${toString ep.port}.";
-            fix = "Change the listeners instead.";
+            from = "the listener on port ${toString ep.port} in listeners";
+            fix = "Edit listeners instead.";
           }) entryPoints
           ++ [
             # The flag follows the toggle alone, so adding a prometheus
@@ -482,33 +482,33 @@ in
             }
             {
               names = [ "--providers.kubernetesGateway.experimentalChannel" ];
-              reason = "it makes Traefik watch TCPRoute, which needs experimental-channel CRDs and RBAC the package does not grant.";
+              reason = "enabling the experimental channel makes Traefik watch TCPRoute, which requires experimental Gateway API CRDs and RBAC permissions this package does not grant.";
             }
             {
               names = [ "--configFile" ];
-              reason = "with a configuration file Traefik ignores every flag, including the ones the package sets.";
-              fix = "Remove it from extraArgs and pass the configuration as flags.";
+              reason = "when given a configuration file, Traefik ignores all CLI flags, including those set by this package.";
+              fix = "Pass static configuration as flags in extraArgs instead, and remove --configFile.";
             }
             # A provider turns on when any key under it is set, so these are
             # refused as families.
             {
               families = [ "--providers.kubernetesCRD" ];
-              reason = "Traefik's CRD provider needs Traefik's CRDs and RBAC, which the package does not install.";
-              fix = "Route through the Gateway with kix.expose.";
+              reason = "Traefik's CRD provider requires Traefik CRDs and RBAC permissions that this package does not install.";
+              fix = "Route traffic through the Gateway with kix.expose instead.";
             }
             {
               families = [ "--providers.kubernetesIngress" ];
-              reason = "the Ingress provider needs RBAC the package does not grant.";
-              fix = "Route through the Gateway with kix.expose.";
+              reason = "the Ingress provider requires RBAC permissions that this package does not grant.";
+              fix = "Route traffic through the Gateway with kix.expose instead.";
             }
             {
               families = [ "--providers.kubernetesIngressNGINX" ];
-              reason = "the ingress-nginx provider needs RBAC the package does not grant.";
-              fix = "Route through the Gateway with kix.expose.";
+              reason = "the ingress-nginx provider requires RBAC permissions that this package does not grant.";
+              fix = "Route traffic through the Gateway with kix.expose instead.";
             }
             {
               families = [ "--providers.knative" ];
-              reason = "the Knative provider needs RBAC the package does not grant.";
+              reason = "the Knative provider requires RBAC permissions that this package does not grant.";
             }
           ];
         } config.extraArgs;

@@ -220,8 +220,8 @@ in
                   configPath
                 ];
                 names = configFlags;
-                reason = "the package's merged settings are Vector's only config source.";
-                fix = "Put configuration in settings.";
+                reason = "this package renders Vector's configuration from the settings option.";
+                fix = "Configure Vector in settings instead.";
               }
             ];
           } config.extraArgs;

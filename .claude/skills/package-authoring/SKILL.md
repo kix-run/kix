@@ -342,12 +342,12 @@ pattern table has each form.
 - Derive the lock lists from the DI wiring, because they are the same list:
   every path, flag (all spellings), and variable the package computes from a
   dependency or option is locked through `kix.mergeGuarded`, `kix.mergeArgs`
-  (each owned flag stated once, with its value and its reason, in the list
-  the container's arguments come from), and `kix.mergeEnv` owned groups (E3,
-  E6, E8; pattern table).
-- `kix.mergeArgs` needs `parser`. Read how the upstream program parses its
-  flags at the pinned version, set the value that fits, and name the
-  upstream file in a comment at the call.
+  (declaring each owned flag once, with its value and reason, in `args`), and
+  `kix.mergeEnv` owned groups (E3, E6, E8; pattern table).
+- `kix.mergeArgs` requires `parser`. Check how the upstream program parses
+  flags at the pinned version, set the matching parser (`"gnu"`, `"go"`,
+  `"go-arg"`, or `"paerser"`), and cite the upstream file in a comment at the
+  call.
 - `env` accepts strings, so refuse the program's credential variables as
   literal strings (pattern table) and point at a `secretKeyRef` to a Secret
   managed outside Kix or at the secret dep (S1).
@@ -470,19 +470,19 @@ The only place in this skill with package line numbers. `pkg:N` is
 | URL-shaped credential through `$(VAR)` | vaultwarden:143-147, 212-233 |
 | `mergeArgs`, owned flags stated once with their values | `cert-manager/controller.nix`:381-401 |
 | `mergeArgs`, refused flags from owned env groups | keycloak:404-429 |
-| `mergeArgs` with `defaults` that `extraArgs` can override, and `after` | node-exporter:108-146; a default kept first, `victoria-metrics-operator/operator.nix`:303-317 |
+| `mergeArgs` with `defaults` that `extraArgs` can override, and `after` | node-exporter:108-148; a default kept first, `victoria-metrics-operator/operator.nix`:303-317 |
 | `mergeArgs` with `parser = "go"`, `parser = "paerser"`, and `families` | loki:344; traefik:429, 495 |
 | `mergeArgs` with a flag and its value as two words | `clickhouse-logs/vector-agent.nix`:213-227 |
 | `mergeArgs` on an attribute set of flags | victoria-metrics-agent:189-210 |
 | `argValues` to read what `extraArgs` gives a flag | external-dns:398; reloader:106-110 |
-| `mergeGuarded` on `settings` or `extraSpec` | tempo:456; cnpg-cluster:323, 430, 514 |
+| `mergeGuarded` on `settings` or `extraSpec` | tempo:447; cnpg-cluster:323, 430, 514 |
 | Migrations at start: Recreate, deadline from `startupSeconds`, probes | metabase:94-97, 252-256, 284-304 |
 | Config injection into a dependency | metabase:109-112; stackgres-database:120-125; cnpg-database:94-115 |
-| Contracts: consumer `assertions`, provider `check` | metabase:112; stackgres-database:553; keycloak:566; tempo:730 |
+| Contracts: consumer `assertions`, provider `check` | metabase:112; stackgres-database:553; keycloak:566; tempo:718 |
 | `pick` as an option default with `defaultText` | `cnpg-cluster/options.nix`:12-18 |
 | `pick` inline, header names the instance override (O19) | keycloak:256, header 74-76 |
 | `atLeast` | valkey:122 |
-| Ceilings: package-wide, per builder | tempo:298; valkey:568, `harbor/registry.nix`:245, `harbor/jobservice.nix`:338 |
+| Ceilings: package-wide, per builder | tempo:299; valkey:566, `harbor/registry.nix`:245, `harbor/jobservice.nix`:338 |
 | `kix.expose`, `exposure.urlOrNull` | metabase:172-175, 367 |
 | Metrics toggle that does not restart the workload | metabase:152-157; keycloak header 30-35 |
 | `kix.monitor` with alerts | openbao:393; clickhouse:626-636 and `alerts.nix` |

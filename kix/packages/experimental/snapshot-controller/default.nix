@@ -193,11 +193,11 @@ in
             "--v=2"
             {
               owned = [ "--leader-election=true" ];
-              reason = "leader election keeps one active controller while the instance's availability level runs several.";
+              reason = "leader election keeps one controller active when multiple replicas run.";
             }
             {
               owned = [ "--http-endpoint=:${toString httpPort}" ];
-              reason = "the probes and the metrics Service use :${toString httpPort}.";
+              reason = "the probes and the metrics Service use port ${toString httpPort}.";
             }
             "--feature-gates=CSIVolumeGroupSnapshot=false"
             {

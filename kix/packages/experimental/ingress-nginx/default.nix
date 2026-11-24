@@ -437,38 +437,38 @@ in
             "/nginx-ingress-controller"
             {
               owned = [ "--publish-service=$(POD_NAMESPACE)/${self.service.out.name}" ];
-              reason = "the package points it at the controller Service.";
+              reason = "Ingress status must publish the address of this instance's Service.";
             }
             {
               owned = [ "--election-id=${name}-leader" ];
-              reason = "the package derives it from the instance name.";
+              reason = "the leader-election Role only allows updating Lease \"${name}-leader\".";
             }
             {
               owned = [ "--controller-class=${controllerValue}" ];
-              reason = "the package derives it from ingressClassName.";
+              from = "the ingressClassName option";
               fix = "Set ingressClassName instead.";
             }
             {
               owned = [ "--ingress-class=${config.ingressClassName}" ];
-              reason = "the package sets it to ingressClassName.";
+              from = "the ingressClassName option";
               fix = "Set ingressClassName instead.";
             }
             {
               owned = [ "--configmap=$(POD_NAMESPACE)/${self.configmap.out.name}" ];
-              reason = "the package points it at its ConfigMap.";
+              reason = "this package renders the controller's ConfigMap from settings.";
               fix = "Set settings instead.";
             }
             {
               owned = [ "--validating-webhook=:8443" ];
-              reason = "the package serves the admission webhook on :8443.";
+              reason = "the admission webhook Service connects to port 8443.";
             }
             {
               owned = [ "--validating-webhook-certificate=/usr/local/certificates/cert" ];
-              reason = "the package mounts the admission certificate.";
+              reason = "the package mounts the admission TLS certificate at /usr/local/certificates/cert.";
             }
             {
               owned = [ "--validating-webhook-key=/usr/local/certificates/key" ];
-              reason = "the package mounts the admission certificate.";
+              reason = "the package mounts the admission TLS private key at /usr/local/certificates/key.";
             }
             {
               names = [ "--http-port" ];

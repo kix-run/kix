@@ -193,22 +193,22 @@ in
         args = [
           {
             owned = [ "--cert-dir=${certDir}" ];
-            reason = "the serving certificate is written to the emptyDir at ${certDir}, the only writable path.";
+            reason = "the serving certificate is written to the emptyDir volume at ${certDir}, the only writable path in the container.";
           }
           {
             owned = [ "--secure-port=${toString securePort}" ];
-            reason = "the Service, the probes, and the network policy use ${toString securePort}.";
+            reason = "the Service, probes, and network policy use port ${toString securePort}.";
           }
           "--kubelet-preferred-address-types=InternalIP,ExternalIP,Hostname"
           "--kubelet-use-node-status-port"
           "--metric-resolution=15s"
           {
             names = [ "--bind-address" ];
-            reason = "the probes and the API server reach the pod address.";
+            reason = "the probes and the Kubernetes API server connect to the pod IP.";
           }
           {
             names = [ "--kubelet-port" ];
-            reason = "the network policy admits kubelets on ${toString kubeletPort} only.";
+            reason = "the network policy allows traffic to kubelets on port ${toString kubeletPort} only.";
           }
         ];
       } config.extraArgs;

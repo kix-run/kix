@@ -204,7 +204,7 @@ in
                   "--v=2"
                   {
                     owned = [ "--leader-election-namespace=${ns}" ];
-                    reason = "the leader-election Role lives in the instance's namespace.";
+                    reason = "the leader-election Role grants access only in namespace \"${ns}\".";
                   }
                 ];
               } config.cainjector.extraArgs;

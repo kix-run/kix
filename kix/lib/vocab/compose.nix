@@ -27,7 +27,7 @@ let
   ];
   parserList = lib.concatMapStringsSep ", " (p: "\"${p}\"") argParsers;
 
-  overlayHint = "An overlay in the instance's partsOverlays can still change the built resource, and Kix does not check what it changes.";
+  overlayHint = "To override the built resource directly, use partsOverlays on the instance, which runs after the package's checks.";
 
   # Return how `parser` matches words to command-line flags, for
   # `kix.mergeArgs` and `kix.argValues`. `isAttrs` says the flags are the
@@ -455,23 +455,27 @@ rec {
           unknown = builtins.attrNames (removeAttrs entry groupKeys);
           wrongForm =
             key:
-            "gives `${key}` as ${if isAttrs then "a list" else "an attribute set"}, and ${option} is ${form}";
+            "passes `${key}` as ${
+              if isAttrs then "a list" else "an attribute set"
+            }, while ${option} is ${form}";
         in
         if builtins.isString entry then
-          if isAttrs then "is a word, and ${option} is ${form}" else null
+          if isAttrs then "is a string, while ${option} is ${form}" else null
         else if !builtins.isAttrs entry then
-          "is neither a word nor an attribute set"
+          "has type ${builtins.typeOf entry}; expected a string or an attribute set"
         else if entry ? defaults then
           if builtins.attrNames entry != [ "defaults" ] then
-            "sets other attributes beside `defaults`"
+            "sets attributes other than `defaults`"
           else if builtins.isAttrs entry.defaults != isAttrs then
             wrongForm "defaults"
           else
             null
         else if unknown != [ ] then
-          "sets ${lib.concatMapStringsSep ", " (k: "`${k}`") unknown}, which kix.mergeArgs does not read"
+          "sets unknown attribute${lib.optionalString (builtins.length unknown != 1) "s"} ${
+            lib.concatMapStringsSep ", " (k: "`${k}`") unknown
+          }"
         else if (entry ? reason) == (entry ? from) then
-          "needs either `reason` or `from`"
+          "must set either `reason` or `from` (not both)"
         else if entry ? owned && builtins.isAttrs entry.owned != isAttrs then
           wrongForm "owned"
         else
@@ -482,10 +486,10 @@ rec {
           problem = entryProblem entry;
         in
         lib.optional (problem != null) {
-          message = "kix.mergeArgs cannot use the entry ${
+          message = "kix.mergeArgs received an invalid entry ${
             builtins.toJSON (if builtins.isFunction entry then "<function>" else entry)
-          }, which ${problem}.";
-          fix = "Write each entry as a word, as `{ defaults = ...; }`, or as a set of `owned`, `names`, and `families` with a `reason` or a `from`.";
+          }: it ${problem}.";
+          fix = "Pass each entry as a flag string (when ${option} is a list), `{ defaults = ...; }`, or `{ owned ? ...; names ? ...; families ? ...; }` with either `reason` or `from`.";
         }
       ) entries;
 
@@ -531,31 +535,31 @@ rec {
         if parser == null then
           [
             {
-              message = "kix.mergeArgs is missing `parser`. It needs `parser` to tell which word sets which flag.";
-              fix = "Set parser to how the program reads its flags, one of: ${parserList}.";
+              message = "kix.mergeArgs is missing `parser`, so Kix does not know how the program parses flags.";
+              fix = "Set `parser` to one of: ${parserList}.";
             }
           ]
         else if !builtins.elem parser argParsers then
           [
             {
-              message = "kix.mergeArgs does not support parser \"${toString parser}\", so Kix cannot check the flags.";
-              fix = "Set parser to one of: ${parserList}.";
+              message = "kix.mergeArgs does not support parser \"${toString parser}\", so Kix cannot check ${option}.";
+              fix = "Set `parser` to one of: ${parserList}.";
             }
           ]
         else if entryLines != [ ] then
           entryLines
         else
           map (d: {
-            message = "kix.mergeArgs cannot read \"${d}\" in defaults as a flag, so Kix cannot check the flags.";
-            fix = "Write each default as one string starting with - or --, such as \"--flag=value\" instead of separate \"--flag\" and \"value\" items.";
+            message = "kix.mergeArgs cannot read \"${d}\" in `defaults` as a flag, so Kix cannot check ${option}.";
+            fix = "Write each default as one string starting with `-` or `--`, such as \"--flag=value\" instead of separate \"--flag\" and \"value\" items.";
           }) (builtins.filter (d: matcher.wordName d == null) defaultWords)
           ++ map (word: {
-            message = "kix.mergeArgs cannot read \"${word}\", the first word of an `owned` list, as a flag, so Kix cannot check the flags.";
-            fix = "Start each `owned` list with a flag, such as \"--config\" before its value.";
+            message = "kix.mergeArgs cannot read \"${word}\" (the first item in `owned`) as a flag, so Kix cannot check ${option}.";
+            fix = "Start each `owned` list with a flag, such as `[ \"--config\" \"/etc/app.yaml\" ]`.";
           }) strayValues
           ++ map (r: {
-            message = "kix.mergeArgs cannot read \"${r.flag}\" in ${r.source} as a flag under parser \"${parser}\", so Kix cannot check the flags.";
-            fix = "Start each flag name in `names` and `families` with - or --, such as \"--leader-elect\".";
+            message = "kix.mergeArgs cannot read \"${r.flag}\" in `${r.source}` as a flag under parser \"${parser}\", so Kix cannot check ${option}.";
+            fix = "Start each flag name in `names` and `families` with `-` or `--`, such as \"--leader-elect\".";
           }) (builtins.filter (r: r.name == null) allRules);
 
       # Each word the user wrote with the first rule it breaks.
@@ -641,13 +645,13 @@ rec {
     in
     if !builtins.elem parser argParsers then
       fail {
-        message = "kix.argValues does not support parser \"${toString parser}\", so Kix cannot read the flag.";
-        fix = "Set parser to one of: ${parserList}.";
+        message = "kix.argValues does not support parser \"${toString parser}\", so Kix cannot read flag \"${flag}\".";
+        fix = "Set `parser` to one of: ${parserList}.";
       }
     else if name == null then
       fail {
         message = "kix.argValues cannot read \"${flag}\" as a flag under parser \"${parser}\".";
-        fix = "Start the flag name with - or --, such as \"--namespaces\".";
+        fix = "Start the flag name with `-` or `--`, such as \"--namespaces\".";
       }
     else if isAttrs then
       builtins.attrValues (lib.filterAttrs (key: _: matcher.sets name key) args)
@@ -665,8 +669,8 @@ rec {
     }:
     (if scope == null then fail else scope.fail) {
       id = "K5396";
-      message = "kix.guardArgs was removed. kix.mergeArgs replaces it, takes the flags the package passes together with why it owns them, and returns the container's whole argument list.";
-      fix = "Call kix.mergeArgs, set `parser`, and move each owned flag with its value into an `owned` entry of `args`.";
+      message = "kix.guardArgs was removed and replaced by kix.mergeArgs, which builds the full argument list from the package's flags and extraArgs.";
+      fix = "Replace kix.guardArgs with kix.mergeArgs, set `parser`, and pass the package's flags (including `{ owned = [ ... ]; reason = \"...\"; }` entries) in `args`.";
     };
 
   # Validate that a secret dependency `dep` declares all required `keys` (and

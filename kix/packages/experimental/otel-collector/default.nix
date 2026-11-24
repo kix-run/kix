@@ -503,13 +503,13 @@ in
                 args = [
                   {
                     owned = [ "--config=${configDir}/${configFile}" ];
-                    reason = "the package's merged settings are the collector's only configuration.";
-                    fix = "Put configuration in settings.";
+                    reason = "this package renders the collector configuration from the settings option.";
+                    fix = "Configure the collector in settings instead.";
                   }
                   {
                     names = [ "--set" ];
-                    reason = "it overrides configuration paths after the package's checks.";
-                    fix = "Put configuration in settings.";
+                    reason = "--set overrides configuration fields at startup, bypassing this package's checks on settings.";
+                    fix = "Configure the collector in settings instead.";
                   }
                 ];
               } config.extraArgs;

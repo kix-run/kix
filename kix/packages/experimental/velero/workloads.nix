@@ -164,7 +164,7 @@ let
   # refuse every flag either of them owns.
   metricsAddressArg = {
     owned = [ "--metrics-address=:${toString metricsPort}" ];
-    reason = "the probes and the metrics Service use :${toString metricsPort}.";
+    reason = "the probes and the metrics Service use port ${toString metricsPort}.";
   };
   featureArgs = {
     owned = lib.optional (
@@ -172,7 +172,7 @@ let
     ) "--features=${lib.concatStringsSep "," config.features}";
     names = [ "--features" ];
     from = "the features option";
-    fix = "Set the features option.";
+    fix = "Set features instead.";
   };
   # Return the entry of a flag that names a ConfigMap the package builds
   # from `option`. `configMap` is null when the package builds none.
@@ -180,7 +180,7 @@ let
     owned = lib.optional (configMap != null) "${flag}=${configMap.out.name}";
     names = [ flag ];
     from = "the ${option} option";
-    fix = "Set ${option}.";
+    fix = "Set ${option} instead.";
   };
 
   plugins =

@@ -354,15 +354,15 @@ in
           args = [
             {
               owned = [ "--auto-scaling-runner-set-only" ];
-              reason = "the controller's RBAC covers AutoscalingRunnerSets only.";
+              reason = "the controller's RBAC grants permissions for AutoscalingRunnerSets only.";
             }
             {
               owned = [ "--enable-leader-election" ];
-              reason = "availability can run several replicas, which need leader election.";
+              reason = "leader election keeps one controller active when multiple replicas run.";
             }
             {
               owned = [ "--leader-election-id=${name}" ];
-              reason = "the lease is named after the instance, which the leader-election Role covers.";
+              reason = "this package names the leader-election Lease \"${name}\" in namespace \"${ns}\", where the leader-election Role grants access.";
             }
             "--log-level=info"
             "--log-format=text"

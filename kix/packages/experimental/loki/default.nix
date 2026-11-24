@@ -191,13 +191,13 @@ let
     let
       locks = path: names: {
         inherit names;
-        reason = "it sets ${path}, which the package locks.";
+        reason = "it overrides ${path} in config.yaml, which this package sets itself.";
       };
     in
     [
       {
         names = [ "-target" ];
-        reason = "the package runs every Loki component in its one pod.";
+        reason = "this package runs Loki in single-binary mode inside one pod.";
       }
       (locks "auth_enabled" [ "-auth.enabled" ])
       (locks "server.http_listen_port" [ "-server.http-listen-port" ])
@@ -347,12 +347,12 @@ in
           args = [
             {
               owned = [ "-config.file=${configDir}/config.yaml" ];
-              reason = "the package renders the file from settings.";
-              fix = "Change settings instead.";
+              reason = "this package renders config.yaml from settings.";
+              fix = "Configure Loki in settings instead.";
             }
             {
               owned = [ "-config.expand-env=true" ];
-              reason = "settings and env rely on variable expansion.";
+              reason = "Loki must expand environment variables referenced in settings.";
             }
           ]
           ++ ownedFlags;

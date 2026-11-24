@@ -178,16 +178,16 @@ in
                   "--v=2"
                   {
                     owned = [ "--secure-port=${toString securePort}" ];
-                    reason = "the containerPort and the Service's targetPort use it.";
+                    from = "the webhook.securePort option, which also sets the container port and Service targetPort";
                     fix = "Set webhook.securePort instead.";
                   }
                   {
                     owned = [ "--dynamic-serving-ca-secret-namespace=$(POD_NAMESPACE)" ];
-                    reason = "the CA injection annotation and the dynamic-serving Role expect the CA Secret in the instance's namespace.";
+                    reason = "the CA injection annotation and the dynamic-serving Role expect the CA Secret in namespace \"${ns}\".";
                   }
                   {
                     owned = [ "--dynamic-serving-ca-secret-name=${caSecret}" ];
-                    reason = "the CA injection annotation and the dynamic-serving Role name the same Secret.";
+                    reason = "the CA injection annotation and the dynamic-serving Role point to Secret \"${caSecret}\".";
                   }
                   {
                     owned = [
@@ -195,7 +195,7 @@ in
                       "--dynamic-serving-dns-names=${serviceName}.$(POD_NAMESPACE)"
                       "--dynamic-serving-dns-names=${serviceName}.$(POD_NAMESPACE).svc"
                     ];
-                    reason = "the package sets the webhook Service's names, which the API server uses to reach the webhook.";
+                    reason = "the serving certificate must match the webhook Service's DNS names so the Kubernetes API server can reach it.";
                   }
                 ];
               } config.webhook.extraArgs;

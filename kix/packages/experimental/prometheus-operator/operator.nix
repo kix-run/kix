@@ -47,7 +47,7 @@ let
       }
       {
         owned = [ "--kubelet-service=${kubeletService.namespace}/${kubeletService.name}" ];
-        reason = "out.kubeletService names the Service it maintains.";
+        reason = "consumers read out.kubeletService, which points to Service ${kubeletService.namespace}/${kubeletService.name}.";
       }
       {
         owned = [

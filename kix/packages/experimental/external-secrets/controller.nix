@@ -60,27 +60,27 @@ let
     args = [
       {
         owned = [ "--enable-leader-election=true" ];
-        reason = "the package always enables leader election, so instances above availability none run one active controller.";
+        reason = "leader election keeps one controller active when multiple replicas run.";
       }
       {
         owned = [ "--metrics-addr=:${toString ports.metrics}" ];
-        reason = "the container's metrics port and the metrics Service use :${toString ports.metrics}.";
+        reason = "the container's metrics port and the metrics Service use port ${toString ports.metrics}.";
       }
       {
         owned = [ "--live-addr=:${toString ports.controllerHealth}" ];
-        reason = "the liveness and readiness probes use :${toString ports.controllerHealth}.";
+        reason = "the liveness and readiness probes use port ${toString ports.controllerHealth}.";
       }
       {
         names = [ "--leader-election-id" ];
-        reason = "the leader-election Role grants the lease ${controllerLeaseName} only.";
+        reason = "the leader-election Role only grants access to Lease \"${controllerLeaseName}\".";
       }
       {
         names = [ "--metrics-secure" ];
-        reason = "the ServiceMonitor scrapes plain HTTP.";
+        reason = "the ServiceMonitor scrapes metrics over plain HTTP.";
       }
       {
         names = [ "--metrics-auth" ];
-        reason = "the ServiceMonitor scrapes without a token and the package grants no TokenReview RBAC.";
+        reason = "the ServiceMonitor scrapes metrics without a token, and the controller's RBAC does not grant TokenReview permissions.";
       }
     ];
   } config.extraArgs;

@@ -385,11 +385,11 @@ in
                   "--v=2"
                   {
                     owned = [ "--cluster-resource-namespace=$(POD_NAMESPACE)" ];
-                    reason = "the controller reads ClusterIssuer Secrets from the instance's namespace (out.clusterResourceNamespace).";
+                    reason = "out.clusterResourceNamespace directs consumers to place ClusterIssuer Secrets in namespace \"${ns}\".";
                   }
                   {
                     owned = [ "--leader-election-namespace=${ns}" ];
-                    reason = "the leader-election Role lives in the instance's namespace.";
+                    reason = "the leader-election Role grants access only in namespace \"${ns}\".";
                   }
                   {
                     owned = [ "--acme-http01-solver-image=${acmesolverImage}" ];

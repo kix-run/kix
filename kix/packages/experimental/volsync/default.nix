@@ -286,25 +286,25 @@ in
           args = [
             {
               owned = [ "--leader-elect" ];
-              reason = "leader election keeps one active operator while the instance's availability level runs several.";
+              reason = "leader election keeps one operator active when multiple replicas run.";
             }
             {
               owned = [ "--health-probe-bind-address=:${toString healthPort}" ];
-              reason = "the probes use :${toString healthPort}.";
+              reason = "the probes use port ${toString healthPort}.";
             }
             {
               owned = [ "--metrics-bind-address=:${toString metricsPort}" ];
-              reason = "the metrics Service uses :${toString metricsPort}.";
+              reason = "the metrics Service uses port ${toString metricsPort}.";
             }
             # The operator's HTTPS metrics use a self-signed certificate;
             # the ServiceMonitor scrapes plain HTTP.
             {
               owned = [ "--metrics-secure=false" ];
-              reason = "the ServiceMonitor scrapes plain HTTP.";
+              reason = "the ServiceMonitor scrapes metrics over plain HTTP.";
             }
             {
               owned = map (m: "--${m}-container-image=${image}") movers;
-              reason = "the movers run the image option, which out.extraImages lists.";
+              from = "the image option (also published in out.extraImages for mover Jobs)";
               fix = "Set image instead.";
             }
           ];
