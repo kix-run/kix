@@ -533,6 +533,17 @@
       ]
     },
     {
+      "page": "package-task-guides/create-databases-with-db-operator",
+      "scenario": "package-stacks",
+      "status": "implemented",
+      "snippets": [
+        "dbOperatorInstance",
+        "dbOperatorServer",
+        "dbOperatorDatabase"
+      ],
+      "unverifiedNixBlocks": 2
+    },
+    {
       "page": "package-task-guides/deploy-stackgres",
       "scenario": "package-stacks",
       "status": "implemented",
