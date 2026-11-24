@@ -1,0 +1,4 @@
+# The operator's roles and the aggregated edit and view roles from the KEDA
+# release manifest at the same tag as crds/sources.txt. default.nix binds
+# the operator roles to the operator's ServiceAccount.
+https://github.com/kedacore/keda/releases/download/v2.21.1/keda-2.21.1.yaml ClusterRole/keda-operator Role/keda-operator ClusterRole/keda:edit ClusterRole/keda:view

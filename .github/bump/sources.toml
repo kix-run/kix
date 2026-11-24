@@ -192,6 +192,10 @@ packages = ["experimental.ingress-nginx"]
 repo = "https://github.com/kubernetes/ingress-nginx"
 tags = '^controller-v(\d+\.\d+\.\d+)$'
 
+[keda]
+packages = ["experimental.keda"]
+repo = "https://github.com/kedacore/keda"
+
 [keycloak]
 packages = ["experimental.keycloak"]
 repo = "https://github.com/keycloak/keycloak"
