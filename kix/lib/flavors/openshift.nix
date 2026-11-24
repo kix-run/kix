@@ -12,6 +12,12 @@
   kix,
   ...
 }:
+let
+  platformDns = import ./platform-dns.nix {
+    inherit kix;
+    inherit (config) clusterDomain;
+  };
+in
 {
   cluster.provider = lib.mkDefault "openshift";
 
@@ -38,17 +44,9 @@
   };
 
   instances.kube-system = {
-    platform-dns = {
-      package = kix.mkImport {
-        kind = "Deployment";
-        apiVersion = "apps/v1";
-        roles = [ "dns" ];
-        out = {
-          name = "coredns";
-          fqdn = "dns-default.openshift-dns.svc.${config.clusterDomain}";
-        };
-      };
-      optional = true;
+    platform-dns = platformDns {
+      name = "dns-default";
+      namespace = "openshift-dns";
     };
   };
 }

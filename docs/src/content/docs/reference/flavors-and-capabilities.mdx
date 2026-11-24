@@ -101,7 +101,7 @@ Flavors declare [`kix.mkImport`](/docs/reference/helm-and-imports/) instances to
 
 | Import instance | Claimed role | Declared by flavors | `optional` | Purpose |
 | --- | --- | --- | --- | --- |
-| `kube-system/platform-dns` (`gke-managed/platform-dns` on `gke-autopilot`) | `dns` | All flavors | `false` on `kind`; `true` on all other flavors | Represents the cluster's built-in DNS Deployment (`coredns` or `kube-dns`). When active, `kix deploy` verifies the Deployment exists before applying dependent workloads. |
+| `kube-system/platform-dns` (`gke-managed/platform-dns` on `gke-autopilot`) | `dns` | All flavors | `false` on `kind`; `true` on all other flavors | Represents the cluster's built-in DNS Service and exposes its `out.name` and `out.fqdn`. When active, `kix deploy` waits until the Service has a ready endpoint before applying workloads that depend on DNS. Activating `platform-dns` on `gke-autopilot` or `openshift` times out during `kix deploy`, because Kix looks for the Service in the `platform-dns` instance's namespace while `kube-dns` on `gke-autopilot` is in `kube-system` and `dns-default` on `openshift` is in `openshift-dns`. |
 | `kube-system/platform-storage` (`gke-managed/platform-storage` on `gke-autopilot`) | `storageClasses` | `aks`, `gke`, `gke-autopilot`, `k3s`, `kind`, `ovh`, `scaleway` | `false` | Represents the default `StorageClass` created by the provider. Always active so optional `storageClasses` dependencies on StatefulSets and PVCs resolve to it and cross-resource check 20 sees the class. |
 | `kube-system/platform-cilium` | `cni` | `rke2` (when `cluster.flavor.rke2.cni` includes `"cilium"`) | `false` | Exposes `out.helmChartConfig = { name = "rke2-cilium"; namespace = "kube-system"; }` so a managed `cilium` instance writes a `HelmChartConfig` instead of deploying a second Cilium chart. |
 | `kube-system/platform-snapshot-controller` | `snapshotController` | `rke2` | `false` | Exposes `out.crds` handles (`VolumeSnapshotClass`, `VolumeSnapshotContent`, `VolumeSnapshot`) for RKE2's bundled snapshot controller. |
@@ -110,20 +110,20 @@ Flavors declare [`kix.mkImport`](/docs/reference/helm-and-imports/) instances to
 
 The table below lists the exact DNS Service FQDNs and default `StorageClass` names exposed by each flavor's `platform-dns` and `platform-storage` imports:
 
-| Flavor | Import namespace | `platform-dns` Deployment name | `platform-dns.out.fqdn` | `platform-storage` (`out.storageClassName`) |
+| Flavor | Import namespace | `platform-dns.out.name` (Service) | `platform-dns.out.fqdn` | `platform-storage` (`out.storageClassName`) |
 | --- | --- | --- | --- | --- |
-| `aks` | `kube-system` | `coredns` | `kube-dns.kube-system.svc.<clusterDomain>` | `"managed-csi"` |
-| `eks` | `kube-system` | `coredns` | `kube-dns.kube-system.svc.<clusterDomain>` | none (`storageClasses` is `"absent"`; install the EBS CSI driver or declare a `storage-classes` instance) |
+| `aks` | `kube-system` | `kube-dns` | `kube-dns.kube-system.svc.<clusterDomain>` | `"managed-csi"` |
+| `eks` | `kube-system` | `kube-dns` | `kube-dns.kube-system.svc.<clusterDomain>` | none (`storageClasses` is `"absent"`; install the EBS CSI driver or declare a `storage-classes` instance) |
 | `gke` | `kube-system` | `kube-dns` | `kube-dns.kube-system.svc.<clusterDomain>` | `"standard-rwo"` |
 | `gke-autopilot` | `gke-managed` | `kube-dns` | `kube-dns.kube-system.svc.<clusterDomain>` | `"premium-rwo"` |
-| `k3s` | `kube-system` | `coredns` | `kube-dns.kube-system.svc.<clusterDomain>` | `"local-path"` |
-| `kind` | `kube-system` | `coredns` | `kube-dns.kube-system.svc.<clusterDomain>` | `"standard"` |
-| `kubeadm` | `kube-system` | `coredns` | `kube-dns.kube-system.svc.<clusterDomain>` | none (`storageClasses` is `"absent"`) |
-| `openshift` | `kube-system` | `coredns` | `dns-default.openshift-dns.svc.<clusterDomain>` | none (`storageClasses` is `"absent"` by default) |
-| `ovh` | `kube-system` | `coredns` | `kube-dns.kube-system.svc.<clusterDomain>` | `"csi-cinder-high-speed"` |
-| `rke2` | `kube-system` | `coredns` | `kube-dns.kube-system.svc.<clusterDomain>` | none (`storageClasses` is `"absent"`) |
-| `scaleway` | `kube-system` | `coredns` | `kube-dns.kube-system.svc.<clusterDomain>` | `"sbs-default"` |
-| `talos` | `kube-system` | `coredns` | `kube-dns.kube-system.svc.<clusterDomain>` | none (`storageClasses` is `"absent"`) |
+| `k3s` | `kube-system` | `kube-dns` | `kube-dns.kube-system.svc.<clusterDomain>` | `"local-path"` |
+| `kind` | `kube-system` | `kube-dns` | `kube-dns.kube-system.svc.<clusterDomain>` | `"standard"` |
+| `kubeadm` | `kube-system` | `kube-dns` | `kube-dns.kube-system.svc.<clusterDomain>` | none (`storageClasses` is `"absent"`) |
+| `openshift` | `kube-system` | `dns-default` | `dns-default.openshift-dns.svc.<clusterDomain>` | none (`storageClasses` is `"absent"` by default) |
+| `ovh` | `kube-system` | `kube-dns` | `kube-dns.kube-system.svc.<clusterDomain>` | `"csi-cinder-high-speed"` |
+| `rke2` | `kube-system` | `rke2-coredns-rke2-coredns` | `rke2-coredns-rke2-coredns.kube-system.svc.<clusterDomain>` | none (`storageClasses` is `"absent"`) |
+| `scaleway` | `kube-system` | `kube-dns` | `kube-dns.kube-system.svc.<clusterDomain>` | `"sbs-default"` |
+| `talos` | `kube-system` | `kube-dns` | `kube-dns.kube-system.svc.<clusterDomain>` | none (`storageClasses` is `"absent"`) |
 
 When a flavor imports a default `StorageClass` (`cluster.roles.storageClasses.binding = "shadowable"`), `kix.storage.mkClasses` (used by `packages.storage-classes`) refuses to annotate a managed `StorageClass` with `storageclass.kubernetes.io/is-default-class: "true"` because the cluster's existing default class is not removed by Kix and Kubernetes would see two defaults. (When multiple rendered `StorageClass` manifests in the same build are marked default, cross-resource [validation check 23](/docs/reference/validation-checks/) also fails the build.)
 
