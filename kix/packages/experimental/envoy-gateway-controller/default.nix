@@ -168,7 +168,6 @@ let
   # meta.version, image.tag, and the tag in crds/sources.txt and
   # rbac/sources.txt.
   release = "v1.10.0";
-  minorOf = tag: lib.versions.majorMinor (lib.removePrefix "v" tag);
 
   name = scope.instanceName;
   ns = scope.namespaceName;
@@ -268,7 +267,7 @@ let
 in
 {
   meta = {
-    version = lib.removePrefix "v" release;
+    version = release;
     description = "Envoy Gateway controller, CRDs, and GatewayClass for envoy-gateway instances";
     owner = "platform";
     defaultAliases = [ "envoyGateway" ];
@@ -282,16 +281,13 @@ in
 
   assertions =
     { config, ... }:
-    let
-      imageTag = builtins.unsafeDiscardStringContext config.image.tag;
-    in
     [
-      {
-        assertion = minorOf imageTag == minorOf release;
-        option = "image.tag";
-        message = "image.tag is \"${imageTag}\", which does not match Envoy Gateway ${minorOf release}. This package bundles CRDs and RBAC manifests from ${release}, so running a different minor version can fail at deploy or runtime.";
-        fix = "Set image.tag to a v${minorOf release}.x release (and matching image.digest).";
-      }
+      (kix.image.checkRelease {
+        inherit (config) image;
+        inherit release;
+        reason = "this package ships CRDs and RBAC manifests from Envoy Gateway ${release}, and another minor version may fail during deploy or at runtime";
+        fix = "If you set a new tag, also update image.digest to match.";
+      })
     ];
 
   options = {
@@ -299,7 +295,7 @@ in
       repository = "docker.io/envoyproxy/gateway";
       tag = release;
       digest = "sha256:c2243d43518bed91d3ed8c2db849a4b7a14ac9b96eb019f2ab104bb1ca8572b1";
-      description = "Container image for the Envoy Gateway controller, the certificate-generation Job, and the shutdown-manager sidecar in each proxy pod. Must be a v${minorOf release}.x release to match the bundled CRDs and RBAC.";
+      description = "Container image for the Envoy Gateway controller, the certificate-generation Job, and the shutdown-manager sidecar in each proxy pod. Must use the same major.minor version as ${release} to match the bundled CRDs and RBAC.";
     };
 
     operandImages = {

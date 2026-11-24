@@ -127,7 +127,7 @@ let
 in
 {
   meta = {
-    version = lib.removePrefix "v" release;
+    version = release;
     description = "Spegel, a peer-to-peer OCI registry mirror that serves image layers from the nodes that already hold them";
     owner = "platform";
     roles = [ "registryMirror" ];

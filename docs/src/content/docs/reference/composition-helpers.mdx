@@ -381,12 +381,13 @@ Kix models cluster availability across four ordered levels: `"none"` < `"pod"` <
 
 Packages can read `clusterConfig.k8sVersion` in `build` and compare it against a version bound to omit flags, collectors, or RBAC rules that older Kubernetes releases do not support.
 
-### `kix.version.atLeast` and `kix.version.atMost`
+### `kix.version.atLeast`, `kix.version.atMost`, and `kix.version.ofTag`
 
 | Function | Signature | Behavior |
 | --- | --- | --- |
 | `kix.version.atLeast` | `version -> bound -> bool or null` | Returns `true` when `version` is `bound` or newer, `false` when older, or `null` when `version` is too imprecise to tell. |
 | `kix.version.atMost` | `version -> bound -> bool or null` | Returns `true` when `version` is `bound` or older, `false` when newer, or `null` when `version` is too imprecise to tell. |
+| `kix.version.ofTag` | `string -> string or null` | Extracts the version from a tag string, stripping any leading `v`, vendor suffix, or `@digest` while keeping pre-release suffixes (the same rules as [`kix.image.version`](#image-and-pin-helpers)). For example, `"v1.156.0-cluster"` returns `"1.156.0"`, `"2.0.0-rc1"` returns `"2.0.0-rc1"`, and `"latest"` returns `null`. Use it for standalone tag strings outside an image option, such as a custom resource's version field. |
 
 Both functions compare up to the segment precision of `bound` (using the [version rules](/docs/reference/package-anatomy/#metaversion)), so `kix.version.atLeast "1.36.2" "1.36"` and `kix.version.atMost "1.36.2" "1.36"` both return `true`. When `version` has fewer numeric segments than `bound` and matches its prefix (such as `"1.36"` against `"1.36.2"`), both return `null`; if an earlier segment already differs (such as `"1.35"` against `"1.36.2"`), they still return `true` or `false`.
 
@@ -401,7 +402,7 @@ served = k8sVersion == null || kix.version.atLeast k8sVersion "1.36" != false;
 
 ## Image and pin helpers
 
-### `kix.image.ref`, `kix.image.version`, and `kix.image.isPinned`
+### `kix.image.ref`, `kix.image.version`, `kix.image.isPinned`, and `kix.image.checkRelease`
 
 Pair `kix.options.image` in `options` with `kix.image.ref` in container specs:
 
@@ -415,6 +416,22 @@ imagePullPolicy = config.image.pullPolicy;
 | `kix.image.ref` | `{ repository, tag, digest ? null, ... } -> string` | Formats a container image reference from an image attribute set. Both `repository` and `tag` are required and must be non-empty strings (throws an evaluation error if either is missing or `""`). Renders `"${repository}:${tag}@${digest}"` when `digest` is non-null, or `"${repository}:${tag}"` when `digest` is `null`. |
 | `kix.image.version` | `{ tag ? null, ... } -> string or null` | Returns the version the image's tag names, without a leading `v`, a digest, or a vendor suffix: `"v1.37.1-alpine"` gives `"1.37.1"`. A pre-release suffix stays: `"2.0.0-rc1"` gives `"2.0.0-rc1"`. Returns `null` when the tag names no version, such as `"latest"`. A package publishes the result as `out.version` so that an instance reports the version it runs. |
 | `kix.image.isPinned` | `{ digest ? null, ... } -> bool` | Takes an image attribute set and returns `true` when `image.digest` is non-null (`(image.digest or null) != null`). |
+| `kix.image.checkRelease` | `{ image, release, reason, option ? "image", also ? [ ], fix ? null } -> assertion` | Builds an entry for the package's `assertions` list that checks `image.tag` against `release`. The check passes when `image.tag` starts with the same major.minor version as `release`, or with any major.minor listed in `also`, such as `"1.9"`. It ignores any leading `v` and anything after the minor version, so a custom rebuild tagged `"1.21.3"` or `"v1.21.3-internal"` still passes when `release` is `"v1.21.3"`. `option` sets the option path reported on failure (`"${option}.tag"`). `reason` explains why the package requires that release (rendered after `"because"`, for example `"the CRDs in kix/packages/experimental/velero/crds come from ${release}"`). On failure, Kix suggests setting a tag from the accepted release series or removing the override to use the default, and appends `fix` when set (for example, instructions for updating the package to another version). |
+
+Use `kix.image.checkRelease` when a package ships CRDs or RBAC rules from a specific upstream release:
+
+```nix
+assertions =
+  { config, ... }:
+  [
+    (kix.image.checkRelease {
+      inherit (config) image;
+      inherit release;
+      reason = "the CRDs in kix/packages/experimental/velero/crds come from ${release}";
+      fix = "To update this package to another version, change release in kix/packages/experimental/velero/common.nix and run uv run scripts/vendor-crds.py velero.";
+    })
+  ];
+```
 
 ### `kix.pins`
 

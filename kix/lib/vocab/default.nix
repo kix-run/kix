@@ -55,9 +55,10 @@ compose
     };
   };
   # Compare version strings such as a cluster's `k8sVersion`. Both return
-  # null when the version is less precise than the bound.
+  # null when the version is less precise than the bound. `ofTag` reads the
+  # version a tag names, as `kix.image.version` does for an image.
   version = {
-    inherit (versions) atLeast atMost;
+    inherit (versions) atLeast atMost ofTag;
   };
   # Map availability levels to replica counts, quorums, and topology spread
   # constraints (`core/availability.nix`). Single-replica workloads set a

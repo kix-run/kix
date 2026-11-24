@@ -68,7 +68,7 @@ let
 in
 {
   meta = {
-    version = lib.removePrefix "v" release;
+    version = release;
     description = "VictoriaMetrics agent: a metrics scraper run through a VMAgent CR";
     owner = "platform";
     defaultAliases = [ "vmAgent" ];

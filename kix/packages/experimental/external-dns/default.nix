@@ -368,6 +368,14 @@ in
       );
     in
     [
+      # sources.nix and providers.nix follow `release`, and another release
+      # may need other RBAC rules or accept other providers.
+      (kix.image.checkRelease {
+        inherit (config) image;
+        inherit release;
+        reason = "the ClusterRole rules (sources.nix) and supported providers (providers.nix) match external-dns v${release}";
+        fix = "To update this package to another version, change release in kix/packages/experimental/external-dns/default.nix and update sources.nix and providers.nix from clusterrole.yaml in that version's chart and pkg/apis/externaldns/types.go.";
+      })
       {
         assertion = s.complete || s.dep != null || config.secretEnv != { };
         message = "provider \"${config.provider}\" reads its API credentials from ${keySetText}, and no complete set is supplied. Add a secret or secret-ref instance in namespace \"${ns}\" holding them, set deps.providerCredentials = ref.${ns}.<instance>, and name the key ${firstVar} or map it with secretEnv.${firstVar} = \"<key>\".";
@@ -527,20 +535,6 @@ in
           );
         } config.extraArgs;
 
-        # sources.nix and providers.nix follow `release`; another release
-        # may need other RBAC rules or accept other providers.
-        imageTag = builtins.unsafeDiscardStringContext config.image.tag;
-        imageRef =
-          if lib.versions.majorMinor (lib.removePrefix "v" imageTag) == lib.versions.majorMinor release then
-            kix.image.ref config.image
-          else
-            scope.fail {
-              package = "external-dns";
-              option = "image.tag";
-              message = "image.tag \"${imageTag}\" is not a ${lib.versions.majorMinor release} release, and the ClusterRole rules (sources.nix) and the provider list (providers.nix) follow external-dns v${release}.";
-              fix = "To move to another release, change `release` in kix/packages/experimental/external-dns/default.nix and update both files from that release's chart clusterrole.yaml and pkg/apis/externaldns/types.go.";
-            };
-
         probe = {
           httpGet = {
             path = "/healthz";
@@ -601,7 +595,7 @@ in
                   (
                     {
                       name = "external-dns";
-                      image = imageRef;
+                      image = kix.image.ref config.image;
                       inherit args;
                       ports = [ (kix.port "metrics" metricsPort) ];
                       # Timings from the upstream chart's values.yaml.

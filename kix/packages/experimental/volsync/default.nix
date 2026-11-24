@@ -140,8 +140,6 @@ let
   readJSON = file: builtins.fromJSON (builtins.readFile file);
   vendored = file: (readJSON ./crds/${file}).spec;
 
-  minorOf = tag: lib.versions.majorMinor (lib.removePrefix "v" tag);
-
   # The Lease name compiled into the operator (cmd/main.go).
   leaseName = "b95b3104.backube";
 
@@ -202,14 +200,13 @@ in
 
   assertions =
     { config, ... }:
-    let
-      imageTag = builtins.unsafeDiscardStringContext config.image.tag;
-    in
     [
-      {
-        assertion = minorOf imageTag == minorOf release;
-        message = "image.tag \"${imageTag}\" is not a ${minorOf release} release, and the CRDs and ClusterRole under kix/packages/experimental/volsync/{crds,rbac} are vendored from v${release}. Set image.tag to a ${minorOf release}.x tag. To move to another release, change release in kix/packages/experimental/volsync/default.nix and the tag in crds/sources.txt and rbac/sources.txt, then run uv run scripts/vendor-crds.py volsync.";
-      }
+      (kix.image.checkRelease {
+        inherit (config) image;
+        inherit release;
+        reason = "the CRDs and ClusterRole in kix/packages/experimental/volsync/{crds,rbac} come from v${release}";
+        fix = "To update this package to another version, change release in kix/packages/experimental/volsync/default.nix and the tag in crds/sources.txt and rbac/sources.txt, and then run uv run scripts/vendor-crds.py volsync.";
+      })
     ];
 
   options = {

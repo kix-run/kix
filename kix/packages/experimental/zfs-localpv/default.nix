@@ -62,22 +62,6 @@ let
 
   vendored = file: (builtins.fromJSON (builtins.readFile ./crds/${file})).spec;
 
-  minorOf = tag: builtins.match "v?([0-9]+)\\.([0-9]+)\\..*" tag;
-  releaseMinor = minorOf release;
-  checkedRef =
-    image:
-    let
-      tag = builtins.unsafeDiscardStringContext image.tag;
-    in
-    if minorOf tag != releaseMinor then
-      scope.fail {
-        package = "zfs-localpv";
-        option = "image.tag";
-        message = "image.tag \"${tag}\" is not a ${lib.concatStringsSep "." releaseMinor} release, and the CRDs under kix/packages/experimental/zfs-localpv/crds are vendored from ${release}.";
-        fix = "To move to another release, change release in kix/packages/experimental/zfs-localpv/default.nix and run uv run scripts/vendor-crds.py zfs-localpv.";
-      }
-    else
-      kix.image.ref image;
 in
 {
   meta = {
@@ -108,22 +92,31 @@ in
 
   assertions =
     { config, deps, ... }:
-    map
-      (message: {
-        assertion = false;
-        inherit message;
+    [
+      (kix.image.checkRelease {
+        inherit (config) image;
+        inherit release;
+        reason = "the CRDs in kix/packages/experimental/zfs-localpv/crds come from ${release}";
+        fix = "To update this package to another version, change release in kix/packages/experimental/zfs-localpv/default.nix and run uv run scripts/vendor-crds.py zfs-localpv.";
       })
-      (
-        kix.storage.snapshotClassProblems {
-          optionPath = "config.volumeSnapshotClasses";
-          classes = config.volumeSnapshotClasses;
-          snapshotController = deps.snapshotController or null;
-        }
-        ++ kix.tolerations.problems {
-          optionPath = "config.node.tolerations";
-          inherit (config.node) tolerations;
-        }
-      );
+    ]
+    ++
+      map
+        (message: {
+          assertion = false;
+          inherit message;
+        })
+        (
+          kix.storage.snapshotClassProblems {
+            optionPath = "config.volumeSnapshotClasses";
+            classes = config.volumeSnapshotClasses;
+            snapshotController = deps.snapshotController or null;
+          }
+          ++ kix.tolerations.problems {
+            optionPath = "config.node.tolerations";
+            inherit (config.node) tolerations;
+          }
+        );
 
   build =
     {
@@ -343,7 +336,7 @@ in
             ++ [
               {
                 name = "zfs-plugin";
-                image = checkedRef config.image;
+                image = kix.image.ref config.image;
                 imagePullPolicy = config.image.pullPolicy;
                 args = [
                   "--endpoint=$(OPENEBS_CSI_ENDPOINT)"
@@ -459,7 +452,7 @@ in
                 }
                 {
                   name = "zfs-plugin";
-                  image = checkedRef config.image;
+                  image = kix.image.ref config.image;
                   imagePullPolicy = config.image.pullPolicy;
                   args = [
                     "--nodename=$(OPENEBS_NODE_NAME)"

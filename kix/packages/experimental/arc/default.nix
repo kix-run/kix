@@ -98,15 +98,12 @@ let
   metricsPort = 8080;
   healthPort = 8081;
 
-  # The first two captures are the major and minor version. null for a tag
-  # the controller's parseSemver (apis/actions.github.com/v1alpha1/
-  # version.go) rejects, such as "v0.15.1" or "0.15.x": the tag becomes
-  # every runner set's version label, and the controller deletes a runner
-  # set whose label it cannot parse.
-  versionParts =
-    t: builtins.match "(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(\\.(0|[1-9][0-9]*)([^0-9].*)?)?" t;
-  releaseMinor = lib.take 2 (versionParts release);
-  releaseMinorText = lib.concatStringsSep "." releaseMinor;
+  # Return whether the controller's parseSemver (apis/actions.github.com/
+  # v1alpha1/version.go) accepts a tag. It rejects tags such as "v0.15.1"
+  # or "0.15.x". The tag becomes every runner set's version label, and the
+  # controller deletes a runner set whose label it cannot parse.
+  controllerParses =
+    t: builtins.match "(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(\\.(0|[1-9][0-9]*)([^0-9].*)?)?" t != null;
 
   # GitHub's API and the Actions service. `meta.network.intents` cannot read
   # the instance's config, so under an enforcer the controller cannot reach a
@@ -271,17 +268,18 @@ in
       (
         let
           imageTag = builtins.unsafeDiscardStringContext config.image.tag;
-          parts = versionParts imageTag;
         in
         {
-          assertion = parts != null && lib.take 2 parts == releaseMinor;
-          message =
-            if parts == null then
-              "image.tag \"${imageTag}\" is not a version the controller can parse (digits as major.minor.patch, no \"v\" prefix). The tag becomes every runner set's version label, and the controller deletes a runner set whose label it cannot parse. Remove image.tag or set a ${releaseMinorText} tag."
-            else
-              "image.tag \"${imageTag}\" is not a ${releaseMinorText} release, and the CRDs under kix/packages/experimental/arc/crds are vendored from ${release}. Remove image.tag or set a ${releaseMinorText} tag. To move to another release, change release in kix/packages/experimental/arc/default.nix and run uv run scripts/vendor-crds.py arc.";
+          assertion = controllerParses imageTag;
+          message = "image.tag \"${imageTag}\" is not a version the controller can parse. Kix rejected it because the controller writes this tag to every runner set's version label and deletes any runner set whose label it cannot parse. Set image.tag to a major.minor.patch version without a \"v\" prefix or leading zeros (such as \"${release}\"), or remove image.tag to use the default.";
         }
       )
+      (kix.image.checkRelease {
+        inherit (config) image;
+        inherit release;
+        reason = "the CRDs in kix/packages/experimental/arc/crds come from ${release}";
+        fix = "To update this package to another version, change release in kix/packages/experimental/arc/default.nix and run uv run scripts/vendor-crds.py arc.";
+      })
     ];
 
   options = {

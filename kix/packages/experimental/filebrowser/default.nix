@@ -84,7 +84,7 @@ let
 in
 {
   meta = {
-    version = lib.removePrefix "v" release;
+    version = release;
     description = "Filebrowser: web-based file manager";
     owner = "app-team";
   };

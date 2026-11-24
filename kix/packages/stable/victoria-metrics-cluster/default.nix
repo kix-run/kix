@@ -88,7 +88,7 @@ let
 in
 {
   meta = {
-    version = lib.removePrefix "v" release;
+    version = release;
     description = "VictoriaMetrics cluster: vmstorage, vmselect and vminsert through a VMCluster CR";
     owner = "platform";
     defaultAliases = [
@@ -592,7 +592,7 @@ in
             remoteWriteUrl = "http://${self.insertService.out.fqdn}:8480/insert/0/prometheus/api/v1/write";
             insertBaseUrl = "http://${self.insertService.out.fqdn}:8480/insert/0/prometheus";
             inherit (config) scrapeInterval;
-            version = kix.image.version { tag = config.clusterVersion; };
+            version = kix.version.ofTag config.clusterVersion;
             # Operand images are reconciled by the operator, not in any
             # Kix-generated pod spec.
             extraImages = [

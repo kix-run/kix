@@ -108,7 +108,7 @@ let
 in
 {
   meta = {
-    version = lib.removePrefix "v" release;
+    version = release;
     description = "Kubernetes Gateway API standard-channel CRDs (gateway.networking.k8s.io)";
     owner = "platform";
     # The role admits one managed claimant per cluster, which keeps a

@@ -49,24 +49,6 @@ rec {
     else
       80;
 
-  # The CRDs come from `release`; a server of another minor release may not
-  # serve the same schema.
-  releaseMinor = builtins.match "v([0-9]+)\\.([0-9]+)\\..*" release;
-  checkedRef =
-    image:
-    let
-      tag = builtins.unsafeDiscardStringContext image.tag;
-    in
-    if builtins.match "v([0-9]+)\\.([0-9]+)\\..*" tag != releaseMinor then
-      scope.fail {
-        package = "velero";
-        option = "image.tag";
-        message = "image.tag \"${tag}\" is not a ${lib.concatStringsSep "." releaseMinor} release, and the CRDs under kix/packages/experimental/velero/crds are vendored from ${release}.";
-        fix = "To move to another release, change release in kix/packages/experimental/velero/default.nix and run uv run scripts/vendor-crds.py velero.";
-      }
-    else
-      kix.image.ref image;
-
   # Velero decodes the policy file with unknown keys refused, and a refused
   # file fails every backup, so the conditions are a closed set.
   volumeTypes = [

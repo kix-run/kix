@@ -88,7 +88,7 @@ let
 in
 {
   meta = {
-    version = lib.removePrefix "v" release;
+    version = release;
     description = "Prometheus time-series database";
     owner = "platform";
     defaultAliases = [ "prometheusServer" ];

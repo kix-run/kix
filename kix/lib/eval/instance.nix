@@ -220,7 +220,7 @@ in
           instance = where;
         };
 
-        packageMeta = raw.meta or { };
+        packageMeta = packageLib.metaFrom raw;
 
         discoveredDeps = discoverBuildDeps raw.build;
         depsEnrichment = raw.deps or { };

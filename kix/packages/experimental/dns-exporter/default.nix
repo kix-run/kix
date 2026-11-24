@@ -33,7 +33,7 @@ let
 in
 {
   meta = {
-    version = lib.removePrefix "v" release;
+    version = release;
     description = "dns_exporter, a Prometheus exporter that runs DNS queries and reports the results as metrics";
     owner = "platform";
   };

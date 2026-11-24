@@ -19,12 +19,7 @@ let
   ns = scope.namespaceName;
   who = common.who scope;
   metricsOn = config.metrics.enabled && prometheus != null;
-  acmesolverImage = kix.image.ref (
-    common.checkRelease who config [
-      "operandImages"
-      "acmesolver"
-    ]
-  );
+  acmesolverImage = kix.image.ref config.operandImages.acmesolver;
 
   inherit (scope.rbac)
     group
@@ -380,7 +375,7 @@ in
           containers = [
             {
               name = "cert-manager-controller";
-              image = kix.image.ref (common.checkRelease who config [ "image" ]);
+              image = kix.image.ref config.image;
               imagePullPolicy = config.image.pullPolicy;
               args = [
                 "--v=2"

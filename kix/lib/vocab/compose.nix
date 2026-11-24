@@ -39,13 +39,13 @@ rec {
   image =
     let
       needField =
-        image: field:
+        caller: image: field:
         let
           v = image.${field} or null;
         in
         if v == null || v == "" then
           fail {
-            message = "kix.image.ref: image reference has no '${field}', and got: ${builtins.toJSON image}";
+            message = "${caller}: '${field}' is missing or empty in image ${builtins.toJSON image}.";
             fix = "An image needs at least { repository, tag }.";
           }
         else
@@ -59,7 +59,7 @@ rec {
       ref =
         image:
         builtins.unsafeDiscardStringContext (
-          "${needField image "repository"}:${needField image "tag"}"
+          "${needField "kix.image.ref" image "repository"}:${needField "kix.image.ref" image "tag"}"
           + lib.optionalString (image.digest or null != null) "@${image.digest}"
         );
 
@@ -75,6 +75,55 @@ rec {
 
       # Return true when `image.digest` is present and non-null.
       isPinned = image: (image.digest or null) != null;
+
+      # Return an assertion that the image's tag names the major.minor of
+      # `release`, or one of the minors in `also` (such as "1.9"). A leading
+      # `v` and anything after the minor number are ignored, because a user
+      # may point the image at a rebuild that tags in another form. A
+      # package puts it in `assertions` for each image whose files it
+      # vendors from `release`. `reason` says what the release binds, and
+      # `fix` says how to move the package to another release.
+      checkRelease =
+        {
+          image,
+          release,
+          reason,
+          option ? "image",
+          also ? [ ],
+          fix ? null,
+        }:
+        let
+          tag = builtins.unsafeDiscardStringContext (needField "kix.image.checkRelease" image "tag");
+          releaseMinor = versions.minorOf release;
+          prefix = if builtins.match "[vV].*" release == null then "" else builtins.substring 0 1 release;
+          minorText = m: prefix + lib.concatMapStringsSep "." toString m;
+          accepted = map versions.minorOf also ++ [ releaseMinor ];
+          acceptedText =
+            let
+              texts = map minorText accepted;
+              n = builtins.length texts;
+            in
+            if n == 1 then
+              builtins.head texts
+            else
+              lib.concatStringsSep ", " (lib.take (n - 1) texts) + ", or ${lib.last texts}";
+          tagMinor = versions.minorOf tag;
+          path = "${option}.tag";
+        in
+        if releaseMinor == null || builtins.elem null accepted then
+          fail {
+            message = "kix.image.checkRelease: release (${builtins.toJSON release}) or an entry in also (${builtins.toJSON also}) is missing major and minor version numbers, so Kix cannot check this image tag.";
+            fix = "Pass a version with at least major and minor numbers, such as \"v1.10.0\" for release and \"1.9\" in also.";
+          }
+        else
+          {
+            assertion = builtins.elem tagMinor accepted;
+            option = path;
+            message = "${path} \"${tag}\" is not a ${acceptedText} release. Kix rejected it because ${reason}.";
+            fix =
+              "Set ${path} to a tag from the ${acceptedText} release series, or remove ${path} to use the default."
+              + lib.optionalString (fix != null) " ${fix}";
+          };
     };
 
   port = name: containerPort: {

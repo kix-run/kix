@@ -8,7 +8,7 @@
 }:
 
 rec {
-  # meta.version, the version check on image.tag, and the DiskPool CRD
+  # meta.version, the release check on each image tag, and the DiskPool CRD
   # version and RBAC in this package are written for this release.
   release = "2.12.2";
 
@@ -67,22 +67,6 @@ rec {
         "node.kubernetes.io/unreachable"
         "node.kubernetes.io/not-ready"
       ];
-
-  imageRef =
-    image:
-    let
-      minor = v: builtins.match "v?([0-9]+)\\.([0-9]+)\\..*" v;
-      tag = builtins.unsafeDiscardStringContext image.tag;
-    in
-    if minor tag != minor release then
-      scope.fail {
-        package = "mayastor";
-        option = "image.tag";
-        message = "image tag \"${tag}\" is not a ${lib.concatStringsSep "." (minor release)} release, and the DiskPool CRD version and the RBAC in kix/packages/experimental/mayastor are written for ${release}.";
-        fix = "To move to another release, change release in kix/packages/experimental/mayastor/common.nix.";
-      }
-    else
-      kix.image.ref image;
 
   # The addresses components dial. Each is built from a Service's
   # `out.fqdn` or `out.url`, which carry the endpoint that network policy

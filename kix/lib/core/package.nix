@@ -9,6 +9,7 @@
 { lib }:
 let
   inherit (import ./error.nix { inherit lib; }) fail;
+  versions = import ./version.nix { inherit lib; };
 
   typeOf = value: if builtins.isAttrs value then value._type or "" else "";
 in
@@ -113,17 +114,30 @@ rec {
         fix = "Set `package` to a built-in package (`packages.<name>` or `packages.experimental.<name>`), a package function (`{ scope, lib, ... }: { ... }`), an inline attribute set with `build`, or `kix.mkImport { ... }`.";
       };
 
+  # Return the `meta` of a package's definition, the result of `call`, as
+  # Kix reads it. `meta.version` loses a leading `v`, so a package can set
+  # it to the upstream tag and still report the version as `out.version`
+  # does.
+  metaFrom =
+    definition:
+    let
+      meta = definition.meta or { };
+    in
+    meta // lib.optionalAttrs (meta ? version) { version = versions.bare meta.version; };
+
   # Return a package's `meta` without building it. A package function is
   # called with an empty scope and `availability = "none"`, so `meta` must
   # not depend on either. This runs before the availability level of an
   # instance is known.
   metaOf =
     { package, kix }:
-    if isFunction package || isRefused package then
-      (call {
-        inherit package kix;
-        scope = { };
-      }).meta or { }
-    else
-      package.meta or { };
+    metaFrom (
+      if isFunction package || isRefused package then
+        call {
+          inherit package kix;
+          scope = { };
+        }
+      else
+        package
+    );
 }

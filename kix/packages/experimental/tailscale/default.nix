@@ -116,10 +116,6 @@ let
   };
   parentType = type: managedLabels // { "tailscale.com/parent-resource-type" = type; };
 
-  versionParts = t: builtins.match "v?([0-9]+)\\.([0-9]+)(\\..*)?" t;
-  releaseMinor = lib.take 2 (versionParts release);
-  releaseMinorText = lib.concatStringsSep "." releaseMinor;
-
   loginServerPattern = "https://[^/:]+(:443)?(/.*)?";
 
   declaredProxyClasses =
@@ -196,14 +192,12 @@ in
           !(builtins.isString loginServer) || builtins.match loginServerPattern loginServer != null;
         message = "env.OPERATOR_LOGIN_SERVER = \"${toString loginServer}\" is not an https URL on port 443 (${loginServerPattern}). The operator's egress policy allows TCP 443 and UDP 3478 only; serve the control server over https on 443.";
       }
-      {
-        assertion =
-          let
-            imageTag = builtins.unsafeDiscardStringContext config.image.tag;
-          in
-          versionParts imageTag != null && lib.take 2 (versionParts imageTag) == releaseMinor;
-        message = "image.tag \"${builtins.unsafeDiscardStringContext config.image.tag}\" is not a ${releaseMinorText} release, and the CRDs under kix/packages/experimental/tailscale/crds and the rules in kix/packages/experimental/tailscale/rbac.nix come from ${release}. Remove image.tag or set a v${releaseMinorText} tag. To move to another release, change release in kix/packages/experimental/tailscale/default.nix and the tag in crds/sources.txt, run uv run scripts/vendor-crds.py tailscale, and compare rbac.nix with that release's operator-rbac.yaml and proxy-rbac.yaml.";
-      }
+      (kix.image.checkRelease {
+        inherit (config) image;
+        inherit release;
+        reason = "the CRDs in kix/packages/experimental/tailscale/crds and the RBAC rules in kix/packages/experimental/tailscale/rbac.nix come from ${tag}";
+        fix = "To update this package to another version, change release in kix/packages/experimental/tailscale/default.nix and the tag in crds/sources.txt, run uv run scripts/vendor-crds.py tailscale, and compare rbac.nix against operator-rbac.yaml and proxy-rbac.yaml for that version.";
+      })
       (reservedKeys "proxyClasses" "scope.mkCR tailscale.out.crds.ProxyClass" (
         builtins.attrNames config.proxyClasses
       ))

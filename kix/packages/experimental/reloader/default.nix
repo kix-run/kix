@@ -124,7 +124,7 @@ let
 in
 {
   meta = {
-    version = lib.removePrefix "v" release;
+    version = release;
     description = "Stakater Reloader, which restarts workloads when a Secret they reference changes outside Kix";
     owner = "platform";
     defaultAliases = [ "reloader" ];
@@ -144,6 +144,19 @@ in
       "deployment.reloader.stakater.com"
     ];
   };
+
+  # The flags in baseArgs, ownedFlags, and the RBAC rules follow `release`,
+  # and another release may lack a flag or need other rules.
+  assertions =
+    { config, ... }:
+    [
+      (kix.image.checkRelease {
+        inherit (config) image;
+        inherit release;
+        reason = "this package's flags and RBAC rules are written for Reloader ${release}";
+        fix = "To update this package to another version, change release in kix/packages/experimental/reloader/default.nix and check its flags against internal/pkg/util/util.go and its RBAC rules against the chart's clusterrole.yaml for that version.";
+      })
+    ];
 
   options = {
     image = kix.options.image {
@@ -272,23 +285,6 @@ in
           else
             null
         );
-
-        # The flags in baseArgs, ownedFlags, and the RBAC rules follow
-        # `release`; another release may lack a flag or need other rules.
-        imageTag = builtins.unsafeDiscardStringContext config.image.tag;
-        imageRef =
-          if
-            lib.versions.majorMinor (lib.removePrefix "v" imageTag)
-            == lib.versions.majorMinor (lib.removePrefix "v" release)
-          then
-            kix.image.ref config.image
-          else
-            scope.fail {
-              package = "reloader";
-              option = "image.tag";
-              message = "image.tag \"${imageTag}\" is not a ${lib.versions.majorMinor (lib.removePrefix "v" release)} release, and the flags and RBAC rules of this package follow reloader ${release}.";
-              fix = "To move to another release, change `release` in kix/packages/experimental/reloader/default.nix and check the flags against that release's internal/pkg/util/util.go and the rules against its chart clusterrole.yaml.";
-            };
 
         env = kix.mkEnvVars (
           kix.mergeEnv {
@@ -504,7 +500,7 @@ in
                 containers = [
                   {
                     name = "reloader";
-                    image = imageRef;
+                    image = kix.image.ref config.image;
                     imagePullPolicy = config.image.pullPolicy;
                     inherit args env;
                     ports = [ (kix.port "http" 9090) ];
