@@ -41,8 +41,9 @@ compose
     inherit (toleration) problems render;
   };
   # The role a workload gets in a cloud: the values a cluster author gives a
-  # credentials dependency (`aws`, `gcp`, `azure`), `use`, which a package
-  # calls on that dependency, and `annotationsFor` (`vocab/cloud-identity.nix`).
+  # credentials dependency (`aws`, `gcp`, `azure`), `use` and `useIdentity`,
+  # which a package calls on that dependency, `annotationsFor`, and
+  # `ambientProblem` (`vocab/cloud-identity.nix`).
   # How a cluster delivers it is the flavor's or a module's business.
   cloudIdentity = {
     inherit (cloudIdentity)
@@ -50,6 +51,8 @@ compose
       gcp
       azure
       use
+      useIdentity
+      ambientProblem
       annotationsFor
       ;
   };

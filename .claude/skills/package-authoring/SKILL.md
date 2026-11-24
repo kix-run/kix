@@ -505,7 +505,38 @@ The only place in this skill with package line numbers. `pkg:N` is
 | A step after the migrations on one replica of a dependency: an init container running a sibling script from a ConfigMap, with a checksum annotation | plausible:518-561, 605-606; `plausible/replicate.py` |
 | One alias, two implementations, a contract file | `kix/contracts/experimental/clickhouse.nix`; clickhouse:101, clickhouse-cluster:90 |
 | Renamed dependency with `renamedFrom` | immich:209-212; `kix/contracts/stable/redis.nix` (`helpers.renamedFrom`) |
-| Credentials dependency accepting either a Secret or a cloud identity (`kix.cloudIdentity.use` and `credentials.bind`) | external-dns:179-187, 600-607; `providers.nix` (`cloud`) |
+| Credentials dependency accepting either a Secret or a cloud identity (`kix.cloudIdentity.use` and `credentials.bind`) | external-dns:164-168, 607-614; `providers.nix` (`cloud`) |
+| Cloud identity when one package owns the ServiceAccount and another chooses the cloud (`kix.cloudIdentity.useIdentity`, `ambientProblem`, `out.identityCloud`, `out.ambientCloud`) | `kix/lib/tests/units/cloud-identity.nix` (`holderPackage`, `callerPackage`, `storagePackage`, `databasePackage`) |
+
+Always declare a cloud identity dependency on the package that owns the
+ServiceAccount, because a ServiceAccount carries a single identity:
+
+- `kix.cloudIdentity.use { inherit scope dep cloud; identityGoesTo ? null; }`:
+  unpacks a dependency that accepts a Secret or (when `cloud` is `"aws"`,
+  `"gcp"`, or `"azure"`) a cloud identity, such as `external-dns`. When
+  `cloud` is `null` because another package owns the ServiceAccount, pass
+  `identityGoesTo` naming that instance's identity dependency so the error's
+  fix points there.
+- `kix.cloudIdentity.useIdentity { inherit scope dep secretGoesTo; cloud ? ...; }`:
+  unpacks an optional cloud identity on a package that owns the ServiceAccount
+  while another package chooses the cloud and accepts any Secret (`secretGoesTo`
+  names where to pass a Secret instead). Omit `cloud` and publish
+  `out.identityCloud = credentials.cloud` when dependents choose the cloud; or
+  pass `cloud = <dep>.out.ambientCloud` when a dependency chooses the cloud.
+- Rendering the identity: pipe a Kix-built ServiceAccount through
+  `credentials.bind`. When an operator creates the ServiceAccount from a custom
+  resource instead, take `cloudIdentity ? null` in `build` and pass
+  `credentials.identity` (from `use` or `useIdentity`) to
+  `kix.cloudIdentity.annotationsFor { inherit scope; identity = credentials.identity; provider = cloudIdentity; }`
+  (returns empty `serviceAccountAnnotations` and `podLabels` when `identity` is
+  `null`).
+
+A package that chooses the cloud while another package owns the ServiceAccount
+never accepts a cloud identity. It keeps any static Secret and any upstream
+setting for using ambient pod credentials. If the ServiceAccount package
+depends on it, publish `out.ambientCloud` (`"aws"`, `"gcp"`, `"azure"`, or
+`null` when using a Secret). If it depends on the ServiceAccount package, check
+`kix.cloudIdentity.ambientProblem { cloud; holder; }` in `assertions`.
 
 A script of more than a few lines is a sibling file read with
 `builtins.readFile`, so it can be linted and run alone
