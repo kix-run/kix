@@ -1,0 +1,3 @@
+# 2026-11-24 · `kix/packages/` · 35 package options have no description.
+
+The package catalog in the docs shows these options with a type and a default and no text. The `listeners` submodule options of `experimental/envoy-gateway` and `experimental/traefik` account for 28 of them. The rest are in `victoria-metrics-alert` (`alertmanager.configMaps`, `alertmanager.retention`, `evaluationInterval`), `victoria-metrics-cluster` (`retentionPeriod`), and `victoria-metrics-operator` (`imagePullSecrets`, `priorityClassName`, `serviceAccountAnnotations`). No check requires an option description, so a new option can arrive without one. The catalog generator (`docs/scripts/package-catalog.py`) could refuse such an option once these are fixed.
