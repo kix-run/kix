@@ -459,6 +459,28 @@ let
         };
       };
     };
+    # The login every client must use, and a Prometheus provider, so the
+    # metrics Service, the ServiceMonitor, and the alerts are built. The
+    # package refuses a mode that disagrees with the availability level, so
+    # the instance is clustered wherever the cluster has several nodes:
+    # standalone at "none", clustered at "zone".
+    nats.module =
+      name:
+      { config, ... }:
+      {
+        instances.${name}.${name}.config.clustered = config.cluster.capabilities.multiNode or false;
+      };
+    nats.instances = {
+      nats-auth = {
+        package = packages.secret;
+        aliases = [ "natsAuth" ];
+        config.stringData = {
+          username = "app";
+          password = "password";
+        };
+      };
+      prometheus-operator.package = packages.prometheus-operator;
+    };
     # The static seal, the default, needs the key. A declared policy, role,
     # and engine give the reconcile Job data to apply.
     openbao = {

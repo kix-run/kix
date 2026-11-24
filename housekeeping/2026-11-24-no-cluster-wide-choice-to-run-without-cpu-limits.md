@@ -1,0 +1,3 @@
+# 2026-11-24 · `kix/lib/rules/reliability.nix` · A cluster that runs without CPU limits must clear the limit on every instance, and the scorecard then warns about each one.
+
+Many operators leave CPU limits off, because a limit throttles a container even when the node has idle CPU, and the request already guarantees its share. Packages set a CPU limit by default through `kix.options.resources`. A user can remove it for one instance by setting `resources.limits.cpu = null`, and there is no setting for the whole cluster. The rule `reliability.boundedResources` warns about every container with no `limits.cpu`, so a cluster that follows this practice gets a warning for each container.
