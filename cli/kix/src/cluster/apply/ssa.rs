@@ -39,7 +39,7 @@ pub enum ApplyError {
     },
 
     #[error(
-        "[K9044] field ownership conflict on {resource} (not updated). Another field manager owns Secret keys under `data` that the build also sets, and Kix did not overwrite them. Run the command again with `--force-conflicts` to write the build's values. To keep the values on the cluster, put them in the build (in `stringData` or the SOPS file) and deploy again. Kubernetes reported: {}", reported(.source)
+        "[K9044] field ownership conflict on {resource} (not updated). Another field manager owns keys in `data` with different values, so Kix did not overwrite them. Run the command again with `--force-conflicts` to write the build's values, or copy the cluster's values into `stringData` or the SOPS file and deploy again. Kubernetes reported: {}", reported(.source)
     )]
     SecretDataConflict {
         resource: String,

@@ -300,7 +300,7 @@ If you pass Flux's encrypted `Secret` manifest to `scope.mkSecret`, `kix plan` a
 
    Open `secrets/api-credentials.enc.yaml` before committing and confirm that `username` and `password` show `ENC[...]` values.
 
-### Adopt `api` and release Flux's fields
+### Adopt `api` and clear Flux field ownership
 
 1. Enable `instances.api.api` in `clusters/test.nix`, suspend the `api` `Kustomization`, run a dry run, and deploy:
 
@@ -319,9 +319,9 @@ If you pass Flux's encrypted `Secret` manifest to `scope.mkSecret`, `kix plan` a
 
 2. Clear `kustomize-controller` field ownership on the `api` resources.
 
-   Kix writes `Secret` values under `data`, so after `kix deploy test` the `kix` field manager owns every key of `api-credentials` alongside `kustomize-controller`. When the empty apply removes `kustomize-controller`, the keys stay because Kix still owns them.
+   Kix writes `Secret` values under `data`, so after `kix deploy test`, both `kix` and `kustomize-controller` own every key in `api-credentials`. Applying the stub manifest removes `kustomize-controller`, and the keys stay in place because Kix still owns them.
 
-   Preview `release-flux-api.yaml` with `--dry-run=server -o yaml` first and check that `data` still holds `username` and `password`. Then apply the stub file and verify with `kix plan test --reconcile`:
+   Preview `release-flux-api.yaml` with `--dry-run=server -o yaml` first and check that `api-credentials` still holds `username` and `password` under `data`. Then apply the stub file and verify with `kix plan test --reconcile`:
 
    <Command
      commands={[
@@ -331,7 +331,7 @@ If you pass Flux's encrypted `Secret` manifest to `scope.mkSecret`, `kix plan` a
      ]}
    />
 
-   If an older release of Kix deployed the `Secret`, it owns the keys under the write-only `stringData` field instead, and the preview shows `data` disappear. Run `kix deploy test --reconcile` first so that Kix writes the `Secret` again and owns its keys under `data`, then preview again.
+   If `data` disappears in the preview, an earlier version of Kix deployed `api-credentials` through the write-only `stringData` field and does not own `data` yet. Run `kix deploy test --reconcile` so Kix rewrites the `Secret` and takes ownership under `data`, then run the preview again before applying the stub file.
 
 ## Detach Namespaces from `infra` and uninstall Flux
 
