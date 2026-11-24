@@ -106,7 +106,12 @@ impl Fetcher {
                 .enable_all()
                 .build()
                 .map_err(|e| FetchError::Unreachable(e.to_string()))?;
+            // Some servers label a `.tar.gz` file with `Content-Encoding:
+            // gzip`. A client that decodes it would hash the unpacked tar, and
+            // the archive would fail its SHA-256 check. The text files this
+            // fetcher reads are a few kilobytes, so compression gains little.
             let client = reqwest::Client::builder()
+                .no_gzip()
                 .user_agent(format!("kix/{}", version::running().release()))
                 .connect_timeout(self.timeouts.0)
                 .read_timeout(self.timeouts.1)
@@ -480,6 +485,44 @@ mod tests {
         let out = site.path().join("out");
         fetcher.get_to_file("/big", &out).unwrap();
         assert_eq!(std::fs::metadata(&out).unwrap().len(), big.len() as u64);
+    }
+
+    #[test]
+    fn an_archive_labelled_gzip_encoded_downloads_unchanged() {
+        use std::io::{Read, Write as _};
+
+        let site = tempfile::tempdir().unwrap();
+        let bytes = std::fs::read(archive(site.path(), &[("kix/bin/kix", "x")])).unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let served = bytes.clone();
+        let server = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            let mut head = Vec::new();
+            let mut buf = [0u8; 1024];
+            while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+                let n = sock.read(&mut buf).unwrap();
+                assert!(n > 0, "the client closed before sending a request");
+                head.extend_from_slice(&buf[..n]);
+            }
+            let reply = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/gzip\r\n\
+                 Content-Encoding: gzip\r\nContent-Length: {}\r\n\r\n",
+                served.len()
+            );
+            sock.write_all(reply.as_bytes()).unwrap();
+            sock.write_all(&served).unwrap();
+            String::from_utf8(head).unwrap().to_ascii_lowercase()
+        });
+
+        let mut fetcher = Fetcher::new(Source::Https(base));
+        let out = site.path().join("out.tar.gz");
+        let digest = fetcher.get_to_file("/a.tar.gz", &out).unwrap();
+        let head = server.join().unwrap();
+
+        assert!(!head.contains("accept-encoding"), "{head}");
+        assert_eq!(std::fs::read(&out).unwrap(), bytes);
+        assert_eq!(digest, super::super::verify::hex(&Sha256::digest(&bytes)));
     }
 
     #[test]
