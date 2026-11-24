@@ -23,7 +23,6 @@ const HOW_TO_GROUPS: SectionGroup[] = [
 const REFERENCE_GROUPS: SectionGroup[] = [
   { slug: '_root', label: 'Core reference' },
   { slug: 'cli', label: 'CLI' },
-  { slug: 'package-catalog', label: 'Package catalog' },
 ];
 
 const NAVIGATION_INDEX_IDS = new Set([
@@ -86,7 +85,13 @@ export const GET: APIRoute = async (context) => {
   const tutorials = entries.filter((e) => normalizeId(e.id).startsWith('tutorials/')).sort(sortById);
   const explanations = entries.filter((e) => normalizeId(e.id).startsWith('explanation/')).sort(sortById);
   const howToEntries = entries.filter((e) => normalizeId(e.id).startsWith('how-to/')).sort(sortById);
-  const referenceEntries = entries.filter((e) => normalizeId(e.id).startsWith('reference/')).sort(sortById);
+  // The package catalog has a page for every package, which would push
+  // llms.txt past its size limit. Its index page lists them all, so only the
+  // index is linked here.
+  const referenceEntries = entries
+    .filter((e) => normalizeId(e.id).startsWith('reference/'))
+    .filter((e) => !normalizeId(e.id).startsWith('reference/package-catalog/'))
+    .sort(sortById);
 
   const renderGroupedSection = (
     sectionPrefix: string,
