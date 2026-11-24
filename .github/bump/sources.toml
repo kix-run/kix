@@ -1,9 +1,13 @@
 # Where each package's upstream releases come from. `detect.py` reads this
-# file once a week, compares upstream's newest release with the version each
-# package pins, and starts the bump workflow for each package that is behind.
+# file once a week, compares upstream's releases with the version each
+# package pins, and starts the bump workflow for each package that is
+# behind. The target is the newest release whose images the registry has.
+# The images come from the package: each default image whose tag names the
+# pinned version (`kix/packages/release-images.nix`).
 #
 # Each table is one upstream, and its name is the bump's name: the branch
-# `bump/<name>-<version>` and the change record `changes/bump-<name>.md`.
+# `bump/<name>-<version>` and the change record
+# `changes/bump-<name>-<version>.md`.
 #
 #   packages  Package names as `kix list packages` shows them, such as
 #             "grafana" or "experimental.cert-manager". Packages that share
@@ -18,6 +22,10 @@
 #             skips pre-release tags such as `v1.2.3-rc.1`.
 #   track     Optional. "major" stays within the pinned major version, and
 #             "minor" within the pinned minor version.
+#   through   Optional. "minor" moves one minor version at a time, for an
+#             upstream that supports no larger jump: to the newest patch of
+#             the pinned minor version, then to the newest patch of the
+#             next one. Each move is a bump of its own.
 #   skip      Optional. Versions not to move to, each with the reason.
 #   also      Optional. More package names whose folders the bump may
 #             change, for packages that set no `meta.version` but pin the
@@ -134,6 +142,10 @@ tags = '^pgbouncer_(\d+_\d+_\d+)$'
 packages = ["experimental.coredns"]
 repo = "https://github.com/coredns/coredns"
 
+[db-operator]
+packages = ["experimental.db-operator"]
+repo = "https://github.com/db-operator/db-operator"
+
 [descheduler]
 packages = ["experimental.descheduler"]
 repo = "https://github.com/kubernetes-sigs/descheduler"
@@ -187,6 +199,9 @@ repo = "https://github.com/keycloak/keycloak"
 [kubevirt]
 packages = ["experimental.kubevirt"]
 repo = "https://github.com/kubevirt/kubevirt"
+# KubeVirt supports an update from the latest patch of one minor version to
+# the next minor version.
+through = "minor"
 
 [loki]
 packages = ["experimental.loki"]

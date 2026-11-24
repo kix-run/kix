@@ -9,6 +9,8 @@
 
 let
   contract = kixlib.contracts.experimental.otlpEndpoint;
+  # A consumer or provider scope whose `fail` throws.
+  scope.fail = kixlib.fail;
 
   # What a kix.mkImport stand-in must publish.
   importOut = {
@@ -30,15 +32,14 @@ let
   };
 
   messagesOf = assertions: map (a: a.message) (builtins.filter (a: !a.assertion) assertions);
-  checks = out: (builtins.tryEval (contract.check "provider tracing/collector" out)).success;
+  checks = out: (builtins.tryEval (contract.check scope out)).success;
 in
 {
   # A provider out with every field passes `check` unchanged, extra fields
   # included; one without `tls`, with a non-boolean `tls`, or with a path
   # after the port is refused.
   otlp-endpoint-check-requires-every-field =
-    contract.check "provider tracing/collector" (providerOut // { queryUrl = "x"; })
-    == providerOut // { queryUrl = "x"; }
+    contract.check scope (providerOut // { queryUrl = "x"; }) == providerOut // { queryUrl = "x"; }
     && checks (providerOut // { tls = null; })
     && !checks importOut
     && !checks (providerOut // { tls = "no"; })
@@ -46,25 +47,24 @@ in
     && !checks (providerOut // { otlpGrpcUrl = "collector.example.net:4317"; });
 
   # A consumer's assertion accepts an import with only the URLs, and refuses
-  # one without `otlpGrpcUrl` with a message naming the consumer, the
-  # provider instance, and the field.
+  # one without `otlpGrpcUrl` with a message naming the provider instance
+  # and the field.
   otlp-endpoint-assertions-name-instance-and-field =
     let
       missing = messagesOf (
-        contract.assertions "app apps/app" (depOf (builtins.removeAttrs importOut [ "otlpGrpcUrl" ]))
+        contract.assertions (depOf (builtins.removeAttrs importOut [ "otlpGrpcUrl" ]))
       );
     in
-    messagesOf (contract.assertions "app apps/app" (depOf importOut)) == [ ]
-    && messagesOf (contract.assertions "app apps/app" (depOf providerOut)) == [ ]
+    messagesOf (contract.assertions (depOf importOut)) == [ ]
+    && messagesOf (contract.assertions (depOf providerOut)) == [ ]
     && builtins.length missing == 1
-    && lib.hasInfix "app apps/app" (builtins.head missing)
     && lib.hasInfix "tracing/collector" (builtins.head missing)
     && lib.hasInfix "otlpGrpcUrl is missing" (builtins.head missing);
 
   # An optional field is still checked when present.
   otlp-endpoint-assertions-check-present-fields =
     let
-      found = messagesOf (contract.assertions "app" (depOf (importOut // { tls = "yes"; })));
+      found = messagesOf (contract.assertions (depOf (importOut // { tls = "yes"; })));
     in
     builtins.length found == 1 && lib.hasInfix "tls is not" (builtins.head found);
 }

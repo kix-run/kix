@@ -16,7 +16,8 @@ use super::preview::saved_in_use;
 use super::route::{Route, Walk, stopped_lines, walk_from};
 use super::run::{Failures, Outcome, Run};
 use super::state::{self, Status, UpgradeState};
-use super::subprocess::{clusters, packages_in_use};
+use super::subject::Subject;
+use super::subprocess::packages_in_use;
 
 /// The phases of a run, in the order [`super::upgrade`] calls them.
 impl Run {
@@ -34,8 +35,9 @@ impl Run {
         if let Some(s) = resume {
             if s.before != before || !before.is_dir() {
                 return Err(refused(format!(
-                    "Cannot resume upgrade from Kix {from}: cached baseline builds were not found at {}.\nflake.nix and flake.lock remain at Kix {pinned}.\nNext: delete kix-upgrade.json and run `kix upgrade` to start a new comparison from Kix {pinned}.",
+                    "Cannot resume upgrade from Kix {from}: cached baseline builds were not found at {}.\nflake.nix and flake.lock remain at Kix {pinned}.\nNext: delete kix-upgrade.json and run `{command}` to start a new comparison from Kix {pinned}.",
                     before.display(),
+                    command = self.subject.command(),
                     from = from.release(),
                     pinned = self.pinned.release()
                 )));
@@ -63,19 +65,32 @@ impl Run {
         }
 
         println!("Upgrading Kix {} -> {}", from.release(), goal.release());
+        match &self.subject {
+            Subject::Input { name, clusters } if clusters.is_some() => {
+                println!(
+                    "Input `{name}` in flake.nix, used by {}",
+                    out::list(clusters.as_deref().unwrap_or_default())
+                );
+            }
+            Subject::Input { .. } => {}
+            Subject::Cluster { cluster, from, to } => {
+                println!("Cluster `{cluster}`, from input `{from}` to input `{to}`");
+            }
+        }
         if !route.without_notes.is_empty() {
             println!("{}", out::without_notes_line(&route.without_notes));
         }
         println!();
         let from_kix = self.kix(from)?;
-        let names = clusters(&from_kix, &self.dir).map_err(|e| miette!("{e}"))?;
+        let names = self.names(&from_kix).map_err(|e| miette!("{e}"))?;
         if names.is_empty() {
             return Err(refused(format!(
-                "Cannot upgrade: Kix {} found no clusters in this project.\nNo project files were modified.\nNext: add at least one cluster to the project, then run `kix upgrade` again.",
-                from.release()
+                "Cannot upgrade: Kix {} found no clusters in this project.\nNo project files were modified.\nNext: add at least one cluster to the project, then run `{}` again.",
+                from.release(),
+                self.subject.command()
             )));
         }
-        let in_use = packages_in_use(&from_kix, from, &self.dir);
+        let in_use = packages_in_use(&from_kix, from, &self.dir, &names);
         let built = self.build_all(&from_kix, from, &before);
         let failed: Vec<String> = built.failures.iter().map(|f| f.cluster.clone()).collect();
         println!(
@@ -108,8 +123,9 @@ impl Run {
         }
         println!("No project files were modified.");
         println!(
-            "Next: fix the build on Kix {}, then run `kix upgrade` again.",
-            from.release()
+            "Next: fix the build on Kix {}, then run `{}` again.",
+            from.release(),
+            self.subject.command()
         );
         Err(Halt::Stopped(EXIT_BUILD_FAILED))
     }
@@ -129,6 +145,16 @@ impl Run {
             from: route.from.release(),
             to: route.goal.release(),
             requested: Some(route.requested.clone()),
+            input: match &self.subject {
+                Subject::Input { name, .. } if name == kix::flake_lock::INPUT => None,
+                Subject::Input { name, .. } => Some(name.clone()),
+                Subject::Cluster { to, .. } => Some(to.clone()),
+            },
+            cluster: match &self.subject {
+                Subject::Cluster { cluster, .. } => Some(cluster.clone()),
+                Subject::Input { .. } => None,
+            },
+            clusters: self.subject.clusters(),
             status: Status::FixNeeded,
             steps: resume.map(|s| s.steps.clone()).unwrap_or_default(),
             records: by_kind(applying),
@@ -183,7 +209,7 @@ impl Run {
                 .collect();
         print_matching(&matching, previous_step, failing);
         println!();
-        for line in stopped_lines(failing, &route.goal, &route.steps) {
+        for line in stopped_lines(&self.subject, failing, &route.goal, &route.steps) {
             println!("{line}");
         }
         self.state_mut().status = Status::FixNeeded;

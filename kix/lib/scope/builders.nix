@@ -2,6 +2,7 @@
 
 let
   inherit (import ../core/error.nix { inherit lib; }) fail;
+  inherit (import ../core/util.nix { inherit lib; }) reasonSentence;
   kixAnnotations = import ../core/annotations.nix;
   kixKeys = kixAnnotations.keys;
   availabilityLib = import ../core/availability.nix { inherit lib; };
@@ -92,24 +93,29 @@ in
             builtins.seq (validators.checkRawPvc args) (
               builtins.seq loadBalancerWarnings (
                 builtins.seq metricsApiWarnings (
-                  k8s.mkResource (
-                    removeAttrs args [ "labels" ]
+                  (
+                    let
+                      res = k8s.mkResource (
+                        removeAttrs args [ "labels" ]
+                        // {
+                          namespace = namespaceResource;
+                          inherit clusterDomain;
+                          labels = clusterLabels // instanceLabels // labels;
+                          factBehavior = behavior;
+                          requires = (args.requires or [ ]) ++ dnsRequires;
+                        }
+                      );
+                    in
+                    res
                     // {
-                      namespace = namespaceResource;
-                      inherit clusterDomain;
-                      labels = clusterLabels // instanceLabels // labels;
-                      factBehavior = behavior;
-                      requires = (args.requires or [ ]) ++ dnsRequires;
+                      packageLabels = labels;
+                      _builtBy = builtBy;
+                      # Warnings raised while building the resource, outside the
+                      # manifest. `eval/instance.nix` collects them from the
+                      # instance's parts into its warnings.
+                      _warnings = res._warnings ++ loadBalancerWarnings ++ metricsApiWarnings;
                     }
                   )
-                  // {
-                    packageLabels = labels;
-                    _builtBy = builtBy;
-                    # Warnings raised while building the resource, outside the
-                    # manifest. `eval/instance.nix` collects them from the
-                    # instance's parts into its warnings.
-                    _warnings = loadBalancerWarnings ++ metricsApiWarnings;
-                  }
                 )
               )
             )
@@ -222,6 +228,8 @@ in
           # Highest availability level this workload supports (checked by
           # workloadCeilingOf), or null.
           workloadCeiling ? null,
+          # Why the workload cannot run above `workloadCeiling`, or null.
+          workloadCeilingReason ? null,
         }:
         let
           # Apply a builder ceiling to this workload only. Keep the package's
@@ -240,6 +248,8 @@ in
               packageCeiling == null || availabilityLib.rank workloadCeiling < availabilityLib.rank packageCeiling
             );
           effectiveCeiling = if builderIsLower then workloadCeiling else packageCeiling;
+          ceilingReason =
+            if builderIsLower then workloadCeilingReason else availability.ceilingReason or null;
           ceilingFrom =
             if builderIsLower then
               "builder"
@@ -263,7 +273,7 @@ in
             )
             // {
               ceiling = effectiveCeiling;
-              inherit ceilingFrom;
+              inherit ceilingFrom ceilingReason;
             };
           cappedConsequence =
             {
@@ -282,6 +292,7 @@ in
               "${workloadKind} '${workloadInput.name or "?"}' supports at most "
               + "\"${workloadCeiling}\" availability (the package sets `availability.max` on it). "
               + "Kix runs this workload at \"${workloadCeiling}\" instead of \"${availability.level}\", so it ${cappedConsequence}. "
+              + lib.optionalString (workloadCeilingReason != null) "${reasonSentence workloadCeilingReason} "
               + "Other workloads in this instance still run at \"${availability.level}\". "
               + "To run the whole instance at \"${workloadCeiling}\" and silence this warning, set `availability = \"${workloadCeiling}\";` on the instance.";
           };
@@ -374,7 +385,12 @@ in
           where = "${namespaceName}/${instanceName}";
           subject = "${kind} '${attrs.name or "?"}'";
           a = attrs.availability;
-          unknown = builtins.attrNames (removeAttrs a [ "max" ]);
+          unknown = builtins.attrNames (
+            removeAttrs a [
+              "max"
+              "reason"
+            ]
+          );
         in
         if !(attrs ? availability) then
           null
@@ -393,10 +409,17 @@ in
         else if unknown != [ ] then
           fail {
             instance = where;
-            message = "${subject} availability has unknown key(s) ${lib.concatStringsSep ", " unknown}. The only key is max.";
+            message = "${subject} availability has unknown attribute(s): ${lib.concatStringsSep ", " unknown}.";
+            fix = "Use only `max` and `reason` in availability.";
           }
         else if (a.max or null) == null then
           null
+        else if !builtins.isString (a.reason or "") then
+          fail {
+            instance = where;
+            message = "${subject} availability.reason must be a string, got ${builtins.typeOf a.reason}.";
+            fix = "Set availability.reason to a sentence explaining why this workload cannot run at a higher level, for example `availability.reason = \"Only one pod can write to the SQLite database at a time.\";`.";
+          }
         else
           availabilityLib.checkCeiling {
             value = a.max;
@@ -506,6 +529,7 @@ in
             workloadInput = baseArgs;
             workloadKind = kind;
             inherit selector hostNetwork workloadCeiling;
+            workloadCeilingReason = attrs.availability.reason or null;
           });
 
       # Process a CronJob's nested pod template through the same validation,
@@ -571,6 +595,7 @@ in
             workloadInput = baseArgs;
             workloadKind = kind;
             inherit selector hostNetwork workloadCeiling;
+            workloadCeilingReason = attrs.availability.reason or null;
           });
 
       mkJob =
@@ -611,6 +636,11 @@ in
 
           workloadCeiling = workloadCeilingOf kind attrs;
 
+          # A Job's pod template is immutable, so a changed Job that kept its
+          # name could never be applied. Every Job therefore carries the rerun
+          # rule, and the deploy recreates it when its content changes. A value
+          # the package sets wins, so the cross-resource check still refuses
+          # one it does not support.
           baseArgs =
             removeAttrs attrs [
               "spec"
@@ -620,6 +650,10 @@ in
               inherit apiVersion kind;
               spec = finalSpec;
               labels = selector // (attrs.labels or { });
+              annotations = {
+                ${kixKeys.rerun} = kixAnnotations.values.rerunOnChange;
+              }
+              // (attrs.annotations or { });
             };
         in
         withChecks
@@ -635,6 +669,7 @@ in
             workloadInput = baseArgs;
             workloadKind = kind;
             inherit selector hostNetwork workloadCeiling;
+            workloadCeilingReason = attrs.availability.reason or null;
           });
 
       # Apply workload validation to chart output. Skip checkNamespacedRefs
@@ -835,26 +870,30 @@ in
           readiness = k8s.validateReadiness "mkCRD ${instanceName}" "${group}/${crKind}" (
             attrs.readiness or null
           );
+          declaredBy = "scope.mkCRD ${plural}.${group} in ${namespaceName}/${instanceName}";
+          crRequires = k8s.validateCrRequires declaredBy "${group}/${crKind}" (attrs.crRequires or [ ]);
 
-          crdResource = builtins.seq readiness (scopeMkClusterResource {
-            apiVersion = "apiextensions.k8s.io/v1";
-            kind = "CustomResourceDefinition";
-            name = "${plural}.${group}";
-            inherit labels;
-            ownership = attrs.ownership or { };
-            extra = {
-              spec = crdSpec;
-            }
-            // lib.optionalAttrs (annotations != { }) {
-              metadata = { inherit annotations; };
-            };
-          });
+          crdResource = builtins.seq readiness (
+            builtins.seq crRequires (scopeMkClusterResource {
+              apiVersion = "apiextensions.k8s.io/v1";
+              kind = "CustomResourceDefinition";
+              name = "${plural}.${group}";
+              inherit labels;
+              ownership = attrs.ownership or { };
+              extra = {
+                spec = crdSpec;
+              }
+              // lib.optionalAttrs (annotations != { }) {
+                metadata = { inherit annotations; };
+              };
+            })
+          );
 
           crdBuilders = k8s.mkCRDBuilders {
             crdOrRef = crdResource;
             group = group;
             kind = crKind;
-            declaredBy = "scope.mkCRD ${plural}.${group} in ${namespaceName}/${instanceName}";
+            inherit declaredBy crRequires;
             inherit
               version
               servedVersions

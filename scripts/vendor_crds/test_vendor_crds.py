@@ -214,15 +214,17 @@ class Reconcile(unittest.TestCase):
     def test_write_then_check_then_drift(self):
         files = {"a.g.json": "A\n", "b.g.json": "B\n"}
         lines = self.driver.reconcile(self.dir, files, check=False)
-        self.assertEqual([l.split()[0] for l in lines], ["written", "written"])
+        self.assertEqual([line.split()[0] for line in lines], ["written", "written"])
         lines = self.driver.reconcile(self.dir, files, check=True)
-        self.assertEqual([l.split()[0] for l in lines], ["ok", "ok"])
+        self.assertEqual([line.split()[0] for line in lines], ["ok", "ok"])
         (self.dir / "a.g.json").write_text("edited\n")
         (self.dir / "stray.json").write_text("{}\n")
         lines = self.driver.reconcile(self.dir, files, check=True)
-        self.assertEqual([l.split()[0] for l in lines], ["STALE", "ok", "ORPHAN"])
+        self.assertEqual([line.split()[0] for line in lines], ["STALE", "ok", "ORPHAN"])
         lines = self.driver.reconcile(self.dir, files, check=False)
-        self.assertEqual([l.split()[0] for l in lines], ["written", "ok", "removed"])
+        self.assertEqual(
+            [line.split()[0] for line in lines], ["written", "ok", "removed"]
+        )
         self.assertFalse((self.dir / "stray.json").exists())
 
     def test_process_reports_errors_without_raising(self):

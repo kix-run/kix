@@ -43,7 +43,7 @@ Reference implementation: `kix/packages/stable/harbor/`.
 
 5. **Secrets are dependencies, checked before the first read**. A secret the package needs is a dependency named for its contract (`harborSecrets`, not `credentials`), read through one binding made by `kix.contracts.secret.helpers.use`, so a missing key fails with the secret's name before any `out.keyRef` throws. A dependency's own Secret (`database.out.credentials`) gets a local check instead, whose message names the database, because `deps.database` takes a database, not a Secret.
    ```nix
-   secrets = kix.contracts.secret.helpers.use { inherit who; arg = "harborSecrets"; dep = harborSecrets; keys = secretKeys; };
+   secrets = kix.contracts.secret.helpers.use { inherit scope; arg = "harborSecrets"; dep = harborSecrets; keys = secretKeys; };
    env = secrets.out.mkEnv { CORE_SECRET = "coreSecret"; JOBSERVICE_SECRET = "jobserviceSecret"; }
      ++ dbCredentials.out.mkEnv { POSTGRESQL_PASSWORD = "password"; };
    envFrom = [ { configMapRef.name = self.coreConfigMap.out.name; } ];
@@ -89,7 +89,7 @@ Reference implementation: `kix/packages/stable/harbor/`.
    ```
    The orphan warning tells you what you forgot.
 
-12. **`root` with `postHooks`**: for Jobs that must run AFTER the package is fully deployed (e.g., webhook cert patching, database migration). Post-hook resources must depend on forward-closure resources (typically root or its descendants) so wave ordering places them after the main package. The PackageInstance CR depends on them, so the package isn't "done" until post-hooks complete. Jobs use existing readiness (`status.succeeded >= 1`).
+12. **`root` with `postHooks`**: for Jobs that must run after the package's main resources are ready (for example, webhook certificate patching or a migration Job). Each entry in `postHooks` must depend on `root.resource` or an entry in `root.requires` (directly or through another resource) so Kix deploys it after those resources; otherwise Kix emits a warning. If a resource must finish before the instance is ready without waiting for `root.resource`, put it in `root.requires` instead. The `PackageInstance` depends on `postHooks`, so downstream consumers wait until they finish (`status.succeeded >= 1` for Jobs).
     ```nix
     root = {
       resource = self.service;

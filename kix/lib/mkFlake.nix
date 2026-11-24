@@ -25,7 +25,11 @@
     "x86_64-darwin"
     "aarch64-darwin"
   ],
-}:
+
+  # Arguments this library does not know. `unknownArguments` below refuses
+  # them unless a newer version of Kix in the same project may read them.
+  ...
+}@arguments:
 
 let
   lib = inputs.nixpkgs.lib;
@@ -57,6 +61,147 @@ let
         message = "kix.toml sets builder = ${builtins.toJSON value}, which is not a known builder (the Kix library supports: ${lib.concatStringsSep ", " builders}).";
         fix = "Check the spelling, or run `kix upgrade` if the project needs a newer Kix library.";
       };
+
+  # The clusters each Kix library input builds, from `[versions]` in
+  # kix.toml, or null when the project has one version of Kix.
+  versions = settings.versions or null;
+  inputOf =
+    name:
+    lib.findFirst (
+      # A newer version of Kix may write an entry that is not a list.
+      input: builtins.isList versions.${input} && builtins.elem name versions.${input}
+    ) null (builtins.attrNames versions);
+
+  # Return `cluster` when this library is the input that `[versions]` names
+  # for it. The flake's outputs read only the input `kix`, and Kix replaces
+  # that input with the cluster's own before it evaluates. Without the
+  # replacement, a cluster on another input would build with the library of
+  # `kix`, so it fails here. A cluster on `kix` cannot be checked, because
+  # the replaced input is not visible to the library.
+  onItsLibrary =
+    name: cluster:
+    let
+      input = inputOf name;
+      listed = lib.concatMapStringsSep ", " (i: "`${i}`") (builtins.attrNames versions);
+    in
+    if versions == null then
+      cluster
+    else if input == null then
+      fail {
+        message = "Cluster '${name}' in flake.nix is missing from kix.toml [versions].";
+        fix = "Add \"${name}\" to one of the input lists in kix.toml [versions] (${listed}).";
+      }
+    else if input == "kix" then
+      cluster
+    else if !(inputs ? ${input}) then
+      fail {
+        message = "kix.toml [versions] assigns cluster '${name}' to input `${input}`, which is missing from flake.nix.";
+        fix = "Add `inputs.${input}.url = \"github:kix-run/kix/v<version>\";` to flake.nix, then run `kix upgrade ${input}` to lock it.";
+      }
+    else if (inputs.kix.outPath or null) != inputs.${input}.outPath then
+      fail {
+        message = "Cluster '${name}' is assigned to input `${input}` in kix.toml [versions], which pins a different Kix library than `inputs.kix`.";
+        fix = "Run `kix check ${name}` or `kix build ${name}` so Kix selects `${input}` automatically, or pass `--override-input kix <locked-${input}-ref>` to `nix`.";
+      }
+    else
+      cluster;
+
+  # The release tag that flake.lock records for the input `kix`, or null
+  # when the project has no lock or `kix` names no tag. Replacing the input
+  # for one evaluation does not change the file, so this is the newest
+  # version of Kix in the project.
+  lockedKixTag =
+    let
+      lockFile = if self == null then null else "${self}/flake.lock";
+      lock =
+        if lockFile != null && builtins.pathExists lockFile then
+          builtins.fromJSON (builtins.readFile lockFile)
+        else
+          { };
+      node = lock.nodes.${lock.root or "root"}.inputs.kix or null;
+      ref = if builtins.isString node then lock.nodes.${node}.original.ref or null else null;
+    in
+    if ref == null then null else lib.removePrefix "refs/tags/" ref;
+
+  cargoToml = ../../cli/Cargo.toml;
+  libraryVersion =
+    if builtins.pathExists cargoToml then
+      (builtins.fromTOML (builtins.readFile cargoToml)).workspace.package.version
+    else
+      null;
+
+  # Split a Kix version such as `0.12.3` or `0.12.0-rc.1` into its three
+  # numbers and the parts of its pre-release label. Return null for text
+  # that is not a version, such as a branch name.
+  parseVersion =
+    text:
+    let
+      match = builtins.match "([0-9]+)\\.([0-9]+)\\.([0-9]+)(-([0-9A-Za-z.-]+))?" text;
+      pre = builtins.elemAt match 4;
+    in
+    if match == null then
+      null
+    else
+      {
+        numbers = map lib.toIntBase10 (lib.take 3 match);
+        pre = if pre == null then null else lib.splitString "." pre;
+      };
+
+  # Compare two parts of a pre-release label as semantic versioning does:
+  # numbers by value, and a number before a word.
+  comparePart =
+    a: b:
+    let
+      number = part: builtins.match "[0-9]+" part != null;
+    in
+    if number a && number b then
+      lib.compare (lib.toIntBase10 a) (lib.toIntBase10 b)
+    else if number a then
+      -1
+    else if number b then
+      1
+    else
+      lib.compare a b;
+
+  # Whether the version `a` is older than `b`. A pre-release is older than
+  # its release.
+  olderVersion =
+    a: b:
+    let
+      numbers = lib.compareLists lib.compare a.numbers b.numbers;
+    in
+    if numbers != 0 then
+      numbers < 0
+    else if a.pre == null then
+      false
+    else if b.pre == null then
+      true
+    else
+      lib.compareLists comparePart a.pre b.pre < 0;
+
+  # Whether this library is an older version of Kix than the release the
+  # project's input `kix` pins, which holds some clusters back on it
+  # (`[versions]`). Every version reads the same flake.nix, so an older one
+  # skips the arguments it does not know. The library of `kix` is the
+  # newest and checks them. A `kix` input on a branch names no release, so
+  # every library checks its arguments.
+  heldBack =
+    let
+      newest = if lockedKixTag == null then null else parseVersion (lib.removePrefix "v" lockedKixTag);
+      own = if libraryVersion == null then null else parseVersion libraryVersion;
+    in
+    versions != null && newest != null && own != null && olderVersion own newest;
+
+  unknownArguments = builtins.attrNames (
+    removeAttrs arguments [
+      "inputs"
+      "clusters"
+      "pins"
+      "clusterModules"
+      "packages"
+      "systems"
+    ]
+  );
 
   catalogPackages = import ../packages { inherit lib; };
   packagesByLevel = import ../packages/by-level.nix { inherit lib; };
@@ -139,21 +284,23 @@ let
                   kix.kixlib.pins pins;
             };
           in
-          if builtins.isFunction fn then
-            let
-              fArgs = builtins.functionArgs fn;
-              # functionArgs marks defaulted arguments as true. Omit `pins`
-              # when no shared file exists so the function's default applies.
-              wantsItsOwnDefault = pins == null && (fArgs.pins or false);
-              passArgs =
-                let
-                  all = lib.intersectAttrs fArgs available;
-                in
-                if wantsItsOwnDefault then builtins.removeAttrs all [ "pins" ] else all;
-            in
-            fn passArgs
-          else
-            fn
+          onItsLibrary name (
+            if builtins.isFunction fn then
+              let
+                fArgs = builtins.functionArgs fn;
+                # functionArgs marks defaulted arguments as true. Omit `pins`
+                # when no shared file exists so the function's default applies.
+                wantsItsOwnDefault = pins == null && (fArgs.pins or false);
+                passArgs =
+                  let
+                    all = lib.intersectAttrs fArgs available;
+                  in
+                  if wantsItsOwnDefault then builtins.removeAttrs all [ "pins" ] else all;
+              in
+              fn passArgs
+            else
+              fn
+          )
         ) clusters;
 
       resolvedClusters = resolveClusters kix;
@@ -313,9 +460,26 @@ let
     };
 
   systemOutputs = eachSystem perSystem;
+  # Refuse an argument this library does not know, when the outputs are
+  # read. The check reads the project's files through `self`, and the flake
+  # needs the names of the outputs before `self` exists, so it cannot wrap
+  # the whole set.
+  checked =
+    outputs:
+    if unknownArguments != [ ] && !heldBack then
+      fail {
+        message = "Unknown `mkFlake` argument ${
+          lib.concatMapStringsSep ", " (a: "`${a}`") unknownArguments
+        }${
+          lib.optionalString (libraryVersion != null) " in the Kix library ${libraryVersion}"
+        } (supported: inputs, clusters, pins, clusterModules, packages, systems).";
+        fix = "Check the spelling in flake.nix, or run `kix upgrade` if the project needs a newer Kix library.";
+      }
+    else
+      outputs;
 in
 {
-  packages = lib.mapAttrs (_: s: s.packages) systemOutputs;
-  checks = lib.mapAttrs (_: s: s.checks) systemOutputs;
-  legacyPackages = lib.mapAttrs (_: s: s.legacyPackages) systemOutputs;
+  packages = checked (lib.mapAttrs (_: s: s.packages) systemOutputs);
+  checks = checked (lib.mapAttrs (_: s: s.checks) systemOutputs);
+  legacyPackages = checked (lib.mapAttrs (_: s: s.legacyPackages) systemOutputs);
 }

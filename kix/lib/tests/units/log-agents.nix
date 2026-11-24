@@ -2,14 +2,14 @@
 # Vector agent they share (clickhouse-logs/vector-agent.nix): the locked
 # `settings` paths, the refused flags and env variables, the deps.loki
 # guard, the monitoring module's lokiLogs guard, the priorityClass
-# dependency, and the one-letter flags kix.guardArgs refuses. loki-logs runs
+# dependency, and the one-letter flags kix.mergeArgs refuses. loki-logs runs
 # in namespace `logs` next to a loki instance, clickhouse-logs in `chlogs`.
 #
 # builtins.tryEval drops the text of a `throw`. To read a refusal's message,
 # `caught` loads a file through builtins.scopedImport with `throw` bound to
 # a function that returns `{ thrown = <message>; }`, and so does the
 # `kix.fail` they call (see caught.nix). The packages are loaded
-# that way and given a kix whose mergeGuarded, guardArgs and mergeEnv come
+# that way and given a kix whose mergeGuarded, mergeArgs and mergeEnv come
 # from vocab/compose.nix loaded the same way, so a refusal renders its
 # message into the manifests: the ConfigMap's vector.yaml becomes
 # `{ "thrown": ... }`, a refused argument list becomes one `refused: ...`
@@ -39,10 +39,10 @@ let
   compose = caught ../../vocab/compose.nix { inherit lib; };
   renderingKix = {
     mergeGuarded = compose.mergeGuarded;
-    guardArgs =
+    mergeArgs =
       args: extraArgs:
       let
-        r = compose.guardArgs args extraArgs;
+        r = compose.mergeArgs args extraArgs;
       in
       if builtins.isAttrs r then [ "refused: ${r.thrown}" ] else r;
     mergeEnv =
@@ -223,9 +223,7 @@ let
     && settings ? thrown
     && builtins.all (f: lib.hasInfix f settings.thrown) fragments;
 
-  lokiWho = "loki-logs logs/loki-logs: ";
-  lockedMessage =
-    what: "${lokiWho}settings overrides ${what}, which the package sets for correctness.";
+  lockedMessage = what: "settings overrides ${what}, which this package sets itself.";
 in
 {
   # The default instance pushes to the loki instance's out.serviceUrl,
@@ -291,11 +289,9 @@ in
       && lokiLogsRefuses [
         (lockedMessage "sources.internal_metrics.type (replaced by `sources.internal_metrics = null`)")
       ] { settings.sources.internal_metrics = null; }
-      &&
-        lokiLogsRefuses [ "${lokiWho}settings overrides sinks.loki.type (replaced by `sinks.loki = null`)" ]
-          {
-            settings.sinks.loki = null;
-          }
+      && lokiLogsRefuses [ "settings overrides sinks.loki.type (replaced by `sinks.loki = null`)" ] {
+        settings.sinks.loki = null;
+      }
       && accepted.sinks.metrics.flush_period_secs == 30
       && accepted.sources.internal_metrics.scrape_interval_secs == 5
       && accepted.sinks.loki.tenant_id == "a"
@@ -316,7 +312,7 @@ in
       message = lokiLogsRefusal { settings.sinks = null; };
     in
     lokiLogsRefuses [
-      "${lokiWho}settings overrides "
+      "settings overrides "
       "sinks.metrics.type (replaced by `sinks = null`)"
       "sinks.metrics.address (replaced by `sinks = null`)"
       "sinks.loki.endpoint (replaced by `sinks = null`)"
@@ -336,17 +332,16 @@ in
         })).args;
     in
     (
-      lokiLogsRefuses [ "${lokiWho}extraArgs sets \"--config-dir\", which this package does not accept" ]
-        {
-          extraArgs = [
-            "--config-dir"
-            "/x"
-          ];
-        }
-      && lokiLogsRefuses [ "${lokiWho}extraArgs sets \"-c=/x\", which this package does not accept" ] {
+      lokiLogsRefuses [ "extraArgs sets \"--config-dir\", which this package does not accept" ] {
+        extraArgs = [
+          "--config-dir"
+          "/x"
+        ];
+      }
+      && lokiLogsRefuses [ "extraArgs sets \"-c=/x\", which this package does not accept" ] {
         extraArgs = [ "-c=/x" ];
       }
-      && lokiLogsRefuses [ "${lokiWho}extraArgs sets \"-c/x\", which this package does not accept" ] {
+      && lokiLogsRefuses [ "extraArgs sets \"-c/x\", which this package does not accept" ] {
         extraArgs = [ "-c/x" ];
       }
       &&
@@ -380,9 +375,9 @@ in
     in
     (
       lokiLogsRefuses [
-        "${lokiWho}env sets VECTOR_CONFIG_DIR, which comes from the package's settings, Vector's only config source. Put configuration in settings."
+        "env sets VECTOR_CONFIG_DIR, which comes from the package's settings, Vector's only config source. Put configuration in settings."
       ] { env.VECTOR_CONFIG_DIR = "/x"; }
-      && lokiLogsRefuses [ "${lokiWho}env sets VECTOR_SELF_NODE_NAME, which comes from the pod's node" ] {
+      && lokiLogsRefuses [ "env sets VECTOR_SELF_NODE_NAME, which comes from the pod's node" ] {
         env.VECTOR_SELF_NODE_NAME = "x";
       }
       && builtins.any (e: e.name == "VECTOR_LOG" && e.value == "debug") env
@@ -515,7 +510,7 @@ in
   # settings stay open.
   log-agents-clickhouse-logs-locked-settings =
     let
-      who = "clickhouse-logs chlogs/clickhouse-logs: settings overrides ";
+      who = "settings overrides ";
       accepted = vectorConfigOf "clickhouse-logs" (clickhouseLogsCluster {
         config.settings.sinks.clickhouse.batch.timeout_secs = 7;
       });
@@ -575,30 +570,38 @@ in
 
   # A one-letter owned flag also refuses its attached-value form; a long
   # flag that starts with the same letter, and the other letter case, pass.
-  log-agents-guard-args-short-flags =
+  log-agents-merge-args-short-flags =
     let
-      guard = compose.guardArgs {
-        who = "pkg ns/inst";
-        owned."-c" = "remove it.";
+      args = [
+        {
+          names = [ "-c" ];
+          reason = "the package renders the config.";
+        }
+      ];
+      guard = compose.mergeArgs {
+        scope.fail = (caught ../../core/error.nix { inherit lib; }).fail;
+        parser = "gnu";
+        inherit args;
       };
       passes =
-        args:
-        kixlib.guardArgs {
-          who = "pkg ns/inst";
-          owned."-c" = "remove it.";
-        } args == args;
+        extraArgs:
+        kixlib.mergeArgs {
+          scope.fail = kixlib.fail;
+          parser = "gnu";
+          inherit args;
+        } extraArgs == extraArgs;
     in
     (
-      guard [ "-c/etc/x" ] == {
-        thrown = "pkg ns/inst: extraArgs sets \"-c/etc/x\", which this package does not accept: remove it.";
-      }
+      lib.hasPrefix
+        "extraArgs sets \"-c/etc/x\", which this package does not accept: the package renders the config."
+        (guard [ "-c/etc/x" ]).thrown
       && builtins.isAttrs (guard [ "-c" ])
       && builtins.isAttrs (guard [ "-c=/x" ])
       && passes [ "--cache" ]
       && passes [ "-C/x" ]
       && passes [ "-v" ]
     )
-    || throw "guardArgs short flags: ${builtins.toJSON (guard [ "-c/etc/x" ])}";
+    || throw "mergeArgs short flags: ${builtins.toJSON (guard [ "-c/etc/x" ])}";
 
   # A cluster that declares a Kubernetes version Vector does not support is
   # refused with the change record's id, by both packages that run the

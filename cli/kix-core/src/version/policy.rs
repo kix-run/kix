@@ -134,7 +134,11 @@ impl fmt::Display for LibraryMismatch {
                 f,
                 "flake.lock pins Kix {pinned}, but flake.nix now asks for {}. {}",
                 self.library.release(),
-                crate::flake_lock::moved_tag_next_step(&self.pinned, &self.library)
+                crate::flake_lock::moved_tag_next_step(
+                    crate::versions::chosen_input(),
+                    &self.pinned,
+                    &self.library
+                )
             )
         } else {
             write!(

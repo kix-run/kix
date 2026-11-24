@@ -1,0 +1,3 @@
+# 2026-11-24 · `kix/lib/helm.nix` · `kix.helmChart` does not expose `deps`, `networkDeps`, `extraEdges`, `includeHooks`, `kubeVersion`, or `extraFlags`.
+
+Anyone starting with `kix.helmChart` who needs cross-package network policies (`deps` or `networkDeps`), ordering for a chart hook Job (`extraEdges` or `includeHooks`), extra `--api-versions` flags (`extraFlags`), or a matching `.Capabilities.KubeVersion` (`kubeVersion`) must rewrite the inline chart as a full package. `kix.helmChart` forwards only a fixed subset of arguments to `scope.helm.importChart`. `docs/src/content/docs/reference/helm-and-imports.mdx` documents these limits.

@@ -235,7 +235,6 @@ in
           in
           if v == null then
             scope.fail {
-              package = "clickhouse-cluster";
               option = "image.tag";
               message = "image.tag \"${builtins.unsafeDiscardStringContext config.image.tag}\" names no ClickHouse version. Packages that use this server check its version.";
               fix = "Set config.image.tag to a tag that starts with the version, such as \"${release}\".";
@@ -390,7 +389,6 @@ in
       in
       if (config.resources.limits.memory or null) == null then
         scope.fail {
-          package = "clickhouse-cluster";
           option = "resources.limits.memory";
           message = "resources.limits.memory is unset. ClickHouse sizes its memory cap from the container limit and falls back to the node's RAM without one.";
           fix = "Set config.resources.limits.memory.";
@@ -400,7 +398,7 @@ in
           installation = clickhouseOperator.out.mkClickHouseInstallation scope {
             inherit name;
             spec = kix.mergeGuarded {
-              who = "clickhouse-cluster (${name})";
+              inherit scope;
               # The Keeper address carries the netpol edge, the password
               # is the credentials dep, the users' network and
               # access_management are what lets clickhouse-database in,
@@ -577,7 +575,7 @@ in
               self.replicaIngress
               self.operatorEgress
             ];
-            out = contract.check "clickhouse-cluster (${name})" {
+            out = contract.check scope {
               httpUrl = "http://${self.service.out.fqdn}:${toString ports.http}";
               nativeEndpoint = "${self.service.out.fqdn}:${toString ports.native}";
               host = self.service.out.fqdn;

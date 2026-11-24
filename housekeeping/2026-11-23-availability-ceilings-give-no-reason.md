@@ -1,0 +1,3 @@
+# 2026-11-23 · `kix/packages` · No package sets `reason` on its availability ceiling, so the replica-guard error and the capped warnings never say why.
+
+`meta.availability` and `availability` on a workload builder take `reason`, and Kix adds it to the messages about the ceiling (`kix/lib/core/availability.nix`, `kix/lib/scope/builders.nix`, `kix/lib/plugins/availability/module.nix`). About 26 lines in `kix/packages` set a ceiling, and each keeps its reason in a comment beside it. Checklist item W3 in `.claude/skills/package-review/SKILL.md` now asks for `reason`, so every package review will raise it until the packages move their comments into the field.

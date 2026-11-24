@@ -29,16 +29,7 @@ impl CommandResponse for BuildResponse {
 }
 
 pub fn run(args: &BuildArgs, ctx: &mut CommandContext) -> Result<()> {
-    let spinner = output::spinner(format!("Evaluating cluster '{}'...", args.cluster));
-
-    let cluster_output = ctx.eval_cluster_or_suggest(&args.cluster);
-
-    if let Some(sp) = &spinner {
-        sp.finish_and_clear();
-    }
-
-    let cluster_output = cluster_output?;
-    output::library_warnings(&cluster_output.warnings);
+    let cluster_output = ctx.eval_cluster_or_suggest(&args.cluster)?;
 
     let response = BuildResponse {
         manifests: cluster_output.raw_manifests,

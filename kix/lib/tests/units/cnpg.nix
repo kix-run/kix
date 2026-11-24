@@ -382,7 +382,7 @@ in
         config.image.tag = "1.30.0";
       };
     in
-    (says ''image.tag "1.29.3" is not a CloudNativePG 1.30 release'' got && fine == [ ])
+    (says ''image.tag "1.29.3" is not a 1.30 release'' got && fine == [ ])
     || throw "cnpg-operator image refusal: ${builtins.toJSON { inherit got fine; }}";
 
   # Operator variables the package owns or refuses fail the build; another
@@ -1411,8 +1411,8 @@ in
       fine = messages { image.tag = "v0.16.0"; };
     in
     (
-      says ''image.tag "v0.15.1" is not a plugin-barman-cloud 0.16 release'' oldImage
-      && says ''sidecar.image.tag "v0.15.1" is not a plugin-barman-cloud 0.16 release'' oldSidecar
+      says ''image.tag "v0.15.1" is not a v0.16 release'' oldImage
+      && says ''sidecar.image.tag "v0.15.1" is not a v0.16 release'' oldSidecar
       && fine == [ ]
       && evalFails (backups {
         pluginConfig.extraArgs = [ "--server-address=:9091" ];
@@ -1450,7 +1450,7 @@ in
           availability = "none";
         }).meta.version;
       dir = ../../../packages/experimental/cnpg-barman-cloud;
-      stray = builtins.filter (u: !(lib.hasInfix "/v${release}/" u)) (
+      stray = builtins.filter (u: !(lib.hasInfix "/${release}/" u)) (
         urls (dir + "/crds/sources.txt") ++ urls (dir + "/rbac/sources.txt")
       );
     in

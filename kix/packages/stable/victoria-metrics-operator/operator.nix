@@ -296,32 +296,25 @@ in
 
   operatorDeployment =
     let
-      # The operator parses flags with Go's flag package, which reads
-      # `-flag` and `--flag` as the same flag, so both spellings are owned.
-      ownedFlags =
-        lib.concatMapAttrs
-          (flag: reason: {
-            "-${flag}" = reason;
-            "--${flag}" = reason;
-          })
+      # Info logging unless extraArgs picks another level. Keep the level
+      # flag first. Moving it changes the pod template, which restarts the
+      # operator when a cluster upgrades Kix. The operator parses flags with
+      # Go's flag package (internal/manager/manager.go upstream).
+      args = kix.mergeArgs {
+        inherit scope;
+        parser = "go";
+        args = [
+          { defaults = [ "--zap-log-level=info" ]; }
           {
-            "leader-elect" = "leader election keeps one replica active when multiple replicas run; remove it.";
-            "health-probe-bind-address" = "the liveness and readiness probes use :8081; remove it.";
-          };
-      # Info logging unless extraArgs picks another level.
-      setsLogLevel = builtins.any (a: builtins.match "--?zap-log-level(=.*)?" a != null) config.extraArgs;
-      # Keep the level flag first. Moving it changes the pod template, which
-      # restarts the operator when a cluster upgrades Kix.
-      args =
-        lib.optional (!setsLogLevel) "--zap-log-level=info"
-        ++ [
-          "--leader-elect"
-          "--health-probe-bind-address=:8081"
-        ]
-        ++ kix.guardArgs {
-          who = "victoria-metrics-operator ${ns}/${name}";
-          owned = ownedFlags;
-        } config.extraArgs;
+            flags = [ "--leader-elect" ];
+            reason = "leader election keeps one replica active when multiple replicas run.";
+          }
+          {
+            flags = [ "--health-probe-bind-address=:8081" ];
+            reason = "the liveness and readiness probes use port 8081.";
+          }
+        ];
+      } config.extraArgs;
 
       # The prometheus-operator converter is the compat contract for the
       # `prometheus` alias claim: every converter is pinned explicitly from

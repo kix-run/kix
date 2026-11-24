@@ -54,47 +54,48 @@
 let
   release = "v1.4.24";
   name = scope.instanceName;
-  who = "reloader ${scope.namespaceName}/${name}";
   reloadAnnotation = "secret.reloader.stakater.com/reload";
 
-  # Reasons follow guardArgs' "which this package does not accept: ".
-  replay = "the package sets it so that each new leader replays every Secret and restarts only the workloads whose Secret changed. Remove it.";
-  annotationName = "withReloadOn and meta.annotationDomains use the default annotation names. Remove it.";
-  ownedFlags = {
-    "--enable-ha" =
-      "every replica is a leader-election candidate, so only the leader restarts workloads. Remove it.";
-    "--reload-strategy" = replay;
-    "--reload-on-create" = replay;
-    "--sync-after-restart" = replay;
-    "--ignored-workload-types" =
-      "a reload of a CronJob would run a Job at every replay, and Job pods read the Secret when they start. Remove it.";
-    "--resources-to-ignore" =
-      "the package watches Secrets only; a Kix-built ConfigMap rolls its workload through a checksum/<name> pod annotation. Remove it.";
-    "--auto-reload-all" =
-      "the package leaves it off, because it would also restart workloads for Kix-built Secrets, which roll through a checksum/<name> pod annotation. Remove it.";
-    "--webhook-url" =
-      "the package leaves it unset, because with it reloader sends a webhook instead of restarting workloads. Remove it.";
-    "--configmap-annotation" = annotationName;
-    "--secret-annotation" = annotationName;
-    "--auto-annotation" = annotationName;
-    "--ignore-annotation" = annotationName;
-    "--configmap-auto-annotation" = annotationName;
-    "--secret-auto-annotation" = annotationName;
-    "--auto-search-annotation" = annotationName;
-    "--search-match-annotation" = annotationName;
-    "--pause-deployment-annotation" = annotationName;
-    "--pause-deployment-time-annotation" = annotationName;
-  };
-  # Flags the package neither sets nor supports: each needs RBAC the
-  # package does not grant.
-  unsupportedFlags = {
-    "--namespace-selector" =
-      "reloader then reads Namespaces, which the package's RBAC does not allow. Remove it.";
-    "--is-Argo-Rollouts" =
-      "reloader then updates argoproj.io Rollouts, which the package's RBAC does not allow. Remove it.";
-    "--enable-csi-integration" =
-      "reloader then watches secrets-store.csi.x-k8s.io resources, which the package's RBAC does not allow. Remove it.";
-  };
+  # Flags the package sets no value for and still owns.
+  refusedFlags = [
+    {
+      names = [ "--auto-reload-all" ];
+      reason = "--auto-reload-all would also restart workloads for Kix-built Secrets, which already roll through checksum/<name> pod annotations.";
+    }
+    {
+      names = [ "--webhook-url" ];
+      reason = "setting --webhook-url makes reloader send a webhook instead of restarting workloads.";
+    }
+    {
+      names = [
+        "--configmap-annotation"
+        "--secret-annotation"
+        "--auto-annotation"
+        "--ignore-annotation"
+        "--configmap-auto-annotation"
+        "--secret-auto-annotation"
+        "--auto-search-annotation"
+        "--search-match-annotation"
+        "--pause-deployment-annotation"
+        "--pause-deployment-time-annotation"
+      ];
+      reason = "workloads wired with reloader.out.withReloadOn and Kix's annotation checks use the default annotation names.";
+    }
+    # Flags the package neither sets nor supports: each needs RBAC the
+    # package does not grant.
+    {
+      names = [ "--namespace-selector" ];
+      reason = "--namespace-selector requires permission to read Namespaces, which this package's RBAC does not grant.";
+    }
+    {
+      names = [ "--is-Argo-Rollouts" ];
+      reason = "--is-Argo-Rollouts requires permission to update argoproj.io Rollouts, which this package's RBAC does not grant.";
+    }
+    {
+      names = [ "--enable-csi-integration" ];
+      reason = "--enable-csi-integration requires permission to watch secrets-store.csi.x-k8s.io resources, which this package's RBAC does not grant.";
+    }
+  ];
 
   # Flags whose values withReloadOn checks. Each is a pflag string slice:
   # repeats add to the list and each value is split on commas.
@@ -105,27 +106,15 @@ let
   ];
   valuesOf =
     extraArgs: flag:
-    let
-      bare = builtins.filter (arg: arg == flag) extraArgs;
-      set = builtins.filter (lib.hasPrefix "${flag}=") extraArgs;
-    in
-    if bare != [ ] then
-      scope.fail {
-        package = "reloader";
-        option = "extraArgs";
-        message = "extraArgs passes ${flag} without \"=\".";
-        fix = "Write ${flag}=<a,b>.";
-      }
-    else
-      builtins.filter (v: v != "") (
-        lib.concatMap (arg: lib.splitString "," (lib.removePrefix "${flag}=" arg)) set
-      );
+    builtins.filter (v: v != "") (
+      lib.concatMap (lib.splitString ",") (kix.argValues { parser = "gnu"; } flag extraArgs)
+    );
 
   fieldRef = path: { valueFrom.fieldRef.fieldPath = path; };
 in
 {
   meta = {
-    version = lib.removePrefix "v" release;
+    version = release;
     description = "Stakater Reloader, which restarts workloads when a Secret they reference changes outside Kix";
     owner = "platform";
     defaultAliases = [ "reloader" ];
@@ -145,6 +134,19 @@ in
       "deployment.reloader.stakater.com"
     ];
   };
+
+  # The flags in args, refusedFlags, and the RBAC rules follow `release`,
+  # and another release may lack a flag or need other rules.
+  assertions =
+    { config, ... }:
+    [
+      (kix.image.checkRelease {
+        inherit (config) image;
+        inherit release;
+        reason = "this package's flags and RBAC rules are written for Reloader ${release}";
+        fix = "To update this package to another version, change release in kix/packages/experimental/reloader/default.nix and check its flags against internal/pkg/util/util.go and its RBAC rules against the chart's clusterrole.yaml for that version.";
+      })
+    ];
 
   options = {
     image = kix.options.image {
@@ -180,8 +182,7 @@ in
         `--namespaces-to-ignore=a,b` skips namespaces. `withReloadOn`
         refuses a Secret outside what this reloader watches, and refuses
         every Secret while `--resource-label-selector` is set.
-        `--namespaces` and `--namespaces-to-ignore` cannot be combined, and
-        these three flags take their value after "=".
+        `--namespaces` and `--namespaces-to-ignore` cannot be combined.
 
         Refused: the flags that set the reload strategy (`--enable-ha`,
         `--reload-strategy`, `--reload-on-create`, `--sync-after-restart`,
@@ -233,67 +234,61 @@ in
           }
         ];
 
-        # With --sync-after-restart and --reload-on-create, the leader's
-        # initial list counts as a change to every Secret. The env-vars
-        # strategy then restarts only workloads whose stored
-        # STAKATER_<NAME>_SECRET hash differs from the Secret's.
-        baseArgs = [
-          "--log-format=json"
-          "--enable-ha=true"
-          "--reload-strategy=env-vars"
-          "--reload-on-create=true"
-          "--sync-after-restart=true"
-          # A reload of a CronJob creates a Job and stores no hash, so every
-          # replay would run it again. Job pods read the Secret when they
-          # start.
-          "--ignored-workload-types=jobs,cronjobs"
-          "--resources-to-ignore=configmaps"
-        ];
-        args =
-          baseArgs
-          ++ kix.guardArgs {
-            inherit who;
-            owned = ownedFlags // unsupportedFlags;
-          } config.extraArgs;
+        # reloader parses flags with cobra and pflag
+        # (internal/pkg/cmd/reloader.go upstream).
+        args = kix.mergeArgs {
+          inherit scope;
+          parser = "gnu";
+          args = [
+            "--log-format=json"
+            {
+              flags = [ "--enable-ha=true" ];
+              reason = "leader election ensures only one replica restarts workloads when multiple replicas run.";
+            }
+            # With --sync-after-restart and --reload-on-create, the leader's
+            # initial list counts as a change to every Secret. The env-vars
+            # strategy then restarts only workloads whose stored
+            # STAKATER_<NAME>_SECRET hash differs from the Secret's.
+            {
+              flags = [
+                "--reload-strategy=env-vars"
+                "--reload-on-create=true"
+                "--sync-after-restart=true"
+              ];
+              reason = "these flags let a new leader replay every Secret while restarting only workloads whose Secret changed.";
+            }
+            # A reload of a CronJob creates a Job and stores no hash, so
+            # every replay would run it again. Job pods read the Secret when
+            # they start.
+            {
+              flags = [ "--ignored-workload-types=jobs,cronjobs" ];
+              reason = "reloading a CronJob starts an extra Job on every leader replay, and Job pods already read the current Secret when they start.";
+            }
+            {
+              flags = [ "--resources-to-ignore=configmaps" ];
+              reason = "this package watches Secrets only; Kix-built ConfigMaps roll their workloads through checksum/<name> pod annotations.";
+            }
+          ]
+          ++ refusedFlags;
+        } config.extraArgs;
 
         read = lib.genAttrs readFlags (valuesOf config.extraArgs);
         watched = lib.unique read."--namespaces";
         ignored = read."--namespaces-to-ignore";
         labelSelector = read."--resource-label-selector";
-        # Forces every read flag, so a bare one fails the build even when no
-        # workload calls withReloadOn.
-        _flagsCheck = builtins.deepSeq read (
+        _flagsCheck =
           if watched != [ ] && ignored != [ ] then
             scope.fail {
-              package = "reloader";
               option = "extraArgs";
               message = "extraArgs sets both --namespaces and --namespaces-to-ignore. reloader ignores --namespaces-to-ignore when --namespaces is set.";
               fix = "Remove one.";
             }
           else
-            null
-        );
-
-        # The flags in baseArgs, ownedFlags, and the RBAC rules follow
-        # `release`; another release may lack a flag or need other rules.
-        imageTag = builtins.unsafeDiscardStringContext config.image.tag;
-        imageRef =
-          if
-            lib.versions.majorMinor (lib.removePrefix "v" imageTag)
-            == lib.versions.majorMinor (lib.removePrefix "v" release)
-          then
-            kix.image.ref config.image
-          else
-            scope.fail {
-              package = "reloader";
-              option = "image.tag";
-              message = "image.tag \"${imageTag}\" is not a ${lib.versions.majorMinor (lib.removePrefix "v" release)} release, and the flags and RBAC rules of this package follow reloader ${release}.";
-              fix = "To move to another release, change `release` in kix/packages/experimental/reloader/default.nix and check the flags against that release's internal/pkg/util/util.go and the rules against its chart clusterrole.yaml.";
-            };
+            null;
 
         env = kix.mkEnvVars (
           kix.mergeEnv {
-            inherit who;
+            inherit scope;
             owned = [
               {
                 vars = {
@@ -344,27 +339,23 @@ in
           in
           if kind == "Secret" || kind == "ConfigMap" then
             scope.fail {
-              package = "reloader";
               message = "${prefix} got ${kind} '${r.out.name or "?"}', whose content is part of the build.";
               fix = "Put \"checksum/<name>\" = <ref>.out.contentHash on the pod template instead, so the rollout appears in the deploy plan. reloader would restart the workload a second time.";
             }
           else if !(kind == "PackageInstance" && r ? out.keyRef) then
             scope.fail {
-              package = "reloader";
               message = "${prefix} takes Secrets from scope.mkSecretRef or a secret-ref dependency; got ${
                 if kind != null then kind else r._type or (builtins.typeOf r)
               }.";
             }
           else if labelSelector != [ ] then
             scope.fail {
-              package = "reloader";
               option = "extraArgs";
               message = "${prefix}: reloader watches only Secrets labelled ${lib.concatStringsSep "," labelSelector}, and Kix cannot check that Secret ${shown}, created outside Kix, carries them.";
               fix = "Remove --resource-label-selector to use withReloadOn.";
             }
           else if (watched != [ ] && !builtins.elem namespace watched) || builtins.elem namespace ignored then
             scope.fail {
-              package = "reloader";
               option = "extraArgs";
               message = "${prefix}: Secret ${shown} is in a namespace this reloader does not watch (extraArgs ${
                 if watched != [ ] then
@@ -398,22 +389,18 @@ in
           in
           if !builtins.isList refs || refs == [ ] then
             scope.fail {
-              package = "reloader";
               message = "${prefix} needs a non-empty list of Secrets.";
             }
           else if args ? _type then
             scope.fail {
-              package = "reloader";
               message = "${prefix} takes builder args; pipe them through it before scope.mkDeployment.";
             }
           else if args ? spec.jobTemplate || restartPolicy == "Never" || restartPolicy == "OnFailure" then
             scope.fail {
-              package = "reloader";
               message = "${prefix}: Job and CronJob pods read the Secret when they start; this reloader ignores them (--ignored-workload-types).";
             }
           else if !(args ? spec.template) then
             scope.fail {
-              package = "reloader";
               message = "${prefix}: reloader restarts only Deployments, DaemonSets, and StatefulSets, and these args have no spec.template.";
               fix = "Pass the builder args of one of those kinds.";
             }
@@ -505,7 +492,7 @@ in
                 containers = [
                   {
                     name = "reloader";
-                    image = imageRef;
+                    image = kix.image.ref config.image;
                     imagePullPolicy = config.image.pullPolicy;
                     inherit args env;
                     ports = [ (kix.port "http" 9090) ];

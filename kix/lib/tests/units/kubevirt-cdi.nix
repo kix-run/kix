@@ -576,12 +576,11 @@ in
       };
       movedEnv = envOf moved "kubevirt-operator";
 
-      releaseMessage = "kubevirt/{crds,rbac} are vendored from v1.10.0";
+      releaseMessage = "kubevirt/{crds,rbac} come from v1.10.0";
       refused = {
         older = refusedWith releaseMessage "kubevirt" { image.tag = "v1.4.1"; };
         newer = refusedWith releaseMessage "kubevirt" { image.tag = "v1.11.0"; };
         latest = refusedWith releaseMessage "kubevirt" { image.tag = "latest"; };
-        noV = refusedWith releaseMessage "kubevirt" { image.tag = "1.10.0"; };
         cdiMinor = refusedWith "is not a v1.66 release" "cdi" { image.tag = "v1.67.0"; };
         operandPullPolicy = refusedWith "operandImages.cdi-importer.pullPolicy" "cdi" {
           operandImages.cdi-importer.pullPolicy = "Always";
@@ -656,9 +655,9 @@ in
     in
     (
       got.kubevirt == [
-        "It conflicts with 'kubevirt' (cluster-wide). Conflicting instances: kubevirt2/kubevirt2"
+        "It conflicts with 'kubevirt' (cluster-wide). Conflicting instances: kubevirt2/kubevirt2."
       ]
-      && got.cdi == [ "It conflicts with 'cdi' (cluster-wide). Conflicting instances: cdi2/cdi2" ]
+      && got.cdi == [ "It conflicts with 'cdi' (cluster-wide). Conflicting instances: cdi2/cdi2." ]
       && evalFails kv2
       && evalFails cdi2
     )
@@ -680,7 +679,7 @@ in
         let
           release = (metaOf package).version;
         in
-        builtins.filter (u: !(lib.hasInfix "/v${release}/" u)) (
+        builtins.filter (u: !(lib.hasInfix "/${release}/" u)) (
           urls (dir + "/crds/sources.txt") ++ urls (dir + "/rbac/sources.txt")
         );
       got = {

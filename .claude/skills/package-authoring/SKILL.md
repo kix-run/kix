@@ -95,8 +95,8 @@ rewrites the later ones.
   unchanged. A field it cannot honour means a different alias, not a `null`
   (`v2_discussions/148_clickhouse_packages_plan.md:39`).
 - CRDs: vendor or `mkCRDRef` markers (crd-vendoring skill §1). An operator
-  with admission webhooks gets a gate Job on every handle on either route
-  (C21). Every declaration sets `holdsData`: `true` when deleting a custom
+  with admission webhooks lists a webhook-check Job in `crRequires` on every
+  `scope.mkCRD` or `scope.mkCRDRef` call for the kinds those webhooks admit (C21). Every declaration sets `holdsData`: `true` when deleting a custom
   resource of the kind loses data (a database, a storage pool, a backup),
   `false` otherwise (C24). A stateful package that renders a custom resource
   of a kind without it fails to build.
@@ -106,7 +106,7 @@ rewrites the later ones.
   that serves it, so the API server never calls a webhook whose pods are not
   ready. When it does (it writes its certificate into `caBundle` at startup,
   as CloudNativePG does), the workload requires the configuration, and every
-  CRD handle makes its custom resources wait for a check Job (`cnpg-operator`,
+  CRD declaration lists a webhook-check Job in `crRequires` (`cnpg-operator`,
   C21). Either way, the deploy's dry run treats an unreachable webhook as not
   checked only when the deploy writes the webhook's Service or another object
   of the package; otherwise the deploy stops before it writes anything (C26).
@@ -191,8 +191,11 @@ is a finding from the upstream source, not a default.
    and in the header's `Limits:` line (grafana:67, 425; tempo:37). A
    program-wide limit is `meta.availability.max = "none";`; a limit that
    depends on config, wiring, or one workload is `availability.max` on that
-   builder (pattern table, "Ceilings"). W4 and W5 cover the singleton form:
-   a literal `replicas = 1` under the `none` ceiling.
+   builder (pattern table, "Ceilings"). Both accept an optional `reason`
+   string explaining why the software cannot run at a higher level. Kix
+   includes `reason` when it warns that availability was capped or rejects
+   more than one replica under `"none"`. W4 and W5 cover the
+   singleton form: a literal `replicas = 1` under the `none` ceiling.
 5. Load-serving workloads: O19 (the option form is the pattern table's
    "`pick`" row). Strategy: W8.
 6. Operator-placed operands map the level into the CR (`instances`,
@@ -208,7 +211,7 @@ is a finding from the upstream source, not a default.
 
 Lib: levels and `pick` in `kix/lib/core/availability.nix:15, 55`; `resolve`
 caps at the package ceiling with a warning (`:184-218`); builder ceilings in
-`kix/lib/scope/builders.nix:226-280`; the plugin derives spread and
+`kix/lib/scope/builders.nix:231-285`; the plugin derives spread and
 PDB from `replicas > 1`, warns on a one-replica root workload at `node` and
 above, and throws on `replicas > 1` under an effective `none`
 (`kix/lib/plugins/availability/module.nix:255-282, 292-323`). `every-package-evaluates`
@@ -245,7 +248,7 @@ the defaults fails there.
   result of `mkContract { name; alias; fields; remedyNoun ? ; extraProblems ? ;
   helpers ? { }; options ? null; }`. Every contract then has the same parts:
   `name`, `alias`, `fields`, `problems`, `check`, `assertions`, `require`,
-  `helpers`, and `options`. A field without `required` is required. The
+  `requireAs`, `helpers`, and `options`. A field without `required` is required. The
   contract's own functions go under `helpers`
   (`kix/contracts/stable/redis.nix`).
 - A package that renames a dependency sets `deps.<arg>.renamedFrom = { name
@@ -304,8 +307,11 @@ the defaults fails there.
   has a `meta.version` and an image the user can change (I11). Read the
   image of the main software, never a helper's (I12). The PackageInstance
   record, `kix plan`, and a consumer's `compatibleWith` check then report
-  what the instance runs. `meta.version` is the default release, without a
-  `v` prefix (M2).
+  what the instance runs. Set `meta.version` to the default upstream release
+  tag; Kix strips any leading `v` when reading `meta.version` (M2).
+- When the package vendors CRDs or RBAC from `release`, add
+  `kix.image.checkRelease` to `assertions` for every image tied to that
+  release (C8).
 
 ### 6. Secrets
 
@@ -335,14 +341,28 @@ pattern table has each form.
 - The hatch set is E1's.
 - Derive the lock lists from the DI wiring, because they are the same list:
   every path, flag (all spellings), and variable the package computes from a
-  dependency or option is locked through `kix.mergeGuarded`, `kix.guardArgs`
-  (owned flags derived from the owned env groups), and `kix.mergeEnv` owned
-  groups (E3, E6, E8; pattern table).
+  dependency or option is locked through `kix.mergeGuarded`, `kix.mergeArgs`
+  (declaring each owned flag once, with its value and reason, in `args`), and
+  `kix.mergeEnv` owned groups (E3, E6, E8; pattern table).
+- `kix.mergeArgs` requires `parser`. Check how the upstream program parses
+  flags at the pinned version, set the matching parser (`"gnu"`,
+  `"component-base"`, `"go"`, `"go-arg"`, or `"paerser"`), and cite the
+  upstream file in a comment at the call. Use `"component-base"` when a
+  pflag program runs through Kubernetes component-base `cli.Run` or passes
+  `WordSepNormalizeFunc` to `SetNormalizeFunc`, because those programs treat
+  `_` and `-` as the same character in flag names.
 - `env` accepts strings, so refuse the program's credential variables as
   literal strings (pattern table) and point at a `secretKeyRef` to a Secret
   managed outside Kix or at the secret dep (S1).
-- Bind `who = "<pkg> ${scope.namespaceName}/${name}"` once in the `let` and
-  pass it to every helper (Pr9).
+- Pass `inherit scope;` to `kix.mergeGuarded`, `kix.mergeEnv`,
+  `kix.mergeArgs`, `kix.checkSecretKeys`, and contract helpers that take an
+  attribute set (such as `kix.contracts.secret.helpers.use`,
+  `kix.contracts.smtp.helpers.settings`, and
+  `kix.contracts.oidc.helpers.client`). Pass `scope` to `<contract>.check`,
+  `<contract>.require`, `<contract>.requireAs`, and
+  `kix.contracts.redis.helpers.requirePlaintext`, and pass only the
+  dependency to `<contract>.assertions`, so errors report the instance and
+  package automatically (Pr9).
 
 ### 8. Option surface
 
@@ -413,15 +433,16 @@ stack trace (`docs/src/content/docs/reference/package-anatomy.mdx`,
 Kubernetes may run a Job's pod more than once on its own: it retries a
 failed pod up to `backoffLimit`, restarts the container under
 `restartPolicy = "OnFailure"`, and starts a new pod after an eviction or a
-node drain, possibly after the work finished. Kix runs a Job under
-`kix.run/rerun` again when its own content changes. So every Job a package
+node drain, possibly after the work finished. Kix also reruns every Job built
+with `scope.mkJob` when its content changes or its last run failed. So every Job a package
 writes must give the same result when it runs again. Check whether the work
 is done and stop early, or make each step idempotent (`IF NOT EXISTS`, an
 existence check before `CREATE`, an upsert, `kubectl annotate --overwrite`).
 Never generate a secret or append to a log in the Job without checking first
 (stackgres-database's bootstrap script is the model).
 
-A Job with `kix.run/rerun` reruns when its own manifest changes, including
+`scope.mkJob` adds `kix.run/rerun: on-change` automatically, so do not set
+that annotation yourself. A Job reruns when its own manifest changes, including
 any `checksum/*` annotations on its pod template. It also reruns when a
 Kix-built Secret or ConfigMap read by its pod (through a volume, `env`, or
 `envFrom`) changes; the Kix library includes those reads in
@@ -441,32 +462,41 @@ The only place in this skill with package line numbers. `pkg:N` is
 
 | Pattern | Reference |
 |---|---|
-| Release binding, digest, `who`, `startupSeconds` in one `let` | metabase:89-97 |
+| Release binding, digest, `startupSeconds` in one `let` | metabase:105-111 |
 | Shared release file for a release group | `immich/release.nix`, immich:121 |
 | Running version published from the image (`out.version`) | echo-server:228; among several images, valkey |
+| Image tag checked against the vendored release (`kix.image.checkRelease`) | cnpg-operator:237 |
 | Follower image tag with `tagText` and `mkDefault` | n8n:268-275, 308 |
 | `kix.contracts.secret.helpers.use`, read through the binding | metabase:158-163, 208, 264 |
 | `mergeEnv` defaults and owned groups | metabase:168-232 |
 | Discrete database variables through `keyRef`, owned `_FILE` twins | metabase:187-203 |
 | URL-shaped credential through `$(VAR)` | vaultwarden:143-147, 212-233 |
-| `guardArgs`, owned flags from owned env groups | keycloak:398 |
-| `mergeGuarded` on `settings` or `extraSpec` | tempo:386; cnpg-cluster:323, 430, 514 |
+| `mergeArgs`, owned flags stated once with their values | `cert-manager/controller.nix`:381-401 |
+| `mergeArgs`, refused flags from owned env groups | keycloak:404-429 |
+| `mergeArgs` with `defaults` that `extraArgs` can override | node-exporter:108-143; a default kept first, `victoria-metrics-operator/operator.nix`:303-317 |
+| `mergeArgs` with `parser = "go"`, `parser = "paerser"`, and `families` | loki:344; traefik:429, 495 |
+| `mergeArgs` with `parser = "component-base"` | descheduler:265-272 |
+| `mergeArgs` with a flag and its value as two words, written as a list item of `flags` | `clickhouse-logs/vector-agent.nix`:213-229; several values, spegel:301-303 |
+| `mergeArgs` on an attribute set of flags | victoria-metrics-agent:189-210 |
+| `argValues` to read what `extraArgs` gives a flag | external-dns:398; reloader:106-110 |
+| `mergeGuarded` on `settings` or `extraSpec` | tempo:447; cnpg-cluster:323, 430, 514 |
 | Migrations at start: Recreate, deadline from `startupSeconds`, probes | metabase:94-97, 252-256, 284-304 |
 | Config injection into a dependency | metabase:109-112; stackgres-database:120-125; cnpg-database:94-115 |
-| Contracts: consumer `assertions`, provider `check` | metabase:112; stackgres-database:554; keycloak:559; tempo:631 |
+| Contracts: consumer `assertions`, provider `check` | metabase:112; stackgres-database:553; keycloak:566; tempo:718 |
 | `pick` as an option default with `defaultText` | `cnpg-cluster/options.nix`:12-18 |
 | `pick` inline, header names the instance override (O19) | keycloak:256, header 74-76 |
 | `atLeast` | valkey:122 |
-| Ceilings: package-wide, per builder | tempo:276; valkey:561, `harbor/registry.nix`:245, `harbor/jobservice.nix`:338 |
+| Ceilings: package-wide, per builder | tempo:299; valkey:566, `harbor/registry.nix`:245, `harbor/jobservice.nix`:338 |
 | `kix.expose`, `exposure.urlOrNull` | metabase:172-175, 367 |
 | Metrics toggle that does not restart the workload | metabase:152-157; keycloak header 30-35 |
 | `kix.monitor` with alerts | openbao:393; clickhouse:626-636 and `alerts.nix` |
 | `kix.alerts` over a PodMonitor | `cnpg-cluster/alerts.nix`:54 |
-| `kix.healthCheck` with a script file | victoria-metrics-agent:358-375 |
+| `kix.reconcileErrorsAlert` for an operator | cnpg-operator:942; victoria-metrics-operator:346 (`job` labels) |
+| `kix.healthCheck` with a script file | victoria-metrics-agent:365-382 |
 | Checksum annotations from `out.contentHash`, `enableServiceLinks = false` | metabase:258-271 |
 | Facade: consumer-namespace Secret, server-namespace Job | clickhouse-database:1-36; stackgres-database |
 | Facade resources in the server's namespace named with the consumer's namespace | clickhouse-database:356 (`serverSideName`) |
-| A Job that runs again when its content changes: a fixed name, `kix.run/rerun` (never a hash in the name), and `checksum/*` only for resources reached over the network or the Kubernetes API | stackgres-database:449-465; clickhouse-database:506-523 |
+| Job whose inputs can change: fixed name with no content hash, `scope.mkJob` (sets `kix.run/rerun` automatically), and `checksum/*` only for resources reached over the network or the Kubernetes API | stackgres-database:449-464; clickhouse-database:506-522 |
 | Privileges injected into a facade, with the upstream file for each, and asserted on `out` | plausible:183-195, 213-253 |
 | Migrations in an init container sharing the server's env and mounts (`kix.withMountsOn [ "migrate" "plausible" ]`) | plausible:620-626, 693; vaultwarden:180-202, 277 |
 | One volume written by an init container and read by the main containers (two mount records, one `readOnly`) | n8n:499-513, 679-680 |
@@ -545,8 +575,8 @@ Cheap first. Each step assumes the earlier ones pass.
 F=--extra-experimental-features; P=pipe-operators
 git add -A kix/packages/experimental/<pkg> clusters kix/lib/tests                     # 0. the fetcher sees nothing untracked
 nix build .#cluster-<cluster> $F $P                                      # 1. the test cluster, every toggle on (use ./scripts/kix-manifests.sh . <cluster> ./result if it uses Helm); read its traces
-nix build .#checks.x86_64-linux.every-package-evaluates $F $P            # 2. defaults at none and zone, option contract, settings entry
-nix build .#checks.x86_64-linux.kix-lib-tests $F $P                      # 3. unit tests, negative tests with controls
+nix build .#checks.x86_64-linux.kix-lib-tests $F $P                      # 2. unit tests, negative tests with controls
+nix develop -c bash -c 'cd cli && cargo test -p kix-cli --test commands_test -- --ignored flake_checks_evaluate_with_helm'  # 3. every-package-evaluates (defaults at none and zone, option contract, settings entry) and each cluster's PackageInstance wiring, with Helm charts rendered. Builds Kix and evaluates every cluster (about 10 minutes on 8 cores)
 nix build .#checks.x86_64-linux.rules-cluster-<cluster> $F $P            # 4. promtool check and the .rules-test.yaml (alerts only; use ./scripts/cluster-checks.sh if the cluster uses Helm)
 nix build .#checks.x86_64-linux.{clickhouse,postgres,gateway}-swap $F $P # 5. the contract's swap check (contract changes only)
 nix shell nixpkgs#uv -c uv run --frozen scripts/vendor-crds.py --check   # 6. CRDs only
@@ -682,10 +712,16 @@ prints `check-bump: PASS` and the upgrade deploy below has run.
   platform the old ones did: a release whose image publishing failed is
   followed by a fix release.
 - `.github/workflows/bump-detect.yml` reads `.github/bump/sources.toml` every
-  week to find new upstream releases. To skip a specific release, add
+  week to find new upstream releases. It picks the newest release whose images
+  are published in their registries, checking every image option whose default
+  `tag` contains the package's pinned version. Keep the release version in the
+  default `tag` of every image that upgrades with the package so the workflow
+  checks it. To skip a specific release, add
   `"<version>" = "<reason>"` to `skip` in the package's entry. To keep a
   package within its pinned major or minor version, set `track = "major"` or
-  `track = "minor"` with a comment explaining why.
+  `track = "minor"` with a comment explaining why. If upstream supports
+  upgrading only one minor version at a time, set `through = "minor"` with a
+  comment citing upstream's rule.
 - Read the notes of every release between the pinned version and the
   target. Release notes omit what a package depends on. Also compare
   upstream's own deployment files between the two versions (manifests, Helm
@@ -757,10 +793,6 @@ prints `check-bump: PASS` and the upgrade deploy below has run.
 `scripts/check-bump.sh` finds these and lists every place the old version
 still appears. Update each place, or say why it stays.
 
-- `cli/kix-cli/tests/snapshots/` when the package is in the example
-  cluster. The snapshots hold hashes that change too, so regenerate them
-  instead of editing them directly. From `cli/`: `nix develop .. -c env
-  INSTA_UPDATE=always cargo test -p kix-cli --test snapshot_test`.
 - `docs/src/command-output/`: leave these files alone. Each Kix release
   regenerates the captured command output in the docs, so
   `scripts/check-bump.sh` skips them.

@@ -11,8 +11,6 @@ pub mod export;
 pub mod gc;
 pub mod graph;
 pub mod graph_stream;
-pub mod images;
-pub mod inspect;
 pub mod list;
 pub mod logs;
 pub mod migrate;
@@ -112,6 +110,18 @@ impl CommandContext {
     /// that build the cluster read `StoreGraph::cluster_name` from the build
     /// instead.
     pub fn cluster_identity(&self, arg: &str, lookup: Lookup) -> miette::Result<String> {
+        self.cluster_identity_after(arg, lookup, || Ok(()))
+    }
+
+    /// Return the cluster name as [`CommandContext::cluster_identity`] does,
+    /// for a command that has not set up the project. `prepare` sets it up,
+    /// and runs only when step 3 has to evaluate.
+    pub fn cluster_identity_after(
+        &self,
+        arg: &str,
+        lookup: Lookup,
+        prepare: impl FnOnce() -> miette::Result<()>,
+    ) -> miette::Result<String> {
         let flake_path = match resolve_flake_path(&self.global.flake) {
             Ok(p) => p,
             Err(_) => return Ok(arg.to_string()),
@@ -127,6 +137,19 @@ impl CommandContext {
                 .await
                 .ok()
         });
+        if has_records != Some(true)
+            && let Err(e) = prepare()
+        {
+            return match lookup {
+                Lookup::Mutating => Err(e),
+                Lookup::ReadOnly => {
+                    eprintln!(
+                        "warning: could not load the project to check the deployed name of cluster '{arg}': {e}\nKix will look for '{arg}' on the Kubernetes cluster directly. If '{arg}' sets a different `name` in its cluster definition, fix the error above and run the command again."
+                    );
+                    Ok(arg.to_string())
+                }
+            };
+        }
         resolve_identity(arg, has_records == Some(true), lookup, || {
             kix::eval::eval_cluster_name(
                 &flake_path.to_string_lossy(),
@@ -152,13 +175,23 @@ impl CommandContext {
         )
     }
 
-    /// Evaluate a cluster, or return an error listing available clusters when `name` is not found.
+    /// Evaluate a cluster behind a spinner and print the library's
+    /// warnings, or return an error listing available clusters when `name`
+    /// is not found.
     pub fn eval_cluster_or_suggest(
         &mut self,
         name: &str,
     ) -> miette::Result<kix::eval::ClusterOutput> {
-        match self.evaluator()?.eval_cluster(name) {
-            Ok(o) => Ok(o),
+        let spinner = crate::output::spinner(format!("Evaluating cluster '{name}'..."));
+        let evaluated = self.evaluator()?.eval_cluster(name);
+        if let Some(sp) = &spinner {
+            sp.finish_and_clear();
+        }
+        match evaluated {
+            Ok(o) => {
+                crate::output::library_warnings(&o.warnings);
+                Ok(o)
+            }
             Err(kix::eval::error::KixEvalError::ClusterNotFound { name }) => {
                 Err(miette::miette!("{}", self.cluster_not_found(name)))
             }
@@ -236,6 +269,20 @@ pub(crate) fn build_flake(
             }
         })?;
     crate::output::clear_status_line();
+    crate::output::library_warnings(build.warnings());
+    Ok(build)
+}
+
+/// Read the build of `cluster` from the bundle at `path`, with the
+/// `--deployed-bundle` files in `deployed`, and print the library's
+/// warnings that the bundle carries.
+pub(crate) fn read_bundle(
+    path: &std::path::Path,
+    deployed: &[PathBuf],
+    cluster: &str,
+) -> miette::Result<Build> {
+    let build =
+        kix_bundle::read_build(path, deployed, cluster).map_err(|e| miette::miette!("{e}"))?;
     crate::output::library_warnings(build.warnings());
     Ok(build)
 }

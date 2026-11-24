@@ -1582,6 +1582,65 @@ in
           };
         };
 
+  # --- Helm ordering reads matchExpressions ---
+
+  # A chart PodDisruptionBudget and ServiceMonitor that select with
+  # matchExpressions get their edges, and an expression that excludes the
+  # target adds none.
+  lib-reference-checks-helm-edges-read-match-expressions =
+    let
+      inExpr = key: values: {
+        matchExpressions = [
+          {
+            inherit key values;
+            operator = "In";
+          }
+        ];
+      };
+      web = {
+        apiVersion = "apps/v1";
+        kind = "Deployment";
+        metadata.name = "web";
+        spec.template.metadata.labels.app = "web";
+      };
+      svc = {
+        apiVersion = "v1";
+        kind = "Service";
+        metadata = {
+          name = "web";
+          labels.app = "web";
+        };
+      };
+      pdb = name: selector: {
+        apiVersion = "policy/v1";
+        kind = "PodDisruptionBudget";
+        metadata.name = name;
+        spec = { inherit selector; };
+      };
+      monitor = name: selector: {
+        apiVersion = "monitoring.coreos.com/v1";
+        kind = "ServiceMonitor";
+        metadata.name = name;
+        spec = { inherit selector; };
+      };
+      edges = builtins.filter (e: e.type == "selects" || e.type == "monitors") (
+        helmDag.inferEdges [
+          web
+          svc
+          (pdb "in" (inExpr "app" [ "web" ]))
+          (pdb "out" (inExpr "app" [ "api" ]))
+          (monitor "in" (inExpr "app" [ "web" ]))
+          (monitor "out" (inExpr "app" [ "api" ]))
+        ]
+      );
+      got = map (e: "${e.from.kind}/${e.from.metadata.name}->${e.to.kind}") edges;
+    in
+    got == [
+      "PodDisruptionBudget/in->Deployment"
+      "ServiceMonitor/in->Service"
+    ]
+    || throw "helm edges: ${builtins.toJSON got}";
+
   # --- chart custom resources depend on the chart's CRD ---
 
   lib-reference-checks-chart-cr-depends-on-chart-crd =
@@ -1768,6 +1827,7 @@ in
         namespaceName = "edge";
         mkDeployment = d: d;
         selectorLabels = { };
+        inherit (kixlib) fail;
       };
       pkg = import ../../../packages/experimental/cloudflared {
         scope = stubScope;

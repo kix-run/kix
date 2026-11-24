@@ -6,7 +6,6 @@
 # Returns null when the cluster allows Falco, or the refusal message.
 { lib }:
 {
-  who,
   capabilities,
   provider ? null,
 }:
@@ -20,6 +19,6 @@ in
 if missing == [ ] then
   null
 else
-  "${who}: cluster.capabilities sets ${
+  "cluster.capabilities sets ${
     lib.concatMapStringsSep " and " (cap: "${cap} = false") missing
   }${on}. Falco runs a DaemonSet on every node with host mounts and the BPF, PERFMON, SYS_RESOURCE, and SYS_PTRACE capabilities, which this cluster does not allow. If the platform can grant them (a SecurityContextConstraints on OpenShift), set the capability to true in the cluster definition; otherwise remove the falco instance."

@@ -47,9 +47,19 @@ impl CommandResponse for StatusResponse {
 pub fn run(args: &StatusArgs, ctx: &mut CommandContext) -> Result<Exit> {
     let checks = document::selected(&args.checks);
     let global = ctx.global.clone();
+    // A person types the cluster's key in flake.nix. Its deploy records
+    // carry its name, which differs when the definition sets one.
+    let cluster = match args.cluster.as_deref() {
+        Some(arg) => Some(
+            ctx.cluster_identity_after(arg, super::Lookup::ReadOnly, || {
+                crate::dispatch::prepare_evaluation(&global, Some(arg))
+            })?,
+        ),
+        None => None,
+    };
     let (observation, kubernetes, notes) = ctx
         .runtime()?
-        .block_on(read_cluster(args.cluster.as_deref(), &global))?;
+        .block_on(read_cluster(cluster.as_deref(), &global))?;
     let doc = document::build(
         &observation,
         kubernetes,

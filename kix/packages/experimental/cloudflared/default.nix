@@ -39,8 +39,8 @@
 # derives no dependency or network policy from them. The metrics port
 # (2000) serves the probes; the package renders no ServiceMonitor.
 #
-# Upgrades: cloudflared keeps no state, so a pod on 2026.11.1 starts from
-# nothing that 2026.9.3 left, and each pod is replaced once. Both versions
+# Upgrades: cloudflared keeps no state, so a pod on 2026.11.2 starts from
+# nothing that 2026.11.1 left, and each pod is replaced once. Both versions
 # take the same flags and the same token. Cloudflare publishes no rule on
 # which versions can upgrade to which. To go back, set `image.tag` and
 # `image.digest` to the older image, or deploy the previous version of this
@@ -56,9 +56,8 @@
 }:
 
 let
-  release = "2026.11.1";
+  release = "2026.11.2";
   name = scope.instanceName;
-  who = "cloudflared ${scope.namespaceName}/${name}";
 in
 {
   meta = {
@@ -73,7 +72,7 @@ in
     image = kix.options.image {
       repository = "docker.io/cloudflare/cloudflared";
       tag = release;
-      digest = "sha256:e613aadbc2d9511785d2e67a86b0c8ac18dd63a3f9af0d06faf04cbfdcb35f2d";
+      digest = "sha256:55c7e3e8d89d5e8d20b75a82f3602cbf98e06db406e73e282073cfdc5a9a3af6";
     };
     replicas = lib.mkOption {
       type = lib.types.int;
@@ -114,7 +113,7 @@ in
     }:
     let
       token = kix.contracts.secret.helpers.use {
-        inherit who;
+        inherit scope;
         arg = "tunnelToken";
         dep = tunnelToken;
         keys = [ "token" ];

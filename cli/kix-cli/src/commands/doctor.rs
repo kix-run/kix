@@ -81,10 +81,51 @@ fn check_version(global: &GlobalArgs) -> usize {
             1
         }
     };
+    let failed = failed + check_versions(&dir);
     if let Some(line) = untracked_lock(&dir) {
         warn(&line);
     }
     failed
+}
+
+/// Report each version of Kix a project with a `[versions]` table in
+/// `kix.toml` holds, and the clusters on it. Return 1 when the table and
+/// `flake.lock` do not agree.
+fn check_versions(dir: &std::path::Path) -> usize {
+    let versions = match kix::versions::Versions::read(dir) {
+        Ok(Some(versions)) => versions,
+        Ok(None) => return 0,
+        Err(e) => {
+            fail("kix.toml [versions] is invalid");
+            detail(&e.to_string());
+            return 1;
+        }
+    };
+    let Ok(lock) = flake_lock::read(dir) else {
+        return 0;
+    };
+    if let Err(e) = versions.check(&lock, &kix::versions::flake_text(dir)) {
+        fail("kix.toml [versions] does not match flake.lock");
+        detail(&e.to_string());
+        return 1;
+    }
+    for input in versions.inputs() {
+        let what = match flake_lock::input(&lock, input).map(flake_lock::from_original) {
+            Ok(Ok(ProjectKix::Release(v))) => format!("pins Kix {}", v.release()),
+            Ok(Ok(ProjectKix::Development(from))) => {
+                format!("uses a development Kix library ({})", from.describe(input))
+            }
+            _ => "has an unknown version of Kix".to_string(),
+        };
+        let clusters = versions.clusters_of(input);
+        let used_by = if clusters.is_empty() {
+            "used by no clusters".to_string()
+        } else {
+            format!("used by {}", clusters.join(", "))
+        };
+        ok(&format!("Input {input} {what}, {used_by}"));
+    }
+    0
 }
 
 /// Return the warning for a project in Git whose `flake.lock` Git does not

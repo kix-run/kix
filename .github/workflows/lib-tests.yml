@@ -3,12 +3,14 @@ name: Library tests
 # Runs the kix/lib evaluation test suite (kix/lib/tests), the flake check
 # `kix-lib-tests`. The suite is plain Nix and needs no Helm rendering, so it
 # runs with `nix build` rather than through the kix render loop that
-# bundle-checks.yml uses for the cluster checks.
+# package-checks.yml uses for the cluster checks.
 
 on:
   pull_request:
     paths:
       - 'kix/**'
+      # Read by kix/lib/tests/units/cli-fixture.nix.
+      - 'clusters/test-cli-fixture.nix'
       - 'flake.nix'
       - 'flake.lock'
       - '.github/workflows/lib-tests.yml'
@@ -16,6 +18,8 @@ on:
     branches: [main]
     paths:
       - 'kix/**'
+      # Read by kix/lib/tests/units/cli-fixture.nix.
+      - 'clusters/test-cli-fixture.nix'
       - 'flake.nix'
       - 'flake.lock'
       - '.github/workflows/lib-tests.yml'

@@ -14,7 +14,6 @@
 let
   common = import ./common.nix { inherit lib; };
   name = scope.instanceName;
-  who = common.who scope;
   labels = (common.labels name).startupapicheck;
 
   inherit (scope.rbac)
@@ -58,7 +57,6 @@ in
     # its own content changes. The checksum annotations below put the
     # content of the webhook and of what serves it into that content, so the
     # check runs again when any of them changes.
-    annotations.${kix.keys.rerun} = kix.keyValues.rerunOnChange;
     requires = builtins.attrValues apiCheckRoles;
     spec = {
       backoffLimit = 4;
@@ -82,12 +80,7 @@ in
           containers = [
             {
               name = "cert-manager-startupapicheck";
-              image = kix.image.ref (
-                common.checkRelease who config [
-                  "startupapicheck"
-                  "image"
-                ]
-              );
+              image = kix.image.ref config.startupapicheck.image;
               imagePullPolicy = config.startupapicheck.image.pullPolicy;
               args = [
                 "check"

@@ -138,7 +138,6 @@
 let
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "envoy-gateway ${ns}/${name}";
 
   # The proxy's stats port (internal/xds/bootstrap/bootstrap.go).
   proxyStatsPort = 19001;
@@ -561,7 +560,8 @@ in
           what: spec:
           kix.mergeGuarded
             {
-              inherit who what;
+              inherit scope;
+              option = what;
               locked = [
                 [ "targetRef" ]
                 [ "targetRefs" ]
@@ -630,8 +630,8 @@ in
             }
           else
             kix.mergeGuarded {
-              inherit who;
-              what = "proxySpec";
+              inherit scope;
+              option = "proxySpec";
               locked = [
                 [
                   "provider"
@@ -675,7 +675,7 @@ in
         proxySpec = lib.recursiveUpdate proxyMerged proxySpread;
 
         gatewayCrds = kix.contracts.experimental.gatewayApi.helpers.crdsFor {
-          who = "${ns}/${name}";
+          inherit scope;
           inherit gatewayApi;
           kinds = [
             "Gateway"
@@ -889,7 +889,7 @@ in
         root = {
           resource = self.gateway;
           requires = builtins.filter (p: p != null) [ self.httpsRedirect ];
-          out = kix.contracts.gateway.check who {
+          out = kix.contracts.gateway.check scope {
             gatewayRef = {
               name = self.gateway.out.name;
               namespace = ns;

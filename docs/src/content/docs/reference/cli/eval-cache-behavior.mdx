@@ -85,7 +85,12 @@ once for each command that uses the cache.
 
 Kix does not use the cache when you pass `--override-input`, because the
 fingerprint describes the inputs in `flake.lock` and an override replaces one
-of them.
+of them. For the same reason, clusters assigned to an input other than `kix` in
+[`[versions]`](/docs/reference/kix-toml/#the-versions-table) do not use the
+cache: Kix overrides `kix` with that cluster's input during evaluation, so those
+clusters evaluate from source each time. Moving a cluster to `kix` in a tracked
+`kix.toml` also invalidates any earlier cache entry because both the source
+fingerprint and the running Kix version change.
 
 Kix evaluates every time, and stores nothing, when Nix gives the project no
 fingerprint. This happens in a Git repository that has submodules and

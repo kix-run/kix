@@ -224,6 +224,7 @@ fn refusal_title(r: &AdmissionRefusal) -> String {
             format!("admission webhook {w} is unreachable")
         }
         (RefusalReason::WebhookUnreachable, None) => "an admission webhook is unreachable".into(),
+        (RefusalReason::SopsNotFlat, _) => "its SOPS file has a nested or empty value".into(),
         (RefusalReason::Other, _) => "refused".into(),
     }
 }
@@ -604,12 +605,22 @@ fn write_warnings_markdown(out: &mut String, plan: &Plan) -> fmt::Result {
         plan.warnings.len()
     )?;
     writeln!(out)?;
-    writeln!(out, "```text")?;
-    for w in &plan.warnings {
-        writeln!(out, "{}", w.describe("  "))?;
-    }
-    writeln!(out, "```")?;
+    let body: String = plan
+        .warnings
+        .iter()
+        .map(|w| w.describe("  ") + "\n")
+        .collect();
+    let fence = fence_for(&body);
+    write!(out, "{fence}text\n{body}{fence}\n")?;
     writeln!(out)
+}
+
+/// Return a Markdown code fence that `body` cannot close: a run of
+/// backticks longer than any run in `body`, and at least three. A warning
+/// can hold text from a bundle another machine made.
+fn fence_for(body: &str) -> String {
+    let longest = body.split(|c| c != '`').map(str::len).max().unwrap_or(0);
+    "`".repeat(longest.max(2) + 1)
 }
 
 /// Render the Markdown plan sections that follow the package diff.
@@ -817,6 +828,25 @@ mod tests {
         );
         plan.drift = Checked::found(drift);
         plan
+    }
+
+    /// A warning that holds a code fence stays inside the warnings block,
+    /// because the block's fence is longer than any run of backticks in it.
+    #[test]
+    fn a_warning_cannot_close_the_warnings_fence() {
+        let mut plan = plan_with(Vec::new());
+        plan.warnings = vec![kix::eval::library_record::LibraryRecord {
+            message: "before\n```\n# injected heading\n````".to_string(),
+            ..Default::default()
+        }];
+        let text = render_warnings_markdown(&plan);
+        let fences: Vec<&str> = text.lines().filter(|l| l.starts_with("```")).collect();
+        assert_eq!(fences.first(), Some(&"`````text"), "{text}");
+        assert_eq!(fences.last(), Some(&"`````"), "{text}");
+        assert!(
+            fences[1..fences.len() - 1].iter().all(|f| f.len() < 5),
+            "{text}"
+        );
     }
 
     fn drift(managers: &[&str], reverted: bool) -> DriftChange {

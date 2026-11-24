@@ -1,0 +1,3 @@
+# 2026-11-24 · `kix/lib` · A package cannot claim the names it creates inside an outside system, so two instances that pick the same name collide only at runtime.
+
+db-operator-database's database and role are named `<namespace>-<instance>` by DB Operator, so instance `c` in namespace `a-b` and instance `b-c` in namespace `a` both get `a-b-c`; the second shares the first one's database and resets its role's password. Kix's duplicate-resource check covers Kubernetes objects only. stackgres-database and clickhouse-database name databases and users on a shared server too. A library way to declare "this instance creates name N on server S", checked for duplicates across the cluster at evaluation, would turn these into build errors. Today each package's header warns instead.

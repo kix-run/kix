@@ -62,10 +62,6 @@
   kix,
 }:
 
-let
-  name = scope.instanceName;
-  who = "oidc-client ${scope.namespaceName}/${name}";
-in
 {
   meta = {
     description = "One application's OpenID Connect client at a multi-realm identity provider";
@@ -74,7 +70,7 @@ in
     defaultAliases = [ "oidc" ];
   };
 
-  deps.oidcProvider.assertions = dep: kix.contracts.experimental.oidcProvider.assertions who dep;
+  deps.oidcProvider.assertions = kix.contracts.experimental.oidcProvider.assertions;
 
   options.realm = lib.mkOption {
     type = lib.types.strMatching "[^/?#[:space:]]+";
@@ -95,7 +91,7 @@ in
       # dependency's own `root` is its PackageInstance record, which a
       # resource must not depend on.
       credentials = kix.contracts.secret.helpers.use {
-        inherit who;
+        inherit scope;
         arg = "oidcClient";
         dep = oidcClient;
         keys = kix.contracts.oidc.fields.credentials.keys;
@@ -110,7 +106,7 @@ in
 
       root = {
         resource = self.ready;
-        out = kix.contracts.oidc.check who (
+        out = kix.contracts.oidc.check scope (
           {
             issuerUrl = oidcProvider.out.issuerUrl config.realm;
             inherit credentials;

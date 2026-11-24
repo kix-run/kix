@@ -39,10 +39,9 @@ use kix::build_source::Build;
 use kix::cluster::activation::{Record, Records};
 use kix::cluster::binding::{self, BindingError, Connection};
 use kix::cluster::cancel::CancelToken;
-use kix::cluster::discovery;
 use kix::cluster::graph::ResourceGraph;
 use kix::cluster::kubernetes_version;
-use kix::cluster::prune_guard::{PruneGuard, Pruned};
+use kix::cluster::prune_guard::{self, Pruned, Removal};
 use kix::cluster::scheduler::{self, OnErrorPolicy, SchedulerConfig};
 use kix::cluster::stops;
 use kix::cluster::stream::DeployObserver;
@@ -440,16 +439,16 @@ async fn start_queued(
         }
     }
 
-    // The operator writes this deploy with its own Kix, so a cluster
-    // that Kix last deployed before a required stop fails here when
-    // the operator's Kix is past that stop's minor.
+    // The operator writes this deploy with its own Kix, so the build fails
+    // here when the operator's Kix would skip a required stop, or when a
+    // newer minor of Kix made the cluster's last deploy.
     let old_active = ctx
         .records
         .active(cluster)
         .await
         .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
     if let Err(refusal) = stops::check(
-        old_active.as_ref().and_then(|r| r.deployed_with.as_deref()),
+        old_active.as_ref(),
         kix::version::running(),
         &ctx.required_stops,
     ) {
@@ -459,7 +458,7 @@ async fn start_queued(
             .fail_queued(name, &reason)
             .await
             .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
-        events().warn_now("RequiredStopSkipped", &reason).await;
+        events().warn_now(refusal.event_reason(), &reason).await;
         return Ok(Action::await_change());
     }
 
@@ -755,14 +754,9 @@ async fn handle_delete(
             let ordered: Vec<ResourceId> = match ResourceGraph::from_manifests(&orphan_manifests) {
                 Ok(g) => g.reverse_topo_ids(),
                 Err(_) => all_rids.clone(),
-            }
-            .into_iter()
-            // Namespaces and CRDs stay, which also keeps the CRD this
-            // operator's own Activation records live in. See `never_pruned`.
-            .filter(|rid| !kix::manifest::lifecycle::never_pruned(rid.group_kind()))
-            .collect();
+            };
 
-            delete_closure(&ctx.client, &ctx.records, cluster, name, &ordered).await?;
+            delete_closure(&ctx.client, cluster, name, &ordered).await?;
         }
     } else {
         tracing::info!(
@@ -787,36 +781,42 @@ async fn handle_delete(
 }
 
 /// Delete a deleted record's resources in `ordered` order through
-/// [`PruneGuard`], preserving any object still referenced by another Kix
-/// cluster's current build (such as a shared ClusterRole). `cluster` is the
-/// record's Kix cluster; because the record remains listed while its finalizer
-/// is present, its own hash still counts as belonging to `cluster`.
+/// [`prune_guard::delete_in_order`], preserving any object still referenced by
+/// another Kix cluster's current build (such as a shared ClusterRole), and log
+/// what happened to each. Namespaces and CRDs stay, which also keeps the CRD
+/// this operator's own Activation records live in. `cluster` is the record's
+/// Kix cluster; because the record remains listed while its finalizer is
+/// present, its own hash still counts as belonging to `cluster`.
 async fn delete_closure(
     client: &Client,
-    records: &Records,
     cluster: &str,
     name: &str,
     ordered: &[ResourceId],
 ) -> Result<(), OperatorError> {
-    let discovery = discovery::discover_resources(client)
+    let removals = prune_guard::delete_in_order(client, cluster, ordered)
         .await
         .map_err(|e| OperatorError::DiscoveryError(e.to_string()))?;
-    let guard = PruneGuard::new(client.clone(), records.clone().into(), cluster);
-    for rid in ordered {
-        let Some((ar, scope)) = discovery::find(&discovery, &rid.group, &rid.kind) else {
-            continue;
-        };
-        match guard
-            .delete(ar, scope, rid, &kube::api::DeleteParams::default())
-            .await
-        {
-            Ok(Pruned::Deleted) => tracing::info!(name, resource = %rid, "Deleted"),
-            Ok(Pruned::Gone) => {}
-            Ok(kept) => {
+    for (rid, removal) in removals {
+        match removal {
+            Removal::NeverPruned => tracing::info!(
+                name,
+                resource = %rid,
+                "Kept while deleting Activation: Kix never deletes this kind automatically. Delete it with kubectl if you want to remove it"
+            ),
+            Removal::UnknownKind => tracing::warn!(
+                name,
+                resource = %rid,
+                "Not deleted while deleting Activation: Kubernetes does not recognize this kind. If its CustomResourceDefinition was removed, Kubernetes already deleted this object with it"
+            ),
+            Removal::Pruned(Pruned::Deleted) => tracing::info!(name, resource = %rid, "Deleted"),
+            Removal::Pruned(Pruned::Gone) => {}
+            Removal::Pruned(kept) => {
                 let reason = kept.kept_reason().unwrap_or_default();
                 tracing::info!(name, resource = %rid, "prune: {reason}");
             }
-            Err(e) => tracing::warn!(name, resource = %rid, error = %e, "Failed to delete"),
+            Removal::Failed(e) => {
+                tracing::warn!(name, resource = %rid, error = %e, "Failed to delete")
+            }
         }
     }
     Ok(())
@@ -858,6 +858,7 @@ pub fn error_policy(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kix::cluster::discovery;
 
     /// Only the start of a submitted deploy reruns a failed Job, once. The
     /// operator retries a resume and a repair, so they must not.
@@ -947,7 +948,10 @@ mod tests {
         let active = json!({
             "apiVersion": keys::API_VERSION,
             "kind": "Activation",
-            "metadata": { "name": "a-old", "labels": { (keys::CLUSTER_LABEL): "a" } },
+            "metadata": {
+                "name": "a-old",
+                "labels": { "app.kubernetes.io/managed-by": "kix", (keys::CLUSTER_LABEL): "a" },
+            },
             "status": { "phase": PHASE_ACTIVE },
         });
         let record = queued(dir.path(), Some(ELSEWHERE), None);
@@ -1103,7 +1107,10 @@ mod tests {
         let active = json!({
             "apiVersion": keys::API_VERSION,
             "kind": "Activation",
-            "metadata": { "name": "a-old", "labels": { (keys::CLUSTER_LABEL): "a" } },
+            "metadata": {
+                "name": "a-old",
+                "labels": { "app.kubernetes.io/managed-by": "kix", (keys::CLUSTER_LABEL): "a" },
+            },
             "status": { "phase": PHASE_ACTIVE },
         });
         let record = queued(dir.path(), Some(HERE), Some("1.30"));
@@ -1217,6 +1224,55 @@ mod tests {
             .filter(|r| r.contains("a-old"))
             .collect();
         assert!(supersedes.is_empty(), "{supersedes:?}");
+    }
+
+    /// A Queued build on a cluster that a newer minor of Kix last deployed
+    /// fails with its own event reason, and the Active record is left alone.
+    #[tokio::test]
+    async fn a_queued_build_on_a_cluster_a_newer_kix_deployed_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let active = json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": "Activation",
+            "metadata": {
+                "name": "a-old",
+                "labels": {
+                    "app.kubernetes.io/managed-by": "kix",
+                    (keys::CLUSTER_LABEL): "a",
+                },
+            },
+            "status": {
+                "phase": PHASE_ACTIVE,
+                (keys::RECEIPT_FIELD): {
+                    "builder": { "kixVersion": "99.0.0" },
+                    "source": { "gitCommit": "abc1234def5678" },
+                },
+            },
+        });
+        let record = queued(dir.path(), Some(HERE), None);
+        let api = FakeApi::new(vec![kube_system(HERE), active, record.clone()]);
+        let (result, after) = reconcile_on(&api, record).await;
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(after["status"]["phase"], PHASE_FAILED);
+        let reason = after["status"]["failure"]["reason"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(
+            reason.contains("last deployed with Kix 99.0.0 (from commit abc1234)")
+                && reason.contains("Nothing was applied"),
+            "{reason}"
+        );
+        let requests = api.requests();
+        assert!(
+            requests
+                .iter()
+                .any(|r| r.starts_with("POST ") && r.contains("/events")),
+            "{requests:?}"
+        );
+        assert!(
+            !requests.iter().any(|r| r.contains("a-old")),
+            "{requests:?}"
+        );
     }
 
     /// A Queued build whose definition leaves `k8sVersion` unset is not asked
@@ -1393,42 +1449,9 @@ mod tests {
             namespace: kix::manifest::types::CLUSTER_SCOPED.into(),
             name: name.into(),
         };
-        let client = api.client();
-        let discovery = discovery::discover_resources(&client).await.unwrap();
-        let records = Records::open_installed(&client, &discovery).unwrap();
-        delete_closure(&client, &records, "b", "b", &[rid("b-only"), rid("shared")])
+        delete_closure(&api.client(), "b", "b", &[rid("b-only"), rid("shared")])
             .await
             .unwrap();
         assert_eq!(api.names("ClusterRole"), vec!["shared"]);
-    }
-
-    /// A deleted record's objects are deleted through the API of their own
-    /// group, though `/apis` lists another group that serves a `Job` kind
-    /// first.
-    #[tokio::test]
-    async fn delete_closure_deletes_through_the_objects_group() {
-        use kix::cluster::fake_api::OTHER_JOB_GROUP;
-        let other_version = format!("{OTHER_JOB_GROUP}/v1alpha1");
-        let job = |api_version: &str| {
-            json!({
-                "apiVersion": api_version,
-                "kind": "Job",
-                "metadata": {
-                    "name": "x",
-                    "namespace": "app",
-                    "annotations": { (keys::ACTIVATIONS): "b1" },
-                },
-            })
-        };
-        let api = FakeApi::new([job("batch/v1"), job(&other_version)]);
-        let client = api.client();
-        let discovery = discovery::discover_resources(&client).await.unwrap();
-        let records = Records::open_installed(&client, &discovery).unwrap();
-        let rid = ResourceId::from_value(&job("batch/v1"));
-        delete_closure(&client, &records, "b", "b", &[rid])
-            .await
-            .unwrap();
-        assert!(api.names_of("batch/v1", "Job").is_empty());
-        assert_eq!(api.names_of(&other_version, "Job"), vec!["x"]);
     }
 }

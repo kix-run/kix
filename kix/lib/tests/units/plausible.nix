@@ -465,12 +465,20 @@ in
       mountsOf = c: map (m: m.name) c.volumeMounts;
       volumesOf = cluster: map (v: v.name) ((podSpecOf cluster).volumes or [ ]);
       configMaps = cluster: map (c: c.metadata.name) (ofKind "ConfigMap" (manifests cluster));
+      replicaWarnings =
+        cluster:
+        builtins.filter (
+          w: (w.dependency or null) == "clickhouseDatabase"
+        ) cluster.instances.web.plausible._diagnostics.warnings;
     in
     (
-      map (c: c.name) (inits two) == [
-        "migrate"
-        "replicate"
-      ]
+      builtins.length (replicaWarnings two) == 1
+      && replicaWarnings one == [ ]
+      &&
+        map (c: c.name) (inits two) == [
+          "migrate"
+          "replicate"
+        ]
       && builtins.elemAt migrate.command 0 == "/bin/sh"
       && lib.hasInfix "exec /entrypoint.sh db migrate" (builtins.elemAt migrate.command 2)
       && lib.hasInfix "> /run/plausible-replica/host" (builtins.elemAt migrate.command 2)

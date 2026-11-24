@@ -9,8 +9,6 @@
 
 let
   inherit (import ../core/resource.nix { inherit lib; }) resourcesIn;
-  kixAnnotations = import ../core/annotations.nix;
-  kixKeys = kixAnnotations.keys;
   imageRef = image.ref;
 
   # Reserve 90s after the retry window so one final check round can finish
@@ -152,7 +150,6 @@ in
           {
             name = "${name}-health";
             requires = builtins.filter waitsFor required ++ lib.optional requireRoot rootRes;
-            annotations.${kixKeys.rerun} = kixAnnotations.values.rerunOnChange;
             spec = {
               backoffLimit = 0;
               activeDeadlineSeconds = deadline;

@@ -11,7 +11,7 @@ The Reference section documents the options, functions, schemas, and policy rule
 
 | Page | Covers |
 | --- | --- |
-| [`kix.toml`](/docs/reference/kix-toml/) | Project configuration beside `flake.nix` that chooses whether Kix evaluates with the Kix runtime (`builder = "kix"`) or the machine's Nix (`builder = "nix"`). |
+| [`kix.toml`](/docs/reference/kix-toml/) | Project configuration beside `flake.nix` that chooses whether Kix evaluates with the Kix runtime (`builder = "kix"`) or the machine's Nix (`builder = "nix"`), maps clusters to Kix library inputs (`[versions]`), and sets how `kix upgrade` picks releases (`[upgrade]`). |
 | [Cluster configuration](/docs/reference/cluster-configuration/) | How to configure cluster-wide settings such as availability targets, namespaces, network policies, and scorecard enforcement. |
 | [Instances and composition](/docs/reference/instances-and-composition/) | How to declare package instances in a cluster, wire dependencies across namespaces, and stamp environments across teams. |
 | [Flavors and capabilities](/docs/reference/flavors-and-capabilities/) | Built-in provider profiles (`kix.flavors.*`) that pre-configure cloud capabilities, storage classes, and platform services. |
@@ -25,6 +25,7 @@ The Reference section documents the options, functions, schemas, and policy rule
 | [Composition helpers](/docs/reference/composition-helpers/) | Shorthand `kix.*` functions for environment variables, volume mounts, Services, ingress routes, monitoring, and health checks. |
 | [Secrets, CRDs, and RBAC](/docs/reference/secrets-crds-and-rbac/) | Specialized builders that validate Secret keys, CustomResourceDefinitions, and RBAC permissions at build time. |
 | [Helm and imports](/docs/reference/helm-and-imports/) | How to wrap upstream Helm charts as Kix packages and model pre-existing cluster services with `kix.mkImport`. |
+| [Package catalog](/docs/reference/package-catalog/) | Every built-in Kix package, with its stability level, `package` value, default software version, dependencies, and options. |
 
 ### Policy, validation, and runtime records
 
@@ -32,7 +33,7 @@ The Reference section documents the options, functions, schemas, and policy rule
 | --- | --- |
 | [Dependency contracts](/docs/reference/dependency-contracts/) | Shared `kix.contracts.*` schemas, credential rules (`out.credentials`), and `kix.mkImport` shapes for databases, Redis, mail (`smtp`), single sign-on (`oidc`), Gateways, and OpenTelemetry. |
 | [Scorecard and rules](/docs/reference/scorecard-and-rules/) | How build-time scorecard rules work, how to customize severities, and the full catalog of built-in checks. |
-| [Validation checks](/docs/reference/validation-checks/) | The 24 always-on cross-resource checks that verify selectors, ports, volumes, and CRD ordering on every build. |
+| [Validation checks](/docs/reference/validation-checks/) | The 25 always-on cross-resource checks that verify selectors, ports, volumes, and CRD ordering on every build. |
 | [Annotations, CRDs, and receipts](/docs/reference/annotations-crds-and-receipts/) | Bookkeeping `kix.run/*` annotations, in-cluster `Activation` and `PackageInstance` records, and deploy receipts. |
 
 ## I want to...

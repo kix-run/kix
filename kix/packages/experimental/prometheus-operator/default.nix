@@ -86,8 +86,6 @@ let
   # The operator, its config-reloader, and the vendored CRDs and ClusterRole
   # come from one upstream release.
   release = "v0.95.2";
-  minorOf =
-    tag: lib.mapNullable (m: "v${builtins.head m}") (builtins.match "v([0-9]+\\.[0-9]+)(\\..*)?" tag);
 
   # The labels the operator puts on the pods it creates for a resource,
   # by the resource's name.
@@ -115,7 +113,7 @@ let
 in
 {
   meta = {
-    version = lib.removePrefix "v" release;
+    version = release;
     # The operator has no leader election upstream, so a second replica
     # reconciles everything twice.
     availability.max = "none";
@@ -143,14 +141,13 @@ in
 
   assertions =
     { config, ... }:
-    let
-      imageTag = builtins.unsafeDiscardStringContext config.image.tag;
-    in
     [
-      {
-        assertion = minorOf imageTag == minorOf release;
-        message = "image.tag \"${imageTag}\" is not a ${toString (minorOf release)} release (upstream tags look like ${release}), and the CRDs and ClusterRole under kix/packages/experimental/prometheus-operator/{crds,rbac} are vendored from ${release}. Remove image.tag or set a ${toString (minorOf release)} tag. To move to another release, change release in kix/packages/experimental/prometheus-operator/default.nix and the tag in crds/sources.txt and rbac/sources.txt, then run uv run scripts/vendor-crds.py prometheus-operator.";
-      }
+      (kix.image.checkRelease {
+        inherit (config) image;
+        inherit release;
+        reason = "the CRDs and ClusterRole in kix/packages/experimental/prometheus-operator/{crds,rbac} come from ${release}";
+        fix = "To update this package to another version, change release in kix/packages/experimental/prometheus-operator/default.nix and the tag in crds/sources.txt and rbac/sources.txt, and then run uv run scripts/vendor-crds.py prometheus-operator.";
+      })
       {
         assertion = config.operandImages.prometheus-config-reloader.pullPolicy == null;
         message = "operandImages.prometheus-config-reloader.pullPolicy = \"${toString config.operandImages.prometheus-config-reloader.pullPolicy}\" has no effect: the operator gives the config-reloader sidecar the imagePullPolicy of the Prometheus or Alertmanager resource it runs in. Remove it, and set image.pullPolicy on the prometheus or alertmanager instance instead.";

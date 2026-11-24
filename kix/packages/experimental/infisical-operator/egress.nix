@@ -8,7 +8,6 @@
   # `address` is the normalised address, `scheme://host[:port][/path]`.
   check =
     {
-      who,
       clusterConfig,
       address,
       namespace,
@@ -98,9 +97,9 @@
     if !enforced || platformIntentCovers then
       null
     else if parsed == null then
-      "${who}: this cluster enforces egress policy, and the package cannot read a host and port from address ${address}, so it cannot tell whether the operator may reach it. Use a host name, or add a networkPolicy.platformIntents entry with namespace = \"${namespace}\", podSelector = ${selectorText}, and an egress rule that reaches the address."
+      "Cluster egress policy is enforced, and Kix could not parse a hostname and port from `address` (${address}) to verify that the operator can reach it. Use `http(s)://<hostname>[:<port>]` in `address`, or allow the traffic in `networkPolicy.platformIntents` with `namespace = \"${namespace}\"`, `podSelector = ${selectorText}`, and an egress rule for that address."
     else if port == 443 && !inCluster then
       null
     else
-      "${who}: this cluster enforces egress policy, and the package's network intent opens only TCP 443 to destinations outside the cluster, so the operator cannot reach ${address} and the default InfisicalConnection would never become ready. ${remedy}";
+      "Cluster egress policy blocks the operator from reaching `address` (${address}), so its `default` InfisicalConnection would never become ready. This package only opens outbound TCP port 443 to destinations outside the cluster. ${remedy}";
 }

@@ -65,14 +65,15 @@ pub(super) fn packages_in_use(
     kix: &Path,
     version: &Version,
     dir: &Path,
+    clusters: &[String],
 ) -> Option<BTreeSet<String>> {
     let mut in_use = BTreeSet::new();
-    for cluster in clusters(kix, dir).ok()? {
+    for cluster in clusters {
         let mut args = vec!["-o", "json", "list", "packages"];
         if !new_command_line(version) {
             args.push("--cluster");
         }
-        args.push(&cluster);
+        args.push(cluster);
         let out = run_kix(kix, dir, &args).ok()?;
         if out.trim().is_empty() {
             continue;

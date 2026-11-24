@@ -2143,9 +2143,9 @@ mod discovery_waits {
     use crate::manifest::types::CLUSTER_SCOPED;
 
     const CRD_GROUP: &str = "apiextensions.k8s.io";
-    /// The readiness loops measure time with `std::time::Instant`, which a
-    /// paused tokio clock does not advance, so a timeout here is real time.
-    const TIMEOUT: Duration = Duration::from_secs(1);
+    /// The tests run on a paused tokio clock, so the deploy's own timeout
+    /// costs no real time.
+    const TIMEOUT: Duration = DEFAULT_TIMEOUT;
 
     /// An established CRD that defines `kind` in `group`.
     fn crd(name: &str, group: &str, kind: &str) -> Value {
@@ -2544,7 +2544,7 @@ mod pending_restart_waits {
             &Scope::Namespaced,
             &rid,
             None,
-            Duration::from_secs(1),
+            DEFAULT_TIMEOUT,
             &CancelToken::new(),
             |_| {},
         )

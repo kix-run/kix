@@ -25,6 +25,8 @@
 
 let
   contract = kixlib.contracts.smtp;
+  # A consumer or provider scope whose `fail` throws.
+  scope.fail = kixlib.fail;
   secretPackage = import ../../../packages/stable/secret;
   pvcPackage = import ../../../packages/stable/persistent-volume-claim;
   vaultwardenPackage = import ../../../packages/experimental/vaultwarden;
@@ -250,7 +252,7 @@ let
       from ? null,
     }:
     contract.helpers.settings {
-      who = "app apps/app";
+      inherit scope;
       smtp = depOf out;
       inherit from;
     };
@@ -281,10 +283,7 @@ in
     && contract.problems (relayOut // { host = "smtp.example.org:465"; }) != [ ]
     && contract.problems (relayOut // { from = "noreply"; }) != [ ]
     && contract.problems (removeAttrs relayOut [ "from" ]) == [ ]
-    &&
-      builtins.length (
-        messagesOf (contract.assertions "app apps/app" (depOf (removeAttrs relayOut [ "tls" ])))
-      ) == 1;
+    && builtins.length (messagesOf (contract.assertions (depOf (removeAttrs relayOut [ "tls" ])))) == 1;
 
   # settings returns the port as a string and as a number, the server's
   # sender or the instance's, and the credentials; with no server, null.
@@ -310,7 +309,7 @@ in
       && (settingsOf { from = "app@example.org"; }).from == "app@example.org"
       &&
         contract.helpers.settings {
-          who = "app";
+          inherit scope;
           smtp = null;
         } == null
     )

@@ -42,7 +42,6 @@ let
   release = "9.1.3";
 
   name = scope.instanceName;
-  who = "valkey ${scope.namespaceName}/${name}";
 
   ports = {
     valkey = 6379;
@@ -276,7 +275,7 @@ in
         scrape = config.metrics.enabled && prometheus != null;
 
         password = kix.contracts.secret.helpers.use {
-          inherit who;
+          inherit scope;
           arg = "valkeyPassword";
           dep = valkeyPassword;
           keys = [ "password" ];
@@ -307,14 +306,12 @@ in
         } config.sentinel.primarySettings;
 
         refused =
-          conf.refusals who "settings" (conf.reservedSettings ports.valkey) config.settings
+          conf.refusals "settings" (conf.reservedSettings ports.valkey) config.settings
           ++
-            conf.refusals who "sentinel.primarySettings" conf.reservedPrimarySettings
+            conf.refusals "sentinel.primarySettings" conf.reservedPrimarySettings
               config.sentinel.primarySettings;
 
-        valkeyConf = lib.throwIf (refused != [ ]) (lib.concatStringsSep "\n" refused) (
-          conf.render lib.id valkeyDirectives
-        );
+        valkeyConf = if refused != [ ] then scope.fail refused else conf.render lib.id valkeyDirectives;
 
         sentinelConf = conf.render (k: "sentinel ${k} ${primarySet}") primaryDirectives;
 
@@ -424,27 +421,35 @@ in
           ];
         };
 
-        # redis_exporter parses flags with Go's flag package, which takes
-        # both `-flag` and `--flag`.
-        exporterOwned =
-          lib.concatMapAttrs
-            (flag: reason: {
-              "-${flag}" = reason;
-              "--${flag}" = reason;
-            })
-            {
-              "redis.addr" = "the exporter reads the local valkey-server; remove it.";
-              "redis.user" = "the exporter authenticates with the valkeyPassword password; remove it.";
-              "redis.password" = "the exporter authenticates with the valkeyPassword password; remove it.";
-              "redis.password-file" = "the exporter authenticates with the valkeyPassword password; remove it.";
-              "web.listen-address" =
-                "the metrics Service and probes use port ${toString ports.metrics}; remove it.";
-              "web.telemetry-path" = "the ServiceMonitor scrapes /metrics; remove it.";
-            };
-        exporterArgs = kix.guardArgs {
-          inherit who;
+        # redis_exporter parses flags with Go's flag package (main.go
+        # upstream).
+        exporterArgs = kix.mergeArgs {
+          inherit scope;
+          parser = "go";
           option = "metrics.extraArgs";
-          owned = exporterOwned;
+          args = [
+            {
+              names = [ "--redis.addr" ];
+              reason = "the exporter scrapes the valkey-server container in the same pod.";
+            }
+            {
+              names = [
+                "--redis.user"
+                "--redis.password"
+                "--redis.password-file"
+              ];
+              from = "the valkeyPassword secret dependency";
+              fix = "Remove it from metrics.extraArgs. To change the password, update the Secret wired to deps.valkeyPassword.";
+            }
+            {
+              names = [ "--web.listen-address" ];
+              reason = "the metrics Service and probes use port ${toString ports.metrics}.";
+            }
+            {
+              names = [ "--web.telemetry-path" ];
+              reason = "the ServiceMonitor scrapes /metrics.";
+            }
+          ];
         } config.metrics.extraArgs;
 
         metricsContainer = {
@@ -647,7 +652,7 @@ in
 
         root = {
           resource = self.mainService;
-          out = kix.contracts.redis.check who ({
+          out = kix.contracts.redis.check scope ({
             host = self.mainService.out.fqdn;
             port = toString ports.valkey;
             credentials = password;

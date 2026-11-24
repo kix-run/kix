@@ -39,7 +39,6 @@ let
         derived
       else
         scope.fail {
-          package = "cnpg-cluster";
           option = "metrics.maxBackupAge";
           message = "backup.schedule \"${config.backup.schedule}\" does not show how often base backups run, so CNPGBackupMissing has no threshold.";
           fix = "Set metrics.maxBackupAge to twice the longest gap between two runs plus the time a backup takes, such as \"15d\" for a weekly schedule.";

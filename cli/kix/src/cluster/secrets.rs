@@ -49,6 +49,31 @@ pub(crate) enum SecretError {
     #[error("failed to parse SOPS output as YAML/JSON for {path}: {message}")]
     ParseFailed { path: String, message: String },
 
+    /// A top-level value of the SOPS file is a map, a list, or null, so it has
+    /// no text to write as the value of a Secret key.
+    #[error(
+        "[K6746] SOPS file {file}: top-level key \"{key}\" is {found}\n      \
+         Kix cannot build this Secret from the file; any existing Secret on the cluster is unchanged.\n\n      \
+         Each top-level key in {file} becomes a Secret key, so every value must be a string, a number, `true`, or `false` (store JSON for a single key as a string). \
+         Use a flat YAML or JSON map (local deploys also accept dotenv; bundles do not). \
+         INI files cannot be used because `sops` groups keys into section maps such as \"DEFAULT\".\n\n      \
+         If {file} is an encrypted Kubernetes Secret manifest (for example from Flux):\n        \
+         1. Check `.sops.yaml`: the rule matching <new-file> must not set `encrypted_regex` (`^(data|stringData)$` leaves a flat file in plain text).\n        \
+         2. Extract the keys and encrypt the new file:\n             \
+         sops decrypt --extract '[\"stringData\"]' <flux-file> > <new-file>\n             \
+         sops encrypt --in-place <new-file>\n           \
+         If the manifest uses `data` instead of `stringData`, base64-decode those values before encrypting.\n        \
+         3. Confirm every value in <new-file> is `ENC[...]`, and delete any plain-text copies.\n      \
+         Then run `kix deploy` again (for a bundle, build a new one with `kix bundle <cluster>` first). \
+         If `kix rollback` hit this error, editing {file} now will not change that older build: pick a newer deployment record, or check out the commit you want, convert {file}, and run `kix deploy`.",
+        file = sops_file_name(path)
+    )]
+    NotFlat {
+        path: String,
+        key: String,
+        found: &'static str,
+    },
+
     /// A Secret names a SOPS source the build does not carry, or records no
     /// digest of it, when the build carries its SOPS files.
     #[error("secret '{name}': {message}")]
@@ -399,13 +424,12 @@ fn age_only_keys(path: &Path) -> Result<(Vec<String>, &'static str), SecretError
             ));
         }
     }
-    let keys = doc
+    let entries = doc
         .as_object()
         .into_iter()
-        .flat_map(|o| o.keys())
-        .filter(|k| *k != "sops")
-        .cloned()
-        .collect();
+        .flatten()
+        .filter(|(k, _)| *k != "sops");
+    let keys = flat_values(path, entries)?.into_keys().collect();
     Ok((keys, input_type))
 }
 
@@ -618,10 +642,7 @@ fn decrypt_command(path: &Path, input_type: Option<&str>) -> Result<Command, Run
     Ok(command)
 }
 
-/// Parse decrypted SOPS output into a flat key-value map.
-///
-/// Supports both flat YAML/JSON (`{ key: value }`) and nested structures
-/// without flattening nested values because Kubernetes Secret data is flat.
+/// Parse decrypted SOPS output into the Secret's keys and values.
 fn parse_secret_data(
     path: &Path,
     plaintext: &str,
@@ -635,19 +656,44 @@ fn parse_secret_data(
         path: path.display().to_string(),
         message: "expected a JSON object at top level".to_string(),
     })?;
+    flat_values(path, obj.iter())
+}
 
-    let mut data = BTreeMap::new();
-    for (key, val) in obj {
-        let string_val = match val {
-            Value::String(s) => s.clone(),
-            Value::Number(n) => n.to_string(),
-            Value::Bool(b) => b.to_string(),
-            other => other.to_string(),
-        };
-        data.insert(key.clone(), string_val);
-    }
-
-    Ok(data)
+/// Return each top-level entry of a SOPS document as a Secret key and its
+/// text, or refuse the first value that has no text.
+///
+/// A Secret holds one string per key, so a value must be a string, a number,
+/// or a boolean. A map, a list, or null is refused. A Kubernetes manifest
+/// in the file fails this check at its `metadata`.
+///
+/// `sops` keeps the shape of a document when it encrypts it, so the check
+/// gives the same answer on the encrypted file as on the decrypted one.
+fn flat_values<'a>(
+    path: &Path,
+    entries: impl IntoIterator<Item = (&'a String, &'a Value)>,
+) -> Result<BTreeMap<String, String>, SecretError> {
+    entries
+        .into_iter()
+        .map(|(key, value)| {
+            let text = match value {
+                Value::String(s) => s.clone(),
+                Value::Number(n) => n.to_string(),
+                Value::Bool(b) => b.to_string(),
+                Value::Object(_) | Value::Array(_) | Value::Null => {
+                    return Err(SecretError::NotFlat {
+                        path: path.display().to_string(),
+                        key: key.clone(),
+                        found: match value {
+                            Value::Object(_) => "a map",
+                            Value::Array(_) => "a list",
+                            _ => "empty (`null`)",
+                        },
+                    });
+                }
+            };
+            Ok((key.clone(), text))
+        })
+        .collect()
 }
 
 /// Compute the hash of secret data that Kix 0.9 and earlier wrote to
@@ -826,6 +872,152 @@ mod tests {
         assert_eq!(data.get("username").unwrap(), "admin");
         assert_eq!(data.get("password").unwrap(), "s3cret");
         assert_eq!(data.get("port").unwrap(), "5432");
+    }
+
+    /// A Flux SOPS file holds a whole Secret manifest. Its top-level keys are
+    /// the manifest's fields, so it must not become a Secret with keys
+    /// `apiVersion`, `kind`, `metadata`, and `stringData`.
+    #[test]
+    fn a_decrypted_document_that_is_not_flat_is_refused() {
+        let cases = [
+            (
+                r#"{"apiVersion":"v1","kind":"Secret","metadata":{"name":"api"},"stringData":{"password":"p"},"type":"Opaque"}"#,
+                "metadata",
+                "a map",
+            ),
+            (r#"{"password":"p","hosts":["a","b"]}"#, "hosts", "a list"),
+            (
+                r#"{"password":"p","token":null}"#,
+                "token",
+                "empty (`null`)",
+            ),
+        ];
+        for (plaintext, want_key, want_found) in cases {
+            let err = parse_secret_data(Path::new("/x/api.enc.yaml"), plaintext).unwrap_err();
+            assert!(
+                matches!(&err, SecretError::NotFlat { key, found, .. } if key == want_key && *found == want_found),
+                "{plaintext}: {err}"
+            );
+            assert!(err.to_string().starts_with("[K6746] "), "{err}");
+        }
+
+        // sops decrypts an INI file into sections, so it fails at `DEFAULT`,
+        // and the message says INI cannot be used.
+        let ini = r#"{"DEFAULT":{"username":"app","password":"p"}}"#;
+        let err = parse_secret_data(Path::new("/x/api.enc.ini"), ini).unwrap_err();
+        assert!(
+            matches!(&err, SecretError::NotFlat { key, .. } if key == "DEFAULT"),
+            "{err}"
+        );
+        assert!(
+            err.to_string().contains("INI files cannot be used"),
+            "{err}"
+        );
+    }
+
+    /// `sops` keeps a document's shape when it encrypts it, so a plan on a
+    /// carried build refuses a Flux manifest before anything is decrypted.
+    #[test]
+    fn a_carried_sops_file_that_is_not_flat_is_refused_without_decrypting() {
+        let text = AGE_ONLY.replace(
+            "password: ENC[AES256_GCM,data:abc]\n",
+            "apiVersion: v1\nkind: Secret\nmetadata:\n  name: api\nstringData:\n  password: ENC[AES256_GCM,data:abc]\ntype: Opaque\n",
+        );
+        let mut manifests = [carried_secret(SOURCE, Some(&digest_of(&text)))];
+        let err = hydrate_secrets_from(&mut manifests, &from_carried(&text, true)).unwrap_err();
+        assert!(
+            matches!(&err, SecretError::NotFlat { key, .. } if key == "metadata"),
+            "{err}"
+        );
+    }
+
+    /// Encrypt a Flux Secret manifest and a flat file with the `sops` that
+    /// Kix ships, then read both the way a deploy and a bundle plan do. The
+    /// key is the test-only key in `clusters/dev-secrets/age-key.txt`.
+    #[test]
+    fn real_sops_files_are_refused_or_accepted_by_shape() {
+        const RECIPIENT: &str = "age12uaczkdv3uvyrw6kmvc4s4srykpwtd9uqzejlqt9yzajd986qp8qvtfjmv";
+        const IDENTITY: &str =
+            "AGE-SECRET-KEY-17GL4UCEWMVTVSTEJKYL6PA4KMKC88MEV9E5CG8E8UQ7TSY4WA2HQ9XDQMR\n";
+        let dir = tempfile::tempdir().unwrap();
+        let key_file = dir.path().join("age-key.txt");
+        std::fs::write(&key_file, IDENTITY).unwrap();
+        let encrypt = |name: &str, text: &str, regex: Option<&str>| {
+            let path = dir.path().join(name);
+            std::fs::write(&path, text).unwrap();
+            let mut command = runtime::tool(Tool::Sops, Want::Shipped).unwrap();
+            command
+                .current_dir(dir.path())
+                .args(["encrypt", "--age", RECIPIENT]);
+            if let Some(regex) = regex {
+                command.args(["--encrypted-regex", regex]);
+            }
+            let out = command.arg("--in-place").arg(&path).output().unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            path
+        };
+        let flux = encrypt(
+            "flux.yaml",
+            "apiVersion: v1\nkind: Secret\nmetadata:\n  name: api\nstringData:\n  username: app\n  password: s3cr3t\ntype: Opaque\n",
+            Some("^(data|stringData)$"),
+        );
+        let flat = encrypt(
+            "flat.yaml",
+            "username: app\npassword: s3cr3t\nport: 5432\n",
+            None,
+        );
+        let decrypt = |path: &Path| {
+            let out = decrypt_command(path, None)
+                .unwrap()
+                .env("SOPS_AGE_KEY_FILE", &key_file)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            parse_secret_data(path, &String::from_utf8(out.stdout).unwrap())
+        };
+
+        let err = decrypt(&flux).unwrap_err();
+        assert!(
+            matches!(&err, SecretError::NotFlat { key, .. } if key == "metadata"),
+            "{err}"
+        );
+        assert!(err.to_string().starts_with("[K6746] "), "{err}");
+        let data = decrypt(&flat).unwrap();
+        assert_eq!(
+            data,
+            BTreeMap::from([
+                ("password".into(), "s3cr3t".into()),
+                ("port".into(), "5432".into()),
+                ("username".into(), "app".into()),
+            ])
+        );
+
+        let bundle = |path: &Path, placeholders: bool| {
+            let text = std::fs::read_to_string(path).unwrap();
+            let mut manifests = [carried_secret(SOURCE, Some(&digest_of(&text)))];
+            manifests[0]["type"] = json!("Opaque");
+            hydrate_secrets_from(&mut manifests, &from_carried(&text, placeholders))
+                .map(|_| manifests[0]["stringData"].clone())
+        };
+        for placeholders in [true, false] {
+            let err = bundle(&flux, placeholders).unwrap_err();
+            assert!(
+                matches!(&err, SecretError::NotFlat { key, .. } if key == "metadata"),
+                "{err}"
+            );
+        }
+        assert_eq!(
+            bundle(&flat, true).unwrap(),
+            json!({"password": "kix-placeholder", "port": "kix-placeholder", "username": "kix-placeholder"})
+        );
     }
 
     #[test]

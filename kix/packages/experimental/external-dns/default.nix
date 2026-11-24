@@ -94,7 +94,6 @@ let
 
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "external-dns ${ns}/${name}";
 
   # kingpin's DefaultEnvars (pkg/apis/externaldns/types.go) reads `--<flag>`
   # from this variable when the flag is not on the command line.
@@ -132,23 +131,6 @@ let
   # "CF_API_TOKEN, or CF_API_KEY and CF_API_EMAIL"
   describeKeySets = sets: lib.concatMapStringsSep ", or " (lib.concatStringsSep " and ") sets;
   listOrNone = names: if names == [ ] then "nothing" else lib.concatStringsSep ", " names;
-
-  # The value of `flag` in `args`, in either the `--flag=value` or the
-  # `--flag value` form, for every occurrence.
-  flagValues =
-    flag: args:
-    let
-      indexed = lib.imap0 (i: arg: { inherit i arg; }) args;
-    in
-    builtins.concatMap (
-      { i, arg }:
-      if lib.hasPrefix "${flag}=" arg then
-        [ (lib.removePrefix "${flag}=" arg) ]
-      else if arg == flag && i + 1 < builtins.length args then
-        [ (builtins.elemAt args (i + 1)) ]
-      else
-        [ ]
-    ) indexed;
 
   # What the instance supplies for the provider's credential variables:
   # the mapped variables or, without `secretEnv`, the Secret's keys, plus
@@ -369,6 +351,14 @@ in
       );
     in
     [
+      # sources.nix and providers.nix follow `release`, and another release
+      # may need other RBAC rules or accept other providers.
+      (kix.image.checkRelease {
+        inherit (config) image;
+        inherit release;
+        reason = "the ClusterRole rules (sources.nix) and supported providers (providers.nix) match external-dns v${release}";
+        fix = "To update this package to another version, change release in kix/packages/experimental/external-dns/default.nix and update sources.nix and providers.nix from clusterrole.yaml in that version's chart and pkg/apis/externaldns/types.go.";
+      })
       {
         assertion = s.complete || s.dep != null || config.secretEnv != { };
         message = "provider \"${config.provider}\" reads its API credentials from ${keySetText}, and no complete set is supplied. Add a secret or secret-ref instance in namespace \"${ns}\" holding them, set deps.providerCredentials = ref.${ns}.<instance>, and name the key ${firstVar} or map it with secretEnv.${firstVar} = \"<key>\".";
@@ -405,7 +395,7 @@ in
   warnings =
     { config, ... }:
     let
-      crdRegistry = builtins.elem "crd" (flagValues "--registry" config.extraArgs);
+      crdRegistry = builtins.elem "crd" (kix.argValues { parser = "gnu"; } "--registry" config.extraArgs);
       listenerSets = builtins.any (
         arg: arg == "--gateway-listener-sets" || arg == "--gateway-listener-sets=true"
       ) config.extraArgs;
@@ -473,7 +463,7 @@ in
 
         env = kix.mkEnvVars (
           kix.mergeEnv {
-            inherit who;
+            inherit scope;
             owned = [
               {
                 names = ownedEnvNames;
@@ -496,51 +486,61 @@ in
           } config.env
         );
 
-        # kingpin refuses a repeated single-value flag at startup, and
-        # `--source` here would bypass the RBAC derived from `sources`.
-        args = [
-          "--provider=${config.provider}"
-          "--policy=${config.policy}"
-          "--txt-owner-id=${config.txtOwnerId}"
-          "--interval=${config.interval}"
-          "--metrics-address=:${toString metricsPort}"
-        ]
-        ++ map (s: "--source=${s}") selected
-        ++ kix.guardArgs {
-          inherit who;
-          owned = {
-            "--provider" = "set the provider option.";
-            "--policy" = "set the policy option.";
-            "--txt-owner-id" = "set the txtOwnerId option.";
-            "--interval" = "set the interval option.";
-            "--source" = "add it to sources, which also grants its RBAC.";
-            "--metrics-address" =
-              "the probes, the metrics Service, and the ServiceMonitor use :${toString metricsPort}; remove it.";
-            "--once" =
-              "external-dns exits after one synchronization, and the Deployment restarts it every time; remove it.";
-          }
-          // lib.genAttrs (map (flag: "--${flag}") secretFlags) (
+        # external-dns parses flags with kingpin (pkg/apis/externaldns/types.go
+        # upstream), which refuses a repeated single-value flag at startup.
+        args = kix.mergeArgs {
+          inherit scope;
+          parser = "gnu";
+          args = [
+            {
+              flags = [ "--provider=${config.provider}" ];
+              from = "the provider option";
+              fix = "Remove it from extraArgs and set provider instead.";
+            }
+            {
+              flags = [ "--policy=${config.policy}" ];
+              from = "the policy option";
+              fix = "Remove it from extraArgs and set policy instead.";
+            }
+            {
+              flags = [ "--txt-owner-id=${config.txtOwnerId}" ];
+              from = "the txtOwnerId option";
+              fix = "Remove it from extraArgs and set txtOwnerId instead.";
+            }
+            {
+              flags = [ "--interval=${config.interval}" ];
+              from = "the interval option";
+              fix = "Remove it from extraArgs and set interval instead.";
+            }
+            {
+              flags = [ "--metrics-address=:${toString metricsPort}" ];
+              reason = "the probes, metrics Service, and ServiceMonitor use port ${toString metricsPort}.";
+            }
+            # `--source` in extraArgs would bypass the RBAC derived from
+            # `sources`.
+            {
+              flags = map (s: "--source=${s}") selected;
+              names = [ "--source" ];
+              from = "the sources option";
+              fix = "Remove it from extraArgs and add the source to sources instead, which also grants the required RBAC.";
+            }
+            {
+              names = [ "--once" ];
+              reason = "--once makes external-dns exit after a single sync, causing the Deployment to restart it in a loop.";
+            }
+          ]
+          ++ map (
             flag:
             let
-              var = flagEnvVar (lib.removePrefix "--" flag);
+              var = flagEnvVar flag;
             in
-            "its value is a credential, which would be stored in the Nix store and the pod's arguments. Put it in the providerCredentials Secret under the key ${var}, or map it with secretEnv.${var} = \"<key>\"."
-          );
+            {
+              names = [ "--${flag}" ];
+              reason = "passing a credential as a flag exposes it in Kix's local store and the pod spec.";
+              fix = "Remove --${flag} from extraArgs, and store the credential in the providerCredentials Secret under key ${var} (or map it with secretEnv.${var} = \"<key>\").";
+            }
+          ) secretFlags;
         } config.extraArgs;
-
-        # sources.nix and providers.nix follow `release`; another release
-        # may need other RBAC rules or accept other providers.
-        imageTag = builtins.unsafeDiscardStringContext config.image.tag;
-        imageRef =
-          if lib.versions.majorMinor (lib.removePrefix "v" imageTag) == lib.versions.majorMinor release then
-            kix.image.ref config.image
-          else
-            scope.fail {
-              package = "external-dns";
-              option = "image.tag";
-              message = "image.tag \"${imageTag}\" is not a ${lib.versions.majorMinor release} release, and the ClusterRole rules (sources.nix) and the provider list (providers.nix) follow external-dns v${release}.";
-              fix = "To move to another release, change `release` in kix/packages/experimental/external-dns/default.nix and update both files from that release's chart clusterrole.yaml and pkg/apis/externaldns/types.go.";
-            };
 
         probe = {
           httpGet = {
@@ -602,7 +602,7 @@ in
                   (
                     {
                       name = "external-dns";
-                      image = imageRef;
+                      image = kix.image.ref config.image;
                       inherit args;
                       ports = [ (kix.port "metrics" metricsPort) ];
                       # Timings from the upstream chart's values.yaml.

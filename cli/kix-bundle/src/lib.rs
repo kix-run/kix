@@ -12,9 +12,11 @@
 //!
 //! - Frame 0 is the [`Header`] as JSON: `format` (`kix-bundle`), `version`
 //!   (3), `kix_rev`, an optional `receipt` that only the deploy receipt
-//!   shows, and `files`, one `[path, size, references]` per store file,
-//!   each reference an index into `files`. Files are sorted by store name,
-//!   then by path, and no path appears twice.
+//!   shows, optional `warnings`, the Kix library's warnings for the build,
+//!   which the commands that read the bundle show, and `files`, one
+//!   `[path, size, references]` per store file, each reference an index
+//!   into `files`. Files are sorted by store name, then by path, and no
+//!   path appears twice. A bundle with no warnings leaves the field out.
 //! - Frames 1 to n hold the files' bytes, concatenated in that order. A
 //!   frame holds whole files and at least one byte.
 //! - A skippable frame ends the file: the seek table, each frame's
@@ -109,6 +111,7 @@
 //! | `MAX_FILES`, 200,000 | server: memory per file and per seek-table entry, counted before the header is kept |
 //! | `MAX_REFERENCES`, 1,600,000 | server: time to hash the references of every path, and memory for them |
 //! | `MAX_RECEIPT_BYTES`, 256 KiB | server: memory to parse the receipt |
+//! | `MAX_WARNINGS_BYTES`, 1 MiB | server: memory to parse the warnings |
 //! | `MAX_FRAME_BYTES`, 32 MiB | server: memory for one frame, so also the largest file |
 //! | `MAX_CONTENT_BYTES`, 1 GiB | server: time to decompress and hash the files |
 //! | [`MAX_RECORD_BYTES`], 256 KiB | server: memory to parse the record |
@@ -142,6 +145,7 @@ mod write;
 
 pub use file::{Written, read_build, write_build};
 pub use kix::build_source::Provenance;
+use kix::eval::library_record::LibraryRecord;
 use kix::eval::manifest_json::NotJson;
 /// Re-exported for the Kix Enterprise server, which parses a bundle's
 /// manifests one at a time as this crate does.
@@ -184,6 +188,10 @@ pub const MAX_RECORD_BYTES: u64 = 256 * 1024;
 /// source and inputs, a few KB, and parses to about sixteen times its size
 /// at worst.
 pub(crate) const MAX_RECEIPT_BYTES: usize = 256 * 1024;
+/// The largest list of warnings in the header, as JSON. A build gives a few
+/// hundred bytes for each warning, and a warning parses to about twenty
+/// times its size at worst.
+pub(crate) const MAX_WARNINGS_BYTES: usize = 1024 * 1024;
 
 pub(crate) const LIMITS: Limits = Limits {
     stored: MAX_STORED_BYTES,
@@ -210,6 +218,10 @@ pub struct Header {
     /// deploy receipt shows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub receipt: Option<Provenance>,
+    /// The Kix library's warnings for the build, which the commands that
+    /// read the bundle show.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<LibraryRecord>,
 }
 
 /// One file of the [`Header`], written `[path, size, references]`.

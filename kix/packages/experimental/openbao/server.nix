@@ -20,7 +20,6 @@ let
   inherit (c)
     name
     ns
-    who
     ports
     metricsServiceName
     reconcileRole
@@ -47,7 +46,6 @@ let
 
   certCrds =
     certManager.out.crds or (scope.fail {
-      package = "openbao";
       message = "the certManager dependency has no out.crds, as with an import.";
       fix = "Wire a managed cert-manager instance with deps.certManager = ref.<namespace>.<instance>.";
     });
@@ -57,14 +55,13 @@ let
       null
     else if unsealKey == null then
       scope.fail {
-        package = "openbao";
         option = "seal.type";
         message = "seal.type is \"static\" and there is no unsealKey dependency.";
         fix = "Add a secret aliased unsealKey with key \"key\", a 32-byte key (`openssl rand -hex 32 | tr -d '\\n'`), or set seal.type = \"shamir\" to initialize and unseal OpenBao by hand.";
       }
     else
       kix.contracts.secret.helpers.use {
-        inherit who;
+        inherit scope;
         arg = "unsealKey";
         dep = unsealKey;
         keys = [ "key" ];
@@ -112,7 +109,6 @@ let
   serverConfig =
     if settingsOwned != [ ] then
       scope.fail {
-        package = "openbao";
         option = "settings";
         message = "settings sets ${lib.concatStringsSep ", " settingsOwned}, which the package sets from ${
           lib.concatMapStringsSep "; " ownedReason settingsOwned
@@ -212,7 +208,7 @@ let
   ]
   ++ kix.mkEnvVars (
     kix.mergeEnv {
-      inherit who;
+      inherit scope;
       owned = [
         {
           vars = {
@@ -240,7 +236,6 @@ let
             "BAO_STATIC_SEAL_PREVIOUS_KEY_ID"
           ];
           from = "the package, which derives the addresses, the Raft node, and the seal from the StatefulSet and the seal options";
-          fix = "Remove it from env.";
         }
       ];
     } config.env

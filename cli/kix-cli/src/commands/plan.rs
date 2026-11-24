@@ -57,6 +57,7 @@ pub fn run(args: &PlanArgs, save: Option<&Path>, ctx: &mut CommandContext) -> Re
         }
         return Ok(Exit::Success);
     };
+    super::deploy::stops::warn(&args.cluster, p.baseline.active());
     // A plan decrypts no SOPS file the build carries: those Secrets get
     // placeholder values, so planning before anyone has approved reads no
     // secret.
@@ -170,8 +171,7 @@ fn new_build(args: &PlanArgs, ctx: &CommandContext) -> Result<InstallableBuild> 
     let build = match &args.bundle {
         Some(path) => {
             crate::say!("Reading bundle {}...", path.display());
-            kix_bundle::read_build(path, &args.deployed_bundles, &args.cluster)
-                .map_err(|e| miette::miette!("{e}"))?
+            super::read_bundle(path, &args.deployed_bundles, &args.cluster)?
         }
         None => {
             let status = |msg: &str| output::status_line(msg);
@@ -628,6 +628,7 @@ pub(crate) fn admission_reason(refusal: &Refusal) -> (RefusalReason, Option<Stri
         Refusal::NamespaceMissing { .. } => (RefusalReason::NamespaceMissing, None),
         Refusal::UnknownKind { .. } => (RefusalReason::UnknownKind, None),
         Refusal::Hydration { .. } => (RefusalReason::Decryption, None),
+        Refusal::SopsNotFlat { .. } => (RefusalReason::SopsNotFlat, None),
         // `classify` lists a webhook without dry-run support as not checked,
         // so no such refusal reaches the document.
         Refusal::WebhookNoDryRun { webhook, .. } => (RefusalReason::Other, webhook.clone()),

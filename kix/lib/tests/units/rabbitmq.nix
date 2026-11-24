@@ -240,7 +240,7 @@ in
         config.image.tag = "2.23.1";
       };
     in
-    (says ''image.tag "2.22.5" is not a RabbitMQ Cluster Operator 2.23 release'' got && fine == [ ])
+    (says ''image.tag "2.22.5" is not a 2.23 release'' got && fine == [ ])
     || throw "rabbitmq-operator image refusal: ${builtins.toJSON { inherit got fine; }}";
 
   # Operator variables the package owns or refuses fail the build; another
@@ -294,6 +294,25 @@ in
       );
     in
     stray == [ ] || throw "sources.txt URLs not at ${release}: ${builtins.toJSON stray}";
+
+  # A volume under 5GB warns on storage.size. The default size does not.
+  rabbitmq-cluster-small-volume-warns =
+    let
+      storageWarnings =
+        clusterConfig:
+        builtins.filter (w: (w.option or null) == "storage.size")
+          (rabbitmq {
+            modules = [ singleNode ];
+            inherit clusterConfig;
+          }).instances.messaging.rabbitmq._diagnostics.warnings;
+    in
+    (
+      builtins.length (storageWarnings {
+        storage.size = "2Gi";
+      }) == 1
+      && storageWarnings { } == [ ]
+    )
+    || throw "rabbitmq small volume warning";
 
   # The rendered RabbitmqCluster at availability none: one node, the image,
   # the volumes, settings as rabbitmq.conf lines, the operator's own spread

@@ -16,6 +16,12 @@
   config,
   ...
 }:
+let
+  platformDns = import ./platform-dns.nix {
+    inherit kix;
+    inherit (config) clusterDomain;
+  };
+in
 {
   cluster.provider = lib.mkDefault "kind";
 
@@ -52,71 +58,67 @@
   };
 
   instances.kube-system = {
-    platform-dns = {
-      package = kix.mkImport {
-        kind = "Deployment";
-        apiVersion = "apps/v1";
-        roles = [ "dns" ];
-        out = {
-          name = "coredns";
-          fqdn = "kube-dns.kube-system.svc.${config.clusterDomain}";
+    platform-dns =
+      platformDns {
+        name = "kube-dns";
+        namespace = "kube-system";
+        optional = false;
+      }
+      // {
+        # Attach CoreDNS network policy intents to `platform-dns` so workloads
+        # that depend on DNS are ordered after the CoreDNS policies and the
+        # network policy enforcer.
+        platformIntents = lib.mkIf config.networkPolicy.enable {
+          coredns-egress = {
+            namespace = "kube-system";
+            podSelector = {
+              "k8s-app" = "kube-dns";
+            };
+            egress = [
+              { to = "apiserver"; }
+              {
+                to = "world";
+                ports = [
+                  {
+                    port = 53;
+                    protocol = "UDP";
+                  }
+                  {
+                    port = 53;
+                    protocol = "TCP";
+                  }
+                  {
+                    port = 443;
+                    protocol = "TCP";
+                  }
+                ];
+              }
+            ];
+          };
+
+          coredns-ingress = {
+            namespace = "kube-system";
+            podSelector = {
+              "k8s-app" = "kube-dns";
+            };
+            ingress = [
+              {
+                from = "all-pods";
+                ports = [
+                  {
+                    port = 53;
+                    protocol = "UDP";
+                  }
+                  {
+                    port = 53;
+                    protocol = "TCP";
+                  }
+                ];
+              }
+            ];
+          };
         };
       };
-
-      # Attach CoreDNS network policy intents to `platform-dns` so workloads
-      # that depend on DNS are ordered after the CoreDNS policies and the
-      # network policy enforcer.
-      platformIntents = lib.mkIf config.networkPolicy.enable {
-        coredns-egress = {
-          namespace = "kube-system";
-          podSelector = {
-            "k8s-app" = "kube-dns";
-          };
-          egress = [
-            { to = "apiserver"; }
-            {
-              to = "world";
-              ports = [
-                {
-                  port = 53;
-                  protocol = "UDP";
-                }
-                {
-                  port = 53;
-                  protocol = "TCP";
-                }
-                {
-                  port = 443;
-                  protocol = "TCP";
-                }
-              ];
-            }
-          ];
-        };
-
-        coredns-ingress = {
-          namespace = "kube-system";
-          podSelector = {
-            "k8s-app" = "kube-dns";
-          };
-          ingress = [
-            {
-              from = "all-pods";
-              ports = [
-                {
-                  port = 53;
-                  protocol = "UDP";
-                }
-                {
-                  port = 53;
-                  protocol = "TCP";
-                }
-              ];
-            }
-          ];
-        };
-      };
-    };
 
     platform-storage = {
       package = kix.mkImport {

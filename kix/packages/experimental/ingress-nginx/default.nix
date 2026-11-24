@@ -59,7 +59,6 @@ let
   certgenRelease = "v1.6.9";
 
   name = scope.instanceName;
-  who = "ingress-nginx ${scope.namespaceName}/${name}";
   # Cluster-scoped objects carry the namespace too, so instances with the
   # same name in two namespaces do not collide. Namespace `a-b` with
   # instance `c` and namespace `a` with instance `b-c` still give the same
@@ -100,7 +99,7 @@ let
 in
 {
   meta = {
-    version = lib.removePrefix "v" release;
+    version = release;
     description = "NGINX Ingress controller (deprecated: retired by Kubernetes in March 2026, no security fixes; use traefik)";
     owner = "platform";
     deprecated = {
@@ -329,7 +328,6 @@ in
           in
           if builtins.stringLength value > 250 then
             scope.fail {
-              package = "ingress-nginx";
               option = "ingressClassName";
               message = "The IngressClass controller value \"${value}\" is longer than the API server's 250-character limit.";
               fix = "Shorten ingressClassName.";
@@ -348,14 +346,12 @@ in
         settings =
           if snippets != null && snippets != "true" && snippets != "false" then
             scope.fail {
-              package = "ingress-nginx";
               option = "settings.\"allow-snippet-annotations\"";
               message = "settings.\"allow-snippet-annotations\" is \"${snippets}\".";
               fix = "Use \"true\" or \"false\".";
             }
           else if snippets == "true" && riskLevel != "critical" then
             scope.fail {
-              package = "ingress-nginx";
               option = "settings.\"allow-snippet-annotations\"";
               message = "settings.\"allow-snippet-annotations\" is \"true\", but snippet annotations are Critical risk and the admission webhook rejects them unless settings.\"annotations-risk-level\" is \"Critical\".";
               fix = "Set both, or neither.";
@@ -377,20 +373,17 @@ in
           if serviceSpecOwnedHits != [ ] then
             scope.fail (
               map (k: {
-                package = "ingress-nginx";
                 option = "service.spec.${k}";
                 message = "service.spec.${k} is set by the package, which ${serviceSpecOwned.${k}}";
               }) serviceSpecOwnedHits
             )
           else if serviceType == "ClusterIP" && nodePortsSet != { } then
             scope.fail {
-              package = "ingress-nginx";
               option = "service.nodePorts";
               message = "service.nodePorts sets ${lib.concatStringsSep ", " (builtins.attrNames nodePortsSet)}, which needs service.spec.type NodePort or LoadBalancer; the type is ClusterIP.";
             }
           else if serviceType == "ClusterIP" && config.service.spec.externalTrafficPolicy != null then
             scope.fail {
-              package = "ingress-nginx";
               option = "service.spec.externalTrafficPolicy";
               message = "service.spec.externalTrafficPolicy applies to NodePort and LoadBalancer Services, and the API server rejects it on ClusterIP.";
               fix = "Change service.spec.type or remove it.";
@@ -398,8 +391,8 @@ in
           else
             kix.mergeGuarded
               {
-                inherit who;
-                what = "service.spec";
+                inherit scope;
+                option = "service.spec";
                 locked = [
                   [ "selector" ]
                   [ "ports" ]
@@ -435,43 +428,75 @@ in
               }
               (lib.filterAttrs (_: v: v != null) config.service.spec);
 
-        args = [
-          "/nginx-ingress-controller"
-          "--publish-service=$(POD_NAMESPACE)/${self.service.out.name}"
-          "--election-id=${name}-leader"
-          "--controller-class=${controllerValue}"
-          "--ingress-class=${config.ingressClassName}"
-          "--configmap=$(POD_NAMESPACE)/${self.configmap.out.name}"
-          "--validating-webhook=:8443"
-          "--validating-webhook-certificate=/usr/local/certificates/cert"
-          "--validating-webhook-key=/usr/local/certificates/key"
-        ]
-        # Upstream's default is false, which serves only Go runtime metrics
-        # on :10254. The flag follows the toggle alone, so adding a
-        # prometheus instance does not restart the controller.
-        ++ lib.optional config.metrics.enabled "--enable-metrics=true"
-        ++ kix.guardArgs {
-          inherit who;
-          owned = {
-            "--enable-metrics" = "the package sets it from metrics.enabled; set that instead.";
-            "--http-port" = "the Service, container ports, and network policy use port 80; remove it.";
-            "--https-port" = "the Service, container ports, and network policy use port 443; remove it.";
-            "--healthz-port" = "the probes and the metrics Service use port 10254; remove it.";
-            "--publish-service" = "the package points it at the controller Service; remove it.";
-            "--election-id" = "the package derives it from the instance name; remove it.";
-            "--controller-class" =
-              "the package derives it from ingressClassName; set ingressClassName instead.";
-            "--ingress-class" = "the package sets it to ingressClassName; set ingressClassName instead.";
-            "--configmap" = "the package points it at its ConfigMap; set settings instead.";
-            "--validating-webhook" = "the package serves the admission webhook on :8443; remove it.";
-            "--validating-webhook-certificate" = "the package mounts the admission certificate; remove it.";
-            "--validating-webhook-key" = "the package mounts the admission certificate; remove it.";
-          };
+        # The controller parses flags with pflag (pkg/flags/flags.go
+        # upstream).
+        args = kix.mergeArgs {
+          inherit scope;
+          parser = "gnu";
+          args = [
+            "/nginx-ingress-controller"
+            {
+              flags = [ "--publish-service=$(POD_NAMESPACE)/${self.service.out.name}" ];
+              reason = "Ingress status must publish the address of this instance's Service.";
+            }
+            {
+              flags = [ "--election-id=${name}-leader" ];
+              reason = "the leader-election Role only allows updating Lease \"${name}-leader\".";
+            }
+            {
+              flags = [ "--controller-class=${controllerValue}" ];
+              from = "the ingressClassName option";
+              fix = "Remove it from extraArgs and set ingressClassName instead.";
+            }
+            {
+              flags = [ "--ingress-class=${config.ingressClassName}" ];
+              from = "the ingressClassName option";
+              fix = "Remove it from extraArgs and set ingressClassName instead.";
+            }
+            {
+              flags = [ "--configmap=$(POD_NAMESPACE)/${self.configmap.out.name}" ];
+              from = "the settings option, which builds the controller's ConfigMap";
+              fix = "Remove it from extraArgs and set settings instead.";
+            }
+            {
+              flags = [ "--validating-webhook=:8443" ];
+              reason = "the admission webhook Service connects to port 8443.";
+            }
+            {
+              flags = [ "--validating-webhook-certificate=/usr/local/certificates/cert" ];
+              reason = "the admission TLS certificate is mounted at /usr/local/certificates/cert.";
+            }
+            {
+              flags = [ "--validating-webhook-key=/usr/local/certificates/key" ];
+              reason = "the admission TLS private key is mounted at /usr/local/certificates/key.";
+            }
+            {
+              names = [ "--http-port" ];
+              reason = "the Service, container ports, and network policy use port 80.";
+            }
+            {
+              names = [ "--https-port" ];
+              reason = "the Service, container ports, and network policy use port 443.";
+            }
+            {
+              names = [ "--healthz-port" ];
+              reason = "the probes and the metrics Service use port 10254.";
+            }
+            # Upstream's default is false, which serves only Go runtime
+            # metrics on :10254. The flag follows the toggle alone, so adding
+            # a prometheus instance does not restart the controller.
+            {
+              flags = lib.optional config.metrics.enabled "--enable-metrics=true";
+              names = [ "--enable-metrics" ];
+              from = "the metrics.enabled option";
+              fix = "Remove it from extraArgs and set metrics.enabled instead.";
+            }
+          ];
         } config.extraArgs;
 
         env = kix.mkEnvVars (
           kix.mergeEnv {
-            inherit who;
+            inherit scope;
             owned = [
               {
                 vars = {
@@ -612,7 +637,6 @@ in
             name = jobName;
             labels = admissionLabels;
             inherit requires;
-            annotations.${kix.keys.rerun} = kix.keyValues.rerunOnChange;
             spec = {
               template = {
                 metadata = {

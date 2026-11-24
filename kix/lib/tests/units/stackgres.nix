@@ -687,7 +687,7 @@ in
       resolve =
         version:
         releaseTable.resolvePostgres {
-          who = "test";
+          inherit (import ../../core/error.nix { inherit lib; }) fail;
           inherit version;
           registry = "quay.io";
           operatorTag = releaseTable.release;

@@ -82,16 +82,22 @@ def replicated_ddl(create, table, new_name):
     if not head:
         sys.exit(f"replicate: cannot parse the definition of {table}: {create}")
     prefix = f"CREATE TABLE {quote(DATABASE)}.{quote(new_name)}"
-    rest = create[head.end():]
+    rest = create[head.end() :]
     path = literal(ZK_PATH % table) + ", '{replica}'"
     engine = re.search(r"ENGINE = (\w*MergeTree)(\(([^)]*)\))?", rest)
     if engine:
         args = engine.group(3)
-        new_engine = f"ENGINE = Replicated{engine.group(1)}({path}{', ' + args if args else ''})"
-        return prefix + rest[: engine.start()] + new_engine + rest[engine.end():]
+        new_engine = (
+            f"ENGINE = Replicated{engine.group(1)}({path}{', ' + args if args else ''})"
+        )
+        return prefix + rest[: engine.start()] + new_engine + rest[engine.end() :]
     # Ecto's schema_migrations is a TinyLog table: no ORDER BY to keep.
     if re.search(r"ENGINE = TinyLog\s*$", rest):
-        return prefix + re.sub(r"ENGINE = TinyLog\s*$", f"ENGINE = ReplicatedMergeTree({path}) ORDER BY tuple()", rest)
+        return prefix + re.sub(
+            r"ENGINE = TinyLog\s*$",
+            f"ENGINE = ReplicatedMergeTree({path}) ORDER BY tuple()",
+            rest,
+        )
     sys.exit(f"replicate: {table} has an engine this script does not convert: {create}")
 
 
@@ -106,7 +112,9 @@ def convert(table, engine, create):
             f"SELECT DISTINCT partition_id FROM system.parts "
             f"WHERE database = {literal(DATABASE)} AND table = {literal(table)} AND active"
         ):
-            query(f"ALTER TABLE {quote(staged)} ATTACH PARTITION ID {literal(partition)} FROM {quote(table)}")
+            query(
+                f"ALTER TABLE {quote(staged)} ATTACH PARTITION ID {literal(partition)} FROM {quote(table)}"
+            )
     else:
         query(f"INSERT INTO {quote(staged)} SELECT * FROM {quote(table)}")
     query(f"EXCHANGE TABLES {quote(table)} AND {quote(staged)}")
@@ -128,7 +136,11 @@ def main():
     tables = [t for t in tables if not t[0].endswith(SUFFIX)]
 
     for name, engine, create in tables:
-        if engine.endswith("MergeTree") and not engine.startswith("Replicated") or engine == "TinyLog":
+        if (
+            engine.endswith("MergeTree")
+            and not engine.startswith("Replicated")
+            or engine == "TinyLog"
+        ):
             convert(name, engine, create)
 
     # Step 2: the same objects on every replica. Keeper registers each
@@ -144,35 +156,67 @@ def main():
     # dictionaries are Plausible's to create, with ON CLUSTER, once its
     # tables are replicated.
     db = literal(DATABASE)
-    replicas = int(rows("SELECT count() FROM system.clusters WHERE cluster = getMacro('cluster')")[0][0])
+    replicas = int(
+        rows("SELECT count() FROM system.clusters WHERE cluster = getMacro('cluster')")[
+            0
+        ][0]
+    )
     # ON CLUSTER reaches the replicas the cluster definition lists when the
     # statement is issued. The Altinity operator adds a replica to it some
     # time after the replica starts, so on a first install the definition
     # can list fewer than the server has. Exiting fails the init container,
     # and the kubelet runs it again.
     if replicas < REPLICAS:
-        sys.exit(f"replicate: the cluster definition lists {replicas} of {REPLICAS} replicas; waiting for the rest")
-    incomplete = rows(f"SELECT table FROM system.replicas WHERE database = {db} AND total_replicas < {replicas}")
+        sys.exit(
+            f"replicate: the cluster definition lists {replicas} of {REPLICAS} replicas; waiting for the rest"
+        )
+    incomplete = rows(
+        f"SELECT table FROM system.replicas WHERE database = {db} AND total_replicas < {replicas}"
+    )
     if not incomplete:
         print(f"replicate: {DATABASE} is replicated on all {replicas} replicas")
         return
     kinds = [
         # (what, query for name and definition, CREATE keyword)
-        ("function", "SELECT name, create_query FROM system.functions WHERE origin = 'SQLUserDefined'", "FUNCTION"),
-        ("dictionary", f"SELECT name, create_table_query FROM system.tables WHERE database = {db} AND engine = 'Dictionary'", "DICTIONARY"),
-        ("table", f"SELECT name, create_table_query FROM system.tables WHERE database = {db} AND engine LIKE 'Replicated%'", "TABLE"),
+        (
+            "function",
+            "SELECT name, create_query FROM system.functions WHERE origin = 'SQLUserDefined'",
+            "FUNCTION",
+        ),
+        (
+            "dictionary",
+            f"SELECT name, create_table_query FROM system.tables WHERE database = {db} AND engine = 'Dictionary'",
+            "DICTIONARY",
+        ),
+        (
+            "table",
+            f"SELECT name, create_table_query FROM system.tables WHERE database = {db} AND engine LIKE 'Replicated%'",
+            "TABLE",
+        ),
     ]
     for what, select, keyword in kinds:
         for name, create in rows(select + " ORDER BY name"):
-            target = quote(name) if what == "function" else f"{quote(DATABASE)}.{quote(name)}"
+            target = (
+                quote(name)
+                if what == "function"
+                else f"{quote(DATABASE)}.{quote(name)}"
+            )
             if what == "dictionary":
                 # SHOW CREATE masks the source password; Plausible's
                 # dictionaries log in as this same user
                 # (Plausible.MigrationUtils.dictionary_connection_params).
-                create = create.replace("PASSWORD '[HIDDEN]'", f"PASSWORD {literal(PASSWORD)}")
-            statement = re.sub(rf"^CREATE {keyword} \S+", f"CREATE {keyword} IF NOT EXISTS {target} {ON_CLUSTER}", create)
+                create = create.replace(
+                    "PASSWORD '[HIDDEN]'", f"PASSWORD {literal(PASSWORD)}"
+                )
+            statement = re.sub(
+                rf"^CREATE {keyword} \S+",
+                f"CREATE {keyword} IF NOT EXISTS {target} {ON_CLUSTER}",
+                create,
+            )
             query(statement, distributed_ddl_output_mode="throw_only_active")
-    print(f"replicate: created {DATABASE}'s objects on every replica ({len(incomplete)} tables were missing somewhere)")
+    print(
+        f"replicate: created {DATABASE}'s objects on every replica ({len(incomplete)} tables were missing somewhere)"
+    )
 
 
 main()

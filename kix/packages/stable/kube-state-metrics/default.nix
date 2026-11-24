@@ -44,13 +44,12 @@
 let
   release = "v2.20.0";
   name = scope.instanceName;
-  who = "kube-state-metrics ${scope.namespaceName}/${name}";
   metricsPort = 8080;
   telemetryPort = 8081;
 in
 {
   meta = {
-    version = lib.removePrefix "v" release;
+    version = release;
     description = "kube-state-metrics: Kubernetes object state exporter";
     owner = "platform";
     defaultAliases = [ "kubeStateMetrics" ];
@@ -159,24 +158,35 @@ in
           "volumeattachments"
         ];
         servedCollectors = builtins.filter served defaultCollectors;
-        # `--resources` in `extraArgs` replaces the package's choice.
-        choosesCollectors = builtins.any (lib.hasPrefix "--resources") config.extraArgs;
 
-        args = [
-          "--port=${toString metricsPort}"
-          "--telemetry-port=${toString telemetryPort}"
-        ]
-        ++ lib.optional (
-          !choosesCollectors && servedCollectors != defaultCollectors
-        ) "--resources=${lib.concatStringsSep "," servedCollectors}"
-        ++ kix.guardArgs {
-          inherit who;
-          owned = {
-            "--port" = "the probes and the Service use port ${toString metricsPort}; remove it.";
-            "--telemetry-port" = "the Service uses port ${toString telemetryPort}; remove it.";
-            "--shard" = "the package runs one unsharded replica; remove it.";
-            "--total-shards" = "the package runs one unsharded replica; remove it.";
-          };
+        # kube-state-metrics parses flags with cobra and pflag
+        # (pkg/options/options.go upstream).
+        args = kix.mergeArgs {
+          inherit scope;
+          parser = "gnu";
+          args = [
+            {
+              flags = [ "--port=${toString metricsPort}" ];
+              reason = "the probes and the Service use port ${toString metricsPort}.";
+            }
+            {
+              flags = [ "--telemetry-port=${toString telemetryPort}" ];
+              reason = "the Service uses port ${toString telemetryPort}.";
+            }
+            # `--resources` in `extraArgs` replaces the package's choice.
+            {
+              defaults = lib.optional (
+                servedCollectors != defaultCollectors
+              ) "--resources=${lib.concatStringsSep "," servedCollectors}";
+            }
+            {
+              names = [
+                "--shard"
+                "--total-shards"
+              ];
+              reason = "this package runs a single unsharded kube-state-metrics replica.";
+            }
+          ];
         } config.extraArgs;
 
         probe = {

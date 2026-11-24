@@ -16,7 +16,7 @@
   ...
 }:
 let
-  inherit (import ../../lib/core/error.nix { inherit lib; }) fail;
+  inherit (import ../../lib/core/error.nix { inherit lib; }) failOf;
 
   tlsModes = [
     "starttls"
@@ -95,19 +95,22 @@ let
       # which replaces the server's `out.from`.
       settings =
         {
-          who,
+          scope ? null,
+          who ? null,
           smtp,
           from ? null,
         }:
         let
-          found = server { inherit who smtp; };
+          scopeFail = failOf "contracts.smtp.helpers.settings" { inherit scope who; };
+          found = server { inherit scope smtp; };
           sender = if from != null then from else found.from;
         in
-        if found == null then
+        if builtins.seq scopeFail found == null then
           null
         else if sender == null then
-          fail {
-            message = "${who}: deps.smtp has no sender address.";
+          scopeFail {
+            dependency = "smtp";
+            message = "No sender email address is set on this instance (`mail.from`) or on its `smtp` dependency (`out.from`), so Kix cannot configure outbound mail.";
             fix = "Set out.from on the SMTP instance, or mail.from on this instance.";
           }
         else
@@ -167,19 +170,27 @@ let
 
   # A server without `external = false` counts as outside the cluster, so
   # `tls = "none"` is refused there: the password and the mail would cross
-  # the internet in clear text.
+  # the internet in clear text. The errors name the consumer in `scope`.
   server =
-    { who, smtp }:
-    if smtp == null then
+    {
+      scope ? null,
+      who ? null,
+      smtp,
+    }:
+    let
+      scopeFail = failOf "contracts.smtp.helpers.server" { inherit scope who; };
+    in
+    if builtins.seq scopeFail smtp == null then
       null
     else
       let
-        out = (contract.require who smtp).out;
+        out = (contract.require scope smtp).out;
         external = out.external or true;
       in
       if out.tls == "none" && external then
-        fail {
-          message = "${who}: deps.smtp is a server outside the cluster with tls = \"none\", so the password and the mail would cross the internet in clear text.";
+        scopeFail {
+          dependency = "smtp";
+          message = "deps.smtp uses `tls = \"none\"` without `external = false`, so Kix treats the SMTP server as external and refuses to send mail or credentials over the internet in plain text.";
           fix = "Set tls to \"starttls\" (usually port 587) or \"implicit\" (usually port 465) on its out. A server inside the cluster sets external = false.";
         }
       else

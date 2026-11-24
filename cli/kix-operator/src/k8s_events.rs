@@ -248,6 +248,15 @@ fn node_event(node: &NodeId, verdict: &Verdict, detail: Option<&NodeDetail>) -> 
                 action: "Rerun".into(),
                 secondary: None,
             }),
+            Some(NodeDetail::PendingRestart { message, .. }) => Some(KEvent {
+                type_: EventType::Warning,
+                reason: "RestartPending".into(),
+                note: Some(format!(
+                    "{resource} is ready but needs a restart: {message}"
+                )),
+                action: "Ready".into(),
+                secondary: None,
+            }),
             _ => Some(KEvent {
                 type_: EventType::Normal,
                 reason: "ResourceReady".into(),
@@ -418,5 +427,25 @@ mod tests {
         };
         let note = prune_note(&long("ConfigMap"), &long("Namespace"), true);
         assert!(note.len() < 1024, "{} bytes", note.len());
+    }
+
+    /// A resource whose running workload waits for a restart gets a Warning,
+    /// so the operator's deploy tells someone to restart it.
+    #[test]
+    fn pending_restart_is_a_warning() {
+        let node = NodeId::Resource(rid("DaemonSet", "io-engine"));
+        let detail = NodeDetail::PendingRestart {
+            stale: Some(2),
+            message: "2 pods run the previous template".into(),
+        };
+        let event = node_event(&node, &Verdict::Ready, Some(&detail)).unwrap();
+        assert_eq!(event.type_, EventType::Warning);
+        assert_eq!(event.reason, "RestartPending");
+        assert_eq!(
+            event.note.as_deref(),
+            Some(
+                "DaemonSet/io-engine@app is ready but needs a restart: 2 pods run the previous template"
+            )
+        );
     }
 }

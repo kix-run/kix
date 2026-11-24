@@ -1,0 +1,5 @@
++++
+kind = "security"
+packages = ["experimental/openbao"]
++++
+`openbao` runs OpenBao 2.7.3, which fixes two advisories that upstream has assigned no CVE ids. GHSA-h8fh-pmch-cjww: a request that a standby pod forwarded to the active pod skipped the listener's request size limits and its `disable_unauthed_*` settings, and the active pod mishandled its forwarded client certificate headers. Only instances with more than one replica have standby pods. GHSA-fgmw-h9wp-wc7g: an auth method that matches entity and group alias names without regard to case can let one user log in as another whose name differs only in case. OpenBao 2.7.3 adds the auth mount setting `case_sensitive_alias` to turn on exact matching. Every mount, including the Kubernetes auth mount this package creates, still ignores case until you set it, and OpenBao 2.8.0 will turn it on for new mounts. The Kubernetes auth method takes alias names from service accounts, which are lower case, so this package's logins are not exposed. OpenBao 2.7.3 is also built with Go 1.27.4 and newer `golang.org/x/crypto` and `golang.org/x/net`, on Alpine 3.24.4.

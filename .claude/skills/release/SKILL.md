@@ -111,8 +111,10 @@ same unreleased records, with the version taken from the prerelease.
    Package version bumps leave these files alone until a release. Revert any
    file where only a timestamp changed. Check the remaining diff: every
    change should come from the new Kix version (such as `kix --version`), a
-   package bump, or a change record in this release. Without this step, the
-   Documentation captures check fails on the release pull request.
+   package bump, or a change record in this release. Pull requests that
+   change Kix, the Kix library, or a package leave untouched captures for the
+   release. On the release pull request, the Documentation captures check
+   runs on every capture and fails without this step.
 4. The change records. First read the section they make:
    `scripts/change-records.py changelog`. If a bullet reads wrongly, fix
    the wording in its record. Then run
@@ -132,6 +134,8 @@ same unreleased records, with the version taken from the prerelease.
    `cli/kix/src/cluster/stops.rs`. `kix deploy`, `kix rollback`, and the
    operator then refuse a cluster last deployed by an older Kix when the Kix
    deploying it is newer than that release's minor. Skip this for a prerelease.
+   The test `required_stops_match_the_change_records` fails unless
+   `REQUIRED_STOPS` matches the released change records.
 
 ## 3. Open and merge the pull request
 
@@ -170,6 +174,13 @@ list an unsigned release, so the index and install-script checks above do not
 find it, and Kix cannot install it automatically. Tell the person the release
 is unsigned and point them at `cli/kix/release-keys/README.md` to add a key.
 
+If "Sign the release index" fails during the site rebuild, either the
+`KIX_INDEX_SIGNING_KEY` secret is missing or its public key is not committed in
+`cli/kix/index-keys/`. Ask the person to fix it (see `cli/kix/index-keys/README.md`).
+While this step is failing, kix.run keeps serving the last signed index, which
+expires seven days after it was built. Once it expires, Kix and the install
+script refuse to pick releases until a new index is signed.
+
 Give the person the release URL.
 
 If the job failed, read its log, fix the cause, and run the job again. A
@@ -177,3 +188,36 @@ second run is safe: it skips a release that already exists in
 `kix-run/kix-releases` and creates the tag last. A later push to main can
 replace the run for the merge commit while that run waits to start. The
 later run then publishes the release, from the later commit.
+
+## Withdraw a release
+
+Withdraw a release when it has a bug that can damage a cluster and users must
+not install or deploy with it. Withdrawing a release leaves its files in
+`kix-run/kix-releases` unchanged.
+
+1. Make sure a newer, non-withdrawn release that fixes the problem is already
+   in the release index, or cut one first. Every withdrawal entry must name
+   that replacement version in `use`.
+2. Add an entry to `web/releases/withdrawn.json`:
+   `{ "version": "0.10.1", "reason": "it deletes Secrets on rollback", "use": "0.10.2" }`.
+   Write `reason` as a plain clause that follows `Kix <version> was withdrawn
+   because ...`, so a user can see what breaks and decide whether to upgrade.
+   Do not include quotes, backslashes, braces, or newlines, because the install
+   script parses `index.json` with `sed`.
+3. Run `node --test 'web/scripts/*.test.mjs'`, open a pull request explaining
+   why the release is being withdrawn, label it `no-changelog` (nothing in
+   `cli/` or `kix/` changes, so add no change record), and merge it.
+4. Wait for "Deploy site to Cloudflare Pages" to finish, then run
+   `curl -s https://kix.run/releases/index.json | jq .withdrawn` and confirm
+   the release appears in `.withdrawn` and is gone from `.releases` and
+   `.latest`.
+5. Tell the person what happens next: Kix and the install script stop selecting
+   the withdrawn version immediately, and install it (with a warning) only when
+   that exact version is requested. Installed copies block `kix deploy` and
+   `kix rollback` as soon as they refresh the release index, within 24 hours at
+   most. Users on that version can upgrade their projects with
+   `kix upgrade --to <use>`. Announce the withdrawal where users will see it,
+   such as in the release notes of `<use>`.
+
+To reinstate a withdrawn release, remove its entry from
+`web/releases/withdrawn.json` and merge a pull request.

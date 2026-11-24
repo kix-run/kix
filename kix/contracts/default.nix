@@ -31,7 +31,15 @@ let
           // import path {
             inherit lib compose;
             inherit (builder) credentialsField;
-            mkContract = args: builder.mkContract (args // { here = "kix/contracts/${level}/${file}"; });
+            mkContract =
+              args:
+              builder.mkContract (
+                args
+                // {
+                  here = "kix/contracts/${level}/${file}";
+                  path = "contracts.${lib.optionalString (level == "experimental") "experimental."}${name}";
+                }
+              );
           }
         );
     };

@@ -340,23 +340,68 @@ in
       }
     );
 
+  # scope.fail names the instance and its package on each error that names
+  # neither, and keeps a value the error sets.
+  lib-errors-fail-for-fills-package =
+    let
+      caughtErrors = (import ../caught.nix { inherit lib; }).caught ../../core/error.nix { inherit lib; };
+      records = (import ../caught.nix { inherit lib; }).records;
+      failHere = caughtErrors.failFor {
+        instance = "shop/db";
+        package = "experimental/cnpg-database";
+      };
+      got =
+        records
+          (failHere [
+            "m"
+            {
+              message = "n";
+              package = "other";
+            }
+          ]).thrown;
+      noPackage = records (caughtErrors.failFor { instance = "shop/db"; } "m").thrown;
+    in
+    (
+      got == [
+        {
+          instance = "shop/db";
+          package = "experimental/cnpg-database";
+          message = "m";
+        }
+        {
+          instance = "shop/db";
+          package = "other";
+          message = "n";
+        }
+      ]
+      &&
+        noPackage == [
+          {
+            instance = "shop/db";
+            message = "m";
+          }
+        ]
+    )
+    || throw "failFor: ${builtins.toJSON got} ${builtins.toJSON noPackage}";
+
   # scope.fail stops the build of the instance that calls it.
   lib-errors-scope-fail = evalFails (mkCluster [ { instances.app.bad.package = failingPackage; } ]);
 
-  # A failed assertion keeps its fields and gains the instance that raised
-  # it. The message no longer starts with the instance name. A cluster with a
-  # failed assertion does not build.
+  # A failed assertion and a warning keep their fields and gain the instance
+  # that raised them and the id of its package. A cluster with a failed
+  # assertion does not build.
   lib-errors-assertion-fields =
     let
       combined = meta.combineDiagnostics {
         instanceName = "web";
         namespaceName = "app";
+        packageId = "experimental/web";
         metaResult = {
           warnings = [ ];
           assertions = [ ];
         };
         packageResult = {
-          warnings = [ ];
+          warnings = [ "w" ];
           assertions = assertingPackage.assertions { };
         };
         structuralWarnings = [ ];
@@ -366,13 +411,22 @@ in
       {
         assertion = false;
         instance = "app/web";
+        package = "experimental/web";
         message = "replicas was removed.";
         id = "K0002";
         fix = "Set config.replicas.";
       }
     ]
+    &&
+      combined.allWarnings == [
+        {
+          instance = "app/web";
+          package = "experimental/web";
+          message = "w";
+        }
+      ]
     && evalFails asserting
-    || throw "assertions: ${builtins.toJSON combined.failedAssertions}";
+    || throw "assertions: ${builtins.toJSON combined.failedAssertions} ${builtins.toJSON combined.allWarnings}";
 
   # The warnings a package raises reach the file the CLI reads as records
   # with the instance, and a structural warning names its object.

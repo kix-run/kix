@@ -383,14 +383,22 @@ async fn update_bookkeeping_annotations_checked(
         })
 }
 
-/// One segment of an API server field path: `.spec`, `[name="x"]`, `[0]`, or
-/// `[*]` (matching any list element in a `kix.run/cede-fields` declaration).
+/// One segment of an API server field path: `.spec`, `[name="x"]`,
+/// `[containerPort=53,protocol="UDP"]`, `[0]`, or `[*]` (matching any list
+/// element in a `kix.run/cede-fields` declaration).
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Seg {
     Field(String),
-    Key(String, String),
+    /// A list element picked by the values of its key fields, in the order
+    /// the path names them.
+    Key(Vec<(String, Value)>),
     Index(usize),
     Any,
+}
+
+/// Return whether the list element `item` has every key value in `keys`.
+fn picks(keys: &[(String, Value)], item: &Value) -> bool {
+    keys.iter().all(|(k, v)| item.get(k) == Some(v))
 }
 
 /// Parse a field path such as `.webhooks[name="x"].rules` (with an optional
@@ -407,8 +415,7 @@ pub(super) fn parse_path(path: &str) -> Option<Vec<Seg>> {
             } else if let Ok(i) = inner.parse::<usize>() {
                 Seg::Index(i)
             } else {
-                let (k, v) = inner.split_once('=')?;
-                Seg::Key(k.to_string(), v.trim_matches('"').to_string())
+                Seg::Key(key_values(inner)?)
             };
             segs.push(seg);
             rest = &after[end + 1..];
@@ -426,6 +433,52 @@ pub(super) fn parse_path(path: &str) -> Option<Vec<Seg>> {
     if segs.is_empty() { None } else { Some(segs) }
 }
 
+/// Parse the key fields of a list element, `containerPort=53,protocol="UDP"`.
+/// The API server writes each value as JSON. A value that is not JSON, such
+/// as `name=x` in a `kix.run/cede-fields` declaration, is read as a string.
+fn key_values(inner: &str) -> Option<Vec<(String, Value)>> {
+    split_outside(inner, |c| c == ',')
+        .into_iter()
+        .map(|pair| {
+            let (k, v) = pair.split_once('=')?;
+            let v = serde_json::from_str(v).unwrap_or_else(|_| Value::String(v.to_string()));
+            Some((k.to_string(), v))
+        })
+        .collect()
+}
+
+/// Split `text` at each character `at` accepts, except inside brackets or a
+/// double-quoted string, so a list key such as
+/// `[containerPort=53,protocol="UDP"]` stays in one piece.
+fn split_outside(text: &str, at: impl Fn(char) -> bool) -> Vec<&str> {
+    let mut pieces = Vec::new();
+    let (mut depth, mut quoted, mut escaped) = (0usize, false, false);
+    let mut start = 0;
+    for (i, c) in text.char_indices() {
+        if quoted {
+            match c {
+                _ if escaped => escaped = false,
+                '\\' => escaped = true,
+                '"' => quoted = false,
+                _ => {}
+            }
+            continue;
+        }
+        match c {
+            '"' => quoted = true,
+            '[' => depth += 1,
+            ']' => depth = depth.saturating_sub(1),
+            _ if depth == 0 && at(c) => {
+                pieces.push(&text[start..i]);
+                start = i + c.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    pieces.push(&text[start..]);
+    pieces
+}
+
 /// Parse the field paths declared in `manifest`'s `kix.run/cede-fields`
 /// annotation.
 pub(crate) fn ceded_fields(manifest: &Value) -> Vec<Vec<Seg>> {
@@ -433,15 +486,21 @@ pub(crate) fn ceded_fields(manifest: &Value) -> Vec<Vec<Seg>> {
         .pointer("/metadata/annotations")
         .and_then(|a| a.get(keys::CEDE_FIELDS))
         .and_then(Value::as_str)
-        .map(|s| s.split(',').filter_map(|p| parse_path(p.trim())).collect())
+        .map(|s| {
+            split_outside(s, |c| c == ',')
+                .into_iter()
+                .filter_map(|p| parse_path(p.trim()))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
-/// Extract the dot-prefixed field paths named in an HTTP 409 conflict message
-/// (for example, `conflict with "cdi-operator" using v1: .spec.versions`).
-pub(super) fn conflict_paths(message: &str) -> Vec<String> {
-    message
-        .split(|c: char| c.is_whitespace() || c == ',')
+/// Extract the dot-prefixed field paths named in `text`, part or all of an
+/// HTTP 409 conflict message (for example,
+/// `conflict with "cdi-operator" using v1: .spec.versions`).
+pub(crate) fn conflict_paths(text: &str) -> Vec<String> {
+    split_outside(text, |c| c.is_whitespace() || c == ',')
+        .into_iter()
         .filter(|t| t.len() > 1 && t.starts_with('.'))
         .map(str::to_string)
         .collect()
@@ -461,10 +520,7 @@ fn step_mut<'a>(v: &'a mut Value, seg: &Seg) -> Option<&'a mut Value> {
     match seg {
         Seg::Field(f) => v.get_mut(f),
         Seg::Index(i) => v.get_mut(*i),
-        Seg::Key(k, val) => v
-            .as_array_mut()?
-            .iter_mut()
-            .find(|e| e.get(k).and_then(Value::as_str) == Some(val)),
+        Seg::Key(keys) => v.as_array_mut()?.iter_mut().find(|e| picks(keys, e)),
         Seg::Any => None,
     }
 }
@@ -482,9 +538,9 @@ fn remove_path(v: &mut Value, path: &[Seg]) -> bool {
                     false
                 }
             }),
-            Seg::Key(k, val) => v.as_array_mut().is_some_and(|a| {
+            Seg::Key(keys) => v.as_array_mut().is_some_and(|a| {
                 let before = a.len();
-                a.retain(|e| e.get(k).and_then(Value::as_str) != Some(val));
+                a.retain(|e| !picks(keys, e));
                 a.len() != before
             }),
             Seg::Any => false,

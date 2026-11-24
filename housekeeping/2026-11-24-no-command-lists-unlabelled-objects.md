@@ -1,0 +1,3 @@
+# 2026-11-24 · `cli/kix/src/cluster/inventory.rs` · No Kix command reports unlabelled objects in namespaces Kix manages.
+
+An object applied without `app.kubernetes.io/managed-by=kix`, such as a `HelmRelease` or `Deployment` applied with `kubectl`, never appears in `kix plan`, `kix plan --read-only`, `kix snapshot`, `kix status`, `kix gc`, `kix deploy`, or Kix operator reconciles. A Kix-managed namespace can therefore run live workloads that no plan or status check shows. Every live-cluster command starts from `sweep_managed`, which filters LIST calls by `app.kubernetes.io/managed-by=kix`. `docs/src/content/docs/reference/cli/diff.mdx` (`#objects-kix-did-not-apply`) documents this gap and gives a `kubectl` label-selector workaround.

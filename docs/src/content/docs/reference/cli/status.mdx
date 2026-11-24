@@ -7,9 +7,11 @@ import Command from '/src/components/Command.astro';
 
 `kix status` checks what Kix deployed. For every object of a Kix cluster's
 current deploy, it answers three questions: is the object on the cluster, does
-it still hold what Kix applied, and is it ready. It reads only the Kubernetes
-cluster through your kubeconfig. It does not evaluate or build anything, so it
-works outside a project directory.
+it still hold what Kix applied, and is it ready. It reads the Kubernetes
+cluster through your kubeconfig and works outside a project directory. Inside a
+project (or with `--flake`), if `CLUSTER` does not match any deploy record on
+the Kubernetes cluster, Kix evaluates `flake.nix` to look up the `name` set in
+that cluster's definition.
 
 `kix health`, `kix drift`, and `kix status --operator` were removed in 0.10.
 Use `kix status <cluster> --check presence`, `kix status [cluster] --check drift`,
@@ -28,7 +30,7 @@ kix status [CLUSTER] [--check presence|drift|readiness]... [--package <NAME>]
 
 | Argument or flag | Meaning |
 | --- | --- |
-| `[CLUSTER]` | Kix cluster to check. Without it, Kix checks every Kix cluster that has a current deploy on the Kubernetes cluster of the context. |
+| `[CLUSTER]` | Kix cluster to check: either its key in `flake.nix` or the name on its deploy records (`kix.run/cluster`). When omitted, Kix checks every Kix cluster with a current deploy in the selected Kubernetes context. |
 | `--check <CHECK>` | Run only this check: `presence`, `drift`, or `readiness`. Repeat it to run more than one. Without it, all three run. Every check reports a missing object. |
 | `--package <NAME>` | Show only this package, by instance name (`web`) or `namespace/instance` (`shop/web`). An error when no checked cluster has the package. The error lists the packages, or the five closest names when there are more than ten. |
 | `-o`, `--output` | `text` (default), `json`, or `yaml`. Other formats are refused. |
@@ -36,7 +38,9 @@ kix status [CLUSTER] [--check presence|drift|readiness]... [--package <NAME>]
 | `-q`, `--quiet` | Print only the objects with a problem. |
 | `--context <CONTEXT>` | Kubeconfig context to read. Defaults to the current context. |
 
-`--flake`, `--no-cache`, and `--override-input` have no effect. See
+`--no-cache` has no effect. `--flake` and `--override-input` apply only when
+`CLUSTER` matches no deploy record on the Kubernetes cluster and Kix evaluates
+`flake.nix` to look up the cluster's deployed `name`. See
 [Global flags](/docs/reference/cli/global-flags/).
 
 ## The checks
@@ -50,6 +54,8 @@ current deploy is the cluster's `Active` or `Degraded`
 | `presence` | Is the object on the cluster? | It is gone, for example after a `kubectl delete`. |
 | `drift` | Does the object still hold what Kix applied? | The fields Kix owns no longer hash to the object's `kix.run/applied-hash` stamp. |
 | `readiness` | Is the object ready? | It is not ready by the rules [`kix deploy`](/docs/reference/cli/deploy/) waits on, such as a Deployment with fewer ready replicas than it wants. |
+
+`kix status` checks only the objects listed in the current deploy record. It never reports extra objects on the cluster, whether orphaned from an earlier deploy or created outside Kix. See [Objects Kix did not apply](/docs/reference/cli/diff/#objects-kix-did-not-apply).
 
 A missing object is a problem under every check, because no check can run on
 an object that is gone. `kix status --check drift` and

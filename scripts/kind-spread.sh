@@ -47,9 +47,10 @@ kubectl --context "$CTX" get nodes -L topology.kubernetes.io/zone
 kubectl --context "$CTX" wait --for=condition=Ready nodes --all --timeout=180s
 nix build .#cluster-spread --extra-experimental-features pipe-operators -o result-spread
 # CRDs first (the PackageInstance kind), then everything.
-for f in $(find result-spread/ -name '*customresourcedefinition*.yaml'); do
-  kubectl --context "$CTX" apply -f "$f"
-done
+find result-spread/ -name '*customresourcedefinition*.yaml' -print0 |
+  while IFS= read -r -d '' f; do
+    kubectl --context "$CTX" apply -f "$f"
+  done
 kubectl --context "$CTX" wait --for=condition=Established crd --all --timeout=60s
 kubectl --context "$CTX" apply -f result-spread/ -R
 for d in zoned unspread pinned movable; do

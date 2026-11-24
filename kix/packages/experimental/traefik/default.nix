@@ -98,7 +98,6 @@ let
   controllerName = "traefik.io/gateway-controller";
 
   name = scope.instanceName;
-  who = "traefik ${scope.namespaceName}/${name}";
   # Cluster-scoped RBAC carries the namespace too, so instances with the
   # same name in two namespaces do not collide.
   clusterName = "${scope.namespaceName}-${name}";
@@ -150,7 +149,7 @@ let
 in
 {
   meta = {
-    version = lib.removePrefix "v" release;
+    version = release;
     description = "Traefik proxy as a Gateway API implementation (GatewayClass, Gateway, and data plane)";
     owner = "platform";
     defaultAliases = [ "gateway" ];
@@ -393,14 +392,12 @@ in
           if serviceSpecOwnedHits != [ ] then
             scope.fail (
               map (k: {
-                package = "traefik";
                 option = "service.spec.${k}";
                 message = "service.spec.${k} is set by the package, which ${serviceSpecOwned.${k}}";
               }) serviceSpecOwnedHits
             )
           else if serviceType == "ClusterIP" && config.service.spec.externalTrafficPolicy != null then
             scope.fail {
-              package = "traefik";
               option = "service.spec.externalTrafficPolicy";
               message = "service.spec.externalTrafficPolicy applies to NodePort and LoadBalancer Services, and the API server rejects it on ClusterIP.";
               fix = "Change service.spec.type or remove it.";
@@ -408,8 +405,8 @@ in
           else
             kix.mergeGuarded
               {
-                inherit who;
-                what = "service.spec";
+                inherit scope;
+                option = "service.spec";
                 locked = [
                   [ "selector" ]
                   [ "ports" ]
@@ -427,115 +424,105 @@ in
               }
               (lib.filterAttrs (_: v: v != null) config.service.spec);
 
-        # Traefik matches flag names in any case, accepts one or two leading
-        # dashes (paerser flag/flagparser.go), and turns a provider on when
-        # any key under it is set, so kix.guardArgs, which matches exact
-        # flags, cannot express these rules. flagOf gives "--<lowercase
-        # name>" for a flag and null for a value argument.
-        flagOf =
-          arg:
-          let
-            name = builtins.head (lib.splitString "=" arg);
-          in
-          if lib.hasPrefix "-" name then
-            "--${lib.toLower (lib.removePrefix "-" (lib.removePrefix "-" name))}"
-          else
-            null;
-        ownedFlags =
-          lib.listToAttrs (
-            map (
-              ep:
-              lib.nameValuePair "--entrypoints.${lib.toLower ep.name}.address" "the package derives it from the listener on port ${toString ep.port}; change the listeners instead."
-            ) entryPoints
-          )
-          // {
-            "--entrypoints.traefik.address" =
-              "the probes and the metrics Service use port ${toString internalPort}; remove it.";
-            "--ping" = "the probes use /ping on the internal entrypoint; remove it.";
-            "--ping.entrypoint" = "the probes use /ping on the internal entrypoint; remove it.";
-            "--metrics.prometheus" = "the package sets it from metrics.enabled; set that instead.";
-            "--metrics.prometheus.entrypoint" =
-              "the metrics Service scrapes the internal entrypoint on port ${toString internalPort}; remove it.";
-            "--providers.kubernetesgateway" = "the package turns the Gateway provider on; remove it.";
-            "--providers.kubernetesgateway.labelselector" =
-              "the package selects this instance's GatewayClass; remove it.";
-            "--providers.kubernetesgateway.statusaddress.service.name" =
-              "the package points it at the Traefik Service; remove it.";
-            "--providers.kubernetesgateway.statusaddress.service.namespace" =
-              "the package points it at the Traefik Service; remove it.";
-            "--providers.kubernetesgateway.experimentalchannel" =
-              "it makes Traefik watch TCPRoute, which needs experimental-channel CRDs and RBAC the package does not grant; remove it.";
-            "--configfile" =
-              "with a configuration file Traefik ignores every flag, including the ones the package sets; use extraArgs instead.";
-          };
-        # Any key under these turns the provider on.
-        refusedFamilies = {
-          "--providers.kubernetescrd" =
-            "Traefik's CRD provider needs Traefik's CRDs and RBAC, which the package does not install; route through the Gateway with kix.expose.";
-          "--providers.kubernetesingress" =
-            "the Ingress provider needs RBAC the package does not grant; route through the Gateway with kix.expose.";
-          "--providers.kubernetesingressnginx" =
-            "the ingress-nginx provider needs RBAC the package does not grant; route through the Gateway with kix.expose.";
-          "--providers.knative" = "the Knative provider needs RBAC the package does not grant; remove it.";
-        };
-        reasonFor =
-          arg:
-          let
-            flag = flagOf arg;
-            family = lib.findFirst (f: flag == f || lib.hasPrefix "${f}." flag) null (
-              builtins.attrNames refusedFamilies
-            );
-          in
-          if flag == null then
-            null
-          else if ownedFlags ? ${flag} then
-            "which this package does not accept: ${ownedFlags.${flag}}"
-          else if family != null then
-            "which this package does not accept: ${refusedFamilies.${family}}"
-          else
-            null;
-        argProblems = builtins.concatMap (
-          arg:
-          let
-            reason = reasonFor arg;
-          in
-          lib.optional (reason != null) {
-            package = "traefik";
-            option = "extraArgs";
-            message = "extraArgs sets \"${arg}\", ${reason}";
-          }
-        ) config.extraArgs;
-
-        args = [
-          "--global.checkNewVersion=false"
-          "--entryPoints.traefik.address=:${toString internalPort}"
-          "--ping=true"
-          "--providers.kubernetesGateway=true"
-          "--providers.kubernetesGateway.labelSelector=${
-            lib.concatStringsSep "," (lib.mapAttrsToList (k: v: "${k}=${v}") selectorLabels)
-          }"
-          "--providers.kubernetesGateway.statusAddress.service.name=${self.service.out.name}"
-          "--providers.kubernetesGateway.statusAddress.service.namespace=${scope.namespaceName}"
-        ]
-        # Traefik matches a listener to an entrypoint by the address suffix
-        # ":<port>", so the address carries no "/tcp".
-        ++ map (ep: "--entryPoints.${ep.name}.address=:${toString ep.port}") entryPoints
-        # The flag follows the toggle alone, so adding a prometheus instance
-        # does not restart Traefik.
-        ++ lib.optional config.metrics.enabled "--metrics.prometheus=true"
-        ++ config.extraArgs;
+        # Traefik's flag parser (paerser flag/flagparser.go) matches flag
+        # names in any case and accepts one or two leading dashes.
+        args = kix.mergeArgs {
+          inherit scope;
+          parser = "paerser";
+          args = [
+            "--global.checkNewVersion=false"
+            {
+              flags = [ "--entryPoints.traefik.address=:${toString internalPort}" ];
+              reason = "the probes and the metrics Service use port ${toString internalPort}.";
+            }
+            {
+              flags = [ "--ping=true" ];
+              names = [ "--ping.entrypoint" ];
+              reason = "the probes use /ping on the internal entrypoint.";
+            }
+            {
+              flags = [ "--providers.kubernetesGateway=true" ];
+              reason = "this package runs Traefik as a Gateway API controller.";
+            }
+            {
+              flags = [
+                "--providers.kubernetesGateway.labelSelector=${
+                  lib.concatStringsSep "," (lib.mapAttrsToList (k: v: "${k}=${v}") selectorLabels)
+                }"
+              ];
+              reason = "Traefik must select this instance's GatewayClass.";
+            }
+            {
+              flags = [
+                "--providers.kubernetesGateway.statusAddress.service.name=${self.service.out.name}"
+                "--providers.kubernetesGateway.statusAddress.service.namespace=${scope.namespaceName}"
+              ];
+              reason = "Gateway status must publish the address of this instance's Service.";
+            }
+          ]
+          # Traefik matches a listener to an entrypoint by the address suffix
+          # ":<port>", so the address carries no "/tcp".
+          ++ map (ep: {
+            flags = [ "--entryPoints.${ep.name}.address=:${toString ep.port}" ];
+            from = "the listener on port ${toString ep.port} in listeners";
+            fix = "Remove it from extraArgs and edit listeners instead.";
+          }) entryPoints
+          ++ [
+            # The flag follows the toggle alone, so adding a prometheus
+            # instance does not restart Traefik.
+            {
+              flags = lib.optional config.metrics.enabled "--metrics.prometheus=true";
+              names = [ "--metrics.prometheus" ];
+              from = "the metrics.enabled option";
+              fix = "Remove it from extraArgs and set metrics.enabled instead.";
+            }
+            {
+              names = [ "--metrics.prometheus.entrypoint" ];
+              reason = "the metrics Service scrapes the internal entrypoint on port ${toString internalPort}.";
+            }
+            {
+              names = [ "--providers.kubernetesGateway.experimentalChannel" ];
+              reason = "enabling the experimental channel makes Traefik watch TCPRoute, which requires experimental Gateway API CRDs and RBAC permissions this package does not grant.";
+            }
+            {
+              names = [ "--configFile" ];
+              reason = "when given a configuration file, Traefik ignores all CLI flags, including those set by this package.";
+              fix = "Remove --configFile from extraArgs and pass static configuration as CLI flags in extraArgs instead.";
+            }
+            # A provider turns on when any key under it is set, so these are
+            # refused as families.
+            {
+              families = [ "--providers.kubernetesCRD" ];
+              reason = "Traefik's CRD provider requires Traefik CRDs and RBAC permissions that this package does not install.";
+              fix = "Remove it from extraArgs and route traffic through Traefik's Gateway with HTTPRoute resources instead (packages using kix.expose create HTTPRoutes automatically).";
+            }
+            {
+              families = [ "--providers.kubernetesIngress" ];
+              reason = "the Ingress provider requires RBAC permissions that this package does not grant.";
+              fix = "Remove it from extraArgs and route traffic through Traefik's Gateway with HTTPRoute resources instead (packages using kix.expose create HTTPRoutes automatically).";
+            }
+            {
+              families = [ "--providers.kubernetesIngressNGINX" ];
+              reason = "the ingress-nginx provider requires RBAC permissions that this package does not grant.";
+              fix = "Remove it from extraArgs and route traffic through Traefik's Gateway with HTTPRoute resources instead (packages using kix.expose create HTTPRoutes automatically).";
+            }
+            {
+              families = [ "--providers.knative" ];
+              reason = "the Knative provider requires RBAC permissions that this package does not grant.";
+            }
+          ];
+        } config.extraArgs;
 
         traefikEnv = builtins.filter (lib.hasPrefix "TRAEFIK_") (builtins.attrNames config.env);
         env =
           if traefikEnv != [ ] then
             scope.fail {
-              package = "traefik";
               option = "env";
               message = "env sets ${lib.concatStringsSep ", " traefikEnv}, which Traefik ignores because it reads its configuration from flags.";
               fix = "Pass the setting in extraArgs.";
             }
           else
-            kix.mkEnvVars (kix.mergeEnv { inherit who; } config.env);
+            kix.mkEnvVars (kix.mergeEnv { inherit scope; } config.env);
 
         clusterRbac = mkClusterRoleSet scope {
           subjects = [
@@ -583,7 +570,7 @@ in
         # Traefik's Gateway provider does not start while any watched kind
         # is missing, so the Deployment requires each CRD.
         crds = kix.contracts.experimental.gatewayApi.helpers.crdsFor {
-          who = "${scope.namespaceName}/${name}";
+          inherit scope;
           inherit gatewayApi;
           kinds = [
             "GatewayClass"
@@ -611,12 +598,9 @@ in
       if listenerProblems != [ ] then
         scope.fail (
           map (p: {
-            package = "traefik";
             message = p;
           }) listenerProblems
         )
-      else if argProblems != [ ] then
-        scope.fail argProblems
       else
         {
           serviceAccount = scope.mkResource {
@@ -750,7 +734,7 @@ in
             requires = builtins.filter (r: r != null) [
               self.gateway
             ];
-            out = kix.contracts.gateway.check who {
+            out = kix.contracts.gateway.check scope {
               gatewayRef = {
                 name = self.gateway.out.name;
                 namespace = scope.namespaceName;

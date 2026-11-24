@@ -113,12 +113,13 @@
 # Upgrades: n8n migrates its database when a pod starts, and every pod
 # takes a lock in the database first, so only one pod migrates. The
 # Recreate strategy stops the old main pod before the new one starts.
-# Upstream documents no way back to an older version. n8n 2.48.6 adds no
-# database migration to 2.48.5. n8n 2.41.5 and 2.48.5 started on a
-# database that 2.48.6 had migrated and read its workflows, credentials,
-# and executions, so going back from 2.48.6 is deploying the previous
-# package. For a larger step back, restore a database backup taken before
-# the upgrade.
+# Upstream documents no way back to an older version. n8n 2.48.8 adds one
+# database migration to 2.48.6, which gives existing custom instance roles
+# the permission to read the migration report. n8n 2.48.6 started on a
+# database that 2.48.8 had migrated and read its workflows, credentials,
+# and executions, and n8n 2.41.5 did the same on a database from 2.48.6, so
+# going back from 2.48.8 is deploying the previous package. For a larger
+# step back, restore a database backup taken before the upgrade.
 
 {
   scope,
@@ -128,10 +129,9 @@
 }:
 
 let
-  release = "2.48.6";
+  release = "2.48.8";
 
   name = scope.instanceName;
-  who = "n8n ${scope.namespaceName}/${name}";
 
   httpPort = 5678;
   # n8n's default broker port on a worker in external task-runner mode.
@@ -175,7 +175,6 @@ let
           lib.toIntBase10 v
         else
           scope.fail {
-            package = "n8n";
             option = "env.${var}";
             message = "env.${var} is \"${v}\". n8n reads it as a whole number of MiB (for example \"64\").";
           };
@@ -212,7 +211,7 @@ in
     network.intents.workflows.egress = [ { to = "world"; } ];
   };
 
-  deps.database.assertions = dep: kix.contracts.postgresDatabase.assertions who dep;
+  deps.database.assertions = kix.contracts.postgresDatabase.assertions;
 
   # n8n has no Sentinel client, and with Sentinel the valkey Service also
   # routes to read-only replicas, so n8n asks its valkey for a standalone
@@ -223,7 +222,7 @@ in
     # An import is not reached by the injection above.
     assertions =
       dep:
-      kix.contracts.redis.assertions who dep
+      kix.contracts.redis.assertions dep
       ++ lib.optional (kix.contracts.redis.helpers.usesSentinel dep) {
         assertion = false;
         message = "n8n needs a standalone valkey with one pod: it has no Sentinel client, so its queue writes would reach read-only replicas through the valkey Service. Wire a valkey with sentinel.enabled = false.";
@@ -234,7 +233,7 @@ in
     image = kix.options.image {
       repository = "docker.io/n8nio/n8n";
       tag = release;
-      digest = "sha256:eafe48609be09a2d56dd3628b29932a12c2e81a06ac5a309205652ea36146619";
+      digest = "sha256:e0df076a41076127d5f765e05acb8ba746bddff86442a92269c0f5a7219a7e4b";
       description = "The n8n image, for the main instance, the workers, and the init container that writes the task-runner token.";
     };
 
@@ -291,7 +290,7 @@ in
       image = kix.options.image {
         repository = "docker.io/n8nio/runners";
         tag = release;
-        digest = "sha256:4f99e9d82bb26565eae8cb00b687a26e7ce09a8ab476cb39ac9c1ef2d8ecd132";
+        digest = "sha256:ae28d2510cfe84731825e5bf2fcb675f52a612802fd1ed2bb3f5baedeed9883d";
         tagText = "config.image.tag";
         description = "The task-runner sidecar image. Its version must match the n8n image's, so its tag follows `image.tag`.";
       };
@@ -353,7 +352,7 @@ in
         exposure = self.exposure;
 
         ek = kix.contracts.secret.helpers.use {
-          inherit who;
+          inherit scope;
           arg = "encryptionKey";
           dep = encryptionKey;
           keys = [ "key" ];
@@ -472,7 +471,7 @@ in
           role:
           kix.mkEnvVars (
             kix.mergeEnv {
-              inherit who;
+              inherit scope;
               defaults = defaultsFor role;
               owned = [
                 databaseGroup
@@ -486,7 +485,8 @@ in
 
         runnerEnv = kix.mkEnvVars (
           kix.mergeEnv {
-            who = "${who} runners.env";
+            inherit scope;
+            option = "runners.env";
             defaults = lib.getAttrs (lib.intersectLists runnerSharedVars (lib.attrNames config.env)) config.env;
             owned = [
               (group

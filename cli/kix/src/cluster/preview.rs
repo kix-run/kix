@@ -111,6 +111,11 @@ pub enum Refusal {
     Hydration {
         message: String,
     },
+    /// A SOPS file has a top-level value that is a map, a list, or null, so
+    /// Kix cannot make the Secret's keys from it and nothing was sent.
+    SopsNotFlat {
+        message: String,
+    },
     Other {
         message: String,
     },
@@ -135,6 +140,7 @@ impl Refusal {
             | Refusal::Forbidden { message }
             | Refusal::NamespaceMissing { message, .. }
             | Refusal::Hydration { message }
+            | Refusal::SopsNotFlat { message }
             | Refusal::Other { message } => message.clone(),
             Refusal::UnknownKind { kind } => {
                 format!("the apiserver does not serve kind {kind}")
@@ -173,8 +179,10 @@ impl Refusal {
 
     /// Classify a secret hydration failure.
     pub(crate) fn of_hydration(err: &SecretError) -> Refusal {
-        Refusal::Hydration {
-            message: err.to_string(),
+        let message = err.to_string();
+        match err {
+            SecretError::NotFlat { .. } => Refusal::SopsNotFlat { message },
+            _ => Refusal::Hydration { message },
         }
     }
 
@@ -291,7 +299,7 @@ pub(crate) fn conflict_owners(message: &str) -> Vec<ConflictOwner> {
         let manager = after[..end].to_string();
         let tail = &after[end + 1..];
         let next = tail.find(" with \"").unwrap_or(tail.len());
-        let fields = field_paths(&tail[..next]);
+        let fields = crate::cluster::apply::conflict_paths(&tail[..next]);
         match owners.iter_mut().find(|o| o.manager == manager) {
             Some(o) => o.fields.extend(fields),
             None => owners.push(ConflictOwner { manager, fields }),
@@ -299,31 +307,6 @@ pub(crate) fn conflict_owners(message: &str) -> Vec<ConflictOwner> {
         rest = &tail[next..];
     }
     owners
-}
-
-/// Extract `.`-prefixed field paths from `text`, splitting on whitespace and
-/// commas outside brackets so keyed list selectors stay intact.
-fn field_paths(text: &str) -> Vec<String> {
-    let mut paths = Vec::new();
-    let mut current = String::new();
-    let mut depth = 0usize;
-    for c in text.chars() {
-        match c {
-            '[' => depth += 1,
-            ']' => depth = depth.saturating_sub(1),
-            _ => {}
-        }
-        if depth == 0 && (c.is_whitespace() || c == ',') {
-            paths.push(std::mem::take(&mut current));
-        } else {
-            current.push(c);
-        }
-    }
-    paths.push(current);
-    paths
-        .into_iter()
-        .filter(|t| t.len() > 1 && t.starts_with('.'))
-        .collect()
 }
 
 /// The answers a dry run collected, in the order they arrived.
@@ -350,6 +333,29 @@ impl Journal {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A SOPS file that decrypts but has the wrong shape is its own refusal,
+    /// so the plan does not call it a decryption failure.
+    #[test]
+    fn a_sops_file_that_is_not_flat_is_not_a_decryption_failure() {
+        let not_flat = SecretError::NotFlat {
+            path: "/x/api.enc.yaml".into(),
+            key: "metadata".into(),
+            found: "a map",
+        };
+        assert!(matches!(
+            Refusal::of_hydration(&not_flat),
+            Refusal::SopsNotFlat { message } if message.starts_with("[K6746] ")
+        ));
+        let failed = SecretError::DecryptionFailed {
+            path: "/x/api.enc.yaml".into(),
+            message: "no key".into(),
+        };
+        assert!(matches!(
+            Refusal::of_hydration(&failed),
+            Refusal::Hydration { .. }
+        ));
+    }
 
     #[test]
     fn a_single_conflict_names_its_manager_and_field() {

@@ -1,3 +1,0 @@
-# 2026-11-18 · `kix/packages/experimental/clickhouse` · The clickhouse-server 26.3.33.24 tag now resolves to a different digest than the one the packages pinned.
-
-`crane digest docker.io/clickhouse/clickhouse-server:26.3.33.24` returns `sha256:ca62d1a9…` (Docker Hub shows it updated 2026-09-25). The packages pinned `sha256:810861a2…`, which still pulls. ClickHouse rebuilds a release tag after publishing it. A bump check that compares the old tag's digest with the pin fails for this image although the pin is valid, and the 26.8.39.19 pin can drift the same way. The keeper tag 26.3.32.14 still matches its pin.

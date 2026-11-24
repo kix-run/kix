@@ -21,9 +21,9 @@
       craneLib = crane.mkLib pkgs;
 
       commonArgs = {
-        # kix-core/runtime/programs.json and the release keys in
-        # kix/release-keys/ are compiled into Kix, so keep them beside the
-        # Rust sources.
+        # kix-core/runtime/programs.json and the public keys in
+        # kix/release-keys/ and kix/index-keys/ are compiled into Kix, so
+        # keep them beside the Rust sources.
         src = lib.cleanSourceWith {
           src = ../cli;
           filter =
@@ -32,7 +32,9 @@
             || lib.hasSuffix "/cli/kix-core/runtime" path
             || lib.hasSuffix "/cli/kix-core/runtime/programs.json" path
             || lib.hasSuffix "/cli/kix/release-keys" path
-            || (lib.hasInfix "/cli/kix/release-keys/" path && lib.hasSuffix ".pub" path);
+            || (lib.hasInfix "/cli/kix/release-keys/" path && lib.hasSuffix ".pub" path)
+            || lib.hasSuffix "/cli/kix/index-keys" path
+            || (lib.hasInfix "/cli/kix/index-keys/" path && lib.hasSuffix ".pub" path);
         };
         strictDeps = true;
 

@@ -76,7 +76,6 @@ let
   release = "v3.16.0";
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "prometheus ${ns}/${name}";
 
   replicas = kix.availability.pick availability {
     none = 1;
@@ -89,7 +88,7 @@ let
 in
 {
   meta = {
-    version = lib.removePrefix "v" release;
+    version = release;
     description = "Prometheus time-series database";
     owner = "platform";
     defaultAliases = [ "prometheusServer" ];
@@ -177,7 +176,6 @@ in
           alertmanager.out
         else
           scope.fail {
-            package = "prometheus";
             message = "deps.alertmanager resolved to an instance whose out has no namespace and portName, so spec.alerting cannot name its Service.";
             fix = "Wire an alertmanager instance from packages.experimental.alertmanager. For an Alertmanager outside the cluster, give its address in extraSpec.additionalAlertManagerConfigs and let the kix.mkImport answer another alias, so this instance does not bind it.";
           };
@@ -247,7 +245,7 @@ in
       };
 
       spec = kix.mergeGuarded {
-        inherit who;
+        inherit scope;
         locked = [
           [ "image" ]
           [ "version" ]

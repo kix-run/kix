@@ -5,6 +5,8 @@ let
   compose = import ./compose.nix { inherit lib; };
   durations = import ./durations.nix { inherit lib; };
   storageClass = import ./storage-class.nix { inherit lib; };
+  snapshotClass = import ./snapshot-class.nix { inherit lib; };
+  toleration = import ./toleration.nix { inherit lib; };
   versions = import ../core/version.nix { inherit lib; };
   availability = import ../core/availability.nix { inherit lib; };
   scorecard = import ../scorecard.nix { inherit lib; };
@@ -19,10 +21,24 @@ compose
     // {
       # Define a StorageClass submodule option (`vocab/storage-class.nix`).
       storageClass = storageClass.type;
+      # Define a VolumeSnapshotClass submodule option (`vocab/snapshot-class.nix`).
+      volumeSnapshotClass = snapshotClass.type;
+      # Define a pod toleration submodule option (`vocab/toleration.nix`).
+      toleration = toleration.type;
     };
-  # Render StorageClasses from `kix.types.storageClass` values and pick the
-  # default class for consumers that do not name one (`vocab/storage-class.nix`).
-  storage.mkClasses = storageClass.mkClasses;
+  storage = {
+    # Render StorageClasses from `kix.types.storageClass` values and pick the
+    # default class for consumers that do not name one (`vocab/storage-class.nix`).
+    inherit (storageClass) mkClasses;
+    # Check and render a CSI driver's VolumeSnapshotClasses from
+    # `kix.types.volumeSnapshotClass` values (`vocab/snapshot-class.nix`).
+    inherit (snapshotClass) snapshotClassProblems mkSnapshotClasses;
+  };
+  # Check `kix.types.toleration` values against the apiserver's rules, and
+  # render them for a pod spec (`vocab/toleration.nix`).
+  tolerations = {
+    inherit (toleration) problems render;
+  };
   # The contracts in `kix/contracts`, by name, with the experimental ones
   # under `contracts.experimental`.
   contracts = import ../../contracts { inherit lib; };
@@ -39,9 +55,10 @@ compose
     };
   };
   # Compare version strings such as a cluster's `k8sVersion`. Both return
-  # null when the version is less precise than the bound.
+  # null when the version is less precise than the bound. `ofTag` reads the
+  # version a tag names, as `kix.image.version` does for an image.
   version = {
-    inherit (versions) atLeast atMost;
+    inherit (versions) atLeast atMost ofTag;
   };
   # Map availability levels to replica counts, quorums, and topology spread
   # constraints (`core/availability.nix`). Single-replica workloads set a

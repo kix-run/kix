@@ -39,7 +39,7 @@ Both project builders ([`kix.toml`](/docs/reference/kix-toml/)) run the same pin
 - **Under `builder = "kix"` (the default):** Kix runs the `helm` programs in the Kix runtime and writes the fetched charts and rendered manifests into Kix's local store (`~/.cache/kix/store`).
 - **Under `builder = "nix"`:** The machine's Nix fetches the chart and runs `helm template` during evaluation (`allow-import-from-derivation`).
 
-Because rendered chart hashes depend on the exact Helm version, Kix pins the Helm versions in `kix/lib/helm-versions.json`. A project on a release uses a Kix library of the same version as Kix, so both name the same Helm versions. [`kix upgrade`](/docs/reference/cli/upgrade/) moves the Kix library with the project's version of Kix.
+Because rendered chart hashes depend on the exact Helm version, Kix pins the Helm versions in `kix/lib/helm-versions.json`. Each cluster runs the version of Kix that matches its Kix library, so Kix and the Kix library always use the same Helm versions. [`kix upgrade`](/docs/reference/cli/upgrade/) updates the Kix library tag in `flake.nix` and `flake.lock` so both stay on the same version.
 
 Kix supports three tiers of Helm integration depending on how much control you need:
 
@@ -62,6 +62,23 @@ Before wrapping the rendered chart resources, `kix/lib/helm-dag.nix` analyzes th
 - **Custom resources to CRDs:** Every custom resource in the chart is linked to the chart's own `CustomResourceDefinition` for that group and kind, and any CRD builders exposed on `out.crds.<Kind>` automatically wait for both CRD establishment and the chart's controller workloads (which may serve admission or conversion webhooks).
 
 Kix turns these inferred relationships into real `requires` dependencies before sealing each resource. If a chart contains an implicit runtime dependency that does not appear in manifest fields (for example, a proxy Deployment whose startup script dials a sibling StatefulSet by a hardcoded name), package authors can add it with `extraEdges`. For cross-package connections into a Helm chart, passing resolved dependencies in `importChart`'s `deps = [ ... ]` argument collects their `out` string contexts so Kix can still derive network policy egress rules.
+
+## Connecting a chart to other packages
+
+Passing an output such as `dep.out.fqdn` in a chart's `values` writes the right address into the rendered YAML, but creates no deploy-ordering dependency and no network policy rule. Before running `helm template`, Kix serializes `values` to JSON, which strips Kix's dependency metadata. When network policy is enabled, the chart's workloads get only DNS egress.
+
+To generate network policies from a chart to another package, pass the upstream dependency in `deps = [ dep ... ]` on `scope.helm.importChart` (and keep `dep` as an argument of the package's `build` function). Kix attaches the dependency metadata from every top-level string in `dep.out` (such as `out.name`, `out.fqdn`, and `out.url`) to every workload in the chart. For nested outputs such as `dep.out.byKind.<Kind>.<name>`, pass those strings in `networkDeps = [ ... ]`. When network policy is enabled, Kix generates an egress policy from each chart workload to the dependency Service's pods on its target port, plus a matching ingress policy on the dependency's pods. On chart packages (`meta.isHelm = true`, which `kix.helmChart` sets automatically), Kix also prints a warning when network policy is enabled: `"Kix may not detect every connection between workloads in this Helm chart. Review the generated network policies and add any missing rules"`.
+
+`deps` gives only partial deploy ordering:
+
+- **With network policy enabled:** Each chart workload waits for cluster DNS and for its generated policies, and the egress policy waits for the dependency's Service. As a result, Kix deploys the chart's workloads after that Service.
+- **With network policy disabled:** Each chart workload waits only for cluster DNS, with no ordering link to the dependency.
+
+In neither case do chart workloads wait for the dependency's own workload (its Deployment or StatefulSet). Kix cannot order a chart's workloads after another package's workloads today.
+
+`kix.helmChart` does not accept `deps` or `networkDeps`. To connect a chart to another package, wrap it in a Tier 2 package that calls `scope.helm.importChart`. See [Cross-package wiring and network policy](/docs/reference/helm-and-imports/#cross-package-wiring-and-network-policy) for the full argument reference.
+
+If a chart renders its own `NetworkPolicy` templates, Kix applies them alongside its generated `CiliumNetworkPolicy` objects, and Cilium enforces both. Disable the chart's built-in policies so one set of rules governs traffic: either turn them off in `values` (for example, `values.networkPolicy.enabled = false`; check the chart's `values.yaml` for the exact key) or filter them out with `patchResources` on `scope.helm.importChart` or `kix.helmChart`.
 
 ## Resource adoption and external imports
 

@@ -133,10 +133,12 @@ let
       gatewayNs ? "gwns",
       gatewayPackage ? envoyGatewayPackage,
       ingress ? false,
+      ingressPackage ? stubIngressNginx,
       issuer ? false,
       domain ? "example.test",
+      build ? mkCluster,
     }:
-    mkCluster (
+    build (
       [
         (
           { ref, ... }:
@@ -161,7 +163,7 @@ let
         }
         // lib.optionalAttrs (gatewayConfig != { }) { config = gatewayConfig; };
       }
-      ++ lib.optional ingress { instances.ingressns.ingress-nginx.package = stubIngressNginx; }
+      ++ lib.optional ingress { instances.ingressns.ingress-nginx.package = ingressPackage; }
       ++ lib.optional issuer { instances.issuerns.issuer.package = stubClusterIssuer; }
     );
 
@@ -200,6 +202,56 @@ let
     protocol = "HTTPS";
     tls.certificateRefs = [ { name = "wildcard-tls"; } ];
     allowedRoutes.namespaces.from = "All";
+  };
+
+  # The evaluator loaded so that `kix.fail` returns `{ thrown = ...; }`,
+  # with the full text of the error.
+  caughtLib = import ../caught.nix { inherit lib; };
+  evalCaught = caughtLib.loadCaughtFull ../../eval {
+    inherit lib;
+    k8s = import ../../core { inherit lib; };
+    self = ../../../..;
+  };
+  mkClusterCaught =
+    modules:
+    evalCaught.buildCluster {
+      name = "test";
+      inherit modules;
+    };
+
+  # An ingress controller that publishes no out.ingressClassName.
+  classlessIngress = stubIngressNginx // {
+    build =
+      { self, scope, ... }:
+      {
+        cm = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ConfigMap";
+          name = "controller";
+        };
+        root = self.cm;
+      };
+  };
+
+  # The web app with `kix.expose` taken from the build's own `kix`, so the
+  # caught evaluator renders its errors.
+  webWithOwnExpose = (mkWebPackage { }) // {
+    build = [
+      (builtins.head (mkWebPackage { }).build)
+      (
+        {
+          self,
+          config,
+          clusterConfig,
+          scope,
+          lib,
+          kix,
+          ingressNginx ? null,
+          ...
+        }@args:
+        kix.expose { service = "service"; } args
+      )
+    ];
   };
 
   failsWith = args: !(builtins.tryEval (builtins.deepSeq (urlFor args) true)).success;
@@ -819,4 +871,33 @@ in
       && domainRule "cluster.local" [ (configMapWith "a.b.svc.cluster.local") ] == [ ]
     )
     || throw "clusterDomainLiteral";
+
+  # An ingressNginx dependency without out.ingressClassName fails through
+  # kix.fail and names the missing key.
+  lib-expose-domain-version-ingress-class-missing =
+    let
+      args = {
+        ingress = true;
+        ingressPackage = classlessIngress;
+      };
+      ingressOf = cluster: byName "web" (ofKind "Ingress" (manifests cluster));
+      rendered =
+        (ingressOf (
+          mkExposeCluster (
+            args
+            // {
+              app = webWithOwnExpose;
+              build = mkClusterCaught;
+            }
+          )
+        )).spec.ingressClassName.thrown or "";
+      record = builtins.head (caughtLib.records rendered);
+    in
+    (
+      fails (manifests (mkExposeCluster args))
+      && lib.hasInfix "Kix cannot build Ingress appns/web because the ingressNginx dependency does not set out.ingressClassName (the class name for spec.ingressClassName)." record.message
+      && record.instance == "appns/web"
+      && record.dependency == "ingressNginx"
+    )
+    || throw "ingress-class-missing: ${rendered}";
 }

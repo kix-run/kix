@@ -9,9 +9,9 @@
   "commands": [
     {
       "command": "kix check how-to-application",
-      "stdout": " TOOL  RESULT  DETAILS   \n eval  fail    see below \n\nA definition for option `instances.how-to-app.preview.config.environment' is not of type `one of \"preview\", \"production\"'. Definition values:\n- In `<unknown-file>, via option instances.how-to-app.preview.config': \"staging\"\n(147 stack frame(s) hidden; run with -v to show them)\n",
+      "stdout": " TOOL  RESULT  DETAILS   \n eval  fail    see below \n\nA definition for option `instances.how-to-app.preview.config.environment' is not of type `one of \"preview\", \"production\"'. Definition values:\n- In `<unknown-file>, via option instances.how-to-app.preview.config': \"staging\"\n(150 stack frame(s) hidden; run with -v to show them)\n",
       "stderr": "",
-      "stdoutDrift": "\n(147 stack frame(s) hidden; run with -v to show them)\n- In `<unknown-file>, via option instances.how-to-app.preview.config': \"staging\"\nA definition for option `instances.how-to-app.preview.config.environment' is not of type `one of \"preview\", \"production\"'. Definition values:\nTOOL RESULT DETAILS\neval fail see below\n",
+      "stdoutDrift": "\n(150 stack frame(s) hidden; run with -v to show them)\n- In `<unknown-file>, via option instances.how-to-app.preview.config': \"staging\"\nA definition for option `instances.how-to-app.preview.config.environment' is not of type `one of \"preview\", \"production\"'. Definition values:\nTOOL RESULT DETAILS\neval fail see below\n",
       "stderrDrift": "",
       "exitCode": 1
     }

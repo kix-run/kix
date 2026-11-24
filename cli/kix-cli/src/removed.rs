@@ -733,87 +733,87 @@ mod tests {
             (
                 &["kix", "apply", "c"][..],
                 &["kix", "deploy", "c"][..],
-                "[K9947]",
+                "K9947",
             ),
             (
                 &["kix", "inspect", "c"],
                 &["kix", "list", "resources", "c"],
-                "[K0450]",
+                "K0450",
             ),
             (
                 &["kix", "images", "c", "--sources"],
                 &["kix", "list", "images", "c", "--sources"],
-                "[K0450]",
+                "K0450",
             ),
             (
                 &["kix", "list", "packages", "--cluster", "c"],
                 &["kix", "list", "packages", "c"],
-                "[K0450]",
+                "K0450",
             ),
             (
                 &["kix", "snapshot", "save", "c", "d"],
                 &["kix", "snapshot", "c", "--out", "d"],
-                "[K2314]",
+                "K2314",
             ),
             (
                 &["kix", "bundle", "c", "f"],
                 &["kix", "bundle", "c", "--out", "f"],
-                "[K2314]",
+                "K2314",
             ),
             (
                 &["kix", "plan", "c", "--save", "f"],
                 &["kix", "plan", "c", "--out", "f"],
-                "[K2314]",
+                "K2314",
             ),
             (
                 &["kix", "diff", "c", "--from", "x", "--save", "f"],
                 &["kix", "diff", "c", "--from", "x", "--out", "f"],
-                "[K2314]",
+                "K2314",
             ),
             (
                 &["kix", "diff", "c"],
                 &["kix", "plan", "c", "--read-only"],
-                "[K3143]",
+                "K3143",
             ),
             (
                 &["kix", "plan", "c", "--current-activation"],
                 &["kix", "plan", "c", "--offline"],
-                "[K3428]",
+                "K3428",
             ),
             (
                 &["kix", "deploy", "c", "--current-activation"],
                 &["kix", "deploy", "c", "--offline"],
-                "[K3428]",
+                "K3428",
             ),
             (
                 &["kix", "deploy", "c", "--prune-mode", "no"],
                 &["kix", "deploy", "c", "--skip-orphan-check"],
-                "[K4285]",
+                "K4285",
             ),
             (
                 &["kix", "deploy", "c", "--tui"],
                 &["kix", "deploy", "c", "--log-format", "tui"],
-                "[K5429]",
+                "K5429",
             ),
             (
                 &["kix", "deploy", "c", "--group-by-ns"],
                 &["kix", "deploy", "c", "--group-by", "namespace"],
-                "[K5429]",
+                "K5429",
             ),
             (
                 &["kix", "deploy", "c", "--fold-height", "9"],
                 &["kix", "deploy", "c"],
-                "[K5429]",
+                "K5429",
             ),
             (
                 &["kix", "rollback", "c", "--list"],
                 &["kix", "history", "c"],
-                "[K5914]",
+                "K5914",
             ),
             (
                 &["kix", "gc", "c", "--hard"],
                 &["kix", "gc", "c", "--full-scan"],
-                "[K9205]",
+                "K9205",
             ),
             (
                 &["kix", "gc", "c", "--hard", "--include-unstamped"],
@@ -825,34 +825,30 @@ mod tests {
                     "--include",
                     "unstamped,copies",
                 ],
-                "[K9205]",
+                "K9205",
             ),
             (
                 &["kix", "export", "c", "--for", "audit"],
                 &["kix", "export", "c", "--with-kix-metadata"],
-                "[K6794]",
+                "K6794",
             ),
             (
                 &["kix", "self", "update"],
                 &["kix", "self", "upgrade"],
-                "[K4616]",
+                "K4616",
             ),
             (
                 &["kix", "upgrade", "--preview"],
                 &["kix", "upgrade", "--dry-run"],
-                "[K4616]",
+                "K4616",
             ),
             (
                 &["kix", "upgrade", "--ack", "m"],
                 &["kix", "upgrade", "--acknowledge", "m"],
-                "[K4616]",
+                "K4616",
             ),
         ] {
-            assert_eq!(
-                refused_id(old).map(|id| format!("[{id}]")).as_deref(),
-                Some(id),
-                "{old:?}"
-            );
+            assert_eq!(refused_id(old), Some(id), "{old:?}");
             assert_eq!(refused_id(new), None, "{new:?}");
         }
     }

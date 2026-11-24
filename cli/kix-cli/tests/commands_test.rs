@@ -29,7 +29,7 @@ fn list_clusters() {
         .args(["list", "clusters"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("example"));
+        .stdout(predicate::str::contains("cli-fixture"));
 }
 
 /// A format the command does not print stops it before it evaluates
@@ -69,7 +69,7 @@ fn kix_output_is_refused() {
 fn a_bad_command_line_exits_1() {
     kix().args(["list", "clusters", "--bogus"]).assert().code(1);
     kix()
-        .args(["check", "example", "--sarif"])
+        .args(["check", "cli-fixture", "--sarif"])
         .assert()
         .code(1)
         .stderr(predicate::str::contains("[K0719]"))
@@ -79,7 +79,7 @@ fn a_bad_command_line_exits_1() {
 #[test]
 fn check_prints_sarif() {
     let out = kix()
-        .args(["check", "example", "-o", "sarif"])
+        .args(["check", "cli-fixture", "-o", "sarif"])
         .output()
         .unwrap();
     let sarif: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
@@ -90,7 +90,7 @@ fn check_prints_sarif() {
 #[test]
 fn build_yaml() {
     kix()
-        .args(["build", "example"])
+        .args(["build", "cli-fixture"])
         .assert()
         .success()
         .stdout(predicate::str::contains("apiVersion"));
@@ -99,27 +99,27 @@ fn build_yaml() {
 #[test]
 fn check_passes() {
     kix()
-        .args(["check", "example"])
+        .args(["check", "cli-fixture"])
         .assert()
         .success()
         .stdout(predicate::str::contains("pass"));
 }
 
 /// The Kix library's warnings reach `kix check` when the evaluation passes.
-/// The example cluster asks for more availability than immich supports,
-/// which the library reports only as a warning.
+/// The fixture cluster asks for more availability than its `web` package
+/// supports, which the library reports only as a warning.
 #[test]
 fn check_shows_library_warnings() {
     let warning = "availability \"node\" was requested";
     kix()
-        .args(["check", "example"])
+        .args(["check", "cli-fixture"])
         .assert()
         .success()
         .stdout(predicate::str::contains("Warnings from the Kix library"))
         .stdout(predicate::str::contains(warning));
 
     let out = kix()
-        .args(["check", "example", "-o", "json"])
+        .args(["check", "cli-fixture", "-o", "json"])
         .output()
         .unwrap();
     assert!(out.status.success());
@@ -147,25 +147,32 @@ fn check_shows_library_warnings() {
     );
 }
 
-/// `kix build` shows the library's warnings on stderr, and keeps stdout for
-/// the manifests.
+/// Every command that evaluates the cluster shows the library's warnings
+/// on stderr, and keeps stdout for its own output.
 #[test]
-fn build_shows_library_warnings() {
-    kix()
-        .args(["build", "example"])
-        .assert()
-        .success()
-        .stderr(predicate::str::contains("Warnings from the Kix library"))
-        .stderr(predicate::str::contains(
-            "availability \"node\" was requested",
-        ))
-        .stdout(predicate::str::contains("Warnings").not());
+fn evaluating_commands_show_library_warnings() {
+    for args in [
+        ["build", "cli-fixture"].as_slice(),
+        &["graph", "cli-fixture"],
+        &["list", "images", "cli-fixture"],
+        &["list", "resources", "cli-fixture"],
+    ] {
+        kix()
+            .args(args)
+            .assert()
+            .success()
+            .stderr(predicate::str::contains("Warnings from the Kix library"))
+            .stderr(predicate::str::contains(
+                "availability \"node\" was requested",
+            ))
+            .stdout(predicate::str::contains("Warnings").not());
+    }
 }
 
 #[test]
 fn graph_tree() {
     kix()
-        .args(["graph", "example"])
+        .args(["graph", "cli-fixture"])
         .assert()
         .success()
         .stdout(predicate::str::is_empty().not());
@@ -174,10 +181,10 @@ fn graph_tree() {
 #[test]
 fn list_resources_text() {
     kix()
-        .args(["list", "resources", "example"])
+        .args(["list", "resources", "cli-fixture"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Cluster: example"));
+        .stdout(predicate::str::contains("Cluster: test-cli-fixture"));
 }
 
 /// Verify that `deploy --dry-run` (equivalent to `kix plan`) with
@@ -188,7 +195,7 @@ fn deploy_dry_run() {
     let cache = common::tempdir();
     kix()
         .env("XDG_CACHE_HOME", cache.path())
-        .args(["deploy", "example", "--dry-run", "--yes", "--offline"])
+        .args(["deploy", "cli-fixture", "--dry-run", "--yes", "--offline"])
         .assert()
         .code(2)
         .stdout(predicate::str::contains("Plan:"))
@@ -200,14 +207,16 @@ fn deploy_dry_run() {
 #[test]
 fn bundle_reads_back() {
     let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join("example.kixbundle");
+    let file = dir.path().join("cli-fixture.kixbundle");
     kix()
-        .args(["bundle", "example", "--out"])
+        .args(["bundle", "cli-fixture", "--out"])
         .arg(&file)
         .assert()
         .success();
+    // A bundle is read without the flake, so the argument is the cluster's
+    // name and not its flake attribute.
     kix()
-        .args(["graph", "example", "--bundle"])
+        .args(["graph", "test-cli-fixture", "--bundle"])
         .arg(&file)
         .assert()
         .success();
@@ -407,7 +416,7 @@ fn without_a_runtime_kix_refuses_to_run_programs() {
     };
 
     without_runtime()
-        .args(["build", "minimal"])
+        .args(["build", "cli-fixture"])
         .assert()
         .failure()
         .stderr(
@@ -447,7 +456,7 @@ fn kix_toml_chooses_the_builder() {
         .stdout(predicate::str::contains("✓ Builder: kix (default)"));
 
     std::fs::write(&file, "builder = \"remote\"\n").unwrap();
-    run(&["build", "minimal"])
+    run(&["build", "cli-fixture"])
         .assert()
         .failure()
         .stderr(predicate::str::contains(

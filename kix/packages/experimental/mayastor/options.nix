@@ -38,45 +38,6 @@ let
       description = "Resources of ${program}.";
     };
 
-  tolerationType = lib.types.submodule {
-    options = {
-      key = lib.mkOption {
-        type = lib.types.nullOr lib.types.str;
-        default = null;
-        description = "Taint key. Null with operator `Exists` tolerates every taint.";
-      };
-      operator = lib.mkOption {
-        type = lib.types.enum [
-          "Exists"
-          "Equal"
-        ];
-        default = "Equal";
-        description = "`Exists` matches any value of the key; `Equal` matches `value`.";
-      };
-      value = lib.mkOption {
-        type = lib.types.nullOr lib.types.str;
-        default = null;
-        description = "Taint value for operator `Equal`.";
-      };
-      effect = lib.mkOption {
-        type = lib.types.nullOr (
-          lib.types.enum [
-            "NoSchedule"
-            "PreferNoSchedule"
-            "NoExecute"
-          ]
-        );
-        default = null;
-        description = "Taint effect to tolerate. Null tolerates every effect.";
-      };
-      tolerationSeconds = lib.mkOption {
-        type = lib.types.nullOr lib.types.ints.unsigned;
-        default = null;
-        description = "For `NoExecute`, how long the pod stays bound after the taint appears.";
-      };
-    };
-  };
-
   mayastorParams = lib.types.submodule {
     freeformType = lib.types.attrsOf lib.types.str;
     options = {
@@ -89,34 +50,6 @@ let
         type = lib.types.enum [ "nvmf" ];
         default = "nvmf";
         description = "Transport between the volume target and the node that mounts the volume.";
-      };
-    };
-  };
-
-  snapshotClassType = lib.types.submodule {
-    options = {
-      deletionPolicy = lib.mkOption {
-        type = lib.types.enum [
-          "Delete"
-          "Retain"
-        ];
-        default = "Delete";
-        description = "Whether deleting a VolumeSnapshot deletes the underlying snapshot.";
-      };
-      parameters = lib.mkOption {
-        type = lib.types.attrsOf lib.types.str;
-        default = { };
-        description = "Driver parameters of the class. Omitted from the manifest when empty.";
-      };
-      labels = lib.mkOption {
-        type = lib.types.attrsOf lib.types.str;
-        default = { };
-        description = "Labels on the VolumeSnapshotClass.";
-      };
-      annotations = lib.mkOption {
-        type = lib.types.attrsOf lib.types.str;
-        default = { };
-        description = "Annotations on the VolumeSnapshotClass. `snapshot.storage.kubernetes.io/is-default-class = \"true\"` marks it as the default class for this driver.";
       };
     };
   };
@@ -193,7 +126,7 @@ in
       description = "Labels of the nodes that run io-engine and may hold pools. Null selects `openebs.io/engine = mayastor`; `kubernetes.io/arch = amd64` is always added.";
     };
     tolerations = lib.mkOption {
-      type = lib.types.listOf tolerationType;
+      type = lib.types.listOf kix.types.toleration;
       default = [ ];
       description = "Taints io-engine tolerates.";
     };
@@ -323,7 +256,7 @@ in
       '';
     };
     tolerations = lib.mkOption {
-      type = lib.types.listOf tolerationType;
+      type = lib.types.listOf kix.types.toleration;
       default = [ ];
       description = "Taints the CSI node plugin and `agent-ha-node` tolerate.";
     };
@@ -479,7 +412,7 @@ in
   };
 
   volumeSnapshotClasses = lib.mkOption {
-    type = lib.types.attrsOf snapshotClassType;
+    type = lib.types.attrsOf kix.types.volumeSnapshotClass;
     default = { };
     description = "VolumeSnapshotClasses for Mayastor volumes, keyed by class name. Requires the `snapshotController` dependency.";
   };

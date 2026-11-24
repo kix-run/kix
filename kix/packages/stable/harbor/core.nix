@@ -20,7 +20,6 @@ let
   c = import ./common.nix { inherit lib kix scope; };
   inherit (c)
     name
-    who
     metricsPort
     registryUser
     svc
@@ -71,7 +70,7 @@ let
     ;
 
   oidcProviderInfo = kix.contracts.oidc.helpers.client {
-    inherit who oidc;
+    inherit scope oidc;
     options = config.oidc;
   };
   oidcOn = oidcProviderInfo != null;
@@ -135,7 +134,6 @@ let
   coreSettings =
     if settingsProblems != [ ] then
       scope.fail {
-        package = "harbor";
         option = "core.settings";
         message = lib.concatStringsSep " " settingsProblems;
       }

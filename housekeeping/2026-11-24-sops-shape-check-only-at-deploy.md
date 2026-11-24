@@ -1,0 +1,3 @@
+# 2026-11-24 · `cli/kix/src/cluster/secrets.rs` · `kix check` does not run the SOPS file shape check, which needs no key.
+
+`[K6746]` refuses a SOPS file whose top-level values are maps, lists, or null. The bundle path runs this check on the encrypted file without decrypting it, because sops keeps a document's shape. Yet the check runs only when `kix plan` or `kix deploy` connects to a cluster and is about to apply that Secret. `kix check` and `kix build`, and a plan with no cluster connection, pass such a file. Running the same check on every Secret's `kix.run/sops-source` during `kix check` would give the error on the developer's machine before anything reaches a cluster. The checks on multi-document files and on declared keys would fit there too.

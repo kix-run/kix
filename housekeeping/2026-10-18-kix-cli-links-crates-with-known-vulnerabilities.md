@@ -1,3 +1,0 @@
-# 2026-10-18 · `cli/Cargo.lock`, `cli/Cargo.toml` · The kix binary links crates with known vulnerabilities, two of them High.
-
-grype 0.112.0 (database built 2026-10-18) on syft's list of the crates in the kix binary gives 8 findings. High: `rustls-webpki 0.103.10` (GHSA-82j2-j2ch-gfr8) and `libyml 0.0.5` (GHSA-gfxp-f68g-8x78, through `serde_yml 0.0.12`, which is unmaintained). Also `rustls 0.23.37` (Medium, fixed in 0.23.45), `serde_yml 0.0.12` (Medium), two Low on `rustls-webpki`, `lru 0.12.5` and `rand 0.8.5`. Reproduce: `nix build .#kix`, then `syft file:result/bin/kix -o syft-json > kix.json && grype sbom:kix.json`. `serde_yml` needs a replacement crate, not a bump.

@@ -1,0 +1,3 @@
+# 2026-11-24 · `cli/kix/src/cluster/discovery.rs` · API discovery asks for one group version at a time and repeats the whole round within one command, which is most of a command's time on a slow link.
+
+Measured on kind through a proxy that adds 100 ms to each round trip, with the `homelab-kind` cluster (334 objects). One discovery round is 33 requests sent one after another, about 3.3 s. `kix deploy` of the same build ran two rounds: 67 of its 78 requests and about 6.7 s of its 9.9 s. `kix deploy` with 6 changed objects ran three rounds and a fourth burst: 244 of 1,207 requests, at least 10 s of 44 s, and it fetched `/apis` 31 times. `kix status` ran one round: about 3.4 s of 6.4 s. The requests of one round do not depend on each other after `/apis` has answered.

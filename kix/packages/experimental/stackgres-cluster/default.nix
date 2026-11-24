@@ -42,7 +42,6 @@
 let
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "stackgres-cluster ${ns}/${name}";
 
   supportedRelease = "1.19";
 
@@ -252,12 +251,11 @@ in
             stackgresOperator.out
           else
             scope.fail {
-              package = "stackgres-cluster";
               message = "the stackgresOperator dependency has no out.resolvePostgres, as with an import. This package reads the operator's release, operand images, and pod labels from it.";
               fix = "Wire a managed stackgres-operator instance with deps.stackgresOperator = ref.<namespace>.<instance>.";
             };
         pg = operator.resolvePostgres {
-          inherit who;
+          inherit scope;
           inherit (config.postgres) version;
         };
         operandSelector = operator.operandSelectors.sgCluster name;
@@ -269,7 +267,6 @@ in
         _flavor =
           if (config.extraSpec.postgres or { }) ? flavor then
             scope.fail {
-              package = "stackgres-cluster";
               option = "extraSpec";
               message = "postgres.flavor is not supported: the version check and the operand images assume vanilla PostgreSQL.";
             }
@@ -278,7 +275,6 @@ in
         _storage =
           if backupsOn && sgObjectStorage == null then
             scope.fail {
-              package = "stackgres-cluster";
               option = "backups";
               message = "backups is set but no sgObjectStorage dependency resolved in namespace ${ns}.";
               fix = "Add a stackgres-object-storage instance there, or set backups = null.";
@@ -346,7 +342,7 @@ in
 
         spec = builtins.seq _flavor (
           kix.mergeGuarded {
-            inherit who locked;
+            inherit scope locked;
           } baseSpec config.extraSpec
         );
 
@@ -356,7 +352,6 @@ in
         _antiAffinity =
           if kix.availability.atLeast "node" availability && config.instances > 1 && antiAffinityOff then
             scope.fail {
-              package = "stackgres-cluster";
               option = "extraSpec";
               message = "extraSpec turns off StackGres's one-pod-per-node anti-affinity (profile \"${profile}\", nonProductionOptions.disableClusterPodAntiAffinity ${
                 if antiAffinityFlag == null then "unset" else "= true"

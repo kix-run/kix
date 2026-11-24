@@ -82,7 +82,6 @@ let
   release = "v1.156.0";
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "victoria-metrics-alert ${ns}/${name}";
 
   inherit (import ../victoria-metrics-operator/cr-image.nix { inherit lib kix; })
     crImage
@@ -104,7 +103,7 @@ let
 in
 {
   meta = {
-    version = lib.removePrefix "v" release;
+    version = release;
     description = "VictoriaMetrics alerting: VMAlert and VMAlertmanager";
     owner = "platform";
     defaultAliases = [ "vmAlert" ];
@@ -265,13 +264,12 @@ in
         configDep =
           if builtins.length configRoutes > 1 then
             scope.fail {
-              package = "victoria-metrics-alert";
               message = "${lib.concatStringsSep " and " configRoutes} are set, and each supplies the whole Alertmanager configuration.";
               fix = "Keep one.";
             }
           else
             kix.contracts.secret.helpers.use {
-              inherit who;
+              inherit scope;
               arg = "alertmanagerConfig";
               dep = alertmanagerConfig;
               keys = [ "alertmanager.yaml" ];
@@ -371,8 +369,8 @@ in
         vmAlertmanager = vmOperator.out.mkVMAlertmanager scope {
           inherit name;
           spec = kix.mergeGuarded {
-            inherit who;
-            what = "alertmanager.extraSpec";
+            inherit scope;
+            option = "alertmanager.extraSpec";
             locked = map lib.toList [
               "configSecret"
               "configRawYaml"
@@ -390,7 +388,7 @@ in
         vmAlert = vmOperator.out.mkVMAlert scope {
           inherit name;
           spec = kix.mergeGuarded {
-            inherit who;
+            inherit scope;
             locked = [
               [
                 "datasource"

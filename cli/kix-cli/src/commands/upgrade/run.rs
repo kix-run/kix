@@ -12,9 +12,11 @@ use super::halt::{Flow, Halt, refused};
 use super::out::{self, Failed};
 use super::pin::{self, edit_message};
 use super::state::{Status, Step, UpgradeState};
+use super::subject::Subject;
 use super::subprocess::{clusters, new_command_line, run_kix};
 use super::{EXIT_BUILD_FAILED, EXIT_NEEDS_PERSON};
 use crate::exit::Exit;
+use kix::flake_lock::INPUT;
 
 /// One cluster that failed to build.
 pub(super) struct Failure {
@@ -39,6 +41,8 @@ pub(super) type Outcome = std::result::Result<Version, (Version, Failures)>;
 
 /// One `kix upgrade` run: what it installed, and where it builds.
 pub(super) struct Run {
+    /// What the run moves: an input, or a cluster.
+    pub(super) subject: Subject,
     pub(super) dir: PathBuf,
     pub(super) source: Source,
     pub(super) work: PathBuf,
@@ -75,6 +79,8 @@ impl Run {
             return Ok(i.bin());
         }
         let system = release::system().map_err(|e| miette!("{e}"))?;
+        // A withdrawn baseline installs with warnings meant for someone who
+        // stays on it. The upgrade is leaving it, so they are not printed.
         let installed = release::install(
             &Requirement::Exact(version.clone()),
             &system,
@@ -87,9 +93,10 @@ impl Run {
             Err(e) if self.state.is_some() => {
                 let v = version.release();
                 return Err(refused(format!(
-                    "Installing Kix {v}... failed\n\nCannot download Kix {v}: {}.\nUpgrade state is saved in kix-upgrade.json (the {} baseline build is cached).\nNext: check your network connection, then run `kix upgrade` to resume at Kix {v}.",
+                    "Installing Kix {v}... failed\n\nCannot download Kix {v}: {}.\nUpgrade state is saved in kix-upgrade.json (the {} baseline build is cached).\nNext: check your network connection, then run `{}` to resume at Kix {v}.",
                     e.to_string().trim_end_matches('.'),
-                    self.from.release()
+                    self.from.release(),
+                    self.subject.command()
                 )));
             }
             Err(e) => {
@@ -133,33 +140,23 @@ impl Run {
                 self.from.release()
             )
         };
-        edit_message(edit, &state, "kix upgrade")
+        edit_message(edit, &state, &self.subject.command())
     }
 
-    /// Set the result of the step in progress, and save the state.
-    fn finish_step(&mut self, result: &str, failures: &Failures) -> Flow<()> {
-        let step = self
-            .state_mut()
-            .steps
-            .last_mut()
-            .expect("a step is in progress");
-        step.result = result.to_string();
-        step.failed = failures.iter().map(|f| f.cluster.clone()).collect();
-        self.save()
+    /// Return the clusters this run builds. A project with a `[versions]`
+    /// table names them there. Otherwise `kix` lists every cluster.
+    pub(super) fn names(&self, kix: &Path) -> std::result::Result<Vec<String>, String> {
+        match self.subject.clusters() {
+            Some(names) => Ok(names),
+            None => clusters(kix, &self.dir),
+        }
     }
 
-    /// Pin the project to `version` and build every cluster. The target is
-    /// installed only after Kix knows it can make the flake.nix edit. A
-    /// first try of the target (`jump`) names the failed clusters only.
-    fn step(&mut self, version: &Version, jump: bool) -> Flow<std::result::Result<(), Failures>> {
-        self.state_mut().steps.push(Step {
-            version: version.release(),
-            result: "started".into(),
-            failed: Vec::new(),
-        });
-        self.state_mut().status = Status::FixNeeded;
-        self.save()?;
-        let plan = match pin::prepare(&self.dir, Some(&self.pinned), version) {
+    /// Pin the input `input` to `version`, and return the `kix` of that
+    /// version. The version is installed only after Kix knows it can make
+    /// the flake.nix edit.
+    fn pin_step(&mut self, input: &str, version: &Version) -> Flow<PathBuf> {
+        let plan = match pin::prepare(&self.dir, input, Some(&self.pinned), version) {
             Ok(plan) => plan,
             Err(pin::PinError::Edit(edit)) => {
                 let message = self.edit_message(&edit);
@@ -175,30 +172,89 @@ impl Run {
             Err(e) => return Err(miette!("{e}").into()),
         };
         let kix = self.kix(version)?;
-        match pin::pin(Some(&self.pinned), version, &plan) {
+        match pin::pin(input, Some(&self.pinned), version, &plan) {
             Ok(files) => {
                 if !files.is_empty() {
+                    let pinned = if input == INPUT {
+                        "project".to_string()
+                    } else {
+                        format!("input `{input}`")
+                    };
                     println!(
-                        "Pinned project to Kix {} (updated {})",
+                        "Pinned {pinned} to Kix {} (updated {})",
                         version.release(),
                         out::list(&files)
                     );
                 }
-                self.pinned = version.clone();
+                Ok(kix)
             }
             Err(pin::PinError::Lock(message)) => {
                 self.finish_step("failed", &Vec::new())?;
-                return Err(self.stop(Status::FixNeeded, &message, EXIT_BUILD_FAILED));
+                Err(self.stop(Status::FixNeeded, &message, EXIT_BUILD_FAILED))
             }
             Err(pin::PinError::ByHand(message)) => {
-                return Err(self.stop(Status::EditNeeded, &message, EXIT_NEEDS_PERSON));
+                Err(self.stop(Status::EditNeeded, &message, EXIT_NEEDS_PERSON))
             }
             Err(pin::PinError::Edit(edit)) => {
                 let message = self.edit_message(&edit);
-                return Err(self.stop(Status::EditNeeded, &message, EXIT_NEEDS_PERSON));
+                Err(self.stop(Status::EditNeeded, &message, EXIT_NEEDS_PERSON))
             }
-            Err(e) => return Err(miette!("{e}").into()),
+            Err(e) => Err(miette!("{e}").into()),
         }
+    }
+
+    /// List `cluster` under the input `to` in `[versions]`, and return the
+    /// `kix` of `version`, the version that input pins.
+    fn move_step(&mut self, cluster: &str, to: &str, version: &Version) -> Flow<PathBuf> {
+        let kix = self.kix(version)?;
+        let listed = kix::versions::Versions::read(&self.dir)
+            .ok()
+            .flatten()
+            .is_some_and(|v| v.input_of(cluster) == Some(to));
+        if listed {
+            return Ok(kix);
+        }
+        if let Err(e) = kix::versions::move_cluster(&self.dir, cluster, to) {
+            let message = format!(
+                "{e}\nNext: make that change, then run `{}` again.",
+                self.subject.command()
+            );
+            return Err(self.stop(Status::EditNeeded, &message, EXIT_NEEDS_PERSON));
+        }
+        println!(
+            "Moved cluster `{cluster}` to input `{to}` on Kix {} (updated kix.toml)",
+            version.release()
+        );
+        Ok(kix)
+    }
+
+    /// Set the result of the step in progress, and save the state.
+    fn finish_step(&mut self, result: &str, failures: &Failures) -> Flow<()> {
+        let step = self
+            .state_mut()
+            .steps
+            .last_mut()
+            .expect("a step is in progress");
+        step.result = result.to_string();
+        step.failed = failures.iter().map(|f| f.cluster.clone()).collect();
+        self.save()
+    }
+
+    /// Move the project to `version` and build its clusters. A first try of
+    /// the target (`jump`) names the failed clusters only.
+    fn step(&mut self, version: &Version, jump: bool) -> Flow<std::result::Result<(), Failures>> {
+        self.state_mut().steps.push(Step {
+            version: version.release(),
+            result: "started".into(),
+            failed: Vec::new(),
+        });
+        self.state_mut().status = Status::FixNeeded;
+        self.save()?;
+        let kix = match self.subject.clone() {
+            Subject::Input { name, .. } => self.pin_step(&name, version)?,
+            Subject::Cluster { cluster, to, .. } => self.move_step(&cluster, &to, version)?,
+        };
+        self.pinned = version.clone();
         let out_dir = self.work.join(version.release());
         let built = self.build_all(&kix, version, &out_dir);
         let failed: Vec<String> = built.failures.iter().map(|f| f.cluster.clone()).collect();
@@ -274,7 +330,7 @@ impl Run {
         if let Some(parent) = out.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let names = match clusters(kix, &self.dir) {
+        let names = match self.names(kix) {
             Ok(names) => names,
             Err(e) => {
                 return Built {
@@ -345,12 +401,17 @@ impl Run {
 }
 
 /// Return the directory `kix upgrade` keeps its builds of the project in
-/// `dir` in, under Kix's cache directory.
-pub(super) fn work_dir(dir: &Path) -> PathBuf {
+/// `dir` in, under Kix's cache directory. Each input and each cluster that
+/// moves has its own.
+pub(super) fn work_dir(dir: &Path, subject: &Subject) -> PathBuf {
     use sha2::Digest;
     let digest = sha2::Sha256::digest(dir.as_os_str().as_encoded_bytes());
     let key: String = digest.iter().take(8).map(|b| format!("{b:02x}")).collect();
-    kix::eval::store::default_cache_dir()
+    let work = kix::eval::store::default_cache_dir()
         .join("upgrade")
-        .join(key)
+        .join(key);
+    match subject.work_name() {
+        Some(name) => work.join(name),
+        None => work,
+    }
 }

@@ -1,0 +1,3 @@
+# 2026-11-24 · `kix/packages/experimental/keycloak` · A `-Dkc.<option>=value` word in `extraArgs` may set an option the package owns.
+
+`kc.sh` hands every word that starts with `-D` to the JVM as a system property (`quarkus/dist/src/main/content/bin/kc.sh` line 69 at 26.8.2). Keycloak's configuration reads `kc.<option>` system properties, as far as its SmallRye defaults show. The package refuses the `--<option>` form of each owned option through `kix.mergeArgs`, and no `parser` value reads a `-D` word as that option. So `extraArgs = [ "-Dkc.db-url=..." ]` would pass the check. Nobody has run this against the image to confirm that the system property wins.

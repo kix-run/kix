@@ -133,15 +133,12 @@ let
 
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "volsync ${ns}/${name}";
 
   healthPort = 8081;
   metricsPort = 8080;
 
   readJSON = file: builtins.fromJSON (builtins.readFile file);
   vendored = file: (readJSON ./crds/${file}).spec;
-
-  minorOf = tag: lib.versions.majorMinor (lib.removePrefix "v" tag);
 
   # The Lease name compiled into the operator (cmd/main.go).
   leaseName = "b95b3104.backube";
@@ -154,7 +151,6 @@ let
     dir: crName:
     if builtins.stringLength crName > maxNameLength then
       scope.fail {
-        package = "volsync";
         message = "the VolSync resource \"${crName}\" has a name longer than ${toString maxNameLength} characters, so VolSync hashes its mover Job's name and Kix cannot select the mover pods for network policy.";
         fix = "Shorten the name.";
       }
@@ -203,14 +199,13 @@ in
 
   assertions =
     { config, ... }:
-    let
-      imageTag = builtins.unsafeDiscardStringContext config.image.tag;
-    in
     [
-      {
-        assertion = minorOf imageTag == minorOf release;
-        message = "image.tag \"${imageTag}\" is not a ${minorOf release} release, and the CRDs and ClusterRole under kix/packages/experimental/volsync/{crds,rbac} are vendored from v${release}. Set image.tag to a ${minorOf release}.x tag. To move to another release, change release in kix/packages/experimental/volsync/default.nix and the tag in crds/sources.txt and rbac/sources.txt, then run uv run scripts/vendor-crds.py volsync.";
-      }
+      (kix.image.checkRelease {
+        inherit (config) image;
+        inherit release;
+        reason = "the CRDs and ClusterRole in kix/packages/experimental/volsync/{crds,rbac} come from v${release}";
+        fix = "To update this package to another version, change release in kix/packages/experimental/volsync/default.nix and the tag in crds/sources.txt and rbac/sources.txt, and then run uv run scripts/vendor-crds.py volsync.";
+      })
     ];
 
   options = {
@@ -279,32 +274,40 @@ in
 
         snapshotCrd =
           snapshotController.out.crds.VolumeSnapshot or (scope.fail {
-            package = "volsync";
             message = "the snapshotController dependency has no out.crds.VolumeSnapshot.";
             fix = "Wire a snapshot-controller instance, or an import that claims the snapshotController role with its crds.";
           });
 
-        args = [
-          "--leader-elect"
-          "--health-probe-bind-address=:${toString healthPort}"
-          "--metrics-bind-address=:${toString metricsPort}"
-          # The operator's HTTPS metrics use a self-signed certificate;
-          # the ServiceMonitor scrapes plain HTTP.
-          "--metrics-secure=false"
-        ]
-        ++ map (m: "--${m}-container-image=${image}") movers
-        ++ kix.guardArgs {
-          inherit who;
-          owned = {
-            "--leader-elect" =
-              "leader election keeps one active operator while the instance's availability level runs several; remove it.";
-            "--health-probe-bind-address" = "the probes use :${toString healthPort}; remove it.";
-            "--metrics-bind-address" = "the metrics Service uses :${toString metricsPort}; remove it.";
-            "--metrics-secure" = "the ServiceMonitor scrapes plain HTTP; remove it.";
-          }
-          // lib.genAttrs (map (m: "--${m}-container-image") movers) (
-            _: "the movers run the image option, which out.extraImages lists; set image instead."
-          );
+        # The manager registers Go flags and parses them with pflag
+        # (cmd/main.go upstream).
+        args = kix.mergeArgs {
+          inherit scope;
+          parser = "gnu";
+          args = [
+            {
+              flags = [ "--leader-elect" ];
+              reason = "leader election keeps one operator active when multiple replicas run.";
+            }
+            {
+              flags = [ "--health-probe-bind-address=:${toString healthPort}" ];
+              reason = "the probes use port ${toString healthPort}.";
+            }
+            {
+              flags = [ "--metrics-bind-address=:${toString metricsPort}" ];
+              reason = "the metrics Service uses port ${toString metricsPort}.";
+            }
+            # The operator's HTTPS metrics use a self-signed certificate;
+            # the ServiceMonitor scrapes plain HTTP.
+            {
+              flags = [ "--metrics-secure=false" ];
+              reason = "the ServiceMonitor scrapes metrics over plain HTTP.";
+            }
+            {
+              flags = map (m: "--${m}-container-image=${image}") movers;
+              from = "the image option, which sets the image for both the operator and its mover Jobs";
+              fix = "Remove it from extraArgs and set image instead.";
+            }
+          ];
         } config.extraArgs;
 
         crds = [
@@ -328,7 +331,6 @@ in
             fail =
               msg:
               scope.fail {
-                package = "volsync";
                 message = "${what}: ${msg}";
               };
 
@@ -356,7 +358,15 @@ in
                 kix.facts.connect (builtins.getContext endpointService.out.fqdn) repository.out.name;
 
             spec = kix.mergeGuarded {
-              who = "${who}: ${what}";
+              inherit scope;
+              # A consumer passes `extraSpec` to this function, so no option
+              # of this instance holds it.
+              option = null;
+              object = {
+                kind = "ReplicationSource";
+                inherit name;
+                namespace = consumerScope.namespaceName;
+              };
               locked = [
                 [ "sourcePVC" ]
                 [ "trigger" ]
@@ -496,7 +506,7 @@ in
                   inherit args;
                   env = kix.mkEnvVars (
                     kix.mergeEnv {
-                      inherit who;
+                      inherit scope;
                       owned = [
                         {
                           vars.VOLSYNC_NAMESPACE = scope.namespaceName;

@@ -350,6 +350,10 @@ impl Command {
 pub fn run(cli: &Cli) -> Result<Exit> {
     if cli.command.needs() == Needs::Project {
         prepare_project(cli)?;
+        // Deploy and rollback refuse a withdrawn Kix themselves.
+        if !matches!(cli.command, Command::Deploy(_) | Command::Rollback(_)) {
+            commands::deploy::withdrawn::warn();
+        }
     }
     let mut ctx = CommandContext::new(
         &cli.global,
@@ -397,33 +401,56 @@ fn prepare_project(cli: &Cli) -> Result<()> {
         && !args.dry_run
         && let Some(dir) = commands::project_dir(&cli.global.flake)
     {
-        commands::upgrade::check_deploy(&dir)?;
+        commands::upgrade::check_deploy(&dir, &args.plan.cluster)?;
     }
+    prepare_evaluation(&cli.global, cli.command.cluster_name())
+}
+
+/// Set up what an evaluation of the project needs: the Kix library input of
+/// `cluster`, the builder, and the runtime.
+pub fn prepare_evaluation(global: &crate::cli::GlobalArgs, cluster: Option<&str>) -> Result<()> {
     // Validate the cluster name before the Nix backend starts, which is slow.
-    if let Some(name) = cli.command.cluster_name() {
+    if let Some(name) = cluster {
         validate_cluster_name(name)?;
     }
+    // A project with several versions of Kix evaluates with the library of
+    // the input this cluster uses.
+    if let Some(dir) = commands::project_dir(&global.flake) {
+        kix::versions::choose(&dir, cluster).map_err(|e| miette::miette!("{e}"))?;
+        warn_unused_override(global);
+    }
     // The project's builder decides which Nix every later step runs.
-    commands::select_builder(&cli.global)?;
+    commands::select_builder(global)?;
     // Stop before any work when Kix has no runtime, or its runtime comes from
     // another release.
     kix::runtime::runtime().map_err(|e| miette::miette!("{e}"))?;
     Ok(())
 }
 
-/// Validate cluster name format.
-///
-/// SECURITY: This is the primary defense against Nix expression injection.
-/// The cluster name is spliced into the flake attribute `nix eval` reads
-/// (`kix::eval::nix`) and into the `--apply` expression of `nix eval`
-/// (`cluster_name_command`).
-/// Only alphanumeric characters, hyphens, and underscores are safe.
+/// Warn when the command overrides the input `kix` and its cluster uses
+/// another input, where the override changes nothing.
+fn warn_unused_override(global: &crate::cli::GlobalArgs) {
+    let Some(chosen) = kix::versions::chosen().filter(|c| c.swap.is_some()) else {
+        return;
+    };
+    let overridden = |name: &str| {
+        global
+            .override_input
+            .chunks_exact(2)
+            .any(|pair| pair[0] == name)
+    };
+    if overridden(kix::flake_lock::INPUT) && !overridden(&chosen.input) {
+        eprintln!(
+            "warning: ignoring `--override-input kix` because this cluster uses input `{input}` in kix.toml [versions]. Kix will evaluate with `{input}` from flake.lock. Pass `--override-input {input} <url>` to override this cluster's Kix library.",
+            input = chosen.input
+        );
+    }
+}
+
+/// Refuse a cluster name that [`kix::eval::nix::is_valid_cluster_name`]
+/// rejects, with a message for the person who typed it.
 fn validate_cluster_name(name: &str) -> Result<()> {
-    if name.is_empty()
-        || !name
-            .chars()
-            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
-    {
+    if !kix::eval::nix::is_valid_cluster_name(name) {
         return Err(miette::miette!(
             "'{}' is not a valid cluster name. Use a name like 'example' or 'nw1', not a file path.",
             name

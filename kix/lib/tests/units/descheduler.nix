@@ -188,6 +188,24 @@ let
     )).spec.replicas;
 in
 {
+  # A KubernetesMetrics provider on a cluster that leaves the metricsApi
+  # role unset warns on that role's binding. No provider, no warning.
+  descheduler-metrics-provider-warns =
+    let
+      metricsWarnings =
+        instance:
+        builtins.filter (
+          w: (w.clusterOption or null) == "cluster.roles.metricsApi.binding"
+        ) (descheduler instance).instances.descheduler.descheduler._diagnostics.warnings;
+    in
+    (
+      builtins.length (metricsWarnings {
+        config.policy.metricsProviders = [ { source = "KubernetesMetrics"; } ];
+      }) == 1
+      && metricsWarnings { } == [ ]
+    )
+    || throw "descheduler metrics API warning";
+
   # scheme = "https" and a tlsConfig render on the primary endpoint. Left
   # out, the endpoint is `scheme: http` with no tlsConfig.
   descheduler-monitor-https =
@@ -401,6 +419,64 @@ in
       })
     )
     || throw "descheduler: replicas pod ${toString (replicasAt "pod")}, zone ${toString (replicasAt "zone")}";
+
+  # The descheduler reads `_` in a flag name as `-`, so the package refuses
+  # an underscore spelling of an owned flag with its change record id.
+  descheduler-underscore-owned-flag =
+    let
+      caughtFail =
+        ((import ../caught.nix { inherit lib; }).caught ../../core/error.nix { inherit lib; }).failFor
+          {
+            instance = "descheduler/descheduler";
+            package = "experimental/descheduler";
+          };
+      # Stubs that keep the deployment a plain attribute set, so its
+      # arguments can be read without building the cluster.
+      stubbed = import packagePath {
+        inherit lib;
+        kix = kixlib // {
+          withMounts = _: d: d;
+        };
+        scope = {
+          instanceName = "descheduler";
+          namespaceName = "descheduler";
+          fail = caughtFail;
+          rbac = {
+            mkRoleSet = _: _: { };
+            mkClusterRoleSet = _: _: { };
+          };
+          selectorLabels = { };
+          mkDeployment = d: d;
+        };
+        availability = "none";
+      };
+      argsFor =
+        extraArgs:
+        (builtins.head
+          (builtins.head stubbed.build {
+            self = { };
+            config = {
+              inherit extraArgs;
+              image = {
+                repository = "descheduler";
+                tag = "v0.37.0";
+                pullPolicy = "IfNotPresent";
+              };
+              deschedulingInterval = "5m";
+              metrics.enabled = true;
+              resources = { };
+            };
+          }).deployment.spec.template.spec.containers
+        ).args;
+      refused = argsFor [ "--leader_elect=false" ];
+    in
+    (
+      refused ? thrown
+      && lib.hasInfix "[K9425]" refused.thrown
+      && lib.hasInfix "--leader_elect=false" refused.thrown
+      && builtins.isList (argsFor [ "--v_x=1" ])
+    )
+    || throw "descheduler: --leader_elect=false gives ${builtins.toJSON refused}";
 
   # The alerts render under `descheduler-alerts` with a prometheus provider
   # and metrics.enabled, and every expression selects the metrics Service.

@@ -79,6 +79,16 @@ let
         "1.36"
       ];
     };
+    "experimental/db-operator" = {
+      warns = [
+        "1.33"
+        "1.37"
+      ];
+      accepts = [
+        "1.34"
+        "1.36"
+      ];
+    };
     "experimental/descheduler" = {
       warns = [
         "1.34"

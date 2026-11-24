@@ -3,8 +3,8 @@
 #
 # The validating webhook admits every object of these kinds with
 # failurePolicy Fail and refuses writes until cainjector has injected its CA
-# into the webhook configuration. Each handle's `cr` and `mkCR` therefore add
-# the API-check Job (startupapicheck.nix) to the custom resource's requires.
+# into the webhook configuration. Each definition therefore lists the
+# API-check Job (startupapicheck.nix) in `crRequires`.
 # Certificate, CertificateRequest, Issuer, and ClusterIssuer also declare
 # their Ready condition, so a deploy waits for them and reports
 # cert-manager's message on failure. Order and Challenge report a
@@ -19,66 +19,50 @@ let
     status = "True";
   };
 
-  withCheck = args: args // { requires = (args.requires or [ ]) ++ [ self.apiCheck ]; };
-
-  gate =
-    crd:
-    crd
-    // {
-      out = crd.out // {
-        cr = args: crd.out.cr (withCheck args);
-        mkCR = consumerScope: args: crd.out.mkCR consumerScope (withCheck args);
-      };
-    };
+  checked = [ self.apiCheck ];
 in
 # A certificate can be issued again, so no cert-manager kind holds data.
 # No kind but Challenge runs pods; an HTTP01 Challenge runs a solver pod.
 {
   crds = {
-    certificates = gate (
-      scope.mkCRD {
-        spec = vendored "certificates.cert-manager.io.json";
-        readiness = ready;
-        holdsData = false;
-        usesAtLeast = _: { };
-      }
-    );
-    certificateRequests = gate (
-      scope.mkCRD {
-        spec = vendored "certificaterequests.cert-manager.io.json";
-        readiness = ready;
-        holdsData = false;
-        usesAtLeast = _: { };
-      }
-    );
-    challenges = gate (
-      scope.mkCRD {
-        spec = vendored "challenges.acme.cert-manager.io.json";
-        holdsData = false;
-      }
-    );
-    clusterIssuers = gate (
-      scope.mkCRD {
-        spec = vendored "clusterissuers.cert-manager.io.json";
-        readiness = ready;
-        holdsData = false;
-        usesAtLeast = _: { };
-      }
-    );
-    issuers = gate (
-      scope.mkCRD {
-        spec = vendored "issuers.cert-manager.io.json";
-        readiness = ready;
-        holdsData = false;
-        usesAtLeast = _: { };
-      }
-    );
-    orders = gate (
-      scope.mkCRD {
-        spec = vendored "orders.acme.cert-manager.io.json";
-        holdsData = false;
-        usesAtLeast = _: { };
-      }
-    );
+    certificates = scope.mkCRD {
+      spec = vendored "certificates.cert-manager.io.json";
+      readiness = ready;
+      holdsData = false;
+      crRequires = checked;
+      usesAtLeast = _: { };
+    };
+    certificateRequests = scope.mkCRD {
+      spec = vendored "certificaterequests.cert-manager.io.json";
+      readiness = ready;
+      holdsData = false;
+      crRequires = checked;
+      usesAtLeast = _: { };
+    };
+    challenges = scope.mkCRD {
+      spec = vendored "challenges.acme.cert-manager.io.json";
+      holdsData = false;
+      crRequires = checked;
+    };
+    clusterIssuers = scope.mkCRD {
+      spec = vendored "clusterissuers.cert-manager.io.json";
+      readiness = ready;
+      holdsData = false;
+      crRequires = checked;
+      usesAtLeast = _: { };
+    };
+    issuers = scope.mkCRD {
+      spec = vendored "issuers.cert-manager.io.json";
+      readiness = ready;
+      holdsData = false;
+      crRequires = checked;
+      usesAtLeast = _: { };
+    };
+    orders = scope.mkCRD {
+      spec = vendored "orders.acme.cert-manager.io.json";
+      holdsData = false;
+      crRequires = checked;
+      usesAtLeast = _: { };
+    };
   };
 }

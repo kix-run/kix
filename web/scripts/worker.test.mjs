@@ -82,7 +82,7 @@ test('still serves the Markdown twin of a docs page', async () => {
   assert.deepEqual(seen, ['/docs/how-to.md', '/docs/how-to/']);
 });
 
-test('serves the install script as text and the release index with a short cache', async () => {
+test('serves the install script as text, release files with a short cache, and the index revalidated', async () => {
   const seen = [];
   const env = {
     ASSETS: {
@@ -96,7 +96,16 @@ test('serves the install script as text and the release index with a short cache
   assert.equal(install.headers.get('content-type'), 'text/plain; charset=utf-8');
   assert.equal(install.headers.get('cache-control'), 'public, max-age=300');
   const index = await worker.fetch(new Request('https://kix.run/releases/index.json'), env);
-  assert.equal(index.headers.get('cache-control'), 'public, max-age=300');
+  assert.equal(index.headers.get('cache-control'), 'public, no-cache');
   assert.equal(index.headers.get('content-type'), 'application/octet-stream');
-  assert.deepEqual(seen, ['/install', '/releases/index.json']);
+  const sig = await worker.fetch(new Request('https://kix.run/releases/index.json.sig'), env);
+  assert.equal(sig.headers.get('cache-control'), 'public, no-cache');
+  const sums = await worker.fetch(new Request('https://kix.run/releases/v0.8.4/SHA256SUMS'), env);
+  assert.equal(sums.headers.get('cache-control'), 'public, max-age=300');
+  assert.deepEqual(seen, [
+    '/install',
+    '/releases/index.json',
+    '/releases/index.json.sig',
+    '/releases/v0.8.4/SHA256SUMS',
+  ]);
 });

@@ -1,0 +1,3 @@
+# 2026-11-23 · `kix/lib/eval/cluster.nix` · `kix list packages <cluster>` shows an optional instance that nothing activated as installed.
+
+`instanceInfo` lists every instance of `mergedInstances`, including an optional instance that no dependency switched on, and `kix list` prints each as `installed [<namespace>]`. The build leaves that instance out. Kix used to print the activated optional instances as a `[kix] activated optionals` trace, which no command showed, so nothing in Kix's output tells a dormant optional instance from an active one. `instanceInfo` could carry `active` beside `auto`.

@@ -136,15 +136,15 @@ in
   # removes an unlocked key.
   mergeConfig =
     {
-      who,
+      scope,
       sink,
       locked ? [ ],
     }:
     base: user:
     lib.filterAttrsRecursive (_: v: v != null) (
       kix.mergeGuarded {
-        inherit who;
-        what = "settings";
+        inherit scope;
+        option = "settings";
         locked = [
           [ "data_dir" ]
           [
@@ -188,7 +188,6 @@ in
   podSpec =
     {
       scope,
-      who,
       name,
       config,
       self,
@@ -210,19 +209,27 @@ in
           name = "vector";
           image = kix.image.ref config.image;
           imagePullPolicy = config.image.pullPolicy;
-          args = [
-            "--config"
-            configPath
-          ]
-          ++ kix.guardArgs {
-            inherit who;
-            owned = lib.genAttrs configFlags (
-              _: "the package's merged settings are Vector's only config source; put configuration in settings."
-            );
+          # Vector parses flags with clap (src/cli.rs upstream).
+          args = kix.mergeArgs {
+            inherit scope;
+            parser = "gnu";
+            args = [
+              {
+                flags = [
+                  [
+                    "--config"
+                    configPath
+                  ]
+                ];
+                names = configFlags;
+                reason = "Vector reads its configuration from the file built from settings.";
+                fix = "Remove it from extraArgs and configure Vector in settings instead.";
+              }
+            ];
           } config.extraArgs;
           env = kix.mkEnvVars (
             kix.mergeEnv {
-              inherit who;
+              inherit scope;
               owned = [
                 {
                   vars.VECTOR_SELF_NODE_NAME.valueFrom.fieldRef.fieldPath = "spec.nodeName";

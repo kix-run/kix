@@ -380,7 +380,6 @@ in
         ...
       }:
       let
-        who = "coredns ${scope.namespaceName}/${scope.instanceName}";
         facts = corefile.facts config.servers;
         scrape = config.metrics.enabled && prometheus != null;
 
@@ -400,9 +399,7 @@ in
 
         # Every build renders this value (the Deployment's checksum hashes
         # the ConfigMap), so a refused Corefile fails evaluation.
-        renderedCorefile = lib.throwIf (failures != [ ]) (lib.concatMapStringsSep "\n" (
-          m: "${who}: ${m}"
-        ) failures) (corefile.render config.servers);
+        renderedCorefile = if failures != [ ] then scope.fail failures else corefile.render config.servers;
 
         dnsPorts = builtins.concatMap (
           p:
@@ -425,7 +422,7 @@ in
 
         metricsPorts = lib.optional (facts.metricsPort != null) (kix.port "metrics" facts.metricsPort);
 
-        envVars = kix.mkEnvVars (kix.mergeEnv { inherit who; } config.env);
+        envVars = kix.mkEnvVars (kix.mergeEnv { inherit scope; } config.env);
       in
       {
         serviceAccount = scope.mkResource {

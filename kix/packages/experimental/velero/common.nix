@@ -17,7 +17,6 @@ rec {
 
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "velero ${ns}/${name}";
 
   # Each workload, and each metrics Service, carries its own component, so
   # no selector claims another component's pods and a ServiceMonitor built
@@ -37,7 +36,6 @@ rec {
     in
     if m == null then
       scope.fail {
-        package = "velero";
         option = "backupStorageLocation.config.s3Url";
         message = "s3Url \"${url}\" is not an http or https URL, so the package cannot tell which port the store listens on.";
         fix = "Write it as https://<host>[:<port>].";
@@ -48,24 +46,6 @@ rec {
       443
     else
       80;
-
-  # The CRDs come from `release`; a server of another minor release may not
-  # serve the same schema.
-  releaseMinor = builtins.match "v([0-9]+)\\.([0-9]+)\\..*" release;
-  checkedRef =
-    image:
-    let
-      tag = builtins.unsafeDiscardStringContext image.tag;
-    in
-    if builtins.match "v([0-9]+)\\.([0-9]+)\\..*" tag != releaseMinor then
-      scope.fail {
-        package = "velero";
-        option = "image.tag";
-        message = "image.tag \"${tag}\" is not a ${lib.concatStringsSep "." releaseMinor} release, and the CRDs under kix/packages/experimental/velero/crds are vendored from ${release}.";
-        fix = "To move to another release, change release in kix/packages/experimental/velero/default.nix and run uv run scripts/vendor-crds.py velero.";
-      }
-    else
-      kix.image.ref image;
 
   # Velero decodes the policy file with unknown keys refused, and a refused
   # file fails every backup, so the conditions are a closed set.
@@ -225,7 +205,7 @@ rec {
     cloudCredentials:
     let
       dep = kix.contracts.secret.helpers.use {
-        inherit who;
+        inherit scope;
         arg = "cloudCredentials";
         dep = cloudCredentials;
         anyOf = [
@@ -238,7 +218,6 @@ rec {
     in
     if isFile && builtins.any (k: builtins.elem k declared) awsKeyPair then
       scope.fail {
-        package = "velero";
         message = "deps.cloudCredentials resolved to secret \"${dep.out.name}\", which declares both `cloud` and ${lib.concatStringsSep ", " awsKeyPair}. Velero would read the key pair and ignore the file.";
         fix = "Keep one form.";
       }

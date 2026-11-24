@@ -1,0 +1,3 @@
+# 2026-11-23 · `devenv.nix`, `lefthook.yml`, `.github/workflows/lint.yml` · Three copies of ruff decide whether a Python file is formatted, so the dev shell can still rewrite files that CI passes.
+
+The lint job and one branch of the `format-python` hook use the ruff from `flake.lock`. The dev shell's treefmt step (`devenv.nix`) uses the ruff from `devenv.lock`, which pins a different nixpkgs. The hook's middle branch uses whatever `ruff` is on the user's path. Every tracked file is clean under each today. When the versions disagree on a file, the lint job passes and entering the shell rewrites that file in the working tree. The cause matches `clippy-hook-and-ci-run-different-toolchains`: the shell and CI take their tools from different lock files.

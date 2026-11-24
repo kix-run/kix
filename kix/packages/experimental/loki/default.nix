@@ -92,7 +92,6 @@
 }:
 let
   name = scope.instanceName;
-  who = "loki ${scope.namespaceName}/${name}";
   release = "3.7.10";
 
   httpPort = 3100;
@@ -187,33 +186,38 @@ let
   ];
 
   # Loki applies flags after the config file, so a flag that sets a locked
-  # path overrides it. Go's flag package reads the `-` and `--` spellings.
+  # path overrides it.
   ownedFlags =
     let
-      locks = path: "it sets ${path}, which the package locks; remove it.";
-      flags = {
-        "-config.file" = "the package renders the file from settings; change settings instead.";
-        "-config.expand-env" = "settings and env rely on variable expansion; remove it.";
-        "-target" = "the package runs every Loki component in its one pod; remove it.";
-        "-auth.enabled" = locks "auth_enabled";
-        "-server.http-listen-port" = locks "server.http_listen_port";
-        "-common.path-prefix" = locks "common.path_prefix";
-        "-common.storage.filesystem.chunk-directory" = locks "common.storage.filesystem";
-        "-common.storage.filesystem.rules-directory" = locks "common.storage.filesystem";
-        "-common.storage.ring.instance-addr" = locks "common.instance_addr";
-        "-common.storage.ring.store" = locks "common.ring.kvstore";
-        "-common.storage.ring.replication-factor" = locks "common.replication_factor";
+      locks = path: names: {
+        inherit names;
+        reason = "it overrides ${path} in config.yaml, which this package sets itself.";
       };
     in
-    flags // lib.mapAttrs' (flag: lib.nameValuePair "-${flag}") flags;
+    [
+      {
+        names = [ "-target" ];
+        reason = "this package runs Loki in single-binary mode inside one pod.";
+      }
+      (locks "auth_enabled" [ "-auth.enabled" ])
+      (locks "server.http_listen_port" [ "-server.http-listen-port" ])
+      (locks "common.path_prefix" [ "-common.path-prefix" ])
+      (locks "common.storage.filesystem" [
+        "-common.storage.filesystem.chunk-directory"
+        "-common.storage.filesystem.rules-directory"
+      ])
+      (locks "common.instance_addr" [ "-common.storage.ring.instance-addr" ])
+      (locks "common.ring.kvstore" [ "-common.storage.ring.store" ])
+      (locks "common.replication_factor" [ "-common.storage.ring.replication-factor" ])
+    ];
 
   # The rendered config.yaml: `settings` over `builtinConfig`, nulls removed.
   mergeSettings =
     config:
     lib.filterAttrsRecursive (_: v: v != null) (
       kix.mergeGuarded {
-        inherit who;
-        what = "settings";
+        inherit scope;
+        option = "settings";
         locked = lockedPaths;
       } builtinConfig config.settings
     );
@@ -335,13 +339,23 @@ in
       let
         mergedConfig = mergeSettings config;
 
-        args = [
-          "-config.file=${configDir}/config.yaml"
-          "-config.expand-env=true"
-        ]
-        ++ kix.guardArgs {
-          inherit who;
-          owned = ownedFlags;
+        # Loki parses flags with Go's flag package (pkg/util/cfg/flag.go
+        # upstream).
+        args = kix.mergeArgs {
+          inherit scope;
+          parser = "go";
+          args = [
+            {
+              flags = [ "-config.file=${configDir}/config.yaml" ];
+              from = "the settings option, which builds config.yaml";
+              fix = "Remove it from extraArgs and configure Loki in settings instead.";
+            }
+            {
+              flags = [ "-config.expand-env=true" ];
+              reason = "Loki must expand environment variables referenced in settings.";
+            }
+          ]
+          ++ ownedFlags;
         } config.extraArgs;
       in
       {
@@ -405,7 +419,7 @@ in
                       image = kix.image.ref config.image;
                       imagePullPolicy = config.image.pullPolicy;
                       inherit args;
-                      env = kix.mkEnvVars (kix.mergeEnv { inherit who; } config.env);
+                      env = kix.mkEnvVars (kix.mergeEnv { inherit scope; } config.env);
                       # gRPC (9095) stays inside the pod.
                       ports = [ (kix.port "http" httpPort) ];
                       readinessProbe = {
@@ -498,7 +512,6 @@ in
             v
           else
             scope.fail {
-              package = "loki";
               option = "settings.${lib.concatStringsSep "." path}";
               message = "settings.${lib.concatStringsSep "." path} must be ${expected} (it is ${builtins.toJSON v}).";
             };

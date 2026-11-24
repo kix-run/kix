@@ -142,7 +142,7 @@ let
 in
 {
   meta = {
-    version = lib.removePrefix "v" release;
+    version = release;
     description = "Velero backup and restore: server, node-agent, a default backup location, and scheduled backups";
     owner = "platform";
     defaultAliases = [ "velero" ];
@@ -443,6 +443,14 @@ in
         ];
     in
     [
+      # The CRDs come from `release`, and a server of another minor release
+      # may not serve the same schema.
+      (kix.image.checkRelease {
+        inherit (config) image;
+        inherit release;
+        reason = "the CRDs in kix/packages/experimental/velero/crds come from ${release}";
+        fix = "To update this package to another version, change release in kix/packages/experimental/velero/common.nix and run uv run scripts/vendor-crds.py velero.";
+      })
       {
         assertion = setByPackage bsl == [ ];
         message = "backupStorageLocation sets ${lib.concatStringsSep " and " (setByPackage bsl)}, which the package sets: the credential comes from the cloudCredentials dependency and this location is the default. Build another location in ${ns}, the only namespace Velero reads, with (scope.forService velero).mkCR velero.out.crds.BackupStorageLocation.";

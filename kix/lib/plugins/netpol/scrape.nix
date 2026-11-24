@@ -42,8 +42,8 @@
 { lib }:
 
 let
-  inherit (import ../../core/error.nix { inherit lib; }) fail;
   kixKeys = (import ../../core/annotations.nix).keys;
+  matchesSelector = (import ../../core/label-selector.nix { inherit lib; }).matches;
   core = import ../../core/default.nix { inherit lib; };
   inherit
     (import ../../eval/edges.nix {
@@ -77,32 +77,6 @@ let
 
   nsOfRaw = raw: raw.metadata.namespace or null;
 
-  # Return true when `labels` satisfies a Kubernetes `metav1.LabelSelector`.
-  # An empty selector matches every label set.
-  matchesSelector =
-    selector: labels:
-    let
-      matchLabels = selector.matchLabels or { };
-      exprHolds =
-        e:
-        let
-          has = labels ? ${e.key};
-          values = e.values or [ ];
-        in
-        if e.operator == "In" then
-          has && builtins.elem labels.${e.key} values
-        else if e.operator == "NotIn" then
-          !has || !(builtins.elem labels.${e.key} values)
-        else if e.operator == "Exists" then
-          has
-        else if e.operator == "DoesNotExist" then
-          !has
-        else
-          fail "netpol: label selector operator '${toString e.operator}' is not one of In, NotIn, Exists, DoesNotExist";
-    in
-    builtins.all (k: (labels.${k} or null) == matchLabels.${k}) (builtins.attrNames matchLabels)
-    && builtins.all exprHolds (selector.matchExpressions or [ ]);
-
   # Return true for the strings Go's strconv.ParseBool reads as true, which
   # is how the VictoriaMetrics operator reads its boolean variables.
   isGoTrue =
@@ -119,8 +93,6 @@ let
   isNumeric = p: builtins.isInt p || (builtins.isString p && builtins.match "[0-9]+" p != null);
 in
 {
-  inherit matchesSelector;
-
   # Derive `{ egressPolicies, ingressPolicies, warnings, errors }` for all
   # scrapers (Prometheus and VMAgent resources) in Kix-managed namespaces. `extraPolicies` supplies
   # additional cluster-level policies (such as platform intents) that count
@@ -681,6 +653,17 @@ in
           promNs = plain (nsOfRaw prom);
           promName = plain prom.metadata.name;
           who = "${sk.kind} ${promNs}/${promName}";
+          # Return a warning about this scraper as a record whose `object` and
+          # `instance` name the scraper and the instance that built it.
+          aboutScraper = message: {
+            object = {
+              inherit (sk) kind;
+              namespace = promNs;
+              name = promName;
+            };
+            instance = r._builtBy or null;
+            inherit message;
+          };
           stem = sk.stem promName;
           podSelectorDecl = r.factBehavior.podSelector;
           scraperSelector =
@@ -695,11 +678,11 @@ in
           unreadWarnings =
             map (
               o:
-              "${who} selects ${o.kind} ${o.namespace}/${o.name}, whose targets Kix does not read, so no network policy opens them. Under an enforcer the scrape is dropped unless a policy outside the scrape join admits it, such as a networkPolicy.platformIntents entry."
+              aboutScraper "${who} selects ${o.kind} ${o.namespace}/${o.name}, whose targets Kix does not read, so no network policy opens them. Under an enforcer the scrape is dropped unless a policy outside the scrape join admits it, such as a networkPolicy.platformIntents entry."
             ) unreadObjects
             ++ map (
               f:
-              "${who} sets spec.${f}, whose targets Kix does not read, so no network policy opens them. Under an enforcer that traffic is dropped unless a policy outside the scrape join admits it, such as a networkPolicy.platformIntents entry."
+              aboutScraper "${who} sets spec.${f}, whose targets Kix does not read, so no network policy opens them. Under an enforcer that traffic is dropped unless a policy outside the scrape join admits it, such as a networkPolicy.platformIntents entry."
             ) unreadFields;
 
           # Two monitors on one Service are one target with the union of
@@ -831,11 +814,11 @@ in
           warnings = lib.optionals enforced.ingress (
             map (
               t:
-              "${who}: another ingress policy ${
+              aboutScraper "${who} scrapes target ${plain t.namespace}/${plain t.key}. Another ingress policy ${
                 if t.podLabelSets == [ ] then
-                  "may isolate only some of the pods behind target ${plain t.namespace}/${plain t.key}, which Kix did not build, depending on labels outside the target's selector"
+                  "may isolate only some of the target's pods, because that policy matches labels outside the target's selector and Kix does not know the full labels of pods it did not build"
                 else
-                  "isolates only some of the pods behind target ${plain t.namespace}/${plain t.key}"
+                  "isolates only some of the target's pods"
               }. Without default deny Kix adds scrape ingress only where it can show that every pod is already isolated, so the server cannot reach the isolated pods. Select all of the target's pods in that policy, or turn on networkPolicy.defaultDeny."
             ) partlyIsolatedTargets
           );

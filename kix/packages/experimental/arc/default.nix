@@ -94,20 +94,16 @@ let
 
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "arc ${ns}/${name}";
 
   metricsPort = 8080;
   healthPort = 8081;
 
-  # The first two captures are the major and minor version. null for a tag
-  # the controller's parseSemver (apis/actions.github.com/v1alpha1/
-  # version.go) rejects, such as "v0.15.1" or "0.15.x": the tag becomes
-  # every runner set's version label, and the controller deletes a runner
-  # set whose label it cannot parse.
-  versionParts =
-    t: builtins.match "(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(\\.(0|[1-9][0-9]*)([^0-9].*)?)?" t;
-  releaseMinor = lib.take 2 (versionParts release);
-  releaseMinorText = lib.concatStringsSep "." releaseMinor;
+  # Return whether the controller's parseSemver (apis/actions.github.com/
+  # v1alpha1/version.go) accepts a tag. It rejects tags such as "v0.15.1"
+  # or "0.15.x". The tag becomes every runner set's version label, and the
+  # controller deletes a runner set whose label it cannot parse.
+  controllerParses =
+    t: builtins.match "(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(\\.(0|[1-9][0-9]*)([^0-9].*)?)?" t != null;
 
   # GitHub's API and the Actions service. `meta.network.intents` cannot read
   # the instance's config, so under an enforcer the controller cannot reach a
@@ -272,17 +268,18 @@ in
       (
         let
           imageTag = builtins.unsafeDiscardStringContext config.image.tag;
-          parts = versionParts imageTag;
         in
         {
-          assertion = parts != null && lib.take 2 parts == releaseMinor;
-          message =
-            if parts == null then
-              "image.tag \"${imageTag}\" is not a version the controller can parse (digits as major.minor.patch, no \"v\" prefix). The tag becomes every runner set's version label, and the controller deletes a runner set whose label it cannot parse. Remove image.tag or set a ${releaseMinorText} tag."
-            else
-              "image.tag \"${imageTag}\" is not a ${releaseMinorText} release, and the CRDs under kix/packages/experimental/arc/crds are vendored from ${release}. Remove image.tag or set a ${releaseMinorText} tag. To move to another release, change release in kix/packages/experimental/arc/default.nix and run uv run scripts/vendor-crds.py arc.";
+          assertion = controllerParses imageTag;
+          message = "image.tag \"${imageTag}\" is not a version the controller can parse. Kix rejected it because the controller writes this tag to every runner set's version label and deletes any runner set whose label it cannot parse. Set image.tag to a major.minor.patch version without a \"v\" prefix or leading zeros (such as \"${release}\"), or remove image.tag to use the default.";
         }
       )
+      (kix.image.checkRelease {
+        inherit (config) image;
+        inherit release;
+        reason = "the CRDs in kix/packages/experimental/arc/crds come from ${release}";
+        fix = "To update this package to another version, change release in kix/packages/experimental/arc/default.nix and run uv run scripts/vendor-crds.py arc.";
+      })
     ];
 
   options = {
@@ -348,43 +345,50 @@ in
           };
         };
 
-        baseArgs = [
-          "--auto-scaling-runner-set-only"
-          "--enable-leader-election"
-          "--leader-election-id=${name}"
-          "--log-level=info"
-          "--log-format=text"
-          "--metrics-addr=:${toString metricsPort}"
-          "--listener-metrics-addr=:${toString metricsPort}"
-          "--listener-metrics-endpoint=/metrics"
-          "--health-probe-bind-address=:${toString healthPort}"
-        ]
-        ++ map (p: "--exclude-label-propagation-prefix=${p}") excludedLabelPrefixes;
-
-        args =
-          baseArgs
-          ++ kix.guardArgs {
-            inherit who;
-            owned = {
-              "--metrics-addr" =
-                "the metrics Service and ServiceMonitor use port ${toString metricsPort}; remove it.";
-              "--listener-metrics-addr" =
-                "the listener PodMonitor scrapes port ${toString metricsPort}; remove it.";
-              "--listener-metrics-endpoint" = "the listener PodMonitor scrapes /metrics; remove it.";
-              "--health-probe-bind-address" =
-                "the liveness and readiness probes use port ${toString healthPort}; remove it.";
-              "--enable-leader-election" =
-                "availability can run several replicas, which need leader election; remove it.";
-              "--leader-election-id" =
-                "the lease is named after the instance, which the leader-election Role covers; remove it.";
-              "--auto-scaling-runner-set-only" =
-                "the controller's RBAC covers AutoscalingRunnerSets only; remove it.";
-            };
-          } config.extraArgs;
+        # The controller parses flags with Go's flag package (main.go
+        # upstream).
+        args = kix.mergeArgs {
+          inherit scope;
+          parser = "go";
+          id = "K8006";
+          args = [
+            {
+              flags = [ "--auto-scaling-runner-set-only" ];
+              reason = "the controller's RBAC grants permissions for AutoscalingRunnerSets only.";
+            }
+            {
+              flags = [ "--enable-leader-election" ];
+              reason = "leader election keeps one controller active when multiple replicas run.";
+            }
+            {
+              flags = [ "--leader-election-id=${name}" ];
+              reason = "the leader-election Role in namespace \"${ns}\" grants access to Lease \"${name}\" only.";
+            }
+            "--log-level=info"
+            "--log-format=text"
+            {
+              flags = [ "--metrics-addr=:${toString metricsPort}" ];
+              reason = "the metrics Service and ServiceMonitor use port ${toString metricsPort}.";
+            }
+            {
+              flags = [ "--listener-metrics-addr=:${toString metricsPort}" ];
+              reason = "the listener PodMonitor scrapes port ${toString metricsPort}.";
+            }
+            {
+              flags = [ "--listener-metrics-endpoint=/metrics" ];
+              reason = "the listener PodMonitor scrapes /metrics.";
+            }
+            {
+              flags = [ "--health-probe-bind-address=:${toString healthPort}" ];
+              reason = "the liveness and readiness probes use port ${toString healthPort}.";
+            }
+          ]
+          ++ map (p: "--exclude-label-propagation-prefix=${p}") excludedLabelPrefixes;
+        } config.extraArgs;
 
         env = kix.mkEnvVars (
           kix.mergeEnv {
-            inherit who;
+            inherit scope;
             owned = [
               {
                 vars.CONTROLLER_MANAGER_CONTAINER_IMAGE = kix.image.ref config.image;
@@ -423,7 +427,6 @@ in
         runnerSet = import ./runner-set.nix {
           inherit
             lib
-            who
             ns
             self
             config
@@ -657,8 +660,6 @@ in
     (
       let
         sel = ''namespace="${ns}",service="${name}-metrics"'';
-        reconcileErrors = "sum by (namespace, service, controller) (increase(controller_runtime_reconcile_errors_total{${sel}}[30m]))";
-        reconciles = "sum by (namespace, service, controller) (increase(controller_runtime_reconcile_total{${sel}}[30m]))";
         controller = "Actions Runner Controller ${ns}/${name}";
       in
       kix.monitor {
@@ -671,15 +672,12 @@ in
             summary = "The Actions Runner Controller is down.";
             description = "The ${controller} has not answered a scrape for 10 minutes. Running jobs finish, but no runner set scales and no new runner starts, so queued jobs wait. Check the controller Deployment in ${ns}.";
           };
-          ArcControllerReconcileErrors = {
-            # controller-runtime counts an optimistic-lock conflict as an error
-            # and retries at once, so a busy healthy controller shows a few.
-            # Alert on the share of reconciles that fail, with a floor.
-            expr = "${reconcileErrors} / ${reconciles} > 0.1 and ${reconcileErrors} > 2";
-            "for" = "15m";
-            severity = "warning";
+          ArcControllerReconcileErrors = kix.reconcileErrorsAlert {
+            selector = sel;
+            operator = controller;
             summary = "The Actions Runner Controller fails to reconcile runner sets.";
-            description = "The {{ $labels.controller }} controller of the ${controller} has failed {{ $value | humanizePercentage }} of its reconciles over the last 30 minutes, so runner sets may not scale. The controller log names the error; a GitHub API error or a refused credential is the usual cause.";
+            impact = "runner sets may not scale";
+            nextStep = "Check the controller logs for the error. Common causes are GitHub API errors or rejected credentials.";
           };
           # The gauge counts EphemeralRunners in phase Failed. The runner
           # set counts them with its pending and running runners

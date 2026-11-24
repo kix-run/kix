@@ -205,7 +205,7 @@ let
           group_filter="$1"
           ;;
         -h|--help)
-          cat <<USAGE
+          cat <<'USAGE'
     regen-captures: capture every `live` step in docs/nix/captures.nix
     against a dedicated kind cluster, diff against the checked-in
     sidecars, optionally apply.

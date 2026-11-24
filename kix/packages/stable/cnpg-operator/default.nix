@@ -126,11 +126,9 @@ let
   # meta.version, the default image.tag, and the tag in crds/sources.txt and
   # rbac/sources.txt.
   release = "1.30.2";
-  minorOf = lib.versions.majorMinor;
 
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "cnpg-operator ${ns}/${name}";
 
   group = "postgresql.cnpg.io";
   vendored = file: (builtins.fromJSON (builtins.readFile ./crds/${file})).spec;
@@ -234,14 +232,13 @@ in
 
   assertions =
     { config, ... }:
-    let
-      imageTag = builtins.unsafeDiscardStringContext config.image.tag;
-    in
     [
-      {
-        assertion = minorOf imageTag == minorOf release;
-        message = "image.tag \"${imageTag}\" is not a CloudNativePG ${minorOf release} release, and the definitions under kix/packages/stable/cnpg-operator/crds and the ClusterRole under rbac are vendored from ${release}. Set image.tag to a ${minorOf release}.x tag, or move the package to another release as its header describes.";
-      }
+      (kix.image.checkRelease {
+        inherit (config) image;
+        inherit release;
+        reason = "the CRDs in kix/packages/stable/cnpg-operator/crds and the ClusterRole in its rbac directory come from CloudNativePG ${release}";
+        fix = "To update this package to another version, follow the instructions at the top of kix/packages/stable/cnpg-operator/default.nix.";
+      })
     ];
 
   options = {
@@ -293,7 +290,7 @@ in
       let
         env = kix.mkEnvVars (
           kix.mergeEnv {
-            inherit who;
+            inherit scope;
             owned = [
               {
                 vars = {
@@ -407,18 +404,8 @@ in
           };
         };
 
-        # Each handle adds the webhook check to the requires of every custom
-        # resource built from it.
-        withCheck = args: args // { requires = (args.requires or [ ]) ++ [ self.webhookCheck ]; };
-        gate =
-          crd:
-          crd
-          // {
-            out = crd.out // {
-              cr = args: crd.out.cr (withCheck args);
-              mkCR = consumerScope: args: crd.out.mkCR consumerScope (withCheck args);
-            };
-          };
+        # Every custom resource of a gated kind waits for the webhook check.
+        checked = [ self.webhookCheck ];
       in
       {
         serviceAccount = scope.mkResource {
@@ -449,139 +436,130 @@ in
           };
           # A ScheduledBackup and a Pooler report no conditions; a Pooler's
           # consumers wait on its Service's endpoints instead.
-          scheduledBackups = gate (
-            scope.mkCRD {
-              spec = vendored "scheduledbackups.${group}.json";
-              holdsData = false;
-              usesAtLeast = _: { };
-            }
-          );
-          poolers = gate (
-            scope.mkCRD {
-              spec = vendored "poolers.${group}.json";
-              holdsData = false;
-              # Count `spec.instances` PgBouncer pods (default 1), each with
-              # every container in `spec.template`, and the one Service the
-              # operator makes for the Pooler.
-              usesAtLeast =
-                cr:
-                kix.usage.add [
-                  (kix.usage.times (cr.spec.instances or 1) (
-                    kix.usage.ofPod (cr.spec.template.spec.containers or [ ])
-                  ))
-                  { services = 1; }
-                ];
-            }
-          );
+          scheduledBackups = scope.mkCRD {
+            spec = vendored "scheduledbackups.${group}.json";
+            crRequires = checked;
+            holdsData = false;
+            usesAtLeast = _: { };
+          };
+          poolers = scope.mkCRD {
+            spec = vendored "poolers.${group}.json";
+            crRequires = checked;
+            holdsData = false;
+            # Count `spec.instances` PgBouncer pods (default 1), each with
+            # every container in `spec.template`, and the one Service the
+            # operator makes for the Pooler.
+            usesAtLeast =
+              cr:
+              kix.usage.add [
+                (kix.usage.times (cr.spec.instances or 1) (
+                  kix.usage.ofPod (cr.spec.template.spec.containers or [ ])
+                ))
+                { services = 1; }
+              ];
+          };
           failoverQuorums = scope.mkCRD {
             spec = vendored "failoverquorums.${group}.json";
             holdsData = false;
             usesAtLeast = _: { };
           };
-          clusters = gate (
-            scope.mkCRD {
-              spec = vendored "clusters.${group}.json";
-              readiness = ready;
-              holdsData = true;
-              # The instances dial the hosts a Cluster names (externalClusters).
-              factBehavior = {
-                endpoint = "terminate";
-                podSelector = cr: operandSelectors.cluster cr.metadata.name;
-              };
-              # Count `spec.instances` instance pods, sized by `spec.resources`.
-              # Each instance has one claim for its data, one for
-              # `spec.walStorage` when set, and one per tablespace. A claim
-              # counts only when its size is known. The rw, ro, and r Services
-              # count unless `spec.managed.services` disables them, plus each
-              # additional managed Service. Short-lived init and join Jobs are
-              # excluded.
-              usesAtLeast =
-                cr:
-                let
-                  spec = cr.spec or { };
-                  instances = spec.instances or 1;
-                  sizeOf = storage: storage.size or storage.pvcTemplate.resources.requests.storage or null;
-                  sizes = builtins.filter (size: size != null && size != "") (
-                    map sizeOf (
-                      [ (spec.storage or { }) ]
-                      ++ lib.optional (spec ? walStorage) spec.walStorage
-                      ++ map (t: t.storage or { }) (spec.tablespaces or [ ])
-                    )
-                  );
-                  services = spec.managed.services or { };
-                  disabled = services.disabledDefaultServices or [ ];
-                in
-                kix.usage.add (
-                  [
-                    (kix.usage.times instances (kix.usage.ofPod [ { resources = spec.resources or { }; } ]))
-                    {
-                      services =
-                        builtins.length (
-                          builtins.filter (t: !(builtins.elem t disabled)) [
-                            "rw"
-                            "ro"
-                            "r"
-                          ]
-                        )
-                        + builtins.length (services.additional or [ ]);
-                    }
-                  ]
-                  ++ map (
-                    size:
-                    kix.usage.times instances {
-                      persistentvolumeclaims = 1;
-                      "requests.storage" = size;
-                    }
-                  ) sizes
+          clusters = scope.mkCRD {
+            spec = vendored "clusters.${group}.json";
+            crRequires = checked;
+            readiness = ready;
+            holdsData = true;
+            # The instances dial the hosts a Cluster names (externalClusters).
+            factBehavior = {
+              endpoint = "terminate";
+              podSelector = cr: operandSelectors.cluster cr.metadata.name;
+            };
+            # Count `spec.instances` instance pods, sized by `spec.resources`.
+            # Each instance has one claim for its data, one for
+            # `spec.walStorage` when set, and one per tablespace. A claim
+            # counts only when its size is known. The rw, ro, and r Services
+            # count unless `spec.managed.services` disables them, plus each
+            # additional managed Service. Short-lived init and join Jobs are
+            # excluded.
+            usesAtLeast =
+              cr:
+              let
+                spec = cr.spec or { };
+                instances = spec.instances or 1;
+                sizeOf = storage: storage.size or storage.pvcTemplate.resources.requests.storage or null;
+                sizes = builtins.filter (size: size != null && size != "") (
+                  map sizeOf (
+                    [ (spec.storage or { }) ]
+                    ++ lib.optional (spec ? walStorage) spec.walStorage
+                    ++ map (t: t.storage or { }) (spec.tablespaces or [ ])
+                  )
                 );
-            }
-          );
-          databases = gate (
-            scope.mkCRD {
-              spec = vendored "databases.${group}.json";
-              readiness = applied;
-              holdsData = true;
-              usesAtLeast = _: { };
-            }
-          );
-          databaseRoles = gate (
-            scope.mkCRD {
-              spec = vendored "databaseroles.${group}.json";
-              readiness = applied;
-              holdsData = false;
-              usesAtLeast = _: { };
-            }
-          );
-          publications = gate (
-            scope.mkCRD {
-              spec = vendored "publications.${group}.json";
-              readiness = applied;
-              holdsData = false;
-              usesAtLeast = _: { };
-            }
-          );
-          subscriptions = gate (
-            scope.mkCRD {
-              spec = vendored "subscriptions.${group}.json";
-              readiness = applied;
-              holdsData = false;
-              usesAtLeast = _: { };
-            }
-          );
-          imageCatalogs = gate (
-            scope.mkCRD {
-              spec = vendored "imagecatalogs.${group}.json";
-              holdsData = false;
-              usesAtLeast = _: { };
-            }
-          );
-          clusterImageCatalogs = gate (
-            scope.mkCRD {
-              spec = vendored "clusterimagecatalogs.${group}.json";
-              holdsData = false;
-              usesAtLeast = _: { };
-            }
-          );
+                services = spec.managed.services or { };
+                disabled = services.disabledDefaultServices or [ ];
+              in
+              kix.usage.add (
+                [
+                  (kix.usage.times instances (kix.usage.ofPod [ { resources = spec.resources or { }; } ]))
+                  {
+                    services =
+                      builtins.length (
+                        builtins.filter (t: !(builtins.elem t disabled)) [
+                          "rw"
+                          "ro"
+                          "r"
+                        ]
+                      )
+                      + builtins.length (services.additional or [ ]);
+                  }
+                ]
+                ++ map (
+                  size:
+                  kix.usage.times instances {
+                    persistentvolumeclaims = 1;
+                    "requests.storage" = size;
+                  }
+                ) sizes
+              );
+          };
+          databases = scope.mkCRD {
+            spec = vendored "databases.${group}.json";
+            crRequires = checked;
+            readiness = applied;
+            holdsData = true;
+            usesAtLeast = _: { };
+          };
+          databaseRoles = scope.mkCRD {
+            spec = vendored "databaseroles.${group}.json";
+            crRequires = checked;
+            readiness = applied;
+            holdsData = false;
+            usesAtLeast = _: { };
+          };
+          publications = scope.mkCRD {
+            spec = vendored "publications.${group}.json";
+            crRequires = checked;
+            readiness = applied;
+            holdsData = false;
+            usesAtLeast = _: { };
+          };
+          subscriptions = scope.mkCRD {
+            spec = vendored "subscriptions.${group}.json";
+            crRequires = checked;
+            readiness = applied;
+            holdsData = false;
+            usesAtLeast = _: { };
+          };
+          imageCatalogs = scope.mkCRD {
+            spec = vendored "imagecatalogs.${group}.json";
+            crRequires = checked;
+            holdsData = false;
+            usesAtLeast = _: { };
+          };
+          clusterImageCatalogs = scope.mkCRD {
+            spec = vendored "clusterimagecatalogs.${group}.json";
+            crRequires = checked;
+            holdsData = false;
+            usesAtLeast = _: { };
+          };
         };
 
         defaultMonitoring = scope.mkResource {
@@ -798,7 +776,6 @@ in
             # Job when its own content changes. The checksum annotations below
             # put the content of the webhook and of what serves it into that
             # content, so the check runs again when any of them changes.
-            annotations.${kix.keys.rerun} = kix.keyValues.rerunOnChange;
             requires = builtins.attrValues self.webhookCheckRole;
             spec = {
               # The kubelet restarts the container with a growing delay (10 s
@@ -927,8 +904,6 @@ in
       }@args:
       let
         sel = ''namespace="${ns}",service="${metricsServiceName}"'';
-        reconcileErrors = "sum by (namespace, service, controller) (increase(controller_runtime_reconcile_errors_total{${sel}}[30m]))";
-        reconciles = "sum by (namespace, service, controller) (increase(controller_runtime_reconcile_total{${sel}}[30m]))";
         operator = "CloudNativePG operator ${ns}/${name}";
       in
       kix.monitor {
@@ -941,15 +916,12 @@ in
             summary = "The CloudNativePG operator is down.";
             description = "No replica of the ${operator} has answered a scrape for 10 minutes. Running PostgreSQL clusters keep serving, but no failover happens, changes to Clusters are not applied, and its webhooks refuse creating or updating one. Check the operator Deployment in ${ns}.";
           };
-          CNPGOperatorReconcileErrors = {
-            # controller-runtime counts an optimistic-lock conflict as an error
-            # and retries at once, so a busy healthy controller shows a few.
-            # Alert on the share of reconciles that fail, with a floor.
-            expr = "${reconcileErrors} / ${reconciles} > 0.1 and ${reconcileErrors} > 2";
-            "for" = "15m";
-            severity = "warning";
+          CNPGOperatorReconcileErrors = kix.reconcileErrorsAlert {
+            selector = sel;
+            operator = operator;
             summary = "The CloudNativePG operator fails to reconcile its resources.";
-            description = "The {{ $labels.controller }} controller of the ${operator} has failed {{ $value | humanizePercentage }} of its reconciles over the last 30 minutes, so a resource of that kind may not match its spec. The operator log names the error and the resource.";
+            impact = "the resources handled by that controller may not match their specs";
+            nextStep = "Check the operator logs for the failing resource and error.";
           };
         };
       } args

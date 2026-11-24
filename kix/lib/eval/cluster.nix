@@ -16,9 +16,9 @@
   callPackagePhase1,
   discoverBuildDeps,
   resolveDepTargets,
-  describeRequester,
   buildConfigInjections,
   checkRefTargets,
+  checkDepsKeys,
   refsOf,
   evaluateInstanceModules,
   instancePinsLib,
@@ -34,7 +34,7 @@
 
 let
   inherit (import ../core/error.nix { inherit lib; }) fail warning;
-  inherit (import ../core/util.nix { inherit lib; }) plain namespaceOf;
+  inherit (import ../core/util.nix { inherit lib; }) plain namespaceOf instanceLabel;
   versions = import ../core/version.nix { inherit lib; };
   kubernetes = import ../core/kubernetes.nix;
   packageLib = import ../core/package.nix { inherit lib; };
@@ -432,7 +432,9 @@ in
 
       # Read only `ref` pointers in phase 1. Other explicit `deps` values may
       # come from the instance fixpoint, so they are bound during full instance
-      # evaluation and do not receive config injections.
+      # evaluation and do not receive config injections. An inactive optional
+      # instance deploys nothing, so it resolves no dependency and injects no
+      # config.
       phase1Instances = lib.mapAttrs (
         nsName: nsInsts:
         lib.mapAttrs (
@@ -456,14 +458,19 @@ in
               };
               discoveredDeps = discoverBuildDeps raw.build;
               depsEnrichment = raw.deps or { };
-              resolvedTargets = resolveDepTargets {
-                declaredDeps = discoveredDeps;
-                inherit resolutionIndex depsEnrichment;
-                namespace = nsName;
-                requester = describeRequester nsName instName instCfg;
-                requesterName = instName;
-                explicitOverrides = lib.filterAttrs (_: v: refsOf v != [ ]) (instCfg.deps or { });
-              };
+              resolvedTargets =
+                if isActive nsName instName then
+                  resolveDepTargets {
+                    declaredDeps = discoveredDeps;
+                    inherit resolutionIndex depsEnrichment;
+                    namespace = nsName;
+                    requester = "${nsName}/${instName}";
+                    addedFor = instCfg._autoInstantiatedFor or [ ];
+                    requesterName = instName;
+                    explicitOverrides = lib.filterAttrs (_: v: refsOf v != [ ]) (instCfg.deps or { });
+                  }
+                else
+                  lib.mapAttrs (_: _: { found = false; }) discoveredDeps;
             in
             {
               inherit discoveredDeps depsEnrichment resolvedTargets;
@@ -472,6 +479,8 @@ in
             }
         ) nsInsts
       ) mergedInstances;
+
+      _depsKeysCheck = checkDepsKeys { inherit mergedInstances phase1Instances; };
 
       configInjections = buildConfigInjections phase1Instances;
 
@@ -1158,9 +1167,9 @@ in
         builtins.concatMap ofInstance (builtins.filter isStateful allInstancesList);
 
       # Reject cluster-scoped objects rendered with the same API group, kind,
-      # and name by multiple active instances. Identical copies would otherwise
-      # be collapsed by `dedupeByOutPath`, and differing copies would fail
-      # cross-resource validation without naming the owning instances.
+      # and name by multiple active instances. `dedupeByOutPath` collapses
+      # identical copies, so the cross-resource duplicate check sees only
+      # differing ones, and this check also catches the identical ones.
       sharedClusterObjectAssertions =
         let
           owned = builtins.concatMap (
@@ -1199,12 +1208,7 @@ in
                 parts = lib.splitString "/" o;
               in
               mergedInstances.${builtins.head parts}.${builtins.elemAt parts 1}._autoInstantiatedFor or null;
-            label =
-              o:
-              let
-                rs = requestersOf o;
-              in
-              if rs == null then o else "${o} (auto-instantiated for ${builtins.concatStringsSep ", " rs})";
+            label = o: instanceLabel o (requestersOf o);
             anyAuto = builtins.any (o: requestersOf o != null) os;
           in
           {
@@ -1380,51 +1384,53 @@ in
     in
     builtins.seq _instancePinsCheck (
       builtins.seq _refTargetsCheck (
-        builtins.seq _extraDepsCheck (
-          builtins.seq _rolesValidation (
-            builtins.seq _roleBindingsCheck (
-              builtins.seq _annotationDomainsCheck (
-                builtins.seq _clusterHookChecksRun (
-                  builtins.seq clusterDiagnostics.evaluateExtraWarnings (
-                    builtins.seq clusterDiagnostics.assertionCheck {
-                      _type = "k8s-cluster-v2";
-                      inherit name;
+        builtins.seq _depsKeysCheck (
+          builtins.seq _extraDepsCheck (
+            builtins.seq _rolesValidation (
+              builtins.seq _roleBindingsCheck (
+                builtins.seq _annotationDomainsCheck (
+                  builtins.seq _clusterHookChecksRun (
+                    builtins.seq clusterDiagnostics.evaluateExtraWarnings (
+                      builtins.seq clusterDiagnostics.assertionCheck {
+                        _type = "k8s-cluster-v2";
+                        inherit name;
 
-                      inherit clusterInstances;
-                      instances = clusterInstances;
+                        inherit clusterInstances;
+                        instances = clusterInstances;
 
-                      namespaces = nsResources;
+                        namespaces = nsResources;
 
-                      inherit
-                        activation
-                        activationIndex
-                        activationFiles
-                        packageIndex
-                        packageIndexContent
-                        info
-                        extraImages
-                        imageSources
-                        ;
+                        inherit
+                          activation
+                          activationIndex
+                          activationFiles
+                          packageIndex
+                          packageIndexContent
+                          info
+                          extraImages
+                          imageSources
+                          ;
 
-                      interfaces = if platformSide == null then { } else platformSide.interfaces;
+                        interfaces = if platformSide == null then { } else platformSide.interfaces;
 
-                      diagnostics = {
-                        warnings = libraryWarnings;
-                        inherit (clusterDiagnostics) assertions failedAssertions;
-                      };
-
-                      out = {
-                        maintenance = {
-                          enable = cfg.cluster.maintenance.enable or false;
-                          reason = cfg.cluster.maintenance.reason or null;
-                          until = cfg.cluster.maintenance.until or null;
+                        diagnostics = {
+                          warnings = libraryWarnings;
+                          inherit (clusterDiagnostics) assertions failedAssertions;
                         };
-                      };
 
-                      inherit scorecardReport;
+                        out = {
+                          maintenance = {
+                            enable = cfg.cluster.maintenance.enable or false;
+                            reason = cfg.cluster.maintenance.reason or null;
+                            until = cfg.cluster.maintenance.until or null;
+                          };
+                        };
 
-                      rawManifests = rawManifestList;
-                    }
+                        inherit scorecardReport;
+
+                        rawManifests = rawManifestList;
+                      }
+                    )
                   )
                 )
               )

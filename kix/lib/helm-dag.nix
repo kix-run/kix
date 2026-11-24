@@ -20,18 +20,18 @@ let
 
   podLabelsOf = r: (podSpec.podTemplateOf r).metadata.labels or { };
 
-  # Return true when every key in selector matches labels.
-  isSubsetMatch =
-    selector: labels:
-    selector != { }
-    && builtins.all (k: labels ? ${k} && labels.${k} == selector.${k}) (builtins.attrNames selector);
+  labelSelector = import ./core/label-selector.nix { inherit lib; };
+
+  # Return true when a non-empty label selector matches `labels`. An empty
+  # selector adds no ordering edge.
+  selectsLabels =
+    selector: labels: !labelSelector.isEmpty selector && labelSelector.matches selector labels;
 in
 rec {
   inherit
     workloadKinds
     isWorkloadKind
     podLabelsOf
-    isSubsetMatch
     ;
 
   # Return the "Kind/name" key for a raw JSON resource, which is unique within
@@ -108,8 +108,8 @@ rec {
       serviceEdges = builtins.concatMap (
         svc:
         let
-          svcSelector = svc.spec.selector or { };
-          matching = builtins.filter (w: isSubsetMatch svcSelector (podLabelsOf w)) workloads;
+          svcSelector.matchLabels = svc.spec.selector or { };
+          matching = builtins.filter (w: selectsLabels svcSelector (podLabelsOf w)) workloads;
         in
         map (w: {
           from = svc;
@@ -139,8 +139,8 @@ rec {
       pdbEdges = builtins.concatMap (
         r:
         let
-          pdbSelector = r.spec.selector.matchLabels or { };
-          matching = builtins.filter (w: isSubsetMatch pdbSelector (podLabelsOf w)) workloads;
+          pdbSelector = r.spec.selector or { };
+          matching = builtins.filter (w: selectsLabels pdbSelector (podLabelsOf w)) workloads;
         in
         map (w: {
           from = r;
@@ -241,9 +241,9 @@ rec {
       serviceMonitorEdges = builtins.concatMap (
         r:
         let
-          smSelector = r.spec.selector.matchLabels or { };
+          smSelector = r.spec.selector or { };
           services = builtins.filter (s: s.kind == "Service") resources;
-          matching = builtins.filter (svc: isSubsetMatch smSelector (svc.metadata.labels or { })) services;
+          matching = builtins.filter (svc: selectsLabels smSelector (svc.metadata.labels or { })) services;
         in
         map (svc: {
           from = r;
