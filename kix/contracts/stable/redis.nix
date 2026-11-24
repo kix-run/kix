@@ -79,7 +79,7 @@ mkContract {
       else if dep.out.tls or false then
         scope.fail {
           dependency = "redis";
-          message = "The `redis` dependency uses TLS (`out.tls = true`), and this package does not support Redis over TLS.";
+          message = "The `redis` dependency has TLS enabled (`out.tls = true`), which this package does not support.";
           fix = "Wire a server without TLS, or one that also listens without it.";
         }
       else

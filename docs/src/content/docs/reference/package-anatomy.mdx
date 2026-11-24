@@ -623,9 +623,9 @@ deps.postgres = {
 
 `kix.contracts.*` provides shared contract validators (`postgresDatabase`, `redis`, `smtp`, `oidc`, and `gateway` under `kix.contracts.<name>`, and `oidcProvider`, `otlpEndpoint`, and `clickhouse` under `kix.contracts.experimental.<name>`) that verify the `out` surface passed between providers (including `kix.mkImport` stand-ins) and consumers:
 
-- **Provider validation (`check`)**: A provider passes its `root.out` through `kix.contracts.<name>.check scope { ... }` (or `kix.contracts.experimental.<name>.check scope { ... }`), which verifies every required and optional contract field and returns `out`.
-- **Consumer validation (`assertions` or helper functions)**: A consumer checks a bound dependency in `deps.<alias>.assertions` with `kix.contracts.<name>.assertions` or `kix.contracts.experimental.<name>.assertions` (or reads it through a contract helper such as `kix.contracts.smtp.helpers.settings`, `kix.contracts.smtp.helpers.server`, `kix.contracts.oidc.helpers.client`, or `kix.contracts.gateway.require`), which checks all required contract fields and validates the shape of any present optional fields.
-- **Automatic error context**: Contract checks that take `scope` fail through `scope.fail`, and Kix attaches `instance`, `package`, and `dependency` to failed dependency assertions automatically. Error messages do not need to repeat the instance or package name.
+- **Provider validation (`check`)**: A provider passes `root.out` through `kix.contracts.<name>.check scope { ... }` (or `kix.contracts.experimental.<name>.check scope { ... }`), which validates every required and optional field and returns `out`.
+- **Consumer validation (`assertions` or helper functions)**: A consumer sets `deps.<alias>.assertions` to `kix.contracts.<name>.assertions` (or `kix.contracts.experimental.<name>.assertions`), or reads the dependency through a contract helper such as `kix.contracts.smtp.helpers.settings`, `kix.contracts.smtp.helpers.server`, `kix.contracts.oidc.helpers.client`, or `kix.contracts.gateway.require`. Consumer checks require all `required = true` fields and validate any optional fields that are present.
+- **Automatic error context**: Contract checks that take `scope` fail through `scope.fail`, and Kix attaches `instance`, `package`, and `dependency` to failed dependency assertions automatically, so error messages should not repeat the instance or package name.
 - **Credentials on contracts (`out.credentials`)**: Every contract that carries a login places the secret or secret instance at `out.credentials` (read via `dep.out.credentials.out.keyRef "<key>"`) rather than taking a second secret dependency.
 
 ```nix
@@ -786,7 +786,7 @@ kix.checkPackageOptions {
 
 A package takes every secret value through a secret dependency, never through an option, so the cluster chooses where the value comes from: `packages.secret` (plain text or a SOPS file), `packages.secret-ref` (a Secret that something else writes), or another source package. A test in the Kix repository fails any package that Kix ships if one of its options holds a secret or a path to one.
 
-Wrap the dependency with `kix.contracts.secret.helpers.use` before reading its keys. It checks that the dependency honours the secret contract (`kix.contracts.secret`: `out.name`, `out.keyRef`, `out.mkEnv`, `out.envFrom`, `out.volume`), and that `dep.out.keys` declares all required `keys` and at least one complete key group in `anyOf`. It returns `dep` when valid, or fails through `scope.fail` with `dependency` set to `arg`. `kix.checkSecretKeys` takes the same arguments and checks the keys only.
+Wrap the dependency with `kix.contracts.secret.helpers.use` before reading its keys. It checks that `dep` satisfies `kix.contracts.secret` (`out.name`, `out.keyRef`, `out.mkEnv`, `out.envFrom`, and `out.volume`) and that `dep.out.keys` declares every key in `keys` and at least one full group in `anyOf`. When valid, it returns `dep`; otherwise it fails through `scope.fail` with `dependency` set to `arg`. `kix.checkSecretKeys` takes the same arguments and checks only the keys.
 
 ```nix
 build =

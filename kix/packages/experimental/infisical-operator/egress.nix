@@ -97,9 +97,9 @@
     if !enforced || platformIntentCovers then
       null
     else if parsed == null then
-      "Kix cannot parse a hostname and port from `address` (${address}) to check whether cluster egress policy allows the operator to reach it. Use a hostname in `address`, or allow the traffic in `networkPolicy.platformIntents` with `namespace = \"${namespace}\"`, `podSelector = ${selectorText}`, and an egress rule for that address."
+      "Cluster egress policy is enforced, and Kix could not parse a hostname and port from `address` (${address}) to verify that the operator can reach it. Use `http(s)://<hostname>[:<port>]` in `address`, or allow the traffic in `networkPolicy.platformIntents` with `namespace = \"${namespace}\"`, `podSelector = ${selectorText}`, and an egress rule for that address."
     else if port == 443 && !inCluster then
       null
     else
-      "Cluster egress policy blocks the operator from reaching ${address}, so the default InfisicalConnection would never become ready. By default, this package only allows outbound TCP port 443 to addresses outside the cluster. ${remedy}";
+      "Cluster egress policy blocks the operator from reaching `address` (${address}), so its `default` InfisicalConnection would never become ready. This package only opens outbound TCP port 443 to destinations outside the cluster. ${remedy}";
 }

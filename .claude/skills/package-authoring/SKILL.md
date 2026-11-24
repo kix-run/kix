@@ -348,11 +348,14 @@ pattern table has each form.
   literal strings (pattern table) and point at a `secretKeyRef` to a Secret
   managed outside Kix or at the secret dep (S1).
 - Pass `inherit scope;` to `kix.mergeGuarded`, `kix.mergeEnv`,
-  `kix.guardArgs`, `kix.checkSecretKeys`, and attribute-set contract helpers
-  (such as `kix.contracts.secret.helpers.use`). Pass `scope` as the first
-  argument to `<contract>.check`, `<contract>.require`, and
-  `kix.contracts.redis.helpers.requirePlaintext` so errors report the
-  instance and package (Pr9).
+  `kix.guardArgs`, `kix.checkSecretKeys`, and contract helpers that take an
+  attribute set (such as `kix.contracts.secret.helpers.use`,
+  `kix.contracts.smtp.helpers.settings`, and
+  `kix.contracts.oidc.helpers.client`). Pass `scope` to `<contract>.check`,
+  `<contract>.require`, `<contract>.requireAs`, and
+  `kix.contracts.redis.helpers.requirePlaintext`, and pass only the
+  dependency to `<contract>.assertions`, so errors report the instance and
+  package automatically (Pr9).
 
 ### 8. Option surface
 

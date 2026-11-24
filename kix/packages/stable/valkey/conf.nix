@@ -79,8 +79,8 @@ in
         [
           {
             inherit option;
-            message = "${option}.${key} must be lowercase (Valkey directive names are case-insensitive).";
-            fix = "Rename it to ${option}.${lower}.";
+            message = "${option}.${key} must be lowercase; Valkey ignores case in directive names, so mixed case can duplicate a directive in ${option}.";
+            fix = "Rename `${key}` to `${lower}` in `${option}`.";
           }
         ]
       else

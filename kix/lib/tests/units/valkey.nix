@@ -217,7 +217,7 @@ in
       && says "settings.masteruser cannot be set here because replicas authenticate" got.masteruser
       && says "settings.rename-command cannot be set here" got.rename
       && says "settings.Appendonly must be lowercase" got.upper
-      && (builtins.head got.upper).fix == "Rename it to settings.appendonly."
+      && (builtins.head got.upper).fix == "Rename `Appendonly` to `appendonly` in `settings`."
       && says ''settings."appendonly yes\nport" is not a valid Valkey directive name'' got.notName
       && says "sentinel.primarySettings.monitor cannot be set here" got.monitor
       && says "sentinel.primarySettings.rename-command cannot be set here" got.primaryRename

@@ -340,8 +340,8 @@ in
               helpers.mergeCollide {
                 inherit (scope') fail;
                 error = names: {
-                  message = "Multiple `build` entries define the same part name (${names}).";
-                  fix = "Give each part a unique name (for example, set `partName` or `exposurePart` on `kix.expose`, or `monitorPart` or `rulesPart` on `kix.monitor`), or use `partsOverlays` to replace an existing part.";
+                  message = "Multiple `build` entries define the same part (${names}), and Kix does not allow one `build` entry to overwrite another.";
+                  fix = "Give each part a unique name (for example, set `partName` or `exposurePart` on `kix.expose`, or `monitorPart` or `rulesPart` on `kix.monitor`), or use `partsOverlays` on the instance to modify an existing part.";
                 };
               } acc (callBuildFn self fn)
             ) { } rawBuildEntries;

@@ -152,7 +152,7 @@ in
           else
             fail {
               message = "`root.out` does not satisfy the ${name} contract (${here}): ${lib.concatStringsSep "; " found}.";
-              fix = "Correct the fields named above where the package sets `out` on its `root`. If the package reads one from a setting of the instance, change that setting.";
+              fix = "If one of those fields comes from an option on this instance, fix that option in your cluster definition; otherwise fix `root.out` in the package.";
             }
         );
 
@@ -168,7 +168,7 @@ in
           refuseWho {
             helper = "${path}.assertions";
             reason = "Kix adds the instance and package to each assertion automatically.";
-            fix = "Remove `who`, as in `deps.<name>.assertions = kix.${path}.assertions;`.";
+            fix = "Pass only the dependency, such as `deps.<name>.assertions = kix.${path}.assertions;` (or `dep: kix.${path}.assertions dep ++ ...`).";
           }
         else
           lib.optional (found != [ ]) ({ assertion = false; } // consumerError dep found);

@@ -110,7 +110,7 @@ let
         else if sender == null then
           scopeFail {
             dependency = "smtp";
-            message = "No sender email address is set on this instance (`mail.from`) or on its `smtp` dependency (`out.from`).";
+            message = "No sender email address is set on this instance (`mail.from`) or on its `smtp` dependency (`out.from`), so Kix cannot configure outbound mail.";
             fix = "Set out.from on the SMTP instance, or mail.from on this instance.";
           }
         else
@@ -190,7 +190,7 @@ let
       if out.tls == "none" && external then
         scopeFail {
           dependency = "smtp";
-          message = "deps.smtp points to an external SMTP server with `tls = \"none\"`, which would send mail and any credentials in plain text.";
+          message = "deps.smtp uses `tls = \"none\"` without `external = false`, so Kix treats the SMTP server as external and refuses to send mail or credentials over the internet in plain text.";
           fix = "Set tls to \"starttls\" (usually port 587) or \"implicit\" (usually port 465) on its out. A server inside the cluster sets external = false.";
         }
       else

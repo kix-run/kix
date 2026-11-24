@@ -145,7 +145,7 @@ in
     else if matching == [ ] then
       fail {
         option = "postgres.version";
-        message = "postgres.version \"${version}\" is not supported by StackGres ${release}.";
+        message = "StackGres ${release} does not include PostgreSQL \"${version}\".";
         fix =
           if builtins.elem askedMajor majors then
             "PostgreSQL ${askedMajor} minors it ships: ${minorsOf askedMajor}."
@@ -155,7 +155,7 @@ in
     else if builtins.elem pg.version unpublished then
       fail {
         option = "postgres.version";
-        message = "postgres.version \"${version}\" selects PostgreSQL ${pg.version} (build ${pg.build}), which has no published StackGres container images on quay.io, so the pods cannot start.";
+        message = "postgres.version \"${version}\" resolves to PostgreSQL ${pg.version} (build ${pg.build}), and StackGres did not publish container images for that build on quay.io, so the database pods would fail to pull their images.";
         fix = "Pin another minor: ${minorsOf pg.major}.";
       }
     else

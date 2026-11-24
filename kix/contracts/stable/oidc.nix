@@ -89,8 +89,8 @@ let
               endpoints =
                 out.endpoints or (scopeFail {
                   dependency = "oidc";
-                  message = "deps.oidc does not set `out.endpoints`. This package requires explicit authorization, token, and userinfo URLs.";
-                  fix = "Set out.endpoints on that instance (an oidc-client on keycloak sets them, and a kix.mkImport sets them in `out`).";
+                  message = "The `oidc` dependency does not set `out.endpoints`, which this package needs because it does not use OIDC discovery.";
+                  fix = "In a `kix.mkImport` provider, set `out.endpoints = { authorizationUrl = \"...\"; tokenUrl = \"...\"; userinfoUrl = \"...\"; };`. For Keycloak, wire a `packages.experimental.oidc-client` instance, which sets `out.endpoints` automatically.";
                 });
             }
         );
