@@ -298,20 +298,21 @@ in
     let
       # Info logging unless extraArgs picks another level. Keep the level
       # flag first. Moving it changes the pod template, which restarts the
-      # operator when a cluster upgrades Kix. The owned flags sit in
-      # `defaults` to keep that order, and extraArgs cannot replace them.
-      args = kix.guardArgs {
+      # operator when a cluster upgrades Kix. The operator parses flags with
+      # Go's flag package (internal/manager/manager.go upstream).
+      args = kix.mergeArgs {
         inherit scope;
         parser = "go";
-        owned = {
-          "--leader-elect" =
-            "leader election keeps one replica active when multiple replicas run; remove it.";
-          "--health-probe-bind-address" = "the liveness and readiness probes use :8081; remove it.";
-        };
-        defaults = [
-          "--zap-log-level=info"
-          "--leader-elect"
-          "--health-probe-bind-address=:8081"
+        args = [
+          { defaults = [ "--zap-log-level=info" ]; }
+          {
+            owned = [ "--leader-elect" ];
+            reason = "leader election keeps one replica active when multiple replicas run.";
+          }
+          {
+            owned = [ "--health-probe-bind-address=:8081" ];
+            reason = "the liveness and readiness probes use :8081.";
+          }
         ];
       } config.extraArgs;
 

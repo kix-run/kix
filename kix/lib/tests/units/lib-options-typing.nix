@@ -19,6 +19,9 @@ let
   throws = v: !(builtins.tryEval (builtins.deepSeq v v)).success;
   evalFails' = ms: throws ms;
 
+  # The sentence every mergeArgs refusal ends with.
+  overlayHint = "An overlay in the instance's partsOverlays can still change the built resource, and Kix does not check what it changes.";
+
   # A scope whose `fail` returns `{ thrown; }` instead of throwing, as the
   # scope of instance ns/inst of package `pkg`.
   caughtScope.fail =
@@ -343,249 +346,365 @@ in
     )
     || throw "mergeEnv: ${builtins.toJSON (merge { })}";
 
-  lib-options-typing-guard-args =
+  # mergeArgs passes the package's words in order, the user's words after
+  # them, and `after` behind those. A plain word may be set again, an owned
+  # flag may not, and a value word in `owned` reserves nothing.
+  lib-options-typing-merge-args =
     let
-      guard = kixlib.guardArgs {
+      merge = kixlib.mergeArgs {
         scope.fail = kixlib.fail;
-        owned."--ingress-class" = "remove it.";
+        parser = "gnu";
+        args = [
+          "serve"
+          "--v=2"
+          {
+            owned = [
+              "--config"
+              "/etc/app.yaml"
+            ];
+            names = [ "-c" ];
+            reason = "the package renders the file.";
+          }
+          {
+            owned = [ "--ingress-class=kix" ];
+            from = "the ingressClassName option";
+          }
+        ];
+        after = [
+          {
+            owned = [ "--port=80" ];
+            reason = "the Service uses port 80.";
+          }
+        ];
       };
     in
     (
-      guard [ "--ingress-class-by-name=true" ] == [ "--ingress-class-by-name=true" ]
-      && throws (guard [ "--ingress-class=x" ])
-      && throws (guard [ "--ingress-class" ])
-      && throws (guard [
-        "--ingress-class=x"
-        "--ingress-class"
-      ])
+      merge [
+        "--v=4"
+        "--ingress-class-by-name=true"
+        "/etc/app.yaml"
+      ] == [
+        "serve"
+        "--v=2"
+        "--config"
+        "/etc/app.yaml"
+        "--ingress-class=kix"
+        "--v=4"
+        "--ingress-class-by-name=true"
+        "/etc/app.yaml"
+        "--port=80"
+      ]
+      && throws (merge [ "--ingress-class=x" ])
+      && throws (merge [ "--ingress-class" ])
+      && throws (merge [ "--config=/x" ])
+      && throws (merge [ "-c/x" ])
+      && throws (merge [ "--port" ])
     )
-    || throw "guardArgs passed or refused the wrong arguments";
+    || throw "mergeArgs: ${builtins.toJSON (merge [ "--v=4" ])}";
 
-  # Without `parser`, a list word matches the flag as written, as
-  # `<flag>=`, or as a one-letter flag with its value attached. A one-dash
-  # spelling of a two-dash flag passes, and a one-dash owned flag matches
-  # itself.
-  lib-options-typing-guard-args-gnu-default =
+  # Under "gnu", a word matches the flag as written, as `<flag>=`, or as a
+  # one-letter flag with its value attached. A one-dash spelling of a
+  # two-dash flag passes, and a one-dash name matches itself.
+  lib-options-typing-merge-args-gnu =
     let
-      guard = kixlib.guardArgs {
+      merge = kixlib.mergeArgs {
         scope.fail = kixlib.fail;
-        owned = {
-          "--leader-elect" = "remove it.";
-          "-v" = "remove it.";
-          "-config.file" = "remove it.";
-        };
+        parser = "gnu";
+        args = [
+          {
+            names = [
+              "--leader-elect"
+              "-v"
+              "-config.file"
+            ];
+            reason = "the package sets them.";
+          }
+        ];
       };
     in
     (
-      guard [ "-leader-elect=false" ] == [ "-leader-elect=false" ]
-      && guard [ "--Leader-elect" ] == [ "--Leader-elect" ]
-      && throws (guard [ "--leader-elect" ])
-      && throws (guard [ "-vmodule=x" ])
-      && throws (guard [ "-v2" ])
-      && throws (guard [ "-config.file=/x" ])
+      merge [ "-leader-elect=false" ] == [ "-leader-elect=false" ]
+      && merge [ "--Leader-elect" ] == [ "--Leader-elect" ]
+      && throws (merge [ "--leader-elect" ])
+      && throws (merge [ "-vmodule=x" ])
+      && throws (merge [ "-v2" ])
+      && throws (merge [ "-config.file=/x" ])
     )
-    || throw "guardArgs gnu default changed meaning";
+    || throw "mergeArgs gnu parser passed or refused the wrong arguments";
 
   # Under "go", `-flag` and `--flag` are one flag, whichever spelling is
-  # owned. A longer flag and a value word pass, and a one-letter flag takes
-  # no attached value.
-  lib-options-typing-guard-args-go =
+  # owned. A longer flag, a value word, and three dashes pass, and a
+  # one-letter flag takes no attached value. Under "go-arg", any number of
+  # dashes names the flag.
+  lib-options-typing-merge-args-go =
     let
-      guard = kixlib.guardArgs {
-        scope.fail = kixlib.fail;
-        parser = "go";
-        owned = {
-          "--leader-elect" = "remove it.";
-          "-config.file" = "remove it.";
-          "-v" = "remove it.";
+      mergeWith =
+        parser:
+        kixlib.mergeArgs {
+          scope.fail = kixlib.fail;
+          inherit parser;
+          args = [
+            {
+              owned = [ "--leader-elect" ];
+              names = [
+                "-config.file"
+                "-v"
+              ];
+              reason = "the package sets them.";
+            }
+          ];
         };
-      };
+      merge = mergeWith "go";
+      passed = [
+        "-leader-elected"
+        "leader-elect"
+        "-vmodule=x"
+        "---leader-elect"
+      ];
     in
     (
-      guard [
-        "-leader-elected"
-        "leader-elect"
-        "-vmodule=x"
-        "---leader-elect"
-      ] == [
-        "-leader-elected"
-        "leader-elect"
-        "-vmodule=x"
-        "---leader-elect"
-      ]
-      && throws (guard [ "-leader-elect=false" ])
-      && throws (guard [ "--leader-elect" ])
-      && throws (guard [ "--config.file=/x" ])
-      && throws (guard [ "-config.file" ])
-      && throws (guard [ "--v=2" ])
+      merge passed == [ "--leader-elect" ] ++ passed
+      && throws (merge [ "-leader-elect=false" ])
+      && throws (merge [ "--leader-elect" ])
+      && throws (merge [ "--config.file=/x" ])
+      && throws (merge [ "-config.file" ])
+      && throws (merge [ "--v=2" ])
+      && throws (mergeWith "go-arg" [ "---leader-elect" ])
+      && throws (mergeWith "go-arg" [ "-leader-elect=false" ])
+      &&
+        mergeWith "go-arg" [ "--Leader-elect" ] == [
+          "--leader-elect"
+          "--Leader-elect"
+        ]
     )
-    || throw "guardArgs go parser passed or refused the wrong arguments";
+    || throw "mergeArgs go parser passed or refused the wrong arguments";
 
   # Under "paerser", flag names match in any case, and a family refuses
-  # its flag and every flag under it, but not a longer name beside it.
-  lib-options-typing-guard-args-paerser =
+  # its flag and every flag under it, but not a longer name beside it. The
+  # refusal of a family member gives the word, the reason, and the fix.
+  lib-options-typing-merge-args-paerser =
     let
-      guard = kixlib.guardArgs {
-        scope.fail = kixlib.fail;
+      helpers = import ../caught.nix { inherit lib; };
+      mergeArgs = {
+        scope = caughtScope;
         parser = "paerser";
-        owned."--ping" = "remove it.";
-        ownedFamilies."--providers.kubernetesCRD" = "route through the Gateway.";
+        args = [
+          {
+            owned = [ "--Ping=true" ];
+            reason = "the probes use /ping.";
+          }
+          {
+            families = [ "--providers.kubernetesCRD" ];
+            reason = "the package installs no Traefik CRDs.";
+            fix = "Route through the Gateway.";
+          }
+        ];
       };
+      merge = kixlib.mergeArgs (mergeArgs // { scope.fail = kixlib.fail; });
+      refusal =
+        helpers.records
+          ((helpers.caught ../../vocab/compose.nix { inherit lib; }).mergeArgs mergeArgs [
+            "-Providers.KubernetesCrd.namespaces=a"
+          ]).thrown;
+      passed = [
+        "--ping.entrypoint=web"
+        "--providers.kubernetescrdx=a"
+        "ping"
+      ];
     in
     (
-      guard [
-        "--ping.entrypoint=web"
-        "--providers.kubernetescrdx=a"
-        "ping"
-      ] == [
-        "--ping.entrypoint=web"
-        "--providers.kubernetescrdx=a"
-        "ping"
-      ]
-      && throws (guard [ "-PING=false" ])
-      && throws (guard [ "--providers.kubernetescrd" ])
-      && throws (guard [ "-Providers.KubernetesCrd.namespaces=a" ])
+      merge passed == [ "--Ping=true" ] ++ passed
+      && throws (merge [ "-PING=false" ])
+      && throws (merge [ "--providers.kubernetescrd" ])
+      &&
+        refusal == [
+          {
+            instance = "ns/inst";
+            package = "pkg";
+            option = "extraArgs";
+            message = "extraArgs sets \"-Providers.KubernetesCrd.namespaces=a\", which this package does not accept: the package installs no Traefik CRDs.";
+            fix = "Route through the Gateway. ${overlayHint}";
+          }
+        ]
     )
-    || throw "guardArgs paerser parser passed or refused the wrong arguments";
+    || throw "mergeArgs paerser: ${builtins.toJSON refusal}";
 
-  # `defaults` come first, and a default is dropped when the user sets the
-  # same flag, matched as the owned check matches. Under "gnu" a one-dash
-  # default is a one-letter flag. An attrset takes attrset defaults.
-  lib-options-typing-guard-args-defaults =
+  # A default keeps its place in the list and is dropped when the user sets
+  # the same flag, matched as the owned check matches. Under "gnu" a
+  # one-dash default is a one-letter flag. An attribute set takes attribute
+  # set defaults and owned flags.
+  lib-options-typing-merge-args-defaults =
     let
-      guard =
+      merge =
         args:
-        kixlib.guardArgs (
+        kixlib.mergeArgs (
           {
             scope.fail = kixlib.fail;
+            parser = "gnu";
           }
           // args
         );
-    in
-    (
-      guard
-        {
-          defaults = [
-            "--retries=3"
-            "-p/data"
-            "--freq=20s"
-          ];
-        }
-        [
-          "--retries"
-          "5"
-          "-p/tmp"
-        ] == [
-        "--freq=20s"
-        "--retries"
-        "5"
-        "-p/tmp"
-      ]
-      &&
-        guard {
-          defaults = [ "--retries=3" ];
-        } [ "--retries-max=5" ] == [
-          "--retries=3"
-          "--retries-max=5"
-        ]
-      &&
-        guard {
-          parser = "go";
-          defaults = [ "--zap-log-level=info" ];
-        } [ "-zap-log-level=debug" ] == [ "-zap-log-level=debug" ]
-      &&
-        guard {
-          parser = "paerser";
-          defaults = [ "--log.level=INFO" ];
-        } [ "--LOG.LEVEL=DEBUG" ] == [ "--LOG.LEVEL=DEBUG" ]
-      &&
-        guard {
-          owned."dedup.minScrapeInterval" = "remove it.";
-          defaults = {
-            "search.maxQueryDuration" = "60s";
-            "search.maxSeries" = "1000";
-          };
-        } { "-search.maxSeries" = "10"; } == {
-          "search.maxQueryDuration" = "60s";
-          "-search.maxSeries" = "10";
-        }
-      && guard { } [ ] == [ ]
-      && guard { } { } == { }
-    )
-    || throw "guardArgs defaults: ${
-      builtins.toJSON (
-        guard
+      positioned =
+        merge
           {
-            defaults = [
-              "--retries=3"
-              "-p/data"
-              "--freq=20s"
+            args = [
+              { defaults = [ "--retries=3" ]; }
+              {
+                owned = [ "--port=80" ];
+                reason = "the Service uses port 80.";
+              }
+              {
+                defaults = [
+                  "-p/data"
+                  "--freq=20s"
+                ];
+              }
             ];
           }
           [
             "--retries"
             "5"
             "-p/tmp"
-          ]
-      )
-    }";
+          ];
+    in
+    (
+      positioned == [
+        "--port=80"
+        "--freq=20s"
+        "--retries"
+        "5"
+        "-p/tmp"
+      ]
+      &&
+        merge {
+          args = [ { defaults = [ "--retries=3" ]; } ];
+        } [ "--retries-max=5" ] == [
+          "--retries=3"
+          "--retries-max=5"
+        ]
+      &&
+        merge {
+          parser = "go";
+          args = [ { defaults = [ "--zap-log-level=info" ]; } ];
+        } [ "-zap-log-level=debug" ] == [ "-zap-log-level=debug" ]
+      &&
+        merge {
+          parser = "paerser";
+          args = [ { defaults = [ "--log.level=INFO" ]; } ];
+        } [ "--LOG.LEVEL=DEBUG" ] == [ "--LOG.LEVEL=DEBUG" ]
+      &&
+        merge {
+          parser = "go";
+          args = [
+            {
+              owned."dedup.minScrapeInterval" = "30s";
+              reason = "it follows scrapeInterval.";
+            }
+            {
+              defaults = {
+                "search.maxQueryDuration" = "60s";
+                "search.maxSeries" = "1000";
+              };
+            }
+          ];
+        } { "-search.maxSeries" = "10"; } == {
+          "dedup.minScrapeInterval" = "30s";
+          "search.maxQueryDuration" = "60s";
+          "-search.maxSeries" = "10";
+        }
+      && merge { } [ ] == [ ]
+      && merge { } { } == { }
+    )
+    || throw "mergeArgs defaults: ${builtins.toJSON positioned}";
 
   # An `id` reaches each refusal record, so the error starts with it.
-  lib-options-typing-guard-args-id =
+  lib-options-typing-merge-args-id =
     let
       helpers = import ../caught.nix { inherit lib; };
       got = helpers.records (
-        ((helpers.caught ../../vocab/compose.nix { inherit lib; }).guardArgs {
+        ((helpers.caught ../../vocab/compose.nix { inherit lib; }).mergeArgs {
           scope = caughtScope;
           parser = "go";
           id = "K0001";
-          owned."--leader-elect" = "remove it.";
+          args = [
+            {
+              owned = [ "--leader-elect" ];
+              reason = "the package sets it.";
+            }
+          ];
         } [ "-leader-elect=false" ]).thrown
       );
     in
-    map (r: r.id or null) got == [ "K0001" ] || throw "guardArgs id: ${builtins.toJSON got}";
+    map (r: r.id or null) got == [ "K0001" ] || throw "mergeArgs id: ${builtins.toJSON got}";
 
-  # A call the parser cannot read is refused even when the user's
-  # arguments are fine.
-  lib-options-typing-guard-args-refuses-bad-calls =
-    let
-      guard =
-        args:
-        kixlib.guardArgs (
-          {
-            scope.fail = kixlib.fail;
-          }
-          // args
-        );
-    in
-    throws (guard { parser = "zsh"; } [ ])
-    && throws (
-      guard {
-        parser = "go";
-        owned."leader-elect" = "remove it.";
-      } [ ]
-    )
-    && throws (guard { defaults = [ "300" ]; } [ ])
-    && throws (guard { defaults.a = "1"; } [ ])
-    && throws (guard { defaults = [ "--a=1" ]; } { });
-
-  # An attrset of flags (a VictoriaMetrics CR's extraArgs) is refused on an
-  # owned key, matched exactly after its leading dashes, and comes back
-  # unchanged otherwise. The refusal names the option, the key as written,
-  # and the reason.
-  lib-options-typing-guard-args-attrset =
+  # A call the library cannot read is refused even when the user's
+  # arguments are fine, and each refusal says what is wrong with the call.
+  lib-options-typing-merge-args-refuses-bad-calls =
     let
       helpers = import ../caught.nix { inherit lib; };
-      guardArgs = {
-        scope = caughtScope;
-        option = "vmstorage.extraArgs";
-        owned."dedup.minScrapeInterval" = "set scrapeInterval instead.";
+      message =
+        args: extraArgs:
+        (builtins.head (
+          helpers.records
+            ((helpers.caught ../../vocab/compose.nix { inherit lib; }).mergeArgs (
+              {
+                scope = caughtScope;
+                parser = "gnu";
+              }
+              // args
+            ) extraArgs).thrown
+        )).message;
+      owned = entry: {
+        args = [ (entry // { reason = "the package sets it."; }) ];
       };
-      guard = kixlib.guardArgs (guardArgs // { scope.fail = kixlib.fail; });
+      cases = {
+        "is missing `parser`" = message { parser = null; } [ ];
+        "does not support parser \"zsh\"" = message { parser = "zsh"; } [ ];
+        "cannot read \"leader-elect\" in names" = message (
+          { parser = "go"; } // owned { names = [ "leader-elect" ]; }
+        ) [ ];
+        "cannot read \"/etc/x\", the first word of an `owned` list" = message (owned {
+          owned = [ "/etc/x" ];
+        }) [ ];
+        "cannot read \"300\" in defaults" = message { args = [ { defaults = [ "300" ]; } ]; } [ ];
+        "gives `defaults` as an attribute set" = message { args = [ { defaults.a = "1"; } ]; } [ ];
+        "gives `defaults` as a list" = message { args = [ { defaults = [ "--a=1" ]; } ]; } { };
+        "gives `owned` as a list" = message (owned { owned = [ "--a=1" ]; }) { };
+        "is a word, and extraArgs is an attribute set" = message { args = [ "--a=1" ]; } { };
+        "needs either `reason` or `from`" = message { args = [ { owned = [ "--a" ]; } ]; } [ ];
+        "sets `flags`, which kix.mergeArgs does not read" = message (owned {
+          flags = [ "--a" ];
+        }) [ ];
+      };
+      wrong = lib.filterAttrs (expected: got: !lib.hasInfix expected got) cases;
+    in
+    wrong == { } || throw "mergeArgs bad calls: ${builtins.toJSON wrong}";
+
+  # An attribute set of flags (a VictoriaMetrics resource's extraArgs) is
+  # refused on an owned key, matched exactly after its leading dashes, and
+  # otherwise comes back with the package's flags. The refusal names the
+  # option, the key as written, and where the flag comes from. Without
+  # `fix`, it tells the user to remove the flag from the option. Every
+  # refusal ends with the sentence about partsOverlays.
+  lib-options-typing-merge-args-attrset =
+    let
+      helpers = import ../caught.nix { inherit lib; };
+      mergeArgs = {
+        scope = caughtScope;
+        parser = "go";
+        option = "vmstorage.extraArgs";
+        args = [
+          {
+            names = [ "dedup.minScrapeInterval" ];
+            from = "the scrapeInterval option";
+          }
+        ];
+      };
+      merge = kixlib.mergeArgs (mergeArgs // { scope.fail = kixlib.fail; });
       refusal =
         args:
         helpers.records (
-          ((helpers.caught ../../vocab/compose.nix { inherit lib; }).guardArgs guardArgs args).thrown
+          ((helpers.caught ../../vocab/compose.nix { inherit lib; }).mergeArgs mergeArgs args).thrown
         );
       allowed = {
         "dedup.minScrapeIntervalExtra" = "1m";
@@ -593,15 +712,15 @@ in
       };
     in
     (
-      guard allowed == allowed
-      && guard { } == { }
-      && throws (guard {
+      merge allowed == allowed
+      && merge { } == { }
+      && throws (merge {
         "dedup.minScrapeInterval" = "1m";
       })
-      && throws (guard {
+      && throws (merge {
         "-dedup.minScrapeInterval" = "1m";
       })
-      && throws (guard {
+      && throws (merge {
         "--dedup.minScrapeInterval" = "1m";
       })
       &&
@@ -612,15 +731,113 @@ in
             instance = "ns/inst";
             package = "pkg";
             option = "vmstorage.extraArgs";
-            message = "vmstorage.extraArgs sets \"dedup.minScrapeInterval\", which this package does not accept: set scrapeInterval instead.";
+            message = "vmstorage.extraArgs sets \"dedup.minScrapeInterval\", which comes from the scrapeInterval option.";
+            fix = "Remove it from vmstorage.extraArgs. ${overlayHint}";
           }
         ]
     )
-    || throw "guardArgs attrset: ${
+    || throw "mergeArgs attrset: ${
       builtins.toJSON (refusal {
         "dedup.minScrapeInterval" = "1m";
       })
     }";
+
+  # argValues returns a flag's values under each parser: after `=`, attached
+  # to a one-letter flag under "gnu", or in the next word. The next word is
+  # then no flag of its own. An attribute set gives the values of its
+  # matching keys.
+  lib-options-typing-arg-values =
+    let
+      values = parser: kixlib.argValues { inherit parser; };
+      got = {
+        gnu = values "gnu" "--registry" [
+          "--registry=crd"
+          "--registry"
+          "txt"
+          "-registry=x"
+          "--registry-x=y"
+          "--registry"
+        ];
+        gnuShort = values "gnu" "-c" [
+          "-c/x"
+          "-c=y"
+          "-c"
+          "z"
+          "-C"
+          "w"
+        ];
+        go = values "go" "--namespaces" [
+          "-namespaces=a=b"
+          "--namespaces"
+          "-namespaces"
+          "namespaces"
+          "---namespaces=c"
+        ];
+        goArg = values "go-arg" "--namespaces" [
+          "---namespaces=c"
+          "-namespaces"
+          "d"
+        ];
+        paerser = values "paerser" "--log.level" [
+          "--Log.Level=DEBUG"
+          "-LOG.LEVEL"
+          "INFO"
+        ];
+        attrs = values "go" "--search.maxSeries" {
+          "search.maxSeries" = "10";
+          "search.maxQueryDuration" = "60s";
+        };
+        none = values "gnu" "--registry" [ ];
+      };
+      expected = {
+        gnu = [
+          "crd"
+          "txt"
+        ];
+        gnuShort = [
+          "/x"
+          "y"
+          "z"
+        ];
+        go = [
+          "a=b"
+          "-namespaces"
+        ];
+        goArg = [
+          "c"
+          "d"
+        ];
+        paerser = [
+          "DEBUG"
+          "INFO"
+        ];
+        attrs = [ "10" ];
+        none = [ ];
+      };
+    in
+    (got == expected && throws (values "zsh" "--a" [ ]) && throws (values "go" "a" [ ]))
+    || throw "argValues: ${builtins.toJSON got}";
+
+  # kix.guardArgs is refused with its change record id and names
+  # kix.mergeArgs, with the instance when the call passes `scope`.
+  lib-options-typing-guard-args-removed =
+    let
+      helpers = import ../caught.nix { inherit lib; };
+      got = builtins.head (
+        helpers.records
+          ((helpers.caught ../../vocab/compose.nix { inherit lib; }).guardArgs {
+            scope = caughtScope;
+            owned."--leader-elect" = "remove it.";
+          }).thrown
+      );
+    in
+    (
+      got.id or null == "K5396"
+      && got.instance or null == "ns/inst"
+      && lib.hasInfix "kix.mergeArgs" got.message
+      && throws (kixlib.guardArgs { owned = { }; } [ ])
+    )
+    || throw "guardArgs removed: ${builtins.toJSON got}";
 
   # The helpers' refusals name the instance and the package through
   # `scope.fail`, and the option the user set. A mergeEnv group with a
@@ -741,13 +958,13 @@ in
       caughtErrors = (import ../caught.nix { inherit lib; }).caught ../../core/error.nix { inherit lib; };
       records = (import ../caught.nix { inherit lib; }).records;
       withWho =
-        (caughtErrors.failOf "guardArgs" {
+        (caughtErrors.failOf "mergeEnv" {
           scope = null;
           who = "pkg ns/inst";
         }).thrown;
       withWhoAndScope = builtins.head (
         records
-          (caughtErrors.failOf "guardArgs" {
+          (caughtErrors.failOf "mergeEnv" {
             scope = caughtScope;
             who = "pkg ns/inst";
           }).thrown
@@ -776,12 +993,6 @@ in
       && withWhoAndScope.id or null == "K6417"
       && withWhoAndScope.instance or null == "ns/inst"
       && lib.hasInfix "needs `scope`" (builtins.head (records withoutScope)).message
-    )
-    && throws (
-      kixlib.guardArgs {
-        who = "pkg ns/inst";
-        owned = { };
-      } [ ]
     )
     && throws (
       kixlib.mergeGuarded {

@@ -341,14 +341,18 @@ pattern table has each form.
 - The hatch set is E1's.
 - Derive the lock lists from the DI wiring, because they are the same list:
   every path, flag (all spellings), and variable the package computes from a
-  dependency or option is locked through `kix.mergeGuarded`, `kix.guardArgs`
-  (owned flags derived from the owned env groups), and `kix.mergeEnv` owned
-  groups (E3, E6, E8; pattern table).
+  dependency or option is locked through `kix.mergeGuarded`, `kix.mergeArgs`
+  (each owned flag stated once, with its value and its reason, in the list
+  the container's arguments come from), and `kix.mergeEnv` owned groups (E3,
+  E6, E8; pattern table).
+- `kix.mergeArgs` needs `parser`. Read how the upstream program parses its
+  flags at the pinned version, set the value that fits, and name the
+  upstream file in a comment at the call.
 - `env` accepts strings, so refuse the program's credential variables as
   literal strings (pattern table) and point at a `secretKeyRef` to a Secret
   managed outside Kix or at the secret dep (S1).
 - Pass `inherit scope;` to `kix.mergeGuarded`, `kix.mergeEnv`,
-  `kix.guardArgs`, `kix.checkSecretKeys`, and contract helpers that take an
+  `kix.mergeArgs`, `kix.checkSecretKeys`, and contract helpers that take an
   attribute set (such as `kix.contracts.secret.helpers.use`,
   `kix.contracts.smtp.helpers.settings`, and
   `kix.contracts.oidc.helpers.client`). Pass `scope` to `<contract>.check`,
@@ -464,23 +468,27 @@ The only place in this skill with package line numbers. `pkg:N` is
 | `mergeEnv` defaults and owned groups | metabase:168-232 |
 | Discrete database variables through `keyRef`, owned `_FILE` twins | metabase:187-203 |
 | URL-shaped credential through `$(VAR)` | vaultwarden:143-147, 212-233 |
-| `guardArgs`, owned flags from owned env groups | keycloak:398 |
-| `guardArgs` with `defaults` that `extraArgs` can override | node-exporter:106 |
-| `guardArgs` with `parser = "go"`, `parser = "paerser"`, and `ownedFamilies` | loki:340; traefik:487 |
-| `mergeGuarded` on `settings` or `extraSpec` | tempo:442; cnpg-cluster:323, 430, 514 |
+| `mergeArgs`, owned flags stated once with their values | `cert-manager/controller.nix`:381-401 |
+| `mergeArgs`, refused flags from owned env groups | keycloak:404-429 |
+| `mergeArgs` with `defaults` that `extraArgs` can override, and `after` | node-exporter:108-146; a default kept first, `victoria-metrics-operator/operator.nix`:303-317 |
+| `mergeArgs` with `parser = "go"`, `parser = "paerser"`, and `families` | loki:344; traefik:429, 495 |
+| `mergeArgs` with a flag and its value as two words | `clickhouse-logs/vector-agent.nix`:213-227 |
+| `mergeArgs` on an attribute set of flags | victoria-metrics-agent:189-210 |
+| `argValues` to read what `extraArgs` gives a flag | external-dns:398; reloader:106-110 |
+| `mergeGuarded` on `settings` or `extraSpec` | tempo:456; cnpg-cluster:323, 430, 514 |
 | Migrations at start: Recreate, deadline from `startupSeconds`, probes | metabase:94-97, 252-256, 284-304 |
 | Config injection into a dependency | metabase:109-112; stackgres-database:120-125; cnpg-database:94-115 |
-| Contracts: consumer `assertions`, provider `check` | metabase:112; stackgres-database:553; keycloak:559; tempo:707 |
+| Contracts: consumer `assertions`, provider `check` | metabase:112; stackgres-database:553; keycloak:566; tempo:730 |
 | `pick` as an option default with `defaultText` | `cnpg-cluster/options.nix`:12-18 |
 | `pick` inline, header names the instance override (O19) | keycloak:256, header 74-76 |
 | `atLeast` | valkey:122 |
-| Ceilings: package-wide, per builder | tempo:284; valkey:555, `harbor/registry.nix`:245, `harbor/jobservice.nix`:338 |
+| Ceilings: package-wide, per builder | tempo:298; valkey:568, `harbor/registry.nix`:245, `harbor/jobservice.nix`:338 |
 | `kix.expose`, `exposure.urlOrNull` | metabase:172-175, 367 |
 | Metrics toggle that does not restart the workload | metabase:152-157; keycloak header 30-35 |
 | `kix.monitor` with alerts | openbao:393; clickhouse:626-636 and `alerts.nix` |
 | `kix.alerts` over a PodMonitor | `cnpg-cluster/alerts.nix`:54 |
 | `kix.reconcileErrorsAlert` for an operator | cnpg-operator:942; victoria-metrics-operator:346 (`job` labels) |
-| `kix.healthCheck` with a script file | victoria-metrics-agent:358-375 |
+| `kix.healthCheck` with a script file | victoria-metrics-agent:365-382 |
 | Checksum annotations from `out.contentHash`, `enableServiceLinks = false` | metabase:258-271 |
 | Facade: consumer-namespace Secret, server-namespace Job | clickhouse-database:1-36; stackgres-database |
 | Facade resources in the server's namespace named with the consumer's namespace | clickhouse-database:356 (`serverSideName`) |

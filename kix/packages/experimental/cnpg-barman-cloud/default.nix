@@ -276,30 +276,42 @@ in
         } config.env
       );
 
-      args = [
-        "operator"
-        "--server-cert=/server/tls.crt"
-        "--server-key=/server/tls.key"
-        "--client-cert=/client/tls.crt"
-        "--server-address=:${toString grpcPort}"
-        "--health-probe-bind-address=:${toString healthPort}"
-        "--leader-elect"
-      ]
-      ++ kix.guardArgs {
+      # The operator parses flags with cobra and pflag
+      # (internal/cmd/operator/main.go upstream).
+      args = kix.mergeArgs {
         inherit scope;
-        owned = {
-          "--server-cert" =
-            "the package mounts the server certificate from the Certificate it issues; remove it.";
-          "--server-key" = "the package mounts the server key from the Certificate it issues; remove it.";
-          "--client-cert" =
-            "the package issues the client certificate the operator presents and names it on the Service; remove it.";
-          "--server-address" =
-            "the Service and the readiness probe use port ${toString grpcPort}; remove it.";
-          "--health-probe-bind-address" = "the liveness probe uses port ${toString healthPort}; remove it.";
-          "--leader-elect" = "the package always enables leader election; remove it.";
-          "--plugin-path" =
-            "the operator dials the plugin over TCP through its Service, not through a socket; remove it.";
-        };
+        parser = "gnu";
+        args = [
+          "operator"
+          {
+            owned = [ "--server-cert=/server/tls.crt" ];
+            reason = "the package mounts the server certificate from the Certificate it issues.";
+          }
+          {
+            owned = [ "--server-key=/server/tls.key" ];
+            reason = "the package mounts the server key from the Certificate it issues.";
+          }
+          {
+            owned = [ "--client-cert=/client/tls.crt" ];
+            reason = "the package issues the client certificate the operator presents and names it on the Service.";
+          }
+          {
+            owned = [ "--server-address=:${toString grpcPort}" ];
+            reason = "the Service and the readiness probe use port ${toString grpcPort}.";
+          }
+          {
+            owned = [ "--health-probe-bind-address=:${toString healthPort}" ];
+            reason = "the liveness probe uses port ${toString healthPort}.";
+          }
+          {
+            owned = [ "--leader-elect" ];
+            reason = "the package always enables leader election.";
+          }
+          {
+            names = [ "--plugin-path" ];
+            reason = "the operator dials the plugin over TCP through its Service, not through a socket.";
+          }
+        ];
       } config.extraArgs;
 
       certSecret =

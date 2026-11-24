@@ -338,18 +338,26 @@ in
                 name = "zfs-plugin";
                 image = kix.image.ref config.image;
                 imagePullPolicy = config.image.pullPolicy;
-                args = [
-                  "--endpoint=$(OPENEBS_CSI_ENDPOINT)"
-                  "--plugin=$(OPENEBS_CONTROLLER_DRIVER)"
-                ]
-                ++ kix.guardArgs {
+                # zfs-plugin parses flags with cobra and pflag (cmd/main.go
+                # upstream).
+                args = kix.mergeArgs {
                   inherit scope;
+                  parser = "gnu";
                   option = "controller.extraArgs";
-                  owned = {
-                    "--endpoint" = "the sidecars reach the plugin on the socket the package sets; remove it.";
-                    "--plugin" = "it selects the controller code path; remove it.";
-                    "--name" = "the driver name must equal the CSIDriver ${driverName}; remove it.";
-                  };
+                  args = [
+                    {
+                      owned = [ "--endpoint=$(OPENEBS_CSI_ENDPOINT)" ];
+                      reason = "the sidecars reach the plugin on the socket the package sets.";
+                    }
+                    {
+                      owned = [ "--plugin=$(OPENEBS_CONTROLLER_DRIVER)" ];
+                      reason = "it selects the controller code path.";
+                    }
+                    {
+                      names = [ "--name" ];
+                      reason = "the driver name must equal the CSIDriver ${driverName}.";
+                    }
+                  ];
                 } config.controller.extraArgs;
                 env = kix.mkEnvVars (
                   kix.mergeEnv {
@@ -454,22 +462,28 @@ in
                   name = "zfs-plugin";
                   image = kix.image.ref config.image;
                   imagePullPolicy = config.image.pullPolicy;
-                  args = [
-                    "--nodename=$(OPENEBS_NODE_NAME)"
-                    "--endpoint=$(OPENEBS_CSI_ENDPOINT)"
-                    "--plugin=$(OPENEBS_NODE_DRIVER)"
-                  ]
-                  ++ kix.guardArgs {
+                  args = kix.mergeArgs {
                     inherit scope;
+                    parser = "gnu";
                     option = "node.extraArgs";
-                    owned = {
-                      "--nodename" =
-                        "the plugin's node ID must be the Kubernetes node name, which the package passes; remove it.";
-                      "--endpoint" =
-                        "the registrar and the kubelet reach the plugin on the socket the package sets; remove it.";
-                      "--plugin" = "it selects the node code path; remove it.";
-                      "--name" = "the driver name must equal the CSIDriver ${driverName}; remove it.";
-                    };
+                    args = [
+                      {
+                        owned = [ "--nodename=$(OPENEBS_NODE_NAME)" ];
+                        reason = "the plugin's node ID must be the Kubernetes node name, which the package passes.";
+                      }
+                      {
+                        owned = [ "--endpoint=$(OPENEBS_CSI_ENDPOINT)" ];
+                        reason = "the registrar and the kubelet reach the plugin on the socket the package sets.";
+                      }
+                      {
+                        owned = [ "--plugin=$(OPENEBS_NODE_DRIVER)" ];
+                        reason = "it selects the node code path.";
+                      }
+                      {
+                        names = [ "--name" ];
+                        reason = "the driver name must equal the CSIDriver ${driverName}.";
+                      }
+                    ];
                   } config.node.extraArgs;
                   env = kix.mkEnvVars (
                     kix.mergeEnv {

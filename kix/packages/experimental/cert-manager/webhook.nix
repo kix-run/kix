@@ -168,28 +168,36 @@ in
               name = "cert-manager-webhook";
               image = kix.image.ref config.webhook.image;
               imagePullPolicy = config.webhook.image.pullPolicy;
-              args = [
-                "--v=2"
-                "--secure-port=${toString securePort}"
-                "--dynamic-serving-ca-secret-namespace=$(POD_NAMESPACE)"
-                "--dynamic-serving-ca-secret-name=${caSecret}"
-                "--dynamic-serving-dns-names=${serviceName}"
-                "--dynamic-serving-dns-names=${serviceName}.$(POD_NAMESPACE)"
-                "--dynamic-serving-dns-names=${serviceName}.$(POD_NAMESPACE).svc"
-              ]
-              ++ kix.guardArgs {
+              # The webhook parses flags with cobra and pflag
+              # (cmd/webhook/app/webhook.go upstream).
+              args = kix.mergeArgs {
                 inherit scope;
+                parser = "gnu";
                 option = "webhook.extraArgs";
-                owned = {
-                  "--secure-port" =
-                    "the containerPort and the Service's targetPort use it; set webhook.securePort instead.";
-                  "--dynamic-serving-ca-secret-name" =
-                    "the CA injection annotation and the dynamic-serving Role name the same Secret; remove it.";
-                  "--dynamic-serving-ca-secret-namespace" =
-                    "the CA injection annotation and the dynamic-serving Role expect the CA Secret in the instance's namespace; remove it.";
-                  "--dynamic-serving-dns-names" =
-                    "the package sets the webhook Service's names, which the API server uses to reach the webhook; remove it.";
-                };
+                args = [
+                  "--v=2"
+                  {
+                    owned = [ "--secure-port=${toString securePort}" ];
+                    reason = "the containerPort and the Service's targetPort use it.";
+                    fix = "Set webhook.securePort instead.";
+                  }
+                  {
+                    owned = [ "--dynamic-serving-ca-secret-namespace=$(POD_NAMESPACE)" ];
+                    reason = "the CA injection annotation and the dynamic-serving Role expect the CA Secret in the instance's namespace.";
+                  }
+                  {
+                    owned = [ "--dynamic-serving-ca-secret-name=${caSecret}" ];
+                    reason = "the CA injection annotation and the dynamic-serving Role name the same Secret.";
+                  }
+                  {
+                    owned = [
+                      "--dynamic-serving-dns-names=${serviceName}"
+                      "--dynamic-serving-dns-names=${serviceName}.$(POD_NAMESPACE)"
+                      "--dynamic-serving-dns-names=${serviceName}.$(POD_NAMESPACE).svc"
+                    ];
+                    reason = "the package sets the webhook Service's names, which the API server uses to reach the webhook.";
+                  }
+                ];
               } config.webhook.extraArgs;
               ports = [
                 {

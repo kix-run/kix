@@ -1,0 +1,6 @@
++++
+kind = "error"
+library = ["kix.guardArgs", "kix.mergeArgs"]
+id = "K5396"
++++
+If you maintain custom packages, replace each `kix.guardArgs` call with `kix.mergeArgs`. `kix.guardArgs` is removed, and a call to it stops the build with `[K5396]`. `kix.mergeArgs` returns the container's whole argument list, so pass it everything the package passes, in order, under `args`, and use its result as `args` on the container instead of appending it to a list. Write each flag the package owns once, as an entry `{ owned = [ "--flag=value" ]; reason = "..."; }` at its position in `args`, where `kix.guardArgs` took the flag's name under `owned` and the package wrote its value in a separate list. A flag the package refuses without passing goes in `names`, and `ownedFamilies` becomes `families` in an entry. A default that `extraArgs` may replace is an entry `{ defaults = [ "--flag=value" ]; }`, and words that must follow `extraArgs` go under `after`. Set `parser`, which is now required: `"gnu"` for getopt, clap, pflag, and kingpin, `"go"` for Go's `flag` package, `"go-arg"` for alexflint/go-arg, or `"paerser"` for Traefik. Write each `reason` without the remedy, and put a remedy other than removing the flag in `fix`. If your cluster uses only built-in packages, no changes are needed.

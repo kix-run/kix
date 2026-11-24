@@ -194,15 +194,19 @@ in
               name = "cert-manager-cainjector";
               image = kix.image.ref config.cainjector.image;
               imagePullPolicy = config.cainjector.image.pullPolicy;
-              args = [
-                "--v=2"
-                "--leader-election-namespace=${ns}"
-              ]
-              ++ kix.guardArgs {
+              # The cainjector parses flags with cobra and pflag
+              # (cmd/cainjector/app/cainjector.go upstream).
+              args = kix.mergeArgs {
                 inherit scope;
+                parser = "gnu";
                 option = "cainjector.extraArgs";
-                owned."--leader-election-namespace" =
-                  "the leader-election Role lives in the instance's namespace; remove it.";
+                args = [
+                  "--v=2"
+                  {
+                    owned = [ "--leader-election-namespace=${ns}" ];
+                    reason = "the leader-election Role lives in the instance's namespace.";
+                  }
+                ];
               } config.cainjector.extraArgs;
               ports = [
                 {

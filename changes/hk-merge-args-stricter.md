@@ -1,0 +1,6 @@
++++
+kind = "error"
+packages = ["experimental/prometheus-operator", "experimental/snapshot-controller", "experimental/arc", "experimental/spegel"]
+id = "K8006"
++++
+Remove the one-dash form of each flag these packages set themselves from `extraArgs`. Each program reads `-flag` as `--flag`, and the packages previously rejected only the `--` form, so the one-dash form could override a value the package depends on. Setting one now stops the build with `[K8006]` and names the flag. On `prometheus-operator`, remove `-web.listen-address`, `-kubelet-service`, and `-prometheus-config-reloader`. On `snapshot-controller`, remove `-leader-election`, `-leader-election-namespace`, `-http-endpoint`, and `-metrics-path`. On `arc`, remove `-metrics-addr`, `-listener-metrics-addr`, `-listener-metrics-endpoint`, `-health-probe-bind-address`, `-enable-leader-election`, `-leader-election-id`, and `-auto-scaling-runner-set-only`. On `spegel`, remove any form with one dash, or with three or more dashes, of `registry-addr`, `router-addr`, `metrics-addr`, `containerd-sock`, `containerd-content-path`, `containerd-namespace`, `containerd-registry-config-path`, `bootstrap-kind`, `dns-bootstrap-domain`, `http-bootstrap-url`, `http-bootstrap-cert-dir`, `static-bootstrap-peers`, `mirrored-registries`, and `data-dir`.

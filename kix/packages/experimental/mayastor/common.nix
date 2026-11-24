@@ -114,24 +114,17 @@ rec {
     };
   };
 
-  # A component's flags: the package's owned flags, the tunable defaults
-  # `extraArgs` does not replace, then `extraArgs`. `owned` maps each owned
-  # flag to the reason shown when `extraArgs` sets it. The binaries refuse
-  # a single-value flag given twice, so `extraArgs` replaces a tunable
-  # rather than repeating it.
+  # Return a component's flags: `args` as `kix.mergeArgs` takes it, then the
+  # `extraArgs` of the instance option `option`. The binaries parse flags
+  # with clap (control-plane/agents/src/bin/core/main.rs upstream and its
+  # siblings) and refuse a single-value flag given twice, so each tunable is
+  # a `defaults` entry that `extraArgs` replaces.
   args =
-    {
-      option,
-      base,
-      owned,
-      tunables ? [ ],
-    }:
-    extraArgs:
-    base
-    ++ kix.guardArgs {
-      inherit scope option owned;
-      defaults = tunables;
-    } extraArgs;
+    { option, args }:
+    kix.mergeArgs {
+      inherit scope option args;
+      parser = "gnu";
+    };
 
   fieldRef = path: { valueFrom.fieldRef.fieldPath = path; };
 

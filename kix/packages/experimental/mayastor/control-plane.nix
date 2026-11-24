@@ -68,16 +68,24 @@ in
             imagePullPolicy = config.agentCore.image.pullPolicy;
             args = c.args {
               option = "agentCore.extraArgs";
-              base = [
-                "--store=${ep.etcdStore}"
-                "--grpc-server-addr=[::]:50051"
+              args = [
+                {
+                  owned = [ "--store=${ep.etcdStore}" ];
+                  reason = "the package points it at this instance's etcd.";
+                }
+                {
+                  owned = [ "--grpc-server-addr=[::]:50051" ];
+                  reason = "the agent-core Service and its clients use port 50051.";
+                }
+                {
+                  names = [ "-s" ];
+                  reason = "the package sets --store to this instance's etcd.";
+                }
+                {
+                  names = [ "-g" ];
+                  reason = "the package sets --grpc-server-addr, which the agent-core Service uses.";
+                }
               ];
-              owned = {
-                "--store" = "the package points it at this instance's etcd; remove it.";
-                "-s" = "the package sets --store to this instance's etcd; remove it.";
-                "--grpc-server-addr" = "the agent-core Service and its clients use port 50051; remove it.";
-                "-g" = "the package sets --grpc-server-addr, which the agent-core Service uses; remove it.";
-              };
             } config.agentCore.extraArgs;
             env = c.env {
               option = "agentCore.env";
@@ -98,19 +106,32 @@ in
             imagePullPolicy = config.agentHaCluster.image.pullPolicy;
             args = c.args {
               option = "agentHaCluster.extraArgs";
-              base = [
-                "--grpc-endpoint=[::]:50052"
-                "--store=${ep.etcdUrl}"
-                "--core-grpc=https://127.0.0.1:50051"
+              args = [
+                {
+                  owned = [ "--grpc-endpoint=[::]:50052" ];
+                  reason = "the agent-core Service and agent-ha-node use port 50052.";
+                }
+                {
+                  owned = [ "--store=${ep.etcdUrl}" ];
+                  reason = "the package points it at this instance's etcd.";
+                }
+                {
+                  owned = [ "--core-grpc=https://127.0.0.1:50051" ];
+                  reason = "agent-core runs in the same pod.";
+                }
+                {
+                  names = [ "-g" ];
+                  reason = "the package sets --grpc-endpoint, which the agent-core Service uses.";
+                }
+                {
+                  names = [ "-s" ];
+                  reason = "the package sets --store to this instance's etcd.";
+                }
+                {
+                  names = [ "-c" ];
+                  reason = "the package sets --core-grpc to agent-core in the same pod.";
+                }
               ];
-              owned = {
-                "--grpc-endpoint" = "the agent-core Service and agent-ha-node use port 50052; remove it.";
-                "-g" = "the package sets --grpc-endpoint, which the agent-core Service uses; remove it.";
-                "--store" = "the package points it at this instance's etcd; remove it.";
-                "-s" = "the package sets --store to this instance's etcd; remove it.";
-                "--core-grpc" = "agent-core runs in the same pod; remove it.";
-                "-c" = "the package sets --core-grpc to agent-core in the same pod; remove it.";
-              };
             } config.agentHaCluster.extraArgs;
             env = c.env {
               option = "agentHaCluster.env";
@@ -175,21 +196,30 @@ in
               # the package does not expose, with built-in certificates.
               args = c.args {
                 option = "apiRest.extraArgs";
-                base = [
-                  "--http=[::]:8081"
-                  "--no-auth"
-                  "--dummy-certificates"
-                  "--core-grpc=${ep.coreGrpc}"
+                args = [
+                  {
+                    owned = [ "--http=[::]:8081" ];
+                    reason = "the api-rest Service, the probes, and every client use port 8081.";
+                  }
+                  {
+                    owned = [ "--no-auth" ];
+                    from = "the package, and clients send no token";
+                  }
+                  {
+                    owned = [ "--dummy-certificates" ];
+                    names = [ "-d" ];
+                    from = "the package";
+                  }
+                  {
+                    owned = [ "--core-grpc=${ep.coreGrpc}" ];
+                    reason = "the package points it at this instance's agent-core.";
+                  }
+                  {
+                    names = [ "-z" ];
+                    reason = "the package sets --core-grpc to this instance's agent-core.";
+                  }
+                  { defaults = [ "--core-health-freq=20s" ]; }
                 ];
-                tunables = [ "--core-health-freq=20s" ];
-                owned = {
-                  "--http" = "the api-rest Service, the probes, and every client use port 8081; remove it.";
-                  "--core-grpc" = "the package points it at this instance's agent-core; remove it.";
-                  "-z" = "the package sets --core-grpc to this instance's agent-core; remove it.";
-                  "--no-auth" = "the package sets it; clients send no token.";
-                  "--dummy-certificates" = "the package sets it.";
-                  "-d" = "the package sets --dummy-certificates.";
-                };
               } config.apiRest.extraArgs;
               env = c.env {
                 option = "apiRest.env";
@@ -231,17 +261,24 @@ in
             imagePullPolicy = config.operatorDiskpool.image.pullPolicy;
             args = c.args {
               option = "operatorDiskpool.extraArgs";
-              base = [
-                "--endpoint=${ep.rest}"
-                "--namespace=${ns}"
+              args = [
+                {
+                  owned = [ "--endpoint=${ep.rest}" ];
+                  reason = "the package points it at this instance's api-rest.";
+                }
+                {
+                  owned = [ "--namespace=${ns}" ];
+                  reason = "the operator reads DiskPools in this instance's namespace, where its RBAC and the package's DiskPools are.";
+                }
+                {
+                  names = [ "-e" ];
+                  reason = "the package sets --endpoint to this instance's api-rest.";
+                }
+                {
+                  names = [ "-n" ];
+                  reason = "the package sets --namespace to this instance's namespace.";
+                }
               ];
-              owned = {
-                "--endpoint" = "the package points it at this instance's api-rest; remove it.";
-                "-e" = "the package sets --endpoint to this instance's api-rest; remove it.";
-                "--namespace" =
-                  "the operator reads DiskPools in this instance's namespace, where its RBAC and the package's DiskPools are; remove it.";
-                "-n" = "the package sets --namespace to this instance's namespace; remove it.";
-              };
             } config.operatorDiskpool.extraArgs;
             env = c.env {
               option = "operatorDiskpool.env";
@@ -282,16 +319,24 @@ in
             imagePullPolicy = config.csiController.image.pullPolicy;
             args = c.args {
               option = "csiController.extraArgs";
-              base = [
-                "--csi-socket=${csiSocket}"
-                "--rest-endpoint=${ep.rest}"
+              args = [
+                {
+                  owned = [ "--csi-socket=${csiSocket}" ];
+                  reason = "the CSI sidecars dial this socket.";
+                }
+                {
+                  owned = [ "--rest-endpoint=${ep.rest}" ];
+                  reason = "the package points it at this instance's api-rest.";
+                }
+                {
+                  names = [ "-c" ];
+                  reason = "the package sets --csi-socket, which the CSI sidecars dial.";
+                }
+                {
+                  names = [ "-r" ];
+                  reason = "the package sets --rest-endpoint to this instance's api-rest.";
+                }
               ];
-              owned = {
-                "--csi-socket" = "the CSI sidecars dial this socket; remove it.";
-                "-c" = "the package sets --csi-socket, which the CSI sidecars dial; remove it.";
-                "--rest-endpoint" = "the package points it at this instance's api-rest; remove it.";
-                "-r" = "the package sets --rest-endpoint to this instance's api-rest; remove it.";
-              };
             } config.csiController.extraArgs;
             env = c.env {
               option = "csiController.env";

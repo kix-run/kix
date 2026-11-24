@@ -248,46 +248,76 @@ in
           else
             null;
 
-        registryArgs = [
-          "registry"
-          "--registry-addr=:${toString registryPort}"
-          "--router-addr=:${toString routerPort}"
-          "--metrics-addr=:${toString metricsPort}"
-          "--containerd-sock=${containerd.socket}"
-          "--containerd-content-path=${containerd.contentPath}"
-          # Spegel compares it with the path containerd 2.4 and later
-          # reports, and refuses to start when they differ.
-          "--containerd-registry-config-path=${containerd.registryConfigPath}"
-          "--bootstrap-kind=dns"
-          "--dns-bootstrap-domain=${self.bootstrap.out.fqdn}"
-          "--data-dir=${dataDir}"
-          "--debug-web-enabled=false"
-        ]
-        ++ lib.optionals (config.mirroredRegistries != [ ]) (
-          [ "--mirrored-registries" ] ++ config.mirroredRegistries
-        )
-        ++ kix.guardArgs {
+        # Spegel parses flags with go-arg (main.go upstream).
+        registryArgs = kix.mergeArgs {
           inherit scope;
-          owned = {
-            "--registry-addr" =
-              "the NodePort, the probes, and the network policy use ${toString registryPort}; remove it.";
-            "--router-addr" = "the peers reach each other on ${toString routerPort}; remove it.";
-            "--metrics-addr" = "the metrics Service uses ${toString metricsPort}; remove it.";
-            "--containerd-sock" = "the package mounts cluster.containerd.socket; set that instead.";
-            "--containerd-content-path" =
-              "the package mounts cluster.containerd.contentPath; set that instead.";
-            "--containerd-namespace" = "kubelet pulls into containerd's k8s.io namespace; remove it.";
-            "--containerd-registry-config-path" =
-              "the init container writes cluster.containerd.registryConfigPath; set that instead.";
-            "--bootstrap-kind" = "the pods find each other through the bootstrap Service; remove it.";
-            "--dns-bootstrap-domain" = "the package names the bootstrap Service; remove it.";
-            "--http-bootstrap-url" = "the pods find each other through the bootstrap Service; remove it.";
-            "--http-bootstrap-cert-dir" = "the pods find each other through the bootstrap Service; remove it.";
-            "--static-bootstrap-peers" = "the pods find each other through the bootstrap Service; remove it.";
-            "--mirrored-registries" =
-              "the init container writes the mirror configuration from it as well; set mirroredRegistries instead.";
-            "--data-dir" = "the package mounts ${dataDir} from the host; remove it.";
-          };
+          parser = "go-arg";
+          id = "K8006";
+          args = [
+            "registry"
+            {
+              owned = [ "--registry-addr=:${toString registryPort}" ];
+              reason = "the NodePort, the probes, and the network policy use ${toString registryPort}.";
+            }
+            {
+              owned = [ "--router-addr=:${toString routerPort}" ];
+              reason = "the peers reach each other on ${toString routerPort}.";
+            }
+            {
+              owned = [ "--metrics-addr=:${toString metricsPort}" ];
+              reason = "the metrics Service uses ${toString metricsPort}.";
+            }
+            {
+              owned = [ "--containerd-sock=${containerd.socket}" ];
+              reason = "the package mounts cluster.containerd.socket.";
+              fix = "Set cluster.containerd.socket instead.";
+            }
+            {
+              owned = [ "--containerd-content-path=${containerd.contentPath}" ];
+              reason = "the package mounts cluster.containerd.contentPath.";
+              fix = "Set cluster.containerd.contentPath instead.";
+            }
+            # Spegel compares it with the path containerd 2.4 and later
+            # reports, and refuses to start when they differ.
+            {
+              owned = [ "--containerd-registry-config-path=${containerd.registryConfigPath}" ];
+              reason = "the init container writes cluster.containerd.registryConfigPath.";
+              fix = "Set cluster.containerd.registryConfigPath instead.";
+            }
+            {
+              owned = [ "--bootstrap-kind=dns" ];
+              reason = "the pods find each other through the bootstrap Service.";
+            }
+            {
+              owned = [ "--dns-bootstrap-domain=${self.bootstrap.out.fqdn}" ];
+              reason = "the package names the bootstrap Service.";
+            }
+            {
+              owned = [ "--data-dir=${dataDir}" ];
+              reason = "the package mounts ${dataDir} from the host.";
+            }
+            "--debug-web-enabled=false"
+            {
+              owned = lib.optionals (config.mirroredRegistries != [ ]) (
+                [ "--mirrored-registries" ] ++ config.mirroredRegistries
+              );
+              names = [ "--mirrored-registries" ];
+              reason = "the init container writes the mirror configuration from it as well.";
+              fix = "Set mirroredRegistries instead.";
+            }
+            {
+              names = [ "--containerd-namespace" ];
+              reason = "kubelet pulls into containerd's k8s.io namespace.";
+            }
+            {
+              names = [
+                "--http-bootstrap-url"
+                "--http-bootstrap-cert-dir"
+                "--static-bootstrap-peers"
+              ];
+              reason = "the pods find each other through the bootstrap Service.";
+            }
+          ];
         } config.extraArgs;
 
         nodeIp = {

@@ -260,37 +260,51 @@ in
           }
         ];
 
-        baseArgs = [
-          "--policy-config-file=${policyDir}/policy.yaml"
-          "--descheduling-interval=${config.deschedulingInterval}"
-          "--leader-elect=true"
-          "--leader-elect-resource-name=${name}"
-          # Upstream defaults the Lease to kube-system; the instance's
-          # namespace keeps the Lease and its Role with the instance.
-          "--leader-elect-resource-namespace=${scope.namespaceName}"
-          "--v=3"
-        ]
-        ++ lib.optional (!config.metrics.enabled) "--disable-metrics";
-
-        leaderElection = "leader election follows the instance's availability level; remove it.";
-        args =
-          baseArgs
-          ++ kix.guardArgs {
-            inherit scope;
-            owned = {
-              "--policy-config-file" = "set policy instead.";
-              "--descheduling-interval" = "set deschedulingInterval instead.";
-              "--leader-elect" = leaderElection;
-              "--leader-elect-resource-name" = leaderElection;
-              "--leader-elect-resource-namespace" = leaderElection;
-              "--leader-elect-resource-lock" = leaderElection;
-              "--secure-port" =
-                "the probes and the ServiceMonitor need the metrics server on 0.0.0.0:${toString metricsPort}; remove it.";
-              "--bind-address" =
-                "the probes and the ServiceMonitor need the metrics server on 0.0.0.0:${toString metricsPort}; remove it.";
-              "--disable-metrics" = "set metrics.enabled = false instead.";
-            };
-          } config.extraArgs;
+        leaderElection = "leader election follows the instance's availability level.";
+        metricsServer = "the probes and the ServiceMonitor need the metrics server on 0.0.0.0:${toString metricsPort}.";
+        # The descheduler parses flags with cobra and pflag
+        # (cmd/descheduler/app/server.go upstream).
+        args = kix.mergeArgs {
+          inherit scope;
+          parser = "gnu";
+          args = [
+            {
+              owned = [ "--policy-config-file=${policyDir}/policy.yaml" ];
+              from = "the policy option";
+              fix = "Set policy instead.";
+            }
+            {
+              owned = [ "--descheduling-interval=${config.deschedulingInterval}" ];
+              from = "the deschedulingInterval option";
+              fix = "Set deschedulingInterval instead.";
+            }
+            {
+              owned = [
+                "--leader-elect=true"
+                "--leader-elect-resource-name=${name}"
+                # Upstream defaults the Lease to kube-system; the instance's
+                # namespace keeps the Lease and its Role with the instance.
+                "--leader-elect-resource-namespace=${scope.namespaceName}"
+              ];
+              names = [ "--leader-elect-resource-lock" ];
+              reason = leaderElection;
+            }
+            "--v=3"
+            {
+              owned = lib.optional (!config.metrics.enabled) "--disable-metrics";
+              names = [ "--disable-metrics" ];
+              from = "the metrics.enabled option";
+              fix = "Set metrics.enabled = false instead.";
+            }
+            {
+              names = [
+                "--secure-port"
+                "--bind-address"
+              ];
+              reason = metricsServer;
+            }
+          ];
+        } config.extraArgs;
       in
       {
         serviceAccount = scope.mkResource {

@@ -205,22 +205,6 @@ in
   reloader-refusals =
     let
       withRefs = refs: clusterWith { consumer = mkConsumer { inherit refs; }; };
-      # A consumer that does not call withReloadOn, for the checks that must
-      # fail the build without one.
-      noReloadOn =
-        extraArgs:
-        clusterWith {
-          config = { inherit extraArgs; };
-          consumer = mkConsumer {
-            transform =
-              p:
-              p.scope.mkDeployment {
-                name = "web";
-                spec.selector.matchLabels = p.scope.selectorLabels;
-                spec.template.spec.containers = [ container ];
-              };
-          };
-        };
       withArgs =
         args:
         clusterWith {
@@ -342,26 +326,35 @@ in
           bad = withConfig { env.KUBERNETES_NAMESPACE = "demo"; };
           good = withConfig { extraArgs = [ "--namespaces=demo" ]; };
         };
-        bareNamespaces = {
+        separateWordNamespaces = {
           bad = inDemo [
+            "--namespaces"
+            "reloader"
+          ];
+          good = inDemo [
             "--namespaces"
             "demo"
           ];
-          good = inDemo [ "--namespaces=demo" ];
         };
-        bareNamespacesToIgnore = {
-          bad = noReloadOn [
+        separateWordNamespacesToIgnore = {
+          bad = inDemo [
             "--namespaces-to-ignore"
             "demo"
           ];
-          good = noReloadOn [ "--namespaces-to-ignore=demo" ];
+          good = inDemo [
+            "--namespaces-to-ignore"
+            "other"
+          ];
         };
-        bareResourceLabelSelector = {
-          bad = noReloadOn [
+        separateWordResourceLabelSelector = {
+          bad = inDemo [
             "--resource-label-selector"
             "a=b"
           ];
-          good = noReloadOn [ "--resource-label-selector=a=b" ];
+          good = inDemo [
+            "--log-level"
+            "debug"
+          ];
         };
         olderImage = {
           bad = withConfig { image.tag = "v1.3.0"; };

@@ -278,27 +278,36 @@ in
             fix = "Wire a snapshot-controller instance, or an import that claims the snapshotController role with its crds.";
           });
 
-        args = [
-          "--leader-elect"
-          "--health-probe-bind-address=:${toString healthPort}"
-          "--metrics-bind-address=:${toString metricsPort}"
-          # The operator's HTTPS metrics use a self-signed certificate;
-          # the ServiceMonitor scrapes plain HTTP.
-          "--metrics-secure=false"
-        ]
-        ++ map (m: "--${m}-container-image=${image}") movers
-        ++ kix.guardArgs {
+        # The manager registers Go flags and parses them with pflag
+        # (cmd/main.go upstream).
+        args = kix.mergeArgs {
           inherit scope;
-          owned = {
-            "--leader-elect" =
-              "leader election keeps one active operator while the instance's availability level runs several; remove it.";
-            "--health-probe-bind-address" = "the probes use :${toString healthPort}; remove it.";
-            "--metrics-bind-address" = "the metrics Service uses :${toString metricsPort}; remove it.";
-            "--metrics-secure" = "the ServiceMonitor scrapes plain HTTP; remove it.";
-          }
-          // lib.genAttrs (map (m: "--${m}-container-image") movers) (
-            _: "the movers run the image option, which out.extraImages lists; set image instead."
-          );
+          parser = "gnu";
+          args = [
+            {
+              owned = [ "--leader-elect" ];
+              reason = "leader election keeps one active operator while the instance's availability level runs several.";
+            }
+            {
+              owned = [ "--health-probe-bind-address=:${toString healthPort}" ];
+              reason = "the probes use :${toString healthPort}.";
+            }
+            {
+              owned = [ "--metrics-bind-address=:${toString metricsPort}" ];
+              reason = "the metrics Service uses :${toString metricsPort}.";
+            }
+            # The operator's HTTPS metrics use a self-signed certificate;
+            # the ServiceMonitor scrapes plain HTTP.
+            {
+              owned = [ "--metrics-secure=false" ];
+              reason = "the ServiceMonitor scrapes plain HTTP.";
+            }
+            {
+              owned = map (m: "--${m}-container-image=${image}") movers;
+              reason = "the movers run the image option, which out.extraImages lists.";
+              fix = "Set image instead.";
+            }
+          ];
         } config.extraArgs;
 
         crds = [

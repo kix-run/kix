@@ -159,22 +159,34 @@ in
         ];
         servedCollectors = builtins.filter served defaultCollectors;
 
-        args = [
-          "--port=${toString metricsPort}"
-          "--telemetry-port=${toString telemetryPort}"
-        ]
-        ++ kix.guardArgs {
+        # kube-state-metrics parses flags with cobra and pflag
+        # (pkg/options/options.go upstream).
+        args = kix.mergeArgs {
           inherit scope;
-          # `--resources` in `extraArgs` replaces the package's choice.
-          defaults = lib.optional (
-            servedCollectors != defaultCollectors
-          ) "--resources=${lib.concatStringsSep "," servedCollectors}";
-          owned = {
-            "--port" = "the probes and the Service use port ${toString metricsPort}; remove it.";
-            "--telemetry-port" = "the Service uses port ${toString telemetryPort}; remove it.";
-            "--shard" = "the package runs one unsharded replica; remove it.";
-            "--total-shards" = "the package runs one unsharded replica; remove it.";
-          };
+          parser = "gnu";
+          args = [
+            {
+              owned = [ "--port=${toString metricsPort}" ];
+              reason = "the probes and the Service use port ${toString metricsPort}.";
+            }
+            {
+              owned = [ "--telemetry-port=${toString telemetryPort}" ];
+              reason = "the Service uses port ${toString telemetryPort}.";
+            }
+            # `--resources` in `extraArgs` replaces the package's choice.
+            {
+              defaults = lib.optional (
+                servedCollectors != defaultCollectors
+              ) "--resources=${lib.concatStringsSep "," servedCollectors}";
+            }
+            {
+              names = [
+                "--shard"
+                "--total-shards"
+              ];
+              reason = "the package runs one unsharded replica.";
+            }
+          ];
         } config.extraArgs;
 
         probe = {
