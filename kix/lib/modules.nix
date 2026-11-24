@@ -579,6 +579,37 @@ in
       };
     };
 
+    cluster.defaultLimits = {
+      cpu = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = ''
+          Whether packages give containers their default CPU limit. False
+          drops the CPU limit a package's `kix.options.resources` sets by
+          default, and keeps its CPU request. A CPU limit throttles a
+          container even when the node has idle CPU, and the request already
+          guarantees the container its share. A limit an instance sets in
+          its `resources` stays. The reliability.boundedResources scorecard
+          rule then accepts a container without a CPU limit.
+        '';
+      };
+      memory = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = ''
+          Whether packages give containers their default memory limit.
+          False drops the memory limit a package's `kix.options.resources`
+          sets by default, and keeps its memory request. Memory cannot be
+          throttled, so one leaking container without a limit can exhaust
+          the node, and the kernel then kills other workloads. The common
+          advice is a memory limit equal to the request. A limit an
+          instance sets in its `resources` stays. The
+          reliability.boundedResources scorecard rule then accepts a
+          container without a memory limit.
+        '';
+      };
+    };
+
     # Node containerd paths and settings. Flavors set the defaults for their
     # node images, and host-level packages such as spegel read them.
     cluster.containerd = {

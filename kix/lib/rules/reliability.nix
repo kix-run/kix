@@ -25,6 +25,8 @@ let
 in
 {
   # Require both CPU and memory in `requests` and `limits` on every container.
+  # Accept a missing CPU or memory limit when the cluster turned that default
+  # limit off in `cluster.defaultLimits`.
   boundedResources = {
     description = "Every container should declare CPU+memory requests and limits";
     level = "manifest";
@@ -36,7 +38,14 @@ in
     ];
     appliesTo = { resource, ... }: isWorkload resource;
     check =
-      { resource, ... }:
+      {
+        resource,
+        defaultLimits ? {
+          cpu = true;
+          memory = true;
+        },
+        ...
+      }:
       let
         containers = getContainers resource;
         missingFor =
@@ -48,8 +57,8 @@ in
             missing =
               (lib.optional (!(requests ? cpu)) "requests.cpu")
               ++ (lib.optional (!(requests ? memory)) "requests.memory")
-              ++ (lib.optional (!(limits ? cpu)) "limits.cpu")
-              ++ (lib.optional (!(limits ? memory)) "limits.memory");
+              ++ (lib.optional (defaultLimits.cpu && !(limits ? cpu)) "limits.cpu")
+              ++ (lib.optional (defaultLimits.memory && !(limits ? memory)) "limits.memory");
           in
           missing;
         findings = builtins.concatMap (

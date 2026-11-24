@@ -213,6 +213,11 @@ rec {
       owner ? null,
       meta ? { },
       acceptedSecretSources ? null,
+      # The cluster's `cluster.defaultLimits`.
+      defaultLimits ? {
+        cpu = true;
+        memory = true;
+      },
     }:
     let
       manifestRules = builtins.filter (r: (r.rule.level or "") == "manifest") (flattenRules rules);
@@ -240,6 +245,7 @@ rec {
             namespaceName
             meta
             acceptedSecretSources
+            defaultLimits
             ;
         };
         applies = checkAppliesTo rule ctx;
