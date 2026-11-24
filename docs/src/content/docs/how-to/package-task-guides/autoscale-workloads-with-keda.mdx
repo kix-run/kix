@@ -8,18 +8,17 @@ import Snippet from '/src/components/Snippet.astro';
 import kedaInstance from '/src/snippets/clusters/test-keda/kedaInstance.json';
 import kedaScaledObject from '/src/snippets/clusters/test-keda/kedaScaledObject.json';
 
-Use `packages.experimental.keda` to deploy KEDA and autoscale Deployments,
-StatefulSets, and Jobs from external metrics and event queues.
+Use `packages.experimental.keda` to deploy KEDA 2.21.1 and autoscale
+Deployments, StatefulSets, and Jobs from external metrics and event queues.
+The package installs KEDA's six CustomResourceDefinitions, the operator, the
+metrics API server, and the admission webhooks. Upstream tests KEDA 2.21 on
+Kubernetes 1.34 to 1.36; `kix check` warns if your cluster's `k8sVersion` is
+outside that range and continues the build. Because this package is
+experimental, breaking changes may ship in any release.
 
-This package deploys KEDA 2.21.1 and its six CustomResourceDefinitions. The KEDA
-project tests KEDA 2.21 on Kubernetes 1.34 to 1.36, and `kix check` warns if
-your cluster's `k8sVersion` falls outside that range. This package is
-experimental, so its options and outputs may change in any Kix release.
-
-A cluster can run only one KEDA instance. Kix rejects a second instance during
-`kix check` because a cluster can have only one
-`v1beta1.external.metrics.k8s.io` APIService, and the KEDA operator watches all
-namespaces.
+Each cluster can run only one KEDA instance. `kix check` rejects a second
+instance because Kubernetes serves only one `v1beta1.external.metrics.k8s.io`
+APIService per cluster and the KEDA operator watches all namespaces.
 
 ## Add KEDA to the cluster
 
@@ -29,33 +28,37 @@ Add a `keda` instance to your cluster definition:
 
 This creates a `keda` instance in the `keda` namespace
 (`instances.<namespace>.<name>`). Every option has a working default, and no
-dependencies are required.
+dependencies are required (the operator generates and rotates its own TLS
+certificates, without `cert-manager`).
 
-When the cluster has a `prometheus` instance (such as
-`packages.experimental.prometheus`), Kix connects it to KEDA automatically
+When the cluster has a `prometheus` provider (such as
+`packages.experimental.prometheus-operator` or
+`packages.victoria-metrics-operator`), Kix connects it to KEDA automatically
 (`deps.prometheus`) and creates a metrics Service, a `ServiceMonitor`, and
 Prometheus alert rules for the operator. Set `config.metrics.enabled = false` on
 the KEDA instance to turn them off.
 
-Under `config`, pass extra flags or environment variables with `env` and
+Under `config`, you can pass extra flags or environment variables with `env` and
 `extraArgs` for the operator, `metricsServer.extraArgs` for the metrics API
-server, and `webhooks.extraArgs` for the admission webhooks. Kix rejects flags
-and environment variables that the package manages itself, including Service
-names, ports, leader election, cluster domain, TLS certificates,
+server, and `webhooks.extraArgs` for the admission webhooks. `kix check` rejects
+flags and environment variables that the package manages itself, including
+Service names, ports, leader election, cluster domain, TLS certificates,
 `POD_NAMESPACE`, and `WATCH_NAMESPACE`.
 
 ## Scale a Deployment
 
 Leave `spec.replicas` unset on any Deployment or StatefulSet that KEDA scales
 (for example, in `scope.mkDeployment`). KEDA and its HorizontalPodAutoscaler
-update `spec.replicas` at runtime, including when scaling to or from zero. When
-you omit `spec.replicas`, Kix does not own that field, so `kix deploy` does not
-reset the live replica count.
+update `spec.replicas` at runtime, including when scaling to or from zero.
+Leaving `spec.replicas` unset keeps Kix from owning that field, so `kix deploy`
+does not reset the live replica count.
 
-Add `keda` to your workload package's `build` arguments (`{ self, keda, ... }:`).
-Because a cluster runs a single KEDA instance, Kix resolves `keda` automatically
-from any namespace. Build the `ScaledObject` with `scope.mkCR` and
-`keda.out.crds.ScaledObject`, and include it in `root.requires`:
+Add `keda` and any trigger source dependencies (here, `prometheus` and `nats`)
+to your workload package's `build` arguments
+(`{ self, keda, prometheus, nats, ... }:`). Because a cluster runs one KEDA
+instance, Kix connects `keda` automatically from any namespace. Build the
+`ScaledObject` with `scope.mkCR` and `keda.out.crds.ScaledObject`, and include
+it in `root.requires`:
 
 <Snippet {...kedaScaledObject} />
 
@@ -65,56 +68,60 @@ the `worker` Deployment in the same package. KEDA scales the Deployment between
 `1` and `6` replicas from two triggers:
 
 - **Prometheus.** `prometheus.out.serviceUrl` sets `serverAddress` to the
-  Service URL of a `packages.experimental.prometheus` dependency. Replace
-  `query = "vector(3)"` and `threshold = "1"` with your own PromQL query and
-  scaling threshold.
+  Service URL of a `packages.experimental.prometheus` dependency. When that
+  Prometheus server runs in another namespace (such as `monitoring`), wire it on
+  the workload instance with `deps.prometheus = ref.monitoring.prometheus`.
+  Replace `query = "vector(3)"` and `threshold = "1"` with your own PromQL query
+  and scaling threshold.
 - **NATS JetStream.** `natsServerMonitoringEndpoint` takes `host:port` without a
-  URL scheme, such as `"${nats.out.monitoringHost}:${nats.out.monitoringPort}"`.
-  `out.monitoringHost` is the headless Service, so `<pod>.<out.monitoringHost>`
-  resolves when KEDA checks each clustered server for the consumer leader. This
-  trigger checks pending messages for consumer `worker` on stream `events` in
-  global account `"$G"` and scales up above `lagThreshold = "5"`.
+  URL scheme: `"${nats.out.monitoringHost}:${nats.out.monitoringPort}"` (from a
+  `packages.experimental.nats` dependency, wired across namespaces with
+  `deps.nats = ref.messaging.nats`). `out.monitoringHost` is the NATS headless
+  Service, which lets KEDA resolve individual pod DNS names
+  (`<pod>.<out.monitoringHost>`) to find the consumer leader in a NATS cluster.
+  Because the NATS monitoring port (`8222`) uses no authentication, this trigger
+  needs no `TriggerAuthentication`. It scales up when pending messages for
+  consumer `worker` on stream `events` (in the default global account `"$G"`)
+  exceed `lagThreshold = "5"`. See
+  [Deploy NATS with JetStream](/docs/how-to/package-task-guides/deploy-nats-jetstream/#connect-an-application)
+  for setting up streams and cross-namespace client credentials.
 
-`requires = [ self.streams ]` makes Kix deploy the ScaledObject after the
-`worker-streams` Job in the same package. That Job creates the `events` stream
-and the `worker` consumer that the NATS trigger reads. The NATS instance runs in
-namespace `messaging`. The worker names it with
-`deps.nats = ref.messaging.nats`. A Kubernetes Secret reference works only within the pod's
-namespace. As a result, the Job logs in to NATS with its `natsLogin` dependency,
-a Secret in the app's own namespace that holds the same username and password as
-the NATS instance's `natsAuth` Secret. The NATS monitoring port needs no login.
-The trigger therefore needs no TriggerAuthentication.
+In the snippet, `requires = [ self.streams ]` deploys the `ScaledObject` after a
+setup Job in the same package that creates the `events` stream and `worker`
+consumer. Omit `requires` when your stream and consumer already exist.
 
 ### ScaledObjects, ScaledJobs, and authentication
 
 `keda.out.crds` provides handles for `ScaledObject`, `ScaledJob`,
 `TriggerAuthentication`, and `ClusterTriggerAuthentication`. Build each one with
-`scope.mkCR`, for example
-`scope.mkCR keda.out.crds.ScaledObject { name = "worker"; spec = { ... }; }`.
+`scope.mkCR` (for example,
+`scope.mkCR keda.out.crds.TriggerAuthentication { name = "worker-auth"; spec = { ... }; }`)
+and reference resource names through `.out.name` so Kix deploys them in order.
 
-At runtime, KEDA copies labels and annotations from a `ScaledObject` onto the
-HorizontalPodAutoscaler it creates, and from a `ScaledJob` onto each Job it
-creates. Because those copies include Kix's labels,
+At runtime, KEDA copies labels and annotations from each `ScaledObject` onto the
+HorizontalPodAutoscaler it creates, and from each `ScaledJob` onto the Jobs it
+creates. Because those copies carry Kix's labels,
 [`kix gc --full-scan`](/docs/how-to/operate-a-cluster/garbage-collect-stale-resources/#scan-the-live-cluster-for-orphans)
-lists them under "Copied labels". Kix knows it never applied them, so
-`kix deploy --prune`, `kix gc`, and `kix gc --full-scan` keep them (unless you
-pass `--include copies`).
+lists them under "Copied labels". Kix sees that it never applied those objects,
+so `kix deploy --prune`, `kix gc`, and `kix gc --full-scan` keep them running
+unless you pass `--include copies`.
 
 ### Network policy for triggers
 
 When a `ScaledObject`, `ScaledJob`, `TriggerAuthentication`, or
-`ClusterTriggerAuthentication` references a Kix Service address (such as
-`prometheus.out.serviceUrl` or
-`"${nats.out.monitoringHost}:${nats.out.monitoringPort}"`), Kix automatically:
+`ClusterTriggerAuthentication` uses a Service address from another package's
+`out` (such as `prometheus.out.serviceUrl` or
+`"${nats.out.monitoringHost}:${nats.out.monitoringPort}"`), Kix:
 
 - Deploys the KEDA custom resource after that Service.
-- When [generated network policy](/docs/how-to/platform-capabilities/enable-generated-network-policy/)
-  is enabled, allows egress from the KEDA operator in the KEDA namespace to that
-  Service, and ingress to that Service from the KEDA operator.
+- Allows traffic from the KEDA operator pods to that Service (both operator
+  egress and Service ingress) when
+  [generated network policy](/docs/how-to/platform-capabilities/enable-generated-network-policy/)
+  is enabled.
 
-Kix cannot derive ordering or network policies from literal address strings or
-endpoints outside the cluster. When generated network policy is enabled, allow
-those connections by adding an egress rule for the KEDA operator pods in
+Kix cannot detect dependencies in literal address strings or external endpoints.
+When generated network policy is enabled, allow those connections by adding an
+egress rule for the KEDA operator pods in
 [`networkPolicy.platformIntents`](/docs/how-to/platform-capabilities/declare-platform-intents-for-non-kix-managed-pods/).
 
 ## Check and deploy
@@ -127,19 +134,19 @@ Deploy the cluster:
 
 <Command commands={["kix deploy my-cluster"]} />
 
-During `kix deploy`, Kix starts the KEDA operator first so it can create and
-fill the `<instance>-certs` Secret. Once the operator is ready and that Secret
-exists, Kix deploys the metrics API server and admission webhooks, their
-Services, the webhook configuration, and the `v1beta1.external.metrics.k8s.io`
-APIService. On a fresh install, the metrics API server and webhook pods may
-restart while the operator finishes writing the certificates into
-`<instance>-certs`.
+During `kix deploy`, Kix starts the KEDA operator first so it can create the
+`<instance>-certs` Secret (`keda-certs` when the instance is named `keda`). Once
+the operator is ready and that Secret exists, Kix deploys the metrics API
+server, the admission webhooks, their Services, the webhook configuration, and
+the `v1beta1.external.metrics.k8s.io` APIService. On a fresh install, the
+metrics API server and webhook pods may restart while the operator finishes
+writing TLS certificates into `<instance>-certs`.
 
-`kix deploy` then waits for the APIService to report `Available` (confirming the
+`kix deploy` waits for the APIService to report `Available` (confirming the
 Kubernetes API server can reach the metrics API server over TLS) and for each
 `ScaledObject` and `ScaledJob` to report `Ready=True`.
 
-Check that the `ScaledObject`, its HorizontalPodAutoscaler, and the external
+Verify that the `ScaledObject`, its HorizontalPodAutoscaler, and the external
 metric are active:
 
 <Command
@@ -151,11 +158,11 @@ metric are active:
 />
 
 KEDA names each `ScaledObject` metric `s<index>-<trigger-type>`, so
-`s0-prometheus` is the metric for the first trigger (index `0`). In this
-example, its query is `vector(3)`, so the command returns `3`.
+`s0-prometheus` is the metric for the first trigger (index `0`). Because the
+example query is `vector(3)`, this command returns `3`.
 
-If the `ScaledObject` is not `Ready` or fails to poll a trigger, check its
-events and the KEDA operator logs:
+If a `ScaledObject` is not `Ready` or cannot read a trigger, check its events
+and the KEDA operator logs:
 
 <Command
   commands={[
@@ -166,8 +173,8 @@ events and the KEDA operator logs:
 
 ## What the package sets up
 
-- **Components and replicas.** The package runs three Deployments, each with
-  its own ServiceAccount:
+- **Components and replicas.** The package runs three Deployments, each with its
+  own ServiceAccount:
   - **Operator (`<instance>-operator`):** Reconciles `ScaledObject` and
     `ScaledJob` resources, creates a HorizontalPodAutoscaler for each
     `ScaledObject`, polls trigger sources, and serves metrics over gRPC on TCP
@@ -180,71 +187,67 @@ events and the KEDA operator logs:
     `none` and 2 replicas at `pod`, `node`, and `zone`.
   - **Admission webhooks (`<instance>-admission-webhooks`):** Validates KEDA
     custom resources. Webhook rules set `failurePolicy` to `Ignore`, so custom
-    resources created during a fresh install (before the operator writes the CA
+    resources applied during a fresh install (before the operator writes the CA
     bundle) are still admitted. It runs 1 replica at `none` and 2 replicas at
     `pod`, `node`, and `zone`.
 - **Certificates.** On startup, the operator generates and rotates its own CA
-  and service certificates (no `cert-manager` instance is needed). It stores
-  them in the `<instance>-certs` Secret (`keda-certs` when the instance is named
-  `keda`) and writes `caBundle` on the webhook configuration and `APIService`.
-  Kix leaves `caBundle` unset on both resources so only the operator manages
-  that field.
+  and service certificates in the `<instance>-certs` Secret, and writes
+  `caBundle` onto the webhook configuration and `APIService`. No `cert-manager`
+  instance is needed. Kix leaves `caBundle` unset on both resources so only the
+  operator manages that field.
 - **Permissions.** The operator's ClusterRole (from KEDA's release manifest)
-  grants `get` access to all resources, including Secrets, across all
-  namespaces. KEDA needs this access because `TriggerAuthentication` resources
-  read Secrets in application namespaces, and scale targets can be any resource
-  kind with a `scale` subresource.
-- **Network policy.** When generated network policy is enabled, Kix allows
-  egress from the metrics API server to the operator's gRPC port (TCP 9666),
-  plus operator egress and Service ingress for any trigger or authentication
-  address that uses a Kix Service `out` value. It also allows ingress from the
-  Kubernetes API server on TCP 6443 (metrics API) and TCP 9443 (webhooks). That
-  API server ingress rule selects all three KEDA Deployments on both ports,
-  although only the metrics API server listens on 6443 and only the webhooks
-  listen on 9443.
-- **Metrics.** When `prometheus` is connected and `config.metrics.enabled` is
-  `true` (the default), the package creates an operator metrics Service, a
-  `ServiceMonitor`, and three Prometheus alerts: `KedaOperatorDown` (no operator
-  pod has responded to scrapes for 10 minutes), `KedaScalerErrors` (a trigger
-  has failed to read its source for 15 minutes, such as when blocked by network
-  policy), and `KedaOperatorReconcileErrors` (an operator controller has a high
-  reconcile failure rate).
+  grants `get` access to all resources, including Secrets, in every namespace.
+  KEDA needs this access because `TriggerAuthentication` resources read Secrets
+  in application namespaces and scale targets can be any resource kind with a
+  `scale` subresource.
+- **Network policy.** When generated network policy is enabled, Kix allows the
+  metrics API server to connect to the operator on TCP port 9666 (gRPC), and
+  opens operator egress and Service ingress for any trigger or authentication
+  address read from a Kix Service `out` field. Kix also allows ingress from the
+  Kubernetes API server on TCP ports 6443 (metrics API server) and 9443
+  (admission webhooks). Package-level ingress rules apply to all three KEDA
+  Deployments, even though only one component listens on each port.
+- **Metrics.** When a `prometheus` provider is connected and
+  `config.metrics.enabled` is `true` (the default), the package creates a
+  metrics Service (`<instance>-operator-metrics`), a `ServiceMonitor`, and three
+  warning alerts: `KedaOperatorDown` (no operator pod scraped for 10 minutes),
+  `KedaScalerErrors` (a trigger has failed to read its source for 15 minutes),
+  and `KedaOperatorReconcileErrors` (high controller reconcile error rate).
 
 ## Limits
 
-- **ScaledJob network policy.** Kix attaches every derived network policy on a
-  `ScaledJob` to the KEDA operator pods, even for Service `out` addresses inside
-  `jobTargetRef`. The Job pods that KEDA starts get no generated network policy,
-  so under default-deny network policy you must add a
-  `networkPolicy.platformIntents` entry for them.
-- **CPU and memory triggers.** A `cpu` or `memory` trigger requires the
-  Kubernetes resource metrics API (`metrics.k8s.io`, provided by a package such
-  as `packages.experimental.metrics-server`). `kix check` does not verify that
-  the cluster provides `metrics.k8s.io` when a `ScaledObject` uses those
-  triggers.
-- **Scale targets without `spec.replicas`.** When you omit `spec.replicas` on a
-  target workload, Kix treats it as a single-replica workload regardless of
-  `minReplicaCount` on the `ScaledObject`. Kix does not generate topology spread
-  constraints or a `PodDisruptionBudget` for that workload, and counts only one
-  pod toward any namespace `ResourceQuota`.
-- **HorizontalPodAutoscaler conflicts.** `kix check` does not detect when a
-  `ScaledObject` and a separate HorizontalPodAutoscaler target the same
-  workload. KEDA's admission webhook rejects that conflict at deploy time,
-  except when the webhook is unreachable (`failurePolicy` is `Ignore`).
-- **Removing KEDA.** Before you remove the `keda` instance from your cluster,
-  remove all `ScaledObject`, `ScaledJob`, `TriggerAuthentication`, and
-  `ClusterTriggerAuthentication` resources and deploy with `--prune` first. KEDA
-  puts the `finalizer.keda.sh` finalizer on its custom resources. `kix deploy
-  --prune` starts deleting those custom resources before it deletes the KEDA
-  operator, but it does not wait for their deletion to finish. Removing both in
-  the same deploy can leave the custom resources stuck `Terminating` with no
-  operator left to clear the finalizer.
-- **CloudEvent sources.** The package installs the `CloudEventSource` and
-  `ClusterCloudEventSource` CustomResourceDefinitions because the KEDA operator
-  watches them, but `keda.out.crds` does not include handles for either kind, so
-  `scope.mkCR` cannot build them.
-- **ScaledObject and ScaledJob updates.** KEDA does not record
-  `observedGeneration` in `ScaledObject` or `ScaledJob` status. When
-  `kix deploy` updates an existing `ScaledObject` or `ScaledJob`, it sees the
-  previous `Ready=True` condition and can finish before KEDA reconciles the
-  change.
+- **ScaledJob pod network policy.** Job pods started by a `ScaledJob` do not get
+  generated network policies. When generated network policy is enabled, add a
+  `networkPolicy.platformIntents` entry for those Job pods. Any Kix Service
+  `out` address inside a `ScaledJob` (including under `jobTargetRef`) opens
+  network access only for the KEDA operator pods.
+- **CPU and memory triggers.** Deploy a `metrics.k8s.io` provider (such as
+  `packages.experimental.metrics-server`) before using `cpu` or `memory`
+  triggers. `kix check` does not verify that the cluster serves
+  `metrics.k8s.io` when a `ScaledObject` uses these triggers.
+- **Scale targets without `spec.replicas`.** When `spec.replicas` is unset on a
+  target workload, Kix treats it as having 1 replica regardless of
+  `minReplicaCount` on the `ScaledObject`. Kix does not generate
+  `topologySpreadConstraints` or a `PodDisruptionBudget` for that workload, and
+  counts only 1 pod toward any namespace `ResourceQuota`.
+- **HorizontalPodAutoscaler conflicts.** Do not target the same workload with
+  both a `ScaledObject` and a separate HorizontalPodAutoscaler. `kix check` does
+  not catch this conflict. KEDA's admission webhook rejects the second resource
+  during `kix deploy`, unless the webhook is unreachable (`failurePolicy` is
+  `Ignore`).
+- **Removing KEDA.** Remove KEDA in two deploys: first delete all
+  `ScaledObject`, `ScaledJob`, `TriggerAuthentication`, and
+  `ClusterTriggerAuthentication` resources and run
+  `kix deploy <cluster> --prune`, then remove the `keda` instance and deploy
+  again. `kix deploy --prune` starts deleting KEDA custom resources before the
+  operator, but does not wait for deletion to finish; removing both in one
+  deploy can leave custom resources stuck `Terminating` on the
+  `finalizer.keda.sh` finalizer.
+- **CloudEvent sources.** `keda.out.crds` does not expose `CloudEventSource` or
+  `ClusterCloudEventSource`, so `scope.mkCR` cannot build them. The package
+  still installs both CustomResourceDefinitions because the KEDA operator
+  watches them at startup.
+- **Updating ScaledObjects and ScaledJobs.** When `kix deploy` updates an
+  existing `ScaledObject` or `ScaledJob`, it can finish before KEDA reconciles
+  the new spec. KEDA does not write `observedGeneration` in status, so Kix sees
+  the existing `Ready=True` condition immediately.
