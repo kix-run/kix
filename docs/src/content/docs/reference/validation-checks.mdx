@@ -74,7 +74,7 @@ Check 22 compares named key reads against:
 - `kix.run/import-secret-keys` on external Secret markers built with `scope.mkSecretRef`; and
 - `data` and `binaryData` keys on `ConfigMap` resources in the build.
 
-If a `scope.mkSecretRef` sets `keys = [ ]`, any container that references a specific key by name fails check 22. List the expected keys in `keys` so both check 22 and `kix deploy`'s pre-wave readiness check can verify them. When an operator writes the Secret at runtime, pass its custom resource in `requires` on `scope.mkSecretRef` so `kix deploy` applies the custom resource before checking the Secret. See [Example: a Secret an operator writes at runtime](/docs/reference/secrets-crds-and-rbac/#example-a-secret-an-operator-writes-at-runtime) for a worked example.
+If a `scope.mkSecretRef` sets `keys = [ ]`, any container that references a specific key by name fails check 22. List the expected keys in `keys` so both check 22 and `kix deploy`'s pre-wave readiness check can verify them. When an operator creates the Secret at runtime, pass the custom resource in `requires` on `scope.mkSecretRef` so `kix deploy` applies that custom resource before waiting for the Secret. See [Example: a Secret an operator writes at runtime](/docs/reference/secrets-crds-and-rbac/#example-a-secret-an-operator-writes-at-runtime).
 
 ## How names and selectors resolve
 

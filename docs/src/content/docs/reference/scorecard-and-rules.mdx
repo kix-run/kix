@@ -59,16 +59,16 @@ See [Add scorecard rules](/docs/how-to/policy-ci-and-compliance/add-scorecard-ru
 
 ## Rules that follow references between objects
 
-A rule with `level = "cluster"` receives `allResources`: the rendered manifest of every resource of every active instance, as plain attribute sets (including PriorityClass objects and workloads). A cluster rule can follow a name from one object to another because it sees every rendered resource in the build. Manifest-, package-, and namespace-level rules see only their own resource, instance, or namespace.
+Manifest-, package-, and namespace-level rules see only one resource, instance, or namespace at a time. To follow a reference from one object to another (for example, resolving a workload's `priorityClassName` to its `PriorityClass` object), write a rule with `level = "cluster"`. Cluster rules receive `allResources`: a list of every rendered manifest across all active instances in the build.
 
-Rules run at evaluation time and never read the cluster. A rule cannot see objects outside the build:
-- Kubernetes' built-in classes `system-cluster-critical` (value `2000000000`) and `system-node-critical` (value `2000001000`).
-- Classes created outside Kix, or a class represented by a `kix.mkImport` marker (the marker carries no `value`).
-- Pods an operator creates at runtime, and anything on the live cluster.
+Scorecard rules run during evaluation and never contact the cluster, so `allResources` omits anything outside the build:
+- Built-in Kubernetes objects that no manifest declares, such as the `system-cluster-critical` (`2000000000`) and `system-node-critical` (`2000001000`) PriorityClasses.
+- Objects created outside Kix, or external objects represented by `kix.mkImport` markers (which carry no resource fields such as a PriorityClass `value`).
+- Pods created at runtime by operators, along with any other live cluster state.
 
 ### Example: cap PriorityClass values in a namespace
 
-In a cluster module where `kix` is in scope, this configuration enforces a PriorityClass ceiling of `1000` on workloads in namespace `apps`:
+In a cluster module with `kix` in scope, this rule enforces a maximum `PriorityClass` value of `1000` on workloads in namespace `apps`:
 
 ```nix
 scorecard = {
@@ -125,13 +125,15 @@ scorecard = {
 };
 ```
 
-Setting `scorecard.rules` replaces the built-in rule set (its default is `kix.rules`), so merge custom rules with `kix.rules // { ... }` to keep the built-in rules. A finding at severity `"error"` fails the build only when `scorecard.maxSeverity = "error"`.
+Setting `scorecard.rules` replaces the built-in `kix.rules` set, so merge custom rules with `kix.rules // { ... }` to keep the built-in checks. Findings at `severity = "error"` fail the build only when `scorecard.maxSeverity = "error"`.
 
-- **Built-in classes**: `builtInClasses` lists `system-cluster-critical` and `system-node-critical` directly because no build contains them, and the rule reports a finding if a workload names another class outside the build.
-- **`globalDefault` classes**: `globalDefaults` handles workloads that omit `priorityClassName`, because a pod that names no class gets the `globalDefault` PriorityClass.
-- **Comparing names with `==`**: A name set from another resource's `out.name` (such as `priorityClassName = priorityClass.out.name`) carries Kix's dependency tracking. Compare such names with `builtins.filter` and `==`, because indexing an attribute set like `classes.${name}` fails evaluation with an error saying the string "is not allowed to refer to a store path".
+Three details in `check` handle how Kubernetes and Kix represent PriorityClasses:
 
-On a cluster where Deployment `app` in `apps` sets `priorityClassName` from a `packages.priority-class` instance `batch` with `config.value = 500`, `kix check` passes:
+- **Built-in PriorityClasses:** `builtInClasses` lists `system-cluster-critical` and `system-node-critical` directly because Kubernetes creates them outside the build. If a workload names any other class missing from the build, the rule reports a finding because it cannot check that class's `value`.
+- **`globalDefault` fallback:** When a workload omits `priorityClassName`, Kubernetes assigns the cluster's `globalDefault` PriorityClass if one exists, so the rule falls back to `globalDefaults`.
+- **Comparing names with `==` instead of attribute lookup:** When a package sets `priorityClassName = priorityClass.out.name`, that string carries Kix's dependency metadata. Search matching resources with `builtins.filter` and `==` rather than indexing an attribute set (`classes.${name}`), which fails evaluation with an error stating that the string `"is not allowed to refer to a store path"`.
+
+When Deployment `app` in namespace `apps` sets `priorityClassName` from a `packages.priority-class` instance `batch` with `config.value = 500`, `kix check` passes:
 
 ```text
 TOOL       RESULT  DETAILS
@@ -139,7 +141,7 @@ eval       pass    31 manifests evaluated, 1 warnings
 scorecard  pass    0 errors, 10 warnings, 6 info
 ```
 
-With `config.value = 5000`, `kix check` fails:
+Raising `config.value` to `5000` fails `kix check`:
 
 ```text
 cluster 'evalq' has 1 problem:

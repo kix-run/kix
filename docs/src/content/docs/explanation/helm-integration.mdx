@@ -63,44 +63,22 @@ Before wrapping the rendered chart resources, `kix/lib/helm-dag.nix` analyzes th
 
 Kix turns these inferred relationships into real `requires` dependencies before sealing each resource. If a chart contains an implicit runtime dependency that does not appear in manifest fields (for example, a proxy Deployment whose startup script dials a sibling StatefulSet by a hardcoded name), package authors can add it with `extraEdges`. For cross-package connections into a Helm chart, passing resolved dependencies in `importChart`'s `deps = [ ... ]` argument collects their `out` string contexts so Kix can still derive network policy egress rules.
 
-## Where generated wiring stops at a chart
+## Connecting a chart to other packages
 
-Writing an output reference such as `dep.out.fqdn` into a chart's `values` puts the right
-string into the rendered manifests. On its own, a reference in `values` creates no
-deploy-ordering dependency and no network policy rule. Kix turns `values` into JSON for
-`helm template` and drops Kix's dependency tracking from the values on the way. With network
-policy enabled, the chart's workloads get only DNS egress.
+Passing an output such as `dep.out.fqdn` in a chart's `values` writes the right address into the rendered YAML, but creates no deploy-ordering dependency and no network policy rule. Before running `helm template`, Kix serializes `values` to JSON, which strips Kix's dependency metadata. When network policy is enabled, the chart's workloads get only DNS egress.
 
-To generate network policies for cross-package traffic, pass dependencies in
-`deps = [ dep ... ]` on `scope.helm.importChart`. Each dependency must also be an argument
-of the package's `build` function. Kix collects the dependency tracking of every top-level
-string in each dependency's `out` (such as `out.name`, `out.fqdn`, and `out.url`) and
-attaches it to every workload in the chart. For nested outputs such as
-`dep.out.byKind.<Kind>.<name>`, pass those strings through `networkDeps = [ ... ]`. With
-`deps` set and network policy enabled, Kix writes an egress rule for each chart workload to
-the dependency Service's pods on the Service's target port. Kix also writes a paired ingress
-policy on the dependency's pods allowing traffic from the chart's pods. For every chart, Kix
-prints this warning: "Kix may not detect every connection between workloads in this Helm
-chart. Review the generated network policies and add any missing rules".
+To generate network policies from a chart to another package, pass the upstream dependency in `deps = [ dep ... ]` on `scope.helm.importChart` (and keep `dep` as an argument of the package's `build` function). Kix attaches the dependency metadata from every top-level string in `dep.out` (such as `out.name`, `out.fqdn`, and `out.url`) to every workload in the chart. For nested outputs such as `dep.out.byKind.<Kind>.<name>`, pass those strings in `networkDeps = [ ... ]`. When network policy is enabled, Kix generates an egress policy from each chart workload to the dependency Service's pods on its target port, plus a matching ingress policy on the dependency's pods. On chart packages (`meta.isHelm = true`, which `kix.helmChart` sets automatically), Kix also prints a warning when network policy is enabled: `"Kix may not detect every connection between workloads in this Helm chart. Review the generated network policies and add any missing rules"`.
 
-With `deps` set and network policy enabled, Kix applies the chart's workloads after the
-dependency's Service. Each chart workload depends on the cluster's DNS provider and on its
-generated policies, and the egress policy depends on the dependency's Service. With network
-policy disabled, `deps` adds only the DNS ordering. Kix does not make chart workloads wait
-for the dependency's own workload (its Deployment or StatefulSet). Kix cannot order a
-chart's workloads after another package's workload today.
+`deps` gives only partial deploy ordering:
 
-`kix.helmChart` has no `deps` or `networkDeps` argument. To wire a chart to another package,
-write a Tier 2 package that calls `scope.helm.importChart`. See
-[Cross-package wiring and network policy](/docs/reference/helm-and-imports/#cross-package-wiring-and-network-policy)
-for the exact arguments.
+- **With network policy enabled:** Each chart workload waits for cluster DNS and for its generated policies, and the egress policy waits for the dependency's Service. As a result, Kix deploys the chart's workloads after that Service.
+- **With network policy disabled:** Each chart workload waits only for cluster DNS, with no ordering link to the dependency.
 
-A chart's own `NetworkPolicy` templates are rendered and applied like any other chart
-object, beside the policies Kix generates. Cilium enforces both kinds. Switch the chart's
-policies off so one set of policies describes the traffic. Use the chart's own value when it
-has one, such as `values.networkPolicy.enabled = false` (check the chart's `values.yaml` for
-the key name). Alternatively, drop them after rendering with `patchResources` on
-`scope.helm.importChart` or `kix.helmChart`.
+In neither case do chart workloads wait for the dependency's own workload (its Deployment or StatefulSet). Kix cannot order a chart's workloads after another package's workloads today.
+
+`kix.helmChart` does not accept `deps` or `networkDeps`. To connect a chart to another package, wrap it in a Tier 2 package that calls `scope.helm.importChart`. See [Cross-package wiring and network policy](/docs/reference/helm-and-imports/#cross-package-wiring-and-network-policy) for the full argument reference.
+
+If a chart renders its own `NetworkPolicy` templates, Kix applies them alongside its generated `CiliumNetworkPolicy` objects, and Cilium enforces both. Disable the chart's built-in policies so one set of rules governs traffic: either turn them off in `values` (for example, `values.networkPolicy.enabled = false`; check the chart's `values.yaml` for the exact key) or filter them out with `patchResources` on `scope.helm.importChart` or `kix.helmChart`.
 
 ## Resource adoption and external imports
 

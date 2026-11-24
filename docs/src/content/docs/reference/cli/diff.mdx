@@ -98,22 +98,28 @@ Kix does not migrate data.
 
 ## Objects Kix did not apply
 
-Kix sets the label `app.kubernetes.io/managed-by=kix` on every object it applies. Every command that reads the live cluster (`kix plan`, `kix plan --read-only`, `kix snapshot`, `kix status`, `kix gc`, and `kix deploy`), along with the Kix operator, lists only objects with that label.
+Kix sets the label `app.kubernetes.io/managed-by=kix` on every object it applies. Every command that reads the live cluster (`kix plan`, `kix plan --read-only`, `kix snapshot`, `kix status`, `kix gc`, and `kix deploy`), along with the Kix operator, lists only objects carrying that label.
 
-| Command | Objects Kix applied that the build no longer has | Objects Kix never applied (no Kix label) |
+| Command | Objects Kix applied that left the build | Objects Kix never applied (no Kix label) |
 | --- | --- | --- |
-| `kix diff` | Shows as removed when the resource is in the baseline (an earlier build, a bundle, a `kix snapshot` directory, or a `kix export --with-kix-metadata` directory) and missing from the build. | Never contacts the cluster. A `kix snapshot` baseline uses the same label selector, so unlabelled objects never appear. |
-| `kix plan` | Lists each orphan and its [prune fate](/docs/reference/cli/plan/#prune-fates). Orphans come from comparing the new build with the Active record's build and the builds listed under `status.orphansKeptFrom` by earlier deploys that kept orphans (`kix deploy` without `--prune` keeps orphans and records them for a later `--prune` or [`kix gc`](/docs/reference/cli/gc/)). | Never listed or compared, except when an object in the build has the same kind, namespace, and name (see below). |
-| `kix plan --read-only` | Shows as a removed resource (`-`) in the package report when the live object carries the Kix label and its `kix.run/activations` annotation names one of this cluster's Activation records. Prune fates are not checked. | Never listed or compared. |
-| [`kix status`](/docs/reference/cli/status/) `--check presence` / `--check drift` | Never reported. Checks only the objects the current deploy record says the cluster should have, reporting missing or changed objects. | Never listed, compared, or counted. |
-| [`kix gc`](/docs/reference/cli/gc/) | Deletes orphans found by comparing the deployed builds with a fresh build. | Never listed or deleted. |
-| `kix gc --full-scan` | Reads every labelled object of the named cluster and deletes those whose `kix.run/identity-hash` is absent from the fresh build. | Never listed or deleted. |
+| `kix diff` | Shown as removed (`-`) when present in the baseline (an earlier build, a bundle, a `kix snapshot` directory, or a `kix export --with-kix-metadata` directory) and absent from the new build. | Never contacts the cluster. A `kix snapshot` baseline uses the same label selector, so unlabelled objects never appear. |
+| `kix plan` | Lists each orphan and its [prune fate](/docs/reference/cli/plan/#prune-fates), comparing the new build against the Active record's build and any earlier builds recorded under `status.orphansKeptFrom` (from deploys run without `--prune`). | Never listed or compared, unless an object in the build has the same kind, namespace, and name (see below). |
+| `kix plan --read-only` | Shown as removed (`-`) in the package report when the live object carries the Kix label and its `kix.run/activations` annotation names one of this cluster's Activation records. Prune fates are not checked. | Never listed or compared. |
+| [`kix status`](/docs/reference/cli/status/) `--check presence` / `--check drift` | Never reported. Checks only the objects listed in the current deploy record, reporting missing or changed objects. | Never listed, compared, or counted. |
+| [`kix gc`](/docs/reference/cli/gc/) | Deletes orphans found by comparing the deployed builds against a fresh build. | Never listed or deleted. |
+| `kix gc --full-scan` | Scans every labelled object of the named cluster and deletes those whose `kix.run/identity-hash` is absent from the fresh build. | Never listed or deleted. |
 
-Among objects with `app.kubernetes.io/managed-by=kix`, Kix sorts three groups. Objects Kix applied carry `kix.run/identity-hash` and were written by Kix's field manager. Unstamped objects carry the label without `kix.run/identity-hash`, so Kix never applied them. Copies carry Kix's labels and annotations because an operator copied them from an object Kix made, even though Kix never wrote the copy. [`kix gc --full-scan`](/docs/reference/cli/gc/) lists unstamped objects, copies, and objects that name no Activation record, and deletes them only when `--include unstamped,copies,unattributed` names them.
+Even when an object carries `app.kubernetes.io/managed-by=kix`, Kix separates what it wrote from objects created by other tools or controllers:
 
-If an unlabelled object on the cluster has the same kind, namespace, and name as an object in the build, `kix plan` and `kix deploy` act on it as the build's object. `kix plan` reports field ownership conflicts with the manager that owns each field, and `kix deploy` stops on them unless `--force-conflicts` is passed.
+- **Managed objects** carry `kix.run/identity-hash` and a `managedFields` entry for the `kix` field manager.
+- **Unstamped objects** carry the label without `kix.run/identity-hash` (excluding controller-owned child objects and Service `Endpoints`, which Kix ignores). Kix never applied them.
+- **Copies** carry `kix.run/identity-hash` without a `kix` field-manager entry, because an operator copied Kix's labels and annotations onto a new object (such as a database operator's volume claim).
 
-Kix cannot report unlabelled objects today. Objects without the Kix label, such as a HelmRelease applied with `kubectl apply` into a namespace Kix manages, never appear in `kix plan`, `kix diff`, `kix status`, or `kix gc` output, and they are never counted anywhere. To find unlabelled objects of a kind today, run `kubectl` with a label selector that matches objects lacking Kix's label value (in Kubernetes, `key!=value` also matches objects that do not have the key). Built-in kinds return controller-made children too (ReplicaSets, Pods, and EndpointSlices), so query the kinds you care about:
+[`kix gc --full-scan`](/docs/reference/cli/gc/) lists unstamped objects, copies, and unattributed objects (objects that name no Activation record on a shared cluster), and deletes them only when `--include unstamped,copies,unattributed` names them.
+
+The one exception for unlabelled objects is a name collision: if an unlabelled live object has the same kind, namespace, and name as a resource in the build, `kix plan` and `kix deploy` target that object. `kix plan` reports field ownership conflicts and names each field's current manager, and `kix deploy` stops on those conflicts unless `--force-conflicts` is passed.
+
+Kix has no command to report unlabelled objects in namespaces it manages. Objects without the Kix label, such as a Flux `HelmRelease` applied with `kubectl apply`, never appear in `kix diff`, `kix plan`, `kix status`, or `kix gc` output. To find objects lacking Kix's label, query `kubectl` with `app.kubernetes.io/managed-by!=kix` (in Kubernetes, `key!=value` also matches objects without the key). Query specific kinds rather than all built-in kinds, which also return controller-created Pods, ReplicaSets, and EndpointSlices:
 
 <Command commands={["kubectl get helmreleases.helm.toolkit.fluxcd.io -A -l 'app.kubernetes.io/managed-by!=kix'"]} />
 
