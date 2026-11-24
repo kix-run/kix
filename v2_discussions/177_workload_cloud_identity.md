@@ -177,12 +177,13 @@ deps.providerCredentials = kix.cloudIdentity.gcp { };
 deps.providerCredentials = kix.cloudIdentity.gcp { serviceAccount = "dns@project.iam.gserviceaccount.com"; };
 deps.providerCredentials = kix.cloudIdentity.azure { clientId = "00000000-0000-0000-0000-000000000000"; };
 
-# self-managed cluster: the cluster author states the mechanism once
-instances.kube-system.cloud-identity.package = kix.mkImport {
-  roles = [ "cloudIdentity" ];
-  annotationDomains = [ "irsa.example.com" ];
-  out.cloudIdentity = kix.cloudIdentity.irsa { annotationPrefix = "irsa.example.com"; };
-};
+# self-managed cluster: the mechanism is chosen with the cluster, beside
+# the flavor, the way the cloud flavors carry theirs
+modules = [
+  kix.flavors.kubeadm
+  kix.modules.experimental.irsa-webhook
+  { irsaWebhook.annotationPrefix = "irsa.example.com"; }   # only for another prefix
+];
 ```
 
 ```nix
@@ -207,10 +208,21 @@ The constructors (`aws`, `gcp`, `azure`) check their fields, so a mistyped
 key names the field. `scope.mkResource` renders a bound identity through the
 mechanism of the role's provider, which `findRoleProvider` reaches without
 the package naming it, adds the provider's root as a dependency, and the
-workload builders stamp the pods. A provider's `out.cloudIdentity` is a
-mechanism record (`irsa`, `eksPodIdentity`, `gke`, `azureWorkloadId`). The
-flavors place it as an import; a Kix package for a self-hosted webhook
-claims the role and takes precedence. `cloud` stays because it catches a
+workload builders stamp the pods.
+
+Two layers stay apart in what a user reads. `kix.cloudIdentity` holds only
+the role a workload gets (`aws`, `gcp`, `azure`) and what a package reads
+(`use`, `annotationsFor`). How the cluster delivers it is chosen with the
+cluster: the `eks`, `gke`, `gke-autopilot`, and `aks` flavors carry it, and a
+self-managed cluster adds a module (`irsa-webhook`,
+`azure-workload-identity-webhook`). The mechanism records (IRSA, EKS Pod
+Identity, GKE, Entra Workload ID) are library internals; a Kix package for a
+self-hosted webhook would claim the role and take precedence.
+
+A workload definition can stay free of credentials: a module shared by
+several cluster files sets the software's own settings, and each cluster
+file gives `deps.providerCredentials` its value, a role on EKS and a Secret
+`ref` on kind (`clusters/test-cloud-identity-layout/` in #330). `cloud` stays because it catches a
 real mistake that the cluster's mechanism cannot: external-dns writing to
 Cloud DNS from an EKS cluster with an AWS identity.
 
@@ -250,7 +262,7 @@ pods do not restart when the role changes.
 | EKS Pod Identity | Nothing to write. No record. | No annotation. The record and the stamp. |
 | GKE direct / linked | Nothing, or the annotation | The record, or the annotation, and the stamp |
 | AKS | Needs a second option for the pod label | Annotation and pod label |
-| Self-managed, webhook | Domain registered by hand | An import is the provider |
+| Self-managed, webhook | Domain registered by hand | A module beside the flavor |
 | Self-managed, no webhook | Not covered | A later mechanism adds the token volume |
 | Secret fallback | No check | The same dependency, a `ref` |
 
@@ -289,7 +301,7 @@ pods do not restart when the role changes.
 | Step | Change | Record |
 |---|---|---|
 | Flavors declare their cloud's annotation domain | A warning stops. | `fixed` |
-| Role, constructors, `use`, mechanisms, flavor imports | New surface. The flavor's import adds a marker object to existing EKS, GKE, and AKS clusters. | `added`, plus a `note` |
+| Role, constructors, `use`, flavor imports, webhook modules | New surface. The flavor's import adds a marker object to existing EKS, GKE, and AKS clusters. | `added`, plus a `note` |
 | A package's `assertions` see plain `deps` values | They did not before. | `changed` |
 | external-dns takes an identity in `providerCredentials` and drops `serviceAccountAnnotations` | Experimental. The old option is refused with an error naming the new line. A cloud provider with no credentials is refused. | two `error` records |
 | victoria-metrics-operator | Stable. Its option goes in 0.11. | `error` in 0.11 |
@@ -298,8 +310,8 @@ pods do not restart when the role changes.
 ## 9. Recommendation and plan
 
 Build D. **Phase 0** (the domain declarations) and **phase 1** (the role,
-constructors, `use`, the mechanisms for EKS, GKE, and AKS, and
-external-dns) are built in #330. **Phase 2**, one pull request per package:
+constructors, `use`, the mechanisms for EKS, GKE, and AKS, the
+self-managed webhook modules, and external-dns) are built in #330. **Phase 2**, one pull request per package:
 the packages in section 8, with their per-cloud application switch, the
 operator path (`kix.cloudIdentity.annotationsFor`), and egress. **Phase 3**,
 on demand: a per-instance mechanism on EKS, the ACK Pod Identity object,
