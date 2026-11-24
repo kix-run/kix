@@ -133,15 +133,12 @@ let
 
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "volsync ${ns}/${name}";
 
   healthPort = 8081;
   metricsPort = 8080;
 
   readJSON = file: builtins.fromJSON (builtins.readFile file);
   vendored = file: (readJSON ./crds/${file}).spec;
-
-  minorOf = tag: lib.versions.majorMinor (lib.removePrefix "v" tag);
 
   # The Lease name compiled into the operator (cmd/main.go).
   leaseName = "b95b3104.backube";
@@ -203,14 +200,13 @@ in
 
   assertions =
     { config, ... }:
-    let
-      imageTag = builtins.unsafeDiscardStringContext config.image.tag;
-    in
     [
-      {
-        assertion = minorOf imageTag == minorOf release;
-        message = "image.tag \"${imageTag}\" is not a ${minorOf release} release, and the CRDs and ClusterRole under kix/packages/experimental/volsync/{crds,rbac} are vendored from v${release}. Set image.tag to a ${minorOf release}.x tag. To move to another release, change release in kix/packages/experimental/volsync/default.nix and the tag in crds/sources.txt and rbac/sources.txt, then run uv run scripts/vendor-crds.py volsync.";
-      }
+      (kix.image.checkRelease {
+        inherit (config) image;
+        inherit release;
+        reason = "the CRDs and ClusterRole in kix/packages/experimental/volsync/{crds,rbac} come from v${release}";
+        fix = "To update this package to another version, change release in kix/packages/experimental/volsync/default.nix and the tag in crds/sources.txt and rbac/sources.txt, and then run uv run scripts/vendor-crds.py volsync.";
+      })
     ];
 
   options = {
@@ -294,7 +290,7 @@ in
         ]
         ++ map (m: "--${m}-container-image=${image}") movers
         ++ kix.guardArgs {
-          inherit who;
+          inherit scope;
           owned = {
             "--leader-elect" =
               "leader election keeps one active operator while the instance's availability level runs several; remove it.";
@@ -356,7 +352,15 @@ in
                 kix.facts.connect (builtins.getContext endpointService.out.fqdn) repository.out.name;
 
             spec = kix.mergeGuarded {
-              who = "${who}: ${what}";
+              inherit scope;
+              # A consumer passes `extraSpec` to this function, so no option
+              # of this instance holds it.
+              option = null;
+              object = {
+                kind = "ReplicationSource";
+                inherit name;
+                namespace = consumerScope.namespaceName;
+              };
               locked = [
                 [ "sourcePVC" ]
                 [ "trigger" ]
@@ -496,7 +500,7 @@ in
                   inherit args;
                   env = kix.mkEnvVars (
                     kix.mergeEnv {
-                      inherit who;
+                      inherit scope;
                       owned = [
                         {
                           vars.VOLSYNC_NAMESPACE = scope.namespaceName;

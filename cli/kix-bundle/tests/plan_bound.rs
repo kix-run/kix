@@ -235,6 +235,7 @@ impl Draft {
         Contents {
             kix_rev: self.kix_rev.clone(),
             receipt: self.receipt.clone(),
+            warnings: Vec::new(),
             files,
         }
     }

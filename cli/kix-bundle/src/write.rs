@@ -7,6 +7,7 @@ use std::path::Path;
 use kix::build_source::Provenance;
 use kix::eval::build_files::BuildFiles;
 use kix::eval::error::KixEvalError;
+use kix::eval::library_record::{LibraryRecord, read_warnings};
 use kix::eval::{store, store_path};
 
 use crate::{FORMAT, FileEntry, Header, MAX_FRAME_BYTES, VERSION, stream_order};
@@ -16,6 +17,8 @@ use crate::{FORMAT, FileEntry, Header, MAX_FRAME_BYTES, VERSION, stream_order};
 pub struct Contents {
     pub kix_rev: String,
     pub receipt: Option<Provenance>,
+    /// The Kix library's warnings for the build.
+    pub warnings: Vec<LibraryRecord>,
     pub files: BTreeMap<String, BundleFile>,
 }
 
@@ -67,6 +70,7 @@ impl Contents {
             kix_rev: self.kix_rev.clone(),
             files,
             receipt: self.receipt.clone(),
+            warnings: self.warnings.clone(),
         })
     }
 
@@ -95,14 +99,16 @@ impl Contents {
 }
 
 /// Load bundle [`Contents`] from the build at `built_via` in the local Nix
-/// store using `nix path-info`.
+/// store using `nix path-info`, with the build's warnings, which are not in
+/// the Activation record's closure.
 pub fn from_local(
     built_via: &Path,
     kix_rev: &str,
     receipt: Option<Provenance>,
 ) -> Result<Contents, KixEvalError> {
     let err = |message: String| KixEvalError::StoreGraphError { message };
-    let activation = BuildFiles::read(built_via)?.activation;
+    let build_files = BuildFiles::read(built_via)?;
+    let activation = build_files.activation;
     let mut files = BTreeMap::new();
     for (path, references) in kix::eval::nix::path_info(&activation)? {
         let bytes = store::disk_path(Path::new(&path))
@@ -113,6 +119,7 @@ pub fn from_local(
     Ok(Contents {
         kix_rev: kix_rev.to_string(),
         receipt,
+        warnings: read_warnings(build_files.warnings.as_ref()),
         files,
     })
 }

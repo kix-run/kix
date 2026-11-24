@@ -2,7 +2,7 @@
 
 let
   inherit (import ../core/error.nix { inherit lib; }) fail;
-  inherit (helpers) mergeCollide collectTypedAttrs knownFolders;
+  inherit (helpers) mergeCollide knownFolders;
 in
 
 {
@@ -69,26 +69,9 @@ in
         else
           acc
       ) null (builtins.attrNames knownFolders);
-
-      _folderContentChecks = builtins.foldl' (
-        acc: folderName:
-        let
-          spec = knownFolders.${folderName};
-          contents = parts.${folderName} or { };
-          typed = collectTypedAttrs { } contents;
-          bad = builtins.filter (r: !(builtins.elem (r._type or "") spec.expectedTypes)) typed;
-        in
-        lib.foldl' (
-          inner: r:
-          builtins.trace "warning: ${ctx}.${folderName} contains ${r.kind or "?"}/${r.name or "?"}; unexpected _type '${r._type or "unknown"}'" inner
-        ) acc bad
-      ) null (builtins.attrNames knownFolders);
-
     in
     builtins.seq _folderStructureChecks (
-      builtins.seq _folderContentChecks (
-        mergeCollide "${ctx}: folder key collides with root.out" folders autoKeys
-        |> mergeCollide "${ctx}: package key collides with system key" system
-      )
+      mergeCollide "${ctx}: folder key collides with root.out" folders autoKeys
+      |> mergeCollide "${ctx}: package key collides with system key" system
     );
 }

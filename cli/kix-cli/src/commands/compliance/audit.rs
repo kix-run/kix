@@ -49,7 +49,11 @@ pub fn run(args: &ComplianceAuditArgs, ctx: &mut CommandContext) -> Result<()> {
 
     // The scorecard findings come from the KixEvaluator (ClusterOutput),
     // not the StoreGraph, so we run a cached eval in addition to the build.
-    let cluster_output = ctx.eval_cluster_or_suggest(&args.cluster).ok();
+    // The build has printed the library's warnings already.
+    let cluster_output = ctx
+        .evaluator()
+        .ok()
+        .and_then(|e| e.eval_cluster(&args.cluster).ok());
     let scorecard_findings: Vec<Value> = cluster_output
         .as_ref()
         .and_then(|o| o.scorecard_report.as_ref())

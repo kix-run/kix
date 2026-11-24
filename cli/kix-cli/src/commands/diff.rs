@@ -142,9 +142,7 @@ pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<Exit> {
 /// directory or the live cluster's Kix-owned view.
 pub(super) fn compare(args: &Comparison, ctx: &mut CommandContext) -> Result<Exit> {
     let new_build = match args.bundle {
-        Some(path) => {
-            kix_bundle::read_build(path, &[], args.cluster).map_err(|e| miette!("{e}"))?
-        }
+        Some(path) => super::read_bundle(path, &[], args.cluster)?,
         None => {
             // A status line, which `build_flake` clears before it prints the
             // library's warnings. A spinner would draw over them.

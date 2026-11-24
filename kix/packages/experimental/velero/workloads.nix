@@ -23,7 +23,6 @@ let
     componentLabels
     dataPathLabels
     urlPort
-    checkedRef
     renderPolicy
     withDataPathLabels
     checkCloudCredentials
@@ -372,7 +371,7 @@ in
         containers = [
           {
             name = "velero";
-            image = checkedRef config.image;
+            image = kix.image.ref config.image;
             imagePullPolicy = config.image.pullPolicy;
             command = [ "/velero" ];
             args = [
@@ -387,13 +386,14 @@ in
               self.repositoryMaintenanceConfig != null
             ) "--repo-maintenance-job-configmap=${self.repositoryMaintenanceConfig.out.name}"
             ++ kix.guardArgs {
-              inherit who;
+              inherit scope;
               option = "server.extraArgs";
               owned = ownedArgs;
             } config.server.extraArgs;
             env = kix.mkEnvVars (
               kix.mergeEnv {
-                inherit who;
+                inherit scope;
+                option = "server.env";
                 owned = ownedEnv { LD_LIBRARY_PATH = "/plugins"; };
               } config.server.env
             );
@@ -450,7 +450,7 @@ in
               containers = [
                 {
                   name = "node-agent";
-                  image = checkedRef config.image;
+                  image = kix.image.ref config.image;
                   imagePullPolicy = config.image.pullPolicy;
                   command = [ "/velero" ];
                   args = [
@@ -461,13 +461,14 @@ in
                   ++ featureArgs
                   ++ [ "--node-agent-configmap=${self.nodeAgentConfig.out.name}" ]
                   ++ kix.guardArgs {
-                    inherit who;
+                    inherit scope;
                     option = "nodeAgent.extraArgs";
                     owned = ownedArgs;
                   } config.nodeAgent.extraArgs;
                   env = kix.mkEnvVars (
                     kix.mergeEnv {
-                      inherit who;
+                      inherit scope;
+                      option = "nodeAgent.env";
                       owned = ownedEnv { NODE_NAME.valueFrom.fieldRef.fieldPath = "spec.nodeName"; };
                     } config.nodeAgent.env
                   );

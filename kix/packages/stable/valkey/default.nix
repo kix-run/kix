@@ -442,7 +442,7 @@ in
               "web.telemetry-path" = "the ServiceMonitor scrapes /metrics; remove it.";
             };
         exporterArgs = kix.guardArgs {
-          inherit who;
+          inherit scope;
           option = "metrics.extraArgs";
           owned = exporterOwned;
         } config.metrics.extraArgs;

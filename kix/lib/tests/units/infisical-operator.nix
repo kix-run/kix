@@ -5,6 +5,7 @@
 
 {
   lib,
+  kixlib,
   kixKeys,
   mkCluster,
   netpolOn,
@@ -559,12 +560,12 @@ in
             config.image.tag = tag;
           })
         );
-      # The assertions use only `lib` from the package arguments.
+      # The assertions use only `lib` and `kix` from the package arguments.
       assertionsOf =
         (operatorPackage {
           inherit lib;
           scope = { };
-          kix = { };
+          kix = kixlib;
           availability = null;
         }).assertions;
       latest = failed "latest";
@@ -572,7 +573,9 @@ in
     (
       builtins.length latest == 1
       && lib.hasPrefix "image.tag \"latest\" is not a v0.11 release" (builtins.head latest)
-      && lib.hasInfix "Remove image.tag or set a v0.11 tag." (builtins.head latest)
+      && lib.hasInfix "the CRDs and RBAC in kix/packages/experimental/infisical-operator are from v0.11.18" (
+        builtins.head latest
+      )
       && failed "v0.11.3" == [ ]
     )
     || throw "infisical-operator image tag: ${builtins.toJSON latest}";

@@ -11,6 +11,12 @@
   kix,
   ...
 }:
+let
+  platformDns = import ./platform-dns.nix {
+    inherit kix;
+    inherit (config) clusterDomain;
+  };
+in
 {
   cluster.provider = lib.mkDefault "gke-autopilot";
 
@@ -43,17 +49,9 @@
   # Place platform imports in `gke-managed` because Autopilot blocks user
   # resources in `kube-system`.
   instances.gke-managed = {
-    platform-dns = {
-      package = kix.mkImport {
-        kind = "Deployment";
-        apiVersion = "apps/v1";
-        roles = [ "dns" ];
-        out = {
-          name = "kube-dns";
-          fqdn = "kube-dns.kube-system.svc.${config.clusterDomain}";
-        };
-      };
-      optional = true;
+    platform-dns = platformDns {
+      name = "kube-dns";
+      namespace = "kube-system";
     };
 
     platform-storage = {

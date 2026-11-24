@@ -99,12 +99,9 @@ let
   # meta.version, the default image tags, and the tag in crds/sources.txt
   # and rbac/sources.txt.
   release = "v0.16.0";
-  # builtins.splitVersion would read the `v` as a component of its own.
-  minorOf = v: lib.versions.majorMinor (lib.removePrefix "v" v);
 
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "cnpg-barman-cloud ${ns}/${name}";
 
   readJSON = file: builtins.fromJSON (builtins.readFile file);
 
@@ -150,7 +147,7 @@ let
 in
 {
   meta = {
-    version = lib.removePrefix "v" release;
+    version = release;
     description = "Barman Cloud plugin for CloudNativePG: WAL archiving and base backups to object storage";
     owner = "platform";
     defaultAliases = [ "barmanCloud" ];
@@ -168,20 +165,23 @@ in
 
   assertions =
     { config, ... }:
-    let
-      imageTag = builtins.unsafeDiscardStringContext config.image.tag;
-      sidecarTag = builtins.unsafeDiscardStringContext config.sidecar.image.tag;
-    in
     [
-      {
-        assertion = minorOf imageTag == minorOf release;
-        message = "image.tag \"${imageTag}\" is not a plugin-barman-cloud ${minorOf release} release, and the definition under kix/packages/experimental/cnpg-barman-cloud/crds and the roles under rbac are vendored from ${release}. Set image.tag to a ${minorOf release}.x tag, or move the package to another release as its header describes.";
+      (kix.image.checkRelease {
+        inherit (config) image;
+        inherit release;
+        reason = "the CRD in kix/packages/experimental/cnpg-barman-cloud/crds and the RBAC roles in its rbac directory come from plugin-barman-cloud ${release}";
+        fix = "To update this package to another version, follow the instructions at the top of kix/packages/experimental/cnpg-barman-cloud/default.nix.";
+      })
+    ]
+    # A sidecar that keeps image.tag is covered by the check on image.tag.
+    ++ lib.optional (config.sidecar.image.tag != config.image.tag) (
+      kix.image.checkRelease {
+        inherit (config.sidecar) image;
+        option = "sidecar.image";
+        inherit release;
+        reason = "the plugin requires a sidecar from the same release (plugin-barman-cloud ${release})";
       }
-      {
-        assertion = minorOf sidecarTag == minorOf release;
-        message = "sidecar.image.tag \"${sidecarTag}\" is not a plugin-barman-cloud ${minorOf release} release, and the plugin expects the sidecar of its own release. Set sidecar.image.tag to a ${minorOf release}.x tag, or leave it to follow image.tag.";
-      }
-    ];
+    );
 
   options = {
     image = kix.options.image {
@@ -268,7 +268,7 @@ in
 
       env = kix.mkEnvVars (
         kix.mergeEnv {
-          inherit who;
+          inherit scope;
           owned = [
             {
               vars.SIDECAR_IMAGE = sidecarImage;
@@ -289,7 +289,7 @@ in
         "--leader-elect"
       ]
       ++ kix.guardArgs {
-        inherit who;
+        inherit scope;
         owned = {
           "--server-cert" =
             "the package mounts the server certificate from the Certificate it issues; remove it.";

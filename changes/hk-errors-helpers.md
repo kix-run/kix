@@ -1,0 +1,6 @@
++++
+kind = "error"
+library = ["kix.mergeGuarded", "kix.mergeEnv", "kix.guardArgs", "kix.storage.mkClasses"]
+id = "K6417"
++++
+Cluster definitions that use only built-in packages need no changes. In custom packages that call `kix.mergeGuarded`, `kix.mergeEnv`, `kix.guardArgs`, or `kix.storage.mkClasses`, remove `who` and pass `inherit scope;` (passing `who` now fails evaluation). In `kix.mergeGuarded`, rename `what` to `option` (passing `what` fails with `[K0998]`). In `kix.storage.mkClasses`, pass `optionPath` without a `config.` prefix, such as `"classes"`. All four helpers now report errors through `scope.fail`, which sets both `instance` and `package` for built-in packages in error output and `kix check -o json`. `kix.mergeGuarded` and `kix.mergeEnv` (when an `owned` entry omits `fix`) now tell users to remove disallowed fields or variables from that option. `kix.mergeGuarded` also accepts `object` to identify a Kubernetes resource, and `option = null` when overrides do not come from an instance option. `kix.mergeEnv` accepts `option` (default `"env"`) to name the option in errors, and its `owned` entries accept `reason` instead of `from` when a package rejects an environment variable outright.

@@ -33,6 +33,49 @@ fn ceded_conflict_is_stripped_and_others_are_not() {
 }
 
 #[test]
+fn a_ceded_field_under_a_multi_key_list_element_is_stripped() {
+    let manifest = json!({
+        "apiVersion": "v1",
+        "kind": "Service",
+        "metadata": { "name": "dns", "annotations": { super::keys::CEDE_FIELDS: "spec.ports[*].name" } },
+        "spec": { "ports": [
+            { "port": 53, "protocol": "UDP", "name": "dns" },
+            { "port": 53, "protocol": "TCP", "name": "dns-tcp" }
+        ] }
+    });
+    let msg = "Apply failed with 1 conflict: conflict with \"helm\" using v1: \
+               .spec.ports[port=53,protocol=\"UDP\"].name";
+    assert_eq!(
+        super::conflict_paths(msg),
+        vec![".spec.ports[port=53,protocol=\"UDP\"].name"]
+    );
+    let stripped = super::without_ceded_conflicts(&manifest, msg).expect("ceded");
+    assert!(stripped["spec"]["ports"][0].get("name").is_none());
+    assert_eq!(stripped["spec"]["ports"][1]["name"], "dns-tcp");
+}
+
+#[test]
+fn a_declared_two_key_selector_cedes_only_its_element() {
+    let manifest = json!({
+        "apiVersion": "v1",
+        "kind": "Service",
+        "metadata": { "name": "dns", "annotations": {
+            super::keys::CEDE_FIELDS: "spec.ports[port=53,protocol=\"UDP\"].name"
+        } },
+        "spec": { "ports": [
+            { "port": 53, "protocol": "UDP", "name": "dns" },
+            { "port": 53, "protocol": "TCP", "name": "dns-tcp" }
+        ] }
+    });
+    let udp = "conflict with \"helm\" using v1: .spec.ports[port=53,protocol=\"UDP\"].name";
+    let stripped = super::without_ceded_conflicts(&manifest, udp).expect("ceded");
+    assert!(stripped["spec"]["ports"][0].get("name").is_none());
+    assert_eq!(stripped["spec"]["ports"][1]["name"], "dns-tcp");
+    let tcp = "conflict with \"helm\" using v1: .spec.ports[port=53,protocol=\"TCP\"].name";
+    assert!(super::without_ceded_conflicts(&manifest, tcp).is_none());
+}
+
+#[test]
 fn conflict_paths_are_read_from_the_message() {
     let msg = "Apply failed with 2 conflicts: conflicts with \"cdi-operator\" using apiextensions.k8s.io/v1:\n- .spec.versions\n- .spec.conversion";
     assert_eq!(
@@ -43,7 +86,7 @@ fn conflict_paths_are_read_from_the_message() {
         super::parse_path(".a[name=\"x y\"].b[0]").unwrap(),
         vec![
             super::Seg::Field("a".into()),
-            super::Seg::Key("name".into(), "x y".into()),
+            super::Seg::Key(vec![("name".into(), json!("x y"))]),
             super::Seg::Field("b".into()),
             super::Seg::Index(0)
         ]

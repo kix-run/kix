@@ -44,7 +44,7 @@ let
   # their placement.
   csiNodePlacement = {
     nodeSelector = config.csiNode.nodeSelector // c.amd64;
-    tolerations = map c.toleration config.csiNode.tolerations;
+    tolerations = kix.tolerations.render config.csiNode.tolerations;
   };
 
   cpuCount = config.ioEngine.cpuCount;
@@ -66,7 +66,7 @@ in
       template.spec = hostNetworkPod // {
         serviceAccount = self.ioEngineServiceAccount;
         nodeSelector = c.ioEngineLabels config // c.amd64;
-        tolerations = map c.toleration config.ioEngine.tolerations;
+        tolerations = kix.tolerations.render config.ioEngine.tolerations;
         initContainers = [
           (c.waitFor config "agent-core" self.agentCoreService.out.fqdn 50051)
           (c.waitFor config "etcd" self.etcdService.out.fqdn 2379)
@@ -74,7 +74,7 @@ in
         containers = [
           {
             name = "io-engine";
-            image = c.imageRef config.image;
+            image = kix.image.ref config.image;
             imagePullPolicy = config.image.pullPolicy;
             command = [ "io-engine" ];
             args = c.args {
@@ -167,7 +167,7 @@ in
           }
           {
             name = "metrics-exporter-io-engine";
-            image = c.imageRef config.metricsExporter.image;
+            image = kix.image.ref config.metricsExporter.image;
             imagePullPolicy = config.metricsExporter.image.pullPolicy;
             args = c.args {
               option = "metricsExporter.extraArgs";
@@ -229,7 +229,7 @@ in
           containers = [
             {
               name = "csi-node";
-              image = c.imageRef config.csiNode.image;
+              image = kix.image.ref config.csiNode.image;
               imagePullPolicy = config.csiNode.image.pullPolicy;
               args = c.args {
                 option = "csiNode.extraArgs";
@@ -355,7 +355,7 @@ in
           containers = [
             {
               name = "agent-ha-node";
-              image = c.imageRef config.agentHaNode.image;
+              image = kix.image.ref config.agentHaNode.image;
               imagePullPolicy = config.agentHaNode.image.pullPolicy;
               args = c.args {
                 option = "agentHaNode.extraArgs";

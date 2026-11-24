@@ -150,7 +150,7 @@ let
 in
 {
   meta = {
-    version = lib.removePrefix "v" release;
+    version = release;
     description = "Traefik proxy as a Gateway API implementation (GatewayClass, Gateway, and data plane)";
     owner = "platform";
     defaultAliases = [ "gateway" ];
@@ -408,8 +408,8 @@ in
           else
             kix.mergeGuarded
               {
-                inherit who;
-                what = "service.spec";
+                inherit scope;
+                option = "service.spec";
                 locked = [
                   [ "selector" ]
                   [ "ports" ]
@@ -535,7 +535,7 @@ in
               fix = "Pass the setting in extraArgs.";
             }
           else
-            kix.mkEnvVars (kix.mergeEnv { inherit who; } config.env);
+            kix.mkEnvVars (kix.mergeEnv { inherit scope; } config.env);
 
         clusterRbac = mkClusterRoleSet scope {
           subjects = [

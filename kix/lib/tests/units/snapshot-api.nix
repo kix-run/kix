@@ -384,7 +384,7 @@ in
         no-provider =
           refusedWith
             [
-              "volumeSnapshotClasses defines zfs, but nothing provides the snapshotController role"
+              "volumeSnapshotClasses defines zfs, but no instance in the cluster provides a snapshot controller (the snapshotController role)"
             ]
             {
               config = { };
@@ -393,7 +393,7 @@ in
         two-defaults =
           refusedWith
             [
-              "config.volumeSnapshotClasses.a and config.volumeSnapshotClasses.b are both annotated snapshot.storage.kubernetes.io/is-default-class"
+              "config.volumeSnapshotClasses.a and config.volumeSnapshotClasses.b each set snapshot.storage.kubernetes.io/is-default-class"
             ]
             {
               config.volumeSnapshotClasses = {
@@ -404,8 +404,8 @@ in
         reserved-keys =
           refusedWith
             [
-              "config.volumeSnapshotClasses.root: kix drops parts named root or meta, so this VolumeSnapshotClass would not be rendered. Rename it."
-              "config.volumeSnapshotClasses.meta: kix drops parts named root or meta"
+              "config.volumeSnapshotClasses.root: Kix reserves the keys \"root\" and \"meta\", so this VolumeSnapshotClass cannot be built. Rename it."
+              "config.volumeSnapshotClasses.meta: Kix reserves the keys \"root\" and \"meta\""
             ]
             {
               config.volumeSnapshotClasses = {
@@ -413,11 +413,11 @@ in
                 meta = { };
               };
             };
-        toleration-without-key = refusedWith [ "config.node.tolerations.0 has no key and operator Equal" ] {
+        toleration-without-key = refusedWith [ "config.node.tolerations[0] has a missing or empty key" ] {
           config.node.tolerations = [ { effect = "NoSchedule"; } ];
         };
         toleration-exists-with-value =
-          refusedWith [ "config.node.tolerations.0 sets value with operator Exists" ]
+          refusedWith [ "config.node.tolerations[0] sets value with operator \"Exists\"" ]
             {
               config.node.tolerations = [
                 {
@@ -428,7 +428,7 @@ in
               ];
             };
         toleration-seconds-without-noexecute =
-          refusedWith [ "config.node.tolerations.1 sets tolerationSeconds with effect NoSchedule" ]
+          refusedWith [ "config.node.tolerations[1] sets tolerationSeconds while effect is NoSchedule" ]
             {
               config.node.tolerations = [
                 { operator = "Exists"; }

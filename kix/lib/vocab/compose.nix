@@ -3,7 +3,7 @@
 { lib }:
 
 let
-  inherit (import ../core/error.nix { inherit lib; }) fail;
+  inherit (import ../core/error.nix { inherit lib; }) fail failOf;
   markers = import ../core/markers.nix { inherit lib; };
 
   kixAnnotations = import ../core/annotations.nix;
@@ -39,13 +39,13 @@ rec {
   image =
     let
       needField =
-        image: field:
+        caller: image: field:
         let
           v = image.${field} or null;
         in
         if v == null || v == "" then
           fail {
-            message = "kix.image.ref: image reference has no '${field}', and got: ${builtins.toJSON image}";
+            message = "${caller}: '${field}' is missing or empty in image ${builtins.toJSON image}.";
             fix = "An image needs at least { repository, tag }.";
           }
         else
@@ -59,7 +59,7 @@ rec {
       ref =
         image:
         builtins.unsafeDiscardStringContext (
-          "${needField image "repository"}:${needField image "tag"}"
+          "${needField "kix.image.ref" image "repository"}:${needField "kix.image.ref" image "tag"}"
           + lib.optionalString (image.digest or null != null) "@${image.digest}"
         );
 
@@ -75,6 +75,55 @@ rec {
 
       # Return true when `image.digest` is present and non-null.
       isPinned = image: (image.digest or null) != null;
+
+      # Return an assertion that the image's tag names the major.minor of
+      # `release`, or one of the minors in `also` (such as "1.9"). A leading
+      # `v` and anything after the minor number are ignored, because a user
+      # may point the image at a rebuild that tags in another form. A
+      # package puts it in `assertions` for each image whose files it
+      # vendors from `release`. `reason` says what the release binds, and
+      # `fix` says how to move the package to another release.
+      checkRelease =
+        {
+          image,
+          release,
+          reason,
+          option ? "image",
+          also ? [ ],
+          fix ? null,
+        }:
+        let
+          tag = builtins.unsafeDiscardStringContext (needField "kix.image.checkRelease" image "tag");
+          releaseMinor = versions.minorOf release;
+          prefix = if builtins.match "[vV].*" release == null then "" else builtins.substring 0 1 release;
+          minorText = m: prefix + lib.concatMapStringsSep "." toString m;
+          accepted = map versions.minorOf also ++ [ releaseMinor ];
+          acceptedText =
+            let
+              texts = map minorText accepted;
+              n = builtins.length texts;
+            in
+            if n == 1 then
+              builtins.head texts
+            else
+              lib.concatStringsSep ", " (lib.take (n - 1) texts) + ", or ${lib.last texts}";
+          tagMinor = versions.minorOf tag;
+          path = "${option}.tag";
+        in
+        if releaseMinor == null || builtins.elem null accepted then
+          fail {
+            message = "kix.image.checkRelease: release (${builtins.toJSON release}) or an entry in also (${builtins.toJSON also}) is missing major and minor version numbers, so Kix cannot check this image tag.";
+            fix = "Pass a version with at least major and minor numbers, such as \"v1.10.0\" for release and \"1.9\" in also.";
+          }
+        else
+          {
+            assertion = builtins.elem tagMinor accepted;
+            option = path;
+            message = "${path} \"${tag}\" is not a ${acceptedText} release. Kix rejected it because ${reason}.";
+            fix =
+              "Set ${path} to a tag from the ${acceptedText} release series, or remove ${path} to use the default."
+              + lib.optionalString (fix != null) " ${fix}";
+          };
     };
 
   port = name: containerPort: {
@@ -105,15 +154,36 @@ rec {
 
   # Merge `overrides` into `base` with `lib.recursiveUpdate`, failing if
   # `overrides` touches any attribute path in `locked` or replaces a parent of
-  # a locked path with a non-attrset value.
+  # a locked path with a non-attrset value. `option` is the instance option
+  # that holds `overrides`, and the error names it. Set it to null when
+  # `overrides` comes from somewhere else, such as an argument of a function
+  # the package publishes in `out`. `object` names the Kubernetes object the
+  # merge builds, `{ kind; name; namespace ? null; }`, when the instance
+  # builds several from one option.
   mergeGuarded =
     {
-      who,
+      scope ? null,
+      who ? null,
       locked,
-      what ? "extraSpec",
+      option ? "extraSpec",
+      what ? null,
+      object ? null,
     }:
     base: overrides:
     let
+      scopeFail =
+        let
+          f = failOf "mergeGuarded" { inherit scope who; };
+        in
+        if what != null then
+          f {
+            id = "K0998";
+            message = "kix.mergeGuarded no longer accepts `what`. That argument is now named `option`.";
+            fix = "Rename `what` to `option`.";
+          }
+        else
+          f;
+
       # Return the shortest proper prefix of `path` that `overrides` sets to a
       # non-attrset, or null when none exists.
       replacingAncestor =
@@ -142,13 +212,18 @@ rec {
       touched = builtins.filter (d: d != null) (map describe locked);
     in
     if touched != [ ] then
-      fail {
-        option = what;
-        message = "${who}: ${what} overrides ${lib.concatStringsSep ", " touched}, which the package sets for correctness.";
-        fix = "Use the option that owns it.";
+      let
+        pronoun = if builtins.length touched == 1 then "it" else "them";
+      in
+      scopeFail {
+        inherit option object;
+        message = "${
+          if option == null then "The overrides set" else "${option} overrides"
+        } ${lib.concatStringsSep ", " touched}, which this package sets itself.";
+        fix = "Remove ${pronoun}${lib.optionalString (option != null) " from ${option}"}.";
       }
     else
-      lib.recursiveUpdate base overrides;
+      builtins.seq scopeFail (lib.recursiveUpdate base overrides);
 
   # Validate Kubernetes resource quantities (`vocab/quantity.nix`).
   types.quantity = quantity.type;
@@ -161,18 +236,25 @@ rec {
   # Merge package `defaults`, user `env` (`kix.options.env`), and package-owned
   # variables into an attrset for `kix.mkEnvVars`.
   #
-  # Each entry in `owned` has `{ vars ? { }; names ? [ ]; from; fix; }`. `vars`
-  # are added to the result, while `names` reserves variables delivered via
-  # `envFrom`. Throws if `env` defines any key in `vars` or `names` (even as
-  # null).
+  # Each entry in `owned` has `{ vars ? { }; names ? [ ]; from; fix ? null; }`
+  # or `{ names; reason; fix ? null; }`. Without `fix`, the error tells the
+  # user to remove the variable from `option`. `vars` are added to the result, while
+  # `names` reserves variables delivered via `envFrom` or refused outright.
+  # Throws if `env` defines any key in `vars` or `names` (even as null). The
+  # error names `option`, the instance option that holds `env`. It says a
+  # variable comes `from` somewhere, or that the package does not accept it
+  # and why, when the group gives a `reason`.
   mergeEnv =
     {
-      who,
+      scope ? null,
+      who ? null,
+      option ? "env",
       owned ? [ ],
       defaults ? { },
     }:
     env:
     let
+      scopeFail = failOf "mergeEnv" { inherit scope who; };
       hits =
         group:
         builtins.filter (n: env ? ${n}) (builtins.attrNames (group.vars or { }) ++ group.names or [ ]);
@@ -182,26 +264,34 @@ rec {
           h = hits group;
         in
         lib.optional (h != [ ]) {
-          option = "env";
-          message = "${who}: env sets ${lib.concatStringsSep ", " h}, which ${
-            if builtins.length h == 1 then "comes" else "come"
-          } from ${group.from}.";
-          fix = group.fix;
+          inherit option;
+          message =
+            "${option} sets ${lib.concatStringsSep ", " h}, which "
+            + (
+              if group ? reason then
+                "this package does not accept: ${group.reason}"
+              else
+                "${if builtins.length h == 1 then "comes" else "come"} from ${group.from}."
+            );
+          fix = group.fix or "Remove ${if builtins.length h == 1 then "it" else "them"} from ${option}.";
         }
       ) owned;
     in
     if lines != [ ] then
-      fail lines
+      scopeFail lines
     else
-      defaults // env // lib.foldl' (acc: group: acc // group.vars or { }) { } owned;
+      builtins.seq scopeFail (
+        defaults // env // lib.foldl' (acc: group: acc // group.vars or { }) { } owned
+      );
 
   # Validate that `args` does not set any CLI flag in `owned`, and return
   # `args` unchanged.
   #
   # `owned` maps each refused flag to the reason and the remedy. The message
-  # reads `<who>: <option> sets "<flag>", which this package does not accept:
+  # reads `<option> sets "<flag>", which this package does not accept:
   # <reason>`, so a reason fits a flag the package sets itself and a flag it
-  # does not support.
+  # does not support. The error names the instance and its package from
+  # `scope`.
   #
   # `args` is either a list of command-line words or an attrset of flags
   # keyed by flag name, the form a VictoriaMetrics CR's `extraArgs` takes.
@@ -212,12 +302,14 @@ rec {
   # dashes are removed.
   guardArgs =
     {
-      who,
+      scope ? null,
+      who ? null,
       option ? "extraArgs",
       owned,
     }:
     args:
     let
+      scopeFail = failOf "guardArgs" { inherit scope who; };
       isShortFlag = flag: builtins.match "-[^-]" flag != null;
       flagOf =
         arg:
@@ -252,11 +344,11 @@ rec {
         { written, flag }:
         {
           inherit option;
-          message = "${who}: ${option} sets \"${written}\", which this package does not accept: ${owned.${flag}}";
+          message = "${option} sets \"${written}\", which this package does not accept: ${owned.${flag}}";
         }
       ) hits;
     in
-    if lines != [ ] then fail lines else args;
+    if lines != [ ] then scopeFail lines else builtins.seq scopeFail args;
 
   # Validate that a secret dependency `dep` declares all required `keys` (and
   # at least one key group in `anyOf` when set) in `dep.out.keys`, then return
@@ -466,5 +558,6 @@ rec {
   inherit (monitorModule)
     monitor
     alerts
+    reconcileErrorsAlert
     ;
 }

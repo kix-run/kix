@@ -17,7 +17,6 @@ let
   common = import ./common.nix { inherit lib; };
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = common.who scope;
   labels = (common.labels name).webhook;
   metricsOn = config.metrics.enabled && prometheus != null;
 
@@ -167,12 +166,7 @@ in
           containers = [
             {
               name = "cert-manager-webhook";
-              image = kix.image.ref (
-                common.checkRelease who config [
-                  "webhook"
-                  "image"
-                ]
-              );
+              image = kix.image.ref config.webhook.image;
               imagePullPolicy = config.webhook.image.pullPolicy;
               args = [
                 "--v=2"
@@ -184,7 +178,7 @@ in
                 "--dynamic-serving-dns-names=${serviceName}.$(POD_NAMESPACE).svc"
               ]
               ++ kix.guardArgs {
-                inherit who;
+                inherit scope;
                 option = "webhook.extraArgs";
                 owned = {
                   "--secure-port" =

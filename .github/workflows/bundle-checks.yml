@@ -1,16 +1,13 @@
 name: Bundle checks
 
-# The bundle checks too slow for every `cargo test` (cli/README.md,
-# "Bundle acceptance checks"):
-#
-# - each libFuzzer target in cli/fuzz (20s per target on pull requests, two
-#   minutes on the weekly schedule and manual runs), seeded from the honest
-#   bundles in cli/kix-bundle/tests/fixtures and the plan file in
-#   cli/kix/tests/fixtures, under the README's 4 GiB RSS cap;
-# - `every_test_cluster_bundles`, which builds and bundles every test
-#   cluster;
-# - `flake_checks_evaluate_with_helm`, which evaluates every cluster's
-#   PackageInstance wiring check and `every-package-evaluates` through kix.
+# The libFuzzer targets in cli/fuzz, too slow for every `cargo test`
+# (cli/README.md, "Bundle acceptance checks"). Each target runs for 20s on
+# pull requests and two minutes on the weekly schedule and manual runs,
+# seeded from the honest bundles in cli/kix-bundle/tests/fixtures and the
+# plan file in cli/kix/tests/fixtures, under the README's 4 GiB RSS cap.
+# The targets read bundles and plan files, so only a change to that code
+# runs them. The tests that bundle every cluster and evaluate every package
+# run in package-checks.yml.
 #
 # A short run catches a reader change that breaks on the seeds' first
 # mutations without holding a Spot VM long enough to be preempted. The weekly
@@ -29,12 +26,7 @@ on:
       - 'cli/kix-bundle/**'
       - 'cli/kix-container/**'
       - 'cli/kix/src/plan/file.rs'
-      - 'cli/kix-core/src/eval/**'
-      - 'kix/lib/helm.nix'
-      - 'cli/kix-cli/src/commands/bundle.rs'
-      - 'cli/kix-cli/tests/commands_test.rs'
       - 'cli/fuzz/**'
-      - 'clusters/**'
       - 'flake.nix'
       - 'cli/Cargo.toml'
       - 'cli/Cargo.lock'
@@ -51,7 +43,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  bundle-checks:
+  fuzz:
     runs-on: [self-hosted, spindle-8c-16g]
     timeout-minutes: 60
     env:
@@ -91,18 +83,6 @@ jobs:
               cargo fuzz run -s none -O --codegen-units 16 "$target" "corpus/$target" "$seeds" -- \
                 -max_total_time="$FUZZ_SECONDS" -max_len=2500000 -rss_limit_mb=4096
             done'
-
-      - name: Every test cluster bundles
-        run: |
-          nix develop --command bash -c \
-            'cd cli && cargo test -p kix-cli --test commands_test -- --ignored every_test_cluster_bundles'
-
-      # Plain `nix flake check` cannot render Helm charts, so the
-      # evaluation-only flake checks run through kix here.
-      - name: Flake checks evaluate with Helm
-        run: |
-          nix develop --command bash -c \
-            'cd cli && cargo test -p kix-cli --test commands_test -- --ignored flake_checks_evaluate_with_helm'
 
       - name: Upload crashing inputs
         if: failure()

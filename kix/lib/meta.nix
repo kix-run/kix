@@ -7,6 +7,7 @@ let
   versions = import ./core/version.nix { inherit lib; };
   errors = import ./core/error.nix { inherit lib; };
   packageLib = import ./core/package.nix { inherit lib; };
+  inherit (import ./core/util.nix { inherit lib; }) instanceLabel reasonSentence;
 
   failedAssertion = message: {
     assertion = false;
@@ -93,15 +94,14 @@ let
         assertions = builtins.concatMap (c: c.assertions) checks;
       };
 
-  # Return warning `w` with `dependency` set to `name` unless it sets one.
+  # Return warning or assertion `w` with `dependency` set to `name` unless it
+  # sets one.
   aboutDependency =
     name: w:
     {
       dependency = name;
     }
     // (if builtins.isString w then { message = w; } else w);
-
-  emitTraces = prefix: items: lib.foldl' (acc: msg: builtins.trace "${prefix}${msg}" acc) null items;
 
   noDiagnostics = {
     warnings = [ ];
@@ -138,6 +138,43 @@ rec {
         fix = "Set it to \"cluster\" or \"namespace\", or leave it unset.";
       };
 
+  # Return a package's `meta.conflictsWith` entries as `{ key; reason; }`.
+  # An entry is a key, such as "cluster:tailscale", or `{ key; reason; }`,
+  # where `reason` is a sentence that says why two such instances cannot
+  # run together.
+  conflictEntries =
+    packageMeta:
+    map (
+      e:
+      if builtins.isString e then
+        {
+          key = e;
+          reason = null;
+        }
+      else if
+        builtins.isAttrs e
+        && builtins.isString (e.key or null)
+        && builtins.isString (e.reason or "")
+        &&
+          removeAttrs e [
+            "key"
+            "reason"
+          ] == { }
+      then
+        {
+          inherit (e) key;
+          reason = e.reason or null;
+        }
+      else
+        errors.fail {
+          message = "meta.conflictsWith contains an invalid entry: ${builtins.toJSON e}.";
+          fix = "Write each entry as a string (\"<name>\" or \"cluster:<name>\") or as { key = \"...\"; reason = \"...\"; }.";
+        }
+    ) (packageMeta.conflictsWith or [ ]);
+
+  # Return the keys of a package's `meta.conflictsWith` entries.
+  conflictKeys = packageMeta: map (e: e.key) (conflictEntries packageMeta);
+
   # Return whether a package serves every namespace. Dependency resolution
   # binds an instance of such a package from any namespace, and
   # auto-instantiation places it once per cluster. A package serves the whole
@@ -156,7 +193,7 @@ rec {
       scope != "namespace"
       && (
         (packageMeta.roles or [ ]) != [ ]
-        || builtins.any (lib.hasPrefix "cluster:") (packageMeta.conflictsWith or [ ])
+        || builtins.any (lib.hasPrefix "cluster:") (conflictKeys packageMeta)
       )
     );
 
@@ -300,8 +337,9 @@ rec {
       versionDiags = [ k8sDiag ] ++ compatDiags;
 
       conflictAssertions = builtins.concatMap (
-        conflict:
+        entry:
         let
+          conflict = entry.key;
           isClusterWide = lib.hasPrefix "cluster:" conflict;
           name = if isClusterWide then lib.removePrefix "cluster:" conflict else conflict;
           isSelf = c: c.instName == instanceName && c.namespace == namespaceName;
@@ -321,21 +359,27 @@ rec {
               builtins.filter (c: c.namespace == namespaceName && !(isSelf c)) candidates;
           scope = if isClusterWide then "(cluster-wide)" else "in namespace '${namespaceName}'";
           isAuto = c: (c.meta.autoInstantiatedFor or null) != null;
-          label =
-            c:
-            "${c.namespace}/${c.instName}"
-            + lib.optionalString (isAuto c) " (auto-instantiated for ${builtins.concatStringsSep ", " c.meta.autoInstantiatedFor})";
+          label = c: instanceLabel "${c.namespace}/${c.instName}" (c.meta.autoInstantiatedFor or null);
           instances = builtins.concatStringsSep ", " (map label matching);
           autoAdvice = lib.optionalString (builtins.any isAuto matching) (
-            ". An auto-instantiated instance is created for a required dependency that no declared instance answers. "
+            " An auto-instantiated instance is created for a required dependency that no declared instance answers. "
             + "Make ${namespaceName}/${instanceName} answer '${name}' (instances.${namespaceName}.${instanceName}.aliases), "
             + "or bind the consumers to it with deps.<arg> = ref.${namespaceName}.${instanceName}."
           );
         in
-        lib.optional (matching != [ ]) (
-          failedAssertion "It conflicts with '${name}' ${scope}. Conflicting instances: ${instances}${autoAdvice}"
-        )
-      ) (packageMeta.conflictsWith or [ ]);
+        lib.optional (matching != [ ]) {
+          assertion = false;
+          message =
+            "It conflicts with '${name}' ${scope}. Conflicting instances: ${instances}."
+            + lib.optionalString (entry.reason != null) " ${reasonSentence entry.reason}"
+            + autoAdvice;
+          fix =
+            if isClusterWide then
+              "Remove either ${namespaceName}/${instanceName} or the conflicting instances so only one runs in the cluster (if Kix auto-instantiated one, alias or wire the kept instance as shown above). One declared instance of a cluster-wide package serves every namespace."
+            else
+              "Remove ${namespaceName}/${instanceName}, or move or remove the conflicting instances so they do not share a namespace.";
+        }
+      ) (conflictEntries packageMeta);
 
       # Validate `meta.scope` up front, because resolution reads it only for
       # a dependency from another namespace.
@@ -385,12 +429,14 @@ rec {
       resolvedDepMeta,
       depsEnrichment ? { },
       resolvedDeps ? { },
+      clusterConfig ? { },
     }:
     let
       ctx = {
         config = evaluatedConfig;
         self = parts;
         deps = lib.mapAttrs (_: di: di.value) resolvedDepMeta;
+        inherit clusterConfig;
       };
 
       depDiagnostics =
@@ -407,7 +453,11 @@ rec {
                 warnings =
                   acc.warnings
                   ++ map (aboutDependency depName) (if enrichment ? warnings then enrichment.warnings dep else [ ]);
-                assertions = acc.assertions ++ (if enrichment ? assertions then enrichment.assertions dep else [ ]);
+                assertions =
+                  acc.assertions
+                  ++ map (aboutDependency depName) (
+                    if enrichment ? assertions then enrichment.assertions dep else [ ]
+                  );
               }
           )
           {
@@ -457,9 +507,6 @@ rec {
       evaluateWarnings = builtins.deepSeq (
         map (errors.describe "  ") allWarnings ++ scorecardWarnings
       ) null;
-      emitAssertionWarnings = emitTraces "ASSERTION FAILED: " (
-        map (a: "${a.instance}: ${a.message}") failedAssertions
-      );
     };
 
   # Aggregate diagnostics across all instances and attach cluster- and

@@ -163,9 +163,6 @@ let
     pluralOf
     unexposedKinds
     crdOf
-    versionParts
-    releaseMinor
-    releaseMinorText
     ;
 
   # Secret selectors (`{ name; key; namespace?; }`, the upstream
@@ -207,7 +204,7 @@ let
 in
 {
   meta = {
-    version = lib.removePrefix "v" release;
+    version = release;
     description = "External Secrets Operator, which syncs secrets from external stores into Kubernetes Secrets";
     owner = "platform";
     defaultAliases = [ "externalSecrets" ];
@@ -264,13 +261,13 @@ in
           lib.hasPrefix "--unsafe-allow-generic-targets=" a && a != "--unsafe-allow-generic-targets=false"
         )
       ) config.extraArgs;
-      imageTag = builtins.unsafeDiscardStringContext config.image.tag;
     in
     [
-      {
-        assertion = versionParts imageTag != null && lib.take 2 (versionParts imageTag) == releaseMinor;
-        message = "image.tag \"${imageTag}\" is not a v${releaseMinorText} release, and the CRDs and RBAC in kix/packages/experimental/external-secrets are from ${release}. Remove image.tag or set a v${releaseMinorText}.x tag.";
-      }
+      (kix.image.checkRelease {
+        inherit (config) image;
+        inherit release;
+        reason = "the CRDs and RBAC in kix/packages/experimental/external-secrets are from ${release}";
+      })
       {
         assertion = generic == [ ];
         message = "extraArgs sets ${lib.concatStringsSep ", " generic}, which lets ExternalSecrets write ConfigMaps and custom resources. The package grants the controller no RBAC for them and out.mkExternalSecret refuses spec.target.manifest. Remove the flag; create generic targets outside Kix.";

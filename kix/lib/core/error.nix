@@ -185,10 +185,13 @@ let
     in
     "${text}\n${marker}${builtins.toJSON payload}";
 
-  withInstance =
-    instance: e:
-    lib.optionalAttrs (instance != null) { inherit instance; }
-    // (if builtins.isString e then { message = e; } else e);
+  # Return error `e` as an attribute set, with each non-null field of
+  # `defaults` set unless `e` sets it.
+  withDefaults =
+    defaults: e:
+    lib.filterAttrs (_: v: v != null) defaults // (if builtins.isString e then { message = e; } else e);
+
+  withInstance = instance: withDefaults { inherit instance; };
 in
 rec {
   inherit marker fields describe;
@@ -234,10 +237,38 @@ rec {
   failAll = args: throw (text args);
 
   # Return `scope.fail` for an instance: `fail` with `instance` set to
-  # "<namespace>/<name>" on every error that does not set it.
+  # "<namespace>/<name>", and `package` to the id of the package it runs, on
+  # every error that does not set them. `package` is null for a package
+  # outside Kix's own set, and the errors then name none.
   failFor =
-    instance: e:
-    fail (if builtins.isList e then map (withInstance instance) e else withInstance instance e);
+    {
+      instance,
+      package ? null,
+    }:
+    e:
+    let
+      fill = withDefaults { inherit instance package; };
+    in
+    fail (if builtins.isList e then map fill e else fill e);
+
+  # Return the `fail` of the `scope` that the library helper `helper`
+  # received. Refuse a call that passes `who`, and name the form to use.
+  failOf =
+    helper:
+    { scope, who }:
+    if who != null then
+      (if scope == null then fail else scope.fail) {
+        id = "K6417";
+        message = "kix.${helper} no longer accepts `who`. It reads the instance and package from `scope`.";
+        fix = "Remove `who` and pass `inherit scope;`.";
+      }
+    else if scope == null then
+      fail {
+        message = "kix.${helper} is missing `scope`. It needs `scope` to report the instance and package in errors.";
+        fix = "Pass `inherit scope;`.";
+      }
+    else
+      scope.fail;
 
   # Return the error record of a failed assertion: its fields without
   # `assertion`, with `instance` set unless it sets one.

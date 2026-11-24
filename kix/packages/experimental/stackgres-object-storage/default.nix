@@ -283,7 +283,7 @@ in
       };
 
       spec = kix.mergeGuarded {
-        inherit who;
+        inherit scope;
         locked = [
           [ "type" ]
           [

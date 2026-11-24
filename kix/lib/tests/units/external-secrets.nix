@@ -170,12 +170,12 @@ let
     };
   };
 
-  # The package's assertions read only `config` and `lib`.
+  # The package's assertions read only `config`, `lib`, and `kix`.
   assertionsOf =
     (operatorPackage {
       inherit lib;
       scope = { };
-      kix = { };
+      kix = kixlib;
       availability = null;
     }).assertions;
   failedAssertions =
@@ -465,7 +465,7 @@ in
         )
       );
     in
-    (urls != [ ] && lib.all (lib.hasInfix "/v${release}/") urls)
+    (urls != [ ] && lib.all (lib.hasInfix "/${release}/") urls)
     || throw "external-secrets sources.txt is not at ${release}: ${builtins.toJSON urls}";
 
   # The assertions name the tag, the release minor, and the fix, and refuse
@@ -480,7 +480,9 @@ in
       && failedAssertions (defaultConfig // { image.tag = "v2.15.3"; }) == [ ]
       && builtins.length latest == 1
       && lib.hasPrefix "image.tag \"latest\" is not a v2.15 release" (builtins.head latest)
-      && lib.hasInfix "Remove image.tag or set a v2.15.x tag." (builtins.head latest)
+      && lib.hasInfix "the CRDs and RBAC in kix/packages/experimental/external-secrets are from v2.15.0" (
+        builtins.head latest
+      )
       && builtins.length generic == 1
       && lib.hasInfix "--unsafe-allow-generic-targets" (builtins.head generic)
       &&

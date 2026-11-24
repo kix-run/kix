@@ -453,7 +453,6 @@ in
       bootstrapJob = backendScope.mkJob {
         name = "${serverSideName}-bootstrap";
         labels = labels;
-        annotations.${kix.keys.rerun} = kix.keyValues.rerunOnChange;
         spec = {
           backoffLimit = 20;
           template = {
@@ -553,12 +552,12 @@ in
           # The Job reaches this instance by two routes, and each covers a
           # case the other does not. `pg` above carries it to consumers, so a
           # consumer's workload waits for the Job and gets egress to postgres.
-          # `postHooks` puts the Job, and what it references (bootstrapPassword,
+          # `requires` puts the Job, and what it references (bootstrapPassword,
           # the superuser Secret, its network policies), in this instance's own forward
           # closure, so the PackageInstance depends on the Job even when no
           # consumer reads `out.host`. `credentials` does not reference the Job
           # and can be applied before the Job runs.
-          postHooks = [ bootstrapJob ];
+          requires = [ bootstrapJob ];
 
           out = kix.contracts.postgresDatabase.check who {
             host = self.pg.fqdn;

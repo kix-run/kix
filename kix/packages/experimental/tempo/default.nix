@@ -441,8 +441,8 @@ in
         mergedConfig = lib.filterAttrsRecursive (_: v: v != null) (
           kix.mergeGuarded
             {
-              inherit who;
-              what = "settings";
+              inherit scope;
+              option = "settings";
               locked = lockedPaths {
                 objectStorage = objectStorageOn;
                 inherit inClusterStore;
@@ -511,12 +511,12 @@ in
           "-config.expand-env=true"
         ]
         ++ kix.guardArgs {
-          inherit who;
+          inherit scope;
           owned = ownedFlags;
         } config.extraArgs;
 
         env = kix.mergeEnv {
-          inherit who;
+          inherit scope;
           owned = lib.optional objectStorageOn {
             vars = {
               AWS_ACCESS_KEY_ID = credentials.out.keyRef credentialKeys.accessKeyId;

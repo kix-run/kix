@@ -575,7 +575,7 @@ pub(super) const DECLARED_FAILURE_GRACE: std::time::Duration = std::time::Durati
 /// Track a declared failure across polls and decide when it is final.
 #[derive(Debug, Default)]
 pub(super) struct FailureWatch {
-    held_since: Option<(String, std::time::Instant)>,
+    held_since: Option<(String, tokio::time::Instant)>,
 }
 
 impl FailureWatch {
@@ -586,7 +586,7 @@ impl FailureWatch {
     pub(super) fn observe(
         &mut self,
         failure: Option<DeclaredFailure>,
-        now: std::time::Instant,
+        now: tokio::time::Instant,
     ) -> Option<String> {
         let Some(failure) = failure else {
             self.held_since = None;

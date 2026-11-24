@@ -44,13 +44,12 @@
 let
   release = "v2.20.0";
   name = scope.instanceName;
-  who = "kube-state-metrics ${scope.namespaceName}/${name}";
   metricsPort = 8080;
   telemetryPort = 8081;
 in
 {
   meta = {
-    version = lib.removePrefix "v" release;
+    version = release;
     description = "kube-state-metrics: Kubernetes object state exporter";
     owner = "platform";
     defaultAliases = [ "kubeStateMetrics" ];
@@ -170,7 +169,7 @@ in
           !choosesCollectors && servedCollectors != defaultCollectors
         ) "--resources=${lib.concatStringsSep "," servedCollectors}"
         ++ kix.guardArgs {
-          inherit who;
+          inherit scope;
           owned = {
             "--port" = "the probes and the Service use port ${toString metricsPort}; remove it.";
             "--telemetry-port" = "the Service uses port ${toString telemetryPort}; remove it.";

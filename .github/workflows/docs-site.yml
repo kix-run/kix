@@ -1,0 +1,82 @@
+name: Docs site
+
+# Builds the docs site on a pull request the way pages.yml builds main's
+# docs after the merge, so a change that breaks the build fails here first.
+# The build runs the docs checks in docs/flake.nix's `preBuild`: the how-to
+# coverage ledger, the local imports, and the references to repository
+# files. It also renders the snippets read from `kix/` and from
+# kix-examples, and the package option reference. Nothing is deployed.
+#
+# The docs read package and library source, and the version in
+# cli/Cargo.toml, so a change to `kix/` runs this too.
+#
+# The build needs the private kix-run/kix-examples repository, which only
+# the KIX_EXAMPLES_TOKEN secret can read. GitHub gives no secrets to a pull
+# request from a fork or from Dependabot, so the job skips its steps there
+# and says so in a notice. Like pages.yml, it builds against kix-examples'
+# default branch.
+#
+# Same Nix setup as pages.yml, on a Spindle VM whose image ships Nix.
+
+on:
+  pull_request:
+    paths:
+      - 'docs/**'
+      - 'kix/**'
+      - 'cli/Cargo.toml'
+      - '.github/workflows/docs-site.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-site-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docs-site:
+    runs-on: [self-hosted, spindle-8c-16g]
+    timeout-minutes: 30
+    env:
+      NIX_CONFIG: |
+        extra-experimental-features = nix-command flakes pipe-operators
+        accept-flake-config = true
+        access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Check for the kix-examples token
+        id: token
+        env:
+          TOKEN: ${{ secrets.KIX_EXAMPLES_TOKEN }}
+        run: |
+          if [ -n "$TOKEN" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice title=Docs site build skipped::This run has no KIX_EXAMPLES_TOKEN secret, which pull requests from forks and from Dependabot never get. The docs build needs the private kix-examples repository, so it did not run. A maintainer can run this workflow on the branch."
+          fi
+
+      - name: Checkout kix
+        if: steps.token.outputs.present == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: kix
+          fetch-depth: 0
+
+      - name: Checkout kix-examples
+        if: steps.token.outputs.present == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: kix-run/kix-examples
+          token: ${{ secrets.KIX_EXAMPLES_TOKEN }}
+          path: kix-examples
+          fetch-depth: 0
+
+      - name: Build the docs site
+        if: steps.token.outputs.present == 'true'
+        working-directory: kix
+        run: |
+          nix build ./docs#site-main \
+            --override-input kix-examples "git+file://${{ github.workspace }}/kix-examples" \
+            --no-link \
+            --print-build-logs \
+            --show-trace

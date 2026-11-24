@@ -1,0 +1,5 @@
+# 2026-11-23 · `cli/kix-cli/tests/commands_test.rs` · The only way to run `every-package-evaluates` with Helm charts rendered is an ignored Rust test, and five files copy its command.
+
+`cargo test -p kix-cli --test commands_test -- --ignored flake_checks_evaluate_with_helm` appears in the kix-migration, package-authoring, and package-review skills, in `cli/README.md`, and in `.github/workflows/package-checks.yml`. It builds the whole CLI and evaluates every cluster's wiring check, about ten minutes on 8 cores, so an author waits that long to learn whether one package evaluates with its defaults. `scripts/cluster-checks.sh` already runs one cluster's Helm-backed checks through `kix` in the shape that would fit here.
+
+Decision required from Adam: keep the ignored test as the entry point, or add a script beside `scripts/cluster-checks.sh` that runs `every-package-evaluates` (for one package or all) and one cluster's wiring check through `kix`, which the skills, the workflow, and the test would all call.

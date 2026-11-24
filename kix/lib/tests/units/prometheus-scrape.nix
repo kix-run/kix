@@ -568,58 +568,8 @@ let
   };
 
   show = builtins.toJSON;
-  inherit (import ../../plugins/netpol/scrape.nix { inherit lib; }) matchesSelector;
 in
 {
-  prometheus-scrape-label-selector-semantics =
-    let
-      labels = {
-        team = "apps";
-        tier = "web";
-      };
-      cases = [
-        (matchesSelector { } labels)
-        (matchesSelector { matchLabels.team = "apps"; } labels)
-        (!matchesSelector { matchLabels.team = "platform"; } labels)
-        (matchesSelector {
-          matchExpressions = [
-            {
-              key = "team";
-              operator = "In";
-              values = [
-                "apps"
-                "data"
-              ];
-            }
-            {
-              key = "env";
-              operator = "DoesNotExist";
-            }
-          ];
-        } labels)
-        (
-          !matchesSelector {
-            matchExpressions = [
-              {
-                key = "tier";
-                operator = "NotIn";
-                values = [ "web" ];
-              }
-            ];
-          } labels
-        )
-        (matchesSelector {
-          matchExpressions = [
-            {
-              key = "tier";
-              operator = "Exists";
-            }
-          ];
-        } labels)
-      ];
-    in
-    builtins.all (c: c) cases || throw "label selector cases: ${show cases}";
-
   prometheus-scrape-server-egress-has-dns-and-apiserver =
     let
       p = byName "prometheus-server-server-egress" (cnpsOf (clusterWith { }));
@@ -908,7 +858,14 @@ in
     (
       operandIngress byNotIn != null
       && operandIngress byDoesNotExist == null
-      && hasWarning "another ingress policy may isolate only some of the pods behind target apps/pods-operand" byDoesNotExist
+      && hasWarning "scrapes target apps/pods-operand. Another ingress policy may isolate only some of the target's pods" byDoesNotExist
+      && builtins.any (
+        w:
+        lib.hasInfix "Another ingress policy" w.message
+        && (w.object.kind or null) == "Prometheus"
+        && (w.object.namespace or null) == "monitoring"
+        && (w.instance or null) != null
+      ) byDoesNotExist.diagnostics.warnings
     )
     || throw "unknown pods: NotIn ${show (operandIngress byNotIn)}; DoesNotExist ${show (operandIngress byDoesNotExist)}, warnings ${show (warningsOf byDoesNotExist)}";
 

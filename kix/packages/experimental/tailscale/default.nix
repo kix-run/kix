@@ -6,9 +6,7 @@
 # `tailscale`, and network policies for the operand pods the operator creates
 # in this namespace.
 #
-# A cluster runs one instance: the CRDs are cluster-wide, the operator serves
-# loadBalancerClass `tailscale` by that literal name, and its DNS-record
-# handler for Ingresses matches class name `tailscale` literally.
+# A cluster runs one instance. `meta.conflictsWith` gives the reason.
 #
 # Tailscale setup before first deploy:
 #   - In the tailnet policy file, add `tag:k8s-operator` and `tag:k8s`, with
@@ -118,10 +116,6 @@ let
   };
   parentType = type: managedLabels // { "tailscale.com/parent-resource-type" = type; };
 
-  versionParts = t: builtins.match "v?([0-9]+)\\.([0-9]+)(\\..*)?" t;
-  releaseMinor = lib.take 2 (versionParts release);
-  releaseMinorText = lib.concatStringsSep "." releaseMinor;
-
   loginServerPattern = "https://[^/:]+(:443)?(/.*)?";
 
   declaredProxyClasses =
@@ -148,7 +142,12 @@ in
     description = "Tailscale Kubernetes operator: exposes Services and Ingresses on a tailnet and runs subnet routers, egress proxies, and API server proxies from tailscale.com resources";
     owner = "platform";
     defaultAliases = [ "tailscale" ];
-    conflictsWith = [ "cluster:tailscale" ];
+    conflictsWith = [
+      {
+        key = "cluster:tailscale";
+        reason = "The operator watches cluster-wide tailscale.com resources, Services with loadBalancerClass \"tailscale\", and Ingresses with IngressClass \"tailscale\" across all namespaces, so two instances would compete for the same objects.";
+      }
+    ];
     annotationDomains = [ "tailscale.com" ];
     podSecurity = "privileged";
     unsafe = [ "privileged" ];
@@ -193,14 +192,12 @@ in
           !(builtins.isString loginServer) || builtins.match loginServerPattern loginServer != null;
         message = "env.OPERATOR_LOGIN_SERVER = \"${toString loginServer}\" is not an https URL on port 443 (${loginServerPattern}). The operator's egress policy allows TCP 443 and UDP 3478 only; serve the control server over https on 443.";
       }
-      {
-        assertion =
-          let
-            imageTag = builtins.unsafeDiscardStringContext config.image.tag;
-          in
-          versionParts imageTag != null && lib.take 2 (versionParts imageTag) == releaseMinor;
-        message = "image.tag \"${builtins.unsafeDiscardStringContext config.image.tag}\" is not a ${releaseMinorText} release, and the CRDs under kix/packages/experimental/tailscale/crds and the rules in kix/packages/experimental/tailscale/rbac.nix come from ${release}. Remove image.tag or set a v${releaseMinorText} tag. To move to another release, change release in kix/packages/experimental/tailscale/default.nix and the tag in crds/sources.txt, run uv run scripts/vendor-crds.py tailscale, and compare rbac.nix with that release's operator-rbac.yaml and proxy-rbac.yaml.";
-      }
+      (kix.image.checkRelease {
+        inherit (config) image;
+        inherit release;
+        reason = "the CRDs in kix/packages/experimental/tailscale/crds and the RBAC rules in kix/packages/experimental/tailscale/rbac.nix come from ${tag}";
+        fix = "To update this package to another version, change release in kix/packages/experimental/tailscale/default.nix and the tag in crds/sources.txt, run uv run scripts/vendor-crds.py tailscale, and compare rbac.nix against operator-rbac.yaml and proxy-rbac.yaml for that version.";
+      })
       (reservedKeys "proxyClasses" "scope.mkCR tailscale.out.crds.ProxyClass" (
         builtins.attrNames config.proxyClasses
       ))
@@ -275,7 +272,6 @@ in
               POD_UID = fieldRef "metadata.uid";
             };
             from = "the pod's own metadata";
-            fix = "Remove them from env.";
           }
           {
             vars = {
@@ -283,7 +279,6 @@ in
               XDG_CONFIG_HOME = "/config";
             };
             from = "the package: the operator keeps its tailnet state in a Secret its Role may write and its files in the writable /config volume";
-            fix = "Remove them from env.";
           }
           {
             vars.OPERATOR_INGRESS_CLASS_NAME = self.ingressClass.out.name;
@@ -312,17 +307,17 @@ in
           )
           {
             names = [ "CLIENT_ID" ];
-            from = "the oauthCredentials dependency in this package; CLIENT_ID selects workload identity federation, which needs serviceaccounts/token RBAC the package does not grant";
+            reason = "setting CLIENT_ID directly enables workload identity federation, and the operator has no serviceaccounts/token RBAC permissions.";
             fix = "Wire an OAuth client through deps.oauthCredentials.";
           }
           {
             names = [ "APISERVER_PROXY" ];
-            from = "a kube-apiserver ProxyGroup in this package; the operator's in-process API server proxy needs impersonation RBAC the package does not grant";
-            fix = "Build one with out.mkProxyGroup, spec.type = \"kube-apiserver\" and spec.kubeAPIServer.mode = \"noauth\".";
+            reason = "the operator's in-process API server proxy requires impersonation RBAC permissions not granted to the operator.";
+            fix = "Remove APISERVER_PROXY from env. To expose the API server on the tailnet, build a ProxyGroup with out.mkProxyGroup using spec.type = \"kube-apiserver\" and spec.kubeAPIServer.mode = \"noauth\".";
           }
           {
             names = [ "OPERATOR_DEFAULT_LOAD_BALANCER" ];
-            from = "each Service's loadBalancerClass in this package; the variable makes the operator claim every LoadBalancer Service without a class, which is the cluster's loadBalancer role";
+            reason = "Tailscale would claim every LoadBalancer Service without a loadBalancerClass, taking over Services meant for the cluster's default load balancer (the loadBalancer role).";
             fix = "Set loadBalancerClass = tailscale.out.loadBalancerClass on the Services you want on the tailnet.";
           }
           {
@@ -334,7 +329,7 @@ in
 
         env = kix.mkEnvVars (
           kix.mergeEnv {
-            inherit who;
+            inherit scope;
             owned = ownedEnv;
           } config.env
         );
@@ -381,7 +376,6 @@ in
           inherit
             lib
             kix
-            who
             ns
             managedLabels
             config
@@ -685,8 +679,6 @@ in
     (
       let
         sel = ''namespace="${ns}",service="${name}-metrics"'';
-        reconcileErrors = "sum by (namespace, service, controller) (increase(controller_runtime_reconcile_errors_total{${sel}}[30m]))";
-        reconciles = "sum by (namespace, service, controller) (increase(controller_runtime_reconcile_total{${sel}}[30m]))";
         operator = "Tailscale operator ${ns}/${name}";
       in
       kix.monitor {
@@ -699,15 +691,12 @@ in
             summary = "The Tailscale operator is down.";
             description = "The ${operator} has not answered a scrape for 10 minutes. Running proxies keep serving, but new or changed Services, Ingresses, and tailscale.com resources are not acted on. Check the operator Deployment in ${ns}.";
           };
-          TailscaleOperatorReconcileErrors = {
-            # controller-runtime counts an optimistic-lock conflict as an error
-            # and retries at once, so a busy healthy controller shows a few.
-            # Alert on the share of reconciles that fail, with a floor.
-            expr = "${reconcileErrors} / ${reconciles} > 0.1 and ${reconcileErrors} > 2";
-            "for" = "15m";
-            severity = "warning";
+          TailscaleOperatorReconcileErrors = kix.reconcileErrorsAlert {
+            selector = sel;
+            operator = operator;
             summary = "The Tailscale operator fails to reconcile resources.";
-            description = "The {{ $labels.controller }} controller of the ${operator} has failed {{ $value | humanizePercentage }} of its reconciles over the last 30 minutes, so a proxy or tailnet device may not match its resource. The operator log names the error; a refused OAuth client or a tailnet API error is the usual cause.";
+            impact = "a proxy or tailnet device may not match its Kubernetes resource";
+            nextStep = "Check the operator logs for the error. Common causes are rejected OAuth client credentials or tailnet API errors.";
           };
         };
       }

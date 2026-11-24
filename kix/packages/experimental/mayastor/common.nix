@@ -8,7 +8,7 @@
 }:
 
 rec {
-  # meta.version, the version check on image.tag, and the DiskPool CRD
+  # meta.version, the release check on each image tag, and the DiskPool CRD
   # version and RBAC in this package are written for this release.
   release = "2.12.2";
 
@@ -67,22 +67,6 @@ rec {
         "node.kubernetes.io/unreachable"
         "node.kubernetes.io/not-ready"
       ];
-
-  imageRef =
-    image:
-    let
-      minor = v: builtins.match "v?([0-9]+)\\.([0-9]+)\\..*" v;
-      tag = builtins.unsafeDiscardStringContext image.tag;
-    in
-    if minor tag != minor release then
-      scope.fail {
-        package = "mayastor";
-        option = "image.tag";
-        message = "image tag \"${tag}\" is not a ${lib.concatStringsSep "." (minor release)} release, and the DiskPool CRD version and the RBAC in kix/packages/experimental/mayastor are written for ${release}.";
-        fix = "To move to another release, change release in kix/packages/experimental/mayastor/common.nix.";
-      }
-    else
-      kix.image.ref image;
 
   # The addresses components dial. Each is built from a Service's
   # `out.fqdn` or `out.url`, which carry the endpoint that network policy
@@ -158,15 +142,14 @@ rec {
     base
     ++ dropOverridden tunables extraArgs
     ++ kix.guardArgs {
-      inherit who option owned;
+      inherit scope option owned;
     } extraArgs;
 
   fieldRef = path: { valueFrom.fieldRef.fieldPath = path; };
 
   # A component's env: `defaults` the instance may override or remove,
   # then the instance's `env`, then the variables the package owns.
-  # `option` is the instance's env option, which the refusal names because
-  # `kix.mergeEnv`'s message names only the variable.
+  # `option` is the instance's env option, which the refusal names.
   env =
     {
       option,
@@ -176,15 +159,11 @@ rec {
     instanceEnv:
     kix.mkEnvVars (
       kix.mergeEnv {
-        inherit who defaults;
+        inherit scope option defaults;
         owned = lib.optional (owned != { }) {
           vars = owned;
           from = "the pod's Downward API fields, which the package's flags and the program read";
-          fix = "Remove it from ${option}.";
         };
       } instanceEnv
     );
-
-  # A toleration from the `tolerations` option type in default.nix.
-  toleration = t: lib.filterAttrs (_: v: v != null) t;
 }

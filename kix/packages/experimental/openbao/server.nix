@@ -212,7 +212,7 @@ let
   ]
   ++ kix.mkEnvVars (
     kix.mergeEnv {
-      inherit who;
+      inherit scope;
       owned = [
         {
           vars = {
@@ -240,7 +240,6 @@ let
             "BAO_STATIC_SEAL_PREVIOUS_KEY_ID"
           ];
           from = "the package, which derives the addresses, the Raft node, and the seal from the StatefulSet and the seal options";
-          fix = "Remove it from env.";
         }
       ];
     } config.env

@@ -131,7 +131,6 @@ let
 
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "stackgres-operator ${ns}/${name}";
 
   group = "stackgres.io";
   # Quarkus serves HTTP on 8080 beside the webhooks' HTTPS on 8443.
@@ -325,8 +324,8 @@ in
         sgConfigSpec =
           kix.mergeGuarded
             {
-              inherit who;
-              what = "sgConfig";
+              inherit scope;
+              option = "sgConfig";
               locked = [
                 [ "containerRegistry" ]
                 [ "imagePullPolicy" ]
@@ -362,7 +361,7 @@ in
 
         env = kix.mkEnvVars (
           kix.mergeEnv {
-            inherit who;
+            inherit scope;
             owned = [
               {
                 vars = {
@@ -507,19 +506,6 @@ in
             namespace = ns;
           }
         ];
-
-        # Each CRD reference adds the webhook check to the requires of every
-        # custom resource built from it.
-        withCheck = args: args // { requires = (args.requires or [ ]) ++ [ self.webhookCheck ]; };
-        gate =
-          crd:
-          crd
-          // {
-            out = crd.out // {
-              cr = args: crd.out.cr (withCheck args);
-              mkCR = consumerScope: args: crd.out.mkCR consumerScope (withCheck args);
-            };
-          };
 
         manage = allow [
           "get"
@@ -839,7 +825,6 @@ in
           # when its own content changes. The checksum annotations below put
           # the content of the webhook and of what serves it into that
           # content, so the check runs again when any of them changes.
-          annotations.${kix.keys.rerun} = kix.keyValues.rerunOnChange;
           requires =
             builtins.attrValues self.webhookCheckClusterRole ++ builtins.attrValues self.webhookCheckRole;
           spec = {
@@ -930,78 +915,77 @@ in
         crds = lib.mapAttrs' (
           kind: k:
           lib.nameValuePair k.part (
-            gate (
-              scope.mkCRDRef (
-                {
-                  inherit group kind;
-                  inherit (k) plural version;
-                  servedVersions = k.servedVersions or null;
-                  readiness = k.readiness or null;
-                  inherit (k) holdsData;
-                  installedBy = self.operatorDeployment;
-                }
-                // lib.optionalAttrs (kind == "SGCluster") {
-                  # The operand pods dial the addresses in an SGCluster spec,
-                  # including an SGObjectStorage endpoint it references.
-                  factBehavior = {
-                    endpoint = "terminate";
-                    podSelector = cr: operandSelectors.sgCluster cr.metadata.name;
-                  };
-                }
-                // lib.optionalAttrs (kind == "SGCluster") {
-                  # Count `spec.instances` pods, lowered to
-                  # `spec.autoscaling.minInstances` when horizontal autoscaling is
-                  # active (`mode` is `"all"`, the default, or `"horizontal"`) and to
-                  # 1 when replicas initialize from a newly created backup. Each
-                  # pod has one claim of `spec.pods.persistentVolume.size`. Pod
-                  # resources are not counted because they live on the
-                  # referenced `SGInstanceProfile`.
-                  usesAtLeast =
-                    cr:
-                    let
-                      spec = cr.spec or { };
-                      autoscaling = spec.autoscaling or null;
-                      scales =
-                        autoscaling != null
-                        && builtins.elem (autoscaling.mode or "all") [
-                          "all"
-                          "horizontal"
-                        ];
-                      fromNewBackup = (spec.replication.initialization.mode or null) == "FromNewlyCreatedBackup";
-                      pods = lib.foldl' lib.min (spec.instances or 0) (
-                        lib.optional scales (autoscaling.minInstances or 0) ++ lib.optional fromNewBackup 1
-                      );
-                    in
-                    kix.usage.times pods {
-                      pods = 1;
-                      persistentvolumeclaims = 1;
-                      "requests.storage" = spec.pods.persistentVolume.size or null;
-                    };
-                }
-                // lib.optionalAttrs (kind == "SGDistributedLogs") {
-                  # Count the single-instance `SGCluster` created for distributed
-                  # logs, with its one claim of `spec.persistentVolume.size`.
-                  usesAtLeast = cr: {
+            scope.mkCRDRef (
+              {
+                inherit group kind;
+                inherit (k) plural version;
+                servedVersions = k.servedVersions or null;
+                readiness = k.readiness or null;
+                inherit (k) holdsData;
+                installedBy = self.operatorDeployment;
+                crRequires = [ self.webhookCheck ];
+              }
+              // lib.optionalAttrs (kind == "SGCluster") {
+                # The operand pods dial the addresses in an SGCluster spec,
+                # including an SGObjectStorage endpoint it references.
+                factBehavior = {
+                  endpoint = "terminate";
+                  podSelector = cr: operandSelectors.sgCluster cr.metadata.name;
+                };
+              }
+              // lib.optionalAttrs (kind == "SGCluster") {
+                # Count `spec.instances` pods, lowered to
+                # `spec.autoscaling.minInstances` when horizontal autoscaling is
+                # active (`mode` is `"all"`, the default, or `"horizontal"`) and to
+                # 1 when replicas initialize from a newly created backup. Each
+                # pod has one claim of `spec.pods.persistentVolume.size`. Pod
+                # resources are not counted because they live on the
+                # referenced `SGInstanceProfile`.
+                usesAtLeast =
+                  cr:
+                  let
+                    spec = cr.spec or { };
+                    autoscaling = spec.autoscaling or null;
+                    scales =
+                      autoscaling != null
+                      && builtins.elem (autoscaling.mode or "all") [
+                        "all"
+                        "horizontal"
+                      ];
+                    fromNewBackup = (spec.replication.initialization.mode or null) == "FromNewlyCreatedBackup";
+                    pods = lib.foldl' lib.min (spec.instances or 0) (
+                      lib.optional scales (autoscaling.minInstances or 0) ++ lib.optional fromNewBackup 1
+                    );
+                  in
+                  kix.usage.times pods {
                     pods = 1;
                     persistentvolumeclaims = 1;
-                    "requests.storage" = cr.spec.persistentVolume.size or null;
+                    "requests.storage" = spec.pods.persistentVolume.size or null;
                   };
-                }
-                # Profiles, configurations, storage definitions, and scripts
-                # are read by the clusters that name them and run no pods.
-                // lib.optionalAttrs (builtins.elem kind [
-                  "SGInstanceProfile"
-                  "SGObjectStorage"
-                  "SGPoolingConfig"
-                  "SGPostgresConfig"
-                  "SGScript"
-                ]) { usesAtLeast = _: { }; }
-                // lib.optionalAttrs (kind == "SGObjectStorage") {
-                  # No pod dials the endpoint for the SGObjectStorage; the
-                  # SGCluster that references it carries the address on.
-                  factBehavior.endpoint = "conduct";
-                }
-              )
+              }
+              // lib.optionalAttrs (kind == "SGDistributedLogs") {
+                # Count the single-instance `SGCluster` created for distributed
+                # logs, with its one claim of `spec.persistentVolume.size`.
+                usesAtLeast = cr: {
+                  pods = 1;
+                  persistentvolumeclaims = 1;
+                  "requests.storage" = cr.spec.persistentVolume.size or null;
+                };
+              }
+              # Profiles, configurations, storage definitions, and scripts
+              # are read by the clusters that name them and run no pods.
+              // lib.optionalAttrs (builtins.elem kind [
+                "SGInstanceProfile"
+                "SGObjectStorage"
+                "SGPoolingConfig"
+                "SGPostgresConfig"
+                "SGScript"
+              ]) { usesAtLeast = _: { }; }
+              // lib.optionalAttrs (kind == "SGObjectStorage") {
+                # No pod dials the endpoint for the SGObjectStorage; the
+                # SGCluster that references it carries the address on.
+                factBehavior.endpoint = "conduct";
+              }
             )
           )
         ) referencedKinds;

@@ -102,7 +102,6 @@ let
 
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "cnpg-pooler ${ns}/${name}";
 
   # The Pooler fields this package writes are those of CloudNativePG 1.30.
   supportedRelease = "1.30";
@@ -290,7 +289,7 @@ in
       };
 
       spec = kix.mergeGuarded {
-        inherit who locked;
+        inherit scope locked;
       } baseSpec config.extraSpec;
 
       # Read only when the scope has an enforcer (kix.operandPolicy).

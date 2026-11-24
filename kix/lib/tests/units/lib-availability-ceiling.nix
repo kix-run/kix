@@ -452,8 +452,8 @@ in
     (evalFails (clusterWith [ multiZone ] { package = pkg "node"; })) && resultAt "pod" == "true"
     || throw "atLeast above the package ceiling was accepted, or atLeast at the ceiling failed";
 
-  # meta.availability takes only `max`; anything else fails rather than
-  # being ignored.
+  # meta.availability takes only `max` and `reason`; anything else fails
+  # rather than being ignored.
   lib-availability-ceiling-meta-availability-unknown-key =
     (evalFails (
       clusterWith [ multiZone ] {
@@ -477,4 +477,48 @@ in
     ))
     && builds [ multiZone ] { package = appPackage { packageMax = "pod"; }; }
     || throw "an unknown meta.availability key was accepted";
+
+  # A ceiling's `reason` reaches the warning about the capped level, from
+  # the package and from a builder call. A reason that is not a string fails.
+  lib-availability-ceiling-reason-in-warnings =
+    let
+      warningsOf = instance: map (w: w.message) (clusterWith [ multiZone ] instance).diagnostics.warnings;
+      saysReason = reason: builtins.any (lib.hasInfix "Reason: ${reason}");
+      fromPackage = warningsOf {
+        package = appPackage { } // {
+          meta = {
+            version = "test";
+            availability = {
+              max = "none";
+              reason = "One SQLite writer.";
+            };
+          };
+        };
+        availability = "pod";
+      };
+      fromBuilder = warningsOf {
+        package = appPackage {
+          availability = {
+            max = "none";
+            reason = "No leader election.";
+          };
+        };
+        availability = "pod";
+      };
+    in
+    (
+      saysReason "One SQLite writer." fromPackage
+      && saysReason "No leader election." fromBuilder
+      && evalFails (
+        clusterWith [ multiZone ] {
+          package = appPackage {
+            availability = {
+              max = "none";
+              reason = 1;
+            };
+          };
+        }
+      )
+    )
+    || throw "ceiling reason: package ${builtins.toJSON fromPackage}, builder ${builtins.toJSON fromBuilder}";
 }

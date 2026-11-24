@@ -496,21 +496,12 @@ fn readiness_of(obj: &DynamicObject) -> Readiness {
     }
 }
 
-/// Return the identity hashes `kix.run/depends-on` lists, without the
-/// `<relation>:` prefix an entry may carry.
 fn depends_on(obj: &DynamicObject) -> impl Iterator<Item = &str> {
-    annotation(obj, keys::DEPENDS_ON)
-        .unwrap_or("")
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(|s| s.rsplit_once(':').map_or(s, |(_, hash)| hash))
+    keys::depends_on_hashes(annotation(obj, keys::DEPENDS_ON).unwrap_or(""))
 }
 
 fn package_of(obj: &DynamicObject) -> Option<String> {
-    let name = annotation(obj, keys::PACKAGE)?;
-    let namespace = annotation(obj, keys::PACKAGE_NAMESPACE)?;
-    Some(format!("{namespace}/{name}"))
+    keys::package_of_meta(obj.metadata.annotations.as_ref()?)
 }
 
 fn annotation<'a>(obj: &'a DynamicObject, key: &str) -> Option<&'a str> {

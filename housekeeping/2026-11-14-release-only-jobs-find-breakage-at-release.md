@@ -14,6 +14,12 @@ Options:
    archive build per such pull request.
 2. Run the release jobs nightly on main with `workflow_dispatch`, and open an
    issue when they fail. It is cheap, but a break still lands on main first.
+   A `schedule` trigger added to `cli-tests.yml` itself would share the
+   `cli-tests-refs/heads/main` concurrency group, so a scheduled run could
+   replace a release run that is waiting to start. It needs its own group,
+   or a small workflow that starts `cli-tests.yml` by dispatch. It also
+   holds the Mac Studio runners (`kix-linux-nix`, `kix-macos-nix`) each
+   night.
 3. Keep it as it is, and run the release jobs by hand
    (`gh workflow run cli-tests.yml -f rehearse=...`) before a release.
 

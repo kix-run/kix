@@ -52,7 +52,7 @@ use kix::cluster::binding;
 use kix::cluster::discovery;
 use kix::cluster::graph::ResourceGraph;
 use kix::cluster::inventory;
-use kix::cluster::prune_guard::{PruneGuard, Pruned};
+use kix::cluster::prune_guard::{self, Pruned, Removal};
 use kix::eval::store;
 use kix::eval::store_graph::store_hash;
 use kix::manifest::keys;
@@ -662,70 +662,58 @@ async fn delete_records(retirement: &RecordRetirement) -> Result<(usize, usize)>
 pub(super) struct Deletions {
     pub(super) deleted: usize,
     pub(super) failed: usize,
-    /// Resources skipped by [`PruneGuard`] because they changed after being
+    /// Resources skipped by [`prune_guard::PruneGuard`] because they changed after being
     /// read; their presence prevents `clear_kept` from clearing `orphansKeptFrom`.
     pub(super) changed: usize,
 }
 
-/// Delete `resources` for `cluster` in order via [`PruneGuard`], skipping kinds
-/// protected by `lifecycle::never_pruned`.
+/// Delete `resources` for `cluster` in order through
+/// [`prune_guard::delete_in_order`], printing a line for each object.
 pub(super) async fn delete_resources(
     client: &kube::Client,
     cluster: &str,
     resources: &[ResourceId],
 ) -> Result<Deletions> {
-    let (resources, kept) = split_never_pruned(resources.to_vec());
-    for rid in &kept {
-        eprintln!(
-            "  {} {}: never deleted automatically; skipping it",
-            output::yellow("!"),
-            rid
-        );
-    }
-    let mut done = Deletions::default();
-    if resources.is_empty() {
-        return Ok(done);
-    }
-    let discovery = discovery::discover_resources(client)
+    let removals = prune_guard::delete_in_order(client, cluster, resources)
         .await
         .map_err(|e| miette!("{e}"))?;
-    let records = Records::open(client, &discovery).map_err(|e| miette!("{e}"))?;
-    let guard = PruneGuard::new(client.clone(), records, cluster);
-
-    for rid in &resources {
-        let Some((ar, scope)) = discovery::find(&discovery, &rid.group, &rid.kind) else {
-            eprintln!(
-                "  {} {}: Kubernetes does not recognize this kind; skipping it",
-                output::red("!"),
-                rid
-            );
-            done.failed += 1;
-            continue;
-        };
-        match guard
-            .delete(ar, scope, rid, &kube::api::DeleteParams::default())
-            .await
-        {
-            Ok(Pruned::Deleted) => {
+    let mut done = Deletions::default();
+    for (rid, removal) in &removals {
+        match removal {
+            Removal::NeverPruned => {
+                eprintln!(
+                    "  {} {}: kept because Kix never deletes this kind automatically. Delete it with `kubectl` if you want to remove it.",
+                    output::yellow("!"),
+                    rid
+                );
+            }
+            Removal::UnknownKind => {
+                eprintln!(
+                    "  {} {}: not deleted because Kubernetes does not recognize its kind. If its CustomResourceDefinition was removed, Kubernetes already deleted this object with it. Run `kix gc --full-scan` instead to check only objects still on the cluster.",
+                    output::red("!"),
+                    rid
+                );
+                done.failed += 1;
+            }
+            Removal::Pruned(Pruned::Deleted) => {
                 println!("  {} deleted {}", output::red("-"), rid);
                 done.deleted += 1;
             }
-            Ok(Pruned::Gone) => {
+            Removal::Pruned(Pruned::Gone) => {
                 println!("  {} {} already gone", output::dim("="), rid);
             }
-            Ok(outcome @ (Pruned::Kept(_) | Pruned::Changed(_))) => {
+            Removal::Pruned(outcome @ (Pruned::Kept(_) | Pruned::Changed(_))) => {
                 if matches!(outcome, Pruned::Changed(_)) {
                     done.changed += 1;
                 }
                 let reason = outcome.kept_reason().unwrap_or_default();
                 println!("  {} prune: {reason}", output::yellow("="));
             }
-            Err(e) => {
+            Removal::Failed(e) => {
                 eprintln!("  {} {}: {}", output::red("!"), rid, e);
                 done.failed += 1;
             }
         }
     }
-
     Ok(done)
 }

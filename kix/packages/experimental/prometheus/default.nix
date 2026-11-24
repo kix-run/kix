@@ -76,7 +76,6 @@ let
   release = "v3.16.0";
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "prometheus ${ns}/${name}";
 
   replicas = kix.availability.pick availability {
     none = 1;
@@ -89,7 +88,7 @@ let
 in
 {
   meta = {
-    version = lib.removePrefix "v" release;
+    version = release;
     description = "Prometheus time-series database";
     owner = "platform";
     defaultAliases = [ "prometheusServer" ];
@@ -247,7 +246,7 @@ in
       };
 
       spec = kix.mergeGuarded {
-        inherit who;
+        inherit scope;
         locked = [
           [ "image" ]
           [ "version" ]

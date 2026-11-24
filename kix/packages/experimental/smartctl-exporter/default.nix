@@ -103,7 +103,7 @@ let
   device = "{{ $labels.device }} on the node of pod {{ $labels.pod }}";
 in
 {
-  meta.version = lib.removePrefix "v" release;
+  meta.version = release;
   meta.description = "smartctl_exporter from the upstream Helm chart, a privileged DaemonSet that exports SMART disk health metrics to Prometheus";
   meta.owner = "platform";
   # smartctl reads SMART data from the node's block devices, which needs a

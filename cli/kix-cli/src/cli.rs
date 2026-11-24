@@ -92,7 +92,7 @@ pub struct GlobalArgs {
 impl GlobalArgs {
     /// Pair the `--override-input NAME URL` tokens into `(name, url)` tuples.
     ///
-    /// Both clap (for the flag) and `override_input_from_env` (for
+    /// Both clap (for the flag) and [`override_input_env`] (for
     /// `KIX_OVERRIDE_INPUT`) guarantee an even number of elements.
     ///
     /// When this run's cluster uses another input than `kix`
@@ -119,6 +119,43 @@ impl GlobalArgs {
         }
         pairs
     }
+}
+
+/// Return the words of `KIX_OVERRIDE_INPUT`, which `--override-input` falls
+/// back to, or no words when it is unset. Both the version selection and the
+/// command read the variable here, so they run with the same overrides.
+///
+/// Clap does not read the variable because a space delimiter on the argument
+/// would also split `--override-input` values that hold spaces (such as
+/// `path:` URLs).
+pub fn override_input_env() -> miette::Result<Vec<String>> {
+    match std::env::var_os("KIX_OVERRIDE_INPUT") {
+        Some(value) => override_input_words(&value),
+        None => Ok(Vec::new()),
+    }
+}
+
+/// Split `value` into pairs of an input name and a URL. Refuse a value that
+/// is not UTF-8 or that leaves a name without a URL.
+fn override_input_words(value: &std::ffi::OsStr) -> miette::Result<Vec<String>> {
+    let words: Vec<String> = value
+        .to_str()
+        .ok_or_else(|| {
+            miette::miette!(
+                "KIX_OVERRIDE_INPUT is not valid UTF-8. Nothing was built or changed.\n\
+                 Next: set KIX_OVERRIDE_INPUT to space-separated `<INPUT> <URL>` pairs, unset it, or pass `--override-input <INPUT> <URL>`."
+            )
+        })?
+        .split_whitespace()
+        .map(str::to_owned)
+        .collect();
+    if !words.len().is_multiple_of(2) {
+        return Err(miette::miette!(
+            "KIX_OVERRIDE_INPUT must contain space-separated `<INPUT> <URL>` pairs, but it has an odd number of words (a missing URL, or a URL with spaces). Nothing was built or changed.\n\
+             Next: give every input in KIX_OVERRIDE_INPUT a URL, unset KIX_OVERRIDE_INPUT, or pass `--override-input <INPUT> <URL>` (required when a URL contains spaces)."
+        ));
+    }
+    Ok(words)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -357,6 +394,22 @@ impl Command {
 mod tests {
     use super::*;
     use clap::FromArgMatches;
+
+    #[test]
+    fn override_input_env_holds_pairs() {
+        use std::ffi::OsStr;
+        assert_eq!(
+            override_input_words(OsStr::new(" kix path:/x  nixpkgs path:/n ")).unwrap(),
+            ["kix", "path:/x", "nixpkgs", "path:/n"]
+        );
+        assert!(override_input_words(OsStr::new("")).unwrap().is_empty());
+        assert!(override_input_words(OsStr::new("kix path:/x nixpkgs")).is_err());
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            assert!(override_input_words(OsStr::from_bytes(b"kix \xff")).is_err());
+        }
+    }
 
     /// Return a command line for the command at `path` that gives every
     /// required argument a value, with `first` as the first positional.

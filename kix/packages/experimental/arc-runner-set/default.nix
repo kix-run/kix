@@ -211,7 +211,7 @@ in
         ];
       };
 
-      env = kix.mkEnvVars (kix.mergeEnv { inherit who; } config.env);
+      env = kix.mkEnvVars (kix.mergeEnv { inherit scope; } config.env);
       runner = {
         name = "runner";
         image = kix.image.ref config.image;
@@ -254,7 +254,7 @@ in
       };
 
       spec = lib.recursiveUpdate (kix.mergeGuarded {
-        inherit who locked;
+        inherit scope locked;
       } baseSpec extraWithoutContainers) { template.spec = { inherit containers; }; };
 
       parts =

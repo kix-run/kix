@@ -633,13 +633,39 @@ in
     ]
   );
 
-  v07-duplicate-identity = onlyFailure "Duplicate resource: ConfigMap/a/same" (
+  v07-duplicate-identity = onlyFailure "Duplicate resource: ConfigMap/a/same." (
     base "a"
     ++ [
       (res "ConfigMap" "a" "same" { data.k = "1"; })
       (res "ConfigMap" "a" "same" { data.k = "2"; })
     ]
   );
+
+  # The duplicate-resource failure names each instance that builds the
+  # object, and tells the user to remove one or rename the object.
+  v07-duplicate-identity-names-instances =
+    let
+      ms = [
+        (res "PriorityClass" null "high" { apiVersion = "scheduling.k8s.io/v1"; })
+        (res "PriorityClass" null "high" { apiVersion = "scheduling.k8s.io/v1"; })
+      ];
+      fs = map validate.failureText (
+        validate.crossResourceFailures {
+          manifests = ms;
+          identityHashes = map idOf ms;
+          owners = [
+            "a/high"
+            "b/high"
+          ];
+        }
+      );
+    in
+    (
+      fs == [
+        "Duplicate resource: PriorityClass/cluster-scoped/high. Built by instances: a/high, b/high.\nFix: Remove one of these instances, or configure them to use different names for this resource. Two resources of the same kind cannot share a name in the same namespace (or anywhere in the cluster for cluster-scoped resources)."
+      ]
+    )
+    || throw "duplicate with owners: ${builtins.toJSON fs}";
 
   v08-managed-by-label = onlyFailure "missing app.kubernetes.io/managed-by=kix" (
     base "a"
@@ -760,8 +786,8 @@ in
 
   p14-pdb-selects-pod-template = clean (base "a" ++ [ (pdb "a" "web" podLabels { }) ]);
 
-  # matchExpressions-only selectors have no matchLabels to resolve.
-  p14b-pdb-without-matchlabels-is-skipped = clean (
+  # A matchExpressions-only selector is resolved like any other.
+  p14b-pdb-matchexpressions-selects-pod-template = clean (
     base "a"
     ++ [
       (pdb "a" "expr" { } {
@@ -777,6 +803,74 @@ in
       })
     ]
   );
+
+  v14d-pdb-matchexpressions-selects-nothing = onlyFailure "PodDisruptionBudget a/expr selector" (
+    base "a"
+    ++ [
+      (pdb "a" "expr" { } {
+        spec.selector = {
+          matchExpressions = [
+            {
+              key = "app";
+              operator = "NotIn";
+              values = [ "web" ];
+            }
+          ];
+        };
+      })
+    ]
+  );
+
+  v25-selector-operator-is-not-valid =
+    onlyFailure
+      "[K1895] PodDisruptionBudget a/bad has an invalid label selector in spec.selector, so Kix stopped the build: the matchExpressions entry for key 'app' sets operator 'Equals'"
+      (
+        base "a"
+        ++ [
+          (pdb "a" "bad" { } {
+            spec.selector.matchExpressions = [
+              {
+                key = "app";
+                operator = "Equals";
+                values = [ "web" ];
+              }
+            ];
+          })
+        ]
+      );
+
+  v12c-networkpolicy-matchexpressions-selects-nothing =
+    onlyFailure "[K1895] NetworkPolicy a/np podSelector"
+      (
+        base "a"
+        ++ [
+          (res "NetworkPolicy" "a" "np" {
+            apiVersion = "networking.k8s.io/v1";
+            spec.podSelector.matchExpressions = [
+              {
+                key = "app";
+                operator = "DoesNotExist";
+              }
+            ];
+          })
+        ]
+      );
+
+  v09b-selector-expression-outside-template-labels =
+    onlyFailure "does not match pod template labels"
+      (
+        base "a"
+        ++ [
+          (deployment "a" "api" {
+            spec.selector.matchExpressions = [
+              {
+                key = "tier";
+                operator = "Exists";
+              }
+            ];
+          })
+        ]
+      );
 
   p14c-pdb-over-ref-pods = clean (
     base "a"

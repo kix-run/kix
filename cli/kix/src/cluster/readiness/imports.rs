@@ -1,6 +1,6 @@
 //! Readiness checks for import markers and resource expectations.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use kube::{
     api::{Api, DynamicObject},
@@ -8,6 +8,7 @@ use kube::{
     discovery::{ApiResource, Scope},
 };
 use serde_json::Value;
+use tokio::time::Instant;
 
 use super::super::cancel::CancelToken;
 use super::super::errors::{FailureClass, classify};

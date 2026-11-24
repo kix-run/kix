@@ -267,7 +267,7 @@ in
                         })
                         ++ kix.mkEnvVars (
                           kix.mergeEnv {
-                            who = "vaultwarden ${scope.namespaceName}/${name}";
+                            inherit scope;
                             defaults = {
                               SIGNUPS_ALLOWED = "false";
                               INVITATIONS_ALLOWED = "true";

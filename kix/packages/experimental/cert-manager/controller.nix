@@ -17,14 +17,8 @@ let
   labels = (common.labels name).controller;
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = common.who scope;
   metricsOn = config.metrics.enabled && prometheus != null;
-  acmesolverImage = kix.image.ref (
-    common.checkRelease who config [
-      "operandImages"
-      "acmesolver"
-    ]
-  );
+  acmesolverImage = kix.image.ref config.operandImages.acmesolver;
 
   inherit (scope.rbac)
     group
@@ -380,7 +374,7 @@ in
           containers = [
             {
               name = "cert-manager-controller";
-              image = kix.image.ref (common.checkRelease who config [ "image" ]);
+              image = kix.image.ref config.image;
               imagePullPolicy = config.image.pullPolicy;
               args = [
                 "--v=2"
@@ -389,7 +383,7 @@ in
                 "--acme-http01-solver-image=${acmesolverImage}"
               ]
               ++ kix.guardArgs {
-                inherit who;
+                inherit scope;
                 owned = {
                   "--cluster-resource-namespace" =
                     "the controller reads ClusterIssuer Secrets from the instance's namespace (out.clusterResourceNamespace); remove it.";
@@ -415,7 +409,7 @@ in
               # Kubernetes leaves an undefined variable unexpanded.
               env = kix.mkEnvVars (
                 kix.mergeEnv {
-                  inherit who;
+                  inherit scope;
                   owned = [
                     {
                       vars.POD_NAMESPACE.valueFrom.fieldRef.fieldPath = "metadata.namespace";

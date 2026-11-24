@@ -399,8 +399,8 @@ in
             }
           else
             kix.mergeGuarded {
-              inherit who;
-              what = "settings";
+              inherit scope;
+              option = "settings";
               locked = map (l: lib.splitString "." l.path) lockedPaths;
             } builtinSettings config.settings;
 
@@ -493,7 +493,7 @@ in
                         ];
                         env = kix.mkEnvVars (
                           kix.mergeEnv {
-                            inherit who;
+                            inherit scope;
                             owned = [
                               {
                                 vars = {
@@ -502,7 +502,6 @@ in
                                   FALCO_HOSTNAME.valueFrom.fieldRef.fieldPath = "spec.nodeName";
                                 };
                                 from = "the package, which mounts the host's paths under ${hostRoot} and names each alert's node";
-                                fix = "Remove it from env.";
                               }
                             ];
                           } config.env

@@ -45,6 +45,7 @@ let
       kixlib
       helpers
       ;
+    inherit (scopeMod) mkScope;
     inherit (resolve)
       evaluateInstanceConfig
       buildEntriesOf
@@ -100,9 +101,9 @@ let
       callPackagePhase1
       discoverBuildDeps
       resolveDepTargets
-      describeRequester
       buildConfigInjections
       checkRefTargets
+      checkDepsKeys
       refsOf
       evaluateInstanceModules
       instancePinsLib
@@ -137,7 +138,6 @@ in
     buildResolutionIndex
     resolveArg
     checkRefTargets
-    describeRequester
     extractDeferredDefs
     evaluateInstanceConfig
     evaluateInstanceModules

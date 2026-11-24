@@ -85,11 +85,10 @@ let
   inherit (import ../victoria-metrics-operator/operand-placement.nix { inherit lib kix; })
     operandPlacement
     ;
-  who = "victoria-metrics-cluster ${scope.namespaceName}/${name}";
 in
 {
   meta = {
-    version = lib.removePrefix "v" release;
+    version = release;
     description = "VictoriaMetrics cluster: vmstorage, vmselect and vminsert through a VMCluster CR";
     owner = "platform";
     defaultAliases = [
@@ -352,7 +351,7 @@ in
           component:
           lib.optionalAttrs (component != "vminsert") dedupArgs
           // kix.guardArgs {
-            inherit who;
+            inherit scope;
             option = "${component}.extraArgs";
             owned = ownedByComponent.${component};
           } config.${component}.extraArgs;
@@ -409,7 +408,7 @@ in
         };
 
         spec = kix.mergeGuarded {
-          inherit who;
+          inherit scope;
           # Everything here is computed (the storage class from the
           # dep, the dedup flag) or has an option of its own.
           locked = [
@@ -593,7 +592,7 @@ in
             remoteWriteUrl = "http://${self.insertService.out.fqdn}:8480/insert/0/prometheus/api/v1/write";
             insertBaseUrl = "http://${self.insertService.out.fqdn}:8480/insert/0/prometheus";
             inherit (config) scrapeInterval;
-            version = kix.image.version { tag = config.clusterVersion; };
+            version = kix.version.ofTag config.clusterVersion;
             # Operand images are reconciled by the operator, not in any
             # Kix-generated pod spec.
             extraImages = [

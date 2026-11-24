@@ -11,8 +11,6 @@ pub mod export;
 pub mod gc;
 pub mod graph;
 pub mod graph_stream;
-pub mod images;
-pub mod inspect;
 pub mod list;
 pub mod logs;
 pub mod migrate;
@@ -177,13 +175,23 @@ impl CommandContext {
         )
     }
 
-    /// Evaluate a cluster, or return an error listing available clusters when `name` is not found.
+    /// Evaluate a cluster behind a spinner and print the library's
+    /// warnings, or return an error listing available clusters when `name`
+    /// is not found.
     pub fn eval_cluster_or_suggest(
         &mut self,
         name: &str,
     ) -> miette::Result<kix::eval::ClusterOutput> {
-        match self.evaluator()?.eval_cluster(name) {
-            Ok(o) => Ok(o),
+        let spinner = crate::output::spinner(format!("Evaluating cluster '{name}'..."));
+        let evaluated = self.evaluator()?.eval_cluster(name);
+        if let Some(sp) = &spinner {
+            sp.finish_and_clear();
+        }
+        match evaluated {
+            Ok(o) => {
+                crate::output::library_warnings(&o.warnings);
+                Ok(o)
+            }
             Err(kix::eval::error::KixEvalError::ClusterNotFound { name }) => {
                 Err(miette::miette!("{}", self.cluster_not_found(name)))
             }
@@ -261,6 +269,20 @@ pub(crate) fn build_flake(
             }
         })?;
     crate::output::clear_status_line();
+    crate::output::library_warnings(build.warnings());
+    Ok(build)
+}
+
+/// Read the build of `cluster` from the bundle at `path`, with the
+/// `--deployed-bundle` files in `deployed`, and print the library's
+/// warnings that the bundle carries.
+pub(crate) fn read_bundle(
+    path: &std::path::Path,
+    deployed: &[PathBuf],
+    cluster: &str,
+) -> miette::Result<Build> {
+    let build =
+        kix_bundle::read_build(path, deployed, cluster).map_err(|e| miette::miette!("{e}"))?;
     crate::output::library_warnings(build.warnings());
     Ok(build)
 }

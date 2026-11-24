@@ -168,7 +168,6 @@
 let
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "rabbitmq-cluster ${ns}/${name}";
 
   # meta.version and the default image tag: the RabbitMQ release the
   # cluster runs.
@@ -335,6 +334,17 @@ in
       message = "this package writes the RabbitmqCluster fields of the RabbitMQ Cluster Operator ${supportedRelease}, and the rabbitmqOperator dependency runs ${dep.out.release}. Update kix/packages/experimental/rabbitmq-cluster for that release.";
     }
   ];
+
+  # The operator writes `disk_free_limit.absolute = 2GB` into every node's
+  # rabbitmq.conf. Below 5GB a fresh volume leaves too little headroom over
+  # twice that limit, where RabbitMQDiskNearAlarm fires.
+  warnings =
+    { config, ... }:
+    lib.optional (kix.parseQuantity "storage" config.storage.size < 5 * 1000 * 1000 * 1000) {
+      option = "storage.size";
+      message = "storage.size is ${toString config.storage.size} (under 5 GB). Kix built the RabbitmqCluster with this size. Because the RabbitMQ operator sets disk_free_limit.absolute to 2 GB, the RabbitMQDiskNearAlarm alert can fire on an idle cluster, and at 2 GB or less RabbitMQ starts in a disk alarm and blocks all publishers.";
+      fix = "Set storage.size to at least \"5Gi\".";
+    };
 
   options = {
     replicas = lib.mkOption {
@@ -504,13 +514,8 @@ in
         };
 
         spec = kix.mergeGuarded {
-          inherit who locked;
+          inherit scope locked;
         } baseSpec config.extraSpec;
-
-        # The operator writes `disk_free_limit.absolute = 2GB` into every
-        # node's rabbitmq.conf. Below 5GB a fresh volume leaves too little
-        # headroom over twice that limit, where RabbitMQDiskNearAlarm fires.
-        smallVolume = kix.parseQuantity "storage" config.storage.size < 5 * 1000 * 1000 * 1000;
 
         # Read only when the scope has an enforcer (kix.operandPolicy).
         netpol = scope.networkPolicyEnforcer.netpol;
@@ -526,15 +531,10 @@ in
         operatorNamespace = (scope.forService rabbitmqOperator).namespaceName;
       in
       {
-        cluster =
-          lib.warnIf smallVolume
-            "${who}: storage.size is ${toString config.storage.size}, under 5GB. The operator sets RabbitMQ's disk_free_limit to 2GB, so RabbitMQDiskNearAlarm can fire on this volume while the cluster is idle, and a volume of 2GB or less starts in the free disk alarm, which blocks every publisher. Use at least 5Gi."
-            (
-              scope.mkCR operator.crds.RabbitmqCluster {
-                inherit name spec;
-                annotations."rabbitmq.com/disable-default-topology-spread-constraints" = "true";
-              }
-            );
+        cluster = scope.mkCR operator.crds.RabbitmqCluster {
+          inherit name spec;
+          annotations."rabbitmq.com/disable-default-topology-spread-constraints" = "true";
+        };
 
         client = scope.mkServiceRef {
           inherit name;

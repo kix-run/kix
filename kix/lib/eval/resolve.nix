@@ -2,8 +2,10 @@
 
 let
   inherit (import ../core/error.nix { inherit lib; }) fail;
+  inherit (import ../core/util.nix { inherit lib; }) instanceLabel;
   packageLib = import ../core/package.nix { inherit lib; };
   inherit (packageLib) systemArgNames;
+  roles = import ./roles.nix { inherit lib; };
 
   systemBuildArgNames = [
     "self"
@@ -74,13 +76,51 @@ rec {
       inherit byKey byDefaultAlias;
     };
 
-  # Format an instance identifier for resolution error messages, noting
-  # auto-instantiated instances that do not appear in the cluster config.
-  describeRequester =
-    namespaceName: instanceName: instCfg:
-    "${namespaceName}/${instanceName}${
-      lib.optionalString (instCfg._autoInstantiated or false) " (auto-instantiated)"
-    }";
+  # Return the sentence that tells a reader why an instance they did not
+  # declare exists, or "" for a declared instance. `addedFor` lists the
+  # instances whose dependencies made auto-instantiation add it.
+  addedForNote =
+    instance: addedFor:
+    lib.optionalString (
+      addedFor != [ ]
+    ) " Kix pulled ${instanceLabel instance addedFor} from availablePackages.";
+
+  # Return the error for a required dependency on a cluster role that no
+  # instance provides. A provider of a role serves every namespace, so the
+  # fix may declare it in any namespace. It lists the packages of Kix's own
+  # set that claim the role in `meta.roles`.
+  missingRole =
+    role:
+    let
+      byLevel = import ../../packages/by-level.nix { inherit lib; };
+      claims =
+        package:
+        builtins.elem role (
+          (packageLib.metaOf {
+            inherit package;
+            kix = kixlib;
+          }).roles or [ ]
+        );
+      claimants =
+        builtins.concatMap
+          (level: map packageLib.spellingOf (builtins.filter claims (builtins.attrValues byLevel.${level})))
+          [
+            "stable"
+            "experimental"
+          ];
+    in
+    {
+      message = "dependency '${role}' is a cluster role, and no instance in the cluster provides it.";
+      fix =
+        (
+          if claimants == [ ] then
+            "In any namespace, declare an instance of a package that sets meta.roles = [ \"${role}\" ]."
+          else
+            "In any namespace, declare an instance of a package that provides '${role}':"
+            + lib.concatMapStrings (c: "\n  instances.<namespace>.<name>.package = ${c};") claimants
+        )
+        + "\nIf the cluster already provides '${role}' outside Kix, declare an import with `package = kix.mkImport { roles = [ \"${role}\" ]; ... };` instead.";
+    };
 
   isRef = v: builtins.isAttrs v && (v._type or "") == "kix-ref";
 
@@ -125,6 +165,72 @@ rec {
       ) acc nsInsts
     ) null instances;
 
+  # Refuse a `deps.<name>` whose name the instance's package does not take,
+  # on every instance, active or not. Resolution reads only the names the
+  # package takes, so such an entry would be ignored. `phase1Instances`
+  # gives each instance's `discoveredDeps` and the package's `deps`
+  # attribute (`depsEnrichment`).
+  checkDepsKeys =
+    { mergedInstances, phase1Instances }:
+    lib.foldlAttrs (
+      acc: nsName: nsInsts:
+      lib.foldlAttrs (
+        acc: instName: instCfg:
+        let
+          p1 = phase1Instances.${nsName}.${instName};
+          taken = builtins.attrNames p1.discoveredDeps;
+          path = "instances.${nsName}.${instName}.deps";
+          isImport = (instCfg.package._type or "") == "kix-import";
+          # The dependency that took this name before a rename, or null.
+          renamedTo =
+            key: lib.findFirst (arg: (p1.depsEnrichment.${arg}.renamedFrom.name or null) == key) null taken;
+          refuseKey =
+            key:
+            let
+              newName = renamedTo key;
+              renamedFrom = p1.depsEnrichment.${newName}.renamedFrom;
+            in
+            if isImport then
+              fail {
+                id = "K3646";
+                instance = "${nsName}/${instName}";
+                dependency = key;
+                message = "${path}.${key} is set on a kix.mkImport instance. Imports describe resources managed outside Kix and take no dependencies, so Kix rejected it.";
+                fix = "Remove ${path}.${key}. To deploy this import after another instance, add ref.<namespace>.<instance> to instances.${nsName}.${instName}.extraDeps.";
+              }
+            else if newName != null then
+              fail {
+                id = lib.removeSuffix "]" (lib.removePrefix "[" renamedFrom.id);
+                instance = "${nsName}/${instName}";
+                dependency = key;
+                message = "${path}.${key} uses a dependency name that this package renamed to '${newName}', so Kix rejected it.";
+                fix = "Rename ${path}.${key} to ${path}.${newName}.";
+              }
+            else
+              fail {
+                id = "K3646";
+                instance = "${nsName}/${instName}";
+                dependency = key;
+                message =
+                  if taken == [ ] then
+                    "${path}.${key} is set, and this instance's package takes no dependencies, so Kix rejected it."
+                  else
+                    "${path}.${key} is not a dependency of this instance's package, so Kix rejected it. Valid dependencies for this package: ${builtins.concatStringsSep ", " taken}.";
+                fix =
+                  if taken == [ ] then
+                    "Remove ${path}.${key}."
+                  else if builtins.length taken == 1 then
+                    "Rename ${path}.${key} to ${path}.${builtins.head taken}, or remove ${path}.${key}."
+                  else
+                    "Rename ${path}.${key} to one of the listed dependencies, or remove ${path}.${key}.";
+              };
+        in
+        builtins.foldl' (acc: key: if p1.discoveredDeps ? ${key} then acc else refuseKey key) acc (
+          builtins.attrNames (instCfg.deps or { })
+        )
+      ) acc nsInsts
+    ) null mergedInstances;
+
   # Resolve a package dependency argument against `explicitOverride` or
   # `resolutionIndex`. An instance in another namespace binds only when the
   # override names it, when its package serves the whole cluster
@@ -139,18 +245,33 @@ rec {
       requesterNamespace,
       hasDefault,
       explicitOverride,
+      # The requesting instance, as `<namespace>/<name>`.
       requester ? null,
       # The requesting instance's name, for the `instances.<ns>.<name>` path
       # in messages.
       requesterName ? null,
+      # The instances whose dependencies made auto-instantiation add the
+      # requester, as `<namespace>/<name>`. Empty for a declared instance.
+      addedFor ? [ ],
       # `{ name; id; }` from the package's `deps.<arg>.renamedFrom`, when the
       # dependency had another name in an earlier release. `id` is the id of
       # the change record for the rename, such as "K1234".
       renamedFrom ? null,
     }:
     let
-      # Fail with `e`, naming the requesting instance.
-      refuse = e: fail ({ instance = requester; } // e);
+      # Fail with `e`, naming the requesting instance and, for an instance
+      # that auto-instantiation added, the instances that needed it.
+      refuse =
+        e:
+        fail (
+          {
+            instance = requester;
+          }
+          // e
+          // {
+            message = e.message + addedForNote requester addedFor;
+          }
+        );
       label = c: "${c.namespace}/${c.instName}";
       labels = cs: builtins.concatStringsSep ", " (map label cs);
       depLine = c: "  deps.${argName} = ref.${c.namespace}.${c.instName};";
@@ -169,6 +290,10 @@ rec {
           resolutionIndex.byKey.${t.instanceName} or [ ]
         );
 
+      isRequester = namespace: instName: namespace == requesterNamespace && instName == requesterName;
+
+      selfRef = lib.findFirst (r: isRequester r.namespace r.instanceName) null (refsOf explicitOverride);
+
       # Refuse a ref from another namespace to an instance whose package
       # declares `meta.scope = "namespace"`.
       checkRefScope =
@@ -186,7 +311,19 @@ rec {
         else
           t;
     in
-    if explicitOverride != null then
+    if selfRef != null then
+      refuse {
+        message = "${consumerPath}.deps.${argName} ${
+          if builtins.isList explicitOverride then "includes" else "points to"
+        } ref.${selfRef.namespace}.${selfRef.instanceName}, which is the instance itself. An instance cannot depend on itself, so Kix rejected it.";
+        fix =
+          if builtins.isList explicitOverride then
+            "Remove ref.${selfRef.namespace}.${selfRef.instanceName} from ${consumerPath}.deps.${argName}, or replace it with a ref to another instance."
+          else
+            "Point ${consumerPath}.deps.${argName} to another instance that provides '${argName}', or remove ${consumerPath}.deps.${argName}.";
+      }
+
+    else if explicitOverride != null then
       # Resolve `ref` and `[ ref ... ]` overrides with `direct = false` so they
       # run through the same meta checks as auto-resolved dependencies.
       if isRef explicitOverride then
@@ -239,10 +376,15 @@ rec {
 
         # Prefer managed instances over imports among the instances this
         # namespace may use, so a managed provider that serves the cluster
-        # shadows a flavour's import in the requester's namespace.
+        # shadows a flavour's import in the requester's namespace. Then drop
+        # the requesting instance, which never binds to itself. A managed
+        # instance that answers its own dependency name still shadows an
+        # import of that name, so it does not bind the import it replaces.
         eligible = sameNs ++ serving;
         managed = builtins.filter (c: !(c.meta.isImport or false)) eligible;
-        candidates = if managed != [ ] then managed else eligible;
+        candidates = builtins.filter (c: !(isRequester c.namespace c.instName)) (
+          if managed != [ ] then managed else eligible
+        );
         own = builtins.filter (c: c.namespace == requesterNamespace) candidates;
         shared = builtins.filter (c: c.namespace != requesterNamespace) candidates;
 
@@ -310,6 +452,9 @@ rec {
 
       else if builtins.length nameable > 1 then
         refuse (several nameable)
+
+      else if roles.registry ? ${argName} then
+        refuse (missingRole argName)
 
       else
         refuse {
@@ -598,6 +743,7 @@ rec {
       allInstances,
       requester ? null,
       requesterName ? null,
+      addedFor ? [ ],
       # The package's `deps` attribute, read for `renamedFrom`.
       depsEnrichment ? { },
     }:
@@ -614,6 +760,7 @@ rec {
             explicitOverride
             requester
             requesterName
+            addedFor
             ;
           renamedFrom = depsEnrichment.${argName}.renamedFrom or null;
           requesterNamespace = namespace;
@@ -643,6 +790,7 @@ rec {
       explicitOverrides,
       requester ? null,
       requesterName ? null,
+      addedFor ? [ ],
       # The package's `deps` attribute, read for `renamedFrom`.
       depsEnrichment ? { },
     }:
@@ -658,6 +806,7 @@ rec {
             explicitOverride
             requester
             requesterName
+            addedFor
             ;
           renamedFrom = depsEnrichment.${argName}.renamedFrom or null;
           requesterNamespace = namespace;

@@ -44,13 +44,12 @@ let
   release = "v1.12.1";
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "node-exporter ${ns}/${name}";
   port = 9100;
   textfileDirectory = "/var/lib/node_exporter/textfile_collector";
 in
 {
   meta = {
-    version = lib.removePrefix "v" release;
+    version = release;
     description = "Prometheus Node Exporter: host-level metrics";
     owner = "platform";
     defaultAliases = [ "nodeExporter" ];
@@ -116,7 +115,7 @@ in
         };
 
         ownedArgs = kix.guardArgs {
-          inherit who;
+          inherit scope;
           owned = {
             "--web.listen-address" = "the probes and the Service use port ${toString port}; remove it.";
             "--path.sysfs" = "the package mounts the host's /sys at /host/sys; remove it.";

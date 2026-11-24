@@ -97,12 +97,12 @@ impl KubeMigrationOps {
         F: Fn() -> Fut,
         Fut: std::future::Future<Output = Result<bool, String>>,
     {
-        let deadline = std::time::Instant::now() + CRD_SETTLE_TIMEOUT;
+        let deadline = tokio::time::Instant::now() + CRD_SETTLE_TIMEOUT;
         loop {
             if check().await? {
                 return Ok(());
             }
-            if std::time::Instant::now() >= deadline {
+            if tokio::time::Instant::now() >= deadline {
                 return Err(format!(
                     "{what} did not settle within {}s. Run the migration again once the \
                      apiserver is healthy: it skips what is already done. Note that a \

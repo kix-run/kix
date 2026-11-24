@@ -72,10 +72,9 @@
       ...
     }:
     let
-      who = "storage-classes ${scope.namespaceName}/${scope.instanceName}";
       sc = kix.storage.mkClasses {
-        inherit scope clusterConfig who;
-        optionPath = "config.classes";
+        inherit scope clusterConfig;
+        optionPath = "classes";
         classes = config.classes;
         parts = self.classes;
       };

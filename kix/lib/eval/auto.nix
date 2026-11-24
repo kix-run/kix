@@ -9,6 +9,7 @@
 let
   inherit (resolve) discoverBuildDeps refsOf;
   inherit (import ../core/error.nix { inherit lib; }) fail;
+  inherit (import ../core/util.nix { inherit lib; }) instanceLabel;
   packageLib = import ../core/package.nix { inherit lib; };
 in
 
@@ -115,7 +116,7 @@ rec {
 
       # Map each key to every availablePackages entry that answers it, in
       # attrNames order. Membership tests (`?`) do not check how many packages
-      # match. Demands go through pickCatalog, which rejects keys with multiple
+      # match. `ambiguityRefusals` rejects a demanded key with multiple
       # matching packages.
       availableByKey = builtins.zipAttrsWith (_: names: names) (
         builtins.concatMap (name: map (key: { ${key} = name; }) (catalogKeys name)) (
@@ -205,11 +206,17 @@ rec {
               inherit packageMeta;
             };
           in
-          [ instName ] ++ aliases
+          map (key: { ${key} = "${ns}/${instName}"; }) (lib.unique ([ instName ] ++ aliases))
         ) (builtins.attrNames (mandatory.${ns} or { }))
       ) (builtins.attrNames mandatory);
 
-      mandatoryKeys = builtins.listToAttrs (map (k: lib.nameValuePair k true) mandatoryKeysList);
+      # The mandatory instances that answer each name, as `<ns>/<inst>`.
+      mandatoryKeys = builtins.zipAttrsWith (_: owners: owners) mandatoryKeysList;
+
+      # Return whether a mandatory instance other than `requester` answers
+      # `name`. Dependency resolution never binds an instance to itself.
+      answeredByOther =
+        requester: name: builtins.any (owner: owner != requester) (mandatoryKeys.${name} or [ ]);
 
       optionalByKeyList = builtins.concatMap (
         ns:
@@ -254,7 +261,7 @@ rec {
             package = normalizedAvail.${name}.package;
             inherit kixlib;
           };
-          clusterConflicts = builtins.filter (lib.hasPrefix "cluster:") (packageMeta.conflictsWith or [ ]);
+          clusterConflicts = builtins.filter (lib.hasPrefix "cluster:") (meta.conflictKeys packageMeta);
           quoted = xs: builtins.concatStringsSep ", " (map builtins.toJSON xs);
         in
         if !(meta.servesCluster { inherit packageMeta context; }) then
@@ -289,7 +296,7 @@ rec {
           requester = "${ns}/${instName}";
           # resolveArg treats a null entry as not wired.
           wired = lib.filterAttrs (_: v: v != null) (instCfg.deps or { });
-          required = builtins.filter (d: !(mandatoryKeys ? ${d})) (getRequiredDeps instCfg.package);
+          required = builtins.filter (d: !(answeredByOther requester d)) (getRequiredDeps instCfg.package);
           wiredOptionals = builtins.filter (v: (optional.${v.namespace} or { }) ? ${v.instanceName}) (
             builtins.concatMap (d: refsOf wired.${d}) (
               builtins.filter (d: wired ? ${d}) (getAllDeps instCfg.package)
@@ -358,35 +365,68 @@ rec {
         else
           null;
 
-      # Select the single availablePackages entry matching a demand. Kix does not
-      # rank multiple matching packages, so reject ambiguous keys when a consumer
-      # demands them rather than when they are declared in availablePackages.
-      pickCatalog =
+      # Return whether more than one availablePackages entry answers a demand.
+      # Kix does not rank them, so `ambiguityRefusals` rejects the key when a
+      # consumer demands it rather than when the entries are declared.
+      isAmbiguous = item: builtins.length availableByKey.${item.depName} > 1;
+
+      # Return the availablePackages entry that answers a demand that is not
+      # ambiguous.
+      pickCatalog = item: builtins.head availableByKey.${item.depName};
+
+      # Return the refusal for a demand that several availablePackages
+      # entries answer.
+      ambiguityError =
         item:
         let
           claimants = availableByKey.${item.depName};
         in
-        if builtins.length claimants == 1 then
-          builtins.head claimants
+        {
+          message = builtins.concatStringsSep "\n" (
+            [
+              "${item.requester}: ${describeDemand item}, and ${toString (builtins.length claimants)} packages in availablePackages match '${item.depName}':"
+            ]
+            ++ map (
+              name: "  ${name} (${builtins.concatStringsSep ", " (claimSources name item.depName)})"
+            ) claimants
+          );
+          fix = builtins.concatStringsSep "\n" (
+            [
+              "Declare the package this cluster should use by adding one of these lines. `optional = true` creates the instance only when something depends on it, and the namespace and name match what Kix creates automatically so any existing instance keeps its data:"
+            ]
+            ++ map (name: "  ${chosenInstanceLine item name}") claimants
+            ++ [
+              "If the other matching packages are not used in this cluster, remove them from availablePackages."
+            ]
+            ++ lib.optional (builtins.elem item.depName roles.roleNames) "If the cluster environment already provides '${item.depName}', set `cluster.roles.${item.depName}.binding = \"shadowable\";` (or `\"exclusive\";`) in your cluster definition instead."
+          );
+        };
+
+      # Return the namespace auto-instantiation gives availablePackages entry
+      # `avPkg` for `item`.
+      catalogNamespace =
+        item: avPkg:
+        if avPkg.namespace != null then
+          avPkg.namespace
+        else if autoNamespace != null then
+          autoNamespace
         else
-          fail {
-            message = builtins.concatStringsSep "\n" (
-              [
-                "${item.requester}: ${describeDemand item}, and ${toString (builtins.length claimants)} packages in availablePackages match '${item.depName}':"
-              ]
-              ++ map (
-                name: "  ${name} (${builtins.concatStringsSep ", " (claimSources name item.depName)})"
-              ) claimants
-            );
-            fix = builtins.concatStringsSep "\n" (
-              [
-                "Declare the package this cluster should use as an optional instance (created only when something depends on it):"
-                "  instances.<namespace>.${item.depName} = { package = packages.<one of the above>; optional = true; };"
-                "If the other matching packages are not used in this cluster, remove them from availablePackages."
-              ]
-              ++ lib.optional (builtins.elem item.depName roles.roleNames) "If the cluster environment already provides '${item.depName}', set `cluster.roles.${item.depName}.binding = \"shadowable\";` (or `\"exclusive\";`) in your cluster definition instead."
-            );
-          };
+          item.requesterNs;
+
+      # Return the `instances` line that declares availablePackages entry
+      # `name` as an optional instance under the namespace, the name, and the
+      # aliases auto-instantiation gives it for `item`.
+      chosenInstanceLine =
+        item: name:
+        let
+          avPkg = normalizedAvail.${name};
+          # A declared instance without `aliases` answers the package's own
+          # aliases, which are the catalog aliases unless the entry adds some.
+          aliases =
+            lib.optionalString (avPkg.aliases != [ ])
+              " aliases = [ ${lib.concatMapStringsSep " " builtins.toJSON (catalogAliases name)} ];";
+        in
+        "instances.${catalogNamespace item avPkg}.${name} = { package = ${packageSpelling name}; optional = true;${aliases} };";
 
       catalogInstance =
         item:
@@ -396,13 +436,7 @@ rec {
         in
         {
           inherit canonicalName avPkg;
-          ns =
-            if avPkg.namespace != null then
-              avPkg.namespace
-            else if autoNamespace != null then
-              autoNamespace
-            else
-              item.requesterNs;
+          ns = catalogNamespace item avPkg;
         };
 
       seeds = builtins.concatMap (
@@ -422,6 +456,9 @@ rec {
           if opt != null then
             demandsOf optional.${opt.ns}.${opt.instName} opt.ns opt.instName
 
+          else if availableByKey ? ${item.depName} && isAmbiguous item then
+            [ ]
+
           else if availableByKey ? ${item.depName} then
             let
               catalog = catalogInstance item;
@@ -434,6 +471,15 @@ rec {
           else
             [ ];
       };
+
+      # Demands that several availablePackages entries answer. Collecting
+      # them after the closure reports every one at once, and the closure
+      # does not follow them.
+      ambiguityRefusals = map ambiguityError (
+        builtins.filter (
+          item: activatedBy item == null && availableByKey ? ${item.depName} && isAmbiguous item
+        ) closure
+      );
 
       activatedOptionals = builtins.listToAttrs (
         builtins.concatMap (
@@ -458,11 +504,7 @@ rec {
               instName = canonicalName;
               instCfg = {
                 package = avPkg.package;
-                aliases = meta.peekPackageAliases {
-                  availEntry = avPkg;
-                  inherit kixlib;
-                  context = "availablePackages.${canonicalName}";
-                };
+                aliases = catalogAliases canonicalName;
                 config = { };
                 deps = { };
                 partsOverlays = [ ];
@@ -515,24 +557,44 @@ rec {
           parts = lib.splitString "/" r;
           declared = (explicitInstances.${builtins.head parts} or { }) ? ${builtins.elemAt parts 1};
         in
-        if declared then r else "${r} (auto-instantiated)";
+        if declared then r else instanceLabel r (requestersOf.${r} or null);
 
       # Reject availablePackages entries that must run once per cluster when
       # demands place them in multiple namespaces. A fixed namespace on the
       # availablePackages entry or autoNamespace places every copy in one
       # namespace, so only packages placed in their requester's namespace can
       # spread across namespaces.
-      # Return how a cluster names Kix's package `name`, at its level.
+      # Return how a cluster definition names the package of
+      # availablePackages entry `name`.
       packageSpelling =
         name:
         let
-          byLevel = import ../../packages/by-level.nix { inherit lib; };
+          spelling = packageLib.spellingOf normalizedAvail.${name}.package;
         in
-        if !(byLevel.stable ? ${name}) && byLevel.experimental ? ${name} then
-          "packages.experimental.${name}"
-        else
-          "packages.${name}";
+        if spelling == null then "<package for ${name}>" else spelling;
 
+      # Return the aliases auto-instantiation gives availablePackages entry
+      # `name`.
+      catalogAliases =
+        name:
+        meta.peekPackageAliases {
+          availEntry = normalizedAvail.${name};
+          inherit kixlib;
+          context = "availablePackages.${name}";
+        };
+
+      # Return the fix for a package that runs once per cluster and that
+      # nothing places in a namespace of its own.
+      onePerClusterFix =
+        name:
+        "Declare ${name} once in its own namespace so all consumers share it:"
+        + "\n  instances.<namespace>.${name}.package = ${packageSpelling name};"
+        + "\nOr set `availablePackages.${name}.namespace = \"<namespace>\";` to place just this package there, or `autoNamespace = \"<namespace>\";` to place all auto-instantiated packages there.";
+
+      # Refuse a package that runs once per cluster when demands would place
+      # it in several namespaces. The refusal stops evaluation at once,
+      # because the copies in each namespace would otherwise raise their own
+      # conflict and duplicate-resource errors, which hide the cause.
       spreadRefusals = builtins.concatMap (
         name:
         let
@@ -540,15 +602,15 @@ rec {
           namespaces = lib.unique (map (p: p.ns) ps);
           reason = onePerClusterReason name;
         in
-        lib.optional (builtins.length namespaces > 1 && reason != null) ({
+        lib.optional (builtins.length namespaces > 1 && reason != null) {
           message = builtins.concatStringsSep "\n" (
             [
-              "kix: ${name} runs once per cluster (${reason}), but auto-instantiation would place it in ${toString (builtins.length namespaces)} namespaces:"
+              "${name} runs once per cluster (${reason}), but no namespace is set for it, so Kix refused to create separate copies in ${toString (builtins.length namespaces)} namespaces:"
             ]
             ++ map (p: "  ${p.ns}/${name}, for dependency '${p.depName}' of ${labelRequester p.requester}") ps
           );
-          fix = "Declare it once, and every consumer resolves to it:\n  instances.<namespace>.${name}.package = ${packageSpelling name};";
-        })
+          fix = onePerClusterFix name;
+        }
       ) (builtins.attrNames placementsByName);
 
       # Refuse a package that runs once per cluster and would land beside
@@ -575,37 +637,16 @@ rec {
               "Removing that package would then remove ${name} for the whole cluster."
             ]
           );
-          fix =
-            "Declare ${name} once, in a namespace of its own:"
-            + "\n  instances.<namespace>.${name}.package = ${packageSpelling name};"
-            + "\nOr set autoNamespace to place every package Kix adds there.";
+          fix = onePerClusterFix name;
         }
       ) (builtins.attrNames placementsByName);
-
-      traceMsg =
-        let
-          items = map (item: "${item.instName} (${item.ns})") autoInstanceList;
-          optItems = builtins.attrNames activatedOptionals;
-        in
-        (
-          if items != [ ] then
-            "auto-instantiated: ${builtins.concatStringsSep ", " (lib.unique items)}"
-          else
-            ""
-        )
-        + (
-          if optItems != [ ] then
-            "${
-              if items != [ ] then "; " else ""
-            }activated optionals: ${builtins.concatStringsSep ", " optItems}"
-          else
-            ""
-        );
     in
-    if spreadRefusals != [ ] then
+    if ambiguityRefusals != [ ] then
+      fail ambiguityRefusals
+    else if spreadRefusals != [ ] then
       fail spreadRefusals
     else
-      (if traceMsg != "" then builtins.trace "[kix] ${traceMsg}" else lib.id) {
+      {
         inherit autoInstances activatedOptionals besideConsumerRefusals;
       };
 }

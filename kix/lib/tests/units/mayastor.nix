@@ -176,7 +176,8 @@ in
     let
       cases = {
         # The instance answers storageClasses through its own alias and no
-        # explicit dependency is wired.
+        # explicit dependency is wired. The resolver skips the instance
+        # itself, so nothing else provides the class.
         aliasOnly = evalFails (clusterWith {
           aliases = [
             "storageClasses"
@@ -195,15 +196,29 @@ in
             };
           in
           builds c && etcdClass c == "local-path";
-        # With the alias, a named class is still refused: the dependency
-        # resolves to this instance before the named class is read.
-        aliasWithNamedClass = evalFails (clusterWith {
+        # With the alias and no dependency wired, a named class builds.
+        aliasWithNamedClass =
+          let
+            c = clusterWith {
+              aliases = [
+                "storageClasses"
+                "mayastor"
+              ];
+              deps = _: { };
+              config.etcd.storage.storageClassName = "local";
+            };
+          in
+          builds c && etcdClass c == "local";
+        # With the alias and only an import answering storageClasses, the
+        # dependency stays unbound: the managed instance shadows the import
+        # of its own name, so etcd has no class.
+        aliasWithShadowedImport = evalFails (clusterWith {
           aliases = [
             "storageClasses"
             "mayastor"
           ];
           deps = _: { };
-          config.etcd.storage.storageClassName = "local";
+          extra.instances.mayastor.local-path.aliases = [ "storageClasses" ];
         });
         selfRef = evalFails (clusterWith {
           deps = ref: { storageClasses = ref.mayastor.mayastor; };
@@ -260,6 +275,27 @@ in
     in
     builtins.all (v: v) (builtins.attrValues cases)
     || throw "pool node checks (true is the expected result for each): ${builtins.toJSON cases}";
+
+  # A pool on a node whose labels in cluster.nodes lack io-engine's node
+  # selector warns on the pool's node option.
+  mayastor-unlabelled-pool-node-warns =
+    let
+      nodeWarnings =
+        labels:
+        builtins.filter (w: builtins.isAttrs w && (w.option or null) == "diskPools.pool-1.node") (
+          mayastor.warnings {
+            config = configOf { diskPools.pool-1 = pool "node1" "/dev/sdb"; };
+            clusterConfig.cluster = {
+              nodes.node1 = { inherit labels; };
+              capabilities.nodeAutoscaling = false;
+            };
+          }
+        );
+    in
+    (
+      builtins.length (nodeWarnings { }) == 1 && nodeWarnings { "openebs.io/engine" = "mayastor"; } == [ ]
+    )
+    || throw "mayastor unlabelled pool node warning";
 
   # Flags and env variables the package derives are refused; the same
   # option with a flag or variable the package does not own builds.
@@ -357,15 +393,19 @@ in
             };
           } == [ ];
         reservedNames =
-          someMessageHas
-            [ "diskPools.root and volumeSnapshotClasses.meta" "Kix drops parts named root or meta" ]
-            (failedMessages {
+          let
+            messages = failedMessages {
               config = {
                 diskPools.root = pool "node1" "/dev/sdb";
                 volumeSnapshotClasses.meta = { };
               };
               deps = snapshotDep;
-            });
+            };
+          in
+          someMessageHas [ "diskPools.root: Kix reserves the keys \"root\" and \"meta\"" ] messages
+          && someMessageHas [
+            "config.volumeSnapshotClasses.meta: Kix reserves the keys \"root\" and \"meta\""
+          ] messages;
         ownedResources =
           someMessageHas [ "ioEngine.resources sets cpu" "ioEngine.cpuCount" ]
             (failedMessages {
@@ -376,7 +416,10 @@ in
             default.annotations."snapshot.storage.kubernetes.io/is-default-class" = "true";
           in
           someMessageHas
-            [ "volumeSnapshotClasses a and b are each annotated" "Keep the annotation on one class" ]
+            [
+              "config.volumeSnapshotClasses.a and config.volumeSnapshotClasses.b each set"
+              "Keep this annotation on at most one class"
+            ]
             (failedMessages {
               config.volumeSnapshotClasses = {
                 a = default;
@@ -386,17 +429,20 @@ in
             });
         snapshotClassesWithoutApi =
           someMessageHas
-            [ "volumeSnapshotClasses defines snap" "nothing provides the snapshotController role" ]
+            [
+              "volumeSnapshotClasses defines snap"
+              "no instance in the cluster provides a snapshot controller (the snapshotController role)"
+            ]
             (failedMessages {
               config.volumeSnapshotClasses.snap = { };
             });
         tolerationWithoutKey =
-          someMessageHas [ "ioEngine.tolerations[0] has no key" "operator = \"Exists\"" ]
+          someMessageHas [ "ioEngine.tolerations[0] has a missing or empty key" "operator = \"Exists\"" ]
             (failedMessages {
               config.ioEngine.tolerations = [ { effect = "NoSchedule"; } ];
             });
         tolerationExistsWithValue =
-          someMessageHas [ "csiNode.tolerations[1] sets value with operator Exists" ]
+          someMessageHas [ "csiNode.tolerations[1] sets value with operator \"Exists\"" ]
             (failedMessages {
               config.csiNode.tolerations = [
                 { operator = "Exists"; }

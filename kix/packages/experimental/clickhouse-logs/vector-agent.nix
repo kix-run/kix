@@ -136,15 +136,15 @@ in
   # removes an unlocked key.
   mergeConfig =
     {
-      who,
+      scope,
       sink,
       locked ? [ ],
     }:
     base: user:
     lib.filterAttrsRecursive (_: v: v != null) (
       kix.mergeGuarded {
-        inherit who;
-        what = "settings";
+        inherit scope;
+        option = "settings";
         locked = [
           [ "data_dir" ]
           [
@@ -215,14 +215,14 @@ in
             configPath
           ]
           ++ kix.guardArgs {
-            inherit who;
+            inherit scope;
             owned = lib.genAttrs configFlags (
               _: "the package's merged settings are Vector's only config source; put configuration in settings."
             );
           } config.extraArgs;
           env = kix.mkEnvVars (
             kix.mergeEnv {
-              inherit who;
+              inherit scope;
               owned = [
                 {
                   vars.VECTOR_SELF_NODE_NAME.valueFrom.fieldRef.fieldPath = "spec.nodeName";

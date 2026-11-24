@@ -16,7 +16,6 @@ let
   common = import ./common.nix { inherit lib; };
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = common.who scope;
   labels = (common.labels name).cainjector;
   metricsOn = config.metrics.enabled && prometheus != null;
 
@@ -193,19 +192,14 @@ in
           containers = [
             {
               name = "cert-manager-cainjector";
-              image = kix.image.ref (
-                common.checkRelease who config [
-                  "cainjector"
-                  "image"
-                ]
-              );
+              image = kix.image.ref config.cainjector.image;
               imagePullPolicy = config.cainjector.image.pullPolicy;
               args = [
                 "--v=2"
                 "--leader-election-namespace=${ns}"
               ]
               ++ kix.guardArgs {
-                inherit who;
+                inherit scope;
                 option = "cainjector.extraArgs";
                 owned."--leader-election-namespace" =
                   "the leader-election Role lives in the instance's namespace; remove it.";

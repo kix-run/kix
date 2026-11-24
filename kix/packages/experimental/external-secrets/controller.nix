@@ -16,7 +16,6 @@ let
   inherit (c)
     name
     ns
-    who
     ports
     controllerLeaseName
     controllerLabels
@@ -53,26 +52,13 @@ let
   generators = group "generators.external-secrets.io" [ ];
   coord = group "coordination.k8s.io" [ "leases" ];
 
-  # Each handle adds the webhook check to the requires of every custom
-  # resource built from it.
-  withCheck = args: args // { requires = (args.requires or [ ]) ++ [ self.webhookCheck ]; };
-  gate =
-    crd:
-    crd
-    // {
-      out = crd.out // {
-        cr = args: crd.out.cr (withCheck args);
-        mkCR = consumerScope: args: crd.out.mkCR consumerScope (withCheck args);
-      };
-    };
-
   controllerArgs = [
     "--enable-leader-election=true"
     "--metrics-addr=:${toString ports.metrics}"
     "--live-addr=:${toString ports.controllerHealth}"
   ]
   ++ kix.guardArgs {
-    inherit who;
+    inherit scope;
     owned = {
       "--enable-leader-election" =
         "the package always enables leader election, so instances above availability none run one active controller; remove it.";
@@ -218,32 +204,32 @@ in
     map (
       doc:
       lib.nameValuePair (pluralOf doc.spec) (
-        gate (
-          scope.mkCRD (
-            {
-              inherit (doc) spec;
-              labels = doc.metadata.labels or { };
-              # Stores, secrets, and generators are reconciled by the
-              # controller pods; none of them runs pods of its own.
-              usesAtLeast = _: { };
-            }
-            // lib.optionalAttrs (builtins.elem (kindOf doc.spec) readyKinds) {
-              readiness.condition = {
-                type = "Ready";
-                status = "True";
-              };
-            }
-            # The controller pods, in this namespace, dial the provider
-            # a store names, so a Service address in a store's spec
-            # opens their egress to it and its ingress from them.
-            // lib.optionalAttrs (builtins.elem (kindOf doc.spec) storeKinds) {
-              factBehavior = {
-                endpoint = "terminate";
-                podSelector = controllerLabels;
-                podNamespace = ns;
-              };
-            }
-          )
+        scope.mkCRD (
+          {
+            inherit (doc) spec;
+            labels = doc.metadata.labels or { };
+            # Every custom resource waits for the webhook check.
+            crRequires = [ self.webhookCheck ];
+            # Stores, secrets, and generators are reconciled by the
+            # controller pods; none of them runs pods of its own.
+            usesAtLeast = _: { };
+          }
+          // lib.optionalAttrs (builtins.elem (kindOf doc.spec) readyKinds) {
+            readiness.condition = {
+              type = "Ready";
+              status = "True";
+            };
+          }
+          # The controller pods, in this namespace, dial the provider
+          # a store names, so a Service address in a store's spec
+          # opens their egress to it and its ingress from them.
+          // lib.optionalAttrs (builtins.elem (kindOf doc.spec) storeKinds) {
+            factBehavior = {
+              endpoint = "terminate";
+              podSelector = controllerLabels;
+              podNamespace = ns;
+            };
+          }
         )
       )
     ) crdDocs
@@ -273,7 +259,7 @@ in
             image = kix.image.ref config.image;
             imagePullPolicy = config.image.pullPolicy;
             args = controllerArgs;
-            env = kix.mkEnvVars (kix.mergeEnv { inherit who; } config.env);
+            env = kix.mkEnvVars (kix.mergeEnv { inherit scope; } config.env);
             ports = [
               (kix.port "metrics" ports.metrics)
               (kix.port "live" ports.controllerHealth)

@@ -213,6 +213,14 @@ in
         ++ policyLib.checkPolicy config.policy
       );
 
+  # A KubernetesMetrics provider makes the descheduler read metrics.k8s.io,
+  # which the cluster's metricsApi role must serve.
+  warnings =
+    { config, ... }:
+    lib.optionals (config.policy.metricsProviders != [ ]) (
+      scope.requireMetricsApi "policy.metricsProviders (KubernetesMetrics)"
+    );
+
   build = [
     (
       {
@@ -222,7 +230,6 @@ in
         ...
       }:
       let
-        who = "descheduler ${scope.namespaceName}/${name}";
 
         inherit (scope.rbac)
           core
@@ -269,7 +276,7 @@ in
         args =
           baseArgs
           ++ kix.guardArgs {
-            inherit who;
+            inherit scope;
             owned = {
               "--policy-config-file" = "set policy instead.";
               "--descheduling-interval" = "set deschedulingInterval instead.";
@@ -292,24 +299,12 @@ in
           inherit name;
         };
 
-        # A KubernetesMetrics provider makes the descheduler read
-        # metrics.k8s.io, which the cluster's metricsApi role must serve.
-        policyConfigMap =
-          builtins.seq
-            (
-              if config.policy.metricsProviders != [ ] then
-                scope.requireMetricsApi "policy.metricsProviders (KubernetesMetrics)"
-              else
-                null
-            )
-            (
-              scope.mkResource {
-                apiVersion = "v1";
-                kind = "ConfigMap";
-                name = "${name}-policy";
-                data."policy.yaml" = builtins.toJSON (policyLib.render config.policy);
-              }
-            );
+        policyConfigMap = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ConfigMap";
+          name = "${name}-policy";
+          data."policy.yaml" = builtins.toJSON (policyLib.render config.policy);
+        };
 
         policyMount = kix.mount.configMap self.policyConfigMap {
           mountPath = policyDir;

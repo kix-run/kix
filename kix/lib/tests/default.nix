@@ -260,6 +260,8 @@ let
       replicas ? 3,
       templateExtra ? { },
       withPdb ? false,
+      # The author PDB's selector, from the package's scope.
+      pdbSelector ? scope: { matchLabels = scope.selectorLabels; },
       metaExtra ? { },
       helm ? false,
     }:
@@ -315,7 +317,7 @@ let
             name = "web-pdb";
             spec = {
               minAvailable = 2;
-              selector.matchLabels = scope.selectorLabels;
+              selector = pdbSelector scope;
             };
           };
         };
@@ -2517,6 +2519,57 @@ let
       (good == [ ] && bad != [ ])
       || throw "monitor rule vs ServiceRef: good=${builtins.toJSON good} bad=${builtins.toJSON bad}";
 
+    # A monitor that selects with matchExpressions is checked like one that
+    # uses matchLabels, and its findings carry the change record id.
+    t54c-monitor-rule-reads-match-expressions =
+      let
+        rule = (import ../rules/architecture.nix { inherit lib; }).monitorSelectorMatchesService;
+        service = {
+          kind = "Service";
+          metadata = {
+            name = "cache";
+            namespace = "app";
+            labels.app = "cache";
+          };
+          spec.ports = [ { name = "metrics"; } ];
+        };
+        run =
+          values:
+          rule.check {
+            allInstances.app = { };
+            allResources = [
+              service
+              {
+                kind = "ServiceMonitor";
+                metadata = {
+                  name = "cache";
+                  namespace = "app";
+                };
+                spec = {
+                  selector.matchExpressions = [
+                    {
+                      key = "app";
+                      operator = "In";
+                      inherit values;
+                    }
+                  ];
+                  namespaceSelector.matchNames = [ "app" ];
+                  endpoints = [ { port = "metrics"; } ];
+                };
+              }
+            ];
+          };
+        good = run [ "cache" ];
+        bad = run [ "web" ];
+      in
+      (
+        good == [ ]
+        && builtins.length bad == 1
+        && (builtins.head bad).id == "K1895"
+        && lib.hasInfix "selects { app in (web) }" (builtins.head bad).message
+      )
+      || throw "monitor rule with matchExpressions: good=${builtins.toJSON good} bad=${builtins.toJSON bad}";
+
     # The labels match but no port does: the monitor finds the Service and
     # then drops every endpoint. Harbor shipped this shape and the rule
     # passed it, because the no-match and over-match branches were the only
@@ -3719,6 +3772,47 @@ let
       in
       (builtins.length findings == 1 && lib.hasInfix "also matches the pods of" msg)
       || throw "expected one selector-overlap finding, got: ${msg}";
+
+    # A selector made of matchExpressions alone is judged too, and the
+    # finding carries the change record id.
+    t55d-workload-expression-selector-claims-another-pod-set =
+      let
+        rule = (import ../rules/architecture.nix { inherit lib; }).distinctWorkloadSelectors;
+        workload = kind: name: selector: podLabels: {
+          inherit kind;
+          metadata = {
+            inherit name;
+            namespace = "ns";
+          };
+          spec = {
+            inherit selector;
+            template.metadata.labels = podLabels;
+          };
+        };
+        findings = rule.check {
+          instanceName = "velero";
+          resources = [
+            (workload "Deployment" "velero" {
+              matchExpressions = [
+                {
+                  key = "part-of";
+                  operator = "Exists";
+                }
+              ];
+            } { part-of = "velero"; })
+            (workload "DaemonSet" "node-agent" { matchLabels.name = "node-agent"; } {
+              part-of = "velero";
+              name = "node-agent";
+            })
+          ];
+        };
+      in
+      (
+        builtins.length findings == 1
+        && lib.hasInfix "node-agent" (builtins.head findings).message
+        && (builtins.head findings).id == "K1895"
+      )
+      || throw "expected one selector-overlap finding with an id, got: ${builtins.toJSON findings}";
 
     # Each workload carrying its own label is the fix, and passes.
     t55c-distinct-workload-selectors-pass =
@@ -5045,6 +5139,29 @@ let
       in
       namesOf pdbs == [ "web-pdb" ] || throw "author PDB not honoured: ${builtins.toJSON (namesOf pdbs)}";
 
+    # An author PDB that selects with matchExpressions also covers the pods.
+    a16b-pdb-author-wins-with-match-expressions =
+      let
+        pdbs = ofKind "PodDisruptionBudget" (
+          manifests (mkCluster [
+            multiZone
+            {
+              instances.appns.web.package = mkReplicatedPackage {
+                withPdb = true;
+                pdbSelector = scope: {
+                  matchExpressions = lib.mapAttrsToList (key: value: {
+                    inherit key;
+                    operator = "In";
+                    values = [ value ];
+                  }) scope.selectorLabels;
+                };
+              };
+            }
+          ])
+        );
+      in
+      namesOf pdbs == [ "web-pdb" ] || throw "author PDB not honoured: ${builtins.toJSON (namesOf pdbs)}";
+
     # Helm-imported workloads go through the same seal and get the same spread.
     a17-helm-workload-gets-spread =
       let
@@ -5418,7 +5535,7 @@ let
     t101-merge-guarded =
       let
         guard = kixlib.mergeGuarded {
-          who = "pkg (x)";
+          scope.fail = kixlib.fail;
           locked = [
             [
               "a"

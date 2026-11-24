@@ -127,7 +127,7 @@ let
 in
 {
   meta = {
-    version = lib.removePrefix "v" release;
+    version = release;
     description = "Alertmanager: alert routing and deduplication";
     owner = "platform";
     defaultAliases = [ "alertmanager" ];
@@ -268,7 +268,7 @@ in
       };
 
       spec = kix.mergeGuarded {
-        inherit who;
+        inherit scope;
         locked = [
           [ "image" ]
           [ "version" ]

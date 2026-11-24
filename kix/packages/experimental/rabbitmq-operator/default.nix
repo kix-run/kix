@@ -107,11 +107,9 @@ let
   # meta.version, the default image.tag, and the tag in crds/sources.txt and
   # rbac/sources.txt.
   release = "2.23.3";
-  minorOf = lib.versions.majorMinor;
 
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "rabbitmq-operator ${ns}/${name}";
 
   group = "rabbitmq.com";
   readJSON = file: builtins.fromJSON (builtins.readFile file);
@@ -178,14 +176,13 @@ in
 
   assertions =
     { config, ... }:
-    let
-      imageTag = builtins.unsafeDiscardStringContext config.image.tag;
-    in
     [
-      {
-        assertion = minorOf imageTag == minorOf release;
-        message = "image.tag \"${imageTag}\" is not a RabbitMQ Cluster Operator ${minorOf release} release, and the definition under kix/packages/experimental/rabbitmq-operator/crds and the roles under rbac are vendored from ${release}. Set image.tag to a ${minorOf release}.x tag, or move the package to another release as its header describes.";
-      }
+      (kix.image.checkRelease {
+        inherit (config) image;
+        inherit release;
+        reason = "the CRD in kix/packages/experimental/rabbitmq-operator/crds and the RBAC roles in its rbac directory come from RabbitMQ Cluster Operator ${release}";
+        fix = "To update this package to another version, follow the instructions at the top of kix/packages/experimental/rabbitmq-operator/default.nix.";
+      })
     ];
 
   options = {
@@ -196,14 +193,17 @@ in
       description = "Operator image. Its major.minor must be the package's release.";
     };
 
-    # The release manifest's values.
+    # Requests and the memory limit are the release manifest's values. The
+    # manifest also caps CPU at its 200m request, which throttles the
+    # operator whenever it reconciles many objects at once; the limit here
+    # lets it burst to one core.
     resources = kix.options.resources {
       requests = {
         cpu = "200m";
         memory = "500Mi";
       };
       limits = {
-        cpu = "200m";
+        cpu = "1";
         memory = "500Mi";
       };
     };
@@ -234,7 +234,7 @@ in
       let
         env = kix.mkEnvVars (
           kix.mergeEnv {
-            inherit who;
+            inherit scope;
             owned = [
               {
                 vars.OPERATOR_NAMESPACE = fieldRef "metadata.namespace";
@@ -320,17 +320,6 @@ in
           spec.replicas = 1;
         };
 
-        withCheck = args: args // { requires = (args.requires or [ ]) ++ [ self.webhookCheck ]; };
-        gate =
-          crd:
-          crd
-          // {
-            out = crd.out // {
-              cr = args: crd.out.cr (withCheck args);
-              mkCR = consumerScope: args: crd.out.mkCR consumerScope (withCheck args);
-            };
-          };
-
         probe = path: {
           httpGet = {
             inherit path;
@@ -356,7 +345,7 @@ in
             (readJSON ./rbac/role-rabbitmq-cluster-leader-election-role.json).rules;
         };
 
-        crds.rabbitmqClusters = gate (
+        crds.rabbitmqClusters =
           let
             crdSpec = (readJSON ./crds/rabbitmqclusters.rabbitmq.com.json).spec;
             specSchema = (builtins.head crdSpec.versions).schema.openAPIV3Schema.properties.spec.properties;
@@ -365,6 +354,8 @@ in
           in
           scope.mkCRD {
             spec = crdSpec;
+            # Every RabbitmqCluster waits for the webhook check.
+            crRequires = [ self.webhookCheck ];
             # Durable queues and messages live on the server pods' volumes.
             holdsData = true;
             # The condition carries no observedGeneration, so the deploy
@@ -425,8 +416,7 @@ in
                     }
                   )
                 );
-          }
-        );
+          };
 
         issuer = scope.mkCR certCrds.Issuer {
           name = "${name}-selfsigned";
@@ -632,7 +622,6 @@ in
             # Job when its own content changes. The checksum annotations below
             # put the content of the webhook and of what serves it into that
             # content, so the check runs again when any of them changes.
-            annotations.${kix.keys.rerun} = kix.keyValues.rerunOnChange;
             requires = builtins.attrValues self.webhookCheckRole;
             spec = {
               # The kubelet restarts the container with a growing delay (10 s
@@ -765,12 +754,12 @@ in
             summary = "The RabbitMQ Cluster Operator is down.";
             description = "No replica of the ${operator} has answered a scrape for 10 minutes. Running RabbitMQ clusters keep serving, but changes to RabbitmqClusters are not applied, and its webhooks refuse creating or updating one. Check the operator Deployment in ${ns}.";
           };
-          RabbitMQOperatorReconcileErrors = {
-            expr = "sum by (namespace, service, controller) (rate(controller_runtime_reconcile_errors_total{${sel}}[5m])) > 0";
-            "for" = "15m";
-            severity = "warning";
+          RabbitMQOperatorReconcileErrors = kix.reconcileErrorsAlert {
+            selector = sel;
+            inherit operator;
             summary = "The RabbitMQ Cluster Operator fails to reconcile RabbitMQ clusters.";
-            description = "The {{ $labels.controller }} controller of the ${operator} has failed reconciles for 15 minutes, so a RabbitmqCluster's StatefulSet, Services, or claims may not match its spec. The operator log and the ReconcileSuccess condition of the RabbitmqCluster name the error.";
+            impact = "a RabbitmqCluster's StatefulSet, Services, or PersistentVolumeClaims may not match its spec";
+            nextStep = "Check the operator logs and the RabbitmqCluster's ReconcileSuccess condition for the error.";
           };
         };
       } args
