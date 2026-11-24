@@ -39,7 +39,10 @@
 # "none") and with three availability zones declared ("zone"). Replica
 # counts depend on the level, and a builder ceiling (`availability.max` on
 # one workload) can leave them level-dependent, so a package can pass at
-# "none" and fail the replica guard under a `none` ceiling at "zone".
+# "none" and fail the replica guard under a `none` ceiling at "zone". A
+# third pass turns off every default CPU and memory limit
+# (`cluster.defaultLimits`), which catches a package that reads its own
+# limit without a fallback.
 
 { kix, lib }:
 
@@ -810,8 +813,56 @@ let
     };
   };
 
+  # A cluster module that turns off every default CPU and memory limit
+  # (`cluster.defaultLimits`). Each package is evaluated once more under it,
+  # at availability "none", so a package that reads its own limit without a
+  # fallback fails here.
+  withoutDefaultLimits.cluster.defaultLimits = {
+    cpu = "none";
+    memory = "none";
+  };
+
+  # Packages that refuse to build with no memory limit, each with the reason.
+  # The pass without default limits requires each listed package to stop
+  # with an error a person can read (a throw), and fails when one builds, so
+  # an entry is removed once the package no longer needs the limit. A Nix
+  # error such as a missing attribute cannot be caught, so it fails the check
+  # for listed and unlisted packages alike.
+  refusesWithoutDefaultLimits = {
+    clickhouse = "ClickHouse sizes its memory cap from the container limit.";
+    clickhouse-cluster = "ClickHouse sizes its memory cap from the container limit.";
+    clickhouse-database = "Its clickhouse dependency needs a memory limit.";
+    clickhouse-logs = "Its clickhouse dependency needs a memory limit.";
+    plausible = "Its clickhouse dependency needs a memory limit.";
+  };
+
   evaluatePackage =
     level: name: package:
+    evaluatePackageIn {
+      module = levelModules.${level};
+      where = "at availability \"${level}\"";
+    } name package;
+
+  # Evaluate a package without default limits, or check that a package in
+  # `refusesWithoutDefaultLimits` refuses.
+  evaluateWithoutDefaultLimits =
+    name: package:
+    let
+      result = evaluatePackageIn {
+        module = withoutDefaultLimits;
+        where = "with cluster.defaultLimits.cpu = \"none\" and cluster.defaultLimits.memory = \"none\"";
+      } name package;
+    in
+    if refusesWithoutDefaultLimits ? ${name} then
+      assert lib.assertMsg (!(builtins.tryEval result).success)
+        "${folderOf name} now builds with cluster.defaultLimits.cpu = \"none\" and cluster.defaultLimits.memory = \"none\". Remove ${name} from refusesWithoutDefaultLimits in kix/package-eval.nix.";
+      name
+    else
+      result;
+
+  evaluatePackageIn =
+    { module, where }:
+    name: package:
     let
       s = settings.${name} or { };
       failures = knownFailures.${name} or [ ];
@@ -819,7 +870,7 @@ let
         name = "package-${name}";
         modules = [
           kix.flavors.kind
-          levelModules.${level}
+          module
           {
             clusterDomain = evalClusterDomain;
             scorecard.maxSeverity = "error";
@@ -846,42 +897,43 @@ let
     in
     assert checkSource name;
     assert checkVersion name package;
-    builtins.addErrorContext
-      "while evaluating ${folderOf name} in its synthetic cluster at availability \"${level}\""
-      (
-        builtins.deepSeq cluster.rawManifests (
-          builtins.seq (piChecks.validatePIWiring "package-${name}" cluster) (
-            assert checkPublishedVersion name package cluster;
-            builtins.deepSeq cluster.scorecardReport (
-              builtins.foldl' (
-                acc: f:
-                assert lib.assertMsg (cluster.scorecardReport.summary.byRule ? ${f.rule})
-                  "${name} no longer fails ${f.rule}; remove it from knownFailures in kix/package-eval.nix ${
-                    if lib.hasPrefix "housekeeping/" f.reason then
-                      "and update or delete ${f.reason}"
-                    else
-                      "and the exception described in ${f.reason}"
-                  }";
-                acc
-              ) name failures
-            )
+    builtins.addErrorContext "while evaluating ${folderOf name} in its synthetic cluster ${where}" (
+      builtins.deepSeq cluster.rawManifests (
+        builtins.seq (piChecks.validatePIWiring "package-${name}" cluster) (
+          assert checkPublishedVersion name package cluster;
+          builtins.deepSeq cluster.scorecardReport (
+            builtins.foldl' (
+              acc: f:
+              assert lib.assertMsg (cluster.scorecardReport.summary.byRule ? ${f.rule})
+                "${name} no longer fails ${f.rule}; remove it from knownFailures in kix/package-eval.nix ${
+                  if lib.hasPrefix "housekeeping/" f.reason then
+                    "and update or delete ${f.reason}"
+                  else
+                    "and the exception described in ${f.reason}"
+                }";
+              acc
+            ) name failures
           )
         )
-      );
+      )
+    );
 
   strayKeys = lib.filter (key: !(packages ? ${key})) (
     builtins.attrNames settings
     ++ builtins.attrNames knownFailures
     ++ builtins.attrNames skip
+    ++ builtins.attrNames refusesWithoutDefaultLimits
     ++ sourceDomainLiteralExceptions
     ++ builtins.attrNames versionExceptions
   );
 
   levels = builtins.attrNames levelModules;
 
-  evaluated = lib.concatMap (
-    level: lib.mapAttrsToList (evaluatePackage level) (removeAttrs packages (builtins.attrNames skip))
-  ) levels;
+  evaluatedPackages = removeAttrs packages (builtins.attrNames skip);
+
+  evaluated =
+    lib.concatMap (level: lib.mapAttrsToList (evaluatePackage level) evaluatedPackages) levels
+    ++ lib.mapAttrsToList evaluateWithoutDefaultLimits evaluatedPackages;
 in
 {
   inherit
@@ -897,6 +949,10 @@ in
   # when `names` throws.
   evaluate = level: name: evaluatePackage level name packages.${name};
 
+  # One package with every default limit turned off, for finding the
+  # failure when `names` throws.
+  evaluateWithoutDefaultLimits = name: evaluateWithoutDefaultLimits name packages.${name};
+
   # The option contract of one package: null when its options pass, a
   # failure listing each violation otherwise.
   checkOptionContract = name: checkOptions name packages.${name};
@@ -904,8 +960,8 @@ in
   inherit checkOptionContracts;
 
   # Forcing this checks the option contract of every package, then
-  # evaluates every package that is not skipped, at every level. Each
-  # package name appears once per level.
+  # evaluates every package that is not skipped, at every level and once
+  # more without default limits. Each package name appears once per pass.
   names =
     assert lib.assertMsg (strayKeys == [ ])
       "kix/package-eval.nix: `settings`, `knownFailures`, `skip`, `sourceDomainLiteralExceptions`, or `versionExceptions` names ${lib.concatStringsSep ", " strayKeys}, which is not a package folder under kix/packages/";

@@ -1,5 +1,12 @@
 # Define reusable package option schemas (`kix.options.*`).
-{ lib }:
+#
+# `defaultLimits` is the cluster's `cluster.defaultLimits`. The instance
+# evaluator imports this file again with the cluster's value and hands the
+# result to the package as `kix.options.resources`.
+{
+  lib,
+  defaultLimits ? (import ../core/default-limits.nix).default,
+}:
 
 let
   inherit (import ../core/error.nix { inherit lib; }) fail;
@@ -171,7 +178,9 @@ in
   #
   # Package defaults may set `cpu`, `memory`, and `ephemeral-storage`.
   # Instances may also set `hugepages-<size>` and extended resources (such as
-  # `nvidia.com/gpu`) or set a field to null to clear its default.
+  # `nvidia.com/gpu`) or set a field to null to clear its default. A default
+  # CPU or memory limit is dropped when the cluster sets that field of
+  # `cluster.defaultLimits` to "none". A limit the instance sets stays.
   resources =
     {
       requests ? { },
@@ -187,6 +196,7 @@ in
       badDefaults = builtins.filter (k: !(builtins.elem k known)) (
         builtins.attrNames requests ++ builtins.attrNames limits
       );
+      defaultedLimits = lib.filterAttrs (name: _: (defaultLimits.${name} or "package") != "none") limits;
       side =
         defaults:
         lib.mkOption {
@@ -205,7 +215,8 @@ in
           description = "Resource quantities by name.";
         };
       shownDefault = cleanResources {
-        inherit requests limits;
+        inherit requests;
+        limits = defaultedLimits;
         claims = null;
       };
     in
@@ -219,7 +230,7 @@ in
         type = lib.types.submodule {
           options = {
             requests = side requests;
-            limits = side limits;
+            limits = side defaultedLimits;
             claims = lib.mkOption {
               type = lib.types.nullOr (
                 lib.types.listOf (

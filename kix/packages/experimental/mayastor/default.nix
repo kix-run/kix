@@ -150,7 +150,7 @@ in
       setByPackage =
         side:
         builtins.filter (k: k == "cpu" || lib.hasPrefix "hugepages-" k) (
-          builtins.attrNames (lib.filterAttrs (_: v: v != null) res.${side})
+          builtins.attrNames (lib.filterAttrs (_: v: v != null) (res.${side} or { }))
         );
       owned = lib.unique (setByPackage "requests" ++ setByPackage "limits");
 

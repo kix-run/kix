@@ -52,6 +52,24 @@ let
     cpu = toString cpuCount;
     hugepages-2Mi = config.ioEngine.hugepages2Mi;
   };
+
+  # io-engine polls on `cpuCount` whole cores. The kubelet's static CPU
+  # manager gives exclusive cores only to a pod in the Guaranteed QoS class,
+  # and that class needs every limit equal to its request. So the memory
+  # limit follows the memory request, as in upstream's chart. The package
+  # derives it here instead of declaring a default limit, so
+  # `cluster.defaultLimits` leaves it in place. An instance that sets
+  # `limits.memory` overrides it.
+  ioEngineResources =
+    let
+      r = config.ioEngine.resources;
+      requestedMemory = lib.optionalAttrs (r ? requests.memory) { inherit (r.requests) memory; };
+    in
+    r
+    // {
+      requests = (r.requests or { }) // ioEngineCompute;
+      limits = requestedMemory // (r.limits or { }) // ioEngineCompute;
+    };
 in
 {
   # Restarting io-engine drops every NVMe target on its node, so a changed
@@ -162,10 +180,7 @@ in
               };
             } config.ioEngine.env;
             ports = [ (kix.port "io-engine" 10124) ];
-            resources = lib.recursiveUpdate config.ioEngine.resources {
-              requests = ioEngineCompute;
-              limits = ioEngineCompute;
-            };
+            resources = ioEngineResources;
             securityContext.privileged = true;
             volumeMounts = [
               {
