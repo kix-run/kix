@@ -19,6 +19,7 @@
   describeRequester,
   buildConfigInjections,
   checkRefTargets,
+  checkDepsKeys,
   refsOf,
   evaluateInstanceModules,
   instancePinsLib,
@@ -432,7 +433,9 @@ in
 
       # Read only `ref` pointers in phase 1. Other explicit `deps` values may
       # come from the instance fixpoint, so they are bound during full instance
-      # evaluation and do not receive config injections.
+      # evaluation and do not receive config injections. An inactive optional
+      # instance deploys nothing, so it resolves no dependency and injects no
+      # config.
       phase1Instances = lib.mapAttrs (
         nsName: nsInsts:
         lib.mapAttrs (
@@ -456,14 +459,18 @@ in
               };
               discoveredDeps = discoverBuildDeps raw.build;
               depsEnrichment = raw.deps or { };
-              resolvedTargets = resolveDepTargets {
-                declaredDeps = discoveredDeps;
-                inherit resolutionIndex depsEnrichment;
-                namespace = nsName;
-                requester = describeRequester nsName instName instCfg;
-                requesterName = instName;
-                explicitOverrides = lib.filterAttrs (_: v: refsOf v != [ ]) (instCfg.deps or { });
-              };
+              resolvedTargets =
+                if isActive nsName instName then
+                  resolveDepTargets {
+                    declaredDeps = discoveredDeps;
+                    inherit resolutionIndex depsEnrichment;
+                    namespace = nsName;
+                    requester = describeRequester nsName instName instCfg;
+                    requesterName = instName;
+                    explicitOverrides = lib.filterAttrs (_: v: refsOf v != [ ]) (instCfg.deps or { });
+                  }
+                else
+                  lib.mapAttrs (_: _: { found = false; }) discoveredDeps;
             in
             {
               inherit discoveredDeps depsEnrichment resolvedTargets;
@@ -472,6 +479,8 @@ in
             }
         ) nsInsts
       ) mergedInstances;
+
+      _depsKeysCheck = checkDepsKeys { inherit mergedInstances phase1Instances; };
 
       configInjections = buildConfigInjections phase1Instances;
 
@@ -1380,51 +1389,53 @@ in
     in
     builtins.seq _instancePinsCheck (
       builtins.seq _refTargetsCheck (
-        builtins.seq _extraDepsCheck (
-          builtins.seq _rolesValidation (
-            builtins.seq _roleBindingsCheck (
-              builtins.seq _annotationDomainsCheck (
-                builtins.seq _clusterHookChecksRun (
-                  builtins.seq clusterDiagnostics.evaluateExtraWarnings (
-                    builtins.seq clusterDiagnostics.assertionCheck {
-                      _type = "k8s-cluster-v2";
-                      inherit name;
+        builtins.seq _depsKeysCheck (
+          builtins.seq _extraDepsCheck (
+            builtins.seq _rolesValidation (
+              builtins.seq _roleBindingsCheck (
+                builtins.seq _annotationDomainsCheck (
+                  builtins.seq _clusterHookChecksRun (
+                    builtins.seq clusterDiagnostics.evaluateExtraWarnings (
+                      builtins.seq clusterDiagnostics.assertionCheck {
+                        _type = "k8s-cluster-v2";
+                        inherit name;
 
-                      inherit clusterInstances;
-                      instances = clusterInstances;
+                        inherit clusterInstances;
+                        instances = clusterInstances;
 
-                      namespaces = nsResources;
+                        namespaces = nsResources;
 
-                      inherit
-                        activation
-                        activationIndex
-                        activationFiles
-                        packageIndex
-                        packageIndexContent
-                        info
-                        extraImages
-                        imageSources
-                        ;
+                        inherit
+                          activation
+                          activationIndex
+                          activationFiles
+                          packageIndex
+                          packageIndexContent
+                          info
+                          extraImages
+                          imageSources
+                          ;
 
-                      interfaces = if platformSide == null then { } else platformSide.interfaces;
+                        interfaces = if platformSide == null then { } else platformSide.interfaces;
 
-                      diagnostics = {
-                        warnings = libraryWarnings;
-                        inherit (clusterDiagnostics) assertions failedAssertions;
-                      };
-
-                      out = {
-                        maintenance = {
-                          enable = cfg.cluster.maintenance.enable or false;
-                          reason = cfg.cluster.maintenance.reason or null;
-                          until = cfg.cluster.maintenance.until or null;
+                        diagnostics = {
+                          warnings = libraryWarnings;
+                          inherit (clusterDiagnostics) assertions failedAssertions;
                         };
-                      };
 
-                      inherit scorecardReport;
+                        out = {
+                          maintenance = {
+                            enable = cfg.cluster.maintenance.enable or false;
+                            reason = cfg.cluster.maintenance.reason or null;
+                            until = cfg.cluster.maintenance.until or null;
+                          };
+                        };
 
-                      rawManifests = rawManifestList;
-                    }
+                        inherit scorecardReport;
+
+                        rawManifests = rawManifestList;
+                      }
+                    )
                   )
                 )
               )

@@ -104,6 +104,7 @@ let
       describeRequester
       buildConfigInjections
       checkRefTargets
+      checkDepsKeys
       refsOf
       evaluateInstanceModules
       instancePinsLib

@@ -83,9 +83,14 @@ instances.mayastor = {
 };
 ```
 
-When the Mayastor instance itself answers `storageClasses` for the cluster
-(its `aliases` include `storageClasses`), wire `deps.storageClasses`
-explicitly as above; evaluation refuses the instance otherwise.
+If you add `"storageClasses"` to the Mayastor instance's `aliases` so other
+packages use Mayastor by default, Kix skips Mayastor when resolving etcd's own
+`storageClasses` dependency. etcd can still use
+`config.etcd.storage.storageClassName` or another managed `storageClasses`
+instance automatically. However, because managed instances take priority over
+imports, Kix does not automatically select a `kix.mkImport` provider (such as a
+platform default class) once Mayastor claims `"storageClasses"`. To give etcd
+an imported class, point `deps.storageClasses` to that import as shown above.
 
 The number of etcd members follows the instance's availability level: one at
 `none`, three above. Three members need three nodes on which the etcd class

@@ -205,11 +205,17 @@ rec {
               inherit packageMeta;
             };
           in
-          [ instName ] ++ aliases
+          map (key: { ${key} = "${ns}/${instName}"; }) (lib.unique ([ instName ] ++ aliases))
         ) (builtins.attrNames (mandatory.${ns} or { }))
       ) (builtins.attrNames mandatory);
 
-      mandatoryKeys = builtins.listToAttrs (map (k: lib.nameValuePair k true) mandatoryKeysList);
+      # The mandatory instances that answer each name, as `<ns>/<inst>`.
+      mandatoryKeys = builtins.zipAttrsWith (_: owners: owners) mandatoryKeysList;
+
+      # Return whether a mandatory instance other than `requester` answers
+      # `name`. Dependency resolution never binds an instance to itself.
+      answeredByOther =
+        requester: name: builtins.any (owner: owner != requester) (mandatoryKeys.${name} or [ ]);
 
       optionalByKeyList = builtins.concatMap (
         ns:
@@ -289,7 +295,7 @@ rec {
           requester = "${ns}/${instName}";
           # resolveArg treats a null entry as not wired.
           wired = lib.filterAttrs (_: v: v != null) (instCfg.deps or { });
-          required = builtins.filter (d: !(mandatoryKeys ? ${d})) (getRequiredDeps instCfg.package);
+          required = builtins.filter (d: !(answeredByOther requester d)) (getRequiredDeps instCfg.package);
           wiredOptionals = builtins.filter (v: (optional.${v.namespace} or { }) ? ${v.instanceName}) (
             builtins.concatMap (d: refsOf wired.${d}) (
               builtins.filter (d: wired ? ${d}) (getAllDeps instCfg.package)

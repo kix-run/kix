@@ -125,6 +125,72 @@ rec {
       ) acc nsInsts
     ) null instances;
 
+  # Refuse a `deps.<name>` whose name the instance's package does not take,
+  # on every instance, active or not. Resolution reads only the names the
+  # package takes, so such an entry would be ignored. `phase1Instances`
+  # gives each instance's `discoveredDeps` and the package's `deps`
+  # attribute (`depsEnrichment`).
+  checkDepsKeys =
+    { mergedInstances, phase1Instances }:
+    lib.foldlAttrs (
+      acc: nsName: nsInsts:
+      lib.foldlAttrs (
+        acc: instName: instCfg:
+        let
+          p1 = phase1Instances.${nsName}.${instName};
+          taken = builtins.attrNames p1.discoveredDeps;
+          path = "instances.${nsName}.${instName}.deps";
+          isImport = (instCfg.package._type or "") == "kix-import";
+          # The dependency that took this name before a rename, or null.
+          renamedTo =
+            key: lib.findFirst (arg: (p1.depsEnrichment.${arg}.renamedFrom.name or null) == key) null taken;
+          refuseKey =
+            key:
+            let
+              newName = renamedTo key;
+              renamedFrom = p1.depsEnrichment.${newName}.renamedFrom;
+            in
+            if isImport then
+              fail {
+                id = "K3646";
+                instance = "${nsName}/${instName}";
+                dependency = key;
+                message = "${path}.${key} is set on a kix.mkImport instance. Imports describe resources managed outside Kix and take no dependencies, so Kix rejected it.";
+                fix = "Remove ${path}.${key}. To deploy this import after another instance, add ref.<namespace>.<instance> to instances.${nsName}.${instName}.extraDeps.";
+              }
+            else if newName != null then
+              fail {
+                id = lib.removeSuffix "]" (lib.removePrefix "[" renamedFrom.id);
+                instance = "${nsName}/${instName}";
+                dependency = key;
+                message = "${path}.${key} uses a dependency name that this package renamed to '${newName}', so Kix rejected it.";
+                fix = "Rename ${path}.${key} to ${path}.${newName}.";
+              }
+            else
+              fail {
+                id = "K3646";
+                instance = "${nsName}/${instName}";
+                dependency = key;
+                message =
+                  if taken == [ ] then
+                    "${path}.${key} is set, and this instance's package takes no dependencies, so Kix rejected it."
+                  else
+                    "${path}.${key} is not a dependency of this instance's package, so Kix rejected it. Valid dependencies for this package: ${builtins.concatStringsSep ", " taken}.";
+                fix =
+                  if taken == [ ] then
+                    "Remove ${path}.${key}."
+                  else if builtins.length taken == 1 then
+                    "Rename ${path}.${key} to ${path}.${builtins.head taken}, or remove ${path}.${key}."
+                  else
+                    "Rename ${path}.${key} to one of the listed dependencies, or remove ${path}.${key}.";
+              };
+        in
+        builtins.foldl' (acc: key: if p1.discoveredDeps ? ${key} then acc else refuseKey key) acc (
+          builtins.attrNames (instCfg.deps or { })
+        )
+      ) acc nsInsts
+    ) null mergedInstances;
+
   # Resolve a package dependency argument against `explicitOverride` or
   # `resolutionIndex`. An instance in another namespace binds only when the
   # override names it, when its package serves the whole cluster
@@ -169,6 +235,10 @@ rec {
           resolutionIndex.byKey.${t.instanceName} or [ ]
         );
 
+      isRequester = namespace: instName: namespace == requesterNamespace && instName == requesterName;
+
+      selfRef = lib.findFirst (r: isRequester r.namespace r.instanceName) null (refsOf explicitOverride);
+
       # Refuse a ref from another namespace to an instance whose package
       # declares `meta.scope = "namespace"`.
       checkRefScope =
@@ -186,7 +256,19 @@ rec {
         else
           t;
     in
-    if explicitOverride != null then
+    if selfRef != null then
+      refuse {
+        message = "${consumerPath}.deps.${argName} ${
+          if builtins.isList explicitOverride then "includes" else "points to"
+        } ref.${selfRef.namespace}.${selfRef.instanceName}, which is the instance itself. An instance cannot depend on itself, so Kix rejected it.";
+        fix =
+          if builtins.isList explicitOverride then
+            "Remove ref.${selfRef.namespace}.${selfRef.instanceName} from ${consumerPath}.deps.${argName}, or replace it with a ref to another instance."
+          else
+            "Point ${consumerPath}.deps.${argName} to another instance that provides '${argName}', or remove ${consumerPath}.deps.${argName}.";
+      }
+
+    else if explicitOverride != null then
       # Resolve `ref` and `[ ref ... ]` overrides with `direct = false` so they
       # run through the same meta checks as auto-resolved dependencies.
       if isRef explicitOverride then
@@ -239,10 +321,15 @@ rec {
 
         # Prefer managed instances over imports among the instances this
         # namespace may use, so a managed provider that serves the cluster
-        # shadows a flavour's import in the requester's namespace.
+        # shadows a flavour's import in the requester's namespace. Then drop
+        # the requesting instance, which never binds to itself. A managed
+        # instance that answers its own dependency name still shadows an
+        # import of that name, so it does not bind the import it replaces.
         eligible = sameNs ++ serving;
         managed = builtins.filter (c: !(c.meta.isImport or false)) eligible;
-        candidates = if managed != [ ] then managed else eligible;
+        candidates = builtins.filter (c: !(isRequester c.namespace c.instName)) (
+          if managed != [ ] then managed else eligible
+        );
         own = builtins.filter (c: c.namespace == requesterNamespace) candidates;
         shared = builtins.filter (c: c.namespace != requesterNamespace) candidates;
 
