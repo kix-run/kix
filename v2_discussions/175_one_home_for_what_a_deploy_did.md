@@ -87,6 +87,8 @@ PackageInstance kind is not changed.
    revisions. A team that wants one stores it in another system.
 9. An older Kix is stopped from running `kix gc` after a newer one has
    deployed.
+10. The first deploy by the new Kix removes the two old notes from every
+    object (section 7). Pods of operators that copy annotations restart once.
 
 Decision 1 reverses a rule the CLI states today: live state is read "never to
 decide" (`cli/README.md`, "Baseline: what a plan compares against"). That
@@ -522,35 +524,34 @@ and one list per kind.
 
 For Adam:
 
-1. **Remove the old notes on the first deploy, or leave them?** I recommend
-   removing them, at the cost of one restart of pods that copy annotations.
-2. **Is a required stop acceptable for the first of the two releases?**
+1. **Is a required stop acceptable for the first of the two releases?**
    Decision 9 needs it (section 7).
 
-Settled on 2026-11-24: the field manager test comes first (decision 6), the
+Settled on 2026-11-24: the old notes are removed on the first deploy
+(decision 10), the field manager test comes first (decision 6), the
 repair takes the lock (decision 7), no revision history (decision 8), and an
 older `kix gc` is stopped (decision 9). The repair yields to a waiting deploy
 and does not count as a writer.
 
 To settle by reading or testing before any code:
 
-3. Test what happens to objects applied under today's manager name when a
+2. Test what happens to objects applied under today's manager name when a
    Kix cluster starts to apply under its own name, and how the old entry is
    removed. The rest of the field manager test passed (section 4.7).
-4. Measure on a cluster larger than 334 objects. The sizes and timings in
+3. Measure on a cluster larger than 334 objects. The sizes and timings in
    section 4.8 come from one small cluster on kind.
-5. Decide the lease duration and the holder's margin.
-6. Say what the next deploy does after a restore that drops `status`: how
+4. Decide the lease duration and the holder's margin.
+5. Say what the next deploy does after a restore that drops `status`: how
     the head finds `current` when no record has a phase.
-7. Say what `kix status` and `kix plan` show when a record is `Deploying`
+6. Say what `kix status` and `kix plan` show when a record is `Deploying`
     and the lock may be dead, since one read cannot tell.
-8. Say which head an Activation with no `kix.run/cluster` label uses. It
+7. Say which head an Activation with no `kix.run/cluster` label uses. It
     takes its own name as the Kix cluster today.
-9. Say who installs the two CRDs on a cluster that only the operator
+8. Say who installs the two CRDs on a cluster that only the operator
     deploys. The operator leaves CRDs out of its reconcile.
-10. Find the new home for the cleanup of retired annotation keys
-    (section 4.6).
-11. Confirm that a saved plan binds to nothing but what section 4.4 lists.
+9. Find the new home for the cleanup of retired annotation keys
+   (section 4.6).
+10. Confirm that a saved plan binds to nothing but what section 4.4 lists.
 
 Not in this document: the planner itself (review theme 4), replacing an
 object that cannot change in place (theme 6), and readiness (theme 7). Each
