@@ -2,10 +2,12 @@
 kind = "added"
 packages = ["cnpg-cluster"]
 +++
-`cnpg-cluster` can back up to S3 as an AWS IAM role instead of with access
-keys. Set `deps.storageCredentials = kix.cloudIdentity.aws { roleArn = "..."; }`.
-The ObjectStore then sets `s3Credentials.inheritFromIAMRole`, and the
-Cluster's `spec.serviceAccountTemplate` carries the role for the ServiceAccount
-that the CloudNativePG operator creates. Kix does not restart the instance pods
-when the role changes; run `kubectl cnpg restart <cluster>`. A Secret in
-`storageCredentials` works as before.
+`cnpg-cluster` can now authenticate S3 backups with an AWS IAM role as well as
+a Secret. Existing instances that pass a Secret in `deps.storageCredentials`
+need no changes. To use an IAM role, set
+`deps.storageCredentials = kix.cloudIdentity.aws { roleArn = "..."; }`. Kix
+sets `s3Credentials.inheritFromIAMRole` on the `ObjectStore` and writes the
+cloud identity annotations to `spec.serviceAccountTemplate` on the `Cluster`
+for the `ServiceAccount` created by the CloudNativePG operator. Because the
+operator creates the PostgreSQL pods, changing the role does not restart them
+automatically. Run `kubectl cnpg restart <cluster>` after changing the role.

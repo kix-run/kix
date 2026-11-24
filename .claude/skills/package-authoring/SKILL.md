@@ -506,7 +506,7 @@ The only place in this skill with package line numbers. `pkg:N` is
 | One alias, two implementations, a contract file | `kix/contracts/experimental/clickhouse.nix`; clickhouse:101, clickhouse-cluster:90 |
 | Renamed dependency with `renamedFrom` | immich:209-212; `kix/contracts/stable/redis.nix` (`helpers.renamedFrom`) |
 | Credentials dependency accepting either a Secret or a cloud identity (`kix.cloudIdentity.use` and `credentials.bind`) | external-dns:179-187, 600-607; `providers.nix` (`cloud`) |
-| Cloud identity on a ServiceAccount an operator creates from a custom resource (`kix.cloudIdentity.annotationsFor` into the CR, locked against `extraSpec`) | cnpg-cluster:356-383, 631-639 |
+| Cloud identity on a ServiceAccount created by an operator (`kix.cloudIdentity.annotationsFor`, written to the custom resource and locked against `extraSpec`) | cnpg-cluster:356-383, 631-639 |
 
 A script of more than a few lines is a sibling file read with
 `builtins.readFile`, so it can be linted and run alone

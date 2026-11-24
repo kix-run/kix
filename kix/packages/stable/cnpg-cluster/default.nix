@@ -384,8 +384,8 @@ in
           if identity != null && builtins.any (k: k != null) (builtins.attrValues bk.credentialKeys) then
             scope.fail {
               option = "backup.credentialKeys";
-              message = "backup.credentialKeys names keys of a storageCredentials Secret, and storageCredentials holds a cloud identity, so nothing reads them.";
-              fix = "Remove backup.credentialKeys.";
+              message = "`backup.credentialKeys` is set, but `deps.storageCredentials` uses a cloud identity instead of a Secret. With a cloud identity, the backup `ObjectStore` authenticates with the IAM role and reads no Secret keys, so Kix rejected `backup.credentialKeys`.";
+              fix = "Remove `backup.credentialKeys` to use the cloud identity, or pass a Secret instance (`ref.<namespace>.<instance>`) in `deps.storageCredentials` instead.";
             }
           else
             null;
@@ -659,8 +659,8 @@ in
           else if identity != null && config.extraSpec ? serviceAccountName then
             scope.fail {
               option = "extraSpec.serviceAccountName";
-              message = "extraSpec sets serviceAccountName while storageCredentials holds a cloud identity. The package puts the identity on the ServiceAccount the operator creates, and with serviceAccountName the operator creates none.";
-              fix = "Remove serviceAccountName, or give that ServiceAccount the role outside Kix and wire a Secret as storageCredentials.";
+              message = "`extraSpec.serviceAccountName` is set while `deps.storageCredentials` uses a cloud identity. Kix writes the cloud identity to `spec.serviceAccountTemplate` on the `Cluster` for the ServiceAccount that CloudNativePG creates. Because CloudNativePG does not create a ServiceAccount when `serviceAccountName` is set, Kix rejected this `Cluster`.";
+              fix = "Remove `extraSpec.serviceAccountName` so CloudNativePG creates the ServiceAccount with the cloud identity, or pass a Secret instance (`ref.<namespace>.<instance>`) in `deps.storageCredentials` instead.";
             }
           else if backupOn && (config.extraSpec.backup or { }) ? barmanObjectStore then
             scope.fail {
