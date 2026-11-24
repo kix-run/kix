@@ -343,12 +343,16 @@ in
               summary = "The VictoriaMetrics operator is down.";
               description = "No replica of the VictoriaMetrics operator ${ns}/${scope.instanceName} has answered a scrape for 10 minutes. Running VMCluster, VMAgent, and VMAlert workloads keep working, but no change to a VictoriaMetrics CR, ServiceMonitor, or PrometheusRule is applied. Check the operator Deployment.";
             };
-            VMOperatorReconcileErrors = {
-              expr = "sum by (namespace, job, controller) (rate(controller_runtime_reconcile_errors_total{${op}}[5m])) > 0";
-              "for" = "15m";
-              severity = "warning";
+            VMOperatorReconcileErrors = kix.reconcileErrorsAlert {
+              selector = op;
+              by = [
+                "namespace"
+                "job"
+              ];
+              operator = "VictoriaMetrics operator ${ns}/${scope.instanceName}";
               summary = "The VictoriaMetrics operator fails to reconcile objects.";
-              description = "The {{ $labels.controller }} controller of the VictoriaMetrics operator ${ns}/${scope.instanceName} has failed reconciles for 15 minutes, so the objects it manages may not match their CRs. Check the operator logs for the object and the error.";
+              impact = "the objects it manages may not match their custom resources";
+              nextStep = "Check the operator logs for the failing object and error.";
             };
           };
         }

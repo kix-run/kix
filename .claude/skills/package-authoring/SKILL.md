@@ -463,6 +463,7 @@ The only place in this skill with package line numbers. `pkg:N` is
 | Metrics toggle that does not restart the workload | metabase:152-157; keycloak header 30-35 |
 | `kix.monitor` with alerts | openbao:393; clickhouse:626-636 and `alerts.nix` |
 | `kix.alerts` over a PodMonitor | `cnpg-cluster/alerts.nix`:54 |
+| `kix.reconcileErrorsAlert` for an operator | cnpg-operator:942; victoria-metrics-operator:346 (`job` labels) |
 | `kix.healthCheck` with a script file | victoria-metrics-agent:358-375 |
 | Checksum annotations from `out.contentHash`, `enableServiceLinks = false` | metabase:258-271 |
 | Facade: consumer-namespace Secret, server-namespace Job | clickhouse-database:1-36; stackgres-database |

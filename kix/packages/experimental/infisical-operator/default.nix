@@ -828,8 +828,6 @@ in
     (
       let
         sel = ''namespace="${ns}",service="${metricsServiceName}"'';
-        reconcileErrors = "sum by (namespace, service, controller) (increase(controller_runtime_reconcile_errors_total{${sel}}[30m]))";
-        reconciles = "sum by (namespace, service, controller) (increase(controller_runtime_reconcile_total{${sel}}[30m]))";
         operator = "Infisical operator ${ns}/${name}";
       in
       kix.monitor {
@@ -843,15 +841,12 @@ in
             summary = "The Infisical operator is down.";
             description = "No replica of the ${operator} has answered a scrape for 10 minutes. Secrets and ConfigMaps it synced keep their values, but changes made in Infisical do not reach them. Check the operator Deployment in ${ns}.";
           };
-          InfisicalOperatorReconcileErrors = {
-            # controller-runtime counts an optimistic-lock conflict as an error
-            # and retries at once, so a busy healthy controller shows a few.
-            # Alert on the share of reconciles that fail, with a floor.
-            expr = "${reconcileErrors} / ${reconciles} > 0.1 and ${reconcileErrors} > 2";
-            "for" = "15m";
-            severity = "warning";
+          InfisicalOperatorReconcileErrors = kix.reconcileErrorsAlert {
+            selector = sel;
+            operator = operator;
             summary = "The Infisical operator fails to reconcile its resources.";
-            description = "The {{ $labels.controller }} controller of the ${operator} has failed {{ $value | humanizePercentage }} of its reconciles over the last 30 minutes, so a Secret or ConfigMap it manages may be stale. The operator log and the conditions of the custom resource name the error, such as an authentication or connection failure.";
+            impact = "Secrets or ConfigMaps it manages may be out of date";
+            nextStep = "Check the operator logs and the custom resource's conditions for errors such as authentication or connection failures.";
           };
         };
       }

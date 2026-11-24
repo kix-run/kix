@@ -466,5 +466,6 @@ rec {
   inherit (monitorModule)
     monitor
     alerts
+    reconcileErrorsAlert
     ;
 }

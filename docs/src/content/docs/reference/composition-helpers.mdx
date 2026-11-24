@@ -283,6 +283,33 @@ For packages that define `PrometheusRule` alerts without a `ServiceMonitor` (for
 
 `kix.alerts` accepts `alerts`, `name` (defaults to `scope.instanceName`), `extraLabels`, and `rulesPart` (defaults to `"prometheusRules"`), and is gated by `config.metrics.enabled` (default `true`).
 
+### Operator reconcile errors (`kix.reconcileErrorsAlert`)
+
+Operators built on controller-runtime increment `controller_runtime_reconcile_errors_total` on every failed reconcile, including optimistic-lock conflicts that a busy, healthy operator immediately retries. For operators that expose `controller_runtime_reconcile_total` and `controller_runtime_reconcile_errors_total`, `kix.reconcileErrorsAlert` builds a `"warning"` alert entry for `alerts`. It fires when a controller's 30-minute failure rate exceeds 10% (with at least three errors, `> 2.5` after `increase()` extrapolation) for 15 minutes.
+
+```nix
+alerts = {
+  FooOperatorReconcileErrors = kix.reconcileErrorsAlert {
+    selector = ''namespace="${ns}",service="${metricsServiceName}"'';
+    operator = "Foo operator ${ns}/${name}";
+    summary = "The Foo operator is failing to reconcile resources.";
+    impact = "Foo resources may not match their specs";
+    nextStep = "Check the operator logs for the failing resource and error.";
+  };
+};
+```
+
+| Argument | Type | Default | Description |
+| --- | --- | --- | --- |
+| `selector` | string | Required | PromQL label matchers that scope both reconcile counters to this operator instance. |
+| `by` | list of strings | `[ "namespace" "service" ]` | Labels used to group the alert by operator instance (`controller` is always appended). When scraping through a `PodMonitor` or a `VMServiceScrape` that identifies the target by `job`, pass `[ "namespace" "job" ]`. |
+| `operator` | string | Required | Operator name and `<namespace>/<instance>`, placed after `of the ` in the description (omit a leading `the`). |
+| `summary` | string | Required | Static `summary` annotation for the alert. |
+| `impact` | string | Required | Clause placed after `so ` in the description to explain what may be out of date while reconciles fail. |
+| `nextStep` | string | Required | Final sentence of the description telling the reader what to check first. |
+
+The generated `description` reads "The `<controller>` controller of the `<operator>` has failed `<percentage>` of its reconciles over the last 30 minutes, so `<impact>`. `<nextStep>`". Merge an attribute set with `//` to override fields such as `severity` or `"for"`.
+
 ---
 
 ## healthCheck
