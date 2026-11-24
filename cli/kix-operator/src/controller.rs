@@ -1567,7 +1567,7 @@ mod tests {
                 "metadata": {
                     "name": "held",
                     "namespace": "app",
-                    "finalizers": ["test.kix.run/hold"],
+                    "finalizers": ["example.com/hold"],
                     "annotations": { (keys::ACTIVATIONS): "b1" },
                 },
             }),
@@ -1584,7 +1584,7 @@ mod tests {
         .unwrap_err();
         assert!(
             matches!(&err, OperatorError::DeletionUnfinished { count: 1, leftovers }
-                if leftovers.contains("waiting for test.kix.run/hold")),
+                if leftovers.contains("waiting for example.com/hold")),
             "{err}"
         );
 
@@ -1644,7 +1644,7 @@ mod tests {
         );
         let err = OperatorError::DeletionUnfinished {
             count: 1,
-            leftovers: "ConfigMap/held@app (waiting for test.kix.run/hold)".into(),
+            leftovers: "ConfigMap/held@app (waiting for example.com/hold)".into(),
         };
         let api = kix::cluster::fake_api::FakeApi::new([]);
         let runtime = tokio::runtime::Builder::new_current_thread()

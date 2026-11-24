@@ -178,7 +178,7 @@ async fn an_object_being_deleted_is_not_ready() {
         .find(|o| o["metadata"]["name"] == "web-config")
         .unwrap();
     config["metadata"]["deletionTimestamp"] = serde_json::json!("2026-11-24T15:54:00Z");
-    config["metadata"]["finalizers"] = serde_json::json!(["test.kix.run/hold"]);
+    config["metadata"]["finalizers"] = serde_json::json!(["example.com/hold"]);
     let api = FakeApi::new(objects);
 
     let seen = observe_fake(&api, ObserveScope::Cluster("shop")).await;
@@ -186,7 +186,7 @@ async fn an_object_being_deleted_is_not_ready() {
     let config = by_name(&seen.clusters[0], "web-config");
     assert_eq!(
         config.readiness,
-        Readiness::NotReady("being deleted, waiting for test.kix.run/hold".into())
+        Readiness::NotReady("being deleted, waiting for example.com/hold".into())
     );
 }
 

@@ -603,7 +603,7 @@ mod tests {
                     "name": "cm",
                     "namespace": "app",
                     "deletionTimestamp": "2026-11-24T15:54:00Z",
-                    "finalizers": ["test.kix.run/hold"],
+                    "finalizers": ["example.com/hold"],
                     "annotations": { (keys::ACTIVATIONS): "a1" },
                 },
             }),
@@ -648,7 +648,7 @@ mod tests {
             "cm",
             "hash_cm",
             "hash_secret",
-            &["test.kix.run/hold"],
+            &["example.com/hold"],
         );
         let secret = object("Secret", "needed", "hash_secret", "", &[]);
         let other = object("Secret", "other", "hash_other", "", &[]);
@@ -678,7 +678,7 @@ mod tests {
         let Removal::Stuck(stuck) = by_name("cm") else {
             panic!("{removals:?}");
         };
-        assert_eq!(stuck.finalizers, vec!["test.kix.run/hold".to_string()]);
+        assert_eq!(stuck.finalizers, vec!["example.com/hold".to_string()]);
         assert!(
             matches!(by_name("needed"), Removal::HeldBack { by, shared: false } if by.name == "cm")
         );
@@ -689,7 +689,7 @@ mod tests {
         assert_eq!(api.names("ConfigMap"), vec!["cm"]);
         assert_eq!(api.names("Secret"), vec!["needed"]);
         assert!(
-            steps.contains(&"cm waiting: being deleted, waiting for test.kix.run/hold".to_string()),
+            steps.contains(&"cm waiting: being deleted, waiting for example.com/hold".to_string()),
             "{steps:?}"
         );
         // Two deletes went out: `cm` and `other`. `needed` got none.
@@ -813,7 +813,7 @@ mod tests {
     /// and the one behind it are reported cancelled, and both stay.
     #[tokio::test(start_paused = true)]
     async fn a_cancel_mid_walk_stops_it() {
-        let (api, order) = pair(&["test.kix.run/hold"]);
+        let (api, order) = pair(&["example.com/hold"]);
         let cancel = CancelToken::new();
         let stopper = {
             let cancel = cancel.clone();
@@ -849,7 +849,7 @@ mod tests {
                 "metadata": {
                     "name": name,
                     "namespace": "app",
-                    "finalizers": ["test.kix.run/hold"],
+                    "finalizers": ["example.com/hold"],
                     "annotations": { (keys::ACTIVATIONS): "a1" },
                 },
             }));

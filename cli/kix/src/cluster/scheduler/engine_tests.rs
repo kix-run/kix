@@ -2056,10 +2056,10 @@ async fn a_stuck_prune_delete_fails_and_holds_back_what_it_needs() {
     let ops = Arc::new(ScriptedOps::new());
     ops.gone_behaviour(
         rid("ConfigMap", "cr"),
-        Some("being deleted, waiting for test.kix.run/hold"),
+        Some("being deleted, waiting for example.com/hold"),
         Behaviour::Now(Ok(Deletion::Stuck(Stuck {
             elapsed: secs(10),
-            finalizers: vec!["test.kix.run/hold".into()],
+            finalizers: vec!["example.com/hold".into()],
         }))),
     );
     let rec = Arc::new(Recorder::default());
@@ -2096,7 +2096,7 @@ async fn a_stuck_prune_delete_fails_and_holds_back_what_it_needs() {
         failure.message
     );
     assert!(
-        failure.message.contains("test.kix.run/hold"),
+        failure.message.contains("example.com/hold"),
         "{}",
         failure.message
     );
@@ -2136,7 +2136,7 @@ async fn a_stuck_prune_delete_fails_and_holds_back_what_it_needs() {
                 verdict: Verdict::Running,
                 detail: Some(NodeDetail::ReadinessProgress(status)),
                 ..
-            } if status == "being deleted, waiting for test.kix.run/hold"
+            } if status == "being deleted, waiting for example.com/hold"
         )),
         "{events:?}"
     );
@@ -2152,7 +2152,7 @@ async fn a_cancel_during_the_prune_wait_stops_the_run() {
     let ops = Arc::new(ScriptedOps::new());
     ops.gone_behaviour(
         rid("ConfigMap", "cr"),
-        Some("being deleted, waiting for test.kix.run/hold"),
+        Some("being deleted, waiting for example.com/hold"),
         Behaviour::Hang,
     );
     let cfg = config(quiet_watchdog());
@@ -2213,7 +2213,7 @@ async fn stuck_prune_deletes_wait_together() {
                 secs(180),
                 Ok(Deletion::Stuck(Stuck {
                     elapsed: secs(180),
-                    finalizers: vec!["test.kix.run/hold".into()],
+                    finalizers: vec!["example.com/hold".into()],
                 })),
             ),
         );

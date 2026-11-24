@@ -671,11 +671,11 @@ mod tests {
             delete_line(
                 &Verdict::Running,
                 Some(&NodeDetail::ReadinessProgress(
-                    "being deleted, waiting for test.kix.run/hold".into()
+                    "being deleted, waiting for example.com/hold".into()
                 ))
             )
             .as_deref(),
-            Some("deleting, waiting for test.kix.run/hold")
+            Some("deleting, waiting for example.com/hold")
         );
         let failed = Verdict::Failed {
             message: "stuck".into(),

@@ -1191,7 +1191,7 @@ fn a_prune_waits_for_finalizers() {
             "hold-test-config",
             "--type=merge",
             "-p",
-            r#"{"metadata":{"finalizers":["test.kix.run/hold"]}}"#,
+            r#"{"metadata":{"finalizers":["example.com/hold"]}}"#,
         ],
     );
     assert!(patch.status.success(), "{patch:?}");
@@ -1214,7 +1214,7 @@ fn a_prune_waits_for_finalizers() {
     eprintln!("$ kix deploy hold --prune --yes --timeout 10s\n{text}");
     assert_eq!(out.status.code(), Some(1), "{text}");
     assert!(text.contains("[K2794]"), "{text}");
-    assert!(text.contains("test.kix.run/hold"), "{text}");
+    assert!(text.contains("example.com/hold"), "{text}");
     assert!(
         text.contains("kubectl -n hold-test patch configmap hold-test-config"),
         "{text}"

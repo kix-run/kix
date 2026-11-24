@@ -371,7 +371,7 @@ mod delete_tests {
             "cm",
             "hash_cm",
             "hash_s",
-            &["test.kix.run/hold"],
+            &["example.com/hold"],
         );
         let secret = object("Secret", "s", "hash_s", "", &[]);
         let api = FakeApi::new([record("a", "a1"), cm.clone(), secret.clone()]);

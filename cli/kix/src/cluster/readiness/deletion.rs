@@ -466,7 +466,7 @@ mod tests {
     /// An object whose last finalizer is removed during the wait is gone.
     #[tokio::test(start_paused = true)]
     async fn an_object_is_gone_once_its_finalizer_is_removed() {
-        let fake = FakeApi::new([config_map(&["test.kix.run/hold"])]);
+        let fake = FakeApi::new([config_map(&["example.com/hold"])]);
         let api = api_for(&fake).await;
         let uid = uid_of(&fake);
         api.delete("cm", &Default::default()).await.unwrap();
@@ -485,12 +485,12 @@ mod tests {
     /// so the deleted one is gone.
     #[tokio::test(start_paused = true)]
     async fn an_object_replaced_by_a_new_uid_is_gone() {
-        let fake = FakeApi::new([config_map(&["test.kix.run/hold"])]);
+        let fake = FakeApi::new([config_map(&["example.com/hold"])]);
         let api = api_for(&fake).await;
         let uid = uid_of(&fake);
         api.delete("cm", &Default::default()).await.unwrap();
         fake.remove_finalizers("ConfigMap", "cm");
-        fake.insert(config_map(&["test.kix.run/hold"]));
+        fake.insert(config_map(&["example.com/hold"]));
         assert_ne!(uid_of(&fake), uid);
         assert_eq!(
             wait(&api, Some(&uid), Duration::from_secs(10)).await,
@@ -507,7 +507,7 @@ mod tests {
     /// without progress, and the result names the finalizer.
     #[tokio::test(start_paused = true)]
     async fn an_object_that_keeps_its_finalizer_is_stuck_after_the_budget() {
-        let fake = FakeApi::new([config_map(&["test.kix.run/hold"])]);
+        let fake = FakeApi::new([config_map(&["example.com/hold"])]);
         let api = api_for(&fake).await;
         let uid = uid_of(&fake);
         api.delete("cm", &Default::default()).await.unwrap();
@@ -525,12 +525,12 @@ mod tests {
         let Deletion::Stuck(stuck) = deletion else {
             panic!("expected stuck, got {deletion:?}");
         };
-        assert_eq!(stuck.finalizers, vec!["test.kix.run/hold".to_string()]);
+        assert_eq!(stuck.finalizers, vec!["example.com/hold".to_string()]);
         assert!(stuck.elapsed >= Duration::from_secs(10), "{stuck:?}");
         assert!(stuck.elapsed < Duration::from_secs(13), "{stuck:?}");
         assert_eq!(
             seen.last().unwrap(),
-            "being deleted, waiting for test.kix.run/hold"
+            "being deleted, waiting for example.com/hold"
         );
         assert_eq!(fake.names("ConfigMap"), vec!["cm"]);
     }
@@ -562,7 +562,7 @@ mod tests {
     /// A failed read is an error, never "gone".
     #[tokio::test(start_paused = true)]
     async fn a_read_error_is_not_gone() {
-        let fake = FakeApi::new([config_map(&["test.kix.run/hold"])]);
+        let fake = FakeApi::new([config_map(&["example.com/hold"])]);
         let api = api_for(&fake).await;
         let uid = uid_of(&fake);
         api.delete("cm", &Default::default()).await.unwrap();
@@ -582,7 +582,7 @@ mod tests {
     /// The wait ends when the cancel token fires.
     #[tokio::test(start_paused = true)]
     async fn a_cancelled_wait_says_so() {
-        let fake = FakeApi::new([config_map(&["test.kix.run/hold"])]);
+        let fake = FakeApi::new([config_map(&["example.com/hold"])]);
         let api = api_for(&fake).await;
         api.delete("cm", &Default::default()).await.unwrap();
         let cancel = CancelToken::new();
