@@ -94,7 +94,6 @@ let
 
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "arc ${ns}/${name}";
 
   metricsPort = 8080;
   healthPort = 8081;
@@ -364,7 +363,7 @@ in
         args =
           baseArgs
           ++ kix.guardArgs {
-            inherit who;
+            inherit scope;
             owned = {
               "--metrics-addr" =
                 "the metrics Service and ServiceMonitor use port ${toString metricsPort}; remove it.";
@@ -384,7 +383,7 @@ in
 
         env = kix.mkEnvVars (
           kix.mergeEnv {
-            inherit who;
+            inherit scope;
             owned = [
               {
                 vars.CONTROLLER_MANAGER_CONTAINER_IMAGE = kix.image.ref config.image;
@@ -423,7 +422,6 @@ in
         runnerSet = import ./runner-set.nix {
           inherit
             lib
-            who
             ns
             self
             config

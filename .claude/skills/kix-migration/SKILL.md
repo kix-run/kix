@@ -83,7 +83,8 @@ A function `{ scope, lib, kix, availability }: ...` that returns `{ meta?, optio
 { scope, lib, kix, availability }:
 let
   name = scope.instanceName;
-  # Prefix of every error the package raises, and the `who` of the kix helpers.
+  # The name the contract helpers (`kix.contracts.*`) give this instance in
+  # their errors.
   who = "my-app ${scope.namespaceName}/${name}";
   requiredExtensions = [ "vchord" "cube" ];
 in
@@ -174,11 +175,11 @@ in
               name = "server";
               image = kix.image.ref config.image;   # repository:tag@digest
               args = [ "--listen=:8080" ] ++ kix.guardArgs {
-                inherit who;
+                inherit scope;
                 owned."--listen" = "the Service and the probes use port 8080; remove it.";
               } config.extraArgs;
               env = kix.mkEnvVars (kix.mergeEnv {
-                inherit who;
+                inherit scope;
                 defaults.LOG_LEVEL = "info";
                 owned = [ {
                   vars = { DB_HOST = database.out.host; DB_PORT = toString database.out.port; };
@@ -568,9 +569,9 @@ The script gives up once `RETRY_FOR` seconds have passed and keeps one round of 
 | `kix.port name containerPort` | `→ { name, containerPort, protocol = "TCP" }` |
 | `kix.mkEnvVars { KEY = "val"; OPT = null; }` | `→ [{ name, value }]`. Nulls filtered. A value that is a `valueFrom` source (`secret.out.keyRef "password"`) renders as one, with the env name winning; any other attrset throws. |
 | `kix.mkEnv { KEY = "val"; } [ rawEntries ]` | Combine named env vars with raw K8s env entries (e.g. `valueFrom.secretKeyRef`). |
-| `kix.mergeGuarded { who; locked; what ? "extraSpec"; } base overrides` | `lib.recursiveUpdate` for an `extraSpec` or `settings` escape hatch that throws when `overrides` touches a path in `locked` (a list of attribute paths the package computes) or sets an ancestor of one to a non-attrset value such as null. Use it for every `extraSpec` and `settings`. |
-| `kix.mergeEnv { who; defaults ? { }; owned ? [ ]; } config.env` | The env attrset for `kix.mkEnvVars`: `defaults`, then the instance's `env`, then the owned variables. Each `owned` group is `{ vars ? { }; names ? [ ]; from; fix; }`; an `env` key a group owns throws with `from` and `fix`. Every `env` option goes through it. |
-| `kix.guardArgs { who; option ? "extraArgs"; owned; } config.extraArgs` | Returns `extraArgs` unless it sets an owned flag. A list entry matches `--flag`, `--flag=...`, or a one-letter flag with an attached value; a key of an attrset (a VictoriaMetrics CR's `extraArgs`) matches an owned name with or without leading dashes. `owned."--flag"` is the reason and fix shown after `which this package does not accept:`. |
+| `kix.mergeGuarded { scope; locked; option ? "extraSpec"; object ? null; } base overrides` | Merges `overrides` into `base` with `lib.recursiveUpdate`, failing if `overrides` sets a path in `locked` (a list of attribute paths the package computes) or replaces an ancestor of one with a non-attribute-set value such as `null`. Use it for every `extraSpec` and `settings` option. `option` names the instance option in errors (set `option = null` when `overrides` comes from a function argument such as an `out` builder). Pass `object` (`{ kind; name; namespace ? null; }`) to name the target Kubernetes resource when `option` configures several resources or `option` is `null`. |
+| `kix.mergeEnv { scope; option ? "env"; defaults ? { }; owned ? [ ]; } config.env` | Builds the environment attribute set for `kix.mkEnvVars` by merging `defaults`, the instance's `env`, and package-owned variables. Pass every `env` option through it, and set `option` when the option path is not `"env"` (for example, `"runners.env"`). Each `owned` entry is `{ vars ? { }; names ? [ ]; from; fix ? null; }` for variables the package sets, or `{ names; reason; fix ? null; }` for variables it rejects outright. If `env` sets a claimed variable, evaluation fails with `from` (or `reason`) and `fix` (which defaults to removing the variable from `option`). |
+| `kix.guardArgs { scope; option ? "extraArgs"; owned; } config.extraArgs` | Returns `extraArgs` unless it sets an owned flag. A list entry matches `--flag`, `--flag=...`, or a one-letter flag with an attached value; a key of an attrset (a VictoriaMetrics CR's `extraArgs`) matches an owned name with or without leading dashes. `owned."--flag"` is the reason and fix shown after `which this package does not accept:`. |
 | `kix.contracts.secret.helpers.use { who; arg; dep; keys ? [ ]; anyOf ? null; }` | Returns the secret dep after checking that it is a secret (`kix.contracts.secret`) and declares the keys; read the secret through the returned value so the check runs before any `keyRef` throws. `kix.checkSecretKeys` takes the same arguments and checks the keys only. |
 | `kix.operandPolicy { scope; name; spec; }` | A network policy over pods an operator creates (`spec` in the enforcer's format). Drops the `ingress`/`egress` sections of a direction `networkPolicy.directions` does not enforce; null when no enforcer runs or no section is left, so filter nulls before `root.requires`. |
 | `kix.parseQuantity "memory" "512Mi"` | `→ 536870912` (bytes; millicores for `"cpu"`); null when not a quantity; an integer, and a value above the signed 64-bit range throws. |

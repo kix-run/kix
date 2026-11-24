@@ -184,7 +184,6 @@ in
         ...
       }:
       let
-        who = "victoria-metrics-agent ${scope.namespaceName}/${name}";
         # Stream-parse scrape responses instead of buffering them whole;
         # bounds vmagent memory on large targets (k8s-stack chart default).
         baseArgs = {
@@ -194,7 +193,7 @@ in
         # selects into these two flags, and an `extraArgs` entry would replace
         # either one.
         extraArgs = kix.guardArgs {
-          inherit who;
+          inherit scope;
           owned = {
             "remoteWrite.url" =
               "the vmCluster dependency sets it to the cluster's insert Service, which the network policy also opens. Change the vmCluster dependency instead.";
@@ -232,7 +231,7 @@ in
         vmAgent = vmOperator.out.mkVMAgent scope {
           inherit name;
           spec = kix.mergeGuarded {
-            inherit who;
+            inherit scope;
             locked = map lib.toList [
               "remoteWrite"
               "scrapeInterval"

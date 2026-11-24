@@ -131,7 +131,7 @@ in
         };
 
         mergedSettings = vectorAgent.mergeConfig {
-          inherit who;
+          inherit scope;
           sink = "loki";
         } builtinSettings config.settings;
       in

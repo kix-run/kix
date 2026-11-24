@@ -13,7 +13,6 @@ rec {
 
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "external-secrets ${ns}/${name}";
 
   ports = {
     metrics = 8080;

@@ -19,6 +19,15 @@ let
   throws = v: !(builtins.tryEval (builtins.deepSeq v v)).success;
   evalFails' = ms: throws ms;
 
+  # A scope whose `fail` returns `{ thrown; }` instead of throwing, as the
+  # scope of instance ns/inst of package `pkg`.
+  caughtScope.fail =
+    ((import ../caught.nix { inherit lib; }).caught ../../core/error.nix { inherit lib; }).failFor
+      {
+        instance = "ns/inst";
+        package = "pkg";
+      };
+
   # The value of one option `o` after the module system merges `defs`.
   optionValue =
     o: defs:
@@ -301,7 +310,7 @@ in
   lib-options-typing-merge-env =
     let
       merge = kixlib.mergeEnv {
-        who = "pkg ns/inst";
+        scope.fail = kixlib.fail;
         defaults.LOG = "info";
         owned = [
           {
@@ -337,7 +346,7 @@ in
   lib-options-typing-guard-args =
     let
       guard = kixlib.guardArgs {
-        who = "pkg ns/inst";
+        scope.fail = kixlib.fail;
         owned."--ingress-class" = "remove it.";
       };
     in
@@ -358,14 +367,13 @@ in
   # and the reason.
   lib-options-typing-guard-args-attrset =
     let
+      helpers = import ../caught.nix { inherit lib; };
       guardArgs = {
-        who = "pkg ns/inst";
+        scope = caughtScope;
         option = "vmstorage.extraArgs";
         owned."dedup.minScrapeInterval" = "set scrapeInterval instead.";
       };
-      guard = kixlib.guardArgs guardArgs;
-      # compose.nix with `throw` replaced, so the message can be read.
-      helpers = import ../caught.nix { inherit lib; };
+      guard = kixlib.guardArgs (guardArgs // { scope.fail = kixlib.fail; });
       refusal =
         args:
         helpers.records (
@@ -393,8 +401,10 @@ in
           "dedup.minScrapeInterval" = "1m";
         } == [
           {
+            instance = "ns/inst";
+            package = "pkg";
             option = "vmstorage.extraArgs";
-            message = "pkg ns/inst: vmstorage.extraArgs sets \"dedup.minScrapeInterval\", which this package does not accept: set scrapeInterval instead.";
+            message = "vmstorage.extraArgs sets \"dedup.minScrapeInterval\", which this package does not accept: set scrapeInterval instead.";
           }
         ]
     )
@@ -403,6 +413,256 @@ in
         "dedup.minScrapeInterval" = "1m";
       })
     }";
+
+  # The helpers' refusals name the instance and the package through
+  # `scope.fail`, and the option the user set. A mergeEnv group with a
+  # `reason` refuses a variable outright, and a group without `fix` tells
+  # the user to remove it from the option. A mergeGuarded refusal tells the
+  # user to remove the locked path, names `object`, and names no option when
+  # `option` is null. A storage.mkClasses refusal keeps its option.
+  lib-options-typing-helper-refusal-records =
+    let
+      compose = (import ../caught.nix { inherit lib; }).caught ../../vocab/compose.nix { inherit lib; };
+      records = (import ../caught.nix { inherit lib; }).records;
+      envRefusal =
+        (compose.mergeEnv
+          {
+            scope = caughtScope;
+            option = "runners.env";
+            owned = [
+              {
+                names = [ "CLIENT_ID" ];
+                reason = "it selects workload identity.";
+                fix = "Wire deps.oauth.";
+              }
+              {
+                vars.DB_HOST = "db";
+                from = "the database dependency";
+              }
+            ];
+          }
+          {
+            CLIENT_ID = "x";
+            DB_HOST = "y";
+          }
+        ).thrown;
+      guardedRefusal =
+        (compose.mergeGuarded {
+          scope = caughtScope;
+          option = "settings";
+          locked = [ [ "auth_enabled" ] ];
+        } { } { auth_enabled = true; }).thrown;
+      objectRefusal =
+        (compose.mergeGuarded {
+          scope = caughtScope;
+          option = null;
+          object = {
+            kind = "ReplicationSource";
+            name = "db";
+            namespace = "app";
+          };
+          locked = [ [ "trigger" ] ];
+        } { } { trigger = { }; }).thrown;
+      storage = (import ../caught.nix { inherit lib; }).caught ../../vocab/storage-class.nix {
+        inherit lib;
+      };
+      classesRefusal =
+        (storage.mkClasses {
+          scope = caughtScope;
+          clusterConfig = { };
+          optionPath = "classes";
+          classes = { };
+          parts = { };
+        }).storageClassName.thrown;
+      expected = {
+        env = [
+          {
+            instance = "ns/inst";
+            package = "pkg";
+            option = "runners.env";
+            message = "runners.env sets CLIENT_ID, which this package does not accept: it selects workload identity.";
+            fix = "Wire deps.oauth.";
+          }
+          {
+            instance = "ns/inst";
+            package = "pkg";
+            option = "runners.env";
+            message = "runners.env sets DB_HOST, which comes from the database dependency.";
+            fix = "Remove it from runners.env.";
+          }
+        ];
+        guarded = [
+          {
+            instance = "ns/inst";
+            package = "pkg";
+            option = "settings";
+            message = "settings overrides auth_enabled, which this package sets itself.";
+            fix = "Remove it from settings.";
+          }
+        ];
+        object = [
+          {
+            instance = "ns/inst";
+            package = "pkg";
+            object = {
+              kind = "ReplicationSource";
+              name = "db";
+              namespace = "app";
+            };
+            message = "The overrides set trigger, which this package sets itself.";
+            fix = "Remove it.";
+          }
+        ];
+        classesOption = "classes";
+      };
+      got = {
+        env = records envRefusal;
+        guarded = records guardedRefusal;
+        object = records objectRefusal;
+        classesOption = (builtins.head (records classesRefusal)).option or null;
+      };
+    in
+    got == expected || throw "helper refusal records: ${builtins.toJSON got}";
+
+  # A helper called with `who` is refused with the change record id, and
+  # the refusal names the instance when the call also passes `scope`. A call
+  # without `scope`, and a mergeGuarded call with `what`, are refused too,
+  # even when nothing else is wrong.
+  lib-options-typing-helpers-refuse-who =
+    let
+      caughtErrors = (import ../caught.nix { inherit lib; }).caught ../../core/error.nix { inherit lib; };
+      records = (import ../caught.nix { inherit lib; }).records;
+      withWho =
+        (caughtErrors.failOf "guardArgs" {
+          scope = null;
+          who = "pkg ns/inst";
+        }).thrown;
+      withWhoAndScope = builtins.head (
+        records
+          (caughtErrors.failOf "guardArgs" {
+            scope = caughtScope;
+            who = "pkg ns/inst";
+          }).thrown
+      );
+      realScope.fail = kixlib.fail;
+      classes =
+        args:
+        kixlib.storage.mkClasses (
+          {
+            scope = realScope;
+            clusterConfig = { };
+            optionPath = "classes";
+            classes.a.annotations = { };
+            parts.a.out.name = "a";
+          }
+          // args
+        );
+      withoutScope =
+        (caughtErrors.failOf "mergeEnv" {
+          scope = null;
+          who = null;
+        }).thrown;
+    in
+    (
+      (builtins.head (records withWho)).id or null == "K6417"
+      && withWhoAndScope.id or null == "K6417"
+      && withWhoAndScope.instance or null == "ns/inst"
+      && lib.hasInfix "needs `scope`" (builtins.head (records withoutScope)).message
+    )
+    && throws (
+      kixlib.guardArgs {
+        who = "pkg ns/inst";
+        owned = { };
+      } [ ]
+    )
+    && throws (
+      kixlib.mergeGuarded {
+        scope = realScope;
+        who = "pkg ns/inst";
+        locked = [ ];
+      } { } { }
+    )
+    && throws (
+      kixlib.mergeGuarded {
+        scope = realScope;
+        what = "settings";
+        locked = [ ];
+      } { } { }
+    )
+    && throws (
+      kixlib.mergeEnv {
+        scope = realScope;
+        who = "pkg ns/inst";
+      } { }
+    )
+    && (classes { }).storageClassName == "a"
+    && throws (classes { who = "pkg ns/inst"; }).storageClassName
+    && throws (classes { who = "pkg ns/inst"; }).resources
+    || throw "helpers accepted `who` or a missing scope: ${withWho} ${withoutScope}";
+
+  # A package run through `kix.mkImport { from = ...; }` gets a scope with
+  # `fail`, so the helpers work in an import as they do in an instance.
+  lib-options-typing-helpers-in-import =
+    let
+      imported =
+        { scope, kix, ... }:
+        {
+          meta.version = "test";
+          build =
+            { self, ... }:
+            {
+              service = scope.mkResource {
+                apiVersion = "v1";
+                kind = "Service";
+                name = "cache";
+                spec =
+                  kix.mergeGuarded
+                    {
+                      inherit scope;
+                      locked = [ [ "ports" ] ];
+                    }
+                    {
+                      ports = [
+                        {
+                          name = "tcp";
+                          port = 6379;
+                        }
+                      ];
+                    }
+                    { };
+              };
+              root = self.service;
+            };
+        };
+      consumer = {
+        meta.version = "test";
+        build =
+          {
+            self,
+            scope,
+            cache,
+            ...
+          }:
+          {
+            cm = scope.mkResource {
+              apiVersion = "v1";
+              kind = "ConfigMap";
+              name = "cache-consumer";
+              extra.data.name = cache.out.name;
+            };
+            root = self.cm;
+          };
+      };
+      cm = lib.findFirst (m: m.kind == "ConfigMap" && m.metadata.name == "cache-consumer") null (
+        manifests (mkCluster [
+          {
+            instances.cache.cache.package = eval.mkImport { from = imported; };
+            instances.app.consumer.package = consumer;
+          }
+        ])
+      );
+    in
+    (cm.data.name or null == "cache") || throw "helper in an import: ${builtins.toJSON cm}";
 
   lib-options-typing-check-secret-keys =
     let

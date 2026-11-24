@@ -48,7 +48,6 @@
 
 let
   name = scope.instanceName;
-  who = "immich-machine-learning ${scope.namespaceName}/${name}";
   release = import ../immich/release.nix;
 in
 {
@@ -188,7 +187,7 @@ in
                   # go there too.
                   env = kix.mkEnvVars (
                     kix.mergeEnv {
-                      inherit who;
+                      inherit scope;
                       defaults = {
                         HF_XET_CACHE = "/cache/huggingface-xet";
                         MPLCONFIGDIR = "/cache/matplotlib-config";

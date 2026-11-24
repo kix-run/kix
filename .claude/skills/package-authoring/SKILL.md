@@ -341,8 +341,10 @@ pattern table has each form.
 - `env` accepts strings, so refuse the program's credential variables as
   literal strings (pattern table) and point at a `secretKeyRef` to a Secret
   managed outside Kix or at the secret dep (S1).
-- Bind `who = "<pkg> ${scope.namespaceName}/${name}"` once in the `let` and
-  pass it to every helper (Pr9).
+- Pass `inherit scope;` to `kix.mergeGuarded`, `kix.mergeEnv`, and
+  `kix.guardArgs` so their errors include the instance and package. Bind
+  `who = "<pkg> ${scope.namespaceName}/${name}"` once in `let` for contract
+  helpers (`kix.contracts.*`) that take `who` (Pr9).
 
 ### 8. Option surface
 

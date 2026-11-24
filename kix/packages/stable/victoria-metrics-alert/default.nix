@@ -371,8 +371,8 @@ in
         vmAlertmanager = vmOperator.out.mkVMAlertmanager scope {
           inherit name;
           spec = kix.mergeGuarded {
-            inherit who;
-            what = "alertmanager.extraSpec";
+            inherit scope;
+            option = "alertmanager.extraSpec";
             locked = map lib.toList [
               "configSecret"
               "configRawYaml"
@@ -390,7 +390,7 @@ in
         vmAlert = vmOperator.out.mkVMAlert scope {
           inherit name;
           spec = kix.mergeGuarded {
-            inherit who;
+            inherit scope;
             locked = [
               [
                 "datasource"

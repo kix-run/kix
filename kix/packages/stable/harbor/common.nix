@@ -273,13 +273,12 @@ rec {
         secretEnv
         ++ kix.mkEnvVars (
           kix.mergeEnv {
-            inherit who;
+            inherit scope option;
             defaults = tunables;
             owned = [
               {
                 names = lib.remove sslmodeVar facts;
                 from = "a ConfigMap the package derives from its dependencies";
-                fix = "Remove it from ${option}.";
               }
               {
                 names = map (e: e.name) secretEnv;
@@ -289,7 +288,6 @@ rec {
               {
                 inherit vars;
                 from = "the package's dependencies";
-                fix = "Remove it from ${option}.";
               }
               {
                 vars = caTrust;

@@ -54,7 +54,6 @@
 let
   release = "v1.4.24";
   name = scope.instanceName;
-  who = "reloader ${scope.namespaceName}/${name}";
   reloadAnnotation = "secret.reloader.stakater.com/reload";
 
   # Reasons follow guardArgs' "which this package does not accept: ".
@@ -252,7 +251,7 @@ in
         args =
           baseArgs
           ++ kix.guardArgs {
-            inherit who;
+            inherit scope;
             owned = ownedFlags // unsupportedFlags;
           } config.extraArgs;
 
@@ -293,7 +292,7 @@ in
 
         env = kix.mkEnvVars (
           kix.mergeEnv {
-            inherit who;
+            inherit scope;
             owned = [
               {
                 vars = {

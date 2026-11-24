@@ -265,7 +265,7 @@ in
           keeper = clickhouseOperator.out.mkKeeperInstallation scope {
             inherit name;
             spec = kix.mergeGuarded {
-              who = "clickhouse-keeper (${name})";
+              inherit scope;
               # The replica count is the quorum, the pod template carries
               # the image and the spread, the volume has its option.
               locked = [

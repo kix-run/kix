@@ -2,7 +2,7 @@
 {
   lib,
   kix,
-  who,
+  scope,
   fail,
   httpPort,
   paths,
@@ -219,8 +219,8 @@ let
 
   ini = lib.mapAttrs (_: lib.filterAttrs (_: v: v != null)) (
     kix.mergeGuarded {
-      inherit who;
-      what = "settings";
+      inherit scope;
+      option = "settings";
       locked = [
         [ "paths" ]
         [
@@ -304,12 +304,11 @@ let
 
   env = kix.mkEnvVars (
     kix.mergeEnv {
-      inherit who;
+      inherit scope;
       owned = [
         {
           vars = paths;
           from = "the package, which mounts the data, plugins, and provisioning directories there";
-          fix = "Remove it from env.";
         }
         {
           vars = {
@@ -326,7 +325,6 @@ let
         {
           vars.GF_SERVER_HTTP_PORT = toString httpPort;
           from = "the package, so the Service and probes match the container";
-          fix = "Remove it from env.";
         }
       ]
       ++ lib.optional oidcOn {

@@ -275,7 +275,6 @@ in
               POD_UID = fieldRef "metadata.uid";
             };
             from = "the pod's own metadata";
-            fix = "Remove them from env.";
           }
           {
             vars = {
@@ -283,7 +282,6 @@ in
               XDG_CONFIG_HOME = "/config";
             };
             from = "the package: the operator keeps its tailnet state in a Secret its Role may write and its files in the writable /config volume";
-            fix = "Remove them from env.";
           }
           {
             vars.OPERATOR_INGRESS_CLASS_NAME = self.ingressClass.out.name;
@@ -312,17 +310,17 @@ in
           )
           {
             names = [ "CLIENT_ID" ];
-            from = "the oauthCredentials dependency in this package; CLIENT_ID selects workload identity federation, which needs serviceaccounts/token RBAC the package does not grant";
+            reason = "setting CLIENT_ID directly enables workload identity federation, and the operator has no serviceaccounts/token RBAC permissions.";
             fix = "Wire an OAuth client through deps.oauthCredentials.";
           }
           {
             names = [ "APISERVER_PROXY" ];
-            from = "a kube-apiserver ProxyGroup in this package; the operator's in-process API server proxy needs impersonation RBAC the package does not grant";
-            fix = "Build one with out.mkProxyGroup, spec.type = \"kube-apiserver\" and spec.kubeAPIServer.mode = \"noauth\".";
+            reason = "the operator's in-process API server proxy requires impersonation RBAC permissions not granted to the operator.";
+            fix = "Remove APISERVER_PROXY from env. To expose the API server on the tailnet, build a ProxyGroup with out.mkProxyGroup using spec.type = \"kube-apiserver\" and spec.kubeAPIServer.mode = \"noauth\".";
           }
           {
             names = [ "OPERATOR_DEFAULT_LOAD_BALANCER" ];
-            from = "each Service's loadBalancerClass in this package; the variable makes the operator claim every LoadBalancer Service without a class, which is the cluster's loadBalancer role";
+            reason = "Tailscale would claim every LoadBalancer Service without a loadBalancerClass, taking over Services meant for the cluster's default load balancer (the loadBalancer role).";
             fix = "Set loadBalancerClass = tailscale.out.loadBalancerClass on the Services you want on the tailnet.";
           }
           {
@@ -334,7 +332,7 @@ in
 
         env = kix.mkEnvVars (
           kix.mergeEnv {
-            inherit who;
+            inherit scope;
             owned = ownedEnv;
           } config.env
         );
@@ -381,7 +379,6 @@ in
           inherit
             lib
             kix
-            who
             ns
             managedLabels
             config

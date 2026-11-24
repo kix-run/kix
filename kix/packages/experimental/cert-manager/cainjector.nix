@@ -205,7 +205,7 @@ in
                 "--leader-election-namespace=${ns}"
               ]
               ++ kix.guardArgs {
-                inherit who;
+                inherit scope;
                 option = "cainjector.extraArgs";
                 owned."--leader-election-namespace" =
                   "the leader-election Role lives in the instance's namespace; remove it.";

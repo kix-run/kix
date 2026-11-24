@@ -400,7 +400,7 @@ in
           installation = clickhouseOperator.out.mkClickHouseInstallation scope {
             inherit name;
             spec = kix.mergeGuarded {
-              who = "clickhouse-cluster (${name})";
+              inherit scope;
               # The Keeper address carries the netpol edge, the password
               # is the credentials dep, the users' network and
               # access_management are what lets clickhouse-database in,

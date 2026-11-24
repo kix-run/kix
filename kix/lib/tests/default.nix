@@ -5418,7 +5418,7 @@ let
     t101-merge-guarded =
       let
         guard = kixlib.mergeGuarded {
-          who = "pkg (x)";
+          scope.fail = kixlib.fail;
           locked = [
             [
               "a"

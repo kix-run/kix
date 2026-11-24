@@ -319,7 +319,7 @@ in
           "--health-probe-bind-address=:8081"
         ]
         ++ kix.guardArgs {
-          who = "victoria-metrics-operator ${ns}/${name}";
+          inherit scope;
           owned = ownedFlags;
         } config.extraArgs;
 

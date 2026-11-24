@@ -387,13 +387,14 @@ in
               self.repositoryMaintenanceConfig != null
             ) "--repo-maintenance-job-configmap=${self.repositoryMaintenanceConfig.out.name}"
             ++ kix.guardArgs {
-              inherit who;
+              inherit scope;
               option = "server.extraArgs";
               owned = ownedArgs;
             } config.server.extraArgs;
             env = kix.mkEnvVars (
               kix.mergeEnv {
-                inherit who;
+                inherit scope;
+                option = "server.env";
                 owned = ownedEnv { LD_LIBRARY_PATH = "/plugins"; };
               } config.server.env
             );
@@ -461,13 +462,14 @@ in
                   ++ featureArgs
                   ++ [ "--node-agent-configmap=${self.nodeAgentConfig.out.name}" ]
                   ++ kix.guardArgs {
-                    inherit who;
+                    inherit scope;
                     option = "nodeAgent.extraArgs";
                     owned = ownedArgs;
                   } config.nodeAgent.extraArgs;
                   env = kix.mkEnvVars (
                     kix.mergeEnv {
-                      inherit who;
+                      inherit scope;
+                      option = "nodeAgent.env";
                       owned = ownedEnv { NODE_NAME.valueFrom.fieldRef.fieldPath = "spec.nodeName"; };
                     } config.nodeAgent.env
                   );

@@ -172,7 +172,6 @@ let
 
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "envoy-gateway-controller ${ns}/${name}";
 
   # The controller name Envoy Gateway's GatewayClass controller watches for
   # (api/v1alpha1/envoygateway_helpers.go).
@@ -425,8 +424,8 @@ in
           kind = "EnvoyGateway";
         }
         // kix.mergeGuarded {
-          inherit who;
-          what = "settings";
+          inherit scope;
+          option = "settings";
           locked = lockedSettings;
         } configBase config.settings;
 

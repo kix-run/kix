@@ -341,8 +341,8 @@ in
         };
 
         merged = kix.mergeGuarded {
-          inherit who;
-          what = "settings";
+          inherit scope;
+          option = "settings";
           locked = [
             [
               "extensions"
@@ -503,7 +503,7 @@ in
                 "--config=${configDir}/${configFile}"
               ]
               ++ kix.guardArgs {
-                inherit who;
+                inherit scope;
                 owned = {
                   "--config" =
                     "the package's merged settings are the collector's only configuration; put configuration in settings.";
@@ -511,7 +511,7 @@ in
                     "it overrides configuration paths after the package's checks; put configuration in settings.";
                 };
               } config.extraArgs;
-              env = kix.mkEnvVars (kix.mergeEnv { inherit who; } config.env);
+              env = kix.mkEnvVars (kix.mergeEnv { inherit scope; } config.env);
               ports = [
                 (kix.port "otlp-grpc" grpcPort)
                 (kix.port "otlp-http" httpPort)

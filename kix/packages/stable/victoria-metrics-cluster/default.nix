@@ -85,7 +85,6 @@ let
   inherit (import ../victoria-metrics-operator/operand-placement.nix { inherit lib kix; })
     operandPlacement
     ;
-  who = "victoria-metrics-cluster ${scope.namespaceName}/${name}";
 in
 {
   meta = {
@@ -352,7 +351,7 @@ in
           component:
           lib.optionalAttrs (component != "vminsert") dedupArgs
           // kix.guardArgs {
-            inherit who;
+            inherit scope;
             option = "${component}.extraArgs";
             owned = ownedByComponent.${component};
           } config.${component}.extraArgs;
@@ -409,7 +408,7 @@ in
         };
 
         spec = kix.mergeGuarded {
-          inherit who;
+          inherit scope;
           # Everything here is computed (the storage class from the
           # dep, the dedup flag) or has an option of its own.
           locked = [

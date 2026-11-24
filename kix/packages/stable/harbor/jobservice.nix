@@ -19,7 +19,6 @@ let
   c = import ./common.nix { inherit lib kix scope; };
   inherit (c)
     name
-    who
     metricsPort
     registryUser
     svc
@@ -103,8 +102,8 @@ let
   jobserviceConfig = lib.filterAttrsRecursive (_: v: v != null) (
     kix.mergeGuarded
       {
-        inherit who;
-        what = "jobservice.settings";
+        inherit scope;
+        option = "jobservice.settings";
         locked = [
           [ "protocol" ]
           [ "port" ]

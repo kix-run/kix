@@ -40,6 +40,9 @@ rec {
       # `namespaceName` and keeps this, so a resource built into another
       # namespace still records this instance as its builder.
       homeNamespaceName ? namespaceName,
+      # Id of the package the instance runs (`core/package.nix`, `idOf`),
+      # or null for a package outside Kix's own set.
+      packageId ? null,
       namespaces ? { },
       clusterLabels ? { },
       labelStyle ? "kix",
@@ -96,6 +99,7 @@ rec {
         inherit
           instanceName
           namespaceName
+          packageId
           capabilities
           roleStatus
           ;
@@ -161,8 +165,12 @@ rec {
         mkResource = scopeMkResource;
 
         # Stop evaluation with an error for a person to fix, naming this
-        # instance (`core/error.nix`). Takes what `kix.fail` takes.
-        fail = errors.failFor "${homeNamespaceName}/${instanceName}";
+        # instance and its package (`core/error.nix`). Takes what `kix.fail`
+        # takes.
+        fail = errors.failFor {
+          instance = "${homeNamespaceName}/${instanceName}";
+          package = packageId;
+        };
 
         # Verify that the cluster serves `metrics.k8s.io` for `subject`. Packages
         # whose workloads read the metrics API without an HPA call this directly.
@@ -239,6 +247,7 @@ rec {
             inherit
               instanceName
               homeNamespaceName
+              packageId
               namespaces
               clusterLabels
               labelStyle

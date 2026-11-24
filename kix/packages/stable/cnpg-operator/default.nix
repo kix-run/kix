@@ -130,7 +130,6 @@ let
 
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "cnpg-operator ${ns}/${name}";
 
   group = "postgresql.cnpg.io";
   vendored = file: (builtins.fromJSON (builtins.readFile ./crds/${file})).spec;
@@ -293,7 +292,7 @@ in
       let
         env = kix.mkEnvVars (
           kix.mergeEnv {
-            inherit who;
+            inherit scope;
             owned = [
               {
                 vars = {

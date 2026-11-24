@@ -101,7 +101,6 @@ in
       ...
     }:
     let
-      who = "persistent-volume-claim ${scope.namespaceName}/${scope.instanceName}";
       size = toString config.size;
       modes = config.accessModes;
       modesText = "[ ${lib.concatMapStringsSep " " (m: "\"${m}\"") modes} ]";
@@ -153,7 +152,7 @@ in
           spec =
             kix.mergeGuarded
               {
-                inherit who;
+                inherit scope;
                 locked = [
                   [ "storageClassName" ]
                   [ "accessModes" ]

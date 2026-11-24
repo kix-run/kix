@@ -141,7 +141,6 @@ let
 
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "cdi ${ns}/${name}";
 
   readJSON = file: builtins.fromJSON (builtins.readFile file);
 
@@ -621,7 +620,7 @@ in
       cdiCR = scope.mkCR self.crds.cdis {
         inherit name;
         spec = kix.mergeGuarded {
-          inherit who;
+          inherit scope;
           locked = [
             [
               "infra"

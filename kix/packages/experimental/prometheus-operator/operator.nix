@@ -14,7 +14,6 @@
 let
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "prometheus-operator ${ns}/${name}";
 
   httpPort = 8080;
 
@@ -42,7 +41,7 @@ let
     "--prometheus-config-reloader=${kix.image.ref config.operandImages.prometheus-config-reloader}"
   ]
   ++ kix.guardArgs {
-    inherit who;
+    inherit scope;
     owned = {
       "--web.listen-address" =
         "the probes and the metrics Service use port ${toString httpPort}; remove it.";
@@ -52,7 +51,7 @@ let
     };
   } config.extraArgs;
 
-  env = kix.mkEnvVars (kix.mergeEnv { inherit who; } config.env);
+  env = kix.mkEnvVars (kix.mergeEnv { inherit scope; } config.env);
 
   probe = {
     httpGet = {

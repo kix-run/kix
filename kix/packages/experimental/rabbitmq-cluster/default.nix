@@ -504,7 +504,7 @@ in
         };
 
         spec = kix.mergeGuarded {
-          inherit who locked;
+          inherit scope locked;
         } baseSpec config.extraSpec;
 
         # The operator writes `disk_free_limit.absolute = 2GB` into every

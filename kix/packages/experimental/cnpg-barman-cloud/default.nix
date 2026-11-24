@@ -104,7 +104,6 @@ let
 
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "cnpg-barman-cloud ${ns}/${name}";
 
   readJSON = file: builtins.fromJSON (builtins.readFile file);
 
@@ -268,7 +267,7 @@ in
 
       env = kix.mkEnvVars (
         kix.mergeEnv {
-          inherit who;
+          inherit scope;
           owned = [
             {
               vars.SIDECAR_IMAGE = sidecarImage;
@@ -289,7 +288,7 @@ in
         "--leader-elect"
       ]
       ++ kix.guardArgs {
-        inherit who;
+        inherit scope;
         owned = {
           "--server-cert" =
             "the package mounts the server certificate from the Certificate it issues; remove it.";

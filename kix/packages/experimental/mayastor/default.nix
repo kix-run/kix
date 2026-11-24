@@ -248,8 +248,8 @@ in
       }:
       let
         sc = kix.storage.mkClasses {
-          inherit scope clusterConfig who;
-          optionPath = "config.storageClasses";
+          inherit scope clusterConfig;
+          optionPath = "storageClasses";
           classes = config.storageClasses;
           parts = self.classes;
           provisioner = self.csiDriver.out.name;
@@ -333,8 +333,8 @@ in
             spec =
               kix.mergeGuarded
                 {
-                  inherit who;
-                  what = "diskPools.${poolName}.extraSpec";
+                  inherit scope;
+                  option = "diskPools.${poolName}.extraSpec";
                   locked = [
                     [ "node" ]
                     [ "disks" ]

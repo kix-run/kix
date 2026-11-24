@@ -35,7 +35,6 @@
 # controller needs both to deregister the scale set from GitHub.
 {
   lib,
-  who,
   ns,
   self,
   config,

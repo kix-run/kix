@@ -133,7 +133,6 @@ let
 
   name = scope.instanceName;
   ns = scope.namespaceName;
-  who = "volsync ${ns}/${name}";
 
   healthPort = 8081;
   metricsPort = 8080;
@@ -294,7 +293,7 @@ in
         ]
         ++ map (m: "--${m}-container-image=${image}") movers
         ++ kix.guardArgs {
-          inherit who;
+          inherit scope;
           owned = {
             "--leader-elect" =
               "leader election keeps one active operator while the instance's availability level runs several; remove it.";
@@ -356,7 +355,15 @@ in
                 kix.facts.connect (builtins.getContext endpointService.out.fqdn) repository.out.name;
 
             spec = kix.mergeGuarded {
-              who = "${who}: ${what}";
+              inherit scope;
+              # A consumer passes `extraSpec` to this function, so no option
+              # of this instance holds it.
+              option = null;
+              object = {
+                kind = "ReplicationSource";
+                inherit name;
+                namespace = consumerScope.namespaceName;
+              };
               locked = [
                 [ "sourcePVC" ]
                 [ "trigger" ]
@@ -496,7 +503,7 @@ in
                   inherit args;
                   env = kix.mkEnvVars (
                     kix.mergeEnv {
-                      inherit who;
+                      inherit scope;
                       owned = [
                         {
                           vars.VOLSYNC_NAMESPACE = scope.namespaceName;

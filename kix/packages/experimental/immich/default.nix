@@ -555,7 +555,7 @@ in
             );
 
         env = kix.mergeEnv {
-          inherit who;
+          inherit scope;
           defaults = lib.optionalAttrs hasMetrics { IMMICH_TELEMETRY_INCLUDE = "all"; };
           owned = [
             {

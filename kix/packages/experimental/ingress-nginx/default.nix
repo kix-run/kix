@@ -59,7 +59,6 @@ let
   certgenRelease = "v1.6.9";
 
   name = scope.instanceName;
-  who = "ingress-nginx ${scope.namespaceName}/${name}";
   # Cluster-scoped objects carry the namespace too, so instances with the
   # same name in two namespaces do not collide. Namespace `a-b` with
   # instance `c` and namespace `a` with instance `b-c` still give the same
@@ -398,8 +397,8 @@ in
           else
             kix.mergeGuarded
               {
-                inherit who;
-                what = "service.spec";
+                inherit scope;
+                option = "service.spec";
                 locked = [
                   [ "selector" ]
                   [ "ports" ]
@@ -451,7 +450,7 @@ in
         # prometheus instance does not restart the controller.
         ++ lib.optional config.metrics.enabled "--enable-metrics=true"
         ++ kix.guardArgs {
-          inherit who;
+          inherit scope;
           owned = {
             "--enable-metrics" = "the package sets it from metrics.enabled; set that instead.";
             "--http-port" = "the Service, container ports, and network policy use port 80; remove it.";
@@ -471,7 +470,7 @@ in
 
         env = kix.mkEnvVars (
           kix.mergeEnv {
-            inherit who;
+            inherit scope;
             owned = [
               {
                 vars = {

@@ -268,7 +268,7 @@ in
       };
 
       spec = kix.mergeGuarded {
-        inherit who;
+        inherit scope;
         locked = [
           [ "image" ]
           [ "version" ]
