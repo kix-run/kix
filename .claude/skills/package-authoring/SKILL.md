@@ -505,7 +505,29 @@ The only place in this skill with package line numbers. `pkg:N` is
 | A step after the migrations on one replica of a dependency: an init container running a sibling script from a ConfigMap, with a checksum annotation | plausible:518-561, 605-606; `plausible/replicate.py` |
 | One alias, two implementations, a contract file | `kix/contracts/experimental/clickhouse.nix`; clickhouse:101, clickhouse-cluster:90 |
 | Renamed dependency with `renamedFrom` | immich:209-212; `kix/contracts/stable/redis.nix` (`helpers.renamedFrom`) |
-| Credentials dependency accepting either a Secret or a cloud identity (`kix.cloudIdentity.use` and `credentials.bind`) | external-dns:179-187, 600-607; `providers.nix` (`cloud`) |
+| Credentials dependency accepting either a Secret or a cloud identity (`kix.cloudIdentity.use` and `credentials.bind`) | external-dns:164-168, 607-614; `providers.nix` (`cloud`) |
+| Cloud identity when one package owns the ServiceAccount and another picks the cloud (`kix.cloudIdentity.useIdentity`, `ambientProblem`, `out.identityCloud`, `out.ambientCloud`) | `kix/lib/tests/units/cloud-identity.nix` (`holderPackage`, `callerPackage`, `storagePackage`, `databasePackage`) |
+
+A cloud identity goes on the instance that owns the ServiceAccount, because a
+ServiceAccount carries one identity. Pick the helper by what the dependency
+holds:
+
+- `kix.cloudIdentity.use`: the dependency takes a Secret or a cloud identity,
+  and this package builds the ServiceAccount and picks the cloud
+  (external-dns). When the cloud is null, pass `identityGoesTo`, naming the
+  dependency of the instance that owns the ServiceAccount, if one exists.
+- `kix.cloudIdentity.useIdentity`: the dependency takes a cloud identity or
+  nothing, because another package picks the cloud and holds any Secret.
+  Publish `credentials.cloud` as `out.identityCloud` when only dependents
+  know the cloud, or pass a dependency's `out.ambientCloud` as `cloud`.
+- `kix.cloudIdentity.annotationsFor`: an operator creates the
+  ServiceAccount from a custom resource. Give it the `identity` from `use`
+  or `useIdentity`. It returns empty sets when the identity is null.
+
+A package that picks the cloud and lets the pods use their own credentials
+never takes a cloud identity. It publishes `out.ambientCloud`, or raises
+`kix.cloudIdentity.ambientProblem { cloud; holder; }` from its `assertions`
+when it reaches the cloud through a dependency's pods.
 
 A script of more than a few lines is a sibling file read with
 `builtins.readFile`, so it can be linted and run alone
