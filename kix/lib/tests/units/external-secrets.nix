@@ -133,23 +133,29 @@ let
       config ? { },
       consumer ? mkConsumer { },
       modules ? [ ],
+      # The operator instance's `deps`, from `ref`.
+      deps ? _: { },
     }:
     mkCluster (
       [
-        {
-          instances.external-secrets.external-secrets = {
-            package = operatorPackage;
-            inherit config;
-          };
-          instances.app = {
-            consumer.package = consumer;
-            vault-token = {
-              package = secretRefPackage;
-              aliases = [ "vaultToken" ];
-              config.keys = [ "token" ];
+        (
+          { ref, ... }:
+          {
+            instances.external-secrets.external-secrets = {
+              package = operatorPackage;
+              inherit config;
+              deps = deps ref;
             };
-          };
-        }
+            instances.app = {
+              consumer.package = consumer;
+              vault-token = {
+                package = secretRefPackage;
+                aliases = [ "vaultToken" ];
+                config.keys = [ "token" ];
+              };
+            };
+          }
+        )
       ]
       ++ modules
     );
@@ -170,7 +176,7 @@ let
     };
   };
 
-  # The package's assertions read only `config`, `lib`, and `kix`.
+  # The package's assertions read only `config`, `deps`, `lib`, and `kix`.
   assertionsOf =
     (operatorPackage {
       inherit lib;
@@ -183,12 +189,57 @@ let
     map (a: a.message) (
       builtins.filter (a: !a.assertion) (assertionsOf {
         inherit config;
+        deps = { };
       })
     );
   defaultConfig = {
     image.tag = "v2.15.0";
     extraArgs = [ ];
   };
+
+  ci = kixlib.cloudIdentity;
+  flavor = name: import (../../flavors + "/${name}.nix");
+  roleArn = "arn:aws:iam::111122223333:role/external-secrets";
+  googleAccount = "external-secrets@my-project.iam.gserviceaccount.com";
+  clientId = "00000000-0000-0000-0000-000000000001";
+
+  # The operator on `flavorName` with `credentials ref` as its
+  # controllerCredentials.
+  onFlavor =
+    flavorName: credentials:
+    clusterWith {
+      modules = [ (flavor flavorName) ];
+      deps = ref: { controllerCredentials = credentials ref; };
+    };
+
+  # The ServiceAccount annotations and the pod template metadata of each
+  # component.
+  identityView =
+    c:
+    let
+      m = manifests c;
+      saOf = n: (byName n (ofKind "ServiceAccount" m)).metadata.annotations or { };
+      podOf = n: (byName n (ofKind "Deployment" m)).spec.template.metadata;
+    in
+    {
+      controllerSa = saOf "external-secrets";
+      webhookSa = saOf "external-secrets-webhook";
+      certControllerSa = saOf "external-secrets-cert-controller";
+      controllerPod = podOf "external-secrets";
+      webhookPod = podOf "external-secrets-webhook";
+      certControllerPod = podOf "external-secrets-cert-controller";
+    };
+  stamped = pod: (pod.annotations or { }) ? "checksum/cloud-identity";
+  # Only the controller calls a cloud, so only its ServiceAccount and pods
+  # carry the identity.
+  onlyController =
+    v:
+    v.controllerSa ? ${kixKeys.cloudIdentity}
+    && stamped v.controllerPod
+    && !(v.webhookSa ? ${kixKeys.cloudIdentity})
+    && !(v.certControllerSa ? ${kixKeys.cloudIdentity})
+    && !(stamped v.webhookPod)
+    && !(stamped v.certControllerPod);
 in
 {
   # Every custom resource built from `out`, through a builder or a handle,
@@ -655,4 +706,119 @@ in
     in
     wrong == [ ]
     || throw "external-secrets refusals: bad case built or good case failed: ${builtins.toJSON wrong}";
+
+  # On EKS with IRSA, the controller's ServiceAccount carries the role ARN,
+  # and only the controller pods carry the restart stamp.
+  external-secrets-cloud-identity-aws =
+    let
+      v = identityView (onFlavor "eks" (_: ci.aws { inherit roleArn; }));
+    in
+    (onlyController v && v.controllerSa."eks.amazonaws.com/role-arn" == roleArn)
+    || throw "aws: ${builtins.toJSON v}";
+
+  # On GKE, a linked Google service account is written to the
+  # ServiceAccount. Direct access writes nothing the cloud reads, but the
+  # record and the stamp still follow it.
+  external-secrets-cloud-identity-gcp =
+    let
+      linked = identityView (onFlavor "gke" (_: ci.gcp { serviceAccount = googleAccount; }));
+      direct = identityView (onFlavor "gke" (_: ci.gcp { }));
+    in
+    (
+      onlyController linked
+      && linked.controllerSa."iam.gke.io/gcp-service-account" == googleAccount
+      && onlyController direct
+      && !(direct.controllerSa ? "iam.gke.io/gcp-service-account")
+    )
+    || throw "gcp: ${builtins.toJSON { inherit linked direct; }}";
+
+  # On AKS, the client ID is on the ServiceAccount, and the webhook's label
+  # is on the controller pods only.
+  external-secrets-cloud-identity-azure =
+    let
+      v = identityView (onFlavor "aks" (_: ci.azure { inherit clientId; }));
+      labelled = pod: (pod.labels."azure.workload.identity/use" or null) == "true";
+    in
+    (
+      onlyController v
+      && v.controllerSa."azure.workload.identity/client-id" == clientId
+      && labelled v.controllerPod
+      && !(labelled v.webhookPod)
+      && !(labelled v.certControllerPod)
+    )
+    || throw "azure: ${builtins.toJSON v}";
+
+  # Without the dependency, nothing about a cloud identity is rendered. A
+  # store then takes static keys in its own spec, as the consumer's Vault
+  # store does with its token.
+  external-secrets-cloud-identity-absent =
+    let
+      v = identityView cluster;
+    in
+    (
+      !(v.controllerSa ? ${kixKeys.cloudIdentity})
+      && !(stamped v.controllerPod)
+      && (find "SecretStore" "vault").spec.provider.vault.auth ? tokenSecretRef
+    )
+    || throw "absent: ${builtins.toJSON v}";
+
+  # Each refusal, with a passing case beside it: a Secret instance in
+  # controllerCredentials, an identity on a cluster with no cloud identity
+  # mechanism, and an identity for another cloud than the cluster's.
+  external-secrets-cloud-identity-refusals =
+    let
+      withSecretRef =
+        flavorName: credentials:
+        clusterWith {
+          modules = [
+            (flavor flavorName)
+            {
+              instances.external-secrets.aws-keys = {
+                package = secretRefPackage;
+                config.keys = [
+                  "access-key"
+                  "secret-access-key"
+                ];
+              };
+            }
+          ];
+          deps = ref: { controllerCredentials = credentials ref; };
+        };
+      cases = {
+        secret = {
+          bad = withSecretRef "eks" (ref: ref.external-secrets.aws-keys);
+          good = withSecretRef "eks" (_: ci.aws { inherit roleArn; });
+        };
+        noMechanism = {
+          bad = clusterWith { deps = _: { controllerCredentials = ci.aws { inherit roleArn; }; }; };
+          good = onFlavor "eks" (_: ci.aws { inherit roleArn; });
+        };
+        otherCloud = {
+          bad = onFlavor "gke" (_: ci.aws { inherit roleArn; });
+          good = onFlavor "gke" (_: ci.gcp { });
+        };
+      };
+      wrong = builtins.attrNames (lib.filterAttrs (_: c: !(evalFails c.bad) || evalFails c.good) cases);
+    in
+    wrong == [ ]
+    || throw "external-secrets cloud identity refusals: bad case built or good case failed: ${builtins.toJSON wrong}";
+
+  # The Secret refusal names the dependency and points at the store's
+  # auth.secretRef.
+  external-secrets-cloud-identity-secret-message =
+    let
+      failed = builtins.filter (a: !a.assertion) (assertionsOf {
+        config = defaultConfig;
+        deps.controllerCredentials = {
+          out.name = "aws-keys";
+        };
+      });
+      text = lib.concatMapStringsSep " " (a: a.message + " " + (a.fix or "")) failed;
+    in
+    (
+      builtins.length failed == 1
+      && lib.hasInfix "deps.controllerCredentials" text
+      && lib.hasInfix "auth.secretRef" text
+    )
+    || throw "secret message: ${text}";
 }

@@ -34,6 +34,37 @@
 #   prometheus (optional)  metrics Services, ServiceMonitors, and alert
 #                          rules for the three components while
 #                          `metrics.enabled`.
+#   controllerCredentials  a cloud identity (`kix.cloudIdentity.aws`,
+#     (optional)           `gcp`, `azure`) for the controller's
+#                          ServiceAccount. A Secret instance is refused.
+#
+# Cloud identity: a store whose provider is AWS, Google Cloud Secret
+# Manager, or Azure Key Vault, and that names no ServiceAccount of its own,
+# calls the cloud as the controller's ServiceAccount. The package binds the
+# identity in controllerCredentials to that ServiceAccount, and every
+# controller pod gets the mechanism's pod labels and a
+# `checksum/cloud-identity` stamp. The store selects this mode in its own
+# spec: an AWS store sets no `auth`, a `gcpsm` store sets no `auth`, and an
+# `azurekv` store sets `authType: WorkloadIdentity` and no
+# `serviceAccountRef`. Every store in the cluster that names no credentials
+# then acts as this identity, so any namespace that can create a SecretStore
+# can read what the role can read.
+#
+#   instances.external-secrets.external-secrets = {
+#     package = packages.experimental.external-secrets;
+#     deps.controllerCredentials = kix.cloudIdentity.aws {
+#       roleArn = "arn:aws:iam::111122223333:role/external-secrets";
+#     };
+#   };
+#
+# Upstream recommends that each store reference a ServiceAccount of its own
+# instead (`auth.jwt.serviceAccountRef` for AWS, `auth.workloadIdentity` for
+# Google Cloud, `serviceAccountRef` for Azure). The controller then reads
+# that ServiceAccount's annotations and requests its token itself, without
+# the cluster's webhook or node agent. The package does not build this mode
+# yet. The controller reads only `eks.amazonaws.com/role-arn` on AWS, so
+# the mode fails on EKS Pod Identity and with a self-managed webhook's own
+# annotation prefix. Write the ServiceAccount's annotations by hand.
 #
 # Network policy: the intents open TCP 443 to destinations outside the
 # cluster for provider APIs, and admit the API server to TCP 10250 for the
@@ -44,7 +75,10 @@
 # controller's egress to that Service and the Service's ingress from the
 # controller. A provider outside the cluster on another port, or one
 # inside it written as a literal address, needs a
-# `networkPolicy.platformIntents` entry for the controller's pods.
+# `networkPolicy.platformIntents` entry for the controller's pods. So does a
+# controller identity on EKS Pod Identity or GKE, whose credentials come
+# from a node-local address (the Pod Identity agent, the GKE metadata
+# server) that TCP 443 to the world does not cover.
 #
 # Alerts: with a prometheus dependency and `metrics.enabled`, one
 # PrometheusRule per component: `<instance>-alerts` for the controller,
@@ -252,8 +286,9 @@ in
   };
 
   assertions =
-    { config, ... }:
+    { config, deps, ... }:
     let
+      credentials = c.controllerCredentialsOf (deps.controllerCredentials or null);
       generic = builtins.filter (
         a:
         a == "--unsafe-allow-generic-targets"
@@ -271,6 +306,14 @@ in
       {
         assertion = generic == [ ];
         message = "extraArgs sets ${lib.concatStringsSep ", " generic}, which lets ExternalSecrets write ConfigMaps and custom resources. The package grants the controller no RBAC for them and out.mkExternalSecret refuses spec.target.manifest. Remove the flag; create generic targets outside Kix.";
+      }
+      # Upstream reads static cloud keys only from a store's spec
+      # (`auth.secretRef`), never from the controller's environment.
+      {
+        assertion = credentials.secret == null;
+        dependency = "controllerCredentials";
+        message = "`deps.controllerCredentials` is a Secret instance, but the External Secrets controller does not read credentials from a Secret, so Kix rejected it. The dependency takes only a cloud identity.";
+        fix = "Set `deps.controllerCredentials` to `kix.cloudIdentity.aws { ... }`, `kix.cloudIdentity.gcp { ... }`, or `kix.cloudIdentity.azure { ... }`. For static keys, remove the dependency and reference the Secret in the store's `auth.secretRef` through `out.mkSecretStore`.";
       }
     ];
 

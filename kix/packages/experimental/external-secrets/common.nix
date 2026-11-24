@@ -65,6 +65,18 @@ rec {
     }
   ];
 
+  # Read the `controllerCredentials` dependency. The controller calls the
+  # cloud that each store names, which no package option records, so the
+  # package takes an identity for AWS, Google Cloud, or Azure. The cluster's
+  # mechanism still refuses a cloud the cluster cannot issue. A Secret
+  # instance comes back as `secret`, which the assertions refuse.
+  controllerCredentialsOf =
+    dep:
+    kix.cloudIdentity.use {
+      inherit scope dep;
+      cloud = dep.cloud or null;
+    };
+
   serviceAccount =
     saName:
     scope.mkResource {

@@ -1,0 +1,3 @@
+# 2026-11-24 · `kix/lib/vocab/cloud-identity.nix` · `kix.cloudIdentity.use` needs one cloud, but some software calls whichever cloud a custom resource names.
+
+The External Secrets controller calls AWS, Google Cloud, or Azure as each SecretStore says, and no package option records which. `use` takes `cloud` to refuse an identity for the wrong cloud, so `kix/packages/experimental/external-secrets/common.nix` passes the identity's own cloud (`dep.cloud or null`). That reads a field of the identity value that the library does not document for packages, and it turns the check off. The cluster's mechanism still refuses a cloud the cluster cannot issue. cert-manager, whose DNS01 solver names its cloud in each Issuer, may meet the same gap.
