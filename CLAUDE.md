@@ -134,6 +134,8 @@ A change is breaking when a user who upgrades must change something, or gets a d
 - a change to the state Kix writes into a cluster (Activation records, `kix.run/*` annotations, PackageInstance, and Kix's CRDs) that makes existing state read differently
 - a change to what a package deploys that the user has to act on, such as moving where it keeps its data
 
+A new check that refuses a definition is breaking only when that definition deployed and ran before. When the definition already failed at deploy, for example because Kubernetes rejects the object, the check is a `fixed` record: the user was already broken and now learns at build time. The record still says what to change. A definition that deployed and did the wrong thing without failing, such as a selector that matches no pod, is not this case, and its check is an `error` record. The Change kind check cannot tell the two cases apart, so say in the pull request description which one applies and why.
+
 Adding something is not breaking. That covers a new command, flag, option, field, event type, annotation, or field in cluster state. Programs that read Kix's JSON output or cluster state must skip fields and event types they do not know, and the JSON schemas say so. The Rust crates are not a public API.
 
 There are two kinds of breaking change, each a kind of change record (below) with its own heading in `CHANGELOG.md`:
