@@ -100,32 +100,21 @@
               > $out/manifest.json
           '';
 
-        # Auto-generated per-package option reference (Markdown), produced
-        # via `nixosOptionsDoc` against each package's `options` attrset.
-        # Three packages for now; future passes will scale to all 61.
+        # The package catalog: one reference page per package in
+        # kix/packages/, and an index page, generated from each package's
+        # `meta`, `options`, and `build` (nix/reference.nix). The pages are
+        # build output and are not committed.
         reference =
-          let
-            ref = import ./nix/reference.nix {
-              inherit pkgs;
-              inherit (pkgs) lib;
+          (import ./nix/reference.nix {
+            inherit pkgs;
+            inherit (pkgs) lib;
+            root = ../.;
+            sourceUrlBase = "https://github.com/kix-run/kix/tree/${kix.rev or "main"}";
+          }).mkCatalog
+            {
+              ledger = ./how-to-coverage.json;
+              guides = ./src/content/docs/how-to;
             };
-          in
-          ref.mkAllReferences {
-            packages = [
-              {
-                path = ../kix/packages/stable/echo-server;
-                name = "echo-server";
-              }
-              {
-                path = ../kix/packages/experimental/cert-manager;
-                name = "cert-manager";
-              }
-              {
-                path = ../kix/packages/experimental/cilium;
-                name = "cilium";
-              }
-            ];
-          };
 
         # The docs as one Kix version's build. CI builds them once per
         # version, each at its own git revision, and serves each under its
@@ -162,10 +151,8 @@
           # - Snippets land under `src/snippets/` (OUTSIDE the Starlight
           #   content collection so they're not parsed as MDX). Pages
           #   reach them with Vite `?raw` imports.
-          # - Per-package reference Markdown lands under
-          #   `src/content/docs/reference/package-catalog/`, overwriting
-          #   any placeholder pages Phase 2A wrote for these names.
-          #   Generated content wins.
+          # - The package catalog lands under
+          #   `src/content/docs/reference/package-catalog/`.
           # `--no-preserve=mode` + chmod so the copies are writable:
           # files from the Nix store arrive read-only.
           #

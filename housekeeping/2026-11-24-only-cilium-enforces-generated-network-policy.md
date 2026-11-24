@@ -1,0 +1,3 @@
+# 2026-11-24 · `kix/lib/plugins/netpol` · `networkPolicy.enable = true` supports only Cilium and cannot generate standard Kubernetes `NetworkPolicy` resources.
+
+Setting `networkPolicy.enable = true` on a cluster running Calico, Antrea, or a cloud CNI with plain `NetworkPolicy` enforcement fails evaluation. Only `packages.experimental.cilium` claims the `network-policy-enforcer` role, and every policy it builds is a `CiliumNetworkPolicy` or `CiliumClusterwideNetworkPolicy`. The enforcer interface (`kix/lib/plugins/netpol/interface.nix`) accepts custom policy kinds, and no package implements `networking.k8s.io/v1` `NetworkPolicy` resources today.

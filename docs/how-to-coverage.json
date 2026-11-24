@@ -82,6 +82,12 @@
       "unverifiedNixBlocks": 2
     },
     {
+      "page": "adopt-existing-resources/move-from-flux-to-kix-in-phases",
+      "scenario": "adoption",
+      "status": "implemented",
+      "unverifiedNixBlocks": 1
+    },
+    {
       "page": "adopt-existing-resources/patch-package-output-with-overlays",
       "scenario": "adoption",
       "status": "implemented",
@@ -520,6 +526,10 @@
         "stagingClusterIssuer",
         "selfSignedClusterIssuer",
         "importedClusterIssuer"
+      ],
+      "packages": [
+        "experimental/cert-manager",
+        "experimental/cluster-issuer"
       ]
     },
     {
@@ -534,7 +544,13 @@
         "how-to/package-stackgres/check",
         "how-to/package-stackgres/database-resources"
       ],
-      "unverifiedNixBlocks": 2
+      "unverifiedNixBlocks": 2,
+      "packages": [
+        "experimental/stackgres-operator",
+        "experimental/stackgres-cluster",
+        "experimental/stackgres-database",
+        "experimental/stackgres-object-storage"
+      ]
     },
     {
       "page": "package-task-guides/deploy-valkey-redis",
@@ -547,7 +563,10 @@
         "how-to/package-valkey/check",
         "how-to/package-valkey/resources"
       ],
-      "unverifiedNixBlocks": 3
+      "unverifiedNixBlocks": 3,
+      "packages": [
+        "valkey"
+      ]
     },
     {
       "page": "package-task-guides/deploy-velero",
@@ -560,7 +579,10 @@
         "how-to/package-velero/check",
         "how-to/package-velero/backup-configuration"
       ],
-      "unverifiedNixBlocks": 2
+      "unverifiedNixBlocks": 2,
+      "packages": [
+        "experimental/velero"
+      ]
     },
     {
       "page": "package-task-guides/install-cilium-network-policy-support",
@@ -574,7 +596,10 @@
         "how-to/package-cilium/check",
         "how-to/package-cilium/components"
       ],
-      "unverifiedNixBlocks": 3
+      "unverifiedNixBlocks": 3,
+      "packages": [
+        "experimental/cilium"
+      ]
     },
     {
       "page": "package-task-guides/install-envoy-gateway",
@@ -587,7 +612,12 @@
       "liveCaptures": [
         "how-to/package-envoy-gateway/gateway-resources"
       ],
-      "unverifiedNixBlocks": 1
+      "unverifiedNixBlocks": 1,
+      "packages": [
+        "experimental/gateway-api",
+        "experimental/envoy-gateway-controller",
+        "experimental/envoy-gateway"
+      ]
     },
     {
       "page": "package-task-guides/install-ingress-nginx",
@@ -599,13 +629,19 @@
       "offlineCaptures": [
         "how-to/install-ingress-nginx/controller-resources"
       ],
-      "unverifiedNixBlocks": 1
+      "unverifiedNixBlocks": 1,
+      "packages": [
+        "experimental/ingress-nginx"
+      ]
     },
     {
       "page": "package-task-guides/install-mayastor",
       "scenario": "package-stacks",
       "status": "implemented",
-      "unverifiedNixBlocks": 4
+      "unverifiedNixBlocks": 4,
+      "packages": [
+        "experimental/mayastor"
+      ]
     },
     {
       "page": "package-task-guides/install-the-monitoring-stack",
@@ -619,7 +655,17 @@
         "how-to/package-monitoring/check",
         "how-to/package-monitoring/packages"
       ],
-      "unverifiedNixBlocks": 2
+      "unverifiedNixBlocks": 2,
+      "packages": [
+        "experimental/prometheus-operator",
+        "experimental/prometheus",
+        "experimental/alertmanager",
+        "grafana",
+        "node-exporter",
+        "kube-state-metrics",
+        "experimental/loki",
+        "experimental/loki-logs"
+      ]
     },
     {
       "page": "package-task-guides/install-the-victoriametrics-ha-monitoring-stack",
@@ -633,7 +679,14 @@
         "how-to/package-victoria-metrics/packages",
         "how-to/package-victoria-metrics/resources"
       ],
-      "unverifiedNixBlocks": 2
+      "unverifiedNixBlocks": 2,
+      "packages": [
+        "victoria-metrics-operator",
+        "victoria-metrics-cluster",
+        "victoria-metrics-agent",
+        "victoria-metrics-alert",
+        "grafana"
+      ]
     },
     {
       "page": "package-task-guides/provision-persistent-storage",
@@ -647,6 +700,9 @@
       "offlineCaptures": [
         "how-to/package-storage/check",
         "how-to/package-storage/storage-resources"
+      ],
+      "packages": [
+        "persistent-volume-claim"
       ]
     },
     {
@@ -657,7 +713,10 @@
         "externalDnsInstance",
         "externalDnsKindTryout"
       ],
-      "unverifiedNixBlocks": 2
+      "unverifiedNixBlocks": 2,
+      "packages": [
+        "experimental/external-dns"
+      ]
     },
     {
       "page": "platform-capabilities/add-tls-through-a-cluster-issuer",

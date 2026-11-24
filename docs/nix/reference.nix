@@ -1,115 +1,106 @@
-# Auto-generated reference docs for Kix packages.
+# Generate the package catalog under `reference/package-catalog/`.
 #
-# Imports a Kix package, evaluates its `options` declaration through
-# `lib.evalModules`, and runs the result through `pkgs.nixosOptionsDoc`
-# to emit a CommonMark-derived MDX file per package. Each file gets YAML frontmatter
-# so Starlight picks it up under `reference/package-catalog/`.
+# `catalogData` reads every package in `kix/packages/stable/` and
+# `kix/packages/experimental/` and returns plain data: its `meta`, its
+# options as `lib.optionAttrSetToDocList` describes them, and the
+# dependencies its `build` functions name. `mkCatalog` hands that data, with
+# the how-to ledger, to `docs/scripts/package-catalog.py`, which writes one
+# MDX page per package and an index page. The pages are build output, so
+# nothing in the docs tree can fall behind the packages.
 #
-# Scope: this phase generates reference for three smoke-test packages
-# (echo-server, cert-manager, cilium). Cluster-level options, meta
-# schema, instance schema, and the remaining 58 packages are deferred.
-#
-# Entry points:
-#   mkPackageReference { packagePath, packageName } → derivation
-#   mkAllReferences    { packages }                 → derivation
+# A package function is called as `kix list packages` calls it, with an
+# empty `scope` and `availability = "none"`. Its `meta` and `options` must
+# not depend on either.
 
-{ pkgs, lib }:
+{
+  pkgs,
+  lib,
+  # The repository checkout the packages are read from.
+  root,
+  # The URL of `root` on GitHub, for the links to each package's source.
+  sourceUrlBase,
+}:
 
 let
-  compose = import ../../kix/lib/vocab/compose.nix { inherit lib; };
+  levels = import (root + "/kix/lib/core/levels.nix") { inherit lib; };
+  byLevel = import (root + "/kix/packages/by-level.nix") { inherit lib; };
+  packageLib = import (root + "/kix/lib/core/package.nix") { inherit lib; };
+  kix = import (root + "/kix/lib/vocab") { inherit lib; };
+  resolve = import (root + "/kix/lib/eval/resolve.nix") {
+    inherit lib;
+    kixlib = kix;
+  };
 
-  # Evaluate a single package's options.
-  #
-  # The package function gets `scope` and `kix` thunks that throw if
-  # touched: options declarations should only need `lib`. If a package
-  # reaches for `scope`/`kix` at the options level, the thrown error
-  # identifies which package is misbehaving.
-  evalPackageOptions =
-    { packagePath, packageName }:
+  # The fields of an option that a page shows. A default or example is
+  # already rendered as `{ _type; text; }` by `optionAttrSetToDocList`.
+  optionData =
+    o:
+    {
+      inherit (o) name type;
+      description = o.description or null;
+      readOnly = o.readOnly or false;
+    }
+    // lib.optionalAttrs (o ? default) { inherit (o) default; }
+    // lib.optionalAttrs (o ? example) { inherit (o) example; };
+
+  packageData =
+    level: name: package:
     let
-      package = import packagePath;
-      # Only pass arguments the package function actually declares:
-      # several packages (e.g. cert-manager, cilium) take `{ scope, lib }`
-      # without `kix`, and Nix's strict arity check rejects unexpected args.
-      fnArgs = builtins.functionArgs package;
-      stubs = {
-        inherit lib;
-        scope = throw "kix-reference: package '${packageName}' touched `scope` during options-declaration evaluation; refactor so `options` is static.";
-        # Option defaults read `kix.availability.pick availability { ... }`
-        # to size replica counts, and nixosOptionsDoc renders every default
-        # that has no `defaultText`. The package sees the level a cluster
-        # without an availability setting resolves to, so the rendered
-        # default is the single-replica one. Option helpers come from
-        # `kix.options` and option types from `kix.types`. Any other `kix`
-        # attribute is missing here, and the error names it.
-        kix.availability = import ../../kix/lib/core/availability.nix { inherit lib; };
-        kix.options = compose.options;
-        kix.types = compose.types;
-        availability = "none";
+      id = packageLib.idOf package;
+      definition = packageLib.call {
+        inherit package kix;
+        scope = { };
       };
-      pkg = package (lib.intersectAttrs fnArgs stubs);
-      # nixosOptionsDoc renders each option's declared default. A package
-      # whose `config` defaults an option from another option gives that
-      # option a `defaultText` (for an image, `kix.options.image`'s
-      # `tagText`), so the package's `config` is not evaluated here.
-      evaluated = lib.evalModules {
-        modules = [ { options = pkg.options or { }; } ];
+      meta = packageLib.metaFrom definition;
+      options =
+        (lib.evalModules {
+          modules = [ { options = definition.options or { }; } ];
+        }).options;
+      docs = lib.optionAttrSetToDocList (removeAttrs options [ "_module" ]);
+      data = {
+        inherit name level id;
+        spelling = packageLib.spellingOf package;
+        source = "${sourceUrlBase}/kix/packages/${level}/${name}";
+        meta = {
+          description = meta.description or null;
+          version = meta.version or null;
+          roles = meta.roles or [ ];
+          defaultAliases = meta.defaultAliases or [ ];
+          availabilityMax = meta.availability.max or null;
+          deprecated = meta.deprecated or null;
+        };
+        options = map optionData (builtins.filter (o: o.visible && !o.internal) docs);
+        dependencies = lib.mapAttrsToList (arg: d: {
+          name = arg;
+          inherit (d) optional;
+        }) (resolve.discoverBuildDeps (definition.build or [ ]));
       };
     in
-    # Strip `_module`, which `evalModules` injects and which pollutes the doc.
-    removeAttrs evaluated.options [ "_module" ];
+    # Force the data here so that an error names the package.
+    builtins.addErrorContext "while reading kix/packages/${level}/${name} for the package catalog" (
+      builtins.deepSeq data data
+    );
 
-  # Build the MDX reference for a single package.
-  mkPackageReference =
-    { packagePath, packageName }:
-    let
-      options = evalPackageOptions { inherit packagePath packageName; };
-      # Strict mode: every option must declare a `description`. Missing
-      # descriptions fail the docs build so reference pages stay useful.
-      optionsDoc = pkgs.nixosOptionsDoc {
-        inherit options;
-        warningsAreErrors = true;
-      };
-    in
-    pkgs.runCommand "kix-reference-${packageName}"
+  catalogData = lib.concatMap (
+    level: lib.mapAttrsToList (packageData level) byLevel.${level}
+  ) levels.names;
+
+  mkCatalog =
+    { ledger, guides }:
+    pkgs.runCommand "kix-package-catalog"
       {
-        # Surface the commonMark path for downstream debugging.
-        inherit (optionsDoc) optionsCommonMark;
+        nativeBuildInputs = [ pkgs.python3 ];
+        data = builtins.toJSON catalogData;
+        passAsFile = [ "data" ];
       }
       ''
-        mkdir -p "$out"
-        {
-          printf -- '---\n'
-          printf 'title: %s\n' '${packageName}'
-          printf 'description: Auto-generated from %s package options. Do not edit by hand.\n' '${packageName}'
-          printf -- '---\n\n'
-          cat "$optionsCommonMark"
-        } > "$out/${packageName}.mdx"
-      '';
-
-  # Merge per-package outputs into one directory.
-  mkAllReferences =
-    { packages }:
-    let
-      perPackage = map (
-        { path, name }:
-        mkPackageReference {
-          packagePath = path;
-          packageName = name;
-        }
-      ) packages;
-    in
-    pkgs.runCommand "kix-reference-all"
-      {
-        passthru = { inherit perPackage; };
-      }
-      ''
-        mkdir -p "$out"
-        ${lib.concatMapStringsSep "\n" (drv: ''
-          cp -r ${drv}/. "$out/"
-        '') perPackage}
+        python3 ${../scripts/package-catalog.py} \
+          --data "$dataPath" \
+          --ledger ${ledger} \
+          --guides ${guides} \
+          --out "$out"
       '';
 in
 {
-  inherit mkPackageReference mkAllReferences;
+  inherit catalogData mkCatalog;
 }

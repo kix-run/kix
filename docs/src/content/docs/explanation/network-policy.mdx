@@ -12,6 +12,61 @@ Writing default-deny Kubernetes network policies by hand is tedious and fragile.
 - [Kubernetes Network Policies](https://kubernetes.io/docs/concepts/services-networking/network-policies/): How pod-level ingress and egress filtering works in Kubernetes.
 :::
 
+## Which policy objects Kix writes
+
+To generate network policies, your cluster must include an instance whose package claims the `network-policy-enforcer` role. Setting `networkPolicy.enable = true` without an enforcer instance fails evaluation. Today, `packages.experimental.cilium` is the only enforcer package: Kix generates Cilium policy resources only and cannot emit standard Kubernetes `NetworkPolicy` objects or policies for other CNIs such as Calico.
+
+Most generated policies are namespaced `CiliumNetworkPolicy` objects (`apiVersion: cilium.io/v2`). Kix writes cluster-wide `CiliumClusterwideNetworkPolicy` objects in three cases:
+
+| Policy | Kind | Scope | Written when |
+| --- | --- | --- | --- |
+| Workload and connection policies (caller egress, callee ingress, DNS and API server egress, ingress-controller and LoadBalancer ingress, StatefulSet peer traffic, Prometheus and VMAgent scrapes, and `kix.operandPolicy`) | `CiliumNetworkPolicy` | Namespaced | `networkPolicy.enable = true` |
+| `<namespace>-default-deny` | `CiliumNetworkPolicy` | Namespaced | `networkPolicy.enable = true` and `networkPolicy.defaultDeny = true` (default) |
+| `networkPolicy.platformIntents.<name>` | `CiliumNetworkPolicy` | Namespaced | `networkPolicy.enable = true` and `scope = "namespaced"` (default) |
+| `networkPolicy.platformIntents.<name>` | `CiliumClusterwideNetworkPolicy` | Cluster-wide | `networkPolicy.enable = true` and `scope = "clusterwide"` |
+| `cilium-cluster-dns-egress` | `CiliumClusterwideNetworkPolicy` | Cluster-wide | The `cilium` instance configures Cilium, effective `policyEnforcementMode` is `"always"`, and `clusterDnsEgress = true` (default) |
+| `cilium-health-probes` | `CiliumClusterwideNetworkPolicy` | Cluster-wide | The `cilium` instance configures Cilium and effective `policyEnforcementMode` is `"always"` |
+
+When `networkPolicy.defaultDeny = true` (the default once `networkPolicy.enable = true`), Kix writes a `<namespace>-default-deny` `CiliumNetworkPolicy` in every namespace Kix manages: every namespace (other than `_`-prefixed keys such as `_cluster`) declared under `namespaces` or holding at least one instance, including inactive `optional` instances and imports such as a flavor's `kube-system/platform-dns`. The policy selects all pods in the namespace (`endpointSelector: {}`) and writes an empty rule (`{}`) for each enforced direction in `networkPolicy.directions`. Because an empty rule matches no peers, Cilium blocks all unmatched traffic in that direction:
+
+```yaml
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: immich-default-deny
+  namespace: immich
+  labels:
+    app.kubernetes.io/managed-by: kix
+    kix.run/derived: "true"
+    kix.run/policy-type: default-deny
+spec:
+  endpointSelector: {}
+  ingress:
+    - {}
+  egress:
+    - {}
+```
+
+When the `cilium` instance configures Cilium (either by installing the Helm chart or, on RKE2, by writing a `HelmChartConfig` for RKE2's bundled Cilium) and `networkPolicy.enable = true`, Kix sets Cilium's `policyEnforcementMode` to `"always"` unless `values.policyEnforcementMode` overrides it. In `"always"` mode, Cilium blocks unmatched traffic on every pod in the cluster, even in namespaces Kix does not manage and on pods that no policy selects.
+
+To keep core cluster networking working in `"always"` mode, the `cilium` instance adds two `CiliumClusterwideNetworkPolicy` objects:
+
+- **`cilium-cluster-dns-egress`:** Allows every pod (`endpointSelector: {}`) to reach pods labeled `k8s-app: kube-dns` in `kube-system` on UDP and TCP port 53, so pods outside Kix-managed namespaces can still resolve DNS names. Set `clusterDnsEgress = false` on the `cilium` instance if you write your own cluster-wide DNS policy.
+- **`cilium-health-probes`:** Allows Cilium's node health endpoints to probe each other across nodes (`health` and `remote-node` entities).
+
+When the platform manages Cilium's configuration externally (the `cilium` instance uses a `platform-cilium` import with `out.helmChartConfig = null`), Kix leaves Cilium's enforcement mode unchanged and omits both cluster-wide policies.
+
+### Replacing existing clusterwide policies
+
+Kix writes `<namespace>-default-deny` policies only in namespaces it manages, though Cilium's `"always"` mode still blocks unmatched traffic in unmanaged namespaces (except DNS when `cilium-cluster-dns-egress` is active).
+
+If your cluster relies on existing `CiliumClusterwideNetworkPolicy` rules applied with `kubectl` (for example, allowing egress to `world` from every pod), Kix does not generate equivalents automatically. Bring those rules into Kix in either of two ways:
+
+- Add an entry under `networkPolicy.platformIntents` with `scope = "clusterwide"` (using `podSelector`, `targetNamespace`, `ingress`, and `egress`).
+- Build a `CiliumClusterwideNetworkPolicy` directly in a package with `scope.mkCR cilium.out.crds.CiliumClusterwideNetworkPolicy { ... }`.
+
+Every policy Kix generates carries the label `kix.run/derived: "true"` in `kix build <cluster>` output, so you can check Kix's generated coverage before deleting existing policies.
+
 ## Default-deny baseline and paired rules
 
 With `networkPolicy.defaultDeny = true` (the default when network policy is enabled), Kix emits a baseline default-deny policy in every Kix-managed namespace for the configured `networkPolicy.directions` (`"both"`, `"ingress"`, or `"egress"`). Nothing in those namespaces can dial out or accept traffic unless a specific rule allows it.

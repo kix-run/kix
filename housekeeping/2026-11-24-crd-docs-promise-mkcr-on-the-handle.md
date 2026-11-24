@@ -1,0 +1,3 @@
+# 2026-11-24 · `docs/src/content/docs/reference/secrets-crds-and-rbac.mdx` · The docs say `crd.mkCR` and `crd.cr` are on a CRD handle, and they are only under `out`.
+
+The section "Creating custom resources" says "`crd.mkCR` and `crd.cr` are also available directly on the handle" and gives `prometheus.out.crds.ServiceMonitor.mkCR scope { ... }` as an example. A handle from `scope.mkCRD` or `scope.mkCRDRef` has `out.mkCR` and `out.cr` and no `mkCR` or `cr` at the top (`h ? mkCR` is false in an evaluation), so the example fails for the native `prometheus-operator` package. Only a Helm chart's handle has them at the top, and that handle has no `out`.

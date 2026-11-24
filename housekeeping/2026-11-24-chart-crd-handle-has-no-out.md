@@ -1,0 +1,3 @@
+# 2026-11-24 · `kix/lib/helm.nix` · `scope.mkCR` fails on a CRD handle that a Helm chart publishes.
+
+`importChart` puts `{ cr; mkCR; }` at `out.crds.<Kind>` (`mkCrdBuilder`, the bare result of `k8s.mkCRDBuilders`). The handles from `scope.mkCRD`, `scope.mkCRDRef`, and `kix.mkImport { crds }` are resources with the builders under `out`. `scope.mkCR` reads `crd.out.mkCR` (`kix/lib/scope/builders.nix`), so `scope.mkCR dep.out.crds.<Kind> { ... }` stops with Nix's "attribute 'out' missing" when the dependency is a chart, and works when it is a native package. A consumer has to know which kind of package provides the CRD, and the error names neither the handle nor the instance.
