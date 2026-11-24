@@ -166,12 +166,12 @@ in
         namespaceFilters = [ "^apps$" ];
       };
       description = ''
-        Additional fields merged into the `DbInstance` resource's `spec`, such as
+        Additional fields merged into the `DbInstance` `spec`, such as
         `namespaceFilters` or `endpoint.sslConnection`. Each entry in
         `namespaceFilters` is a Go regular expression matched anywhere in the
-        namespace name; anchor exact names like `^apps$`. Kix rejects `engine`,
+        namespace name, so anchor exact names like `"^apps$"`. Kix rejects `engine`,
         `auth`, `endpoint.host`, and `endpoint.port` here because this package sets
-        them from `deps.postgres` and `deps.adminCredentials`.
+        them.
       '';
     };
   };
@@ -190,8 +190,8 @@ in
         dbOperator.out.crds or (scope.fail {
           package = "db-operator-instance";
           dependency = "dbOperator";
-          message = "deps.dbOperator does not publish out.crds (as happens when it uses kix.mkImport), so Kix cannot create the DbInstance resource.";
-          fix = "Point deps.dbOperator at a db-operator package instance: deps.dbOperator = ref.<namespace>.<instance>.";
+          message = "deps.dbOperator is missing out.crds (for example, because it uses kix.mkImport instead of packages.experimental.db-operator), so Kix cannot create the DbInstance resource.";
+          fix = "Point deps.dbOperator at a packages.experimental.db-operator instance: deps.dbOperator = ref.<namespace>.<instance>.";
         });
 
       server =
@@ -216,7 +216,7 @@ in
             package = "db-operator-instance";
             dependency = "postgres";
             message = "deps.postgres sets out.external to ${builtins.toJSON external} instead of true or false, so Kix rejected this DbInstance.";
-            fix = "Set out.external = true on the kix.mkImport for a PostgreSQL server outside the cluster, or omit out.external for a server in the cluster.";
+            fix = "Set out.external = true on kix.mkImport for a PostgreSQL server outside the cluster, or set out.external = false (or omit it) for a server in the cluster.";
           };
 
       portNumber =

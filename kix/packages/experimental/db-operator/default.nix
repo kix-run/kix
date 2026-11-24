@@ -189,14 +189,14 @@ let
       DBO_METRICS_ADDR = ":${toString metricsPort}";
       DBO_PROBE_ADDR = ":${toString healthPort}";
     };
-    from = "this package's fixed metrics and health-probe ports, used by health probes, the metrics Service, and network policies";
-    fix = "Remove any DBO_METRICS_ADDR or DBO_PROBE_ADDR entry from env and webhook.env.";
+    from = "the fixed ports (60000 for metrics and 8081 for health probes) used by the package's health checks, metrics Service, and network policies";
+    fix = "Remove DBO_METRICS_ADDR and DBO_PROBE_ADDR from env and webhook.env.";
   };
 in
 {
   meta = {
     version = release;
-    description = "DB Operator controller and admission webhook for creating databases and users on database servers";
+    description = "DB Operator controller and admission webhook for provisioning databases and users";
     owner = "platform";
     defaultAliases = [ "dbOperator" ];
     conflictsWith = [
@@ -269,7 +269,7 @@ in
     };
 
     env = kix.options.env // {
-      description = "Extra DBO_* environment variables for the controller, such as DBO_LOG_LEVEL, DBO_RECONCILE_INTERVAL, or DBO_CHECK_FOR_CHANGES. Each value can be a string, a `fieldRef` source, or a `secretKeyRef` source naming a Secret managed outside Kix (with `kix.untrackedRef`). Kix rejects variables that this package sets or reserves (`DBO_CONFIG`, `DBO_ENABLE_LEADER_ELECTION`, `DBO_WATCH_NAMESPACES`, `DBO_METRICS_ADDR`, and `DBO_PROBE_ADDR`).";
+      description = "Extra `DBO_*` environment variables for the controller, such as `DBO_LOG_LEVEL`, `DBO_RECONCILE_INTERVAL`, or `DBO_CHECK_FOR_CHANGES`. Pass a string, a `fieldRef`, or a `secretKeyRef` (using `kix.untrackedRef` for a Secret managed outside Kix). Kix rejects variables that this package sets or reserves (`DBO_CONFIG`, `DBO_ENABLE_LEADER_ELECTION`, `DBO_WATCH_NAMESPACES`, `DBO_METRICS_ADDR`, and `DBO_PROBE_ADDR`).";
     };
 
     settings = lib.mkOption {
@@ -301,7 +301,7 @@ in
       };
 
       env = kix.options.env // {
-        description = "Extra DBO_* environment variables for the webhook server, such as DBO_LOG_LEVEL. Each value can be a string, a `fieldRef` source, or a `secretKeyRef` source naming a Secret managed outside Kix (with `kix.untrackedRef`). Kix rejects variables that this package sets or reserves (`DBO_ENABLE_LEADER_ELECTION`, `DBO_METRICS_ADDR`, and `DBO_PROBE_ADDR`).";
+        description = "Extra `DBO_*` environment variables for the webhook server, such as `DBO_LOG_LEVEL`. Pass a string, a `fieldRef`, or a `secretKeyRef` (using `kix.untrackedRef` for a Secret managed outside Kix). Kix rejects variables that this package sets or reserves (`DBO_ENABLE_LEADER_ELECTION`, `DBO_METRICS_ADDR`, and `DBO_PROBE_ADDR`).";
       };
     };
 
@@ -335,12 +335,12 @@ in
               }
               {
                 vars.DBO_ENABLE_LEADER_ELECTION = "true";
-                from = "this package (leader election stays enabled so only one controller replica reconciles at a time)";
+                from = "this package's leader-election setting, enabled so only one controller pod is active at a time";
                 fix = "Remove DBO_ENABLE_LEADER_ELECTION from env.";
               }
               {
                 names = [ "DBO_WATCH_NAMESPACES" ];
-                reason = "Kix leaves DBO_WATCH_NAMESPACES unset so the controller watches all namespaces. Because DB Operator's admission webhooks are cluster-wide, a Database in an unwatched namespace would still be accepted and then stay unready forever.";
+                reason = "the controller must watch all namespaces. DB Operator's admission webhooks are cluster-wide, so a Database created in an unwatched namespace would pass admission and stay unready forever.";
                 fix = "Remove DBO_WATCH_NAMESPACES from env. To restrict which namespaces can use a server, set extraSpec.namespaceFilters on its db-operator-instance.";
               }
             ];
@@ -366,8 +366,8 @@ in
           certManager.out.crds or (scope.fail {
             package = "db-operator";
             dependency = "certManager";
-            message = "deps.certManager does not publish out.crds (as happens when it uses kix.mkImport), so Kix cannot create the Issuer and Certificate for the DB Operator webhook.";
-            fix = "Point deps.certManager at a cert-manager package instance: deps.certManager = ref.<namespace>.<instance>.";
+            message = "deps.certManager is missing out.crds (for example, because it uses kix.mkImport instead of packages.experimental.cert-manager), so Kix cannot create the webhook's Issuer and Certificate.";
+            fix = "Point deps.certManager at a packages.experimental.cert-manager instance: deps.certManager = ref.<namespace>.<instance>.";
           });
 
         controllerSubjects = [
@@ -941,7 +941,7 @@ in
             "for" = "10m";
             severity = "warning";
             summary = "DB Operator controller is down.";
-            description = "No controller pod of the ${operator} has answered a Prometheus scrape for 10 minutes. Existing databases keep serving traffic, while new or changed Database, DbUser, and DbInstance resources are not applied. Check Deployment ${ns}/${name}-controller and its pod logs.";
+            description = "No controller pod for ${operator} has answered a Prometheus scrape for 10 minutes. Existing databases keep serving traffic, but new or changed Database, DbUser, and DbInstance resources are not applied. Check Deployment ${ns}/${name}-controller and its pod logs.";
           };
           # db_operator_database_status is 1 while a Database is ready and 0
           # otherwise, labelled db_namespace, dbinstance, and database
@@ -953,8 +953,8 @@ in
             expr = "max by (namespace, service, db_namespace, dbinstance, database) (db_operator_database_status{${sel}}) == 0 and max by (namespace, service, db_namespace, dbinstance, database) (max_over_time(db_operator_database_status{${sel}}[6h])) == 1";
             "for" = "15m";
             severity = "warning";
-            summary = "A DB Operator Database is no longer ready.";
-            description = "Database {{ $labels.db_namespace }}/{{ $labels.database }} on DbInstance {{ $labels.dbinstance }} was ready in the last 6 hours and has been unready for 15 minutes. The ${operator} cannot reach the server, sign in, or apply changes to this Database, and applications using it may fail to connect. Check Events on the Database and the logs of Deployment ${ns}/${name}-controller.";
+            summary = "DB Operator Database {{ $labels.db_namespace }}/{{ $labels.database }} is not ready.";
+            description = "Database {{ $labels.db_namespace }}/{{ $labels.database }} on DbInstance {{ $labels.dbinstance }} was ready in the last 6 hours and has been unready for 15 minutes. The ${operator} could not update or verify this Database (for example, because it could not reach or sign in to the server), and applications using it may fail to connect. Run kubectl describe database -n {{ $labels.db_namespace }} {{ $labels.database }} and check the logs of Deployment ${ns}/${name}-controller.";
           };
           DbOperatorReconcileErrors = kix.reconcileErrorsAlert {
             selector = sel;

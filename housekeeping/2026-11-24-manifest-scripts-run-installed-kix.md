@@ -1,0 +1,3 @@
+# 2026-11-24 · `scripts/kix-manifests.sh`, `scripts/cluster-checks.sh` · The two scripts run whatever `kix` is on PATH, and an older installed Kix cannot read this repository.
+
+Both default to `kix` on PATH unless `KIX` is set. With Kix 0.8.0 installed, `scripts/cluster-checks.sh . db-operator ...` stopped with "kix.toml has an unknown setting `library` (Kix 0.8.0 supports: builder, kix)", because this repository's `kix.toml` sets `library = "self"`. The checks passed once `KIX` pointed at `nix build .#kix`. The skills that tell authors to run the script do not mention `KIX`, so the first run fails for anyone whose installed Kix is behind the repository.

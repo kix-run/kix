@@ -21,7 +21,7 @@ tests:
               service: "db-operator-metrics"
             exp_annotations:
               summary: "DB Operator controller is down."
-              description: "No controller pod of the DB Operator instance db-operator/db-operator has answered a Prometheus scrape for 10 minutes. Existing databases keep serving traffic, while new or changed Database, DbUser, and DbInstance resources are not applied. Check Deployment db-operator/db-operator-controller and its pod logs."
+              description: "No controller pod for DB Operator instance db-operator/db-operator has answered a Prometheus scrape for 10 minutes. Existing databases keep serving traffic, but new or changed Database, DbUser, and DbInstance resources are not applied. Check Deployment db-operator/db-operator-controller and its pod logs."
   # The controller answers, and its database controller fails one reconcile
   # in two.
   - interval: 1m
@@ -85,8 +85,8 @@ tests:
               dbinstance: "pg-instance"
               database: "app-db"
             exp_annotations:
-              summary: "A DB Operator Database is no longer ready."
-              description: "Database apps/app-db on DbInstance pg-instance was ready in the last 6 hours and has been unready for 15 minutes. The DB Operator instance db-operator/db-operator cannot reach the server, sign in, or apply changes to this Database, and applications using it may fail to connect. Check Events on the Database and the logs of Deployment db-operator/db-operator-controller."
+              summary: "DB Operator Database apps/app-db is not ready."
+              description: "Database apps/app-db on DbInstance pg-instance was ready in the last 6 hours and has been unready for 15 minutes. The DB Operator instance db-operator/db-operator could not update or verify this Database (for example, because it could not reach or sign in to the server), and applications using it may fail to connect. Run kubectl describe database -n apps app-db and check the logs of Deployment db-operator/db-operator-controller."
   # A Database that stays ready does not fire.
   - interval: 1m
     input_series:

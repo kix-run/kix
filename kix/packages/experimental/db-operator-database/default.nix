@@ -204,13 +204,13 @@ in
     [
       {
         assertion = builtins.stringLength dbName <= 63;
-        message = "PostgreSQL database and role name \"${dbName}\" is ${toString (builtins.stringLength dbName)} bytes long, over PostgreSQL's 63-byte limit. DB Operator names both <namespace>-<instance>, so Kix rejected this Database.";
-        fix = "Shorten the instance name or move it to a namespace with a shorter name so \"<namespace>-<instance>\" is at most 63 bytes.";
+        message = "PostgreSQL database and role name \"${dbName}\" is ${toString (builtins.stringLength dbName)} bytes long, over PostgreSQL's 63-byte limit. DB Operator names both \"<namespace>-<instance>\", so Kix rejected this Database.";
+        fix = "Shorten the instance name or use a shorter namespace name so \"<namespace>-<instance>\" is at most 63 bytes.";
       }
       {
         assertion = taken == [ ];
-        message = "templates uses reserved Secret keys (${lib.concatStringsSep ", " taken}), so Kix rejected this Database. The credentials Secret already includes POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD, username, and password, and DB Operator reserves DB, USER, PASSWORD, CLICKHOUSE_DB, CLICKHOUSE_USER, and CLICKHOUSE_PASSWORD.";
-        fix = "Rename ${lib.concatStringsSep ", " taken} in templates, or read the built-in keys (POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD, username, and password) directly.";
+        message = "templates uses reserved Secret keys (${lib.concatStringsSep ", " taken}), so Kix rejected this Database. The credentials Secret already provides POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD, username, and password, and DB Operator reserves DB, USER, PASSWORD, CLICKHOUSE_DB, CLICKHOUSE_USER, and CLICKHOUSE_PASSWORD.";
+        fix = "Remove or rename ${lib.concatStringsSep ", " taken} in templates. Applications can read POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD, username, and password directly without adding a template.";
         option = "templates";
       }
       {
@@ -221,8 +221,8 @@ in
       }
       {
         assertion = pinned == [ ];
-        message = "extensions pins a version for ${lib.concatStringsSep ", " pinned}, so Kix rejected this Database. DB Operator always installs the PostgreSQL server's default extension version and cannot pin a specific version. Either this instance sets version in extensions, or an application using this database requires a pinned version (for example, immich pins vchord).";
-        fix = "If you set version in extensions on this instance, list the extension by name only (or set version = null). If an application requires a pinned extension version, use cnpg-database or stackgres-database.";
+        message = "extensions pins a version for ${lib.concatStringsSep ", " pinned}, so Kix rejected this Database. DB Operator only installs the PostgreSQL server's default extension version. Either this instance sets version in extensions, or a connected application requires a pinned version (for example, immich pins vchord).";
+        fix = "List the extension by name only (or set version = null) on this instance. If a connected application requires a pinned extension version, use cnpg-database or stackgres-database instead.";
         option = "extensions";
       }
     ];
@@ -283,11 +283,11 @@ in
         postgres.schemas = [ "app" ];
       };
       description = ''
-        Additional fields merged into the `Database` resource's `spec`, such as
+        Additional fields merged into the `Database` `spec`, such as
         `postgres.schemas` or `deletionProtected` (which defaults to `true`). Kix
         rejects `instance`, `secretName`, `existingUser`, `credentials.templates`,
-        `secretsTemplates`, and `postgres.extensions` here because this package sets
-        them from its dependencies and options.
+        `secretsTemplates`, and `postgres.extensions` here because this package
+        manages those settings.
       '';
     };
   };
@@ -305,8 +305,8 @@ in
         dbOperator.out.crds or (scope.fail {
           package = "db-operator-database";
           dependency = "dbOperator";
-          message = "deps.dbOperator does not publish out.crds (as happens when it uses kix.mkImport), so Kix cannot create the Database resource.";
-          fix = "Point deps.dbOperator at a db-operator package instance: deps.dbOperator = ref.<namespace>.<instance>.";
+          message = "deps.dbOperator is missing out.crds (for example, because it uses kix.mkImport instead of packages.experimental.db-operator), so Kix cannot create the Database resource.";
+          fix = "Point deps.dbOperator at a packages.experimental.db-operator instance: deps.dbOperator = ref.<namespace>.<instance>.";
         });
 
       instance =
@@ -321,8 +321,8 @@ in
           scope.fail {
             package = "db-operator-database";
             dependency = "dbInstance";
-            message = "deps.dbInstance is missing out.name, out.fqdn, out.port, or out.engine = \"postgres\", so Kix rejected this Database.";
-            fix = "Point deps.dbInstance at the db-operator-instance that registers your PostgreSQL server: deps.dbInstance = ref.<namespace>.<instance>.";
+            message = "deps.dbInstance is missing out.name, out.fqdn, out.port, or out.engine = \"postgres\" (for example, because it points directly at a PostgreSQL server instead of a db-operator-instance), so Kix rejected this Database.";
+            fix = "Point deps.dbInstance at the packages.experimental.db-operator-instance that registers your PostgreSQL server: deps.dbInstance = ref.<namespace>.<instance>.";
           };
 
       extensions = lib.unique (map extensionName config.extensions);
