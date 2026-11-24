@@ -320,6 +320,10 @@ rec {
     let
       importDef = instCfg.package;
 
+      # Report an error about this import, naming it in the record's
+      # `instance` field.
+      failHere = failFor { instance = "${namespaceName}/${instanceName}"; };
+
       derived =
         if importDef.from != null then
           let
@@ -338,8 +342,7 @@ rec {
             );
             mkDepProxy =
               depName:
-              fail {
-                instance = "${namespaceName}/${instanceName}";
+              failHere {
                 message = "kix.mkImport { from = ...; } tried to read dependency '${depName}' while deriving 'out' from the package. Imports represent external services and do not resolve package dependencies.";
                 fix =
                   "Set the output fields that depend on '${depName}' directly in instances.${namespaceName}.${instanceName}.package:"
@@ -400,7 +403,7 @@ rec {
               builtins.foldl' (
                 acc: fn:
                 helpers.mergeCollide {
-                  inherit (importScope) fail;
+                  fail = failHere;
                   error = names: {
                     message = "Multiple `build` entries in the `from` package define the same part name (${names}).";
                     fix = "Give each part a unique name across `build` entries in that package.";
@@ -409,15 +412,14 @@ rec {
               ) { } (buildEntriesOf raw.build)
             );
 
-            rawRoot =
-              parts.root or (fail "Import instance '${instanceName}': package build must define 'root'");
+            rawRoot = parts.root or (failHere "The package in `from` defines no `root` in `build`.");
             rootRes =
               if rawRoot ? resource then
                 rawRoot.resource
               else if rawRoot ? _type then
                 rawRoot
               else
-                fail "Import instance '${instanceName}': root must be a resource or { resource, requires }";
+                failHere "The `root` of the package in `from` must be a resource or `{ resource, requires }`.";
           in
           {
             out = (rootRes.out or { }) // importDef.out;
@@ -459,7 +461,6 @@ rec {
         "usesAtLeast"
         "holdsData"
       ];
-      who = "Import instance '${namespaceName}/${instanceName}'";
       checkCrdEntry =
         entry:
         let
@@ -471,15 +472,15 @@ rec {
           ];
         in
         if !builtins.isAttrs entry then
-          fail "${who}: each mkImport crds entry is an attribute set of scope.mkCRDRef arguments; got ${builtins.typeOf entry}."
+          failHere "Each mkImport crds entry is an attribute set of scope.mkCRDRef arguments; got ${builtins.typeOf entry}."
         else if missing != [ ] then
-          fail {
-            message = "${who}: a mkImport crds entry is missing ${builtins.concatStringsSep ", " missing}.";
+          failHere {
+            message = "A mkImport crds entry is missing ${builtins.concatStringsSep ", " missing}.";
             fix = "Give group, kind, plural, and version as the CustomResourceDefinition declares them.";
           }
         else if unknown != [ ] then
-          fail {
-            message = "${who}: mkImport crds entry ${entry.group}/${entry.kind} has unknown keys ${builtins.concatStringsSep ", " unknown}. The environment installs an import's CRDs, so installedBy does not apply.";
+          failHere {
+            message = "mkImport crds entry ${entry.group}/${entry.kind} has unknown keys ${builtins.concatStringsSep ", " unknown}. The environment installs an import's CRDs, so installedBy does not apply.";
             fix = "Use only these keys: ${builtins.concatStringsSep ", " crdHandleArgs}.";
           }
         else
@@ -507,15 +508,15 @@ rec {
             if builtins.isList importDef.crds then
               map checkCrdEntry importDef.crds
             else
-              fail "${who}: mkImport crds is a list of scope.mkCRDRef argument sets; got ${builtins.typeOf importDef.crds}.";
+              failHere "mkImport crds is a list of scope.mkCRDRef argument sets; got ${builtins.typeOf importDef.crds}.";
           kinds = map (e: e.kind) entries;
           repeated = lib.unique (builtins.filter (k: lib.count (x: x == k) kinds > 1) kinds);
         in
         if repeated == [ ] then
           entries
         else
-          fail {
-            message = "${who}: mkImport crds declares ${builtins.concatStringsSep ", " repeated} more than once. out.crds holds one handle per kind.";
+          failHere {
+            message = "mkImport crds declares ${builtins.concatStringsSep ", " repeated} more than once. out.crds holds one handle per kind.";
             fix = "Keep one entry for each kind.";
           };
       crdHandleList = map (entry: {
@@ -525,7 +526,7 @@ rec {
       crdHandles = builtins.foldl' (
         acc: h:
         helpers.mergeCollide {
-          fail = failFor { instance = "${namespaceName}/${instanceName}"; };
+          fail = failHere;
           error = names: {
             message = "mkImport `crds` declares kind ${names}, which the `from` package already exports in `out.crds`.";
             fix = "Remove ${names} from `crds` on this `mkImport` (it already inherits `out.crds.${names}` from `from`), or remove it from the package's `out.crds`.";
@@ -546,15 +547,15 @@ rec {
           refText = "ref.${entry.namespace}.${entry.instanceName}";
         in
         if entry.namespace == namespaceName && entry.instanceName == instanceName then
-          fail {
-            message = "${who}: out.${path} names ${refText}, the import itself.";
+          failHere {
+            message = "out.${path} names ${refText}, the import itself.";
             fix = "Point out.${path} at another instance, or remove it.";
           }
         else if isInstanceActive entry.namespace entry.instanceName then
           allInstances.${entry.namespace}.${entry.instanceName}
         else
-          fail {
-            message = "${who}: out.${path} names ${refText}, which is not an active instance. A ref in out does not activate an optional instance.";
+          failHere {
+            message = "out.${path} names ${refText}, which is not an active instance. A ref in out does not activate an optional instance.";
             fix = "Declare it under instances.${entry.namespace}.${entry.instanceName}, or set optional = false on it.";
           };
 
@@ -648,8 +649,8 @@ rec {
           if isInstanceActive entry.namespace entry.instanceName then
             allInstances.${entry.namespace}.${entry.instanceName}.root
           else
-            fail {
-              message = "${who}: extraDeps names ref.${entry.namespace}.${entry.instanceName}, an optional instance that is not active. Kix renders no marker for it, so the import's marker would wait for a resource that is never deployed. An extraDeps ref does not activate its target.";
+            failHere {
+              message = "extraDeps names ref.${entry.namespace}.${entry.instanceName}, an optional instance that is not active. Kix renders no marker for it, so the import's marker would wait for a resource that is never deployed. An extraDeps ref does not activate its target.";
               fix = "Set optional = false on instances.${entry.namespace}.${entry.instanceName}, or remove the entry.";
             }
         else

@@ -952,8 +952,11 @@ in
           package = "pkg";
           dependency = "creds";
         }
+      # Only an error with the change record id throws through this scope,
+      # so `throws` passes only for the refusal of `who`.
       && throws (
         kixlib.checkSecretKeys {
+          scope.fail = e: if (e.id or null) == "K6417" then throw "K6417" else e;
           who = "pkg ns/inst";
           arg = "creds";
           dep = null;

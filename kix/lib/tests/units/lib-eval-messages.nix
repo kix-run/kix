@@ -268,6 +268,34 @@ in
     )
     || throw "require: ${byAlias.thrown or ""} / ${byGivenName.thrown or ""} / ${byText.thrown or ""}";
 
+  # A contract function that takes `scope` or the dependency refuses text in
+  # its place, the `who` of the removed form, with the change record id.
+  lib-eval-messages-contract-who-refusals =
+    let
+      contracts = helpers.loadCaughtFull ../../../contracts/default.nix { inherit lib; };
+      idsOf = r: map (e: e.id or null) (helpers.records (r.thrown or ""));
+      got = {
+        check = idsOf (gatewayLike.check "kix.expose (a/web)" { });
+        assertions = idsOf (gatewayLike.assertions "a/web");
+        requirePlaintext = idsOf (contracts.redis.helpers.requirePlaintext "a/web" { out = { }; });
+        errorsFor = idsOf (
+          contracts.experimental.gatewayApi.helpers.errorsFor {
+            who = "a/web";
+            gatewayApi = null;
+            kinds = [ ];
+            minVersion = "1.0";
+          }
+        );
+      };
+    in
+    got == {
+      check = [ "K6417" ];
+      assertions = [ "K6417" ];
+      requirePlaintext = [ "K6417" ];
+      errorsFor = [ "K6417" ];
+    }
+    || throw "contract who refusals: ${builtins.toJSON got}";
+
   # A package that runs once per cluster, demanded from two namespaces, is
   # refused with the same message form and fix as the refusal beside one
   # consumer.
