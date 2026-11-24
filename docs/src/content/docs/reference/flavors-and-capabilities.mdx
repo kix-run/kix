@@ -149,8 +149,21 @@ Flavors declare [`kix.mkImport`](/docs/reference/helm-and-imports/) instances to
 | --- | --- | --- | --- | --- |
 | `kube-system/platform-dns` (`gke-managed/platform-dns` on `gke-autopilot`) | `dns` | All flavors | `false` on `kind`; `true` on all other flavors | Represents the cluster's built-in DNS Service and exposes its `out.name` and `out.fqdn`. When active, `kix deploy` waits until the Service has a ready endpoint before applying workloads that depend on DNS. Activating `platform-dns` on `gke-autopilot` or `openshift` times out during `kix deploy`, because Kix looks for the Service in the `platform-dns` instance's namespace while `kube-dns` on `gke-autopilot` is in `kube-system` and `dns-default` on `openshift` is in `openshift-dns`. |
 | `kube-system/platform-storage` (`gke-managed/platform-storage` on `gke-autopilot`) | `storageClasses` | `aks`, `gke`, `gke-autopilot`, `k3s`, `kind`, `ovh`, `scaleway` | `false` | Represents the default `StorageClass` created by the provider. Always active so optional `storageClasses` dependencies on StatefulSets and PVCs resolve to it and cross-resource check 20 sees the class. |
+| `kube-system/cloud-identity` (`gke-managed/cloud-identity` on `gke-autopilot`) | `cloudIdentity` | `eks`, `gke`, `gke-autopilot`, `aks` | `false` | Configures the cluster's cloud identity mechanism and declares its annotation domain. Emits a `PackageInstance` import record without waiting for an in-cluster resource during `kix deploy`. |
 | `kube-system/platform-cilium` | `cni` | `rke2` (when `cluster.flavor.rke2.cni` includes `"cilium"`) | `false` | Exposes `out.helmChartConfig = { name = "rke2-cilium"; namespace = "kube-system"; }` so a managed `cilium` instance writes a `HelmChartConfig` instead of deploying a second Cilium chart. |
 | `kube-system/platform-snapshot-controller` | `snapshotController` | `rke2` | `false` | Exposes `out.crds` handles (`VolumeSnapshotClass`, `VolumeSnapshotContent`, `VolumeSnapshot`) for RKE2's bundled snapshot controller. |
+
+## Cloud identity
+
+The `eks`, `gke`, `gke-autopilot`, and `aks` flavors configure how Kix renders an instance's [`cloudIdentity`](/docs/reference/instances-and-composition/#cloudidentity):
+
+| Flavor | Mechanism | Annotation domain | Rendered metadata |
+| --- | --- | --- | --- |
+| `eks` | `kix.cloudIdentity.irsa { }`, or `kix.cloudIdentity.eksPodIdentity { }` when `cluster.flavor.eks.cloudIdentity = "pod-identity"` | `eks.amazonaws.com` | ServiceAccount annotations `eks.amazonaws.com/role-arn` (IRSA only) and `kix.run/cloud-identity`, plus pod template `checksum/cloud-identity`. |
+| `gke`, `gke-autopilot` | `kix.cloudIdentity.gke { }` | `iam.gke.io` | ServiceAccount annotation `iam.gke.io/gcp-service-account` when `gcp.serviceAccount` is set (no Google annotation when `gcp = { }`), `kix.run/cloud-identity`, and pod template `checksum/cloud-identity`. |
+| `aks` | `kix.cloudIdentity.azureWorkloadId { }` | `azure.workload.identity` | ServiceAccount annotations `azure.workload.identity/client-id` (and `azure.workload.identity/tenant-id` when set) and `kix.run/cloud-identity`, pod template label `azure.workload.identity/use: "true"`, and pod template `checksum/cloud-identity`. |
+
+Other flavors do not declare a `cloudIdentity` provider. To configure one on a self-managed cluster, see [`cloudIdentity`](/docs/reference/instances-and-composition/#cloudidentity).
 
 ## Storage and DNS defaults
 

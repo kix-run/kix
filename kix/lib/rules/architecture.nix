@@ -63,9 +63,9 @@ let
 
 in
 {
-  # A domain-qualified annotation must use a reserved or configured domain, or
-  # a domain declared by a dependency. Only top-level `metadata.annotations`
-  # are inspected.
+  # A domain-qualified annotation must use a reserved or configured domain, a
+  # domain an import declares for the environment, or a domain declared by a
+  # dependency. Only top-level `metadata.annotations` are inspected.
   annotationDomainOwnership = {
     description = "Annotations under an operator-managed domain require a DI dep on the declaring package";
     level = "package";
@@ -118,7 +118,11 @@ in
             let
               declarer = annotationDomainIndex.${domain} or null;
             in
-            if declarer == null then
+            # An import declares what the environment reads. Kix deploys
+            # nothing for it, so a consumer needs no dependency on it.
+            if declarer != null && (declarer.isImport or false) then
+              [ ]
+            else if declarer == null then
               [
                 {
                   message =

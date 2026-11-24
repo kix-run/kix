@@ -377,6 +377,59 @@ Kix models cluster availability across four ordered levels: `"none"` < `"pod"` <
 
 ---
 
+## cloudIdentity
+
+`scope.cloudIdentity` exposes the instance's declared [`cloudIdentity`](/docs/reference/instances-and-composition/#cloudidentity) to a package:
+
+- `isSet` (`bool`): `true` when the instance sets `cloudIdentity`.
+- `cloud` (`"aws"`, `"gcp"`, `"azure"`, or `null`): the cloud selected by `cloudIdentity`, or `null` when unset.
+- `bind` (`args -> args`): adds the cloud mechanism's ServiceAccount annotations, `kix.run/cloud-identity`, and a dependency on the cluster's `cloudIdentity` provider when `cloudIdentity` is set, or returns `args` unchanged when unset.
+
+Pipe the ServiceAccount arguments through `scope.cloudIdentity.bind` before `scope.mkResource`, and pass `self.serviceAccount` in the workload's pod spec so workload builders (`scope.mkDeployment`, `mkStatefulSet`, `mkDaemonSet`, `mkJob`, and `mkCronJob`) add `checksum/cloud-identity` and any pod labels required by the cloud mechanism:
+
+```nix
+serviceAccount =
+  { apiVersion = "v1"; kind = "ServiceAccount"; inherit name; }
+  |> scope.cloudIdentity.bind
+  |> scope.mkResource;
+```
+
+```nix
+serviceAccount = self.serviceAccount;
+```
+
+Use `kix.cloudIdentity.orSecret` in `assertions` when a package authenticates to a cloud API with either `cloudIdentity` or a credentials Secret. When `cloud` is `"aws"`, `"gcp"`, or `"azure"`, it requires either `cloudIdentity` for that cloud or `secret` (rejecting neither, both, or an identity for another cloud). When `cloud` is `null`, it rejects any `cloudIdentity`.
+
+| Argument | Type | Default | Description |
+| --- | --- | --- | --- |
+| `identity` | attribute set | Required | Pass `scope.cloudIdentity`. |
+| `secret` | dependency value or `null` | Required | Credentials Secret dependency, or `null` when unset. |
+| `cloud` | `"aws"`, `"gcp"`, `"azure"`, or `null` | Required | Expected cloud for `identity`, or `null` when the current mode accepts no cloud identity. |
+| `what` | string | Required | Label naming the mode or provider in error messages (for example, `"provider \"aws\""`). |
+| `secretDependency` | string or `null` | `null` | Name of the Secret dependency in `deps` (for example, `"providerCredentials"`). |
+| `id` | string or `null` | `null` | Change record ID (such as `"K1798"`) attached when neither or both credential sources are set. |
+
+```nix
+++ kix.cloudIdentity.orSecret {
+  identity = scope.cloudIdentity;
+  secret = deps.providerCredentials or null;
+  cloud = "aws";
+  what = "provider \"aws\"";
+  secretDependency = "providerCredentials";
+}
+```
+
+Packages or `kix.mkImport` instances that claim the `cloudIdentity` role set `out.cloudIdentity` to one of these mechanisms:
+
+| Constructor | Cloud | Arguments | Rendered metadata |
+| --- | --- | --- | --- |
+| `kix.cloudIdentity.irsa` | `"aws"` | `{ annotationPrefix ? "eks.amazonaws.com" }` | ServiceAccount annotations `<annotationPrefix>/role-arn` and `kix.run/cloud-identity`, plus pod template `checksum/cloud-identity`. |
+| `kix.cloudIdentity.eksPodIdentity` | `"aws"` | `{ }` | ServiceAccount annotation `kix.run/cloud-identity` and pod template `checksum/cloud-identity` only. EKS links the ServiceAccount to the role through an EKS Pod Identity association. |
+| `kix.cloudIdentity.gke` | `"gcp"` | `{ }` | ServiceAccount annotation `iam.gke.io/gcp-service-account` when `serviceAccount` is set (no Google annotation when `gcp = { }`), `kix.run/cloud-identity`, and pod template `checksum/cloud-identity`. |
+| `kix.cloudIdentity.azureWorkloadId` | `"azure"` | `{ }` | ServiceAccount annotations `azure.workload.identity/client-id` (and `azure.workload.identity/tenant-id` when `tenantId` is set) and `kix.run/cloud-identity`, pod template label `azure.workload.identity/use: "true"`, and pod template `checksum/cloud-identity`. |
+
+---
+
 ## Version helpers
 
 Packages can read `clusterConfig.k8sVersion` in `build` and compare it against a version bound to omit flags, collectors, or RBAC rules that older Kubernetes releases do not support.

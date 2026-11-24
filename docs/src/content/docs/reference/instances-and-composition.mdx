@@ -40,6 +40,7 @@ Each entry under `instances.<namespace>.<name>` places a managed package instanc
 | [`aliases`](#aliases) | `nullOr (listOf str)` | `null` | list merge | Dependency-resolution names for this instance. A list replaces `meta.defaultAliases`. |
 | [`optional`](#optional) | `bool` | `false` | boolean merge | Keeps the instance dormant unless an active instance transitively depends on it. |
 | [`availability`](#availability) | `null \| "none" \| "pod" \| "node" \| "zone"` | `null` | single definition | Overrides `cluster.availability.default` for this instance. |
+| [`cloudIdentity`](#cloudidentity) | `null` or attribute set | `null` | submodule merge | Binds a cloud IAM identity (`aws`, `gcp`, or `azure`) to the instance's ServiceAccount and pod templates. |
 | [`partsOverlays`](#partsoverlays) | `listOf raw` | `[ ]` | lists concatenate in module order | Post-build functions (`scope: self: base: attrset`) that modify, add, or remove rendered parts. |
 | `labelStyle` | `"kix" \| "helm"` | `"kix"` | single definition | Selector and metadata label convention: `"kix"` (`app.kubernetes.io/*`) or `"helm"` (`app` and `release`). |
 | `selectorLabels` | `nullOr (attrsOf str)` | `null` | attribute set merge | Explicit `spec.selector.matchLabels` override for adopting workloads with immutable live selectors. |
@@ -226,6 +227,48 @@ instances.apps.preview = {
 | Maximum allowed | `cluster.availability.substrate` |
 
 An instance can request a higher or lower availability level than `cluster.availability.default`, as long as it does not exceed `cluster.availability.substrate`. If the package declares `meta.availability.max` (or a workload builder declares `availability.max`) below the requested level, Kix caps the effective level at that ceiling and emits a warning.
+
+## cloudIdentity
+
+Binds a cloud IAM identity to the instance's Kubernetes ServiceAccount so its pods can authenticate to AWS, Google Cloud, or Azure.
+
+```nix
+instances.external-dns.external-dns.cloudIdentity.aws.roleArn =
+  "arn:aws:iam::111122223333:role/external-dns";
+```
+
+| Type | Default | Requires |
+| --- | --- | --- |
+| `null` or attribute set (setting one of `aws`, `gcp`, or `azure`) | `null` | An active `cloudIdentity` role provider in the cluster (included in `kix.flavors.eks`, `gke`, `gke-autopilot`, and `aks`), and a package that binds `scope.cloudIdentity` to a ServiceAccount |
+
+| Cloud | Attribute | What Kix writes |
+| --- | --- | --- |
+| AWS (`eks`) | `aws.roleArn` (IAM role ARN string, such as `"arn:aws:iam::111122223333:role/external-dns"`) | ServiceAccount annotation `eks.amazonaws.com/role-arn: <roleArn>`. When `cluster.flavor.eks.cloudIdentity = "pod-identity"`, Kix omits that annotation because EKS Pod Identity links the ServiceAccount to the role through an EKS API association created outside Kix. |
+| Google Cloud (`gke`, `gke-autopilot`) | `gcp = { }` (grant IAM roles directly to the Kubernetes ServiceAccount) or `gcp.serviceAccount` (`*.gserviceaccount.com` email) | ServiceAccount annotation `iam.gke.io/gcp-service-account: <serviceAccount>` when `serviceAccount` is set; no Google annotation when `gcp = { }`. |
+| Azure (`aks`) | `azure.clientId` (GUID) and optional `azure.tenantId` (GUID) | ServiceAccount annotation `azure.workload.identity/client-id` (plus `azure.workload.identity/tenant-id` when set), and pod template label `azure.workload.identity/use: "true"`. |
+
+For every mechanism, Kix also writes `kix.run/cloud-identity` (JSON of the declared identity and mechanism name) on the ServiceAccount and orders the ServiceAccount after the cluster's `cloudIdentity` provider during `kix deploy`. Workload builders (`mkDeployment`, `mkStatefulSet`, `mkDaemonSet`, `mkJob`, and `mkCronJob`) add `checksum/cloud-identity` to every pod template whose pod spec sets `serviceAccount = self.<part>`, so changing the identity or mechanism restarts the pods to pick up new credentials.
+
+Kix does not create cloud IAM resources. Create the AWS IAM role and trust policy (or EKS Pod Identity association), OIDC provider, Google IAM binding, or Azure federated credential outside Kix for `system:serviceaccount:<namespace>:<serviceaccount name>`.
+
+`kix check` rejects:
+- `cloudIdentity` on a cluster with no `cloudIdentity` provider;
+- an identity for a different cloud than the cluster's `cloudIdentity` provider;
+- a malformed IAM role ARN, Google service account email, client ID, or tenant ID;
+- more than one of `aws`, `gcp`, and `azure` set at once;
+- `cloudIdentity` on an instance whose package does not bind `scope.cloudIdentity` to a ServiceAccount (the error includes a `partsOverlays` snippet to bind it on the instance).
+
+### Self-managed clusters
+
+On a self-managed cluster (such as `kubeadm`) federated to AWS with the self-hosted `amazon-eks-pod-identity-webhook`, declare the `cloudIdentity` provider with `kix.mkImport` and match `annotationPrefix` to the webhook's `--annotation-prefix` flag. If a managed package in the cluster also claims the `cloudIdentity` role, the managed package takes precedence over the import.
+
+```nix
+instances.kube-system.cloud-identity.package = kix.mkImport {
+  roles = [ "cloudIdentity" ];
+  annotationDomains = [ "irsa.example.com" ];
+  out.cloudIdentity = kix.cloudIdentity.irsa { annotationPrefix = "irsa.example.com"; };
+};
+```
 
 ## partsOverlays
 

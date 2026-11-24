@@ -435,7 +435,7 @@ scorecard = {
     byRule."reliability.hasProbes".severity = "error";
     byNamespace."sandbox-*"."security.*".severity = "warning";
   };
-  knownAnnotationDomains = [ "eks.amazonaws.com" ];
+  knownAnnotationDomains = [ "prometheus.io" ];
 };
 ```
 
@@ -446,7 +446,7 @@ scorecard = {
 | `scorecard.maxSeverity` | `"info" \| "warning" \| "error"` | `"warning"` | Caps the effective severity of every finding. Under the default `"warning"` cap, `"error"` rules are reported as warnings and do not fail the build; set `"error"` to fail evaluation on error-severity findings. |
 | `scorecard.ruleDefaults` | `attrsOf anything` | `{ }` | Fallback rule settings (`{ severity = "warning" \| "error" \| "info"; }`) for rules that omit `severity`. |
 | `scorecard.ruleOverrides` | `attrsOf anything` | `{ }` | Scoped overrides under `byRule`, `byOwner`, and `byNamespace`. |
-| `scorecard.knownAnnotationDomains` | `listOf str` | `[ ]` | External annotation domains exempted from the `architecture.annotationDomainOwnership` rule. |
+| `scorecard.knownAnnotationDomains` | `listOf str` | `[ ]` | External annotation domains exempted from the `architecture.annotationDomainOwnership` rule. The `eks`, `gke`, `gke-autopilot`, and `aks` flavors already declare their cloud identity domains (`eks.amazonaws.com`, `iam.gke.io`, and `azure.workload.identity`). |
 
 :::note[Reference]
 See [Scorecard and rules](/docs/reference/scorecard-and-rules/) for the complete rule schema, override precedence, and catalog of built-in rules.

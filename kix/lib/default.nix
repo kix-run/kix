@@ -107,8 +107,14 @@ in
 
   inherit kixlib;
 
-  # Expose image and pin helpers to cluster definitions as well as packages.
-  inherit (kixlib) pins image fail;
+  # Expose the image, pin, and cloud identity helpers to cluster definitions
+  # as well as packages.
+  inherit (kixlib)
+    pins
+    image
+    fail
+    cloudIdentity
+    ;
 
   inherit (meta) peekPackageMeta;
 

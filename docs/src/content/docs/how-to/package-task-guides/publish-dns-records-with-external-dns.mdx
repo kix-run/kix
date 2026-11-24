@@ -7,6 +7,7 @@ import Command from '/src/components/Command.astro';
 import Snippet from '/src/components/Snippet.astro';
 import externalDnsInstance from '/src/snippets/clusters/test-doc-how-tos/externalDnsInstance.json';
 import externalDnsKindTryout from '/src/snippets/clusters/test-external-dns-tryout/externalDnsKindTryout.json';
+import eksIrsaInstance from '/src/snippets/clusters/test-cloud-identity-eks/eksIrsaInstance.json';
 
 Use the `external-dns` package to publish DNS records for the hostnames of
 your Services, Ingresses, and Gateway API routes in an external DNS provider.
@@ -158,22 +159,36 @@ it; restart the Deployment after a rotation:
 
 <Command commands={["kubectl -n <namespace> rollout restart deployment/<instance>"]} />
 
-## Use workload identity
+## Use a cloud identity
 
-On AWS, Google Cloud, or Azure, external-dns can authenticate as the pod's
-ServiceAccount instead of with a stored key. Leave out
-`deps.providerCredentials` and annotate the ServiceAccount:
+On AWS, Google Cloud, or Azure, external-dns can authenticate through its pod's
+ServiceAccount. Leave out `deps.providerCredentials` and set `cloudIdentity` on
+the instance:
 
-```nix
-config.serviceAccountAnnotations."eks.amazonaws.com/role-arn" =
-  "arn:aws:iam::111122223333:role/external-dns";
-```
+<Snippet {...eksIrsaInstance} />
 
-Kix does not run the controller that reads this annotation, so declare its
-domain in `scorecard.knownAnnotationDomains` (for example
-`"eks.amazonaws.com"`) to silence the annotation-ownership warning. Azure
-workload identity also needs the `azure.workload.identity/use: "true"` label
-on the pod; add it with the instance's `partsOverlays`.
+- **GKE:** Set `config.provider = "google"` and `cloudIdentity.gcp.serviceAccount = "dns@project.iam.gserviceaccount.com"` (or `cloudIdentity.gcp = { }` when granting IAM roles directly to the Kubernetes ServiceAccount), and add `--google-project=<project>` to `extraArgs`.
+- **AKS:** Set `config.provider` to `"azure"`, `"azure-dns"`, or `"azure-private-dns"`, set `cloudIdentity.azure = { clientId = "<guid>"; }` (with optional `tenantId`), and mount `/etc/kubernetes/azure.json` (with the tenant, subscription, resource group, and `useWorkloadIdentityExtension: true`) using `partsOverlays`.
+
+The `eks`, `gke`, `gke-autopilot`, and `aks` flavors configure the cluster's
+cloud identity mechanism automatically. Kix writes the cloud's ServiceAccount
+annotations (and, on AKS, the `azure.workload.identity/use: "true"` pod label)
+and restarts the pod whenever `cloudIdentity` changes. On EKS, Kix writes the
+IAM roles for service accounts (IRSA) annotation by default; set
+`cluster.flavor.eks.cloudIdentity = "pod-identity"` to use EKS Pod Identity
+instead. For self-managed clusters, see
+[`cloudIdentity`](/docs/reference/instances-and-composition/#cloudidentity).
+
+Create the cloud IAM binding outside Kix for
+`system:serviceaccount:<namespace>:<instance>` (the AWS IAM role and OIDC trust
+policy or EKS Pod Identity association, the Google IAM binding, or the Azure
+federated credential).
+
+The `aws`, `aws-sd`, `google`, `azure`, `azure-dns`, and `azure-private-dns`
+providers require either `cloudIdentity` (for the matching cloud) or
+`deps.providerCredentials`, and reject setting both. Other providers do not
+accept `cloudIdentity`. `cloudIdentity` replaces
+`config.serviceAccountAnnotations` (`[K0771]`).
 
 ## Allow the provider through network policy
 

@@ -93,6 +93,7 @@ let
   externalDns =
     {
       enforcer ? null,
+      cloudIdentity ? (import ../../vocab/cloud-identity.nix { inherit lib; }).unset,
     }:
     externalDnsPackage {
       scope = {
@@ -100,6 +101,7 @@ let
         namespaceName = "dns";
         rbac = throw "external-dns tests: rbac is not used by assertions or warnings";
         networkPolicyEnforcer = enforcer;
+        inherit cloudIdentity;
       };
       inherit lib;
       kix = kixlib;

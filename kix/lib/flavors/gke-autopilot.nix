@@ -4,6 +4,9 @@
 # privileged containers, DaemonSets, and user deployments in `kube-system`,
 # enforces the `baseline` Pod Security Standard, and owns `cni` and
 # `loadBalancer` exclusively.
+#
+# Pods get Google Cloud identities through Workload Identity Federation for
+# GKE, which the `cloud-identity` import in `gke-managed` declares.
 
 {
   config,
@@ -16,6 +19,8 @@ let
     inherit kix;
     inherit (config) clusterDomain;
   };
+  platformCloudIdentity = import ./cloud-identity.nix { inherit kix; };
+  cloudIdentity = import ../vocab/cloud-identity.nix { inherit lib; };
 in
 {
   cluster.provider = lib.mkDefault "gke-autopilot";
@@ -53,6 +58,8 @@ in
       name = "kube-dns";
       namespace = "kube-system";
     };
+
+    cloud-identity = platformCloudIdentity { mechanism = cloudIdentity.gke { }; };
 
     platform-storage = {
       package = kix.mkImport {

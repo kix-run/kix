@@ -3,6 +3,9 @@
 # AKS provides a managed control plane, Azure CNI (exclusive), Azure Load
 # Balancer (shadowable), and the Azure Disk CSI driver with `managed-csi` as
 # the default StorageClass. No ingress controller is installed by default.
+#
+# Pods get Azure identities through Microsoft Entra Workload ID, which the
+# `cloud-identity` import declares.
 
 {
   config,
@@ -15,6 +18,8 @@ let
     inherit kix;
     inherit (config) clusterDomain;
   };
+  platformCloudIdentity = import ./cloud-identity.nix { inherit kix; };
+  cloudIdentity = import ../vocab/cloud-identity.nix { inherit lib; };
 in
 {
   cluster.provider = lib.mkDefault "aks";
@@ -53,6 +58,8 @@ in
       name = "kube-dns";
       namespace = "kube-system";
     };
+
+    cloud-identity = platformCloudIdentity { mechanism = cloudIdentity.azureWorkloadId { }; };
 
     platform-storage = {
       package = kix.mkImport {

@@ -1,0 +1,6 @@
++++
+kind = "added"
+packages = ["experimental/external-dns"]
+library = ["kix.cloudIdentity", "scope.cloudIdentity", "kix.mkImport", "kix.flavors.eks"]
++++
+Set `cloudIdentity` on an instance (`aws.roleArn`, `gcp` with optional `gcp.serviceAccount`, or `azure.clientId` with optional `azure.tenantId`) to let its pods authenticate to AWS, Google Cloud, or Azure through their ServiceAccount. Kix writes the ServiceAccount annotations and pod labels for the cluster's cloud identity mechanism and restarts pods when the identity changes, and `packages.experimental.external-dns` now supports `cloudIdentity`. `kix.flavors.eks`, `kix.flavors.gke`, `kix.flavors.gke-autopilot`, and `kix.flavors.aks` configure the mechanism automatically. On EKS, `cluster.flavor.eks.cloudIdentity = "pod-identity"` switches from IAM roles for service accounts (IRSA) to EKS Pod Identity, and self-managed clusters can declare a `cloudIdentity` import with `kix.cloudIdentity.irsa`, `kix.cloudIdentity.eksPodIdentity`, `kix.cloudIdentity.gke`, or `kix.cloudIdentity.azureWorkloadId`. In packages, `scope.cloudIdentity.bind` attaches the identity to a ServiceAccount, `kix.cloudIdentity.orSecret` requires either `cloudIdentity` or a credentials Secret, and `kix.mkImport` accepts `annotationDomains` for annotations read by controllers outside Kix.

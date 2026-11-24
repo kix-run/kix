@@ -1,0 +1,3 @@
+# 2026-11-24 · `kix/packages/experimental/external-dns` · The azure providers cannot start without a config file the package does not render.
+
+external-dns's `azure`, `azure-dns`, and `azure-private-dns` providers read their tenant, subscription, resource group, and `useWorkloadIdentityExtension` from `/etc/kubernetes/azure.json` (`--azure-config-file`). The package mounts no such file, so an AKS instance builds, binds its cloud identity, and then fails at start until the user mounts the file with `partsOverlays`. `clusters/test-cloud-identity-aks.nix` builds but would not run. The google provider has the same shape in a smaller form: it needs `--google-project` in `extraArgs`, and nothing checks it.

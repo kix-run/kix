@@ -7,6 +7,7 @@ let
   storageClass = import ./storage-class.nix { inherit lib; };
   snapshotClass = import ./snapshot-class.nix { inherit lib; };
   toleration = import ./toleration.nix { inherit lib; };
+  cloudIdentity = import ./cloud-identity.nix { inherit lib; };
   versions = import ../core/version.nix { inherit lib; };
   availability = import ../core/availability.nix { inherit lib; };
   scorecard = import ../scorecard.nix { inherit lib; };
@@ -38,6 +39,19 @@ compose
   # render them for a pod spec (`vocab/toleration.nix`).
   tolerations = {
     inherit (toleration) problems render;
+  };
+  # The mechanisms that give a pod a cloud identity, for the `out` of an
+  # instance that claims the `cloudIdentity` role, and the assertions a
+  # package returns when its software takes either that identity or a
+  # credentials Secret (`vocab/cloud-identity.nix`).
+  cloudIdentity = {
+    inherit (cloudIdentity)
+      irsa
+      eksPodIdentity
+      gke
+      azureWorkloadId
+      orSecret
+      ;
   };
   # The contracts in `kix/contracts`, by name, with the experimental ones
   # under `contracts.experimental`.

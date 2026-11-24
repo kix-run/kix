@@ -728,9 +728,10 @@
       "status": "implemented",
       "snippets": [
         "externalDnsInstance",
-        "externalDnsKindTryout"
+        "externalDnsKindTryout",
+        "eksIrsaInstance"
       ],
-      "unverifiedNixBlocks": 2,
+      "unverifiedNixBlocks": 1,
       "packages": [
         "experimental/external-dns"
       ]

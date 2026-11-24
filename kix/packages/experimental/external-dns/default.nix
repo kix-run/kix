@@ -47,6 +47,22 @@
 # timestamp is set, so the stale alert covers them without a rule of its
 # own. A crash loop is left to prometheus-default-rules.
 #
+# A provider on AWS, Google Cloud, or Azure (`cloud` in providers.nix)
+# authenticates with the instance's `cloudIdentity`, which the package binds
+# to its ServiceAccount, or with the providerCredentials Secret. An instance
+# with neither or both is refused, and so is a cloud identity for another
+# cloud or for a provider outside these three clouds.
+#
+#   instances.external-dns.external-dns = {
+#     package = packages.experimental.external-dns;
+#     cloudIdentity.aws.roleArn = "arn:aws:iam::111122223333:role/external-dns";
+#     config = {
+#       provider = "aws";
+#       policy = "upsert-only";
+#       txtOwnerId = "prod/external-dns";
+#     };
+#   };
+#
 # Credentials belong in the providerCredentials Secret, not in the rendered
 # manifests. external-dns reads every flag from `EXTERNAL_DNS_<FLAG>` as
 # well, so a credential that upstream takes as a flag (`--pdns-api-key`,
@@ -294,18 +310,12 @@ in
       '';
     };
 
+    # Removed. The instance's `cloudIdentity` renders these annotations.
     serviceAccountAnnotations = lib.mkOption {
-      type = lib.types.attrsOf lib.types.str;
-      default = { };
-      example = {
-        "eks.amazonaws.com/role-arn" = "arn:aws:iam::111122223333:role/external-dns";
-      };
-      description = ''
-        Annotations on the ServiceAccount, for workload identity on a cloud
-        provider (`eks.amazonaws.com/role-arn`,
-        `iam.gke.io/gcp-service-account`, or
-        `azure.workload.identity/client-id`).
-      '';
+      type = lib.types.unspecified;
+      default = null;
+      visible = false;
+      description = "Removed. Set `cloudIdentity` on the instance instead.";
     };
 
     extraArgs = lib.mkOption {
@@ -351,6 +361,25 @@ in
       );
     in
     [
+      {
+        assertion = config.serviceAccountAnnotations == null;
+        id = "K0771";
+        option = "serviceAccountAnnotations";
+        message = "`config.serviceAccountAnnotations` was removed. Kix no longer accepts raw ServiceAccount annotations here; set `cloudIdentity` on the instance so Kix writes the cloud's ServiceAccount annotations and pod labels and restarts pods when the identity changes.";
+        fix = "Remove `serviceAccountAnnotations` from `config` and set `cloudIdentity` on the instance instead (for example, `cloudIdentity.aws.roleArn = \"arn:aws:iam::111122223333:role/external-dns\";`, `cloudIdentity.gcp.serviceAccount = \"...\";`, or `cloudIdentity.azure.clientId = \"...\";`).";
+      }
+    ]
+    # A cloud provider authenticates with the instance's cloud identity or
+    # with the providerCredentials Secret.
+    ++ kix.cloudIdentity.orSecret {
+      identity = scope.cloudIdentity;
+      secret = s.dep;
+      cloud = providers.${config.provider}.cloud or null;
+      what = "provider \"${config.provider}\"";
+      secretDependency = "providerCredentials";
+      id = "K1798";
+    }
+    ++ [
       # sources.nix and providers.nix follow `release`, and another release
       # may need other RBAC rules or accept other providers.
       (kix.image.checkRelease {
@@ -553,16 +582,14 @@ in
         };
       in
       {
-        serviceAccount = scope.mkResource (
+        serviceAccount =
           {
             apiVersion = "v1";
             kind = "ServiceAccount";
             inherit name;
           }
-          // lib.optionalAttrs (config.serviceAccountAnnotations != { }) {
-            annotations = config.serviceAccountAnnotations;
-          }
-        );
+          |> scope.cloudIdentity.bind
+          |> scope.mkResource;
 
         metricsService =
           if config.metrics.enabled && prometheus != null then

@@ -32,6 +32,7 @@ let
   inherit (import_) evaluateImportInstance;
   availabilityLib = import ../core/availability.nix { inherit lib; };
   packageLib = import ../core/package.nix { inherit lib; };
+  cloudIdentityLib = import ../vocab/cloud-identity.nix { inherit lib; };
 in
 
 {
@@ -160,6 +161,30 @@ in
           else
             _enforcerProvider.out;
 
+        # Resolve the instance's `cloudIdentity` against the provider of the
+        # `cloudIdentity` role. A ServiceAccount the package binds depends on
+        # the provider's root, so a webhook that is a Kix instance is
+        # deployed first.
+        _cloudIdentityValue = instCfg.cloudIdentity or null;
+        _cloudIdentityProvider =
+          if _cloudIdentityValue == null || !(clusterCtx ? findRoleProvider) then
+            null
+          else
+            clusterCtx.findRoleProvider "cloudIdentity";
+        _cloudIdentity = cloudIdentityLib.resolve {
+          value = _cloudIdentityValue;
+          provider = _cloudIdentityProvider;
+        };
+        _cloudIdentityRoot =
+          let
+            p = allInstances.${_cloudIdentityProvider.ns}.${_cloudIdentityProvider.inst};
+          in
+          if p ? raw then p.raw.root.resource or p.raw.root else p.root;
+        _cloudIdentityHandle = cloudIdentityLib.handle {
+          resolved = _cloudIdentity;
+          requires = [ _cloudIdentityRoot ];
+        };
+
         _edgeAnalysis = rec {
           serviceRegistry = edgeAnalysis.mkServiceRegistry _depResourcesForEdges;
           serviceRefRegistry = edgeAnalysis.mkServiceRefRegistry _depResourcesForEdges;
@@ -189,6 +214,7 @@ in
             availability
             ;
           networkPolicyEnforcer = _networkPolicyEnforcer;
+          cloudIdentity = _cloudIdentityHandle;
           packageId = packageLib.idOf instCfg.package;
           namespaces = nsResources;
           labelStyle = instCfg.labelStyle;
@@ -845,8 +871,54 @@ in
         };
         packageResult = {
           warnings = packageResultRaw.warnings;
-          assertions = packageResultRaw.assertions ++ scorecardDiag.assertions;
+          assertions = packageResultRaw.assertions ++ scorecardDiag.assertions ++ cloudIdentityAssertions;
         };
+
+        # Refuse a `cloudIdentity` the cluster cannot deliver, and one that
+        # no ServiceAccount of the instance carries. `bind` leaves a
+        # ServiceAccount unchanged when the first check fails, so the second
+        # runs only when the first passes.
+        cloudIdentityAssertions =
+          let
+            serviceAccountParts = builtins.filter (
+              name:
+              let
+                v = parts.${name};
+              in
+              builtins.isAttrs v && (v._type or "") == "k8s-resource" && (v.kind or "") == "ServiceAccount"
+            ) (builtins.attrNames (removeAttrs parts [ "root" ]));
+            bound = builtins.any (r: (r._cloudIdentity or null) != null) _partResourcesFromParts;
+            partName =
+              if serviceAccountParts == [ ] then "serviceAccount" else builtins.head serviceAccountParts;
+          in
+          if !_cloudIdentity.isSet then
+            [ ]
+          else if _cloudIdentity.problem != null then
+            [ ({ assertion = false; } // _cloudIdentity.problem) ]
+          else
+            [
+              {
+                assertion = bound;
+                message =
+                  "`cloudIdentity.${_cloudIdentity.cloud}` is set on this instance, but its package does not bind `scope.cloudIdentity` to a ServiceAccount. Kix did not write the cloud identity on any ServiceAccount, so the pods would start without cloud credentials. "
+                  + (
+                    if serviceAccountParts == [ ] then
+                      "This package does not create a ServiceAccount."
+                    else
+                      "This package creates ServiceAccount part(s) ${
+                        lib.concatMapStringsSep ", " (n: "`${n}`") serviceAccountParts
+                      } without calling `scope.cloudIdentity.bind`."
+                  );
+                fix =
+                  "Bind the ServiceAccount on this instance with `partsOverlays` (or in the package with `scope.cloudIdentity.bind`):"
+                  + "\n  partsOverlays = [ (scope: self: base: {"
+                  + "\n    ${partName} = scope.mkResource (scope.cloudIdentity.bind {"
+                  + "\n      apiVersion = \"v1\"; kind = \"ServiceAccount\"; name = base.${partName}.name;"
+                  + "\n    });"
+                  + "\n  }) ];"
+                  + "\nAlso check that the workload's pod spec sets `serviceAccount = self.${partName};` so pods restart when `cloudIdentity` changes.";
+              }
+            ];
 
         structuralWarnings =
           let

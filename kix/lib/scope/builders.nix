@@ -96,7 +96,10 @@ in
                   (
                     let
                       res = k8s.mkResource (
-                        removeAttrs args [ "labels" ]
+                        removeAttrs args [
+                          "labels"
+                          "_cloudIdentity"
+                        ]
                         // {
                           namespace = namespaceResource;
                           inherit clusterDomain;
@@ -110,6 +113,11 @@ in
                     // {
                       packageLabels = labels;
                       _builtBy = builtBy;
+                      # The pod labels and restart stamp of a ServiceAccount
+                      # bound with `scope.cloudIdentity.bind`, or null. The
+                      # workload builders read it from the pod's
+                      # ServiceAccount, outside the manifest.
+                      _cloudIdentity = args._cloudIdentity or null;
                       # Warnings raised while building the resource, outside the
                       # manifest. `eval/instance.nix` collects them from the
                       # instance's parts into its warnings.
@@ -177,6 +185,28 @@ in
                   serviceAccountNamespace = saNs;
                 };
             };
+
+      # Return pod template metadata with the cloud identity of the
+      # ServiceAccount the pod spec names: the pod labels its mechanism needs
+      # and a `checksum/cloud-identity` annotation. A cloud's webhook gives
+      # credentials to a pod only when the pod starts, so the stamp makes a
+      # changed identity roll the pods.
+      _withCloudIdentity =
+        rawTemplateSpec: metadata:
+        let
+          sa = rawTemplateSpec.serviceAccount or null;
+          identity = if sa == null then null else sa._cloudIdentity or null;
+        in
+        if identity == null then
+          metadata
+        else
+          metadata
+          // {
+            labels = (metadata.labels or { }) // identity.podLabels;
+            annotations = (metadata.annotations or { }) // {
+              "checksum/cloud-identity" = identity.stamp;
+            };
+          };
 
       _expandHeadlessService =
         spec:
@@ -483,9 +513,12 @@ in
             // {
               selector.matchLabels = selector;
               template = {
-                metadata = templateMeta // {
-                  labels = effectiveTemplateLabels;
-                };
+                metadata = _withCloudIdentity rawTemplateSpec (
+                  templateMeta
+                  // {
+                    labels = effectiveTemplateLabels;
+                  }
+                );
                 spec = templateSpec;
               };
             };
@@ -560,9 +593,12 @@ in
             jobTemplate = (rawSpec.jobTemplate or { }) // {
               spec = jobSpec // {
                 template = {
-                  metadata = templateMeta // {
-                    labels = selector;
-                  };
+                  metadata = _withCloudIdentity rawTemplateSpec (
+                    templateMeta
+                    // {
+                      labels = selector;
+                    }
+                  );
                   spec = templateSpec;
                 };
               };
@@ -627,9 +663,12 @@ in
             }
             // {
               template = {
-                metadata = templateMeta // {
-                  labels = effectiveTemplateLabels;
-                };
+                metadata = _withCloudIdentity rawTemplateSpec (
+                  templateMeta
+                  // {
+                    labels = effectiveTemplateLabels;
+                  }
+                );
                 spec = templateSpec;
               };
             };
