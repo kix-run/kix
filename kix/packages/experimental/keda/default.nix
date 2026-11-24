@@ -72,7 +72,8 @@
 #   instances.keda.keda.package = packages.experimental.keda;
 #
 # Consumer pattern, in a package that depends on `keda` and on `prometheus`
-# (clusters/test-keda.nix builds it, with a NATS JetStream trigger too):
+# (clusters/test-keda.nix builds it, with a NATS JetStream trigger on
+# packages.experimental.nats in another namespace too):
 #
 #   worker = scope.mkDeployment { ... };   # no spec.replicas, see below
 #   scaler = scope.mkCR keda.out.crds.ScaledObject {
@@ -93,8 +94,9 @@
 # Network policy: the ScaledObject, ScaledJob, TriggerAuthentication, and
 # ClusterTriggerAuthentication definitions declare that the operator dials
 # the addresses in their specs. A trigger whose metadata carries a Kix
-# Service address (`prometheus.out.serviceUrl`, or `"${nats.out.fqdn}:8222"`
-# for a NATS monitoring endpoint) therefore orders the custom resource after
+# Service address (`prometheus.out.serviceUrl`, or
+# `"${nats.out.monitoringHost}:${nats.out.monitoringPort}"` for the NATS
+# monitoring endpoint) therefore orders the custom resource after
 # that Service and opens the operator's egress to it and the Service's
 # ingress from the operator, in one declaration. A source outside the
 # cluster, or one written as a literal address, needs a
@@ -262,7 +264,7 @@ let
     "--zap-time-encoding=rfc3339"
   ];
 
-  certFlagReason = "this package manages KEDA's TLS certificates, Service names, and CA bundle patching automatically using Secret ${certSecretName}. Remove this flag.";
+  certFlagReason = "this package manages KEDA's TLS certificates, Service names, and CA bundle patching automatically using Secret ${certSecretName}.";
 
   # The operator dials the addresses in these kinds' specs: trigger
   # sources, and the secret stores a TriggerAuthentication names.
@@ -513,41 +515,50 @@ in
           readOnly = true;
         };
 
-        operatorArgs = [
-          "--leader-elect"
-          "--enable-cert-rotation=true"
-          "--cert-dir=${certDir}"
-          "--cert-secret-name=${certSecretName}"
-          "--operator-service-name=${operatorServiceName}"
-          "--metrics-server-service-name=${metricsServerServiceName}"
-          "--webhooks-service-name=${webhooksServiceName}"
-          "--validating-webhook-name=${webhookConfigName}"
-          "--k8s-cluster-domain=${clusterConfig.clusterDomain}"
-        ]
-        ++ kix.guardArgs {
+        # The three programs read their flags with pflag.
+        operatorArgs = kix.mergeArgs {
           inherit scope;
-          defaults = logDefaults;
-          owned = {
-            "--leader-elect" =
-              "this package already enables --leader-elect so operator replicas coordinate safely across availability levels. Remove this flag.";
-            "--enable-cert-rotation" = certFlagReason;
-            "--cert-dir" = certFlagReason;
-            "--cert-secret-name" = certFlagReason;
-            "--operator-service-name" = certFlagReason;
-            "--metrics-server-service-name" = certFlagReason;
-            "--webhooks-service-name" = certFlagReason;
-            "--validating-webhook-name" = certFlagReason;
-            "--k8s-cluster-domain" =
-              "this package sets it automatically from the cluster's clusterDomain option. Set clusterDomain on the cluster instead, and remove this flag.";
-            "--enable-webhook-patching" = certFlagReason;
-            "--enable-apiservice-patching" = certFlagReason;
-            "--metrics-bind-address" =
-              "the operator's metrics Service and ServiceMonitor scrape port ${toString ports.metrics}. Remove this flag.";
-            "--health-probe-bind-address" =
-              "the operator's liveness and readiness probes check port ${toString ports.health}. Remove this flag.";
-            "--metrics-service-bind-address" =
-              "the metrics API server and generated network policies connect to the operator's gRPC server on port ${toString ports.grpc}. Remove this flag.";
-          };
+          parser = "gnu";
+          args = [
+            {
+              flags = [ "--leader-elect" ];
+              reason = "this package already enables --leader-elect so operator replicas coordinate safely across availability levels.";
+            }
+            {
+              flags = [
+                "--enable-cert-rotation=true"
+                "--cert-dir=${certDir}"
+                "--cert-secret-name=${certSecretName}"
+                "--operator-service-name=${operatorServiceName}"
+                "--metrics-server-service-name=${metricsServerServiceName}"
+                "--webhooks-service-name=${webhooksServiceName}"
+                "--validating-webhook-name=${webhookConfigName}"
+              ];
+              names = [
+                "--enable-webhook-patching"
+                "--enable-apiservice-patching"
+              ];
+              reason = certFlagReason;
+            }
+            {
+              flags = [ "--k8s-cluster-domain=${clusterConfig.clusterDomain}" ];
+              from = "the cluster's clusterDomain option";
+              fix = "Set clusterDomain on the cluster instead, and remove the flag from extraArgs.";
+            }
+            { defaults = logDefaults; }
+            {
+              names = [ "--metrics-bind-address" ];
+              reason = "the operator's metrics Service and ServiceMonitor scrape port ${toString ports.metrics}.";
+            }
+            {
+              names = [ "--health-probe-bind-address" ];
+              reason = "the operator's liveness and readiness probes check port ${toString ports.health}.";
+            }
+            {
+              names = [ "--metrics-service-bind-address" ];
+              reason = "the metrics API server and generated network policies connect to the operator's gRPC server on port ${toString ports.grpc}.";
+            }
+          ];
         } config.extraArgs;
 
         operatorEnv = kix.mkEnvVars (
@@ -567,49 +578,65 @@ in
           } config.env
         );
 
-        metricsServerArgs = [
-          "--secure-port=${toString ports.metricsApi}"
-          "--cert-dir=${certDir}"
-          "--client-ca-file=${certDir}/ca.crt"
-          "--tls-cert-file=${certDir}/tls.crt"
-          "--tls-private-key-file=${certDir}/tls.key"
-          # The operator's certificate names this Service's FQDN, and the
-          # address carries the Service, so the egress to the gRPC port is
-          # derived from it.
-          "--metrics-service-address=${self.operatorService.out.fqdn}:${toString ports.grpc}"
-        ]
-        ++ kix.guardArgs {
+        metricsServerArgs = kix.mergeArgs {
           inherit scope;
           option = "metricsServer.extraArgs";
-          # The release manifest logs only errors here.
-          defaults = [ "--zap-log-level=error" ];
-          owned = {
-            "--secure-port" =
-              "the metrics API Service, health probes, and generated network policies use port ${toString ports.metricsApi}. Remove this flag.";
-            "--cert-dir" = certFlagReason;
-            "--client-ca-file" = certFlagReason;
-            "--tls-cert-file" = certFlagReason;
-            "--tls-private-key-file" = certFlagReason;
-            "--metrics-service-address" =
-              "this package points the metrics API server at the operator's gRPC Service and opens network policy for that connection. Remove this flag.";
-            "--metrics-service-grpc-authority" =
-              "the operator's TLS certificate already matches the gRPC Service address that this package configures. Remove this flag.";
-          };
+          parser = "gnu";
+          args = [
+            {
+              flags = [ "--secure-port=${toString ports.metricsApi}" ];
+              reason = "the metrics API Service, health probes, and generated network policies use port ${toString ports.metricsApi}.";
+            }
+            {
+              flags = [
+                "--cert-dir=${certDir}"
+                "--client-ca-file=${certDir}/ca.crt"
+                "--tls-cert-file=${certDir}/tls.crt"
+                "--tls-private-key-file=${certDir}/tls.key"
+              ];
+              reason = certFlagReason;
+            }
+            # The operator's certificate names this Service's FQDN, and the
+            # address carries the Service, so the egress to the gRPC port is
+            # derived from it.
+            {
+              flags = [
+                "--metrics-service-address=${self.operatorService.out.fqdn}:${toString ports.grpc}"
+              ];
+              reason = "this package points the metrics API server at the operator's gRPC Service and opens network policy for that connection.";
+            }
+            {
+              names = [ "--metrics-service-grpc-authority" ];
+              reason = "the operator's TLS certificate already matches the gRPC Service address that this package configures.";
+            }
+            # The release manifest logs only errors here.
+            { defaults = [ "--zap-log-level=error" ]; }
+          ];
         } config.metricsServer.extraArgs;
 
-        webhooksArgs = kix.guardArgs {
+        webhooksArgs = kix.mergeArgs {
           inherit scope;
           option = "webhooks.extraArgs";
-          defaults = logDefaults;
-          owned = {
-            "--port" =
-              "the webhook Service and generated network policies connect to port ${toString ports.webhook}. Remove this flag.";
-            "--cert-dir" = certFlagReason;
-            "--health-probe-bind-address" =
-              "the webhook liveness and readiness probes check port ${toString ports.health}. Remove this flag.";
-            "--metrics-bind-address" =
-              "the webhook container exposes metrics on port ${toString ports.metrics}. Remove this flag.";
-          };
+          parser = "gnu";
+          args = [
+            { defaults = logDefaults; }
+            {
+              names = [ "--port" ];
+              reason = "the webhook Service and generated network policies connect to port ${toString ports.webhook}.";
+            }
+            {
+              names = [ "--cert-dir" ];
+              reason = certFlagReason;
+            }
+            {
+              names = [ "--health-probe-bind-address" ];
+              reason = "the webhook liveness and readiness probes check port ${toString ports.health}.";
+            }
+            {
+              names = [ "--metrics-bind-address" ];
+              reason = "the webhook container exposes metrics on port ${toString ports.metrics}.";
+            }
+          ];
         } config.webhooks.extraArgs;
 
         # Every component exits at start when WATCH_NAMESPACE is unset. The

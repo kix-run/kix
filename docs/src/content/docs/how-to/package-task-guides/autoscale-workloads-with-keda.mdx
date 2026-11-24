@@ -68,11 +68,22 @@ the `worker` Deployment in the same package. KEDA scales the Deployment between
   Service URL of a `packages.experimental.prometheus` dependency. Replace
   `query = "vector(3)"` and `threshold = "1"` with your own PromQL query and
   scaling threshold.
-- **NATS JetStream.** `natsServerMonitoringEndpoint` takes a NATS monitoring
-  Service address as `host:port` without a URL scheme, such as
-  `"${nats.out.fqdn}:8222"` (published here as `nats.out.monitorEndpoint` by a
-  NATS package). This trigger checks pending messages for consumer `worker` on
-  stream `events` in account `"$G"` and scales up above `lagThreshold = "5"`.
+- **NATS JetStream.** `natsServerMonitoringEndpoint` takes `host:port` without a
+  URL scheme, such as `"${nats.out.monitoringHost}:${nats.out.monitoringPort}"`.
+  `out.monitoringHost` is the headless Service, so `<pod>.<out.monitoringHost>`
+  resolves when KEDA checks each clustered server for the consumer leader. This
+  trigger checks pending messages for consumer `worker` on stream `events` in
+  global account `"$G"` and scales up above `lagThreshold = "5"`.
+
+`requires = [ self.streams ]` makes Kix deploy the ScaledObject after the
+`worker-streams` Job in the same package. That Job creates the `events` stream
+and the `worker` consumer that the NATS trigger reads. The NATS instance runs in
+namespace `messaging`. The worker names it with
+`deps.nats = ref.messaging.nats`. A Kubernetes Secret reference works only within the pod's
+namespace. As a result, the Job logs in to NATS with its `natsLogin` dependency,
+a Secret in the app's own namespace that holds the same username and password as
+the NATS instance's `natsAuth` Secret. The NATS monitoring port needs no login.
+The trigger therefore needs no TriggerAuthentication.
 
 ### ScaledObjects, ScaledJobs, and authentication
 
@@ -93,7 +104,8 @@ pass `--include copies`).
 
 When a `ScaledObject`, `ScaledJob`, `TriggerAuthentication`, or
 `ClusterTriggerAuthentication` references a Kix Service address (such as
-`prometheus.out.serviceUrl` or `"${nats.out.fqdn}:8222"`), Kix automatically:
+`prometheus.out.serviceUrl` or
+`"${nats.out.monitoringHost}:${nats.out.monitoringPort}"`), Kix automatically:
 
 - Deploys the KEDA custom resource after that Service.
 - When [generated network policy](/docs/how-to/platform-capabilities/enable-generated-network-policy/)

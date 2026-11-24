@@ -5,6 +5,4 @@ operator that serves it. When both are pruned, nothing makes the custom
 resource's delete come first, so a finalizer only the operator removes can
 be left behind. Each operator package has to add `crRequires = [ self.<operator> ]`
 by hand; keda does, most packages do not. A default on `scope.mkCRD` (the
-package's controller workload) would cover every operator. Prune also does
-not wait for the deletes to finish (`2026-10-02-prune-does-not-wait-for-crd-finalizers.md`),
-so ordering alone does not settle it.
+package's controller workload) would cover every operator.
