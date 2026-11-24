@@ -597,6 +597,31 @@ mod stop_advice_tests {
         assert!(!text.contains("--on-error continue"), "{text}");
     }
 
+    /// A SOPS file with the wrong shape decrypted, or on a bundle was never
+    /// decrypted, so its refusal does not say that decryption failed.
+    #[test]
+    fn a_sops_file_that_is_not_flat_is_titled_by_its_shape() {
+        use crate::commands::plan::admission_reason;
+        use kix::cluster::preview::Refusal;
+
+        let refusal_of = Refusal::SopsNotFlat {
+            message: "[K6746] cannot use SOPS file api.enc.yaml".into(),
+        };
+        assert_eq!(
+            admission_reason(&refusal_of),
+            (RefusalReason::SopsNotFlat, None)
+        );
+        let text = crate::plan::render::render_text(&plan(
+            Vec::new(),
+            vec![refusal(RefusalReason::SopsNotFlat, None)],
+        ));
+        assert!(
+            text.contains("its SOPS file has a nested or empty value"),
+            "{text}"
+        );
+        assert!(!text.contains("could not decrypt"), "{text}");
+    }
+
     /// The reason of a refused write says what stopped it. A webhook that
     /// could not be reached has its own reason, so a refusal that only
     /// names a webhook is not taken for one.

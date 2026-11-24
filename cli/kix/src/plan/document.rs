@@ -602,6 +602,9 @@ pub enum RefusalReason {
     /// webhook, so the webhook did not answer. This deploy does not write
     /// that Service or the package that serves it.
     WebhookUnreachable,
+    /// A SOPS file has a top-level value that is a map, a list, or null, so
+    /// Kix cannot make the Secret's keys from it.
+    SopsNotFlat,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

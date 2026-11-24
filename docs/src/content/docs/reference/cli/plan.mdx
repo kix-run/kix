@@ -222,6 +222,7 @@ plan reports it as an ownership conflict naming the manager. With
 | `namespace_missing` | The namespace does not exist and the build does not create it. |
 | `unknown_kind` | The apiserver does not serve the kind and the build has no CRD for it. |
 | `decryption` | A SOPS Secret could not be decrypted. |
+| `sops_not_flat` | A top-level value in the Secret's SOPS file is a map, a list, or `null` (`[K6746]`). |
 | `other` | Kix refused the object before sending it, the dry-run write failed without a response, or the apiserver returned another error. |
 
 ## Prune fates

@@ -1,0 +1,3 @@
+# 2026-11-24 · `cli/kix/src/cluster/secrets.rs` · A multi-document YAML SOPS file deploys only its first document, or is refused with a wrong reason in a bundle.
+
+sops encrypts each YAML document with its own `sops` block, and `sops --decrypt --output-type json` prints only the first document (seen with sops 3.13.3). `kix deploy` from a local build then writes the first document's keys and drops the rest with no warning. On a bundle, `age_only_keys` cannot parse the file and refuses it with "Bundles only support YAML or JSON SOPS files", which is wrong for a YAML file. Kix should refuse a file with more than one document on both paths and say so.

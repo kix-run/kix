@@ -1157,6 +1157,11 @@
           "const": "webhook_unreachable",
           "description": "The apiserver could not reach the Service behind an admission\nwebhook, so the webhook did not answer. This deploy does not write\nthat Service or the package that serves it.",
           "type": "string"
+        },
+        {
+          "const": "sops_not_flat",
+          "description": "A SOPS file has a top-level value that is a map, a list, or null, so\nKix cannot make the Secret's keys from it.",
+          "type": "string"
         }
       ]
     },

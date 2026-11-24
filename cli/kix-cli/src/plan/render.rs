@@ -224,6 +224,7 @@ fn refusal_title(r: &AdmissionRefusal) -> String {
             format!("admission webhook {w} is unreachable")
         }
         (RefusalReason::WebhookUnreachable, None) => "an admission webhook is unreachable".into(),
+        (RefusalReason::SopsNotFlat, _) => "its SOPS file has a nested or empty value".into(),
         (RefusalReason::Other, _) => "refused".into(),
     }
 }

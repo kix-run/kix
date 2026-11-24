@@ -1,0 +1,3 @@
+# 2026-11-24 · `cli/kix/src/cluster/secrets.rs` · Nothing compares the keys a SOPS file holds with the `keys` declared on `scope.mkSecret`.
+
+`scope.mkSecret` stamps the declared keys in `kix.run/secret-keys`, and the encrypted file shows its top-level keys in clear text, so the two can be compared without decrypting. Nothing does. A misspelled or missing key deploys a Secret the workload cannot read, and a file with extra keys deploys them unnoticed. The comparison would also have caught a Flux Secret manifest (keys `apiVersion`, `kind`, `metadata`, `stringData`, `type` against `username`, `password`) before the shape check existed. The SOPS how-to says Kix does not check this.

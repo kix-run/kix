@@ -628,6 +628,7 @@ pub(crate) fn admission_reason(refusal: &Refusal) -> (RefusalReason, Option<Stri
         Refusal::NamespaceMissing { .. } => (RefusalReason::NamespaceMissing, None),
         Refusal::UnknownKind { .. } => (RefusalReason::UnknownKind, None),
         Refusal::Hydration { .. } => (RefusalReason::Decryption, None),
+        Refusal::SopsNotFlat { .. } => (RefusalReason::SopsNotFlat, None),
         // `classify` lists a webhook without dry-run support as not checked,
         // so no such refusal reaches the document.
         Refusal::WebhookNoDryRun { webhook, .. } => (RefusalReason::Other, webhook.clone()),

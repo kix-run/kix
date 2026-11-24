@@ -111,6 +111,11 @@ pub enum Refusal {
     Hydration {
         message: String,
     },
+    /// A SOPS file has a top-level value that is a map, a list, or null, so
+    /// Kix cannot make the Secret's keys from it and nothing was sent.
+    SopsNotFlat {
+        message: String,
+    },
     Other {
         message: String,
     },
@@ -135,6 +140,7 @@ impl Refusal {
             | Refusal::Forbidden { message }
             | Refusal::NamespaceMissing { message, .. }
             | Refusal::Hydration { message }
+            | Refusal::SopsNotFlat { message }
             | Refusal::Other { message } => message.clone(),
             Refusal::UnknownKind { kind } => {
                 format!("the apiserver does not serve kind {kind}")
@@ -173,8 +179,10 @@ impl Refusal {
 
     /// Classify a secret hydration failure.
     pub(crate) fn of_hydration(err: &SecretError) -> Refusal {
-        Refusal::Hydration {
-            message: err.to_string(),
+        let message = err.to_string();
+        match err {
+            SecretError::NotFlat { .. } => Refusal::SopsNotFlat { message },
+            _ => Refusal::Hydration { message },
         }
     }
 
@@ -325,6 +333,29 @@ impl Journal {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A SOPS file that decrypts but has the wrong shape is its own refusal,
+    /// so the plan does not call it a decryption failure.
+    #[test]
+    fn a_sops_file_that_is_not_flat_is_not_a_decryption_failure() {
+        let not_flat = SecretError::NotFlat {
+            path: "/x/api.enc.yaml".into(),
+            key: "metadata".into(),
+            found: "a map",
+        };
+        assert!(matches!(
+            Refusal::of_hydration(&not_flat),
+            Refusal::SopsNotFlat { message } if message.starts_with("[K6746] ")
+        ));
+        let failed = SecretError::DecryptionFailed {
+            path: "/x/api.enc.yaml".into(),
+            message: "no key".into(),
+        };
+        assert!(matches!(
+            Refusal::of_hydration(&failed),
+            Refusal::Hydration { .. }
+        ));
+    }
 
     #[test]
     fn a_single_conflict_names_its_manager_and_field() {
