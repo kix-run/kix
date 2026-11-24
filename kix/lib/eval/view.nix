@@ -73,15 +73,15 @@ in
       mergeCollide {
         inherit fail;
         error = names: {
-          message = "The part ${names} of `build` has the same name as a key of `root.out`.";
-          fix = "Rename the part or the key of `root.out`.";
+          message = "Part folder ${names} in `build` collides with the same key in `root.out`.";
+          fix = "Rename the folder in `build` or the key in `root.out`.";
         };
       } folders autoKeys
       |> mergeCollide {
         inherit fail;
         error = names: {
-          message = "`build` or `root.out` defines ${names}, a name Kix uses for the instance view.";
-          fix = "Rename it. Kix uses ${lib.concatStringsSep ", " (builtins.attrNames system)}.";
+          message = "`build` or `root.out` defines ${names}, which is a reserved attribute name on an instance.";
+          fix = "Rename ${names} in `build` or `root.out`. Reserved names: ${lib.concatStringsSep ", " (builtins.attrNames system)}.";
         };
       } system
     );

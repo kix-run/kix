@@ -98,7 +98,11 @@ let
         else if found != [ ] then
           scopeFail {
             dependency = arg;
-            message = "deps.${arg} must be a secret, but it is ${what}.";
+            message =
+              if what == "something else" then
+                "deps.${arg} does not satisfy the secret contract: ${lib.concatStringsSep "; " found}."
+              else
+                "deps.${arg} must be a secret, but resolved to ${what}.";
             fix = "Wire a secret instance, such as packages.secret (plain text or a SOPS file) or packages.secret-ref (a Secret something else writes), with deps.${arg} = ref.<ns>.<instance>.";
           }
         else

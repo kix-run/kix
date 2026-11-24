@@ -74,12 +74,12 @@ mkContract {
       if builtins.isString scope then
         refuseWho {
           helper = "contracts.redis.helpers.requirePlaintext";
-          fix = "Pass `scope` in place of the text.";
+          fix = "Pass `scope` instead of `who`.";
         }
       else if dep.out.tls or false then
         scope.fail {
           dependency = "redis";
-          message = "The redis dependency serves TLS, which this package cannot connect to.";
+          message = "The `redis` dependency uses TLS (`out.tls = true`), and this package does not support Redis over TLS.";
           fix = "Wire a server without TLS, or one that also listens without it.";
         }
       else

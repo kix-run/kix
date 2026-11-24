@@ -32,7 +32,7 @@ let
         in
         if matched == [ ] then
           site.fail {
-            message = "${site.what}: Service ${service.name} has no port ${toString ref}. Its ports are ${
+            message = "${site.what}: Service ${service.name} has no port ${toString ref}. Declared port numbers: ${
               builtins.toJSON (map (p: p.port or null) declared)
             }.";
           }
@@ -50,7 +50,7 @@ let
     in
     if selector == null || selector == { } then
       site.fail {
-        message = "${site.what}: Service ${service.name} has no selector, so a policy over its pods would admit the proxies to every pod in its namespace.";
+        message = "${site.what}: Service ${service.name} has no pod selector (`spec.selector`). A network policy without a selector would allow Tailscale proxies to reach every pod in the namespace.";
         fix = "Pass a Service that selects its backend pods.";
       }
     else
@@ -128,7 +128,7 @@ let
       (builtins.head declared).port
     else
       site.fail {
-        message = "${site.what}: Service ${service.name} has ${toString (builtins.length declared)} ports.";
+        message = "${site.what}: `port` is unset and Service ${service.name} declares ${toString (builtins.length declared)} ports, so Kix cannot choose a default port.";
         fix = "Pass port.";
       };
 
@@ -174,7 +174,7 @@ let
           [ ]
         else if portRef == null then
           site.fail {
-            message = "${site.what}: a path to Service ${serviceName} names no port.";
+            message = "${site.what}: a route path in `spec.rules` targets Service ${serviceName} without specifying a port.";
             fix = "Set backend.service.port.number or .name.";
           }
         else
@@ -213,7 +213,7 @@ let
     site: field: value: fix:
     if value != null && !(isTracked value) then
       site.fail {
-        message = "${site.what}: ${field} = \"${value}\" is a plain string.";
+        message = "${site.what}: ${field} is set to a literal string (\"${value}\"), so Kix cannot verify the target resource or deploy it first.";
         inherit fix;
       }
     else
@@ -242,7 +242,7 @@ let
         (spec.type or null) == "kube-apiserver" && ((spec.kubeAPIServer or { }).mode or "auth") != "noauth"
       then
         site.fail {
-          message = "${site.what}: a kube-apiserver ProxyGroup runs in auth mode unless kubeAPIServer.mode is set. Auth mode needs the kube-apiserver-auth-proxy ServiceAccount and impersonation RBAC, which this package does not create.";
+          message = "${site.what}: `kube-apiserver` ProxyGroups default to `auth` mode, and this package only supports `noauth` mode because it does not create the `kube-apiserver-auth-proxy` ServiceAccount or impersonation RBAC.";
           fix = "Set spec.kubeAPIServer.mode = \"noauth\".";
         }
       else
@@ -272,7 +272,7 @@ let
       (
         if otherNamespace then
           site.fail {
-            message = "${site.what}: ${field} names a Secret, which the operator reads from namespace ${ns}, so a Recorder with S3 credentials is built by an instance in ${ns}.";
+            message = "${site.what}: this instance is in namespace ${consumerScope.namespaceName}, but the Tailscale operator reads ${field} from its own namespace (${ns}). A Recorder with S3 credentials must be created by an instance in ${ns}.";
             fix = "Call mkRecorder from an instance in ${ns} and pass the out.name of a Secret it builds or depends on, or kix.untrackedRef \"<name>\" for a Secret there that Kix does not build.";
           }
         else

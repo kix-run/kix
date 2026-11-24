@@ -92,8 +92,8 @@ mkContract {
       if who != null then
         refuseWho {
           helper = "contracts.experimental.gatewayApi.helpers.errorsFor";
-          reason = "The `scope.fail` that reports the errors names the instance and its package.";
-          fix = "Remove `who`.";
+          reason = "Pass the returned errors to `scope.fail`, which adds the instance and package automatically.";
+          fix = "Remove `who` from the `errorsFor` call.";
         }
       else if gatewayApi == null then
         error {

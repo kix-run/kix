@@ -110,7 +110,7 @@ let
         else if sender == null then
           scopeFail {
             dependency = "smtp";
-            message = "deps.smtp has no sender address.";
+            message = "No sender email address is set on this instance (`mail.from`) or on its `smtp` dependency (`out.from`).";
             fix = "Set out.from on the SMTP instance, or mail.from on this instance.";
           }
         else
@@ -190,7 +190,7 @@ let
       if out.tls == "none" && external then
         scopeFail {
           dependency = "smtp";
-          message = "deps.smtp is a server outside the cluster with tls = \"none\", so the password and the mail would cross the internet in clear text.";
+          message = "deps.smtp points to an external SMTP server with `tls = \"none\"`, which would send mail and any credentials in plain text.";
           fix = "Set tls to \"starttls\" (usually port 587) or \"implicit\" (usually port 465) on its out. A server inside the cluster sets external = false.";
         }
       else

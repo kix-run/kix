@@ -97,7 +97,7 @@ in
         if builtins.isString scope then
           refuseWho {
             helper = "${path}.${helper}";
-            fix = "Pass `scope` in place of the text.";
+            fix = "Pass `scope` instead of `who`.";
           }
         else
           k scope.fail;
@@ -151,7 +151,7 @@ in
             out
           else
             fail {
-              message = "root.out does not honour the ${name} contract (${here}): ${lib.concatStringsSep "; " found}.";
+              message = "`root.out` does not satisfy the ${name} contract (${here}): ${lib.concatStringsSep "; " found}.";
               fix = "Correct the fields named above where the package sets `out` on its `root`. If the package reads one from a setting of the instance, change that setting.";
             }
         );
@@ -167,7 +167,7 @@ in
         if builtins.isString dep then
           refuseWho {
             helper = "${path}.assertions";
-            reason = "Kix names the instance and its package on each assertion.";
+            reason = "Kix adds the instance and package to each assertion automatically.";
             fix = "Remove `who`, as in `deps.<name>.assertions = kix.${path}.assertions;`.";
           }
         else

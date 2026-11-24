@@ -208,17 +208,19 @@ in
         phrase: errors: builtins.length errors == 1 && lib.hasInfix phrase (builtins.head errors).message;
     in
     (
-      says "settings.port is set by the package: the Services and probes use port 6379. Remove it." got.port
+      says "settings.port cannot be set here because the Services and probes use port 6379." got.port
+      && (builtins.head got.port).fix == "Remove `port` from `settings`."
       && (builtins.head got.port).option == "settings"
       && (builtins.head got.monitor).option == "sentinel.primarySettings"
-      && says "settings.PORT is set by the package" got.PORT
-      && says "settings.bind is set by the package" got.bind
-      && says "settings.masteruser is set by the package: replicas authenticate" got.masteruser
-      && says "settings.rename-command is set by the package" got.rename
-      && says "settings.Appendonly is not lower case" got.upper
-      && says ''settings."appendonly yes\nport" is not a directive name'' got.notName
-      && says "sentinel.primarySettings.monitor is set by the package" got.monitor
-      && says "sentinel.primarySettings.rename-command is set by the package" got.primaryRename
+      && says "settings.PORT cannot be set here" got.PORT
+      && says "settings.bind cannot be set here" got.bind
+      && says "settings.masteruser cannot be set here because replicas authenticate" got.masteruser
+      && says "settings.rename-command cannot be set here" got.rename
+      && says "settings.Appendonly must be lowercase" got.upper
+      && (builtins.head got.upper).fix == "Rename it to settings.appendonly."
+      && says ''settings."appendonly yes\nport" is not a valid Valkey directive name'' got.notName
+      && says "sentinel.primarySettings.monitor cannot be set here" got.monitor
+      && says "sentinel.primarySettings.rename-command cannot be set here" got.primaryRename
       && got.ordinary == [ ]
     )
     || throw "valkey refusals: ${builtins.toJSON got}";

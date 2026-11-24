@@ -171,7 +171,7 @@ in
       else
         lib.optional (lib.versionOlder dep.out.version supportedFrom) {
           assertion = false;
-          message = "This instance needs ClickHouse ${supportedFrom} or newer for the SQL its bootstrap runs, and the clickhouse instance it resolved to is ${dep.out.version}.";
+          message = "This package requires ClickHouse ${supportedFrom} or newer to bootstrap the database, and its `clickhouse` dependency runs ${dep.out.version}.";
         };
   };
 
@@ -300,7 +300,7 @@ in
           }
         else if password == null then
           scope.fail {
-            message = "This instance has no `password` dependency.";
+            message = "This instance is missing its required `password` dependency.";
             fix = passwordAdvice;
           }
         else

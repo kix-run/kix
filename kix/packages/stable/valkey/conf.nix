@@ -63,21 +63,24 @@ in
         [
           {
             inherit option;
-            message = "${option}.${key} is set by the package: ${reserved.${lower}}. Remove it.";
+            message = "${option}.${key} cannot be set here because ${reserved.${lower}}.";
+            fix = "Remove `${key}` from `${option}`.";
           }
         ]
       else if builtins.match "[a-z0-9-]+" lower == null then
         [
           {
             inherit option;
-            message = "${option}.${builtins.toJSON key} is not a directive name. Use the name alone, in lower case letters, digits, and hyphens, and put the arguments in the value.";
+            message = "${option}.${builtins.toJSON key} is not a valid Valkey directive name.";
+            fix = "Use only the directive name as the key (lowercase letters, digits, and hyphens), and put its arguments in the value.";
           }
         ]
       else if lower != key then
         [
           {
             inherit option;
-            message = "${option}.${key} is not lower case. Valkey matches directive names case-insensitively, so write it as ${option}.${lower}.";
+            message = "${option}.${key} must be lowercase (Valkey directive names are case-insensitive).";
+            fix = "Rename it to ${option}.${lower}.";
           }
         ]
       else

@@ -139,13 +139,13 @@ in
     if version == "latest" then
       fail {
         option = "postgres.version";
-        message = "postgres.version \"latest\" would move the cluster to a new major when the operator is upgraded, and a major upgrade needs an SGDbOps of type majorVersionUpgrade.";
+        message = "postgres.version cannot be \"latest\". Upgrading the StackGres operator could switch the database to a new major PostgreSQL version, which requires an SGDbOps resource of type `majorVersionUpgrade`.";
         fix = "Pin a major such as \"17\".";
       }
     else if matching == [ ] then
       fail {
         option = "postgres.version";
-        message = "postgres.version \"${version}\" is not a PostgreSQL release that StackGres ${release} ships.";
+        message = "postgres.version \"${version}\" is not supported by StackGres ${release}.";
         fix =
           if builtins.elem askedMajor majors then
             "PostgreSQL ${askedMajor} minors it ships: ${minorsOf askedMajor}."
@@ -155,7 +155,7 @@ in
     else if builtins.elem pg.version unpublished then
       fail {
         option = "postgres.version";
-        message = "postgres.version \"${version}\" selects PostgreSQL ${pg.version} (build ${pg.build}), whose StackGres images quay.io does not publish, so the pods could not start.";
+        message = "postgres.version \"${version}\" selects PostgreSQL ${pg.version} (build ${pg.build}), which has no published StackGres container images on quay.io, so the pods cannot start.";
         fix = "Pin another minor: ${minorsOf pg.major}.";
       }
     else

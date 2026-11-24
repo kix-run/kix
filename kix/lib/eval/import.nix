@@ -402,8 +402,8 @@ rec {
                 helpers.mergeCollide {
                   inherit (importScope) fail;
                   error = names: {
-                    message = "Two build entries of the package in `from` define the part ${names}.";
-                    fix = "Give each part one build entry.";
+                    message = "Multiple `build` entries in the `from` package define the same part name (${names}).";
+                    fix = "Give each part a unique name across `build` entries in that package.";
                   };
                 } acc (callBuildFn self fn)
               ) { } (buildEntriesOf raw.build)
@@ -527,8 +527,8 @@ rec {
         helpers.mergeCollide {
           fail = failFor { instance = "${namespaceName}/${instanceName}"; };
           error = names: {
-            message = "mkImport crds declares ${names}, a kind the package's out.crds already has.";
-            fix = "Remove the crds entry for ${names}, or the kind from the package's out.crds.";
+            message = "mkImport `crds` declares kind ${names}, which the `from` package already exports in `out.crds`.";
+            fix = "Remove ${names} from `crds` on this `mkImport` (it already inherits `out.crds.${names}` from `from`), or remove it from the package's `out.crds`.";
           };
         } acc { ${h.kind} = h.handle; }
       ) (derived.out.crds or { }) crdHandleList;

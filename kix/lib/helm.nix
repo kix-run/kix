@@ -952,8 +952,12 @@ rec {
               collision = helpers.mergeCollide {
                 inherit (scope) fail;
                 error = names: {
-                  message = "importChart (${releaseName}): extraParts names ${names}, a part the chart already renders or `root`.";
-                  fix = "Rename the extra part.";
+                  message =
+                    if names == "root" then
+                      "importChart (${releaseName}): `extraParts` cannot define `root`, because `mkParts` sets `root` itself."
+                    else
+                      "importChart (${releaseName}): `extraParts` defines ${names}, which collides with a part rendered from the chart.";
+                  fix = "Rename ${names} in `extraParts`.";
                 };
               };
             in
