@@ -21,5 +21,7 @@
       fqdn = "${name}.${namespace}.svc.${clusterDomain}";
     };
   };
-  inherit optional;
 }
+# A flavour that needs DNS to exist leaves `optional` at the option's default,
+# so a cluster definition can still set it.
+// (if optional then { optional = true; } else { })
