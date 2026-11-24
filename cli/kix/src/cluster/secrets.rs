@@ -52,20 +52,20 @@ pub(crate) enum SecretError {
     /// A top-level value of the SOPS file is a map, a list, or null, so it has
     /// no text to write as the value of a Secret key.
     #[error(
-        "[K6746] cannot use SOPS file {file}\n  \
-         Kix did not apply this Secret.\n\n  \
-         Why:\n    \
-         The value for top-level key `{key}` in {file} is {found}. Kix turns each top-level key in {file} into a key on the Kubernetes Secret, so every value must be text, a number, `true`, or `false`.\n    \
-         This usually happens when {file} is a full Kubernetes Secret manifest encrypted for Flux, with top-level keys such as `apiVersion`, `kind`, `metadata`, `stringData`, and `type`.\n\n  \
-         Next:\n    \
-         Make {file} a flat map of Secret keys to values. If a key is meant to hold JSON, store that JSON as a string.\n\n    \
-         To convert a Flux Secret manifest:\n    \
-         1. Check `.sops.yaml` first. Flux repositories often set `encrypted_regex: ^(data|stringData)$`, which leaves every value in a flat file in plain text. Make sure the creation rule for `<new-file>` has no `encrypted_regex`.\n    \
-         2. Extract the secret keys and re-encrypt in place:\n         \
-         sops decrypt --extract '[\"stringData\"]' <flux-file> > <new-file>\n         \
-         sops encrypt --in-place <new-file>\n       \
-         If the Flux manifest uses `data` instead of `stringData`, base64-decode those values before encrypting. Kix writes values into the Secret as they appear in the file.\n    \
-         3. Open `<new-file>` to confirm every value is `ENC[...]`, delete any plain-text files, and run the command again (for a bundle, build a new one with `kix bundle <cluster>` first).",
+        "[K6746] SOPS file {file}: top-level key \"{key}\" is {found}\n      \
+         Kix cannot build this Secret from the file; any existing Secret on the cluster is unchanged.\n\n      \
+         Each top-level key in {file} becomes a Secret key, so every value must be a string, a number, `true`, or `false` (store JSON for a single key as a string). \
+         Use a flat YAML or JSON map (local deploys also accept dotenv; bundles do not). \
+         INI files cannot be used because `sops` groups keys into section maps such as \"DEFAULT\".\n\n      \
+         If {file} is an encrypted Kubernetes Secret manifest (for example from Flux):\n        \
+         1. Check `.sops.yaml`: the rule matching <new-file> must not set `encrypted_regex` (`^(data|stringData)$` leaves a flat file in plain text).\n        \
+         2. Extract the keys and encrypt the new file:\n             \
+         sops decrypt --extract '[\"stringData\"]' <flux-file> > <new-file>\n             \
+         sops encrypt --in-place <new-file>\n           \
+         If the manifest uses `data` instead of `stringData`, base64-decode those values before encrypting.\n        \
+         3. Confirm every value in <new-file> is `ENC[...]`, and delete any plain-text copies.\n      \
+         Then run `kix deploy` again (for a bundle, build a new one with `kix bundle <cluster>` first). \
+         If `kix rollback` hit this error, editing {file} now will not change that older build: pick a newer deployment record, or check out the commit you want, convert {file}, and run `kix deploy`.",
         file = sops_file_name(path)
     )]
     NotFlat {
@@ -900,6 +900,19 @@ mod tests {
             );
             assert!(err.to_string().starts_with("[K6746] "), "{err}");
         }
+
+        // sops decrypts an INI file into sections, so it fails at `DEFAULT`,
+        // and the message says INI cannot be used.
+        let ini = r#"{"DEFAULT":{"username":"app","password":"p"}}"#;
+        let err = parse_secret_data(Path::new("/x/api.enc.ini"), ini).unwrap_err();
+        assert!(
+            matches!(&err, SecretError::NotFlat { key, .. } if key == "DEFAULT"),
+            "{err}"
+        );
+        assert!(
+            err.to_string().contains("INI files cannot be used"),
+            "{err}"
+        );
     }
 
     /// `sops` keeps a document's shape when it encrypts it, so a plan on a
