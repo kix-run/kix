@@ -1173,7 +1173,7 @@ in
       };
     in
     (
-      lib.hasInfix "`data/keys`, which is not a cloud identity" omitted.failure
+      lib.hasInfix "but got `data/keys`" omitted.failure
       && lib.hasInfix "`deps.storageCredentials` of the storage instance" omitted.failure
       && withCloud ? failure
       && !(good ? failure)
@@ -1242,7 +1242,7 @@ in
       && check "aws" { } == null
       && check "aws" { identityCloud = "aws"; } == null
       && lib.hasInfix "`platform/cert-manager`" mismatched.message
-      && lib.hasInfix "calls Google Cloud" mismatched.message
+      && lib.hasInfix "to call Google Cloud" mismatched.message
       && lib.hasInfix "identity for AWS" mismatched.message
       && lib.hasInfix "`kix.cloudIdentity.gcp { ... }`" mismatched.fix
     )
@@ -1269,7 +1269,7 @@ in
       plain = failureWith { };
     in
     (
-      lib.hasInfix "set it on `deps.controllerIdentity` of the cert-manager instance instead" named
+      lib.hasInfix "move it to `deps.controllerIdentity` of the cert-manager instance" named
       && !(lib.hasInfix "controllerIdentity" plain)
       && useFailure (ci.aws { inherit roleArn; }) "aws" == ""
     )

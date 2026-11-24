@@ -406,7 +406,7 @@ build =
 | `scope` | The package's `scope`, used to name the instance and package in evaluation errors. |
 | `dep` | The dependency value: a cloud identity, a Secret instance, or `null`. |
 | `cloud` | Which cloud API the software calls: `"aws"`, `"gcp"`, `"azure"`, or `null` when cloud identities are not accepted. Passing an identity for any other cloud fails evaluation. |
-| `identityGoesTo` | Optional. Where the cluster author sets the identity instead, such as ``"`deps.controllerIdentity` of the cert-manager instance"``. When `cloud` is `null` and `dep` is a cloud identity, the error's fix names this location. |
+| `identityGoesTo` | Optional string (defaults to `null`). Where the cluster author should move the cloud identity, such as ``"`deps.controllerIdentity` of the cert-manager instance"``. Appended to the error's fix when `cloud` is `null` and `dep` is a cloud identity. |
 
 `kix.cloudIdentity.use` returns an attribute set with three fields:
 
@@ -418,20 +418,22 @@ build =
 
 If a package builds two ServiceAccounts with separate identities, declare two dependencies and call `kix.cloudIdentity.use` once for each.
 
-When an operator creates the ServiceAccount from a custom resource, `credentials.bind` cannot modify it. Instead, take `cloudIdentity` as a build argument and call `kix.cloudIdentity.annotationsFor { inherit scope; identity = credentials.identity; provider = cloudIdentity; }`. Pass the returned `{ serviceAccountAnnotations, podLabels }` into the custom resource. When `identity` is `null`, both sets are empty. Because the operator creates those pods, Kix does not add `checksum/cloud-identity` to restart them automatically when the identity changes.
+When an operator creates the ServiceAccount from a custom resource, `credentials.bind` cannot modify it. Instead, take `cloudIdentity ? null` as a build argument and call `kix.cloudIdentity.annotationsFor { inherit scope; identity = credentials.identity; provider = cloudIdentity; }`. Pass the returned `{ serviceAccountAnnotations, podLabels }` into the custom resource (both sets are empty when `identity` is `null`). Because the operator creates those pods, Kix does not add `checksum/cloud-identity` to restart them automatically when the identity changes.
 
-### When the ServiceAccount and the cloud are in different packages
+### When one package owns the ServiceAccount and another chooses the cloud
 
-Sometimes one package owns the ServiceAccount and another package chooses the cloud. For example, `cert-manager` runs the controller pod, but each `cluster-issuer` instance chooses Route 53, Cloud DNS, or Azure DNS. The cloud identity belongs to the instance that owns the ServiceAccount, since a ServiceAccount carries one identity. The package that chooses the cloud keeps any static Secret and upstream's settings for using the pod's own cloud credentials. It never takes a cloud identity.
+Sometimes one package owns the ServiceAccount while another chooses the cloud provider. For example, `cert-manager` runs the controller pod and owns its ServiceAccount, while each `cluster-issuer` instance configures Route 53, Cloud DNS, or Azure DNS. Because a Kubernetes ServiceAccount carries a single cloud identity, always declare the cloud identity dependency on the package that owns the ServiceAccount. Keep any static credential Secret and any option for using ambient pod credentials on the package that chooses the cloud; that package never accepts a cloud identity.
 
-The two packages pass the cloud through `out` along the dependency between them:
+Because `out` values flow from a dependency to its dependents, how the two packages validate the cloud depends on the dependency direction:
 
-| `out` field | Published by | Value | Read by |
-| --- | --- | --- | --- |
-| `out.identityCloud` | The package that owns the ServiceAccount and cannot know the cloud | `credentials.cloud` from `useIdentity`: `"aws"`, `"gcp"`, `"azure"`, or `null` | A dependent that reaches a cloud with the pod's own credentials, through `ambientProblem` |
-| `out.ambientCloud` | The package that chooses the cloud and lets the pods use their own credentials | `"aws"`, `"gcp"`, `"azure"`, or `null` when it reads a Secret | A dependent that owns the ServiceAccount, as `cloud` in `useIdentity` |
+| Direction | `out` field | Published by | Value | Checked by |
+| --- | --- | --- | --- | --- |
+| Cloud package depends on ServiceAccount package (for example, `cluster-issuer` -> `cert-manager`) | `out.identityCloud` | The ServiceAccount package | `credentials.cloud` from `useIdentity` (`"aws"`, `"gcp"`, `"azure"`, or `null`) | The cloud package, via `kix.cloudIdentity.ambientProblem` in `assertions` |
+| ServiceAccount package depends on cloud package (for example, `stackgres-cluster` -> `stackgres-object-storage`) | `out.ambientCloud` | The cloud package | `"aws"`, `"gcp"`, `"azure"`, or `null` when using a Secret | The ServiceAccount package, passed as `cloud` to `kix.cloudIdentity.useIdentity` |
 
-The package that owns the ServiceAccount reads its identity dependency with `kix.cloudIdentity.useIdentity`:
+#### `kix.cloudIdentity.useIdentity`
+
+The package that owns the ServiceAccount unpacks its cloud identity dependency with `kix.cloudIdentity.useIdentity`:
 
 ```nix
 credentials = kix.cloudIdentity.useIdentity {
@@ -448,22 +450,36 @@ root.out.identityCloud = credentials.cloud;
 
 | Argument | Description |
 | --- | --- |
-| `scope` | The package's `scope`. |
-| `dep` | The dependency value: a cloud identity or `null`. Any other value fails evaluation. |
-| `secretGoesTo` | Where the cluster author gives a Secret instead. When `dep` is not a cloud identity, the error's fix names this location. |
-| `cloud` | Optional. The cloud the pods call, from a dependency's `out.ambientCloud`. Omit it when only dependents know the cloud, and only the identity's own fields are checked. With `"aws"`, `"gcp"`, or `"azure"`, an identity for another cloud fails evaluation. With `null`, the pods read a Secret, and any identity fails evaluation. |
+| `scope` | The package's `scope`, used to name the instance and package in evaluation errors. |
+| `dep` | The dependency value: a cloud identity or `null`. Passing a Secret instance or any other value fails evaluation. |
+| `secretGoesTo` | Required string naming where to pass a Secret instead (for example, ``"`deps.issuerCredentials` of a cluster-issuer instance"``). Included in the error's fix when `dep` is not a cloud identity or when `cloud` is `null`. |
+| `cloud` | Optional (`"aws"`, `"gcp"`, `"azure"`, or `null`). Pass a dependency's `out.ambientCloud` when a dependency chooses the cloud: an identity for another cloud fails evaluation, and an explicit `null` (meaning the pods use a Secret) rejects any cloud identity. Omit `cloud` altogether when dependents choose the cloud; `useIdentity` then validates only the identity's own fields. |
 
-`useIdentity` returns `{ identity, cloud, bind }`. `identity` is `dep`. `cloud` is the identity's cloud, or `null` without an identity. `bind` works like the `bind` from `use`.
+`kix.cloudIdentity.useIdentity` returns an attribute set with three fields:
 
-The package that chooses the cloud calls `kix.cloudIdentity.ambientProblem { cloud; holder; }` for each object that reaches `cloud` with the pod's own credentials. `holder` is the dependency whose pods make the call. The function reads `holder.out.identityCloud` and returns `null` or `{ message, fix }`. It returns `{ message, fix }` only when the holder's identity is for another cloud. A holder without an identity always passes, because its pods may use the node's credentials. Raise the result from the package's `assertions`.
-
-Use one helper per case:
-
-| Case | Helper |
+| Returned field | Description |
 | --- | --- |
-| The dependency takes a Secret or a cloud identity, and the package builds the ServiceAccount | `use` |
-| The dependency takes a cloud identity or nothing, and another package holds any Secret | `useIdentity` |
-| An operator creates the ServiceAccount from a custom resource | `annotationsFor`, with the identity from `use` or `useIdentity` |
+| `identity` | `dep` when `dep` is a cloud identity, or `null` when `dep` is `null`. |
+| `cloud` | The identity's cloud (`"aws"`, `"gcp"`, or `"azure"`), or `null` when `dep` is `null`. Publish this as `out.identityCloud` when dependents choose the cloud. |
+| `bind` | Same ServiceAccount transformer as `bind` on `kix.cloudIdentity.use` (or pass `identity` to `kix.cloudIdentity.annotationsFor` when an operator creates the ServiceAccount). |
+
+#### `kix.cloudIdentity.ambientProblem`
+
+When the package that chooses the cloud depends on the ServiceAccount owner, call `kix.cloudIdentity.ambientProblem { cloud; holder; }` in `assertions` for each configuration that uses `holder`'s pod credentials:
+
+- `cloud`: `"aws"`, `"gcp"`, `"azure"`, or `null` (when using a static Secret instead of pod credentials).
+- `holder`: the dependency instance whose pods make the cloud API calls (which publishes `out.identityCloud`).
+
+`ambientProblem` returns `{ message, fix }` when `cloud` and `holder.out.identityCloud` are both non-null and differ, or `null` otherwise (including when `holder` has no cloud identity, since pods may fall back to node credentials). Wrap a non-null result with `// { assertion = false; }` in the package's `assertions` list.
+
+#### Choosing a helper
+
+| Situation | Helper |
+| --- | --- |
+| Same package owns the ServiceAccount and accepts either a Secret or a cloud identity | `kix.cloudIdentity.use` |
+| Package owns the ServiceAccount while another package chooses the cloud and accepts any Secret | `kix.cloudIdentity.useIdentity` |
+| An operator creates the ServiceAccount from a custom resource | `kix.cloudIdentity.annotationsFor` (pass `credentials.identity` from `use` or `useIdentity`) |
+| Package chooses the cloud and uses the pod credentials of a dependency that owns the ServiceAccount | `kix.cloudIdentity.ambientProblem` (in `assertions`) |
 
 The cluster's flavor or cloud identity module (such as `kix.modules.experimental.irsa-webhook`) selects the delivery mechanism, keeping packages portable across clusters ([Flavors and capabilities](/docs/reference/flavors-and-capabilities/#cloud-identity)).
 
