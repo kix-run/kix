@@ -263,7 +263,7 @@ let
       "-storage.trace.local.path" = locks "storage.trace.local.path";
       "-live-store.wal.path" = locks "live_store.wal.path";
       "-live-store.shutdown_marker_dir" = locks "live_store.shutdown_marker_dir";
-      "-backend-schedulerbackend-scheduler.local-work-path" = locks "backend_scheduler.local_work_path";
+      "-backend-scheduler.local-work-path" = locks "backend_scheduler.local_work_path";
       "-storage.trace.s3.bucket" =
         "it sets storage.trace.s3.bucket, which objectStorage.bucket owns; remove it.";
       "-storage.trace.s3.endpoint" =
@@ -513,6 +513,7 @@ in
         ++ kix.guardArgs {
           inherit scope;
           parser = "go";
+          id = "K4740";
           owned = ownedFlags;
         } config.extraArgs;
 

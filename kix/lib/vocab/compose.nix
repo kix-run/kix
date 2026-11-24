@@ -307,7 +307,9 @@ rec {
   # its settings is set. The message reads `<option> sets "<word>", which
   # this package does not accept: <reason>`, so a reason fits a flag the
   # package sets itself and a flag it does not support. The error names the
-  # instance and its package from `scope`.
+  # instance and its package from `scope`. Set `id` to a change record id
+  # for the releases after a package's guard starts refusing a spelling it
+  # used to pass.
   #
   # `defaults` holds flags the package passes unless `args` sets the same
   # flag, for a program that refuses a flag given twice. Write each default
@@ -327,6 +329,7 @@ rec {
       owned ? { },
       ownedFamilies ? { },
       defaults ? null,
+      id ? null,
     }:
     args:
     let
@@ -433,10 +436,13 @@ rec {
         let
           rule = lib.findFirst (r: r.test r.name word) null allRules;
         in
-        lib.optional (rule != null) {
-          inherit option;
-          message = "${option} sets \"${word}\", which this package does not accept: ${rule.reason}";
-        }
+        lib.optional (rule != null) (
+          {
+            inherit option;
+            message = "${option} sets \"${word}\", which this package does not accept: ${rule.reason}";
+          }
+          // lib.optionalAttrs (id != null) { inherit id; }
+        )
       ) written;
 
       replaced = d: builtins.any (sets (defaultName d)) written;

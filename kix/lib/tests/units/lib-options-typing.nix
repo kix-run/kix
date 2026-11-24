@@ -530,6 +530,21 @@ in
       )
     }";
 
+  # An `id` reaches each refusal record, so the error starts with it.
+  lib-options-typing-guard-args-id =
+    let
+      helpers = import ../caught.nix { inherit lib; };
+      got = helpers.records (
+        ((helpers.caught ../../vocab/compose.nix { inherit lib; }).guardArgs {
+          scope = caughtScope;
+          parser = "go";
+          id = "K0001";
+          owned."--leader-elect" = "remove it.";
+        } [ "-leader-elect=false" ]).thrown
+      );
+    in
+    map (r: r.id or null) got == [ "K0001" ] || throw "guardArgs id: ${builtins.toJSON got}";
+
   # A call the parser cannot read is refused even when the user's
   # arguments are fine.
   lib-options-typing-guard-args-refuses-bad-calls =

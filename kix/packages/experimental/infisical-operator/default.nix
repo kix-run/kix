@@ -336,6 +336,7 @@ in
         ++ kix.guardArgs {
           inherit scope;
           parser = "go";
+          id = "K4740";
           owned = {
             "--leader-elect" =
               "the package always enables leader election, so instances above availability none run one active controller; remove it.";
