@@ -28,6 +28,52 @@ kix.buildCluster {
 
 Every setting in a flavor uses `lib.mkDefault`, so your cluster modules can override any capability, role binding, or network setting when your cluster differs from the stock distribution.
 
+## Choosing a flavor
+
+Pick the flavor that matches the Kubernetes distribution or managed service used to install the cluster. Configure hardware, storage, and VM software with packages, which supply `absent` [cluster roles](/docs/reference/cluster-configuration/#cluster-roles) or replace `shadowable` platform imports (claiming an `exclusive` role is an evaluation error).
+
+| Flavor | Choose it when | It assumes | You provide |
+| --- | --- | --- | --- |
+| `aks` | Running on Azure AKS | Managed control plane, Azure CNI (`exclusive`), Azure Load Balancer (`shadowable`), `managed-csi` default StorageClass (`shadowable` import), and metrics API (`exclusive`) | Optional replacements for `managed-csi` or Azure Load Balancer |
+| `eks` | Running on Amazon EKS | Managed control plane, `aws-vpc-cni` (`exclusive`), and AWS cloud load balancer (`shadowable`) | EBS CSI driver or a `storage-classes` instance (`storageClasses` `absent`), plus `metricsApi` (`absent`) |
+| `gke` | Running on GKE Standard | Managed control plane, GKE Dataplane V2 (`exclusive`), GCP network LB (`shadowable`), `standard-rwo` default class, metrics API (`exclusive`), and `gpu = false` default | Optional GCP network LB replacement; `gpu` override when needed |
+| `gke-autopilot` | Running on GKE Autopilot | Node autoscaling, Pod Security `baseline`, `premium-rwo` default class, platform imports in `gke-managed`, and DaemonSets and privileged containers disabled | Unprivileged packages without DaemonSets |
+| `k3s` | Cluster is installed with k3s | Flannel (`exclusive`), ServiceLB (`exclusive`), `local-path` default StorageClass (`shadowable`), packaged metrics-server (`exclusive`), pod CIDR `10.42.0.0/16`, and k3s containerd paths | Optional `storageClasses` replacement (with `--disable local-storage`, override `cluster.roles.storageClasses.binding`) |
+| `kind` | Running a local `kind` cluster | Single node (`multiNode = false`), `kindnet` (`exclusive`), and `standard` StorageClass | Load balancer, metrics API, snapshot controller, Gateway API, and registry mirror (all `absent`) |
+| `kubeadm` | Installed with upstream `kubeadm` | Control plane and CoreDNS only; privileged containers and DaemonSets allowed | CNI, `storageClasses`, `loadBalancer`, and `metricsApi` (all `absent`) |
+| `openshift` | Running on Red Hat OpenShift | OVN-Kubernetes (`exclusive`), DNS `dns-default` in `openshift-dns`, metrics from `openshift-monitoring`, Pod Security `restricted`, and privileged containers disabled | `storageClasses` (`absent` by default); unprivileged packages fitting `restricted` Pod Security |
+| `ovh` | Running on OVHcloud MKS | Multi-node, managed control plane, Canal (`exclusive`), `csi-cinder-high-speed` default class, and OVH load balancer (`shadowable`) | Optional OVH load balancer replacement |
+| `rke2` | Cluster is installed with RKE2 | CNI per `cluster.flavor.rke2.cni` (default `[ "canal" ]`, `exclusive`), `rke2-metrics-server` (`exclusive`), imported `rke2-snapshot-controller` (`exclusive`), and pod CIDR `10.42.0.0/16` | `storageClasses` and `loadBalancer` (both `absent`); a `cilium` instance to configure RKE2's bundled Cilium when `cni` includes `"cilium"` |
+| `scaleway` | Running on Scaleway Kapsule | Multi-node, managed control plane, Kapsule-managed Cilium (`exclusive`), and `sbs-default` default class | Packages for any additional roles |
+| `talos` | Nodes run Talos Linux | Flannel (`exclusive`) and containerd registry config at `/etc/cri/conf.d/hosts` | `storageClasses`, `loadBalancer`, and `metricsApi` (all `absent`) |
+
+### Self-managed on-premises cluster with ZFS, KubeVirt, and OpenEBS
+
+Pick `kubeadm`, `k3s`, `rke2`, or `talos` to match your Kubernetes distribution: no flavor is specific to on-premises hardware, and all four allow the privileged containers and DaemonSets that the `packages.experimental.<name>` packages below need.
+
+- **ZFS (`packages.experimental.zfs-localpv`)**: Installs the OpenEBS LocalPV-ZFS CSI driver to provision ZFS datasets or zvols on an existing per-node pool (`config.storageClasses.<name>.parameters.poolname`). It runs privileged and as root (`meta.unsafe = [ "privileged" "run-as-root" ]`), and its node plugin invokes `zfs` through `chroot /host` (set `node.zfsBin` when the binary is outside `/sbin/zfs` and `/usr/sbin/zfs`, and `node.nodeSelector` when only some nodes have a pool). Set `aliases = [ "storageClasses" ]` to make it the default StorageClass provider. That fills the `absent` role on `kubeadm`, `rke2`, and `talos`; on `k3s`, Kix refuses a second default-annotated class alongside `local-path`, so either keep `local-path` as default or disable k3s local storage and set `cluster.roles.storageClasses.binding = "absent"`. `VolumeSnapshotClass` resources require a snapshot controller (`rke2` imports its own; elsewhere add `packages.experimental.snapshot-controller`).
+- **KubeVirt (`packages.experimental.kubevirt`)**: Install one instance per cluster. `virt-handler` runs privileged, as root, and in the host PID namespace, which gives its namespace the `privileged` Pod Security level. Nodes need `/dev/kvm`; otherwise set `extraSpec.configuration.developerConfiguration.useEmulation = true` on the instance. Add `packages.experimental.cdi` to import VM disks through `dataVolumeTemplates`.
+- **OpenEBS**: Kix packages two OpenEBS engines: LocalPV-ZFS (`packages.experimental.zfs-localpv`) and Mayastor (`packages.experimental.mayastor`, for replicated block storage over NVMe-oF from DiskPools on labelled nodes). Kix has no package for other OpenEBS engines (such as LocalPV-Hostpath or LocalPV-LVM) today.
+
+```nix
+modules = [
+  kix.flavors.kubeadm
+  {
+    instances.storage = {
+      zfs-localpv = {
+        package = packages.experimental.zfs-localpv;
+        aliases = [ "storageClasses" ];
+        config.storageClasses.zfs.parameters.poolname = "tank/k8s";
+      };
+    };
+    instances.kubevirt = {
+      kubevirt.package = packages.experimental.kubevirt;
+      cdi.package = packages.experimental.cdi;
+    };
+  }
+];
+```
+
 ## Provider profiles
 
 Kix ships 12 built-in flavor modules under `kix.flavors`:

@@ -1,0 +1,3 @@
+# 2026-11-24 · `cli/kix/src/cluster/inventory.rs` · No Kix command reports objects in a Kix-managed namespace that lack Kix's label.
+
+`sweep_managed` lists with the selector `app.kubernetes.io/managed-by=kix`, and `plan`, `plan --read-only`, `snapshot`, `status`, `gc`, `deploy`, and the operator all start from it. A HelmRelease or Deployment applied with `kubectl` into a namespace Kix owns never shows up anywhere, so a cluster can carry live workloads that no review or plan sees. Users coming from Flux or Argo CD expect an "unmanaged objects" view. The docs (`reference/cli/diff.mdx#objects-kix-did-not-apply`) now say so and give a `kubectl` selector as a stopgap.

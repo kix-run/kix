@@ -57,6 +57,95 @@ At the `manifest` and `package` levels, `resources` includes all resources shipp
 See [Add scorecard rules](/docs/how-to/policy-ci-and-compliance/add-scorecard-rules/) to write custom rules and test them with `kix check`.
 :::
 
+## Rules that follow references between objects
+
+A rule with `level = "cluster"` receives `allResources`: the rendered manifest of every resource of every active instance, as plain attribute sets (including PriorityClass objects and workloads). A cluster rule can follow a name from one object to another because it sees every rendered resource in the build. Manifest-, package-, and namespace-level rules see only their own resource, instance, or namespace.
+
+Rules run at evaluation time and never read the cluster. A rule cannot see objects outside the build:
+- Kubernetes' built-in classes `system-cluster-critical` (value `2000000000`) and `system-node-critical` (value `2000001000`).
+- Classes created outside Kix, or a class represented by a `kix.mkImport` marker (the marker carries no `value`).
+- Pods an operator creates at runtime, and anything on the live cluster.
+
+### Example: cap PriorityClass values in a namespace
+
+In a cluster module where `kix` is in scope, this configuration enforces a PriorityClass ceiling of `1000` on workloads in namespace `apps`:
+
+```nix
+scorecard = {
+  enable = true;
+  maxSeverity = "error";
+  rules = kix.rules // {
+    organization.priorityCeiling = {
+      description = "Pods in namespace apps must not resolve to a PriorityClass above 1000";
+      level = "cluster";
+      severity = "error";
+      check =
+        { allResources, ... }:
+        let
+          namespace = "apps";
+          ceiling = 1000;
+          # Kubernetes creates these two classes itself, so no build contains them.
+          builtInClasses = [
+            { metadata.name = "system-cluster-critical"; value = 2000000000; }
+            { metadata.name = "system-node-critical"; value = 2000001000; }
+          ];
+          classes = builtInClasses ++ builtins.filter (r: (r.kind or "") == "PriorityClass") allResources;
+          globalDefaults = builtins.filter (c: c.globalDefault or false) classes;
+          podSpecOf =
+            r:
+            if r.kind == "CronJob" then
+              r.spec.jobTemplate.spec.template.spec or { }
+            else
+              r.spec.template.spec or { };
+          workloads = builtins.filter (
+            r:
+            builtins.elem (r.kind or "") [ "Deployment" "StatefulSet" "DaemonSet" "Job" "CronJob" ]
+            && (r.metadata.namespace or null) == namespace
+          ) allResources;
+          check =
+            w:
+            let
+              named = (podSpecOf w).priorityClassName or null;
+              # A pod that names no class gets the globalDefault class.
+              class = if named != null then builtins.filter (c: c.metadata.name == named) classes else globalDefaults;
+              finding = message: [ { inherit namespace message; resource = w.metadata.name; } ];
+            in
+            if named == null && class == [ ] then
+              [ ]
+            else if class == [ ] then
+              finding "${w.kind} ${w.metadata.name} names PriorityClass ${named}, which is not in the build, so the rule cannot read its value"
+            else if (builtins.head class).value > ceiling then
+              finding "${w.kind} ${w.metadata.name} resolves to PriorityClass ${(builtins.head class).metadata.name} with value ${toString (builtins.head class).value}, above ${toString ceiling}"
+            else
+              [ ];
+        in
+        builtins.concatMap check workloads;
+    };
+  };
+};
+```
+
+Setting `scorecard.rules` replaces the built-in rule set (its default is `kix.rules`), so merge custom rules with `kix.rules // { ... }` to keep the built-in rules. A finding at severity `"error"` fails the build only when `scorecard.maxSeverity = "error"`.
+
+- **Built-in classes**: `builtInClasses` lists `system-cluster-critical` and `system-node-critical` directly because no build contains them, and the rule reports a finding if a workload names another class outside the build.
+- **`globalDefault` classes**: `globalDefaults` handles workloads that omit `priorityClassName`, because a pod that names no class gets the `globalDefault` PriorityClass.
+- **Comparing names with `==`**: A name set from another resource's `out.name` (such as `priorityClassName = priorityClass.out.name`) carries Kix's dependency tracking. Compare such names with `builtins.filter` and `==`, because indexing an attribute set like `classes.${name}` fails evaluation with an error saying the string "is not allowed to refer to a store path".
+
+On a cluster where Deployment `app` in `apps` sets `priorityClassName` from a `packages.priority-class` instance `batch` with `config.value = 500`, `kix check` passes:
+
+```text
+TOOL       RESULT  DETAILS
+eval       pass    31 manifests evaluated, 1 warnings
+scorecard  pass    0 errors, 10 warnings, 6 info
+```
+
+With `config.value = 5000`, `kix check` fails:
+
+```text
+cluster 'evalq' has 1 problem:
+  - [scorecard:organization.priorityCeiling] apps/app: Deployment app resolves to PriorityClass batch with value 5000, above 1000
+```
+
 ## Finding schema
 
 When `scorecard.enable = true` and no error-severity finding aborts evaluation, Kix writes the scorecard report to `kix-scorecard.json` in the cluster build output.

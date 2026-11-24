@@ -49,6 +49,8 @@ kix gc <CLUSTER> [-y] [--dry-run] [--full-scan [--include unstamped,unattributed
 | `--full-scan` | Every Kix-managed resource of the named cluster | Resources whose identity hash is not in the fresh build |
 | `--operator` | Activation records | Retired records; the operator deletes their resources |
 
+Both the default mode and `--full-scan` judge only objects carrying the label `app.kubernetes.io/managed-by=kix`, and the Kix operator reads only objects with that label. `kix gc` never lists or deletes an object applied without that label, such as a resource applied with `kubectl`. See [Objects Kix did not apply](/docs/reference/cli/diff/#objects-kix-did-not-apply).
+
 :::caution[The default mode can omit cluster-level garbage from its plan]
 The default mode currently deletes stale resources that belong to no package,
 but its confirmation plan does not list them. Use `--full-scan` when you need

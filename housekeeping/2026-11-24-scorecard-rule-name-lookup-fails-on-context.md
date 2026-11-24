@@ -1,0 +1,3 @@
+# 2026-11-24 · `kix/lib/scorecard.nix` · A cluster rule that uses a manifest's name as an attribute name fails with a store-path error.
+
+`allResources` holds manifests whose strings still carry dependency context, so `classes.${w.spec.template.spec.priorityClassName}` or `listToAttrs` keyed by `metadata.name` stops evaluation with "the string 'batch' is not allowed to refer to a store path". Rule authors have to know to compare with `==` and `builtins.filter`. Discarding context from the rule inputs, or documenting a helper, would remove the trap. The worked example in `reference/scorecard-and-rules.mdx` works around it.

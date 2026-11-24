@@ -1,0 +1,3 @@
+# 2026-11-24 · `kix/lib/helm.nix` · Pod template annotations from a chart are stripped whatever `strip.helmAnnotations` and `preserveAnnotationPrefixes` say.
+
+`cleanSpec` calls `stripHelmAnnotations` on `spec.template.metadata.annotations` directly, while only `metadata.annotations` goes through `effectiveStripAnnotations`. So a chart's `checksum/config` pod annotation is always removed, and `preserveAnnotationPrefixes = [ "checksum/" ]` or `strip.helmAnnotations = false` does not keep it. Only `strip.defaultStrategy = false` skips `cleanSpec`, which also keeps the default rollout strategy blocks. Whether chart pods still restart when their ConfigMap changes was not checked.
