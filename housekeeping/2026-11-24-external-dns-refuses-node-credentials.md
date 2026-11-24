@@ -1,0 +1,3 @@
+# 2026-11-24 · `kix/packages/experimental/external-dns` · external-dns refuses the node's cloud role, which other packages will allow.
+
+`[K1798]` fails an instance whose provider is on AWS, Google Cloud, or Azure and whose `deps.providerCredentials` is unset. Its change record says this includes instances that relied on the node's role. `v2_discussions/180_cloud_identity_across_packages.md` lets cert-manager and StackGres run with no identity, because the software's own switch is on and the pods then use the node's role. A user on a self-managed cluster whose nodes hold the DNS permission can run cert-manager that way and cannot run external-dns.
