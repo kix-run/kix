@@ -7,6 +7,7 @@ let
   kixKeys = kixAnnotations.keys;
   availabilityLib = import ../core/availability.nix { inherit lib; };
   workloadKinds = import ../core/workload-kinds.nix { inherit lib; };
+  cloudIdentityLib = import ../vocab/cloud-identity.nix { inherit lib; };
   inherit (k8s) clusterScoped;
 in
 {
@@ -87,6 +88,27 @@ in
           ) edgeAnalysis.dnsRoot;
           loadBalancerWarnings = validators.checkLoadBalancer args;
           metricsApiWarnings = validators.checkHorizontalPodAutoscaler args;
+          # A cloud identity that `kix.cloudIdentity.use` bound to these
+          # arguments, rendered through the mechanism of the cluster's
+          # `cloudIdentity` provider. The resource depends on the provider,
+          # so a webhook that Kix deploys comes first.
+          identity = args._cloudIdentity or null;
+          identityProvider = (clusterCtx.findRoleProvider or (_: null)) "cloudIdentity";
+          rendered = cloudIdentityLib.render {
+            inherit identity;
+            provider = identityProvider;
+          };
+          identityArgs =
+            if identity == null then
+              { }
+            else if rendered.problem != null then
+              fail ({ instance = builtBy; } // rendered.problem)
+            else
+              {
+                annotations = (args.annotations or { }) // rendered.serviceAccountAnnotations;
+                requires = (args.requires or [ ]) ++ [ identityProvider.root ];
+              };
+          sealedArgs = args // identityArgs;
         in
         builtins.seq (checkNoHoldsData args) (
           builtins.seq (validators.checkResourceName args) (
@@ -96,13 +118,16 @@ in
                   (
                     let
                       res = k8s.mkResource (
-                        removeAttrs args [ "labels" ]
+                        removeAttrs sealedArgs [
+                          "labels"
+                          "_cloudIdentity"
+                        ]
                         // {
                           namespace = namespaceResource;
                           inherit clusterDomain;
                           labels = clusterLabels // instanceLabels // labels;
                           factBehavior = behavior;
-                          requires = (args.requires or [ ]) ++ dnsRequires;
+                          requires = (sealedArgs.requires or [ ]) ++ dnsRequires;
                         }
                       );
                     in
@@ -110,6 +135,17 @@ in
                     // {
                       packageLabels = labels;
                       _builtBy = builtBy;
+                      # The pod labels and restart stamp of a ServiceAccount
+                      # bound with `kix.cloudIdentity.use`, or null. The
+                      # workload builders read it from the pod's
+                      # ServiceAccount, outside the manifest.
+                      _cloudIdentity =
+                        if identity == null then
+                          null
+                        else
+                          {
+                            inherit (rendered) podLabels stamp;
+                          };
                       # Warnings raised while building the resource, outside the
                       # manifest. `eval/instance.nix` collects them from the
                       # instance's parts into its warnings.
@@ -177,6 +213,28 @@ in
                   serviceAccountNamespace = saNs;
                 };
             };
+
+      # Return pod template metadata with the cloud identity of the
+      # ServiceAccount the pod spec names: the pod labels its mechanism needs
+      # and a `checksum/cloud-identity` annotation. A cloud's webhook gives
+      # credentials to a pod only when the pod starts, so the stamp makes a
+      # changed identity roll the pods.
+      _withCloudIdentity =
+        rawTemplateSpec: metadata:
+        let
+          sa = rawTemplateSpec.serviceAccount or null;
+          identity = if sa == null then null else sa._cloudIdentity or null;
+        in
+        if identity == null then
+          metadata
+        else
+          metadata
+          // {
+            labels = (metadata.labels or { }) // identity.podLabels;
+            annotations = (metadata.annotations or { }) // {
+              "checksum/cloud-identity" = identity.stamp;
+            };
+          };
 
       _expandHeadlessService =
         spec:
@@ -483,9 +541,12 @@ in
             // {
               selector.matchLabels = selector;
               template = {
-                metadata = templateMeta // {
-                  labels = effectiveTemplateLabels;
-                };
+                metadata = _withCloudIdentity rawTemplateSpec (
+                  templateMeta
+                  // {
+                    labels = effectiveTemplateLabels;
+                  }
+                );
                 spec = templateSpec;
               };
             };
@@ -560,9 +621,12 @@ in
             jobTemplate = (rawSpec.jobTemplate or { }) // {
               spec = jobSpec // {
                 template = {
-                  metadata = templateMeta // {
-                    labels = selector;
-                  };
+                  metadata = _withCloudIdentity rawTemplateSpec (
+                    templateMeta
+                    // {
+                      labels = selector;
+                    }
+                  );
                   spec = templateSpec;
                 };
               };
@@ -627,9 +691,12 @@ in
             }
             // {
               template = {
-                metadata = templateMeta // {
-                  labels = effectiveTemplateLabels;
-                };
+                metadata = _withCloudIdentity rawTemplateSpec (
+                  templateMeta
+                  // {
+                    labels = effectiveTemplateLabels;
+                  }
+                );
                 spec = templateSpec;
               };
             };

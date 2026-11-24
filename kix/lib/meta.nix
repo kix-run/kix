@@ -426,7 +426,6 @@ rec {
       raw,
       evaluatedConfig,
       parts,
-      resolvedDepMeta,
       depsEnrichment ? { },
       resolvedDeps ? { },
       clusterConfig ? { },
@@ -435,7 +434,9 @@ rec {
       ctx = {
         config = evaluatedConfig;
         self = parts;
-        deps = lib.mapAttrs (_: di: di.value) resolvedDepMeta;
+        # Every bound dependency: a resolved instance, or a plain value
+        # given in `deps`.
+        deps = resolvedDeps;
         inherit clusterConfig;
       };
 

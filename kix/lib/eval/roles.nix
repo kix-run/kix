@@ -55,6 +55,11 @@ rec {
       outContract = [ "crds" ];
     };
 
+    cloudIdentity = {
+      description = "Configures pod cloud identities on AWS, Google Cloud, or Azure (EKS IRSA or Pod Identity, Workload Identity Federation for GKE, Microsoft Entra Workload ID on AKS, or a self-hosted webhook). The provider exposes a cloud identity mechanism at out.cloudIdentity, which renders kix.cloudIdentity.aws, kix.cloudIdentity.gcp, and kix.cloudIdentity.azure dependencies into ServiceAccount annotations and pod labels. The eks, gke, gke-autopilot, and aks flavors provide this role as an import; a managed package claiming the role overrides the import.";
+      outContract = [ "cloudIdentity" ];
+    };
+
     snapshotController = {
       description = "CSI snapshot controller and the snapshot.storage.k8s.io API, one per cluster. Consumers build VolumeSnapshotClass and VolumeSnapshot through out.crds. An environment that runs its own controller binds the role exclusive, so a second, managed controller is refused at eval.";
       outContract = [ "crds" ];

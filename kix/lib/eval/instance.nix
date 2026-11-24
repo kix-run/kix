@@ -837,7 +837,6 @@ in
             raw
             evaluatedConfig
             parts
-            resolvedDepMeta
             depsEnrichment
             resolvedDeps
             clusterConfig

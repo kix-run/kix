@@ -109,6 +109,11 @@ rec {
     role = key "role";
     dbCluster = key "db-cluster";
     autoInstantiated = key "auto-instantiated";
+    # JSON on a ServiceAccount bound with `kix.cloudIdentity.use`: the
+    # cloud identity the instance gives the package and the mechanism that delivers
+    # it. Some mechanisms put nothing else on the object, so this is where a
+    # diff and other tools read the identity.
+    cloudIdentity = key "cloud-identity";
     optionalActivated = key "optional-activated";
   };
 

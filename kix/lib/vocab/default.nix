@@ -7,6 +7,7 @@ let
   storageClass = import ./storage-class.nix { inherit lib; };
   snapshotClass = import ./snapshot-class.nix { inherit lib; };
   toleration = import ./toleration.nix { inherit lib; };
+  cloudIdentity = import ./cloud-identity.nix { inherit lib; };
   versions = import ../core/version.nix { inherit lib; };
   availability = import ../core/availability.nix { inherit lib; };
   scorecard = import ../scorecard.nix { inherit lib; };
@@ -39,6 +40,20 @@ compose
   tolerations = {
     inherit (toleration) problems render;
   };
+  # The role a workload gets in a cloud: the values a cluster author gives a
+  # credentials dependency (`aws`, `gcp`, `azure`), `use`, which a package
+  # calls on that dependency, and `annotationsFor` (`vocab/cloud-identity.nix`).
+  # How a cluster delivers it is the flavor's or a module's business.
+  cloudIdentity = {
+    inherit (cloudIdentity)
+      aws
+      gcp
+      azure
+      use
+      annotationsFor
+      ;
+  };
+
   # The contracts in `kix/contracts`, by name, with the experimental ones
   # under `contracts.experimental`.
   contracts = import ../../contracts { inherit lib; };

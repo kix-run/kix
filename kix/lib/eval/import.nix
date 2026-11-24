@@ -45,6 +45,11 @@ rec {
       # ("namespace"). An environment-provided service is normally shared,
       # so the default is "cluster".
       scope ? "cluster",
+      # Annotation domains that something in the environment reads, such as
+      # "eks.amazonaws.com" for the EKS pod identity webhook. The scorecard's
+      # annotation-ownership rule accepts annotations under them on any
+      # instance, with no dependency on this import.
+      annotationDomains ? [ ],
     }:
     {
       _type = "kix-import";
@@ -56,7 +61,7 @@ rec {
         crds
         ;
       meta = {
-        inherit roles scope;
+        inherit roles scope annotationDomains;
       };
     };
 

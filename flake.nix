@@ -77,6 +77,11 @@
             gateway-swap-envoy = ./clusters/test-gateway-swap/envoy.nix;
             gateway-swap-traefik = ./clusters/test-gateway-swap/traefik.nix;
 
+            # One external-dns definition shared by two clusters, with the
+            # credential given in each cluster file.
+            cloud-identity-layout-eks = ./clusters/test-cloud-identity-layout/eks.nix;
+            cloud-identity-layout-kind = ./clusters/test-cloud-identity-layout/kind.nix;
+
             # Package tests kept in a directory with their fixtures.
             reloader = ./clusters/test-reloader/kind.nix;
             tailscale = ./clusters/test-tailscale/cluster.nix;

@@ -737,9 +737,10 @@
       "status": "implemented",
       "snippets": [
         "externalDnsInstance",
-        "externalDnsKindTryout"
+        "externalDnsKindTryout",
+        "eksIrsaInstance"
       ],
-      "unverifiedNixBlocks": 2,
+      "unverifiedNixBlocks": 1,
       "packages": [
         "experimental/external-dns"
       ]
@@ -1076,7 +1077,10 @@
       "scenario": "application",
       "status": "implemented",
       "snippets": [
-        "kindFlavor"
+        "kindFlavor",
+        "sharedExternalDns",
+        "eksCluster",
+        "kindCluster"
       ],
       "unverifiedNixBlocks": 4
     },

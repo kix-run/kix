@@ -381,6 +381,13 @@ in
         else
           lookup
           // {
+            # The provider's root resource, which a consumer depends on to be
+            # deployed after it. An import's root is its marker.
+            root =
+              let
+                provider = clusterInstances.${lookup.ns}.${lookup.inst};
+              in
+              if provider ? raw then provider.raw.root.resource or provider.raw.root else provider.root;
             out = roles.checkOutContract {
               inherit role;
               providerLabel = "${lookup.ns}/${lookup.inst}";

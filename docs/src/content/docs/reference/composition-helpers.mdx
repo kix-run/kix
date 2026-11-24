@@ -377,6 +377,52 @@ Kix models cluster availability across four ordered levels: `"none"` < `"pod"` <
 
 ---
 
+## cloudIdentity
+
+Packages that call AWS, Google Cloud, or Azure APIs can accept either a [cloud identity](/docs/reference/instances-and-composition/#cloud-identities) or a Secret instance on the same dependency and unpack it with `kix.cloudIdentity.use`:
+
+```nix
+build =
+  { self, config, providerCredentials ? null, ... }:
+  let
+    credentials = kix.cloudIdentity.use {
+      inherit scope;
+      dep = providerCredentials;
+      cloud = "aws";
+    };
+  in
+  {
+    serviceAccount =
+      { apiVersion = "v1"; kind = "ServiceAccount"; inherit name; }
+      |> credentials.bind
+      |> scope.mkResource;
+    # Reference this ServiceAccount in the pod spec: serviceAccount = self.serviceAccount;
+    # credentials.secret holds the Secret instance when one was passed, or null.
+  };
+```
+
+| Argument | Description |
+| --- | --- |
+| `scope` | The package's `scope`, used to name the instance and package in evaluation errors. |
+| `dep` | The dependency value: a cloud identity, a Secret instance, or `null`. |
+| `cloud` | Which cloud API the software calls: `"aws"`, `"gcp"`, `"azure"`, or `null` when cloud identities are not accepted. Passing an identity for any other cloud fails evaluation. |
+
+`kix.cloudIdentity.use` returns an attribute set with three fields:
+
+| Returned field | Description |
+| --- | --- |
+| `secret` | `dep` when `dep` is not a cloud identity (such as a Secret instance or `null`); `null` when `dep` is a cloud identity. |
+| `identity` | `dep` when `dep` is a cloud identity; `null` otherwise. |
+| `bind` | Function that transforms ServiceAccount arguments before `scope.mkResource`. When `identity` is non-null, `scope.mkResource` writes the cloud's ServiceAccount annotations and `kix.run/cloud-identity`, and orders the ServiceAccount after the cluster's `cloudIdentity` provider. Workload builders (`scope.mkDeployment`, `mkStatefulSet`, `mkDaemonSet`, `mkJob`, and `mkCronJob`) then add `checksum/cloud-identity` and any required pod labels to every pod template with `serviceAccount = self.<part>`. When `identity` is `null`, `bind` returns its arguments unchanged. |
+
+If a package builds two ServiceAccounts with separate identities, declare two dependencies and call `kix.cloudIdentity.use` once for each.
+
+When an operator creates the ServiceAccount from a custom resource, `credentials.bind` cannot modify it. Instead, take `cloudIdentity` as a build argument and, when `credentials.identity != null`, call `kix.cloudIdentity.annotationsFor { inherit scope; identity = credentials.identity; provider = cloudIdentity; }`. Pass the returned `{ serviceAccountAnnotations, podLabels }` into the custom resource. Because the operator creates those pods, Kix does not add `checksum/cloud-identity` to restart them automatically when the identity changes.
+
+The cluster's flavor or cloud identity module (such as `kix.modules.experimental.irsa-webhook`) selects the delivery mechanism, keeping packages portable across clusters ([Flavors and capabilities](/docs/reference/flavors-and-capabilities/#cloud-identity)).
+
+---
+
 ## Version helpers
 
 Packages can read `clusterConfig.k8sVersion` in `build` and compare it against a version bound to omit flags, collectors, or RBAC rules that older Kubernetes releases do not support.

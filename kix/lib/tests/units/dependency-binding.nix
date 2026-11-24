@@ -222,7 +222,7 @@ in
       ))
       &&
         lib.hasInfix
-          "[K3646] a/app: instances.a.app.deps.svcc is not a dependency of this instance's package, so Kix rejected it. Valid dependencies for this package: svc."
+          "[K3646] a/app: `instances.a.app.deps.svcc` is set, but this package has no `svcc` dependency, so Kix rejected it instead of ignoring the value. The only dependency this package takes is `svc`."
           (result.thrown or "")
     )
     || throw "undeclared deps key: ${builtins.toJSON result}";

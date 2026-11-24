@@ -4,6 +4,9 @@
 # `cni` role that exposes standard Kubernetes NetworkPolicy rather than
 # CiliumNetworkPolicy), `kube-dns`, GCP Network Load Balancer, and the PD CSI
 # driver with `standard-rwo` as the default StorageClass.
+#
+# Pods get Google Cloud identities through Workload Identity Federation for
+# GKE, which the `cloud-identity` import declares.
 
 {
   config,
@@ -16,6 +19,8 @@ let
     inherit kix;
     inherit (config) clusterDomain;
   };
+  platformCloudIdentity = import ./cloud-identity.nix { inherit kix; };
+  mechanisms = import ../vocab/cloud-identity-mechanisms.nix { inherit lib; };
 in
 {
   cluster.provider = lib.mkDefault "gke";
@@ -64,6 +69,8 @@ in
       name = "kube-dns";
       namespace = "kube-system";
     };
+
+    cloud-identity = platformCloudIdentity { mechanism = mechanisms.gke { }; };
 
     platform-storage = {
       package = kix.mkImport {

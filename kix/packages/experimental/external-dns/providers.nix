@@ -15,13 +15,18 @@
 # A provider that takes its credentials only as flags reads them from
 # `EXTERNAL_DNS_<FLAG>` (kingpin DefaultEnvars), so its key sets name those
 # variables.
+#
+# `cloud` names the cloud whose API the provider calls, as
+# `kix.cloudIdentity` names it. Such a provider authenticates with an
+# identity for that cloud or with a Secret, either one in
+# providerCredentials, and an instance with neither is refused.
 {
   alibabacloud = { };
-  aws = { };
-  aws-sd = { };
-  azure = { };
-  azure-dns = { };
-  azure-private-dns = { };
+  aws.cloud = "aws";
+  aws-sd.cloud = "aws";
+  azure.cloud = "azure";
+  azure-dns.cloud = "azure";
+  azure-private-dns.cloud = "azure";
   civo = { };
   # provider/cloudflare/cloudflare.go reads CF_API_TOKEN, and otherwise
   # both CF_API_KEY and CF_API_EMAIL.
@@ -48,7 +53,7 @@
       "EXTERNAL_DNS_GODADDY_API_SECRET"
     ]
   ];
-  google = { };
+  google.cloud = "gcp";
   inmemory = { };
   linode = { };
   ns1 = { };

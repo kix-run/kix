@@ -48,12 +48,15 @@ rec {
     ) instances;
 
   # Map each annotation domain in `meta.annotationDomains` to its declaring
-  # namespace and instance. Operator packages declare the annotation domains
-  # they manage (for example, `reflector.v1.k8s.emberstack.com`), and the
-  # scorecard's `architecture.annotationDomainOwnership` rule checks consumers
-  # against this index. Because annotation domains are upstream operator
-  # identifiers, the declarations themselves form the registry and duplicate
-  # declarers of the same domain fail immediately.
+  # namespace and instance, and whether that instance is an import. Operator
+  # packages declare the annotation domains they manage (for example,
+  # `reflector.v1.k8s.emberstack.com`), and an import declares the domains
+  # something in the environment reads (a flavour's `eks.amazonaws.com`).
+  # The scorecard's `architecture.annotationDomainOwnership` rule checks
+  # consumers against this index. Because annotation domains are upstream
+  # operator identifiers, the declarations themselves form the registry. A
+  # managed instance takes precedence over an import, as it does for a role,
+  # and two declarers of the same kind fail immediately.
   buildAnnotationDomainIndex =
     { instances, peekedMetas }:
     builtins.foldl'
@@ -72,19 +75,19 @@ rec {
               else
                 null;
             existing = acc'.${domain} or null;
+            declarer = {
+              inherit (entry) ns inst isImport;
+            };
           in
           builtins.seq _shape (
-            if existing != null then
+            if existing == null then
+              acc' // { ${domain} = declarer; }
+            else if existing.isImport != entry.isImport then
+              acc' // { ${domain} = if entry.isImport then existing else declarer; }
+            else
               fail {
                 message = "annotation domain '${domain}' is declared by two instances: ${existing.ns}/${existing.inst} and ${entry.ns}/${entry.inst}.";
                 fix = "Exactly one package may own an annotation domain.";
-              }
-            else
-              acc'
-              // {
-                ${domain} = {
-                  inherit (entry) ns inst;
-                };
               }
           )
         ) acc entry.domains
@@ -110,6 +113,7 @@ rec {
             {
               ns = nsName;
               inst = instName;
+              isImport = (instances.${nsName}.${instName}.package._type or "") == "kix-import";
               inherit domains;
             }
           ]

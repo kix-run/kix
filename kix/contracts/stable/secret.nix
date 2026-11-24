@@ -84,8 +84,11 @@ let
           found = contract.problems (dep.out or { });
           name = dep.name or (dep.out.name or null);
           kind = dep.root.kind or (dep.raw.kind or (dep.kind or null));
+          # A plain value in `deps` may say what it is in `description`.
           what =
-            if kind == "PackageInstance" && builtins.isString name then
+            if builtins.isString (dep.description or null) then
+              dep.description
+            else if kind == "PackageInstance" && builtins.isString name then
               "the instance ${name}"
             else if builtins.isString kind then
               "the ${kind}${lib.optionalString (builtins.isString name) " ${name}"}"

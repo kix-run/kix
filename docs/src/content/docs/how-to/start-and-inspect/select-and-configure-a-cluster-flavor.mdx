@@ -6,6 +6,9 @@ description: "Choose the provider defaults that match a target cluster and overr
 import Command from '/src/components/Command.astro';
 import Snippet from '/src/components/Snippet.astro';
 import kindFlavor from '/src/snippets/how-to/application/cluster/kindFlavor.json';
+import sharedExternalDns from '/src/snippets/clusters/test-cloud-identity-layout/external-dns/sharedExternalDns.json';
+import eksCluster from '/src/snippets/clusters/test-cloud-identity-layout/eks/eksCluster.json';
+import kindCluster from '/src/snippets/clusters/test-cloud-identity-layout/kind/kindCluster.json';
 import check from '/src/command-output/how-to/application-basics/check.json';
 import listPackages from '/src/command-output/how-to/application-basics/list-packages.json';
 
@@ -104,6 +107,25 @@ clusters = {
 `mkFlake` passes only `kix`, `packages`, and `pins` to a cluster function. If
 the function requires another argument, such as an externally supplied
 `flavor`, evaluation fails with `called without required argument`.
+
+## Keep credentials in the cluster file
+
+A workload that calls a cloud API can use a cloud identity on one cluster and a
+Secret on another. Put `deps.providerCredentials` in each cluster file so both
+clusters can share the workload definition:
+
+<Snippet {...sharedExternalDns} />
+
+On EKS, pass an IAM role to `deps.providerCredentials`:
+
+<Snippet {...eksCluster} />
+
+On `kind`, where pods have no cloud identity, pass a Secret instance instead:
+
+<Snippet {...kindCluster} />
+
+See [Cloud identities](/docs/reference/instances-and-composition/#cloud-identities)
+for supported cloud identity constructors and options.
 
 ## Check the result
 
