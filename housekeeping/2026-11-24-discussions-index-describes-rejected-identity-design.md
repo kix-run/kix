@@ -1,3 +1,3 @@
-# 2026-11-24 · `v2_discussions/README.md` · The index row for doc 177 describes the design the doc rejected.
+# 2026-11-24 · `v2_discussions/README.md` · The index entry for doc 177 describes a rejected design and still says "Decision required".
 
-The row says the recommended design is "an instance attribute `cloudIdentity`", and that the doc needs a decision. Doc 177 rejected that design (C) after it was built, and recommends and ships the identity as the value of a credentials dependency (D). A reader who trusts the index plans against the wrong shape.
+In `v2_discussions/README.md`, the row for `177_workload_cloud_identity.md` says "Decision required" and calls "an instance attribute `cloudIdentity`" the recommended design. Doc 177 rejected that design (C) after building it; Kix shipped design D, where the cluster sets a cloud identity on a package's credentials dependency (`deps.<name> = kix.cloudIdentity.<cloud> { ... }`). Readers who rely on the index will plan package changes around the rejected API.

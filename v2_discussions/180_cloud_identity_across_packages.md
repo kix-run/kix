@@ -1,66 +1,53 @@
-# 180: Cloud identity when the ServiceAccount and the cloud choice are in two packages
+# 180: Cloud identity when the ServiceAccount and the cloud provider live in separate packages
 
-**Status:** Decided on 2026-11-24. Not built.
-**Related:** `177_workload_cloud_identity.md` (the design this extends), `kix/lib/vocab/cloud-identity.nix`, `kix/lib/architecture.md` (how `deps` and `out` flow)
+**Status:** Decided on 2026-11-24; implementation is pending.
+**Related:** `177_workload_cloud_identity.md` (base workload cloud identity design), `kix/lib/vocab/cloud-identity.nix`, `kix/lib/architecture.md` (`deps` and `out` data flow)
 
 ## 1. The problem
 
-Doc 177 assumes one package knows both the ServiceAccount whose pods call
-the cloud and which cloud the software calls. external-dns does. Two
-adopters do not, and a third looked as if it might not.
+`177_workload_cloud_identity.md` assumes one package owns the `ServiceAccount`
+calling a cloud API and picks that cloud (as `external-dns` does with
+`config.provider`). That breaks when two packages split those jobs:
 
-| | Who has the ServiceAccount | Who has the cloud choice, the switch, and the Secret | Which depends on which |
+| Software | Package that owns the `ServiceAccount` | Package that picks the cloud provider and credentials | Dependency direction |
 |---|---|---|---|
-| cert-manager | `cert-manager` builds the controller's ServiceAccount | Each ClusterIssuer in `cluster-issuer` picks Route 53, Cloud DNS, or Azure DNS, and holds any static key | Many issuers depend on one `cert-manager` |
-| StackGres | The operator creates `<cluster>-patroni` from the SGCluster in `stackgres-cluster` | The SGObjectStorage in `stackgres-object-storage` holds the bucket, the Secret, and the switch (`useIAMRole`, `fetchCredentialsFromMetadataService`) | Many clusters depend on one storage |
-| external-secrets | The controller's, or one that a SecretStore names | The SecretStore's `provider` block | The package that builds a store depends on `external-secrets` |
+| cert-manager | `cert-manager` builds `controllerServiceAccount` | `cluster-issuer` picks Route 53, Cloud DNS, or Azure DNS on each `ClusterIssuer` and holds any static credential `Secret` | Many `cluster-issuer` instances depend on one `cert-manager` instance |
+| StackGres | `stackgres-cluster` configures the `SGCluster` from which the operator creates `<cluster>-patroni` | `stackgres-object-storage` configures the `SGObjectStorage` bucket, any static `Secret`, and the ambient-credential flag (`useIAMRole` or `fetchCredentialsFromMetadataService`) | Many `stackgres-cluster` instances can depend on one `stackgres-object-storage` instance |
+| External Secrets | `external-secrets` builds the controller's `ServiceAccount` | The consumer package writes the `SecretStore`'s `provider` block | Each consumer package depends on `external-secrets` |
 
-One adopter proposed the identity where the pod is (cert-manager). The
-other proposed it where the cloud choice is, copied by every cluster
-(StackGres). Building both gives Kix two patterns.
+Without a shared rule, `cert-manager` puts the identity on the pod's instance
+while StackGres puts it on shared storage and copies it to every cluster,
+giving cluster authors two contradictory wiring models.
 
-## 2. Four facts that decide it
+## 2. Four constraints that decide the design
 
-1. **A ServiceAccount carries one identity, and one identity may sit on
-   many ServiceAccounts.** The IRSA annotation holds one role. So the
-   identity is a property of the ServiceAccount.
-2. **The cloud names each ServiceAccount.** The subject is always the pair
-   (namespace, ServiceAccount name). A role that three database clusters
-   share still needs three subjects in its trust policy.
-3. **A package reads the `out` of what it depends on, and nothing reads its
-   dependents.** `cert-manager` cannot see the issuers built on it. Only
-   the package that depends on the other holds both facts.
-4. **The switch for "use the pod's own credentials" works with no identity
-   at all.** The pod then gets the role of its node, which is a valid
-   setup. So the switch cannot be derived from the identity.
+1. **One identity per `ServiceAccount`, shared across many.** An annotation
+   like `eks.amazonaws.com/role-arn` holds one role ARN, making cloud identity
+   a `ServiceAccount` property even when several share a role.
+2. **Trust policies bind per `(namespace, ServiceAccount)`.** Three clusters
+   sharing one IAM role must list all three `ServiceAccount`s in its policy.
+3. **Packages read `out` from dependencies and never see dependents.**
+   `cert-manager` cannot inspect `cluster-issuer`; only the dependent sees both.
+4. **Ambient credentials work without a `ServiceAccount` identity.** Pods fall
+   back to the node's IAM role on self-managed clusters, so Kix cannot derive
+   the ambient-credential flag from whether an identity is set.
 
-## 3. The rule
+## 3. Design rules
 
-1. **The cluster author writes the identity on the instance that owns the
-   ServiceAccount**: the one whose package builds it, or whose custom
-   resource makes an operator create it. Each ServiceAccount gets its own
-   line, as a dependency of that instance.
-2. **Only that package renders it.** It calls `credentials.bind` on a
-   ServiceAccount it builds, or `kix.cloudIdentity.annotationsFor` for one
-   an operator creates.
-3. **The Secret and the switch stay in the package that makes the cloud
-   choice.** The switch is the software's own field on the object that
-   package builds. That package never takes an identity.
-4. **The cloud travels through `out`, along the dependency that already
-   exists.** The package that depends on the other compares the identity's
-   cloud with the cloud choice.
-5. **A mismatch is refused. A missing identity is allowed**: with the
-   switch on and no identity, the pods use the node's role.
+1. **Attach `deps.<name>` to the instance that owns the `ServiceAccount`,**
+   once per `ServiceAccount` (built directly or created by an operator).
+2. **Render the identity only there:** `credentials.bind` on a built
+   `ServiceAccount`, or `kix.cloudIdentity.annotationsFor` for an operator's.
+3. **Keep static `Secret`s and upstream's ambient-credential flags in the
+   cloud-provider package,** which never accepts a cloud identity.
+4. **Pass the cloud through `out` along the existing dependency** so the
+   dependent package checks that both clouds match (two patterns in section 5).
+5. **Reject mismatched clouds, and allow omitted identities** for node roles.
 
-A package author asks one question: do my resources create the
-ServiceAccount? Rule 4 has two code shapes, set by which way the dependency
-runs (section 5).
+## 4. Changes to the Kix library
 
-## 4. The library change
-
-All of it is in `kix/lib/vocab/cloud-identity.nix`. Dependency resolution
-does not change: a plain value in `deps` already reaches `build` and
-`assertions`, and a package already reads its dependency's `out`.
+All helper changes are in `kix/lib/vocab/cloud-identity.nix`; plain `deps`
+already reach `build` and `assertions`, and packages already read `out`.
 
 ```nix
 # New. Read a dependency that takes a cloud identity or nothing.
@@ -87,22 +74,21 @@ kix.cloudIdentity.use { scope; dep; cloud; identityGoesTo ? null; }
 # `serviceAccountAnnotations` and `podLabels`.
 ```
 
-`useIdentity` refuses a Secret instance and names `secretGoesTo`. With
-`cloud` given, it refuses another cloud as `use` does, and refuses any
-identity when `cloud` is null. `ambientProblem` reads
-`holder.out.identityCloud` and returns null when it is null or matches.
+`useIdentity` rejects a `Secret` (naming `secretGoesTo`), validates the identity
+alone when `cloud` is omitted, matches `use` on `"aws"`, `"gcp"`, or `"azure"`,
+and rejects any identity when `cloud` is `null` (a `Secret`-backed dependency):
+- **`out.identityCloud`** (on a `ServiceAccount` dependency like `cert-manager`)
+  exposes `credentials.cloud` for `ambientProblem` (`null` when `null` or matching).
+- **`out.ambientCloud`** (on a cloud-provider dependency like
+  `stackgres-object-storage`) exposes `"aws"`, `"gcp"`, `"azure"`, or `null`
+  (when reading a `Secret`), passed as `cloud` to `useIdentity`.
 
-Two `out` fields carry the cloud. A package that owns the ServiceAccount
-publishes `out.identityCloud` (`credentials.cloud`) for the packages that
-choose the cloud. A package that chooses the cloud for another package's
-pods publishes `out.ambientCloud`, null when its object reads a Secret.
+## 5. The two dependency patterns
 
-## 5. The two shapes
+### Pattern A: The cloud-provider package depends on the `ServiceAccount` package (`cert-manager`)
 
-### The package with the ServiceAccount is depended on (cert-manager)
-
-Today the author adds the annotation with `partsOverlays`, and the pods do
-not restart when the role changes. After:
+Today users attach annotations via `partsOverlays` without pod restarts on role
+changes. With `useIdentity` and `ambientProblem`:
 
 ```nix
 # on the cert-manager instance
@@ -113,6 +99,8 @@ deps.controllerIdentity = kix.cloudIdentity.aws {
 # for the pod's credentials.
 config.spec.acme.solvers = [ { dns01.route53.region = "eu-west-1"; } ];
 ```
+
+In the two packages:
 
 ```nix
 # cert-manager: owns the ServiceAccount, cannot know the cloud
@@ -130,13 +118,14 @@ root.out.identityCloud = credentials.cloud;
 kix.cloudIdentity.ambientProblem { cloud = "aws"; holder = certManager; }
 ```
 
-An issuer that needs another AWS role sets the solver's `role` field, which
-cert-manager assumes from the controller's identity.
+For a second AWS IAM role, an issuer sets the Route 53 solver's `role` field,
+assumed from the controller's identity.
 
-### The package with the ServiceAccount depends on the other (StackGres)
+### Pattern B: The `ServiceAccount` package depends on the cloud-provider package (StackGres)
 
-Today the author sets the switch and the annotation in two `extraSpec`
-options, and the storage still writes Secret selectors. After:
+Today users set the ambient flag and `ServiceAccount` annotation via `extraSpec`
+on two instances while `stackgres-object-storage` requires a `Secret` and writes
+`secretKeySelectors`. With `out.ambientCloud` and `useIdentity`:
 
 ```nix
 # on the stackgres-object-storage instance: StackGres's own switch, and
@@ -147,6 +136,8 @@ deps.backupIdentity = kix.cloudIdentity.aws {
   roleArn = "arn:aws:iam::111122223333:role/orders-backup";
 };
 ```
+
+In the two packages:
 
 ```nix
 # stackgres-object-storage: reads the switch from the spec it builds
@@ -167,108 +158,121 @@ rendered = kix.cloudIdentity.annotationsFor {
 # spec.metadata.annotations.serviceAccount = rendered.serviceAccountAnnotations
 ```
 
-With the switch on, the storage writes no selectors. It refuses the switch
-together with a Secret, an instance with neither, and the switch on
-`s3Compatible` and `azureBlob`, which have none.
+Enabling `useIAMRole` or `fetchCredentialsFromMetadataService` omits
+`secretKeySelectors`. Evaluation fails if an instance sets both the flag and
+`deps.storageCredentials`, sets neither, or enables ambient credentials on
+`s3Compatible` or `azureBlob` (unsupported in StackGres).
 
-## 6. The rule against each concern
+## 6. How the design handles edge cases
 
-| Concern | Result |
+| Concern | Behavior |
 |---|---|
-| Several ServiceAccounts | One line per ServiceAccount. Clusters that share a role share a `let` binding. The lines match the subjects the trust policy must name. |
-| No identity, node credentials | Builds. cert-manager: a solver with no key and `identityCloud` null. StackGres: the switch on and no `backupIdentity`. |
-| Restart stamp | Automatic for cert-manager, because the package that binds also builds the Deployment. None for StackGres pods, as for every ServiceAccount an operator creates. |
-| No mechanism on the cluster | Raised by `scope.mkResource` or `annotationsFor`. Both run in the instance where the author wrote the identity, so the error names that instance. |
-| No credentials at all (`[K1798]` in external-dns) | The package with the Secret and the switch refuses "no Secret and switch off" where the switch is a field (`stackgres-object-storage`). A cert-manager solver has no such state: leaving the keys out is the switch. |
-| Secret fallback | Only the package that makes the cloud choice sees it. An identity given there is refused, and the fix names the other instance (`identityGoesTo`). |
-| An identity nobody uses | Refused for StackGres (`cloud` is null). Allowed for cert-manager, where another issuer may use it. |
-| Kix's DSL principles | No instance key and no manifest field: the switch is upstream's field, and the identity is a `deps` value as in doc 177. The cloud is read from the dependency's `out`. Each decision has one owner: the role belongs to the instance with the ServiceAccount, the cloud and the switch to the instance with the bucket or the DNS zone, and the check to the one package that sees both. |
+| Multiple `ServiceAccount`s | Cluster authors write one identity dependency per `ServiceAccount`. Instances that share a role can share a `let` binding, and each declaration matches one `(namespace, ServiceAccount)` subject in the cloud trust policy. |
+| Node credentials (no `ServiceAccount` identity) | Builds succeed. For `cert-manager`, the DNS-01 solver omits static key fields and `out.identityCloud` is `null`. For StackGres, `stackgres-object-storage` enables the ambient-credential flag and `stackgres-cluster` leaves `deps.backupIdentity` unset. |
+| Pod restart on identity change | Automatic for `cert-manager`, because `cert-manager` both binds `controllerServiceAccount` and builds `controllerDeployment` (stamping `checksum/cloud-identity`). Kix adds no restart annotation to the pods of any `ServiceAccount` that an operator creates (such as StackGres database pods), because Kix does not build those pod templates. |
+| Cluster has no cloud identity provider | Caught by `scope.mkResource` or `annotationsFor`. Because both run inside the instance where the cluster author wrote the identity, the error names that exact instance. |
+| Missing credentials (`[K1798]` in `external-dns`) | Where ambient credentials use an explicit boolean field (`stackgres-object-storage`), the package rejects instances that set neither a `Secret` nor an enabled flag. `cert-manager` ACME solvers have no separate boolean field: omitting the static key fields tells `cert-manager` to use ambient credentials. |
+| Static `Secret` fallback | Handled only by the package that selects the cloud provider (`cluster-issuer` or `stackgres-object-storage`). Passing a cloud identity there fails evaluation, and `identityGoesTo` points the fix to the instance that owns the `ServiceAccount`. |
+| Unused cloud identity | Rejected for `stackgres-cluster` when `sgObjectStorage.out.ambientCloud` is `null` (meaning backups read a static `Secret` or are unset). Allowed on `cert-manager`, because another `cluster-issuer` may use it. |
+| Kix DSL principles | Adds no custom instance attribute or invented Kubernetes manifest field: the ambient-credential flag is upstream's native spec field, the cloud identity is a `deps` value as in doc 177, and cloud metadata flows through `out`. Each decision has a single owner: the `ServiceAccount` instance owns the identity, the storage or issuer instance owns the cloud provider and static `Secret`, and the dependent package checks that they match. |
 
-## 7. external-secrets
+## 7. `external-secrets`
 
-Kix has no package for a store. A package builds one with
-`externalSecrets.out.mkSecretStore`, and the rule covers both forms.
+Kix has no store package; consumers call `externalSecrets.out.mkSecretStore`.
 
-- **A store with no auth block** uses the controller's ServiceAccount.
-  `external-secrets` owns it and takes the identity with `useIdentity`. It
-  also builds the store, inside `mkSecretStore`, and checks the cloud there.
-- **A store that names a ServiceAccount** (`auth.jwt.serviceAccountRef`,
-  `auth.workloadIdentity.serviceAccountRef`). The package that builds the
-  store builds that ServiceAccount and writes the `provider` block, so it
-  calls `use` and `bind` as external-dns does. The controller reads the
-  role from the annotation, which EKS Pod Identity does not write.
+**A store with no `auth` block uses the controller's `ServiceAccount` (Pattern
+A).** Unmerged pull request #340 passes `deps.controllerCredentials` and
+`cloud = dep.cloud or null` to `kix.cloudIdentity.use`, reading a field packages
+are not meant to read and turning off the cloud check. `useIdentity` with no
+`cloud` is the named form (`secretGoesTo` replaces the `Secret` refusal), and
+`mkSecretStore` calls `ambientProblem` for `aws`, `gcpsm`, and `azurekv`
+providers with no `auth` block to reject cloud mismatches.
 
-## 8. The rule not chosen, and the strongest objection
+**A store naming its own `ServiceAccount` (`auth.jwt.serviceAccountRef`,
+`auth.workloadIdentity.serviceAccountRef`, or Azure Key Vault
+`serviceAccountRef`) is outside this rule and `kix.cloudIdentity`.** No pod runs
+as that `ServiceAccount`. The External Secrets controller requests its token and
+reads fixed annotation keys such as `eks.amazonaws.com/role-arn`. EKS Pod
+Identity writes no annotation, an IRSA webhook with another prefix writes a key
+the controller does not read, and Kix would refuse a cluster with no mechanism
+though the controller needs none. The annotation is configuration that one
+client reads, like the Vault role that doc 177 leaves out, so it belongs to the
+package that runs the client:
+- The consumer package writes plain annotations on the `ServiceAccount` it
+  builds, using the keys External Secrets documents.
+- `external-secrets` lists `eks.amazonaws.com`, `iam.gke.io`, and
+  `azure.workload.identity` in `meta.annotationDomains` so the scorecard accepts
+  them on any cluster.
+- The Kix library gets no second render path (`bind` and `annotationsFor` stay
+  tied to the cluster's mechanism).
 
-**Identity always where the cloud choice is** fails for cert-manager: two
-issuers could give one ServiceAccount two roles, and `cert-manager` cannot
-read its dependents.
+## 8. Alternatives considered and the strongest objection
 
-**A two-case rule** keeps this doc's answer for cert-manager and puts the
-identity on the storage for StackGres, in `storageCredentials`. It is
-close: it reads like external-dns, and one line covers every cluster. It
-loses on four points. A cluster author gets two answers to "where do I
-write the role". Every cluster on a storage shares one role, so each can
-read and delete the others' backups. The errors for a missing mechanism or
-a wrong cloud come from each cluster while the value sits on the storage.
-The storage needs its switch without an identity anyway (fact 4).
-
-**The strongest objection.** For StackGres the author now makes two
-statements in two instances: the switch on the storage and the role on each
-cluster. Add a cluster, forget the role, and the build passes. The backup
-then fails in the cloud, or succeeds with the node's wider role. With the
-identity on the storage, a new cluster cannot miss it.
-
-**Answer.** A new cluster can still miss its role under that design, in
-the cloud. It is a new subject that the trust policy must name, nothing in
-the cluster file says so, and the backup fails in the same way. Kix cannot
-refuse "switch on, no identity" under either rule, because that is how node
-credentials are written. The chosen rule gives one answer for every
-package, a role per cluster by default, and a line in the cluster file for
-each subject the cloud must know.
+- **Always put the identity with the cloud provider.** Fails for `cert-manager`:
+  two `cluster-issuer` instances could set conflicting roles on
+  `controllerServiceAccount`, and `cert-manager` cannot read its dependents.
+- **Two-case rule** (identity on `cert-manager`, StackGres identity in
+  `deps.storageCredentials` on `stackgres-object-storage`). Configures all
+  clusters in one line like `external-dns`, yet loses on four points: (1) two
+  placement rules to learn; (2) clusters on one `SGObjectStorage` share one role
+  and can read or delete each other's backups; (3) missing-provider or
+  wrong-cloud errors fire on `stackgres-cluster` while the bad value sits on
+  `stackgres-object-storage`; and (4) `stackgres-object-storage` still needs its
+  ambient flag for node credentials (constraint 4).
+- **Strongest objection.** StackGres needs the ambient flag on
+  `stackgres-object-storage` plus `deps.backupIdentity` per `stackgres-cluster`;
+  omitting `deps.backupIdentity` on a new cluster still builds and fails in the
+  cloud or uses a broader node role, whereas `stackgres-object-storage` would
+  annotate new clusters automatically.
+- **Why the single rule wins.** Annotating from `stackgres-object-storage` still
+  fails in the cloud until the IAM trust policy lists the new `<cluster>-patroni`
+  `ServiceAccount`, and neither rule can forbid an ambient flag without an
+  identity because node credentials use that setup. One rule stays consistent
+  across packages, defaults to one role per cluster, and records every
+  `ServiceAccount` subject the trust policy must name.
 
 ## 9. Build plan
 
-1. **Library.** Section 4. Unit tests in
-   `kix/lib/tests/units/cloud-identity.nix`: `useIdentity` with null, an
-   identity, a Secret, a malformed identity, and `cloud` matching,
-   differing, and null; `ambientProblem` with no identity, a match, and a
-   mismatch; `use` with `identityGoesTo`; `annotationsFor` with null.
-   Docs: `reference/composition-helpers.mdx`, `kix/lib/architecture.md`,
-   and the `package-authoring` and `package-review` skills. Record: `added`.
-2. **cert-manager and cluster-issuer.** `deps.controllerIdentity`,
-   `out.identityCloud`, and the check on each `route53`, `cloudDNS`, and
-   `azureDNS` solver that sets no key field. `cluster-issuer` refuses an
-   identity in `issuerCredentials` and names `controllerIdentity`. Tests:
-   each cloud, a Secret solver beside a bound controller, the mismatch, and
-   node credentials, plus a test cluster whose manifests show the
-   annotation, the Azure pod label, and `checksum/cloud-identity`. Records:
-   `added` for each package. No existing definition fails, because the
-   refusal needs an identity that could not be given before.
-3. **stackgres-object-storage and stackgres-cluster.** The storage reads
-   its switch, drops the selectors, makes `storageCredentials` optional,
-   and publishes `out.ambientCloud`. The cluster takes
-   `deps.backupIdentity` and the `cloudIdentity` role provider. First
-   confirm two facts in the CRDs of the pinned StackGres release, and stop
-   if either is false: the selectors may be left out when the switch is on,
-   and `spec.metadata.annotations.serviceAccount` reaches
-   `<cluster>-patroni`. Tests as in step 2, plus two clusters with two
-   roles on one storage. Records: `added` for each package, and one `error`
-   for the storage, which now refuses the switch together with a Secret.
+1. **The Kix library.** Implement section 4 and test `useIdentity` (`null`,
+   valid, `Secret`, malformed, and `cloud` matching, mismatched, omitted, or
+   `null`), `ambientProblem` (none, matching, mismatched), `use`
+   (`identityGoesTo`), and `annotationsFor` (`identity = null`) in
+   `kix/lib/tests/units/cloud-identity.nix`. Update `kix/lib/architecture.md`,
+   `docs/src/content/docs/reference/composition-helpers.mdx`, and the
+   `package-authoring` and `package-review` skills. Change record: `added`.
+2. **`cert-manager` and `cluster-issuer`.** Add `deps.controllerIdentity` and
+   `out.identityCloud` to `cert-manager`; have `cluster-issuer` check keyless
+   `route53`, `cloudDNS`, and `azureDNS` solvers and reject identities on
+   `deps.issuerCredentials` (naming `deps.controllerIdentity`). Test each cloud,
+   `Secret` beside a bound controller, mismatches, node credentials, and a
+   cluster checking the `ServiceAccount` annotation, Azure pod label, and
+   `checksum/cloud-identity`. Change records: `added` (neither took an identity).
+3. **`stackgres-object-storage` and `stackgres-cluster`.** Verify in pinned
+   StackGres CRDs (stopping if false) that `secretKeySelectors` is optional with
+   ambient flags and `SGCluster`'s `spec.metadata.annotations.serviceAccount`
+   reaches `<cluster>-patroni`. Update `stackgres-object-storage` (read ambient
+   flags, omit `secretKeySelectors`, make `deps.storageCredentials` optional,
+   and publish `out.ambientCloud`) and `stackgres-cluster` (`deps.backupIdentity`
+   and `cloudIdentity`). Run step 2's tests plus two clusters with separate roles
+   on one `stackgres-object-storage`. Change records: `added` for both, plus
+   `error` for combining an ambient flag with `deps.storageCredentials`.
+4. **`external-secrets`.** Update unmerged pull request #340 in place after step
+   1: replace `use` (`cloud = dep.cloud or null`) with `useIdentity`, publish
+   `out.identityCloud`, call `ambientProblem` in `mkSecretStore`, and list the
+   three domains in `meta.annotationDomains`. Test stores with no `auth` block
+   (bound and mismatched clouds), a `Secret` in `deps.controllerCredentials`,
+   and a store naming an annotated `ServiceAccount` on a cluster with no
+   mechanism. Point its two housekeeping entries at this doc or delete them.
+   Change record: `added`.
 
-All four packages are experimental, so each step can ship in any release.
+All five packages are experimental, so each step can ship in any release.
 
-**A test on a real cloud must check:**
-
-- **cert-manager, on EKS, GKE, and AKS.** The controller pod carries the
-  injected variables (`AWS_ROLE_ARN`, `AZURE_CLIENT_ID`). A Certificate
-  reaches Ready through a DNS-01 solver with no key. A changed role
-  restarts the controller. An issuer with the solver's `role` field assumes
-  that role. On nodes that hold the DNS permission, an instance with no
-  identity still issues.
-- **StackGres, on EKS and GKE.** The operator puts the annotation on
-  `<cluster>-patroni`, for a new cluster and for one that already runs.
-  Record whether running pods need an SGDbOps restart to pick the role up.
-  An SGBackup completes, WAL archiving works, and a restore reads the
-  backup. Of two clusters with two roles on one storage, neither can read
-  the other's path.
+**Live cloud verification checklist:**
+- **`cert-manager` on EKS, GKE, and AKS:** controller pod gets `AWS_ROLE_ARN`
+  and `AZURE_CLIENT_ID`, keyless DNS-01 `Certificate` reaches `Ready`, identity
+  changes restart the pod, solver `role` assumption works, and omitting the
+  identity issues certificates via node DNS permissions.
+- **StackGres on EKS and GKE:** `<cluster>-patroni` gets the annotation on new
+  and running clusters (record whether running pods need an `SGDbOps` restart),
+  `SGBackup`, WAL archiving, and restore work, and two clusters with separate
+  roles on one `SGObjectStorage` cannot read each other's backup paths.
