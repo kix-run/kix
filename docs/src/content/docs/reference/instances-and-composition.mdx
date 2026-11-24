@@ -163,7 +163,7 @@ Every cluster module receives `ref` in its module arguments. Writing `ref.<names
 
 ### Cloud identities
 
-Packages that call AWS, Google Cloud, or Azure APIs (such as `external-dns`) can accept a cloud identity instead of a Secret instance on the same dependency:
+Packages that call AWS, Google Cloud, or Azure APIs can accept a cloud identity instead of a Secret instance on the same dependency. `external-dns` takes one in `providerCredentials`, and `cnpg-cluster` takes an AWS role in `storageCredentials` for its backups to S3:
 
 ```nix
 instances.external-dns.route53 = {
@@ -191,6 +191,8 @@ Evaluation fails when:
 - the cluster has no `cloudIdentity` provider;
 - the identity's cloud does not match the cluster's `cloudIdentity` provider or the cloud API the package calls; or
 - the package does not accept that dependency (`[K3646]`).
+
+When an operator creates the ServiceAccount, as the CloudNativePG operator does for the instance pods of `cnpg-cluster`, Kix writes the annotations into the operator's custom resource (the Cluster's `spec.serviceAccountTemplate`). Kix does not add `checksum/cloud-identity` to those pods, so a changed identity reaches them only after they restart (`kubectl cnpg restart <cluster>`).
 
 If a package does not yet accept `kix.cloudIdentity`, add the cloud's annotation to its ServiceAccount with `partsOverlays`. The cloud flavors declare their annotation domains, so the scorecard allows the annotation without warning. Changing a ServiceAccount annotation in `partsOverlays` does not restart pods automatically:
 

@@ -17,7 +17,9 @@
 #   barmanCloud                `cnpg-barman-cloud` instance; required when
 #                              `backup` is set.
 #   storageCredentials         Secret or secret-ref in this namespace with S3
-#                              access keys; required when `backup` is set.
+#                              access keys, or an AWS role
+#                              (`kix.cloudIdentity.aws { roleArn = "..."; }`);
+#                              required when `backup` is set.
 #   endpointService (optional) In-cluster S3 Service when `backup` is set.
 #   importSource               The server to copy from, as an instance with
 #                              out.fqdn and out.port, such as a cnpg-cluster
@@ -45,6 +47,25 @@
 # with `kix deploy --prune` or `kix gc`. A large database can take longer
 # to copy than the deploy waits for the Cluster to be ready. Run the deploy
 # again once the Cluster is ready.
+#
+# Cloud identity: with an AWS role in storageCredentials, the ObjectStore
+# sets `s3Credentials.inheritFromIAMRole`, and the plugin's sidecar in each
+# instance pod finds credentials through the AWS SDK's default chain. The
+# operator creates the instance pods' ServiceAccount, so the role goes in
+# the Cluster's `spec.serviceAccountTemplate`, through
+# `kix.cloudIdentity.annotationsFor`. Kix does not stamp those pods, so a
+# changed role reaches them only when they restart
+# (`kubectl cnpg restart <cluster>`). The role must trust
+# `system:serviceaccount:<namespace>:<instance>`. The package writes only
+# `s3://` destinations, so it takes no Google Cloud or Azure identity.
+#
+#   instances.data.postgres = {
+#     package = packages.cnpg-cluster;
+#     deps.storageCredentials = kix.cloudIdentity.aws {
+#       roleArn = "arn:aws:iam::111122223333:role/pg-backup";
+#     };
+#     config.backup.destinationPath = "s3://pg-backups/data";
+#   };
 #
 # Upgrades: PostgreSQL 18.7 upgrades directly from 18.6 with no dump and
 # restore. Upstream says minor releases never change the storage format and
@@ -258,6 +279,7 @@ in
         importSource ? null,
         importPassword ? null,
         importCa ? null,
+        cloudIdentity ? null,
         ...
       }:
       let
@@ -328,6 +350,46 @@ in
           else
             barmanCloud.out;
 
+        # storageCredentials holds a Secret instance or a cloud identity. The
+        # package writes only `s3://` destinations, so an identity is an AWS
+        # role, and the Cluster takes none without `backup`.
+        storage = kix.cloudIdentity.use {
+          inherit scope;
+          dep = storageCredentials;
+          cloud = if backupOn then "aws" else null;
+        };
+        identity = storage.identity;
+        # The operator creates the instance pods' ServiceAccount from
+        # `serviceAccountTemplate`, so `bind` cannot reach it, and Kix
+        # cannot stamp the pods to restart them when the identity changes.
+        identityMetadata = kix.cloudIdentity.annotationsFor {
+          inherit scope identity;
+          provider = cloudIdentity;
+        };
+        identityLocks = lib.optionals (identity != null) (
+          map (key: [
+            "serviceAccountTemplate"
+            "metadata"
+            "annotations"
+            key
+          ]) (builtins.attrNames identityMetadata.serviceAccountAnnotations)
+          ++ map (key: [
+            "inheritedMetadata"
+            "labels"
+            key
+          ]) (builtins.attrNames identityMetadata.podLabels)
+        );
+
+        _credentialKeys =
+          if identity != null && builtins.any (k: k != null) (builtins.attrValues bk.credentialKeys) then
+            scope.fail {
+              option = "backup.credentialKeys";
+              message = "backup.credentialKeys names keys of a storageCredentials Secret, and storageCredentials holds a cloud identity, so nothing reads them.";
+              fix = "Remove backup.credentialKeys.";
+            }
+          else
+            null;
+
         credentialKeys =
           lib.genAttrs credentialSelectors (
             s: if bk.credentialKeys.${s} != null then bk.credentialKeys.${s} else s
@@ -344,7 +406,7 @@ in
                 fix = "Add a secret or secret-ref instance there with the keys ${lib.concatStringsSep " and " (builtins.attrValues credentialKeys)} and the alias storageCredentials, or set backup = null.";
               }
             else
-              storageCredentials;
+              storage.secret;
           keys = builtins.attrValues credentialKeys;
         };
 
@@ -371,9 +433,14 @@ in
         objectStoreBase = {
           configuration = {
             inherit (bk) destinationPath;
-            s3Credentials = lib.mapAttrs (
-              _: key: (credentials.out.keyRef key).valueFrom.secretKeyRef
-            ) credentialKeys;
+            # With an identity, the plugin's sidecar finds credentials
+            # through the AWS SDK's default chain, which reads what the
+            # cluster's webhook or the EKS Pod Identity agent gives the pod.
+            s3Credentials =
+              if identity != null then
+                { inheritFromIAMRole = true; }
+              else
+                lib.mapAttrs (_: key: (credentials.out.keyRef key).valueFrom.secretKeyRef) credentialKeys;
           }
           // lib.optionalAttrs inClusterStore {
             endpointURL =
@@ -560,7 +627,15 @@ in
         // lib.optionalAttrs importOn {
           bootstrap.initdb.import = importSpec;
           externalClusters = [ importSourceCluster ];
-        };
+        }
+        // lib.optionalAttrs (identity != null) (
+          {
+            serviceAccountTemplate.metadata.annotations = identityMetadata.serviceAccountAnnotations;
+          }
+          // lib.optionalAttrs (identityMetadata.podLabels != { }) {
+            inheritedMetadata.labels = identityMetadata.podLabels;
+          }
+        );
 
         _unownedPaths =
           if config.extraSpec ? imageCatalogRef then
@@ -581,6 +656,12 @@ in
               message = "an importSource, importPassword, or importCa dependency is wired and import is null, so nothing reads it.";
               fix = "Set import, or remove the import dependencies.";
             }
+          else if identity != null && config.extraSpec ? serviceAccountName then
+            scope.fail {
+              option = "extraSpec.serviceAccountName";
+              message = "extraSpec sets serviceAccountName while storageCredentials holds a cloud identity. The package puts the identity on the ServiceAccount the operator creates, and with serviceAccountName the operator creates none.";
+              fix = "Remove serviceAccountName, or give that ServiceAccount the role outside Kix and wire a Secret as storageCredentials.";
+            }
           else if backupOn && (config.extraSpec.backup or { }) ? barmanObjectStore then
             scope.fail {
               option = "extraSpec.backup.barmanObjectStore";
@@ -590,21 +671,24 @@ in
           else
             null;
 
-        spec = builtins.seq _unownedPaths (
-          kix.mergeGuarded {
-            inherit scope;
-            locked =
-              locked
-              ++ lib.optional backupOn [ "plugins" ]
-              ++ [
-                [
-                  "bootstrap"
-                  "initdb"
-                  "import"
+        spec = builtins.seq storage (
+          builtins.seq _unownedPaths (
+            kix.mergeGuarded {
+              inherit scope;
+              locked =
+                locked
+                ++ lib.optional backupOn [ "plugins" ]
+                ++ [
+                  [
+                    "bootstrap"
+                    "initdb"
+                    "import"
+                  ]
                 ]
-              ]
-              ++ lib.optional importOn [ "externalClusters" ];
-          } baseSpec config.extraSpec
+                ++ lib.optional importOn [ "externalClusters" ]
+                ++ identityLocks;
+            } baseSpec config.extraSpec
+          )
         );
 
         postgresService = scope.mkServiceRef {
@@ -642,10 +726,12 @@ in
         objectStore =
           if backupOn then
             builtins.seq _endpointScheme (
-              plugin.mkObjectStore scope {
-                name = "${name}-backup";
-                spec = objectStoreSpec;
-              }
+              builtins.seq _credentialKeys (
+                plugin.mkObjectStore scope {
+                  name = "${name}-backup";
+                  spec = objectStoreSpec;
+                }
+              )
             )
           else
             null;

@@ -111,14 +111,14 @@
               lib.mkOption {
                 type = lib.types.nullOr lib.types.nonEmptyStr;
                 default = null;
-                description = "Key of the `storageCredentials` Secret holding `${s}`; null reads `${s}`.";
+                description = "Key of the `storageCredentials` Secret holding `${s}`; null reads `${s}`. Refused when `storageCredentials` is a cloud identity.";
               }
             )
             // {
               region = lib.mkOption {
                 type = lib.types.nullOr lib.types.nonEmptyStr;
                 default = null;
-                description = "Key of the `storageCredentials` Secret holding the S3 region. Null sets no region.";
+                description = "Key of the `storageCredentials` Secret holding the S3 region. Null sets no region. Refused when `storageCredentials` is a cloud identity.";
               };
             };
           extraSpec = lib.mkOption {
@@ -146,7 +146,8 @@
     description = ''
       WAL archiving and scheduled base backups to S3 through the Barman Cloud
       plugin. Requires the `barmanCloud` and `storageCredentials` dependencies
-      when non-null.
+      when non-null. `storageCredentials` is a Secret with access keys or an
+      AWS role (`kix.cloudIdentity.aws { roleArn = "..."; }`).
     '';
   };
 

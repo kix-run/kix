@@ -38,6 +38,8 @@ let
   secretPackage = import ../../../packages/stable/secret;
   secretRefPackage = import ../../../packages/stable/secret-ref;
   serviceRefPackage = import ../../../packages/experimental/service-ref;
+  flavor = name: import (../../flavors + "/${name}.nix");
+  ci = kixlib.cloudIdentity;
 
   # A package's failed assertion messages for `config`, evaluated against
   # its options. Throws lose their message in tryEval, so the tests read
@@ -191,7 +193,9 @@ let
     );
 
   # The operator, cert-manager, the plugin, S3 credentials, and a cluster
-  # `postgres` with `backup` set. `modules` are added to the cluster.
+  # `postgres` with `backup` set. `storageCredentials`, when not null, is
+  # wired as that dependency of `postgres`. `modules` are added to the
+  # cluster.
   backups =
     {
       backup ? {
@@ -205,6 +209,7 @@ let
         secretAccessKey = "key";
       },
       clusterExtraSpec ? { },
+      storageCredentials ? null,
       modules ? [ ],
     }:
     mkCluster (
@@ -219,6 +224,9 @@ let
                 inherit backup;
                 extraSpec = clusterExtraSpec;
               };
+            }
+            // lib.optionalAttrs (storageCredentials != null) {
+              deps = { inherit storageCredentials; };
             };
           }
           // lib.optionalAttrs (credentials != null) {
@@ -281,6 +289,29 @@ let
       ]
       ++ modules
     );
+  # Backups to S3 with an AWS role in storageCredentials on `flavorName`,
+  # with `cluster` merged into the cluster options and `extra` into the
+  # arguments of `backups`.
+  roleArn = "arn:aws:iam::111122223333:role/pg-backup";
+  withRole =
+    {
+      flavorName ? "eks",
+      identity ? ci.aws { inherit roleArn; },
+      cluster ? { },
+      extra ? { },
+    }:
+    backups (
+      {
+        credentials = null;
+        storageCredentials = identity;
+        modules = [
+          (flavor flavorName)
+          { inherit cluster; }
+        ];
+      }
+      // extra
+    );
+  identityRecord = annotations: builtins.fromJSON annotations.${kixKeys.cloudIdentity};
 in
 {
   # Every postgresql.cnpg.io custom resource waits for the webhook check,
@@ -1019,6 +1050,133 @@ in
       && !evalFails (backups { })
     )
     || throw "backup dependencies: a missing dependency or key passed, or the control failed";
+
+  # With an AWS role in storageCredentials on EKS, the ObjectStore inherits
+  # the role (`inheritFromIAMRole`) and reads no Secret, and the Cluster's
+  # `serviceAccountTemplate` carries the IRSA annotation and the
+  # `kix.run/cloud-identity` record for the ServiceAccount the operator
+  # creates. AWS gives no pod label, so `inheritedMetadata` stays unset.
+  cnpg-cluster-cloud-identity-irsa =
+    let
+      cluster = withRole { };
+      all = ms cluster;
+      spec = clusterSpec cluster;
+      store = byName "postgres-backup" (ofKind "ObjectStore" all);
+      annotations = spec.serviceAccountTemplate.metadata.annotations;
+    in
+    (
+      store.spec.configuration.s3Credentials == {
+        inheritFromIAMRole = true;
+      }
+      && annotations."eks.amazonaws.com/role-arn" == roleArn
+      &&
+        identityRecord annotations == {
+          mechanism = "irsa";
+          aws.roleArn = roleArn;
+        }
+      && !(spec ? inheritedMetadata)
+    )
+    || throw "irsa: ${
+      builtins.toJSON {
+        store = store.spec or null;
+        inherit (spec) serviceAccountTemplate;
+      }
+    }";
+
+  # With EKS Pod Identity the association lives in AWS, so the template
+  # carries only the record, and the ObjectStore still inherits the role.
+  cnpg-cluster-cloud-identity-pod-identity =
+    let
+      cluster = withRole { cluster.flavor.eks.cloudIdentity = "pod-identity"; };
+      annotations = (clusterSpec cluster).serviceAccountTemplate.metadata.annotations;
+      store = byName "postgres-backup" (ofKind "ObjectStore" (ms cluster));
+    in
+    (
+      builtins.attrNames annotations == [ kixKeys.cloudIdentity ]
+      && (identityRecord annotations).mechanism == "eks-pod-identity"
+      && store.spec.configuration.s3Credentials == { inheritFromIAMRole = true; }
+    )
+    || throw "pod identity: ${builtins.toJSON annotations}";
+
+  # A Secret in storageCredentials on EKS keeps the access keys in the
+  # ObjectStore and leaves the operator's ServiceAccount alone.
+  cnpg-cluster-cloud-identity-secret-fallback =
+    let
+      cluster = backups { modules = [ (flavor "eks") ]; };
+      store = byName "postgres-backup" (ofKind "ObjectStore" (ms cluster));
+    in
+    (
+      store.spec.configuration.s3Credentials.accessKeyId == {
+        name = "s3-credentials";
+        key = "accessKeyId";
+      }
+      && !(clusterSpec cluster ? serviceAccountTemplate)
+    )
+    || throw "secret fallback: ${builtins.toJSON (store.spec or null)}";
+
+  # A role is refused without `backup`, for another cloud than S3's, on a
+  # cluster with no cloud identity provider, beside
+  # `backup.credentialKeys`, which only a Secret reads, and beside
+  # `extraSpec.serviceAccountName`, which stops the operator creating the
+  # ServiceAccount that would carry it. Each refusal has a passing control.
+  cnpg-cluster-cloud-identity-refusals =
+    (
+      evalFails (withRole {
+        extra.backup = null;
+      })
+      && evalFails (withRole {
+        identity = ci.gcp { };
+      })
+      && evalFails (withRole {
+        flavorName = "gke";
+        identity = ci.gcp { };
+      })
+      && evalFails (withRole {
+        flavorName = "kubeadm";
+      })
+      && evalFails (withRole {
+        extra.backup = {
+          destinationPath = "s3://backups/pg";
+          credentialKeys.region = "region";
+        };
+      })
+      && evalFails (withRole {
+        extra.clusterExtraSpec.serviceAccountName = "pg-backup";
+      })
+      && !evalFails (withRole { })
+      && !evalFails (backups {
+        backup = null;
+      })
+      && !evalFails (backups {
+        clusterExtraSpec.serviceAccountName = "pg-backup";
+      })
+    )
+    || throw "cloud identity refusals: a refusal passed, or a control failed";
+
+  # The Cluster's extraSpec cannot set the annotation the identity writes,
+  # and its other ServiceAccount annotations merge beside it.
+  cnpg-cluster-cloud-identity-extra-spec =
+    let
+      extraAnnotations = annotations: {
+        extra.clusterExtraSpec.serviceAccountTemplate.metadata = { inherit annotations; };
+      };
+      annotations =
+        (clusterSpec (
+          withRole (extraAnnotations {
+            "eks.amazonaws.com/sts-regional-endpoints" = "true";
+          })
+        )).serviceAccountTemplate.metadata.annotations;
+    in
+    (
+      evalFails (
+        withRole (extraAnnotations {
+          "eks.amazonaws.com/role-arn" = "arn:aws:iam::111122223333:role/other";
+        })
+      )
+      && annotations."eks.amazonaws.com/sts-regional-endpoints" == "true"
+      && annotations."eks.amazonaws.com/role-arn" == roleArn
+    )
+    || throw "cloud identity extraSpec: ${builtins.toJSON annotations}";
 
   # backup.extraSpec cannot set the paths the package writes, and the
   # Cluster's extraSpec cannot set `plugins` or `backup.barmanObjectStore`
