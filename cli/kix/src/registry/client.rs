@@ -318,6 +318,58 @@ mod tests {
         assert!(BearerChallenge::parse("Basic realm=\"x\"").is_none());
     }
 
+    #[tokio::test]
+    async fn a_gzip_encoded_manifest_is_decoded_before_its_digest_is_checked() {
+        use std::io::Write as _;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let manifest =
+            br#"{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json"}"#;
+        let digest = format!("sha256:{:x}", Sha256::digest(manifest));
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(manifest).unwrap();
+        let gzipped = encoder.finish().unwrap();
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let registry = listener.local_addr().unwrap().to_string();
+        let header = digest.clone();
+        let server = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut head = Vec::new();
+            let mut buf = [0u8; 1024];
+            while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+                let n = sock.read(&mut buf).await.unwrap();
+                assert!(n > 0, "the client closed before sending a request");
+                head.extend_from_slice(&buf[..n]);
+            }
+            let reply = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/vnd.oci.image.manifest.v1+json\r\n\
+                 Content-Encoding: gzip\r\nDocker-Content-Digest: {header}\r\n\
+                 Content-Length: {}\r\n\r\n",
+                gzipped.len()
+            );
+            sock.write_all(reply.as_bytes()).await.unwrap();
+            sock.write_all(&gzipped).await.unwrap();
+            sock.flush().await.unwrap();
+            String::from_utf8(head).unwrap().to_ascii_lowercase()
+        });
+
+        let reference = Reference::parse(&format!("{registry}/app:v1")).unwrap();
+        let resolved = RegistryClient::new()
+            .unwrap()
+            .resolve(&reference)
+            .await
+            .unwrap();
+        let head = server.await.unwrap();
+
+        assert!(
+            head.lines()
+                .any(|l| l.starts_with("accept-encoding:") && l.contains("gzip")),
+            "the request must ask for gzip:\n{head}"
+        );
+        assert_eq!(resolved.digest, digest);
+    }
+
     #[test]
     fn a_challenge_may_omit_the_scope() {
         let c =

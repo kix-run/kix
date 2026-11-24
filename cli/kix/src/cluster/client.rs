@@ -137,7 +137,10 @@ pub(crate) fn env_number(name: &str) -> Option<u64> {
 /// Build a kube `Client` from a `Config` with the resilience layer applied.
 ///
 /// This is the one place a client is constructed for the CLI and the
-/// operator. Prefer it over `Client::try_from(config)`.
+/// operator. Prefer it over `Client::try_from(config)`. The client asks for
+/// gzip answers. `ClientBuilder::try_from` adds the layer that decodes them,
+/// beneath the resilience layer added here. A kubeconfig cluster that sets
+/// `disable-compression: true` turns compression off.
 pub async fn build_client(
     mut config: Config,
     policy: ResiliencePolicy,
@@ -1373,6 +1376,53 @@ mod tests {
             "first contact must not spend the retry budget: took {:?}",
             started.elapsed()
         );
+    }
+
+    #[tokio::test]
+    async fn the_client_asks_for_gzip_and_decodes_it() {
+        use std::io::Write as _;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let body = br#"{"kind":"ConfigMapList","items":[]}"#;
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(body).unwrap();
+        let gzipped = encoder.finish().unwrap();
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut head = Vec::new();
+            let mut buf = [0u8; 1024];
+            while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+                let n = sock.read(&mut buf).await.unwrap();
+                assert!(n > 0, "the client closed before sending a request");
+                head.extend_from_slice(&buf[..n]);
+            }
+            let reply = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                 Content-Encoding: gzip\r\nContent-Length: {}\r\n\r\n",
+                gzipped.len()
+            );
+            sock.write_all(reply.as_bytes()).await.unwrap();
+            sock.write_all(&gzipped).await.unwrap();
+            sock.flush().await.unwrap();
+            String::from_utf8(head).unwrap().to_ascii_lowercase()
+        });
+
+        let client = client_for(&endpoint).await;
+        let request = http::Request::get("/api/v1/configmaps")
+            .body(Vec::new())
+            .unwrap();
+        let text = client.request_text(request).await.unwrap();
+        let head = server.await.unwrap();
+
+        assert!(
+            head.lines()
+                .any(|l| l.starts_with("accept-encoding:") && l.contains("gzip")),
+            "the request must ask for gzip:\n{head}"
+        );
+        assert_eq!(text.as_bytes(), body);
     }
 
     #[test]
