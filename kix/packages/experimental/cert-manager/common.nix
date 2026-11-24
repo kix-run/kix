@@ -10,8 +10,6 @@ in
 {
   inherit release;
 
-  who = scope: "cert-manager ${scope.namespaceName}/${scope.instanceName}";
-
   ports = {
     metrics = 9402;
     controllerHealthz = 9403;
