@@ -52,6 +52,27 @@ so an account that cannot read `/version` is not refused here. A server that
 does not answer fails with an error naming the endpoint, instead of stalling
 on the first real request.
 
+## Compression
+
+Kix asks the API server for gzip-compressed responses on every request except
+watches. The API server compresses only large responses, such as a list of
+many resources.
+
+To turn off compression for a cluster, set `disable-compression: true` on that
+cluster in your kubeconfig:
+
+```yaml
+clusters:
+  - name: my-cluster
+    cluster:
+      server: https://203.0.113.10:6443
+      disable-compression: true
+```
+
+The Kix operator connects with its service account unless its container has a
+kubeconfig at `KUBECONFIG` or `~/.kube/config`. Without a kubeconfig, the
+operator has no setting to turn off compression.
+
 ## Listing managed resources
 
 `plan --read-only`, `snapshot`, `gc`, `status`, and `deploy` (when

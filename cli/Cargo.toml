@@ -49,8 +49,8 @@ rayon = "1"
 indexmap = { version = "2", features = ["serde"] }
 
 # K8s
-# gzip: ask the apiserver for compressed answers. A large list shrinks about
-# ten times. A kubeconfig cluster with `disable-compression: true` turns it off.
+# gzip: ask the apiserver for compressed answers. It compresses only large
+# ones. A kubeconfig cluster with `disable-compression: true` turns it off.
 kube = { version = "5.0", features = [
   "runtime",
   "client",

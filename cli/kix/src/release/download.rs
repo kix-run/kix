@@ -108,8 +108,8 @@ impl Fetcher {
                 .map_err(|e| FetchError::Unreachable(e.to_string()))?;
             // Some servers label a `.tar.gz` file with `Content-Encoding:
             // gzip`. A client that decodes it would hash the unpacked tar, and
-            // the archive would fail its SHA-256 check. The text files this
-            // fetcher reads are a few kilobytes, so compression gains little.
+            // the archive would fail its SHA-256 check. This one client also
+            // fetches the text files, so they download uncompressed too.
             let client = reqwest::Client::builder()
                 .no_gzip()
                 .user_agent(format!("kix/{}", version::running().release()))
