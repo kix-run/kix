@@ -320,7 +320,7 @@ in
         dedup = {
           flags."dedup.minScrapeInterval" = config.scrapeInterval;
           reason = "vmselect and vmstorage must use the same deduplication interval from scrapeInterval.";
-          fix = "Set scrapeInterval instead.";
+          fix = "Remove dedup.minScrapeInterval and set scrapeInterval instead.";
         };
         # The operator turns spec fields into component flags, and an
         # `extraArgs` key of the same name replaces the generated flag.
@@ -330,12 +330,12 @@ in
           {
             names = [ "retentionPeriod" ];
             from = "the retentionPeriod option";
-            fix = "Set retentionPeriod instead.";
+            fix = "Remove retentionPeriod and set the retentionPeriod option instead.";
           }
           {
             names = [ "replicationFactor" ];
             reason = "vminsert, vmselect, and vmstorage must share the same replicationFactor.";
-            fix = "Set replicationFactor instead.";
+            fix = "Remove replicationFactor and set the replicationFactor option instead.";
           }
         ];
         ownedByComponent = {
@@ -347,13 +347,13 @@ in
           ++ [
             {
               names = [ "httpListenAddr" ];
-              reason = "the Service and out.serviceUrl use port 8481.";
+              reason = "the vmselect Service and query URL (out.serviceUrl) use port 8481.";
             }
           ];
           vminsert = specFields ++ [
             {
               names = [ "httpListenAddr" ];
-              reason = "the Service, out.remoteWriteUrl, and out.insertBaseUrl use port 8480.";
+              reason = "the vminsert Service and remote-write URLs (out.remoteWriteUrl and out.insertBaseUrl) use port 8480.";
             }
           ];
         };

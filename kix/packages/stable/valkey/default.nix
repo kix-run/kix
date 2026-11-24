@@ -439,7 +439,7 @@ in
                 "--redis.password-file"
               ];
               from = "the valkeyPassword secret dependency";
-              fix = "Remove it from metrics.extraArgs, or change the password through deps.valkeyPassword.";
+              fix = "Remove it from metrics.extraArgs. To change the password, update the Secret wired to deps.valkeyPassword.";
             }
             {
               names = [ "--web.listen-address" ];

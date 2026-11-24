@@ -208,7 +208,7 @@ in
                   {
                     flags = [ "--dummy-certificates" ];
                     names = [ "-d" ];
-                    reason = "this package does not expose the HTTPS listener on port 8080 and uses built-in certificates for it.";
+                    reason = "api-rest serves HTTP on port 8081 only, so its unused HTTPS listener on port 8080 uses built-in dummy certificates.";
                   }
                   {
                     flags = [ "--core-grpc=${ep.coreGrpc}" ];

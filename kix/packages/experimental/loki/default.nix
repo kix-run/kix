@@ -347,8 +347,8 @@ in
           args = [
             {
               flags = [ "-config.file=${configDir}/config.yaml" ];
-              reason = "this package renders config.yaml from settings.";
-              fix = "Configure Loki in settings instead.";
+              from = "the settings option, which builds config.yaml";
+              fix = "Remove it from extraArgs and configure Loki in settings instead.";
             }
             {
               flags = [ "-config.expand-env=true" ];

@@ -385,7 +385,7 @@ in
                   "--v=2"
                   {
                     flags = [ "--cluster-resource-namespace=$(POD_NAMESPACE)" ];
-                    reason = "out.clusterResourceNamespace directs consumers to place ClusterIssuer Secrets in namespace \"${ns}\".";
+                    reason = "ClusterIssuer Secrets are created in namespace \"${ns}\", so the controller must read them from there.";
                   }
                   {
                     flags = [ "--leader-election-namespace=${ns}" ];
@@ -394,7 +394,7 @@ in
                   {
                     flags = [ "--acme-http01-solver-image=${acmesolverImage}" ];
                     from = "the operandImages.acmesolver option";
-                    fix = "Set operandImages.acmesolver instead.";
+                    fix = "Remove it from extraArgs and set operandImages.acmesolver instead.";
                   }
                 ];
               } config.extraArgs;

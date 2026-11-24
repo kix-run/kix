@@ -79,7 +79,7 @@ let
         "--pause-deployment-annotation"
         "--pause-deployment-time-annotation"
       ];
-      reason = "out.withReloadOn and Kix's annotation checks expect the default annotation names.";
+      reason = "workloads wired with reloader.out.withReloadOn and Kix's annotation checks use the default annotation names.";
     }
     # Flags the package neither sets nor supports: each needs RBAC the
     # package does not grant.
@@ -243,7 +243,7 @@ in
             "--log-format=json"
             {
               flags = [ "--enable-ha=true" ];
-              reason = "leader election keeps one replica restarting workloads when multiple replicas run.";
+              reason = "leader election ensures only one replica restarts workloads when multiple replicas run.";
             }
             # With --sync-after-restart and --reload-on-create, the leader's
             # initial list counts as a change to every Secret. The env-vars

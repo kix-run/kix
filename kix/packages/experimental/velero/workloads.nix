@@ -172,7 +172,7 @@ let
     ) "--features=${lib.concatStringsSep "," config.features}";
     names = [ "--features" ];
     from = "the features option";
-    fix = "Set features instead.";
+    fix = "Remove --features and set features instead.";
   };
   # Return the entry of a flag that names a ConfigMap the package builds
   # from `option`. `configMap` is null when the package builds none.
@@ -180,7 +180,7 @@ let
     flags = lib.optional (configMap != null) "${flag}=${configMap.out.name}";
     names = [ flag ];
     from = "the ${option} option";
-    fix = "Set ${option} instead.";
+    fix = "Remove ${flag} and set ${option} instead.";
   };
 
   plugins =

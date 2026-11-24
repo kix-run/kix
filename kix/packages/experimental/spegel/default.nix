@@ -270,19 +270,19 @@ in
             {
               flags = [ "--containerd-sock=${containerd.socket}" ];
               from = "cluster.containerd.socket, which the pod mounts";
-              fix = "Set cluster.containerd.socket in the cluster definition instead.";
+              fix = "Remove it from extraArgs and set cluster.containerd.socket in the cluster definition instead.";
             }
             {
               flags = [ "--containerd-content-path=${containerd.contentPath}" ];
               from = "cluster.containerd.contentPath, which the pod mounts";
-              fix = "Set cluster.containerd.contentPath in the cluster definition instead.";
+              fix = "Remove it from extraArgs and set cluster.containerd.contentPath in the cluster definition instead.";
             }
             # Spegel compares it with the path containerd 2.4 and later
             # reports, and refuses to start when they differ.
             {
               flags = [ "--containerd-registry-config-path=${containerd.registryConfigPath}" ];
               from = "cluster.containerd.registryConfigPath, which the init container writes";
-              fix = "Set cluster.containerd.registryConfigPath in the cluster definition instead.";
+              fix = "Remove it from extraArgs and set cluster.containerd.registryConfigPath in the cluster definition instead.";
             }
             {
               flags = [ "--bootstrap-kind=dns" ];
@@ -303,7 +303,7 @@ in
               );
               names = [ "--mirrored-registries" ];
               from = "the mirroredRegistries option, which the init container also uses to write mirror configuration";
-              fix = "Set mirroredRegistries instead.";
+              fix = "Remove it from extraArgs and set mirroredRegistries instead.";
             }
             {
               names = [ "--containerd-namespace" ];

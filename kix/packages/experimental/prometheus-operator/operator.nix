@@ -47,14 +47,14 @@ let
       }
       {
         flags = [ "--kubelet-service=${kubeletService.namespace}/${kubeletService.name}" ];
-        reason = "consumers read out.kubeletService, which points to Service ${kubeletService.namespace}/${kubeletService.name}.";
+        reason = "kubelet ServiceMonitors scrape Service ${kubeletService.namespace}/${kubeletService.name} (published on out.kubeletService).";
       }
       {
         flags = [
           "--prometheus-config-reloader=${kix.image.ref config.operandImages.prometheus-config-reloader}"
         ];
         from = "the operandImages.prometheus-config-reloader option";
-        fix = "Set operandImages.prometheus-config-reloader instead.";
+        fix = "Remove it from extraArgs and set operandImages.prometheus-config-reloader instead.";
       }
     ];
   } config.extraArgs;

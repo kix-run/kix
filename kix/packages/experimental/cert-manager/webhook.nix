@@ -179,7 +179,7 @@ in
                   {
                     flags = [ "--secure-port=${toString securePort}" ];
                     from = "the webhook.securePort option, which also sets the container port and Service targetPort";
-                    fix = "Set webhook.securePort instead.";
+                    fix = "Remove it from webhook.extraArgs and set webhook.securePort instead.";
                   }
                   {
                     flags = [ "--dynamic-serving-ca-secret-namespace=$(POD_NAMESPACE)" ];

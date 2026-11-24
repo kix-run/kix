@@ -503,13 +503,13 @@ in
                 args = [
                   {
                     flags = [ "--config=${configDir}/${configFile}" ];
-                    reason = "this package renders the collector configuration from the settings option.";
-                    fix = "Configure the collector in settings instead.";
+                    from = "the settings option";
+                    fix = "Remove it from extraArgs and configure the collector in settings instead.";
                   }
                   {
                     names = [ "--set" ];
                     reason = "--set overrides configuration fields at startup, bypassing this package's checks on settings.";
-                    fix = "Configure the collector in settings instead.";
+                    fix = "Remove --set from extraArgs and configure the collector in settings instead.";
                   }
                 ];
               } config.extraArgs;

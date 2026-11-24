@@ -260,7 +260,7 @@ in
           }
         ];
 
-        leaderElection = "leader election keeps one descheduler active on Lease \"${name}\" in namespace \"${scope.namespaceName}\", where its Role grants access.";
+        leaderElection = "leader election keeps one replica active, and the leader-election Role only grants access to Lease \"${name}\" in namespace \"${scope.namespaceName}\".";
         metricsServer = "the probes and the ServiceMonitor connect to the HTTPS server on 0.0.0.0:${toString metricsPort}.";
         # The descheduler parses flags with cobra and pflag
         # (cmd/descheduler/app/server.go upstream).
@@ -271,12 +271,12 @@ in
             {
               flags = [ "--policy-config-file=${policyDir}/policy.yaml" ];
               from = "the policy option";
-              fix = "Set policy instead.";
+              fix = "Remove it from extraArgs and set policy instead.";
             }
             {
               flags = [ "--descheduling-interval=${config.deschedulingInterval}" ];
               from = "the deschedulingInterval option";
-              fix = "Set deschedulingInterval instead.";
+              fix = "Remove it from extraArgs and set deschedulingInterval instead.";
             }
             {
               flags = [
@@ -294,7 +294,7 @@ in
               flags = lib.optional (!config.metrics.enabled) "--disable-metrics";
               names = [ "--disable-metrics" ];
               from = "the metrics.enabled option";
-              fix = "Set metrics.enabled instead.";
+              fix = "Remove it from extraArgs and set metrics.enabled instead.";
             }
             {
               names = [

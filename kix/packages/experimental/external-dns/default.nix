@@ -495,22 +495,22 @@ in
             {
               flags = [ "--provider=${config.provider}" ];
               from = "the provider option";
-              fix = "Set provider instead.";
+              fix = "Remove it from extraArgs and set provider instead.";
             }
             {
               flags = [ "--policy=${config.policy}" ];
               from = "the policy option";
-              fix = "Set policy instead.";
+              fix = "Remove it from extraArgs and set policy instead.";
             }
             {
               flags = [ "--txt-owner-id=${config.txtOwnerId}" ];
               from = "the txtOwnerId option";
-              fix = "Set txtOwnerId instead.";
+              fix = "Remove it from extraArgs and set txtOwnerId instead.";
             }
             {
               flags = [ "--interval=${config.interval}" ];
               from = "the interval option";
-              fix = "Set interval instead.";
+              fix = "Remove it from extraArgs and set interval instead.";
             }
             {
               flags = [ "--metrics-address=:${toString metricsPort}" ];
@@ -522,7 +522,7 @@ in
               flags = map (s: "--source=${s}") selected;
               names = [ "--source" ];
               from = "the sources option";
-              fix = "Set sources instead, which also grants the required RBAC.";
+              fix = "Remove it from extraArgs and add the source to sources instead, which also grants the required RBAC.";
             }
             {
               names = [ "--once" ];
@@ -537,7 +537,7 @@ in
             {
               names = [ "--${flag}" ];
               reason = "passing a credential as a flag exposes it in Kix's local store and the pod spec.";
-              fix = "Store the credential in the providerCredentials Secret under key ${var} (or map it with secretEnv.${var} = \"<key>\"), and remove --${flag} from extraArgs.";
+              fix = "Remove --${flag} from extraArgs, and store the credential in the providerCredentials Secret under key ${var} (or map it with secretEnv.${var} = \"<key>\").";
             }
           ) secretFlags;
         } config.extraArgs;

@@ -142,7 +142,7 @@ in
               flags = lib.optional config.textfileCollector.enabled "--collector.textfile.directory=${textfileDirectory}";
               names = [ "--collector.textfile.directory" ];
               from = "the textfileCollector.enabled option (mounted at ${textfileDirectory} when enabled)";
-              fix = "Set textfileCollector.enabled instead.";
+              fix = "Remove it from extraArgs and set textfileCollector.enabled instead.";
             }
           ];
         } config.extraArgs;

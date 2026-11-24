@@ -27,7 +27,7 @@ let
   ];
   parserList = lib.concatMapStringsSep ", " (p: "\"${p}\"") argParsers;
 
-  overlayHint = "To override the built resource directly, use partsOverlays on the instance, which runs after the package's checks.";
+  overlayHint = "To modify the built resource after the package's checks, use partsOverlays on the instance.";
 
   # Return how `parser` matches words to command-line flags, for
   # `kix.mergeArgs` and `kix.argValues`. `isAttrs` says the flags are the
@@ -468,12 +468,10 @@ rec {
           unknown = builtins.attrNames (removeAttrs entry groupKeys);
           wrongForm =
             key:
-            "passes `${key}` as ${
-              if isAttrs then "a list" else "an attribute set"
-            }, while ${option} is ${form}";
+            "passes `${key}` as ${if isAttrs then "a list" else "an attribute set"}, but ${option} is ${form}";
         in
         if builtins.isString entry then
-          if isAttrs then "is a string, while ${option} is ${form}" else null
+          if isAttrs then "is a string, but ${option} is ${form}" else null
         else if !builtins.isAttrs entry then
           "has type ${builtins.typeOf entry}; expected a string or an attribute set"
         else if entry ? defaults then
@@ -487,8 +485,10 @@ rec {
           "sets unknown attribute${lib.optionalString (builtins.length unknown != 1) "s"} ${
             lib.concatMapStringsSep ", " (k: "`${k}`") unknown
           }"
-        else if (entry ? reason) == (entry ? from) then
-          "must set either `reason` or `from` (not both)"
+        else if (entry ? reason) && (entry ? from) then
+          "sets both `reason` and `from` (choose one)"
+        else if !(entry ? reason) && !(entry ? from) then
+          "is missing `reason` or `from`"
         else if entry ? flags && builtins.isAttrs entry.flags != isAttrs then
           wrongForm "flags"
         else
@@ -502,7 +502,11 @@ rec {
           message = "kix.mergeArgs received an invalid entry ${
             builtins.toJSON (if builtins.isFunction entry then "<function>" else entry)
           }: it ${problem}.";
-          fix = "Pass each entry as a flag string (when ${option} is a list), `{ defaults = ...; }`, or `{ flags ? ...; names ? ...; families ? ...; }` with either `reason` or `from`.";
+          fix =
+            if isAttrs then
+              "Pass each entry as `{ defaults = { ... }; }` or `{ flags ? { ... }; names ? [ ... ]; families ? [ ... ]; fix ? \"...\"; }` with either `reason` or `from`."
+            else
+              "Pass each entry as a flag string, `{ defaults = [ ... ]; }`, or `{ flags ? [ ... ]; names ? [ ... ]; families ? [ ... ]; fix ? \"...\"; }` with either `reason` or `from`.";
         }
       ) entries;
 
@@ -569,9 +573,9 @@ rec {
             message = "kix.mergeArgs cannot read \"${r.flag}\" in `${r.source}` as a flag under parser \"${parser}\", so Kix cannot check ${option}.";
             fix =
               if r.source == "flags" then
-                "Write each item of `flags` as one string starting with `-` or `--`, such as \"--flag=value\". Write a flag with separate value words as a list, such as `[ \"--config\" \"/etc/app.yaml\" ]`."
+                "Write each item of `flags` as one string starting with `-` or `--` (such as \"--flag=value\"), or pass a flag and its values as a list (such as `[ \"--config\" \"/etc/app.yaml\" ]`)."
               else
-                "Start each flag name in `names` and `families` with `-` or `--`, such as \"--leader-elect\".";
+                "Start each flag name in `${r.source}` with `-` or `--`, such as \"--leader-elect\".";
           }) (builtins.filter (r: r.name == null) allRules);
 
       # Each word the user wrote with the first rule it breaks.
@@ -681,8 +685,8 @@ rec {
     }:
     (if scope == null then fail else scope.fail) {
       id = "K5396";
-      message = "kix.guardArgs was removed and replaced by kix.mergeArgs, which builds the full argument list from the package's flags and extraArgs.";
-      fix = "Replace kix.guardArgs with kix.mergeArgs, set `parser`, and pass the package's flags (including `{ flags = [ ... ]; reason = \"...\"; }` entries) in `args`.";
+      message = "kix.guardArgs was removed. kix.mergeArgs replaces it and builds the full argument list (or flag attribute set) in one call.";
+      fix = "Assign `kix.mergeArgs { inherit scope; parser = \"...\"; args = [ ... ]; } config.extraArgs` directly instead of concatenating base flags, and declare reserved flags as `{ flags = [ ... ]; reason = \"...\"; }` (or `from = \"...\";`) entries in `args`.";
     };
 
   # Validate that a secret dependency `dep` declares all required `keys` (and

@@ -285,15 +285,15 @@ in
           "operator"
           {
             flags = [ "--server-cert=/server/tls.crt" ];
-            reason = "the package mounts the server certificate from its cert-manager Certificate at /server/tls.crt.";
+            reason = "the server certificate from cert-manager is mounted at /server/tls.crt.";
           }
           {
             flags = [ "--server-key=/server/tls.key" ];
-            reason = "the package mounts the server private key from its cert-manager Certificate at /server/tls.key.";
+            reason = "the server private key from cert-manager is mounted at /server/tls.key.";
           }
           {
             flags = [ "--client-cert=/client/tls.crt" ];
-            reason = "the package mounts the client certificate for the CloudNativePG operator at /client/tls.crt and references that Secret on the plugin Service.";
+            reason = "the client certificate for the CloudNativePG operator is mounted at /client/tls.crt, and the plugin Service points to that Secret.";
           }
           {
             flags = [ "--server-address=:${toString grpcPort}" ];
@@ -305,11 +305,11 @@ in
           }
           {
             flags = [ "--leader-elect" ];
-            reason = "leader election keeps one reconciler active when multiple replicas run.";
+            reason = "leader election keeps one replica active when multiple replicas run.";
           }
           {
             names = [ "--plugin-path" ];
-            reason = "the CloudNativePG operator connects to the plugin over TCP through its Service.";
+            reason = "--plugin-path switches the plugin to a Unix socket, and the CloudNativePG operator connects to it over TCP through its Service.";
           }
         ];
       } config.extraArgs;

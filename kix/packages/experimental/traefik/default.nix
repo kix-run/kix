@@ -465,7 +465,7 @@ in
           ++ map (ep: {
             flags = [ "--entryPoints.${ep.name}.address=:${toString ep.port}" ];
             from = "the listener on port ${toString ep.port} in listeners";
-            fix = "Edit listeners instead.";
+            fix = "Remove it from extraArgs and edit listeners instead.";
           }) entryPoints
           ++ [
             # The flag follows the toggle alone, so adding a prometheus
@@ -474,7 +474,7 @@ in
               flags = lib.optional config.metrics.enabled "--metrics.prometheus=true";
               names = [ "--metrics.prometheus" ];
               from = "the metrics.enabled option";
-              fix = "Set metrics.enabled instead.";
+              fix = "Remove it from extraArgs and set metrics.enabled instead.";
             }
             {
               names = [ "--metrics.prometheus.entrypoint" ];
@@ -487,24 +487,24 @@ in
             {
               names = [ "--configFile" ];
               reason = "when given a configuration file, Traefik ignores all CLI flags, including those set by this package.";
-              fix = "Pass static configuration as flags in extraArgs instead, and remove --configFile.";
+              fix = "Remove --configFile from extraArgs and pass static configuration as CLI flags in extraArgs instead.";
             }
             # A provider turns on when any key under it is set, so these are
             # refused as families.
             {
               families = [ "--providers.kubernetesCRD" ];
               reason = "Traefik's CRD provider requires Traefik CRDs and RBAC permissions that this package does not install.";
-              fix = "Route traffic through the Gateway with kix.expose instead.";
+              fix = "Remove it from extraArgs and route traffic through Traefik's Gateway with HTTPRoute resources instead (packages using kix.expose create HTTPRoutes automatically).";
             }
             {
               families = [ "--providers.kubernetesIngress" ];
               reason = "the Ingress provider requires RBAC permissions that this package does not grant.";
-              fix = "Route traffic through the Gateway with kix.expose instead.";
+              fix = "Remove it from extraArgs and route traffic through Traefik's Gateway with HTTPRoute resources instead (packages using kix.expose create HTTPRoutes automatically).";
             }
             {
               families = [ "--providers.kubernetesIngressNGINX" ];
               reason = "the ingress-nginx provider requires RBAC permissions that this package does not grant.";
-              fix = "Route traffic through the Gateway with kix.expose instead.";
+              fix = "Remove it from extraArgs and route traffic through Traefik's Gateway with HTTPRoute resources instead (packages using kix.expose create HTTPRoutes automatically).";
             }
             {
               families = [ "--providers.knative" ];

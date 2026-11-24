@@ -417,12 +417,12 @@ in
             "start"
             {
               names = [ "--optimized" ];
-              reason = "Keycloak must run its build step at startup so build-time settings (such as PostgreSQL, health, and metrics) take effect over the stock image.";
+              reason = "Keycloak must run its build step at startup so its database, health, and metrics settings take effect.";
             }
             {
               names = [ "--hostname" ];
-              from = "the instance's route or env.KC_HOSTNAME";
-              fix = "Set ingress.host or env.KC_HOSTNAME instead.";
+              from = "the instance's Ingress or Gateway route (or env.KC_HOSTNAME)";
+              fix = "Remove it from extraArgs, and set ingress.host (or cluster.domain) or env.KC_HOSTNAME instead.";
             }
           ]
           ++ ownedFlags;

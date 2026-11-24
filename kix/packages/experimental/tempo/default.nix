@@ -253,7 +253,7 @@ let
       secret = path: flag: {
         names = [ flag ];
         reason = "passing ${path} as a flag exposes a credential in Kix's local store and the pod spec.";
-        fix = "Store the S3 credentials in the storageCredentials Secret instead, and remove the flag from extraArgs.";
+        fix = "Remove it from extraArgs and store the S3 credentials in the storageCredentials Secret instead.";
       };
     in
     [
@@ -273,12 +273,12 @@ let
       {
         names = [ "-storage.trace.s3.bucket" ];
         from = "the objectStorage.bucket option";
-        fix = "Set objectStorage.bucket instead.";
+        fix = "Remove it from extraArgs and set objectStorage.bucket instead.";
       }
       {
         names = [ "-storage.trace.s3.endpoint" ];
         reason = "setting storage.trace.s3.endpoint by flag bypasses the network policy derived from settings and deps.endpointService.";
-        fix = "Set settings.storage.trace.s3.endpoint or wire deps.endpointService instead, and remove the flag from extraArgs.";
+        fix = "Remove it from extraArgs, and set settings.storage.trace.s3.endpoint or wire deps.endpointService instead.";
       }
       (secret "storage.trace.s3.access_key" "-storage.trace.s3.access_key")
       (secret "storage.trace.s3.secret_key" "-storage.trace.s3.secret_key")
@@ -516,8 +516,8 @@ in
           args = [
             {
               flags = [ "-config.file=${configDir}/tempo.yaml" ];
-              reason = "this package renders tempo.yaml from settings.";
-              fix = "Configure Tempo in settings instead.";
+              from = "the settings option, which builds tempo.yaml";
+              fix = "Remove it from extraArgs and configure Tempo in settings instead.";
             }
             {
               flags = [ "-config.expand-env=true" ];

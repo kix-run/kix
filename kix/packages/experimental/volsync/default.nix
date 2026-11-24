@@ -304,8 +304,8 @@ in
             }
             {
               flags = map (m: "--${m}-container-image=${image}") movers;
-              from = "the image option (also published in out.extraImages for mover Jobs)";
-              fix = "Set image instead.";
+              from = "the image option, which sets the image for both the operator and its mover Jobs";
+              fix = "Remove it from extraArgs and set image instead.";
             }
           ];
         } config.extraArgs;

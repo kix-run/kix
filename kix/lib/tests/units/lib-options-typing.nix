@@ -20,7 +20,7 @@ let
   evalFails' = ms: throws ms;
 
   # The sentence every mergeArgs refusal ends with.
-  overlayHint = "To override the built resource directly, use partsOverlays on the instance, which runs after the package's checks.";
+  overlayHint = "To modify the built resource after the package's checks, use partsOverlays on the instance.";
 
   # A scope whose `fail` returns `{ thrown; }` instead of throwing, as the
   # scope of instance ns/inst of package `pkg`.
@@ -691,9 +691,18 @@ in
         "passes `defaults` as an attribute set" = message { args = [ { defaults.a = "1"; } ]; } [ ];
         "passes `defaults` as a list" = message { args = [ { defaults = [ "--a=1" ]; } ]; } { };
         "passes `flags` as a list" = message (entry { flags = [ "--a=1" ]; }) { };
-        "is a string, while extraArgs is an attribute set" = message { args = [ "--a=1" ]; } { };
-        "must set either `reason` or `from` (not both)" = message {
+        "is a string, but extraArgs is an attribute set" = message { args = [ "--a=1" ]; } { };
+        "is missing `reason` or `from`" = message {
           args = [ { flags = [ "--a" ]; } ];
+        } [ ];
+        "sets both `reason` and `from`" = message {
+          args = [
+            {
+              flags = [ "--a" ];
+              reason = "x.";
+              from = "y";
+            }
+          ];
         } [ ];
         "sets unknown attribute `owned`" = message (entry {
           owned = [ "--a" ];

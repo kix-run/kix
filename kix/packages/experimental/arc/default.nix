@@ -362,7 +362,7 @@ in
             }
             {
               flags = [ "--leader-election-id=${name}" ];
-              reason = "this package names the leader-election Lease \"${name}\" in namespace \"${ns}\", where the leader-election Role grants access.";
+              reason = "the leader-election Role in namespace \"${ns}\" grants access to Lease \"${name}\" only.";
             }
             "--log-level=info"
             "--log-format=text"

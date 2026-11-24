@@ -202,7 +202,7 @@ in
             "--feature-gates=CSIVolumeGroupSnapshot=false"
             {
               names = [ "--leader-election-namespace" ];
-              reason = "the Role that lets the controller manage its Lease exists only in the instance's namespace.";
+              reason = "the leader-election Role grants access only in namespace \"${scope.namespaceName}\".";
             }
             {
               names = [ "--metrics-path" ];

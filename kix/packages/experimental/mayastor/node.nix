@@ -99,12 +99,12 @@ in
                 {
                   flags = [ "-y${hostDir}/io-engine/config.yaml" ];
                   reason = "io-engine reads its configuration from ${hostDir}/io-engine/config.yaml on the node.";
-                  fix = "Edit ${hostDir}/io-engine/config.yaml on the node instead, and remove -y from ioEngine.extraArgs.";
+                  fix = "Remove -y from ioEngine.extraArgs, and edit ${hostDir}/io-engine/config.yaml on the node instead.";
                 }
                 {
                   flags = [ "-l${lib.concatMapStringsSep "," toString (lib.range 1 cpuCount)}" ];
                   from = "the ioEngine.cpuCount option, which also sets the container's CPU request and limit";
-                  fix = "Set ioEngine.cpuCount instead, or set core_list in ${hostDir}/io-engine/config.yaml on the node.";
+                  fix = "Remove -l from ioEngine.extraArgs, and set ioEngine.cpuCount (or set core_list in ${hostDir}/io-engine/config.yaml on the node) instead.";
                 }
                 {
                   flags = [ "-p=${ep.etcdStore}" ];
@@ -124,7 +124,7 @@ in
                 {
                   names = [ "-m" ];
                   reason = "this package selects CPU cores with -l from ioEngine.cpuCount, which also sets the container's CPU request and limit.";
-                  fix = "Set ioEngine.cpuCount instead, or set core_list in ${hostDir}/io-engine/config.yaml on the node.";
+                  fix = "Remove -m from ioEngine.extraArgs, and set ioEngine.cpuCount (or set core_list in ${hostDir}/io-engine/config.yaml on the node) instead.";
                 }
                 {
                   defaults = [
@@ -291,12 +291,12 @@ in
                   {
                     flags = [ "--kubelet-path=${kubeletDir}" ];
                     from = "the csiNode.kubeletDir option";
-                    fix = "Set csiNode.kubeletDir instead.";
+                    fix = "Remove it from csiNode.extraArgs and set csiNode.kubeletDir instead.";
                   }
                   {
                     flags = [ "--nvme-nr-io-queues=${toString cpuCount}" ];
                     from = "the ioEngine.cpuCount option";
-                    fix = "Set ioEngine.cpuCount instead.";
+                    fix = "Remove it from csiNode.extraArgs and set ioEngine.cpuCount instead.";
                   }
                   {
                     names = [ "-c" ];

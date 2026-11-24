@@ -200,7 +200,7 @@ in
             {
               names = [ "remoteWrite.url" ];
               from = "the vmCluster dependency, which also configures the network policy";
-              fix = "Wire a different cluster through deps.vmCluster instead.";
+              fix = "Remove it from extraArgs, and wire a different cluster through deps.vmCluster if needed.";
             }
             {
               names = [ "promscrape.config" ];

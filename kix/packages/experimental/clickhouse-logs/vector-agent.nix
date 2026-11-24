@@ -222,8 +222,8 @@ in
                   ]
                 ];
                 names = configFlags;
-                reason = "this package renders Vector's configuration from the settings option.";
-                fix = "Configure Vector in settings instead.";
+                reason = "Vector reads its configuration from the file built from settings.";
+                fix = "Remove it from extraArgs and configure Vector in settings instead.";
               }
             ];
           } config.extraArgs;

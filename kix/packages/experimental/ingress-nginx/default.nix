@@ -446,17 +446,17 @@ in
             {
               flags = [ "--controller-class=${controllerValue}" ];
               from = "the ingressClassName option";
-              fix = "Set ingressClassName instead.";
+              fix = "Remove it from extraArgs and set ingressClassName instead.";
             }
             {
               flags = [ "--ingress-class=${config.ingressClassName}" ];
               from = "the ingressClassName option";
-              fix = "Set ingressClassName instead.";
+              fix = "Remove it from extraArgs and set ingressClassName instead.";
             }
             {
               flags = [ "--configmap=$(POD_NAMESPACE)/${self.configmap.out.name}" ];
-              reason = "this package renders the controller's ConfigMap from settings.";
-              fix = "Set settings instead.";
+              from = "the settings option, which builds the controller's ConfigMap";
+              fix = "Remove it from extraArgs and set settings instead.";
             }
             {
               flags = [ "--validating-webhook=:8443" ];
@@ -464,11 +464,11 @@ in
             }
             {
               flags = [ "--validating-webhook-certificate=/usr/local/certificates/cert" ];
-              reason = "the package mounts the admission TLS certificate at /usr/local/certificates/cert.";
+              reason = "the admission TLS certificate is mounted at /usr/local/certificates/cert.";
             }
             {
               flags = [ "--validating-webhook-key=/usr/local/certificates/key" ];
-              reason = "the package mounts the admission TLS private key at /usr/local/certificates/key.";
+              reason = "the admission TLS private key is mounted at /usr/local/certificates/key.";
             }
             {
               names = [ "--http-port" ];
@@ -489,7 +489,7 @@ in
               flags = lib.optional config.metrics.enabled "--enable-metrics=true";
               names = [ "--enable-metrics" ];
               from = "the metrics.enabled option";
-              fix = "Set metrics.enabled instead.";
+              fix = "Remove it from extraArgs and set metrics.enabled instead.";
             }
           ];
         } config.extraArgs;
