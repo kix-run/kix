@@ -506,7 +506,7 @@ The only place in this skill with package line numbers. `pkg:N` is
 | One alias, two implementations, a contract file | `kix/contracts/experimental/clickhouse.nix`; clickhouse:101, clickhouse-cluster:90 |
 | Renamed dependency with `renamedFrom` | immich:209-212; `kix/contracts/stable/redis.nix` (`helpers.renamedFrom`) |
 | Credentials dependency accepting either a Secret or a cloud identity (`kix.cloudIdentity.use` and `credentials.bind`) | external-dns:164-168, 607-614; `providers.nix` (`cloud`) |
-| Cloud identity when one package owns the ServiceAccount and another chooses the cloud (`kix.cloudIdentity.useIdentity`, `ambientProblem`, `out.identityCloud`, `out.ambientCloud`) | `out.ambientCloud` read from upstream's own field: stackgres-object-storage:138-163, 242-256, 467; `useIdentity` and `annotationsFor` on an operator's ServiceAccount, locked against `extraSpec`: stackgres-cluster:313-353, 412-429; `ambientProblem`: `kix/lib/tests/units/cloud-identity.nix` (`callerPackage`) |
+| Cloud identity when one package owns the ServiceAccount and another chooses the cloud (`kix.cloudIdentity.useIdentity`, `ambientProblem`, `out.identityCloud`, `out.ambientCloud`) | Publishing `out.ambientCloud` from an upstream spec field: stackgres-object-storage:138-158, 346-367, 468; `useIdentity` and `annotationsFor` for an operator-created ServiceAccount, locked in `extraSpec`: stackgres-cluster:313-353, 412-429; `ambientProblem`: `kix/lib/tests/units/cloud-identity.nix` (`callerPackage`) |
 
 Always declare a cloud identity dependency on the package that owns the
 ServiceAccount, because a ServiceAccount carries a single identity:

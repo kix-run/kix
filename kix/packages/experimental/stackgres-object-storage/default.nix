@@ -232,31 +232,31 @@ in
         option = "extraSpec";
         message = "`${block}` sets ${
           lib.concatMapStringsSep " and " (f: "`${f} = true`") unsupported
-        }, but StackGres reads pod credentials only for `s3` (`useIAMRole`) and `gcs` (`fetchCredentialsFromMetadataService`), so Kix rejected this instance.";
+        }, which StackGres does not support here. StackGres supports pod credentials only on `s3` (`useIAMRole`) and `gcs` (`fetchCredentialsFromMetadataService`), so Kix rejected this instance.";
         fix =
           if t ? ambient then
-            "Use `${block}.${t.ambient.field} = true` to read pod credentials for type \"${config.type}\", or remove the setting and pass a Secret in `deps.storageCredentials`."
+            "Replace that setting with `${block}.${t.ambient.field} = true` to use pod credentials for `type = \"${config.type}\"`, or remove it and pass a Secret in `deps.storageCredentials`."
           else
-            "Remove the setting and pass a Secret in `deps.storageCredentials`, or change `type` to \"s3\" or \"gcs\" to use pod credentials.";
+            "Remove that setting from `extraSpec` and pass a Secret in `deps.storageCredentials`, or change `type` to `\"s3\"` (`useIAMRole = true`) or `\"gcs\"` (`fetchCredentialsFromMetadataService = true`).";
       }
       {
         assertion = !(ambient && credentialsGiven);
         id = "K5962";
         dependency = "storageCredentials";
-        message = "`${block}.${t.ambient.field or ""}` is true, so wal-g uses the database pods' own cloud credentials, but `deps.storageCredentials` is also set. StackGres uses only one of them, so Kix rejected this instance.";
-        fix = "To use the pods' own credentials, remove `deps.storageCredentials` (or the `storageCredentials` alias from the Secret instance that this instance resolves in its namespace), and set `deps.backupIdentity` on each stackgres-cluster instance that backs up here to give its pods a cloud identity. To use the Secret instead, remove `${t.ambient.field or ""}`.";
+        message = "`${block}.${t.ambient.field or ""}` is `true`, which tells the database pods to use their own cloud credentials, while `storageCredentials` is also bound. StackGres uses only one credential source, so Kix rejected this instance.";
+        fix = "To use pod credentials, remove `deps.storageCredentials` (or remove the `storageCredentials` alias from the Secret instance in this namespace), and set `deps.backupIdentity` on each `stackgres-cluster` instance unless the pods use node credentials. To use the Secret instead, remove `${t.ambient.field or ""}` from `extraSpec`.";
       }
       {
         assertion = ambient || credentialsGiven;
         dependency = "storageCredentials";
-        message = "This instance has no storage credentials: `deps.storageCredentials` is unset${
-          lib.optionalString (t ? ambient) ", and `${block}.${t.ambient.field}` is not true"
-        }, so Kix rejected it.";
+        message = "No storage credentials are configured: `deps.storageCredentials` is unset${
+          lib.optionalString (t ? ambient) ", and `${block}.${t.ambient.field}` is not `true`"
+        }, so Kix rejected this instance.";
         fix =
           "Pass a Secret instance in `deps.storageCredentials`"
           +
             lib.optionalString (t ? ambient)
-              ", or set `${block}.${t.ambient.field} = true` so the database pods use their own cloud credentials"
+              ", or set `${block}.${t.ambient.field} = true` to use the database pods' cloud credentials (with `deps.backupIdentity` on each `stackgres-cluster` instance, or node credentials)"
           + ".";
       }
       {
@@ -264,8 +264,8 @@ in
         option = "credentialKeys";
         message = "`credentialKeys` sets ${
           lib.concatMapStringsSep ", " (k: "`${k}`") keysSet
-        }, but `${block}.${t.ambient.field or ""}` is true, so no Secret is read. Kix rejected this instance.";
-        fix = "Remove `credentialKeys`, or remove `${t.ambient.field or ""}` and pass a Secret in `deps.storageCredentials`.";
+        }, which maps keys in a `storageCredentials` Secret, but `${block}.${t.ambient.field or ""}` is `true` so this instance uses pod credentials instead of a Secret. Kix rejected this instance.";
+        fix = "Remove `credentialKeys` to use pod credentials, or remove `${t.ambient.field or ""}` from `extraSpec` and pass a Secret in `deps.storageCredentials`.";
       }
     ];
 
@@ -361,7 +361,7 @@ in
         inherit scope;
         dep = storageCredentials;
         cloud = null;
-        identityGoesTo = "`deps.backupIdentity` of each stackgres-cluster instance that backs up here, and set `${
+        identityGoesTo = "`deps.backupIdentity` on each `stackgres-cluster` instance that backs up here, and set `${
           t.ambient.field or "useIAMRole"
         } = true` in `extraSpec.${config.type}.${t.block}`";
       };

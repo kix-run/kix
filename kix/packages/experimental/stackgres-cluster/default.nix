@@ -314,8 +314,8 @@ in
           if backupIdentity != null && !backupsOn then
             scope.fail {
               dependency = "backupIdentity";
-              message = "`deps.backupIdentity` is set, but `backups` is null, so no pod of this cluster uses it. Kix rejected this instance.";
-              fix = "Set `backups` to back up with this identity, or remove `deps.backupIdentity`.";
+              message = "`deps.backupIdentity` is set while `backups` is `null` (backups are disabled), so Kix rejected this instance.";
+              fix = "Set `backups` (for example, `config.backups = [ { } ];`) to enable backups with this identity, or remove `deps.backupIdentity`.";
             }
           else
             null;
@@ -325,10 +325,10 @@ in
           cloud =
             sgObjectStorage.out.ambientCloud or (scope.fail {
               dependency = "sgObjectStorage";
-              message = "`deps.backupIdentity` is set, but the sgObjectStorage dependency publishes no `out.ambientCloud`, so Kix cannot check which cloud the backups reach.";
-              fix = "Wire a stackgres-object-storage instance, or remove `deps.backupIdentity`.";
+              message = "`deps.backupIdentity` is set, but the `sgObjectStorage` dependency does not report which cloud it uses (`out.ambientCloud` is missing), so Kix cannot verify that the cloud identity matches the backup storage. Kix rejected this instance.";
+              fix = "Point `deps.sgObjectStorage` to a `packages.experimental.stackgres-object-storage` instance, or remove `deps.backupIdentity`.";
             });
-          secretGoesTo = "`deps.storageCredentials` of the stackgres-object-storage instance";
+          secretGoesTo = "`deps.storageCredentials` on the `stackgres-object-storage` instance";
         };
         # The operator creates the `<cluster>-patroni` ServiceAccount from
         # `spec.metadata`, so `bind` cannot reach it, and Kix cannot stamp

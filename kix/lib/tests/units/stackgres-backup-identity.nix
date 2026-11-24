@@ -263,13 +263,13 @@ in
     (
       ids both == [ "K5962" ]
       && saysIn "remove `deps.storageCredentials`" both
-      && saysIn "`deps.storageCredentials` is unset, and `extraSpec.s3.awsCredentials.useIAMRole` is not true" neither
+      && saysIn "`deps.storageCredentials` is unset, and `extraSpec.s3.awsCredentials.useIAMRole` is not `true`" neither
       && builtins.elem "K5962" (ids compatible)
-      && saysIn "StackGres reads pod credentials only for `s3`" compatible
-      && saysIn "StackGres reads pod credentials only for `s3`" azure
-      && saysIn "Use `extraSpec.gcs.gcpCredentials.fetchCredentialsFromMetadataService = true`" wrongField
+      && saysIn "StackGres supports pod credentials only on `s3`" compatible
+      && saysIn "StackGres supports pod credentials only on `s3`" azure
+      && saysIn "Replace that setting with `extraSpec.gcs.gcpCredentials.fetchCredentialsFromMetadataService = true`" wrongField
       && saysIn "`credentialKeys` sets `accessKeyId`" keys
-      && !(saysIn "StackGres reads pod credentials" azureSecret)
+      && !(saysIn "StackGres supports pod credentials" azureSecret)
     )
     || throw "storage refusals: ${
       builtins.toJSON {
