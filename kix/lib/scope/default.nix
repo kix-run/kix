@@ -15,7 +15,6 @@ let
   buildersMod = import ./builders.nix { inherit lib k8s; };
   unsafe = import ../unsafe.nix { inherit lib; };
   errors = import ../core/error.nix { inherit lib; };
-  cloudIdentityLib = import ../vocab/cloud-identity.nix { inherit lib; };
 
   emptyEdgeAnalysis = {
     edgesFor = _: {
@@ -60,10 +59,6 @@ rec {
         warnings = [ ];
       },
       factBehaviorOverrides ? { },
-      # The instance's cloud identity handle (`vocab/cloud-identity.nix`
-      # `handle`), which `eval/instance.nix` resolves against the cluster's
-      # `cloudIdentity` provider.
-      cloudIdentity ? cloudIdentityLib.unset,
       edgeAnalysis ? emptyEdgeAnalysis,
       clusterCtx ? {
         config = { };
@@ -164,7 +159,6 @@ rec {
           mkOptional
           networkPolicyEnforcer
           networkPolicyEnforced
-          cloudIdentity
           ;
         namespace = namespaceResource;
 
@@ -267,7 +261,6 @@ rec {
               workloadInterceptors
               clusterCtx
               availability
-              cloudIdentity
               ;
             # Clear `dnsRoot` so resources emitted into another namespace do not
             # inherit DNS readiness ordering from the caller's scope.

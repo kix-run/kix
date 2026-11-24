@@ -5,8 +5,8 @@
 # - `external-dns/route53` acts as an IAM role. Its ServiceAccount carries
 #   the role ARN and `kix.run/cloud-identity`, and its pod template carries
 #   `checksum/cloud-identity`, so a changed role rolls the pod.
-# - `external-dns-keys/route53` has no identity and reads AWS access keys
-#   from a Secret created outside Kix instead.
+# - `external-dns-keys/route53` reads AWS access keys from a Secret created
+#   outside Kix instead. The two differ only in `deps.providerCredentials`.
 # - `annotated/app` writes the IRSA annotation on its ServiceAccount itself.
 #   The eks flavor declares the `eks.amazonaws.com` annotation domain, so
 #   the scorecard accepts it.
@@ -46,7 +46,9 @@ kix.buildCluster {
         # region:eksIrsaInstance
         instances.external-dns.route53 = {
           package = packages.experimental.external-dns;
-          cloudIdentity.aws.roleArn = "arn:aws:iam::111122223333:role/external-dns";
+          deps.providerCredentials = kix.cloudIdentity.aws {
+            roleArn = "arn:aws:iam::111122223333:role/external-dns";
+          };
           config = {
             provider = "aws";
             policy = "upsert-only";

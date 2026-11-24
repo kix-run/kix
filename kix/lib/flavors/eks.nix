@@ -36,13 +36,14 @@ in
     type = lib.types.enum (builtins.attrNames mechanisms);
     default = "irsa";
     description = ''
-      How this EKS cluster delivers the AWS IAM role declared in an instance's
-      `cloudIdentity.aws.roleArn`. `"irsa"` (IAM roles for service accounts)
-      sets `eks.amazonaws.com/role-arn` on the ServiceAccount. `"pod-identity"`
-      (EKS Pod Identity) omits that annotation: it requires the EKS Pod Identity
-      Agent add-on and an EKS Pod Identity association created outside Kix to
-      link the ServiceAccount to the role. Both modes still stamp pod templates
-      so changing the role restarts the pods.
+      How pods on this EKS cluster assume AWS IAM roles configured with
+      `kix.cloudIdentity.aws { roleArn = "..."; }`. `"irsa"` (IAM roles for
+      service accounts) sets the `eks.amazonaws.com/role-arn` annotation on the
+      ServiceAccount. `"pod-identity"` (EKS Pod Identity) leaves off that
+      annotation; instead, install the EKS Pod Identity Agent add-on and create
+      an EKS Pod Identity association outside Kix to link the ServiceAccount to
+      the IAM role. Both settings add `checksum/cloud-identity` to pod
+      templates so changing the role restarts the pods.
     '';
   };
 

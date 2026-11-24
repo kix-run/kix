@@ -4,7 +4,6 @@
 let
   versions = import ./core/version.nix { inherit lib; };
   errors = import ./core/error.nix { inherit lib; };
-  cloudIdentity = import ./vocab/cloud-identity.nix { inherit lib; };
 
   isMoved = package: (package._type or "") == "kix-moved";
   isRemoved = package: (package._type or "") == "kix-removed";
@@ -209,34 +208,6 @@ in
               version = lib.mkOption {
                 type = lib.types.nullOr lib.types.str;
                 default = null;
-              };
-              cloudIdentity = lib.mkOption {
-                type = cloudIdentity.type;
-                default = null;
-                example = lib.literalExpression ''
-                  { aws.roleArn = "arn:aws:iam::111122223333:role/external-dns"; }
-                '';
-                description = ''
-                  Cloud IAM identity for this instance's pods. Set one of
-                  `aws.roleArn`, `gcp` (with optional `gcp.serviceAccount`, or
-                  `gcp = { }` to grant IAM roles directly to the Kubernetes
-                  ServiceAccount), or `azure.clientId` (with optional
-                  `azure.tenantId`).
-
-                  Using the cluster's `cloudIdentity` provider (included in the
-                  `eks`, `gke`, `gke-autopilot`, and `aks` flavors), Kix writes
-                  the cloud's annotations on the ServiceAccount, adds
-                  `azure.workload.identity/use: "true"` to pod templates on AKS,
-                  and adds `checksum/cloud-identity` to pod templates that
-                  reference the ServiceAccount so identity changes restart the
-                  pods.
-
-                  Requires a package that binds `scope.cloudIdentity` to its
-                  ServiceAccount. Create the cloud IAM role and trust policy (or
-                  EKS Pod Identity association), Google IAM binding, or Azure
-                  federated credential outside Kix for
-                  `system:serviceaccount:<namespace>:<serviceaccount name>`.
-                '';
               };
               labelStyle = lib.mkOption {
                 type = lib.types.enum [

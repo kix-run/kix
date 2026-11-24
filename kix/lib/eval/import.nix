@@ -229,9 +229,6 @@ rec {
         mkCronJob = mkWorkloadImport "batch/v1" "CronJob";
         mkServiceRef = mkServiceRefImport;
         mkSecretRef = mkSecretRefImport;
-        # An import has no cloud identity, so `bind` leaves a ServiceAccount
-        # as it is.
-        cloudIdentity = (import ../vocab/cloud-identity.nix { inherit lib; }).unset;
         inherit rbac;
       };
     in

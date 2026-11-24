@@ -505,7 +505,7 @@ The only place in this skill with package line numbers. `pkg:N` is
 | A step after the migrations on one replica of a dependency: an init container running a sibling script from a ConfigMap, with a checksum annotation | plausible:518-561, 605-606; `plausible/replicate.py` |
 | One alias, two implementations, a contract file | `kix/contracts/experimental/clickhouse.nix`; clickhouse:101, clickhouse-cluster:90 |
 | Renamed dependency with `renamedFrom` | immich:209-212; `kix/contracts/stable/redis.nix` (`helpers.renamedFrom`) |
-| Cloud identity on the package's ServiceAccount (`scope.cloudIdentity.bind`), requiring either `cloudIdentity` or a credentials Secret (`kix.cloudIdentity.orSecret`) | external-dns:391-398, 578-585; `providers.nix` (`cloud`) |
+| Credentials dependency accepting either a Secret or a cloud identity (`kix.cloudIdentity.use` and `credentials.bind`) | external-dns:179-187, 600-607; `providers.nix` (`cloud`) |
 
 A script of more than a few lines is a sibling file read with
 `builtins.readFile`, so it can be linted and run alone

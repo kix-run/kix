@@ -7,6 +7,7 @@ let
   kixKeys = kixAnnotations.keys;
   availabilityLib = import ../core/availability.nix { inherit lib; };
   workloadKinds = import ../core/workload-kinds.nix { inherit lib; };
+  cloudIdentityLib = import ../vocab/cloud-identity.nix { inherit lib; };
   inherit (k8s) clusterScoped;
 in
 {
@@ -87,6 +88,27 @@ in
           ) edgeAnalysis.dnsRoot;
           loadBalancerWarnings = validators.checkLoadBalancer args;
           metricsApiWarnings = validators.checkHorizontalPodAutoscaler args;
+          # A cloud identity that `kix.cloudIdentity.use` bound to these
+          # arguments, rendered through the mechanism of the cluster's
+          # `cloudIdentity` provider. The resource depends on the provider,
+          # so a webhook that Kix deploys comes first.
+          identity = args._cloudIdentity or null;
+          identityProvider = (clusterCtx.findRoleProvider or (_: null)) "cloudIdentity";
+          rendered = cloudIdentityLib.render {
+            inherit identity;
+            provider = identityProvider;
+          };
+          identityArgs =
+            if identity == null then
+              { }
+            else if rendered.problem != null then
+              fail ({ instance = builtBy; } // rendered.problem)
+            else
+              {
+                annotations = (args.annotations or { }) // rendered.serviceAccountAnnotations;
+                requires = (args.requires or [ ]) ++ [ identityProvider.root ];
+              };
+          sealedArgs = args // identityArgs;
         in
         builtins.seq (checkNoHoldsData args) (
           builtins.seq (validators.checkResourceName args) (
@@ -96,7 +118,7 @@ in
                   (
                     let
                       res = k8s.mkResource (
-                        removeAttrs args [
+                        removeAttrs sealedArgs [
                           "labels"
                           "_cloudIdentity"
                         ]
@@ -105,7 +127,7 @@ in
                           inherit clusterDomain;
                           labels = clusterLabels // instanceLabels // labels;
                           factBehavior = behavior;
-                          requires = (args.requires or [ ]) ++ dnsRequires;
+                          requires = (sealedArgs.requires or [ ]) ++ dnsRequires;
                         }
                       );
                     in
@@ -114,10 +136,16 @@ in
                       packageLabels = labels;
                       _builtBy = builtBy;
                       # The pod labels and restart stamp of a ServiceAccount
-                      # bound with `scope.cloudIdentity.bind`, or null. The
+                      # bound with `kix.cloudIdentity.use`, or null. The
                       # workload builders read it from the pod's
                       # ServiceAccount, outside the manifest.
-                      _cloudIdentity = args._cloudIdentity or null;
+                      _cloudIdentity =
+                        if identity == null then
+                          null
+                        else
+                          {
+                            inherit (rendered) podLabels stamp;
+                          };
                       # Warnings raised while building the resource, outside the
                       # manifest. `eval/instance.nix` collects them from the
                       # instance's parts into its warnings.

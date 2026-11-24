@@ -1,13 +1,13 @@
 # Tests for workload cloud identity: the annotation domains the cloud
-# flavours declare through `kix.mkImport`, the instance's `cloudIdentity`
-# attribute, the mechanisms that render it (`vocab/cloud-identity.nix`),
-# `scope.cloudIdentity.bind`, the pod labels and restart stamp the workload
-# builders add (`scope/builders.nix`), the refusals in `eval/instance.nix`,
-# and external-dns, the first package that binds it.
+# flavours declare through `kix.mkImport`, the identity values a cluster
+# author gives a credentials dependency (`kix.cloudIdentity.aws`, `gcp`,
+# `azure`), `kix.cloudIdentity.use`, the mechanisms that render an identity
+# (`vocab/cloud-identity.nix`), the rendering in `sealResource` and the pod
+# labels and restart stamp the workload builders add (`scope/builders.nix`),
+# and external-dns, the first package that takes one.
 
 {
   lib,
-  k8s,
   eval,
   kixlib,
   kixKeys,
@@ -24,6 +24,8 @@ let
   flavor = name: import (../../flavors + "/${name}.nix");
   externalDnsPackage = import ../../../packages/experimental/external-dns;
   secretRefPackage = import ../../../packages/stable/secret-ref;
+  ci = kixlib.cloudIdentity;
+  vocab = import ../../vocab/cloud-identity.nix { inherit lib; };
 
   helpers = import ../caught.nix { inherit lib; };
   # The evaluator loaded so that a failed assertion does not stop the
@@ -32,18 +34,29 @@ let
     inherit lib k8s;
     self = ../../../..;
   };
+  k8s = import ../../core { inherit lib; };
   failedOf =
     modules:
     (evalCaught.buildCluster {
       name = "test";
       inherit modules;
     }).diagnostics.failedAssertions;
-  # True when one failed assertion contains every fragment.
-  failsWith =
-    fragments: modules:
-    builtins.any (a: builtins.all (f: lib.hasInfix f (a.message + (a.fix or ""))) fragments) (
-      failedOf modules
-    );
+
+  # A scope whose `fail` returns the error record, so a test reads the
+  # message `use` raises.
+  recordingScope = {
+    fail = e: { failed = e; };
+  };
+  # The message and fix `use` raises for `dep` and `cloud`, or "".
+  useFailure =
+    dep: cloud:
+    let
+      r = ci.use {
+        scope = recordingScope;
+        inherit dep cloud;
+      };
+    in
+    if r ? failed then r.failed.message + " " + (r.failed.fix or "") else "";
 
   scorecardOn = {
     scorecard = {
@@ -73,20 +86,35 @@ let
       };
   };
 
-  # A Deployment, a Job, and a CronJob that run as one ServiceAccount, which
-  # `bind` decides whether to bind.
   container = containerBase // {
     name = "worker";
     image = "example/worker:1";
   };
+
+  # A Deployment, a Job, and a CronJob that run as one ServiceAccount. The
+  # `credentials` dependency holds a Secret instance or a cloud identity for
+  # `cloud`.
   workerPackage =
-    {
-      bind ? true,
-    }:
+    { cloud }:
     {
       meta.version = "test";
       build =
-        { self, scope, ... }:
+        {
+          self,
+          scope,
+          credentials ? null,
+          ...
+        }:
+        let
+          creds = kixlib.cloudIdentity.use {
+            inherit scope cloud;
+            dep = credentials;
+          };
+          podSpec = {
+            serviceAccount = self.serviceAccount;
+            containers = [ container ];
+          };
+        in
         {
           serviceAccount =
             {
@@ -94,7 +122,7 @@ let
               kind = "ServiceAccount";
               name = "worker";
             }
-            |> (if bind then scope.cloudIdentity.bind else lib.id)
+            |> creds.bind
             |> scope.mkResource;
           deployment = scope.mkDeployment {
             name = "worker";
@@ -102,10 +130,7 @@ let
               selector.matchLabels = scope.selectorLabels;
               template = {
                 metadata.labels = scope.selectorLabels;
-                spec = {
-                  serviceAccount = self.serviceAccount;
-                  containers = [ container ];
-                };
+                spec = podSpec;
               };
             };
           };
@@ -113,10 +138,8 @@ let
             name = "worker-once";
             spec.template = {
               metadata.labels = scope.selectorLabels;
-              spec = {
-                serviceAccount = self.serviceAccount;
+              spec = podSpec // {
                 restartPolicy = "Never";
-                containers = [ container ];
               };
             };
           };
@@ -126,10 +149,8 @@ let
               schedule = "0 3 * * *";
               jobTemplate.spec.template = {
                 metadata.labels = scope.selectorLabels;
-                spec = {
-                  serviceAccount = self.serviceAccount;
+                spec = podSpec // {
                   restartPolicy = "Never";
-                  containers = [ container ];
                 };
               };
             };
@@ -138,20 +159,52 @@ let
         };
     };
 
-  # The worker on flavour `flavorName`, with `identity` as its cloudIdentity.
+  # The same worker written before cloud identity: it takes no credentials
+  # dependency.
+  plainWorker = {
+    meta.version = "test";
+    build =
+      { self, scope, ... }:
+      {
+        serviceAccount = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ServiceAccount";
+          name = "worker";
+        };
+        deployment = scope.mkDeployment {
+          name = "worker";
+          spec = {
+            selector.matchLabels = scope.selectorLabels;
+            template = {
+              metadata.labels = scope.selectorLabels;
+              spec = {
+                serviceAccount = self.serviceAccount;
+                containers = [ container ];
+              };
+            };
+          };
+        };
+        root = self.deployment;
+      };
+  };
+
+  # The worker on flavour `flavorName`, with `identity` (or null) as its
+  # credentials. `cloud` defaults to the identity's.
   workerOn =
     {
       flavorName,
       identity,
-      bind ? true,
+      cloud ? identity.cloud,
+      extra ? { },
     }:
     [
       (flavor flavorName)
+      extra
       {
         instances.work.worker = {
-          package = workerPackage { inherit bind; };
-          cloudIdentity = identity;
-        };
+          package = workerPackage { inherit cloud; };
+        }
+        // lib.optionalAttrs (identity != null) { deps.credentials = identity; };
       }
     ];
 
@@ -175,10 +228,10 @@ let
   roleArn = "arn:aws:iam::111122223333:role/worker";
   irsa = {
     flavorName = "eks";
-    identity.aws.roleArn = roleArn;
+    identity = ci.aws { inherit roleArn; };
   };
 
-  # external-dns on `flavorName` with `extra` merged into the instance.
+  # external-dns on `flavorName` with `extra ref` merged into the instance.
   externalDnsOn = flavorName: extra: [
     (flavor flavorName)
     (
@@ -291,6 +344,7 @@ in
       none = rendered (workerOn {
         flavorName = "eks";
         identity = null;
+        cloud = "aws";
       });
       ann = r.serviceAccount.annotations;
     in
@@ -318,7 +372,7 @@ in
   # declares eks.amazonaws.com.
   cloud-identity-eks-pod-identity =
     let
-      r = rendered (workerOn irsa ++ [ { cluster.flavor.eks.cloudIdentity = "pod-identity"; } ]);
+      r = rendered (workerOn (irsa // { extra.cluster.flavor.eks.cloudIdentity = "pod-identity"; }));
       findings = domainFindings (mkCluster [
         (flavor "eks")
         scorecardOn
@@ -348,7 +402,7 @@ in
         stampOf (
           rendered (workerOn {
             flavorName = "eks";
-            identity.aws.roleArn = arn;
+            identity = ci.aws { roleArn = arn; };
           })
         );
     in
@@ -361,12 +415,12 @@ in
     let
       direct = rendered (workerOn {
         flavorName = "gke";
-        identity.gcp = { };
+        identity = ci.gcp { };
       });
       email = "worker@my-project.iam.gserviceaccount.com";
       linked = rendered (workerOn {
         flavorName = "gke-autopilot";
-        identity.gcp.serviceAccount = email;
+        identity = ci.gcp { serviceAccount = email; };
       });
     in
     (
@@ -390,7 +444,7 @@ in
       tenantId = "00000000-0000-0000-0000-000000000002";
       r = rendered (workerOn {
         flavorName = "aks";
-        identity.azure = { inherit clientId tenantId; };
+        identity = ci.azure { inherit clientId tenantId; };
       });
       labelled = m: (m.labels."azure.workload.identity/use" or null) == "true";
     in
@@ -407,162 +461,367 @@ in
   # lands under it.
   cloud-identity-self-managed-prefix =
     let
-      r = rendered [
-        (flavor "kubeadm")
-        {
-          instances.kube-system.cloud-identity.package = eval.mkImport {
-            roles = [ "cloudIdentity" ];
-            annotationDomains = [ "irsa.example.com" ];
-            out.cloudIdentity = kixlib.cloudIdentity.irsa { annotationPrefix = "irsa.example.com"; };
-          };
-          instances.work.worker = {
-            package = workerPackage { };
-            cloudIdentity.aws.roleArn = roleArn;
-          };
-        }
-      ];
+      r = rendered (
+        workerOn (
+          irsa
+          // {
+            flavorName = "kubeadm";
+            extra.instances.kube-system.cloud-identity.package = eval.mkImport {
+              roles = [ "cloudIdentity" ];
+              annotationDomains = [ "irsa.example.com" ];
+              out.cloudIdentity = ci.irsa { annotationPrefix = "irsa.example.com"; };
+            };
+          }
+        )
+      );
     in
     (r.serviceAccount.annotations."irsa.example.com/role-arn" == roleArn)
     || throw "self-managed: ${builtins.toJSON r.serviceAccount}";
 
+  # A package with two ServiceAccounts takes two dependencies, and each
+  # ServiceAccount gets its own role and each pod its own stamp.
+  cloud-identity-two-service-accounts =
+    let
+      saAndPod = name: creds: scope: self: {
+        "${name}Sa" =
+          {
+            apiVersion = "v1";
+            kind = "ServiceAccount";
+            inherit name;
+          }
+          |> creds.bind
+          |> scope.mkResource;
+        ${name} = scope.mkDeployment {
+          inherit name;
+          spec = {
+            selector.matchLabels = scope.selectorLabels // {
+              app = name;
+            };
+            template = {
+              metadata.labels = scope.selectorLabels // {
+                app = name;
+              };
+              spec = {
+                serviceAccount = self."${name}Sa";
+                containers = [ container ];
+              };
+            };
+          };
+        };
+      };
+      twoPackage = {
+        meta.version = "test";
+        build =
+          {
+            self,
+            scope,
+            dnsCredentials,
+            storageCredentials,
+            ...
+          }:
+          let
+            use =
+              dep:
+              kixlib.cloudIdentity.use {
+                inherit scope dep;
+                cloud = "aws";
+              };
+          in
+          saAndPod "dns" (use dnsCredentials) scope self
+          // saAndPod "storage" (use storageCredentials) scope self
+          // {
+            root = self.dns;
+          };
+      };
+      ms = manifests (mkCluster [
+        (flavor "eks")
+        {
+          instances.work.two = {
+            package = twoPackage;
+            deps = {
+              dnsCredentials = ci.aws { roleArn = "${roleArn}-dns"; };
+              storageCredentials = ci.aws { roleArn = "${roleArn}-storage"; };
+            };
+          };
+        }
+      ]);
+      arnOf =
+        n: (byName n (ofKind "ServiceAccount" ms)).metadata.annotations."eks.amazonaws.com/role-arn";
+      stampOfDeploy =
+        n: (byName n (ofKind "Deployment" ms)).spec.template.metadata.annotations."checksum/cloud-identity";
+    in
+    (
+      arnOf "dns" == "${roleArn}-dns"
+      && arnOf "storage" == "${roleArn}-storage"
+      && stampOfDeploy "dns" != stampOfDeploy "storage"
+    )
+    || throw "two ServiceAccounts: ${builtins.toJSON (ofKind "ServiceAccount" ms)}";
+
+  # `annotationsFor` gives an operator-made ServiceAccount the annotations
+  # and pod labels `bind` would write, read through the role's provider.
+  cloud-identity-annotations-for-operator =
+    let
+      operatorPackage = {
+        meta.version = "test";
+        build =
+          {
+            self,
+            scope,
+            credentials,
+            cloudIdentity,
+            ...
+          }:
+          let
+            a = kixlib.cloudIdentity.annotationsFor {
+              inherit scope;
+              identity = credentials;
+              provider = cloudIdentity;
+            };
+          in
+          {
+            cm = scope.mkResource {
+              apiVersion = "v1";
+              kind = "ConfigMap";
+              name = "operator-template";
+              data = a.serviceAccountAnnotations // a.podLabels;
+            };
+            root = self.cm;
+          };
+      };
+      data =
+        (byName "operator-template" (
+          ofKind "ConfigMap" (
+            manifests (mkCluster [
+              (flavor "aks")
+              {
+                instances.work.op = {
+                  package = operatorPackage;
+                  deps.credentials = ci.azure { clientId = "00000000-0000-0000-0000-000000000001"; };
+                };
+              }
+            ])
+          )
+        )).data;
+    in
+    (
+      data."azure.workload.identity/client-id" == "00000000-0000-0000-0000-000000000001"
+      && data."azure.workload.identity/use" == "true"
+      && data ? ${kixKeys.cloudIdentity}
+    )
+    || throw "annotationsFor: ${builtins.toJSON data}";
+
+  # A Secret instance in the credentials dependency is handed back as
+  # `secret`, and `bind` leaves the ServiceAccount unchanged.
+  cloud-identity-use-passes-a-secret =
+    let
+      secret = {
+        out.name = "keys";
+      };
+      r = ci.use {
+        scope = recordingScope;
+        dep = secret;
+        cloud = "aws";
+      };
+    in
+    (r.secret == secret && r.identity == null && r.bind { a = 1; } == { a = 1; })
+    || throw "use with a Secret: ${builtins.toJSON (removeAttrs r [ "bind" ])}";
+
   # An identity on a cluster without a provider is refused; the same
   # instance builds on eks.
   cloud-identity-refuses-no-provider =
-    (
-      failsWith [ "this cluster does not configure a cloud identity provider" "kix.flavors.eks" ] (
-        workerOn (irsa // { flavorName = "kubeadm"; })
-      )
-      && failedOf (workerOn irsa) == [ ]
-    )
-    || throw "no provider: ${
-      builtins.toJSON (failedOf (workerOn (irsa // { flavorName = "kubeadm"; })))
-    }";
-
-  # An identity for another cloud than the provider's is refused.
-  cloud-identity-refuses-wrong-cloud =
-    (failsWith [ "cloudIdentity.gcp" "IAM roles for service accounts" ] (workerOn {
-      flavorName = "eks";
-      identity.gcp = { };
-    }))
-    || throw "wrong cloud: ${builtins.toJSON (failedOf (workerOn (irsa // { identity.gcp = { }; })))}";
-
-  # Malformed values and two clouds are refused, each naming what is wrong.
-  cloud-identity-refuses-malformed-values =
     let
-      on =
-        flavorName: identity:
-        failedOf (workerOn {
-          inherit flavorName identity;
-        });
-      cases = {
-        arn = on "eks" { aws.roleArn = "external-dns"; };
-        email = on "gke" { gcp.serviceAccount = "external-dns"; };
-        client = on "aks" { azure.clientId = "external-dns"; };
-        tenant = on "aks" {
-          azure = {
-            clientId = "00000000-0000-0000-0000-000000000001";
-            tenantId = "contoso";
-          };
-        };
-        two = on "eks" {
-          aws.roleArn = roleArn;
-          gcp = { };
-        };
-      };
-      mentions =
-        fragment: failed:
-        builtins.length failed == 1 && lib.hasInfix fragment (builtins.head failed).message;
+      problem =
+        (vocab.render {
+          identity = ci.aws { inherit roleArn; };
+          provider = null;
+        }).problem;
     in
     (
-      mentions "not a valid AWS IAM role ARN" cases.arn
-      && mentions "not a valid Google service account email address" cases.email
-      && mentions "not a valid client ID GUID" cases.client
-      && mentions "not a valid tenant ID GUID" cases.tenant
-      && mentions "sets more than one cloud (aws and gcp)" cases.two
+      evalFails (mkCluster (workerOn (irsa // { flavorName = "kubeadm"; })))
+      && !(evalFails (mkCluster (workerOn irsa)))
+      && lib.hasInfix "has no `cloudIdentity` provider" problem.message
+      && lib.hasInfix "kix.flavors.eks" problem.fix
+    )
+    || throw "no provider: ${builtins.toJSON problem}";
+
+  # An identity for another cloud than the provider's is refused, with one
+  # message that names the provider's mechanism.
+  cloud-identity-refuses-wrong-cloud-for-cluster =
+    let
+      problem =
+        (vocab.render {
+          identity = ci.gcp { };
+          provider = {
+            ns = "kube-system";
+            inst = "cloud-identity";
+            out.cloudIdentity = ci.irsa { };
+          };
+        }).problem;
+    in
+    (
+      evalFails (
+        mkCluster (workerOn {
+          flavorName = "eks";
+          identity = ci.gcp { };
+        })
+      )
+      && !(evalFails (mkCluster (workerOn irsa)))
+      && lib.hasInfix "IAM roles for service accounts" problem.message
+    )
+    || throw "wrong cloud for the cluster: ${builtins.toJSON problem}";
+
+  # An identity for another cloud than the package's software calls is
+  # refused by `use`, before the cluster's provider is read, so the user
+  # sees one error. A package that takes no cloud identity refuses any.
+  cloud-identity-refuses-wrong-cloud-for-package =
+    let
+      other = useFailure (ci.gcp { }) "aws";
+      none = useFailure (ci.aws { inherit roleArn; }) null;
+    in
+    (
+      lib.hasInfix "call the AWS API" other
+      && lib.hasInfix "does not accept for its current configuration" none
+      && useFailure (ci.aws { inherit roleArn; }) "aws" == ""
+      && evalFails (
+        mkCluster (workerOn {
+          flavorName = "gke";
+          identity = ci.gcp { };
+          cloud = "aws";
+        })
+      )
+    )
+    || throw "wrong cloud for the package: ${other}; ${none}";
+
+  # Malformed values and mistyped fields are refused, each naming the
+  # field. A well-formed value of each cloud passes.
+  cloud-identity-refuses-malformed-values =
+    let
+      cases = {
+        arn = useFailure (ci.aws { roleArn = "external-dns"; }) "aws";
+        email = useFailure (ci.gcp { serviceAccount = "external-dns"; }) "gcp";
+        client = useFailure (ci.azure { clientId = "external-dns"; }) "azure";
+        tenant = useFailure (ci.azure {
+          clientId = "00000000-0000-0000-0000-000000000001";
+          tenantId = "contoso";
+        }) "azure";
+        typo = useFailure (ci.aws { rolearn = roleArn; }) "aws";
+        missing = useFailure (ci.azure { }) "azure";
+        notText = useFailure (ci.aws { roleArn = 1; }) "aws";
+      };
+      good = [
+        (useFailure (ci.aws { inherit roleArn; }) "aws")
+        (useFailure (ci.gcp { }) "gcp")
+        (useFailure (ci.azure { clientId = "00000000-0000-0000-0000-000000000001"; }) "azure")
+      ];
+    in
+    (
+      lib.hasInfix "field `roleArn`" cases.arn
+      && lib.hasInfix "not a valid AWS IAM role ARN" cases.arn
+      && lib.hasInfix "field `serviceAccount`" cases.email
+      && lib.hasInfix "field `clientId`" cases.client
+      && lib.hasInfix "field `tenantId`" cases.tenant
+      && lib.hasInfix "no field `rolearn`" cases.typo
+      && lib.hasInfix "missing required field `clientId`" cases.missing
+      && lib.hasInfix "must be a string" cases.notText
+      &&
+        good == [
+          ""
+          ""
+          ""
+        ]
+      && evalFails (
+        mkCluster (workerOn {
+          flavorName = "eks";
+          identity = ci.aws { rolearn = roleArn; };
+          cloud = "aws";
+        })
+      )
     )
     || throw "malformed: ${builtins.toJSON cases}";
 
-  # A package that does not bind the identity is refused, and the fix
-  # names its ServiceAccount part. The same package with bind builds.
-  cloud-identity-refuses-unbound =
-    (
-      failsWith [
-        "does not bind `scope.cloudIdentity` to a ServiceAccount"
-        "serviceAccount = scope.mkResource (scope.cloudIdentity.bind"
-      ] (workerOn (irsa // { bind = false; }))
-      && failedOf (workerOn irsa) == [ ]
-    )
-    || throw "unbound: ${builtins.toJSON (failedOf (workerOn (irsa // { bind = false; })))}";
-
-  # The escape hatch in the unbound error works: a parts overlay that
-  # rebuilds the ServiceAccount with bind satisfies the check and stamps
-  # the pods.
-  cloud-identity-overlay-binds =
+  # A package that takes no credentials dependency refuses one with the
+  # existing unknown-dependency error. The raw annotation in a parts
+  # overlay still works for it, and the scorecard accepts the annotation.
+  cloud-identity-unadopted-package =
     let
-      modules = [
+      unadopted = mkCluster [
         (flavor "eks")
         {
           instances.work.worker = {
-            package = workerPackage { bind = false; };
-            cloudIdentity.aws.roleArn = roleArn;
+            package = plainWorker;
+            deps.credentials = ci.aws { inherit roleArn; };
+          };
+        }
+      ];
+      overlaid = mkCluster [
+        (flavor "eks")
+        scorecardOn
+        {
+          instances.work.worker = {
+            package = plainWorker;
             partsOverlays = [
               (scope: _self: base: {
-                serviceAccount = scope.mkResource (
-                  scope.cloudIdentity.bind {
-                    apiVersion = "v1";
-                    kind = "ServiceAccount";
-                    name = base.serviceAccount.name;
-                  }
-                );
+                serviceAccount = scope.mkResource {
+                  apiVersion = "v1";
+                  kind = "ServiceAccount";
+                  name = base.serviceAccount.name;
+                  annotations."eks.amazonaws.com/role-arn" = roleArn;
+                };
               })
             ];
           };
         }
       ];
+      sa = byName "worker" (ofKind "ServiceAccount" (manifests overlaid));
     in
-    (failedOf modules == [ ] && stampOf (rendered modules) != null)
-    || throw "overlay: ${builtins.toJSON (failedOf modules)}";
+    (
+      evalFails unadopted
+      && sa.metadata.annotations."eks.amazonaws.com/role-arn" == roleArn
+      && domainFindings overlaid == [ ]
+    )
+    || throw "unadopted: ${builtins.toJSON sa}";
 
-  # external-dns binds the identity on a cloud provider and takes either an
-  # identity or the providerCredentials Secret, never neither or both.
+  # external-dns takes an identity or a Secret in providerCredentials, and
+  # refuses neither on a provider that calls a cloud. An identity for
+  # another cloud, or on a provider that takes none, fails evaluation.
   cloud-identity-external-dns-identity-or-secret =
     let
-      identity = _: { cloudIdentity.aws.roleArn = roleArn; };
+      identity = _: { deps.providerCredentials = ci.aws { inherit roleArn; }; };
       secret = ref: { deps.providerCredentials = ref.dns.keys; };
-      cases = {
-        identity = failedOf (externalDnsOn "eks" identity);
-        secret = failedOf (externalDnsOn "eks" secret);
-        neither = failedOf (externalDnsOn "eks" (_: { }));
-        both = failedOf (externalDnsOn "eks" (ref: identity ref // secret ref));
-        otherCloud = failedOf (
-          externalDnsOn "eks" (_: {
-            cloudIdentity.aws.roleArn = roleArn;
-            config.provider = "google";
-          })
-        );
-        notCloud = failedOf (
-          externalDnsOn "eks" (_: {
-            cloudIdentity.aws.roleArn = roleArn;
-            config.provider = "inmemory";
-          })
-        );
-      };
-      mentions =
-        fragment: failed: failed != [ ] && builtins.any (a: lib.hasInfix fragment a.message) failed;
+      neither = failedOf (externalDnsOn "eks" (_: { }));
       sa =
         (byName "edns" (ofKind "ServiceAccount" (manifests (mkCluster (externalDnsOn "eks" identity)))))
         .metadata.annotations;
+      secretDeploy = byName "edns" (
+        ofKind "Deployment" (manifests (mkCluster (externalDnsOn "eks" secret)))
+      );
+      container0 = builtins.head secretDeploy.spec.template.spec.containers;
     in
     (
-      cases.identity == [ ]
-      && cases.secret == [ ]
-      && mentions "sets neither `cloudIdentity.aws` nor" cases.neither
-      && mentions "Both `cloudIdentity` and" cases.both
-      && mentions "calls the Google Cloud API" cases.otherCloud
-      && mentions "does not use a cloud identity" cases.notCloud
+      failedOf (externalDnsOn "eks" identity) == [ ]
+      && failedOf (externalDnsOn "eks" secret) == [ ]
+      && builtins.any (a: (a.id or null) == "K1798") neither
       && sa."eks.amazonaws.com/role-arn" == roleArn
+      && container0 ? envFrom
+      && !(secretDeploy.spec.template.metadata.annotations or { } ? "checksum/cloud-identity")
+      && evalFails (
+        mkCluster (
+          externalDnsOn "eks" (_: {
+            deps.providerCredentials = ci.aws { inherit roleArn; };
+            config.provider = "google";
+          })
+        )
+      )
+      && evalFails (
+        mkCluster (
+          externalDnsOn "eks" (_: {
+            deps.providerCredentials = ci.aws { inherit roleArn; };
+            config.provider = "inmemory";
+          })
+        )
+      )
     )
-    || throw "external-dns: ${builtins.toJSON cases}";
+    || throw "external-dns: neither ${builtins.toJSON neither}";
 
   # The removed serviceAccountAnnotations option is refused with its change
   # id and the new setting.
@@ -570,13 +829,13 @@ in
     let
       failed = failedOf (
         externalDnsOn "eks" (_: {
-          cloudIdentity.aws.roleArn = roleArn;
+          deps.providerCredentials = ci.aws { inherit roleArn; };
           config.serviceAccountAnnotations."eks.amazonaws.com/role-arn" = roleArn;
         })
       );
     in
     builtins.any (
-      a: (a.id or null) == "K0771" && lib.hasInfix "cloudIdentity" (a.message + (a.fix or ""))
+      a: (a.id or null) == "K0771" && lib.hasInfix "kix.cloudIdentity.aws" (a.message + (a.fix or ""))
     ) failed
     || throw "removed option: ${builtins.toJSON failed}";
 }

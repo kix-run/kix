@@ -25,7 +25,9 @@
 # Dependencies:
 #   providerCredentials (optional)  a secret or secret-ref instance in the
 #                                   same namespace holding the provider's API
-#                                   credentials. With `secretEnv` empty the
+#                                   credentials, or for a provider on a cloud
+#                                   a cloud identity (`kix.cloudIdentity.aws`,
+#                                   `gcp`, `azure`). With `secretEnv` empty the
 #                                   whole Secret is injected with `envFrom`,
 #                                   so its keys must be the variable names
 #                                   the provider reads; `secretEnv` maps
@@ -48,14 +50,16 @@
 # own. A crash loop is left to prometheus-default-rules.
 #
 # A provider on AWS, Google Cloud, or Azure (`cloud` in providers.nix)
-# authenticates with the instance's `cloudIdentity`, which the package binds
-# to its ServiceAccount, or with the providerCredentials Secret. An instance
-# with neither or both is refused, and so is a cloud identity for another
-# cloud or for a provider outside these three clouds.
+# authenticates with a cloud identity in providerCredentials, which the
+# package binds to its ServiceAccount, or with a Secret there. An instance
+# with neither is refused, and so is a cloud identity for another cloud or
+# for a provider outside these three clouds.
 #
 #   instances.external-dns.external-dns = {
 #     package = packages.experimental.external-dns;
-#     cloudIdentity.aws.roleArn = "arn:aws:iam::111122223333:role/external-dns";
+#     deps.providerCredentials = kix.cloudIdentity.aws {
+#       roleArn = "arn:aws:iam::111122223333:role/external-dns";
+#     };
 #     config = {
 #       provider = "aws";
 #       policy = "upsert-only";
@@ -155,7 +159,14 @@ let
   credentialState =
     { config, deps }:
     let
-      dep = deps.providerCredentials or null;
+      # providerCredentials holds a Secret instance or, for a provider on a
+      # cloud, a cloud identity (providers.nix `cloud`).
+      credentials = kix.cloudIdentity.use {
+        inherit scope;
+        dep = deps.providerCredentials or null;
+        cloud = providers.${config.provider}.cloud or null;
+      };
+      dep = credentials.secret;
       declared = if dep == null then [ ] else (dep.out.keys or [ ]);
       envStrings = builtins.attrNames (lib.filterAttrs (_: builtins.isString) config.env);
       fromSecret =
@@ -170,6 +181,7 @@ let
     in
     {
       inherit
+        credentials
         dep
         declared
         envStrings
@@ -310,12 +322,12 @@ in
       '';
     };
 
-    # Removed. The instance's `cloudIdentity` renders these annotations.
+    # Removed. A cloud identity in providerCredentials renders these annotations.
     serviceAccountAnnotations = lib.mkOption {
       type = lib.types.unspecified;
       default = null;
       visible = false;
-      description = "Removed. Set `cloudIdentity` on the instance instead.";
+      description = "Removed. Set `deps.providerCredentials` to a cloud identity, such as `kix.cloudIdentity.aws { roleArn = \"...\"; }`.";
     };
 
     extraArgs = lib.mkOption {
@@ -365,20 +377,21 @@ in
         assertion = config.serviceAccountAnnotations == null;
         id = "K0771";
         option = "serviceAccountAnnotations";
-        message = "`config.serviceAccountAnnotations` was removed. Kix no longer accepts raw ServiceAccount annotations here; set `cloudIdentity` on the instance so Kix writes the cloud's ServiceAccount annotations and pod labels and restarts pods when the identity changes.";
-        fix = "Remove `serviceAccountAnnotations` from `config` and set `cloudIdentity` on the instance instead (for example, `cloudIdentity.aws.roleArn = \"arn:aws:iam::111122223333:role/external-dns\";`, `cloudIdentity.gcp.serviceAccount = \"...\";`, or `cloudIdentity.azure.clientId = \"...\";`).";
+        message = "`config.serviceAccountAnnotations` was removed, so Kix rejected this instance. Pass cloud identities through `deps.providerCredentials` instead.";
+        fix = "Remove `config.serviceAccountAnnotations` and set `deps.providerCredentials` to `kix.cloudIdentity.aws { roleArn = \"arn:aws:iam::111122223333:role/external-dns\"; }`, `kix.cloudIdentity.gcp { serviceAccount = \"...\"; }` (or `kix.cloudIdentity.gcp { }`), or `kix.cloudIdentity.azure { clientId = \"...\"; }`. For other ServiceAccount annotations, use `partsOverlays` on the instance.";
+      }
+      # A provider on a cloud authenticates with the identity or the Secret
+      # in providerCredentials, and needs one of them.
+      {
+        assertion = !(providers.${config.provider} ? cloud) || (deps.providerCredentials or null) != null;
+        id = "K1798";
+        dependency = "providerCredentials";
+        message = "`config.provider` is \"${config.provider}\", which requires `deps.providerCredentials`, so Kix rejected this instance. Without credentials, external-dns cannot authenticate to manage DNS records.";
+        fix = "Set `deps.providerCredentials` to `kix.cloudIdentity.${
+          providers.${config.provider}.cloud or "aws"
+        } { ... }` or to a Secret instance (`ref.<namespace>.<instance>`) in the same namespace.";
       }
     ]
-    # A cloud provider authenticates with the instance's cloud identity or
-    # with the providerCredentials Secret.
-    ++ kix.cloudIdentity.orSecret {
-      identity = scope.cloudIdentity;
-      secret = s.dep;
-      cloud = providers.${config.provider}.cloud or null;
-      what = "provider \"${config.provider}\"";
-      secretDependency = "providerCredentials";
-      id = "K1798";
-    }
     ++ [
       # sources.nix and providers.nix follow `release`, and another release
       # may need other RBAC rules or accept other providers.
@@ -448,6 +461,15 @@ in
       let
         selected = lib.unique config.sources;
 
+        inherit
+          (credentialState {
+            inherit config;
+            deps = { inherit providerCredentials; };
+          })
+          credentials
+          ;
+        secret = credentials.secret;
+
         rules = map (r: r // { resources = lib.unique r.resources; }) (
           scope.rbac.grant (builtins.concatMap (s: sources.${s}.intents) selected)
         );
@@ -484,11 +506,11 @@ in
 
         # Keys outside the Secret's declared keys are left to the
         # assertions, which name them; `keyRef` would throw first.
-        declaredKeys = if providerCredentials == null then [ ] else (providerCredentials.out.keys or [ ]);
-        secretVars = lib.mapAttrs (_: key: providerCredentials.out.keyRef key) (
+        declaredKeys = if secret == null then [ ] else (secret.out.keys or [ ]);
+        secretVars = lib.mapAttrs (_: key: secret.out.keyRef key) (
           lib.filterAttrs (_: key: builtins.elem key declaredKeys) config.secretEnv
         );
-        useEnvFrom = providerCredentials != null && config.secretEnv == { };
+        useEnvFrom = secret != null && config.secretEnv == { };
 
         env = kix.mkEnvVars (
           kix.mergeEnv {
@@ -588,7 +610,7 @@ in
             kind = "ServiceAccount";
             inherit name;
           }
-          |> scope.cloudIdentity.bind
+          |> credentials.bind
           |> scope.mkResource;
 
         metricsService =
@@ -612,8 +634,8 @@ in
               # Rolls the pod when a Kix-built Secret changes. A secret-ref
               # names a Secret managed outside Kix, which has no content
               # hash, so a rotation does not roll the pod.
-              // lib.optionalAttrs (providerCredentials != null && providerCredentials.out ? contentHash) {
-                annotations."checksum/provider-credentials" = providerCredentials.out.contentHash;
+              // lib.optionalAttrs (secret != null && secret.out ? contentHash) {
+                annotations."checksum/provider-credentials" = secret.out.contentHash;
               };
               spec = {
                 serviceAccount = self.serviceAccount;
@@ -654,7 +676,7 @@ in
                     }
                     // lib.optionalAttrs (env != [ ]) { inherit env; }
                     // lib.optionalAttrs useEnvFrom {
-                      envFrom = [ providerCredentials.out.envFrom ];
+                      envFrom = [ secret.out.envFrom ];
                     }
                   )
                 ];

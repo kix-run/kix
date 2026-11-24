@@ -40,19 +40,24 @@ compose
   tolerations = {
     inherit (toleration) problems render;
   };
-  # The mechanisms that give a pod a cloud identity, for the `out` of an
-  # instance that claims the `cloudIdentity` role, and the assertions a
-  # package returns when its software takes either that identity or a
-  # credentials Secret (`vocab/cloud-identity.nix`).
+  # Cloud identities: the values a cluster author gives a credentials
+  # dependency (`aws`, `gcp`, `azure`), `use`, which a package calls on that
+  # dependency, and the mechanisms the `cloudIdentity` role's provider puts in
+  # its `out` (`vocab/cloud-identity.nix`).
   cloudIdentity = {
     inherit (cloudIdentity)
+      aws
+      gcp
+      azure
+      use
+      annotationsFor
       irsa
       eksPodIdentity
       gke
       azureWorkloadId
-      orSecret
       ;
   };
+
   # The contracts in `kix/contracts`, by name, with the experimental ones
   # under `contracts.experimental`.
   contracts = import ../../contracts { inherit lib; };

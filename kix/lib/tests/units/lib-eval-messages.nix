@@ -152,7 +152,6 @@ in
         raw = { };
         evaluatedConfig = { };
         parts = { };
-        resolvedDepMeta.otlpTraces.value = { };
         depsEnrichment.otlpTraces.assertions = _dep: [
           {
             assertion = false;

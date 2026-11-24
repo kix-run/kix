@@ -30,13 +30,15 @@ kix.buildCluster {
     {
       instances.external-dns.clouddns = {
         package = packages.experimental.external-dns;
-        cloudIdentity.gcp = { };
+        deps.providerCredentials = kix.cloudIdentity.gcp { };
         config = externalDns "cloud-identity-gke/direct";
       };
 
       instances.external-dns-linked.clouddns = {
         package = packages.experimental.external-dns;
-        cloudIdentity.gcp.serviceAccount = "external-dns@my-project.iam.gserviceaccount.com";
+        deps.providerCredentials = kix.cloudIdentity.gcp {
+          serviceAccount = "external-dns@my-project.iam.gserviceaccount.com";
+        };
         config = externalDns "cloud-identity-gke/linked";
       };
     }

@@ -20,7 +20,9 @@ kix.buildCluster {
     {
       instances.external-dns.azure-dns = {
         package = packages.experimental.external-dns;
-        cloudIdentity.azure.clientId = "00000000-0000-0000-0000-000000000000";
+        deps.providerCredentials = kix.cloudIdentity.azure {
+          clientId = "00000000-0000-0000-0000-000000000000";
+        };
         config = {
           provider = "azure";
           policy = "upsert-only";

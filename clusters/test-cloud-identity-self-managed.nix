@@ -24,7 +24,9 @@ kix.buildCluster {
 
       instances.external-dns.route53 = {
         package = packages.experimental.external-dns;
-        cloudIdentity.aws.roleArn = "arn:aws:iam::111122223333:role/external-dns";
+        deps.providerCredentials = kix.cloudIdentity.aws {
+          roleArn = "arn:aws:iam::111122223333:role/external-dns";
+        };
         config = {
           provider = "aws";
           policy = "upsert-only";

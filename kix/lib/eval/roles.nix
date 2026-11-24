@@ -56,7 +56,7 @@ rec {
     };
 
     cloudIdentity = {
-      description = "Cloud identity integration for pods (EKS IRSA or Pod Identity, GKE Workload Identity Federation, Microsoft Entra Workload ID on AKS, or a self-hosted webhook). The provider's out.cloudIdentity holds a mechanism from kix.cloudIdentity that renders an instance's cloudIdentity into ServiceAccount annotations and pod labels. Cloud flavors declare this role as an import; a managed package claiming the role takes precedence.";
+      description = "Gives pods a cloud identity on AWS, Google Cloud, or Azure (EKS IRSA or Pod Identity, GKE Workload Identity Federation, Microsoft Entra Workload ID on AKS, or a self-hosted webhook). The provider sets out.cloudIdentity to a kix.cloudIdentity mechanism, which turns kix.cloudIdentity.aws, kix.cloudIdentity.gcp, or kix.cloudIdentity.azure dependencies into ServiceAccount annotations and pod labels. The eks, gke, gke-autopilot, and aks flavors declare this role as an import; a managed package claiming the role takes precedence.";
       outContract = [ "cloudIdentity" ];
     };
 
