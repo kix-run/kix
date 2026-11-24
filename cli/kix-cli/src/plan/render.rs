@@ -165,11 +165,11 @@ fn write_being_deleted(out: &mut String, plan: &Plan) -> fmt::Result {
         out,
         "{}",
         output::yellow(&format!(
-            "{n} object{} in the build {} being deleted on the cluster. The deploy waits until {} gone, then creates {} again:",
+            "{n} object{} in the build {} being deleted on the cluster. The deploy will wait until {} gone, then recreate {}:",
             if n == 1 { "" } else { "s" },
             if n == 1 { "is" } else { "are" },
-            if n == 1 { "it is" } else { "each is" },
-            if n == 1 { "it" } else { "each" },
+            if n == 1 { "it is" } else { "they are" },
+            if n == 1 { "it" } else { "them" },
         ))
     )?;
     for d in &plan.being_deleted {
@@ -185,7 +185,7 @@ fn write_being_deleted(out: &mut String, plan: &Plan) -> fmt::Result {
                 out,
                 "      {}",
                 output::yellow(
-                    "may hold data: the new object starts empty, and nothing the old one held is kept"
+                    "may hold data: the new object starts empty and keeps none of the old object's data"
                 )
             )?;
         }
@@ -729,12 +729,12 @@ fn write_markdown(out: &mut String, plan: &Plan) -> fmt::Result {
         writeln!(out)?;
         writeln!(
             out,
-            "The deploy waits until each object is gone, then creates it again from the build:"
+            "The deploy will wait until each object is gone, then recreate it from the build:"
         )?;
         writeln!(out)?;
         for d in &plan.being_deleted {
             let data = if d.holds_data {
-                ". It may hold data: the new object starts empty"
+                " (may hold data: the new object starts empty and keeps none of the old object's data)"
             } else {
                 ""
             };

@@ -68,7 +68,7 @@ pub enum ApplyError {
     },
 
     #[error(
-        "{resource} is {reason}, so Kix did not apply to it; an object that is being deleted would vanish after the deploy."
+        "{resource} is {reason} (not applied). Applying changes now would let Kubernetes finish deleting it after the deploy. Wait for {resource} to be removed, then run the deploy again."
     )]
     BeingDeleted {
         resource: String,
@@ -89,7 +89,7 @@ pub enum ApplyError {
 
     /// The cancel token fired while Kix waited for the object to be deleted.
     #[error(
-        "interrupted while waiting for {resource} to be deleted, so Kix has not applied {resource}; run the same command again once {resource} is gone"
+        "interrupted while waiting for {resource} to finish deleting (not applied). Wait for deletion to finish, then run the deploy again."
     )]
     Interrupted { resource: String },
 

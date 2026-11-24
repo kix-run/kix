@@ -297,9 +297,8 @@ pub fn stuck_explanation(path: DeletePath) -> String {
     let recreated = "Kix deleted each object above to create it again because an immutable \
                      field changed or a Job must run again; Kix held no other objects back and \
                      has not created the new object yet, and";
-    let already = "Each object above was already being deleted when Kix came to apply it, so \
-                   Kix waited for the delete to finish before creating it again; Kix held no \
-                   other objects back and has not created the new object yet, and";
+    let already = "This object was already being deleted on the cluster, so Kix waited for \
+                   deletion to finish and has not created the new object yet.";
     let (retry, did) = match path {
         DeletePath::Prune(Runner::Cli) => (
             cli_retry.to_string(),
@@ -346,13 +345,13 @@ pub fn stuck_explanation(path: DeletePath) -> String {
         ),
         DeletePath::Apply(Runner::Cli) => (
             cli_retry.to_string(),
-            format!("{already} rerunning the command will create it once the old object is gone."),
+            format!("{already} Once the old object is gone, run the command again to create it."),
         ),
         DeletePath::Apply(Runner::Operator) => (
             operator_retry.to_string(),
             format!(
-                "{already} the Kix operator will create it on its next reconcile once the old \
-                 object is gone."
+                "{already} Once the old object is gone, the Kix operator will create it on its \
+                 next reconcile."
             ),
         ),
     };
