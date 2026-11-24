@@ -51,8 +51,7 @@ go in `config.extraSpec`.
 When a cluster sets `availablePackages` and declares no claim, Kix
 auto-instantiates `persistent-volume-claim` for a package's required `storage`
 dependency. That claim has no size, so the build fails with
-``The option `instances.<namespace>.persistent-volume-claim.config.size' was accessed but has no value defined``
-after a `[kix] auto-instantiated: persistent-volume-claim (<namespace>)` trace.
+``The option `instances.<namespace>.persistent-volume-claim.config.size' was accessed but has no value defined``.
 Declare the claim as a full instance with its `size`, as in the snippet above.
 
 ## Create the package mount

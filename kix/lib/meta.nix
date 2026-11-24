@@ -101,8 +101,6 @@ let
     }
     // (if builtins.isString w then { message = w; } else w);
 
-  emitTraces = prefix: items: lib.foldl' (acc: msg: builtins.trace "${prefix}${msg}" acc) null items;
-
   noDiagnostics = {
     warnings = [ ];
     assertions = [ ];
@@ -385,12 +383,14 @@ rec {
       resolvedDepMeta,
       depsEnrichment ? { },
       resolvedDeps ? { },
+      clusterConfig ? { },
     }:
     let
       ctx = {
         config = evaluatedConfig;
         self = parts;
         deps = lib.mapAttrs (_: di: di.value) resolvedDepMeta;
+        inherit clusterConfig;
       };
 
       depDiagnostics =
@@ -457,9 +457,6 @@ rec {
       evaluateWarnings = builtins.deepSeq (
         map (errors.describe "  ") allWarnings ++ scorecardWarnings
       ) null;
-      emitAssertionWarnings = emitTraces "ASSERTION FAILED: " (
-        map (a: "${a.instance}: ${a.message}") failedAssertions
-      );
     };
 
   # Aggregate diagnostics across all instances and attach cluster- and

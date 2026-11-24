@@ -67,6 +67,9 @@ rec {
     else
       value;
 
+  # Attach `ctx` to every string in `value`. A number or a boolean cannot
+  # carry string context, so a consumer that reads one from `.manifest`
+  # gets no dependency on the resource.
   attachCtxDeep =
     ctx: value:
     if value == null then
@@ -78,7 +81,7 @@ rec {
     else if builtins.isList value then
       map (attachCtxDeep ctx) value
     else
-      builtins.trace "warning: .manifest returned a ${builtins.typeOf value} value. Kix cannot track dependencies through this value; use an out helper or an explicit requires entry" value;
+      value;
 
   extractStoreHash =
     path: builtins.substring 11 32 (builtins.unsafeDiscardStringContext (toString path));
@@ -556,20 +559,24 @@ rec {
 
       # Without factBehavior, a custom kind forwards endpoint facts by default.
       # Warn when it absorbs an endpoint so the author can declare whether its
-      # controller's pods connect to it. Emit the warning when outPath is forced.
+      # controller's pods connect to it.
       _undeclaredCrWarning =
         if
           factBehavior == null
           && facts.isForeignGroup apiVersion
           && facts.factsOfKind "endpoint" manifestJson != [ ]
         then
-          "kix: ${kind}/${name} (${apiVersion}) references a Service address but does not declare how its controller uses it. "
-          + "Kix assumes endpoint = \"conduct\" (the resource passes the address "
-          + "to other resources). If pods created by this controller connect to the address "
-          + "directly, build the custom resource with `scope.mkCR <owner>.out.crds.<kind>` "
-          + "and declare `factBehavior = { endpoint = \"terminate\"; podSelector = cr: "
-          + "{ ... }; }` on the owner's mkCRD/mkCRDRef. For resources built without a typed builder (Helm or "
-          + "raw kind strings), set `cluster.factBehavior.\"<group>/${kind}\"`."
+          {
+            object = { inherit kind name; };
+            message =
+              "${kind}/${name} (${apiVersion}) references a Service address without declaring whether pods for this resource connect to that Service (`factBehavior`). "
+              + "Kix assumed this resource only passes the address on (`endpoint = \"conduct\"`). "
+              + "When network policies are enabled, Kix does not allow pods for this resource to connect to that Service.";
+            fix =
+              "Set `cluster.factBehavior.\"<group>/${kind}\"` in the cluster definition (for Helm charts or raw manifests), or set `factBehavior` on `scope.mkCRD` or `scope.mkCRDRef` and build the resource with `scope.mkCR <owner>.out.crds.<kind>`. "
+              + "Use `{ endpoint = \"terminate\"; podSelector = cr: "
+              + "{ ... }; }` if pods for this resource connect to the Service, or `{ endpoint = \"conduct\"; }` if the resource only passes the address on.";
+          }
         else
           null;
 
@@ -686,11 +693,11 @@ rec {
           extraDeps
           ;
 
-        outPath =
-          if _undeclaredCrWarning != null then
-            builtins.trace _undeclaredCrWarning _identityPath
-          else
-            _identityPath;
+        outPath = _identityPath;
+
+        # Warnings about this resource, which `eval/instance.nix` adds to the
+        # instance's diagnostics. The scope's builders append their own.
+        _warnings = lib.optional (_undeclaredCrWarning != null) _undeclaredCrWarning;
 
         out = mergedOut;
 

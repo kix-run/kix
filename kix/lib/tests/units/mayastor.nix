@@ -261,6 +261,27 @@ in
     builtins.all (v: v) (builtins.attrValues cases)
     || throw "pool node checks (true is the expected result for each): ${builtins.toJSON cases}";
 
+  # A pool on a node whose labels in cluster.nodes lack io-engine's node
+  # selector warns on the pool's node option.
+  mayastor-unlabelled-pool-node-warns =
+    let
+      nodeWarnings =
+        labels:
+        builtins.filter (w: builtins.isAttrs w && (w.option or null) == "diskPools.pool-1.node") (
+          mayastor.warnings {
+            config = configOf { diskPools.pool-1 = pool "node1" "/dev/sdb"; };
+            clusterConfig.cluster = {
+              nodes.node1 = { inherit labels; };
+              capabilities.nodeAutoscaling = false;
+            };
+          }
+        );
+    in
+    (
+      builtins.length (nodeWarnings { }) == 1 && nodeWarnings { "openebs.io/engine" = "mayastor"; } == [ ]
+    )
+    || throw "mayastor unlabelled pool node warning";
+
   # Flags and env variables the package derives are refused; the same
   # option with a flag or variable the package does not own builds.
   mayastor-owned-flags-and-env =

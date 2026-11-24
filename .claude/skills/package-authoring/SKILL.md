@@ -208,7 +208,7 @@ is a finding from the upstream source, not a default.
 
 Lib: levels and `pick` in `kix/lib/core/availability.nix:15, 55`; `resolve`
 caps at the package ceiling with a warning (`:184-218`); builder ceilings in
-`kix/lib/scope/builders.nix:226-280`; the plugin derives spread and
+`kix/lib/scope/builders.nix:231-285`; the plugin derives spread and
 PDB from `replicas > 1`, warns on a one-replica root workload at `node` and
 above, and throws on `replicas > 1` under an effective `none`
 (`kix/lib/plugins/availability/module.nix:255-282, 292-323`). `every-package-evaluates`

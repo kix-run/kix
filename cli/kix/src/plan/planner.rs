@@ -1043,6 +1043,9 @@ mod tests {
             fn deployed_build(&self, _identity_hash: &str) -> Result<Option<StoreGraph>, String> {
                 Ok(None)
             }
+            fn warnings(&self) -> Vec<crate::eval::library_record::LibraryRecord> {
+                Vec::new()
+            }
         }
         let bytes: &[u8] = crate::eval::fixtures::KIX_ENTERPRISE_TEST_JSON;
         let graph = crate::plan::fixtures::kix_enterprise_test();

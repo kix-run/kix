@@ -147,19 +147,26 @@ fn check_shows_library_warnings() {
     );
 }
 
-/// `kix build` shows the library's warnings on stderr, and keeps stdout for
-/// the manifests.
+/// Every command that evaluates the cluster shows the library's warnings
+/// on stderr, and keeps stdout for its own output.
 #[test]
-fn build_shows_library_warnings() {
-    kix()
-        .args(["build", "cli-fixture"])
-        .assert()
-        .success()
-        .stderr(predicate::str::contains("Warnings from the Kix library"))
-        .stderr(predicate::str::contains(
-            "availability \"node\" was requested",
-        ))
-        .stdout(predicate::str::contains("Warnings").not());
+fn evaluating_commands_show_library_warnings() {
+    for args in [
+        ["build", "cli-fixture"].as_slice(),
+        &["graph", "cli-fixture"],
+        &["list", "images", "cli-fixture"],
+        &["list", "resources", "cli-fixture"],
+    ] {
+        kix()
+            .args(args)
+            .assert()
+            .success()
+            .stderr(predicate::str::contains("Warnings from the Kix library"))
+            .stderr(predicate::str::contains(
+                "availability \"node\" was requested",
+            ))
+            .stdout(predicate::str::contains("Warnings").not());
+    }
 }
 
 #[test]

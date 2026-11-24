@@ -172,8 +172,9 @@ rec {
           package = packageId;
         };
 
-        # Verify that the cluster serves `metrics.k8s.io` for `subject`. Packages
-        # whose workloads read the metrics API without an HPA call this directly.
+        # Check that the cluster serves `metrics.k8s.io` for `subject`, and
+        # return a list of warnings. A package whose workloads read the
+        # metrics API without an HPA returns the list from its `warnings`.
         requireMetricsApi = validators.requireMetricsApi;
 
         # Hook emission facade passed to hooks as `ctx.emit`. Not part of the

@@ -71,6 +71,17 @@ let
     "operatorDiskpool"
     "metricsExporter"
   ];
+
+  # Return the cluster.nodes that a pool's node is checked against, or null
+  # when Kix does not check it: cluster.nodes is empty, or an autoscaler
+  # adds nodes the cluster definition does not list. The build refuses a
+  # node missing from them, and `warnings` checks its labels.
+  checkedNodes =
+    clusterConfig:
+    let
+      nodes = clusterConfig.cluster.nodes;
+    in
+    if nodes != { } && clusterConfig.cluster.capabilities.nodeAutoscaling != true then nodes else null;
 in
 {
   meta = {
@@ -209,13 +220,29 @@ in
     ];
 
   warnings =
-    { config, ... }:
+    { config, clusterConfig, ... }:
     let
       pools = builtins.attrValues config.diskPools;
       poolNodes = lib.unique (map (p: p.node) pools);
       encryptedPools = builtins.filter (p: p.encrypted) pools;
+
+      nodes = checkedNodes clusterConfig;
+      ioEngineLabels = c.ioEngineLabels config;
+      unlabelledPool =
+        poolName: pool:
+        let
+          missing = lib.filterAttrs (k: v: (nodes.${pool.node}.labels.${k} or null) != v) ioEngineLabels;
+        in
+        lib.optional (nodes != null && nodes ? ${pool.node} && missing != { }) {
+          option = "diskPools.${poolName}.node";
+          message = "diskPools.${poolName} uses node \"${pool.node}\", whose labels in cluster.nodes do not include ${
+            lib.concatStringsSep ", " (lib.mapAttrsToList (k: v: "${k}=${v}") missing)
+          } (required by ioEngine.nodeSelector). Kix still built the DiskPool, which will stay offline unless the io-engine DaemonSet runs on that node.";
+          fix = "Label the Kubernetes node to match ioEngine.nodeSelector and record the labels under cluster.nodes in the cluster definition, or update ioEngine.nodeSelector.";
+        };
     in
-    lib.optionals (pools != [ ]) (
+    lib.concatLists (lib.mapAttrsToList unlabelledPool config.diskPools)
+    ++ lib.optionals (pools != [ ]) (
       lib.concatLists (
         lib.mapAttrsToList (
           cls: def:
@@ -261,12 +288,10 @@ in
 
         key = c.poolKey poolEncryptionKey;
 
-        nodes = clusterConfig.cluster.nodes;
-        checkNodes = nodes != { } && clusterConfig.cluster.capabilities.nodeAutoscaling != true;
-        ioEngineLabels = c.ioEngineLabels config;
+        nodes = checkedNodes clusterConfig;
         checkPool =
           poolName: pool:
-          if !checkNodes then
+          if nodes == null then
             pool
           else if !(nodes ? ${pool.node}) then
             scope.fail {
@@ -276,14 +301,7 @@ in
               fix = "Name the node that holds the pool's disk.";
             }
           else
-            let
-              missing = lib.filterAttrs (k: v: (nodes.${pool.node}.labels.${k} or null) != v) ioEngineLabels;
-            in
-            lib.warnIf (missing != { })
-              "${who}: diskPools.${poolName} is on node ${pool.node}, whose labels in cluster.nodes lack ${
-                lib.concatStringsSep ", " (lib.mapAttrsToList (k: v: "${k}=${v}") missing)
-              } from ioEngine.nodeSelector, so io-engine may not run there and the pool would not come up. Label the node, or ignore this if it is labelled outside the cluster definition."
-              pool;
+            pool;
       in
       {
         csiDriver = scope.mkClusterResource {

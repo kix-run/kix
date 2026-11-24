@@ -581,31 +581,11 @@ rec {
             + "\nOr set autoNamespace to place every package Kix adds there.";
         }
       ) (builtins.attrNames placementsByName);
-
-      traceMsg =
-        let
-          items = map (item: "${item.instName} (${item.ns})") autoInstanceList;
-          optItems = builtins.attrNames activatedOptionals;
-        in
-        (
-          if items != [ ] then
-            "auto-instantiated: ${builtins.concatStringsSep ", " (lib.unique items)}"
-          else
-            ""
-        )
-        + (
-          if optItems != [ ] then
-            "${
-              if items != [ ] then "; " else ""
-            }activated optionals: ${builtins.concatStringsSep ", " optItems}"
-          else
-            ""
-        );
     in
     if spreadRefusals != [ ] then
       fail spreadRefusals
     else
-      (if traceMsg != "" then builtins.trace "[kix] ${traceMsg}" else lib.id) {
+      {
         inherit autoInstances activatedOptionals besideConsumerRefusals;
       };
 }

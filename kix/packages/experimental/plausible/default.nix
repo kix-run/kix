@@ -167,6 +167,11 @@
 let
   release = "3.2.1";
   name = scope.instanceName;
+
+  # Return whether the clickhouseDatabase dependency's server has more than
+  # one replica, from its `out.replicas`. The build then adds the
+  # `replicate` init container, and `warnings` says so.
+  isReplicated = replicas: replicas != null && replicas != "1";
   who = "plausible ${scope.namespaceName}/${name}";
 
   # The first start runs every PostgreSQL and ClickHouse migration in the
@@ -240,13 +245,10 @@ in
           assertion = false;
           message = "deps.clickhouseDatabase publishes no `replicas`, and Plausible's ClickHouse migrations run differently on one replica and on several. Wire a clickhouse-database instance, or add `replicas` (and `replicaHosts` above one) to the stand-in's out.";
         }
-        ++
-          lib.optional
-            (replicas != null && replicas != "1" && builtins.length replicaHosts != lib.toInt replicas)
-            {
-              assertion = false;
-              message = "deps.clickhouseDatabase reports ${replicas} replicas and ${toString (builtins.length replicaHosts)} replicaHosts. On several replicas Plausible migrates on one replica and then replicates its tables from there, so it needs one address per replica in out.replicaHosts.";
-            }
+        ++ lib.optional (isReplicated replicas && builtins.length replicaHosts != lib.toInt replicas) {
+          assertion = false;
+          message = "deps.clickhouseDatabase reports ${replicas} replicas and ${toString (builtins.length replicaHosts)} replicaHosts. On several replicas Plausible migrates on one replica and then replicates its tables from there, so it needs one address per replica in out.replicaHosts.";
+        }
         ++ lib.optional (!(builtins.elem "ALL" privileges)) {
           assertion = false;
           message = "deps.clickhouseDatabase grants ${
@@ -256,6 +258,15 @@ in
         ++ lib.optional (missingGrants != [ ]) {
           assertion = false;
           message = "deps.clickhouseDatabase does not grant ${lib.concatStringsSep ", " missingGrants}, which Plausible's migrations need. The package asks a clickhouse-database for these through its `grants`; a stand-in must grant them on the server and publish them in out.grants.";
+        };
+      warnings =
+        dep:
+        let
+          replicas = dep.out.replicas or null;
+        in
+        lib.optional (isReplicated replicas) {
+          message = "deps.clickhouseDatabase runs on ${replicas} ClickHouse replicas, which Plausible Community Edition does not officially support. Kix configured migrations to run on one replica and added the `replicate` init container to convert Plausible's tables into replicated tables (tested with Plausible v${release}).";
+          fix = "Point deps.clickhouseDatabase at a single-replica ClickHouse server, or if you keep multiple replicas, test new Plausible versions before upgrading and upgrade only while all ClickHouse replicas are running.";
         };
     };
   };
@@ -391,7 +402,7 @@ in
         # replicated and creates them on the others from the same replica.
         # Trying them in order keeps every start on replica 0 while it is
         # up. The server uses the load-balanced Service.
-        replicated = ch.replicas != "1";
+        replicated = isReplicated ch.replicas;
         replicaDir = "/run/plausible-replica";
         replicaHostFile = "${replicaDir}/host";
         # PLAUSIBLE_CH_USERNAME and PLAUSIBLE_CH_PASSWORD come from
@@ -723,15 +734,12 @@ in
 
           replicateScript =
             if replicated then
-              lib.warn
-                "${who}: deps.clickhouseDatabase is on a ClickHouse server with ${ch.replicas} replicas. Plausible Community Edition documents a single ClickHouse server; Kix migrates on one replica and converts Plausible's tables to replicated ones in the `replicate` init container, which Plausible does not support. It was tested with Plausible v${release}. Before upgrading Plausible, test the new version on a replicated ClickHouse, and upgrade only while every replica is up."
-                scope.mkResource
-                {
-                  apiVersion = "v1";
-                  kind = "ConfigMap";
-                  name = "${name}-replicate";
-                  data."replicate.py" = replicatePy;
-                }
+              scope.mkResource {
+                apiVersion = "v1";
+                kind = "ConfigMap";
+                name = "${name}-replicate";
+                data."replicate.py" = replicatePy;
+              }
             else
               null;
 

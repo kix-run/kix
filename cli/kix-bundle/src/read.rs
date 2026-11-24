@@ -18,8 +18,9 @@ use serde::{Deserialize, Deserializer};
 
 use crate::{
     BundleError, BundleFile, Contents, FORMAT, FileEntry, Header, INDEX_NAME, LIMITS,
-    MAX_CONTENT_BYTES, MAX_FILES, MAX_RECEIPT_BYTES, MAX_RECORD_BYTES, MAX_REFERENCES, Role,
-    VERSION, ZSTD_MAGIC, malformed, parse_manifest, stream_order, too_large,
+    MAX_CONTENT_BYTES, MAX_FILES, MAX_RECEIPT_BYTES, MAX_RECORD_BYTES, MAX_REFERENCES,
+    MAX_WARNINGS_BYTES, Role, VERSION, ZSTD_MAGIC, malformed, parse_manifest, stream_order,
+    too_large,
 };
 
 /// A bundle whose seek table and header have been read and checked, and
@@ -81,6 +82,7 @@ impl<R: Read + Seek> OpenBundle<R> {
         Ok(Contents {
             kix_rev: self.header.kix_rev.clone(),
             receipt: self.header.receipt.clone(),
+            warnings: self.header.warnings.clone(),
             files,
         })
     }
@@ -327,6 +329,14 @@ fn parse_header(bytes: &[u8]) -> Result<Header, BundleError> {
             "the receipt is over {MAX_RECEIPT_BYTES} bytes"
         )));
     }
+    if counts
+        .warnings
+        .is_some_and(|w| w.get().len() > MAX_WARNINGS_BYTES)
+    {
+        return Err(too_large(format!(
+            "the warnings are over {MAX_WARNINGS_BYTES} bytes; fix the warnings in the cluster definition and run `kix bundle` again"
+        )));
+    }
     let header: Header = serde_json::from_slice(bytes).map_err(unreadable)?;
     let files = &header.files;
     if files.iter().map(|f| f.size).fold(0, u64::saturating_add) > MAX_CONTENT_BYTES {
@@ -361,6 +371,8 @@ struct Counts<'a> {
     files: FileCounts,
     #[serde(default, borrow)]
     receipt: Option<&'a serde_json::value::RawValue>,
+    #[serde(default, borrow)]
+    warnings: Option<&'a serde_json::value::RawValue>,
 }
 
 /// The files a header lists and the references they give, counted

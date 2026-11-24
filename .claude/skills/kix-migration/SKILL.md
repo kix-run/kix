@@ -272,7 +272,7 @@ A resource's `requires` and `root.requires` order different things. A resource's
 - **Duplicate requires:** same resource listed twice
 - **Orphaned resources:** defined in the package but unreachable from `root`
 
-A package's own `warnings` function returns messages or records with the fields of `scope.fail` (`message`, `fix`, `object`, `option`, `dependency`, `clusterOption`, `id`). Return a warning through `warnings`, not `builtins.trace` or `lib.warn`, which no command shows when the build succeeds.
+A package's `warnings` function takes `{ config, self, deps, clusterConfig }` and returns a list of strings or attribute sets with the fields of `scope.fail` (`message`, `fix`, `object`, `option`, `dependency`, `clusterOption`, `id`). Return warnings from `warnings`; Kix hides `builtins.trace` and `lib.warn` output when the build succeeds.
 
 Fix all warnings before committing.
 
