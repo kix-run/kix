@@ -1,0 +1,3 @@
+# 2026-11-24 · `cli/kix/src/cluster/secrets.rs` · Kix applies Secret values as `stringData`, so under server-side apply it never owns the `data` keys.
+
+The `kix` field manager owns only `f:stringData.<key>`, a write-only field. When another manager also owned `data.<key>` (Flux's kustomize-controller after a takeover) and that manager's fields are released with an empty apply, Kubernetes deletes `data` and the Secret is empty. Seen moving a Flux SOPS Secret: `kix status` still reported every resource ok, and only `kix plan --reconcile` showed `+ $.data`. The same cause keeps keys on the cluster after they leave the SOPS file, because no manager owns them, so nothing prunes them.

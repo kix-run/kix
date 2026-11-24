@@ -1,0 +1,416 @@
+---
+title: "Move from Flux to Kix in phases"
+description: "Migrate a Flux cluster to Kix one layer at a time while preventing pruning and resolving server-side apply field ownership."
+---
+
+import Command from '/src/components/Command.astro';
+
+Move a Flux-managed cluster to Kix one layer at a time while workloads stay up. You build the matching Kix definition alongside your Flux repository, migrate leaf layers individually before the shared infrastructure layer, strip Flux's server-side apply ownership after each takeover, and uninstall Flux last. This guide covers Flux only.
+
+The examples assume a Flux repository with `Kustomization` layers that set `prune: true` and `dependsOn`, `HelmRelease` charts, SOPS secrets encrypted with `age`, and `postBuild.substitute` and `postBuild.substituteFrom` cluster variables. Three leaf layers (`web`, `podinfo`, and `api`) and one shared layer (`infra`) move into a Kix cluster named `test`.
+
+Kix has no pull-based mode today. `kix deploy` runs from a workstation or a CI job and applies from there. Pull-based sync through the Kix operator is planned. The operator is a work in progress (with [`kix deploy --operator`](/docs/reference/cli/operator-mode/), the CLI still builds and plans on your machine while the operator applies).
+
+## Rules for Flux resource deletion
+
+Six Flux behaviors determine when removing a manifest deletes live objects:
+
+1. Removing a `Kustomization` with `prune: true` from Git causes its parent `Kustomization` to delete it, which deletes every object that `Kustomization` applied.
+2. Flux keeps those objects when any one of three conditions holds before you remove the `Kustomization` from Git: you suspend it (`flux suspend kustomization <name>`), it sets `deletionPolicy: Orphan`, or the object carries the annotation `kustomize.toolkit.fluxcd.io/prune: disabled`.
+3. Removing an object from the path of a `Kustomization` that keeps running deletes the object only if it still carries the `kustomize.toolkit.fluxcd.io/name` and `kustomize.toolkit.fluxcd.io/namespace` labels. Flux keeps objects without those labels.
+4. Deleting an unsuspended `HelmRelease` runs a Helm uninstall (`uninstalled Helm release for deleted resource` in `helm-controller` logs) and deletes the `Deployment`, `Service`, and release `Secret`. Suspending the `HelmRelease` first (`flux suspend helmrelease <name> -n <ns>`) logs `reconciliation is suspended for this object` on deletion and keeps the `Deployment`, `Service`, and release `Secret`.
+5. Removing a `Namespace` from a running shared layer (such as `infra`) deletes that `Namespace` and everything inside it, including workloads Kix already manages. Annotating the `Namespace` with `kustomize.toolkit.fluxcd.io/prune: disabled` in Git and letting Flux reconcile before removing the manifest keeps the `Namespace` and its contents.
+6. Running `flux uninstall` removes finalizers from every Flux object, then deletes the Flux CRDs and the `flux-system` `Namespace`. The objects Flux had applied stay in place, including the `podinfo` and `api` `Namespace` objects of the unsuspended `infra` `Kustomization` (with `prune: true`) and the workloads in them. Objects inside `flux-system`, such as the `cluster-vars` `ConfigMap`, are deleted with that `Namespace`.
+
+## Build the Kix project next to the Flux repository
+
+Create the Kix project alongside your Flux checkout. Add leaf layers (`web`, `podinfo`, and `api`, which nothing depends on) to `clusters/test.nix` one layer at a time as you migrate them so Flux can continue reconciling the remaining layers. Move the shared `infra` layer last.
+
+```nix title="clusters/test.nix"
+{ kix, ... }:
+let
+  # What Flux read from the cluster-vars ConfigMap and postBuild.substitute.
+  clusterVars = {
+    clusterName = "kix-flux-test";
+    environment = "production";
+  };
+in
+kix.buildCluster {
+  modules = [
+    kix.flavors.kind
+    {
+      instances.web.web = {
+        package = import ../packages/web.nix;
+        # Keep the selector Flux created; Deployment selectors are immutable.
+        selectorLabels.app = "web";
+        config = {
+          greeting = "Hello";
+          inherit (clusterVars) clusterName environment;
+          replicas = 2;
+        };
+      };
+
+      instances.podinfo.podinfo = {
+        package = kix.helmChart {
+          repo = "https://stefanprodan.github.io/podinfo";
+          name = "podinfo";
+          version = "6.17.0";
+          hash = "sha256-09Z/Rg+flLttEJUDFfwJU3me/A7mAzLjxHXnVemcDgQ=";
+          releaseName = "podinfo";
+        };
+        # The values the HelmRelease set.
+        config.values.replicaCount = 2;
+      };
+
+      instances.api.api = {
+        package = import ../packages/api.nix;
+        selectorLabels.app = "api";
+        config.credentialsFile = ../secrets/api-credentials.enc.yaml;
+      };
+    }
+  ];
+}
+```
+
+### Replace `postBuild` variables and `dependsOn`
+
+In Flux, the `web` `Kustomization` set `postBuild.substitute: { GREETING: "Hello" }` and loaded `CLUSTER_NAME: kix-flux-test`, `ENVIRONMENT: production`, and `WEB_REPLICAS: "2"` through `postBuild.substituteFrom` from the `cluster-vars` `ConfigMap` (referenced as `${GREETING} from ${CLUSTER_NAME}` in a `ConfigMap`, `${ENVIRONMENT}` in an environment variable, and `${WEB_REPLICAS}` for replica count). In `clusters/test.nix`, those variables become the `clusterVars` `let` binding passed to typed options in `packages/web.nix`: `greeting`, `clusterName`, `environment` (an enum of `"staging"` and `"production"`), and `replicas` (a positive integer with default `2`). `packages/web.nix` builds the `web-content` `ConfigMap`, the `web` `Deployment`, and the `web` `Service`. Because options are typed, a typo fails `kix check` instead of producing an empty string. See [Create a local package](/docs/how-to/author-packages-and-clusters/create-a-local-package/) and [Add typed package options](/docs/how-to/author-packages-and-clusters/add-typed-package-options/).
+
+Kix has no layers. It orders resources from the references in the definition: a `Namespace` before the objects in it, and a `Secret` before the `Deployment` that reads it through `out.mkEnv`. For an order that references do not express, see [Add explicit ordering with extraDeps](/docs/how-to/adopt-existing-resources/add-explicit-ordering-with-extradeps/).
+
+### Check selectors and pod restarts before deploying
+
+Keep immutable `Deployment` selectors with `selectorLabels` on each instance, as shown on `web` and `api` above. See [Preserve existing selectors](/docs/how-to/adopt-existing-resources/preserve-existing-selectors/).
+
+Validate the cluster and inspect the rendered manifests:
+
+<Command
+  commands={[
+    "kix check test",
+    "kix build test",
+  ]}
+/>
+
+On the first deploy of a package, `kix plan test` lists the package as added (`+ web 1.0.0 (3 resources)`) without showing a field diff against existing objects on the cluster. Compare the `kix build test` output with the live objects (`kubectl get ... -o yaml`) yourself before deploying.
+
+Check for two pod template differences that cause a one-time rollout during takeover:
+
+- **Pod labels:** Kix adds `app.kubernetes.io/name` (set to the instance name) to every pod template it builds. Flux's `web` and `api` `Deployment` pods carried only `app: <name>`, so the first `kix deploy` changes the pod template and rolls their pods once (with 2 replicas and a readiness probe, `web` keeps serving). Their pod UIDs stay unchanged afterward when you release Flux's fields, remove the Flux layer, and run `flux uninstall`. Pods that already carry a matching `app.kubernetes.io/name` label, such as `podinfo` with `app.kubernetes.io/name: podinfo`, do not restart at all.
+- **Environment variable order:** `kix.mkEnvVars` and a `Secret`'s `out.mkEnv` take an attribute set and write container `env` entries sorted by name. A different `env` order in the Flux manifest also updates the pod template on the first deploy.
+
+## Move a Kustomization leaf layer (`web`)
+
+Start with `instances.web.web` enabled in `clusters/test.nix` and follow this sequence for each plain `Kustomization` leaf layer. See [Take ownership of kubectl-managed resources](/docs/how-to/adopt-existing-resources/take-ownership-of-kubectl-managed-resources/) for background on adopting existing objects.
+
+1. Suspend the `web` `Kustomization` so Flux does not re-apply its own manifest on the next reconcile:
+
+   <Command commands={["flux suspend kustomization web"]} />
+
+2. Check the plan and run a server-side dry run:
+
+   <Command
+     commands={[
+       "kix plan test",
+       "kix deploy test --dry-run",
+     ]}
+   />
+
+   When Kix renders the same field values as Flux, server-side apply reports zero conflicts and requires no `--force-conflicts`.
+
+3. Deploy with Kix and check workload health:
+
+   <Command
+     commands={[
+       "kix deploy test",
+       "kix status test",
+       "kubectl rollout status deployment/web -n web",
+     ]}
+   />
+
+   `kix deploy test` prints `Deploy complete: 5 created, 6 configured, 0 unchanged, 0 failed` (the 5 created resources are Kix's two CRDs and `PackageInstance` records). Each shared field on `web` is now co-owned by `kustomize-controller` and `kix`, and Flux's `kustomize.toolkit.fluxcd.io/*` labels stay on the objects.
+
+4. Remove the `web` `Kustomization` from Git and push while `web` remains suspended. Flux deletes the suspended `Kustomization` object and leaves the `web` resources intact.
+
+5. Release `kustomize-controller` field ownership. While `kustomize-controller` still co-owns fields on the adopted objects, Kix refuses later changes to those fields. Changing `replicas` from `2` to `3`, for example, stops on `kix deploy test --dry-run`:
+
+   <Command commands={["kix deploy test --dry-run"]} />
+
+   {/* Output in this guide is maintained by hand. It comes from a test run with Flux 2.10.0, which the docs capture pipeline cannot reproduce. */}
+
+   ```text
+   The deploy would stop on 1 write:
+     ✗ Deployment.apps/web@web field ownership conflict
+         kustomize-controller owns .spec.replicas
+         --force-conflicts takes the fields; `ownership.cede` on the resource leaves them to the other manager
+   ```
+
+   :::note[Explanation]
+   Flux's `kustomize-controller` applies as field manager `kustomize-controller`, `helm-controller` applies as `helm-controller`, and Kix applies as `kix`. Sending an empty server-side apply under Flux's manager name drops that manager from `managedFields` and deletes any field owned exclusively by Flux. See [Server-side apply and drift](/docs/explanation/server-side-apply-and-drift/).
+   :::
+
+   Write a stub file containing only `apiVersion`, `kind`, `metadata.name`, and `metadata.namespace` for each object in the layer:
+
+   ```yaml title="release-flux-web.yaml"
+   apiVersion: apps/v1
+   kind: Deployment
+   metadata:
+     name: web
+     namespace: web
+   ---
+   apiVersion: v1
+   kind: Service
+   metadata:
+     name: web
+     namespace: web
+   ---
+   apiVersion: v1
+   kind: ConfigMap
+   metadata:
+     name: web-content
+     namespace: web
+   ```
+
+   Preview the empty apply with `--dry-run=server -o yaml` first to see any Flux-only field that would be deleted, then apply it:
+
+   <Command
+     commands={[
+       "kubectl apply --server-side --field-manager=kustomize-controller -f release-flux-web.yaml --dry-run=server -o yaml",
+       "kubectl apply --server-side --field-manager=kustomize-controller -f release-flux-web.yaml",
+     ]}
+   />
+
+   The `kustomize-controller` entry leaves `managedFields`, the `kustomize.toolkit.fluxcd.io/name` and `kustomize.toolkit.fluxcd.io/namespace` labels are removed, and pods do not restart. Later `replicas` edits plan without conflicts.
+
+6. Reconcile-check every object, including unchanged ones, to verify no needed field was lost:
+
+   <Command commands={["kix plan test --reconcile"]} />
+
+   `Plan: 5 unchanged` confirms every object matches Kix's output. If the plan shows a field to add back, run `kix deploy test --reconcile`.
+
+## Move a HelmRelease layer (`podinfo`)
+
+Enable `instances.podinfo.podinfo` in `clusters/test.nix` to migrate the `podinfo` chart. For the general chart adoption workflow, see [Take ownership of Helm-managed resources](/docs/how-to/adopt-existing-resources/take-ownership-of-helm-managed-resources/).
+
+1. Save the installed Helm values and manifest for comparison:
+
+   <Command
+     commands={[
+       "helm get values podinfo --namespace podinfo --all --output yaml > podinfo.values.yaml",
+       "helm get manifest podinfo --namespace podinfo > podinfo.manifest.yaml",
+     ]}
+   />
+
+2. Pin the same chart `version`, `releaseName`, and `config.values` with `kix.helmChart` in `clusters/test.nix`. To find `hash`, put `sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=` in `clusters/test.nix` and run `kix check test`:
+
+   <Command commands={["kix check test"]} />
+
+   ```text
+   the Helm chart podinfo 6.17.0 from https://stefanprodan.github.io/podinfo has the hash sha256-09Z/Rg+flLttEJUDFfwJU3me/A7mAzLjxHXnVemcDgQ=, but the package expects sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=.
+   ```
+
+   Set `hash` to the printed digest and re-run `kix check test`.
+
+3. Suspend the `HelmRelease`:
+
+   <Command commands={["flux suspend helmrelease podinfo -n podinfo"]} />
+
+4. Run a server-side dry run:
+
+   <Command commands={["kix deploy test --dry-run"]} />
+
+   ```text
+   The deploy would stop on 2 writes:
+     ✗ Deployment.apps/podinfo@podinfo field ownership conflict
+         helm-controller owns .metadata.labels.app.kubernetes.io/managed-by
+         --force-conflicts takes the fields; `ownership.cede` on the resource leaves them to the other manager
+     ✗ Service/podinfo@podinfo field ownership conflict
+         helm-controller owns .metadata.labels.app.kubernetes.io/managed-by
+         --force-conflicts takes the fields; `ownership.cede` on the resource leaves them to the other manager
+   ```
+
+   This conflict is expected because Helm sets `app.kubernetes.io/managed-by: Helm` while Kix sets `kix`. See [Handle server-side apply conflicts safely](/docs/how-to/adopt-existing-resources/handle-server-side-apply-conflicts-safely/).
+
+5. Deploy with `--force-conflicts` for this single takeover, then check workload status:
+
+   <Command
+     commands={[
+       "kix deploy test --force-conflicts",
+       "kix status test",
+       "kubectl rollout status deployment/podinfo -n podinfo",
+     ]}
+   />
+
+   No pods restart. Drop `--force-conflicts` on subsequent deploys.
+
+6. Remove the `HelmRelease`, its `HelmRepository`, and the `podinfo` `Kustomization` from Git in the same commit while the `HelmRelease` is suspended. Keep the `podinfo` `Kustomization` unsuspended so it deletes the `HelmRelease` and `HelmRepository`; because the `HelmRelease` itself is suspended, `helm-controller` skips the uninstall.
+
+7. Delete the Helm release `Secret`:
+
+   <Command commands={["kubectl -n podinfo delete secret -l owner=helm,name=podinfo"]} />
+
+   :::caution
+   Never run `helm uninstall` to remove the release record. It deletes the live `Deployment` and `Service` along with the release `Secret`.
+   :::
+
+8. Write `release-flux-podinfo.yaml` with `Deployment` and `Service` stubs in `podinfo`, preview and apply with `--field-manager=helm-controller`, and verify with `--reconcile`:
+
+   <Command
+     commands={[
+       "kubectl apply --server-side --field-manager=helm-controller -f release-flux-podinfo.yaml --dry-run=server -o yaml",
+       "kubectl apply --server-side --field-manager=helm-controller -f release-flux-podinfo.yaml",
+       "kix plan test --reconcile",
+     ]}
+   />
+
+   Releasing `helm-controller` removes the `helm.sh/chart` label, `helm.toolkit.fluxcd.io/*` labels, and `meta.helm.sh/*` annotations without restarting pods.
+
+## Move a layer with SOPS secrets (`api`)
+
+In `packages/api.nix`, `scope.mkSecret { name = "api-credentials"; keys = [ "username" "password" ]; source = ./secrets/api-credentials.enc.yaml; }` keeps the secret file encrypted in Git and in the build, and `kix deploy` runs `sops --decrypt` right before applying the `Secret` (before the `Deployment` that reads it). See [Use SOPS-backed secrets](/docs/how-to/platform-capabilities/use-sops-backed-secrets-if-production-ready/).
+
+### Convert the Flux SOPS file first
+
+Flux encrypts a full Kubernetes `Secret` manifest. Kix expects the decrypted file to be a flat map of key to value.
+
+:::caution
+Convert the Flux SOPS file before the first `kix deploy`. Passing Flux's encrypted `Secret` manifest directly to Kix succeeds without failing, writes the manifest fields `apiVersion`, `kind`, `metadata`, `stringData`, and `type` as keys into the `Secret`, and leaves the workload running only because Flux's previous `username` and `password` entries remain on the object.
+:::
+
+1. Add a dedicated creation rule in `.sops.yaml` without `encrypted_regex`. A Flux repository's rule usually sets `encrypted_regex: ^(data|stringData)$`, which leaves `username` and `password` in plain text when encrypting a flat file:
+
+   ```yaml title=".sops.yaml"
+   creation_rules:
+     - path_regex: secrets/.*\.enc\.yaml$
+       age: <your age recipient>
+   ```
+
+   Replace `<your age recipient>` with your `age` public key.
+
+2. Point `SOPS_AGE_KEY_FILE` at the `age` key Flux used, extract `stringData` from the Flux secret onto a trusted machine, and encrypt the flat file in place immediately (the first command writes plain values to disk briefly):
+
+   <Command
+     commands={[
+       "export SOPS_AGE_KEY_FILE=/path/to/age.agekey",
+       `sops decrypt --extract '["stringData"]' apps/api/credentials.sops.yaml > secrets/api-credentials.enc.yaml`,
+       "sops encrypt --in-place secrets/api-credentials.enc.yaml",
+     ]}
+   />
+
+   Inspect `secrets/api-credentials.enc.yaml` and confirm `username` and `password` show as `ENC[...]` before committing.
+
+### Adopt `api` and re-hydrate `Secret` data after releasing Flux
+
+1. Enable `instances.api.api` in `clusters/test.nix`, suspend the `api` `Kustomization`, validate, and deploy:
+
+   <Command
+     commands={[
+       "export SOPS_AGE_KEY_FILE=/path/to/age.agekey",
+       "flux suspend kustomization api",
+       "kix deploy test --dry-run",
+       "kix deploy test",
+       "kix status test",
+       "kubectl rollout status deployment/api -n api",
+     ]}
+   />
+
+   `kix deploy test` prints `Secret/api-credentials@api> hydrated 2 keys from SOPS`. Remove the `api` `Kustomization` from Git while it is suspended.
+
+2. Release `kustomize-controller` fields on the `api` resources and restore `Secret` data immediately. Kix sends `Secret` values as `stringData`, so the `kix` field manager never owns the `Secret`'s `data` keys; `kustomize-controller` owns `data`. The empty apply that releases `kustomize-controller` therefore deletes `data` and leaves the `Secret` empty. Running pods keep working because they read environment variables at startup, and `kix status test` still reports every resource `ok`, so only `kix plan test --reconcile` reveals `+ $.data: {"password":"(secret, not shown)","username":"(secret, not shown)"}`. A pod starting while `data` is empty would fail.
+
+   Preview `release-flux-api.yaml` with `--dry-run=server -o yaml`. When `data` is missing in the preview, run the release followed straight away by `kix deploy test --reconcile` (which prints `Secret/api-credentials@api> hydrated 2 keys from SOPS`), then confirm nothing remains with `kix plan test --reconcile`:
+
+   <Command
+     commands={[
+       "kubectl apply --server-side --field-manager=kustomize-controller -f release-flux-api.yaml --dry-run=server -o yaml",
+       "kubectl apply --server-side --field-manager=kustomize-controller -f release-flux-api.yaml",
+       "kix deploy test --reconcile",
+       "kix plan test --reconcile",
+     ]}
+   />
+
+## Detach Namespaces from `infra` and uninstall Flux
+
+### Remove a Namespace from a running shared layer
+
+If you remove a `Namespace` (such as `web`) from `infra` while `infra` keeps reconciling, protect the `Namespace` from pruning first:
+
+1. Add `kustomize.toolkit.fluxcd.io/prune: disabled` to the `web` `Namespace` in `infra/namespaces.yaml` in Git and let Flux reconcile:
+
+   ```yaml title="infra/namespaces.yaml"
+   apiVersion: v1
+   kind: Namespace
+   metadata:
+     name: web
+     annotations:
+       kustomize.toolkit.fluxcd.io/prune: disabled
+   ```
+
+2. Verify the annotation is present on the live `Namespace`:
+
+   <Command commands={["kubectl get namespace web -o yaml"]} />
+
+3. Remove the `web` `Namespace` document from `infra/namespaces.yaml` in Git and let `infra` reconcile. Flux leaves the `web` `Namespace` and Kix's workloads untouched.
+
+4. Release `kustomize-controller` ownership on the `web` `Namespace` with a `Namespace` stub manifest (`release-flux-web-ns.yaml`). Because Flux set `kustomize.toolkit.fluxcd.io/prune: disabled`, the empty apply removes that annotation too:
+
+   <Command
+     commands={[
+       "kubectl apply --server-side --field-manager=kustomize-controller -f release-flux-web-ns.yaml --dry-run=server -o yaml",
+       "kubectl apply --server-side --field-manager=kustomize-controller -f release-flux-web-ns.yaml",
+     ]}
+   />
+
+### Uninstall Flux
+
+Once every workload layer has moved to Kix and nothing still reads `cluster-vars` in `flux-system`, remove Flux from the cluster:
+
+1. Dry-run and execute `flux uninstall`:
+
+   <Command
+     commands={[
+       "flux uninstall --dry-run",
+       "flux uninstall",
+     ]}
+   />
+
+   `flux uninstall` strips finalizers from every Flux resource, deletes the Flux CRDs, and deletes `flux-system` (along with `cluster-vars`). The objects `infra` had applied outside `flux-system`, including the `podinfo` and `api` `Namespace` objects and the workloads in them, stay in place.
+
+2. Release `kustomize-controller` field ownership on any objects Flux still had applied (here the `podinfo` and `api` `Namespace` objects) using stub manifests previewed with `--dry-run=server -o yaml`.
+
+3. Run the final reconciliation and status checks:
+
+   <Command
+     commands={[
+       "kix plan test --reconcile",
+       "kix status test",
+     ]}
+   />
+
+   `kix plan test --reconcile` prints `Plan: 5 unchanged`, and `kix status test` reports every resource healthy:
+
+   ```text
+     api/api                         3 resources  ok
+     kube-system/platform-dns        1 resource   ok
+     kube-system/platform-storage    1 resource   ok
+     podinfo/podinfo                 3 resources  ok
+     web/web                         4 resources  ok
+     (cluster-level)                 6 resources  ok
+
+   18 resources: 18 ok.
+   ```
+
+## Optional: export YAML for Flux as a bridge
+
+If you want Flux to keep applying while Kix compiles manifests, export plain YAML into your Flux repository checkout (see [Export plain YAML](/docs/how-to/operate-a-cluster/export-plain-yaml/)). For a Kix cluster named `bridge`, run from the Flux checkout:
+
+<Command commands={["kix export bridge --out apps/bridge"]} />
+
+`kix export` writes one YAML file per object without `kix.run/*` annotations or `Activation` and `PackageInstance` records, ready for a Flux `Kustomization` to apply.
+
+Delete `_cluster/CustomResourceDefinition-activations.kix.run.yaml`, `_cluster/CustomResourceDefinition-packageinstances.kix.run.yaml`, and `_cluster/Namespace-kube-system.yaml` from `apps/bridge` before committing. If Flux applies those files and you later remove that `Kustomization` from Git, Flux deletes both Kix CRDs (deleting every `Activation` and `PackageInstance` record on the cluster and erasing rollback history, even though workloads keep running and a later `kix deploy` recreates current records) and tries to delete `kube-system` (which the API server refuses, leaving the `Kustomization` stuck until suspended).
+
+Exported objects keep the label `app.kubernetes.io/managed-by: kix`. A Kix cluster on the same Kubernetes cluster, such as `test`, sees the exported objects; `kix gc test --full-scan --dry-run` lists them as objects Kix never applied and keeps them unless you pass `--include unstamped`:
+
+<Command commands={["kix gc test --full-scan --dry-run"]} />
+
+Because Flux applies the manifests in this mode, Kix's readiness waits, deploy records, and rollback do not run.

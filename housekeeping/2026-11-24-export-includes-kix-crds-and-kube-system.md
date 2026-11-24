@@ -1,0 +1,3 @@
+# 2026-11-24 · `cli/kix-cli/src/commands/export.rs` · `kix export` writes Kix's CRDs and the `kube-system` Namespace into plain YAML meant for another tool.
+
+On a kind-flavored cluster the default export contains `_cluster/CustomResourceDefinition-activations.kix.run.yaml`, `CustomResourceDefinition-packageinstances.kix.run.yaml`, and `Namespace-kube-system.yaml`. Flux applied them, took over the CRDs that a Kix cluster on the same Kubernetes cluster uses, and when its Kustomization was removed it deleted both CRDs, which deleted every Activation and PackageInstance record. It also tried to delete `kube-system` and stuck in finalization. `export-plain-yaml.mdx` mentions the CRDs but not the Namespace or this consequence.

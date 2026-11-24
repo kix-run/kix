@@ -1,0 +1,3 @@
+# 2026-11-24 · `kix/lib/scope/builders.nix` · Taking over a workload restarts its pods when their template lacks `app.kubernetes.io/name`.
+
+`mkWorkload` always adds `app.kubernetes.io/name` (the instance name) to the pod template labels, and keeps the selector as given. A Deployment that Flux or kubectl created with only `app: web` gets a new pod template on the first `kix deploy`, so every pod is replaced once. A takeover with equivalent manifests cannot be done without a restart, and neither `kix plan` nor the takeover guides say so. `kix.mkEnvVars` and `out.mkEnv` take an attribute set, so they also emit `env` sorted by name, which changes the template of a workload whose variables were in another order.

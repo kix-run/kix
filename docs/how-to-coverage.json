@@ -82,6 +82,12 @@
       "unverifiedNixBlocks": 2
     },
     {
+      "page": "adopt-existing-resources/move-from-flux-to-kix-in-phases",
+      "scenario": "adoption",
+      "status": "implemented",
+      "unverifiedNixBlocks": 1
+    },
+    {
       "page": "adopt-existing-resources/patch-package-output-with-overlays",
       "scenario": "adoption",
       "status": "implemented",
