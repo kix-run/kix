@@ -12,6 +12,7 @@
 //! See [`ImportTarget`] and [`wait_for_import_target`].
 
 mod declared;
+mod deletion;
 mod imports;
 mod terminal;
 #[cfg(test)]
@@ -35,6 +36,10 @@ use crate::manifest::kinds;
 use crate::manifest::types::ResourceId;
 
 pub use declared::{check_readiness, declared_rule, is_immediate_kind, not_ready_reason};
+pub use deletion::{
+    DeletePath, Deletion, Runner, STUCK_DELETE_ID, Stuck, cycle_reason, deletion_reason,
+    held_back_reason, stuck_explanation, stuck_message,
+};
 pub use imports::{ImportTarget, MalformedMarker, import_target_from_manifest};
 pub use terminal::{
     PullError, TerminalReason, classify_pod_terminal, classify_pull_error,
@@ -42,6 +47,7 @@ pub use terminal::{
 };
 
 pub(crate) use declared::{check_job_ready, daemonset_pending_restart};
+pub(crate) use deletion::wait_gone;
 pub(crate) use imports::{wait_for_expectations, wait_for_import_target};
 pub(crate) use terminal::termination_output;
 
@@ -141,6 +147,15 @@ pub(crate) enum ReadinessResult {
     },
 }
 
+/// Return the readiness failure for `rid`, which is being deleted for
+/// `reason` ([`deletion_reason`]).
+pub(crate) fn being_deleted(rid: &ResourceId, reason: &str) -> String {
+    format!(
+        "{rid} is {reason}, so it cannot become ready. Run `kix deploy` again once {rid} is gone.",
+        rid = rid.display_id()
+    )
+}
+
 /// Absolute upper bound on how long any single resource may take to become
 /// Ready. Enforced regardless of the per-resource idle budget so a resource
 /// whose fingerprint changes continuously without reaching Ready still times
@@ -160,6 +175,9 @@ const HARD_CEILING: Duration = Duration::from_secs(5 * 60);
 /// * **Hard ceiling** ([`HARD_CEILING`], 5 minutes): an absolute upper bound
 ///   enforced regardless of progress, catching resources whose fingerprint
 ///   changes continuously without reaching Ready.
+///
+/// An object being deleted fails at once ([`deletion_reason`]): it will be
+/// gone soon, so it never becomes ready.
 ///
 /// Before each poll iteration, scans for terminal failure signals
 /// (`ImagePullBackOff`, `CrashLoopBackOff` past threshold,
@@ -215,6 +233,12 @@ pub(crate) async fn wait_for_ready(
             Ok(obj) => obj,
             Err(e) => return Err(ReadinessError::FetchError(e)),
         };
+        if let Some(reason) = deletion_reason(&obj) {
+            return Ok(ReadinessResult::Failed {
+                message: being_deleted(rid, &reason),
+                output: Vec::new(),
+            });
+        }
 
         // PVCs with WaitForFirstConsumer storage classes stay Pending until a pod
         // mounts them. Treat these as ready so downstream pods can be created,

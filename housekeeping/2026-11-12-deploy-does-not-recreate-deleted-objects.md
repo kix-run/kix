@@ -1,3 +1,4 @@
 # 2026-11-12 · `kix deploy` · A deploy with no build change does not recreate a Kix object someone deleted.
 
 After `kubectl delete svc cnpg-webhook-service`, `kix deploy` printed "activation identical to active. Nothing to apply." and a deploy with an unrelated change wrote only the changed objects, so the Service stayed missing until `--reconcile`. `kix diff` and `kix health` show the missing object; the deploy output does not mention it.
+- Hit again 2026-11-24 while making deletes wait: an unchanged object that is being deleted (it has a `deletionTimestamp`) is skipped the same way, because the plan without `--reconcile` reads no unchanged object, so the deploy goes green and the object then disappears. See `2026-11-24-apply-onto-terminating-object-reports-ready.md` for the wait that would fix both.

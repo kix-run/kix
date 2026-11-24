@@ -619,8 +619,11 @@ fn scalar_text(v: &Value) -> Option<String> {
 }
 
 /// Check whether a single resource is ready based on its kind or declared
-/// readiness rule.
+/// readiness rule. An object being deleted is never ready.
 pub fn check_readiness(obj: &DynamicObject, kind: GroupKind<'_>) -> bool {
+    if obj.metadata.deletion_timestamp.is_some() {
+        return false;
+    }
     if is_immediate_kind(kind) {
         return true;
     }
@@ -967,6 +970,9 @@ pub(super) fn readiness_message(obj: &DynamicObject, kind: GroupKind<'_>) -> Str
 /// name, and a deploy that waits for the object shows it in
 /// [`readiness_message`].
 pub fn not_ready_reason(obj: &DynamicObject, kind: GroupKind<'_>) -> String {
+    if let Some(reason) = super::deletion_reason(obj) {
+        return reason;
+    }
     if let Some(rule) = declared_readiness(obj) {
         let field = &rule.generation;
         let generation = obj.metadata.generation;

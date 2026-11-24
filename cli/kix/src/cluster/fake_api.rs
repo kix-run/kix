@@ -5,8 +5,10 @@
 //! Job, ClusterRole, Kix's Activation, and two kinds of a group served at two
 //! versions), and GET, LIST (with an equality or existence label
 //! selector), PATCH (as a JSON merge patch, on the object or its `status`),
-//! DELETE (honoring `preconditions`), and server-side apply on the objects it
-//! holds. An apply stores the manifest sent as it is, and a dry-run apply
+//! POST (create), DELETE (honoring `preconditions` and `metadata.finalizers`), and
+//! server-side apply on the objects it holds. A DELETE of an object with
+//! finalizers sets its `deletionTimestamp` and keeps it, and a PATCH that
+//! leaves such an object without finalizers removes it, as Kubernetes does. An apply stores the manifest sent as it is, and a dry-run apply
 //! (`dryRun=All`) answers without storing.
 //! Every object gets a uid and a resourceVersion when it is added, and a new
 //! resourceVersion on every change. `/version` answers once
@@ -57,6 +59,7 @@ const KINDS: &[(&str, &str, &str, &str, bool)] = &[
         false,
     ),
     (keys::DOMAIN, "v1alpha1", RECORD_KIND, "activations", false),
+    ("events.k8s.io", "v1", "Event", "events", true),
     // A group served at two versions, preferred first: `Gizmo` at both,
     // `Gadget` only at the older one.
     (TWO_VERSION_GROUP, "v1", "Gizmo", "gizmos", true),
@@ -106,6 +109,21 @@ impl State {
         self.next_rv += 1;
         self.next_rv.to_string()
     }
+
+    /// Remove the object at `i` when it is being deleted and has no
+    /// finalizers left.
+    fn finish_deletion(&mut self, i: usize) {
+        let o = &self.objects[i];
+        if !o["metadata"]["deletionTimestamp"].is_null() && !has_finalizers(o) {
+            self.objects.remove(i);
+        }
+    }
+}
+
+fn has_finalizers(o: &Value) -> bool {
+    o["metadata"]["finalizers"]
+        .as_array()
+        .is_some_and(|f| !f.is_empty())
 }
 
 /// The `kube-system` Namespace with `uid`, which identifies the Kubernetes
@@ -220,6 +238,39 @@ impl FakeApi {
             .collect();
         v.sort();
         v
+    }
+
+    /// Return a copy of the held object of `kind` named `name`, in any group.
+    pub fn object(&self, kind: &str, name: &str) -> Option<Value> {
+        let st = self.state.lock().unwrap();
+        st.objects
+            .iter()
+            .find(|o| o["kind"] == kind && o["metadata"]["name"] == name)
+            .cloned()
+    }
+
+    /// Change the held object of `kind` named `name` with `f`, as another
+    /// writer would, giving it a new resourceVersion. An object being deleted
+    /// that `f` leaves without finalizers is removed.
+    pub fn patch_object(&self, kind: &str, name: &str, f: impl FnOnce(&mut Value)) {
+        let mut st = self.state.lock().unwrap();
+        let i = st
+            .objects
+            .iter()
+            .position(|o| o["kind"] == kind && o["metadata"]["name"] == name)
+            .expect("the object to patch");
+        f(&mut st.objects[i]);
+        let rv = st.bump();
+        st.objects[i]["metadata"]["resourceVersion"] = json!(rv);
+        st.finish_deletion(i);
+    }
+
+    /// Remove every finalizer from the held object of `kind` named `name`, as
+    /// its controller does when its cleanup is done.
+    pub fn remove_finalizers(&self, kind: &str, name: &str) {
+        self.patch_object(kind, name, |o| {
+            o["metadata"]["finalizers"] = json!([]);
+        });
     }
 
     /// Return `METHOD path` for every request seen so far, including `?query`
@@ -364,8 +415,35 @@ impl FakeApi {
                 if stale {
                     return status(409, "Conflict", "Precondition failed");
                 }
+                if has_finalizers(&st.objects[i]) {
+                    let rv = st.bump();
+                    let meta = &mut st.objects[i]["metadata"];
+                    if meta["deletionTimestamp"].is_null() {
+                        meta["deletionTimestamp"] = json!("2026-11-24T15:54:00Z");
+                    }
+                    meta["resourceVersion"] = json!(rv);
+                    return (200, st.objects[i].clone());
+                }
                 let gone = st.objects.remove(i);
                 (200, gone)
+            }
+            ("POST", None) => {
+                let Ok(mut obj) = serde_json::from_slice::<Value>(body) else {
+                    return status(400, "BadRequest", "the fake serves JSON bodies only");
+                };
+                let rv = st.bump();
+                let meta = &mut obj["metadata"];
+                if meta["name"].is_null() {
+                    let prefix = meta["generateName"].as_str().unwrap_or("").to_string();
+                    meta["name"] = json!(format!("{prefix}{rv}"));
+                }
+                meta["uid"] = json!(format!("uid-{rv}"));
+                meta["resourceVersion"] = json!(rv);
+                if let Some(ns) = &target.namespace {
+                    meta["namespace"] = json!(ns);
+                }
+                st.objects.push(obj.clone());
+                (201, obj)
             }
             ("PATCH", Some(name)) if apply => {
                 let Ok(mut obj) = serde_json::from_slice::<Value>(body) else {
@@ -399,7 +477,9 @@ impl FakeApi {
                 merge_patch(&mut st.objects[i], &patch);
                 let rv = st.bump();
                 st.objects[i]["metadata"]["resourceVersion"] = json!(rv);
-                (200, st.objects[i].clone())
+                let answer = st.objects[i].clone();
+                st.finish_deletion(i);
+                (200, answer)
             }
             _ => status(405, "MethodNotAllowed", "not served by the fake"),
         }

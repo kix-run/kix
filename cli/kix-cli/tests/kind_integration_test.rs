@@ -1083,3 +1083,169 @@ fn unwrapped(out: &str) -> String {
     }
     text
 }
+
+/// A package of two ConfigMaps: `hold-test-config` names
+/// `hold-test-base`, so it depends on it.
+const HOLD_NIX: &str = r#"{ scope, ... }:
+{
+  meta = {
+    version = "1";
+    description = "A ConfigMap that depends on another";
+    owner = "test";
+  };
+  build =
+    { self, ... }:
+    {
+      base = scope.mkResource {
+        apiVersion = "v1";
+        kind = "ConfigMap";
+        name = "hold-test-base";
+        extra.data.role = "needed";
+      };
+      config = scope.mkResource {
+        apiVersion = "v1";
+        kind = "ConfigMap";
+        name = "hold-test-config";
+        extra.data.base = self.base.out.name;
+      };
+      root = self.config;
+    };
+}
+"#;
+
+/// Write the flake of the Kix cluster `hold` into `dir`, with the `hold`
+/// package when `with_package` is set.
+fn write_hold_cluster(dir: &Path, with_package: bool) {
+    let instance = if with_package {
+        "instances.hold-test.hold.package = import ./hold.nix;"
+    } else {
+        ""
+    };
+    let text = format!(
+        r#"{{ kix, packages }}:
+kix.buildCluster {{
+  name = "hold";
+  modules = [
+    kix.flavors.kind
+    {{
+      namespaces.hold-test = {{ }};
+      {instance}
+    }}
+  ];
+}}
+"#
+    );
+    std::fs::write(dir.join("hold-cluster.nix"), text).unwrap();
+    git(dir, &["add", "-A"]);
+}
+
+/// Verify that a prune waits for each deleted object to be gone. A
+/// ConfigMap that keeps a finalizer fails the deploy with exit code 1 and
+/// a message that names the finalizer, and the ConfigMap it depends on
+/// stays. Once the finalizer is removed, the next prune deletes both.
+///
+/// The kind cluster is `$KIX_KIND_CLUSTER` (default `kix-delete-wait`); the
+/// test creates and deletes it.
+#[test]
+#[ignore] // Run explicitly: cargo test --test kind_integration_test -- --ignored
+fn a_prune_waits_for_finalizers() {
+    if !has_kind() || !has_kubectl() {
+        eprintln!("skipping: kind or kubectl not available");
+        return;
+    }
+    let kind_cluster =
+        std::env::var("KIX_KIND_CLUSTER").unwrap_or_else(|_| "kix-delete-wait".into());
+    let ctx = format!("kind-{kind_cluster}");
+    kind_delete(&kind_cluster);
+    clear_activation_cache("hold");
+    assert!(kind_create(&kind_cluster), "failed to create kind cluster");
+    struct Cleanup(String);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            kind_delete(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(kind_cluster.clone());
+
+    // The flake of TwoClusters, with one more cluster.
+    let flake = TwoClusters::new();
+    let flake_nix = std::fs::read_to_string(flake.path().join("flake.nix"))
+        .unwrap()
+        .replace(
+            "sweep-b = ./b.nix;",
+            "sweep-b = ./b.nix;\n        hold = ./hold-cluster.nix;",
+        );
+    flake.write("flake.nix", &flake_nix);
+    flake.write("hold.nix", HOLD_NIX);
+    write_hold_cluster(flake.path(), true);
+
+    let (ok, out) = flake.kix(&ctx, &["deploy", "hold", "--yes"]);
+    assert!(ok, "{out}");
+    let patch = kubectl(
+        &ctx,
+        &[
+            "-n",
+            "hold-test",
+            "patch",
+            "configmap",
+            "hold-test-config",
+            "--type=merge",
+            "-p",
+            r#"{"metadata":{"finalizers":["example.com/hold"]}}"#,
+        ],
+    );
+    assert!(patch.status.success(), "{patch:?}");
+
+    write_hold_cluster(flake.path(), false);
+    let out = assert_cmd::Command::cargo_bin("kix")
+        .unwrap()
+        .env("NO_COLOR", "true")
+        .arg("--flake")
+        .arg(flake.path())
+        .args(["--context", &ctx])
+        .args(["deploy", "hold", "--prune", "--yes", "--timeout", "10s"])
+        .output()
+        .expect("kix should run");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    eprintln!("$ kix deploy hold --prune --yes --timeout 10s\n{text}");
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(text.contains("[K2794]"), "{text}");
+    assert!(text.contains("example.com/hold"), "{text}");
+    assert!(
+        text.contains("kubectl -n hold-test patch configmap hold-test-config"),
+        "{text}"
+    );
+    let base = kubectl(
+        &ctx,
+        &["-n", "hold-test", "get", "configmap", "hold-test-base"],
+    );
+    assert!(
+        base.status.success(),
+        "the ConfigMap the stuck one needs was deleted"
+    );
+
+    let unpatch = kubectl(
+        &ctx,
+        &[
+            "-n",
+            "hold-test",
+            "patch",
+            "configmap",
+            "hold-test-config",
+            "--type=merge",
+            "-p",
+            r#"{"metadata":{"finalizers":null}}"#,
+        ],
+    );
+    assert!(unpatch.status.success(), "{unpatch:?}");
+    let (ok, out) = flake.kix(&ctx, &["deploy", "hold", "--prune", "--yes"]);
+    assert!(ok, "{out}");
+    for name in ["hold-test-config", "hold-test-base"] {
+        let gone = kubectl(&ctx, &["-n", "hold-test", "get", "configmap", name]);
+        assert!(!gone.status.success(), "{name} is still on the cluster");
+    }
+}

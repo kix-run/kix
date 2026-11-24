@@ -164,6 +164,7 @@ async fn main() -> anyhow::Result<()> {
         records,
         required_stops: kix::cluster::stops::required_stops(),
         shutdown: CancelToken::new(),
+        events: k8s_events::recorder(client.clone(), std::env::var("HOSTNAME").ok()),
     });
 
     // On a stop request, cancel every running deploy and let the controller

@@ -381,6 +381,238 @@ fn get_annotation(manifest: &serde_json::Value, key: &str) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+/// Objects to delete, in an order that deletes each object before the
+/// objects it depends on, together with the dependencies of a whole build.
+///
+/// A delete that does not finish leaves its object on the cluster, and that
+/// object may still need what it depends on, such as the operator that must
+/// remove its finalizer. [`DeleteOrder::walk`] deletes each object once
+/// nothing still undeleted depends on it, runs independent deletes at the
+/// same time, and holds back everything a stuck or failed object depends on.
+/// Deploy's prune, `kix gc`, and the operator's teardown all walk a
+/// `DeleteOrder`.
+///
+/// The dependencies come from every manifest the order is made from, not only
+/// the objects to delete, so a dependency that passes through an object that
+/// stays (a custom resource that needs a Job that needs its operator) still
+/// orders the deletes and still holds the operator back.
+#[derive(Debug, Clone, Default)]
+pub struct DeleteOrder {
+    ids: Vec<ResourceId>,
+    /// The objects each object depends on directly.
+    needs: HashMap<ResourceId, Vec<ResourceId>>,
+    /// Each object held back, and the object whose delete did not finish
+    /// that holds it.
+    held: HashMap<ResourceId, ResourceId>,
+}
+
+/// What [`DeleteOrder::walk`] did with one object.
+pub enum Walked<'a, T> {
+    /// The object's delete ran and ended with this outcome.
+    Done(T),
+    /// Not deleted, because this object, whose delete did not finish,
+    /// depends on it.
+    HeldBack(&'a ResourceId),
+    /// Not deleted, because it is part of a dependency cycle, or something
+    /// in one depends on it, so no order deletes it after everything that
+    /// needs it.
+    Cycle,
+    /// Not started, because the walk was cancelled.
+    NotStarted,
+}
+
+impl DeleteOrder {
+    /// Order the objects of `manifests` by their `kix.run/depends-on`
+    /// annotations, dependents first, and record those dependencies. When
+    /// they form a cycle, keep the order of `manifests`; the walk then
+    /// reports the objects of the cycle instead of deleting them. Callers
+    /// pass every manifest they know and [`DeleteOrder::retain`] the objects
+    /// to delete.
+    pub fn of_manifests(manifests: &[serde_json::Value]) -> Self {
+        let mut by_hash: HashMap<String, ResourceId> = HashMap::new();
+        for m in manifests {
+            if let Some(hash) = get_annotation(m, keys::IDENTITY_HASH) {
+                by_hash.insert(hash, ResourceId::from_value(m));
+            }
+        }
+        let mut needs: HashMap<ResourceId, Vec<ResourceId>> = HashMap::new();
+        for m in manifests {
+            let Some(deps) = get_annotation(m, keys::DEPENDS_ON) else {
+                continue;
+            };
+            let id = ResourceId::from_value(m);
+            for hash in keys::depends_on_hashes(&deps) {
+                if let Some(dep) = by_hash.get(hash)
+                    && *dep != id
+                {
+                    needs.entry(id.clone()).or_default().push(dep.clone());
+                }
+            }
+        }
+        let ids = match ResourceGraph::from_manifests(manifests) {
+            Ok(graph) => graph.reverse_topo_ids(),
+            Err(_) => manifests.iter().map(ResourceId::from_value).collect(),
+        };
+        DeleteOrder {
+            ids,
+            needs,
+            held: HashMap::new(),
+        }
+    }
+
+    /// Keep `ids` in the order given, with no known dependencies.
+    pub fn unordered(ids: Vec<ResourceId>) -> Self {
+        DeleteOrder {
+            ids,
+            ..Self::default()
+        }
+    }
+
+    pub fn ids(&self) -> &[ResourceId] {
+        &self.ids
+    }
+
+    /// Append `rid`, with no known dependencies, unless it is listed already.
+    pub fn push(&mut self, rid: ResourceId) {
+        if !self.ids.contains(&rid) {
+            self.ids.push(rid);
+        }
+    }
+
+    /// Keep only the objects for which `keep` returns true. The dependencies
+    /// recorded through the objects removed still count.
+    pub fn retain(&mut self, keep: impl FnMut(&ResourceId) -> bool) {
+        self.ids.retain(keep);
+    }
+
+    /// Hold back every object that `stuck` depends on, directly or through
+    /// others, because `stuck` is still on the cluster.
+    pub fn hold_back(&mut self, stuck: &ResourceId) {
+        let mut queue = vec![stuck.clone()];
+        while let Some(rid) = queue.pop() {
+            for dep in self.needs.get(&rid).into_iter().flatten() {
+                if dep != stuck && !self.held.contains_key(dep) {
+                    self.held.insert(dep.clone(), stuck.clone());
+                    queue.push(dep.clone());
+                }
+            }
+        }
+    }
+
+    /// Return the object whose delete did not finish and that still needs
+    /// `rid`, or `None` when nothing holds `rid` back.
+    pub fn held_by(&self, rid: &ResourceId) -> Option<&ResourceId> {
+        self.held.get(rid)
+    }
+
+    /// Return, for each object to delete, the objects to delete that depend
+    /// on it, directly or through any other object. An object in a cycle
+    /// lists itself.
+    fn blockers(&self) -> HashMap<ResourceId, Vec<ResourceId>> {
+        let mut dependents: HashMap<&ResourceId, Vec<&ResourceId>> = HashMap::new();
+        for (from, deps) in &self.needs {
+            for dep in deps {
+                dependents.entry(dep).or_default().push(from);
+            }
+        }
+        let deleting: std::collections::HashSet<&ResourceId> = self.ids.iter().collect();
+        self.ids
+            .iter()
+            .map(|rid| {
+                let mut seen: std::collections::HashSet<&ResourceId> =
+                    std::collections::HashSet::new();
+                let mut queue = vec![rid];
+                while let Some(next) = queue.pop() {
+                    for d in dependents.get(next).into_iter().flatten() {
+                        if seen.insert(*d) {
+                            queue.push(*d);
+                        }
+                    }
+                }
+                let found = seen
+                    .into_iter()
+                    .filter(|d| deleting.contains(*d))
+                    .cloned()
+                    .collect();
+                (rid.clone(), found)
+            })
+            .collect()
+    }
+
+    /// Delete the objects in order, running up to `limit` deletes at a time.
+    ///
+    /// An object starts once every object to delete that depends on it is
+    /// done, so independent objects run together and a slow or stuck delete
+    /// holds up only what it depends on. `start` returns the future that
+    /// deletes one object and waits for it to be gone. When `unfinished` says
+    /// an outcome left the object on the cluster, everything it depends on is
+    /// held back. Because a stuck object holds back everything below it, a
+    /// chain of dependencies waits on at most one delete that never
+    /// finishes. Stuck deletes wait side by side, `limit` at a time, so the
+    /// time a walk spends on them is about one wait budget for every `limit`
+    /// of them, plus the deletes that finish along the longest chain.
+    ///
+    /// `report` hears of each object once, in the order things happen. Once
+    /// `cancel` fires, nothing new starts, and the objects not started are
+    /// reported as [`Walked::NotStarted`].
+    pub async fn walk<T, Fut>(
+        &mut self,
+        limit: usize,
+        cancel: &crate::cluster::cancel::CancelToken,
+        mut start: impl FnMut(&ResourceId) -> Fut,
+        unfinished: impl Fn(&T) -> bool,
+        mut report: impl FnMut(&ResourceId, Walked<'_, T>),
+    ) where
+        Fut: std::future::Future<Output = T>,
+    {
+        use futures::stream::{FuturesUnordered, StreamExt};
+        let blockers = self.blockers();
+        let ids = self.ids.clone();
+        let mut done: std::collections::HashSet<ResourceId> = std::collections::HashSet::new();
+        let mut started: std::collections::HashSet<ResourceId> = std::collections::HashSet::new();
+        let mut running = FuturesUnordered::new();
+        loop {
+            let mut rescan = !cancel.is_cancelled();
+            while rescan {
+                rescan = false;
+                for rid in &ids {
+                    if running.len() >= limit.max(1) {
+                        break;
+                    }
+                    if started.contains(rid) || !blockers[rid].iter().all(|b| done.contains(b)) {
+                        continue;
+                    }
+                    started.insert(rid.clone());
+                    if let Some(stuck) = self.held.get(rid).cloned() {
+                        report(rid, Walked::HeldBack(&stuck));
+                        done.insert(rid.clone());
+                        rescan = true;
+                        continue;
+                    }
+                    let fut = start(rid);
+                    let rid = rid.clone();
+                    running.push(async move { (rid, fut.await) });
+                }
+            }
+            let Some((rid, outcome)) = running.next().await else {
+                break;
+            };
+            if unfinished(&outcome) {
+                self.hold_back(&rid);
+            }
+            report(&rid, Walked::Done(outcome));
+            done.insert(rid);
+        }
+        for rid in ids.iter().filter(|rid| !started.contains(*rid)) {
+            if cancel.is_cancelled() {
+                report(rid, Walked::NotStarted);
+            } else {
+                report(rid, Walked::Cycle);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -396,6 +628,113 @@ mod tests {
             .flat_map(|idx| dag.neighbors_directed(idx, petgraph::Direction::Outgoing))
             .map(|dep| &dag[dep])
             .collect()
+    }
+
+    /// An object whose delete did not finish holds back what it depends on,
+    /// directly and through others, and nothing else.
+    #[test]
+    fn a_stuck_delete_holds_back_what_it_depends_on() {
+        let operator = manifest("Deployment", "operator", "ops", "hash_op", "");
+        let job = manifest("Job", "check", "ops", "hash_job", "hash_op");
+        let cr = manifest("ConfigMap", "resource", "app", "hash_cr", "hash_job");
+        let other = manifest("Secret", "other", "app", "hash_other", "");
+        let mut order = DeleteOrder::of_manifests(&[operator, job, cr, other]);
+        let id = |kind: &str, ns: &str, name: &str| {
+            let group = if kind == "Deployment" {
+                "apps"
+            } else if kind == "Job" {
+                "batch"
+            } else {
+                ""
+            };
+            ResourceId::new(group, kind, ns, name)
+        };
+        let ids = order.ids().to_vec();
+        let pos = |rid: &ResourceId| ids.iter().position(|r| r == rid).unwrap();
+        let (op, job, cr, other) = (
+            id("Deployment", "ops", "operator"),
+            id("Job", "ops", "check"),
+            id("ConfigMap", "app", "resource"),
+            id("Secret", "app", "other"),
+        );
+        assert!(pos(&cr) < pos(&job) && pos(&job) < pos(&op), "{ids:?}");
+
+        order.retain(|rid| *rid != job);
+        order.hold_back(&cr);
+        assert_eq!(order.held_by(&op), Some(&cr));
+        assert_eq!(order.held_by(&job), Some(&cr));
+        assert_eq!(order.held_by(&other), None);
+        assert_eq!(order.held_by(&cr), None);
+    }
+
+    /// A dependency through an object that is not deleted still orders the
+    /// walk and still holds back what the stuck object needs: the custom
+    /// resource needs a Job that stays, and the Job needs the operator.
+    #[tokio::test]
+    async fn the_walk_follows_dependencies_through_objects_that_stay() {
+        let operator = manifest("Deployment", "operator", "ops", "hash_op", "");
+        let job = manifest("Job", "check", "ops", "hash_job", "hash_op");
+        let cr = manifest("ConfigMap", "resource", "app", "hash_cr", "hash_job");
+        let mut order = DeleteOrder::of_manifests(&[operator, job, cr]);
+        let op = ResourceId::new("apps", "Deployment", "ops", "operator");
+        let cr = ResourceId::new("", "ConfigMap", "app", "resource");
+        order.retain(|rid| *rid == op || *rid == cr);
+        let mut seen = Vec::new();
+        order
+            .walk(
+                8,
+                &crate::cluster::cancel::CancelToken::new(),
+                |rid| {
+                    let stuck = rid.name == "resource";
+                    async move { stuck }
+                },
+                |stuck| *stuck,
+                |rid, walked| {
+                    seen.push(match walked {
+                        Walked::Done(stuck) => format!("{} done stuck={stuck}", rid.name),
+                        Walked::HeldBack(by) => format!("{} held by {}", rid.name, by.name),
+                        Walked::Cycle => format!("{} cycle", rid.name),
+                        Walked::NotStarted => format!("{} not started", rid.name),
+                    })
+                },
+            )
+            .await;
+        assert_eq!(
+            seen,
+            vec!["resource done stuck=true", "operator held by resource"]
+        );
+    }
+
+    /// Objects in a dependency cycle are reported, not deleted, and the
+    /// walk still deletes what does not depend on the cycle.
+    #[tokio::test]
+    async fn the_walk_reports_a_cycle() {
+        let a = manifest("ConfigMap", "a", "app", "hash_a", "hash_b");
+        let b = manifest("ConfigMap", "b", "app", "hash_b", "hash_a");
+        let c = manifest("ConfigMap", "c", "app", "hash_c", "");
+        let mut order = DeleteOrder::of_manifests(&[a, b, c]);
+        let mut seen = Vec::new();
+        order
+            .walk(
+                8,
+                &crate::cluster::cancel::CancelToken::new(),
+                |_| async { false },
+                |stuck| *stuck,
+                |rid, walked| {
+                    seen.push(format!(
+                        "{} {}",
+                        rid.name,
+                        match walked {
+                            Walked::Done(_) => "done",
+                            Walked::Cycle => "cycle",
+                            _ => "other",
+                        }
+                    ))
+                },
+            )
+            .await;
+        seen.sort();
+        assert_eq!(seen, vec!["a cycle", "b cycle", "c done"]);
     }
 
     #[test]

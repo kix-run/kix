@@ -53,7 +53,7 @@ current deploy is the cluster's `Active` or `Degraded`
 | --- | --- | --- |
 | `presence` | Is the object on the cluster? | It is gone, for example after a `kubectl delete`. |
 | `drift` | Does the object still hold what Kix applied? | The fields Kix owns no longer hash to the object's `kix.run/applied-hash` stamp. |
-| `readiness` | Is the object ready? | It is not ready by the rules [`kix deploy`](/docs/reference/cli/deploy/) waits on, such as a Deployment with fewer ready replicas than it wants. |
+| `readiness` | Is the object ready? | It is not ready by the rules [`kix deploy`](/docs/reference/cli/deploy/) waits on, such as a Deployment with fewer ready replicas than it wants. An object that is being deleted is never ready, regardless of kind, and the reason names any finalizers holding up deletion. |
 
 `kix status` checks only the objects listed in the current deploy record. It never reports extra objects on the cluster, whether orphaned from an earlier deploy or created outside Kix. See [Objects Kix did not apply](/docs/reference/cli/diff/#objects-kix-did-not-apply).
 
@@ -201,7 +201,7 @@ Each entry of `resources[]`:
 | `named` | `false` when Kix could not name a missing object. |
 | `present` | `yes`, `no`, `external` (an import marker for an object Kix does not manage), `unknown` (the account may not list the kind), or `ambiguous` (no live object matches its identity hash, multiple API groups serve its kind, and an older deploy record lacks its API group; run `kix deploy <cluster> --reconcile` to record it). |
 | `drift` | `null` when the drift check did not run or the object is gone. Otherwise `verdict` (`in_sync`, `changed`, `unstamped`, or `no_fieldset`), `foreign_owners` (other field managers, each with `manager`, `operation`, `subresource`, `time`, `paths`, and `unshared_paths`; `unshared_paths` lists the paths Kix does not co-own, which can conflict on deploy), and `unrecorded_scale` (a replica count changed through `/scale` that Kubernetes recorded no owner for). |
-| `ready` | `true` or `false`. `null` when the readiness check did not run, the kind has no readiness (such as a ConfigMap), or the object is gone. |
+| `ready` | `true` or `false` (always `false` while an object is being deleted). `null` when the readiness check did not run, the object is gone, or its kind has no readiness check (such as a ConfigMap) and it is not being deleted. |
 | `not_ready_reason` | Why the object is not ready, such as `0/1 ready, 0/1 updated`. |
 | `needed_by` | For a missing object, the objects that depend on it, as `Kind.group namespace/name` (or `Kind namespace/name` for core `v1` kinds). |
 | `problems` | `missing`, `changed`, and `not_ready`. Empty when the object is fine. |

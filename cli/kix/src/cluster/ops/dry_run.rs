@@ -16,7 +16,7 @@ use super::super::cancel::CancelToken;
 use super::super::errors::FetchError;
 use super::super::preview::{DryRunAnswer, DryRunOutcome, Journal, PruneAnswer, Refusal};
 use super::super::prune_guard::Pruned;
-use super::super::readiness::{ImportTarget, ReadinessError, ReadinessResult};
+use super::super::readiness::{Deletion, ImportTarget, ReadinessError, ReadinessResult};
 use super::super::secrets::{HydrationResult, SecretError};
 use super::{
     DeleteError, KubeResources, OnStatus, ReadError, RecreateError, ResourceIo, SecretHydrator,
@@ -98,7 +98,12 @@ impl ResourceIo for DryRun {
         self.resources.get_live(rid).await
     }
 
-    async fn recreate_in_place(&self, manifest: &Value) -> Result<ApplyResult, RecreateError> {
+    async fn recreate_in_place(
+        &self,
+        manifest: &Value,
+        _timeout: Duration,
+        _cancel: &CancelToken,
+    ) -> Result<ApplyResult, RecreateError> {
         let rid = ResourceId::from_value(manifest);
         let (ar, scope, api, _) = self.resources.delete_for_recreate(&rid).await?;
 
@@ -161,7 +166,9 @@ impl ResourceIo for DryRun {
     async fn prune(&self, rid: &ResourceId) -> Result<Pruned, DeleteError> {
         let deleted = self.resources.prune(rid).await;
         let answer = match &deleted {
-            Ok(Pruned::Deleted | Pruned::Gone) => PruneAnswer::Deleted,
+            Ok(Pruned::Deleted { .. } | Pruned::AlreadyDeleting { .. } | Pruned::Gone) => {
+                PruneAnswer::Deleted
+            }
             Ok(Pruned::Kept(shared)) => PruneAnswer::KeptShared(shared.describe()),
             Ok(Pruned::Changed(_)) => PruneAnswer::KeptChanged,
             // Skip recording an answer when the delete never reached the
@@ -172,6 +179,18 @@ impl ResourceIo for DryRun {
         self.journal
             .record(rid.clone(), DryRunOutcome::Pruned(answer));
         deleted
+    }
+
+    /// Return at once, because a dry-run delete removes nothing.
+    async fn wait_gone(
+        &self,
+        _rid: &ResourceId,
+        _uid: Option<&str>,
+        _timeout: Duration,
+        _cancel: &CancelToken,
+        _on_status: OnStatus<'_>,
+    ) -> Result<Deletion, ReadError> {
+        Ok(Deletion::Gone)
     }
 }
 

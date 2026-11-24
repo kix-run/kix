@@ -31,13 +31,17 @@ use super::super::cancel::CancelToken;
 use super::super::errors::FetchError;
 use super::super::kept::NotKeptField;
 use super::super::prune_guard::Pruned;
-use super::super::readiness::{ImportTarget, ReadinessError, ReadinessResult};
+use super::super::readiness::{Deletion, ImportTarget, ReadinessError, ReadinessResult};
 use super::super::secrets::{HydrationResult, SecretError};
 pub use super::Finalized;
 use super::{
     DeleteError, DeployRecord, OnStatus, ReadError, RecordWriteError, RecreateError, ResourceIo,
     SecretHydrator, StampError,
 };
+
+/// The status [`ResourceIo::wait_gone`] reports for one object, if any, and
+/// how its wait ends.
+type GoneScript = (Option<String>, Behaviour<Result<Deletion, String>>);
 
 /// A latch many calls can wait on. Opened once by the test.
 #[derive(Clone, Default, Debug)]
@@ -191,6 +195,7 @@ pub enum Call {
     },
     Stamp(ResourceId),
     Delete(ResourceId),
+    WaitGone(ResourceId),
     Finalize {
         had_failures: bool,
         orphans_left: bool,
@@ -216,6 +221,9 @@ pub struct ScriptedOps {
     checkpoint: Mutex<Behaviour<Result<(), String>>>,
     stamp: Mutex<Behaviour<Result<(), String>>>,
     delete: Mutex<Behaviour<Result<Pruned, String>>>,
+    /// What [`ResourceIo::wait_gone`] answers for each object, after
+    /// reporting the status. Unscripted objects are gone at once.
+    gone: Mutex<HashMap<ResourceId, GoneScript>>,
     finalize: Mutex<Behaviour<Result<Option<Finalized>, String>>>,
     abort: Mutex<Behaviour<Result<(), String>>>,
     log: Mutex<Vec<Logged>>,
@@ -241,7 +249,8 @@ impl ScriptedOps {
             begin: Mutex::new(Behaviour::Now(Ok(()))),
             checkpoint: Mutex::new(Behaviour::Now(Ok(()))),
             stamp: Mutex::new(Behaviour::Now(Ok(()))),
-            delete: Mutex::new(Behaviour::Now(Ok(Pruned::Deleted))),
+            delete: Mutex::new(Behaviour::Now(Ok(Pruned::Deleted { uid: None }))),
+            gone: Mutex::new(HashMap::new()),
             finalize: Mutex::new(Behaviour::Now(Ok(None))),
             abort: Mutex::new(Behaviour::Now(Ok(()))),
             log: Mutex::new(Vec::new()),
@@ -303,6 +312,21 @@ impl ScriptedOps {
 
     pub fn delete_behaviour(&self, b: Behaviour<Result<Pruned, String>>) -> &Self {
         *self.delete.lock().unwrap() = b;
+        self
+    }
+
+    /// Script how the wait for the deleted object `rid` ends. `status`, when
+    /// set, is reported once before it ends.
+    pub fn gone_behaviour(
+        &self,
+        rid: ResourceId,
+        status: Option<&str>,
+        b: Behaviour<Result<Deletion, String>>,
+    ) -> &Self {
+        self.gone
+            .lock()
+            .unwrap()
+            .insert(rid, (status.map(str::to_string), b));
         self
     }
 
@@ -439,7 +463,12 @@ impl ResourceIo for ScriptedOps {
         script.live.run().await.map_err(ReadError::Scripted)
     }
 
-    async fn recreate_in_place(&self, manifest: &Value) -> Result<ApplyResult, RecreateError> {
+    async fn recreate_in_place(
+        &self,
+        manifest: &Value,
+        _timeout: Duration,
+        _cancel: &CancelToken,
+    ) -> Result<ApplyResult, RecreateError> {
         let rid = ResourceId::from_value(manifest);
         self.record(Call::RecreateStart(rid.clone()));
         let script = self.node_script(&rid);
@@ -516,6 +545,29 @@ impl ResourceIo for ScriptedOps {
         self.record(Call::Delete(rid.clone()));
         let b = self.delete.lock().unwrap().clone();
         b.run().await.map_err(DeleteError::Scripted)
+    }
+
+    async fn wait_gone(
+        &self,
+        rid: &ResourceId,
+        _uid: Option<&str>,
+        _timeout: Duration,
+        cancel: &CancelToken,
+        on_status: OnStatus<'_>,
+    ) -> Result<Deletion, ReadError> {
+        self.record(Call::WaitGone(rid.clone()));
+        let scripted = self.gone.lock().unwrap().get(rid).cloned();
+        let Some((status, b)) = scripted else {
+            return Ok(Deletion::Gone);
+        };
+        if let Some(status) = status {
+            on_status(&status);
+        }
+        // The real wait ends when the cancel token fires, and so does this.
+        tokio::select! {
+            out = b.run() => out.map_err(ReadError::Scripted),
+            _ = cancel.cancelled() => Ok(Deletion::Cancelled),
+        }
     }
 }
 

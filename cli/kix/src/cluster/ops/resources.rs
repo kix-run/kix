@@ -25,7 +25,7 @@ use super::super::cancel::CancelToken;
 use super::super::discovery;
 use super::super::errors::FetchError;
 use super::super::prune_guard::{PruneGuard, Pruned};
-use super::super::readiness::{self, ImportTarget, ReadinessError, ReadinessResult};
+use super::super::readiness::{self, Deletion, ImportTarget, ReadinessError, ReadinessResult};
 use super::{DeleteError, NotDiscovered, OnStatus, ReadError, RecreateError, ResourceIo};
 
 /// Shared discovery cache of every kind the cluster serves, refreshed after
@@ -35,12 +35,6 @@ use super::{DeleteError, NotDiscovered, OnStatus, ReadError, RecreateError, Reso
 /// never forgets a kind already seen or replaces a cached kind when a group
 /// version fails to respond.
 type DiscoveryCache = Arc<RwLock<Vec<(ApiResource, Scope)>>>;
-
-/// Wall-clock bound for waiting on the live resource to disappear during an
-/// immutable-conflict recreate. This is independent of the readiness timeout
-/// because deletion is normally near-instant and a longer wait usually
-/// indicates stuck finalizers.
-const RECREATE_DELETE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How long apply waits for an object a manifest expects something else to
 /// have created (`kix.run/expects`). The creator is ready by the time this
@@ -279,13 +273,21 @@ impl KubeResources {
     }
 
     /// Delete the live object as the first step of an in-place recreate.
-    /// Returns the resolved kind, the API handle, and whether an object existed
-    /// to delete. A 404 is treated as success because the object is already
-    /// absent.
+    /// Returns the resolved kind, the API handle, and, when an object existed
+    /// to delete, its uid. A 404 is treated as success because the object is
+    /// already absent.
     pub(super) async fn delete_for_recreate(
         &self,
         rid: &ResourceId,
-    ) -> Result<(ApiResource, Scope, Api<DynamicObject>, bool), RecreateError> {
+    ) -> Result<
+        (
+            ApiResource,
+            Scope,
+            Api<DynamicObject>,
+            Option<Option<String>>,
+        ),
+        RecreateError,
+    > {
         let (ar, scope) = self.cached(rid).await.ok_or_else(|| not_discovered(rid))?;
         let api = self.api_for(&ar, &scope, rid);
         let dp = DeleteParams {
@@ -294,8 +296,13 @@ impl KubeResources {
             ..Default::default()
         };
         let deleted = match api.delete(&rid.name, &dp).await {
-            Ok(_) => true,
-            Err(kube::Error::Api(ae)) if ae.code == 404 => false,
+            // The object while it waits for its finalizers, or the status of a
+            // delete already done.
+            Ok(answer) => Some(answer.either(
+                |obj| obj.metadata.uid,
+                |status| status.details.map(|d| d.uid).filter(|uid| !uid.is_empty()),
+            )),
+            Err(kube::Error::Api(ae)) if ae.code == 404 => None,
             Err(e) => return Err(RecreateError::Delete(e)),
         };
         Ok((ar, scope, api, deleted))
@@ -330,6 +337,21 @@ impl ResourceIo for KubeResources {
             .map_err(DeleteError::Prune)
     }
 
+    async fn wait_gone(
+        &self,
+        rid: &ResourceId,
+        uid: Option<&str>,
+        timeout: Duration,
+        cancel: &CancelToken,
+        on_status: OnStatus<'_>,
+    ) -> Result<Deletion, ReadError> {
+        let (ar, scope) = self.cached(rid).await.ok_or_else(|| not_discovered(rid))?;
+        let api = self.api_for(&ar, &scope, rid);
+        readiness::wait_gone(&api, &rid.name, uid, timeout, cancel, on_status)
+            .await
+            .map_err(ReadError::Get)
+    }
+
     async fn apply(&self, manifest: &Value) -> Result<ApplyResult, ApplyError> {
         let (ar, scope) = self.resolve_kind(manifest).await?;
         // Wait for any untracked resources expected by the manifest
@@ -361,37 +383,28 @@ impl ResourceIo for KubeResources {
             .map_err(ReadError::Get)
     }
 
-    async fn recreate_in_place(&self, manifest: &Value) -> Result<ApplyResult, RecreateError> {
+    async fn recreate_in_place(
+        &self,
+        manifest: &Value,
+        timeout: Duration,
+        cancel: &CancelToken,
+    ) -> Result<ApplyResult, RecreateError> {
         let rid = ResourceId::from_value(manifest);
         let (ar, scope, api, deleted) = self.delete_for_recreate(&rid).await?;
 
-        // Poll until the deleted object disappears. Transient API errors are
-        // treated as gone because the delete call succeeded and any persistent
-        // failure will surface on re-apply. If the object still exists at the
-        // deadline, return `StillExists` instead of re-applying into the same
-        // immutable-field 422.
-        if deleted {
-            let deadline = tokio::time::Instant::now() + RECREATE_DELETE_TIMEOUT;
-            let mut gone = false;
-            while tokio::time::Instant::now() < deadline {
-                match api.get_opt(&rid.name).await {
-                    Ok(None) => {
-                        gone = true;
-                        break;
-                    }
-                    Ok(Some(_)) => tokio::time::sleep(Duration::from_millis(500)).await,
-                    Err(e) => {
-                        tracing::debug!(resource = %rid, error = %e, "transient error polling deletion; assuming gone");
-                        gone = true;
-                        break;
-                    }
+        // An object still there after the wait is not applied again, because
+        // the apply would fail with the same immutable-field error.
+        if let Some(uid) = deleted {
+            let waited =
+                readiness::wait_gone(&api, &rid.name, uid.as_deref(), timeout, cancel, |_| {})
+                    .await;
+            match waited {
+                Ok(Deletion::Gone) => {}
+                Ok(Deletion::Stuck(stuck)) => {
+                    return Err(RecreateError::StillExists { rid, stuck });
                 }
-            }
-            if !gone && matches!(api.get_opt(&rid.name).await, Ok(Some(_))) {
-                return Err(RecreateError::StillExists {
-                    rid,
-                    waited: RECREATE_DELETE_TIMEOUT,
-                });
+                Ok(Deletion::Cancelled) => return Err(RecreateError::Cancelled(rid)),
+                Err(source) => return Err(RecreateError::WaitGone { rid, source }),
             }
         }
 
@@ -508,7 +521,10 @@ mod prune_tests {
             namespace: CLUSTER_SCOPED.into(),
             name: name.into(),
         };
-        assert_eq!(ops.prune(&rid("mine")).await.unwrap(), Pruned::Deleted);
+        assert!(matches!(
+            ops.prune(&rid("mine")).await.unwrap(),
+            Pruned::Deleted { .. }
+        ));
         assert!(matches!(
             ops.prune(&rid("shared")).await,
             Ok(Pruned::Kept(_))
@@ -579,7 +595,10 @@ mod group_tests {
         let other = ops.get_live(&rid(&other_version)).await.unwrap();
         assert_eq!(note(other), json!("other"));
 
-        assert_eq!(ops.prune(&rid("batch/v1")).await.unwrap(), Pruned::Deleted);
+        assert!(matches!(
+            ops.prune(&rid("batch/v1")).await.unwrap(),
+            Pruned::Deleted { .. }
+        ));
         assert!(api.names_of("batch/v1", "Job").is_empty());
         assert_eq!(api.names_of(&other_version, "Job"), vec!["x"]);
     }

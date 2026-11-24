@@ -35,7 +35,8 @@ pub struct DeployArgs {
     #[arg(long, default_value = "stop")]
     pub on_error: OnError,
 
-    /// Readiness timeout (e.g. "5m", "300s", or bare seconds)
+    /// Timeout for readiness and for each delete without finalizer progress,
+    /// up to 5m per delete (e.g. "5m", "300s", or bare seconds)
     #[arg(long, value_parser = validate_timeout)]
     pub timeout: Option<String>,
 

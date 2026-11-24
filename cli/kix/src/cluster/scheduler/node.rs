@@ -14,9 +14,9 @@ use chrono::Utc;
 
 use super::super::apply::{ApplyAction, ApplyError, ApplyResult, ChangeAction};
 use super::super::cancel::CancelToken;
-use super::super::graph::ResourceGraph;
-use super::super::ops::{ResourceIo, SecretHydrator};
-use super::super::readiness::{self, ReadinessResult};
+use super::super::graph::DeleteOrder;
+use super::super::ops::{RecreateError, ResourceIo, SecretHydrator};
+use super::super::readiness::{self, DeletePath, ReadinessResult, Runner};
 use super::super::secrets;
 use super::super::stream::{
     DeployEvent, DeployObserver, NodeDetail, NodeId, Phase, TransitionKind, Verdict,
@@ -33,6 +33,8 @@ pub(super) struct NodeCtx {
     pub(super) dry_run: bool,
     pub(super) progress: Arc<Progress>,
     pub(super) observer: Arc<dyn DeployObserver>,
+    /// Who runs the deploy, for the next step a message gives.
+    pub(super) runner: Runner,
 }
 
 impl NodeCtx {
@@ -79,10 +81,18 @@ async fn recreate(
     if let Some(refusal) = recreate_refusal(rid) {
         return Err(refusal);
     }
-    ctx.resources
-        .recreate_in_place(manifest)
+    match ctx
+        .resources
+        .recreate_in_place(manifest, ctx.timeout, &ctx.cancel)
         .await
-        .map_err(|e| e.to_string())
+    {
+        Ok(result) => Ok(result),
+        Err(e @ RecreateError::StillExists { .. }) => Err(format!(
+            "{e}\n\n{}",
+            readiness::stuck_explanation(DeletePath::Recreate(ctx.runner))
+        )),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 /// Return an error message if `rid` is a protected kind that Kix must not
@@ -547,26 +557,17 @@ async fn wait_live(ctx: &NodeCtx, entry: &PlanNodeEntry, rid: &ResourceId) -> No
     }
 }
 
-/// Return orphaned resources in reverse-topological order according to
-/// `old_manifests`. Orphans without a matching manifest in `old_manifests`
-/// have no known dependencies and are appended at the end.
-pub(super) fn prune_order(orphan_rids: &[ResourceId], old_manifests: &[Value]) -> Vec<ResourceId> {
+/// Return the orphans in an order that deletes each before the orphans it
+/// depends on, with the dependencies of the whole previous build
+/// (`old_manifests`), so a dependency through an object that stays still
+/// counts. Orphans without a matching manifest have no known dependencies
+/// and come last.
+pub(super) fn prune_order(orphan_rids: &[ResourceId], old_manifests: &[Value]) -> DeleteOrder {
     let orphan_set: HashSet<&ResourceId> = orphan_rids.iter().collect();
-    let orphan_manifests: Vec<Value> = old_manifests
-        .iter()
-        .filter(|m| orphan_set.contains(&ResourceId::from_value(m)))
-        .cloned()
-        .collect();
-    let mut ordered = match ResourceGraph::from_manifests(&orphan_manifests) {
-        Ok(graph) => graph.reverse_topo_ids(),
-        Err(_) => return orphan_rids.to_vec(),
-    };
-    let listed: HashSet<ResourceId> = ordered.iter().cloned().collect();
-    ordered.extend(
-        orphan_rids
-            .iter()
-            .filter(|rid| !listed.contains(*rid))
-            .cloned(),
-    );
-    ordered
+    let mut order = DeleteOrder::of_manifests(old_manifests);
+    order.retain(|rid| orphan_set.contains(rid));
+    for rid in orphan_rids {
+        order.push(rid.clone());
+    }
+    order
 }

@@ -46,7 +46,7 @@ use super::cancel::CancelToken;
 use super::errors::FetchError;
 use super::errors::describe;
 use super::prune_guard::{PruneError, Pruned};
-use super::readiness::{ImportTarget, ReadinessError, ReadinessResult};
+use super::readiness::{Deletion, ImportTarget, ReadinessError, ReadinessResult, Stuck};
 use super::secrets::{HydrationResult, SecretError};
 use crate::build_source::SopsSources;
 
@@ -85,12 +85,18 @@ pub(crate) trait ResourceIo: Send + Sync + 'static {
     /// read even during a dry run.
     async fn get_live(&self, rid: &ResourceId) -> Result<Option<Value>, ReadError>;
 
-    /// Delete the live object, wait for it to disappear, and re-apply. Called
+    /// Delete the live object, wait for it to be gone, and re-apply. Called
     /// after an immutable-field conflict when the engine has pre-authorized the
     /// delete (the resource is in the orphan set), and for a live resource that
     /// carries `kix.run/rerun` and must run again. A missing object is not
-    /// an error, whereas an object still present after the wait is.
-    async fn recreate_in_place(&self, manifest: &Value) -> Result<ApplyResult, RecreateError>;
+    /// an error, whereas an object still present after the wait is. The wait
+    /// is [`super::readiness::wait_gone`] with `timeout` as its budget.
+    async fn recreate_in_place(
+        &self,
+        manifest: &Value,
+        timeout: Duration,
+        cancel: &CancelToken,
+    ) -> Result<ApplyResult, RecreateError>;
 
     /// Wait for the object (or, for an import marker, the object it
     /// describes) to be ready. `applied_at` is when this deploy changed the
@@ -114,9 +120,23 @@ pub(crate) trait ResourceIo: Send + Sync + 'static {
     /// `discovery::DISCOVERY_SETTLE` or failed outright.
     async fn rediscover(&self) -> Result<(), FetchError>;
 
-    /// Delete an orphan, unless another Kix cluster still deploys it or it
-    /// changed since it was read (see [`super::prune_guard`]).
+    /// Delete an orphan, unless another Kix cluster still deploys it, it
+    /// changed since it was read, or it is already being deleted (see
+    /// [`super::prune_guard`]). The object may still be on the cluster when
+    /// this returns; [`ResourceIo::wait_gone`] waits for it.
     async fn prune(&self, rid: &ResourceId) -> Result<Pruned, DeleteError>;
+
+    /// Wait for the object `rid` with uid `uid`, which [`ResourceIo::prune`]
+    /// deleted, to be gone ([`super::readiness::wait_gone`]). A dry run
+    /// deleted nothing, so it does not wait.
+    async fn wait_gone(
+        &self,
+        rid: &ResourceId,
+        uid: Option<&str>,
+        timeout: Duration,
+        cancel: &CancelToken,
+        on_status: OnStatus<'_>,
+    ) -> Result<Deletion, ReadError>;
 }
 
 /// The run's Activation record, as the engine writes it.
@@ -305,10 +325,19 @@ pub(crate) enum RecreateError {
     /// The object outlived the deletion wait and was not re-applied because the
     /// apply would fail with the same immutable-field 422.
     #[error(
-        "{rid} still exists {}s after delete (stuck finalizer?); the new object was not applied. Run `kubectl get` on {rid} with `-o yaml` to inspect `metadata.finalizers`.",
-        .waited.as_secs()
+        "{}",
+        super::readiness::stuck_message(.rid, .stuck)
     )]
-    StillExists { rid: ResourceId, waited: Duration },
+    StillExists { rid: ResourceId, stuck: Stuck },
+    /// The cancel token fired while the deleted object was still there.
+    #[error("interrupted while waiting for {0} to be deleted; the new object was not applied")]
+    Cancelled(ResourceId),
+    /// The object could not be read while waiting for it to be gone.
+    #[error("could not read {rid} while waiting for it to be deleted: {}", describe(.source))]
+    WaitGone {
+        rid: ResourceId,
+        source: kube::Error,
+    },
     #[error("re-apply failed: {0}")]
     Reapply(ApplyError),
     #[error("dry-run re-apply failed: {0}")]

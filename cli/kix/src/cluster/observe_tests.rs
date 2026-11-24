@@ -166,6 +166,30 @@ fn by_name<'a>(view: &'a ClusterView, name: &str) -> &'a ObjectView {
         .unwrap_or_else(|| panic!("no object {name}"))
 }
 
+/// A ConfigMap of the build that is being deleted is not ready, though a
+/// ConfigMap has no readiness otherwise, so `kix status` does not call it ok.
+#[tokio::test]
+async fn an_object_being_deleted_is_not_ready() {
+    let index = index(true);
+    let mut objects = live_objects();
+    objects.push(record(Some(&index), ""));
+    let config = objects
+        .iter_mut()
+        .find(|o| o["metadata"]["name"] == "web-config")
+        .unwrap();
+    config["metadata"]["deletionTimestamp"] = serde_json::json!("2026-11-24T15:54:00Z");
+    config["metadata"]["finalizers"] = serde_json::json!(["example.com/hold"]);
+    let api = FakeApi::new(objects);
+
+    let seen = observe_fake(&api, ObserveScope::Cluster("shop")).await;
+
+    let config = by_name(&seen.clusters[0], "web-config");
+    assert_eq!(
+        config.readiness,
+        Readiness::NotReady("being deleted, waiting for example.com/hold".into())
+    );
+}
+
 /// One read gives each object its three facts: the Secret is missing, one
 /// ConfigMap changed, and the Job that needs the Secret is not ready.
 #[tokio::test]

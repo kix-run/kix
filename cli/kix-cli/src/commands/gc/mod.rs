@@ -50,9 +50,10 @@ use kix::build_source::{Build, FlakeBuildError};
 use kix::cluster::activation::Records;
 use kix::cluster::binding;
 use kix::cluster::discovery;
-use kix::cluster::graph::ResourceGraph;
+use kix::cluster::graph::DeleteOrder;
 use kix::cluster::inventory;
-use kix::cluster::prune_guard::{self, Pruned, Removal};
+use kix::cluster::prune_guard::{self, Pruned, Removal, Step};
+use kix::cluster::readiness::{self, DeletePath};
 use kix::eval::store;
 use kix::eval::store_graph::store_hash;
 use kix::manifest::keys;
@@ -217,11 +218,22 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         .cloned()
         .chain(kept_garbage)
         .collect();
-    let ordered_rids = match ResourceGraph::from_manifests(&garbage_values) {
-        Ok(graph) => graph.reverse_topo_ids(),
-        Err(_) => garbage_values.iter().map(ResourceId::from_value).collect(),
-    };
-    let (ordered_rids, kept) = split_never_pruned(ordered_rids);
+    // The dependencies come from the whole previous build, so one that
+    // passes through an object still in use orders the deletes too.
+    let known: Vec<Value> = old_graph
+        .resources
+        .values()
+        .map(|r| r.manifest.clone())
+        .chain(garbage_values.iter().cloned())
+        .collect();
+    let mut order = DeleteOrder::of_manifests(&known);
+    let garbage_ids: HashSet<ResourceId> =
+        garbage_values.iter().map(ResourceId::from_value).collect();
+    order.retain(|rid| garbage_ids.contains(rid));
+    for rid in &garbage_ids {
+        order.push(rid.clone());
+    }
+    let (ordered_rids, kept) = split_never_pruned(order.ids().to_vec());
     let client = ctx
         .runtime()?
         .block_on(client::make_client(global.context.as_deref()))
@@ -290,13 +302,13 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         return Ok(());
     }
 
-    let done = ctx.runtime()?.block_on(delete_resources(
-        &client,
-        &new_graph.cluster_name,
-        &ordered_rids,
-    ))?;
+    let deleting: HashSet<&ResourceId> = ordered_rids.iter().collect();
+    order.retain(|rid| deleting.contains(rid));
+    let done =
+        ctx.runtime()?
+            .block_on(delete_resources(&client, &new_graph.cluster_name, order))?;
     let (retired, records_failed) = ctx.runtime()?.block_on(delete_records(&retirement))?;
-    if done.failed == 0 && done.changed == 0 {
+    if done.all_gone() {
         ctx.runtime()?.block_on(clear_kept(
             &cluster,
             &retirement,
@@ -310,6 +322,56 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         done.failed + records_failed,
         Some((retired, retirement.plan.kept.len())),
     )
+}
+
+/// Order the garbage `entries` of a full scan by the `kix.run/depends-on`
+/// annotations of every `live` object, dependents first, so a stuck delete
+/// holds back what it depends on as in the default mode.
+fn live_order(live: &[kube::api::DynamicObject], entries: &[GarbageEntry]) -> DeleteOrder {
+    let ids: HashSet<&ResourceId> = entries.iter().map(|g| &g.id).collect();
+    let manifests: Vec<Value> = live.iter().map(ordering_stub).collect();
+    let mut order = DeleteOrder::of_manifests(&manifests);
+    order.retain(|rid| ids.contains(rid));
+    for entry in entries {
+        order.push(entry.id.clone());
+    }
+    order
+}
+
+/// Return the parts of a live object that ordering reads: its identity and
+/// its `kix.run/identity-hash` and `kix.run/depends-on` annotations. Leaving
+/// out the rest keeps Secret data and managed fields out of memory.
+fn ordering_stub(obj: &kube::api::DynamicObject) -> Value {
+    let rid = kix::cluster::drift::resource_id(obj);
+    let mut annotations = serde_json::Map::new();
+    for key in [keys::IDENTITY_HASH, keys::DEPENDS_ON] {
+        if let Some(value) = obj
+            .metadata
+            .annotations
+            .as_ref()
+            .and_then(|a| keys::get_meta(a, key))
+        {
+            annotations.insert(key.to_string(), Value::String(value.to_string()));
+        }
+    }
+    let api_version = obj
+        .data
+        .get("apiVersion")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| obj.types.as_ref().map(|t| t.api_version.clone()))
+        .unwrap_or_else(|| {
+            if rid.group.is_empty() {
+                "v1".to_string()
+            } else {
+                format!("{}/v1", rid.group)
+            }
+        });
+    let mut metadata = serde_json::json!({ "name": rid.name, "annotations": annotations });
+    if rid.namespace != kix::manifest::types::CLUSTER_SCOPED {
+        metadata["namespace"] = Value::String(rid.namespace.clone());
+    }
+    serde_json::json!({ "apiVersion": api_version, "kind": rid.kind, "metadata": metadata })
 }
 
 /// Return `126 objects still in use`: the objects of the current build, which
@@ -545,10 +607,10 @@ async fn run_hard_async(
         return Ok(());
     }
 
-    let rids: Vec<ResourceId> = resource_entries.iter().map(|g| g.id.clone()).collect();
-    let done = delete_resources(&client, cluster_name, &rids).await?;
+    let done =
+        delete_resources(&client, cluster_name, live_order(&live, &resource_entries)).await?;
     let (retired, records_failed) = delete_records(&retirement).await?;
-    if done.failed == 0 && done.changed == 0 {
+    if done.all_gone() {
         clear_kept(cluster_name, &retirement, examined_all, build_hash).await;
     }
     finish(
@@ -665,20 +727,41 @@ pub(super) struct Deletions {
     /// Resources skipped by [`prune_guard::PruneGuard`] because they changed after being
     /// read; their presence prevents `clear_kept` from clearing `orphansKeptFrom`.
     pub(super) changed: usize,
+    /// Resources kept because an object whose delete did not finish depends
+    /// on them.
+    pub(super) held: usize,
 }
 
-/// Delete `resources` for `cluster` in order through
-/// [`prune_guard::delete_in_order`], printing a line for each object.
+impl Deletions {
+    /// Return whether every object gc set out to delete is gone, so
+    /// `clear_kept` may forget the builds they came from.
+    pub(super) fn all_gone(&self) -> bool {
+        self.failed == 0 && self.changed == 0 && self.held == 0
+    }
+}
+
+/// Delete the objects of `order` for `cluster` through
+/// [`prune_guard::delete_in_order`], which waits for each to be gone, and
+/// print a line for each object as it happens.
 pub(super) async fn delete_resources(
     client: &kube::Client,
     cluster: &str,
-    resources: &[ResourceId],
+    order: DeleteOrder,
 ) -> Result<Deletions> {
-    let removals = prune_guard::delete_in_order(client, cluster, resources)
-        .await
-        .map_err(|e| miette!("{e}"))?;
     let mut done = Deletions::default();
-    for (rid, removal) in &removals {
+    let mut stuck_any = false;
+    let mut waiting: std::collections::HashMap<ResourceId, String> = Default::default();
+    let mut report = |rid: &ResourceId, step: Step<'_>| {
+        let removal = match step {
+            Step::Waiting(status) => {
+                if waiting.get(rid).map(String::as_str) != Some(status) {
+                    println!("  {} {rid} {}", output::dim("…"), output::dim(status));
+                    waiting.insert(rid.clone(), status.to_string());
+                }
+                return;
+            }
+            Step::Done(removal) => removal,
+        };
         match removal {
             Removal::NeverPruned => {
                 eprintln!(
@@ -695,7 +778,7 @@ pub(super) async fn delete_resources(
                 );
                 done.failed += 1;
             }
-            Removal::Pruned(Pruned::Deleted) => {
+            Removal::Pruned(Pruned::Deleted { .. } | Pruned::AlreadyDeleting { .. }) => {
                 println!("  {} deleted {}", output::red("-"), rid);
                 done.deleted += 1;
             }
@@ -709,11 +792,47 @@ pub(super) async fn delete_resources(
                 let reason = outcome.kept_reason().unwrap_or_default();
                 println!("  {} prune: {reason}", output::yellow("="));
             }
+            Removal::Stuck(stuck) => {
+                eprintln!(
+                    "  {} {}",
+                    output::red("!"),
+                    readiness::stuck_message(rid, stuck)
+                );
+                stuck_any = true;
+                done.failed += 1;
+            }
+            Removal::HeldBack { by, shared } => {
+                println!(
+                    "  {} {}",
+                    output::yellow("="),
+                    readiness::held_back_reason(rid, by, DeletePath::Gc, *shared)
+                );
+                done.held += 1;
+            }
+            Removal::Cycle => {
+                eprintln!("  {} {}", output::yellow("!"), readiness::cycle_reason(rid));
+                done.held += 1;
+            }
+            Removal::Cancelled => done.held += 1,
             Removal::Failed(e) => {
                 eprintln!("  {} {}: {}", output::red("!"), rid, e);
                 done.failed += 1;
             }
         }
+    };
+    prune_guard::delete_in_order(
+        client,
+        cluster,
+        order,
+        readiness::DEFAULT_TIMEOUT,
+        &kix::cluster::cancel::CancelToken::new(),
+        &mut report,
+    )
+    .await
+    .map_err(|e| miette!("{e}"))?;
+    if stuck_any {
+        eprintln!();
+        eprintln!("{}", readiness::stuck_explanation(DeletePath::Gc));
     }
     Ok(done)
 }

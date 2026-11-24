@@ -28,22 +28,36 @@ use kix::manifest::types::ResourceId;
 /// Controller identity reported on every Event's `reportingComponent`.
 const REPORTER_CONTROLLER: &str = "kix-operator";
 
+/// Return the operator's one Event recorder. `instance` is reported as each
+/// Event's `reportingInstance`, normally the operator pod's name.
+pub fn recorder(client: kube::Client, instance: Option<String>) -> Arc<Recorder> {
+    Arc::new(Recorder::new(
+        client,
+        Reporter {
+            controller: REPORTER_CONTROLLER.to_string(),
+            instance,
+        },
+    ))
+}
+
 pub struct K8sEventObserver {
     recorder: Arc<Recorder>,
     reference: ObjectReference,
 }
 
 impl K8sEventObserver {
-    /// Build a Recorder for `activation` and wrap it as a DeployObserver.
+    /// Wrap `recorder` as a DeployObserver that reports on `activation`.
     ///
     /// The ObjectReference fields (kind, apiVersion, namespace, name, uid)
     /// are filled from the Activation CR's own metadata so `kubectl describe
-    /// activation <name>` shows the emitted Events inline.
+    /// activation <name>` shows the emitted Events inline. Every observer
+    /// shares the operator's one [`Recorder`] ([`recorder`]), whose cache
+    /// turns a repeated Event into a count on one Event instead of a new
+    /// Event each time.
     pub fn new(
-        client: kube::Client,
+        recorder: Arc<Recorder>,
         activation: &kube::api::DynamicObject,
         activation_api_version: &str,
-        instance: Option<String>,
     ) -> Self {
         let reference = ObjectReference {
             kind: Some(kix::manifest::lifecycle::RECORD_KIND.to_string()),
@@ -54,13 +68,8 @@ impl K8sEventObserver {
             resource_version: activation.metadata.resource_version.clone(),
             ..Default::default()
         };
-        let reporter = Reporter {
-            controller: REPORTER_CONTROLLER.to_string(),
-            instance,
-        };
-        let recorder = Recorder::new(client, reporter);
         Self {
-            recorder: Arc::new(recorder),
+            recorder,
             reference,
         }
     }

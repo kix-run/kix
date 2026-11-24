@@ -85,6 +85,57 @@ When the operator receives `SIGTERM` (such as when Kubernetes stops its pod) or
 interrupted deploy leaves its Activation record `Deploying`. When the operator
 starts again, it resumes every `Deploying` record started in operator mode.
 
+## When an Activation record is deleted
+
+When an `Active`, `Deploying`, or `Degraded` Activation record is deleted, the
+operator deletes that build's resources before removing its `kix.run/operator-gc`
+finalizer (keeping Namespaces, CustomResourceDefinitions, and resources still
+deployed by another Kix cluster). It deletes dependents before their
+dependencies, up to 64 independent resources in parallel, and waits up to 300
+seconds (5 minutes) for each resource to disappear from the cluster.
+
+Cleanup is unfinished if any resource belonging to this Kix cluster:
+
+- fails to delete, or changed while being deleted,
+- is still on the cluster after the 300-second wait,
+- is held back because a resource still on the cluster depends on it, or
+- is part of, or depends on, a dependency cycle.
+
+When cleanup is unfinished, the operator keeps `kix.run/operator-gc` on the
+Activation record, posts a `DeletionUnfinished` Warning Event naming up to five
+remaining resources, and retries 30 seconds after the attempt finishes. Repeated
+retries update the count on the same Event; run `kubectl describe activation <name>`
+to read it. Because a stuck resource waits out the 300-second limit before the
+30-second pause, each retry cycle takes about 5.5 minutes; a delete that fails
+immediately, such as a permission error, retries every 30 seconds. If the
+operator stops during cleanup, it cancels the active wait and tries again the
+next time it starts.
+
+To let cleanup finish, inspect `kubectl describe activation <name>` and the
+operator logs, then clear the blocking resources: fix any permission error,
+start the controller responsible for a stuck finalizer, follow the log
+instructions for built-in Kubernetes protection finalizers, or run the
+`kubectl patch` command printed in the operator log to remove a controller
+finalizer and skip its external cleanup.
+
+To abandon cleanup instead and let Kubernetes delete the Activation record,
+remove `kix.run/operator-gc` from the record:
+
+```sh
+kubectl patch activation <name> --type=json -p '[{"op":"test","path":"/metadata/finalizers/0","value":"kix.run/operator-gc"},{"op":"remove","path":"/metadata/finalizers/0"}]'
+```
+
+The `test` operation checks that `kix.run/operator-gc` is at index `0`, so the
+patch fails safely if another finalizer comes first. If it fails, run
+`kubectl get activation <name> -o jsonpath='{.metadata.finalizers}'` and replace
+`0` in both paths with the 0-based index of `kix.run/operator-gc`.
+
+Kubernetes deletes the Activation record once no finalizers remain on it. If a
+cleanup attempt is already running, it finishes first and may delete a few more
+resources. Any resources the operator did not delete stay on the cluster without
+an Activation record naming them; run `kix gc <cluster> --full-scan` to find
+them.
+
 ## Waiting for the operator
 
 The CLI polls the Activation record every 2 seconds and prints progress as

@@ -37,3 +37,5 @@ tracing-subscriber.workspace = true
 kix-lib = { workspace = true, features = ["test-util"] }
 assert_cmd.workspace = true
 tempfile.workspace = true
+# Paused-clock tests of the teardown's waits.
+tokio = { workspace = true, features = ["test-util"] }
