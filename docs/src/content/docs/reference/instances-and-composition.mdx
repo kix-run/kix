@@ -182,7 +182,7 @@ instances.external-dns.route53 = {
 | `kix.cloudIdentity.gcp` | optional `serviceAccount` (Google service account email) | `iam.gke.io/gcp-service-account` on the ServiceAccount when `serviceAccount` is set. `kix.cloudIdentity.gcp { }` omits the Google annotation when IAM roles are granted directly to the Kubernetes ServiceAccount. |
 | `kix.cloudIdentity.azure` | `clientId`, optional `tenantId` (GUIDs) | `azure.workload.identity/client-id` (and `azure.workload.identity/tenant-id` when set) on the ServiceAccount, plus label `azure.workload.identity/use: "true"` on the pods. |
 
-Some packages take a cloud identity on a dependency that accepts no Secret. The `external-secrets` package takes one in `controllerCredentials` and binds it to the controller's ServiceAccount:
+Some packages accept only a cloud identity on their credentials dependency and reject a Secret instance. For example, `packages.experimental.external-secrets` takes a cloud identity on `deps.controllerCredentials` for the controller's ServiceAccount:
 
 ```nix
 instances.external-secrets.external-secrets = {
@@ -193,7 +193,7 @@ instances.external-secrets.external-secrets = {
 };
 ```
 
-A SecretStore or ClusterSecretStore that names no credentials of its own then calls AWS, Google Cloud, or Azure as that identity. For AWS and Google Cloud, the store sets no `auth`. For Azure, it sets `authType: WorkloadIdentity` and no `serviceAccountRef`. Every such store in the cluster shares the identity, so any namespace that can create a SecretStore can read what the role can read. A store that should use its own static keys references a Secret in its `auth.secretRef`.
+To use that identity in a `SecretStore` or `ClusterSecretStore`, leave `auth` unset on AWS (`aws`) and Google Cloud (`gcpsm`) stores, or set `authType: WorkloadIdentity` without `serviceAccountRef` on Azure (`azurekv`) stores. The controller then authenticates to AWS, Google Cloud, or Azure as that identity. Every store in the cluster configured this way shares the controller's identity, so any namespace that can create a `SecretStore` can read whatever the cloud role can read. To give a store its own static keys instead, reference a Secret in the store's spec (such as `auth.secretRef`, or `authSecretRef` on Azure).
 
 The cluster's `cloudIdentity` role provider controls how Kix renders the identity. The `eks`, `gke`, `gke-autopilot`, and `aks` flavors declare this provider automatically ([Flavors and capabilities](/docs/reference/flavors-and-capabilities/#cloud-identity)). Kix also writes `kix.run/cloud-identity` (containing the identity and mechanism as JSON) on the ServiceAccount, orders the ServiceAccount after the `cloudIdentity` provider, and adds `checksum/cloud-identity` to every pod template referencing that ServiceAccount so changing the identity restarts the pods.
 

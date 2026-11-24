@@ -312,8 +312,8 @@ in
       {
         assertion = credentials.secret == null;
         dependency = "controllerCredentials";
-        message = "`deps.controllerCredentials` is a Secret instance, but the External Secrets controller does not read credentials from a Secret, so Kix rejected it. The dependency takes only a cloud identity.";
-        fix = "Set `deps.controllerCredentials` to `kix.cloudIdentity.aws { ... }`, `kix.cloudIdentity.gcp { ... }`, or `kix.cloudIdentity.azure { ... }`. For static keys, remove the dependency and reference the Secret in the store's `auth.secretRef` through `out.mkSecretStore`.";
+        message = "`deps.controllerCredentials` accepts only a cloud identity for the controller's ServiceAccount, so Kix rejected this instance. External Secrets reads static keys from Secrets referenced in each `SecretStore` or `ClusterSecretStore`.";
+        fix = "Set `deps.controllerCredentials` to `kix.cloudIdentity.aws { roleArn = \"...\"; }`, `kix.cloudIdentity.gcp { ... }`, or `kix.cloudIdentity.azure { clientId = \"...\"; }`. To use static keys instead, remove `deps.controllerCredentials` and reference the Secret in the store's spec (such as `auth.secretRef`, or `authSecretRef` on Azure) with `out.mkSecretStore` or `out.mkClusterSecretStore`.";
       }
     ];
 
