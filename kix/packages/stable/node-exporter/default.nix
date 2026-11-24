@@ -133,11 +133,6 @@ in
                 "--collector.filesystem.mount-points-exclude=^/(dev|proc|sys|var/lib/docker/.+|var/lib/kubelet/.+)($|/)"
               ];
             }
-          ];
-          # Keep this flag behind extraArgs. Moving it changes the pod
-          # template of an instance that sets extraArgs, which restarts the
-          # exporter on every node when a cluster upgrades Kix.
-          after = [
             {
               flags = lib.optional config.textfileCollector.enabled "--collector.textfile.directory=${textfileDirectory}";
               names = [ "--collector.textfile.directory" ];

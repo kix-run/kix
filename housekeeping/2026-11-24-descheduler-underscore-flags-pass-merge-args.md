@@ -1,3 +1,0 @@
-# 2026-11-24 · `kix/packages/experimental/descheduler` · `--leader_elect=false` in `extraArgs` passes the check and may turn off leader election.
-
-descheduler starts through `cli.Run` from Kubernetes component-base (`cmd/descheduler/descheduler.go` at v0.37.0). `cli.Run` sets `cliflag.WordSepNormalizeFunc`, which reads `_` and `-` in a flag name as the same character. The package declares `parser = "gnu"`, which compares names as written, so an underscore spelling of any owned flag passes `kix.mergeArgs`. This was read in upstream source and was not run against the image. Nobody has checked whether kube-state-metrics and velero start the same way.

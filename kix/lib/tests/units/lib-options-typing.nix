@@ -346,10 +346,9 @@ in
     )
     || throw "mergeEnv: ${builtins.toJSON (merge { })}";
 
-  # mergeArgs passes the package's words in order, the user's words after
-  # them, and `after` behind those. A plain word may be set again, an owned
-  # flag may not, and the value words of a flag written as a list reserve
-  # nothing.
+  # mergeArgs passes the package's words in order and the user's words after
+  # them. A plain word may be set again, an owned flag may not, and the value
+  # words of a flag written as a list reserve nothing.
   lib-options-typing-merge-args =
     let
       merge = kixlib.mergeArgs {
@@ -372,8 +371,6 @@ in
             flags = [ "--ingress-class=kix" ];
             from = "the ingressClassName option";
           }
-        ];
-        after = [
           {
             flags = [ "--port=80" ];
             reason = "the Service uses port 80.";
@@ -392,10 +389,10 @@ in
         "--config"
         "/etc/app.yaml"
         "--ingress-class=kix"
+        "--port=80"
         "--v=4"
         "--ingress-class-by-name=true"
         "/etc/app.yaml"
-        "--port=80"
       ]
       && throws (merge [ "--ingress-class=x" ])
       && throws (merge [ "--ingress-class" ])
@@ -432,8 +429,53 @@ in
       && throws (merge [ "-vmodule=x" ])
       && throws (merge [ "-v2" ])
       && throws (merge [ "-config.file=/x" ])
+      && merge [ "--leader_elect=false" ] == [ "--leader_elect=false" ]
     )
     || throw "mergeArgs gnu parser passed or refused the wrong arguments";
+
+  # Under "component-base", `_` and `-` in a flag name are one character,
+  # in the word, in `flags`, `names`, `families`, and `defaults`. A
+  # one-letter flag still takes an attached value, as under "gnu".
+  lib-options-typing-merge-args-component-base =
+    let
+      merge = kixlib.mergeArgs {
+        scope.fail = kixlib.fail;
+        parser = "component-base";
+        args = [
+          {
+            flags = [ "--policy_config-file=/etc/policy.yaml" ];
+            names = [
+              "--leader-elect"
+              "-v"
+            ];
+            families = [ "--feature-gates" ];
+            reason = "the package sets them.";
+          }
+        ];
+      };
+      withDefault = kixlib.mergeArgs {
+        scope.fail = kixlib.fail;
+        parser = "component-base";
+        args = [ { defaults = [ "--log_level=info" ]; } ];
+      };
+      passed = [
+        "--leader-elected=true"
+        "-leader_elect"
+        "--feature_gatesX=a"
+      ];
+    in
+    (
+      merge passed == [ "--policy_config-file=/etc/policy.yaml" ] ++ passed
+      && throws (merge [ "--leader_elect=false" ])
+      && throws (merge [ "--leader-elect" ])
+      && throws (merge [ "--policy-config_file=/x" ])
+      && throws (merge [ "--policy-config-file" ])
+      && throws (merge [ "--feature_gates.x=true" ])
+      && throws (merge [ "--feature-gates" ])
+      && throws (merge [ "-v2" ])
+      && withDefault [ "--log-level=debug" ] == [ "--log-level=debug" ]
+    )
+    || throw "mergeArgs component-base parser passed or refused the wrong arguments";
 
   # Under "go", `-flag` and `--flag` are one flag, whichever spelling is
   # owned. A longer flag, a value word, and three dashes pass, and a
@@ -776,8 +818,9 @@ in
 
   # argValues returns a flag's values under each parser: after `=`, attached
   # to a one-letter flag under "gnu", or in the next word. The next word is
-  # then no flag of its own. An attribute set gives the values of its
-  # matching keys.
+  # then no flag of its own. "component-base" reads `_` in a name as `-`,
+  # and "gnu" does not. An attribute set gives the values of its matching
+  # keys.
   lib-options-typing-arg-values =
     let
       values = parser: kixlib.argValues { inherit parser; };
@@ -819,6 +862,13 @@ in
           "search.maxSeries" = "10";
           "search.maxQueryDuration" = "60s";
         };
+        componentBase = values "component-base" "--leader-elect" [
+          "--leader_elect=false"
+          "--leader-elect"
+          "true"
+          "--leader_elect_x=y"
+        ];
+        gnuUnderscore = values "gnu" "--leader-elect" [ "--leader_elect=false" ];
         none = values "gnu" "--registry" [ ];
       };
       expected = {
@@ -844,6 +894,11 @@ in
           "INFO"
         ];
         attrs = [ "10" ];
+        componentBase = [
+          "false"
+          "true"
+        ];
+        gnuUnderscore = [ ];
         none = [ ];
       };
     in

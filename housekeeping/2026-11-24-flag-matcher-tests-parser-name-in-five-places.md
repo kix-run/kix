@@ -1,0 +1,3 @@
+# 2026-11-24 · `kix/lib/vocab/compose.nix` · `flagMatcher` tests the name of the `parser` in five places, so each new parser value has to touch all of them.
+
+The dash pattern, `gnuStyle`, `isShortName`, `nameOf`, and `wordName` each branch on `parser`, either directly or through `gnuStyle`. Each value is a base style plus one change to how a name compares: `"paerser"` lowers the case, `"component-base"` replaces `_` with `-`, and `"go-arg"` accepts more dashes. Nothing states that shape in one place. A new value that is missed in one of the five places acts like `"go"` there, and no error says so.

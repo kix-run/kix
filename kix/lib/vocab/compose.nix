@@ -21,6 +21,7 @@ let
 
   argParsers = [
     "gnu"
+    "component-base"
     "go"
     "go-arg"
     "paerser"
@@ -43,7 +44,8 @@ let
           m = builtins.match "${dashes}([^-=][^=]*)(=.*)?" word;
         in
         if m == null then null else builtins.head m;
-      isShortName = name: !isAttrs && parser == "gnu" && builtins.match "-[^-]" name != null;
+      gnuStyle = parser == "gnu" || parser == "component-base";
+      isShortName = name: !isAttrs && gnuStyle && builtins.match "-[^-]" name != null;
     in
     rec {
       # Return the name of the flag `word` sets, or null when the parser
@@ -54,23 +56,30 @@ let
           n =
             if isAttrs then
               builtins.head (builtins.match "-*(.*)" word)
-            else if parser == "gnu" then
+            else if gnuStyle then
               builtins.head (lib.splitString "=" word)
             else
               dashedName word;
         in
-        if n != null && parser == "paerser" then lib.toLower n else n;
+        if n == null then
+          null
+        else if parser == "paerser" then
+          lib.toLower n
+        else if parser == "component-base" then
+          builtins.replaceStrings [ "_" ] [ "-" ] n
+        else
+          n;
 
       # Return the name of the flag that a word the package passes sets, or
-      # null when it is a value. Under "gnu", a word with one dash sets a
-      # one-letter flag.
+      # null when it is a value. Under "gnu" and "component-base", a word
+      # with one dash sets a one-letter flag.
       wordName =
         word:
         if isAttrs then
           nameOf word
         else if !lib.hasPrefix "-" word then
           null
-        else if parser == "gnu" && builtins.match "-[^-].*" word != null then
+        else if gnuStyle && builtins.match "-[^-].*" word != null then
           builtins.substring 0 2 word
         else
           nameOf word;
@@ -383,6 +392,10 @@ rec {
   #   it equals the flag or starts with `<flag>=`. A one-letter flag such as
   #   `-c` also matches a word with its value attached (`-c/etc/x`), and so
   #   also matches `-vmodule=x` when `-v` is owned.
+  # - "component-base" fits a pflag program that starts through Kubernetes
+  #   component-base (`cli.Run`), which sets `cliflag.WordSepNormalizeFunc`.
+  #   It reads flags as "gnu" does and treats `_` and `-` in a name as the
+  #   same character, so `--leader_elect` sets `--leader-elect`.
   # - "go" fits Go's `flag` package, which reads `-flag` and `--flag` as the
   #   same flag. A word sets the flag named by its text after one or two
   #   dashes and before any `=`.
@@ -391,16 +404,15 @@ rec {
   # - "paerser" fits Traefik's flag parser, which reads flags as "go" does
   #   and ignores the letter case of the name.
   #
-  # `args` lists what the package passes, in order. The user's `extraArgs`
-  # follow it, and `after` lists what the package passes behind them. Each
-  # entry is one of:
+  # `args` lists what the package passes, in order, and the user's
+  # `extraArgs` follow it. Each entry is one of:
   #
   # - A string. It is passed as written, and `extraArgs` may set the same
   #   flag again.
   # - `{ defaults = [ "--flag=value" ]; }`. Each word is passed unless
   #   `extraArgs` sets the same flag, for a program that refuses a flag
-  #   given twice. Write each default as one word. Under "gnu", a default
-  #   with one dash is a one-letter flag.
+  #   given twice. Write each default as one word. Under "gnu" and
+  #   "component-base", a default with one dash is a one-letter flag.
   # - `{ flags ? [ ]; names ? [ ]; families ? [ ]; reason; fix ? null; }`,
   #   or the same with `from` in place of `reason`. The package owns the
   #   flags in `flags`. They are passed as written, and `extraArgs` may not
@@ -437,7 +449,6 @@ rec {
       option ? "extraArgs",
       parser ? null,
       args ? [ ],
-      after ? [ ],
       id ? null,
     }:
     extraArgs:
@@ -451,7 +462,6 @@ rec {
       written = if isAttrs then builtins.attrNames extraArgs else extraArgs;
       form = if isAttrs then "an attribute set" else "a list";
       keysOf = v: if builtins.isAttrs v then builtins.attrNames v else v;
-      entries = args ++ after;
 
       groupKeys = [
         "flags"
@@ -508,11 +518,11 @@ rec {
             else
               "Pass each entry as a flag string, `{ defaults = [ ... ]; }`, or `{ flags ? [ ... ]; names ? [ ... ]; families ? [ ... ]; fix ? \"...\"; }` with either `reason` or `from`.";
         }
-      ) entries;
+      ) args;
 
-      groups = builtins.filter (e: builtins.isAttrs e && !(e ? defaults)) entries;
+      groups = builtins.filter (e: builtins.isAttrs e && !(e ? defaults)) args;
       defaultWords = builtins.concatMap (e: keysOf e.defaults) (
-        builtins.filter (e: builtins.isAttrs e && e ? defaults) entries
+        builtins.filter (e: builtins.isAttrs e && e ? defaults) args
       );
 
       # Return the word of an item of `flags` that names its flag. An item
@@ -603,7 +613,7 @@ rec {
       ) written;
 
       replaced = d: builtins.any (matcher.sets (matcher.wordName d)) written;
-      # Return the words that the entries in `list` pass.
+      # The words that the entries in `args` pass.
       words = builtins.concatMap (
         e:
         if builtins.isString e then
@@ -612,14 +622,14 @@ rec {
           builtins.filter (d: !replaced d) e.defaults
         else
           lib.concatMap lib.toList (e.flags or [ ])
-      );
+      ) args;
       # Return the flags that the entries pass under `key`.
-      flags = key: lib.foldl' (acc: e: acc // e.${key} or { }) { } entries;
+      flags = key: lib.foldl' (acc: e: acc // e.${key} or { }) { } args;
       result =
         if isAttrs then
           lib.filterAttrs (d: _: !replaced d) (flags "defaults") // extraArgs // flags "flags"
         else
-          words args ++ extraArgs ++ words after;
+          words ++ extraArgs;
     in
     if authorLines != [ ] then
       scopeFail authorLines
@@ -631,10 +641,10 @@ rec {
   # Return the values `args` gives `flag`, one for each time it sets the
   # flag, matched as `kix.mergeArgs` matches under the same `parser`. A
   # value is the text after `=`, the text attached to a one-letter flag
-  # under "gnu", or else the next word. Ask only for a flag that takes a
-  # value, because the next word after a flag that takes none is not its
-  # value. For an attribute set of flags, return the values of the keys
-  # that name `flag`.
+  # under "gnu" or "component-base", or else the next word. Ask only for a
+  # flag that takes a value, because the next word after a flag that takes
+  # none is not its value. For an attribute set of flags, return the values
+  # of the keys that name `flag`.
   argValues =
     { parser }:
     flag: args:
