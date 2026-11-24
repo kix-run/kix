@@ -1,0 +1,8 @@
+# 2026-11-24 · `cli/kix/src/plan/live.rs` · The operator retries a deploy that stopped on a failed resource every 30 seconds, forever, even when the next try cannot succeed.
+
+`LivePlan::run` sets `mark_failed_on_abort: false`, so a deploy that stops at a failed resource leaves its Activation `Deploying`. The reconcile returns an error, `error_policy` requeues it after 30 seconds, and the resume fails the same way. A SOPS file the operator's pod has no key for shows this: `sops` exits 128 on every try, and `kix deploy --operator` waits out its 600 seconds. A readiness failure loops the same way, once per 300-second timeout. The CLI marks the record `Failed` on any stop (`planner.rs` sets `mark_failed_on_abort: true`), so the two disagree on who decides whether a stopped deploy has failed. The SOPS case cannot be split into "permanent" and "transient" cleanly: `sops` returns 128 (`CouldNotRetrieveKey`) for a missing age key and for a Vault or KMS that refused the connection, and only its free text differs.
+
+Decision required from Adam: pick one of these.
+- Fail a stopped `Start` deploy as the CLI does, and keep retrying a resume after the operator restarts. One rule for both runners. A brief KMS outage then fails the deploy, and someone runs `kix deploy --operator` again. Recommended.
+- Treat exit 128 as permanent when every key in the file's `sops` metadata is age or PGP, and retry otherwise. Small, but it infers the cause, and `SOPS_AGE_KEY_CMD` or an age plugin can fail for a transient reason.
+- Decrypt age-only files in Rust with the `age` crate, which reports "no matching identity" as a typed error. Clean for age, but Kix would reimplement sops' value decryption and MAC check, and KMS files still go through `sops`.
