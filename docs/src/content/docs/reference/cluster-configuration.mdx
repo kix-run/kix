@@ -42,7 +42,7 @@ kix.buildCluster {
 | --- | --- | --- | --- |
 | [`cluster.availability`](#cluster-availability) | submodule | derived from capabilities | Cluster-wide availability target and read-only substrate ceiling. |
 | [`cluster.topology`](#cluster-topology) | submodule | zone and host keys | Node label keys used for derived pod topology spread. |
-| [`cluster.defaultLimits`](#default-resource-limits) | submodule | `{ cpu = true; memory = true; }` | Whether packages give containers their default CPU and memory limits. |
+| [`cluster.defaultLimits`](#default-resource-limits) | submodule | `{ cpu = true; memory = true; }` | Whether packages apply their default CPU and memory limits to containers. |
 | [`cluster.capabilities`](#cluster-capabilities-and-nodes) | submodule | `null` per field (or flavor default) | Substrate capabilities such as `multiNode`, `availabilityZones`, `daemonSets`, and `privilegedContainers`. |
 | [`cluster.nodes`](#cluster-capabilities-and-nodes) | `attrsOf submodule` | `{ }` | Optional static node inventory (`roles`, `cpu`, `memory`, `labels`, `taints`). |
 | [`cluster.provider`](#cluster-capabilities-and-nodes) | `nullOr str` | `null` (or flavor default) | Display name of the Kubernetes distribution or cloud provider. |
@@ -133,26 +133,26 @@ Packages whose pods are created by an operator rather than a Kix Deployment or S
 
 ## Default resource limits
 
-Packages declare a container's resources with [`kix.options.resources`](/docs/reference/package-anatomy/#kixoptions-helpers), which usually gives a default CPU limit and a default memory limit. `cluster.defaultLimits` turns either default off for every package in the cluster.
+`cluster.defaultLimits` controls whether packages apply their default CPU and memory limits (declared with [`kix.options.resources`](/docs/reference/package-anatomy/#kixoptions-helpers)) across the cluster.
 
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `cluster.defaultLimits.cpu` | `bool` | `true` | Whether packages give containers their default CPU limit. |
-| `cluster.defaultLimits.memory` | `bool` | `true` | Whether packages give containers their default memory limit. |
+| `cluster.defaultLimits.cpu` | `bool` | `true` | Whether packages apply their default CPU limits to containers. |
+| `cluster.defaultLimits.memory` | `bool` | `true` | Whether packages apply their default memory limits to containers. |
 
-Many operators leave CPU limits off. A CPU limit throttles a container even when the node has idle CPU, and the CPU request already guarantees the container its share:
+Many operators disable default CPU limits because CPU limits throttle containers even when the node has idle CPU, while CPU requests still guarantee each container's share:
 
 ```nix
 cluster.defaultLimits.cpu = false;
 ```
 
-With a field set to `false`, packages leave out that default limit and keep every request. A limit an instance sets stays, for example `instances.web.app.config.resources.limits.cpu = "2";`. The [`reliability.boundedResources`](/docs/reference/scorecard-and-rules/) rule then accepts a container without that limit.
+When a field is `false`, `kix.options.resources` omits that default limit and keeps all resource requests. Limits set on an instance still apply (for example, `instances.web.app.config.resources.limits.cpu = "2";`). The [`reliability.boundedResources`](/docs/reference/scorecard-and-rules/) scorecard rule also skips checking for a disabled limit.
 
 :::caution[Keep memory limits]
-Do not turn memory limits off unless you have a reason. Memory cannot be throttled, so one leaking container without a limit can use all of the node's memory, and the kernel then kills other workloads. The common advice is a memory limit equal to the memory request. Kix allows `cluster.defaultLimits.memory = false` for operators who decide otherwise.
+Keep `cluster.defaultLimits.memory = true` unless you intend to run without memory limits. Memory cannot be throttled: a leaking container without a limit can exhaust a node's memory and cause the kernel to kill other workloads on that node. Memory limits are commonly set equal to the memory request.
 :::
 
-The setting changes only the defaults of `kix.options.resources`. A limit a package writes into a container directly, and a limit an imported Helm chart renders, stay, and the built manifest does not show which limits came from a package default.
+`cluster.defaultLimits` affects only defaults declared through `kix.options.resources`. Limits written directly into a container spec or rendered by an imported Helm chart remain unchanged. Built manifests do not mark whether a limit came from a package default.
 
 ## Cluster capabilities and nodes
 

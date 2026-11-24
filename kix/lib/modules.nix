@@ -584,28 +584,29 @@ in
         type = lib.types.bool;
         default = true;
         description = ''
-          Whether packages give containers their default CPU limit. False
-          drops the CPU limit a package's `kix.options.resources` sets by
-          default, and keeps its CPU request. A CPU limit throttles a
-          container even when the node has idle CPU, and the request already
-          guarantees the container its share. A limit an instance sets in
-          its `resources` stays. The reliability.boundedResources scorecard
-          rule then accepts a container without a CPU limit.
+          Whether packages apply their default CPU limits to containers.
+          When `false`, `kix.options.resources` omits a package's default
+          CPU limit while keeping its CPU request and any `limits.cpu` set
+          on an instance. CPU limits throttle containers even when the node
+          has idle CPU, while CPU requests still guarantee each container's
+          share. Setting `false` also stops the `reliability.boundedResources`
+          scorecard rule from reporting missing `limits.cpu`.
         '';
       };
       memory = lib.mkOption {
         type = lib.types.bool;
         default = true;
         description = ''
-          Whether packages give containers their default memory limit.
-          False drops the memory limit a package's `kix.options.resources`
-          sets by default, and keeps its memory request. Memory cannot be
-          throttled, so one leaking container without a limit can exhaust
-          the node, and the kernel then kills other workloads. The common
-          advice is a memory limit equal to the request. A limit an
-          instance sets in its `resources` stays. The
-          reliability.boundedResources scorecard rule then accepts a
-          container without a memory limit.
+          Whether packages apply their default memory limits to containers.
+          When `false`, `kix.options.resources` omits a package's default
+          memory limit while keeping its memory request and any
+          `limits.memory` set on an instance. Setting `false` also stops the
+          `reliability.boundedResources` scorecard rule from reporting
+          missing `limits.memory`. Keep this `true` unless you intend to run
+          without memory limits: memory cannot be throttled, so a leaking
+          container without a limit can exhaust node memory and cause the
+          kernel to kill other workloads. Memory limits are commonly set
+          equal to the memory request.
         '';
       };
     };

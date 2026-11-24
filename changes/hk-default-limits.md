@@ -2,10 +2,11 @@
 kind = "added"
 library = ["cluster.defaultLimits", "kix.options.resources"]
 +++
-A cluster can turn off the default CPU limit or the default memory limit
-that packages give their containers, with `cluster.defaultLimits.cpu = false`
-or `cluster.defaultLimits.memory = false`. Requests stay, and so does a limit
-an instance sets. The `reliability.boundedResources` rule then accepts the
-missing limit. Keep memory limits unless you have a reason: a container
-without one can use all of a node's memory, and the kernel then kills other
-workloads.
+Set `cluster.defaultLimits.cpu = false` or `cluster.defaultLimits.memory = false`
+to omit the default CPU or memory limits that packages set through
+`kix.options.resources`. Both options default to `true`, so existing clusters
+do not change. Resource requests and any limits set on an instance still apply,
+and the `reliability.boundedResources` scorecard rule does not report containers
+missing a disabled limit. Keep memory limits enabled unless you need to turn
+them off: a container without a memory limit can use all of a node's memory and
+cause the kernel to kill other workloads.
