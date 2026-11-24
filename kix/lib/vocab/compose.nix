@@ -403,28 +403,28 @@ rec {
 
       authorLines =
         lib.optional (!builtins.elem parser parsers) {
-          message = "kix.guardArgs got parser \"${toString parser}\", which it does not know.";
-          fix = "Set parser to one of ${lib.concatMapStringsSep ", " (p: "\"${p}\"") parsers}.";
+          message = "kix.guardArgs does not support parser \"${toString parser}\", so Kix cannot check the flags.";
+          fix = "Set parser to one of: ${lib.concatMapStringsSep ", " (p: "\"${p}\"") parsers}.";
         }
         ++ (
           if builtins.isAttrs defaults' != isAttrs then
             [
               {
-                message = "kix.guardArgs got ${if isAttrs then "an attrset" else "a list"} of arguments and ${
-                  if isAttrs then "a list" else "an attrset"
-                } of defaults.";
-                fix = "Give defaults in the same form as the arguments.";
+                message = "kix.guardArgs cannot merge defaults with the flags to check: the flags are ${
+                  if isAttrs then "an attrset" else "a list"
+                }, but defaults is ${if isAttrs then "a list" else "an attrset"}.";
+                fix = "Pass defaults as a list of flag strings when checking a list, or as an attribute set when checking an attribute set.";
               }
             ]
           else
             map (d: {
-              message = "kix.guardArgs got the default \"${d}\", which is not a flag.";
-              fix = "Write each default as one word, such as --flag=value.";
+              message = "kix.guardArgs cannot parse \"${d}\" in defaults as a flag, so Kix cannot check the flags.";
+              fix = "Start each entry in defaults with - or -- and attach any value in the same string, such as \"--flag=value\" instead of separate \"--flag\" and \"value\" items.";
             }) (builtins.filter (d: defaultName d == null) defaultWords)
         )
         ++ map (r: {
-          message = "kix.guardArgs got \"${r.flag}\" to refuse, which parser \"${parser}\" does not read as a flag.";
-          fix = "Write the flag as the program reads it, with its leading dashes.";
+          message = "kix.guardArgs cannot match \"${r.flag}\" in owned or ownedFamilies because parser \"${parser}\" does not parse it as a flag.";
+          fix = "Write the flag name in owned or ownedFamilies with a - or -- prefix, such as \"--leader-elect\".";
         }) (builtins.filter (r: r.name == null) allRules);
 
       # Each word the user wrote with the first rule it breaks.

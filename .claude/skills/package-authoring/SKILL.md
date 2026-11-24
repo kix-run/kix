@@ -460,8 +460,8 @@ The only place in this skill with package line numbers. `pkg:N` is
 | Discrete database variables through `keyRef`, owned `_FILE` twins | metabase:187-203 |
 | URL-shaped credential through `$(VAR)` | vaultwarden:143-147, 212-233 |
 | `guardArgs`, owned flags from owned env groups | keycloak:398 |
-| `guardArgs` with `defaults` that `extraArgs` replaces | node-exporter:106 |
-| `guardArgs` for a Go `flag` program (`parser = "go"`), flag families | loki:340; traefik:487 |
+| `guardArgs` with `defaults` that `extraArgs` can override | node-exporter:106 |
+| `guardArgs` with `parser = "go"`, `parser = "paerser"`, and `ownedFamilies` | loki:340; traefik:487 |
 | `mergeGuarded` on `settings` or `extraSpec` | tempo:442; cnpg-cluster:323, 430, 514 |
 | Migrations at start: Recreate, deadline from `startupSeconds`, probes | metabase:94-97, 252-256, 284-304 |
 | Config injection into a dependency | metabase:109-112; stackgres-database:120-125; cnpg-database:94-115 |
