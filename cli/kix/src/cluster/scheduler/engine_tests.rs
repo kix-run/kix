@@ -1937,7 +1937,7 @@ async fn finalize_learns_whether_orphans_were_left() {
     }
     let cm = [rid("ConfigMap", "old")];
     let ns = [rid("Namespace", "ns")];
-    let ok = || Behaviour::Now(Ok(Pruned::Deleted));
+    let ok = || Behaviour::Now(Ok(Pruned::Deleted { uid: None }));
 
     assert!(orphans_left(PrunePolicy::WarnOnly, &cm, ok()).await);
     assert!(orphans_left(PrunePolicy::Skip, &cm, ok()).await);
@@ -2042,6 +2042,284 @@ async fn a_kept_prune_delete_is_reported_as_kept() {
     assert!(
         kept[0].1.contains("still deployed by Kix cluster b"),
         "{kept:?}"
+    );
+}
+
+/// A prune delete whose object is still there after the wait fails the
+/// run and names the finalizer. The orphan it depends on is kept and
+/// reported, an orphan it does not depend on is still deleted, and the run
+/// records that orphans are left for the next prune.
+#[tokio::test(start_paused = true)]
+async fn a_stuck_prune_delete_fails_and_holds_back_what_it_needs() {
+    use crate::cluster::readiness::{Deletion, Stuck};
+    let manifests = vec![m("ConfigMap", "keep", &[])];
+    let ops = Arc::new(ScriptedOps::new());
+    ops.gone_behaviour(
+        rid("ConfigMap", "cr"),
+        Some("being deleted, waiting for test.kix.run/hold"),
+        Behaviour::Now(Ok(Deletion::Stuck(Stuck {
+            elapsed: secs(10),
+            finalizers: vec!["test.kix.run/hold".into()],
+        }))),
+    );
+    let rec = Arc::new(Recorder::default());
+    let cfg = config(quiet_watchdog());
+    let orphans = [
+        rid("ConfigMap", "cr"),
+        rid("Secret", "needed"),
+        rid("Secret", "other"),
+    ];
+    let old = [
+        m("ConfigMap", "cr", &["needed"]),
+        m("Secret", "needed", &[]),
+        m("Secret", "other", &[]),
+    ];
+
+    let result = run_with_orphans(
+        &ops,
+        plan_of(&manifests),
+        &orphans,
+        &old,
+        PrunePolicy::Delete,
+        &cfg,
+        rec.clone(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!((result.pruned, result.failed), (1, 1));
+    let failure = &result.failures[0];
+    assert_eq!(failure.node, NodeId::Resource(rid("ConfigMap", "cr")));
+    assert!(
+        failure.message.starts_with("[K2794] "),
+        "{}",
+        failure.message
+    );
+    assert!(
+        failure.message.contains("test.kix.run/hold"),
+        "{}",
+        failure.message
+    );
+
+    let deleted: Vec<ResourceId> = ops
+        .calls()
+        .into_iter()
+        .filter_map(|c| match c {
+            Call::Delete(rid) => Some(rid),
+            _ => None,
+        })
+        .collect();
+    assert!(!deleted.contains(&rid("Secret", "needed")), "{deleted:?}");
+    assert!(deleted.contains(&rid("Secret", "other")), "{deleted:?}");
+    assert!(ops.calls().contains(&Call::Finalize {
+        had_failures: true,
+        orphans_left: true,
+    }));
+
+    let events = rec.0.lock().unwrap();
+    let kept: Vec<&String> = events
+        .iter()
+        .filter_map(|e| match e {
+            DeployEvent::PruneKept { resource, reason } if *resource == rid("Secret", "needed") => {
+                Some(reason)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(kept.len(), 1, "{events:?}");
+    assert!(kept[0].contains("ConfigMap/cr@"), "{kept:?}");
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            DeployEvent::NodeStateChanged {
+                kind: TransitionKind::Delete,
+                verdict: Verdict::Running,
+                detail: Some(NodeDetail::ReadinessProgress(status)),
+                ..
+            } if status == "being deleted, waiting for test.kix.run/hold"
+        )),
+        "{events:?}"
+    );
+}
+
+/// A cancel while the prune waits for a finalizer stops the run: the orphan
+/// being waited for and the one behind it count as cancelled, the record is
+/// marked Failed and not finalized, and the run returns the cancel. The
+/// operator passes its shutdown token as the same cancel token.
+#[tokio::test(start_paused = true)]
+async fn a_cancel_during_the_prune_wait_stops_the_run() {
+    let manifests = vec![m("ConfigMap", "keep", &[])];
+    let ops = Arc::new(ScriptedOps::new());
+    ops.gone_behaviour(
+        rid("ConfigMap", "cr"),
+        Some("being deleted, waiting for test.kix.run/hold"),
+        Behaviour::Hang,
+    );
+    let cfg = config(quiet_watchdog());
+    let cancel = cfg.cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(secs(5)).await;
+        cancel.cancel();
+    });
+    let orphans = [rid("ConfigMap", "cr"), rid("Secret", "needed")];
+    let old = [
+        m("ConfigMap", "cr", &["needed"]),
+        m("Secret", "needed", &[]),
+    ];
+
+    let result = run_with_orphans(
+        &ops,
+        plan_of(&manifests),
+        &orphans,
+        &old,
+        PrunePolicy::Delete,
+        &cfg,
+        Arc::new(Recorder::default()),
+    )
+    .await;
+
+    let Err(DeployError::Cancelled { partial, .. }) = result else {
+        panic!("expected a cancelled run, got {result:?}");
+    };
+    assert_eq!((partial.pruned, partial.cancelled), (0, 2));
+    let calls = ops.calls();
+    assert!(
+        calls.iter().any(|c| matches!(c, Call::Abort { .. })),
+        "{calls:?}"
+    );
+    assert!(
+        !calls.iter().any(|c| matches!(c, Call::Finalize { .. })),
+        "{calls:?}"
+    );
+    assert!(
+        !calls.contains(&Call::Delete(rid("Secret", "needed"))),
+        "{calls:?}"
+    );
+}
+
+/// Deletes that never finish wait at the same time, so three stuck orphans
+/// cost one wait, not three, and an orphan independent of them is still
+/// deleted in the same run.
+#[tokio::test(start_paused = true)]
+async fn stuck_prune_deletes_wait_together() {
+    use crate::cluster::readiness::{Deletion, Stuck};
+    let manifests = vec![m("ConfigMap", "keep", &[])];
+    let ops = Arc::new(ScriptedOps::new());
+    for name in ["a", "b", "c"] {
+        ops.gone_behaviour(
+            rid("ConfigMap", name),
+            None,
+            Behaviour::After(
+                secs(180),
+                Ok(Deletion::Stuck(Stuck {
+                    elapsed: secs(180),
+                    finalizers: vec!["test.kix.run/hold".into()],
+                })),
+            ),
+        );
+    }
+    let cfg = config(quiet_watchdog());
+    let orphans = [
+        rid("ConfigMap", "a"),
+        rid("ConfigMap", "b"),
+        rid("ConfigMap", "c"),
+        rid("Secret", "free"),
+    ];
+    let old = [
+        m("ConfigMap", "a", &[]),
+        m("ConfigMap", "b", &[]),
+        m("ConfigMap", "c", &[]),
+        m("Secret", "free", &[]),
+    ];
+
+    let start = Instant::now();
+    let result = run_with_orphans(
+        &ops,
+        plan_of(&manifests),
+        &orphans,
+        &old,
+        PrunePolicy::Delete,
+        &cfg,
+        Arc::new(Recorder::default()),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!((result.pruned, result.failed), (1, 3));
+    let waited = start.elapsed();
+    assert!(waited < secs(200), "waited {waited:?}");
+}
+
+/// Orphans whose recorded dependencies form a cycle are kept and reported,
+/// since no order deletes each after everything that needs it.
+#[tokio::test(start_paused = true)]
+async fn orphans_in_a_dependency_cycle_are_kept_and_reported() {
+    let manifests = vec![m("ConfigMap", "keep", &[])];
+    let ops = Arc::new(ScriptedOps::new());
+    let rec = Arc::new(Recorder::default());
+    let cfg = config(quiet_watchdog());
+    let orphans = [rid("ConfigMap", "a"), rid("ConfigMap", "b")];
+    let old = [m("ConfigMap", "a", &["b"]), m("ConfigMap", "b", &["a"])];
+
+    let result = run_with_orphans(
+        &ops,
+        plan_of(&manifests),
+        &orphans,
+        &old,
+        PrunePolicy::Delete,
+        &cfg,
+        rec.clone(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result.pruned, 0);
+    assert!(!ops.calls().iter().any(|c| matches!(c, Call::Delete(_))));
+    let reasons: Vec<String> = rec
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|e| match e {
+            DeployEvent::PruneKept { reason, .. } => Some(reason.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(reasons.len(), 2, "{reasons:?}");
+    assert!(reasons[0].contains("cycle"), "{reasons:?}");
+    assert!(ops.calls().contains(&Call::Finalize {
+        had_failures: false,
+        orphans_left: true,
+    }));
+}
+
+/// An orphan already being deleted is waited for, and counts as pruned
+/// once it is gone.
+#[tokio::test(start_paused = true)]
+async fn an_orphan_already_being_deleted_is_waited_for() {
+    let manifests = vec![m("ConfigMap", "keep", &[])];
+    let ops = Arc::new(ScriptedOps::new());
+    ops.delete_behaviour(Behaviour::Now(Ok(Pruned::AlreadyDeleting { uid: None })));
+    let cfg = config(quiet_watchdog());
+    let orphans = [rid("ConfigMap", "old")];
+    let old = [m("ConfigMap", "old", &[])];
+
+    let result = run_with_orphans(
+        &ops,
+        plan_of(&manifests),
+        &orphans,
+        &old,
+        PrunePolicy::Delete,
+        &cfg,
+        Arc::new(Recorder::default()),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!((result.pruned, result.failed), (1, 0));
+    assert!(
+        ops.calls()
+            .contains(&Call::WaitGone(rid("ConfigMap", "old")))
     );
 }
 

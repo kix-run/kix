@@ -25,7 +25,7 @@ use super::super::cancel::CancelToken;
 use super::super::discovery;
 use super::super::errors::FetchError;
 use super::super::prune_guard::{PruneGuard, Pruned};
-use super::super::readiness::{self, ImportTarget, ReadinessError, ReadinessResult};
+use super::super::readiness::{self, Deletion, ImportTarget, ReadinessError, ReadinessResult};
 use super::{DeleteError, NotDiscovered, OnStatus, ReadError, RecreateError, ResourceIo};
 
 /// Shared discovery cache of every kind the cluster serves, refreshed after
@@ -35,12 +35,6 @@ use super::{DeleteError, NotDiscovered, OnStatus, ReadError, RecreateError, Reso
 /// never forgets a kind already seen or replaces a cached kind when a group
 /// version fails to respond.
 type DiscoveryCache = Arc<RwLock<Vec<(ApiResource, Scope)>>>;
-
-/// Wall-clock bound for waiting on the live resource to disappear during an
-/// immutable-conflict recreate. This is independent of the readiness timeout
-/// because deletion is normally near-instant and a longer wait usually
-/// indicates stuck finalizers.
-const RECREATE_DELETE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How long apply waits for an object a manifest expects something else to
 /// have created (`kix.run/expects`). The creator is ready by the time this
@@ -279,13 +273,21 @@ impl KubeResources {
     }
 
     /// Delete the live object as the first step of an in-place recreate.
-    /// Returns the resolved kind, the API handle, and whether an object existed
-    /// to delete. A 404 is treated as success because the object is already
-    /// absent.
+    /// Returns the resolved kind, the API handle, and, when an object existed
+    /// to delete, its uid. A 404 is treated as success because the object is
+    /// already absent.
     pub(super) async fn delete_for_recreate(
         &self,
         rid: &ResourceId,
-    ) -> Result<(ApiResource, Scope, Api<DynamicObject>, bool), RecreateError> {
+    ) -> Result<
+        (
+            ApiResource,
+            Scope,
+            Api<DynamicObject>,
+            Option<Option<String>>,
+        ),
+        RecreateError,
+    > {
         let (ar, scope) = self.cached(rid).await.ok_or_else(|| not_discovered(rid))?;
         let api = self.api_for(&ar, &scope, rid);
         let dp = DeleteParams {
@@ -294,8 +296,13 @@ impl KubeResources {
             ..Default::default()
         };
         let deleted = match api.delete(&rid.name, &dp).await {
-            Ok(_) => true,
-            Err(kube::Error::Api(ae)) if ae.code == 404 => false,
+            // The object while it waits for its finalizers, or the status of a
+            // delete already done.
+            Ok(answer) => Some(answer.either(
+                |obj| obj.metadata.uid,
+                |status| status.details.map(|d| d.uid).filter(|uid| !uid.is_empty()),
+            )),
+            Err(kube::Error::Api(ae)) if ae.code == 404 => None,
             Err(e) => return Err(RecreateError::Delete(e)),
         };
         Ok((ar, scope, api, deleted))
@@ -330,14 +337,34 @@ impl ResourceIo for KubeResources {
             .map_err(DeleteError::Prune)
     }
 
-    async fn apply(&self, manifest: &Value) -> Result<ApplyResult, ApplyError> {
+    async fn wait_gone(
+        &self,
+        rid: &ResourceId,
+        uid: Option<&str>,
+        timeout: Duration,
+        cancel: &CancelToken,
+        on_status: OnStatus<'_>,
+    ) -> Result<Deletion, ReadError> {
+        let (ar, scope) = self.cached(rid).await.ok_or_else(|| not_discovered(rid))?;
+        let api = self.api_for(&ar, &scope, rid);
+        readiness::wait_gone(&api, &rid.name, uid, timeout, cancel, on_status)
+            .await
+            .map_err(ReadError::Get)
+    }
+
+    async fn apply(
+        &self,
+        manifest: &Value,
+        timeout: Duration,
+        cancel: &CancelToken,
+        on_status: OnStatus<'_>,
+    ) -> Result<ApplyResult, ApplyError> {
         let (ar, scope) = self.resolve_kind(manifest).await?;
         // Wait for any untracked resources expected by the manifest
         // (`kix.run/expects`, see `core/markers.nix`). The creator dependency
         // is already Ready, and this verifies that the expected object exists.
-        let cancel = CancelToken::new();
         if let Err((expected, detail)) =
-            readiness::wait_for_expectations(&self.client, manifest, EXPECTS_TIMEOUT, &cancel).await
+            readiness::wait_for_expectations(&self.client, manifest, EXPECTS_TIMEOUT, cancel).await
         {
             return Err(ApplyError::ExpectationUnmet {
                 resource: ResourceId::from_value(manifest).display_id(),
@@ -345,7 +372,25 @@ impl ResourceIo for KubeResources {
                 detail,
             });
         }
-        self.apply_as(&ar, scope, manifest).await
+        let uid = match self.apply_as(&ar, scope.clone(), manifest).await {
+            Err(ApplyError::BeingDeleted { uid, .. }) => uid,
+            other => return other,
+        };
+        let rid = ResourceId::from_value(manifest);
+        let api = self.api_for(&ar, &scope, &rid);
+        match readiness::wait_gone(&api, &rid.name, uid.as_deref(), timeout, cancel, on_status)
+            .await
+        {
+            Ok(Deletion::Gone) => self.apply_as(&ar, scope, manifest).await,
+            Ok(Deletion::Stuck(stuck)) => Err(ApplyError::StillBeingDeleted { rid, stuck }),
+            Ok(Deletion::Cancelled) => Err(ApplyError::Interrupted {
+                resource: rid.display_id(),
+            }),
+            Err(source) => Err(ApplyError::PatchFailed {
+                resource: rid.display_id(),
+                source,
+            }),
+        }
     }
 
     async fn get_live(&self, rid: &ResourceId) -> Result<Option<Value>, ReadError> {
@@ -361,37 +406,28 @@ impl ResourceIo for KubeResources {
             .map_err(ReadError::Get)
     }
 
-    async fn recreate_in_place(&self, manifest: &Value) -> Result<ApplyResult, RecreateError> {
+    async fn recreate_in_place(
+        &self,
+        manifest: &Value,
+        timeout: Duration,
+        cancel: &CancelToken,
+    ) -> Result<ApplyResult, RecreateError> {
         let rid = ResourceId::from_value(manifest);
         let (ar, scope, api, deleted) = self.delete_for_recreate(&rid).await?;
 
-        // Poll until the deleted object disappears. Transient API errors are
-        // treated as gone because the delete call succeeded and any persistent
-        // failure will surface on re-apply. If the object still exists at the
-        // deadline, return `StillExists` instead of re-applying into the same
-        // immutable-field 422.
-        if deleted {
-            let deadline = tokio::time::Instant::now() + RECREATE_DELETE_TIMEOUT;
-            let mut gone = false;
-            while tokio::time::Instant::now() < deadline {
-                match api.get_opt(&rid.name).await {
-                    Ok(None) => {
-                        gone = true;
-                        break;
-                    }
-                    Ok(Some(_)) => tokio::time::sleep(Duration::from_millis(500)).await,
-                    Err(e) => {
-                        tracing::debug!(resource = %rid, error = %e, "transient error polling deletion; assuming gone");
-                        gone = true;
-                        break;
-                    }
+        // An object still there after the wait is not applied again, because
+        // the apply would fail with the same immutable-field error.
+        if let Some(uid) = deleted {
+            let waited =
+                readiness::wait_gone(&api, &rid.name, uid.as_deref(), timeout, cancel, |_| {})
+                    .await;
+            match waited {
+                Ok(Deletion::Gone) => {}
+                Ok(Deletion::Stuck(stuck)) => {
+                    return Err(RecreateError::StillExists { rid, stuck });
                 }
-            }
-            if !gone && matches!(api.get_opt(&rid.name).await, Ok(Some(_))) {
-                return Err(RecreateError::StillExists {
-                    rid,
-                    waited: RECREATE_DELETE_TIMEOUT,
-                });
+                Ok(Deletion::Cancelled) => return Err(RecreateError::Cancelled(rid)),
+                Err(source) => return Err(RecreateError::WaitGone { rid, source }),
             }
         }
 
@@ -508,7 +544,10 @@ mod prune_tests {
             namespace: CLUSTER_SCOPED.into(),
             name: name.into(),
         };
-        assert_eq!(ops.prune(&rid("mine")).await.unwrap(), Pruned::Deleted);
+        assert!(matches!(
+            ops.prune(&rid("mine")).await.unwrap(),
+            Pruned::Deleted { .. }
+        ));
         assert!(matches!(
             ops.prune(&rid("shared")).await,
             Ok(Pruned::Kept(_))
@@ -539,6 +578,88 @@ mod prune_tests {
         let err = ops.prune(&rid).await.unwrap_err().to_string();
         assert!(err.contains("kix migrate domain"), "{err}");
         assert_eq!(api.names("ClusterRole"), vec!["mine"]);
+    }
+}
+
+#[cfg(test)]
+mod apply_tests {
+    use super::*;
+    use crate::cluster::fake_api::FakeApi;
+    use serde_json::json;
+
+    fn held_config_map() -> Value {
+        json!({
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {
+                "name": "cm",
+                "namespace": "app",
+                "deletionTimestamp": "2026-11-24T15:54:00Z",
+                "finalizers": ["test.kix.run/hold"],
+            },
+            "data": { "old": "yes" },
+        })
+    }
+
+    fn desired() -> Value {
+        json!({
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": { "name": "cm", "namespace": "app" },
+            "data": { "new": "yes" },
+        })
+    }
+
+    async fn ops(api: &FakeApi) -> KubeResources {
+        let client = api.client();
+        let discovery = discovery::discover_resources(&client).await.unwrap();
+        KubeResources::new(client, discovery, "a".into(), None, false)
+    }
+
+    /// An apply onto an object being deleted waits for it to be gone, then
+    /// creates the new object.
+    #[tokio::test(start_paused = true)]
+    async fn an_apply_waits_for_the_object_being_deleted_then_creates_it() {
+        let api = FakeApi::new([held_config_map()]);
+        let ops = ops(&api).await;
+        let remover = {
+            let api = api.clone();
+            async move {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                api.remove_finalizers("ConfigMap", "cm");
+            }
+        };
+        let (manifest, cancel) = (desired(), CancelToken::new());
+        let applied = ops.apply(&manifest, Duration::from_secs(60), &cancel, &|_| {});
+        let (applied, ()) = tokio::join!(applied, remover);
+        assert_eq!(applied.unwrap().action, apply::ApplyAction::Created);
+        let cm = api.object("ConfigMap", "cm").unwrap();
+        assert_eq!(cm["data"], json!({ "new": "yes" }));
+        assert!(cm["metadata"]["deletionTimestamp"].is_null());
+    }
+
+    /// An object that stays past the wait is not applied, and the error is
+    /// the stuck message for this path.
+    #[tokio::test(start_paused = true)]
+    async fn an_apply_onto_an_object_that_stays_reports_it_stuck() {
+        let api = FakeApi::new([held_config_map()]);
+        let ops = ops(&api).await;
+        let err = ops
+            .apply(
+                &desired(),
+                Duration::from_secs(10),
+                &CancelToken::new(),
+                &|_| {},
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.starts_with("[K2794] "), "{err}");
+        assert!(err.contains("Kix has not applied"), "{err}");
+        assert_eq!(
+            api.object("ConfigMap", "cm").unwrap()["data"],
+            json!({ "old": "yes" })
+        );
     }
 }
 
@@ -579,7 +700,10 @@ mod group_tests {
         let other = ops.get_live(&rid(&other_version)).await.unwrap();
         assert_eq!(note(other), json!("other"));
 
-        assert_eq!(ops.prune(&rid("batch/v1")).await.unwrap(), Pruned::Deleted);
+        assert!(matches!(
+            ops.prune(&rid("batch/v1")).await.unwrap(),
+            Pruned::Deleted { .. }
+        ));
         assert!(api.names_of("batch/v1", "Job").is_empty());
         assert_eq!(api.names_of(&other_version, "Job"), vec!["x"]);
     }

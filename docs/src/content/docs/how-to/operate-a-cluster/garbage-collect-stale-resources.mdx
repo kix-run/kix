@@ -86,6 +86,39 @@ takes a comma-separated list, such as `--include unstamped,unattributed`:
   cwd="kix-examples/"
 />
 
+## When a delete does not finish
+
+Kubernetes keeps a deleted object on the cluster until every finalizer on it is
+removed. Usually, the controller or operator that added a finalizer removes it
+after cleaning up external state, such as a database or cloud load balancer.
+`kix gc` waits for each deleted object to be removed, stopping after 3 minutes
+without a finalizer being removed or 5 minutes in total.
+
+If an object is still on the cluster when the wait ends, `kix gc` fails with
+`[K2794]`, lists any remaining finalizers, and exits with code `1`. Kix skips
+deleting any resources recorded as dependencies of the stuck object and lists
+them as kept. Those orphans stay tracked so the next `kix gc` or
+`kix deploy --prune` can delete them once the stuck object is gone. Most
+packages do not yet record that a custom resource depends on its operator, so
+removing both at once can delete the operator before it clears the custom
+resource's finalizer.
+
+To resolve `[K2794]`:
+
+1. **Wait if cleanup is still running.** Slow cleanups, such as pods with a
+   long termination grace period or a cloud load balancer being deleted, can
+   finish on their own after Kix stops waiting. Run `kix gc` again later.
+2. **Check the controller or operator for the finalizer.** Make sure the
+   workload that removes the finalizer is running. If you removed it in the
+   same change, restore it and deploy so it can clean up its objects, then run
+   `kix gc` again.
+3. **Force-remove the finalizer to skip external cleanup.** Kix never removes
+   finalizers itself. To make Kubernetes delete the object immediately, run the
+   `kubectl patch` command printed in the error message. Anything the finalizer
+   would have cleaned up outside the object, such as an external database or
+   cloud resource, remains behind. Then run `kix gc` again to delete any
+   dependencies Kix kept.
+
 ## Let the operator perform cleanup
 
 For an operator-managed cluster, use operator mode:
@@ -96,7 +129,11 @@ Kix deletes the Activation records selected by the retention policy. These are
 all Superseded records, so the operator only removes its finalizer from each
 one. It deletes no resources: the Active record owns them. The operator deletes
 resources only when an Active, Deploying or Degraded record is deleted, and even
-then it keeps every Namespace and CustomResourceDefinition.
+then it keeps every Namespace and CustomResourceDefinition. If any resource
+fails to delete or is still being deleted when the wait ends, the operator
+keeps its finalizer on the Activation record, records a Warning Event on it,
+and retries every 30 seconds. See
+[When an Activation record is deleted](/docs/reference/cli/operator-mode/#when-an-activation-record-is-deleted).
 
 Use the same `--keep`, `--keep-max`, and `--keep-for` flags in any mode. For
 example:

@@ -14,7 +14,7 @@ use chrono::Utc;
 
 use super::super::apply::{ApplyAction, ApplyError, ApplyResult, ChangeAction};
 use super::super::cancel::CancelToken;
-use super::super::graph::ResourceGraph;
+use super::super::graph::DeleteOrder;
 use super::super::ops::{ResourceIo, SecretHydrator};
 use super::super::readiness::{self, ReadinessResult};
 use super::super::secrets;
@@ -80,7 +80,7 @@ async fn recreate(
         return Err(refusal);
     }
     ctx.resources
-        .recreate_in_place(manifest)
+        .recreate_in_place(manifest, ctx.timeout, &ctx.cancel)
         .await
         .map_err(|e| e.to_string())
 }
@@ -317,7 +317,13 @@ async fn apply_or_recreate(
             Err(e) => Err(apply_failed(format!("rerun ({reason}) failed: {e}"))),
         };
     }
-    match ctx.resources.apply(manifest).await {
+    let node = NodeId::Resource(rid.clone());
+    let on_status = |msg: &str| ctx.progress.set_status(&node, msg);
+    match ctx
+        .resources
+        .apply(manifest, ctx.timeout, &ctx.cancel, &on_status)
+        .await
+    {
         Ok(result) => Ok((result, None)),
         Err(ApplyError::ImmutableConflict { source, .. }) if ctx.orphan_set.contains(rid) => {
             let reason = source.to_string();
@@ -547,26 +553,17 @@ async fn wait_live(ctx: &NodeCtx, entry: &PlanNodeEntry, rid: &ResourceId) -> No
     }
 }
 
-/// Return orphaned resources in reverse-topological order according to
-/// `old_manifests`. Orphans without a matching manifest in `old_manifests`
-/// have no known dependencies and are appended at the end.
-pub(super) fn prune_order(orphan_rids: &[ResourceId], old_manifests: &[Value]) -> Vec<ResourceId> {
+/// Return the orphans in an order that deletes each before the orphans it
+/// depends on, with the dependencies of the whole previous build
+/// (`old_manifests`), so a dependency through an object that stays still
+/// counts. Orphans without a matching manifest have no known dependencies
+/// and come last.
+pub(super) fn prune_order(orphan_rids: &[ResourceId], old_manifests: &[Value]) -> DeleteOrder {
     let orphan_set: HashSet<&ResourceId> = orphan_rids.iter().collect();
-    let orphan_manifests: Vec<Value> = old_manifests
-        .iter()
-        .filter(|m| orphan_set.contains(&ResourceId::from_value(m)))
-        .cloned()
-        .collect();
-    let mut ordered = match ResourceGraph::from_manifests(&orphan_manifests) {
-        Ok(graph) => graph.reverse_topo_ids(),
-        Err(_) => return orphan_rids.to_vec(),
-    };
-    let listed: HashSet<ResourceId> = ordered.iter().cloned().collect();
-    ordered.extend(
-        orphan_rids
-            .iter()
-            .filter(|rid| !listed.contains(*rid))
-            .cloned(),
-    );
-    ordered
+    let mut order = DeleteOrder::of_manifests(old_manifests);
+    order.retain(|rid| orphan_set.contains(rid));
+    for rid in orphan_rids {
+        order.push(rid.clone());
+    }
+    order
 }

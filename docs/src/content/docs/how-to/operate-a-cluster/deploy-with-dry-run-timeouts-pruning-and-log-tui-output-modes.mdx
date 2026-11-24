@@ -104,6 +104,19 @@ Pruning never deletes a Namespace or CustomResourceDefinition. It also keeps
 an orphan that another Kix cluster in the same Kubernetes cluster still
 deploys. The plan lists both as kept.
 
+Kix waits for each pruned object to be removed from the cluster. It stops
+waiting after `--timeout` passes without a finalizer being removed, or after 5
+minutes in total. If an object is still on the cluster when the wait ends, the
+deploy fails with `[K2794]`. Kix keeps any orphans that the build records as
+dependencies of the stuck object, so the next `kix deploy --prune` or `kix gc`
+can delete them once it is gone. Most packages do not yet record that a custom
+resource depends on its operator, so removing both at once can delete the
+operator before it clears the custom resource's finalizer. If cleanup is still
+running normally, deploy again later or pass a longer `--timeout` (up to `5m`
+per delete). See
+[When a delete does not finish](/docs/how-to/operate-a-cluster/garbage-collect-stale-resources/#when-a-delete-does-not-finish)
+to resolve a stuck delete.
+
 Use `--skip-orphan-check` to skip looking for orphans at all. The deploy
 deletes nothing and does not list orphans, and they stay on the cluster for
 [`kix gc`](/docs/how-to/operate-a-cluster/garbage-collect-stale-resources/)

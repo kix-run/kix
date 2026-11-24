@@ -32,7 +32,7 @@ kix deploy <CLUSTER> [-y] [--dry-run] [--plan <FILE>] [--prune | --skip-orphan-c
 | `--plan <FILE>` | Deploy only if the plan made now still matches a reviewed one. See [Deploy a reviewed plan](#deploy-a-reviewed-plan). With `--dry-run`, check the plan and exit without deploying. Not with `--offline` or `--operator`. |
 | `--prune` | Delete orphans: resources the previous activation had and this build does not, including orphans earlier deploys kept. Without it, orphans are listed and kept, and the new Activation records where they came from so a later `kix deploy --prune` or `kix gc` deletes them. |
 | `--skip-orphan-check` | Do not look for orphans at all in this run, and prune nothing. The orphans stay on the cluster for `kix gc` to find. Not with `--prune`. |
-| `--timeout <DURATION>` | How long to wait for each resource to become ready: `5m`, `300s`, or a bare number of seconds. Default `180s`. Not with `--operator`. |
+| `--timeout <DURATION>` | How long to wait without progress for each resource to become ready or for each deleted object to be removed (capped at `5m` total per object). Accepts `5m`, `300s`, or a bare number of seconds. Default `180s`. Not with `--operator`. |
 | `--on-error <MODE>` | `stop` (default) stops before applying anything when the plan shows a refused write, and halts the run at the first failure and cancels what has not started. `continue` applies the plan even when it shows refused writes, cancels only the dependents of a failed resource, and carries on with the rest. Either way, a run in which any resource failed exits `1`. |
 | `--reconcile` | Re-apply every resource, including those whose identity hash matches the running activation. Use it to put back fields that were changed on the cluster. |
 | `--force-conflicts` | Take ownership of fields another field manager owns. Without it, a conflict is a refused write in the plan, naming the fields and their current owner, and under `--on-error stop` the deploy stops before applying anything. |
@@ -109,6 +109,34 @@ Set `KIX_TUI_HEIGHT` to a number of rows to cap the live view of
    When two deploys are planned against the same Active record, the one that
    finishes second writes a list computed without the first one's builds, and
    only `kix gc --full-scan` then finds the orphans the first one kept.
+
+   With `--prune`, Kix deletes dependents before the objects they depend on,
+   deletes independent objects in parallel, and waits for each object to be
+   removed from the cluster. If an object is already being deleted, Kix waits
+   for that deletion instead of sending a second delete request. Kubernetes
+   keeps a deleted object until every entry in `metadata.finalizers` is
+   removed, usually by the controller or operator that added it after finishing
+   its cleanup. Kix stops waiting if `--timeout` passes without a finalizer
+   being removed, or after 5 minutes in total. Orphans whose recorded
+   dependencies form a cycle are kept and reported (`prune_kept` in
+   `--log-format json`), because Kix cannot choose a safe deletion order.
+
+   If an object is still on the cluster when the wait ends, the deploy fails
+   with `[K2794]` (exit code `1`), marks the Activation `Degraded`, and lists
+   any remaining finalizers and how long Kix waited. Kix skips deleting any
+   orphans that the build records as dependencies of the stuck object, reports
+   them as kept (`prune_kept` in `--log-format json`), and keeps the builds
+   they came from in `status.orphansKeptFrom` so the next `kix deploy --prune`
+   or `kix gc` tries again. Most packages do not yet record that a custom
+   resource depends on its operator, so removing both at once can delete the
+   operator before it clears the custom resource's finalizer. If cleanup is
+   still running normally, such as pods with a long termination grace period or
+   a cloud load balancer teardown, deploy again later or pass a longer
+   `--timeout` (up to `5m` per delete). Kix never removes finalizers itself;
+   when finalizers remain, the `[K2794]` error prints a `kubectl patch` command
+   to remove them. Running that command makes Kubernetes delete the object
+   immediately and leaves behind anything the finalizer would have cleaned up,
+   such as an external database or cloud resource.
 
    To avoid relying on this list, pass `--prune` to every deploy and
    rollback. A run that deletes every orphan adds nothing to the list, so it

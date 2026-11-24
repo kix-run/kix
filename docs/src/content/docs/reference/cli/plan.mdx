@@ -70,7 +70,7 @@ needs only `get` and `list`.
 | Section | Content |
 | --- | --- |
 | Field changes | For each object the dry run answered, the live object compared with the object the apiserver says the apply would produce. Server-maintained metadata and `status` are left out, and Secret values are not shown. A package the build comparison called unchanged becomes changed when the apiserver says it would change. |
-| Writes the deploy would stop on | Field ownership conflicts, with the manager that owns each field; admission webhook denials; ValidatingAdmissionPolicy denials; validation errors; changes to immutable fields; RBAC refusals; missing namespaces and unknown kinds the build does not create; SOPS Secrets that do not decrypt; and refused prune deletes. |
+| Writes the deploy would stop on | Field ownership conflicts, with the manager that owns each field; admission webhook denials; ValidatingAdmissionPolicy denials; validation errors; changes to immutable fields; RBAC refusals; missing namespaces and unknown kinds the build does not create; SOPS Secrets that do not decrypt; objects in the build that are being deleted on the cluster; and refused prune deletes. |
 | Prune | Each orphan and what the deploy does with it. See [Prune fates](#prune-fates). |
 | Stateful migrations | Objects that hold data that the change removes from a stateful package and adds in their place. A deploy stops on them unless run with `--accept-migrations`. |
 | Drift | Fields where the live object differs from the deployed build, the managers that own them live, and whether the deploy puts the deployed value back. |

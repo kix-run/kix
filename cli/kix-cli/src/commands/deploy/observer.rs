@@ -121,6 +121,17 @@ impl StreamCliObserver {
             .tag()
             .map(|t| format!("{} ", output::dim(t)))
             .unwrap_or_default();
+        if kind == TransitionKind::Delete
+            && let Some(line) = super::super::deploy_log::delete_line(verdict, detail)
+        {
+            let symbol = if matches!(verdict, Verdict::Ready) {
+                output::green("✔")
+            } else {
+                output::dim("…")
+            };
+            println!("  {symbol} {label} {}", output::dim(&line));
+            return;
+        }
         match verdict {
             Verdict::Pending => {}
             Verdict::Running => match detail {

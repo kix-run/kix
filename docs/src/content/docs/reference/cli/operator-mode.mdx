@@ -85,6 +85,33 @@ When the operator receives `SIGTERM` (such as when Kubernetes stops its pod) or
 interrupted deploy leaves its Activation record `Deploying`. When the operator
 starts again, it resumes every `Deploying` record started in operator mode.
 
+## When an Activation record is deleted
+
+When an `Active`, `Deploying`, or `Degraded` Activation record is deleted, the
+operator deletes that record's resources before removing its finalizer
+(`kix.run/operator-gc`). It waits up to 300 seconds (5 minutes) for each
+resource to be removed from the cluster. If any resource fails to delete, is
+still being deleted when the wait ends, is held back by a stuck dependent, or
+is in a dependency cycle, the operator keeps `kix.run/operator-gc` on the
+Activation record, posts a Warning Event with reason `DeletionUnfinished`
+listing the remaining resources, and retries every 30 seconds. Run
+`kubectl describe activation <name>` to read the Event. If the operator stops
+during cleanup, it interrupts the wait and retries the next time it starts.
+
+To let cleanup finish, resolve the resources named in the Event: start the
+controller or operator responsible for a stuck finalizer, or remove that
+resource's finalizers with the `kubectl patch` command printed in the operator
+log. To abandon cleanup instead, remove the operator's finalizer from the
+Activation record:
+
+```sh
+kubectl patch activation <name> --type=merge -p '{"metadata":{"finalizers":null}}'
+```
+
+Kubernetes then deletes the Activation record immediately. Any resources the
+operator had not deleted remain on the cluster without a deployment record
+naming them; run `kix gc <cluster> --full-scan` to find them.
+
 ## Waiting for the operator
 
 The CLI polls the Activation record every 2 seconds and prints progress as

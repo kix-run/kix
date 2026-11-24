@@ -227,6 +227,7 @@ mod prompt_tests {
 mod delete_tests {
     use super::*;
     use kix::cluster::fake_api::FakeApi;
+    use kix::cluster::graph::DeleteOrder;
     use kix::manifest::lifecycle::PHASE_ACTIVE;
     use serde_json::json;
 
@@ -251,7 +252,7 @@ mod delete_tests {
             ),
             rid("", "Namespace", "gone"),
         ];
-        let done = delete_resources(&api.client(), "a", &resources)
+        let done = delete_resources(&api.client(), "a", DeleteOrder::unordered(resources))
             .await
             .unwrap();
         assert_eq!(done, Deletions::default());
@@ -299,7 +300,7 @@ mod delete_tests {
             rid("rbac.authorization.k8s.io", "ClusterRole", "shared"),
             rid("rbac.authorization.k8s.io", "ClusterRole", "racing"),
         ];
-        let done = delete_resources(&api.client(), "a", &resources)
+        let done = delete_resources(&api.client(), "a", DeleteOrder::unordered(resources))
             .await
             .unwrap();
         assert_eq!(
@@ -308,6 +309,7 @@ mod delete_tests {
                 deleted: 1,
                 failed: 0,
                 changed: 1,
+                held: 0,
             }
         );
         assert_eq!(api.names("ClusterRole"), vec!["racing", "shared"]);
@@ -331,12 +333,63 @@ mod delete_tests {
             })
         };
         let api = FakeApi::new([record("a", "a1"), job("batch/v1"), job(&other_version)]);
-        let done = delete_resources(&api.client(), "a", &[rid("batch", "Job", "x")])
-            .await
-            .unwrap();
+        let done = delete_resources(
+            &api.client(),
+            "a",
+            DeleteOrder::unordered(vec![rid("batch", "Job", "x")]),
+        )
+        .await
+        .unwrap();
         assert_eq!(done.deleted, 1);
         assert!(api.names_of("batch/v1", "Job").is_empty());
         assert_eq!(api.names_of(&other_version, "Job"), vec!["x"]);
+    }
+
+    /// gc waits for each object it deletes. One that keeps its finalizer
+    /// counts as a failure and keeps the object it depends on, so gc does
+    /// not forget the build they came from.
+    #[tokio::test(start_paused = true)]
+    async fn delete_resources_waits_and_keeps_what_a_stuck_object_needs() {
+        let object = |kind: &str, name: &str, hash: &str, deps: &str, finalizers: &[&str]| {
+            json!({
+                "apiVersion": "v1",
+                "kind": kind,
+                "metadata": {
+                    "name": name,
+                    "namespace": "app",
+                    "finalizers": finalizers,
+                    "annotations": {
+                        (keys::ACTIVATIONS): "a1",
+                        (keys::IDENTITY_HASH): hash,
+                        (keys::DEPENDS_ON): deps,
+                    },
+                },
+            })
+        };
+        let cm = object(
+            "ConfigMap",
+            "cm",
+            "hash_cm",
+            "hash_s",
+            &["test.kix.run/hold"],
+        );
+        let secret = object("Secret", "s", "hash_s", "", &[]);
+        let api = FakeApi::new([record("a", "a1"), cm.clone(), secret.clone()]);
+        let done = delete_resources(&api.client(), "a", DeleteOrder::of_manifests(&[cm, secret]))
+            .await
+            .unwrap();
+        assert_eq!(
+            done,
+            Deletions {
+                deleted: 0,
+                failed: 1,
+                changed: 0,
+                held: 1,
+            }
+        );
+        assert!(!done.all_gone());
+        assert_eq!(api.names("ConfigMap"), vec!["cm"]);
+        assert_eq!(api.names("Secret"), vec!["s"]);
     }
 }
 

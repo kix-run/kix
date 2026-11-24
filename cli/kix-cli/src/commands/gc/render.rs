@@ -132,6 +132,9 @@ pub(super) fn print_garbage_plan(garbage: &[GarbageEntry]) {
 
                 let reason_line = format!("reason: {}", entry.reason.label());
                 println!("        {}", output::dim(&reason_line));
+                if let Some(deleting) = &entry.deleting {
+                    println!("        {}", output::yellow(&format!("already {deleting}")));
+                }
 
                 if let Some(pkg) = &entry.package {
                     let pkg_display = match &entry.package_namespace {

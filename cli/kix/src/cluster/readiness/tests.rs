@@ -404,6 +404,39 @@ fn declared_readiness_message_shapes() {
     assert!(msg.contains("<absent>"), "got: {msg}");
 }
 
+/// Return `obj` with a deletion timestamp and `finalizers`, as Kubernetes
+/// leaves an object whose delete waits for its finalizers.
+fn being_deleted(mut obj: DynamicObject, finalizers: &[&str]) -> DynamicObject {
+    obj.metadata.deletion_timestamp =
+        Some(serde_json::from_value(json!("2026-11-24T15:54:00Z")).unwrap());
+    obj.metadata.finalizers = Some(finalizers.iter().map(|f| f.to_string()).collect());
+    obj
+}
+
+/// An object being deleted is not ready, whatever its status says, and
+/// even of a kind that is ready once it exists. The reason names the
+/// finalizer it waits for.
+#[test]
+fn an_object_being_deleted_is_not_ready() {
+    let ready = make_obj_gen(
+        1,
+        json!({
+            "spec": {"replicas": 1},
+            "status": {"observedGeneration": 1, "readyReplicas": 1, "updatedReplicas": 1},
+        }),
+    );
+    assert!(check_readiness(&ready, gk("Deployment")));
+    let deleting = being_deleted(ready, &["db.app-db"]);
+    assert!(!check_readiness(&deleting, gk("Deployment")));
+    assert_eq!(
+        not_ready_reason(&deleting, gk("Deployment")),
+        "being deleted, waiting for db.app-db"
+    );
+    let config = being_deleted(make_obj(json!({})), &[]);
+    assert!(!check_readiness(&config, gk("ConfigMap")));
+    assert_eq!(not_ready_reason(&config, gk("ConfigMap")), "being deleted");
+}
+
 #[test]
 fn immediate_kinds() {
     assert!(is_immediate_kind(gk("ConfigMap")));
@@ -2188,6 +2221,27 @@ mod discovery_waits {
         )
         .await
         .unwrap()
+    }
+
+    /// A deploy waiting for an object being deleted fails at once, because
+    /// the object will be gone, and the message names the finalizer.
+    #[tokio::test(start_paused = true)]
+    async fn waiting_for_an_object_being_deleted_fails_at_once() {
+        let mut gone_soon = crd("widgets.example.com", "example.com", "Widget");
+        gone_soon["metadata"]["deletionTimestamp"] = json!("2026-11-24T15:54:00Z");
+        gone_soon["metadata"]["finalizers"] = json!(["customresourcecleanup.apiextensions.k8s.io"]);
+        let api = FakeApi::new([gone_soon]);
+        let start = tokio::time::Instant::now();
+        let result = wait_for_crd(&api, "widgets.example.com").await;
+        assert_eq!(start.elapsed(), Duration::ZERO);
+        let ReadinessResult::Failed { message, .. } = result else {
+            panic!("expected a failure, got {result:?}");
+        };
+        assert!(
+            message
+                .contains("being deleted, waiting for customresourcecleanup.apiextensions.k8s.io"),
+            "{message}"
+        );
     }
 
     fn import(kind: &str, api_version: &str, name: &str) -> ImportTarget {

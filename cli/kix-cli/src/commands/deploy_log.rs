@@ -18,7 +18,8 @@ use std::time::Instant;
 use kix::cluster::apply::ApplyAction;
 use kix::cluster::deploy_log::Line;
 use kix::cluster::stream::{
-    DeployEvent, DeployObserver, DeployResult, HALTED_ON_FAILURE, NodeDetail, Verdict,
+    DeployEvent, DeployObserver, DeployResult, HALTED_ON_FAILURE, NodeDetail, TransitionKind,
+    Verdict,
 };
 use kix::manifest::types::ResourceId;
 
@@ -40,6 +41,12 @@ impl DeployObserver for LineObserver {
             } => {
                 let label = node.to_string();
                 let tag = kind.tag().map(|t| format!("{t} ")).unwrap_or_default();
+                if *kind == TransitionKind::Delete
+                    && let Some(line) = delete_line(verdict, detail.as_ref())
+                {
+                    println!("{label}> {line}");
+                    return;
+                }
                 match verdict {
                     Verdict::Pending => {}
                     Verdict::Running => match detail {
@@ -213,6 +220,26 @@ fn json_line(line: &Line) -> String {
         .to_string()
 }
 
+/// Return the text after `<object>> ` for a prune delete that is waiting
+/// for its object to be gone or is done, or `None` for a verdict the other
+/// node lines cover.
+pub(crate) fn delete_line(verdict: &Verdict, detail: Option<&NodeDetail>) -> Option<String> {
+    match (verdict, detail) {
+        (Verdict::Running, Some(NodeDetail::ReadinessProgress(status))) => Some(deleting(status)),
+        (Verdict::Ready, _) => Some("deleted".to_string()),
+        _ => None,
+    }
+}
+
+/// Describe a delete that waits for its object to be gone, given what the
+/// object waits for, such as `being deleted, waiting for finalizer.keda.sh`.
+pub(crate) fn deleting(status: &str) -> String {
+    match status.strip_prefix("being deleted") {
+        Some(rest) => format!("deleting{rest}"),
+        None => format!("deleting, {status}"),
+    }
+}
+
 /// Format `PruneStart` lines for `LineObserver`, listing deleted or reported
 /// orphans followed by protected orphans.
 fn prune_lines(resources: &[ResourceId], kept: &[ResourceId], delete: bool) -> Vec<String> {
@@ -226,10 +253,15 @@ fn prune_lines(resources: &[ResourceId], kept: &[ResourceId], delete: bool) -> V
                 "prune> {count} object(s) left the build, still on the cluster; run `kix deploy --prune` or `kix gc` to delete them"
             )
         });
+        let each = if delete {
+            "left the build, will be deleted"
+        } else {
+            "left the build, still on the cluster"
+        };
         lines.extend(
             resources
                 .iter()
-                .map(|rid| format!("{}> left the build, still on the cluster", rid.display_id())),
+                .map(|rid| format!("{}> {each}", rid.display_id())),
         );
     }
     if !kept.is_empty() {
@@ -608,6 +640,48 @@ mod tests {
     }
 
     const GOLDEN: &str = include_str!("../../tests/fixtures/deploy-log.ndjson");
+
+    /// Under `--prune`, each object is listed as one Kix will delete.
+    #[test]
+    fn prune_lines_say_what_will_be_deleted() {
+        let lines = prune_lines(&[rid("ConfigMap", "old")], &[], true);
+        assert_eq!(
+            lines,
+            vec![
+                "prune> deleting 1 object(s) that left the build",
+                "ConfigMap/old@app> left the build, will be deleted",
+            ]
+        );
+    }
+
+    /// A delete that waits says what for, and a finished delete says
+    /// "deleted".
+    #[test]
+    fn a_delete_reads_as_deleted() {
+        assert_eq!(
+            deleting("being deleted, waiting for finalizer.keda.sh"),
+            "deleting, waiting for finalizer.keda.sh"
+        );
+        assert_eq!(deleting("being deleted"), "deleting");
+        assert_eq!(
+            delete_line(&Verdict::Ready, None).as_deref(),
+            Some("deleted")
+        );
+        assert_eq!(
+            delete_line(
+                &Verdict::Running,
+                Some(&NodeDetail::ReadinessProgress(
+                    "being deleted, waiting for test.kix.run/hold".into()
+                ))
+            )
+            .as_deref(),
+            Some("deleting, waiting for test.kix.run/hold")
+        );
+        let failed = Verdict::Failed {
+            message: "stuck".into(),
+        };
+        assert_eq!(delete_line(&failed, None), None);
+    }
 
     /// Verify that warn-only mode lists protected orphans separately from
     /// reported orphans.

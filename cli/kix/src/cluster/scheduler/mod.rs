@@ -45,8 +45,10 @@ use crate::manifest::{keys, lifecycle, types::CLUSTER_SCOPED};
 
 use super::apply::ApplyAction;
 use super::cancel::CancelToken;
+use super::graph::Walked;
 use super::ops::{Cluster, DeployRecord, RecordWriteError, ResourceIo};
 use super::prune_guard::Pruned;
+use super::readiness::{self, DeletePath, Deletion};
 use super::stream::{
     CancelReason, DeployEvent, DeployObserver, DeployResult, NodeDetail, NodeFailure, NodeId,
     Phase, TransitionKind, Verdict,
@@ -275,6 +277,7 @@ pub(crate) async fn run_deploy(
     }
     run.stamp_unchanged().await;
     let orphans_left = run.prune().await;
+    run.stop_if_cancelled().await?;
     run.finalize(orphans_left).await
 }
 
@@ -1062,6 +1065,12 @@ impl<'a> Run<'a> {
     /// Prune orphaned resources after all plan nodes reach a terminal verdict.
     /// Returns `true` if any prunable orphans remain on the cluster so
     /// finalization can record their source builds.
+    ///
+    /// The orphans are deleted through [`DeleteOrder::walk`], and each delete
+    /// waits for its object to be gone. An object still there after the wait
+    /// fails the run, stays recorded as an orphan, and holds back the orphans
+    /// it depends on, which the next prune deletes. When the cancel token
+    /// fires during the prune, every orphan not deleted counts as cancelled.
     async fn prune(&mut self) -> bool {
         let prune = self.prune;
         let effective_orphans: Vec<ResourceId> = self
@@ -1077,9 +1086,10 @@ impl<'a> Run<'a> {
         if effective_orphans.is_empty() || prune == PrunePolicy::Skip {
             return orphans_left;
         }
-        let ordered = prune_order(&effective_orphans, self.old_manifests);
+        let mut order = prune_order(&effective_orphans, self.old_manifests);
         let delete = prune == PrunePolicy::Delete;
-        let (kept, prunable): (Vec<ResourceId>, Vec<ResourceId>) = ordered
+        let (kept, prunable): (Vec<ResourceId>, Vec<ResourceId>) = order
+            .ids()
             .iter()
             .cloned()
             .partition(|r| never_pruned(r.group_kind()));
@@ -1089,61 +1099,161 @@ impl<'a> Run<'a> {
             kept,
             delete,
         });
-
-        for rid in &ordered {
-            if prune == PrunePolicy::WarnOnly || never_pruned(rid.group_kind()) {
-                continue;
-            }
-            let deleted =
-                match tokio::time::timeout(INLINE_BEST_EFFORT_TIMEOUT, self.resources.prune(rid))
-                    .await
-                {
-                    Ok(outcome) => outcome.map_err(|e| e.to_string()),
-                    Err(_) => Err(format!(
-                        "no answer within {}s",
-                        INLINE_BEST_EFFORT_TIMEOUT.as_secs()
-                    )),
-                };
-            match deleted {
-                Ok(outcome @ (Pruned::Kept(_) | Pruned::Changed(_))) => {
-                    // An object kept because its content drifted still belongs
-                    // to this cluster, so preserve its source build for the
-                    // next prune. An object shared with another Kix cluster is
-                    // managed by that cluster.
-                    if matches!(outcome, Pruned::Changed(_)) {
-                        orphans_left = true;
-                    }
-                    self.emit(DeployEvent::PruneKept {
-                        resource: rid.clone(),
-                        reason: outcome.kept_reason().unwrap_or_default(),
-                    });
-                }
-                Ok(Pruned::Deleted | Pruned::Gone) => {
-                    self.result.pruned += 1;
-                    self.emit(DeployEvent::NodeStateChanged {
-                        node: NodeId::Resource(rid.clone()),
-                        kind: TransitionKind::Delete,
-                        verdict: Verdict::Ready,
-                        detail: None,
-                    });
-                }
-                Err(message) => {
-                    self.result.failed += 1;
-                    self.result.failures.push(NodeFailure {
-                        node: NodeId::Resource(rid.clone()),
-                        message: message.clone(),
-                    });
-                    orphans_left = true;
-                    self.emit(DeployEvent::NodeStateChanged {
-                        node: NodeId::Resource(rid.clone()),
-                        kind: TransitionKind::Delete,
-                        verdict: Verdict::Failed { message },
-                        detail: None,
-                    });
-                }
-            }
+        if prune == PrunePolicy::WarnOnly {
+            return orphans_left;
         }
+        order.retain(|rid| !never_pruned(rid.group_kind()));
+
+        let resources = self.resources.clone();
+        let observer = self.observer.clone();
+        let progress = self.progress.clone();
+        let (timeout, cancel) = (self.config.timeout, self.config.cancel.clone());
+        let emit = |event: DeployEvent| {
+            progress.touch();
+            if let DeployEvent::NodeStateChanged { node, verdict, .. } = &event
+                && verdict.is_terminal()
+            {
+                progress.finished(node);
+            }
+            observer.on_event(&event);
+        };
+        let state = |rid: &ResourceId, verdict: Verdict| DeployEvent::NodeStateChanged {
+            node: NodeId::Resource(rid.clone()),
+            kind: TransitionKind::Delete,
+            verdict,
+            detail: None,
+        };
+        let mut result = std::mem::take(&mut self.result);
+        let start = |rid: &ResourceId| {
+            let (resources, observer, progress, cancel) = (
+                resources.clone(),
+                observer.clone(),
+                progress.clone(),
+                cancel.clone(),
+            );
+            let rid = rid.clone();
+            async move {
+                let deleted =
+                    match tokio::time::timeout(INLINE_BEST_EFFORT_TIMEOUT, resources.prune(&rid))
+                        .await
+                    {
+                        Ok(outcome) => outcome.map_err(|e| e.to_string()),
+                        Err(_) => Err(format!(
+                            "no answer within {}s",
+                            INLINE_BEST_EFFORT_TIMEOUT.as_secs()
+                        )),
+                    };
+                match deleted {
+                    Ok(kept @ (Pruned::Kept(_) | Pruned::Changed(_))) => Pruning::Kept(kept),
+                    Ok(pruned) => match pruned.deleting() {
+                        Some(uid) => {
+                            let waited = wait_gone(
+                                &*resources,
+                                &observer,
+                                &progress,
+                                &rid,
+                                uid,
+                                timeout,
+                                &cancel,
+                            )
+                            .await;
+                            match waited {
+                                Ok(()) => Pruning::Gone,
+                                Err(unfinished) => Pruning::Unfinished(unfinished),
+                            }
+                        }
+                        None => Pruning::Gone,
+                    },
+                    Err(message) => Pruning::Unfinished(Unfinished::Failed(message)),
+                }
+            }
+        };
+        order
+            .walk(
+                self.config.concurrency,
+                &cancel,
+                start,
+                |p| matches!(p, Pruning::Unfinished(_)),
+                |rid, walked| match walked {
+                    Walked::Done(Pruning::Gone) => {
+                        result.pruned += 1;
+                        emit(state(rid, Verdict::Ready));
+                    }
+                    Walked::Done(Pruning::Kept(outcome)) => {
+                        // An object kept because its content drifted still
+                        // belongs to this cluster, so preserve its source
+                        // build for the next prune. An object shared with
+                        // another Kix cluster is managed by that cluster.
+                        if matches!(outcome, Pruned::Changed(_)) {
+                            orphans_left = true;
+                        }
+                        emit(DeployEvent::PruneKept {
+                            resource: rid.clone(),
+                            reason: outcome.kept_reason().unwrap_or_default(),
+                        });
+                    }
+                    Walked::Done(Pruning::Unfinished(Unfinished::Failed(message))) => {
+                        orphans_left = true;
+                        result.failed += 1;
+                        result.failures.push(NodeFailure {
+                            node: NodeId::Resource(rid.clone()),
+                            message: message.clone(),
+                        });
+                        emit(state(
+                            rid,
+                            Verdict::Failed {
+                                message: message.clone(),
+                            },
+                        ));
+                    }
+                    Walked::Done(Pruning::Unfinished(Unfinished::Cancelled))
+                    | Walked::NotStarted => {
+                        orphans_left = true;
+                        result.cancelled += 1;
+                        emit(state(
+                            rid,
+                            Verdict::Cancelled {
+                                because: CancelReason::External,
+                            },
+                        ));
+                    }
+                    Walked::HeldBack(stuck) => {
+                        orphans_left = true;
+                        emit(DeployEvent::PruneKept {
+                            resource: rid.clone(),
+                            reason: readiness::held_back_reason(rid, stuck, DeletePath::Prune),
+                        });
+                    }
+                    Walked::Cycle => {
+                        orphans_left = true;
+                        emit(DeployEvent::PruneKept {
+                            resource: rid.clone(),
+                            reason: readiness::cycle_reason(rid, DeletePath::Prune),
+                        });
+                    }
+                },
+            )
+            .await;
+        self.result = result;
         orphans_left
+    }
+
+    /// Stop a run that was cancelled while it pruned: report it, mark the
+    /// record `Failed` as a cancel during the node phase does, and return the
+    /// error. Returns `Ok` when the prune was not cancelled.
+    async fn stop_if_cancelled(&mut self) -> Result<(), DeployError> {
+        if self.result.cancelled == 0 || !self.config.cancel.is_cancelled() {
+            return Ok(());
+        }
+        let reason = cancel_reason(self.config);
+        self.emit(DeployEvent::Stopped {
+            reason: reason.clone(),
+        });
+        self.abort_record(&reason).await;
+        Err(DeployError::Cancelled {
+            reason,
+            partial: self.partial(),
+        })
     }
 
     /// Finalize the Activation record unless the run was a no-op or a dry run.
@@ -1184,6 +1294,70 @@ impl<'a> Run<'a> {
             }
         }
         Ok(self.result)
+    }
+}
+
+/// How one prune delete ended.
+enum Pruning {
+    /// The object is gone.
+    Gone,
+    /// The prune guard kept the object.
+    Kept(Pruned),
+    /// The object may still be on the cluster.
+    Unfinished(Unfinished),
+}
+
+/// Why a prune delete did not finish.
+enum Unfinished {
+    /// The cancel token fired during the wait.
+    Cancelled,
+    /// The delete failed or the object stayed, with the message to report.
+    Failed(String),
+}
+
+/// Wait for the orphan `rid` with uid `uid`, deleted by this prune or
+/// already being deleted, to be gone, within `timeout`. Report what it waits
+/// for each time that changes.
+async fn wait_gone(
+    resources: &dyn ResourceIo,
+    observer: &Arc<dyn DeployObserver>,
+    progress: &Progress,
+    rid: &ResourceId,
+    uid: Option<&str>,
+    timeout: Duration,
+    cancel: &CancelToken,
+) -> Result<(), Unfinished> {
+    let last = std::sync::Mutex::new(String::new());
+    let on_status = |status: &str| {
+        let Ok(mut last) = last.lock() else {
+            return;
+        };
+        if *last == status {
+            return;
+        }
+        *last = status.to_string();
+        progress.touch();
+        observer.on_event(&DeployEvent::NodeStateChanged {
+            node: NodeId::Resource(rid.clone()),
+            kind: TransitionKind::Delete,
+            verdict: Verdict::Running,
+            detail: Some(NodeDetail::ReadinessProgress(status.to_string())),
+        });
+    };
+    match resources
+        .wait_gone(rid, uid, timeout, cancel, &on_status)
+        .await
+    {
+        Ok(Deletion::Gone) => Ok(()),
+        Ok(Deletion::Stuck(stuck)) => Err(Unfinished::Failed(readiness::stuck_message(
+            rid,
+            &stuck,
+            DeletePath::Prune,
+        ))),
+        Ok(Deletion::Cancelled) => Err(Unfinished::Cancelled),
+        Err(e) => Err(Unfinished::Failed(format!(
+            "Kix deleted {rid}, then could not read it to confirm that it is gone, so the delete failed: {e}"
+        ))),
     }
 }
 

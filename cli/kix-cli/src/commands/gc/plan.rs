@@ -50,6 +50,8 @@ pub(super) struct GarbageEntry {
     pub(super) package_namespace: Option<String>,
     pub(super) activations: Option<String>,
     pub(super) reason: GarbageReason,
+    /// What the object waits for when it is already being deleted.
+    pub(super) deleting: Option<String>,
 }
 
 /// Planned Activation record retirement paired with the [`Records`] handle used
@@ -192,6 +194,7 @@ pub(super) fn judge_hard(
             package_namespace: ann_get(keys::PACKAGE_NAMESPACE),
             activations: ann_get(keys::ACTIVATIONS),
             reason,
+            deleting: kix::cluster::readiness::deletion_reason(obj),
         });
     }
     (garbage, shared)
@@ -350,6 +353,7 @@ pub(super) fn record_garbage(plan: &Retirement) -> Vec<GarbageEntry> {
             package_namespace: None,
             activations: None,
             reason: GarbageReason::RetiredActivation,
+            deleting: None,
         })
         .collect()
 }

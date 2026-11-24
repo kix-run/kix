@@ -483,11 +483,14 @@ fn walk_depends_on<'a>(
     (found, unresolved)
 }
 
-/// Return the readiness of a live object by the rules a deploy waits on.
+/// Return the readiness of a live object by the rules a deploy waits on. An
+/// object being deleted is not ready, even of a kind that has no readiness.
 fn readiness_of(obj: &DynamicObject) -> Readiness {
     let rid = drift::resource_id(obj);
     let kind = rid.group_kind();
-    if readiness::is_immediate_kind(kind) {
+    if let Some(reason) = readiness::deletion_reason(obj) {
+        Readiness::NotReady(reason)
+    } else if readiness::is_immediate_kind(kind) {
         Readiness::NotApplicable
     } else if readiness::check_readiness(obj, kind) {
         Readiness::Ready
