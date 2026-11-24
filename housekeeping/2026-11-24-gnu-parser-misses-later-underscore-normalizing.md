@@ -1,0 +1,3 @@
+# 2026-11-24 · `kix/packages` · A package that declares `parser = "gnu"` lets underscore spellings of its owned flags through, with no signal, once its program starts to read `_` as `-`.
+
+A pflag program reads `--leader_elect` as `--leader-elect` when it starts through component-base `cli.Run`, or calls `SetNormalizeFunc` with `WordSepNormalizeFunc`. Such a program needs `parser = "component-base"`. Most `kix.mergeArgs` calls on pflag programs declare `"gnu"` today, and none of their pinned versions reads `_` as `-`. A later upstream version can adopt one of these calls. The package then keeps building, and `extraArgs` can set an owned flag through its underscore spelling. No step of a version bump searches the new source for these calls, and no test would notice.
