@@ -74,18 +74,19 @@ cd docs && npm install && npm run dev
 - `astro.config.mjs`: site config, sidebar, and plugins
 - `src/content.config.ts`: Starlight content collection schema
 
-Pages under `reference/package-catalog/` are generated, and git ignores
-them. `docs/nix/reference.nix` reads the `meta`, `options`, and `build`
-dependencies of every package in `kix/packages/stable/` and
-`kix/packages/experimental/`, and `docs/scripts/package-catalog.py` writes
-an index page and one page per package from that data. A package page
-links the how-to guides whose entry in `how-to-coverage.json` lists the
-package's id under `packages`. To change a page, change the package or the
-ledger.
+Pages under `reference/package-catalog/` are generated at build time and
+ignored by git. Do not edit them directly; edit the package in `kix/packages/`
+or `docs/how-to-coverage.json` instead. `docs/nix/reference.nix` reads the
+`meta`, `options`, and `build` dependencies of every package in
+`kix/packages/stable/` and `kix/packages/experimental/`, and
+`docs/scripts/package-catalog.py` writes the catalog index and one MDX page
+per package. To link a how-to guide on a package page, add the package ID
+(such as `valkey` or `experimental/cilium`) to that guide's `packages` list in
+`docs/how-to-coverage.json`.
 
-The `reference` derivation runs when you build the site, which copies it
-into the content tree in `preBuild`, or directly with
-`nix build ./docs#reference`.
+`nix build ./docs#site` and `nix run ./docs#dev` build the catalog and copy it
+into `src/content/docs/reference/package-catalog/`. To build only the catalog,
+run `nix build ./docs#reference`.
 
 ## Snippets
 
