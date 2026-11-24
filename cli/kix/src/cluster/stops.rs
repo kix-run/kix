@@ -20,7 +20,7 @@ pub const ALLOW_DOWNGRADE_VAR: &str = "KIX_ALLOW_DOWNGRADE";
 
 /// The releases every cluster must deploy before it moves past their minor.
 /// The release skill adds a version here when one of the release's change
-/// records has `required-stop = true`.
+/// records has `required-stop = true`, and a test checks that the two agree.
 pub const REQUIRED_STOPS: &[&str] = &[];
 
 /// Return [`REQUIRED_STOPS`] as versions.
@@ -209,6 +209,51 @@ mod tests {
 
     fn last(version: &str) -> Record {
         deployed(Some(version), None)
+    }
+
+    /// `kix upgrade` stops at the releases whose change records set
+    /// `required-stop = true`, and `kix deploy` refuses to skip the releases in
+    /// [`REQUIRED_STOPS`]. The two must name the same releases.
+    ///
+    /// Walks up from `CARGO_MANIFEST_DIR` to the repository root, and is
+    /// skipped when the records are not there, so a packaged crate still
+    /// tests clean.
+    #[test]
+    fn required_stops_match_the_change_records() {
+        let Some(root) = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .find(|p| p.join("changes/README.md").is_file())
+        else {
+            return;
+        };
+        let mut from_records = std::collections::BTreeSet::new();
+        for release in std::fs::read_dir(root.join("changes")).unwrap() {
+            let release = release.unwrap().path();
+            let Some(version) = release
+                .file_name()
+                .and_then(|n| n.to_str())
+                .and_then(|n| n.parse::<Version>().ok())
+                .filter(|v| !v.is_prerelease())
+            else {
+                continue;
+            };
+            for record in std::fs::read_dir(&release).unwrap() {
+                let text = std::fs::read_to_string(record.unwrap().path()).unwrap();
+                let header = text
+                    .strip_prefix("+++\n")
+                    .and_then(|rest| rest.split_once("\n+++"))
+                    .map_or("", |(header, _)| header);
+                let header: toml::Table = toml::from_str(header).unwrap();
+                if header.get("required-stop") == Some(&toml::Value::Boolean(true)) {
+                    from_records.insert(version.clone());
+                }
+            }
+        }
+        let listed: std::collections::BTreeSet<Version> = required_stops().into_iter().collect();
+        assert_eq!(
+            listed, from_records,
+            "REQUIRED_STOPS must list each release with a `required-stop = true` record"
+        );
     }
 
     #[test]

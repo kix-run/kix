@@ -6,7 +6,7 @@ use crate::cli::ListResourcesArgs;
 use crate::output::{self, CommandResponse};
 use kix::manifest::types::{CLUSTER_SCOPED, ResourceId};
 
-use super::CommandContext;
+use crate::commands::CommandContext;
 
 /// A cluster's rendered resources by namespace and kind.
 #[derive(serde::Serialize, schemars::JsonSchema)]

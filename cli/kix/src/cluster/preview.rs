@@ -291,7 +291,7 @@ pub(crate) fn conflict_owners(message: &str) -> Vec<ConflictOwner> {
         let manager = after[..end].to_string();
         let tail = &after[end + 1..];
         let next = tail.find(" with \"").unwrap_or(tail.len());
-        let fields = field_paths(&tail[..next]);
+        let fields = crate::cluster::apply::conflict_paths(&tail[..next]);
         match owners.iter_mut().find(|o| o.manager == manager) {
             Some(o) => o.fields.extend(fields),
             None => owners.push(ConflictOwner { manager, fields }),
@@ -299,31 +299,6 @@ pub(crate) fn conflict_owners(message: &str) -> Vec<ConflictOwner> {
         rest = &tail[next..];
     }
     owners
-}
-
-/// Extract `.`-prefixed field paths from `text`, splitting on whitespace and
-/// commas outside brackets so keyed list selectors stay intact.
-fn field_paths(text: &str) -> Vec<String> {
-    let mut paths = Vec::new();
-    let mut current = String::new();
-    let mut depth = 0usize;
-    for c in text.chars() {
-        match c {
-            '[' => depth += 1,
-            ']' => depth = depth.saturating_sub(1),
-            _ => {}
-        }
-        if depth == 0 && (c.is_whitespace() || c == ',') {
-            paths.push(std::mem::take(&mut current));
-        } else {
-            current.push(c);
-        }
-    }
-    paths.push(current);
-    paths
-        .into_iter()
-        .filter(|t| t.len() > 1 && t.starts_with('.'))
-        .collect()
 }
 
 /// The answers a dry run collected, in the order they arrived.

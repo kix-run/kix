@@ -447,19 +447,10 @@ fn warn_unused_override(global: &crate::cli::GlobalArgs) {
     }
 }
 
-/// Validate cluster name format.
-///
-/// SECURITY: This is the primary defense against Nix expression injection.
-/// The cluster name is spliced into the flake attribute `nix eval` reads
-/// (`kix::eval::nix`) and into the `--apply` expression of `nix eval`
-/// (`cluster_name_command`).
-/// Only alphanumeric characters, hyphens, and underscores are safe.
+/// Refuse a cluster name that [`kix::eval::nix::is_valid_cluster_name`]
+/// rejects, with a message for the person who typed it.
 fn validate_cluster_name(name: &str) -> Result<()> {
-    if name.is_empty()
-        || !name
-            .chars()
-            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
-    {
+    if !kix::eval::nix::is_valid_cluster_name(name) {
         return Err(miette::miette!(
             "'{}' is not a valid cluster name. Use a name like 'example' or 'nw1', not a file path.",
             name

@@ -1,3 +1,10 @@
+//! `kix list`: the clusters and packages a project defines, and the
+//! resources ([`resources`]) and container images ([`images`]) of one
+//! cluster.
+
+pub mod images;
+pub mod resources;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use miette::{IntoDiagnostic, Result};
@@ -153,8 +160,8 @@ pub fn run(args: &ListArgs, ctx: &mut CommandContext) -> Result<()> {
     match &args.command {
         ListCommand::Clusters => run_clusters(ctx),
         ListCommand::Packages(pkg_args) => run_packages(pkg_args.cluster.as_deref(), ctx),
-        ListCommand::Resources(args) => super::inspect::run(args, ctx),
-        ListCommand::Images(args) => super::images::run(args, ctx),
+        ListCommand::Resources(args) => resources::run(args, ctx),
+        ListCommand::Images(args) => images::run(args, ctx),
     }
 }
 

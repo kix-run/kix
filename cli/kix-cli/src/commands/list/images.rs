@@ -6,7 +6,7 @@ use serde::Serialize;
 use crate::cli::ListImagesArgs;
 use crate::output::{self, CommandResponse};
 
-use super::CommandContext;
+use crate::commands::CommandContext;
 
 /// A single container image reference found in the cluster manifests.
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema, PartialEq, Eq, PartialOrd, Ord)]

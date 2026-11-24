@@ -80,11 +80,11 @@ fn the_command_output_schemas_match_their_types() {
     );
     check(
         "list-resources.schema.json",
-        output::<inspect::InspectResponse>(),
+        output::<list::resources::InspectResponse>(),
     );
     check(
         "list-images.schema.json",
-        output::<images::ImagesResponse>(),
+        output::<list::images::ImagesResponse>(),
     );
     check("pin-set.schema.json", output::<pin::PinSetResponse>());
     check("pin-rm.schema.json", output::<pin::PinRmResponse>());

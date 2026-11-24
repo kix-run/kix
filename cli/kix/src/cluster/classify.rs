@@ -127,7 +127,7 @@ impl<'a> Context<'a> {
             crds: BuildCrds::of(scope.build),
             changed: ChangedCrds::of(answers),
             writes: applied.iter().map(|m| ResourceId::from_value(m)).collect(),
-            written_packages: applied.iter().filter_map(|m| package_of(m)).collect(),
+            written_packages: applied.iter().filter_map(|m| keys::package_of(m)).collect(),
             manifests,
         }
     }
@@ -193,7 +193,10 @@ impl<'a> Context<'a> {
     fn unreachable(&self, webhook: Option<&str>, service: &ResourceId, message: &str) -> Verdict {
         let webhook_name = webhook.unwrap_or("?");
         let svc = service.display_id();
-        let package = self.manifests.get(service).and_then(|m| package_of(m));
+        let package = self
+            .manifests
+            .get(service)
+            .and_then(|m| keys::package_of(m));
         if self.writes.contains(service) {
             return Verdict::NotChecked {
                 reason: UncheckedReason::WebhookBackendWrittenByThisDeploy,
@@ -227,13 +230,6 @@ impl<'a> Context<'a> {
             ),
         })
     }
-}
-
-/// Return the `namespace/instance` key of the package that owns `manifest`.
-fn package_of(manifest: &Value) -> Option<String> {
-    let name = keys::get(manifest, keys::PACKAGE)?;
-    let namespace = keys::get(manifest, keys::PACKAGE_NAMESPACE)?;
-    Some(format!("{namespace}/{name}"))
 }
 
 /// Return the `(group, kind)` pair for `manifest`.

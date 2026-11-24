@@ -413,6 +413,30 @@ fn a_project_on_this_version_runs_here() {
         .stderr(predicate::str::contains("started from").not());
 }
 
+/// A malformed `KIX_OVERRIDE_INPUT` stops a command, but `kix --version`
+/// still prints the version and names the problem.
+#[test]
+fn version_prints_despite_a_malformed_override_variable() {
+    let s = Setup::new(VERSION);
+    s.kix()
+        .env("KIX_OVERRIDE_INPUT", "kix")
+        .arg("--flake")
+        .arg(&s.project)
+        .arg("--version")
+        .assert()
+        .success()
+        .stdout(format!("kix {VERSION}\n"))
+        .stderr(predicate::str::contains("odd number of words"));
+    s.kix()
+        .env("KIX_OVERRIDE_INPUT", "kix")
+        .arg("--flake")
+        .arg(&s.project)
+        .args(["list", "clusters"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("odd number of words"));
+}
+
 #[test]
 fn version_without_auto_install_says_how_to_install() {
     let s = Setup::new("9.9.1");
