@@ -71,6 +71,7 @@ needs only `get` and `list`.
 | --- | --- |
 | Field changes | For each object the dry run answered, the live object compared with the object the apiserver says the apply would produce. Server-maintained metadata and `status` are left out, and Secret values are not shown. A package the build comparison called unchanged becomes changed when the apiserver says it would change. |
 | Writes the deploy would stop on | Field ownership conflicts, with the manager that owns each field; admission webhook denials; ValidatingAdmissionPolicy denials; validation errors; changes to immutable fields; RBAC refusals; missing namespaces and unknown kinds the build does not create; SOPS Secrets that do not decrypt; and refused prune deletes. |
+| Objects being deleted | Objects this deploy applies that are already being deleted on the cluster, showing when deletion started and any finalizers holding them. The deploy waits for each old object to be removed and then creates a new one from the build. Any object that may hold data, such as a PersistentVolumeClaim, carries a warning that the new object starts empty and keeps none of the old object's data. Shown as a warning; does not stop the deploy. |
 | Prune | Each orphan and what the deploy does with it. See [Prune fates](#prune-fates). |
 | Stateful migrations | Objects that hold data that the change removes from a stateful package and adds in their place. A deploy stops on them unless run with `--accept-migrations`. |
 | Drift | Fields where the live object differs from the deployed build, the managers that own them live, and whether the deploy puts the deployed value back. |
@@ -96,6 +97,9 @@ say:
 - `The deploy would stop on N writes:`, one line per conflict, refusal, or
   refused prune delete, with the owning manager and fields or the
   apiserver's message.
+- `N objects in the build are being deleted on the cluster`, one line per
+  object showing when deletion started and any finalizers holding it, plus a
+  second warning line when the object may hold data.
 - `Drift:`, one line per drifted field with its live and deployed values,
   the managers that set it, and whether the deploy reverts it.
 - `Prune:`, objects that left the build and stay on the cluster
@@ -108,7 +112,8 @@ say:
 ### Markdown
 
 GitHub-flavoured Markdown for pull request comments: the package plan, then
-the Kix library's warnings, the writes the deploy would stop on, and the
+the Kix library's warnings, the writes the deploy would stop on, the
+objects being deleted on the cluster, and the
 objects the dry run did not check in a `<details>` block.
 
 ## Plan file
@@ -165,6 +170,7 @@ Its JSON Schema is `cli/kix-cli/schema/plan.schema.json`.
 | `conflicts` | Checked section of `{ resource, owners, message }`, each owner `{ manager, fields }`. |
 | `admission` | Checked section of `{ resource, reason, webhook, message }`. See [Refusal reasons](#refusal-reasons). |
 | `drift` | Checked section of `{ resource, path, live, deployed, managers, reverted }`. A plan lists the drift on the objects the deploy applies, so `reverted` is always true; `kix plan --read-only` also lists drift the deploy leaves alone, with `reverted` false. |
+| `being_deleted` | Array of `{ resource, since, finalizers, holds_data }` for each object this deploy applies that is currently being deleted on the cluster. `since` is `metadata.deletionTimestamp`, `finalizers` lists the finalizers still holding the object, and `holds_data` is `true` when the object may hold data (which the recreated object will not keep). Omitted when empty, and omitted by `kix plan --read-only` and `kix diff`. |
 | `prune` | Checked section of `{ resource, fate, detail }`. See [Prune fates](#prune-fates). |
 | `readiness` | Always `{ "status": "not_checked", "reason": "not_previewable" }`. |
 | `warnings` | The Kix library's warnings for the build, each with the fields [`kix check`](/docs/reference/cli/check/#library-warnings) gives a warning, without `severity`. Left out when there are none, and for a build read from a bundle. |

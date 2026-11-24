@@ -1,0 +1,3 @@
+# 2026-11-24 · `kix/lib/eval/cluster.nix` · The config-only first evaluation of an instance uses a `kix.options.resources` that ignores `cluster.defaultLimits`.
+
+`phase1Instances` (`kix/lib/eval/cluster.nix:452`) calls each package with the plain `kix`, so its options carry every default limit. It ignores the availability level in the same way. Today nothing reads `resources` from that evaluation. If a config injection ever reads a consumer's `resources`, it will see a limit that the built container lacks. The cause is two evaluations of one instance's config that get different library inputs.

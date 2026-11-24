@@ -66,7 +66,15 @@ impl DryRun {
 
 #[async_trait]
 impl ResourceIo for DryRun {
-    async fn apply(&self, manifest: &Value) -> Result<ApplyResult, ApplyError> {
+    /// An object being deleted is previewed as a recreate: the deploy waits
+    /// for it to be gone, then creates it.
+    async fn apply(
+        &self,
+        manifest: &Value,
+        _timeout: Duration,
+        _cancel: &CancelToken,
+        _on_status: OnStatus<'_>,
+    ) -> Result<ApplyResult, ApplyError> {
         let rid = ResourceId::from_value(manifest);
         // A dry run creates no CRD, so discovery cannot gain a kind during
         // one and a cache miss is final.
@@ -78,7 +86,32 @@ impl ResourceIo for DryRun {
                 .record(rid, DryRunOutcome::Refused(Refusal::of_apply(&e)));
             return Err(e);
         };
-        let applied = self.resources.apply_as(&ar, scope, manifest).await;
+        let applied = self.resources.apply_as(&ar, scope.clone(), manifest).await;
+        if let Err(ApplyError::BeingDeleted { .. }) = &applied {
+            // The whole object, metadata included, which says what the
+            // delete waits for.
+            let live = self
+                .resources
+                .api_for(&ar, &scope, &rid)
+                .get_opt(&rid.name)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|o| serde_json::to_value(o).ok());
+            self.journal.record(
+                rid,
+                DryRunOutcome::Recreated {
+                    live,
+                    result: None,
+                    not_kept: Vec::new(),
+                },
+            );
+            return Ok(ApplyResult {
+                action: ApplyAction::Created,
+                preview: None,
+                not_kept: Vec::new(),
+            });
+        }
         match &applied {
             Ok(ApplyResult {
                 preview: Some(preview),
@@ -238,13 +271,69 @@ mod tests {
             "kind": "Widget",
             "metadata": { "name": "w" },
         });
-        assert!(dry.apply(&manifest).await.is_err());
+        assert!(
+            dry.apply(
+                &manifest,
+                Duration::from_secs(1),
+                &CancelToken::new(),
+                &|_| {}
+            )
+            .await
+            .is_err()
+        );
         let answers = dry.take_answers();
         assert_eq!(answers.len(), 1);
         assert!(matches!(
             &answers[0].outcome,
             DryRunOutcome::Refused(Refusal::UnknownKind { kind }) if kind == "Widget"
         ));
+    }
+
+    /// An apply onto an object being deleted is answered as a recreate that
+    /// keeps the whole live object, so the plan can say what its delete
+    /// waits for. The deploy goes on.
+    #[tokio::test]
+    async fn an_object_being_deleted_is_answered_as_a_recreate() {
+        let api = FakeApi::new([json!({
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {
+                "name": "cm",
+                "namespace": "app",
+                "deletionTimestamp": "2026-11-24T15:54:00Z",
+                "finalizers": ["example.com/hold"],
+            },
+        })]);
+        let dry = dry_run(&api).await;
+        let manifest = json!({
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": { "name": "cm", "namespace": "app" },
+        });
+        let applied = dry
+            .apply(
+                &manifest,
+                Duration::from_secs(1),
+                &CancelToken::new(),
+                &|_| {},
+            )
+            .await
+            .unwrap();
+        assert_eq!(applied.action, ApplyAction::Created);
+        let answers = dry.take_answers();
+        let [answer] = answers.as_slice() else {
+            panic!("{answers:?}");
+        };
+        let DryRunOutcome::Recreated {
+            live: Some(live),
+            result: None,
+            ..
+        } = &answer.outcome
+        else {
+            panic!("{answer:?}");
+        };
+        assert_eq!(live["metadata"]["finalizers"], json!(["example.com/hold"]));
+        assert!(live["metadata"]["deletionTimestamp"].is_string());
     }
 
     /// A prune of a kind discovery lacks fails without an answer: the engine

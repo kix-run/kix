@@ -25,8 +25,10 @@ let
 in
 {
   # Require both CPU and memory in `requests` and `limits` on every container.
+  # Accept a missing CPU or memory limit when the cluster sets that field of
+  # `cluster.defaultLimits` to "none".
   boundedResources = {
-    description = "Every container should declare CPU+memory requests and limits";
+    description = "Every container should set CPU and memory requests and any limits not turned off by cluster.defaultLimits";
     level = "manifest";
     severity = "warning";
     tags = [
@@ -36,9 +38,24 @@ in
     ];
     appliesTo = { resource, ... }: isWorkload resource;
     check =
-      { resource, ... }:
+      {
+        resource,
+        defaultLimits ? (import ../core/default-limits.nix).default,
+        ...
+      }:
       let
         containers = getContainers resource;
+        asksCpu = defaultLimits.cpu != "none";
+        asksMemory = defaultLimits.memory != "none";
+        advice =
+          if asksCpu && asksMemory then
+            "Set CPU and memory requests and limits."
+          else if asksCpu then
+            "Set CPU and memory requests and a CPU limit."
+          else if asksMemory then
+            "Set CPU and memory requests and a memory limit."
+          else
+            "Set CPU and memory requests.";
         missingFor =
           c:
           let
@@ -48,8 +65,8 @@ in
             missing =
               (lib.optional (!(requests ? cpu)) "requests.cpu")
               ++ (lib.optional (!(requests ? memory)) "requests.memory")
-              ++ (lib.optional (!(limits ? cpu)) "limits.cpu")
-              ++ (lib.optional (!(limits ? memory)) "limits.memory");
+              ++ (lib.optional (asksCpu && !(limits ? cpu)) "limits.cpu")
+              ++ (lib.optional (asksMemory && !(limits ? memory)) "limits.memory");
           in
           missing;
         findings = builtins.concatMap (
@@ -65,7 +82,8 @@ in
                 message =
                   "container '${c.name or "unnamed"}' is missing resource settings: "
                   + builtins.concatStringsSep ", " missing
-                  + ". Set CPU and memory requests and limits. Without a memory limit, a workload can exhaust the node's memory.";
+                  + ". ${advice}"
+                  + lib.optionalString (builtins.elem "limits.memory" missing) " Without a memory limit, a workload can exhaust the node's memory.";
               }
             ]
         ) containers;

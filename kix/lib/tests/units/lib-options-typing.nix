@@ -113,6 +113,24 @@ let
   messagesMention = needle: vs: vs != [ ] && builtins.all (v: lib.hasInfix needle v.message) vs;
 
   t = lib.types;
+
+  # A package function that declares default CPU and memory limits through
+  # the `kix` argument, so it receives the cluster's `kix.options.resources`.
+  limitsPackage =
+    { kix, ... }:
+    resourcesPackage
+    // {
+      options.resources = kix.options.resources {
+        requests = {
+          cpu = "100m";
+          memory = "128Mi";
+        };
+        limits = {
+          cpu = "500m";
+          memory = "256Mi";
+        };
+      };
+    };
 in
 {
   # parse and the type share one grammar: every value the type accepts
@@ -284,6 +302,183 @@ in
     in
     (builtins.length findings == 1 && lib.hasInfix "missing resource settings: limits.cpu." message)
     || throw "boundedResources findings: ${builtins.toJSON findings}";
+
+  # A `cluster.defaultLimits` field set to "none" drops that default limit,
+  # keeps the other limit and both requests, and keeps a limit the instance
+  # sets. "package" is the default.
+  lib-options-typing-default-limits =
+    let
+      resourcesUnder =
+        cluster: config:
+        let
+          deployment = lib.findFirst (m: m.kind == "Deployment") null (
+            manifests (mkCluster [
+              {
+                inherit cluster;
+                instances.appns.web = {
+                  package = limitsPackage;
+                  inherit config;
+                };
+              }
+            ])
+          );
+        in
+        (builtins.head deployment.spec.template.spec.containers).resources;
+      requests = {
+        cpu = "100m";
+        memory = "128Mi";
+      };
+      cases = rec {
+        unchanged = {
+          got = resourcesUnder { } { };
+          want = {
+            inherit requests;
+            limits = {
+              cpu = "500m";
+              memory = "256Mi";
+            };
+          };
+        };
+        package = {
+          got = resourcesUnder {
+            defaultLimits = {
+              cpu = "package";
+              memory = "package";
+            };
+          } { };
+          want = cases.unchanged.want;
+        };
+        cpuOff = {
+          got = resourcesUnder { defaultLimits.cpu = "none"; } { };
+          want = {
+            inherit requests;
+            limits.memory = "256Mi";
+          };
+        };
+        cpuOffInstanceLimit = {
+          got = resourcesUnder { defaultLimits.cpu = "none"; } { resources.limits.cpu = "2"; };
+          want = {
+            inherit requests;
+            limits = {
+              cpu = "2";
+              memory = "256Mi";
+            };
+          };
+        };
+        memoryOff = {
+          got = resourcesUnder { defaultLimits.memory = "none"; } { };
+          want = {
+            inherit requests;
+            limits.cpu = "500m";
+          };
+        };
+        memoryOffInstanceLimit = {
+          got = resourcesUnder { defaultLimits.memory = "none"; } { resources.limits.memory = "1Gi"; };
+          want = {
+            inherit requests;
+            limits = {
+              cpu = "500m";
+              memory = "1Gi";
+            };
+          };
+        };
+        bothOff = {
+          got = resourcesUnder {
+            defaultLimits = {
+              cpu = "none";
+              memory = "none";
+            };
+          } { };
+          want = { inherit requests; };
+        };
+      };
+      wrong = lib.filterAttrs (_: c: c.got != c.want) cases;
+    in
+    wrong == { } || throw "default limits: ${builtins.toJSON wrong}";
+
+  # A boolean is not a `cluster.defaultLimits` value.
+  lib-options-typing-default-limits-refuses-bool = throws (
+    manifests (mkCluster [
+      {
+        cluster.defaultLimits.cpu = false;
+        instances.appns.web.package = limitsPackage;
+      }
+    ])
+  );
+
+  # The boundedResources rule accepts a missing limit that the cluster turned
+  # off, and still reports the other one.
+  lib-options-typing-default-limits-scorecard =
+    let
+      messagesUnder =
+        cluster: config:
+        map (f: f.message) (
+          builtins.filter (f: lib.hasSuffix "boundedResources" (f.rule or "")) (
+            (mkCluster [
+              {
+                inherit cluster;
+                scorecard = {
+                  enable = true;
+                  rules.reliability = import ../../rules/reliability.nix { inherit lib; };
+                };
+                instances.appns.web = {
+                  package = limitsPackage;
+                  inherit config;
+                };
+              }
+            ]).scorecardReport.findings
+          )
+        );
+      missing = what: advice: "container 'web' is missing resource settings: ${what}. ${advice}";
+      memoryWarning = " Without a memory limit, a workload can exhaust the node's memory.";
+      cases = {
+        cpuOff = {
+          got = messagesUnder { defaultLimits.cpu = "none"; } { };
+          want = [ ];
+        };
+        cpuOffNoMemory = {
+          got = messagesUnder { defaultLimits.cpu = "none"; } { resources.limits.memory = null; };
+          want = [
+            (missing "limits.memory" "Set CPU and memory requests and a memory limit." + memoryWarning)
+          ];
+        };
+        memoryOff = {
+          got = messagesUnder { defaultLimits.memory = "none"; } { };
+          want = [ ];
+        };
+        memoryOffNoCpu = {
+          got = messagesUnder { defaultLimits.memory = "none"; } { resources.limits.cpu = null; };
+          want = [ (missing "limits.cpu" "Set CPU and memory requests and a CPU limit.") ];
+        };
+        bothOffNoRequest = {
+          got =
+            messagesUnder
+              {
+                defaultLimits = {
+                  cpu = "none";
+                  memory = "none";
+                };
+              }
+              {
+                resources.requests.cpu = null;
+              };
+          want = [ (missing "requests.cpu" "Set CPU and memory requests.") ];
+        };
+        bothOn = {
+          got = messagesUnder { } {
+            resources.limits = {
+              cpu = null;
+              memory = null;
+            };
+          };
+          want = [
+            (missing "limits.cpu, limits.memory" "Set CPU and memory requests and limits." + memoryWarning)
+          ];
+        };
+      };
+      wrong = lib.filterAttrs (_: c: c.got != c.want) cases;
+    in
+    wrong == { } || throw "boundedResources under default limits: ${builtins.toJSON wrong}";
 
   lib-options-typing-env-type =
     let

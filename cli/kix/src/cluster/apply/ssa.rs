@@ -68,6 +68,32 @@ pub enum ApplyError {
     },
 
     #[error(
+        "{resource} is {reason} (not applied). Applying changes now would let Kubernetes finish deleting it after the deploy. Wait for {resource} to be removed, then run the deploy again."
+    )]
+    BeingDeleted {
+        resource: String,
+        reason: String,
+        /// The uid of the object being deleted, to wait for.
+        uid: Option<String>,
+    },
+
+    /// The object was being deleted and was still there after the wait.
+    #[error(
+        "{}",
+        super::super::readiness::stuck_message(.rid, .stuck)
+    )]
+    StillBeingDeleted {
+        rid: ResourceId,
+        stuck: super::super::readiness::Stuck,
+    },
+
+    /// The cancel token fired while Kix waited for the object to be deleted.
+    #[error(
+        "interrupted while waiting for {resource} to finish deleting (not applied). Wait for deletion to finish, then run the deploy again."
+    )]
+    Interrupted { resource: String },
+
+    #[error(
         "the API server does not serve kind `{kind}` (not applied). Check the kind and `apiVersion`, and make sure the CustomResourceDefinition for `{kind}` is installed if it is a custom resource."
     )]
     UnknownKind { kind: String },
@@ -255,6 +281,16 @@ pub(crate) async fn apply_resource(
     // keeps the live object for its preview.
     let live = api.get_opt(&name).await.ok().flatten();
     let existed = live.is_some();
+    if let Some(reason) = live
+        .as_ref()
+        .and_then(super::super::readiness::deletion_reason)
+    {
+        return Err(ApplyError::BeingDeleted {
+            resource: rid.display_id(),
+            reason,
+            uid: live.as_ref().and_then(|o| o.metadata.uid.clone()),
+        });
+    }
 
     // Transient errors (429, 5xx, connection loss) are retried by the
     // client transport (cluster::client), not here. 409 conflicts are

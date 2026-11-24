@@ -43,6 +43,36 @@
       ],
       "type": "object"
     },
+    "BeingDeleted": {
+      "description": "An object of the build that is being deleted on the cluster. The deploy\nwaits until it is gone, then creates it again.",
+      "properties": {
+        "finalizers": {
+          "description": "The finalizers the delete waits for. Empty when none are left.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "holds_data": {
+          "description": "Whether the object may hold data, such as a PersistentVolumeClaim or\na database custom resource. The new object starts without it.",
+          "type": "boolean"
+        },
+        "resource": {
+          "type": "string"
+        },
+        "since": {
+          "description": "The object's `metadata.deletionTimestamp`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "resource",
+        "since",
+        "finalizers",
+        "holds_data"
+      ],
+      "type": "object"
+    },
     "Build": {
       "description": "A cluster build.",
       "properties": {
@@ -1105,6 +1135,13 @@
         "admission": {
           "$ref": "#/$defs/Checked3",
           "description": "Writes the apiserver, an admission webhook, or the deploy itself would\nrefuse, other than ownership conflicts."
+        },
+        "being_deleted": {
+          "description": "Objects of the build that are being deleted on the cluster, from the\ndry run of `kix plan`. The deploy waits until each is gone, then\ncreates it again from the build, so the new object keeps nothing\nthat the old one held. Left out when there are none.",
+          "items": {
+            "$ref": "#/$defs/BeingDeleted"
+          },
+          "type": "array"
         },
         "build": {
           "$ref": "#/$defs/Build",

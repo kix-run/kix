@@ -116,8 +116,8 @@ in
       default = "2Gi";
       description = "2 MiB hugepages io-engine requests and limits. Each io-engine node must allocate them before the kubelet starts.";
     };
-    resources = resourcesOption "io-engine" { memory = "1Gi"; } { memory = "1Gi"; } // {
-      description = "Memory of io-engine. Its CPU comes from `ioEngine.cpuCount` and its hugepages from `ioEngine.hugepages2Mi`; setting either here is refused.";
+    resources = resourcesOption "io-engine" { memory = "1Gi"; } { } // {
+      description = "Memory requests and limits for io-engine. Kix sets `limits.memory` equal to `requests.memory` (even when `cluster.defaultLimits.memory` is `\"none\"` or `limits.memory` is `null`) so the pod stays in the `Guaranteed` QoS class for exclusive CPU cores. Set `limits.memory` to a quantity to override it. CPU comes from `ioEngine.cpuCount` and hugepages come from `ioEngine.hugepages2Mi`; setting either here fails the build.";
     };
     nodeSelector = lib.mkOption {
       type = lib.types.nullOr (lib.types.attrsOf lib.types.str);
