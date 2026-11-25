@@ -132,7 +132,11 @@ pod template in the build (AWS F17). Policies for operator-created pods and
 platform-intent policies target pods that have no template in the build, so
 check 12 skips generated policies of those types. When a package defines a
 `NetworkPolicy` directly, check 12 honors the `kix.run/operand-of` annotation,
-just as check 14 does for a `PodDisruptionBudget`.
+just as check 14 does for a `PodDisruptionBudget`. Honoring
+`kix.run/operand-of` needs no renderer and ships first in build step 1 because
+defining policies directly is the only way to have network policy on GKE and
+EKS today. The skip for generated policies ships with the standard renderer in
+step 6.
 
 `all-pods` is the one narrower translation. In the standard renderer, it
 matches every pod in every namespace, excluding nodes and the API server. Nine
