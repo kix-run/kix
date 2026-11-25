@@ -1343,3 +1343,155 @@ async fn an_object_being_deleted_is_not_applied() {
         api.requests()
     );
 }
+
+fn secret(body: Value) -> Value {
+    let mut s = json!({"apiVersion": "v1", "kind": "Secret",
+        "metadata": {"name": "creds", "namespace": "app"}, "type": "Opaque"});
+    s.as_object_mut()
+        .unwrap()
+        .extend(body.as_object().unwrap().clone());
+    s
+}
+
+/// A Secret's `stringData` goes into `data` as base64. A key in both takes
+/// the `stringData` value, and `data` keys it does not name stay as they are.
+#[test]
+fn string_data_is_sent_as_data() {
+    let sent = |body: Value| string_data_as_data(&secret(body)).into_owned();
+    assert_eq!(
+        sent(json!({
+            "stringData": {"user": "admin", "password": "hunter2"},
+            // "old", and bytes that are not UTF-8
+            "data": {"password": "b2xk", "key.bin": "/w=="},
+        })),
+        secret(json!({"data": {
+            "user": "YWRtaW4=",
+            "password": "aHVudGVyMg==",
+            "key.bin": "/w==",
+        }}))
+    );
+    assert_eq!(
+        sent(json!({"stringData": {"user": "admin"}})),
+        secret(json!({"data": {"user": "YWRtaW4="}}))
+    );
+    assert_eq!(
+        sent(json!({"stringData": {"user": "admin"}, "data": null})),
+        secret(json!({"data": {"user": "YWRtaW4="}}))
+    );
+    assert_eq!(
+        sent(json!({"stringData": {}, "data": {"k": "eA=="}})),
+        secret(json!({"data": {"k": "eA=="}}))
+    );
+}
+
+/// Anything but a Secret with a map of strings in `stringData` is sent as
+/// the build has it. The server refuses a malformed Secret with its own
+/// message.
+#[test]
+fn other_manifests_are_sent_as_they_are() {
+    use std::borrow::Cow;
+
+    let config_map = json!({"apiVersion": "v1", "kind": "ConfigMap",
+        "metadata": {"name": "c", "namespace": "app"}, "stringData": {"a": "b"}});
+    let unchanged = [
+        config_map,
+        secret(json!({"data": {"k": "eA=="}})),
+        secret(json!({"stringData": {"port": 5432}})),
+        secret(json!({"stringData": {"a": "b"}, "data": "not a map"})),
+        secret(json!({"stringData": "not a map"})),
+    ];
+    for m in &unchanged {
+        assert!(
+            matches!(string_data_as_data(m), Cow::Borrowed(b) if b == m),
+            "{m}"
+        );
+    }
+}
+
+/// A real apply and a dry run both send the Secret's values as `data`, so
+/// the plan previews what the deploy writes. The server stores `data` as
+/// sent, so nothing is reported as not kept.
+#[tokio::test]
+async fn an_apply_sends_secret_values_as_data() {
+    use crate::cluster::{discovery, fake_api::FakeApi};
+
+    let api = FakeApi::default();
+    let client = api.client();
+    let discovery = discovery::discover_resources(&client).await.unwrap();
+    let (ar, scope) = discovery
+        .iter()
+        .find(|(ar, _)| ar.kind == "Secret")
+        .unwrap();
+    let built = secret(json!({"stringData": {"password": "hunter2"}}));
+    let sent = secret(json!({"data": {"password": "aHVudGVyMg=="}}));
+    let without_server_fields = |mut o: Value| {
+        let meta = o["metadata"].as_object_mut().unwrap();
+        meta.remove("uid");
+        meta.remove("resourceVersion");
+        o
+    };
+
+    let result = super::apply_resource(&client, ar, scope.clone(), &built, true, None, None, false)
+        .await
+        .unwrap();
+    let preview = result.preview.expect("a dry run previews");
+    assert_eq!(without_server_fields(preview.result), sent);
+    assert!(result.not_kept.is_empty(), "{:?}", result.not_kept);
+    assert_eq!(api.object("Secret", "creds"), None);
+
+    let result =
+        super::apply_resource(&client, ar, scope.clone(), &built, false, None, None, false)
+            .await
+            .unwrap();
+    assert!(result.not_kept.is_empty(), "{:?}", result.not_kept);
+    assert_eq!(
+        without_server_fields(api.object("Secret", "creds").unwrap()),
+        sent
+    );
+}
+
+/// A conflict on a Secret's `data` keys names the Secret case. Any other
+/// conflict, on a Secret or not, is the general one.
+#[test]
+fn a_conflict_on_secret_data_is_named_as_such() {
+    let rid = |kind: &str| ResourceId {
+        group: String::new(),
+        kind: kind.into(),
+        namespace: "app".into(),
+        name: "creds".into(),
+    };
+    let conflict = |message: &str| {
+        kube::Error::Api(
+            kube::core::Status::failure(message, "Conflict")
+                .with_code(409)
+                .boxed(),
+        )
+    };
+    let on_data =
+        "Apply failed with 1 conflict: conflict with \"kubectl-edit\" using v1: .data.password";
+    let on_labels =
+        "Apply failed with 1 conflict: conflict with \"x\" using v1: .metadata.labels.app";
+
+    let err = super::conflict_error(&rid("Secret"), "Secret/creds@app".into(), conflict(on_data));
+    assert!(
+        matches!(err, ApplyError::SecretDataConflict { .. }),
+        "{err}"
+    );
+    assert!(err.to_string().starts_with("[K9044] "), "{err}");
+    for (kind, message) in [("Secret", on_labels), ("ConfigMap", on_data)] {
+        let err = super::conflict_error(&rid(kind), format!("{kind}/creds@app"), conflict(message));
+        assert!(matches!(err, ApplyError::Conflict { .. }), "{kind}: {err}");
+    }
+}
+
+/// A Secret key ceded to another manager is left out of the apply when that
+/// manager owns it, because the conflict names the `data` key the apply sends.
+#[test]
+fn a_ceded_secret_key_is_stripped_from_data() {
+    let mut built = secret(json!({"stringData": {"user": "admin", "token": "t"}}));
+    built["metadata"]["annotations"] = json!({ super::keys::CEDE_FIELDS: "data.token" });
+    let sent = string_data_as_data(&built);
+    let msg = "Apply failed with 1 conflict: conflict with \"issuer\" using v1: .data.token";
+    let stripped = super::without_ceded_conflicts(&sent, msg).expect("ceded");
+    assert_eq!(stripped["data"], json!({"user": "YWRtaW4="}));
+}

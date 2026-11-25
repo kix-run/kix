@@ -181,7 +181,7 @@ in
         # their identity path, after the "/nix/store/" prefix.
         storeHash = p: builtins.substring 11 32 (builtins.unsafeDiscardStringContext (toString p));
         crdHashes = map (r: storeHash r.outPath) crds;
-        # Entries are "<hash>", "requires:<hash>", or "extra:<hash>".
+        # Entries are "<hash>", or a hash after a relation such as "requires:".
         depHashes =
           r:
           map (e: lib.last (lib.splitString ":" e)) (

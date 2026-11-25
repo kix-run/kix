@@ -27,8 +27,8 @@ pub(crate) use ssa::{
 };
 #[cfg(test)]
 use ssa::{
-    is_immutable_field_message, is_stored_version_message, merge_activation_set, parse_path,
-    without_ceded_conflicts,
+    conflict_error, is_immutable_field_message, is_stored_version_message, merge_activation_set,
+    parse_path, string_data_as_data, without_ceded_conflicts,
 };
 
 /// Return `true` if `manifest` is a `Job` with `kix.run/rerun: on-change`.

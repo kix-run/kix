@@ -1,7 +1,8 @@
 # Define the role a workload gets in a cloud: the values a cluster author
 # gives a package's credentials dependency (`kix.cloudIdentity.aws`, `gcp`,
-# `azure`), `use`, which a package calls on that dependency, and
-# `annotationsFor`, for a ServiceAccount an operator creates.
+# `azure`), `use` and `useIdentity`, which a package calls on that
+# dependency, `annotationsFor`, for a ServiceAccount an operator creates, and
+# `ambientProblem`, which compares two packages' clouds.
 #
 # The cluster author writes the principal in its cloud's own terms as the
 # value of a dependency, where a Secret instance would otherwise go:
@@ -11,6 +12,19 @@
 # (`cloud-identity-mechanisms.nix`) in the `out.cloudIdentity` of the
 # instance that claims the `cloudIdentity` role. The scope's `sealResource`
 # renders a bound ServiceAccount through it (`scope/builders.nix`).
+#
+# The identity goes on the instance that owns the ServiceAccount. When
+# another package picks the cloud, the two packages pass the cloud through
+# `out` along the dependency between them:
+#
+# - `out.identityCloud`: a package that owns the ServiceAccount and cannot
+#   know the cloud publishes `credentials.cloud` from `useIdentity`. A
+#   dependent that reaches a cloud with the pod's own credentials passes
+#   that instance to `ambientProblem` as `holder`.
+# - `out.ambientCloud`: a package that picks the cloud and lets the pods
+#   use their own credentials publishes that cloud (`"aws"`, `"gcp"`,
+#   `"azure"`), or null when it reads a Secret. A dependent that owns the
+#   ServiceAccount passes it to `useIdentity` as `cloud`.
 { lib }:
 
 let
@@ -184,28 +198,92 @@ let
         stamp = builtins.hashString "sha256" recordJson;
       };
 
+  # Return what is wrong with cloud identity `dep` for software that calls
+  # `cloud`, as `{ message; fix; }`, or null. `cloud` null means the software
+  # takes no cloud identity, and the caller's `unused` is returned. A cloud
+  # other than the identity's returns `mismatch`, a function of the two
+  # calls, such as "kix.cloudIdentity.aws", and the two cloud names.
+  identityProblem =
+    {
+      dep,
+      cloud,
+      unused,
+      mismatch,
+    }:
+    if dep.problem != null then
+      dep.problem
+    else if cloud == null then
+      unused "kix.cloudIdentity.${dep.cloud}"
+    else if cloud != dep.cloud then
+      mismatch {
+        given = "kix.cloudIdentity.${dep.cloud}";
+        wanted = "kix.cloudIdentity.${cloud}";
+        givenCloud = clouds.${dep.cloud};
+        wantedCloud = clouds.${cloud};
+      }
+    else
+      null;
+
+  bindTo = dep: args: args // { _cloudIdentity = dep; };
+
+  # Return how a message names the dependency `arg` of the instance, or the
+  # dependency in general when `arg` is null, as `this` inside a sentence
+  # and `This` at its start.
+  depWords =
+    arg:
+    let
+      this = if arg == null then "this dependency" else "`deps.${arg}`";
+    in
+    {
+      inherit this;
+      This = capitalize this;
+    };
+
+  capitalize = s: lib.toUpper (builtins.substring 0 1 s) + builtins.substring 1 (-1) s;
+
   # Read a credentials dependency that holds a Secret instance or a cloud
   # identity. `cloud` is the cloud whose API the package's software calls
   # (`"aws"`, `"gcp"`, `"azure"`), or null when it takes no cloud identity.
+  # `identityGoesTo` names where this cluster takes the identity instead,
+  # such as the dependency of another instance that owns the
+  # ServiceAccount, for the fix when `cloud` is null.
   # Return `{ secret; identity; bind; }`: one of `secret` and `identity` is
   # the dependency and the other is null, and `bind` adds the identity to
   # ServiceAccount arguments. The scope's `sealResource` renders it through
   # the cluster's mechanism, and the workload builders add the pod labels
   # and a restart stamp to every pod template that names that
   # ServiceAccount. Without an identity, `bind` returns its arguments
-  # unchanged.
+  # unchanged. `arg` is the name the package takes `dep` under, and a
+  # refusal names that dependency of the instance.
   use =
     {
       scope,
       dep,
       cloud,
+      identityGoesTo ? null,
+      arg ? null,
     }:
     let
       fail = errors.failOf "cloudIdentity.use" {
         inherit scope;
         who = null;
       };
-      call = "kix.cloudIdentity.${dep.cloud}";
+      words = depWords arg;
+      problem = identityProblem {
+        inherit dep cloud;
+        unused = call: {
+          message = "${words.This} is set to `${call} { ... }`, but this instance does not authenticate with a cloud identity in its current configuration. Kix rejected the cloud identity.";
+          fix =
+            "Set ${words.this} to a Secret instance (`ref.<namespace>.<instance>`), or remove it."
+            + lib.optionalString (
+              identityGoesTo != null
+            ) " To authenticate with this cloud identity, move it to ${identityGoesTo}.";
+        };
+        mismatch = m: {
+          message = "${words.This} is set to `${m.given} { ... }` (${m.givenCloud}), but this instance is configured to call ${m.wantedCloud}. Kix rejected the cloud identity.";
+          fix = "Set ${words.this} to `${m.wanted} { ... }` or a Secret instance (`ref.<namespace>.<instance>`) with ${m.wantedCloud} credentials, or change this instance's `config` to use ${m.givenCloud}.";
+        };
+      };
     in
     if !(isIdentity dep) then
       {
@@ -213,32 +291,106 @@ let
         identity = null;
         bind = args: args;
       }
-    else if dep.problem != null then
-      fail dep.problem
-    else if cloud != dep.cloud then
-      fail (
-        if cloud == null then
-          {
-            message = "With its current configuration, this package does not authenticate with a cloud identity, so Kix rejected `${call} { ... }`.";
-            fix = "Pass a Secret instance (`ref.<namespace>.<instance>`) instead, or remove the dependency.";
-          }
-        else
-          {
-            message = "This instance passes `${call} { ... }` (${clouds.${dep.cloud}}), but it is configured to call ${clouds.${cloud}}, so Kix rejected the mismatched cloud identity.";
-            fix = "Change the dependency to `kix.cloudIdentity.${cloud} { ... }` or to a Secret instance (`ref.<namespace>.<instance>`) with ${clouds.${cloud}} credentials, or change the instance's `config` to use ${clouds.${dep.cloud}}.";
-          }
-      )
+    else if problem != null then
+      fail (problem // { dependency = arg; })
     else
       {
         secret = null;
         identity = dep;
-        bind = args: args // { _cloudIdentity = dep; };
+        bind = bindTo dep;
+      };
+
+  # Read a dependency that holds a cloud identity or nothing, on a package
+  # that owns a ServiceAccount whose credentials another package configures.
+  # `secretGoesTo` names where the cluster gives a Secret instead, for the
+  # fix when `dep` is not a cloud identity. `cloud` is the cloud the pods
+  # call, as a dependency's `out.ambientCloud` gives it, and null when that
+  # dependency reads a Secret, so any identity is refused. Without `cloud`,
+  # only the identity's own fields are checked, because only a dependent
+  # knows the cloud. Return `{ identity; cloud; bind; }`: `identity` is the
+  # dependency or null, `cloud` is the identity's cloud or null, for
+  # `out.identityCloud`, and `bind` works as `use`'s does. `arg` works as
+  # `use`'s does.
+  useIdentity =
+    {
+      scope,
+      dep,
+      secretGoesTo,
+      cloud ? null,
+      arg ? null,
+    }@args:
+    let
+      fail = errors.failOf "cloudIdentity.useIdentity" {
+        inherit scope;
+        who = null;
+      };
+      words = depWords arg;
+      depName =
+        if builtins.isAttrs dep && dep ? _meta then
+          "`${dep._meta.namespaceName}/${dep._meta.instanceName}`"
+        else
+          "a value of another type";
+      problem =
+        if !(isIdentity dep) then
+          {
+            message = "${words.This} accepts only a cloud identity (`kix.cloudIdentity.aws`, `gcp`, or `azure`) or `null`, but got ${depName}. Kix rejected it.";
+            fix = "To authenticate with a Secret, pass it to ${secretGoesTo} instead. Otherwise, set ${words.this} to a cloud identity (such as `kix.cloudIdentity.aws { roleArn = \"...\"; }`) or remove it.";
+          }
+        else if !(args ? cloud) then
+          dep.problem
+        else
+          identityProblem {
+            inherit dep cloud;
+            unused = call: {
+              message = "${words.This} is set to `${call} { ... }`, but this instance's pods read their cloud credentials from a Secret. Kix rejected the unused cloud identity.";
+              fix = "To keep using the Secret, remove ${words.this}. To authenticate with this cloud identity instead, remove the Secret from ${secretGoesTo} and configure that instance to use pod credentials.";
+            };
+            mismatch = m: {
+              message = "${words.This} is set to `${m.given} { ... }` (${m.givenCloud}), but this instance's pods call ${m.wantedCloud}. Kix rejected the cloud identity.";
+              fix = "Set ${words.this} to `${m.wanted} { ... }`, or change the instance configured for ${m.wantedCloud} to use ${m.givenCloud}.";
+            };
+          };
+    in
+    if dep == null then
+      {
+        identity = null;
+        cloud = null;
+        bind = sa: sa;
+      }
+    else if problem != null then
+      fail (problem // { dependency = arg; })
+    else
+      {
+        identity = dep;
+        inherit (dep) cloud;
+        bind = bindTo dep;
+      };
+
+  # Compare `cloud`, the cloud that an object reaches with the pod's own
+  # credentials, with the cloud identity of `holder`, the dependency whose
+  # pods make the call and which publishes `out.identityCloud`. Return a
+  # `{ message; fix; }` that names `holder` and both clouds when they differ,
+  # or null. A holder without an identity is never refused, because its
+  # pods may use the node's credentials.
+  ambientProblem =
+    { cloud, holder }:
+    let
+      held = holder.out.identityCloud or null;
+      holderName = "${holder._meta.namespaceName}/${holder._meta.instanceName}";
+    in
+    if cloud == null || held == null || held == cloud then
+      null
+    else
+      {
+        message = "This instance uses the pod credentials of `${holderName}` to call ${clouds.${cloud}}, but `${holderName}` has a cloud identity for ${clouds.${held}}, so Kix rejected this configuration.";
+        fix = "Change the cloud identity on `${holderName}` to `kix.cloudIdentity.${cloud} { ... }`, or change this instance's `config` to use ${clouds.${held}}.";
       };
 
   # Return the ServiceAccount annotations and pod labels of `identity` for a
   # ServiceAccount that an operator creates from a custom resource, which
   # `bind` cannot reach. `provider` is the package's `cloudIdentity`
-  # dependency, the instance that holds the role.
+  # dependency, the instance that holds the role. With `identity` null,
+  # return empty sets.
   annotationsFor =
     {
       scope,
@@ -263,7 +415,15 @@ let
             };
       };
     in
-    if r.problem != null then fail r.problem else { inherit (r) serviceAccountAnnotations podLabels; };
+    if identity == null then
+      {
+        serviceAccountAnnotations = { };
+        podLabels = { };
+      }
+    else if r.problem != null then
+      fail r.problem
+    else
+      { inherit (r) serviceAccountAnnotations podLabels; };
 in
 {
   inherit
@@ -272,6 +432,8 @@ in
     azure
     isIdentity
     use
+    useIdentity
+    ambientProblem
     annotationsFor
     render
     ;
