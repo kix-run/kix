@@ -476,6 +476,7 @@ in
         (kix.cloudIdentity.use {
           inherit scope;
           dep = deps.cloudCredentials or null;
+          arg = "cloudCredentials";
           cloud = identityCloud {
             inherit config;
             objectStorage = deps.objectStorage or null;

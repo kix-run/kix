@@ -235,6 +235,7 @@ rec {
       credentials = kix.cloudIdentity.use {
         inherit scope;
         dep = cloudCredentials;
+        arg = "cloudCredentials";
         cloud = identityCloud { inherit config objectStorage; };
       };
       secret = checkCloudCredentials credentials.secret;
