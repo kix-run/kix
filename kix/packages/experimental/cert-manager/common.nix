@@ -53,6 +53,7 @@ in
     kix.cloudIdentity.useIdentity {
       inherit scope;
       dep = controllerIdentity;
+      arg = "controllerIdentity";
       secretGoesTo = "`deps.issuerCredentials` of a cluster-issuer instance";
     };
 

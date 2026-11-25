@@ -388,6 +388,7 @@ in
       credentials = kix.cloudIdentity.use {
         inherit scope;
         dep = issuerCredentials;
+        arg = "issuerCredentials";
         cloud = null;
         identityGoesTo = "`deps.controllerIdentity` on `cert-manager` instance `${certManager._meta.namespaceName}/${certManager._meta.instanceName}` and omit the credential fields on the DNS-01 solver";
       };

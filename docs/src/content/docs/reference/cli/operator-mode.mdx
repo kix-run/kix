@@ -78,6 +78,54 @@ becoming ready, and stops the deploy at the first failure. It deletes orphaned
 resources, never takes over fields owned by another field manager, and skips
 unchanged resources.
 
+### Retries after a failure
+
+When a deploy fails, the operator keeps the Activation record in `Deploying`,
+posts a `DeployRetrying` Warning Event, and retries 30 seconds later. By
+default, it retries up to 10 times (11 attempts in total). If every retry
+fails, the operator marks the record `Failed`, writes the attempt count and
+last error to `status.failure.reason`, and posts a `DeployFailed` Warning
+Event.
+
+Set `KIX_DEPLOY_RETRIES` on the operator to change the retry limit, or set it
+to `0` to mark the record `Failed` on the first failure (matching `kix deploy`
+without `--operator`). The operator stores the count in
+`status.failedAttempts` on the Activation record, so restarting the operator
+does not reset it.
+
+With the default of 10 retries, a deploy that fails right away (such as a SOPS
+file the operator cannot decrypt) reaches `Failed` in about 5 minutes, within
+the 600 seconds that `kix deploy --operator` and `kix rollback --operator`
+wait. A deploy that hits the 300-second readiness timeout takes over 5 minutes
+per attempt, so `kix deploy --operator` times out locally while the operator
+keeps retrying in the cluster.
+
+While waiting, `kix deploy --operator` and `kix rollback --operator` print each
+failed attempt:
+
+```text
+  ✗ Attempt 1 failed. The Kix operator will retry in 30 seconds.
+    Secret/db@shop: could not prepare secret values for deployment: cannot decrypt SOPS file db.sops.yaml: `sops` could not get a decryption key
+```
+
+If the operator stops retrying before that 600-second wait ends, the command
+exits with the failure reason:
+
+```text
+Error:   × Operator reconciliation failed for 'shop-mxfi8rx0piys': the Kix operator stopped after 11 failed attempts (KIX_DEPLOY_RETRIES is 10 on the operator) and marked this Activation Failed. Fix the cause below, then run `kix deploy --operator` or `kix rollback --operator` again.
+  │
+  │   Last failure:
+  │     Secret/db@shop: could not prepare secret values for deployment: cannot decrypt SOPS file db.sops.yaml: `sops` could not get a decryption key
+  │       ...
+```
+
+To deploy after a record reaches `Failed`, fix the cause and run
+`kix deploy --operator` or `kix rollback --operator` again. Each new deploy or
+rollback request resets `status.failedAttempts`. Redeploying the build that is
+already `Active` or `Degraded` does not count toward `KIX_DEPLOY_RETRIES`; if
+that run fails, the record keeps its phase and the operator repairs any drift
+on later reconciles.
+
 Submitting a newer deploy or rollback request does not cancel a running deploy.
 The operator runs one deploy per cluster at a time, so the new request waits
 until the running deploy finishes.
@@ -132,13 +180,12 @@ Configure the key on the `kix-operator` container in your operator Deployment:
 If the operator cannot decrypt a SOPS file, the deploy stops at that Secret and
 leaves the Activation record `Deploying`. The operator posts a `NodeFailed`
 Warning Event naming the SOPS file (inspect it with
-`kubectl describe activation <name>`) and retries every 30 seconds. The
-operator never marks a record `Failed` when a deploy stops at a failed
-resource, whether for a missing SOPS key, an unreachable key service, or a
-readiness failure.
-`kix deploy --operator` waits up to 600 seconds before timing out locally. Once
-the operator pod has access to the key, the next retry decrypts the file and
-finishes the deploy automatically.
+`kubectl describe activation <name>`) and retries every 30 seconds (up to 10
+times by default; see [Retries after a failure](#retries-after-a-failure)). If
+you give the operator pod access to the key before those retries run out, the
+next retry decrypts the file and finishes the deploy. Once the operator marks
+the record `Failed`, give the pod access to the key and run
+`kix deploy --operator` or `kix rollback --operator` again.
 
 ## When an Activation record is deleted
 
@@ -205,6 +252,7 @@ redeploying the current build) from ending the wait early.
 | `Active` | Success (exit code `0`) |
 | `Degraded` | Error (exit code `1`), after printing the failed resources or `status.failure.reason` |
 | `Failed` | Error (exit code `1`), with the record's `status.failure.reason` (or `unknown error` if unset) |
+| `Deploying` after a failed attempt | Prints `Attempt <n> failed. The Kix operator will retry in 30 seconds.` and the first line of the failure reason, then keeps waiting |
 | `Superseded` | Error: a newer activation took over |
 | No terminal phase after 600 seconds | Error: timed out |
 

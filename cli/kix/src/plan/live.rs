@@ -206,9 +206,8 @@ impl LivePlan {
     ///
     /// With `manage_lifecycle` the run writes the record's lifecycle (begin,
     /// checkpoints, finalize); without, it corrects drift and leaves the
-    /// record alone. The run never marks the record Failed: a reconcile that
-    /// returns early is retried on requeue, and failing the record would
-    /// fight that.
+    /// record alone. The run never marks the record Failed. The operator
+    /// counts the runs that stop and decides when to stop retrying.
     pub async fn run(
         self,
         manage_lifecycle: bool,

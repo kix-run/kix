@@ -164,6 +164,7 @@ let
       credentials = kix.cloudIdentity.use {
         inherit scope;
         dep = deps.providerCredentials or null;
+        arg = "providerCredentials";
         cloud = providers.${config.provider}.cloud or null;
       };
       dep = credentials.secret;

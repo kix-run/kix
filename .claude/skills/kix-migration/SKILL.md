@@ -300,7 +300,7 @@ Fix all warnings before committing.
 | `scope.namespaceName` | The namespace this instance lives in |
 | `scope.namespace` | The Namespace resource itself (for deps) |
 
-Workload constructors (`mkDeployment`, `mkStatefulSet`, `mkDaemonSet`, `mkJob`) are pipe-friendly: use them at the end of a `|>` chain. They auto-set `apiVersion`/`kind` and use `spec.selector.matchLabels` as the pod labels when the template sets none; a template that sets labels must include the selector's (`scope.selectorLabels // { ... }`). The `name` field is required. They are the only way to build a workload: `scope.mkResource { kind = "Deployment"; ... }` is refused at eval, because a workload that skips `sealWorkload` gets no pod-spec validation, no derived spread or PodDisruptionBudget, and no network-policy edges. Inside `spec.template.spec` write `serviceAccount = self.sa;` (not `serviceAccountName`), and in a StatefulSet `headlessService = self.svc;` (not `serviceName`). For programs that call AWS, Google Cloud, or Azure APIs, accept either a Secret instance or a cloud identity on the credentials dependency (`kix.cloudIdentity.aws { roleArn = "..."; }`, `.gcp`, or `.azure`). Unpack it with `credentials = kix.cloudIdentity.use { inherit scope; dep = providerCredentials; cloud = "aws"; };`, build the ServiceAccount with `{ apiVersion = "v1"; kind = "ServiceAccount"; inherit name; } |> credentials.bind |> scope.mkResource`, and read any Secret from `credentials.secret` (`null` when a cloud identity is passed). `scope.mkResource` renders the identity through the cluster's `cloudIdentity` role, and workload builders add any required pod labels plus `checksum/cloud-identity` to pod templates that set `serviceAccount = self.<part>`. When no identity is passed, `bind` returns the ServiceAccount arguments unchanged. For two ServiceAccounts with separate identities, declare two dependencies and call `kix.cloudIdentity.use` on each.
+Workload constructors (`mkDeployment`, `mkStatefulSet`, `mkDaemonSet`, `mkJob`) are pipe-friendly: use them at the end of a `|>` chain. They auto-set `apiVersion`/`kind` and use `spec.selector.matchLabels` as the pod labels when the template sets none; a template that sets labels must include the selector's (`scope.selectorLabels // { ... }`). The `name` field is required. They are the only way to build a workload: `scope.mkResource { kind = "Deployment"; ... }` is refused at eval, because a workload that skips `sealWorkload` gets no pod-spec validation, no derived spread or PodDisruptionBudget, and no network-policy edges. Inside `spec.template.spec` write `serviceAccount = self.sa;` (not `serviceAccountName`), and in a StatefulSet `headlessService = self.svc;` (not `serviceName`). For programs that call AWS, Google Cloud, or Azure APIs, accept either a Secret instance or a cloud identity on the credentials dependency (`kix.cloudIdentity.aws { roleArn = "..."; }`, `.gcp`, or `.azure`). Unpack it with `credentials = kix.cloudIdentity.use { inherit scope; dep = providerCredentials; arg = "providerCredentials"; cloud = "aws"; };`, build the ServiceAccount with `{ apiVersion = "v1"; kind = "ServiceAccount"; inherit name; } |> credentials.bind |> scope.mkResource`, and read any Secret from `credentials.secret` (`null` when a cloud identity is passed). `scope.mkResource` renders the identity through the cluster's `cloudIdentity` role, and workload builders add any required pod labels plus `checksum/cloud-identity` to pod templates that set `serviceAccount = self.<part>`. When no identity is passed, `bind` returns the ServiceAccount arguments unchanged. For two ServiceAccounts with separate identities, declare two dependencies and call `kix.cloudIdentity.use` on each.
 
 ### mkResource / mkClusterResource fields
 
@@ -401,6 +401,15 @@ edge but NO netpol hole. Consequences when authoring:
   condition check. The CLI keeps no per-operator kind list: a new
   operator's convention goes in its package, never in `readiness.rs`.
   Without a declaration, deploys time out waiting on healthy CRs.
+
+  Set `controller = self.operator;` on each `scope.mkCRD` or `scope.mkCRDRef`
+  call to the workload that reconciles that kind (a Deployment, StatefulSet,
+  or DaemonSet, a list of them, or an import marker for one outside Kix). Kix
+  records the workload as a `controller:` entry in each custom resource's
+  `kix.run/depends-on` annotation. Deploys then create the custom resource
+  after the operator is ready, pruning deletes the custom resource before the
+  operator, and `[K2794]` reports whether the operator is ready if a delete
+  gets stuck. See `kix/packages/experimental/keda`.
 
   If the operator's admission webhook refuses its own kinds until it is
   ready (cert-manager's `failurePolicy: Fail` webhook before cainjector
