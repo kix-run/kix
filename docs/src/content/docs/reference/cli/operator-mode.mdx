@@ -45,7 +45,9 @@ yet; pull-based Git sync is planned.
 - **Drift repair:** While an Activation is `Active`, `kix-operator` re-applies
   drifted resources and deletes Kix-managed resources removed from the build.
   It checks every 300 seconds by default (override with the
-  `KIX_REQUEUE_INTERVAL_SECS` environment variable).
+  `KIX_REQUEUE_INTERVAL_SECS` environment variable). It repairs only records that name a
+  build in `spec.source`, so it leaves alone a record that `kix deploy` wrote
+  without `--operator`.
 - **Deploying from Git today:** Run `kix deploy` (with or without `--operator`)
   from CI after a merge.
 

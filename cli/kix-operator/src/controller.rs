@@ -341,6 +341,13 @@ pub async fn reconcile_activation(
         // means the last deploy completed with some failures, but the CR is
         // still the current intended state.
         s if s == PHASE_ACTIVE || s == PHASE_DEGRADED => {
+            // A record that `kix deploy` wrote without `--operator` names no
+            // build the operator can read, so the operator neither repairs it
+            // nor adds its finalizer.
+            if source_path(&activation).is_none() {
+                tracing::debug!(name, "current record has no spec.source; not ours to drive");
+                return Ok(Action::await_change());
+            }
             // Yield to any queued Activation so it can perform the transition.
             let queued = ctx
                 .records
@@ -1633,6 +1640,40 @@ mod tests {
         assert_eq!(after["status"]["phase"], PHASE_ACTIVE);
         assert_eq!(after["status"]["startedRequest"], "r1");
         assert!(after["status"].get("finishedRequest").is_none());
+    }
+
+    /// A current record that `kix deploy` wrote without `--operator` has no
+    /// `spec.source`. The operator leaves it alone: no finalizer, no repair,
+    /// and no error to requeue. The same record with `spec.source` is still
+    /// repaired.
+    #[tokio::test]
+    async fn a_current_record_from_a_direct_deploy_is_left_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut record = queued(dir.path(), Some(HERE), None);
+        record["status"] = json!({ "phase": PHASE_ACTIVE });
+        record["spec"].as_object_mut().unwrap().remove("source");
+        let api = FakeApi::new(vec![kube_system(HERE), record.clone()]);
+        let (result, after) = reconcile_on(&api, record).await;
+        assert_eq!(result.unwrap(), Action::await_change());
+        assert_eq!(after["status"]["phase"], PHASE_ACTIVE);
+        let stored = api.object("Activation", "a-new").unwrap();
+        assert!(stored["metadata"].get("finalizers").is_none(), "{stored}");
+        assert!(
+            !api.requests().iter().any(|r| !r.starts_with("GET")),
+            "{:?}",
+            api.requests()
+        );
+
+        // With `spec.source`, the operator adds its finalizer and repairs
+        // the record. Loading the build then fails in the temporary
+        // directory.
+        let mut record = queued(dir.path(), Some(HERE), None);
+        record["status"] = json!({ "phase": PHASE_ACTIVE });
+        let api = FakeApi::new(vec![kube_system(HERE), record.clone()]);
+        let (result, _) = reconcile_on(&api, record).await;
+        assert!(result.is_err());
+        let stored = api.object("Activation", "a-new").unwrap();
+        assert_eq!(stored["metadata"]["finalizers"], json!([FINALIZER]));
     }
 
     /// A request the operator already started is not started again: a

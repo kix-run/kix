@@ -227,14 +227,16 @@ impl DeployRecord for ActivationRecord {
             return Ok(());
         };
         // Record progress as a single synthetic wave to provide a liveness
-        // pulse on the Activation status.
+        // pulse on the Activation status. The final checkpoint marks the
+        // wave Failed when any object in it failed.
+        let status = match (finalizing, failed) {
+            (false, _) => WaveStatus::Pending,
+            (true, 0) => WaveStatus::Complete,
+            (true, _) => WaveStatus::Failed,
+        };
         let record = WaveRecord {
             wave_index: 0,
-            status: if finalizing {
-                WaveStatus::Complete
-            } else {
-                WaveStatus::Pending
-            },
+            status,
             resource_count: applied + failed,
             applied,
             failed,
@@ -391,5 +393,31 @@ mod tests {
         assert!(unnamed.begin().await.is_ok());
         assert!(unnamed.checkpoint(1, 0, false).await.is_ok());
         assert!(unnamed.finalize(false, false).await.unwrap().is_none());
+    }
+
+    /// The final checkpoint of a run in which an object failed marks the
+    /// wave Failed, so `kix deploy --operator` does not print it as
+    /// Complete. A run with no failure still ends Complete, and a
+    /// checkpoint before the end stays Pending.
+    #[tokio::test]
+    async fn the_final_checkpoint_marks_a_wave_with_failures_failed() {
+        let api = FakeApi::new([serde_json::json!({
+            "apiVersion": crate::manifest::keys::API_VERSION,
+            "kind": "Activation",
+            "metadata": { "name": "act" },
+            "status": { "phase": "Deploying" },
+        })]);
+        let named = record(&api, Some("act")).await;
+        let wave =
+            |api: &FakeApi| api.object("Activation", "act").unwrap()["status"]["waves"][0].clone();
+        named.checkpoint(0, 1, false).await.unwrap();
+        assert_eq!(wave(&api)["status"], "Pending");
+        named.checkpoint(0, 1, true).await.unwrap();
+        assert_eq!(
+            wave(&api),
+            serde_json::json!({ "wave": 0, "status": "Failed", "resources": 1, "applied": 0, "failed": 1 })
+        );
+        named.checkpoint(2, 0, true).await.unwrap();
+        assert_eq!(wave(&api)["status"], "Complete");
     }
 }
