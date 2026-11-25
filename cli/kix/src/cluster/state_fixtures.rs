@@ -129,6 +129,7 @@ fn record_view(r: &Record) -> Value {
         "request": r.request,
         "startedRequest": r.started_request,
         "finishedRequest": r.finished_request,
+        "failedAttempts": r.failed_attempts,
         "pendingRequest": r.pending_request(),
         "orphansKeptFrom": r.orphans_kept_from,
         "packageIndex": r.package_index.as_ref().map(|i| i.to_value()),

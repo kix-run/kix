@@ -291,6 +291,65 @@ let
       )
     ];
 
+  # The evaluator loaded so that `scope.fail` returns `{ thrown = ...; }`
+  # with the full text of the error, so a test reads its fields.
+  evalCaughtFull = helpers.loadCaughtFull ../../eval {
+    inherit lib k8s;
+    self = ../../../..;
+  };
+
+  # A package with two credentials dependencies, `primary` and `backup`,
+  # that reads both with `config.helper` (`use` or `useIdentity`) for AWS.
+  # Its ConfigMap holds, for each dependency, the text of the refusal or
+  # "ok".
+  twoCredentialsPackage = {
+    meta.version = "test";
+    options.helper = lib.mkOption {
+      type = lib.types.enum [
+        "use"
+        "useIdentity"
+      ];
+    };
+    build =
+      {
+        self,
+        scope,
+        config,
+        primary ? null,
+        backup ? null,
+        ...
+      }:
+      let
+        read =
+          arg: dep:
+          (
+            if config.helper == "use" then
+              ci.use {
+                inherit scope dep arg;
+                cloud = "aws";
+              }
+            else
+              ci.useIdentity {
+                inherit scope dep arg;
+                cloud = "aws";
+                secretGoesTo = "`deps.credentials` of a caller instance";
+              }
+          ).thrown or "ok";
+      in
+      {
+        cm = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ConfigMap";
+          name = "two-credentials";
+          data = {
+            primary = read "primary" primary;
+            backup = read "backup" backup;
+          };
+        };
+        root = self.cm;
+      };
+  };
+
   scorecardOn = {
     scorecard = {
       enable = true;
@@ -1209,7 +1268,7 @@ in
       };
     in
     (
-      lib.hasInfix "but its pods call AWS" mismatched.failure
+      lib.hasInfix "but this instance's pods call AWS" mismatched.failure
       && lib.hasInfix "`kix.cloudIdentity.aws { ... }`" mismatched.failure
       && matching.cloud == "gcp"
       && lib.hasInfix "read their cloud credentials from a Secret" unused.failure
@@ -1387,4 +1446,63 @@ in
       )
     )
     || throw "from ambientCloud: ${builtins.toJSON bound}";
+
+  # On a package with two credentials dependencies, a refusal from `use`
+  # and from `useIdentity` names the dependency that holds the bad value,
+  # in the message and in the error's `dependency` field.
+  cloud-identity-refusal-names-dependency =
+    let
+      dataOf =
+        helper:
+        (byName "two-credentials" (
+          ofKind "ConfigMap" (
+            manifests (
+              evalCaughtFull.buildCluster {
+                name = "test";
+                modules = [
+                  (flavor "eks")
+                  {
+                    instances.platform.two = {
+                      package = twoCredentialsPackage;
+                      config = { inherit helper; };
+                      deps = {
+                        primary = ci.aws { inherit roleArn; };
+                        backup = ci.gcp { };
+                      };
+                    };
+                  }
+                ];
+              }
+            )
+          )
+        )).data;
+      refusalOf =
+        helper:
+        let
+          data = dataOf helper;
+        in
+        {
+          inherit (data) primary;
+          record = builtins.head (helpers.records data.backup);
+        };
+      use = refusalOf "use";
+      useIdentity = refusalOf "useIdentity";
+      namesBackup =
+        r:
+        r.primary == "ok"
+        && r.record.dependency == "backup"
+        && r.record.instance == "platform/two"
+        && lib.hasInfix "`deps.backup` is set to `kix.cloudIdentity.gcp { ... }` (Google Cloud)" r.record.message
+        && lib.hasInfix "Set `deps.backup` to" r.record.fix;
+      # Without `arg`, the message keeps its general wording.
+      unnamed = useFailure (ci.gcp { }) "aws";
+    in
+    (
+      namesBackup use
+      && namesBackup useIdentity
+      && !(lib.hasInfix "deps." unnamed)
+      && lib.hasInfix "This dependency is set to" unnamed
+      && lib.hasInfix "Set this dependency to" unnamed
+    )
+    || throw "refusal names dependency: use ${builtins.toJSON use}, useIdentity ${builtins.toJSON useIdentity}";
 }

@@ -319,6 +319,7 @@ in
         credentials = kix.cloudIdentity.useIdentity {
           inherit scope;
           dep = if backupsOn then backupIdentity else null;
+          arg = "backupIdentity";
           cloud =
             sgObjectStorage.out.ambientCloud or (scope.fail {
               dependency = "sgObjectStorage";

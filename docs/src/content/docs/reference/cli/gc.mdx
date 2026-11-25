@@ -93,9 +93,12 @@ second delete request. It stops waiting after 3 minutes without a finalizer
 being removed, or 5 minutes in total. If a resource is still on the cluster
 when the wait ends, `kix gc` counts it as a failure, prints `[K2794]` (with a
 `kubectl patch` command when finalizers remain), and keeps any resources
-recorded as its dependencies in `kix.run/depends-on`. Most packages do not yet
-record that a custom resource depends on its operator, so removing both at once
-can delete the operator before it clears the custom resource's finalizer. A
+recorded as its dependencies in `kix.run/depends-on`. When a package sets
+`controller` on a custom resource kind, that dependency list includes the
+operator, and `[K2794]` reports whether the operator is ready, not ready, or
+not on the cluster. Most packages do not set `controller` yet, so removing a
+custom resource and its operator together can delete the operator before it
+removes the custom resource's finalizer. A
 slow cleanup may still finish on its own; run `kix gc` again later once the
 resource is gone.
 

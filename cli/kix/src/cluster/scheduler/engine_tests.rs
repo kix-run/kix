@@ -2060,6 +2060,7 @@ async fn a_stuck_prune_delete_fails_and_holds_back_what_it_needs() {
         Behaviour::Now(Ok(Deletion::Stuck(Stuck {
             elapsed: secs(10),
             finalizers: vec!["example.com/hold".into()],
+            controllers: Vec::new(),
         }))),
     );
     let rec = Arc::new(Recorder::default());
@@ -2214,6 +2215,7 @@ async fn stuck_prune_deletes_wait_together() {
                 Ok(Deletion::Stuck(Stuck {
                     elapsed: secs(180),
                     finalizers: vec!["example.com/hold".into()],
+                    controllers: Vec::new(),
                 })),
             ),
         );
@@ -2248,6 +2250,86 @@ async fn stuck_prune_deletes_wait_together() {
     assert_eq!((result.pruned, result.failed), (1, 3));
     let waited = start.elapsed();
     assert!(waited < secs(200), "waited {waited:?}");
+}
+
+/// A stuck orphan whose kind names a controller says whether the controller
+/// runs, and the controller is kept. A stuck orphan that depends on the same
+/// workload through `requires:` names no controller.
+#[tokio::test(start_paused = true)]
+async fn a_stuck_prune_names_the_controller() {
+    use crate::cluster::readiness::{Deletion, Stuck};
+    let with_deps = |name: &str, deps: &str| {
+        let mut v = m("ConfigMap", name, &[]);
+        v["metadata"]["annotations"][keys::DEPENDS_ON] = json!(deps);
+        v
+    };
+    let mut operator = m("Deployment", "operator", &[]);
+    operator["apiVersion"] = json!("apps/v1");
+    let operator_rid = ResourceId::from_value(&operator);
+    let old = [
+        with_deps("cr", "controller:h_operator"),
+        with_deps("plain", "requires:h_operator"),
+        operator,
+    ];
+    let ops = Arc::new(ScriptedOps::new());
+    for name in ["cr", "plain"] {
+        ops.gone_behaviour(
+            rid("ConfigMap", name),
+            None,
+            Behaviour::Now(Ok(Deletion::Stuck(Stuck {
+                elapsed: secs(180),
+                finalizers: vec!["example.com/hold".into()],
+                controllers: Vec::new(),
+            }))),
+        );
+    }
+    ops.script(
+        operator_rid.clone(),
+        NodeScript::default().live(Behaviour::Now(Ok(Some(json!({
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "metadata": { "name": "operator", "namespace": "default", "generation": 1 },
+            "spec": { "replicas": 1 },
+            "status": { "observedGeneration": 1, "replicas": 1, "readyReplicas": 0 },
+        }))))),
+    );
+    let orphans = [
+        rid("ConfigMap", "cr"),
+        rid("ConfigMap", "plain"),
+        operator_rid.clone(),
+    ];
+    let result = run_with_orphans(
+        &ops,
+        plan_of(&[m("ConfigMap", "keep", &[])]),
+        &orphans,
+        &old,
+        PrunePolicy::Delete,
+        &config(quiet_watchdog()),
+        Arc::new(Recorder::default()),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!((result.pruned, result.failed), (0, 2));
+    let message_of = |name: &str| {
+        result
+            .failures
+            .iter()
+            .find(|f| f.node == NodeId::Resource(rid("ConfigMap", name)))
+            .map(|f| f.message.clone())
+            .unwrap()
+    };
+    let cr = message_of("cr");
+    assert!(
+        cr.contains("ConfigMap controller Deployment.apps/operator@default is not ready ("),
+        "{cr}"
+    );
+    assert!(
+        !message_of("plain").contains("ConfigMap controller"),
+        "{}",
+        message_of("plain")
+    );
+    assert!(!ops.calls().contains(&Call::Delete(operator_rid)));
 }
 
 /// Orphans whose recorded dependencies form a cycle are kept and reported,
@@ -2307,6 +2389,7 @@ async fn an_operator_prune_says_what_the_operator_does() {
             Behaviour::Now(Ok(Deletion::Stuck(Stuck {
                 elapsed: secs(300),
                 finalizers: vec!["example.com/cleanup".into()],
+                controllers: Vec::new(),
             }))),
         );
     }

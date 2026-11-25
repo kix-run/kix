@@ -360,6 +360,7 @@ in
       storage = kix.cloudIdentity.use {
         inherit scope;
         dep = storageCredentials;
+        arg = "storageCredentials";
         cloud = null;
         identityGoesTo = "`deps.backupIdentity` on each `stackgres-cluster` instance that backs up here, and set `${
           t.ambient.field or "useIAMRole"
