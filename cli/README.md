@@ -651,8 +651,9 @@ against such a repository.
 ```
 new Build (Build::of_flake, or --bundle → Build::carried; checked for a retired domain, then stamped) → Build::installable refuses a stale pin
   → kix::plan::Planner::run(build, OldSide) (kix/src/plan/planner.rs), which prints nothing and reports through PlanEvent:
+    → `binding::Connection::of_context` names the context and API server, reported as `PlanEvent::Connecting` before connecting and kept on `Connected` for the plan document's `kubernetes` field and the JSON deploy log's first `kubernetes` line
     → connect, then `TargetChecks::run`: the binding check (`cluster::binding::check`, see "Cluster binding"), the name check (`binding::check_name`), and the Kubernetes version check. A build bound to another Kubernetes cluster, an unbound build where a bound one has deployed, or a key-named build over a cluster that Kix 0.6 deployed as `cluster` is refused before anything else is read
-    → the baseline: Baseline::of_cluster (or --offline, OldSide::LocalCache: Baseline::of_cache)
+    → the baseline: Baseline::of_cluster (or --offline, OldSide::LocalCache: Baseline::of_cache); with no Active record and no `cluster.kubernetes.uid`, `PlanEvent::Unbound` carries the live `kube-system` UID for the note that says how to bind the definition
       (store path GC'd? → reconstruct old manifests from the live objects naming the Active, Failed, or kept-orphan records: SweepScope::Records { cluster, hashes })
       → load the builds the Active record's status.orphansKeptFrom names
       → leave out the Failed records if another (non-operator) deploy of this cluster is Deploying
@@ -781,6 +782,19 @@ is retried. Read-only commands do not check; `kix status -v` prints the live
 UID, and its JSON carries it as `kubernetes.uid` (`status::KubernetesId`).
 The lock is lifted by removing the label from the records, which the how-to
 page documents.
+
+The same `Connection` names the target before anything is read. `kix plan`,
+`kix deploy`, `kix rollback`, `kix gc`, and `kix migrate domain` print
+`Connection::connecting` ("Connecting to context <name> (<server>)...")
+once, before they connect. `kix plan --read-only` prints it on stderr
+(`diff::Baseline::Live`). JSON output carries it as `binding::Target`
+(`{context, server}`): the plan document's `kubernetes` field (`null` when the
+plan did not connect), the JSON deploy log's first line (`type: kubernetes`),
+`kix history`'s `kubernetes` field, and `server` beside `context` in `kix
+status`. On the first deploy of an unbound definition the planner reports
+`PlanEvent::Unbound`, which prints `binding::unbound_note`: the context, and
+the `cluster.kubernetes.uid` line to add, with the live UID when the account
+may read it.
 
 `binding::check_name(client, connection, cluster, name_from_flake_key)` runs
 beside the binding check in deploy and plan (`TargetChecks::run`). Kix 0.6
@@ -1122,7 +1136,7 @@ manager took shows as an ownership conflict in a plan unless
 
 ### kix-cli (`kix-cli/src/`)
 
-- `client.rs`: `make_client(context)`, the connection every command makes, with the transport policy `policy()` reads from the `KIX_*` variables; the planner gets the same policy through `OldSide::Cluster`
+- `client.rs`: `connect(context)`, which prints `Connection::connecting` and returns the client with its `binding::Connection`, for the commands that change a cluster outside the planner (rollback, gc, migrate, deploy `--offline`, and `--operator` through `operator::connect_and_verify`); `make_client(context)`, the connection every command makes, with the transport policy `policy()` reads from the `KIX_*` variables; the planner gets the same policy through `OldSide::Cluster`
 - `plugin.rs`: `kix NAME ARGS…` execs the first executable `kix-NAME` in an absolute PATH directory (NAME letters, digits, `-`, and `_` only), git-style: no plugin ABI. The global flags given before NAME reach it as the `KIX_*` variables Kix reads them from, `--no-color` as `NO_COLOR`, `-o` as the first two arguments `--output FORMAT` (Kix reads no variable for it), and `KIX_BIN` names the running `kix` binary, so a `kix` subprocess the plugin runs has the user's flags. An `--override-input` value with whitespace is refused there, since the variable could not carry it. A name that is no plugin gets clap's own unknown-command error. Tested with shell-script plugins in `tests/plugin_test.rs`
 - `main.rs`: selects the Kix version, parses the command line, refuses a removed command or flag and an `-o` format the command does not print (`check_format`, `[K2184]`), sets up logging and output, and calls `dispatch::run`. It is the only caller of `std::process::exit` apart from `interrupt.rs`: `kix-cli/clippy.toml` bans it everywhere else
 - `interrupt.rs`: `cancel_on_interrupt(&CancelToken)`, which `kix deploy` and `kix plan` call before a run. The first Ctrl-C or SIGTERM cancels the token with the reason `interrupted` or `terminated`, a second one exits with code 130, and an interrupt while no run watches exits with the signal's shell code (Tokio never restores the OS default handler). The library never ends the process: `kix`, `kix-core`, `kix-bundle`, and `kix-container` each have a `clippy.toml` that bans `std::process::exit`, because the operator embeds the library too

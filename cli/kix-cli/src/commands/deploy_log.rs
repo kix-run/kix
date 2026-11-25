@@ -16,6 +16,7 @@
 use std::time::Instant;
 
 use kix::cluster::apply::ApplyAction;
+use kix::cluster::binding::Connection;
 use kix::cluster::deploy_log::Line;
 use kix::cluster::stream::{
     DeployEvent, DeployObserver, DeployResult, HALTED_ON_FAILURE, NodeDetail, TransitionKind,
@@ -192,6 +193,12 @@ impl JsonObserver {
         Self {
             started_at: Instant::now(),
         }
+    }
+
+    /// Print the line that names the Kubernetes cluster of `connection`.
+    pub fn kubernetes(&self, connection: &Connection) {
+        let elapsed_ms = self.started_at.elapsed().as_millis() as u64;
+        println!("{}", json_line(&Line::kubernetes(connection, elapsed_ms)));
     }
 
     /// Print the final summary line for the deploy run.
@@ -673,6 +680,23 @@ mod tests {
     }
 
     const GOLDEN: &str = include_str!("../../tests/fixtures/deploy-log.ndjson");
+
+    /// The log opens with a line that names the context and API server the
+    /// deploy writes to, and the line reads back as written.
+    #[test]
+    fn the_log_names_the_kubernetes_cluster() {
+        let connection = Connection::Context {
+            name: Some("prod".into()),
+            server: Some("https://prod.example:6443".into()),
+        };
+        let text = json_line(&Line::kubernetes(&connection, 0));
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["type"], "kubernetes");
+        assert_eq!(value["context"], "prod");
+        assert_eq!(value["server"], "https://prod.example:6443");
+        let line: Line = serde_json::from_str(&text).unwrap();
+        assert_eq!(json_line(&line), text);
+    }
 
     /// Under `--prune`, each object is listed as one Kix will delete.
     #[test]

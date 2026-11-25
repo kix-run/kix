@@ -24,7 +24,7 @@ vCluster all differ.
 
 ```
 $ kix status production --context prod -v
-Cluster production on Kubernetes v1.31.4+k3s1 (context prod)
+Cluster production on Kubernetes v1.31.4+k3s1 (context prod, https://prod.example:6443)
 Kubernetes cluster ID: 4d7b1c2e-9f3a-4b8e-a1c5-6d2e8f0a9b3c
 ...
 ```
@@ -38,7 +38,19 @@ $ kubectl --context prod get namespace kube-system -o jsonpath='{.metadata.uid}'
 ```
 
 The UID is known as soon as the cluster exists, so you can bind a definition
-before its first deploy.
+before its first deploy. Before a cluster's first deploy, running `kix plan` or
+`kix deploy` without `cluster.kubernetes.uid` set also prints the line to add,
+using the UID of the connected cluster:
+
+```
+Connecting to context prod (https://prod.example:6443)...
+No previous deployment record on the cluster. First deploy.
+Note: Cluster 'production' does not set `cluster.kubernetes.uid`, so Kix continues without checking that context prod (https://prod.example:6443) is the right Kubernetes cluster.
+  If this is the right cluster, set `cluster.kubernetes.uid = "4d7b1c2e-9f3a-4b8e-a1c5-6d2e8f0a9b3c";` in the 'production' cluster definition. Once set, Kix refuses to deploy 'production' to any other cluster. See https://kix.run/docs/how-to/operate-a-cluster/bind-a-cluster-definition-to-its-kubernetes-cluster/.
+```
+
+Confirm that the context and API server URL point to the right cluster before
+copying the UID.
 
 ## Name it in the definition
 
@@ -117,7 +129,7 @@ those on their own.
 
 ```
 $ kix status production --context prod
-Cluster production on Kubernetes v1.31.4+k3s1 (context prod)
+Cluster production on Kubernetes v1.31.4+k3s1 (context prod, https://prod.example:6443)
 ...
 ```
 

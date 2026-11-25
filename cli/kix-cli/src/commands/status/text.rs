@@ -58,8 +58,17 @@ fn render_cluster(
         if let Some(version) = &doc.kubernetes.version {
             let _ = write!(header, " on Kubernetes {version}");
         }
-        if let Some(context) = &doc.kubernetes.context {
-            let _ = write!(header, " (context {context})");
+        match (&doc.kubernetes.context, &doc.kubernetes.server) {
+            (Some(context), Some(server)) => {
+                let _ = write!(header, " (context {context}, {server})");
+            }
+            (Some(context), None) => {
+                let _ = write!(header, " (context {context})");
+            }
+            (None, Some(server)) => {
+                let _ = write!(header, " ({server})");
+            }
+            (None, None) => {}
         }
         let _ = writeln!(out, "{header}");
         if detail == Detail::Everything

@@ -13,6 +13,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::apply::ApplyAction;
+use super::binding::{Connection, Target};
 use super::kept;
 use super::readiness::ControllerState;
 use super::stream::{
@@ -50,6 +51,16 @@ impl Line {
         })
     }
 
+    /// Build the line that names the Kubernetes cluster of `connection`.
+    pub fn kubernetes(connection: &Connection, elapsed_ms: u64) -> Line {
+        let Target { context, server } = connection.into();
+        Line {
+            schema_version: SCHEMA_VERSION.to_string(),
+            elapsed_ms,
+            event: Event::Kubernetes { context, server },
+        }
+    }
+
     /// Build the final summary line of the run. `succeeded` matches the process
     /// exit status.
     pub fn summary(r: &DeployResult, dry_run: bool, succeeded: bool, elapsed_ms: u64) -> Line {
@@ -74,6 +85,15 @@ impl Line {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
+    /// The Kubernetes cluster the deploy writes to. The first line of the
+    /// log.
+    Kubernetes {
+        /// The kubeconfig context, or `null` when the kubeconfig names none.
+        context: Option<String>,
+        /// The URL of the context's API server in the kubeconfig, or `null`
+        /// when the kubeconfig does not give it.
+        server: Option<String>,
+    },
     /// The plan, before any node runs. `edges` say which node waits on which.
     Plan {
         nodes: Vec<PlannedNode>,

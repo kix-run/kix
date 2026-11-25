@@ -49,6 +49,7 @@ JSON and YAML output is one object:
 | Key | Content |
 | --- | --- |
 | `cluster` | The cluster name. |
+| `kubernetes` | `{ context, server }` for the Kubernetes cluster read: the kubeconfig context and its API server URL, each `null` when not set in the kubeconfig. |
 | `current` | `{ name, identity_hash, built_via }` for the deploy live on the cluster, or `null` when there is none. `built_via` is the store path of the build. |
 | `superseded` | The earlier deploys, most recent first, each `{ name, identity_hash, deployed_at, built_via, previous_activation, available_locally }`. `deployed_at` is RFC 3339. `available_locally` says whether this machine has the build, which `kix rollback` needs. |
 

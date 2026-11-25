@@ -559,6 +559,8 @@ pub struct Planned {
 /// What a plan made while connected to the cluster read there.
 pub struct Connected {
     pub client: Client,
+    /// Which Kubernetes cluster `client` talks to, as the kubeconfig names it.
+    pub connection: binding::Connection,
     pub last_runs: LastRuns,
 }
 
@@ -693,26 +695,53 @@ impl<'a> Planner<'a> {
         let client = match old {
             OldSide::LocalCache => None,
             OldSide::Cluster { context, policy } => {
-                (self.report)(PlanEvent::Connecting);
+                let connection = binding::Connection::of_context(context.as_deref());
+                (self.report)(PlanEvent::Connecting(&connection));
                 let client = client::make_client(context.as_deref(), policy.clone())
                     .await
                     .map_err(|e| PlanError::Connect(Box::new(e)))?;
-                let connection = binding::Connection::of_context(context.as_deref());
                 TargetChecks::of(new_graph)
                     .run(&client, &connection)
                     .await?;
-                Some(client)
+                Some((client, connection))
             }
         };
         let baseline = match &client {
-            Some(client) => Baseline::of_cluster(client, &build, self.report).await?,
+            Some((client, connection)) => {
+                let baseline = Baseline::of_cluster(client, &build, self.report).await?;
+                self.note_unbound(client, connection, new_graph, &baseline)
+                    .await;
+                baseline
+            }
             None => Baseline::of_cache(&new_graph.cluster_name, self.report),
         };
         self.planned(build, baseline, client).await
     }
 
+    /// Report [`PlanEvent::Unbound`] on the first deploy of a build whose
+    /// definition names no Kubernetes cluster. A cluster with an Active
+    /// record was deployed here before, so the note would only repeat.
+    async fn note_unbound(
+        &self,
+        client: &Client,
+        connection: &binding::Connection,
+        graph: &StoreGraph,
+        baseline: &Baseline,
+    ) {
+        if graph.kubernetes_uid.is_some() || baseline.active().is_some() {
+            return;
+        }
+        let uid = binding::live_uid(client).await.ok();
+        (self.report)(PlanEvent::Unbound {
+            cluster: &graph.cluster_name,
+            connection,
+            uid: uid.as_deref(),
+        });
+    }
+
     /// Plan a rollback of Kix cluster `cluster` from its current record
-    /// `current` to `build`, the build of an earlier record, through `client`.
+    /// `current` to `build`, the build of an earlier record, through `client`,
+    /// which talks to the Kubernetes cluster of `connection`.
     /// The baseline is [`Baseline::of_record`]. The rollback command makes
     /// its own target checks before this, because a rollback must not be
     /// refused for a Kubernetes upgrade during an incident.
@@ -722,10 +751,12 @@ impl<'a> Planner<'a> {
         records: &Records,
         current: &Record,
         client: Client,
+        connection: binding::Connection,
     ) -> Result<Planned, PlanError> {
         let cluster = build.graph().cluster_name.clone();
         let baseline = Baseline::of_record(records, &cluster, current, self.report).await;
-        self.planned(build, baseline, Some(client)).await
+        self.planned(build, baseline, Some((client, connection)))
+            .await
     }
 
     /// Plan `build` against `baseline`. With a client, first list the
@@ -736,7 +767,7 @@ impl<'a> Planner<'a> {
         &self,
         build: InstallableBuild,
         baseline: Baseline,
-        client: Option<Client>,
+        client: Option<(Client, binding::Connection)>,
     ) -> Result<Planned, PlanError> {
         let new_graph = build.graph();
         let new_manifests = manifests_of(new_graph);
@@ -744,9 +775,9 @@ impl<'a> Planner<'a> {
         // pairing against it would invent migrations nobody declared.
         let migration_pairs = detect_migration_pairs(&new_manifests, &baseline.active_manifests);
         let read = match client {
-            Some(client) => {
+            Some((client, connection)) => {
                 let live = read_live(&client, &new_manifests).await?;
-                Some((client, live))
+                Some((client, connection, live))
             }
             None => None,
         };
@@ -756,12 +787,13 @@ impl<'a> Planner<'a> {
                 &new_manifests,
                 &new_graph.cluster_name,
                 &baseline,
-                read.as_ref().map(|(client, live)| (client, live)),
+                read.as_ref().map(|(client, _, live)| (client, live)),
             )
             .await?;
-        let connected = read.map(|(client, live)| Connected {
+        let connected = read.map(|(client, connection, live)| Connected {
             last_runs: checked.last_runs_from(&live),
             client,
+            connection,
         });
         Ok(Planned {
             build,
@@ -1284,6 +1316,50 @@ mod tests {
                 crate::manifest::lifecycle::PHASE_FAILED
             );
         }
+    }
+
+    /// Run [`Planner::note_unbound`] for the `kix-enterprise-test` build,
+    /// with `uid` as its `cluster.kubernetes.uid` and `active` as the
+    /// cluster's Active record, against a cluster whose `kube-system` UID is
+    /// `live-uid`. Return the events it reported.
+    async fn unbound_events(uid: Option<&str>, active: Option<Value>) -> Vec<String> {
+        let api = FakeApi::new([crate::cluster::fake_api::kube_system("live-uid")]);
+        let mut graph = crate::plan::fixtures::kix_enterprise_test();
+        graph.kubernetes_uid = uid.map(str::to_string);
+        let mut baseline = Baseline::empty();
+        baseline.active = active.map(|r| Record::of(&serde_json::from_value(r).unwrap()));
+        let connection = binding::Connection::Context {
+            name: Some("prod".into()),
+            server: Some("https://prod.example:6443".into()),
+        };
+        let events = std::sync::Mutex::new(Vec::new());
+        let report = |event: PlanEvent<'_>| events.lock().unwrap().push(format!("{event:?}"));
+        let flags = super::super::document::PlanFlags {
+            prune: PrunePolicy::WarnOnly,
+            reconcile: false,
+            force_conflicts: false,
+            accept_migrations: false,
+        };
+        Planner::new(flags, &report)
+            .note_unbound(&api.client(), &connection, &graph, &baseline)
+            .await;
+        events.into_inner().unwrap()
+    }
+
+    /// The first deploy of a definition that names no Kubernetes cluster
+    /// says so, with the UID that would bind it to this one. A bound
+    /// definition, and a cluster deployed here before, say nothing.
+    #[tokio::test]
+    async fn a_first_deploy_of_an_unbound_definition_says_how_to_bind_it() {
+        let events = unbound_events(None, None).await;
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert!(events[0].starts_with("Unbound"), "{events:?}");
+        assert!(events[0].contains("live-uid"), "{events:?}");
+        assert!(events[0].contains("prod.example"), "{events:?}");
+
+        assert!(unbound_events(Some("live-uid"), None).await.is_empty());
+        let active = record("kix-enterprise-test", "abc");
+        assert!(unbound_events(None, Some(active)).await.is_empty());
     }
 
     /// Build a [`Planned`] for the `kix-enterprise-test` fixture as a first

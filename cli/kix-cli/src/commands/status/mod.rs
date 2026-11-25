@@ -17,7 +17,7 @@ use crate::client;
 use crate::exit::Exit;
 use crate::output::{self, CommandResponse};
 use kix::cluster::activation::{PinnedInterface, Record, Records, RecordsError};
-use kix::cluster::binding::{self, Connection};
+use kix::cluster::binding::{self, Connection, Target};
 use kix::cluster::discovery;
 use kix::cluster::errors::{api_error, forbidden};
 use kix::cluster::kubernetes_version::{self, LiveVersion};
@@ -137,11 +137,10 @@ async fn read_cluster(
     for note in id.unread_notes() {
         crate::esay!("{note}");
     }
+    let target = Target::from(&connection);
     let kubernetes = document::Kubernetes {
-        context: match connection {
-            Connection::Context { name, .. } => name,
-            Connection::InCluster => None,
-        },
+        context: target.context,
+        server: target.server,
         uid: id.uid,
         version: id.version,
     };

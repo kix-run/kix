@@ -17,23 +17,22 @@ use miette::{Result, miette};
 use serde_json::Value;
 
 use crate::client;
+use kix::cluster::binding::Connection;
 use kix::cluster::discovery;
 
 use crate::output;
 
 /// Connect to the cluster, run the domain gate, and verify that Activation
 /// records are readable.
-pub async fn connect_and_verify(context: Option<&str>) -> Result<(Client, Records)> {
-    crate::say!("Connecting to cluster...");
-
-    let client = client::make_client(context)
+pub async fn connect_and_verify(context: Option<&str>) -> Result<(Client, Records, Connection)> {
+    let (client, connection) = client::connect(context)
         .await
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
     let records = open_records(&client).await?;
 
     crate::say!("  {} Activation CRD found", output::green("✓"));
 
-    Ok((client, records))
+    Ok((client, records, connection))
 }
 
 /// Discover and open the cluster's Activation records, verifying read access.

@@ -304,10 +304,10 @@ pub(super) async fn plan_record_retirement(
     plan_records_with(open_records(global).await?, cluster, policy).await
 }
 
-/// Connect to the cluster and open its Activation records, or return `None`
-/// when the cluster has none.
+/// Say which Kubernetes cluster gc targets, connect to it, and open its
+/// Activation records, or return `None` when the cluster has none.
 pub(super) async fn open_records(global: &crate::cli::GlobalArgs) -> Result<Option<Records>> {
-    let client = client::make_client(global.context.as_deref())
+    let (client, _) = client::connect(global.context.as_deref())
         .await
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
     let discovery = discovery::discover_resources(&client)

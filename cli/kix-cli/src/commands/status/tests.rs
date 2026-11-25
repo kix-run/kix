@@ -262,6 +262,7 @@ fn shop() -> Observation {
 fn kubernetes() -> Kubernetes {
     Kubernetes {
         context: Some("prod".into()),
+        server: Some("https://prod.example:6443".into()),
         uid: Some("4d7b1c2e".into()),
         version: Some("v1.33.1".into()),
     }
