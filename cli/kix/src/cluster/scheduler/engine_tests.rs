@@ -56,7 +56,11 @@ fn live_job_named(name: &str, failed: bool) -> Value {
     json!({
         "apiVersion": "batch/v1",
         "kind": "Job",
-        "metadata": { "name": name, "namespace": "default" },
+        "metadata": {
+            "name": name,
+            "namespace": "default",
+            "labels": { "app.kubernetes.io/managed-by": "kix" },
+        },
         "spec": { "backoffLimit": 0 },
         "status": if failed { json!({ "failed": 1 }) } else { json!({ "succeeded": 1 }) },
     })
@@ -1440,14 +1444,13 @@ async fn read_last_runs_reruns_failed_rerun_jobs_and_names_the_others() {
     );
 }
 
-/// A Job Kix cannot read leaves the answer unknown, so the plan does not
-/// say that nothing failed. A refused read and a Job of a group the cluster
-/// does not serve both count, and a Job read through another group's API
-/// never counts as failed.
+/// A Job whose kind Kix may not list leaves the answer unknown, so the plan
+/// does not say that nothing failed. A Job of a group the cluster does not
+/// serve is not on the cluster, so it never counts as failed.
 #[tokio::test]
 async fn read_last_runs_does_not_answer_for_a_job_it_cannot_read() {
     let api = crate::cluster::fake_api::FakeApi::new([live_job_named("done", false)]);
-    api.fail_next("/apis/batch/v1/namespaces/default/jobs/done", 1, 403);
+    api.fail_next("/apis/batch/v1/jobs", 1, 403);
     let client = api.client();
     let discovery = crate::cluster::discovery::discover_resources(&client)
         .await

@@ -304,6 +304,7 @@ mod tests {
             "metadata": {
                 "name": name,
                 "namespace": "d",
+                "labels": { "app.kubernetes.io/managed-by": "kix" },
                 "annotations": {
                     (keys::IDENTITY_HASH): hash,
                     (keys::ACTIVATIONS): activations,

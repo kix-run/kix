@@ -65,13 +65,20 @@ permissions of the deploy it previews. A user who may only `get` and `list`
 gets `forbidden` refusals. Use `kix plan --read-only` for a comparison that
 needs only `get` and `list`.
 
+`kix plan` also needs cluster-wide `list` permission for each resource kind in
+the build. It sends one cluster-wide `list` request per kind to find resources
+that have not changed in the build but are missing from the cluster or being
+deleted, and includes them in the plan so the deploy recreates them. If the
+account cannot list a kind across the cluster, `kix plan` prints a warning and
+skips unchanged resources of that kind unless `--reconcile` is set.
+
 ## What it reports
 
 | Section | Content |
 | --- | --- |
 | Field changes | For each object the dry run answered, the live object compared with the object the apiserver says the apply would produce. Server-maintained metadata and `status` are left out, and Secret values are not shown. A package the build comparison called unchanged becomes changed when the apiserver says it would change. |
 | Writes the deploy would stop on | Field ownership conflicts, with the manager that owns each field; admission webhook denials; ValidatingAdmissionPolicy denials; validation errors; changes to immutable fields; RBAC refusals; missing namespaces and unknown kinds the build does not create; SOPS Secrets that do not decrypt; and refused prune deletes. |
-| Objects being deleted | Objects this deploy applies that are already being deleted on the cluster, showing when deletion started and any finalizers holding them. The deploy waits for each old object to be removed and then creates a new one from the build. Any object that may hold data, such as a PersistentVolumeClaim, carries a warning that the new object starts empty and keeps none of the old object's data. Shown as a warning; does not stop the deploy. |
+| Objects being deleted | Objects this deploy applies that are already being deleted on the cluster (including objects that did not change in the build), showing when deletion started and any finalizers holding them. The deploy waits for each old object to be removed and then creates a new one from the build. Any object that may hold data, such as a PersistentVolumeClaim, carries a warning that the new object starts empty and keeps none of the old object's data. Shown as a warning; does not stop the deploy. |
 | Prune | Each orphan and what the deploy does with it. See [Prune fates](#prune-fates). |
 | Stateful migrations | Objects that hold data that the change removes from a stateful package and adds in their place. A deploy stops on them unless run with `--accept-migrations`. |
 | Drift | Fields where the live object differs from the deployed build, the managers that own them live, and whether the deploy puts the deployed value back. |
