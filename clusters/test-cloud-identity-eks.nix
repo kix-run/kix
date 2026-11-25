@@ -12,6 +12,12 @@
 #   ARN, its pod template carries `checksum/cloud-identity`, and its
 #   container has no AWS key variables. `tracing/gp3` imports the EBS
 #   StorageClass that its claim uses.
+# - `data/pg` is a cnpg-cluster that backs up to S3 as an IAM role. The
+#   CloudNativePG operator creates the ServiceAccount of its instance pods,
+#   so the role ARN and `kix.run/cloud-identity` sit in the Cluster's
+#   `spec.serviceAccountTemplate`, and the ObjectStore sets
+#   `s3Credentials.inheritFromIAMRole`. The operator's pods carry no
+#   `checksum/cloud-identity`.
 # - `annotated/app` writes the IRSA annotation on its ServiceAccount itself.
 #   The eks flavor declares the `eks.amazonaws.com` annotation domain, so
 #   the scorecard accepts it.
@@ -116,6 +122,21 @@ kix.buildCluster {
             };
           };
           # endregion:eksIrsaTempo
+        };
+
+        instances.cnpg-system = {
+          cnpg-operator.package = packages.cnpg-operator;
+          cnpg-barman-cloud.package = packages.experimental.cnpg-barman-cloud;
+        };
+        instances.data.pg = {
+          package = packages.cnpg-cluster;
+          deps.storageCredentials = kix.cloudIdentity.aws {
+            roleArn = "arn:aws:iam::111122223333:role/pg-backup";
+          };
+          config = {
+            storage.size = "10Gi";
+            backup.destinationPath = "s3://example-pg-backups/data";
+          };
         };
 
         instances.annotated.app.package = annotatedServiceAccount;

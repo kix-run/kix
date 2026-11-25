@@ -1,0 +1,3 @@
+# 2026-11-24 · `kix/lib/vocab/cloud-identity.nix` · `annotationsFor` does not order the custom resource after the `cloudIdentity` provider.
+
+`bind` adds the provider's `root` to the ServiceAccount's `requires`, so a webhook that Kix deploys runs before the pods start. `annotationsFor` returns only annotations and labels, and taking `cloudIdentity` as a build argument adds no dependency. In `cnpg-cluster` the Cluster does not wait for the provider. Every provider today is an import that deploys nothing, so nothing breaks yet. A Kix package that runs the IRSA or Azure webhook and claims the role would start the operator's pods before the webhook and leave them without credentials. Seen while wiring `cnpg-cluster` (`kix/packages/stable/cnpg-cluster/default.nix`).
