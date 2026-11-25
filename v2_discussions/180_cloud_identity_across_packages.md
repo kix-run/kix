@@ -1,6 +1,6 @@
 # 180: Cloud identity when the ServiceAccount and the cloud provider live in separate packages
 
-**Status:** Decided on 2026-11-24; implementation is pending.
+**Status:** Decided on 2026-11-24. Steps 1 and 2 of the build plan are built; steps 3 and 4 are pending.
 **Related:** `177_workload_cloud_identity.md` (base workload cloud identity design), `kix/lib/vocab/cloud-identity.nix`, `kix/lib/architecture.md` (`deps` and `out` data flow)
 
 ## 1. The problem
@@ -64,6 +64,8 @@ kix.cloudIdentity.useIdentity {
 # New. Compare the cloud an object reaches with the pod's own credentials
 # with the identity of `holder`, the dependency whose pods make the call.
 kix.cloudIdentity.ambientProblem { cloud; holder; }
+# or, for a builder in the holder's own `out`:
+kix.cloudIdentity.ambientProblem { cloud; holderName; identityCloud; }
 # => null, or { message; fix; } naming both instances and both clouds
 
 # Changed. With `cloud = null`, the refusal of an identity adds
@@ -200,9 +202,12 @@ client reads, like the Vault role that doc 177 leaves out, so it belongs to the
 package that runs the client:
 - The consumer package writes plain annotations on the `ServiceAccount` it
   builds, using the keys External Secrets documents.
-- `external-secrets` lists `eks.amazonaws.com`, `iam.gke.io`, and
-  `azure.workload.identity` in `meta.annotationDomains` so the scorecard accepts
-  them on any cluster.
+- The `eks`, `gke`, `gke-autopilot`, and `aks` flavors already declare their
+  cloud's annotation domain. On any other cluster, the cluster author adds the
+  domain to `scorecard.knownAnnotationDomains`. `external-secrets` does not
+  list the domains in `meta.annotationDomains`: a package that lists a domain
+  owns it, so every other package that writes it would have to depend on
+  `external-secrets`.
 - The Kix library gets no second render path (`bind` and `annotationsFor` stay
   tied to the cluster's mechanism).
 
@@ -258,8 +263,9 @@ package that runs the client:
    `error` for combining an ambient flag with `deps.storageCredentials`.
 4. **`external-secrets`.** Update unmerged pull request #340 in place after step
    1: replace `use` (`cloud = dep.cloud or null`) with `useIdentity`, publish
-   `out.identityCloud`, call `ambientProblem` in `mkSecretStore`, and list the
-   three domains in `meta.annotationDomains`. Test stores with no `auth` block
+   `out.identityCloud`, and call `ambientProblem` in `mkSecretStore` with
+   `holderName` and `identityCloud`, because a builder in the instance's own
+   `out` has no dependency value for that instance. Test stores with no `auth` block
    (bound and mismatched clouds), a `Secret` in `deps.controllerCredentials`,
    and a store naming an annotated `ServiceAccount` on a cluster with no
    mechanism. Point its two housekeeping entries at this doc or delete them.

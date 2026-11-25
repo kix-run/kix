@@ -1,5 +1,0 @@
-# 2026-11-24 · `kix/packages/experimental/stackgres-object-storage`, `stackgres-cluster` · StackGres backups cannot take a cloud identity because the `ServiceAccount` and the storage settings live in separate packages.
-
-StackGres runs `wal-g` inside each cluster pod's Patroni container, so the cloud identity must sit on the `<cluster>-patroni` `ServiceAccount` that the operator creates from `spec.metadata.annotations.serviceAccount` on `SGCluster` (`stackgres-cluster`). However, the setting that tells `wal-g` to use ambient credentials (`s3.awsCredentials.useIAMRole` or `gcs.gcpCredentials.fetchCredentialsFromMetadataService`) lives on `SGObjectStorage` (`stackgres-object-storage`), which several database clusters can share. Until Kix supports split packages, `stackgres-object-storage` directs users to `extraSpec`, still requires `deps.storageCredentials`, and always writes `secretKeySelectors`.
-
-Design decided in `v2_discussions/180_cloud_identity_across_packages.md` (build plan, step 3); implementation is pending.

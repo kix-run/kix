@@ -8,6 +8,7 @@
   kix,
   availability,
   prometheus ? null,
+  controllerCredentials ? null,
   ...
 }:
 
@@ -22,7 +23,6 @@ let
     podSecurityContext
     containerSecurityContext
     subjectsFor
-    serviceAccount
     metricsServiceFor
     crdDocs
     crdSpecs
@@ -32,6 +32,8 @@ let
     storeKinds
     readyKinds
     ;
+
+  credentials = c.controllerCredentialsOf controllerCredentials;
 
   hasMetrics = config.metrics.enabled && prometheus != null;
 
@@ -201,7 +203,18 @@ let
   };
 in
 {
-  serviceAccount = serviceAccount name;
+  # A store that sets no `auth` calls its cloud as the identity bound here
+  # (the AWS SDK's default chain, Google's application default credentials,
+  # or an Azure store with `authType: WorkloadIdentity`). The workload
+  # builder stamps the controller pods, so a changed identity restarts them.
+  serviceAccount =
+    {
+      apiVersion = "v1";
+      kind = "ServiceAccount";
+      inherit name;
+    }
+    |> credentials.bind
+    |> scope.mkResource;
 
   controllerClusterRole = controllerRbac."${name}-controller";
   controllerClusterRoleBinding = controllerRbac."${name}-controller-binding";

@@ -420,7 +420,7 @@ build =
 
 If a package builds two ServiceAccounts with separate identities, declare two dependencies and call `kix.cloudIdentity.use` once for each.
 
-When an operator creates the ServiceAccount from a custom resource, `credentials.bind` cannot modify it. Instead, take `cloudIdentity ? null` as a build argument and call `kix.cloudIdentity.annotationsFor { inherit scope; identity = credentials.identity; provider = cloudIdentity; }`. Pass the returned `{ serviceAccountAnnotations, podLabels }` into the custom resource (both sets are empty when `identity` is `null`). Because the operator creates those pods, Kix does not add `checksum/cloud-identity` to restart them automatically when the identity changes.
+When an operator creates the ServiceAccount from a custom resource, `credentials.bind` cannot modify it. Instead, take `cloudIdentity ? null` as a build argument and call `kix.cloudIdentity.annotationsFor { inherit scope; identity = credentials.identity; provider = cloudIdentity; }`. Pass the returned `{ serviceAccountAnnotations, podLabels }` into the custom resource (both sets are empty when `identity` is `null`). Because the operator creates those pods, Kix does not add `checksum/cloud-identity` to restart them automatically when the identity changes. Also call `kix.cloudIdentity.annotationsFor` when a workload launches its own pods at runtime under a bound ServiceAccount: merge the returned `podLabels` into the ConfigMap or setting that controls those pods' labels (as `velero` does for its node-agent and repository-maintenance ConfigMaps). For example, `cnpg-cluster` writes `serviceAccountAnnotations` to `spec.serviceAccountTemplate.metadata.annotations` and any `podLabels` to `spec.inheritedMetadata.labels` on the `Cluster`, and locks those keys in `kix.mergeGuarded`.
 
 ### When one package owns the ServiceAccount and another chooses the cloud
 
@@ -475,6 +475,21 @@ When the package that chooses the cloud depends on the ServiceAccount owner, cal
 - `holder`: the dependency instance whose pods make the cloud API calls (which publishes `out.identityCloud`).
 
 `ambientProblem` returns `{ message, fix }` when `cloud` and `holder.out.identityCloud` are both non-null and differ, or `null` otherwise (including when `holder` has no cloud identity, since pods may fall back to node credentials). Wrap a non-null result with `// { assertion = false; }` in the package's `assertions` list.
+
+When the ServiceAccount owner exposes a builder function in `out` that chooses the cloud (such as `out.mkSecretStore` in `external-secrets`), the package cannot pass itself as `holder`. Pass `holderName` and `identityCloud` instead:
+
+```nix
+kix.cloudIdentity.ambientProblem {
+  inherit cloud;
+  holderName = "${scope.namespaceName}/${scope.instanceName}";
+  identityCloud = credentials.cloud;
+}
+```
+
+- `holderName`: `"<namespace>/<instance>"` of the ServiceAccount owner, shown in mismatch errors.
+- `identityCloud`: `"aws"`, `"gcp"`, `"azure"`, or `null` (from `credentials.cloud` on `useIdentity`).
+
+Both forms return the same `{ message, fix }` attribute set or `null`. Pass `cloud` with either `holder` or both `holderName` and `identityCloud`; any other combination fails evaluation. Inside an `out` builder, pass a non-null result to the consumer's `scope.fail` so the error points to the consumer instance.
 
 #### Choosing a helper
 

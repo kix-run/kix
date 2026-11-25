@@ -30,9 +30,11 @@
 # Dependencies:
 #   stackgresOperator (required)   the operator whose SGObjectStorage kind
 #                                  this instance uses.
-#   storageCredentials (required)  the Secret the selectors name. The keys
+#   storageCredentials             the Secret the selectors name. The keys
 #                                  it must declare depend on `type`; see
-#                                  `credentialKeys`.
+#                                  `credentialKeys`. Required unless the
+#                                  pods use their own cloud credentials
+#                                  (below), and refused when they do.
 #   endpointService (optional)     an S3 store in the cluster, as an
 #                                  instance whose root is its S3 Service.
 #                                  `s3Compatible` only. The package sets the
@@ -43,9 +45,30 @@
 #                                  alias, so wire it with
 #                                  deps.endpointService = ref.<ns>.<instance>.
 #
-# Credentials from a cloud metadata service or workload identity
-# (`useIAMRole`, `fetchCredentialsFromMetadataService`) are not modelled:
-# set them through `extraSpec`, and the package still writes the selectors.
+# Pod credentials: for `s3`, `extraSpec.s3.awsCredentials.useIAMRole =
+# true`, and for `gcs`,
+# `extraSpec.gcs.gcpCredentials.fetchCredentialsFromMetadataService = true`,
+# make wal-g in each database pod use that pod's own cloud credentials.
+# These are StackGres's own fields. The package then writes no selectors,
+# takes no `storageCredentials`, and publishes the cloud in
+# `out.ambientCloud`. StackGres has no such field for `s3Compatible` or
+# `azureBlob`, so the package refuses one there. The pods run as the
+# `<cluster>-patroni` ServiceAccount that the operator creates for each
+# SGCluster, so the cloud identity goes on each stackgres-cluster instance
+# (`deps.backupIdentity`), never on this one. Without an identity there,
+# the pods use the node's credentials.
+#
+#   backups = {
+#     package = packages.experimental.stackgres-object-storage;
+#     config = {
+#       type = "s3";
+#       bucket = "pg-backups";
+#       extraSpec.s3 = {
+#         region = "eu-west-1";
+#         awsCredentials.useIAMRole = true;
+#       };
+#     };
+#   };
 #
 # Escape hatch: `extraSpec`, merged over the SGObjectStorage spec. It reaches
 # the endpoint, region, path-style addressing, storage class, and
@@ -55,6 +78,8 @@
 #
 # `out`:
 #   out.name             the SGObjectStorage's name.
+#   out.ambientCloud     "aws" or "gcp" when the pods use their own cloud
+#                        credentials, null when they read the Secret.
 #   out.worldEgressPort  the TCP port backups reach outside the cluster: the
 #                        endpoint's port, else 80 or 443 from its scheme,
 #                        else 443. null with `endpointService`, whose
@@ -71,7 +96,9 @@
 let
   name = scope.instanceName;
 
-  # The credentials block of each type and the selectors it takes
+  # The credentials block of each type and the selectors it takes, and,
+  # for a type that has one, the field of that block that makes wal-g use
+  # the pod's own credentials and the cloud they come from
   # (crds/SGObjectStorage.yaml).
   types = {
     s3 = {
@@ -80,6 +107,10 @@ let
         "accessKeyId"
         "secretAccessKey"
       ];
+      ambient = {
+        field = "useIAMRole";
+        cloud = "aws";
+      };
     };
     s3Compatible = {
       block = "awsCredentials";
@@ -91,6 +122,10 @@ let
     gcs = {
       block = "gcpCredentials";
       selectors = [ "serviceAccountJSON" ];
+      ambient = {
+        field = "fetchCredentialsFromMetadataService";
+        cloud = "gcp";
+      };
     };
     azureBlob = {
       block = "azureCredentials";
@@ -100,6 +135,28 @@ let
       ];
     };
   };
+  ambientFields = map (t: t.ambient.field) (
+    builtins.filter (t: t ? ambient) (builtins.attrValues types)
+  );
+
+  # The ambient-credential fields that `extraSpec` sets to true in the
+  # credentials block of `config.type`.
+  ambientSet =
+    config:
+    let
+      block = config.extraSpec.${config.type}.${types.${config.type}.block} or { };
+    in
+    builtins.filter (f: (block.${f} or false) == true) ambientFields;
+
+  # The cloud whose credentials the pods use, or null when they read the
+  # Secret.
+  ambientCloudOf =
+    config:
+    let
+      t = types.${config.type};
+    in
+    if t ? ambient && builtins.elem t.ambient.field (ambientSet config) then t.ambient.cloud else null;
+
   allSelectors = lib.unique (lib.concatMap (t: t.selectors) (builtins.attrValues types)) ++ [
     "caCertificate"
   ];
@@ -142,9 +199,15 @@ in
   };
 
   assertions =
-    { config, ... }:
+    { config, deps, ... }:
     let
       problems = bucketProblems config.bucket;
+      t = types.${config.type};
+      block = "extraSpec.${config.type}.${t.block}";
+      ambient = ambientCloudOf config != null;
+      credentialsGiven = (deps.storageCredentials or null) != null;
+      unsupported = builtins.filter (f: !(t ? ambient) || f != t.ambient.field) (ambientSet config);
+      keysSet = builtins.filter (s: config.credentialKeys.${s} != null) allSelectors;
       foreign = builtins.filter (
         s:
         config.credentialKeys.${s} != null
@@ -162,6 +225,47 @@ in
         message = "credentialKeys sets ${lib.concatStringsSep ", " foreign}, which type \"${config.type}\" does not read. Remove ${
           if builtins.length foreign == 1 then "it" else "them"
         }.";
+      }
+      {
+        assertion = unsupported == [ ];
+        id = "K5962";
+        option = "extraSpec";
+        message = "`${block}` sets ${
+          lib.concatMapStringsSep " and " (f: "`${f} = true`") unsupported
+        }, which StackGres does not support here. StackGres supports pod credentials only on `s3` (`useIAMRole`) and `gcs` (`fetchCredentialsFromMetadataService`), so Kix rejected this instance.";
+        fix =
+          if t ? ambient then
+            "Replace that setting with `${block}.${t.ambient.field} = true` to use pod credentials for `type = \"${config.type}\"`, or remove it and pass a Secret in `deps.storageCredentials`."
+          else
+            "Remove that setting from `extraSpec` and pass a Secret in `deps.storageCredentials`, or change `type` to `\"s3\"` (`useIAMRole = true`) or `\"gcs\"` (`fetchCredentialsFromMetadataService = true`).";
+      }
+      {
+        assertion = !(ambient && credentialsGiven);
+        id = "K5962";
+        dependency = "storageCredentials";
+        message = "`${block}.${t.ambient.field or ""}` is `true`, which tells the database pods to use their own cloud credentials, while `storageCredentials` is also bound. StackGres uses only one credential source, so Kix rejected this instance.";
+        fix = "To use pod credentials, remove `deps.storageCredentials` (or remove the `storageCredentials` alias from the Secret instance in this namespace), and set `deps.backupIdentity` on each `stackgres-cluster` instance unless the pods use node credentials. To use the Secret instead, remove `${t.ambient.field or ""}` from `extraSpec`.";
+      }
+      {
+        assertion = ambient || credentialsGiven;
+        dependency = "storageCredentials";
+        message = "No storage credentials are configured: `deps.storageCredentials` is unset${
+          lib.optionalString (t ? ambient) ", and `${block}.${t.ambient.field}` is not `true`"
+        }, so Kix rejected this instance.";
+        fix =
+          "Pass a Secret instance in `deps.storageCredentials`"
+          +
+            lib.optionalString (t ? ambient)
+              ", or set `${block}.${t.ambient.field} = true` to use the database pods' cloud credentials (with `deps.backupIdentity` on each `stackgres-cluster` instance, or node credentials)"
+          + ".";
+      }
+      {
+        assertion = !ambient || keysSet == [ ];
+        option = "credentialKeys";
+        message = "`credentialKeys` sets ${
+          lib.concatMapStringsSep ", " (k: "`${k}`") keysSet
+        }, which maps keys in a `storageCredentials` Secret, but `${block}.${t.ambient.field or ""}` is `true` so this instance uses pod credentials instead of a Secret. Kix rejected this instance.";
+        fix = "Remove `credentialKeys` to use pod credentials, or remove `${t.ambient.field or ""}` from `extraSpec` and pass a Secret in `deps.storageCredentials`.";
       }
     ];
 
@@ -233,12 +337,14 @@ in
       self,
       config,
       stackgresOperator,
-      storageCredentials,
+      storageCredentials ? null,
       endpointService ? null,
       ...
     }:
     let
       t = types.${config.type};
+      ambientCloud = ambientCloudOf config;
+      ambient = ambientCloud != null;
       inCluster = endpointService != null;
       _inClusterType =
         if inCluster && config.type != "s3Compatible" then
@@ -250,10 +356,20 @@ in
         else
           null;
       keys = selectorKeys config;
+      # A cloud identity belongs on the instances whose pods make the call.
+      storage = kix.cloudIdentity.use {
+        inherit scope;
+        dep = storageCredentials;
+        arg = "storageCredentials";
+        cloud = null;
+        identityGoesTo = "`deps.backupIdentity` on each `stackgres-cluster` instance that backs up here, and set `${
+          t.ambient.field or "useIAMRole"
+        } = true` in `extraSpec.${config.type}.${t.block}`";
+      };
       creds = kix.contracts.secret.helpers.use {
         inherit scope;
         arg = "storageCredentials";
-        dep = storageCredentials;
+        dep = storage.secret;
         keys = builtins.attrValues keys;
       };
 
@@ -261,6 +377,10 @@ in
         inherit (config) type;
         ${config.type} = {
           inherit (config) bucket;
+        }
+        # Without a Secret or the ambient field, an assertion refuses the
+        # instance.
+        // lib.optionalAttrs (!ambient && storage.secret != null) {
           ${t.block}.secretKeySelectors = lib.mapAttrs (_: key: {
             name = creds.out.name;
             inherit key;
@@ -288,12 +408,25 @@ in
             "bucket"
           ]
         ]
-        ++ map (s: [
-          config.type
-          t.block
-          "secretKeySelectors"
-          s
-        ]) (builtins.attrNames keys)
+        # With the ambient field, StackGres requires gcs to omit the
+        # selectors and ignores them for s3.
+        ++ (
+          if ambient then
+            [
+              [
+                config.type
+                t.block
+                "secretKeySelectors"
+              ]
+            ]
+          else
+            map (s: [
+              config.type
+              t.block
+              "secretKeySelectors"
+              s
+            ]) (builtins.attrNames keys)
+        )
         ++ lib.optional inCluster [
           config.type
           "endpoint"
@@ -333,7 +466,7 @@ in
 
       root = {
         resource = self.objectStorage;
-        out = { inherit worldEgressPort; };
+        out = { inherit worldEgressPort ambientCloud; };
       };
     };
 }

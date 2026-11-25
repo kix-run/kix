@@ -19,16 +19,17 @@ let
     ns
     metricsPort
     componentLabels
-    checkCloudCredentials
+    readCloudCredentials
     ;
 
-  creds = checkCloudCredentials cloudCredentials;
+  creds = readCloudCredentials { inherit cloudCredentials config objectStorage; };
   bsl = config.backupStorageLocation;
   metricsOn = config.metrics.enabled && prometheus != null;
 
-  # A key pair in the pods' environment needs no `credential` on the
-  # locations: the AWS plugin and kopia fall back to the environment.
-  credentialSpec = lib.optionalAttrs (creds.envKeys == null) {
+  # Only the file form names a `credential` on the locations. Without one,
+  # the plugins and kopia use their SDK's default credentials: the key pair
+  # in the pods' environment, or the pod's cloud identity.
+  credentialSpec = lib.optionalAttrs creds.file {
     credential = {
       name = creds.dep.out.name;
       key = "cloud";
