@@ -385,12 +385,16 @@ mod tests {
         assert!(shared.is_empty());
     }
 
-    /// On a single Kix cluster, every stale object is an orphan.
+    /// The operator prunes a stale object of its own cluster, and never an
+    /// object that names no record, even when no other Kix cluster has records
+    /// left: that object may belong to a cluster whose records were deleted.
     #[test]
-    fn reconcile_on_a_single_cluster_is_unchanged() {
+    fn reconcile_prunes_only_objects_that_name_its_records() {
         let tenancy = Tenancy::fixture(&[record("a", "a2")], "a");
         let objects = vec![
             live("ConfigMap", "a-web", "h-web", "a2"),
+            live("ConfigMap", "a-stale", "h-stale", "a2"),
+            live("ConfigMap", "b-web", "h-b", "b1"),
             live("ConfigMap", "leftover", "h-left", "retired"),
         ];
         let sweep = inventory::scope_sweep(
@@ -399,8 +403,9 @@ mod tests {
             tenancy.clone(),
         );
         let desired = [annotated("ConfigMap", "a-web", "h-web", "")];
+        assert_eq!(sweep.unattributed.len(), 2);
         let (actions, _) = live_changes(&desired, &sweep.managed, &tenancy);
-        assert_eq!(orphans(&actions), vec!["leftover"]);
+        assert_eq!(orphans(&actions), vec!["a-stale"]);
     }
 
     fn rerun_job(hash: &str) -> Value {

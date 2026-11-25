@@ -731,7 +731,7 @@ async fn run_reconcile(
         tracing::info!(
             name,
             count = plan.unattributed(),
-            "left out Kix objects that name no Activation record; another Kix cluster deploys here",
+            "left out Kix objects that name no Activation record, because Kix cannot tell which Kix cluster they belong to",
         );
     }
     for s in plan.shared_orphans() {

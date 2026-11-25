@@ -50,8 +50,8 @@ pub struct ManagedSweep {
     /// to other Kix clusters, counted per owner (multiple owners are joined
     /// with `", "`).
     pub foreign: BTreeMap<String, usize>,
-    /// Under [`SweepScope::Cluster`], when another Kix cluster has records on
-    /// the cluster, objects that name no record of any cluster. Omitted from
+    /// Under [`SweepScope::Cluster`], objects that name no record of any Kix
+    /// cluster, so Kix cannot tell which cluster they belong to. Omitted from
     /// `managed` and `unstamped`.
     pub unattributed: Vec<DynamicObject>,
     /// Under [`SweepScope::Records`], objects of the named cluster that name
@@ -101,8 +101,7 @@ impl ManagedSweep {
             let n = self.unattributed.len();
             notes.push(format!(
                 "Skipped {n} Kix-labeled object(s) that name no deployment record on this \
-                 cluster; another Kix cluster deploys here, so Kix cannot tell which cluster \
-                 they belong to."
+                 cluster, so Kix cannot tell which Kix cluster they belong to."
             ));
         }
         notes
@@ -113,8 +112,9 @@ impl ManagedSweep {
 #[derive(Debug, Clone, Copy)]
 pub enum SweepScope<'a> {
     /// The named Kix cluster's own and shared objects, as classified by
-    /// [`attribute`]. Unattributed objects are included only when no other Kix
-    /// cluster has records on this Kubernetes cluster.
+    /// [`attribute`]. Unattributed objects go to
+    /// [`ManagedSweep::unattributed`], because an object that names no record
+    /// may belong to a Kix cluster whose records were deleted.
     Cluster(&'a str),
     /// Objects naming one of `hashes` in `kix.run/activations` (the built
     /// resources of those records of `cluster`, whether or not the records
@@ -189,7 +189,6 @@ pub fn scope_sweep(sweep: ManagedSweep, scope: SweepScope<'_>, tenancy: Tenancy)
             }
         }
         SweepScope::Cluster(_) => {
-            let shared_cluster = !tenancy.others.is_empty();
             let mut foreign: BTreeMap<String, usize> = BTreeMap::new();
             let mut unattributed = Vec::new();
             let mut keep = |objects: Vec<DynamicObject>| -> Vec<DynamicObject> {
@@ -200,8 +199,7 @@ pub fn scope_sweep(sweep: ManagedSweep, scope: SweepScope<'_>, tenancy: Tenancy)
                         Attribution::Foreign(owners) => {
                             *foreign.entry(owners.join(", ")).or_default() += 1;
                         }
-                        Attribution::Unattributed if shared_cluster => unattributed.push(obj),
-                        Attribution::Unattributed => kept.push(obj),
+                        Attribution::Unattributed => unattributed.push(obj),
                     }
                 }
                 kept
@@ -979,10 +977,11 @@ mod tests {
         assert_eq!(swept_b.foreign, BTreeMap::from([("a".to_string(), 1)]));
     }
 
-    /// When only one Kix cluster exists on the Kubernetes cluster, the scoped
-    /// sweep retains every object.
+    /// When only one Kix cluster has records on the Kubernetes cluster, the
+    /// scoped sweep keeps that cluster's objects and sets aside every object
+    /// that names no record.
     #[test]
-    fn a_single_cluster_keeps_every_object() {
+    fn a_single_cluster_sets_aside_objects_that_name_no_record() {
         let t = one_cluster();
         let sweep = partition_sweep(vec![
             obj("Deployment", "web", "a2"),
@@ -991,18 +990,39 @@ mod tests {
             swept("ConfigMap", "ns", "kubectl-applied", false, false),
         ]);
         let scoped = scope_sweep(sweep, SweepScope::Cluster("a"), t);
+        assert_eq!(sorted_names(&scoped.managed), vec!["web"]);
         assert_eq!(
-            sorted_names(&scoped.managed),
-            vec!["leftover", "never-annotated", "web"]
+            sorted_names(&scoped.unattributed),
+            vec!["kubectl-applied", "leftover", "never-annotated"]
         );
-        assert_eq!(sorted_names(&scoped.unstamped), vec!["kubectl-applied"]);
-        assert!(scoped.foreign.is_empty() && scoped.unattributed.is_empty());
-        assert!(scoped.scope_notes().is_empty());
+        assert!(scoped.foreign.is_empty() && scoped.unstamped.is_empty());
 
-        // A Kubernetes cluster with no Activation records behaves the same way.
+        // A Kubernetes cluster with no Activation records attributes nothing.
         let none = Tenancy::from_records(&[], "a");
         let scoped = scope_sweep(mixed_sweep(), SweepScope::Cluster("a"), none);
-        assert_eq!(scoped.managed.len(), 4);
+        assert!(scoped.managed.is_empty());
+        assert_eq!(scoped.unattributed.len(), 5);
+    }
+
+    /// Deleting another Kix cluster's records does not make its objects this
+    /// cluster's: they name records that are gone, so they are unattributed.
+    #[test]
+    fn objects_of_a_cluster_whose_records_are_gone_are_not_ours() {
+        let sweep = || {
+            partition_sweep(vec![
+                obj("Deployment", "a-web", "a2"),
+                obj("Deployment", "b-web", "b1"),
+                obj("ClusterRole", "shared", "a2,b1"),
+            ])
+        };
+        let both = scope_sweep(sweep(), SweepScope::Cluster("a"), two_clusters("a"));
+        assert_eq!(sorted_names(&both.managed), vec!["a-web", "shared"]);
+        assert_eq!(both.foreign, BTreeMap::from([("b".to_string(), 1)]));
+
+        let a_only = scope_sweep(sweep(), SweepScope::Cluster("a"), one_cluster());
+        assert_eq!(sorted_names(&a_only.managed), vec!["a-web", "shared"]);
+        assert_eq!(sorted_names(&a_only.unattributed), vec!["b-web"]);
+        assert!(a_only.foreign.is_empty());
     }
 
     #[test]

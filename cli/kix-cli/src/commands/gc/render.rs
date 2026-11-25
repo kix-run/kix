@@ -39,13 +39,15 @@ pub(super) fn print_unstamped(unstamped: &[GarbageEntry]) {
     );
 }
 
-/// Print objects that name no Activation record on a multi-cluster target, and
-/// state whether `--include unattributed` includes them.
+/// Print objects that name no Activation record, and state whether
+/// `--include unattributed` includes them.
 pub(super) fn print_unattributed(objects: &[kube::api::DynamicObject], included: bool) {
     println!();
     println!(
-        "{} {} Kix-labeled object(s) name no deployment record on this cluster, and \
-         another Kix cluster deploys here, so Kix cannot tell which cluster they belong to:",
+        "{} {} Kix-labeled object(s) name no deployment record on this cluster, so Kix \
+         cannot tell which Kix cluster they belong to. They may be leftovers of this \
+         cluster whose records were retired, or objects of another Kix cluster whose \
+         records were deleted:",
         output::bold("No deployment record on this cluster:"),
         objects.len(),
     );

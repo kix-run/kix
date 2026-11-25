@@ -35,8 +35,7 @@ pub struct GcArgs {
     /// comma-separated list. `unstamped`: objects that carry the Kix label
     /// but no `kix.run/identity-hash`, which Kix never applied.
     /// `unattributed`: Kix objects that name no deployment record on the
-    /// cluster; when several Kix clusters share a Kubernetes cluster, Kix
-    /// cannot tell which one owns them. `copies`: objects another program,
+    /// cluster, so Kix cannot tell which Kix cluster owns them. `copies`: objects another program,
     /// usually an operator, copied with Kix's labels and annotations from an
     /// object Kix made.
     #[arg(

@@ -33,7 +33,7 @@ kix gc <CLUSTER> [-y] [--dry-run] [--full-scan [--include unstamped,unattributed
 | `--include` value | Resources it adds |
 | --- | --- |
 | `unstamped` | Resources that carry the label but no `kix.run/identity-hash`. Kix never applied these, so by default they are only listed. |
-| `unattributed` | Resources that name no Activation record on the cluster. When another Kix cluster has records on the same Kubernetes cluster, Kix cannot tell whose these are, so by default they are only listed. |
+| `unattributed` | Resources that name no Activation record on the cluster. Kix cannot tell which Kix cluster these belong to, so by default they are only listed. |
 | `copies` | Copies. A copy carries Kix's labels and annotations, but Kix never wrote it: an operator copied them from an object Kix made, such as the data volumes it makes for a database. By default copies are only listed. |
 | `--operator` | Delete the retired Activation records only; the operator's finalizer removes their resources. |
 | `--timeout <DURATION>` | How long to wait for a deleted resource while its finalizers do not change (`5m`, `300s`, or seconds). Default `3m`. Each removed finalizer resets the timer, up to 5 minutes in total per resource. Not with `--operator`. |
@@ -68,10 +68,12 @@ records to decide whose each resource is:
   run prints how many it skipped per cluster.
 - A resource that another cluster's current build also contains is kept and
   listed as `kept ..., still deployed by Kix cluster <name>`.
-- A resource that names no record on the cluster (its records were retired,
-  or it predates the annotation) is listed under "No deployment record on this cluster" and kept
-  unless you pass `--include unattributed`. With only one Kix cluster on the
-  Kubernetes cluster, such a resource is judged like any other.
+- A resource that names no record on the cluster is listed under "No
+  deployment record on this cluster" and kept unless you pass `--include
+  unattributed`. Its records were retired, it predates the annotation, or it
+  belongs to another Kix cluster whose records were deleted. This holds with
+  only one Kix cluster on the Kubernetes cluster too, because the missing
+  records may have been another cluster's.
 
 The default mode, `kix deploy --prune`, and `kix rollback --prune` apply the same rule to
 a resource both clusters deploy: when the named cluster's build drops it and

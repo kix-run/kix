@@ -561,22 +561,36 @@ mod hard_scope_tests {
         assert_eq!(names(&garbage), vec!["web-x-guest"]);
     }
 
-    /// Verify that on a single-cluster target, objects referencing only retired
-    /// Activation records are judged as garbage without extra flags.
+    /// Verify that hard GC does not delete another Kix cluster's objects
+    /// after that cluster's records are gone. They name no record, so they are
+    /// judged only with `--include unattributed`, like a leftover of this
+    /// cluster whose records were retired.
     #[test]
-    fn hard_gc_on_a_single_cluster_is_unchanged() {
+    fn hard_gc_judges_objects_without_a_record_only_with_the_flag() {
         let tenancy = Tenancy::fixture(&[record("a", "a2")], "a");
-        let sweep = inventory::partition_sweep(vec![
-            live("ConfigMap", "a-current", Some("h-cur"), "a2"),
-            live("ConfigMap", "leftover", Some("h-left"), "retired"),
-        ]);
-        let sweep =
-            inventory::scope_sweep(sweep, inventory::SweepScope::Cluster("a"), tenancy.clone());
-        assert!(sweep.unattributed.is_empty());
+        let sweep = || {
+            inventory::scope_sweep(
+                inventory::partition_sweep(vec![
+                    live("ConfigMap", "a-current", Some("h-cur"), "a2"),
+                    live("Service", "b-web", Some("h-b"), "b1"),
+                    live("ConfigMap", "leftover", Some("h-left"), "retired"),
+                ]),
+                inventory::SweepScope::Cluster("a"),
+                tenancy.clone(),
+            )
+        };
         let expected: HashSet<String> = ["h-cur".to_string()].into();
-        let (garbage, shared) = judge_hard(&sweep.managed, &expected, &HashSet::new(), &tenancy);
-        assert_eq!(names(&garbage), vec!["leftover"]);
+
+        let scoped = sweep();
+        assert_eq!(scoped.unattributed.len(), 2);
+        let judged = judged_objects(scoped, false, false);
+        let (garbage, shared) = judge_hard(&judged, &expected, &HashSet::new(), &tenancy);
+        assert!(garbage.is_empty());
         assert!(shared.is_empty());
+
+        let judged = judged_objects(sweep(), true, false);
+        let (garbage, _) = judge_hard(&judged, &expected, &HashSet::new(), &tenancy);
+        assert_eq!(names(&garbage), vec!["b-web", "leftover"]);
     }
 }
 

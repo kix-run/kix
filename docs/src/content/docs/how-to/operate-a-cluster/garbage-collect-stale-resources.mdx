@@ -70,11 +70,14 @@ them with the expected resources in the current build.
 When one Kubernetes cluster hosts more than one Kix cluster, a full scan
 judges only the named cluster's resources. It finds them through the
 Activation records each resource names, skips the other clusters' resources,
-and keeps a resource another cluster's current build also contains. A
-resource that names no Activation record at all cannot be attributed to
-either cluster, so a full scan lists it under "No deployment record on this
-cluster" and keeps it. Review those and pass `--include unattributed` to judge
-them against the build too.
+and keeps a resource another cluster's current build also contains.
+
+A resource that names no Activation record at all cannot be attributed to any
+Kix cluster, so a full scan lists it under "No deployment record on this
+cluster" and keeps it. This happens with one Kix cluster too: a leftover
+whose records gc has since retired names no record, and neither does a
+resource of another Kix cluster whose records were deleted. Review those and
+pass `--include unattributed` to judge them against the build too.
 
 Resources carrying a Kix label but no `kix.run/identity-hash` are listed under
 "No Kix build annotation" and kept by default. Kix cannot establish that it originally applied
