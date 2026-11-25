@@ -146,16 +146,19 @@ Set `KIX_TUI_HEIGHT` to a number of rows to cap the live view of
    or `kix gc` tries again. When a package sets `controller` on `scope.mkCRD`
    or `scope.mkCRDRef`, custom resources of that kind depend on the operator,
    and `[K2794]` also names the operator and reports whether it is ready, not
-   ready, or not on the cluster. The same holds when the delete before an
-   in-place recreate does not finish, or when an object of the build was
-   already being deleted and is still there when the wait ends. In
-   `--log-format json`, the failed event carries the detail
-   `deletion_unfinished` with `elapsed_ms`, `finalizers`, `controllers` (each
-   with `resource`, `state` of `ready`, `not_ready`, `missing`, or `unread`,
-   and `detail` giving the reason), and `message`. While a pruned object is
-   being deleted, the line log prints a `waiting>` line for it every so often,
-   as it does for a slow readiness wait, and the JSON log a `waiting` event
-   with `phase` `deletion`. Most packages do not set `controller` yet, so
+   ready, or not on the cluster. `[K2794]` reports the same operator status if
+   Kix times out waiting to delete an object before recreating it in place, or
+   waiting for an object in the build that was already being deleted on the
+   cluster. In `--log-format json`, any resource that fails with `[K2794]`
+   carries `deletion_unfinished` under `detail`, with `elapsed_ms`,
+   `finalizers`, `message`, and `controllers` (each with `resource`, `state` of
+   `ready`, `not_ready`, `missing`, or `unread`, and an optional `detail`
+   reason). While `--prune` waits for a deleted object to be removed,
+   `--log-format line` periodically prints a `waiting>` line, as it does for
+   slow readiness checks, and `--log-format json` emits `waiting` events with
+   `phase` set to `deletion`.
+
+   Most packages do not set `controller` yet, so
    removing a custom resource and its operator in the same deploy can delete
    the operator before it removes the custom resource's finalizer. If cleanup is
    still running normally, such as pods with a long termination grace period or
@@ -359,10 +362,10 @@ while the plan, warnings, and confirmation text go to stderr. When the run
 reaches the deploy engine, the last JSON line is the `summary` object, with
 `succeeded` (which matches the exit status), `dry_run`, and the `created`,
 `configured`, `unchanged`, `failed`, `cancelled`, and `pruned` counts. Every
-line carries `schema_version`, the date of the last change to the log's
-format that is not backward compatible; it is `2026-11-25`, since a delete's
-`ready` event now means that the object is gone, not that Kubernetes accepted
-the delete request. A run
+line includes `schema_version` (currently `"2026-11-25"`), the date of the
+latest breaking change to the log format. For a deleted object
+(`"kind": "delete"`), Kix emits the `ready` event only after the object is
+removed from the cluster. A run
 that stops before the engine starts, such as a refused plan or a failed
 connection, writes no `summary` line; its error goes to stderr and the exit
 status is non-zero.
