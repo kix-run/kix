@@ -1,90 +1,100 @@
-# 181a: Network policy on managed clouds, the build plan
+# 181a: Build plan for network policy on managed clouds
 
-**Status:** Draft plan for `181_network_policy_on_managed_clouds.md`. Nothing is built.
-**Related:** `181_network_policy_on_managed_clouds.md` (the decisions, and the finding numbers `Fn` used below)
+**Status:** Draft implementation plan for `181_network_policy_on_managed_clouds.md`. Implementation has not started.
+**Related:** `181_network_policy_on_managed_clouds.md` (design decisions and `Fn` finding numbers cited below)
 
-## 1. Steps
+## 1. Implementation steps
 
-| # | Change | After | Record |
+| # | Change | Depends on | Change record |
 |---|---|---|---|
-| 1 | The missing-enforcer refusal stops recommending Cilium where the pod network is `exclusive`. Correct the `gke` and `k3s` flavour comments and the "Network policy" page | none | `fixed` |
-| 2 | CLI: `kix plan` stops on an unserved kind that only a CRD reference covers (F5). Prune treats an unserved kind as gone (F29) | none | `fixed` |
-| 3 | Envelope repair: `selector`, `ingress`, `egress` arguments on `mkPolicy` and `kix.operandPolicy`. Move every in-tree caller. The closed entity list. The Cilium renderer still accepts `spec`. Every cluster in `clusters/` must build identical manifests | none | `added` |
-| 4 | `out.dnsPeers` on the `dns` role, read by the Cilium renderer and the `cilium` package. Audit the eleven `all-pods` users. Existing manifests unchanged | 3 | `added` |
-| 5 | The default deny rule of decision 5 and `networkPolicy.platformNamespaces` | none | `silent`, minor release |
-| 6 | The standard renderer, `cluster.network.apiServer` and `nodeCidrs`, the refusals, `networkPolicyWidened`, the policy-kind check, the deploy comparison of the API server address. `gke` and `gke-autopilot` declare it. `k3s` and `kind` declare it once a test on each shows that the stock cluster enforces policy | 3, 4, 5 | `added` |
-| 7 | Mechanism `egress`, the `node-local` target, `networkIntents` on the identity value | 3 | `fixed` (policies on Cilium clusters with an identity gain a rule; nobody must act) |
-| 8 | `cluster.flavor.eks.networkPolicy` and the VPC CNI facts | 6, and the EKS test C | `added` |
-| 9 | Refuse the old `spec` argument with an error that names the new ones | 3, one minor later | `error`, with an id |
-| 10 | `cluster.flavor.aks.networkPolicy` | 6, and an AKS cluster | `added` |
-| 11 | The enforcement probe, if the maintainer agrees (181, section 10) | 6 | `added` |
+| 1 | Stop recommending Cilium in the missing-enforcer error when `cluster.roles.cni.binding` is `"exclusive"`. Fix the `gke` and `k3s` flavor header comments and the "Network policy" docs page. | none | `fixed` |
+| 2 | CLI: fail `kix plan` immediately when a resource's kind is unserved and the build holds only a CRD reference with no CRD manifest (F5). Treat unserved kinds as already absent during prune (F29). | none | `fixed` |
+| 3 | Repair the enforcer envelope: add `selector`, `ingress`, and `egress` arguments to `mkPolicy` and `kix.operandPolicy`, migrate all in-tree callers, and restrict `entities` on `meta.network.intents` to the fixed list. Keep `spec` working on the Cilium renderer for now. Every cluster in `clusters/` must build identical manifests. | none | `added` |
+| 4 | Add `out.dnsPeers` to the `dns` role and read it in the Cilium renderer and `cilium` package. Audit all 11 `all-pods` callers and split out explicit node or API server rules where needed. Existing manifests must stay unchanged. | 3 | `added` |
+| 5 | Skip default-deny on import-only and inactive namespaces, and add `networkPolicy.platformNamespaces` (decision 5). | none | `silent` (minor release) |
+| 6 | Implement the standard `NetworkPolicy` renderer, `cluster.network.apiServer`, `cluster.network.nodeCidrs`, unsupported-rule refusals, the `networkPolicyWidened` scorecard rule, the policy-kind validation check, and the `kix deploy` API server IP check. Enable the standard renderer in `gke` and `gke-autopilot`, plus `k3s` and `kind` once live tests confirm stock enforcement. | 3, 4, 5 | `added` |
+| 7 | Add `egress` rules on cloud identity mechanisms, the `"node-local"` intent target, and `networkIntents` on bound identity values. | 3 | `fixed` (adds egress rules on Cilium clusters using cloud identity; no user action needed) |
+| 8 | Add `cluster.flavor.eks.networkPolicy` and the verified VPC CNI behavior flags. | 6 + EKS test C | `added` |
+| 9 | Remove the legacy `spec` argument with an error naming `selector`, `ingress`, and `egress`. | 3 (next minor release) | `error` (with an id) |
+| 10 | Add `cluster.flavor.aks.networkPolicy`. | 6 + live AKS cluster | `added` |
+| 11 | Add the post-deploy enforcement probe, if approved (`181`, section 10). | 6 | `added` |
 
-Steps 1, 2, 3, and 5 can run in parallel. Steps 4 and 7 can run in parallel
-after 3. Each step carries its own docs, skill, and `architecture.md` edits.
-Steps 5 and 9 are the breaking ones. Nothing else changes what an existing
-cluster builds. Steps 1 and 2 may already be in progress from the findings
-themselves, so check before starting them.
+Steps 1, 2, 3, and 5 have no dependencies and can run in parallel; steps 4 and
+7 can run in parallel once step 3 lands. Check before starting steps 1 and 2,
+as fixes for those findings may already be underway separately. Each step
+updates its corresponding user docs, skills, and `architecture.md` in the same
+pull request.
 
-Steps 3, 4, 5, and 7 change nothing on a cloud by themselves. Their proof is
-local: every cluster in `clusters/` builds, and the Change kind check lists
-only the objects each step names. Step 6 is the first that needs a cloud.
+Only steps 5 and 9 are breaking changes; no other step changes what existing
+clusters build. Steps 3, 4, 5, and 7 can be verified locally without a cloud
+cluster: every cluster in `clusters/` must build cleanly, and the Change kind
+check must list only the expected manifest changes. Step 6 is the first step
+that requires a live cloud cluster.
 
 ## 2. Live GKE tests
 
-Step 2: repeat F3 step 2 and F29. The plan must stop in seconds, and the
-prune must finish with no failure. Steps 6 and 7, on a Dataplane V2 cluster
-with NodeLocal DNSCache:
+For step 2, repeat F3 (step 2) and F29: `kix plan` must fail within seconds,
+and prune must finish without errors. For steps 6 and 7, run these checks on a
+GKE Dataplane V2 cluster with NodeLocal DNSCache enabled:
 
-1. `kix.flavors.gke`, `networkPolicy.enable = true`, one `echo-server` in
-   `np`. `kix build` holds `NetworkPolicy np/np-default-deny`, no policy in
-   `kube-system`, and no `cilium.io` object. `kix deploy` finishes (F3, F4).
-2. In the echo pod: `nslookup kubernetes.default` answers (F20), and
-   `curl -m 5 https://example.com` times out.
-3. Add a client package that depends on the echo Service from another
-   namespace. The client gets 200. A pod with no dependency times out.
-4. Add `external-dns` with `kix.cloudIdentity.gcp { }`. Without
-   `cluster.network.apiServer.cidrs`, `kix check` refuses and names the
-   option. Set it to the control plane's internal address. Records appear in
-   Cloud DNS (F19, F21). Then set a wrong address: `kix deploy` stops before
-   applying.
-5. Add `cert-manager` and create a Certificate. Try
-   `sources = [ konnectivity-agent pods ]`, then the control plane range.
-   Report which one lets the webhook answer.
-6. Set the echo Service to `LoadBalancer`. Four requests from outside return
-   200 (F21).
-7. From a pod under egress deny, `curl -m 3 -k https://<another node>:10250`.
-   Report whether it is blocked. Add `prometheus` with `node-exporter`:
-   `kix check` refuses and names node peers.
-8. Empty the definition. `kix deploy --prune` finishes with no failure.
-9. On an Autopilot cluster, if one exists: read `/etc/resolv.conf`, repeat
-   test 2, and report which DNS peer carried it.
+1. Deploy a cluster with `kix.flavors.gke`, `networkPolicy.enable = true`, and
+   one `echo-server` instance in namespace `np`. Verify that `kix build`
+   contains `NetworkPolicy` `np/np-default-deny`, contains no policy in
+   `kube-system`, and contains no `cilium.io` resources, and that `kix deploy`
+   succeeds (F3, F4).
+2. From the `echo-server` pod, verify that `nslookup kubernetes.default`
+   resolves (F20) and `curl -m 5 https://example.com` times out.
+3. Add a client package in another namespace that depends on the `echo-server`
+   Service, plus an unconnected pod. Verify that the client gets HTTP 200 and
+   the unconnected pod times out.
+4. Add `external-dns` with `kix.cloudIdentity.gcp { }`. First leave
+   `cluster.network.apiServer.cidrs` unset and verify that `kix check` fails
+   and names that option. Set `cidrs` to the control plane's internal IP and
+   verify that DNS records appear in Cloud DNS (F19, F21). Then set `cidrs` to
+   a wrong IP and verify that `kix deploy` stops before applying anything.
+5. Add `cert-manager` and create a `Certificate`. Test `sources` first with the
+   `konnectivity-agent` pods and then with the control-plane CIDR, and record
+   which one lets the webhook answer.
+6. Set the `echo-server` Service to `LoadBalancer` and verify that four
+   external requests return HTTP 200 (F21).
+7. From a pod under default egress deny, run
+   `curl -m 3 -k https://<another node>:10250` and record whether Dataplane V2
+   blocks it. Then add `prometheus` with `node-exporter` and verify that
+   `kix check` fails and names node peers.
+8. Empty the cluster definition and verify that `kix deploy --prune` finishes
+   without errors.
+9. If a GKE Autopilot cluster is available, read `/etc/resolv.conf` inside a
+   pod, repeat test 2, and record which DNS peer matched.
 
-The first halves of tests 5 and 7 can run today with policies written for
-the test.
+The standalone policy checks in tests 5 and 7 (webhook source and node kubelet
+egress) can run immediately with explicit `NetworkPolicy` manifests before any
+Kix changes are built.
 
 ## 3. Live EKS tests
 
-Tests 2 to 9 can run today, before any step is built, with policies written
-for the test in a scratch namespace. They decide the facts step 8 puts in
-the flavour. Test 1 needs step 8. All of them need the VPC CNI add-on set to
-`enableNetworkPolicy`:
+Tests 2 through 9 can run immediately in a scratch namespace using explicit
+`NetworkPolicy` manifests before any step is built; their results determine the
+VPC CNI settings for step 8. Test 1 runs once step 8 is built. Enable
+`enableNetworkPolicy` on the VPC CNI add-on for all nine tests:
 
-1. With `cluster.flavor.eks.networkPolicy` unset, `kix check` refuses and
-   names it. With `"vpc-cni"`, repeat GKE tests 1 to 3.
-2. A Service on port 80 with pods on 8080. Allow egress on 8080 only, then on
-   80 and 8080. Report which reaches the Service by name.
-3. Allow egress to the `kubernetes` Service's cluster address only, then to
-   its endpoint addresses only. Report which reaches the API.
-4. Allow egress to `0.0.0.0/0` on one port. Report whether another pod's
-   address and a node's address on that port are reachable.
-5. `external-dns` with IRSA under default deny, with and without TCP 443 to
-   any address.
-6. The same with EKS Pod Identity, with and without a rule for
-   `169.254.170.23/32` TCP 80.
-7. The cert-manager webhook: report the source address of the API server's
-   calls.
-8. A `LoadBalancer` Service with instance targets, then IP targets: ingress
-   from `0.0.0.0/0` returns 200. Report the source address the pod sees.
-9. A Job that calls a denied address in its first second. Report whether the
-   call succeeds.
-
+1. With `cluster.flavor.eks.networkPolicy` unset, verify that `kix check` fails
+   and names `cluster.flavor.eks.networkPolicy`. Set it to `"vpc-cni"` and
+   repeat GKE tests 1 through 3.
+2. Create a Service on port 80 backed by pods on port 8080. Allow egress on TCP
+   8080 only, then on both TCP 80 and 8080, and record which rule reaches the
+   Service by DNS name.
+3. Allow egress to the `kubernetes` Service's ClusterIP only, then to its
+   endpoint IPs only, and record which rule reaches the Kubernetes API.
+4. Allow egress to `0.0.0.0/0` on a single port, and record whether another
+   pod's IP and a node's IP are reachable on that port.
+5. Test `external-dns` with IRSA under default-deny egress, both with and
+   without TCP 443 allowed to `0.0.0.0/0`.
+6. Repeat test 5 using EKS Pod Identity, with and without an egress rule
+   allowing TCP 80 to `169.254.170.23/32`.
+7. Trigger the `cert-manager` admission webhook and record the source IP of the
+   API server's requests.
+8. Expose a `LoadBalancer` Service with `instance` targets and then `ip`
+   targets, allowing ingress from `0.0.0.0/0`. Verify HTTP 200 in both modes
+   and record the source IP seen by the pod.
+9. Run a `Job` that calls a denied IP within its first second of startup, and
+   record whether the connection succeeds before policies load.
