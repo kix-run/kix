@@ -27,7 +27,6 @@ kix.buildCluster {
     {
       instances.stackgres-system.stackgres-operator.package = packages.experimental.stackgres-operator;
 
-      # region:stackgresIrsaInstances
       instances.orders = {
         backups = {
           package = packages.experimental.stackgres-object-storage;
@@ -48,7 +47,6 @@ kix.buildCluster {
           };
           config.backups = [ { path = "orders"; } ];
         };
-        # endregion:stackgresIrsaInstances
 
         billing = {
           package = packages.experimental.stackgres-cluster;
