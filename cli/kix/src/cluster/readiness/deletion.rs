@@ -402,9 +402,7 @@ pub fn stuck_explanation(path: DeletePath) -> String {
             ),
         ),
         DeletePath::Gc => (
-            "Run `kix gc` again later (Kix waits up to 3 minutes without a finalizer being \
-             removed, or 5 minutes in total for each object)."
-                .to_string(),
+            cli_retry.to_string(),
             format!(
                 "{recorded} the next `kix gc` will delete them once the objects above are gone."
             ),
@@ -939,7 +937,7 @@ mod tests {
             assert!(!text.contains("--timeout"), "{path:?}: {text}");
             assert!(!text.contains("same command"), "{path:?}: {text}");
         }
-        assert!(!stuck_explanation(DeletePath::Gc).contains("--timeout"));
+        assert!(stuck_explanation(DeletePath::Gc).contains("`--timeout`"));
         let recreate = stuck_explanation(DeletePath::Recreate(Runner::Cli));
         assert!(
             recreate.contains("has not created the new object"),

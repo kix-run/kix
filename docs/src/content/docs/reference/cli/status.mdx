@@ -53,13 +53,33 @@ current deploy is the cluster's `Active` or `Degraded`
 | --- | --- | --- |
 | `presence` | Is the object on the cluster? | It is gone, for example after a `kubectl delete`. |
 | `drift` | Does the object still hold what Kix applied? | The fields Kix owns no longer hash to the object's `kix.run/applied-hash` stamp. |
-| `readiness` | Is the object ready? | It is not ready by the rules [`kix deploy`](/docs/reference/cli/deploy/) waits on, such as a Deployment with fewer ready replicas than it wants. An object that is being deleted is never ready, regardless of kind, and the reason names any finalizers holding up deletion. |
+| `readiness` | Is the object ready? | It is not ready by the rules [`kix deploy`](/docs/reference/cli/deploy/) waits on, such as a Deployment with fewer ready replicas than it wants. |
 
-`kix status` checks only the objects listed in the current deploy record. It never reports extra objects on the cluster, whether orphaned from an earlier deploy or created outside Kix. See [Objects Kix did not apply](/docs/reference/cli/diff/#objects-kix-did-not-apply).
+`kix status` checks only the objects listed in the current deploy record, with
+one exception: it also lists the objects of the cluster that left the build
+and are still being deleted (see below). It never reports other extra objects
+on the cluster, whether orphaned from an earlier deploy or created outside
+Kix. See [Objects Kix did not apply](/docs/reference/cli/diff/#objects-kix-did-not-apply).
 
 A missing object is a problem under every check, because no check can run on
 an object that is gone. `kix status --check drift` and
 `kix status --check readiness` therefore also report missing objects.
+
+## Objects being deleted
+
+An object with a `metadata.deletionTimestamp` stays on the cluster until every
+finalizer on it is removed, usually by the controller that added it. Such an
+object of the current deploy reports the problem `deleting` under every check,
+in place of `changed` or `not_ready`, because it is present now and will soon
+be missing. Its line names when deletion started and the finalizers that hold
+it. The next `kix deploy` waits until it is gone, then creates it again.
+
+An object that left the build, for example one a `kix deploy --prune` deleted,
+and is still being deleted is listed after the packages under
+`Left the build, still being deleted`. The summary line adds how many there
+are, and each counts as a problem. `--package` lists only the objects of that
+package. Orphans that a deploy without `--prune` kept, and that nobody is
+deleting, are not listed.
 
 The drift check hashes only the fields Kix owns through server-side apply. A
 field Kix never set, such as one a controller adds, does not count. A change
@@ -80,8 +100,9 @@ The text output has four parts:
    counts of its problems. Objects that no package owns, such as Namespaces
    and CustomResourceDefinitions, are listed under `(cluster-level)`.
 2. The objects with a problem, grouped by package.
-3. A summary line with the counts.
-4. When an object is missing or changed, a `Next:` line that names
+3. The objects that left the build and are still being deleted, if any.
+4. A summary line with the counts.
+5. When an object is missing or changed, a `Next:` line that names
    `kix deploy <cluster> --reconcile`, which puts it back, and
    `kix plan <cluster> --reconcile`, which shows what that deploy would change
    first. A deploy without `--reconcile` skips objects whose build did not
@@ -189,7 +210,8 @@ fields and values they do not know.
 | `clusters[].objects_from` | Where Kix found the deploy's objects: `index` (the record's package index), `depends_on` (the live objects' `kix.run/depends-on` annotations), or `unknown` (nowhere; no object was checked). |
 | `clusters[].notes` | Warnings about the cluster, such as a platform interface that changed. |
 | `clusters[].packages[]` | One entry for each package, with `name` (`namespace/instance`, or `null` for the cluster-level objects), `summary`, and `resources`. |
-| `summary` | Counts over every cluster: `resources`, `ok`, `missing`, `changed`, `not_ready`, and `not_checked`. Each cluster and package has the same object. `ok` counts only the objects that every selected check passed. An object with two problems counts under both. |
+| `clusters[].leaving[]` | The objects of the cluster that left the build and are still being deleted, each with `kind`, `group` (omitted for core `v1` kinds), `namespace`, `name`, `package`, `deleting_since` (`metadata.deletionTimestamp`), and `finalizers`. |
+| `summary` | Counts over every cluster: `resources`, `ok`, `missing`, `changed`, `not_ready`, `deleting`, `leaving` (objects in `leaving[]`, not counted in `resources`), and `not_checked`. Each cluster and package has the same object. `ok` counts only the objects that every selected check passed. An object with two problems counts under both. |
 
 Each entry of `resources[]`:
 
@@ -204,7 +226,8 @@ Each entry of `resources[]`:
 | `ready` | `true` or `false` (always `false` while an object is being deleted). `null` when the readiness check did not run, the object is gone, or its kind has no readiness check (such as a ConfigMap) and it is not being deleted. |
 | `not_ready_reason` | Why the object is not ready, such as `0/1 ready, 0/1 updated`. |
 | `needed_by` | For a missing object, the objects that depend on it, as `Kind.group namespace/name` (or `Kind namespace/name` for core `v1` kinds). |
-| `problems` | `missing`, `changed`, and `not_ready`. Empty when the object is fine. |
+| `deleting_since`, `finalizers` | For an object being deleted, `metadata.deletionTimestamp` and the finalizers that hold it. Omitted otherwise. |
+| `problems` | `missing`, `changed`, `not_ready`, and `deleting`. Empty when the object is fine. |
 | `not_checked` | Whether a selected check could not run on the object. |
 
 ## Examples
@@ -222,7 +245,7 @@ Each entry of `resources[]`:
 | --- | --- |
 | `0` | Every selected check passed. Objects that were not checked do not count. |
 | `1` | Kix could not answer: no connection to the cluster, no current deploy for the named cluster, no Kix cluster deployed on the Kubernetes cluster, a `--package` that matches no package, or a record that lists no objects and whose own object is gone. |
-| `2` | An object is missing, changed, or not ready. |
+| `2` | An object is missing, changed, not ready, or being deleted, or an object that left the build is still being deleted. |
 
 A command line Kix cannot use exits `1`, including `kix health`, `kix drift`,
 and `kix status --operator`, which 0.10 removed. So `2` always means that

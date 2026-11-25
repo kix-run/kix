@@ -2,7 +2,9 @@ use super::*;
 use crate::cli::StatusCheck;
 use document::{Kubernetes, Problem, build, selected};
 use kix::cluster::drift::{DriftVerdict, ForeignOwner};
-use kix::cluster::observe::{ClusterView, ExpectedFrom, ObjectView, Presence, Readiness};
+use kix::cluster::observe::{
+    ClusterView, Deleting, ExpectedFrom, Leaving, ObjectView, Presence, Readiness,
+};
 use kix::manifest::types::ResourceId;
 
 fn pinned(sha256: &str) -> PinnedInterface {
@@ -147,6 +149,7 @@ fn object(
         presence,
         content: present.then_some(DriftVerdict::InSync),
         readiness: Readiness::NotApplicable,
+        deleting: None,
         depends_on: vec![],
     }
 }
@@ -250,6 +253,7 @@ fn shop() -> Observation {
             },
             expected_from: ExpectedFrom::Index,
             objects,
+            leaving: vec![],
         }],
         unreadable: vec!["secrets".into()],
     }
@@ -510,4 +514,131 @@ fn the_text_output() {
 fn the_json_output() {
     let doc = document(&[], Some("vaultwarden"));
     insta::assert_snapshot!("status_json", serde_json::to_string_pretty(&doc).unwrap());
+}
+
+fn deleting(finalizer: &str) -> Deleting {
+    Deleting {
+        since: "2026-11-24T15:54:00Z".into(),
+        finalizers: vec![finalizer.into()],
+    }
+}
+
+/// An object of the build that is being deleted reports `deleting` under
+/// every check, in place of `changed` and `not_ready`, and exits 2. The
+/// other objects read as before.
+#[test]
+fn an_object_being_deleted_is_its_own_problem() {
+    let mut seen = shop();
+    for o in &mut seen.clusters[0].objects {
+        if o.rid.name == "pg-config" {
+            o.deleting = Some(deleting("example.com/hold"));
+            o.readiness = Readiness::NotReady("being deleted, waiting for example.com/hold".into());
+        }
+    }
+    for checks in [&[][..], &[StatusCheck::Presence], &[StatusCheck::Drift]] {
+        let doc = build(
+            &seen,
+            kubernetes(),
+            &BTreeMap::new(),
+            &selected(checks),
+            None,
+        )
+        .unwrap();
+        let config = doc.clusters[0]
+            .packages
+            .iter()
+            .flat_map(|p| &p.resources)
+            .find(|r| r.name == "pg-config")
+            .unwrap();
+        assert_eq!(config.problems, [Problem::Deleting], "{checks:?}");
+        assert_eq!(config.finalizers, ["example.com/hold"]);
+        assert_eq!(
+            config.deleting_since.as_deref(),
+            Some("2026-11-24T15:54:00Z")
+        );
+        assert_eq!(doc.summary.deleting, 1);
+        assert_eq!(doc.summary.changed, 0, "{checks:?}");
+        assert_eq!(doc.exit(), Exit::StatusFoundProblem);
+    }
+    let doc = build(&seen, kubernetes(), &BTreeMap::new(), &selected(&[]), None).unwrap();
+    assert_eq!(
+        doc.summary.not_ready, 1,
+        "the Deployment is still not ready"
+    );
+    let text = text::render(&doc, text::Detail::Problems, &two_days_ago);
+    assert!(
+        text.contains(
+            "being deleted, started 2d0h ago, waiting for example.com/hold. The next deploy \
+             creates it again once it is gone."
+        ),
+        "{text}"
+    );
+
+    let unchanged = document(&[], None);
+    assert_eq!(unchanged.summary.deleting, 0);
+    assert!(unchanged.clusters[0].leaving.is_empty());
+}
+
+/// An object that left the build and is still being deleted is listed
+/// apart from the build's objects, counts as a problem, and follows
+/// `--package`.
+#[test]
+fn an_object_that_left_the_build_and_is_being_deleted_is_listed() {
+    let mut seen = shop();
+    seen.clusters[0].leaving = vec![Leaving {
+        rid: ResourceId::new("keda.sh", "ScaledObject", "db", "worker"),
+        package: Some("db/postgres".into()),
+        deleting: deleting("finalizer.keda.sh"),
+    }];
+    let doc = build(&seen, kubernetes(), &BTreeMap::new(), &selected(&[]), None).unwrap();
+    assert_eq!(doc.summary.leaving, 1);
+    assert_eq!(
+        doc.summary.resources, 8,
+        "not counted as a resource of the build"
+    );
+    let leaving = &doc.clusters[0].leaving[0];
+    assert_eq!(
+        (
+            leaving.group.as_str(),
+            leaving.kind.as_str(),
+            leaving.name.as_str()
+        ),
+        ("keda.sh", "ScaledObject", "worker")
+    );
+    assert_eq!(leaving.finalizers, ["finalizer.keda.sh"]);
+    let text = text::render(&doc, text::Detail::Packages, &two_days_ago);
+    assert!(
+        text.contains(
+            "Left the build, still being deleted\n  ScaledObject.keda.sh db/worker  being \
+             deleted, started 2d0h ago, waiting for finalizer.keda.sh"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("1 object that left the build is still being deleted."),
+        "{text}"
+    );
+
+    // Only the package's own objects are listed.
+    let one = build(
+        &seen,
+        kubernetes(),
+        &BTreeMap::new(),
+        &selected(&[]),
+        Some("postgres"),
+    )
+    .unwrap();
+    assert_eq!(one.summary.leaving, 1);
+    assert_eq!(one.exit(), Exit::StatusFoundProblem);
+    let other = build(
+        &seen,
+        kubernetes(),
+        &BTreeMap::new(),
+        &selected(&[]),
+        Some("ingress-nginx"),
+    )
+    .unwrap();
+    assert_eq!(other.summary.leaving, 0);
+    assert!(other.clusters[0].leaving.is_empty());
+    assert_eq!(other.exit(), Exit::Success);
 }

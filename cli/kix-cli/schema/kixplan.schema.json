@@ -1295,8 +1295,69 @@
       ],
       "type": "object"
     },
+    "PruneController": {
+      "description": "A controller of an object the prune deletes, and what the plan found when\nit read it.",
+      "properties": {
+        "detail": {
+          "description": "Why it is not ready, or why Kix could not read it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "resource": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/PruneControllerState"
+        }
+      },
+      "required": [
+        "resource",
+        "state"
+      ],
+      "type": "object"
+    },
+    "PruneControllerState": {
+      "oneOf": [
+        {
+          "const": "ready",
+          "description": "Ready, with at least one ready pod.",
+          "type": "string"
+        },
+        {
+          "const": "not_ready",
+          "description": "On the cluster and not ready, or scaled to no ready pod.",
+          "type": "string"
+        },
+        {
+          "const": "missing",
+          "description": "Not on the cluster.",
+          "type": "string"
+        },
+        {
+          "const": "unread",
+          "description": "Kix could not read it.",
+          "type": "string"
+        }
+      ]
+    },
     "PruneEntry": {
       "properties": {
+        "controllers": {
+          "description": "The workloads that the object's kind names as its controller\n(`controller` on `scope.mkCRD`), which remove its finalizers. Listed\nonly when the delete waits for a finalizer.",
+          "items": {
+            "$ref": "#/$defs/PruneController"
+          },
+          "type": "array"
+        },
+        "deleting_since": {
+          "description": "The object's `metadata.deletionTimestamp` when it is already being\ndeleted. The deploy does not delete it again, and waits for it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "detail": {
           "type": [
             "string",
@@ -1305,6 +1366,13 @@
         },
         "fate": {
           "$ref": "#/$defs/PruneFate"
+        },
+        "finalizers": {
+          "description": "The finalizers on the object, which a delete waits for. Absent when\nthe object has none or the plan did not read it.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "resource": {
           "type": "string"

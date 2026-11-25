@@ -61,6 +61,44 @@ pub struct ClusterView {
     /// Every object the current deploy should have, once, in the order of the
     /// record's index.
     pub objects: Vec<ObjectView>,
+    /// Objects of this Kix cluster that are not in the current deploy and are
+    /// being deleted, sorted by id. A prune deleted them, or someone did, and
+    /// a finalizer or a slow shutdown still holds them.
+    pub leaving: Vec<Leaving>,
+}
+
+/// An object of a Kix cluster that left its build and is still being
+/// deleted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Leaving {
+    pub rid: ResourceId,
+    /// The package the object belonged to, keyed `namespace/instance`, or
+    /// `None` for a cluster-level object.
+    pub package: Option<String>,
+    pub deleting: Deleting,
+}
+
+/// An object's deletion that has not finished.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Deleting {
+    /// The object's `metadata.deletionTimestamp` (RFC 3339).
+    pub since: String,
+    /// The finalizers that still hold it.
+    pub finalizers: Vec<String>,
+}
+
+impl Deleting {
+    /// Return the deletion of `obj`, or `None` when it is not being deleted.
+    pub fn of(obj: &DynamicObject) -> Option<Deleting> {
+        let since = obj.metadata.deletion_timestamp.as_ref()?;
+        Some(Deleting {
+            since: serde_json::to_value(since)
+                .ok()
+                .and_then(|t| t.as_str().map(str::to_string))
+                .unwrap_or_default(),
+            finalizers: readiness::finalizers_of(obj),
+        })
+    }
 }
 
 /// Where [`ClusterView::objects`] came from.
@@ -93,6 +131,9 @@ pub struct ObjectView {
     /// cluster.
     pub content: Option<DriftVerdict>,
     pub readiness: Readiness,
+    /// The object's deletion when it is being deleted. Its readiness is then
+    /// [`Readiness::NotReady`].
+    pub deleting: Option<Deleting>,
     /// Identity hashes of the deploy's objects that this object depends on,
     /// from its live `kix.run/depends-on`.
     pub depends_on: Vec<String>,
@@ -198,9 +239,11 @@ pub async fn observe(
     let clusters = current
         .into_iter()
         .map(|(cluster, record)| {
-            view(cluster, record, &live, &apis, |hashes| {
+            let mut view = view(cluster, record, &live, &apis, |hashes| {
                 store_graph::lookup_hashes(hashes.iter().copied())
-            })
+            });
+            view.leaving = leaving(&view, &sweep.managed, |obj| sweep.tenancy.owners_of(obj));
+            view
         })
         .collect();
     Ok(Observation {
@@ -394,6 +437,7 @@ fn view(
                     .contains(&(rid.group.clone(), rid.kind.clone())),
                 None => !apis.unreadable.is_empty(),
             };
+            let deleting = obj.and_then(Deleting::of);
             let (presence, content, readiness, depends_on) = match obj {
                 Some(obj) => {
                     let marker = lifecycle_of_live(obj) == Lifecycle::Marker;
@@ -431,6 +475,7 @@ fn view(
                 presence,
                 content,
                 readiness,
+                deleting,
                 depends_on,
             }
         })
@@ -441,7 +486,38 @@ fn view(
         record,
         expected_from,
         objects,
+        leaving: Vec::new(),
     }
+}
+
+/// Return the objects of `live` that belong to `view`'s Kix cluster, are not
+/// among the objects of its current deploy, and are being deleted. `owners`
+/// names the Kix clusters an object belongs to.
+fn leaving(
+    view: &ClusterView,
+    live: &[DynamicObject],
+    owners: impl Fn(&DynamicObject) -> Vec<String>,
+) -> Vec<Leaving> {
+    let hashes: HashSet<&str> = view
+        .objects
+        .iter()
+        .map(|o| o.identity_hash.as_str())
+        .collect();
+    let rids: HashSet<&ResourceId> = view.objects.iter().map(|o| &o.rid).collect();
+    let mut out: Vec<Leaving> = live
+        .iter()
+        .filter(|obj| !annotation(obj, keys::IDENTITY_HASH).is_some_and(|h| hashes.contains(h)))
+        .filter(|obj| !rids.contains(&drift::resource_id(obj)))
+        .filter_map(|obj| Some((obj, Deleting::of(obj)?)))
+        .filter(|(obj, _)| owners(obj).contains(&view.cluster))
+        .map(|(obj, deleting)| Leaving {
+            rid: drift::resource_id(obj),
+            package: package_of(obj),
+            deleting,
+        })
+        .collect();
+    out.sort_by(|a, b| a.rid.cmp(&b.rid));
+    out
 }
 
 /// Follow `kix.run/depends-on` from the live object with identity hash

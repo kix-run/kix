@@ -164,6 +164,7 @@ kix gc --yes -y
 kix gc --dry-run
 kix gc --full-scan
 kix gc --operator
+kix gc --timeout <value>
 kix gc --include <value> [unstamped|unattributed|copies]
 kix gc --keep <value>
 kix gc --keep-max <value>

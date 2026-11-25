@@ -9,6 +9,13 @@
         "deploy": {
           "$ref": "#/$defs/Deploy"
         },
+        "leaving": {
+          "description": "Objects of this cluster that left its build and are still being\ndeleted, because a finalizer or a slow shutdown holds them.",
+          "items": {
+            "$ref": "#/$defs/LeavingStatus"
+          },
+          "type": "array"
+        },
         "notes": {
           "description": "Warnings about the cluster, such as a platform interface that\nchanged.",
           "items": {
@@ -36,6 +43,7 @@
         "objects_from",
         "notes",
         "packages",
+        "leaving",
         "summary"
       ],
       "type": "object"
@@ -162,6 +170,55 @@
         "context",
         "uid",
         "version"
+      ],
+      "type": "object"
+    },
+    "LeavingStatus": {
+      "description": "An object that left the build and is still being deleted.",
+      "properties": {
+        "deleting_since": {
+          "description": "When the delete started (RFC 3339).",
+          "type": "string"
+        },
+        "finalizers": {
+          "description": "The finalizers that still hold it.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "group": {
+          "description": "The kind's API group. Left out for the core group.",
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "namespace": {
+          "description": "`null` for a cluster-scoped object.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "package": {
+          "description": "`namespace/instance` of the package it belonged to, or `null`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "namespace",
+        "name",
+        "package",
+        "deleting_since",
+        "finalizers"
       ],
       "type": "object"
     },
@@ -302,12 +359,24 @@
           "const": "changed",
           "description": "The object no longer holds what Kix applied.",
           "type": "string"
+        },
+        {
+          "const": "deleting",
+          "description": "The object is being deleted, so it will soon be missing. Every check\nreports it, in place of `changed` or `not_ready`. The next deploy\nwaits until it is gone, then creates it again.",
+          "type": "string"
         }
       ]
     },
     "ResourceStatus": {
       "description": "One object of the deploy.",
       "properties": {
+        "deleting_since": {
+          "description": "When the object's delete started (RFC 3339), when it is being\ndeleted.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "drift": {
           "anyOf": [
             {
@@ -318,6 +387,13 @@
             }
           ],
           "description": "The drift check, or `null` when it did not run or the object is not\non the cluster."
+        },
+        "finalizers": {
+          "description": "The finalizers that hold an object being deleted.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "group": {
           "description": "The kind's API group. Left out for the core group.",
@@ -489,6 +565,18 @@
           "minimum": 0,
           "type": "integer"
         },
+        "deleting": {
+          "description": "Objects of the build being deleted.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "leaving": {
+          "description": "Objects that left the build and are still being deleted. They are\nnot counted in `resources`.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
         "missing": {
           "format": "uint",
           "minimum": 0,
@@ -522,6 +610,8 @@
         "missing",
         "changed",
         "not_ready",
+        "deleting",
+        "leaving",
         "not_checked"
       ],
       "type": "object"

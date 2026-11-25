@@ -14,7 +14,9 @@ use crate::manifest::types::ResourceId;
 use super::super::apply::{ApplyAction, ApplyError, ApplyResult};
 use super::super::cancel::CancelToken;
 use super::super::errors::FetchError;
-use super::super::preview::{DryRunAnswer, DryRunOutcome, Journal, PruneAnswer, Refusal};
+use super::super::preview::{
+    DeleteWait, DryRunAnswer, DryRunOutcome, Journal, PruneAnswer, Refusal,
+};
 use super::super::prune_guard::Pruned;
 use super::super::readiness::{Deletion, ImportTarget, ReadinessError, ReadinessResult};
 use super::super::secrets::{HydrationResult, SecretError};
@@ -199,9 +201,18 @@ impl ResourceIo for DryRun {
     async fn prune(&self, rid: &ResourceId) -> Result<Pruned, DeleteError> {
         let deleted = self.resources.prune(rid).await;
         let answer = match &deleted {
-            Ok(Pruned::Deleted { .. } | Pruned::AlreadyDeleting { .. } | Pruned::Gone) => {
-                PruneAnswer::Deleted
-            }
+            Ok(Pruned::Deleted { finalizers, .. }) => PruneAnswer::Deleted(DeleteWait {
+                finalizers: finalizers.clone(),
+                ..DeleteWait::default()
+            }),
+            Ok(Pruned::AlreadyDeleting {
+                finalizers, since, ..
+            }) => PruneAnswer::Deleted(DeleteWait {
+                finalizers: finalizers.clone(),
+                deleting_since: since.clone(),
+                ..DeleteWait::default()
+            }),
+            Ok(Pruned::Gone) => PruneAnswer::Deleted(DeleteWait::default()),
             Ok(Pruned::Kept(shared)) => PruneAnswer::KeptShared(shared.describe()),
             Ok(Pruned::Changed(_)) => PruneAnswer::KeptChanged,
             // Skip recording an answer when the delete never reached the
@@ -363,7 +374,7 @@ mod tests {
         assert_eq!(answers.len(), 1);
         assert!(matches!(
             &answers[0].outcome,
-            DryRunOutcome::Pruned(PruneAnswer::Deleted)
+            DryRunOutcome::Pruned(PruneAnswer::Deleted(_))
         ));
     }
 }

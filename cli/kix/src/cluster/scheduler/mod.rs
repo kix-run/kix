@@ -57,9 +57,10 @@ use super::watchdog::{self, Progress, StallPolicy};
 #[cfg(test)]
 use super::{apply::ChangeAction, graph::ResourceGraph};
 
+pub(crate) use node::prune_order;
 #[cfg(test)]
 use node::recreate_refusal;
-use node::{NodeCtx, NodeOutcome, execute_node, prune_order, with_sentence};
+use node::{NodeCtx, NodeOutcome, execute_node, with_sentence};
 use plan::{SchedulerState, is_crd_like, runs_task};
 
 pub use plan::{DeployPlan, LastRuns, PlanNodeEntry};
@@ -1398,21 +1399,7 @@ async fn wait_gone(
         Ok(Deletion::Gone) => Ok(()),
         Ok(Deletion::Stuck(mut stuck)) => {
             for id in controllers {
-                let live = tokio::time::timeout(INLINE_BEST_EFFORT_TIMEOUT, resources.get_live(id))
-                    .await
-                    .map_err(|_| {
-                        format!("no answer within {}s", INLINE_BEST_EFFORT_TIMEOUT.as_secs())
-                    })
-                    .and_then(|read| read.map_err(|e| e.to_string()))
-                    .and_then(|live| {
-                        live.map(serde_json::from_value::<kube::api::DynamicObject>)
-                            .transpose()
-                            .map_err(|e| e.to_string())
-                    });
-                stuck.controllers.push(readiness::Controller {
-                    id: id.clone(),
-                    state: readiness::controller_state(id, live),
-                });
+                stuck.controllers.push(read_controller(resources, id).await);
             }
             Err(Unfinished::Stuck(readiness::stuck_message(rid, &stuck)))
         }
@@ -1420,6 +1407,26 @@ async fn wait_gone(
         Err(e) => Err(Unfinished::Failed(format!(
             "Kix deleted {rid}, then could not read it to confirm that it is gone, so the delete failed: {e}"
         ))),
+    }
+}
+
+/// Read the controller `id` through `resources` and return what Kix found.
+pub(crate) async fn read_controller(
+    resources: &dyn ResourceIo,
+    id: &ResourceId,
+) -> readiness::Controller {
+    let live = tokio::time::timeout(INLINE_BEST_EFFORT_TIMEOUT, resources.get_live(id))
+        .await
+        .map_err(|_| format!("no answer within {}s", INLINE_BEST_EFFORT_TIMEOUT.as_secs()))
+        .and_then(|read| read.map_err(|e| e.to_string()))
+        .and_then(|live| {
+            live.map(serde_json::from_value::<kube::api::DynamicObject>)
+                .transpose()
+                .map_err(|e| e.to_string())
+        });
+    readiness::Controller {
+        id: id.clone(),
+        state: readiness::controller_state(id, live),
     }
 }
 

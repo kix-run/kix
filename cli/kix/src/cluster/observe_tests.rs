@@ -188,6 +188,63 @@ async fn an_object_being_deleted_is_not_ready() {
         config.readiness,
         Readiness::NotReady("being deleted, waiting for example.com/hold".into())
     );
+    assert_eq!(
+        config.deleting,
+        Some(Deleting {
+            since: "2026-11-24T15:54:00Z".into(),
+            finalizers: vec!["example.com/hold".into()],
+        })
+    );
+    assert_eq!(by_name(&seen.clusters[0], "web-extra").deleting, None);
+    assert!(seen.clusters[0].leaving.is_empty());
+}
+
+/// An object of this Kix cluster that left the build and is being deleted
+/// is listed as leaving. One that is not being deleted, and one of another
+/// Kix cluster, are not.
+#[tokio::test]
+async fn an_object_that_left_the_build_and_is_being_deleted_is_leaving() {
+    let index = index(true);
+    let mut objects = live_objects();
+    objects.push(record(Some(&index), ""));
+    let mut gone = object("v1", "ConfigMap", "web", "old-config", 'o', &[], true);
+    gone["metadata"]["deletionTimestamp"] = json!("2026-11-24T15:54:00Z");
+    gone["metadata"]["finalizers"] = json!(["example.com/hold"]);
+    objects.push(gone);
+    objects.push(object(
+        "v1",
+        "ConfigMap",
+        "web",
+        "kept-orphan",
+        'k',
+        &[],
+        true,
+    ));
+    let mut other = object("v1", "ConfigMap", "web", "other-config", 'x', &[], true);
+    other["metadata"]["annotations"][keys::ACTIVATIONS] = json!(h('y'));
+    other["metadata"]["deletionTimestamp"] = json!("2026-11-24T15:54:00Z");
+    other["metadata"]["finalizers"] = json!(["example.com/hold"]);
+    objects.push(other);
+    let mut other_record = record(None, "");
+    other_record["metadata"]["name"] = json!("lab-yyyyyyyyyyyy");
+    other_record["metadata"]["labels"][keys::CLUSTER_LABEL] = json!("lab");
+    other_record["metadata"]["annotations"][keys::IDENTITY_HASH] = json!(h('y'));
+    objects.push(other_record);
+    let api = FakeApi::new(objects);
+
+    let seen = observe_fake(&api, ObserveScope::Cluster("shop")).await;
+
+    assert_eq!(
+        seen.clusters[0].leaving,
+        vec![Leaving {
+            rid: ResourceId::new("", "ConfigMap", "web", "old-config"),
+            package: Some("web/web".into()),
+            deleting: Deleting {
+                since: "2026-11-24T15:54:00Z".into(),
+                finalizers: vec!["example.com/hold".into()],
+            },
+        }]
+    );
 }
 
 /// One read gives each object its three facts: the Secret is missing, one

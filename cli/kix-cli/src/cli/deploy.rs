@@ -149,7 +149,7 @@ fn parse_record_annotation(s: &str) -> Result<(String, String), String> {
     Ok((key.to_string(), value.to_string()))
 }
 
-fn validate_timeout(s: &str) -> Result<String, String> {
+pub(crate) fn validate_timeout(s: &str) -> Result<String, String> {
     let err = || format!("invalid timeout: '{s}'. Use '5m', '300s', or a number of seconds");
     let s = s.trim();
     if let Some(n) = s.strip_suffix('m') {

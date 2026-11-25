@@ -960,7 +960,7 @@ pub(super) fn stop_advice(doc: &Plan, command: Command) -> Vec<String> {
     lines
 }
 
-pub(super) fn parse_timeout(s: Option<&str>) -> Result<Duration> {
+pub(crate) fn parse_timeout(s: Option<&str>) -> Result<Duration> {
     let Some(s) = s else {
         return Ok(readiness::DEFAULT_TIMEOUT);
     };

@@ -3,8 +3,8 @@
 use std::fmt::Write;
 
 use super::document::{
-    ClusterStatus, Drift, DriftState, ObjectsFrom, PackageStatus, Present, Problem, ResourceStatus,
-    StatusDocument, Summary,
+    ClusterStatus, Drift, DriftState, LeavingStatus, ObjectsFrom, PackageStatus, Present, Problem,
+    ResourceStatus, StatusDocument, Summary,
 };
 use crate::output;
 
@@ -142,9 +142,31 @@ fn render_cluster(
                     out,
                     "  {:<width$}  {}",
                     resource_label(r),
-                    resource_state(r)
+                    resource_state(r, age)
                 );
             }
+        }
+    }
+
+    if !c.leaving.is_empty() {
+        let width = c
+            .leaving
+            .iter()
+            .map(|l| leaving_label(l).chars().count())
+            .max()
+            .unwrap_or(0);
+        let mut title = "Left the build, still being deleted".to_string();
+        if detail == Detail::Problems && doc.clusters.len() > 1 {
+            title = format!("{} {title}", c.cluster);
+        }
+        let _ = writeln!(out, "\n{}", output::bold(&title));
+        for l in &c.leaving {
+            let _ = writeln!(
+                out,
+                "  {:<width$}  {}",
+                leaving_label(l),
+                output::red(&deletion_state(&l.deleting_since, &l.finalizers, age)),
+            );
         }
     }
 
@@ -153,6 +175,13 @@ fn render_cluster(
         let s = &c.summary;
         if s.missing + s.changed > 0 {
             let _ = writeln!(out, "{}", next_step(c));
+        }
+        if s.deleting + s.leaving > 0 {
+            let _ = writeln!(
+                out,
+                "An object being deleted stays until each finalizer on it is removed, usually by \
+                 the controller that added it. Check that the controller is running."
+            );
         }
     }
     for note in &c.notes {
@@ -255,6 +284,9 @@ fn problem_counts(s: &Summary) -> Vec<String> {
     if s.missing > 0 {
         parts.push(format!("{} missing", s.missing));
     }
+    if s.deleting > 0 {
+        parts.push(format!("{} being deleted", s.deleting));
+    }
     parts
 }
 
@@ -266,7 +298,7 @@ fn summary_line(s: &Summary) -> String {
     if s.not_checked > 0 {
         parts.push(format!("{} not checked", s.not_checked));
     }
-    format!(
+    let mut line = format!(
         "{} {}: {}.",
         s.resources,
         if s.resources == 1 {
@@ -275,7 +307,15 @@ fn summary_line(s: &Summary) -> String {
             "resources"
         },
         parts.join(", ")
-    )
+    );
+    match s.leaving {
+        0 => {}
+        1 => line.push_str(" 1 object that left the build is still being deleted."),
+        n => line.push_str(&format!(
+            " {n} objects that left the build are still being deleted."
+        )),
+    }
+    line
 }
 
 fn resource_label(r: &ResourceStatus) -> String {
@@ -286,7 +326,25 @@ fn resource_label(r: &ResourceStatus) -> String {
     }
 }
 
-fn resource_state(r: &ResourceStatus) -> String {
+fn leaving_label(l: &LeavingStatus) -> String {
+    let kind = kix::manifest::types::qualified_kind(&l.group, &l.kind);
+    match &l.namespace {
+        Some(ns) => format!("{kind} {ns}/{}", l.name),
+        None => format!("{kind} {}", l.name),
+    }
+}
+
+/// Describe an unfinished delete: when it started and what it waits for.
+fn deletion_state(since: &str, finalizers: &[String], age: &dyn Fn(&str) -> String) -> String {
+    let started = format!("being deleted, started {}", age(since));
+    if finalizers.is_empty() {
+        started
+    } else {
+        format!("{started}, waiting for {}", finalizers.join(", "))
+    }
+}
+
+fn resource_state(r: &ResourceStatus, age: &dyn Fn(&str) -> String) -> String {
     let mut parts: Vec<String> = Vec::new();
     for p in &r.problems {
         parts.push(match p {
@@ -301,6 +359,14 @@ fn resource_state(r: &ResourceStatus) -> String {
                 Some(reason) => format!("{} ({reason})", output::red("not ready")),
                 None => output::red("not ready").into_owned(),
             },
+            Problem::Deleting => format!(
+                "{}. The next deploy creates it again once it is gone.",
+                output::red(&deletion_state(
+                    r.deleting_since.as_deref().unwrap_or_default(),
+                    &r.finalizers,
+                    age
+                ))
+            ),
         });
     }
     if parts.is_empty() {

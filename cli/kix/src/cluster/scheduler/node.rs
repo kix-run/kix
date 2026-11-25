@@ -572,7 +572,7 @@ async fn wait_live(ctx: &NodeCtx, entry: &PlanNodeEntry, rid: &ResourceId) -> No
 /// (`old_manifests`), so a dependency through an object that stays still
 /// counts. Orphans without a matching manifest have no known dependencies
 /// and come last.
-pub(super) fn prune_order(orphan_rids: &[ResourceId], old_manifests: &[Value]) -> DeleteOrder {
+pub(crate) fn prune_order(orphan_rids: &[ResourceId], old_manifests: &[Value]) -> DeleteOrder {
     let orphan_set: HashSet<&ResourceId> = orphan_rids.iter().collect();
     let mut order = DeleteOrder::of_manifests(old_manifests);
     order.retain(|rid| orphan_set.contains(rid));

@@ -1937,7 +1937,12 @@ async fn finalize_learns_whether_orphans_were_left() {
     }
     let cm = [rid("ConfigMap", "old")];
     let ns = [rid("Namespace", "ns")];
-    let ok = || Behaviour::Now(Ok(Pruned::Deleted { uid: None }));
+    let ok = || {
+        Behaviour::Now(Ok(Pruned::Deleted {
+            uid: None,
+            finalizers: Vec::new(),
+        }))
+    };
 
     assert!(orphans_left(PrunePolicy::WarnOnly, &cm, ok()).await);
     assert!(orphans_left(PrunePolicy::Skip, &cm, ok()).await);
@@ -2470,7 +2475,11 @@ async fn a_changed_orphan_holds_back_what_it_needs() {
 async fn an_orphan_already_being_deleted_is_waited_for() {
     let manifests = vec![m("ConfigMap", "keep", &[])];
     let ops = Arc::new(ScriptedOps::new());
-    ops.delete_behaviour(Behaviour::Now(Ok(Pruned::AlreadyDeleting { uid: None })));
+    ops.delete_behaviour(Behaviour::Now(Ok(Pruned::AlreadyDeleting {
+        uid: None,
+        finalizers: Vec::new(),
+        since: None,
+    })));
     let cfg = config(quiet_watchdog());
     let orphans = [rid("ConfigMap", "old")];
     let old = [m("ConfigMap", "old", &[])];

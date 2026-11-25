@@ -51,13 +51,15 @@ use crate::cluster::binding;
 use crate::cluster::client::{self, ResiliencePolicy};
 use crate::cluster::discovery;
 use crate::cluster::errors::FetchError;
+use crate::cluster::graph::DeleteOrder;
 use crate::cluster::graph::ResourceGraph;
 use crate::cluster::inventory;
 use crate::cluster::inventory::SharedOrphan;
 use crate::cluster::kubernetes_version;
 use crate::cluster::migrate::{MigrationPair, detect_migration_pairs};
+use crate::cluster::ops::ResourceIo;
 use crate::cluster::ops::{Cluster, DryRun, KubeResources, RecordConfig};
-use crate::cluster::preview::DryRunAnswer;
+use crate::cluster::preview::{DryRunAnswer, DryRunOutcome, PruneAnswer};
 use crate::cluster::scheduler::{
     self, DeployError, DeployPlan, LastRuns, PrunePolicy, SchedulerConfig,
 };
@@ -437,7 +439,14 @@ impl CheckedPlan {
             observer,
         )
         .await;
-        (result, dry.take_answers())
+        let mut answers = dry.take_answers();
+        read_prune_controllers(
+            &mut answers,
+            &scheduler::prune_order(&self.orphans, &self.old_manifests),
+            &*dry,
+        )
+        .await;
+        (result, answers)
     }
 
     /// Run the engine over the checked plan, writing its Activation record
@@ -490,6 +499,28 @@ impl CheckedPlan {
         )
         .await;
         (result, record.orphans_kept_from())
+    }
+}
+
+/// Read the controllers of each object whose prune delete will wait for a
+/// finalizer, so the plan can say whether something runs that removes it.
+/// `order` names the controllers of each orphan.
+async fn read_prune_controllers(
+    answers: &mut [DryRunAnswer],
+    order: &DeleteOrder,
+    resources: &dyn ResourceIo,
+) {
+    for answer in answers {
+        let DryRunOutcome::Pruned(PruneAnswer::Deleted(wait)) = &mut answer.outcome else {
+            continue;
+        };
+        if wait.finalizers.is_empty() {
+            continue;
+        }
+        for id in order.controllers().get(&answer.rid).into_iter().flatten() {
+            wait.controllers
+                .push(scheduler::read_controller(resources, id).await);
+        }
     }
 }
 
@@ -906,6 +937,68 @@ mod tests {
 
     fn rid(kind: &str, ns: &str, name: &str) -> ResourceId {
         ResourceId::new("", kind, ns, name)
+    }
+
+    /// The plan reads the controller of each prune delete that waits for a
+    /// finalizer, and reads nothing for a delete with no finalizer or an
+    /// object whose kind names no controller.
+    #[tokio::test]
+    async fn the_plan_reads_the_controller_of_a_delete_that_waits() {
+        use crate::cluster::ops::scripted::{Behaviour, NodeScript, ScriptedOps};
+        use crate::cluster::preview::DeleteWait;
+        use crate::cluster::readiness::ControllerState;
+        let manifest = |kind: &str, name: &str, hash: &str, deps: &str| {
+            json!({
+                "apiVersion": if kind == "Deployment" { "apps/v1" } else { "v1" },
+                "kind": kind,
+                "metadata": {
+                    "name": name,
+                    "namespace": "app",
+                    "annotations": {
+                        (keys::IDENTITY_HASH): hash,
+                        (keys::DEPENDS_ON): deps,
+                    },
+                },
+            })
+        };
+        let order = DeleteOrder::of_manifests(&[
+            manifest("ConfigMap", "held", "h1", "controller:op"),
+            manifest("ConfigMap", "free", "h2", "controller:op"),
+            manifest("ConfigMap", "plain", "h3", ""),
+            manifest("Deployment", "operator", "op", ""),
+        ]);
+        let operator = ResourceId::new("apps", "Deployment", "app", "operator");
+        let ops = ScriptedOps::new();
+        ops.script(
+            operator.clone(),
+            NodeScript {
+                live: Behaviour::Now(Ok(None)),
+                ..NodeScript::default()
+            },
+        );
+        let deleted = |rid: ResourceId, finalizers: &[&str]| DryRunAnswer {
+            rid,
+            outcome: DryRunOutcome::Pruned(PruneAnswer::Deleted(DeleteWait {
+                finalizers: finalizers.iter().map(|f| f.to_string()).collect(),
+                ..DeleteWait::default()
+            })),
+        };
+        let mut answers = vec![
+            deleted(rid("ConfigMap", "app", "held"), &["example.com/hold"]),
+            deleted(rid("ConfigMap", "app", "free"), &[]),
+            deleted(rid("ConfigMap", "app", "plain"), &["example.com/hold"]),
+        ];
+        read_prune_controllers(&mut answers, &order, &ops).await;
+        let controllers = |i: usize| match &answers[i].outcome {
+            DryRunOutcome::Pruned(PruneAnswer::Deleted(w)) => w.controllers.clone(),
+            other => panic!("{other:?}"),
+        };
+        let held = controllers(0);
+        assert_eq!(held.len(), 1);
+        assert_eq!(held[0].id, operator);
+        assert_eq!(held[0].state, ControllerState::Missing);
+        assert!(controllers(1).is_empty());
+        assert!(controllers(2).is_empty());
     }
 
     /// Kix cluster `a` drops a ClusterRole and a ConfigMap that `b` still

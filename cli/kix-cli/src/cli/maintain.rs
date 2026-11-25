@@ -25,6 +25,12 @@ pub struct GcArgs {
     #[arg(long)]
     pub operator: bool,
 
+    /// How long to wait for each deleted object to be gone while no
+    /// finalizer is removed, up to 5m per object (e.g. "5m", "300s", or bare
+    /// seconds; default 3m)
+    #[arg(long, value_parser = super::deploy::validate_timeout, conflicts_with = "operator")]
+    pub timeout: Option<String>,
+
     /// Also judge objects that `--full-scan` only reports, as a
     /// comma-separated list. `unstamped`: objects that carry the Kix label
     /// but no `kix.run/identity-hash`, which Kix never applied.

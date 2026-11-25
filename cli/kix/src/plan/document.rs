@@ -668,6 +668,57 @@ pub struct PruneEntry {
     pub fate: PruneFate,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// The finalizers on the object, which a delete waits for. Absent when
+    /// the object has none or the plan did not read it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub finalizers: Vec<String>,
+    /// The object's `metadata.deletionTimestamp` when it is already being
+    /// deleted. The deploy does not delete it again, and waits for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deleting_since: Option<String>,
+    /// The workloads that the object's kind names as its controller
+    /// (`controller` on `scope.mkCRD`), which remove its finalizers. Listed
+    /// only when the delete waits for a finalizer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub controllers: Vec<PruneController>,
+}
+
+impl PruneEntry {
+    /// Return an entry with nothing read from the live object.
+    pub fn new(resource: String, fate: PruneFate, detail: Option<String>) -> Self {
+        PruneEntry {
+            resource,
+            fate,
+            detail,
+            finalizers: Vec::new(),
+            deleting_since: None,
+            controllers: Vec::new(),
+        }
+    }
+}
+
+/// A controller of an object the prune deletes, and what the plan found when
+/// it read it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct PruneController {
+    pub resource: String,
+    pub state: PruneControllerState,
+    /// Why it is not ready, or why Kix could not read it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PruneControllerState {
+    /// Ready, with at least one ready pod.
+    Ready,
+    /// On the cluster and not ready, or scaled to no ready pod.
+    NotReady,
+    /// Not on the cluster.
+    Missing,
+    /// Kix could not read it.
+    Unread,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1116,11 +1167,7 @@ mod tests {
             NotCheckedReason::BuildsOnly,
         );
         assert!(!plan.has_changes());
-        let entry = |fate| PruneEntry {
-            resource: "ConfigMap/x@app".into(),
-            fate,
-            detail: None,
-        };
+        let entry = |fate| PruneEntry::new("ConfigMap/x@app".into(), fate, None);
         plan.prune = Checked::found(vec![entry(PruneFate::KeptWarnOnly)]);
         assert!(!plan.has_changes());
         plan.prune = Checked::found(vec![entry(PruneFate::Delete)]);

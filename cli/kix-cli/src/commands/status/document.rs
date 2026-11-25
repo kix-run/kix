@@ -61,7 +61,28 @@ pub struct ClusterStatus {
     /// changed.
     pub notes: Vec<String>,
     pub packages: Vec<PackageStatus>,
+    /// Objects of this cluster that left its build and are still being
+    /// deleted, because a finalizer or a slow shutdown holds them.
+    pub leaving: Vec<LeavingStatus>,
     pub summary: Summary,
+}
+
+/// An object that left the build and is still being deleted.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct LeavingStatus {
+    pub kind: String,
+    /// The kind's API group. Left out for the core group.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub group: String,
+    /// `null` for a cluster-scoped object.
+    pub namespace: Option<String>,
+    pub name: String,
+    /// `namespace/instance` of the package it belonged to, or `null`.
+    pub package: Option<String>,
+    /// When the delete started (RFC 3339).
+    pub deleting_since: String,
+    /// The finalizers that still hold it.
+    pub finalizers: Vec<String>,
 }
 
 /// The current deploy record.
@@ -129,6 +150,13 @@ pub struct ResourceStatus {
     /// The objects that depend on this one, as `Kind.group namespace/name`
     /// (`Kind namespace/name` for the core group), when it is missing.
     pub needed_by: Vec<String>,
+    /// When the object's delete started (RFC 3339), when it is being
+    /// deleted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deleting_since: Option<String>,
+    /// The finalizers that hold an object being deleted.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub finalizers: Vec<String>,
     /// What the checks found wrong. Empty when the object is fine.
     pub problems: Vec<Problem>,
     /// Whether a selected check could not run on the object.
@@ -160,6 +188,10 @@ pub enum Problem {
     /// The object no longer holds what Kix applied.
     Changed,
     NotReady,
+    /// The object is being deleted, so it will soon be missing. Every check
+    /// reports it, in place of `changed` or `not_ready`. The next deploy
+    /// waits until it is gone, then creates it again.
+    Deleting,
 }
 
 /// The drift check of one object.
@@ -215,6 +247,11 @@ pub struct Summary {
     pub missing: usize,
     pub changed: usize,
     pub not_ready: usize,
+    /// Objects of the build being deleted.
+    pub deleting: usize,
+    /// Objects that left the build and are still being deleted. They are
+    /// not counted in `resources`.
+    pub leaving: usize,
     pub not_checked: usize,
 }
 
@@ -229,6 +266,7 @@ impl Summary {
                 Problem::Missing => self.missing += 1,
                 Problem::Changed => self.changed += 1,
                 Problem::NotReady => self.not_ready += 1,
+                Problem::Deleting => self.deleting += 1,
             }
         }
         if r.not_checked {
@@ -242,12 +280,14 @@ impl Summary {
         self.missing += other.missing;
         self.changed += other.changed;
         self.not_ready += other.not_ready;
+        self.deleting += other.deleting;
+        self.leaving += other.leaving;
         self.not_checked += other.not_checked;
     }
 
     /// Return whether a check found something wrong.
     pub fn has_problems(&self) -> bool {
-        self.missing + self.changed + self.not_ready > 0
+        self.missing + self.changed + self.not_ready + self.deleting + self.leaving > 0
     }
 }
 
@@ -317,10 +357,12 @@ pub fn build(
         };
         for c in &mut clusters {
             c.packages.retain(|p| matches(&p.name));
+            c.leaving.retain(|l| matches(&l.package));
             c.summary = Summary::default();
             for p in &c.packages {
                 c.summary.merge(&p.summary);
             }
+            c.summary.leaving = c.leaving.len();
         }
         if clusters.iter().all(|c| c.packages.is_empty()) {
             return Err(no_such_package(wanted, &known));
@@ -408,6 +450,20 @@ fn cluster_status(
     for p in &packages {
         summary.merge(&p.summary);
     }
+    let leaving: Vec<LeavingStatus> = view
+        .leaving
+        .iter()
+        .map(|l| LeavingStatus {
+            kind: l.rid.kind.clone(),
+            group: l.rid.group.clone(),
+            namespace: (l.rid.namespace != CLUSTER_SCOPED).then(|| l.rid.namespace.clone()),
+            name: l.rid.name.clone(),
+            package: l.package.clone(),
+            deleting_since: l.deleting.since.clone(),
+            finalizers: l.deleting.finalizers.clone(),
+        })
+        .collect();
+    summary.leaving = leaving.len();
     let record = &view.record;
     ClusterStatus {
         cluster: view.cluster.clone(),
@@ -425,6 +481,7 @@ fn cluster_status(
         },
         notes: notes.cloned().unwrap_or_default(),
         packages,
+        leaving,
         summary,
     }
 }
@@ -443,10 +500,15 @@ fn resource_status(view: &ClusterView, obj: &ObjectView, checks: &[StatusCheck])
     if present == Present::No {
         problems.push(Problem::Missing);
     }
+    let deleting = obj.deleting.as_ref();
+    if deleting.is_some() {
+        problems.push(Problem::Deleting);
+    }
     let drift = match (&obj.content, checks.contains(&StatusCheck::Drift)) {
         (Some(verdict), true) => {
             let d = drift_of(verdict);
             match d.verdict {
+                DriftState::Changed if deleting.is_some() => {}
                 DriftState::Changed => problems.push(Problem::Changed),
                 DriftState::Unstamped | DriftState::NoFieldset => not_checked = true,
                 DriftState::InSync => {}
@@ -459,7 +521,9 @@ fn resource_status(view: &ClusterView, obj: &ObjectView, checks: &[StatusCheck])
     {
         (Readiness::Ready, true) => (Some(true), None),
         (Readiness::NotReady(reason), true) => {
-            problems.push(Problem::NotReady);
+            if deleting.is_none() {
+                problems.push(Problem::NotReady);
+            }
             (Some(false), Some(reason.clone()))
         }
         _ => (None, None),
@@ -484,6 +548,8 @@ fn resource_status(view: &ClusterView, obj: &ObjectView, checks: &[StatusCheck])
         ready,
         not_ready_reason,
         needed_by,
+        deleting_since: deleting.map(|d| d.since.clone()),
+        finalizers: deleting.map(|d| d.finalizers.clone()).unwrap_or_default(),
         problems,
         not_checked,
     }

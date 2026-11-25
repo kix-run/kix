@@ -304,9 +304,13 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
 
     let deleting: HashSet<&ResourceId> = ordered_rids.iter().collect();
     order.retain(|rid| deleting.contains(rid));
-    let done =
-        ctx.runtime()?
-            .block_on(delete_resources(&client, &new_graph.cluster_name, order))?;
+    let budget = super::deploy::parse_timeout(args.timeout.as_deref())?;
+    let done = ctx.runtime()?.block_on(delete_resources(
+        &client,
+        &new_graph.cluster_name,
+        order,
+        budget,
+    ))?;
     let (retired, records_failed) = ctx.runtime()?.block_on(delete_records(&retirement))?;
     if done.all_gone() {
         ctx.runtime()?.block_on(clear_kept(
@@ -607,8 +611,14 @@ async fn run_hard_async(
         return Ok(());
     }
 
-    let done =
-        delete_resources(&client, cluster_name, live_order(&live, &resource_entries)).await?;
+    let budget = super::deploy::parse_timeout(args.timeout.as_deref())?;
+    let done = delete_resources(
+        &client,
+        cluster_name,
+        live_order(&live, &resource_entries),
+        budget,
+    )
+    .await?;
     let (retired, records_failed) = delete_records(&retirement).await?;
     if done.all_gone() {
         clear_kept(cluster_name, &retirement, examined_all, build_hash).await;
@@ -742,11 +752,13 @@ impl Deletions {
 
 /// Delete the objects of `order` for `cluster` through
 /// [`prune_guard::delete_in_order`], which waits for each to be gone, and
-/// print a line for each object as it happens.
+/// print a line for each object as it happens. `budget` is how long a wait
+/// may go without a finalizer being removed (`--timeout`).
 pub(super) async fn delete_resources(
     client: &kube::Client,
     cluster: &str,
     order: DeleteOrder,
+    budget: std::time::Duration,
 ) -> Result<Deletions> {
     let mut done = Deletions::default();
     let mut stuck_any = false;
@@ -824,7 +836,7 @@ pub(super) async fn delete_resources(
         client,
         cluster,
         order,
-        readiness::DEFAULT_TIMEOUT,
+        budget,
         &kix::cluster::cancel::CancelToken::new(),
         &mut report,
     )

@@ -19,7 +19,7 @@ use kix::build_source::InstallableBuild;
 use kix::build_source::SopsSources;
 use kix::cluster::classify::{ChangedCrds, DeployScope, Verdict as DryRunVerdict, classify};
 use kix::cluster::preview::{DryRunAnswer, DryRunOutcome, PruneAnswer, Refusal};
-use kix::cluster::readiness;
+use kix::cluster::readiness::{self, ControllerState};
 use kix::cluster::scheduler::{self, OnErrorPolicy, PrunePolicy, SchedulerConfig};
 use kix::cluster::stream::{
     CancelReason, DeployEvent, DeployObserver, NodeId, TransitionKind, Verdict,
@@ -30,8 +30,8 @@ use kix::manifest::lifecycle;
 use kix::manifest::types::ResourceId;
 use kix::plan::document::{
     AdmissionRefusal, Build, Checked, Conflict, ConflictOwner, DeployedBuild, Detail, MadeBy,
-    NotCheckedReason, ObjectWrite, Plan, PlanFlags, PruneEntry, PruneFate, RefusalReason,
-    UncheckedObject, UncheckedReason,
+    NotCheckedReason, ObjectWrite, Plan, PlanFlags, PruneController, PruneControllerState,
+    PruneEntry, PruneFate, RefusalReason, UncheckedObject, UncheckedReason,
 };
 use kix::plan::server::comparable;
 use kix::plan::{CheckedPlan, ManifestIndex, OldSide, PlanEvent, Planned, Planner, Target};
@@ -650,10 +650,12 @@ fn prune_entries(
         .iter()
         .map(|rid| prune_entry(rid, policy, answers.get(rid)))
         .collect();
-    entries.extend(checked.shared_orphans().iter().map(|s| PruneEntry {
-        resource: s.rid.display_id(),
-        fate: PruneFate::KeptShared,
-        detail: Some(s.describe()),
+    entries.extend(checked.shared_orphans().iter().map(|s| {
+        PruneEntry::new(
+            s.rid.display_id(),
+            PruneFate::KeptShared,
+            Some(s.describe()),
+        )
     }));
     entries.sort_by(|a, b| a.resource.cmp(&b.resource));
     entries
@@ -679,13 +681,32 @@ pub(crate) fn prune_entry(
                     Some("changed since it was read; the next prune checks it again".into()),
                 ),
                 Some(PruneAnswer::Refused(why)) => (PruneFate::DeleteRefused, Some(why.clone())),
-                Some(PruneAnswer::Deleted) | None => (PruneFate::Delete, None),
+                Some(PruneAnswer::Deleted(_)) | None => (PruneFate::Delete, None),
             },
         }
     };
-    PruneEntry {
-        resource: rid.display_id(),
-        fate,
+    let mut entry = PruneEntry::new(rid.display_id(), fate, detail);
+    if fate == PruneFate::Delete
+        && let Some(PruneAnswer::Deleted(wait)) = answer
+    {
+        entry.finalizers = wait.finalizers.clone();
+        entry.deleting_since = wait.deleting_since.clone();
+        entry.controllers = wait.controllers.iter().map(prune_controller).collect();
+    }
+    entry
+}
+
+/// Return what the plan document says about a controller Kix read.
+fn prune_controller(c: &readiness::Controller) -> PruneController {
+    let (state, detail) = match &c.state {
+        ControllerState::Ready => (PruneControllerState::Ready, None),
+        ControllerState::NotReady(why) => (PruneControllerState::NotReady, Some(why.clone())),
+        ControllerState::Missing => (PruneControllerState::Missing, None),
+        ControllerState::Unread(e) => (PruneControllerState::Unread, Some(e.clone())),
+    };
+    PruneController {
+        resource: c.id.display_id(),
+        state,
         detail,
     }
 }
@@ -767,4 +788,47 @@ fn markdown(p: &Planned, doc: &Plan) -> String {
     }
     out.push_str(&render::render_markdown(doc));
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kix::cluster::preview::DeleteWait;
+
+    /// A delete's entry carries what the dry run found it will wait for. An
+    /// orphan that the deploy keeps carries none of it.
+    #[test]
+    fn a_prune_entry_says_what_its_delete_waits_for() {
+        let rid = ResourceId::new("keda.sh", "ScaledObject", "app", "worker");
+        let answer = PruneAnswer::Deleted(DeleteWait {
+            finalizers: vec!["finalizer.keda.sh".into()],
+            deleting_since: Some("2026-11-24T15:54:00Z".into()),
+            controllers: vec![readiness::Controller {
+                id: ResourceId::new("apps", "Deployment", "keda", "keda-operator"),
+                state: ControllerState::NotReady("0/1 ready".into()),
+            }],
+        });
+        let entry = prune_entry(&rid, PrunePolicy::Delete, Some(&answer));
+        assert_eq!(entry.fate, PruneFate::Delete);
+        assert_eq!(entry.finalizers, ["finalizer.keda.sh"]);
+        assert_eq!(
+            entry.deleting_since.as_deref(),
+            Some("2026-11-24T15:54:00Z")
+        );
+        assert_eq!(
+            entry.controllers,
+            [PruneController {
+                resource: "Deployment.apps/keda-operator@keda".into(),
+                state: PruneControllerState::NotReady,
+                detail: Some("0/1 ready".into()),
+            }]
+        );
+
+        let kept = prune_entry(&rid, PrunePolicy::WarnOnly, Some(&answer));
+        assert_eq!(kept.fate, PruneFate::KeptWarnOnly);
+        assert!(kept.finalizers.is_empty() && kept.controllers.is_empty());
+        assert_eq!(kept.deleting_since, None);
+        let plain = prune_entry(&rid, PrunePolicy::Delete, None);
+        assert!(plain.finalizers.is_empty() && plain.controllers.is_empty());
+    }
 }

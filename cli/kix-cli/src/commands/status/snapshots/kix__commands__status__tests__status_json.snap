@@ -38,6 +38,8 @@ expression: "serde_json::to_string_pretty(&doc).unwrap()"
             "missing": 1,
             "changed": 0,
             "not_ready": 1,
+            "deleting": 0,
+            "leaving": 0,
             "not_checked": 2
           },
           "resources": [
@@ -114,12 +116,15 @@ expression: "serde_json::to_string_pretty(&doc).unwrap()"
           ]
         }
       ],
+      "leaving": [],
       "summary": {
         "resources": 4,
         "ok": 0,
         "missing": 1,
         "changed": 0,
         "not_ready": 1,
+        "deleting": 0,
+        "leaving": 0,
         "not_checked": 2
       }
     }
@@ -130,6 +135,8 @@ expression: "serde_json::to_string_pretty(&doc).unwrap()"
     "missing": 1,
     "changed": 0,
     "not_ready": 1,
+    "deleting": 0,
+    "leaving": 0,
     "not_checked": 2
   }
 }

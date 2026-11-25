@@ -666,11 +666,11 @@ mod tests {
         );
 
         let mut deleting = plan();
-        deleting.prune = Checked::found(vec![PruneEntry {
-            resource: "ConfigMap/x@app".into(),
-            fate: PruneFate::Delete,
-            detail: None,
-        }]);
+        deleting.prune = Checked::found(vec![PruneEntry::new(
+            "ConfigMap/x@app".into(),
+            PruneFate::Delete,
+            None,
+        )]);
         assert_eq!(
             rules(&compare(&plan(), &deleting)),
             vec![Rule::NewPruneDelete]

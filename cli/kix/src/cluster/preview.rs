@@ -12,6 +12,7 @@ use crate::manifest::types::ResourceId;
 
 use super::apply::{ApplyError, ApplyPreview};
 use super::kept::NotKeptField;
+use super::readiness::Controller;
 use super::secrets::SecretError;
 
 /// One object's answer from a dry run.
@@ -44,13 +45,28 @@ pub enum DryRunOutcome {
 /// What a dry-run prune delete found.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PruneAnswer {
-    /// The delete was accepted, or the object is already gone.
-    Deleted,
+    /// The delete was accepted, the object is already being deleted, or it
+    /// is already gone. Says what the delete will wait for.
+    Deleted(DeleteWait),
     /// Another Kix cluster's current build contains it, so it stays.
     KeptShared(String),
     /// It changed since it was read, so it stays.
     KeptChanged,
     Refused(String),
+}
+
+/// What a prune delete will wait for, as the dry run found it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DeleteWait {
+    /// The finalizers on the object, which the delete waits for. Empty when
+    /// the object goes at once, or is already gone.
+    pub finalizers: Vec<String>,
+    /// The object's `metadata.deletionTimestamp` when it is already being
+    /// deleted.
+    pub deleting_since: Option<String>,
+    /// The controllers that the object's kind names, and what Kix found when
+    /// it read them. Read only when the delete waits for a finalizer.
+    pub controllers: Vec<Controller>,
 }
 
 /// Why a write was refused, sorted by what the reader does about it.

@@ -249,7 +249,10 @@ impl ScriptedOps {
             begin: Mutex::new(Behaviour::Now(Ok(()))),
             checkpoint: Mutex::new(Behaviour::Now(Ok(()))),
             stamp: Mutex::new(Behaviour::Now(Ok(()))),
-            delete: Mutex::new(Behaviour::Now(Ok(Pruned::Deleted { uid: None }))),
+            delete: Mutex::new(Behaviour::Now(Ok(Pruned::Deleted {
+                uid: None,
+                finalizers: Vec::new(),
+            }))),
             gone: Mutex::new(HashMap::new()),
             finalize: Mutex::new(Behaviour::Now(Ok(None))),
             abort: Mutex::new(Behaviour::Now(Ok(()))),

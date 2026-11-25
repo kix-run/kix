@@ -33,7 +33,7 @@ use super::discovery;
 use super::errors::FetchError;
 use super::graph::{DeleteOrder, Walked};
 use super::inventory::SharedOrphan;
-use super::readiness::{Controller, Deletion, Stuck, controller_state, wait_gone};
+use super::readiness::{Controller, Deletion, Stuck, controller_state, finalizers_of, wait_gone};
 use super::tenancy::{self, Tenancy};
 use crate::legacy_domain::LegacyDomainError;
 use crate::manifest::lifecycle;
@@ -44,10 +44,20 @@ use crate::manifest::types::ResourceId;
 pub enum Pruned {
     /// The API server accepted the delete. The object stays on the cluster
     /// until its finalizers are removed. `uid` is the uid of the object
-    /// deleted, for [`super::readiness::wait_gone`].
-    Deleted { uid: Option<String> },
-    /// The object was already being deleted, so no request was sent.
-    AlreadyDeleting { uid: Option<String> },
+    /// deleted, for [`super::readiness::wait_gone`]. `finalizers` are the
+    /// finalizers the object held when it was read, which the delete waits
+    /// for.
+    Deleted {
+        uid: Option<String>,
+        finalizers: Vec<String>,
+    },
+    /// The object was already being deleted, so no request was sent. `since`
+    /// is its `metadata.deletionTimestamp`.
+    AlreadyDeleting {
+        uid: Option<String>,
+        finalizers: Vec<String>,
+        since: Option<String>,
+    },
     /// Not on the cluster.
     Gone,
     /// Another Kix cluster's current build contains it, so it stays.
@@ -73,7 +83,9 @@ impl Pruned {
     /// was already under way, or `None` when nothing is being deleted.
     pub fn deleting(&self) -> Option<Option<&str>> {
         match self {
-            Pruned::Deleted { uid } | Pruned::AlreadyDeleting { uid } => Some(uid.as_deref()),
+            Pruned::Deleted { uid, .. } | Pruned::AlreadyDeleting { uid, .. } => {
+                Some(uid.as_deref())
+            }
             Pruned::Gone | Pruned::Kept(_) | Pruned::Changed(_) => None,
         }
     }
@@ -139,8 +151,15 @@ impl PruneGuard {
             }));
         }
         let uid = obj.metadata.uid.clone();
-        if obj.metadata.deletion_timestamp.is_some() {
-            return Ok(Pruned::AlreadyDeleting { uid });
+        let finalizers = finalizers_of(&obj);
+        if let Some(since) = &obj.metadata.deletion_timestamp {
+            return Ok(Pruned::AlreadyDeleting {
+                uid,
+                finalizers,
+                since: serde_json::to_value(since)
+                    .ok()
+                    .and_then(|t| t.as_str().map(str::to_string)),
+            });
         }
         let params = DeleteParams {
             preconditions: Some(Preconditions {
@@ -150,7 +169,7 @@ impl PruneGuard {
             ..params.clone()
         };
         match api.delete(&rid.name, &params).await {
-            Ok(_) => Ok(Pruned::Deleted { uid }),
+            Ok(_) => Ok(Pruned::Deleted { uid, finalizers }),
             Err(kube::Error::Api(ae)) if ae.code == 404 => Ok(Pruned::Gone),
             Err(kube::Error::Api(ae)) if ae.code == 409 => Ok(Pruned::Changed(rid.clone())),
             Err(e) => Err(e.into()),
@@ -480,7 +499,7 @@ mod tests {
         );
         assert!(matches!(
             delete(&g, &d, &once).await,
-            Pruned::Deleted { uid: Some(_) }
+            Pruned::Deleted { uid: Some(_), .. }
         ));
         assert_eq!(api.names("ClusterRole"), vec!["shared"]);
         assert_eq!(delete(&g, &d, &once).await, Pruned::Gone);
@@ -637,15 +656,56 @@ mod tests {
         ]);
         let (g, d) = guard(&api, "a").await;
         let cm = ResourceId::new("", "ConfigMap", "app", "cm");
-        assert!(matches!(
+        assert_eq!(
             delete(&g, &d, &cm).await,
-            Pruned::AlreadyDeleting { uid: Some(_) }
-        ));
+            Pruned::AlreadyDeleting {
+                uid: api.object("ConfigMap", "cm").unwrap()["metadata"]["uid"]
+                    .as_str()
+                    .map(str::to_string),
+                finalizers: vec!["example.com/hold".to_string()],
+                since: Some("2026-11-24T15:54:00Z".to_string()),
+            }
+        );
         assert!(
             !api.requests().iter().any(|r| r.starts_with("DELETE")),
             "{:?}",
             api.requests()
         );
+    }
+
+    /// A delete returns the finalizers the object held when it was read,
+    /// which the delete waits for. An object without any returns none.
+    #[tokio::test]
+    async fn a_delete_says_which_finalizers_it_waits_for() {
+        let cm = |name: &str, finalizers: &[&str]| {
+            json!({
+                "apiVersion": "v1",
+                "kind": "ConfigMap",
+                "metadata": {
+                    "name": name,
+                    "namespace": "app",
+                    "finalizers": finalizers,
+                    "annotations": { (keys::ACTIVATIONS): "a1" },
+                },
+            })
+        };
+        let api = FakeApi::new([
+            record("a", "a1", lifecycle::PHASE_ACTIVE),
+            cm("held", &["example.com/hold"]),
+            cm("free", &[]),
+        ]);
+        let (g, d) = guard(&api, "a").await;
+        let finalizers = |pruned: Pruned| match pruned {
+            Pruned::Deleted { finalizers, .. } => finalizers,
+            other => panic!("{other:?}"),
+        };
+        let held = ResourceId::new("", "ConfigMap", "app", "held");
+        assert_eq!(
+            finalizers(delete(&g, &d, &held).await),
+            vec!["example.com/hold".to_string()]
+        );
+        let free = ResourceId::new("", "ConfigMap", "app", "free");
+        assert!(finalizers(delete(&g, &d, &free).await).is_empty());
     }
 
     /// `delete_in_order` waits for each deleted object. One that keeps its

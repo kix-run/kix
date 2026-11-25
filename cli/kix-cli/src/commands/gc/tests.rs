@@ -228,8 +228,10 @@ mod delete_tests {
     use super::*;
     use kix::cluster::fake_api::FakeApi;
     use kix::cluster::graph::DeleteOrder;
+    use kix::cluster::readiness;
     use kix::manifest::lifecycle::PHASE_ACTIVE;
     use serde_json::json;
+    use std::time::Duration;
 
     fn rid(group: &str, kind: &str, name: &str) -> ResourceId {
         ResourceId::new(group, kind, CLUSTER_SCOPED, name)
@@ -252,9 +254,14 @@ mod delete_tests {
             ),
             rid("", "Namespace", "gone"),
         ];
-        let done = delete_resources(&api.client(), "a", DeleteOrder::unordered(resources))
-            .await
-            .unwrap();
+        let done = delete_resources(
+            &api.client(),
+            "a",
+            DeleteOrder::unordered(resources),
+            readiness::DEFAULT_TIMEOUT,
+        )
+        .await
+        .unwrap();
         assert_eq!(done, Deletions::default());
         assert!(api.requests().is_empty(), "{:?}", api.requests());
     }
@@ -300,9 +307,14 @@ mod delete_tests {
             rid("rbac.authorization.k8s.io", "ClusterRole", "shared"),
             rid("rbac.authorization.k8s.io", "ClusterRole", "racing"),
         ];
-        let done = delete_resources(&api.client(), "a", DeleteOrder::unordered(resources))
-            .await
-            .unwrap();
+        let done = delete_resources(
+            &api.client(),
+            "a",
+            DeleteOrder::unordered(resources),
+            readiness::DEFAULT_TIMEOUT,
+        )
+        .await
+        .unwrap();
         assert_eq!(
             done,
             Deletions {
@@ -337,6 +349,7 @@ mod delete_tests {
             &api.client(),
             "a",
             DeleteOrder::unordered(vec![rid("batch", "Job", "x")]),
+            readiness::DEFAULT_TIMEOUT,
         )
         .await
         .unwrap();
@@ -375,9 +388,20 @@ mod delete_tests {
         );
         let secret = object("Secret", "s", "hash_s", "", &[]);
         let api = FakeApi::new([record("a", "a1"), cm.clone(), secret.clone()]);
-        let done = delete_resources(&api.client(), "a", DeleteOrder::of_manifests(&[cm, secret]))
-            .await
-            .unwrap();
+        let start = tokio::time::Instant::now();
+        let done = delete_resources(
+            &api.client(),
+            "a",
+            DeleteOrder::of_manifests(&[cm.clone(), secret.clone()]),
+            readiness::DEFAULT_TIMEOUT,
+        )
+        .await
+        .unwrap();
+        assert!(
+            start.elapsed() >= readiness::DEFAULT_TIMEOUT,
+            "{:?}",
+            start.elapsed()
+        );
         assert_eq!(
             done,
             Deletions {
@@ -390,6 +414,26 @@ mod delete_tests {
         assert!(!done.all_gone());
         assert_eq!(api.names("ConfigMap"), vec!["cm"]);
         assert_eq!(api.names("Secret"), vec!["s"]);
+
+        // `--timeout 10s` gives up after ten seconds without progress.
+        let api = FakeApi::new([record("a", "a1"), cm.clone(), secret.clone()]);
+        let start = tokio::time::Instant::now();
+        let budget = crate::commands::deploy::parse_timeout(Some("10s")).unwrap();
+        let done = delete_resources(
+            &api.client(),
+            "a",
+            DeleteOrder::of_manifests(&[cm, secret]),
+            budget,
+        )
+        .await
+        .unwrap();
+        assert_eq!((done.failed, done.held), (1, 1));
+        assert!(start.elapsed() >= budget, "{:?}", start.elapsed());
+        assert!(
+            start.elapsed() < Duration::from_secs(20),
+            "{:?}",
+            start.elapsed()
+        );
     }
 }
 

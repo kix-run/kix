@@ -13,7 +13,7 @@ use crate::output;
 
 use kix::plan::document::{
     AdmissionRefusal, BeingDeleted, Checked, FieldNotKept, MadeBy, NotCheckedReason, NotKept, Plan,
-    PruneFate, RefusalReason, UncheckedReason, WriteChange,
+    PruneControllerState, PruneEntry, PruneFate, RefusalReason, UncheckedReason, WriteChange,
 };
 use kix::plan::origin::ChangeLabel;
 use kix::plan::saved::{Comparison, Rule};
@@ -38,6 +38,7 @@ pub fn render_text(plan: &Plan) -> String {
         write_not_kept(out, plan)?;
         write_drift(out, plan)?;
         write_prune(out, plan)?;
+        write_prune_waits(out, plan)?;
         write_not_checked(out, plan)?;
         write_objects(out, plan)
     })
@@ -551,6 +552,87 @@ fn write_prune(out: &mut String, plan: &Plan) -> fmt::Result {
     Ok(())
 }
 
+/// Return the prune deletes that will wait: for finalizers, or for an object
+/// that is already being deleted.
+fn prune_waits(plan: &Plan) -> Vec<&PruneEntry> {
+    plan.prune
+        .items()
+        .iter()
+        .filter(|p| p.fate == PruneFate::Delete)
+        .filter(|p| !p.finalizers.is_empty() || p.deleting_since.is_some())
+        .collect()
+}
+
+/// Describe what one prune delete waits for.
+fn prune_wait_detail(p: &PruneEntry) -> String {
+    let waits = if p.finalizers.is_empty() {
+        String::new()
+    } else {
+        format!("waits for {}", p.finalizers.join(", "))
+    };
+    match (&p.deleting_since, waits.is_empty()) {
+        (Some(since), true) => format!("already being deleted since {since}"),
+        (Some(since), false) => format!("already being deleted since {since}, {waits}"),
+        (None, _) => waits,
+    }
+}
+
+/// Return a warning for each controller of a prune delete that is not
+/// running, so cannot remove the finalizers the delete waits for.
+fn controller_warnings(p: &PruneEntry) -> Vec<String> {
+    p.controllers
+        .iter()
+        .filter_map(|c| {
+            let state = match (c.state, &c.detail) {
+                (PruneControllerState::Ready, _) => return None,
+                (PruneControllerState::NotReady, Some(why)) => format!("is not ready ({why})"),
+                (PruneControllerState::NotReady, None) => "is not ready".to_string(),
+                (PruneControllerState::Missing, _) => "is not on the cluster".to_string(),
+                (PruneControllerState::Unread, Some(e)) => format!("could not be read ({e})"),
+                (PruneControllerState::Unread, None) => "could not be read".to_string(),
+            };
+            Some(format!(
+                "{} waits for its controller {} to remove {}, and the controller {state}. \
+                 The deploy fails if the finalizers stay past `--timeout` (3 minutes by default).",
+                p.resource,
+                c.resource,
+                p.finalizers.join(", "),
+            ))
+        })
+        .collect()
+}
+
+/// Write the prune deletes that will wait before their objects are gone,
+/// and a warning for each controller that cannot end the wait.
+fn write_prune_waits(out: &mut String, plan: &Plan) -> fmt::Result {
+    let waits = prune_waits(plan);
+    if waits.is_empty() {
+        return Ok(());
+    }
+    writeln!(out)?;
+    writeln!(
+        out,
+        "{} {} delete(s) will wait until the object is gone:",
+        output::bold("Prune:"),
+        waits.len()
+    )?;
+    for p in &waits {
+        writeln!(
+            out,
+            "  {} {} {}",
+            output::red("-"),
+            p.resource,
+            output::dim(&prune_wait_detail(p)),
+        )?;
+    }
+    for p in &waits {
+        for warning in controller_warnings(p) {
+            writeln!(out, "{} {}", output::yellow("!"), output::yellow(&warning))?;
+        }
+    }
+    Ok(())
+}
+
 fn write_not_checked(out: &mut String, plan: &Plan) -> fmt::Result {
     if plan.made_by == MadeBy::DryRun && !plan.not_checked.is_empty() {
         writeln!(out)?;
@@ -742,6 +824,25 @@ fn write_markdown(out: &mut String, plan: &Plan) -> fmt::Result {
         }
         writeln!(out)?;
     }
+    let waits = prune_waits(plan);
+    if !waits.is_empty() {
+        writeln!(out, "#### Prune deletes that will wait")?;
+        writeln!(out)?;
+        writeln!(
+            out,
+            "The deploy waits until each object is gone before it deletes what the object needs:"
+        )?;
+        writeln!(out)?;
+        for p in &waits {
+            writeln!(out, "- `{}`: {}", p.resource, prune_wait_detail(p))?;
+        }
+        writeln!(out)?;
+        let warnings: Vec<String> = waits.iter().flat_map(|p| controller_warnings(p)).collect();
+        for warning in warnings {
+            writeln!(out, ":warning: {warning}")?;
+            writeln!(out)?;
+        }
+    }
     if !plan.not_kept.is_empty() {
         writeln!(out, "#### :warning: Kubernetes would not keep these fields")?;
         writeln!(out)?;
@@ -888,7 +989,7 @@ fn join_list(items: &[&str]) -> String {
 mod tests {
     use super::*;
     use kix::eval::store_graph::StoreGraph;
-    use kix::plan::document::{Build, Detail, DriftChange};
+    use kix::plan::document::{Build, Detail, DriftChange, PruneController};
 
     fn plan_with(drift: Vec<DriftChange>) -> Plan {
         let graph = StoreGraph::empty("c");
@@ -937,6 +1038,75 @@ mod tests {
             markdown.contains("- `PersistentVolumeClaim app/data`: being deleted since"),
             "{markdown}"
         );
+    }
+
+    fn prune_entry(resource: &str, finalizers: &[&str]) -> PruneEntry {
+        let mut entry = PruneEntry::new(resource.into(), PruneFate::Delete, None);
+        entry.finalizers = finalizers.iter().map(|f| f.to_string()).collect();
+        entry
+    }
+
+    /// A prune delete that waits for a finalizer is listed with it, and a
+    /// controller that is not ready gets a warning. A delete with nothing to
+    /// wait for, and a ready controller, add nothing. The plan does not stop.
+    #[test]
+    fn a_prune_delete_that_waits_says_what_for() {
+        let mut plan = plan_with(Vec::new());
+        let mut worker = prune_entry("ScaledObject.keda.sh/worker@app", &["finalizer.keda.sh"]);
+        worker.controllers = vec![PruneController {
+            resource: "Deployment.apps/keda-operator@keda".into(),
+            state: PruneControllerState::NotReady,
+            detail: Some("0/1 ready".into()),
+        }];
+        let mut db = prune_entry("Database.kinda.rocks/app-db@apps", &["db.app-db"]);
+        db.deleting_since = Some("2026-11-24T15:54:00Z".into());
+        db.controllers = vec![PruneController {
+            resource: "Deployment.apps/db-operator@db".into(),
+            state: PruneControllerState::Ready,
+            detail: None,
+        }];
+        plan.prune = Checked::found(vec![worker, db, prune_entry("ConfigMap/plain@app", &[])]);
+        let text = render_text(&plan);
+        assert!(
+            text.contains("2 delete(s) will wait until the object is gone:"),
+            "{text}"
+        );
+        assert!(
+            text.contains("ScaledObject.keda.sh/worker@app waits for finalizer.keda.sh"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "Database.kinda.rocks/app-db@apps already being deleted since \
+                 2026-11-24T15:54:00Z, waits for db.app-db"
+            ),
+            "{text}"
+        );
+        assert!(!text.contains("ConfigMap/plain@app"), "{text}");
+        assert!(
+            text.contains(
+                "! ScaledObject.keda.sh/worker@app waits for its controller \
+                 Deployment.apps/keda-operator@keda to remove finalizer.keda.sh, and the \
+                 controller is not ready (0/1 ready)."
+            ),
+            "{text}"
+        );
+        assert!(!text.contains("db-operator"), "{text}");
+        assert!(!plan.stops());
+        let markdown = render_markdown(&plan);
+        assert!(
+            markdown.contains("- `ScaledObject.keda.sh/worker@app`: waits for finalizer.keda.sh"),
+            "{markdown}"
+        );
+        assert!(
+            markdown.contains(":warning: ScaledObject.keda.sh/worker@app waits for its controller"),
+            "{markdown}"
+        );
+
+        let mut quiet = plan_with(Vec::new());
+        quiet.prune = Checked::found(vec![prune_entry("ConfigMap/plain@app", &[])]);
+        assert!(!render_text(&quiet).contains("will wait"));
+        assert!(!render_markdown(&quiet).contains("will wait"));
     }
 
     /// A warning that holds a code fence stays inside the warnings block,
