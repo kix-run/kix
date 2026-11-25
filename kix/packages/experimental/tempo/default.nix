@@ -402,6 +402,7 @@ in
         access = kix.cloudIdentity.use {
           inherit scope;
           dep = storageCredentials;
+          arg = "storageCredentials";
           cloud = if objectStorageOn && !inClusterStore then "aws" else null;
         };
         identity = access.identity;
