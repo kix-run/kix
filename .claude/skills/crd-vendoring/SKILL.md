@@ -54,9 +54,10 @@ under `rbac/`, the named roles), sort, write. CI runs `--check` on every pull re
    crdFile = file: (builtins.fromJSON (builtins.readFile ./crds/${file})).spec;
    crds.backups = scope.mkCRD { spec = crdFile "backups.velero.io.json"; holdsData = false; };
    ```
-   Give the CRDs to the controller's `requires`, and name the controller
-   on each declaration with `controller = self.<controller>;` so custom
-   resources are deleted before it (package-review C27). A CRD in a `*.k8s.io` group
+   Give the CRDs to the controller's `requires`, and set
+   `controller = self.<controller>;` on each CRD declaration so Kix creates
+   custom resources after the controller and deletes them before it
+   (package-review C27). A CRD in a `*.k8s.io` group
    needs its `api-approved.kubernetes.io` annotation carried over (see
    snapshot-controller) or the apiserver refuses it.
 5. If a CRD only matters while an optional component runs, gate it on that

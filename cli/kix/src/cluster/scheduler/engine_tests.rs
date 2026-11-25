@@ -2321,13 +2321,11 @@ async fn a_stuck_prune_names_the_controller() {
     };
     let cr = message_of("cr");
     assert!(
-        cr.contains(
-            "Deployment.apps/operator@default handles ConfigMap objects and is not ready ("
-        ),
+        cr.contains("ConfigMap controller Deployment.apps/operator@default is not ready ("),
         "{cr}"
     );
     assert!(
-        !message_of("plain").contains("handles"),
+        !message_of("plain").contains("ConfigMap controller"),
         "{}",
         message_of("plain")
     );

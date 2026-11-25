@@ -230,7 +230,7 @@ in
   # The refusal names the declaration, the kind, and what was given.
   lib-crd-controller-refusal-message =
     lib.hasInfix
-      "scope.mkCRD widgets: controller for example.test/Widget is Service \"operator\", which is not a workload."
+      "scope.mkCRD widgets: controller for example.test/Widget must be a workload or list of workloads (got Service \"operator\")."
       (refusal.thrown or "")
     || throw "controller refusal: ${builtins.toJSON refusal}";
 

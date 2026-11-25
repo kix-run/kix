@@ -1115,14 +1115,14 @@ rec {
         if builtins.isAttrs r && r ? kind then
           "${r.kind} ${builtins.toJSON (r.name or null)}"
         else
-          "a ${builtins.typeOf r}";
+          "type ${builtins.typeOf r}";
     in
     if wrong == [ ] then
       listed
     else
       fail {
-        message = "${declaredBy}: controller for ${groupKind} is ${describe (builtins.head wrong)}, which is not a workload.";
-        fix = "Set controller to the Deployment, StatefulSet, or DaemonSet that handles ${groupKind} objects (such as self.operator), to a list of them, or to an import marker for one that runs outside Kix. Set it to null when nothing in the cluster handles the kind.";
+        message = "${declaredBy}: controller for ${groupKind} must be a workload or list of workloads (got ${describe (builtins.head wrong)}).";
+        fix = "Set controller to the Deployment, StatefulSet, or DaemonSet that reconciles ${groupKind} objects (such as self.operator), an import marker for an external workload, or a list of them. Omit controller or set it to null when nothing in the cluster reconciles this kind.";
       };
 
   mkCRDBuilders =

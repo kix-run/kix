@@ -803,20 +803,18 @@ mod tests {
     async fn a_stuck_delete_names_the_controller_and_its_state() {
         let not_ready = stuck_cm_message("controller:", Some(0)).await;
         assert!(
-            not_ready.contains(
-                "Deployment.apps/operator@app handles ConfigMap objects and is not ready ("
-            ),
+            not_ready.contains("ConfigMap controller Deployment.apps/operator@app is not ready ("),
             "{not_ready}"
         );
         let ready = stuck_cm_message("controller:", Some(1)).await;
         assert!(
-            ready.contains("Deployment.apps/operator@app handles ConfigMap objects and is ready."),
+            ready.contains("ConfigMap controller Deployment.apps/operator@app is ready."),
             "{ready}"
         );
         let missing = stuck_cm_message("controller:", None).await;
         assert!(
             missing.contains(
-                "Deployment.apps/operator@app handles ConfigMap objects and is not on the cluster"
+                "ConfigMap controller Deployment.apps/operator@app is not on the cluster"
             ),
             "{missing}"
         );
@@ -832,7 +830,7 @@ mod tests {
                 message.contains("waiting for example.com/hold."),
                 "{message}"
             );
-            assert!(!message.contains("handles"), "{message}");
+            assert!(!message.contains("ConfigMap controller"), "{message}");
         }
     }
 

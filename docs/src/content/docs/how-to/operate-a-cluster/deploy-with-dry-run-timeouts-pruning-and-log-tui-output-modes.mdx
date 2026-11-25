@@ -109,12 +109,12 @@ waiting after `--timeout` passes without a finalizer being removed, or after 5
 minutes in total. If an object is still on the cluster when the wait ends, the
 deploy fails with `[K2794]`. Kix keeps any orphans that the build records as
 dependencies of the stuck object, so the next `kix deploy --prune` or `kix gc`
-can delete them once it is gone. When the package that defines a custom
-resource's kind names its operator as `controller`, Kix keeps the operator
-until the custom resource is gone, and `[K2794]` names the operator and says
-whether it is ready. Most packages do not name a controller yet, so removing a
-custom resource and its operator at once can delete the operator before it
-clears the custom resource's finalizer. If cleanup is still
+can delete them once it is gone. When a package declares its operator as the
+`controller` for its custom resources, Kix keeps the operator until those
+custom resources are gone, and `[K2794]` reports whether the operator is ready.
+Most packages do not declare a `controller` yet, so removing a custom resource
+and its operator in the same deploy can delete the operator before it removes
+the custom resource's finalizer. If cleanup is still
 running normally, deploy again later or pass a longer `--timeout` (up to `5m`
 per delete). See
 [When a delete does not finish](/docs/how-to/operate-a-cluster/garbage-collect-stale-resources/#when-a-delete-does-not-finish)
