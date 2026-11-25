@@ -12,6 +12,10 @@
 #                   clusters and their logs keep databases on their volumes,
 #                   and the operator deletes a backup's files with its
 #                   SGBackup. Configuration and operation kinds are false.
+#   reconciled      the operator reconciles a custom resource of the kind
+#                   (it creates its workloads, jobs, or status), so the kind
+#                   names the operator as its controller. The configuration
+#                   kinds without it are only read.
 #
 # Kinds with conditions but no readiness:
 #   - SGDbOps and SGShardedDbOps set Completed=True when the operation ends,
@@ -35,18 +39,20 @@ let
     holdsData = false;
   };
   data.holdsData = true;
+  reconciled.reconciled = true;
 in
 {
-  SGBackup = v1 "sgBackups" "sgbackups" // data;
+  SGBackup = v1 "sgBackups" "sgbackups" // data // reconciled;
   SGCluster =
     v1 "sgClusters" "sgclusters"
     // data
+    // reconciled
     // {
       readiness = bootstrapped;
     };
   SGConfig = v1 "sgConfigs" "sgconfigs";
-  SGDbOps = v1 "sgDbOps" "sgdbops";
-  SGDistributedLogs = v1 "sgDistributedLogs" "sgdistributedlogs" // data;
+  SGDbOps = v1 "sgDbOps" "sgdbops" // reconciled;
+  SGDistributedLogs = v1 "sgDistributedLogs" "sgdistributedlogs" // data // reconciled;
   SGInstanceProfile = v1 "sgInstanceProfiles" "sginstanceprofiles";
   SGObjectStorage = {
     part = "sgObjectStorages";
@@ -56,8 +62,8 @@ in
   };
   SGPoolingConfig = v1 "sgPoolingConfigs" "sgpoolconfigs";
   SGPostgresConfig = v1 "sgPostgresConfigs" "sgpgconfigs";
-  SGScript = v1 "sgScripts" "sgscripts";
-  SGShardedBackup = v1 "sgShardedBackups" "sgshardedbackups" // data;
+  SGScript = v1 "sgScripts" "sgscripts" // reconciled;
+  SGShardedBackup = v1 "sgShardedBackups" "sgshardedbackups" // data // reconciled;
   SGShardedCluster = {
     part = "sgShardedClusters";
     plural = "sgshardedclusters";
@@ -68,12 +74,14 @@ in
     ];
     readiness = bootstrapped;
     holdsData = true;
+    reconciled = true;
   };
-  SGShardedDbOps = v1 "sgShardedDbOps" "sgshardeddbops";
+  SGShardedDbOps = v1 "sgShardedDbOps" "sgshardeddbops" // reconciled;
   SGStream = {
     part = "sgStreams";
     plural = "sgstreams";
     version = "v1alpha1";
     holdsData = false;
+    reconciled = true;
   };
 }

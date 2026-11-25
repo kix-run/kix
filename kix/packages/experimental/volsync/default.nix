@@ -426,6 +426,7 @@ in
           replicationSources = scope.mkCRD {
             spec = vendored "replicationsources.volsync.backube.json";
             inherit readiness;
+            controller = self.deployment;
             factBehavior = {
               endpoint = "terminate";
               podSelector = cr: moverSelector "src" cr.metadata.name;
@@ -434,6 +435,7 @@ in
           replicationDestinations = scope.mkCRD {
             spec = vendored "replicationdestinations.volsync.backube.json";
             inherit readiness;
+            controller = self.deployment;
             factBehavior = {
               endpoint = "terminate";
               podSelector = cr: moverSelector "dst" cr.metadata.name;

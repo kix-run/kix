@@ -355,6 +355,7 @@ in
             spec = crdSpec;
             # Every RabbitmqCluster waits for the webhook check.
             crRequires = [ self.webhookCheck ];
+            controller = self.deployment;
             # Durable queues and messages live on the server pods' volumes.
             holdsData = true;
             # The condition carries no observedGeneration, so the deploy

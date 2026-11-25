@@ -738,6 +738,7 @@ in
         # operator installs the rest with full schemas.
         kubeVirts = scope.mkCRD {
           spec = (readJSON ./crds/kubevirts.kubevirt.io.json).spec;
+          controller = self.deployment;
           holdsData = false;
           readiness = {
             path = "/status/phase";

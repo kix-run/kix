@@ -406,18 +406,22 @@ in
         crds = {
           connectors = scope.mkCRD {
             spec = vendored "connectors";
+            controller = self.deployment;
             readiness = ready "ConnectorReady";
           };
           dnsConfigs = scope.mkCRD {
             spec = vendored "dnsconfigs";
+            controller = self.deployment;
             readiness = ready "NameserverReady";
           };
           peerRelays = scope.mkCRD {
             spec = vendored "peerrelays";
+            controller = self.deployment;
             readiness = ready "PeerRelayReady";
           };
           proxyClasses = scope.mkCRD {
             spec = vendored "proxyclasses";
+            controller = self.deployment;
             readiness = ready "ProxyClassReady";
             # A class and a policy configure proxies; the ProxyGroup and
             # Connector that use them run the pods.
@@ -429,14 +433,17 @@ in
           };
           proxyGroups = scope.mkCRD {
             spec = vendored "proxygroups";
+            controller = self.deployment;
             readiness = ready "ProxyGroupReady";
           };
           recorders = scope.mkCRD {
             spec = vendored "recorders";
+            controller = self.deployment;
             readiness = ready "RecorderReady";
           };
           tailnets = scope.mkCRD {
             spec = vendored "tailnets";
+            controller = self.deployment;
             readiness = ready "TailnetReady";
           };
         };

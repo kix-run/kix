@@ -3,11 +3,14 @@
 #
 # Prometheus, Alertmanager, PrometheusAgent, and ThanosRuler report an
 # `Available` condition, True once every replica the resource asks for is
-# ready, so a deploy waits for them. The other kinds report per-Prometheus
-# `bindings` and no top-level conditions.
+# ready, so a deploy waits for them. The operator reconciles those four into
+# StatefulSets, so they name it as their `controller`. The other kinds report
+# per-Prometheus `bindings` and no top-level conditions, and the operator
+# only reads them.
 
 { operandSelectors }:
 {
+  self,
   scope,
   lib,
   kix,
@@ -112,6 +115,7 @@ in
       vendored "alertmanagers.monitoring.coreos.com.json"
       // {
         readiness = available;
+        controller = self.operatorDeployment;
         # Silences and the notification log live on the Alertmanager volumes.
         holdsData = true;
         usesAtLeast = usesAtLeastFor (singleSet "alertmanager");
@@ -123,6 +127,7 @@ in
       vendored "prometheusagents.monitoring.coreos.com.json"
       // {
         readiness = available;
+        controller = self.operatorDeployment;
         # An agent forwards samples and keeps only a write-ahead log.
         holdsData = false;
         # Skip DaemonSet mode because the pod count depends on cluster nodes.
@@ -141,6 +146,7 @@ in
       vendored "prometheuses.monitoring.coreos.com.json"
       // {
         readiness = available;
+        controller = self.operatorDeployment;
         # The time series database lives on the Prometheus volumes.
         holdsData = true;
         usesAtLeast = usesAtLeastFor {
@@ -164,6 +170,7 @@ in
       vendored "thanosrulers.monitoring.coreos.com.json"
       // {
         readiness = available;
+        controller = self.operatorDeployment;
         # Recorded rule results live on the ruler volumes.
         holdsData = true;
         usesAtLeast = usesAtLeastFor (singleSet "thanos-ruler");

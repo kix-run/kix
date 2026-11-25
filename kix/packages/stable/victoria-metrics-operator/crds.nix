@@ -440,6 +440,9 @@ let
       schemed
       // {
         readiness = if builtins.elem def.kind configKinds then vmConfigReadiness else vmReadiness;
+        # The operator reconciles every operator.victoriametrics.com kind
+        # and writes the status that `readiness` reads.
+        controller = self.operatorDeployment;
         holdsData = builtins.elem def.kind storageKinds;
       }
       // lib.optionalAttrs (extras ? factBehavior) {

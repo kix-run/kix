@@ -925,6 +925,7 @@ in
                 installedBy = self.operatorDeployment;
                 crRequires = [ self.webhookCheck ];
               }
+              // lib.optionalAttrs (k.reconciled or false) { controller = self.operatorDeployment; }
               // lib.optionalAttrs (kind == "SGCluster") {
                 # The operand pods dial the addresses in an SGCluster spec,
                 # including an SGObjectStorage endpoint it references.

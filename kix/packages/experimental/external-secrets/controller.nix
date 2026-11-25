@@ -226,6 +226,9 @@ in
             usesAtLeast = _: { };
           }
           // lib.optionalAttrs (builtins.elem (kindOf doc.spec) readyKinds) {
+            # The controller reconciles these kinds and reports their Ready
+            # condition. It only reads the generator kinds.
+            controller = self.deployment;
             readiness.condition = {
               type = "Ready";
               status = "True";

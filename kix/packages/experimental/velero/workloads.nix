@@ -265,16 +265,19 @@ in
   crds = {
     backupRepositories = scope.mkCRD {
       spec = crdFile "backuprepositories.velero.io.json";
+      controller = self.deployment;
       usesAtLeast = _: { };
     };
     backups = scope.mkCRD {
       spec = crdFile "backups.velero.io.json";
+      controller = self.deployment;
       readiness = oneShotReadiness "backup";
     };
     # Velero's pods dial the store named in the location's config
     # (`s3Url`), not whoever creates the location.
     backupStorageLocations = scope.mkCRD {
       spec = crdFile "backupstoragelocations.velero.io.json";
+      controller = self.deployment;
       readiness = phase "Available";
       usesAtLeast = _: { };
       factBehavior = {
@@ -286,25 +289,30 @@ in
     dataUploads = scope.mkCRD { spec = crdFile "datauploads.velero.io.json"; };
     deleteBackupRequests = scope.mkCRD {
       spec = crdFile "deletebackuprequests.velero.io.json";
+      controller = self.deployment;
       usesAtLeast = _: { };
     };
     downloadRequests = scope.mkCRD {
       spec = crdFile "downloadrequests.velero.io.json";
+      controller = self.deployment;
       usesAtLeast = _: { };
     };
     podVolumeBackups = scope.mkCRD { spec = crdFile "podvolumebackups.velero.io.json"; };
     podVolumeRestores = scope.mkCRD { spec = crdFile "podvolumerestores.velero.io.json"; };
     restores = scope.mkCRD {
       spec = crdFile "restores.velero.io.json";
+      controller = self.deployment;
       readiness = oneShotReadiness "restore";
     };
     schedules = scope.mkCRD {
       spec = crdFile "schedules.velero.io.json";
+      controller = self.deployment;
       readiness = scheduleReadiness;
       usesAtLeast = _: { };
     };
     serverStatusRequests = scope.mkCRD {
       spec = crdFile "serverstatusrequests.velero.io.json";
+      controller = self.deployment;
       usesAtLeast = _: { };
     };
     volumeSnapshotLocations = scope.mkCRD {
