@@ -158,14 +158,14 @@ impl From<&Connection> for Target {
 pub fn unbound_note(cluster: &str, connection: &Connection, uid: Option<&str>) -> String {
     let set = match uid {
         Some(uid) => format!(
-            "To bind it to this Kubernetes cluster, set `cluster.kubernetes.uid = \"{uid}\";` in the definition."
+            "If this is the right cluster, set `cluster.kubernetes.uid = \"{uid}\";` in the '{cluster}' cluster definition."
         ),
         None => format!(
-            "To bind it, set `cluster.kubernetes.uid` to the UID of the {NAMESPACE} Namespace (`kubectl get namespace {NAMESPACE} -o jsonpath='{{.metadata.uid}}'`)."
+            "If this is the right cluster, run `kubectl get namespace {NAMESPACE} -o jsonpath='{{.metadata.uid}}'` and set `cluster.kubernetes.uid` to that UID in the '{cluster}' cluster definition."
         ),
     };
     format!(
-        "The definition of '{cluster}' does not name its Kubernetes cluster, so Kix cannot check that {} is the one you mean.\n  {set} Kix then refuses to deploy it anywhere else. See {DOCS_URL}{HOW_TO_PATH}.",
+        "Cluster '{cluster}' does not set `cluster.kubernetes.uid`, so Kix continues without checking that {} is the right Kubernetes cluster.\n  {set} Once set, Kix refuses to deploy '{cluster}' to any other cluster. See {DOCS_URL}{HOW_TO_PATH}.",
         connection.describe()
     )
 }

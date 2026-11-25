@@ -38,19 +38,19 @@ $ kubectl --context prod get namespace kube-system -o jsonpath='{.metadata.uid}'
 ```
 
 The UID is known as soon as the cluster exists, so you can bind a definition
-before its first deploy. The first `kix plan` or `kix deploy` of a definition
-that is not bound prints a note with the line to add, using the UID of the
-cluster it connected to:
+before its first deploy. Before a cluster's first deploy, running `kix plan` or
+`kix deploy` without `cluster.kubernetes.uid` set also prints the line to add,
+using the UID of the connected cluster:
 
 ```
 Connecting to context prod (https://prod.example:6443)...
 No previous deployment record on the cluster. First deploy.
-Note: The definition of 'production' does not name its Kubernetes cluster, so Kix cannot check that context prod (https://prod.example:6443) is the one you mean.
-  To bind it to this Kubernetes cluster, set `cluster.kubernetes.uid = "4d7b1c2e-9f3a-4b8e-a1c5-6d2e8f0a9b3c";` in the definition. Kix then refuses to deploy it anywhere else. See https://kix.run/docs/how-to/operate-a-cluster/bind-a-cluster-definition-to-its-kubernetes-cluster/.
+Note: Cluster 'production' does not set `cluster.kubernetes.uid`, so Kix continues without checking that context prod (https://prod.example:6443) is the right Kubernetes cluster.
+  If this is the right cluster, set `cluster.kubernetes.uid = "4d7b1c2e-9f3a-4b8e-a1c5-6d2e8f0a9b3c";` in the 'production' cluster definition. Once set, Kix refuses to deploy 'production' to any other cluster. See https://kix.run/docs/how-to/operate-a-cluster/bind-a-cluster-definition-to-its-kubernetes-cluster/.
 ```
 
-Check that the context and server are the cluster you meant before you copy
-the UID.
+Confirm that the context and API server URL point to the right cluster before
+copying the UID.
 
 ## Name it in the definition
 

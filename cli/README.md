@@ -786,8 +786,8 @@ page documents.
 The same `Connection` names the target before anything is read. `kix plan`,
 `kix deploy`, `kix rollback`, `kix gc`, and `kix migrate domain` print
 `Connection::connecting` ("Connecting to context <name> (<server>)...")
-once, before they connect. `kix plan --read-only` and `kix diff` against the
-cluster print it on stderr. JSON output carries it as `binding::Target`
+once, before they connect. `kix plan --read-only` prints it on stderr
+(`diff::Baseline::Live`). JSON output carries it as `binding::Target`
 (`{context, server}`): the plan document's `kubernetes` field (`null` when the
 plan did not connect), the JSON deploy log's first line (`type: kubernetes`),
 `kix history`'s `kubernetes` field, and `server` beside `context` in `kix

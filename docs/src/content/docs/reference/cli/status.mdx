@@ -204,7 +204,7 @@ fields and values they do not know.
 | Field | Meaning |
 | --- | --- |
 | `schema_version` | Version of the document's shape. |
-| `kubernetes` | The Kubernetes cluster read: `context`, `server` (the context's API server URL in the kubeconfig), `uid` (`null` when the account may not read the `kube-system` Namespace), and `version`. |
+| `kubernetes` | The Kubernetes cluster read: `context`, `server` (the API server URL in the kubeconfig, or `null` when not set), `uid` (`null` when the account may not read the `kube-system` Namespace), and `version`. |
 | `checks` | The checks that ran: `presence`, `drift`, `readiness`. |
 | `unreadable` | Resource types the account may not list, such as `secrets`. |
 | `clusters[]` | One entry for each Kix cluster checked. |

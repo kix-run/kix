@@ -49,14 +49,13 @@ Set `KIX_TUI_HEIGHT` to a number of rows to cap the live view of
 ## What a deploy does
 
 1. Builds the cluster.
-2. Prints the kubeconfig context and API server it connects to, such as
-   `Connecting to context prod (https://prod.example:6443)...`. On the
-   first deploy of a definition that does not set `cluster.kubernetes.uid`,
-   it also prints a note with the line that would
-   [bind the definition](/docs/how-to/operate-a-cluster/bind-a-cluster-definition-to-its-kubernetes-cluster/)
-   to this Kubernetes cluster. Then it reads the running activation from the
-   cluster (or the local cache with `--offline`, which connects only after
-   the confirmation). If that build is no longer in Kix's local store,
+2. Prints the kubeconfig context and API server URL before connecting, such as
+   `Connecting to context prod (https://prod.example:6443)...` (with
+   `--offline`, Kix connects only after confirmation). On a first deploy when
+   `cluster.kubernetes.uid` is unset, Kix also prints a note with the setting
+   to [bind the definition](/docs/how-to/operate-a-cluster/bind-a-cluster-definition-to-its-kubernetes-cluster/)
+   to this Kubernetes cluster. Kix reads the running activation from the
+   cluster, or from the local cache with `--offline`. If that build is no longer in Kix's local store,
    Kix rebuilds the previous state from the live resources whose
    `kix.run/activations` annotation names the running Activation record, a
    failed one of the same cluster, or a build listed under
@@ -365,9 +364,9 @@ deploys without this check.
 
 `--log-format json` writes one JSON event object per line (NDJSON) to stdout,
 while the plan, warnings, and confirmation text go to stderr. The first JSON
-line has `"type": "kubernetes"` and names the cluster the deploy writes to:
-`context` is the kubeconfig context and `server` its API server URL, each
-`null` when the kubeconfig does not give it. When the run
+line has `"type": "kubernetes"` and identifies the target cluster with
+`context` (the kubeconfig context) and `server` (its API server URL), each
+`null` when not set in the kubeconfig. When the run
 reaches the deploy engine, the last JSON line is the `summary` object, with
 `succeeded` (which matches the exit status), `dry_run`, and the `created`,
 `configured`, `unchanged`, `failed`, `cancelled`, and `pruned` counts. Every
