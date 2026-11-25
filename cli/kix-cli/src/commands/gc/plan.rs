@@ -1,7 +1,6 @@
 //! Classify soft, hard, and Activation record garbage for `kix gc`.
 
-use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::collections::HashSet;
 
 use miette::{Result, miette};
 use serde_json::Value;
@@ -12,7 +11,6 @@ use crate::output;
 use kix::cluster::activation::{Record, Records, RetentionPolicy, Retirement, retire_plan};
 use kix::cluster::discovery;
 use kix::cluster::inventory;
-use kix::eval::store_graph::store_hash;
 use kix::manifest::keys;
 use kix::manifest::lifecycle;
 use kix::manifest::types::{CLUSTER_SCOPED, ResourceId, to_manifest_value};
@@ -20,7 +18,9 @@ use kix::manifest::types::{CLUSTER_SCOPED, ResourceId, to_manifest_value};
 /// Reason a live resource was classified as garbage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum GarbageReason {
-    /// Resource carries a `kix.run/identity-hash` that is absent from the expected set.
+    /// Resource carries a `kix.run/identity-hash` that is absent from the
+    /// build gc compares with: the Active build, or the build from the current
+    /// files when the cluster has no Active record.
     HashNotExpected,
     /// Resource carries the Kix label but no `kix.run/identity-hash` annotation.
     NoIdentityHash,
@@ -33,7 +33,7 @@ impl GarbageReason {
     pub(super) fn label(&self) -> &'static str {
         match self {
             GarbageReason::HashNotExpected => {
-                "build hash is not in the build made from the current files"
+                "not in the active deployment's build (or local build if none is active)"
             }
             GarbageReason::NoIdentityHash => {
                 "carries Kix's label but no Kix build annotation (`--include unstamped`)"
@@ -79,23 +79,23 @@ impl RecordRetirement {
     }
 }
 
-/// Return manifests from `closures` (`status.orphansKeptFrom`) that are absent
-/// from the new build and not already present in `garbage`.
+/// Return manifests from `closures` (`status.orphansKeptFrom`) that the
+/// Active build does not contain, once each. `active_hashes` and `active_ids`
+/// are the Active build's store hashes and Kubernetes identities.
 pub(super) fn kept_garbage(
     closures: &[Vec<Value>],
-    garbage: &HashMap<String, Value>,
-    new_hashes: &HashSet<String>,
-    new_ids: &HashSet<String>,
+    active_hashes: &HashSet<String>,
+    active_ids: &HashSet<String>,
 ) -> Vec<Value> {
-    let mut seen: HashSet<String> = garbage.values().map(k8s_identity).collect();
+    let mut seen: HashSet<String> = HashSet::new();
     let mut out = Vec::new();
     for manifest in closures.iter().flatten() {
         let Some(hash) = keys::get(manifest, keys::IDENTITY_HASH) else {
             continue;
         };
         if !lifecycle::lifecycle_of(manifest).prunable()
-            || new_hashes.contains(hash)
-            || new_ids.contains(&k8s_identity(manifest))
+            || active_hashes.contains(hash)
+            || active_ids.contains(&k8s_identity(manifest))
         {
             continue;
         }
@@ -301,14 +301,21 @@ pub(super) async fn plan_record_retirement(
     cluster: &str,
     policy: &RetentionPolicy,
 ) -> Result<RecordRetirement> {
+    plan_records_with(open_records(global).await?, cluster, policy).await
+}
+
+/// Connect to the cluster and open its Activation records, or return `None`
+/// when the cluster has none.
+pub(super) async fn open_records(global: &crate::cli::GlobalArgs) -> Result<Option<Records>> {
     let client = client::make_client(global.context.as_deref())
         .await
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
     let discovery = discovery::discover_resources(&client)
         .await
         .map_err(|e| miette!("{e}"))?;
-    let records = Records::open(&client, &discovery).map_err(|e| miette!("{e}"))?;
-    plan_records_with(records.into_records(), cluster, policy).await
+    Ok(Records::open(&client, &discovery)
+        .map_err(|e| miette!("{e}"))?
+        .into_records())
 }
 
 /// List Superseded records and compute the retirement plan for `cluster`.
@@ -379,30 +386,4 @@ fn live_identity(obj: &kube::api::DynamicObject) -> String {
 pub(super) fn k8s_identity(manifest: &Value) -> String {
     let rid = ResourceId::from_value(manifest);
     format!("{}/{}/{}", rid.kind, rid.namespace, rid.name)
-}
-
-/// Return manifests from `old` whose Kubernetes identity (`kind`, `namespace`,
-/// and `name`) is absent from the new build, keyed by store hash.
-///
-/// A changed store hash alone is not garbage when the resource still exists
-/// under the same Kubernetes identity, because soft GC deletes by name.
-/// Activation records are also excluded here and retired via the retention
-/// policy instead.
-pub(super) fn soft_garbage<'a>(
-    old: impl IntoIterator<Item = (&'a PathBuf, &'a Value)>,
-    new_hashes: &HashSet<String>,
-    new_ids: &HashSet<String>,
-) -> HashMap<String, Value> {
-    let mut garbage = HashMap::new();
-    for (path, manifest) in old {
-        if lifecycle::is_record(manifest) {
-            continue;
-        }
-        let hash = store_hash(path);
-        if new_hashes.contains(&hash) || new_ids.contains(&k8s_identity(manifest)) {
-            continue;
-        }
-        garbage.insert(hash, manifest.clone());
-    }
-    garbage
 }

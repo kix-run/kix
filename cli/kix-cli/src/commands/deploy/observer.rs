@@ -312,7 +312,7 @@ pub(super) fn render_prune_start(
         } else {
             let _ = writeln!(
                 out,
-                "{} {} object(s) left the build, still on the cluster; run `kix deploy --prune` or `kix gc` to delete them:",
+                "{} {} object(s) left the build and remain on the cluster; run `kix gc` to delete them:",
                 output::bold("prune:"),
                 resources.len(),
             );

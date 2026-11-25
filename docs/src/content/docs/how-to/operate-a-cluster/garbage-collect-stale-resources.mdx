@@ -6,9 +6,15 @@ description: "Remove resources no longer present in the cluster definition and r
 import Command from '/src/components/Command.astro';
 import gcPlan from '/src/command-output/how-to/application-gc/plan.json';
 
-Use `kix gc` to remove resources that an earlier Activation managed but the
-current cluster definition no longer contains. Every mode also applies the
-Activation retention policy.
+Use `kix gc` to delete resources that an earlier deploy or rollback left behind
+on the cluster. Every mode also retires old Activation records according to your
+retention policy.
+
+`kix gc` keeps every resource in the cluster's active deployment (the build
+named by its `Active` Activation record from the last deploy or rollback).
+Editing your local files has no effect on `kix gc` until you deploy. To remove a
+resource from the cluster, remove it from your cluster definition and run
+`kix deploy --prune`, or run `kix deploy` and then `kix gc`.
 
 ## Review the normal garbage-collection plan
 
@@ -21,19 +27,12 @@ anything, add `--dry-run`:
 
 <Command commands={["kix gc how-to-application --dry-run"]} cwd="kix-examples/" />
 
-The normal mode compares the previously deployed Activation with a fresh build
-of the cluster. It prints the resources found by that comparison and the
-Activation records it plans to delete, then asks for confirmation.
-
-The normal mode can also find stale cluster-level resources that belong to no
-package. It currently deletes those after confirmation without listing them in
-the plan. Use `--full-scan` when the confirmation plan must be a complete
-inventory of live garbage.
-
-It also deletes orphans that an earlier `kix deploy` without `--prune` listed
-and kept. That deploy records the builds they came from on its Activation; the
-plan lists them under **Orphans kept by earlier deploys (warn-only)** and
-deletes them along with the rest of the garbage after confirmation.
+By default, `kix gc` deletes leftover resources from earlier `kix deploy` and
+`kix rollback` runs that ran without `--prune`. Those runs record the builds
+whose old resources they kept on the `Active` Activation record. `kix gc` checks
+those builds, lists any resources no longer in the active deployment under
+**Objects that left the build in earlier deploys**, shows the Activation records
+it plans to retire, and asks for confirmation.
 
 Check the package, kind, namespace, and name of each resource before approving
 the plan. Kix deletes dependants before their dependencies.
@@ -53,19 +52,20 @@ After reviewing the plan, pass `--yes` in automation:
 
 This performs the same comparison and deletion without asking for
 confirmation. The captured run follows an instance being renamed in the
-cluster definition, so the resources deployed under the old name are the ones
-Kix removes.
+cluster definition and deployed without `--prune`, so Kix removes the resources
+deployed under the old name.
 
 ## Scan the live cluster for orphans
 
-Use `--full-scan` when the local activation cache is unavailable or you need
-to find Kix-managed resources outside the previous-to-current build
-comparison:
+Use `--full-scan` to scan the live cluster for stale Kix-managed resources that
+default `kix gc` does not track, such as resources from a build that is not on
+this machine, or from a deployment whose record was retired (see below):
 
 <Command commands={["kix gc how-to-application --full-scan"]} cwd="kix-examples/" />
 
 A full scan reads live resources carrying Kix ownership metadata and compares
-them with the expected resources in the current build.
+them with the resources in the active deployment's build (or the build from
+your local files when the cluster has no active deployment).
 
 When one Kubernetes cluster hosts more than one Kix cluster, a full scan
 judges only the named cluster's resources. It finds them through the
@@ -78,7 +78,7 @@ record on this cluster" and keeps it, even when only one Kix cluster has
 records there. The resource may come from an earlier deploy whose records
 `kix gc` has retired, or from another Kix cluster whose records were deleted.
 Review the listed resources, then pass `--include unattributed` to check them
-against the current build and delete any not in it.
+against the active deployment's build and delete any not in it.
 
 Resources carrying a Kix label but no `kix.run/identity-hash` are listed under
 "No Kix build annotation" and kept by default. Kix cannot establish that it originally applied
