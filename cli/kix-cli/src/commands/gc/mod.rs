@@ -11,7 +11,7 @@
 //!   (`inventory::SweepScope::Cluster`). Resources whose `kix.run/identity-hash`
 //!   is absent from the new build are garbage (or, for resources stamped before
 //!   the domain move, resources whose Kubernetes identity is absent). Unstamped
-//!   label carriers, unattributed resources on multi-cluster targets, and
+//!   label carriers, resources that name no Activation record, and
 //!   copies other programs made of Kix objects are reported and only deleted when
 //!   `--include` names them.
 //! - **Operator (`--operator`):** Delete retired Superseded Activation records
