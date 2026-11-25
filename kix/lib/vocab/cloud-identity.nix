@@ -226,6 +226,26 @@ let
 
   bindTo = dep: args: args // { _cloudIdentity = dep; };
 
+  # Return how a message names the dependency `arg` of the instance, or the
+  # dependency in general when `arg` is null: `this` and `the` start or sit
+  # inside a sentence, and `inDep` follows a value it holds.
+  depWords =
+    arg:
+    if arg == null then
+      {
+        this = "this dependency";
+        the = "the dependency";
+        inDep = "";
+      }
+    else
+      {
+        this = "`deps.${arg}`";
+        the = "`deps.${arg}`";
+        inDep = " in `deps.${arg}`";
+      };
+
+  capitalize = s: lib.toUpper (builtins.substring 0 1 s) + builtins.substring 1 (-1) s;
+
   # Read a credentials dependency that holds a Secret instance or a cloud
   # identity. `cloud` is the cloud whose API the package's software calls
   # (`"aws"`, `"gcp"`, `"azure"`), or null when it takes no cloud identity.
@@ -238,32 +258,35 @@ let
   # the cluster's mechanism, and the workload builders add the pod labels
   # and a restart stamp to every pod template that names that
   # ServiceAccount. Without an identity, `bind` returns its arguments
-  # unchanged.
+  # unchanged. `arg` is the name the package takes `dep` under, and a
+  # refusal names that dependency of the instance.
   use =
     {
       scope,
       dep,
       cloud,
       identityGoesTo ? null,
+      arg ? null,
     }:
     let
       fail = errors.failOf "cloudIdentity.use" {
         inherit scope;
         who = null;
       };
+      words = depWords arg;
       problem = identityProblem {
         inherit dep cloud;
         unused = call: {
-          message = "With its current configuration, this package does not authenticate with a cloud identity, so Kix rejected `${call} { ... }`.";
+          message = "With its current configuration, this package does not authenticate with a cloud identity, so Kix rejected `${call} { ... }`${words.inDep}.";
           fix =
-            "Pass a Secret instance (`ref.<namespace>.<instance>`) instead, or remove the dependency."
+            "Pass a Secret instance (`ref.<namespace>.<instance>`) to ${words.the} instead, or remove ${words.the}."
             + lib.optionalString (
               identityGoesTo != null
             ) " To authenticate with this cloud identity, move it to ${identityGoesTo}.";
         };
         mismatch = m: {
-          message = "This instance passes `${m.given} { ... }` (${m.givenCloud}), but it is configured to call ${m.wantedCloud}, so Kix rejected the mismatched cloud identity.";
-          fix = "Change the dependency to `${m.wanted} { ... }` or to a Secret instance (`ref.<namespace>.<instance>`) with ${m.wantedCloud} credentials, or change the instance's `config` to use ${m.givenCloud}.";
+          message = "This instance passes `${m.given} { ... }` (${m.givenCloud})${words.inDep}, but it is configured to call ${m.wantedCloud}, so Kix rejected the mismatched cloud identity.";
+          fix = "Change ${words.the} to `${m.wanted} { ... }` or to a Secret instance (`ref.<namespace>.<instance>`) with ${m.wantedCloud} credentials, or change the instance's `config` to use ${m.givenCloud}.";
         };
       };
     in
@@ -274,7 +297,7 @@ let
         bind = args: args;
       }
     else if problem != null then
-      fail problem
+      fail (problem // { dependency = arg; })
     else
       {
         secret = null;
@@ -291,19 +314,22 @@ let
   # only the identity's own fields are checked, because only a dependent
   # knows the cloud. Return `{ identity; cloud; bind; }`: `identity` is the
   # dependency or null, `cloud` is the identity's cloud or null, for
-  # `out.identityCloud`, and `bind` works as `use`'s does.
+  # `out.identityCloud`, and `bind` works as `use`'s does. `arg` works as
+  # `use`'s does.
   useIdentity =
     {
       scope,
       dep,
       secretGoesTo,
       cloud ? null,
+      arg ? null,
     }@args:
     let
       fail = errors.failOf "cloudIdentity.useIdentity" {
         inherit scope;
         who = null;
       };
+      words = depWords arg;
       depName =
         if builtins.isAttrs dep && dep ? _meta then
           "`${dep._meta.namespaceName}/${dep._meta.instanceName}`"
@@ -312,8 +338,8 @@ let
       problem =
         if !(isIdentity dep) then
           {
-            message = "This dependency accepts a cloud identity (`kix.cloudIdentity.aws`, `gcp`, or `azure`) or `null`, but got ${depName}, so Kix rejected it.";
-            fix = "To authenticate with a Secret, pass it to ${secretGoesTo} instead. Otherwise, set this dependency to a cloud identity (such as `kix.cloudIdentity.aws { roleArn = \"...\"; }`) or remove it.";
+            message = "${capitalize words.this} accepts a cloud identity (`kix.cloudIdentity.aws`, `gcp`, or `azure`) or `null`, but got ${depName}, so Kix rejected it.";
+            fix = "To authenticate with a Secret, pass it to ${secretGoesTo} instead. Otherwise, set ${words.this} to a cloud identity (such as `kix.cloudIdentity.aws { roleArn = \"...\"; }`) or remove it.";
           }
         else if !(args ? cloud) then
           dep.problem
@@ -321,12 +347,14 @@ let
           identityProblem {
             inherit dep cloud;
             unused = call: {
-              message = "This instance's pods read their cloud credentials from a Secret, so Kix rejected the unused `${call} { ... }`.";
-              fix = "To keep using the Secret, remove this cloud identity dependency. To authenticate with this cloud identity instead, remove the Secret from ${secretGoesTo} and configure that instance to use pod credentials.";
+              message = "This instance's pods read their cloud credentials from a Secret, so Kix rejected the unused `${call} { ... }`${words.inDep}.";
+              fix = "To keep using the Secret, remove ${
+                if arg == null then "this cloud identity dependency" else words.this
+              }. To authenticate with this cloud identity instead, remove the Secret from ${secretGoesTo} and configure that instance to use pod credentials.";
             };
             mismatch = m: {
-              message = "This instance passes `${m.given} { ... }` (${m.givenCloud}), but its pods call ${m.wantedCloud}, so Kix rejected the mismatched cloud identity.";
-              fix = "Change this dependency to `${m.wanted} { ... }`, or change the instance configured for ${m.wantedCloud} to use ${m.givenCloud}.";
+              message = "This instance passes `${m.given} { ... }` (${m.givenCloud})${words.inDep}, but its pods call ${m.wantedCloud}, so Kix rejected the mismatched cloud identity.";
+              fix = "Change ${words.this} to `${m.wanted} { ... }`, or change the instance configured for ${m.wantedCloud} to use ${m.givenCloud}.";
             };
           };
     in
@@ -337,7 +365,7 @@ let
         bind = sa: sa;
       }
     else if problem != null then
-      fail problem
+      fail (problem // { dependency = arg; })
     else
       {
         identity = dep;

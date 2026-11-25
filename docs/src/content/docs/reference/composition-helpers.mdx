@@ -388,6 +388,7 @@ build =
     credentials = kix.cloudIdentity.use {
       inherit scope;
       dep = providerCredentials;
+      arg = "providerCredentials";
       cloud = "aws";
     };
   in
@@ -406,6 +407,7 @@ build =
 | `scope` | The package's `scope`, used to name the instance and package in evaluation errors. |
 | `dep` | The dependency value: a cloud identity, a Secret instance, or `null`. |
 | `cloud` | Which cloud API the software calls: `"aws"`, `"gcp"`, `"azure"`, or `null` when cloud identities are not accepted. Passing an identity for any other cloud fails evaluation. |
+| `arg` | Optional string (defaults to `null`). The name the package takes `dep` under, such as `"providerCredentials"`. When set, an error names `deps.<arg>` and sets its `dependency` field. Pass it whenever a package has more than one credentials dependency, so the reader knows which one to fix. |
 | `identityGoesTo` | Optional string (defaults to `null`). Where the cluster author should move the cloud identity, such as ``"`deps.controllerIdentity` of the cert-manager instance"``. Appended to the error's fix when `cloud` is `null` and `dep` is a cloud identity. |
 
 `kix.cloudIdentity.use` returns an attribute set with three fields:
@@ -439,6 +441,7 @@ The package that owns the ServiceAccount unpacks its cloud identity dependency w
 credentials = kix.cloudIdentity.useIdentity {
   inherit scope;
   dep = controllerIdentity;
+  arg = "controllerIdentity";
   secretGoesTo = "`deps.issuerCredentials` of a cluster-issuer instance";
 };
 controllerServiceAccount =
@@ -452,6 +455,7 @@ root.out.identityCloud = credentials.cloud;
 | --- | --- |
 | `scope` | The package's `scope`, used to name the instance and package in evaluation errors. |
 | `dep` | The dependency value: a cloud identity or `null`. Passing a Secret instance or any other value fails evaluation. |
+| `arg` | Optional string (defaults to `null`). The name the package takes `dep` under, as for `kix.cloudIdentity.use`. |
 | `secretGoesTo` | Required string naming where to pass a Secret instead (for example, ``"`deps.issuerCredentials` of a cluster-issuer instance"``). Included in the error's fix when `dep` is not a cloud identity or when `cloud` is `null`. |
 | `cloud` | Optional (`"aws"`, `"gcp"`, `"azure"`, or `null`). Pass a dependency's `out.ambientCloud` when a dependency chooses the cloud: an identity for another cloud fails evaluation, and an explicit `null` (meaning the pods use a Secret) rejects any cloud identity. Omit `cloud` altogether when dependents choose the cloud; `useIdentity` then validates only the identity's own fields. |
 
