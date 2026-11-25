@@ -1,0 +1,3 @@
+# 2026-11-25 · `kix/lib/flavors/k3s.nix` · The k3s flavour says nothing enforces `NetworkPolicy`, but k3s ships a policy controller.
+
+The flavour's header says "Flannel does not enforce NetworkPolicy". k3s embeds a policy controller built on kube-router and runs it beside Flannel unless the server starts with `--disable-network-policy` (https://docs.k3s.io/networking/networking-services). A reader concludes that a stock k3s cluster cannot enforce policy, and Kix has no enforcer declared for it, so `networkPolicy.enable = true` fails there without Cilium. k3s also leaves the controller's iptables rules on every node after the flag is added, which the flavour's advice to replace Flannel with Cilium does not mention.
