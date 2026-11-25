@@ -692,6 +692,9 @@ fn write_not_checked(out: &mut String, plan: &Plan) -> fmt::Result {
                 UncheckedReason::CrdCreatedByThisDeploy => {
                     "uses a CustomResourceDefinition created by this deploy"
                 }
+                UncheckedReason::CrdInstalledOutsideKix => {
+                    "uses a CustomResourceDefinition that is not on the cluster. Kix does not install it, and the deploy waits for something else to install it"
+                }
                 UncheckedReason::CrdChangedByThisDeploy => {
                     "uses a CustomResourceDefinition changed by this deploy, so it was checked against the definition currently on the cluster"
                 }

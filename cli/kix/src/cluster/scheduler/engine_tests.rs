@@ -1968,6 +1968,16 @@ async fn finalize_learns_whether_orphans_were_left() {
         clusters: vec!["b".into()],
     });
     assert!(!orphans_left(PrunePolicy::Delete, &cm, Behaviour::Now(Ok(shared))).await);
+    // An orphan of a kind the cluster does not serve cannot exist, so it
+    // is not left for the next prune.
+    assert!(
+        !orphans_left(
+            PrunePolicy::Delete,
+            &cm,
+            Behaviour::Now(Ok(Pruned::NotServed))
+        )
+        .await
+    );
 }
 
 /// An orphan with no manifest among the old manifests is still pruned,

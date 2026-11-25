@@ -160,6 +160,42 @@ example:
   cwd="kix-examples/"
 />
 
+## Remove everything a Kix cluster deployed
+
+Kix has no single command that removes a Kix cluster from a Kubernetes
+cluster. Before you start, list the Namespaces and CustomResourceDefinitions
+the cluster's build creates, because the next steps remove them from the
+build:
+
+<Command commands={["kix list resources how-to-application"]} cwd="kix-examples/" />
+
+Then remove every package from the cluster definition, keeping any flavor or
+platform import the Kubernetes cluster still needs, and deploy with
+`--prune`:
+
+<Command commands={["kix deploy how-to-application --prune"]} cwd="kix-examples/" />
+
+Kix deletes every object the previous build created, except these:
+
+- **Namespaces and CustomResourceDefinitions.** Kix never deletes them
+  automatically. Deleting a Namespace deletes everything in it. Deleting a
+  CustomResourceDefinition deletes every object of its kind in every
+  namespace, so first check that no other Kix cluster or tool uses it.
+- **Objects the software created while it ran**, such as Secrets and Leases
+  that an operator wrote. Kix never deployed them, so it does not track them.
+  They go when you delete their Namespace.
+- **Objects another Kix cluster still deploys.** That cluster keeps them.
+- **The cluster's Activation records**, its deployment history. List them with
+  `kubectl get activations.kix.run -l kix.run/cluster=how-to-application`.
+  On a cluster that runs the Kix operator, deleting the Active record makes the
+  operator delete the objects it names, as described above.
+- **Kix's own CustomResourceDefinitions**, `activations.kix.run` and
+  `packageinstances.kix.run`, and the objects of any flavor or import still in
+  the definition. Other Kix clusters on the same Kubernetes cluster use the
+  same two definitions, so delete them only when no Kix cluster is left.
+
+Remove the leftovers you no longer need with `kubectl delete`.
+
 :::note[Configure the history window]
 See [Configure Activation retention](/docs/how-to/operate-a-cluster/configure-activation-retention/)
 for the retention rules and scheduling example.

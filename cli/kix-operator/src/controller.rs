@@ -1082,15 +1082,10 @@ async fn delete_closure(
                 resource = %rid,
                 "Kept while deleting Activation: Kix never deletes this kind automatically. Delete it with kubectl if you want to remove it"
             ),
-            Removal::UnknownKind => tracing::warn!(
-                name,
-                resource = %rid,
-                "Not deleted while deleting Activation: Kubernetes does not recognize this kind. If its CustomResourceDefinition was removed, Kubernetes already deleted this object with it"
-            ),
             Removal::Pruned(Pruned::Deleted { .. } | Pruned::AlreadyDeleting { .. }) => {
                 tracing::info!(name, resource = %rid, "Deleted")
             }
-            Removal::Pruned(Pruned::Gone) => {}
+            Removal::Pruned(Pruned::Gone | Pruned::NotServed) => {}
             Removal::Pruned(kept) => {
                 let reason = kept.kept_reason().unwrap_or_default();
                 tracing::info!(name, resource = %rid, "prune: {reason}");

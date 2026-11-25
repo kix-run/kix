@@ -373,8 +373,9 @@ pub(crate) enum StampError {
 /// Why [`ResourceIo::prune`] did not delete an orphan.
 #[derive(Debug, Error)]
 pub(crate) enum DeleteError {
-    #[error(transparent)]
-    NotDiscovered(#[from] NotDiscovered),
+    /// Kix could not tell whether the cluster serves the object's kind.
+    #[error("cannot tell whether this Kubernetes cluster serves this resource's kind: {0}")]
+    Discovery(FetchError),
     /// The records sit under a retired group, so no prune guard can tell
     /// what other Kix clusters deploy.
     #[error(transparent)]

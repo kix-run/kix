@@ -135,6 +135,14 @@ impl<'a> Context<'a> {
     fn refusal(&self, rid: &ResourceId, refusal: &Refusal) -> Verdict {
         let manifest = self.manifests.get(rid).copied();
         let changed_crd = manifest.and_then(|m| self.changed.crd_of(m));
+        let crd_source = match refusal {
+            Refusal::UnknownKind { .. }
+                if discovery::find(self.scope.served, &rid.group, &rid.kind).is_none() =>
+            {
+                manifest.and_then(|m| self.crds.source(m))
+            }
+            _ => None,
+        };
         match refusal {
             Refusal::WebhookNoDryRun { message, .. } => Verdict::NotChecked {
                 reason: UncheckedReason::WebhookNoDryRun,
@@ -157,16 +165,21 @@ impl<'a> Context<'a> {
                         .into(),
                 }
             }
-            Refusal::UnknownKind { kind }
-                if discovery::find(self.scope.served, &rid.group, &rid.kind).is_none()
-                    && self.crds.brings(manifest) =>
-            {
-                Verdict::NotChecked {
+            Refusal::UnknownKind { kind } if crd_source.is_some() => match crd_source {
+                Some(CrdSource::Created(crd)) => Verdict::NotChecked {
                     reason: UncheckedReason::CrdCreatedByThisDeploy,
-                    because: manifest.and_then(|m| self.crds.crd_of(m)),
+                    because: Some(crd),
                     detail: format!("kind {kind} is served once this deploy installs its CRD"),
-                }
-            }
+                },
+                _ => Verdict::NotChecked {
+                    reason: UncheckedReason::CrdInstalledOutsideKix,
+                    because: crd_source.and_then(CrdSource::imported),
+                    detail: format!(
+                        "kind {kind} is served once something other than Kix installs its CRD, \
+                         which the deploy waits for"
+                    ),
+                },
+            },
             Refusal::NamespaceMissing { namespace, .. }
                 if self.namespaces.contains(namespace.as_str()) =>
             {
@@ -289,8 +302,28 @@ impl ChangedCrds {
     }
 }
 
+/// Where the CRD of a custom resource's kind comes from.
+enum CrdSource {
+    /// A `CustomResourceDefinition` manifest in the build.
+    Created(ResourceId),
+    /// An import marker (`scope.mkCRDRef`) in the build, which says the CRD
+    /// is installed outside Kix, by an operator in the build or by something
+    /// else. The deploy waits for it and never creates it. The CRD is known
+    /// when the marker is the only one for its API group.
+    Imported(Option<ResourceId>),
+}
+
+impl CrdSource {
+    fn imported(self) -> Option<ResourceId> {
+        match self {
+            CrdSource::Imported(crd) => crd,
+            CrdSource::Created(_) => None,
+        }
+    }
+}
+
 /// Custom resource kinds and API groups the build brings, either as
-/// `CustomResourceDefinition` manifests or through operator import markers.
+/// `CustomResourceDefinition` manifests or through import markers.
 struct BuildCrds {
     kinds: HashMap<(String, String), ResourceId>,
     /// The CRDs that import markers wait for, by API group.
@@ -320,24 +353,17 @@ impl BuildCrds {
         BuildCrds { kinds, groups }
     }
 
-    /// Return `true` if `manifest` belongs to a CRD kind or API group the
-    /// build brings.
-    fn brings(&self, manifest: Option<&Value>) -> bool {
-        manifest
-            .and_then(crd_key)
-            .is_some_and(|key| self.groups.contains_key(&key.0) || self.kinds.contains_key(&key))
-    }
-
-    /// Return the CRD that serves `manifest`'s kind. An import marker names a
-    /// CRD by group only, so it counts only when it is the group's one marker.
-    fn crd_of(&self, manifest: &Value) -> Option<ResourceId> {
+    /// Return where the CRD of `manifest`'s kind comes from, or `None` when
+    /// the build has neither the CRD nor an import marker for its group. An
+    /// import marker names a CRD by group only.
+    fn source(&self, manifest: &Value) -> Option<CrdSource> {
         let key = crd_key(manifest)?;
         if let Some(crd) = self.kinds.get(&key) {
-            return Some(crd.clone());
+            return Some(CrdSource::Created(crd.clone()));
         }
-        match self.groups.get(&key.0).map(Vec::as_slice) {
-            Some([one]) => Some(one.clone()),
-            _ => None,
+        match self.groups.get(&key.0).map(Vec::as_slice)? {
+            [one] => Some(CrdSource::Imported(Some(one.clone()))),
+            _ => Some(CrdSource::Imported(None)),
         }
     }
 }
@@ -642,6 +668,61 @@ mod tests {
         );
     }
 
+    /// A kind whose CRD the build only imports is not said to be created by
+    /// this deploy, while one whose CRD the build holds is.
+    #[test]
+    fn a_kind_whose_crd_the_build_imports_is_installed_outside_kix() {
+        let marker = json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": "PackageInstance",
+            "metadata": {
+                "name": "crd-ref-np-ciliumnetworkpolicies-cilium-io",
+                "namespace": "kube-system",
+                "annotations": {
+                    (keys::MODE): "import",
+                    (keys::IMPORT_KIND): "CustomResourceDefinition",
+                    (keys::IMPORT_API_VERSION): "apiextensions.k8s.io/v1",
+                    (keys::IMPORT_NAME): "ciliumnetworkpolicies.cilium.io",
+                },
+            },
+        });
+        let policy = object("cilium.io/v2", "CiliumNetworkPolicy", "np", "p", "np");
+        let gadget_crd = crd("example.com", "Gadget", "v1");
+        let gadget = object("example.com/v1", "Gadget", "app", "g", "app");
+        let unknown = |m: &Value, kind: &str| DryRunAnswer {
+            rid: ResourceId::from_value(m),
+            outcome: DryRunOutcome::Refused(Refusal::UnknownKind { kind: kind.into() }),
+        };
+        let build = [
+            marker.clone(),
+            policy.clone(),
+            gadget_crd.clone(),
+            gadget.clone(),
+        ];
+        let verdicts = run(
+            &build,
+            &[&policy, &gadget],
+            &[
+                unknown(&policy, "CiliumNetworkPolicy"),
+                unknown(&gadget, "Gadget"),
+            ],
+        );
+        assert_eq!(
+            webhook_reason(&verdicts[0]),
+            Some((
+                &UncheckedReason::CrdInstalledOutsideKix,
+                &Some(crd_id("ciliumnetworkpolicies.cilium.io"))
+            ))
+        );
+        assert_eq!(
+            webhook_reason(&verdicts[1]),
+            Some((
+                &UncheckedReason::CrdCreatedByThisDeploy,
+                &Some(ResourceId::from_value(&gadget_crd))
+            ))
+        );
+    }
+
     #[test]
     fn an_immutable_refusal_the_engine_recreates_is_accepted_once() {
         let op = operator();
@@ -687,7 +768,10 @@ mod tests {
     fn build_crds_match_group_and_kind() {
         let crds = BuildCrds::of(&[crd("example.com", "Widget", "v1")]);
         let widget = |api: &str| json!({"apiVersion": api, "kind": "Widget"});
-        assert!(crds.brings(Some(&widget("example.com/v1"))));
-        assert!(!crds.brings(Some(&widget("other.io/v1"))));
+        assert!(matches!(
+            crds.source(&widget("example.com/v1")),
+            Some(CrdSource::Created(_))
+        ));
+        assert!(crds.source(&widget("other.io/v1")).is_none());
     }
 }

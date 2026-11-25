@@ -784,20 +784,19 @@ pub(super) async fn delete_resources(
                     rid
                 );
             }
-            Removal::UnknownKind => {
-                eprintln!(
-                    "  {} {}: not deleted because Kubernetes does not recognize its kind. If its CustomResourceDefinition was removed, Kubernetes already deleted this object with it. Run `kix gc --full-scan` instead to check only objects still on the cluster.",
-                    output::red("!"),
-                    rid
-                );
-                done.failed += 1;
-            }
             Removal::Pruned(Pruned::Deleted { .. } | Pruned::AlreadyDeleting { .. }) => {
                 println!("  {} deleted {}", output::red("-"), rid);
                 done.deleted += 1;
             }
             Removal::Pruned(Pruned::Gone) => {
                 println!("  {} {} already gone", output::dim("="), rid);
+            }
+            Removal::Pruned(Pruned::NotServed) => {
+                println!(
+                    "  {} {} already gone, because this Kubernetes cluster does not serve its kind",
+                    output::dim("="),
+                    rid
+                );
             }
             Removal::Pruned(outcome @ (Pruned::Kept(_) | Pruned::Changed(_))) => {
                 if matches!(outcome, Pruned::Changed(_)) {
