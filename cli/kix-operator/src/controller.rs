@@ -795,12 +795,12 @@ async fn after_failed_run(
             .await
             .map_err(lifecycle)?
         {
-            tracing::error!(name, attempts, error = %cause, "Deploy failed; not retrying");
+            tracing::error!(name, attempts, error = %cause, "Stopped retrying deploy; marked Activation Failed");
             events
                 .warn_now(
                     "DeployFailed",
                     &format!(
-                        "The Kix operator stopped retrying after {attempts} failed {} and marked this record Failed. status.failure.reason and the NodeFailed Event give the cause.",
+                        "The Kix operator stopped retrying after {attempts} failed {} and marked this Activation Failed. See status.failure.reason or earlier Warning Events for the cause, fix the problem, and run `kix deploy --operator` or `kix rollback --operator` again.",
                         plural(attempts, "attempt", "attempts"),
                     ),
                 )
@@ -812,12 +812,12 @@ async fn after_failed_run(
             .fail_attempt(name, attempts, &cause, false)
             .await
             .map_err(lifecycle)?;
-        tracing::warn!(name, attempts, retries, error = %cause, "Deploy stopped; retrying");
+        tracing::warn!(name, attempts, retries, error = %cause, "Deploy attempt failed; retrying in 30s");
         events
             .warn_now(
                 "DeployRetrying",
                 &format!(
-                    "Attempt {attempts} of {} stopped at a failure. The Kix operator tries again in {} seconds. The NodeFailed Event gives the cause.",
+                    "Attempt {attempts} of {} failed. The Kix operator will retry in {} seconds. See status.failure.reason or earlier Warning Events for the cause.",
                     u64::from(retries) + 1,
                     ERROR_REQUEUE_INTERVAL.as_secs(),
                 ),
@@ -841,7 +841,7 @@ fn stop_cause(error: &DeployError) -> String {
 /// and `kix rollback --operator` print it.
 fn gave_up_reason(attempts: u32, retries: u32, cause: &str) -> String {
     format!(
-        "the Kix operator stopped this deploy after {attempts} failed {} ({DEPLOY_RETRIES_ENV} is {retries} on the operator). \
+        "the Kix operator stopped after {attempts} failed {} ({DEPLOY_RETRIES_ENV} is {retries} on the operator) and marked this Activation Failed. \
          Fix the cause below, then run `kix deploy --operator` or `kix rollback --operator` again.\n\n  \
          Last failure:\n    {}",
         plural(attempts, "attempt", "attempts"),

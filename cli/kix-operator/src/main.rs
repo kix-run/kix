@@ -169,7 +169,7 @@ async fn main() -> anyhow::Result<()> {
     });
     tracing::info!(
         retries = ctx.deploy_retries,
-        "A deploy that stops at a failure is retried this many times, then marked Failed (set {})",
+        "Configured deploy retry limit before marking an Activation Failed (override with {})",
         controller::DEPLOY_RETRIES_ENV,
     );
 

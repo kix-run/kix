@@ -193,7 +193,7 @@ impl Progress {
         if act.phase == PHASE_DEPLOYING && act.failed_attempts > self.attempts_reported {
             self.attempts_reported = act.failed_attempts;
             lines.push(format!(
-                "  {} Attempt {} failed. The Kix operator tries again in 30 seconds.",
+                "  {} Attempt {} failed. The Kix operator will retry in 30 seconds.",
                 output::red("✗"),
                 act.failed_attempts,
             ));
@@ -228,7 +228,7 @@ pub async fn watch_activation_progress(
     loop {
         if start.elapsed() > timeout {
             return Err(miette!(
-                "timed out after {} seconds waiting for the Kix operator to deploy Activation '{activation_name}'. The operator keeps working on it. Follow it with `kubectl describe activation {activation_name}`.",
+                "timed out after {} seconds waiting for the Kix operator to finish Activation '{activation_name}'. This stops only the local wait and does not cancel the deploy on the cluster. Check progress with `kubectl describe activation {activation_name}`, and verify that the Kix operator pod is running.",
                 timeout.as_secs(),
             ));
         }
@@ -464,7 +464,7 @@ mod tests {
         assert_eq!(
             progress.lines(&act),
             vec![
-                "  ✗ Attempt 1 failed. The Kix operator tries again in 30 seconds.".to_string(),
+                "  ✗ Attempt 1 failed. The Kix operator will retry in 30 seconds.".to_string(),
                 "    Secret/db@app: cannot decrypt SOPS file db.yaml".to_string(),
             ]
         );
