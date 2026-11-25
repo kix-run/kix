@@ -1,0 +1,3 @@
+# 2026-11-25 · `cli/kix-operator/src/controller.rs` · A new request on a record the operator is still deploying is never started or answered.
+
+`kix deploy --operator` of a build whose record is `Deploying` (for example, while the operator retries it) writes a new `spec.request` on that record. The `Deploying` branch of `reconcile_activation` runs `Reconcile::Resume` and finishes only `status.startedRequest`, the earlier request. Nothing starts the new one, so the command waits for `status.startedRequest` to match and times out after 600 seconds, even when the deploy succeeds or fails. Found by reading the code while fixing the retry count; not seen live.
