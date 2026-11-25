@@ -73,18 +73,21 @@ Default mode, `--full-scan`, and the Kix operator inspect only objects carrying 
 `--full-scan` judges the resources of the cluster you name. Each resource Kix
 deploys lists, in its `kix.run/activations` annotation, the Activation records
 whose builds contain it, and each record carries a `kix.run/cluster` label.
-When one Kubernetes cluster hosts several Kix clusters, a full scan reads those
-records to decide whose each resource is:
+A record also claims the builds it lists under `status.orphansKeptFrom`, so the
+leftovers of a deploy without `--prune` stay this cluster's after the record
+that deployed them is retired. The default mode deletes the same leftovers. A
+full scan reads those records to decide whose each resource is:
 
 - A resource that names only another cluster's records is skipped, and the
   run prints how many it skipped per cluster.
 - A resource that another cluster's current build also contains is kept and
   listed as `kept ..., still deployed by Kix cluster <name>`.
-- A resource that matches no Activation record on the cluster is listed under
-  "No deployment record on this cluster" and kept by default. Pass `--include
+- A resource whose build no Activation record on the cluster names, in its own
+  identity hash or under `status.orphansKeptFrom`, is listed under "Objects
+  with no matching deployment record" and kept by default. Pass `--include
   unattributed` to check these resources against the active deployment's build and delete any
   that are not in it. A resource may have no matching record because `kix gc`
-  retired its records, because it predates `kix.run/activations`, or because it
+  retired its records and no record lists its build as kept, because it predates `kix.run/activations`, or because it
   belongs to another Kix cluster whose records were deleted. This rule applies
   even when only one Kix cluster has records on the Kubernetes cluster, since
   missing records may have belonged to another Kix cluster.

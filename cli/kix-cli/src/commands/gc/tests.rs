@@ -78,6 +78,14 @@ mod kept_garbage_tests {
         assert!(kept_garbage(&kept, &hashes(&build_b), &ids(&build_b)).is_empty());
     }
 
+    /// Verify that a full scan's reason names the build this run compared
+    /// with, never a choice of two.
+    #[test]
+    fn the_reason_names_the_build_compared_with() {
+        let label = GarbageReason::HashNotExpected.label("the build of active deployment c-v2");
+        assert_eq!(label, "not in the build of active deployment c-v2");
+    }
+
     /// Verify that gc uses the build from the current files only when it is
     /// the build the Active record names.
     #[test]

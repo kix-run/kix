@@ -438,8 +438,10 @@ fn run_hard(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         .collect();
 
     let compared = match &active {
-        Some(active) => format!("active deployment {}", active.name),
-        None => "local build (no active deployment record on cluster)".to_string(),
+        Some(active) => format!("the build of active deployment {}", active.name),
+        None => {
+            "the build from your local files (the cluster has no active deployment)".to_string()
+        }
     };
     crate::say!(
         "Cluster {}: {} resources in {compared}",
@@ -457,6 +459,7 @@ fn run_hard(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         &cluster_name,
         graph.kubernetes_uid.as_deref(),
         build_hash.as_deref(),
+        &compared,
     ))
 }
 
@@ -469,6 +472,7 @@ async fn run_hard_async(
     cluster_name: &str,
     kubernetes_uid: Option<&str>,
     build_hash: Option<&str>,
+    compared: &str,
 ) -> Result<()> {
     // `run_hard` already named the target when it read the Active record.
     let connection = binding::Connection::of_context(global.context.as_deref());
@@ -515,10 +519,14 @@ async fn run_hard_async(
             println!("{note}");
         }
         if !sweep.unattributed.is_empty() {
-            print_unattributed(&sweep.unattributed, args.includes(Include::Unattributed));
+            print_unattributed(
+                &sweep.unattributed,
+                args.includes(Include::Unattributed),
+                compared,
+            );
         }
         if !sweep.copies.is_empty() {
-            print_copies(&sweep.copies, args.includes(Include::Copies));
+            print_copies(&sweep.copies, args.includes(Include::Copies), compared);
         }
     }
     let forbidden_none = sweep.forbidden.is_empty();
@@ -594,7 +602,7 @@ async fn run_hard_async(
         .into_iter()
         .partition(|g| lifecycle::never_pruned(g.id.group_kind()));
     if !resource_entries.is_empty() {
-        print_garbage_plan(&resource_entries);
+        print_garbage_plan(&resource_entries, compared);
     }
     if !output::quiet() {
         let kept: Vec<ResourceId> = kept.into_iter().map(|g| g.id).collect();

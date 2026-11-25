@@ -30,15 +30,18 @@ pub(super) enum GarbageReason {
 }
 
 impl GarbageReason {
-    pub(super) fn label(&self) -> &'static str {
+    /// Describe the reason, naming `compared`, the build this run compared
+    /// live objects with, such as `the build of active deployment c-v2`.
+    pub(super) fn label(&self, compared: &str) -> String {
         match self {
-            GarbageReason::HashNotExpected => {
-                "not in the active deployment's build (or local build if none is active)"
-            }
+            GarbageReason::HashNotExpected => format!("not in {compared}"),
             GarbageReason::NoIdentityHash => {
                 "carries Kix's label but no Kix build annotation (`--include unstamped`)"
+                    .to_string()
             }
-            GarbageReason::RetiredActivation => "activation record retired by retention",
+            GarbageReason::RetiredActivation => {
+                "activation record retired by retention".to_string()
+            }
         }
     }
 }
