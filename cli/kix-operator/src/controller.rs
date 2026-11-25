@@ -345,7 +345,10 @@ pub async fn reconcile_activation(
             // build the operator can read, so the operator neither repairs it
             // nor adds its finalizer.
             if source_path(&activation).is_none() {
-                tracing::debug!(name, "current record has no spec.source; not ours to drive");
+                tracing::debug!(
+                    name,
+                    "Skipping Active or Degraded Activation with no spec.source.path (deployed without --operator)"
+                );
                 return Ok(Action::await_change());
             }
             // Yield to any queued Activation so it can perform the transition.
