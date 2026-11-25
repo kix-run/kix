@@ -1,0 +1,3 @@
+# 2026-11-25 · `cli/kix-operator/src/controller.rs` · The operator keeps repairing its current record while a direct `kix deploy` of the same cluster runs.
+
+When the current record came from `kix deploy --operator`, a later `kix deploy` without `--operator` writes a Deploying record with no `spec.source`. The operator's repair of the current record does not wait for it (`newer_deploy` counts only records with `spec.source`), so a repair that runs during that deploy can undo objects the deploy has already applied. Nothing in `kix deploy` refuses or warns on a cluster the operator repairs. The repair cannot simply wait for such a record, because one whose process died stays Deploying with nothing to resume or fail it.

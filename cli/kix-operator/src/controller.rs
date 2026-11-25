@@ -7,10 +7,16 @@
 //! New resources progress through Queued, Deploying, Active, and Superseded.
 //!
 //! - **Queued**: A new activation waiting to be deployed. The operator
-//!   supersedes the current Active activation and begins deploying this one.
+//!   begins deploying it.
 //! - **Deploying**: Deploy in progress (wave-by-wave apply).
 //! - **Active**: Successfully deployed. Drift detection runs on requeue.
 //! - **Superseded**: Replaced by a newer activation.
+//!
+//! The current Active or Degraded record stays current until a newer record
+//! finishes its deploy. The shared finalize step supersedes it then, as it
+//! does for `kix deploy`. Its drift repair waits while a newer record of the
+//! same Kix cluster is Queued or Deploying. When that deploy ends Failed,
+//! the repair resumes and returns the cluster to the current record's build.
 //!
 //! # Unified reconcile loop
 //!
@@ -354,19 +360,10 @@ pub async fn reconcile_activation(
                 );
                 return Ok(Action::await_change());
             }
-            // Yield to any queued Activation so it can perform the transition.
-            let queued = ctx
-                .records
-                .queued(&cluster)
-                .await
-                .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
-
-            if !queued.is_empty() {
-                tracing::info!(
-                    name,
-                    queued_count = queued.len(),
-                    "Queued activations exist, yielding"
-                );
+            // The record stays current while a newer one deploys, and its
+            // repair would undo that deploy, so it waits.
+            if let Some(newer) = newer_deploy(&ctx.records, &cluster, name).await? {
+                tracing::info!(name, newer = %newer, "A newer record of this cluster is deploying, waiting");
                 return Ok(Action::requeue(QUEUED_REQUEUE_INTERVAL));
             }
 
@@ -428,9 +425,33 @@ pub async fn reconcile_activation(
     }
 }
 
+/// Return the name of a record of Kix cluster `cluster`, other than `name`,
+/// that the operator has queued or is deploying, or `None` when there is
+/// none.
+///
+/// Records without `spec.source` are left out. A direct `kix deploy` writes
+/// them, and one whose process died stays Deploying with nothing to resume
+/// it.
+async fn newer_deploy(
+    records: &Records,
+    cluster: &str,
+    name: &str,
+) -> Result<Option<String>, OperatorError> {
+    let lifecycle =
+        |e: kix::cluster::activation::RecordsError| OperatorError::LifecycleError(e.to_string());
+    let queued = records.queued(cluster).await.map_err(lifecycle)?;
+    let deploying = records.deploying(cluster).await.map_err(lifecycle)?;
+    Ok(queued
+        .into_iter()
+        .chain(deploying.into_iter().filter(|r| r.operator_driven))
+        .map(|r| r.name)
+        .find(|n| n != name))
+}
+
 /// Start the deploy of Queued record `name` of Kix cluster `cluster`: start
-/// its pending request, run the checks a new record gets, supersede the
-/// records it replaces, and deploy it.
+/// its pending request, run the checks a new record gets, supersede older
+/// Queued records, and deploy it. The current record stays current until
+/// the deploy finishes, when the shared finalize step supersedes it.
 async fn start_queued(
     activation: &DynamicObject,
     ctx: &Context,
@@ -575,14 +596,6 @@ async fn start_queued(
                 .await
                 .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
         }
-    }
-
-    if let Some(ref old) = old_active {
-        tracing::info!(name, old = %old.name, "Superseding current Active activation");
-        ctx.records
-            .supersede(&old.name)
-            .await
-            .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
     }
 
     ensure_finalizer(&ctx.records, name, activation).await?;
@@ -837,7 +850,17 @@ async fn after_failed_attempt(
     let retries = ctx.deploy_retries;
     let events = K8sEventObserver::new(ctx.events.clone(), activation, keys::API_VERSION);
     if attempts > retries {
-        let reason = gave_up_reason(attempts, retries, cause);
+        let current = match cluster_of(activation) {
+            Some(cluster) => ctx
+                .records
+                .active(&cluster)
+                .await
+                .map_err(lifecycle)?
+                .map(|r| r.name)
+                .filter(|n| n != name),
+            None => None,
+        };
+        let reason = gave_up_reason(attempts, retries, current.as_deref(), cause);
         if ctx
             .records
             .fail_attempt(name, attempts, &reason, true)
@@ -886,12 +909,19 @@ fn stop_cause(error: &DeployError) -> String {
 }
 
 /// Return the `status.failure.reason` of a record whose deploy the operator
-/// stopped retrying after `attempts` failed runs. `kix deploy --operator`
-/// and `kix rollback --operator` print it.
-fn gave_up_reason(attempts: u32, retries: u32, cause: &str) -> String {
+/// stopped retrying after `attempts` failed runs, while record `current`
+/// is the cluster's current record. `kix deploy --operator` and `kix
+/// rollback --operator` print it.
+fn gave_up_reason(attempts: u32, retries: u32, current: Option<&str>, cause: &str) -> String {
+    let restore = match current {
+        Some(current) => format!(
+            "Activation '{current}' stays current, and the operator returns the cluster to its build. "
+        ),
+        None => String::new(),
+    };
     format!(
         "the Kix operator stopped after {attempts} failed {} ({DEPLOY_RETRIES_ENV} is {retries} on the operator) and marked this Activation Failed. \
-         Fix the cause below, then run `kix deploy --operator` or `kix rollback --operator` again.\n\n  \
+         {restore}Fix the cause below, then run `kix deploy --operator` or `kix rollback --operator` again.\n\n  \
          Last failure:\n    {}",
         plural(attempts, "attempt", "attempts"),
         cause.replace('\n', "\n    "),
@@ -1625,11 +1655,11 @@ mod tests {
     }
 
     /// An earlier record with a request, as `kix rollback --operator`
-    /// writes one, is queued again and deployed in the same reconcile: the
-    /// current record is superseded at once, with no wait for another
-    /// reconcile. One without a request, such as a record a direct deploy
-    /// wrote or one from before requests, stays Superseded and is not
-    /// written.
+    /// writes one, is queued again and deployed in the same reconcile, with
+    /// no wait for another reconcile. The current record stays current
+    /// until that deploy finishes. One without a request, such as a record
+    /// a direct deploy wrote or one from before requests, stays Superseded
+    /// and is not written.
     #[tokio::test]
     async fn a_request_deploys_an_earlier_record_in_the_same_reconcile() {
         let dir = tempfile::tempdir().unwrap();
@@ -1650,8 +1680,7 @@ mod tests {
         record["spec"]["request"] = json!("r1");
         let api = FakeApi::new(vec![kube_system(HERE), active, record.clone()]);
         // Loading the build fails in the temporary directory, after the
-        // record was queued, its request started, and the current record
-        // superseded.
+        // record was queued and its request started.
         let (result, after) = reconcile_on(&api, record.clone()).await;
         assert!(result.is_err());
         assert_eq!(after["status"]["phase"], PHASE_QUEUED);
@@ -1666,7 +1695,7 @@ mod tests {
         .get("a-old")
         .await
         .unwrap();
-        assert_eq!(old.data["status"]["phase"], PHASE_SUPERSEDED);
+        assert_eq!(old.data["status"]["phase"], PHASE_ACTIVE);
 
         let mut direct = record;
         direct["spec"].as_object_mut().unwrap().remove("request");
@@ -2293,5 +2322,106 @@ mod tests {
         assert_eq!(status["phase"], PHASE_ACTIVE);
         assert!(status.get("failedAttempts").is_none(), "{status}");
         assert!(event_reasons(&api).is_empty());
+    }
+
+    /// The current record of cluster `a`, built from `/old`, which the
+    /// operator repairs.
+    fn current() -> Value {
+        json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": "Activation",
+            "metadata": {
+                "name": "a-old",
+                "labels": { "app.kubernetes.io/managed-by": "kix", (keys::CLUSTER_LABEL): "a" },
+            },
+            "spec": { "cluster": "a", "source": { "type": "storePath", "path": "/old" } },
+            "status": { "phase": PHASE_ACTIVE },
+        })
+    }
+
+    /// A Queued record whose deploy starts and then fails leaves the current
+    /// record Active, so the cluster keeps a current record. The reason
+    /// names it. Without a current record, the reason names none.
+    #[tokio::test]
+    async fn a_failed_deploy_leaves_the_current_record_active() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut record = queued(dir.path(), Some(HERE), None);
+        record["spec"]["request"] = json!("r1");
+        let api = FakeApi::new(vec![kube_system(HERE), current(), record.clone()]);
+        // The checks pass, and loading the build then fails in the
+        // temporary directory, which is the point where the current record
+        // used to be superseded.
+        let (answer, status) = reconcile_retrying(&api, record.clone(), 0).await;
+        assert_eq!(answer.unwrap(), Action::await_change());
+        assert_eq!(status["phase"], PHASE_FAILED);
+        assert_eq!(status["finishedRequest"], "r1");
+        let reason = status["failure"]["reason"].as_str().unwrap();
+        assert!(
+            reason.contains(
+                "Activation 'a-old' stays current, and the operator returns the cluster to its build."
+            ),
+            "{reason}"
+        );
+        assert_eq!(
+            api.object("Activation", "a-old").unwrap()["status"]["phase"],
+            PHASE_ACTIVE
+        );
+        assert!(
+            !api.requests()
+                .iter()
+                .any(|r| r.contains("PATCH") && r.contains("a-old/status")),
+            "{:?}",
+            api.requests()
+        );
+
+        let api = FakeApi::new(vec![kube_system(HERE), record.clone()]);
+        let (_, status) = reconcile_retrying(&api, record, 0).await;
+        assert_eq!(status["phase"], PHASE_FAILED);
+        let reason = status["failure"]["reason"].as_str().unwrap();
+        assert!(!reason.contains("stays current"), "{reason}");
+    }
+
+    /// Return `record` with the `managed-by` label that
+    /// [`Records::submit`] writes, so a listing of its cluster finds it.
+    fn listed(mut record: Value) -> Value {
+        record["metadata"]["labels"]["app.kubernetes.io/managed-by"] = json!("kix");
+        record
+    }
+
+    /// The current record does not repair while the operator deploys a
+    /// newer record of its cluster, so the repair cannot undo that deploy.
+    /// It writes nothing and checks again soon.
+    #[tokio::test]
+    async fn the_current_record_waits_while_a_newer_one_deploys() {
+        let api = FakeApi::new(vec![current(), listed(deploying(1))]);
+        let (result, after) = reconcile_on(&api, current()).await;
+        assert_eq!(result.unwrap(), Action::requeue(QUEUED_REQUEUE_INTERVAL));
+        assert_eq!(after["status"]["phase"], PHASE_ACTIVE);
+        let writes: Vec<String> = api
+            .requests()
+            .into_iter()
+            .filter(|r| !r.starts_with("GET"))
+            .collect();
+        assert!(writes.is_empty(), "{writes:?}");
+    }
+
+    /// Once the newer record is Failed, or when the record deploying names
+    /// no build because a direct `kix deploy` wrote it, the current record
+    /// repairs again. The repair then fails here only because `/old` does
+    /// not exist.
+    #[tokio::test]
+    async fn the_current_record_repairs_after_a_newer_deploy_fails() {
+        let mut failed = deploying(11);
+        failed["status"]["phase"] = json!(PHASE_FAILED);
+        let mut direct = deploying(0);
+        direct["metadata"]["name"] = json!("a-direct");
+        direct["spec"].as_object_mut().unwrap().remove("source");
+        for other in [failed, direct] {
+            let api = FakeApi::new(vec![current(), listed(other)]);
+            let (result, after) = reconcile_on(&api, current()).await;
+            let err = result.unwrap_err().to_string();
+            assert!(err.contains("cannot read the build at /old"), "{err}");
+            assert_eq!(after["status"]["phase"], PHASE_ACTIVE);
+        }
     }
 }

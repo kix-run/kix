@@ -395,6 +395,55 @@ mod tests {
         assert!(unnamed.finalize(false, false).await.unwrap().is_none());
     }
 
+    /// Finalizing a deploy supersedes the cluster's current record and links
+    /// the new record to it. `kix deploy` and the operator both finalize
+    /// here, so the current record stays current until then. With no
+    /// current record, the new one has no predecessor.
+    #[tokio::test]
+    async fn finalizing_supersedes_the_current_record_and_links_it() {
+        use crate::manifest::keys;
+        let rec = |name: &str, phase: &str| {
+            serde_json::json!({
+                "apiVersion": keys::API_VERSION,
+                "kind": "Activation",
+                "metadata": {
+                    "name": name,
+                    "labels": { "app.kubernetes.io/managed-by": "kix", (keys::CLUSTER_LABEL): "a" },
+                    "annotations": { (keys::IDENTITY_HASH): format!("h-{name}") },
+                },
+                "status": { "phase": phase },
+            })
+        };
+        let api = FakeApi::new([rec("old", "Active"), rec("new", "Deploying")]);
+        let finalized = record(&api, Some("new"))
+            .await
+            .finalize(false, false)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(finalized.previous.as_deref(), Some("old"));
+        assert_eq!(
+            api.object("Activation", "old").unwrap()["status"]["phase"],
+            "Superseded"
+        );
+        let new = api.object("Activation", "new").unwrap();
+        assert_eq!(new["status"]["phase"], "Active");
+        assert_eq!(new["status"]["previousActivation"], "old");
+        assert_eq!(new["metadata"]["annotations"][keys::PREVIOUS], "h-old");
+
+        let api = FakeApi::new([rec("old", "Superseded"), rec("new", "Deploying")]);
+        let finalized = record(&api, Some("new"))
+            .await
+            .finalize(false, false)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(finalized.previous, None);
+        let new = api.object("Activation", "new").unwrap();
+        assert_eq!(new["status"]["phase"], "Active");
+        assert!(new["status"].get("previousActivation").is_none(), "{new}");
+    }
+
     /// The final checkpoint of a run in which an object failed marks the
     /// wave Failed, so `kix deploy --operator` does not print it as
     /// Complete. A run with no failure still ends Complete, and a

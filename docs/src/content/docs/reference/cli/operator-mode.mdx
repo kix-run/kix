@@ -47,7 +47,8 @@ yet; pull-based Git sync is planned.
   It checks every 300 seconds by default (override with the
   `KIX_REQUEUE_INTERVAL_SECS` environment variable). It only repairs records
   with `spec.source.path` set, so it ignores records created by `kix deploy`
-  without `--operator`.
+  without `--operator`. Repair pauses while the operator has another
+  Activation of the same Kix cluster `Queued` or `Deploying`.
 - **Deploying from Git today:** Run `kix deploy` (with or without `--operator`)
   from CI after a merge.
 
@@ -56,7 +57,7 @@ yet; pull-based Git sync is planned.
 | Command | With `--operator` |
 | --- | --- |
 | `kix deploy <CLUSTER> --operator` | Builds, shows the plan, asks for confirmation, and writes the Activation record with the build's store path, the deploy receipt, and a request token (`spec.request`). Waits for the operator to finish that request. If the build is already deployed, the operator redeploys it and keeps the record current. |
-| `kix rollback <CLUSTER> --operator` | Selects a `Superseded` Activation record, shows the plan, asks for confirmation, and writes a request token (`spec.request`) to that record. The operator restores it as the current deployment and marks the previous record `Superseded`, matching `kix rollback`. Waits for the operator to finish that request. |
+| `kix rollback <CLUSTER> --operator` | Selects a `Superseded` Activation record, shows the plan, asks for confirmation, and writes a request token (`spec.request`) to that record. The operator restores it as the current deployment and, when the deploy finishes, marks the previous record `Superseded`, matching `kix rollback`. Waits for the operator to finish that request. |
 | `kix gc <CLUSTER> --operator` | Deletes the Activation records that retention retires. The operator's finalizer deletes each record's resources; the CLI waits up to 300 seconds per record. |
 
 [`kix status <CLUSTER>`](/docs/reference/cli/status/) takes no `--operator`
@@ -124,6 +125,23 @@ Error:   × Operator reconciliation failed for 'shop-mxfi8rx0piys': the Kix oper
   │     Secret/db@shop: could not prepare secret values for deployment: cannot decrypt SOPS file db.sops.yaml: `sops` could not get a decryption key
   │       ...
 ```
+
+### The current record during a deploy
+
+The cluster's current Activation (`Active` or `Degraded`) stays current until
+a new deploy finishes. Only then does the operator mark it `Superseded` and
+write its name to the new record's `status.previousActivation`, as `kix
+deploy` does. While the new record is `Queued` or `Deploying`, including
+between retries, the operator does not repair the current record.
+
+When the new record reaches `Failed`, the current record is still current, so
+[`kix status`](/docs/reference/cli/status/) shows it, and the operator resumes
+repairing it within a few seconds. That repair returns the cluster to the
+current record's build: it deletes the resources the failed deploy added and
+re-applies the resources it changed. To keep a failed deploy's resources for
+inspection, look at them before the record reaches `Failed`, or set
+`KIX_DEPLOY_RETRIES` higher. The failure reason names the record that stays
+current.
 
 To deploy after a record reaches `Failed`, fix the cause and run
 `kix deploy --operator` or `kix rollback --operator` again. Each new deploy or
