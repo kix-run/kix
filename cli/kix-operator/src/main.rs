@@ -165,7 +165,13 @@ async fn main() -> anyhow::Result<()> {
         required_stops: kix::cluster::stops::required_stops(),
         shutdown: CancelToken::new(),
         events: k8s_events::recorder(client.clone(), std::env::var("HOSTNAME").ok()),
+        deploy_retries: controller::deploy_retries(),
     });
+    tracing::info!(
+        retries = ctx.deploy_retries,
+        "A deploy that stops at a failure is retried this many times, then marked Failed (set {})",
+        controller::DEPLOY_RETRIES_ENV,
+    );
 
     // On a stop request, cancel every running deploy and let the controller
     // start no new reconcile. A cancelled deploy leaves its record

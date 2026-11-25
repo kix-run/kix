@@ -1,0 +1,3 @@
+# 2026-11-25 · `cli/kix-operator/src/controller.rs` · The operator logs an error every 30 seconds for an Active record that `kix deploy` wrote without `--operator`.
+
+A direct deploy writes no `spec.source`. The `Active` branch of `reconcile_activation` still adds the finalizer and runs `Reconcile::Repair`, and `run_reconcile` returns `OperatorError::MissingSourcePath`, so the operator logs `reconcile failed: ReconcilerFailed(MissingSourcePath, ...)` and requeues forever. The `Queued` and `Deploying` branches already skip a record with no `spec.source` as "not ours to drive". Seen on a kind cluster while testing operator retries.

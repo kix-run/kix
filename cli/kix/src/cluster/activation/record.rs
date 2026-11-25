@@ -46,6 +46,10 @@ pub struct Record {
     /// `status.finishedRequest`: the last request whose run the operator
     /// finished.
     pub finished_request: Option<String>,
+    /// `status.failedAttempts`: how many runs of the operator's current
+    /// deploy of this record stopped at a failure. Zero when the record has
+    /// none, as a record the CLI wrote or an older operator wrote does.
+    pub failed_attempts: u32,
     /// `status.orphansKeptFrom`, listing builds whose orphans remain on the cluster.
     pub orphans_kept_from: Vec<KeptOrphanSource>,
     /// `status.packageIndex`, which package each resource of the record's
@@ -96,6 +100,9 @@ pub(crate) const REQUEST_FIELD: &str = "request";
 pub(crate) const STARTED_REQUEST_FIELD: &str = "startedRequest";
 /// The `status` field that holds the last request the operator finished.
 pub(crate) const FINISHED_REQUEST_FIELD: &str = "finishedRequest";
+/// The `status` field that counts the failed runs of the operator's current
+/// deploy.
+pub(crate) const FAILED_ATTEMPTS_FIELD: &str = "failedAttempts";
 
 /// Return a new request token: 32 random hexadecimal digits.
 pub fn new_request() -> String {
@@ -135,6 +142,11 @@ impl Record {
             request: status(&format!("/spec/{REQUEST_FIELD}")),
             started_request: status(&format!("/status/{STARTED_REQUEST_FIELD}")),
             finished_request: status(&format!("/status/{FINISHED_REQUEST_FIELD}")),
+            failed_attempts: obj
+                .data
+                .pointer(&format!("/status/{FAILED_ATTEMPTS_FIELD}"))
+                .and_then(Value::as_u64)
+                .map_or(0, |n| u32::try_from(n).unwrap_or(u32::MAX)),
             orphans_kept_from: orphans_kept_from(obj),
             package_index: obj
                 .data

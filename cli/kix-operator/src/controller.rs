@@ -43,9 +43,9 @@ use kix::cluster::graph::DeleteOrder;
 use kix::cluster::kubernetes_version;
 use kix::cluster::prune_guard::{self, Pruned, Removal, Step};
 use kix::cluster::readiness::{self, DeletePath};
-use kix::cluster::scheduler::{self, OnErrorPolicy, SchedulerConfig};
+use kix::cluster::scheduler::{self, DeployError, OnErrorPolicy, SchedulerConfig};
 use kix::cluster::stops;
-use kix::cluster::stream::DeployObserver;
+use kix::cluster::stream::{DeployObserver, DeployResult};
 use kix::cluster::watchdog::StallPolicy;
 use kix::eval::store_graph::{KixPackageIndex, read_index};
 use kix::manifest::lifecycle::{
@@ -85,6 +85,27 @@ fn requeue_interval() -> Duration {
 /// Default requeue interval after errors.
 const ERROR_REQUEUE_INTERVAL: Duration = Duration::from_secs(30);
 
+/// Environment variable for how many times the operator retries a deploy
+/// that stopped at a failure before it marks the record Failed. `0` marks it
+/// Failed at the first stop, as `kix deploy` does.
+pub const DEPLOY_RETRIES_ENV: &str = "KIX_DEPLOY_RETRIES";
+
+/// The number of retries when [`DEPLOY_RETRIES_ENV`] is unset. A deploy that
+/// stops within seconds, such as one whose SOPS file the operator cannot
+/// decrypt, is retried every [`ERROR_REQUEUE_INTERVAL`], so ten retries end
+/// it in about five minutes. That is inside the 600 seconds `kix deploy
+/// --operator` waits, so the command reports the failure instead of timing
+/// out.
+pub const DEFAULT_DEPLOY_RETRIES: u32 = 10;
+
+/// Return the number of retries [`DEPLOY_RETRIES_ENV`] sets, or
+/// [`DEFAULT_DEPLOY_RETRIES`].
+pub fn deploy_retries() -> u32 {
+    kix::cluster::client::env_number(DEPLOY_RETRIES_ENV).map_or(DEFAULT_DEPLOY_RETRIES, |n| {
+        u32::try_from(n).unwrap_or(u32::MAX)
+    })
+}
+
 /// Shared context for the controller.
 pub struct Context {
     pub client: Client,
@@ -99,6 +120,9 @@ pub struct Context {
     /// The one Event recorder every reconcile reports through
     /// ([`crate::k8s_events::recorder`]).
     pub events: Arc<kube::runtime::events::Recorder>,
+    /// How many times a deploy that stopped at a failure is retried before
+    /// its record is marked Failed, normally [`deploy_retries`].
+    pub deploy_retries: u32,
 }
 
 /// Errors from the operator reconcile loop.
@@ -347,7 +371,7 @@ pub async fn reconcile_activation(
                 .start_request(name, request)
                 .await
                 .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
-            let action = run_reconcile(&activation, &ctx, name, Reconcile::Start).await?;
+            let action = run_reconcile(&activation, &ctx, name, Reconcile::Redeploy).await?;
             finish_request(&ctx, name, Some(request)).await?;
             Ok(action)
         }
@@ -365,7 +389,9 @@ pub async fn reconcile_activation(
             }
             tracing::info!(name, "Resuming Deploying activation");
             ensure_finalizer(&ctx.records, name, &activation).await?;
-            return run_reconcile(&activation, &ctx, name, Reconcile::Resume).await;
+            let action = run_reconcile(&activation, &ctx, name, Reconcile::Resume).await?;
+            finish_request(&ctx, name, record.started_request.as_deref()).await?;
+            Ok(action)
         }
 
         _ => {
@@ -552,11 +578,14 @@ async fn finish_request(
 /// Which reconcile of an Activation record the operator runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Reconcile {
-    /// Start the deploy of a Queued record, or of a request on the current
-    /// record. This happens once for each deploy someone submits.
+    /// Start the deploy of a Queued record, which marks it Deploying. This
+    /// happens once for each deploy someone submits.
     Start,
+    /// Deploy the current record's build again for a request on it. The
+    /// record stays Active or Degraded throughout.
+    Redeploy,
     /// Resume a Deploying record, after the operator restarted or a run
-    /// returned an error.
+    /// stopped at a failure.
     Resume,
     /// Correct drift from an Active or Degraded record's build, on every
     /// requeue.
@@ -577,7 +606,15 @@ impl Reconcile {
     /// retries a resume and a repair, and would recreate a failing Job on
     /// every retry.
     fn reads_last_runs(self) -> bool {
-        self == Reconcile::Start
+        matches!(self, Reconcile::Start | Reconcile::Redeploy)
+    }
+
+    /// Return whether a run that stops counts toward
+    /// [`Context::deploy_retries`]. Only the runs of a Deploying record do.
+    /// After a redeploy stops, the record is still current, and the next
+    /// reconcile repairs it.
+    fn counts_failed_runs(self) -> bool {
+        matches!(self, Reconcile::Start | Reconcile::Resume)
     }
 }
 
@@ -589,6 +626,12 @@ async fn run_reconcile(
     reconcile: Reconcile,
 ) -> Result<Action, OperatorError> {
     let manage_lifecycle = reconcile.manages_lifecycle();
+    if reconcile == Reconcile::Start {
+        ctx.records
+            .clear_failed_attempts(name)
+            .await
+            .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
+    }
     let path = source_path(activation).ok_or(OperatorError::MissingSourcePath)?;
     let new_manifests = load_manifests(&path)?;
 
@@ -658,7 +701,9 @@ async fn run_reconcile(
     let config = SchedulerConfig {
         timeout: READINESS_TIMEOUT,
         on_error: OnErrorPolicy::Stop,
-        cancel: ctx.shutdown.clone(),
+        // The stall watchdog cancels this token. A child token keeps that
+        // cancel inside this run, and an operator shutdown still reaches it.
+        cancel: ctx.shutdown.child(),
         concurrency: scheduler::CONCURRENCY,
         stall: StallPolicy::from_env(),
         // A new build is checked against the objects it leaves unchanged.
@@ -680,7 +725,18 @@ async fn run_reconcile(
         )) as Arc<dyn DeployObserver>,
     ]));
     let result = plan.run(manage_lifecycle, config, observer).await;
+    after_run(activation, ctx, name, reconcile, result).await
+}
 
+/// Decide what follows a `reconcile` run of record `name` that ended with
+/// `result`.
+async fn after_run(
+    activation: &DynamicObject,
+    ctx: &Context,
+    name: &str,
+    reconcile: Reconcile,
+    result: Result<DeployResult, DeployError>,
+) -> Result<Action, OperatorError> {
     match result {
         Ok(r) => {
             tracing::info!(
@@ -690,16 +746,111 @@ async fn run_reconcile(
                 unchanged = r.unchanged,
                 pruned = r.pruned,
                 failed = r.failed,
-                lifecycle = manage_lifecycle,
+                lifecycle = reconcile.manages_lifecycle(),
                 "Reconciliation complete"
             );
             Ok(Action::requeue(requeue_interval()))
         }
-        Err(e) => {
+        // A run the operator's shutdown interrupted is resumed when the
+        // operator starts again, and does not count as a failed attempt.
+        Err(e) if !reconcile.counts_failed_runs() || ctx.shutdown.is_cancelled() => {
             tracing::error!(name, error = %e, "Reconciliation failed");
             Err(OperatorError::ReconcileError(e.to_string()))
         }
+        Err(e) => after_failed_run(activation, ctx, name, &e).await,
     }
+}
+
+/// Count the run of record `name` that stopped with `error`, and mark the
+/// record Failed once the deploy has been retried [`Context::deploy_retries`]
+/// times. Return the error that requeues the next retry, or an action that
+/// waits for a new request once the record is Failed.
+///
+/// The count lives in the record's `status.failedAttempts`, so an operator
+/// restart does not reset it. [`run_reconcile`] clears it when a new deploy
+/// of the record starts.
+async fn after_failed_run(
+    activation: &DynamicObject,
+    ctx: &Context,
+    name: &str,
+    error: &DeployError,
+) -> Result<Action, OperatorError> {
+    let lifecycle =
+        |e: kix::cluster::activation::RecordsError| OperatorError::LifecycleError(e.to_string());
+    let cause = stop_cause(error);
+    let failed_before = ctx
+        .records
+        .get(name)
+        .await
+        .map_err(lifecycle)?
+        .map_or(0, |r| r.failed_attempts);
+    let attempts = failed_before.saturating_add(1);
+    let retries = ctx.deploy_retries;
+    let events = K8sEventObserver::new(ctx.events.clone(), activation, keys::API_VERSION);
+    if attempts > retries {
+        let reason = gave_up_reason(attempts, retries, &cause);
+        if ctx
+            .records
+            .fail_attempt(name, attempts, &reason, true)
+            .await
+            .map_err(lifecycle)?
+        {
+            tracing::error!(name, attempts, error = %cause, "Deploy failed; not retrying");
+            events
+                .warn_now(
+                    "DeployFailed",
+                    &format!(
+                        "The Kix operator stopped retrying after {attempts} failed {} and marked this record Failed. status.failure.reason and the NodeFailed Event give the cause.",
+                        plural(attempts, "attempt", "attempts"),
+                    ),
+                )
+                .await;
+            return Ok(Action::await_change());
+        }
+    } else {
+        ctx.records
+            .fail_attempt(name, attempts, &cause, false)
+            .await
+            .map_err(lifecycle)?;
+        tracing::warn!(name, attempts, retries, error = %cause, "Deploy stopped; retrying");
+        events
+            .warn_now(
+                "DeployRetrying",
+                &format!(
+                    "Attempt {attempts} of {} stopped at a failure. The Kix operator tries again in {} seconds. The NodeFailed Event gives the cause.",
+                    u64::from(retries) + 1,
+                    ERROR_REQUEUE_INTERVAL.as_secs(),
+                ),
+            )
+            .await;
+    }
+    Err(OperatorError::ReconcileError(error.to_string()))
+}
+
+/// Return what stopped a run: the first object that failed and why, or the
+/// run's own error when no object failed.
+fn stop_cause(error: &DeployError) -> String {
+    match error.partial().failures.first() {
+        Some(f) => format!("{}: {}", f.node, f.message),
+        None => error.to_string(),
+    }
+}
+
+/// Return the `status.failure.reason` of a record whose deploy the operator
+/// stopped retrying after `attempts` failed runs. `kix deploy --operator`
+/// and `kix rollback --operator` print it.
+fn gave_up_reason(attempts: u32, retries: u32, cause: &str) -> String {
+    format!(
+        "the Kix operator stopped this deploy after {attempts} failed {} ({DEPLOY_RETRIES_ENV} is {retries} on the operator). \
+         Fix the cause below, then run `kix deploy --operator` or `kix rollback --operator` again.\n\n  \
+         Last failure:\n    {}",
+        plural(attempts, "attempt", "attempts"),
+        cause.replace('\n', "\n    "),
+    )
+}
+
+fn plural<'a>(n: u32, one: &'a str, many: &'a str) -> &'a str {
+    if n == 1 { one } else { many }
 }
 
 /// Handle deletion of an Activation CR (finalizer cleanup).
@@ -944,11 +1095,16 @@ mod tests {
     /// operator retries a resume and a repair, so they must not.
     #[test]
     fn only_the_start_of_a_deploy_reads_last_runs() {
-        assert!(Reconcile::Start.reads_last_runs());
+        assert!(Reconcile::Start.reads_last_runs() && Reconcile::Redeploy.reads_last_runs());
         assert!(!Reconcile::Resume.reads_last_runs());
         assert!(!Reconcile::Repair.reads_last_runs());
         assert!(Reconcile::Start.manages_lifecycle() && Reconcile::Resume.manages_lifecycle());
+        assert!(Reconcile::Redeploy.manages_lifecycle());
         assert!(!Reconcile::Repair.manages_lifecycle());
+        assert!(Reconcile::Start.counts_failed_runs() && Reconcile::Resume.counts_failed_runs());
+        assert!(
+            !Reconcile::Redeploy.counts_failed_runs() && !Reconcile::Repair.counts_failed_runs()
+        );
     }
     use kix::cluster::fake_api::{FakeApi, kube_system};
     use serde_json::json;
@@ -1009,6 +1165,7 @@ mod tests {
             required_stops: stops::required_stops(),
             shutdown: CancelToken::new(),
             events: crate::k8s_events::recorder(api.client(), None),
+            deploy_retries: DEFAULT_DEPLOY_RETRIES,
         });
         let activation: DynamicObject = serde_json::from_value(queued).unwrap();
         reconcile_activation(Arc::new(activation), ctx.clone())
@@ -1100,6 +1257,7 @@ mod tests {
             required_stops: stops::required_stops(),
             shutdown: CancelToken::new(),
             events: crate::k8s_events::recorder(api.client(), None),
+            deploy_retries: DEFAULT_DEPLOY_RETRIES,
         });
         let activation: DynamicObject = serde_json::from_value(record).unwrap();
         let err = reconcile_activation(Arc::new(activation), ctx.clone())
@@ -1140,6 +1298,7 @@ mod tests {
             required_stops,
             shutdown: CancelToken::new(),
             events: crate::k8s_events::recorder(api.client(), None),
+            deploy_retries: DEFAULT_DEPLOY_RETRIES,
         });
         let name = record["metadata"]["name"].as_str().unwrap().to_string();
         let activation: DynamicObject = serde_json::from_value(record).unwrap();
@@ -1662,11 +1821,244 @@ mod tests {
                 required_stops: Vec::new(),
                 shutdown: CancelToken::new(),
                 events: crate::k8s_events::recorder(api.client(), None),
+                deploy_retries: DEFAULT_DEPLOY_RETRIES,
             })
         });
         assert_eq!(
             error_policy(activation, &err, ctx),
             Action::requeue(ERROR_REQUEUE_INTERVAL)
         );
+    }
+
+    /// A Deploying record of cluster `a` whose deploy the operator started
+    /// for request `r1`, after `failed` runs that stopped.
+    fn deploying(failed: u32) -> Value {
+        json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": "Activation",
+            "metadata": {
+                "name": "a-new",
+                "labels": { (keys::CLUSTER_LABEL): "a" },
+            },
+            "spec": {
+                "cluster": "a",
+                "source": { "type": "storePath", "path": "/nonexistent" },
+                "request": "r1",
+            },
+            "status": {
+                "phase": PHASE_DEPLOYING,
+                "startedRequest": "r1",
+                "failedAttempts": failed,
+            },
+        })
+    }
+
+    /// A run that stopped at a Secret whose SOPS file could not be
+    /// decrypted.
+    fn stopped() -> Result<DeployResult, DeployError> {
+        use kix::cluster::stream::{NodeFailure, NodeId};
+        Err(DeployError::NodesFailed {
+            count: 1,
+            partial: DeployResult {
+                failed: 1,
+                failures: vec![NodeFailure {
+                    node: NodeId::Resource(ResourceId::new("", "Secret", "app", "db")),
+                    message: "cannot decrypt SOPS file db.yaml\n  no key".into(),
+                }],
+                ..Default::default()
+            },
+        })
+    }
+
+    /// Return a Context on `api` that retries a stopped deploy `retries`
+    /// times, as an operator that has just started would have.
+    async fn operator(api: &FakeApi, retries: u32) -> Context {
+        let client = api.client();
+        let discovery = discovery::discover_resources(&client).await.unwrap();
+        Context {
+            records: Records::open_installed(&client, &discovery).unwrap(),
+            client,
+            required_stops: Vec::new(),
+            shutdown: CancelToken::new(),
+            events: crate::k8s_events::recorder(api.client(), None),
+            deploy_retries: retries,
+        }
+    }
+
+    /// Hand `result` of a `reconcile` run of record `a-new` to the operator,
+    /// and return its answer and the record's status afterwards.
+    async fn after_a_run(
+        api: &FakeApi,
+        ctx: &Context,
+        reconcile: Reconcile,
+        result: Result<DeployResult, DeployError>,
+    ) -> (Result<Action, OperatorError>, Value) {
+        let record: DynamicObject =
+            serde_json::from_value(api.object("Activation", "a-new").unwrap()).unwrap();
+        let answer = after_run(&record, ctx, "a-new", reconcile, result).await;
+        let status = api.object("Activation", "a-new").unwrap()["status"].clone();
+        (answer, status)
+    }
+
+    /// Return the reasons of the Events posted on `api`.
+    fn event_reasons(api: &FakeApi) -> Vec<String> {
+        api.names("Event")
+            .iter()
+            .filter_map(|n| api.object("Event", n))
+            .map(|e| e["reason"].as_str().unwrap_or_default().to_string())
+            .collect()
+    }
+
+    /// Each stopped run under the limit is counted on the record, which
+    /// stays Deploying, and the error requeues the next try. A run that
+    /// then succeeds is not marked Failed.
+    #[tokio::test]
+    async fn a_stopped_deploy_is_retried_and_may_then_succeed() {
+        let api = FakeApi::new([deploying(0)]);
+        let ctx = operator(&api, 2).await;
+        for attempt in 1..=2 {
+            let (answer, status) = after_a_run(&api, &ctx, Reconcile::Resume, stopped()).await;
+            assert!(answer.is_err(), "{answer:?}");
+            assert_eq!(status["phase"], PHASE_DEPLOYING);
+            assert_eq!(status["failedAttempts"], attempt);
+            assert_eq!(
+                status["failure"]["reason"],
+                "Secret/db@app: cannot decrypt SOPS file db.yaml\n  no key"
+            );
+        }
+        assert_eq!(event_reasons(&api), ["DeployRetrying", "DeployRetrying"]);
+        let (answer, status) =
+            after_a_run(&api, &ctx, Reconcile::Resume, Ok(DeployResult::default())).await;
+        assert_eq!(answer.unwrap(), Action::requeue(requeue_interval()));
+        assert_eq!(status["phase"], PHASE_DEPLOYING);
+    }
+
+    /// The run after the last retry marks the record Failed with the number
+    /// of attempts and the last failure, posts a DeployFailed Event, and
+    /// waits for a new request instead of requeueing.
+    #[tokio::test]
+    async fn a_deploy_that_keeps_stopping_is_marked_failed_after_the_retries() {
+        let api = FakeApi::new([deploying(2)]);
+        let ctx = operator(&api, 2).await;
+        let (answer, status) = after_a_run(&api, &ctx, Reconcile::Resume, stopped()).await;
+        assert_eq!(answer.unwrap(), Action::await_change());
+        assert_eq!(status["phase"], PHASE_FAILED);
+        assert_eq!(status["failedAttempts"], 3);
+        let reason = status["failure"]["reason"].as_str().unwrap();
+        assert!(
+            reason.contains("after 3 failed attempts (KIX_DEPLOY_RETRIES is 2")
+                && reason.contains("kix deploy --operator")
+                && reason.contains("Secret/db@app: cannot decrypt SOPS file db.yaml\n      no key"),
+            "{reason}"
+        );
+        assert_eq!(event_reasons(&api), ["DeployFailed"]);
+    }
+
+    /// With no retries, the first stop marks the record Failed, as `kix
+    /// deploy` does.
+    #[tokio::test]
+    async fn zero_retries_fail_the_deploy_at_the_first_stop() {
+        let api = FakeApi::new([deploying(0)]);
+        let ctx = operator(&api, 0).await;
+        let (answer, status) = after_a_run(&api, &ctx, Reconcile::Start, stopped()).await;
+        assert_eq!(answer.unwrap(), Action::await_change());
+        assert_eq!(status["phase"], PHASE_FAILED);
+        assert_eq!(status["failedAttempts"], 1);
+        let reason = status["failure"]["reason"].as_str().unwrap();
+        assert!(reason.contains("after 1 failed attempt ("), "{reason}");
+    }
+
+    /// A run that the operator's shutdown interrupted writes nothing, so
+    /// the operator that starts next resumes it with the count it had. That
+    /// count is read from the record, so the restart does not reset it.
+    #[tokio::test]
+    async fn a_run_interrupted_by_a_restart_is_not_counted() {
+        let api = FakeApi::new([deploying(2)]);
+        let ctx = operator(&api, 2).await;
+        ctx.shutdown.cancel();
+        let cancelled = Err(DeployError::Cancelled {
+            reason: "cancelled".into(),
+            partial: DeployResult::default(),
+        });
+        let (answer, status) = after_a_run(&api, &ctx, Reconcile::Resume, cancelled).await;
+        assert!(answer.is_err(), "{answer:?}");
+        assert_eq!(status["phase"], PHASE_DEPLOYING);
+        assert_eq!(status["failedAttempts"], 2);
+        assert!(status.get("failure").is_none(), "{status}");
+        assert!(event_reasons(&api).is_empty());
+
+        // The next operator's resume stops once more, which is the third
+        // failed attempt.
+        let restarted = operator(&api, 2).await;
+        let (answer, status) = after_a_run(&api, &restarted, Reconcile::Resume, stopped()).await;
+        assert_eq!(answer.unwrap(), Action::await_change());
+        assert_eq!(status["phase"], PHASE_FAILED);
+        assert_eq!(status["failedAttempts"], 3);
+    }
+
+    /// A stall cancels only the run it stalls in. The operator keeps
+    /// running, and the stall counts as a failed attempt.
+    #[tokio::test]
+    async fn a_stalled_run_counts_and_leaves_the_operator_running() {
+        let api = FakeApi::new([deploying(0)]);
+        let ctx = operator(&api, 2).await;
+        ctx.shutdown
+            .child()
+            .cancel_with_reason("no progress for 600s");
+        assert!(!ctx.shutdown.is_cancelled());
+        let stalled = Err(DeployError::Cancelled {
+            reason: "no progress for 600s".into(),
+            partial: DeployResult::default(),
+        });
+        let (answer, status) = after_a_run(&api, &ctx, Reconcile::Resume, stalled).await;
+        assert!(answer.is_err(), "{answer:?}");
+        assert_eq!(status["failedAttempts"], 1);
+        assert_eq!(
+            status["failure"]["reason"],
+            "deploy cancelled: no progress for 600s"
+        );
+    }
+
+    /// A redeploy of the current record that stops is not counted: the
+    /// record stays current and is repaired on the next reconcile.
+    #[tokio::test]
+    async fn a_stopped_redeploy_of_the_current_record_is_not_counted() {
+        let mut record = deploying(0);
+        record["status"]["phase"] = json!(PHASE_ACTIVE);
+        let api = FakeApi::new([record]);
+        let ctx = operator(&api, 0).await;
+        let (answer, status) = after_a_run(&api, &ctx, Reconcile::Redeploy, stopped()).await;
+        assert!(answer.is_err(), "{answer:?}");
+        assert_eq!(status["phase"], PHASE_ACTIVE);
+        assert_eq!(status["failedAttempts"], 0);
+        assert!(event_reasons(&api).is_empty());
+    }
+
+    /// A new deploy of a record starts the count again: a Queued record
+    /// for a new build, and a Failed record that someone deploys again.
+    #[tokio::test]
+    async fn a_new_deploy_starts_the_count_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut record = queued(dir.path(), Some(HERE), None);
+        record["status"] = json!({ "failedAttempts": 5 });
+        let api = FakeApi::new(vec![kube_system(HERE), record.clone()]);
+        // Loading the build fails in the temporary directory, after the
+        // deploy started.
+        let (result, after) = reconcile_on(&api, record.clone()).await;
+        assert!(result.is_err());
+        assert!(after["status"].get("failedAttempts").is_none(), "{after}");
+
+        record["status"] = json!({
+            "phase": PHASE_FAILED,
+            "failedAttempts": 11,
+            "startedRequest": "r1",
+            "finishedRequest": "r1",
+        });
+        record["spec"]["request"] = json!("r2");
+        let api = FakeApi::new(vec![kube_system(HERE), record.clone()]);
+        let (result, after) = reconcile_on(&api, record).await;
+        assert!(result.is_err());
+        assert_eq!(after["status"]["startedRequest"], "r2");
+        assert!(after["status"].get("failedAttempts").is_none(), "{after}");
     }
 }

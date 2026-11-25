@@ -1,0 +1,3 @@
+# 2026-11-25 · `cli/kix-operator/src/controller.rs` · The operator retries forever when it cannot load a record's build or sweep the cluster.
+
+`run_reconcile` counts failed attempts only for errors from the deploy run (`after_run`). Errors before the run return straight to `error_policy`: `load_manifests` when the build at `spec.source.path` is not in the store the operator reads, and `LivePlan::sweep` when discovery fails. A missing build cannot fix itself, yet the record stays `Deploying` (or `Queued`) and is retried every 30 seconds without end, and `kix deploy --operator` times out after 600 seconds with no reason. Discovery failures are usually transient, so the two cases may want different answers.

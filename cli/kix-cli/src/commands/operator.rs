@@ -153,6 +153,8 @@ pub enum Reconciled {
 struct Progress {
     seen_deploying: bool,
     waves_done: usize,
+    /// The failed attempts already reported, from `status.failedAttempts`.
+    attempts_reported: u32,
 }
 
 impl Progress {
@@ -166,6 +168,10 @@ impl Progress {
                 output::dim("•"),
                 act.total_waves,
             ));
+        }
+        // Each attempt of the operator starts the list of waves again.
+        if act.waves.len() < self.waves_done {
+            self.waves_done = 0;
         }
         for (i, wave) in act.waves.iter().enumerate().skip(self.waves_done) {
             let (mark, status) = match wave.status {
@@ -181,6 +187,19 @@ impl Progress {
                 wave.failed,
             ));
             self.waves_done = i + 1;
+        }
+        // The operator counts each run that stops, and retries the record
+        // while it stays Deploying.
+        if act.phase == PHASE_DEPLOYING && act.failed_attempts > self.attempts_reported {
+            self.attempts_reported = act.failed_attempts;
+            lines.push(format!(
+                "  {} Attempt {} failed. The Kix operator tries again in 30 seconds.",
+                output::red("✗"),
+                act.failed_attempts,
+            ));
+            if let Some(reason) = act.failure_reason.as_deref().and_then(|r| r.lines().next()) {
+                lines.push(format!("    {reason}"));
+            }
         }
         lines
     }
@@ -209,8 +228,8 @@ pub async fn watch_activation_progress(
     loop {
         if start.elapsed() > timeout {
             return Err(miette!(
-                "timed out waiting for operator to reconcile Activation '{}'",
-                activation_name
+                "timed out after {} seconds waiting for the Kix operator to deploy Activation '{activation_name}'. The operator keeps working on it. Follow it with `kubectl describe activation {activation_name}`.",
+                timeout.as_secs(),
             ));
         }
 
@@ -437,6 +456,26 @@ mod tests {
             vec!["  ✗ Wave 2: Failed (2/3 applied, 1 failed)".to_string()]
         );
         assert!(progress.lines(&act).is_empty());
+
+        // An attempt that stopped is reported once, and the waves of the
+        // next attempt are reported from the first.
+        act.failed_attempts = 1;
+        act.failure_reason = Some("Secret/db@app: cannot decrypt SOPS file db.yaml\n  more".into());
+        assert_eq!(
+            progress.lines(&act),
+            vec![
+                "  ✗ Attempt 1 failed. The Kix operator tries again in 30 seconds.".to_string(),
+                "    Secret/db@app: cannot decrypt SOPS file db.yaml".to_string(),
+            ]
+        );
+        assert!(progress.lines(&act).is_empty());
+        act.waves = vec![];
+        assert!(progress.lines(&act).is_empty());
+        act.waves = vec![wave(WaveStatus::Complete)];
+        assert_eq!(
+            progress.lines(&act),
+            vec!["  ✓ Wave 1: Complete (2/3 applied, 1 failed)".to_string()]
+        );
     }
 
     /// Verify that a record deleted while watching returns an error naming the record.

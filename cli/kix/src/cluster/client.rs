@@ -123,7 +123,7 @@ pub(crate) fn mark_first_contact<T>(req: &mut Request<T>) {
 }
 
 /// Read a whole-number environment variable, warning on garbage.
-pub(crate) fn env_number(name: &str) -> Option<u64> {
+pub fn env_number(name: &str) -> Option<u64> {
     let raw = std::env::var(name).ok()?;
     match raw.trim().parse::<u64>() {
         Ok(n) => Some(n),
