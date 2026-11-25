@@ -81,7 +81,11 @@ unchanged resources.
 ### Retries after a failure
 
 When a deploy fails, the operator keeps the Activation record in `Deploying`,
-posts a `DeployRetrying` Warning Event, and retries 30 seconds later. By
+posts a `DeployRetrying` Warning Event, and retries 30 seconds later. An
+attempt also fails when the operator cannot read the build at
+`spec.source.path` (for example, when the build is not in the store the
+operator reads) or cannot list the cluster's objects. If the operator cannot
+read the build of a new record, the record stays `Queued` while it retries. By
 default, it retries up to 10 times (11 attempts in total). If every retry
 fails, the operator marks the record `Failed`, writes the attempt count and
 last error to `status.failure.reason`, and posts a `DeployFailed` Warning
@@ -252,7 +256,7 @@ redeploying the current build) from ending the wait early.
 | `Active` | Success (exit code `0`) |
 | `Degraded` | Error (exit code `1`), after printing the failed resources or `status.failure.reason` |
 | `Failed` | Error (exit code `1`), with the record's `status.failure.reason` (or `unknown error` if unset) |
-| `Deploying` after a failed attempt | Prints `Attempt <n> failed. The Kix operator will retry in 30 seconds.` and the first line of the failure reason, then keeps waiting |
+| `Deploying` or `Queued` after a failed attempt | Prints `Attempt <n> failed. The Kix operator will retry in 30 seconds.` and the first line of the failure reason, then keeps waiting |
 | `Superseded` | Error: a newer activation took over |
 | No terminal phase after 600 seconds | Error: timed out |
 

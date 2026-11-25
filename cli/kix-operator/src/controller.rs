@@ -131,7 +131,7 @@ pub enum OperatorError {
     #[error("missing spec.source.path on Activation")]
     MissingSourcePath,
 
-    #[error("failed to load store graph from {path}: {reason}")]
+    #[error("cannot read the build at {path} in the store the Kix operator reads: {reason}")]
     StoreGraphError { path: String, reason: String },
 
     #[error("failed to run API discovery: {0}")]
@@ -429,7 +429,14 @@ async fn start_queued(
     // way. Only a Queued record gets these checks: an Active record
     // keeps being repaired after a Kubernetes upgrade.
     let events = || K8sEventObserver::new(ctx.events.clone(), activation, keys::API_VERSION);
-    let index = index_of(activation)?;
+    let index = match index_of(activation) {
+        Ok(index) => index,
+        Err(e) => {
+            let action = after_failed_attempt(activation, ctx, name, &e.to_string()).await?;
+            finish_request(ctx, name, record.request.as_deref()).await?;
+            return Ok(action);
+        }
+    };
     match check_binding(&ctx.client, &index).await? {
         Binding::Accepted => {}
         Binding::Refused(reason) => {
@@ -609,35 +616,31 @@ impl Reconcile {
         matches!(self, Reconcile::Start | Reconcile::Redeploy)
     }
 
-    /// Return whether a run that stops counts toward
-    /// [`Context::deploy_retries`]. Only the runs of a Deploying record do.
-    /// After a redeploy stops, the record is still current, and the next
+    /// Return whether an attempt that fails counts toward
+    /// [`Context::deploy_retries`]. Only the attempts to deploy a Queued or
+    /// Deploying record do, whatever stopped them: the build could not be
+    /// read, the cluster's objects could not be listed, or the run stopped.
+    /// After a redeploy fails, the record is still current, and the next
     /// reconcile repairs it.
     fn counts_failed_runs(self) -> bool {
         matches!(self, Reconcile::Start | Reconcile::Resume)
     }
 }
 
-/// Load desired state, fetch live state, diff, wave-plan, and apply.
-async fn run_reconcile(
+/// Load the desired manifests from the record's build and plan them
+/// against the live objects of its Kix cluster. Return `None` when the build
+/// holds nothing the operator applies.
+async fn sweep(
     activation: &DynamicObject,
     ctx: &Context,
     name: &str,
-    reconcile: Reconcile,
-) -> Result<Action, OperatorError> {
-    let manage_lifecycle = reconcile.manages_lifecycle();
-    if reconcile == Reconcile::Start {
-        ctx.records
-            .clear_failed_attempts(name)
-            .await
-            .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
-    }
+) -> Result<Option<LivePlan>, OperatorError> {
     let path = source_path(activation).ok_or(OperatorError::MissingSourcePath)?;
     let new_manifests = load_manifests(&path)?;
 
     if new_manifests.is_empty() {
         tracing::warn!(name, "No manifests found in store graph");
-        return Ok(Action::requeue(requeue_interval()));
+        return Ok(None);
     }
 
     // Exclude CRDs (re-applying them triggers API watch restarts) and
@@ -654,12 +657,31 @@ async fn run_reconcile(
 
     if managed_manifests.is_empty() {
         tracing::debug!(name, "No managed manifests to reconcile");
-        return Ok(Action::requeue(requeue_interval()));
+        return Ok(None);
     }
 
-    let mut plan = LivePlan::sweep(&ctx.client, activation, &managed_manifests)
+    LivePlan::sweep(&ctx.client, activation, &managed_manifests)
         .await
-        .map_err(operator_error)?;
+        .map(Some)
+        .map_err(operator_error)
+}
+
+/// Load desired state, fetch live state, diff, wave-plan, and apply.
+async fn run_reconcile(
+    activation: &DynamicObject,
+    ctx: &Context,
+    name: &str,
+    reconcile: Reconcile,
+) -> Result<Action, OperatorError> {
+    let manage_lifecycle = reconcile.manages_lifecycle();
+    let mut plan = match sweep(activation, ctx, name).await {
+        Ok(Some(plan)) => plan,
+        Ok(None) => return Ok(Action::requeue(requeue_interval())),
+        Err(e) if reconcile.counts_failed_runs() => {
+            return after_failed_attempt(activation, ctx, name, &e.to_string()).await;
+        }
+        Err(e) => return Err(e),
+    };
     if reconcile.reads_last_runs() {
         match plan.read_last_runs().await {
             LastRuns::Read { failed } => {
@@ -757,27 +779,27 @@ async fn after_run(
             tracing::error!(name, error = %e, "Reconciliation failed");
             Err(OperatorError::ReconcileError(e.to_string()))
         }
-        Err(e) => after_failed_run(activation, ctx, name, &e).await,
+        Err(e) => after_failed_attempt(activation, ctx, name, &stop_cause(&e)).await,
     }
 }
 
-/// Count the run of record `name` that stopped with `error`, and mark the
-/// record Failed once the deploy has been retried [`Context::deploy_retries`]
-/// times. Return the error that requeues the next retry, or an action that
-/// waits for a new request once the record is Failed.
+/// Count the attempt to deploy record `name` that failed with `cause`, and
+/// mark the record Failed once the deploy has been retried
+/// [`Context::deploy_retries`] times. Return the error that requeues the next
+/// retry, or an action that waits for a new request once the record is
+/// Failed.
 ///
 /// The count lives in the record's `status.failedAttempts`, so an operator
-/// restart does not reset it. [`run_reconcile`] clears it when a new deploy
-/// of the record starts.
-async fn after_failed_run(
+/// restart does not reset it. Starting a new request on the record clears it
+/// ([`Records::start_request`] and [`Records::requeue`]).
+async fn after_failed_attempt(
     activation: &DynamicObject,
     ctx: &Context,
     name: &str,
-    error: &DeployError,
+    cause: &str,
 ) -> Result<Action, OperatorError> {
     let lifecycle =
         |e: kix::cluster::activation::RecordsError| OperatorError::LifecycleError(e.to_string());
-    let cause = stop_cause(error);
     let failed_before = ctx
         .records
         .get(name)
@@ -788,7 +810,7 @@ async fn after_failed_run(
     let retries = ctx.deploy_retries;
     let events = K8sEventObserver::new(ctx.events.clone(), activation, keys::API_VERSION);
     if attempts > retries {
-        let reason = gave_up_reason(attempts, retries, &cause);
+        let reason = gave_up_reason(attempts, retries, cause);
         if ctx
             .records
             .fail_attempt(name, attempts, &reason, true)
@@ -809,7 +831,7 @@ async fn after_failed_run(
         }
     } else {
         ctx.records
-            .fail_attempt(name, attempts, &cause, false)
+            .fail_attempt(name, attempts, cause, false)
             .await
             .map_err(lifecycle)?;
         tracing::warn!(name, attempts, retries, error = %cause, "Deploy attempt failed; retrying in 30s");
@@ -824,7 +846,7 @@ async fn after_failed_run(
             )
             .await;
     }
-    Err(OperatorError::ReconcileError(error.to_string()))
+    Err(OperatorError::ReconcileError(cause.to_string()))
 }
 
 /// Return what stopped a run: the first object that failed and why, or the
@@ -2034,19 +2056,20 @@ mod tests {
         assert!(event_reasons(&api).is_empty());
     }
 
-    /// A new deploy of a record starts the count again: a Queued record
-    /// for a new build, and a Failed record that someone deploys again.
+    /// A new request starts the count again: a Queued record submitted
+    /// for a new request, and a Failed record that someone deploys again.
+    /// The attempt in each case then fails, because the build in the
+    /// temporary directory cannot be loaded, and counts as the first.
     #[tokio::test]
-    async fn a_new_deploy_starts_the_count_again() {
+    async fn a_new_request_starts_the_count_again() {
         let dir = tempfile::tempdir().unwrap();
         let mut record = queued(dir.path(), Some(HERE), None);
+        record["spec"]["request"] = json!("r1");
         record["status"] = json!({ "failedAttempts": 5 });
         let api = FakeApi::new(vec![kube_system(HERE), record.clone()]);
-        // Loading the build fails in the temporary directory, after the
-        // deploy started.
         let (result, after) = reconcile_on(&api, record.clone()).await;
         assert!(result.is_err());
-        assert!(after["status"].get("failedAttempts").is_none(), "{after}");
+        assert_eq!(after["status"]["failedAttempts"], 1, "{after}");
 
         record["status"] = json!({
             "phase": PHASE_FAILED,
@@ -2059,6 +2082,101 @@ mod tests {
         let (result, after) = reconcile_on(&api, record).await;
         assert!(result.is_err());
         assert_eq!(after["status"]["startedRequest"], "r2");
-        assert!(after["status"].get("failedAttempts").is_none(), "{after}");
+        assert_eq!(after["status"]["failedAttempts"], 1, "{after}");
+    }
+
+    /// Reconcile `record` on `api` with an operator that retries `retries`
+    /// times, and return the answer and the record's status afterwards.
+    async fn reconcile_retrying(
+        api: &FakeApi,
+        record: Value,
+        retries: u32,
+    ) -> (Result<Action, OperatorError>, Value) {
+        let ctx = Arc::new(operator(api, retries).await);
+        let name = record["metadata"]["name"].as_str().unwrap().to_string();
+        let activation: DynamicObject = serde_json::from_value(record).unwrap();
+        let answer = reconcile_activation(Arc::new(activation), ctx).await;
+        let status = api.object("Activation", &name).unwrap()["status"].clone();
+        (answer, status)
+    }
+
+    /// A Deploying record whose build the operator cannot read counts each
+    /// attempt, and is marked Failed once the retries run out, as a run
+    /// that stopped is. The reason names the build.
+    #[tokio::test]
+    async fn a_missing_build_counts_as_a_failed_attempt() {
+        let api = FakeApi::new([deploying(0)]);
+        let (answer, status) = reconcile_retrying(&api, deploying(0), 1).await;
+        assert!(answer.is_err(), "{answer:?}");
+        assert_eq!(status["phase"], PHASE_DEPLOYING);
+        assert_eq!(status["failedAttempts"], 1);
+        let reason = status["failure"]["reason"].as_str().unwrap();
+        assert!(
+            reason.starts_with(
+                "cannot read the build at /nonexistent in the store the Kix operator reads: "
+            ),
+            "{reason}"
+        );
+
+        let (answer, status) = reconcile_retrying(&api, deploying(1), 1).await;
+        assert_eq!(answer.unwrap(), Action::await_change());
+        assert_eq!(status["phase"], PHASE_FAILED);
+        assert_eq!(status["failedAttempts"], 2);
+        let reason = status["failure"]["reason"].as_str().unwrap();
+        assert!(
+            reason.contains("after 2 failed attempts")
+                && reason.contains("cannot read the build at /nonexistent"),
+            "{reason}"
+        );
+        assert_eq!(event_reasons(&api), ["DeployRetrying", "DeployFailed"]);
+    }
+
+    /// A Queued record whose build index the operator cannot read counts
+    /// the attempt while the record stays Queued, and is marked Failed once
+    /// the retries run out. The current record is not superseded.
+    #[tokio::test]
+    async fn a_queued_record_with_a_missing_build_fails_after_the_retries() {
+        let active = json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": "Activation",
+            "metadata": {
+                "name": "a-old",
+                "labels": { "app.kubernetes.io/managed-by": "kix", (keys::CLUSTER_LABEL): "a" },
+            },
+            "spec": { "cluster": "a", "source": { "type": "storePath", "path": "/old" } },
+            "status": { "phase": PHASE_ACTIVE },
+        });
+        let mut record = deploying(0);
+        record["status"] = json!({ "phase": PHASE_QUEUED, "startedRequest": "r1" });
+        let api = FakeApi::new(vec![kube_system(HERE), active, record.clone()]);
+        let (answer, status) = reconcile_retrying(&api, record.clone(), 1).await;
+        assert!(answer.is_err(), "{answer:?}");
+        assert_eq!(status["phase"], PHASE_QUEUED);
+        assert_eq!(status["failedAttempts"], 1);
+
+        record["status"]["failedAttempts"] = json!(1);
+        let (answer, status) = reconcile_retrying(&api, record, 1).await;
+        assert_eq!(answer.unwrap(), Action::await_change());
+        assert_eq!(status["phase"], PHASE_FAILED);
+        assert_eq!(status["finishedRequest"], "r1");
+        assert_eq!(
+            api.object("Activation", "a-old").unwrap()["status"]["phase"],
+            PHASE_ACTIVE
+        );
+    }
+
+    /// A redeploy or a repair of the current record whose build cannot be
+    /// read is not counted: the record stays current, and the reconcile is
+    /// retried.
+    #[tokio::test]
+    async fn a_missing_build_on_the_current_record_is_not_counted() {
+        let mut record = deploying(0);
+        record["status"] = json!({ "phase": PHASE_ACTIVE, "startedRequest": "r1" });
+        let api = FakeApi::new([record.clone()]);
+        let (answer, status) = reconcile_retrying(&api, record, 0).await;
+        assert!(answer.is_err(), "{answer:?}");
+        assert_eq!(status["phase"], PHASE_ACTIVE);
+        assert!(status.get("failedAttempts").is_none(), "{status}");
+        assert!(event_reasons(&api).is_empty());
     }
 }

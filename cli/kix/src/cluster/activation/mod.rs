@@ -657,22 +657,27 @@ impl Records {
         Ok(())
     }
 
-    /// Record that the operator started `request` on record `name`.
+    /// Record that the operator started `request` on record `name`, and
+    /// clear the count of failed attempts, so each request starts from zero.
     pub async fn start_request(&self, name: &str, request: &str) -> Result<(), RecordsError> {
         self.patch_status(
             name,
-            &json!({ "status": { STARTED_REQUEST_FIELD: request } }),
+            &json!({ "status": { STARTED_REQUEST_FIELD: request, FAILED_ATTEMPTS_FIELD: null } }),
         )
         .await
     }
 
-    /// Queue record `name` again for the operator's `request`, and record
-    /// that the operator started it. The operator then deploys the record as
-    /// it deploys a new one.
+    /// Queue record `name` again for the operator's `request`, record that
+    /// the operator started it, and clear the count of failed attempts. The
+    /// operator then deploys the record as it deploys a new one.
     pub async fn requeue(&self, name: &str, request: &str) -> Result<(), RecordsError> {
         self.patch_status(
             name,
-            &json!({ "status": { "phase": PHASE_QUEUED, STARTED_REQUEST_FIELD: request } }),
+            &json!({ "status": {
+                "phase": PHASE_QUEUED,
+                STARTED_REQUEST_FIELD: request,
+                FAILED_ATTEMPTS_FIELD: null,
+            } }),
         )
         .await
     }
@@ -966,17 +971,12 @@ impl Records {
         Ok(())
     }
 
-    /// Clear the count of failed runs on record `name`, as the operator does
-    /// when it starts a new deploy of the record.
-    pub async fn clear_failed_attempts(&self, name: &str) -> Result<(), RecordsError> {
-        self.patch_status(name, &json!({ "status": { FAILED_ATTEMPTS_FIELD: null } }))
-            .await
-    }
-
-    /// Record that the operator's run number `attempts` of record `name`
-    /// stopped with `reason`. With `give_up`, also mark the record `Failed`
-    /// when [`phase_on_abort`] permits it, as [`Records::fail_deploy`] does.
-    /// Return whether the record is now `Failed`.
+    /// Record that the operator's attempt number `attempts` to deploy record
+    /// `name` failed with `reason`. With `give_up`, also mark the record
+    /// `Failed` when it is `Queued`, or when [`phase_on_abort`] permits it, as
+    /// [`Records::fail_deploy`] does. A record is still `Queued` when the
+    /// attempt failed before the deploy began, such as when the operator
+    /// could not read its build. Return whether the record is now `Failed`.
     pub async fn fail_attempt(
         &self,
         name: &str,
@@ -991,7 +991,12 @@ impl Records {
             json!({ "reason": reason, "at": chrono::Utc::now().to_rfc3339() }),
         );
         let failed = if give_up {
-            let phase = phase_on_abort(&self.phase_of(name).await?);
+            let current = self.phase_of(name).await?;
+            let phase = if current == PHASE_QUEUED {
+                Some(PHASE_FAILED)
+            } else {
+                phase_on_abort(&current)
+            };
             if let Some(phase) = phase {
                 status.insert("phase".to_string(), json!(phase));
             }

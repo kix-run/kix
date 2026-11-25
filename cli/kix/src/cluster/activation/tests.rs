@@ -978,3 +978,70 @@ mod package_index_tests {
         assert_eq!(read.package_index, Some(many.without_names()));
     }
 }
+
+mod attempt_tests {
+    use super::super::*;
+    use crate::cluster::fake_api::FakeApi;
+
+    async fn records_with(api: &FakeApi) -> Records {
+        let client = api.client();
+        let discovery = crate::cluster::discovery::discover_resources(&client)
+            .await
+            .unwrap();
+        Records::open_installed(&client, &discovery).unwrap()
+    }
+
+    fn record(name: &str, phase: &str) -> Value {
+        json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": crate::manifest::lifecycle::RECORD_KIND,
+            "metadata": { "name": name },
+            "status": { "phase": phase, (FAILED_ATTEMPTS_FIELD): 4 },
+        })
+    }
+
+    /// Giving up marks a Queued or Deploying record Failed, and leaves a
+    /// current record's phase alone.
+    #[tokio::test]
+    async fn giving_up_fails_a_record_that_has_not_deployed() {
+        for (phase, fails) in [
+            (PHASE_QUEUED, true),
+            (PHASE_DEPLOYING, true),
+            (PHASE_ACTIVE, false),
+        ] {
+            let api = FakeApi::new([record("r", phase)]);
+            let records = records_with(&api).await;
+            assert_eq!(
+                records.fail_attempt("r", 5, "boom", true).await.unwrap(),
+                fails,
+                "{phase}"
+            );
+            let after = records.get("r").await.unwrap().unwrap();
+            let want = if fails { PHASE_FAILED } else { phase };
+            assert_eq!(after.phase, want);
+            assert_eq!(after.failed_attempts, 5);
+        }
+    }
+
+    /// Starting a request, or queueing a record again for one, clears the
+    /// count of failed attempts.
+    #[tokio::test]
+    async fn a_new_request_clears_the_count() {
+        let api = FakeApi::new([record("q", PHASE_QUEUED), record("f", PHASE_FAILED)]);
+        let records = records_with(&api).await;
+        records.start_request("q", "r1").await.unwrap();
+        records.requeue("f", "r2").await.unwrap();
+        for name in ["q", "f"] {
+            let after = records.get(name).await.unwrap().unwrap();
+            assert_eq!(after.failed_attempts, 0, "{name}");
+        }
+        let untouched = FakeApi::new([record("q", PHASE_QUEUED)]);
+        let after = records_with(&untouched)
+            .await
+            .get("q")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.failed_attempts, 4);
+    }
+}

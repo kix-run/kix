@@ -10,7 +10,7 @@ use std::time::Duration;
 use kix::cluster::activation::{Record, Records, WaveStatus};
 use kix::eval::package_index::RecordPackageIndex;
 use kix::manifest::lifecycle::{
-    PHASE_ACTIVE, PHASE_DEGRADED, PHASE_DEPLOYING, PHASE_FAILED, PHASE_SUPERSEDED,
+    PHASE_ACTIVE, PHASE_DEGRADED, PHASE_DEPLOYING, PHASE_FAILED, PHASE_QUEUED, PHASE_SUPERSEDED,
 };
 use kube::client::Client;
 use miette::{Result, miette};
@@ -188,9 +188,11 @@ impl Progress {
             ));
             self.waves_done = i + 1;
         }
-        // The operator counts each run that stops, and retries the record
-        // while it stays Deploying.
-        if act.phase == PHASE_DEPLOYING && act.failed_attempts > self.attempts_reported {
+        // The operator counts each attempt that fails, and retries the
+        // record while it stays Deploying, or Queued when the attempt failed
+        // before the deploy began.
+        let retrying = matches!(act.phase.as_str(), PHASE_DEPLOYING | PHASE_QUEUED | "");
+        if retrying && act.failed_attempts > self.attempts_reported {
             self.attempts_reported = act.failed_attempts;
             lines.push(format!(
                 "  {} Attempt {} failed. The Kix operator will retry in 30 seconds.",
@@ -476,6 +478,28 @@ mod tests {
             progress.lines(&act),
             vec!["  ✓ Wave 1: Complete (2/3 applied, 1 failed)".to_string()]
         );
+    }
+
+    /// An attempt that failed before the deploy began leaves the record
+    /// Queued, and the watch reports it as it reports one on a Deploying
+    /// record. A count left on a current record is not reported.
+    #[test]
+    fn the_watch_reports_an_attempt_on_a_queued_record() {
+        let mut act = Record {
+            phase: PHASE_QUEUED.into(),
+            failed_attempts: 1,
+            failure_reason: Some("cannot read the build at /nix/store/x".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            Progress::default().lines(&act),
+            vec![
+                "  ✗ Attempt 1 failed. The Kix operator will retry in 30 seconds.".to_string(),
+                "    cannot read the build at /nix/store/x".to_string(),
+            ]
+        );
+        act.phase = PHASE_ACTIVE.into();
+        assert!(Progress::default().lines(&act).is_empty());
     }
 
     /// Verify that a record deleted while watching returns an error naming the record.
