@@ -104,7 +104,6 @@ let
       buildConfigInjections
       checkRefTargets
       checkDepsKeys
-      refsOf
       evaluateInstanceModules
       instancePinsLib
       ;

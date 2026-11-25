@@ -420,7 +420,7 @@ build =
 
 If a package builds two ServiceAccounts with separate identities, declare two dependencies and call `kix.cloudIdentity.use` once for each.
 
-When an operator creates the ServiceAccount from a custom resource, `credentials.bind` cannot modify it. Instead, take `cloudIdentity ? null` as a build argument and call `kix.cloudIdentity.annotationsFor { inherit scope; identity = credentials.identity; provider = cloudIdentity; }`. Pass the returned `{ serviceAccountAnnotations, podLabels }` into the custom resource (both sets are empty when `identity` is `null`). Because the operator creates those pods, Kix does not add `checksum/cloud-identity` to restart them automatically when the identity changes.
+When an operator creates the ServiceAccount from a custom resource, `credentials.bind` cannot modify it. Instead, take `cloudIdentity ? null` as a build argument and call `kix.cloudIdentity.annotationsFor { inherit scope; identity = credentials.identity; provider = cloudIdentity; }`. Pass the returned `{ serviceAccountAnnotations, podLabels }` into the custom resource (both sets are empty when `identity` is `null`). Because the operator creates those pods, Kix does not add `checksum/cloud-identity` to restart them automatically when the identity changes. Also call `kix.cloudIdentity.annotationsFor` when a workload launches its own pods at runtime under a bound ServiceAccount: merge the returned `podLabels` into the ConfigMap or setting that controls those pods' labels (as `velero` does for its node-agent and repository-maintenance ConfigMaps).
 
 ### When one package owns the ServiceAccount and another chooses the cloud
 

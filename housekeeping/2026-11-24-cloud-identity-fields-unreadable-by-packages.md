@@ -1,0 +1,3 @@
+# 2026-11-24 · `kix/lib/vocab/cloud-identity.nix` · A package cannot read the fields of a cloud identity, so a user repeats them in config.
+
+`kix.cloudIdentity.use` returns the identity value, but its fields (`roleArn`, `serviceAccount`, `clientId`) sit under an undocumented `value` attribute that no package should read. Velero on GKE needs the Google service account email twice: in `kix.cloudIdentity.gcp { serviceAccount = ...; }` and again in `backupStorageLocation.config.serviceAccount`, which the GCP plugin signs download URLs as. The package can only check that the second is set, not that it matches the first. Any other package whose software needs the role or client ID in its own config will hit the same gap.

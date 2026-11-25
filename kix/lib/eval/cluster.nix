@@ -19,7 +19,6 @@
   buildConfigInjections,
   checkRefTargets,
   checkDepsKeys,
-  refsOf,
   evaluateInstanceModules,
   instancePinsLib,
   evaluateInstance,
@@ -437,11 +436,11 @@ in
       instanceProcessors = hooks.collectHooks cfg "instanceProcessors";
       clusterProcessors = hooks.collectHooks cfg "clusterProcessors";
 
-      # Read only `ref` pointers in phase 1. Other explicit `deps` values may
-      # come from the instance fixpoint, so they are bound during full instance
-      # evaluation and do not receive config injections. An inactive optional
-      # instance deploys nothing, so it resolves no dependency and injects no
-      # config.
+      # Bind `ref` pointers in phase 1. Any other explicit `deps` value binds
+      # its dependency directly. Phase 1 records only that it is bound,
+      # because the value may come from the instance fixpoint, and a direct
+      # value receives no config injections. An inactive optional instance
+      # deploys nothing, so it resolves no dependency and injects no config.
       phase1Instances = lib.mapAttrs (
         nsName: nsInsts:
         lib.mapAttrs (
@@ -474,7 +473,7 @@ in
                     requester = "${nsName}/${instName}";
                     addedFor = instCfg._autoInstantiatedFor or [ ];
                     requesterName = instName;
-                    explicitOverrides = lib.filterAttrs (_: v: refsOf v != [ ]) (instCfg.deps or { });
+                    explicitOverrides = instCfg.deps or { };
                   }
                 else
                   lib.mapAttrs (_: _: { found = false; }) discoveredDeps;
