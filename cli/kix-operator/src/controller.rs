@@ -871,10 +871,11 @@ fn redeploy_failed_reason(phase: &str, error: &OperatorError) -> String {
         other => other.to_string(),
     };
     format!(
-        "the Kix operator could not deploy this build again, and the Activation stays {phase}. \
-         The operator keeps repairing drift from this build, but does not run this request again. \
+        "the Kix operator could not redeploy the current build. \
+         This Activation stays {phase}, and the operator continues repairing drift for this build. \
+         It does not retry a failed redeploy. \
          Fix the cause below, then run `kix deploy --operator` again.\n\n  \
-         Last failure:\n    {}",
+         Cause:\n    {}",
         cause.replace('\n', "\n    "),
     )
 }
@@ -1684,8 +1685,8 @@ mod tests {
         assert_eq!(status["failedRequest"]["request"], "r1");
         let reason = status["failedRequest"]["reason"].as_str().unwrap();
         assert!(
-            reason.starts_with("the Kix operator could not deploy this build again, and the Activation stays Degraded.")
-                && reason.contains("Last failure:\n    ")
+            reason.starts_with("the Kix operator could not redeploy the current build. This Activation stays Degraded,")
+                && reason.contains("Cause:\n    ")
                 && reason.contains("/nonexistent"),
             "{reason}"
         );
