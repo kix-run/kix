@@ -796,7 +796,7 @@ pub(super) fn pod_not_ready_reason(pod: &Value) -> Option<String> {
                 && cs.get("ready").and_then(Value::as_bool) == Some(false)
             {
                 return Some(format!(
-                    "pod {name}/{container} is running and its readiness probe has not passed"
+                    "pod {name}/{container} is running, but its readiness probe has not passed"
                 ));
             }
         }
@@ -859,19 +859,17 @@ pub(super) fn statefulset_held_pods(sts: &DynamicObject, pods: &[Value]) -> Opti
         .join(", ");
     let namespace = sts.metadata.namespace.as_deref().unwrap_or("default");
     let command = format!("kubectl delete pod -n {namespace} {}", names.join(" "));
-    let rule = "The StatefulSet uses OrderedReady pod management, so Kubernetes replaces no pod \
-                while one of its pods is not ready.";
+    let rule = "With OrderedReady pod management, Kubernetes will not replace pods \
+                while any pod in the StatefulSet is not ready.";
     Some(if let [(name, revision)] = held.as_slice() {
         format!(
-            "Pod {name} runs revision {revision}, not the current revision {update}, and is not ready. {rule} \
-             The pod will not move to {update} on its own. Delete it so the StatefulSet \
-             recreates it from {update}: {command}"
+            "Pod {name} is not ready and is still on revision {revision} (current revision: {update}). {rule} \
+             Delete it so the StatefulSet recreates it on the current revision: {command}"
         )
     } else {
         format!(
-            "Pods {listed} are not on the current revision {update} and are not ready. {rule} \
-             The pods will not move to {update} on their own. Delete them so the StatefulSet \
-             recreates them from {update}: {command}"
+            "Pods {listed} are not ready (current revision: {update}). {rule} \
+             Delete them so the StatefulSet recreates them on the current revision: {command}"
         )
     })
 }

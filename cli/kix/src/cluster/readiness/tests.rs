@@ -596,7 +596,7 @@ fn a_rollout_with_old_pods_does_not_claim_the_updated_pods_are_ready() {
     );
     assert_eq!(
         not_ready_reason(&stuck, gk("Deployment")),
-        "2/2 updated, 1 old pod still running, 2 pods ready counting the old one"
+        "2/2 updated, 1 old pod still running, 2 ready including the old pod"
     );
     let rolling = make_obj_gen(
         3,
@@ -2918,7 +2918,7 @@ fn a_pod_that_is_not_ready_says_why() {
     );
     assert_eq!(
         terminal::pod_not_ready_reason(&probing).as_deref(),
-        Some("pod p/app is running and its readiness probe has not passed")
+        Some("pod p/app is running, but its readiness probe has not passed")
     );
     assert_eq!(
         terminal::pod_not_ready_reason(&pod("p", "r", ready_pod_status())),
@@ -2975,7 +2975,7 @@ fn a_statefulset_names_the_pod_that_holds_back_its_rollout() {
     let message = terminal::statefulset_held_pods(&sts, &held).expect("a held pod");
     assert!(
         message.starts_with(
-            "Pod hello-0 runs revision hello-bad, not the current revision hello-good, and is not ready."
+            "Pod hello-0 is not ready and is still on revision hello-bad (current revision: hello-good)."
         ),
         "{message}"
     );
@@ -3087,7 +3087,7 @@ mod workload_waits {
             panic!("expected a timeout, got {result:?}");
         };
         assert!(
-            message.contains("Pod hello-0 runs revision hello-bad")
+            message.contains("Pod hello-0 is not ready and is still on revision hello-bad")
                 && message.ends_with("kubectl delete pod -n demo hello-0"),
             "{message}"
         );

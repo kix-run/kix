@@ -1079,10 +1079,10 @@ pub fn not_ready_reason(obj: &DynamicObject, kind: GroupKind<'_>) -> String {
             // updated ones.
             match old {
                 1 if kind == kinds::DEPLOYMENT => format!(
-                    "{updated}/{desired} updated, 1 old pod still running, {ready} pods ready counting the old one"
+                    "{updated}/{desired} updated, 1 old pod still running, {ready} ready including the old pod"
                 ),
                 n if n > 1 && kind == kinds::DEPLOYMENT => format!(
-                    "{updated}/{desired} updated, {n} old pods still running, {ready} pods ready counting the old ones"
+                    "{updated}/{desired} updated, {n} old pods still running, {ready} ready including the old pods"
                 ),
                 _ => format!("{ready}/{desired} ready, {updated}/{desired} updated"),
             }
@@ -1116,9 +1116,7 @@ pub fn not_ready_reason(obj: &DynamicObject, kind: GroupKind<'_>) -> String {
                 .unwrap_or("Unknown");
             format!("phase {phase}")
         }
-        kinds::SERVICE => {
-            "type LoadBalancer, and the load balancer has not given it an address yet (status.loadBalancer.ingress is empty)".to_string()
-        }
+        kinds::SERVICE => "no load balancer address in status.loadBalancer.ingress yet".to_string(),
         _ => {
             // Show condition types when a generic custom resource has neither
             // Ready nor Available, so the missing readiness convention is visible.

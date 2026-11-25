@@ -164,9 +164,9 @@ pub(crate) fn being_deleted(rid: &ResourceId, reason: &str) -> String {
 const LOAD_BALANCER_WAIT_ID: &str = "[K1243] ";
 
 /// What to do when a `LoadBalancer` Service gets no address.
-const LOAD_BALANCER_ADVICE: &str = "Kix waits until a LoadBalancer Service has an address. \
+const LOAD_BALANCER_ADVICE: &str = "Kix stopped waiting for an address. \
      If this cluster has no load balancer, change the Service's type to ClusterIP or NodePort, \
-     and set cluster.roles.loadBalancer.binding = \"absent\" so that a build refuses such a Service";
+     and set cluster.roles.loadBalancer.binding = \"absent\" in the cluster definition so the build rejects LoadBalancer Services.";
 
 /// Absolute upper bound on how long any single resource may take to become
 /// Ready. Enforced regardless of the per-resource idle budget so a resource
