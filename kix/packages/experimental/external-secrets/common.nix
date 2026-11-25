@@ -73,6 +73,7 @@ rec {
     dep:
     kix.cloudIdentity.useIdentity {
       inherit scope dep;
+      arg = "controllerCredentials";
       secretGoesTo = "the instance that builds each `SecretStore` or `ClusterSecretStore` (referenced in `auth.secretRef`, or `authSecretRef` on Azure)";
     };
 

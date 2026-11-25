@@ -98,9 +98,12 @@ If an object is still on the cluster when the wait ends, `kix gc` fails with
 `[K2794]`, lists any remaining finalizers, and exits with code `1`. Kix also
 keeps any resources recorded as dependencies of that object, because the object
 still on the cluster depends on them; the next `kix gc` run deletes them once
-the object is gone. Note that most packages do not yet record that a custom
-resource depends on its operator, so removing both at once can delete the
-operator before it clears the custom resource's finalizer.
+the object is gone. When a package declares its operator as the `controller` for
+a custom resource kind, Kix deletes custom resources of that kind before the
+operator, keeps the operator until they are gone, and reports in `[K2794]`
+whether the operator is ready. Most packages do not declare a `controller` yet,
+so removing a custom resource and its operator together can delete the operator
+before it removes the custom resource's finalizer.
 
 To resolve `[K2794]`:
 

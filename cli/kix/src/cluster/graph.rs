@@ -381,6 +381,23 @@ fn get_annotation(manifest: &serde_json::Value, key: &str) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+/// Return the object a controller manifest stands for: the workload itself,
+/// or for an import marker, the workload it imports.
+fn controller_id(manifest: &serde_json::Value) -> ResourceId {
+    match crate::cluster::readiness::import_target_from_manifest(manifest) {
+        Ok(Some(target)) => ResourceId::new(
+            crate::manifest::types::api_group(&target.api_version),
+            &target.kind,
+            target
+                .namespace
+                .as_deref()
+                .unwrap_or(crate::manifest::types::CLUSTER_SCOPED),
+            &target.name,
+        ),
+        _ => ResourceId::from_value(manifest),
+    }
+}
+
 /// Objects to delete, in an order that deletes each object before the
 /// objects it depends on, together with the dependencies of a whole build.
 ///
@@ -404,6 +421,10 @@ pub struct DeleteOrder {
     /// Each object held back, and the object whose delete did not finish
     /// that holds it.
     held: HashMap<ResourceId, ResourceId>,
+    /// The controllers of each custom resource whose kind names them, from
+    /// its `controller:` dependencies. A controller that is an import marker
+    /// is listed as the object the marker stands for.
+    controllers: HashMap<ResourceId, Vec<ResourceId>>,
 }
 
 /// What [`DeleteOrder::walk`] did with one object.
@@ -430,12 +451,15 @@ impl DeleteOrder {
     /// to delete.
     pub fn of_manifests(manifests: &[serde_json::Value]) -> Self {
         let mut by_hash: HashMap<String, ResourceId> = HashMap::new();
+        let mut manifest_by_hash: HashMap<String, &serde_json::Value> = HashMap::new();
         for m in manifests {
             if let Some(hash) = get_annotation(m, keys::IDENTITY_HASH) {
-                by_hash.insert(hash, ResourceId::from_value(m));
+                by_hash.insert(hash.clone(), ResourceId::from_value(m));
+                manifest_by_hash.insert(hash, m);
             }
         }
         let mut needs: HashMap<ResourceId, Vec<ResourceId>> = HashMap::new();
+        let mut controllers: HashMap<ResourceId, Vec<ResourceId>> = HashMap::new();
         for m in manifests {
             let Some(deps) = get_annotation(m, keys::DEPENDS_ON) else {
                 continue;
@@ -448,6 +472,12 @@ impl DeleteOrder {
                     needs.entry(id.clone()).or_default().push(dep.clone());
                 }
             }
+            let named: Vec<ResourceId> = keys::controller_hashes(&deps)
+                .filter_map(|hash| manifest_by_hash.get(hash).map(|c| controller_id(c)))
+                .collect();
+            if !named.is_empty() {
+                controllers.insert(id, named);
+            }
         }
         let ids = match ResourceGraph::from_manifests(manifests) {
             Ok(graph) => graph.reverse_topo_ids(),
@@ -457,7 +487,15 @@ impl DeleteOrder {
             ids,
             needs,
             held: HashMap::new(),
+            controllers,
         }
+    }
+
+    /// Return the controllers that the kind of each object names, for the
+    /// objects whose kind names any. A delete loop reads them to say which
+    /// workload should remove a stuck object's finalizers.
+    pub fn controllers(&self) -> &HashMap<ResourceId, Vec<ResourceId>> {
+        &self.controllers
     }
 
     /// Keep `ids` in the order given, with no known dependencies.
@@ -703,6 +741,72 @@ mod tests {
             seen,
             vec!["resource done stuck=true", "operator held by resource"]
         );
+    }
+
+    /// A `controller:` entry names the custom resource's controller, and a
+    /// controller that is an import marker is named as the object it
+    /// imports. A plain or `requires:` entry for the same object orders the
+    /// deletes the same way and names no controller.
+    #[test]
+    fn controller_entries_name_the_controller() {
+        let operator = manifest("Deployment", "operator", "ops", "hash_op", "");
+        let marker = json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": "PackageInstance",
+            "metadata": {
+                "name": "crd-ref-dns",
+                "namespace": "app",
+                "annotations": {
+                    (keys::IDENTITY_HASH): "hash_marker",
+                    (keys::MODE): "import",
+                    (keys::IMPORT_KIND): "Deployment",
+                    (keys::IMPORT_API_VERSION): "apps/v1",
+                    (keys::IMPORT_NAME): "coredns",
+                },
+            },
+        });
+        let named = manifest(
+            "ConfigMap",
+            "named",
+            "app",
+            "hash_named",
+            "controller:hash_op",
+        );
+        let imported = manifest(
+            "ConfigMap",
+            "imported",
+            "app",
+            "hash_imported",
+            "controller:hash_marker",
+        );
+        let plain = manifest(
+            "ConfigMap",
+            "plain",
+            "app",
+            "hash_plain",
+            "requires:hash_op",
+        );
+        let order = DeleteOrder::of_manifests(&[operator, marker, named, imported, plain]);
+        let id = |name: &str| ResourceId::new("", "ConfigMap", "app", name);
+        let op = ResourceId::new("apps", "Deployment", "ops", "operator");
+        assert_eq!(
+            order.controllers().get(&id("named")),
+            Some(&vec![op.clone()])
+        );
+        assert_eq!(
+            order.controllers().get(&id("imported")),
+            Some(&vec![ResourceId::new(
+                "apps",
+                "Deployment",
+                "app",
+                "coredns"
+            )])
+        );
+        assert_eq!(order.controllers().get(&id("plain")), None);
+        let ids = order.ids().to_vec();
+        let pos = |rid: &ResourceId| ids.iter().position(|r| r == rid).unwrap();
+        assert!(pos(&id("named")) < pos(&op), "{ids:?}");
+        assert!(pos(&id("plain")) < pos(&op), "{ids:?}");
     }
 
     /// Objects in a dependency cycle are reported, not deleted, and the

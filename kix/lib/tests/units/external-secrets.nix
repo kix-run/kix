@@ -802,8 +802,8 @@ in
     wrong == [ ]
     || throw "external-secrets cloud identity refusals: bad case built or good case failed: ${builtins.toJSON wrong}";
 
-  # The Secret refusal names the instance it got and points at the store's
-  # auth.secretRef.
+  # The Secret refusal names the dependency and the instance it got, and
+  # points at the store's auth.secretRef.
   external-secrets-cloud-identity-secret-message =
     let
       common = import ../../../packages/experimental/external-secrets/common.nix {
@@ -824,7 +824,12 @@ in
       };
       text = if r ? failed then r.failed.message + " " + (r.failed.fix or "") else "";
     in
-    (lib.hasInfix "but got `external-secrets/aws-keys`" text && lib.hasInfix "auth.secretRef" text)
+    (
+      lib.hasInfix "`deps.controllerCredentials` accepts only a cloud identity" text
+      && lib.hasInfix "but got `external-secrets/aws-keys`" text
+      && lib.hasInfix "auth.secretRef" text
+      && r.failed.dependency == "controllerCredentials"
+    )
     || throw "secret message: ${text}";
 
   # `out.identityCloud` is the cloud of the controller's identity, and null

@@ -50,6 +50,66 @@ pub struct Stuck {
     pub elapsed: Duration,
     /// The finalizers still on the object.
     pub finalizers: Vec<String>,
+    /// The controllers that the object's kind names, as the delete loop
+    /// found them after the wait. [`wait_gone`] leaves it empty; a loop that
+    /// knows the object's manifest fills it.
+    pub controllers: Vec<Controller>,
+}
+
+/// A workload that the kind of a stuck object names as its controller
+/// (`controller` on `scope.mkCRD` or `scope.mkCRDRef`), and what Kix found
+/// when it read it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Controller {
+    pub id: ResourceId,
+    pub state: ControllerState,
+}
+
+/// What Kix found when it read a controller.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ControllerState {
+    Ready,
+    /// On the cluster and not ready, with the reason.
+    NotReady(String),
+    /// Not on the cluster.
+    Missing,
+    /// The read failed, with the error.
+    Unread(String),
+}
+
+/// Return the state of the controller `id` from a read of its live object.
+pub fn controller_state(
+    id: &ResourceId,
+    live: Result<Option<DynamicObject>, String>,
+) -> ControllerState {
+    match live {
+        Err(e) => ControllerState::Unread(e),
+        Ok(None) => ControllerState::Missing,
+        Ok(Some(obj)) if !super::check_readiness(&obj, id.group_kind()) => {
+            ControllerState::NotReady(super::not_ready_reason(&obj, id.group_kind()))
+        }
+        Ok(Some(obj)) => match ready_pods(&obj) {
+            Some(0) => ControllerState::NotReady(super::not_ready_reason(&obj, id.group_kind())),
+            _ => ControllerState::Ready,
+        },
+    }
+}
+
+/// Return how many pods of a Deployment, StatefulSet, or DaemonSet are ready,
+/// or `None` for another kind. Readiness counts a workload scaled to zero as
+/// ready, but a controller with no ready pod removes no finalizer.
+fn ready_pods(obj: &DynamicObject) -> Option<i64> {
+    let field = match obj.types.as_ref()?.kind.as_str() {
+        "Deployment" | "StatefulSet" => "/status/readyReplicas",
+        "DaemonSet" => "/status/numberReady",
+        _ => return None,
+    };
+    Some(
+        obj.data
+            .pointer(field)
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0),
+    )
 }
 
 /// Wait until the object `name` with uid `uid` is gone.
@@ -95,6 +155,7 @@ pub(crate) async fn wait_gone(
             return Ok(Deletion::Stuck(Stuck {
                 elapsed: start.elapsed(),
                 finalizers,
+                controllers: Vec::new(),
             }));
         }
         tokio::select! {
@@ -263,6 +324,9 @@ pub fn stuck_message(rid: &ResourceId, stuck: &Stuck) -> String {
         "[{STUCK_DELETE_ID}] {rid} is still being deleted after {secs}s, waiting for {}.",
         named.join(", ")
     );
+    for controller in &stuck.controllers {
+        message.push_str(&format!("\n  {}", controller_line(rid, controller)));
+    }
     let guards: Vec<(&String, &'static str)> = stuck
         .finalizers
         .iter()
@@ -280,14 +344,38 @@ pub fn stuck_message(rid: &ResourceId, stuck: &Stuck) -> String {
     message
 }
 
+/// Describe a controller that the kind of the stuck object `rid` names, and
+/// what Kix found when it read it.
+fn controller_line(rid: &ResourceId, controller: &Controller) -> String {
+    let id = &controller.id;
+    let kind = &rid.kind;
+    match &controller.state {
+        ControllerState::Ready => format!(
+            "{kind} controller {id} is ready. Check its logs to see why it has not removed \
+             the finalizers."
+        ),
+        ControllerState::NotReady(reason) => format!(
+            "{kind} controller {id} is not ready ({reason}), so it cannot remove the finalizers. \
+             Get it running so cleanup can finish."
+        ),
+        ControllerState::Missing => format!(
+            "{kind} controller {id} is not on the cluster, so it cannot remove the finalizers. \
+             Deploy it again so cleanup can finish."
+        ),
+        ControllerState::Unread(e) => {
+            format!("Kix could not read {kind} controller {id}: {e}.")
+        }
+    }
+}
+
 /// Return the explanation that goes once with the [`stuck_message`]s of a
 /// run on `path`: that the deletes may still finish, what to run next, what
 /// Kix kept, and what removing a finalizer by hand gives up.
 pub fn stuck_explanation(path: DeletePath) -> String {
-    let recorded = "Kix did not delete any object that the build records as a dependency of \
-                    the objects above (a custom resource records a dependency on its operator \
-                    only when its package declares that link; most do not yet); kept objects \
-                    stay recorded, and";
+    let recorded = "Kix kept every object that the build lists as a dependency of the objects \
+                    above. Most packages do not link custom resources to their operator yet, \
+                    so an operator removed in the same run may already be gone. Kept objects \
+                    stay tracked, and";
     let cli_retry = "Run the same command again later, or pass a longer `--timeout` (default 3 \
                      minutes without a finalizer being removed, or 5 minutes in total for each \
                      object).";
@@ -645,6 +733,7 @@ mod tests {
         Stuck {
             elapsed: Duration::from_secs(180),
             finalizers: finalizers.iter().map(|f| f.to_string()).collect(),
+            controllers: Vec::new(),
         }
     }
 
@@ -667,6 +756,92 @@ mod tests {
         assert_eq!(
             remove_finalizers_command(&ns),
             r#"kubectl patch namespace old --type=merge -p '{"metadata":{"finalizers":null}}'"#
+        );
+    }
+
+    /// Each state of a named controller gets its own line, after the
+    /// finalizers and before the removal command. Without a controller the
+    /// message is as before.
+    #[test]
+    fn a_named_controller_says_whether_it_runs() {
+        let rid = ResourceId::new("keda.sh", "ScaledObject", "app", "worker");
+        let op = ResourceId::new("apps", "Deployment", "keda", "keda-operator");
+        let with = |state: ControllerState| {
+            let mut s = stuck(&["finalizer.keda.sh"]);
+            s.controllers.push(Controller {
+                id: op.clone(),
+                state,
+            });
+            stuck_message(&rid, &s)
+        };
+        let not_ready = with(ControllerState::NotReady("0/1 replicas ready".into()));
+        assert!(
+            not_ready.contains(
+                "\n  ScaledObject controller Deployment.apps/keda-operator@keda is not \
+                 ready (0/1 replicas ready),"
+            ),
+            "{not_ready}"
+        );
+        assert!(
+            not_ready.find("ScaledObject controller").unwrap() < not_ready.find("kubectl").unwrap(),
+            "{not_ready}"
+        );
+        assert!(
+            with(ControllerState::Ready)
+                .contains("ScaledObject controller Deployment.apps/keda-operator@keda is ready.")
+        );
+        assert!(with(ControllerState::Missing).contains("is not on the cluster"));
+        assert!(
+            with(ControllerState::Unread("forbidden".into())).contains(
+                "Kix could not read ScaledObject controller Deployment.apps/keda-operator@keda: forbidden."
+            )
+        );
+        let without = stuck_message(&rid, &stuck(&["finalizer.keda.sh"]));
+        assert!(!without.contains("ScaledObject controller"), "{without}");
+    }
+
+    /// A controller's state comes from its live object: missing, ready, or
+    /// not ready with the readiness reason.
+    #[test]
+    fn controller_state_reads_the_live_object() {
+        let op = ResourceId::new("apps", "Deployment", "keda", "keda-operator");
+        let deployment = |ready: u32| -> DynamicObject {
+            serde_json::from_value(json!({
+                "apiVersion": "apps/v1",
+                "kind": "Deployment",
+                "metadata": { "name": "keda-operator", "namespace": "keda", "generation": 1 },
+                "spec": { "replicas": 1 },
+                "status": {
+                    "observedGeneration": 1,
+                    "replicas": 1,
+                    "updatedReplicas": ready,
+                    "readyReplicas": ready,
+                    "availableReplicas": ready,
+                },
+            }))
+            .unwrap()
+        };
+        assert_eq!(controller_state(&op, Ok(None)), ControllerState::Missing);
+        assert_eq!(
+            controller_state(&op, Ok(Some(deployment(1)))),
+            ControllerState::Ready
+        );
+        assert!(matches!(
+            controller_state(&op, Ok(Some(deployment(0)))),
+            ControllerState::NotReady(_)
+        ));
+        // Scaled to zero, the Deployment counts as ready for a deploy, but
+        // no pod runs to remove a finalizer.
+        let mut scaled_down = deployment(0);
+        scaled_down.data["spec"]["replicas"] = json!(0);
+        scaled_down.data["status"]["replicas"] = json!(0);
+        assert_eq!(
+            controller_state(&op, Ok(Some(scaled_down))),
+            ControllerState::NotReady("0/0 ready, 0/0 updated".into())
+        );
+        assert_eq!(
+            controller_state(&op, Err("boom".into())),
+            ControllerState::Unread("boom".into())
         );
     }
 
@@ -750,7 +925,10 @@ mod tests {
         let cli = stuck_explanation(DeletePath::Prune(Runner::Cli));
         assert!(cli.contains("`kix deploy --prune` or `kix gc`"), "{cli}");
         assert!(cli.contains("`--timeout`"), "{cli}");
-        assert!(cli.contains("most do not yet"), "{cli}");
+        assert!(
+            cli.contains("Most packages do not link custom resources to their operator yet"),
+            "{cli}"
+        );
         for path in [
             DeletePath::Prune(Runner::Operator),
             DeletePath::Teardown,

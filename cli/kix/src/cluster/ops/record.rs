@@ -54,7 +54,8 @@ pub(crate) struct RecordConfig {
     /// Whether [`DeployRecord::abort`] should mark the record Failed.
     ///
     /// True for the CLI, which owns the run end to end. False for the
-    /// operator, which resumes on requeue when a reconcile returns early.
+    /// operator, which retries a run that stopped and marks the record
+    /// Failed itself once it stops retrying.
     pub(crate) mark_failed_on_abort: bool,
 }
 

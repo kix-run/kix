@@ -1140,12 +1140,14 @@ impl<'a> Run<'a> {
         // The explanation of a delete that did not finish goes with the first
         // one only, so many stuck objects make one explanation.
         let mut explained = false;
+        let controllers = Arc::new(order.controllers().clone());
         let start = |rid: &ResourceId| {
-            let (resources, observer, progress, cancel) = (
+            let (resources, observer, progress, cancel, controllers) = (
                 resources.clone(),
                 observer.clone(),
                 progress.clone(),
                 cancel.clone(),
+                controllers.clone(),
             );
             let rid = rid.clone();
             async move {
@@ -1169,6 +1171,7 @@ impl<'a> Run<'a> {
                                 &progress,
                                 &rid,
                                 uid,
+                                controllers.get(&rid).map_or(&[], Vec::as_slice),
                                 timeout,
                                 &cancel,
                             )
@@ -1357,13 +1360,17 @@ enum Unfinished {
 
 /// Wait for the orphan `rid` with uid `uid`, deleted by this prune or
 /// already being deleted, to be gone, within `timeout`. Report what it waits
-/// for each time that changes.
+/// for each time that changes. When the wait ends with the object still
+/// there, read each of `controllers`, the workloads its kind names, so the
+/// message says whether they run.
+#[allow(clippy::too_many_arguments)]
 async fn wait_gone(
     resources: &dyn ResourceIo,
     observer: &Arc<dyn DeployObserver>,
     progress: &Progress,
     rid: &ResourceId,
     uid: Option<&str>,
+    controllers: &[ResourceId],
     timeout: Duration,
     cancel: &CancelToken,
 ) -> Result<(), Unfinished> {
@@ -1389,7 +1396,26 @@ async fn wait_gone(
         .await
     {
         Ok(Deletion::Gone) => Ok(()),
-        Ok(Deletion::Stuck(stuck)) => Err(Unfinished::Stuck(readiness::stuck_message(rid, &stuck))),
+        Ok(Deletion::Stuck(mut stuck)) => {
+            for id in controllers {
+                let live = tokio::time::timeout(INLINE_BEST_EFFORT_TIMEOUT, resources.get_live(id))
+                    .await
+                    .map_err(|_| {
+                        format!("no answer within {}s", INLINE_BEST_EFFORT_TIMEOUT.as_secs())
+                    })
+                    .and_then(|read| read.map_err(|e| e.to_string()))
+                    .and_then(|live| {
+                        live.map(serde_json::from_value::<kube::api::DynamicObject>)
+                            .transpose()
+                            .map_err(|e| e.to_string())
+                    });
+                stuck.controllers.push(readiness::Controller {
+                    id: id.clone(),
+                    state: readiness::controller_state(id, live),
+                });
+            }
+            Err(Unfinished::Stuck(readiness::stuck_message(rid, &stuck)))
+        }
         Ok(Deletion::Cancelled) => Err(Unfinished::Cancelled),
         Err(e) => Err(Unfinished::Failed(format!(
             "Kix deleted {rid}, then could not read it to confirm that it is gone, so the delete failed: {e}"
