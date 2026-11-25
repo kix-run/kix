@@ -1,0 +1,3 @@
+# 2026-11-25 · `cli/kix-operator/src/controller.rs` · A failed operator deploy leaves the Kix cluster with no current deployment record.
+
+`start_queued` marks the `Active` record `Superseded` before it applies anything. When the new deploy then ends `Failed`, the cluster has no `Active` or `Degraded` record, so `kix status` finds nothing deployed and `kix rollback --operator` must pick the superseded record by hand. `kix deploy` without `--operator` keeps the previous record `Active` until its own run finalizes. Now that the operator gives up after `KIX_DEPLOY_RETRIES`, this state is reached often (seen on kind with a SOPS file the operator could not decrypt).

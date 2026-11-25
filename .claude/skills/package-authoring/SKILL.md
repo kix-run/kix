@@ -99,7 +99,11 @@ rewrites the later ones.
   `scope.mkCRD` or `scope.mkCRDRef` call for the kinds those webhooks admit (C21). Every declaration sets `holdsData`: `true` when deleting a custom
   resource of the kind loses data (a database, a storage pool, a backup),
   `false` otherwise (C24). A stateful package that renders a custom resource
-  of a kind without it fails to build.
+  of a kind without it fails to build. When a workload reconciles the kind,
+  set `controller` on the declaration to that workload, usually
+  `self.operator` (C27). Kix then creates custom resources after the operator,
+  deletes them before the operator, and names the operator if a delete gets
+  stuck.
 - Admission webhooks: Kix applies webhook configurations in `requires` order,
   so the package sets the order. When the operator does not read or patch its
   webhook configuration at startup, the configuration `requires` the workload
@@ -478,7 +482,7 @@ The only place in this skill with package line numbers. `pkg:N` is
 | `mergeArgs` with `parser = "component-base"` | descheduler:265-272 |
 | `mergeArgs` with a flag and its value as two words, written as a list item of `flags` | `clickhouse-logs/vector-agent.nix`:213-229; several values, spegel:301-303 |
 | `mergeArgs` on an attribute set of flags | victoria-metrics-agent:189-210 |
-| `argValues` to read what `extraArgs` gives a flag | external-dns:398; reloader:106-110 |
+| `argValues` to read what `extraArgs` gives a flag | external-dns:441; reloader:106-110 |
 | `mergeGuarded` on `settings` or `extraSpec` | tempo:447; cnpg-cluster:323, 430, 514 |
 | Migrations at start: Recreate, deadline from `startupSeconds`, probes | metabase:94-97, 252-256, 284-304 |
 | Config injection into a dependency | metabase:109-112; stackgres-database:120-125; cnpg-database:94-115 |
@@ -505,24 +509,28 @@ The only place in this skill with package line numbers. `pkg:N` is
 | A step after the migrations on one replica of a dependency: an init container running a sibling script from a ConfigMap, with a checksum annotation | plausible:518-561, 605-606; `plausible/replicate.py` |
 | One alias, two implementations, a contract file | `kix/contracts/experimental/clickhouse.nix`; clickhouse:101, clickhouse-cluster:90 |
 | Renamed dependency with `renamedFrom` | immich:209-212; `kix/contracts/stable/redis.nix` (`helpers.renamedFrom`) |
-| Credentials dependency accepting either a Secret or a cloud identity (`kix.cloudIdentity.use` and `credentials.bind`) | external-dns:164-168, 607-614; `providers.nix` (`cloud`) |
+| Credentials dependency accepting either a Secret or a cloud identity (`kix.cloudIdentity.use` and `credentials.bind`) | external-dns:164-169, 608-615; `providers.nix` (`cloud`) |
 | Cloud identity when one package owns the ServiceAccount and another chooses the cloud (`kix.cloudIdentity.useIdentity`, `ambientProblem`, `out.identityCloud`, `out.ambientCloud`) | `kix/lib/tests/units/cloud-identity.nix` (`holderPackage`, `callerPackage`, `storagePackage`, `databasePackage`) |
 
 Always declare a cloud identity dependency on the package that owns the
 ServiceAccount, because a ServiceAccount carries a single identity:
 
-- `kix.cloudIdentity.use { inherit scope dep cloud; identityGoesTo ? null; }`:
+- `kix.cloudIdentity.use { inherit scope dep cloud; arg; identityGoesTo ? null; }`:
   unpacks a dependency that accepts a Secret or (when `cloud` is `"aws"`,
   `"gcp"`, or `"azure"`) a cloud identity, such as `external-dns`. When
   `cloud` is `null` because another package owns the ServiceAccount, pass
   `identityGoesTo` naming that instance's identity dependency so the error's
   fix points there.
-- `kix.cloudIdentity.useIdentity { inherit scope dep secretGoesTo; cloud ? ...; }`:
+- `kix.cloudIdentity.useIdentity { inherit scope dep secretGoesTo; arg; cloud ? ...; }`:
   unpacks an optional cloud identity on a package that owns the ServiceAccount
   while another package chooses the cloud and accepts any Secret (`secretGoesTo`
   names where to pass a Secret instead). Omit `cloud` and publish
   `out.identityCloud = credentials.cloud` when dependents choose the cloud; or
   pass `cloud = <dep>.out.ambientCloud` when a dependency chooses the cloud.
+- Set `arg` to the dependency argument name in `build` (for example,
+  `arg = "providerCredentials";`) in both helpers. Evaluation errors then name
+  `deps.<arg>` and set the error's `dependency` field, so cluster authors know
+  which dependency to fix even when a package has more than one.
 - Rendering the identity: pipe a Kix-built ServiceAccount through
   `credentials.bind`. When an operator creates the ServiceAccount from a custom
   resource instead, take `cloudIdentity ? null` in `build` and pass

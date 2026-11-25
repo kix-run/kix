@@ -30,6 +30,16 @@ impl CancelToken {
         Self::default()
     }
 
+    /// Return a token that is cancelled when this one is, and that can be
+    /// cancelled on its own without cancelling this one. It starts with no
+    /// reason.
+    pub fn child(&self) -> Self {
+        Self {
+            inner: self.inner.child_token(),
+            reason: Arc::default(),
+        }
+    }
+
     /// Signal cancellation. Subsequent calls are no-ops.
     pub fn cancel(&self) {
         self.inner.cancel();
@@ -85,6 +95,20 @@ mod tests {
             .unwrap();
         assert_eq!(reason.as_deref(), Some("test"));
         assert!(token.is_cancelled());
+    }
+
+    /// Cancelling a child leaves its parent running, and cancelling the
+    /// parent cancels every child.
+    #[test]
+    fn a_child_is_cancelled_with_its_parent_only() {
+        let parent = CancelToken::new();
+        let first = parent.child();
+        first.cancel_with_reason("stalled");
+        assert!(!parent.is_cancelled());
+        assert!(parent.reason().is_none());
+        let second = parent.child();
+        parent.cancel();
+        assert!(second.is_cancelled());
     }
 
     #[test]
