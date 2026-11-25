@@ -1,6 +1,6 @@
 # 180: Cloud identity when the ServiceAccount and the cloud provider live in separate packages
 
-**Status:** Decided on 2026-11-24; implementation is pending.
+**Status:** Decided on 2026-11-24. Steps 1 and 2 of the build plan are built; steps 3 and 4 are pending.
 **Related:** `177_workload_cloud_identity.md` (base workload cloud identity design), `kix/lib/vocab/cloud-identity.nix`, `kix/lib/architecture.md` (`deps` and `out` data flow)
 
 ## 1. The problem

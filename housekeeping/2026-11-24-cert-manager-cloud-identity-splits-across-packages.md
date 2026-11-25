@@ -1,5 +1,0 @@
-# 2026-11-24 · `kix/packages/experimental/cert-manager`, `cluster-issuer` · `cert-manager` cannot take a cloud identity because the `ServiceAccount` and the DNS provider live in separate packages.
-
-`cert-manager` builds `controllerServiceAccount`, which needs the cloud identity for ACME DNS-01 challenges. However, `cluster-issuer` (which depends on `cert-manager`) chooses the DNS provider (Route 53, Cloud DNS, or Azure DNS) on each `ClusterIssuer` and holds any static credential `Secret` in `deps.issuerCredentials`. Because `kix.cloudIdentity.use` assumes one package owns the `ServiceAccount`, knows the target `cloud`, and accepts the fallback `Secret`, `cert-manager` cannot call it. Until Kix supports split packages, users must add the annotations with `partsOverlays` on `controllerServiceAccount` (and the Azure pod label on `controllerDeployment`), and controller pods get no `checksum/cloud-identity` restart annotation.
-
-Design decided in `v2_discussions/180_cloud_identity_across_packages.md` (build plan, step 2); implementation is pending.

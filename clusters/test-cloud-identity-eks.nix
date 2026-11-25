@@ -10,6 +10,10 @@
 # - `annotated/app` writes the IRSA annotation on its ServiceAccount itself.
 #   The eks flavor declares the `eks.amazonaws.com` annotation domain, so
 #   the scorecard accepts it.
+# - `cert-manager/cert-manager` binds an IAM role to its controller
+#   ServiceAccount, and the ClusterIssuer `cert-manager/letsencrypt` solves
+#   DNS-01 through Route 53 with no key, so cert-manager calls Route 53 with
+#   that role.
 #
 # Build:   kix check cloud-identity-eks
 { kix, packages }:
@@ -82,6 +86,24 @@ kix.buildCluster {
         };
 
         instances.annotated.app.package = annotatedServiceAccount;
+
+        # region:eksCertManager
+        instances.cert-manager.cert-manager = {
+          package = packages.experimental.cert-manager;
+          deps.controllerIdentity = kix.cloudIdentity.aws {
+            roleArn = "arn:aws:iam::111122223333:role/cert-manager";
+          };
+        };
+
+        instances.cert-manager.letsencrypt = {
+          package = packages.experimental.cluster-issuer;
+          config.spec.acme = {
+            server = "https://acme-staging-v02.api.letsencrypt.org/directory";
+            email = "platform@example.com";
+            solvers = [ { dns01.route53.region = "eu-west-1"; } ];
+          };
+        };
+        # endregion:eksCertManager
       }
     )
   ];

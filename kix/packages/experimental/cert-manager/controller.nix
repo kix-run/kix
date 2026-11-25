@@ -10,10 +10,12 @@
   kix,
   availability,
   prometheus ? null,
+  controllerIdentity ? null,
   ...
 }:
 let
   common = import ./common.nix { inherit lib; };
+  credentials = common.controllerCredentials { inherit kix scope controllerIdentity; };
   labels = (common.labels name).controller;
   name = scope.instanceName;
   ns = scope.namespaceName;
@@ -242,12 +244,17 @@ let
 
 in
 {
-  controllerServiceAccount = scope.mkResource {
-    apiVersion = "v1";
-    kind = "ServiceAccount";
-    inherit name labels;
-    extra.automountServiceAccountToken = true;
-  };
+  # With a cloud identity, the controller calls the DNS APIs of keyless
+  # Route 53, Cloud DNS, and Azure DNS solvers with it.
+  controllerServiceAccount =
+    {
+      apiVersion = "v1";
+      kind = "ServiceAccount";
+      inherit name labels;
+      extra.automountServiceAccountToken = true;
+    }
+    |> credentials.bind
+    |> scope.mkResource;
 
   # Aggregated into the built-in view, edit, admin, and cluster-reader roles
   # by label; nothing binds them directly.

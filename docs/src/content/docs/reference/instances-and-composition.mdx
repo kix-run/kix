@@ -201,6 +201,8 @@ Each `SecretStore` or `ClusterSecretStore` then chooses how it authenticates:
 
 The cluster's `cloudIdentity` role provider controls how Kix renders the identity. The `eks`, `gke`, `gke-autopilot`, and `aks` flavors declare this provider automatically ([Flavors and capabilities](/docs/reference/flavors-and-capabilities/#cloud-identity)). Kix also writes `kix.run/cloud-identity` (containing the identity and mechanism as JSON) on the ServiceAccount, orders the ServiceAccount after the `cloudIdentity` provider, and adds `checksum/cloud-identity` to every pod template referencing that ServiceAccount so changing the identity restarts the pods.
 
+When one package owns the ServiceAccount and another configures the cloud provider, set the cloud identity on the package that owns the ServiceAccount. For example, pass the cloud identity to `deps.controllerIdentity` on `cert-manager`, and leave the credential fields out of the Route 53, Cloud DNS, or Azure DNS solver on `cluster-issuer` so it uses the controller's credentials. Static keys still go to `deps.issuerCredentials` on `cluster-issuer`. If a solver without credential fields targets a different cloud than `deps.controllerIdentity`, evaluation fails; when `deps.controllerIdentity` is unset, the controller falls back to the node's credentials. See [Configure cert-manager issuers](/docs/how-to/package-task-guides/configure-cert-manager-issuers/#use-a-cloud-identity-for-dns-01).
+
 Kix does not create cloud IAM resources. Configure the AWS IAM role trust policy (or EKS Pod Identity association), Google Cloud IAM binding, or Azure federated credential outside Kix for `system:serviceaccount:<namespace>:<serviceaccount-name>`.
 
 Evaluation fails when:

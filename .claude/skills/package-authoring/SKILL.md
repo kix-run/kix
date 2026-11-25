@@ -475,7 +475,7 @@ The only place in this skill with package line numbers. `pkg:N` is
 | `mergeEnv` defaults and owned groups | metabase:168-232 |
 | Discrete database variables through `keyRef`, owned `_FILE` twins | metabase:187-203 |
 | URL-shaped credential through `$(VAR)` | vaultwarden:143-147, 212-233 |
-| `mergeArgs`, owned flags stated once with their values | `cert-manager/controller.nix`:381-401 |
+| `mergeArgs`, owned flags stated once with their values | `cert-manager/controller.nix`:388-407 |
 | `mergeArgs`, refused flags from owned env groups | keycloak:404-429 |
 | `mergeArgs` with `defaults` that `extraArgs` can override | node-exporter:108-143; a default kept first, `victoria-metrics-operator/operator.nix`:303-317 |
 | `mergeArgs` with `parser = "go"`, `parser = "paerser"`, and `families` | loki:344; traefik:429, 495 |
@@ -510,7 +510,7 @@ The only place in this skill with package line numbers. `pkg:N` is
 | One alias, two implementations, a contract file | `kix/contracts/experimental/clickhouse.nix`; clickhouse:101, clickhouse-cluster:90 |
 | Renamed dependency with `renamedFrom` | immich:209-212; `kix/contracts/stable/redis.nix` (`helpers.renamedFrom`) |
 | Credentials dependency accepting either a Secret or a cloud identity (`kix.cloudIdentity.use` and `credentials.bind`) | external-dns:164-169, 608-615; `providers.nix` (`cloud`) |
-| Cloud identity when one package owns the ServiceAccount and another chooses the cloud (`kix.cloudIdentity.useIdentity`, `ambientProblem`, `out.identityCloud`, `out.ambientCloud`) | `kix/lib/tests/units/cloud-identity.nix` (`holderPackage`, `callerPackage`, `storagePackage`, `databasePackage`) |
+| Cloud identity when one package owns the ServiceAccount and another chooses the cloud (`kix.cloudIdentity.useIdentity`, `ambientProblem`, `out.identityCloud`, `out.ambientCloud`) | `cert-manager/common.nix`:44-59, `cert-manager/controller.nix`:18, 256, cert-manager:405 (`useIdentity`, `out.identityCloud`); cluster-issuer:138-184, 357-375 (`ambientProblem` per solver without credential fields), 388-394 (`use` with `cloud = null` and `identityGoesTo`); `kix/lib/tests/units/cloud-identity.nix` (`holderPackage`, `callerPackage`, `storagePackage`, `databasePackage`) |
 
 Always declare a cloud identity dependency on the package that owns the
 ServiceAccount, because a ServiceAccount carries a single identity:

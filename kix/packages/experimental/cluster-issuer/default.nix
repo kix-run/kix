@@ -32,6 +32,27 @@
 #                                 every key the spec's Secret key selectors
 #                                 name. The dependency is named for what it
 #                                 holds; the Secret is this issuer's alone.
+#                                 A cloud identity is refused: it goes in
+#                                 `deps.controllerIdentity` of the
+#                                 cert-manager instance.
+#
+# Cloud DNS-01 without a key: a `route53` solver with none of `accessKeyID`,
+# `accessKeyIDSecretRef`, `secretAccessKeySecretRef`, and `auth`, a
+# `cloudDNS` solver with no `serviceAccountSecretRef`, and an `azureDNS`
+# solver with neither `clientID` nor `clientSecretSecretRef` call the cloud
+# with the cert-manager controller's own credentials. Those come from the
+# cloud identity of the cert-manager instance (`out.identityCloud`), or from
+# the node when it has none. A solver for a cloud other than that
+# identity's fails the build.
+#
+#   instances.cert-manager.letsencrypt = {
+#     package = packages.experimental.cluster-issuer;
+#     config.spec.acme = {
+#       server = "https://acme-v02.api.letsencrypt.org/directory";
+#       email = "platform@example.com";
+#       solvers = [ { dns01.route53.region = "eu-west-1"; } ];
+#     };
+#   };
 #
 # The package fills in two things:
 #   - `acme.privateKeySecretRef.name`, when unset, with
@@ -76,6 +97,7 @@
 {
   scope,
   lib,
+  kix,
   ...
 }:
 
@@ -108,6 +130,58 @@ let
         inherit solver;
       }) solvers
     );
+
+  # The DNS-01 providers that, with none of `keyFields` set, call their
+  # cloud with the cert-manager controller's own credentials: its cloud
+  # identity, or the node's. Route 53's `auth` exchanges the token of
+  # another ServiceAccount, so it counts as a key.
+  ambientProviders = {
+    route53 = {
+      cloud = "aws";
+      keyFields = [
+        "accessKeyID"
+        "accessKeyIDSecretRef"
+        "secretAccessKeySecretRef"
+        "auth"
+      ];
+    };
+    cloudDNS = {
+      cloud = "gcp";
+      keyFields = [ "serviceAccountSecretRef" ];
+    };
+    azureDNS = {
+      cloud = "azure";
+      keyFields = [
+        "clientID"
+        "clientSecretSecretRef"
+      ];
+    };
+  };
+
+  # Return the DNS-01 solvers of `spec` that use the controller's own
+  # credentials, each with its path and cloud.
+  ambientSolversOf =
+    spec:
+    lib.concatMap (
+      { path, solver }:
+      let
+        dns01 = if builtins.isAttrs solver then solver.dns01 or null else null;
+      in
+      lib.concatLists (
+        lib.mapAttrsToList (
+          provider: p:
+          let
+            settings = if builtins.isAttrs dns01 then dns01.${provider} or null else null;
+          in
+          lib.optional
+            (builtins.isAttrs settings && builtins.all (f: (settings.${f} or null) == null) p.keyFields)
+            {
+              path = "${path}.dns01.${provider}";
+              inherit (p) cloud;
+            }
+        ) ambientProviders
+      )
+    ) (solversOf spec);
 
   # Removes attributes set to null, except inside free-form subtrees, so the
   # checks and the rendered ClusterIssuer treat them as absent.
@@ -277,6 +351,29 @@ in
     '';
   };
 
+  # A keyless cloud DNS-01 solver calls its cloud with the cert-manager
+  # controller's credentials, so the controller's cloud identity, when it has
+  # one, must be for the same cloud.
+  assertions =
+    { config, deps, ... }:
+    lib.concatMap (
+      { path, cloud }:
+      let
+        problem = kix.cloudIdentity.ambientProblem {
+          inherit cloud;
+          holder = deps.certManager;
+        };
+      in
+      lib.optional (problem != null) (
+        problem
+        // {
+          assertion = false;
+          message = "DNS-01 solver `${path}` has no credential fields set. ${problem.message}";
+          fix = "${problem.fix} To use static credentials instead, set the solver's credential fields and wire a Secret instance (`ref.<namespace>.<instance>`) to `deps.issuerCredentials`.";
+        }
+      )
+    ) (ambientSolversOf config.spec);
+
   build =
     {
       self,
@@ -286,6 +383,17 @@ in
       ...
     }:
     let
+      # issuerCredentials holds a Secret. A cloud identity belongs to the
+      # controller's ServiceAccount, which the cert-manager instance owns.
+      credentials = kix.cloudIdentity.use {
+        inherit scope;
+        dep = issuerCredentials;
+        arg = "issuerCredentials";
+        cloud = null;
+        identityGoesTo = "`deps.controllerIdentity` on `cert-manager` instance `${certManager._meta.namespaceName}/${certManager._meta.instanceName}` and omit the credential fields on the DNS-01 solver";
+      };
+      secret = credentials.secret;
+
       # A `kix.mkImport` answering certManager has none of these.
       cmOut =
         let
@@ -308,8 +416,8 @@ in
         lib.filterAttrs (_: s: (s.type or null) == "object") dns01Schema.properties
       );
 
-      credKeys = if issuerCredentials == null then [ ] else issuerCredentials.out.keys or [ ];
-      credName = if issuerCredentials == null then "" else issuerCredentials.out.name;
+      credKeys = if secret == null then [ ] else secret.out.keys or [ ];
+      credName = if secret == null then "" else secret.out.name;
 
       accountKeyName = "${scope.instanceName}-acme-account-key";
       withAccountKey =
@@ -352,12 +460,12 @@ in
           bad sel "${path} leaves name out but sets no key. Set key to the Secret key that holds the credential."
         else if !(builtins.isString sel.key) then
           ok sel
-        else if issuerCredentials == null then
+        else if secret == null then
           bad sel "${path} names key \"${sel.key}\" but no issuerCredentials dependency is wired. Add a secret or secret-ref instance in namespace \"${cmNs}\" that declares \"${sel.key}\", and set deps.issuerCredentials = ref.${cmNs}.<that instance>. The issuer and its credentials both live in \"${cmNs}\", because cert-manager reads ClusterIssuer Secrets only from there."
         else if !(builtins.elem sel.key credKeys) then
           bad sel "${path} asks for key \"${sel.key}\", and issuerCredentials \"${credName}\" declares: ${listOrNone credKeys}. Add the key to that instance's keys."
         else
-          ok (sel // (issuerCredentials.out.keyRef sel.key).valueFrom.secretKeyRef);
+          ok (sel // (secret.out.keyRef sel.key).valueFrom.secretKeyRef);
 
       # Walks `value` beside its schema and fills every Secret key selector
       # except the ACME account key. Returns the filled value and the
@@ -434,8 +542,9 @@ in
           }. A dns01 solver uses exactly one of: ${lib.concatStringsSep ", " dnsProviders}."
       ) solvers;
 
+      # Forcing `credentials` makes `use` refuse a cloud identity.
       errors =
-        namespaceErrors
+        builtins.seq credentials namespaceErrors
         ++ typeErrors
         ++ filled.errors
         ++ schemaErrors "spec" schema filled.value

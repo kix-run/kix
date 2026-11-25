@@ -40,8 +40,29 @@
 # upstream does not document downgrades for this release.
 #
 # Dependencies:
-#   prometheus (optional)  metrics Services, three ServiceMonitors, and the
-#                          alerts.
+#   prometheus (optional)          metrics Services, three ServiceMonitors,
+#                                  and the alerts.
+#   controllerIdentity (optional)  a cloud identity (`kix.cloudIdentity.aws`,
+#                                  `gcp`, or `azure`) for the controller's
+#                                  ServiceAccount. A Secret is refused: static
+#                                  DNS keys go in `deps.issuerCredentials` of
+#                                  a cluster-issuer instance.
+#
+# Cloud DNS-01: a Route 53, Cloud DNS, or Azure DNS solver that sets no
+# static key makes the controller call the DNS API with its own credentials.
+# cert-manager allows this for ClusterIssuers by default
+# (`--cluster-issuer-ambient-credentials`), and the package leaves
+# `--issuer-ambient-credentials` off, so a namespaced Issuer cannot use the
+# controller's role. Those credentials come from the cloud identity bound to
+# the controller's ServiceAccount, or from the node when there is none.
+# Changing the identity restarts the controller pod.
+#
+#   instances.cert-manager.cert-manager = {
+#     package = packages.experimental.cert-manager;
+#     deps.controllerIdentity = kix.cloudIdentity.aws {
+#       roleArn = "arn:aws:iam::111122223333:role/cert-manager";
+#     };
+#   };
 #
 # Network policy: the intents below open egress to issuer endpoints outside
 # the cluster on 443, 80, and 53, and admit the API server to the webhook.
@@ -74,6 +95,9 @@
 #       The ACME HTTP-01 solver image.
 #   out.version
 #       The cert-manager version `image.tag` names.
+#   out.identityCloud
+#       The cloud of `deps.controllerIdentity` ("aws", "gcp", "azure"), or
+#       null without one.
 
 { lib, kix, ... }:
 
@@ -333,6 +357,7 @@ in
         self,
         config,
         scope,
+        controllerIdentity ? null,
         ...
       }:
       {
@@ -375,6 +400,9 @@ in
             # Certificate's namespace with this set.
             operandSelectors.acmesolver."acme.cert-manager.io/http01-solver" = "true";
             extraImages = [ (kix.image.ref config.operandImages.acmesolver) ];
+            # cluster-issuer compares it with the cloud of each keyless DNS-01
+            # solver.
+            identityCloud = (common.controllerCredentials { inherit kix scope controllerIdentity; }).cloud;
           };
         };
       }
