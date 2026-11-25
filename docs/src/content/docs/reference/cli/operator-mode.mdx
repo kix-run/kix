@@ -127,10 +127,24 @@ Error:   × Operator reconciliation failed for 'shop-mxfi8rx0piys': the Kix oper
 
 To deploy after a record reaches `Failed`, fix the cause and run
 `kix deploy --operator` or `kix rollback --operator` again. Each new deploy or
-rollback request resets `status.failedAttempts`. Redeploying the build that is
-already `Active` or `Degraded` does not count toward `KIX_DEPLOY_RETRIES`; if
-that run fails, the record keeps its phase and the operator repairs any drift
-on later reconciles.
+rollback request resets `status.failedAttempts`.
+
+Redeploying a build that is already `Active` or `Degraded` runs once and does
+not count toward `KIX_DEPLOY_RETRIES`. If that run fails, the Activation keeps
+its phase, the operator continues repairing drift on later reconciles, and
+`kix deploy --operator` exits with the failure recorded in
+`status.failedRequest`:
+
+```text
+Error:   × Operator reconciliation failed for 'shop-mxfi8rx0piys': the Kix operator could not redeploy the current build. This Activation stays Active, and the operator continues repairing drift for this build. It does not retry a failed redeploy. Fix the cause below, then run `kix deploy --operator` again.
+  │
+  │   Cause:
+  │     Secret/db@shop: could not prepare secret values for deployment: cannot decrypt SOPS file db.sops.yaml: `sops` could not get a decryption key
+```
+
+Older versions of the Kix operator do not write `status.failedRequest`. Until
+you upgrade the operator, `kix deploy --operator` waits the full 600 seconds
+and times out when a redeploy fails.
 
 Submitting a newer deploy or rollback request does not cancel a running deploy.
 The operator runs one deploy per cluster at a time, so the new request waits
@@ -258,6 +272,7 @@ redeploying the current build) from ending the wait early.
 | `Active` | Success (exit code `0`) |
 | `Degraded` | Error (exit code `1`), after printing the failed resources or `status.failure.reason` |
 | `Failed` | Error (exit code `1`), with the record's `status.failure.reason` (or `unknown error` if unset) |
+| `Active` or `Degraded` when `status.failedRequest.request` matches `spec.request` | Error (exit code `1`), with `status.failedRequest.reason` |
 | `Deploying` or `Queued` after a failed attempt | Prints `Attempt <n> failed. The Kix operator will retry in 30 seconds.` and the first line of the failure reason, then keeps waiting |
 | `Superseded` | Error: a newer activation took over |
 | No terminal phase after 600 seconds | Error: timed out |

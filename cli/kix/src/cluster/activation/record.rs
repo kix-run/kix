@@ -46,6 +46,11 @@ pub struct Record {
     /// `status.finishedRequest`: the last request whose run the operator
     /// finished.
     pub finished_request: Option<String>,
+    /// `status.failedRequest`: the last request whose run on this record,
+    /// while it stayed current, the operator could not finish. An operator
+    /// writes it in place of `status.finishedRequest`, so a Kix that does not
+    /// read it never takes the failure for success.
+    pub failed_request: Option<FailedRequest>,
     /// `status.failedAttempts`: how many runs of the operator's current
     /// deploy of this record stopped at a failure. Zero when the record has
     /// none, as a record the CLI wrote or an older operator wrote does.
@@ -83,6 +88,16 @@ pub struct Record {
     pub deployed_from: Option<String>,
 }
 
+/// A request the operator could not finish on a current record, read from
+/// `status.failedRequest`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FailedRequest {
+    /// The request, as in `spec.request`.
+    pub request: String,
+    /// Why the run stopped.
+    pub reason: String,
+}
+
 /// Platform interface file metadata pinned by a consumer build.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct PinnedInterface {
@@ -100,6 +115,9 @@ pub(crate) const REQUEST_FIELD: &str = "request";
 pub(crate) const STARTED_REQUEST_FIELD: &str = "startedRequest";
 /// The `status` field that holds the last request the operator finished.
 pub(crate) const FINISHED_REQUEST_FIELD: &str = "finishedRequest";
+/// The `status` field that holds the last request the operator could not
+/// finish on a current record, with the reason.
+pub(crate) const FAILED_REQUEST_FIELD: &str = "failedRequest";
 /// The `status` field that counts the failed runs of the operator's current
 /// deploy.
 pub(crate) const FAILED_ATTEMPTS_FIELD: &str = "failedAttempts";
@@ -142,6 +160,13 @@ impl Record {
             request: status(&format!("/spec/{REQUEST_FIELD}")),
             started_request: status(&format!("/status/{STARTED_REQUEST_FIELD}")),
             finished_request: status(&format!("/status/{FINISHED_REQUEST_FIELD}")),
+            failed_request: status(&format!("/status/{FAILED_REQUEST_FIELD}/request")).map(
+                |request| FailedRequest {
+                    request,
+                    reason: status(&format!("/status/{FAILED_REQUEST_FIELD}/reason"))
+                        .unwrap_or_default(),
+                },
+            ),
             failed_attempts: obj
                 .data
                 .pointer(&format!("/status/{FAILED_ATTEMPTS_FIELD}"))
