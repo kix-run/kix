@@ -63,6 +63,32 @@ let
       };
     }
   ];
+
+  # The greeter with an option its build reads. Reading `config` evaluates
+  # the config injections, which resolve every instance's dependencies.
+  configuredGreeter = greeter // {
+    options.punctuation = lib.mkOption {
+      type = lib.types.str;
+      default = "!";
+    };
+    build =
+      {
+        self,
+        scope,
+        config,
+        greeting,
+        ...
+      }:
+      {
+        cm = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ConfigMap";
+          name = "greeting";
+          data.text = greeting + config.punctuation;
+        };
+        root = self.cm;
+      };
+  };
 in
 {
   # A required dependency given a plain value builds and reads it. Without
@@ -82,6 +108,26 @@ in
     in
     (text == "hello" && evalFails (mkCluster (withGreeting { })))
     || throw "plain required dependency: ${builtins.toJSON text}";
+
+  # A package whose build reads `config` takes a plain value for a required
+  # dependency too.
+  lib-plain-deps-required-dependency-with-config =
+    let
+      text =
+        (byName "greeting" (
+          ofKind "ConfigMap" (
+            manifests (mkCluster [
+              {
+                instances.app.greeter = {
+                  package = configuredGreeter;
+                  deps.greeting = "hello";
+                };
+              }
+            ])
+          )
+        )).data.text;
+    in
+    text == "hello!" || throw "plain required dependency with config: ${builtins.toJSON text}";
 
   # `assertions` receive a plain value in `deps`, so a package can check it.
   lib-plain-deps-assertions-see-the-value =

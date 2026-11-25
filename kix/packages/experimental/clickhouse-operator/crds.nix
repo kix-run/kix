@@ -22,6 +22,7 @@
 # way.
 
 {
+  self,
   config,
   scope,
   lib,
@@ -217,6 +218,7 @@ let
         }
         // lib.optionalAttrs def.operand {
           readiness = operandReadiness;
+          controller = self.operatorDeployment;
           usesAtLeast = usesAtLeastFor;
         }
         // lib.optionalAttrs (!def.operand) { usesAtLeast = _: { }; }

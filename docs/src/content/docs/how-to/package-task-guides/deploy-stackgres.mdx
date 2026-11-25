@@ -121,6 +121,91 @@ backups.deps.endpointService = ref.minio.minio;
 The package then sets the endpoint to that Service's URL and turns on
 path-style addressing, and the PostgreSQL pods get network policy to the store.
 
+### Back up with a cloud identity
+
+On AWS S3 or Google Cloud Storage, the database pods can authenticate with a
+cloud identity instead of a credentials Secret. Configure both the backup
+storage and the database cluster:
+
+- On `stackgres-object-storage`, enable pod credentials in `extraSpec`
+  (`s3.awsCredentials.useIAMRole = true` for `s3`, or
+  `gcs.gcpCredentials.fetchCredentialsFromMetadataService = true` for `gcs`)
+  and omit `deps.storageCredentials` (and any `storageCredentials` Secret alias
+  in that namespace).
+- On each `stackgres-cluster` instance that backs up to that store, pass the
+  cloud identity in `deps.backupIdentity`. Because the database pods run
+  backups under the `<cluster>-patroni` ServiceAccount created by the StackGres
+  operator, each cluster carries its own identity. Leave `deps.backupIdentity`
+  unset if the pods should use the node's credentials.
+
+```nix
+instances.database = {
+  backups = {
+    package = packages.experimental.stackgres-object-storage;
+    config = {
+      type = "s3";
+      bucket = "pg-backups";
+      extraSpec.s3 = {
+        region = "eu-west-1";
+        awsCredentials.useIAMRole = true;
+      };
+    };
+  };
+
+  postgres = {
+    package = packages.experimental.stackgres-cluster;
+    deps.backupIdentity = kix.cloudIdentity.aws {
+      roleArn = "arn:aws:iam::111122223333:role/postgres-backup";
+    };
+    config.backups = [ { cronSchedule = "0 1 * * *"; } ];
+  };
+};
+```
+
+Your cluster must include a
+[cloud identity provider](/docs/reference/instances-and-composition/#cloud-identities),
+such as `kix.flavors.eks` or `kix.flavors.gke`. Kix writes the identity to
+`spec.metadata.annotations.serviceAccount` on the `SGCluster`, and the
+StackGres operator copies it to the `postgres-patroni` ServiceAccount. Kix does
+not create cloud IAM roles or bindings. Configure your AWS IAM role or Google
+Cloud IAM binding to trust `system:serviceaccount:database:postgres-patroni`.
+Multiple clusters in the same namespace can share one
+`stackgres-object-storage` instance and use separate IAM roles, each restricted
+to its own backup path.
+
+Evaluation fails when:
+
+- `stackgres-object-storage` sets both `storageCredentials` and a
+  pod-credential field (`useIAMRole` or `fetchCredentialsFromMetadataService`),
+  or sets neither;
+- `useIAMRole` or `fetchCredentialsFromMetadataService` is set on an
+  unsupported storage `type` (`useIAMRole` is only for `s3`,
+  `fetchCredentialsFromMetadataService` is only for `gcs`, and StackGres
+  supports neither on `s3Compatible` or `azureBlob`);
+- `credentialKeys` is set when pod credentials are enabled, or a cloud identity
+  is passed to `deps.storageCredentials`; or
+- `deps.backupIdentity` is set when `backups` is `null`, when
+  `stackgres-object-storage` reads a Secret, or when the identity's cloud does
+  not match the storage type.
+
+Because the StackGres operator creates the database pods, Kix cannot restart
+them when `deps.backupIdentity` changes, and running pods keep their previous
+credentials until restarted. After deploying a change to `deps.backupIdentity`,
+restart the cluster by applying an `SGDbOps` resource:
+
+```yaml
+apiVersion: stackgres.io/v1
+kind: SGDbOps
+metadata:
+  name: postgres-restart
+  namespace: database
+spec:
+  sgCluster: postgres
+  op: restart
+  restart:
+    method: ReducedImpact
+```
+
 ## Monitor PostgreSQL
 
 When the cluster has a Prometheus provider, such as `prometheus-operator`, the

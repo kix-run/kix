@@ -1307,6 +1307,51 @@ in
     )
     || throw "ambientProblem: ${builtins.toJSON mismatched}";
 
+  # The direct form of `ambientProblem` (`holderName`, `identityCloud`)
+  # gives the same result and text as the `holder` form. Both forms at once,
+  # neither, or half of the direct form stop evaluation.
+  cloud-identity-ambient-problem-direct =
+    let
+      direct =
+        cloud: identityCloud:
+        ci.ambientProblem {
+          inherit cloud identityCloud;
+          holderName = "platform/cert-manager";
+        };
+      viaHolder =
+        cloud: identityCloud:
+        ci.ambientProblem {
+          inherit cloud;
+          holder = instanceDep "platform" "cert-manager" { inherit identityCloud; };
+        };
+      mismatched = direct "gcp" "aws";
+      fails = v: !(builtins.tryEval (builtins.deepSeq v v)).success;
+      holder = instanceDep "platform" "cert-manager" { identityCloud = "aws"; };
+    in
+    (
+      mismatched == viaHolder "gcp" "aws"
+      && lib.hasInfix "`platform/cert-manager`" mismatched.message
+      && direct "aws" "aws" == null
+      && direct "aws" null == null
+      && direct null "aws" == null
+      && fails (
+        ci.ambientProblem {
+          cloud = "aws";
+          inherit holder;
+          holderName = "platform/cert-manager";
+          identityCloud = "aws";
+        }
+      )
+      && fails (ci.ambientProblem { cloud = "aws"; })
+      && fails (
+        ci.ambientProblem {
+          cloud = "aws";
+          holderName = "platform/cert-manager";
+        }
+      )
+    )
+    || throw "ambientProblem direct: ${builtins.toJSON mismatched}";
+
   # `use` adds `identityGoesTo` to the fix when it refuses an identity on a
   # package that takes none, and leaves it out when not given.
   cloud-identity-use-identity-goes-to =

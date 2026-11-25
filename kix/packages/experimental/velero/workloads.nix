@@ -10,6 +10,7 @@
   cloudCredentials,
   repositoryPassword ? null,
   objectStorage ? null,
+  cloudIdentity ? null,
   ...
 }:
 
@@ -24,10 +25,23 @@ let
     urlPort
     renderPolicy
     withDataPathLabels
-    checkCloudCredentials
+    readCloudCredentials
     ;
 
-  creds = checkCloudCredentials cloudCredentials;
+  creds = readCloudCredentials { inherit cloudCredentials config objectStorage; };
+
+  # The pod labels the cloud identity's mechanism needs. The workload
+  # builders add them to the server and node-agent, and the ConfigMaps
+  # give them to the pods Velero launches.
+  identityLabels =
+    if creds.identity == null then
+      { }
+    else
+      (kix.cloudIdentity.annotationsFor {
+        inherit scope;
+        inherit (creds) identity;
+        provider = cloudIdentity;
+      }).podLabels;
 
   # Velero reads the repository key only from this Secret, by name
   # (pkg/repository/keys). Without it, Velero creates the Secret with
@@ -71,7 +85,7 @@ let
     ++ lib.optional (config.volumeSnapshotLocation != null) 443
   );
 
-  credentialFile = creds.envKeys == null;
+  credentialFile = creds.file;
 
   # Kubernetes resolves a secretKeyRef when a container starts, so a
   # changed key pair reaches the server and node-agent only when they
@@ -90,9 +104,12 @@ let
   # The root filesystem is read-only. kopia keeps its repository config
   # and cache under $HOME, so HOME points at the /scratch emptyDir;
   # Velero writes temp files to /tmp. The pods Velero launches copy
-  # this env and these volumes from the server and node-agent.
-  ownedEnv = extra: [
-    {
+  # this env and these volumes from the server and node-agent. With a
+  # cloud identity no credential variable is set, and each SDK finds the
+  # credentials the cloud's webhook or agent gives the pod.
+  ownedEnv =
+    extra:
+    lib.optional (creds.identity == null) {
       vars = credentialEnv;
       from =
         if credentialFile then
@@ -105,17 +122,18 @@ let
         else
           "Remove it, and put the key pair in the cloudCredentials Secret.";
     }
-    {
-      vars = {
-        VELERO_NAMESPACE.valueFrom.fieldRef.fieldPath = "metadata.namespace";
-        VELERO_SCRATCH_DIR = "/scratch";
-        HOME = "/scratch";
+    ++ [
+      {
+        vars = {
+          VELERO_NAMESPACE.valueFrom.fieldRef.fieldPath = "metadata.namespace";
+          VELERO_SCRATCH_DIR = "/scratch";
+          HOME = "/scratch";
+        }
+        // extra;
+        from = "the package (the pod's namespace or node, and the writable directories it mounts)";
+        fix = "Remove it.";
       }
-      // extra;
-      from = "the package (the pod's namespace or node, and the writable directories it mounts)";
-      fix = "Remove it.";
-    }
-  ];
+    ];
 
   emptyDirs =
     names:
@@ -265,16 +283,19 @@ in
   crds = {
     backupRepositories = scope.mkCRD {
       spec = crdFile "backuprepositories.velero.io.json";
+      controller = self.deployment;
       usesAtLeast = _: { };
     };
     backups = scope.mkCRD {
       spec = crdFile "backups.velero.io.json";
+      controller = self.deployment;
       readiness = oneShotReadiness "backup";
     };
     # Velero's pods dial the store named in the location's config
     # (`s3Url`), not whoever creates the location.
     backupStorageLocations = scope.mkCRD {
       spec = crdFile "backupstoragelocations.velero.io.json";
+      controller = self.deployment;
       readiness = phase "Available";
       usesAtLeast = _: { };
       factBehavior = {
@@ -286,25 +307,30 @@ in
     dataUploads = scope.mkCRD { spec = crdFile "datauploads.velero.io.json"; };
     deleteBackupRequests = scope.mkCRD {
       spec = crdFile "deletebackuprequests.velero.io.json";
+      controller = self.deployment;
       usesAtLeast = _: { };
     };
     downloadRequests = scope.mkCRD {
       spec = crdFile "downloadrequests.velero.io.json";
+      controller = self.deployment;
       usesAtLeast = _: { };
     };
     podVolumeBackups = scope.mkCRD { spec = crdFile "podvolumebackups.velero.io.json"; };
     podVolumeRestores = scope.mkCRD { spec = crdFile "podvolumerestores.velero.io.json"; };
     restores = scope.mkCRD {
       spec = crdFile "restores.velero.io.json";
+      controller = self.deployment;
       readiness = oneShotReadiness "restore";
     };
     schedules = scope.mkCRD {
       spec = crdFile "schedules.velero.io.json";
+      controller = self.deployment;
       readiness = scheduleReadiness;
       usesAtLeast = _: { };
     };
     serverStatusRequests = scope.mkCRD {
       spec = crdFile "serverstatusrequests.velero.io.json";
+      controller = self.deployment;
       usesAtLeast = _: { };
     };
     volumeSnapshotLocations = scope.mkCRD {
@@ -326,11 +352,16 @@ in
         keys = [ "repository-password" ];
       };
 
-  serviceAccount = scope.mkResource {
-    apiVersion = "v1";
-    kind = "ServiceAccount";
-    name = "${name}-server";
-  };
+  # The server, node-agent, and every pod they launch run as this
+  # ServiceAccount: Velero copies it from its own Deployment and DaemonSet.
+  serviceAccount =
+    {
+      apiVersion = "v1";
+      kind = "ServiceAccount";
+      name = "${name}-server";
+    }
+    |> creds.bind
+    |> scope.mkResource;
 
   clusterRoleBinding = scope.mkClusterResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
@@ -532,7 +563,9 @@ in
         apiVersion = "v1";
         kind = "ConfigMap";
         name = "${name}-node-agent";
-        data."node-agent.json" = builtins.toJSON (withDataPathLabels config.nodeAgent.settings);
+        data."node-agent.json" = builtins.toJSON (
+          withDataPathLabels identityLabels config.nodeAgent.settings
+        );
       };
 
   repositoryMaintenanceConfig =
@@ -543,7 +576,9 @@ in
         apiVersion = "v1";
         kind = "ConfigMap";
         name = "${name}-repo-maintenance";
-        data.global = builtins.toJSON (withDataPathLabels config.repositoryMaintenance.settings);
+        data.global = builtins.toJSON (
+          withDataPathLabels identityLabels config.repositoryMaintenance.settings
+        );
       };
 
   # JSON is YAML, which is what Velero decodes.

@@ -226,6 +226,8 @@ in
     {
       # Nodes, volumes, and snapshots are records the node agent keeps; a
       # backup or restore runs in the agent too, but that is not checked here.
+      # The node agent removes the finalizers of volumes, snapshots, backups,
+      # and restores, so those kinds name its DaemonSet as their `controller`.
       crds = {
         zfsNodes = scope.mkCRD {
           spec = vendored "zfsnodes.zfs.openebs.io.json";
@@ -233,14 +235,22 @@ in
         };
         zfsVolumes = scope.mkCRD {
           spec = vendored "zfsvolumes.zfs.openebs.io.json";
+          controller = self.node;
           usesAtLeast = _: { };
         };
         zfsSnapshots = scope.mkCRD {
           spec = vendored "zfssnapshots.zfs.openebs.io.json";
+          controller = self.node;
           usesAtLeast = _: { };
         };
-        zfsBackups = scope.mkCRD { spec = vendored "zfsbackups.zfs.openebs.io.json"; };
-        zfsRestores = scope.mkCRD { spec = vendored "zfsrestores.zfs.openebs.io.json"; };
+        zfsBackups = scope.mkCRD {
+          spec = vendored "zfsbackups.zfs.openebs.io.json";
+          controller = self.node;
+        };
+        zfsRestores = scope.mkCRD {
+          spec = vendored "zfsrestores.zfs.openebs.io.json";
+          controller = self.node;
+        };
       };
 
       csiDriver = scope.mkClusterResource {

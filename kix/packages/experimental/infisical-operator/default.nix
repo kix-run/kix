@@ -606,20 +606,24 @@ in
         crds = {
           clusterGenerators = scope.mkCRD {
             spec = vendored "clustergenerators";
+            controller = self.deployment;
             usesAtLeast = _: { };
           };
           infisicalAuths = scope.mkCRD {
             spec = vendored "infisicalauths";
+            controller = self.deployment;
             readiness = condition "IsReady" "True";
             usesAtLeast = _: { };
           };
           infisicalConnections = scope.mkCRD {
             spec = vendored "infisicalconnections";
+            controller = self.deployment;
             readiness = condition "IsReady" "True";
             usesAtLeast = _: { };
           };
           infisicalDynamicSecrets = scope.mkCRD {
             spec = vendored "infisicaldynamicsecrets";
+            controller = self.deployment;
             readiness = condition "Reconcile" "True";
             usesAtLeast = _: { };
           };
@@ -627,17 +631,20 @@ in
           # success.
           infisicalPushSecrets = scope.mkCRD {
             spec = vendored "infisicalpushsecrets";
+            controller = self.deployment;
             readiness = condition "Reconcile" "False";
             usesAtLeast = _: { };
           };
           infisicalSecrets = scope.mkCRD {
             spec = vendored "infisicalsecrets";
+            controller = self.deployment;
             readiness = condition "ReadyToSyncSecrets" "True";
             usesAtLeast = _: { };
           };
           # The operator sets no IsReady condition on this kind.
           infisicalStaticSecrets = scope.mkCRD {
             spec = vendored "infisicalstaticsecrets";
+            controller = self.deployment;
             readiness = condition "LastReconcileStatus" "True";
             usesAtLeast = _: { };
           };
@@ -645,6 +652,7 @@ in
           # the kind must exist before the operator's first reconcile.
           infisicalStaticSecretPushes = scope.mkCRD {
             spec = vendored "infisicalstaticsecretpushes";
+            controller = self.deployment;
             readiness = condition "LastReconcileStatus" "True";
             usesAtLeast = _: { };
           };

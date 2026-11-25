@@ -34,6 +34,53 @@
 #   prometheus (optional)  metrics Services, ServiceMonitors, and alert
 #                          rules for the three components while
 #                          `metrics.enabled`.
+#   controllerCredentials  a cloud identity (`kix.cloudIdentity.aws`,
+#     (optional)           `gcp`, `azure`) for the controller's
+#                          ServiceAccount. A Secret instance is refused.
+#
+# Cloud identity: a store whose provider is AWS, Google Cloud Secret
+# Manager, or Azure Key Vault, and that names no ServiceAccount of its own,
+# calls the cloud as the controller's ServiceAccount. The package binds the
+# identity in controllerCredentials to that ServiceAccount, and every
+# controller pod gets the mechanism's pod labels and a
+# `checksum/cloud-identity` stamp. The store selects this mode in its own
+# spec: an AWS store sets no `auth`, a `gcpsm` store sets no `auth`, and an
+# `azurekv` store sets `authType: WorkloadIdentity` and no
+# `serviceAccountRef`. Every store in the cluster that names no credentials
+# then acts as this identity, so any namespace that can create a SecretStore
+# can read what the role can read. Without controllerCredentials, such a
+# store uses whatever credentials the controller pods find, such as the
+# node's role.
+#
+#   instances.external-secrets.external-secrets = {
+#     package = packages.experimental.external-secrets;
+#     deps.controllerCredentials = kix.cloudIdentity.aws {
+#       roleArn = "arn:aws:iam::111122223333:role/external-secrets";
+#     };
+#   };
+#
+# `out.identityCloud` is the identity's cloud (`"aws"`, `"gcp"`, `"azure"`),
+# or null without one. `out.mkSecretStore` and `out.mkClusterSecretStore`
+# refuse a store that uses the controller's credentials for another cloud
+# than the identity's. Without an identity, any such store builds.
+#
+# A store may instead reference a ServiceAccount of its own
+# (`auth.jwt.serviceAccountRef` for AWS, `auth.workloadIdentity` for Google
+# Cloud, `serviceAccountRef` for Azure), which upstream recommends when
+# several teams share the controller. The controller then reads that
+# ServiceAccount's annotations and requests its token itself. No pod runs as
+# it, so the cluster's cloud identity mechanism plays no part, and Kix's
+# cloud identities do not apply. The consumer package writes the
+# annotations External Secrets reads on the ServiceAccount it builds, as
+# plain annotations: `eks.amazonaws.com/role-arn` on AWS,
+# `iam.gke.io/gcp-service-account` on Google Cloud, and
+# `azure.workload.identity/client-id` (with `azure.workload.identity/tenant-id`
+# or the store's `tenantId`) on Azure. The eks, gke, gke-autopilot, and aks
+# flavors declare their own cloud's annotation domain. On another cluster,
+# add the domain to `scorecard.knownAnnotationDomains`.
+# The package does not declare them, because a package that declares a
+# domain owns it, and every other package that writes it would then have
+# to depend on external-secrets.
 #
 # Network policy: the intents open TCP 443 to destinations outside the
 # cluster for provider APIs, and admit the API server to TCP 10250 for the
@@ -44,7 +91,10 @@
 # controller's egress to that Service and the Service's ingress from the
 # controller. A provider outside the cluster on another port, or one
 # inside it written as a literal address, needs a
-# `networkPolicy.platformIntents` entry for the controller's pods.
+# `networkPolicy.platformIntents` entry for the controller's pods. So does a
+# controller identity on EKS Pod Identity or GKE, whose credentials come
+# from a node-local address (the Pod Identity agent, the GKE metadata
+# server) that TCP 443 to the world does not cover.
 #
 # Alerts: with a prometheus dependency and `metrics.enabled`, one
 # PrometheusRule per component: `<instance>-alerts` for the controller,
@@ -347,7 +397,12 @@ in
     ./webhook.nix
 
     (
-      { self, config, ... }:
+      {
+        self,
+        config,
+        controllerCredentials ? null,
+        ...
+      }:
       let
         # Builder errors go through this instance's `scope.fail` and name
         # the consumer's custom resource in the message.
@@ -381,6 +436,45 @@ in
             }
           else
             result;
+
+        identityCloud = (c.controllerCredentialsOf controllerCredentials).cloud;
+
+        # Return the cloud a store calls with the controller's own
+        # credentials, or null when it names its own credentials or
+        # ServiceAccount. AWS and gcpsm stores do so without `auth`, and an
+        # Azure store with `authType: WorkloadIdentity` and no
+        # `serviceAccountRef`.
+        ambientCloudOf =
+          spec:
+          let
+            p = spec.provider or { };
+          in
+          if p ? aws && !(p.aws ? auth) then
+            "aws"
+          else if p ? gcpsm && !(p.gcpsm ? auth) then
+            "gcp"
+          else if
+            p ? azurekv
+            && (p.azurekv.authType or null) == "WorkloadIdentity"
+            && !(p.azurekv ? serviceAccountRef)
+          then
+            "azure"
+          else
+            null;
+
+        # Return `result` unless the store calls another cloud than the
+        # controller's identity. The error goes through the consumer's
+        # scope, so it names the instance that builds the store.
+        checkAmbientCloud =
+          consumerScope: args: result:
+          let
+            problem = kix.cloudIdentity.ambientProblem {
+              cloud = ambientCloudOf (args.spec or { });
+              holderName = "${scope.namespaceName}/${scope.instanceName}";
+              inherit identityCloud;
+            };
+          in
+          if problem == null then result else consumerScope.fail problem;
 
         # Refuses a generic target and sets empty template metadata when the
         # spec has none (see out.mkExternalSecret in the header).
@@ -498,6 +592,10 @@ in
           out = {
             version = kix.image.version config.image;
 
+            # The cloud of the controller's identity, or null. A store that
+            # names no credentials calls its cloud as this identity.
+            inherit identityCloud;
+
             crds = builtins.listToAttrs (
               map (spec: lib.nameValuePair (kindOf spec) self.crds.${pluralOf spec}) (
                 builtins.filter (spec: !(builtins.elem (kindOf spec) unexposedKinds)) crdSpecs
@@ -507,13 +605,13 @@ in
             mkSecretStore =
               consumerScope: args:
               checkStoreSelectors (crName consumerScope "SecretStore" args) false args (
-                (crdOf self "SecretStore").out.mkCR consumerScope args
+                checkAmbientCloud consumerScope args ((crdOf self "SecretStore").out.mkCR consumerScope args)
               );
 
             mkClusterSecretStore =
               consumerScope: args:
               checkStoreSelectors "ClusterSecretStore ${args.name}" true args (
-                (crdOf self "ClusterSecretStore").out.mkCR consumerScope args
+                checkAmbientCloud consumerScope args ((crdOf self "ClusterSecretStore").out.mkCR consumerScope args)
               );
 
             mkExternalSecret =

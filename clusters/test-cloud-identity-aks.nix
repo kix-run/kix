@@ -9,6 +9,12 @@
 # package does not render. A real cluster mounts that file with
 # `partsOverlays`.
 #
+# `cert-manager/cert-manager` acts as a managed identity too. Its controller
+# ServiceAccount carries the client ID, and its controller pod carries the
+# label and `checksum/cloud-identity`. The ClusterIssuer
+# `cert-manager/letsencrypt` solves DNS-01 through Azure DNS with no client
+# secret, so cert-manager calls Azure DNS with the controller's identity.
+#
 # Build:   kix check cloud-identity-aks
 { kix, packages }:
 
@@ -28,6 +34,30 @@ kix.buildCluster {
           policy = "upsert-only";
           txtOwnerId = "cloud-identity-aks/azure-dns";
           extraArgs = [ "--domain-filter=example.com" ];
+        };
+      };
+
+      instances.cert-manager.cert-manager = {
+        package = packages.experimental.cert-manager;
+        deps.controllerIdentity = kix.cloudIdentity.azure {
+          clientId = "11111111-1111-1111-1111-111111111111";
+        };
+      };
+
+      instances.cert-manager.letsencrypt = {
+        package = packages.experimental.cluster-issuer;
+        config.spec.acme = {
+          server = "https://acme-staging-v02.api.letsencrypt.org/directory";
+          email = "platform@example.com";
+          solvers = [
+            {
+              dns01.azureDNS = {
+                subscriptionID = "22222222-2222-2222-2222-222222222222";
+                resourceGroupName = "dns";
+                hostedZoneName = "example.com";
+              };
+            }
+          ];
         };
       };
     }

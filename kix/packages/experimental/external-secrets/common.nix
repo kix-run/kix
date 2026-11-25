@@ -65,6 +65,18 @@ rec {
     }
   ];
 
+  # Read the `controllerCredentials` dependency. The controller calls the
+  # cloud that each store names, so only a store knows the cloud, and the
+  # package publishes the identity's cloud as `out.identityCloud`. Upstream
+  # reads static keys only from a store's spec, so a Secret is refused.
+  controllerCredentialsOf =
+    dep:
+    kix.cloudIdentity.useIdentity {
+      inherit scope dep;
+      arg = "controllerCredentials";
+      secretGoesTo = "the instance that builds each `SecretStore` or `ClusterSecretStore` (referenced in `auth.secretRef`, or `authSecretRef` on Azure)";
+    };
+
   serviceAccount =
     saName:
     scope.mkResource {

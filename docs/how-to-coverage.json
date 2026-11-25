@@ -534,7 +534,8 @@
         "acmeClusterIssuer",
         "stagingClusterIssuer",
         "selfSignedClusterIssuer",
-        "importedClusterIssuer"
+        "importedClusterIssuer",
+        "eksCertManager"
       ],
       "packages": [
         "experimental/cert-manager",
@@ -570,7 +571,7 @@
         "how-to/package-stackgres/check",
         "how-to/package-stackgres/database-resources"
       ],
-      "unverifiedNixBlocks": 2,
+      "unverifiedNixBlocks": 3,
       "packages": [
         "experimental/stackgres-operator",
         "experimental/stackgres-cluster",
@@ -599,7 +600,10 @@
       "scenario": "package-stacks",
       "status": "implemented",
       "snippets": [
-        "veleroInstance"
+        "veleroInstance",
+        "veleroEksIdentity",
+        "veleroGkeIdentity",
+        "veleroAksIdentity"
       ],
       "offlineCaptures": [
         "how-to/package-velero/check",

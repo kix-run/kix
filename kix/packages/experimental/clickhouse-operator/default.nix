@@ -216,19 +216,10 @@ in
     (
       { self, config, ... }:
       let
-        # The typed builder already makes the CR wait for its CRD and stamps
-        # readiness and fact behavior on it. The CR also has to wait for the
-        # operator Deployment: a CR applied to a cluster with the CRD and no
-        # controller is accepted and never reconciled, and the deploy would
-        # spend its whole timeout on a status nobody is there to write.
-        mkOperand =
-          part: consumerScope: args:
-          self.crds.${part}.out.mkCR consumerScope (
-            args
-            // {
-              requires = (args.requires or [ ]) ++ [ self.operatorDeployment ];
-            }
-          );
+        # The CRD handle makes the CR wait for its CRD, the operator
+        # Deployment (its `controller`), and stamps readiness and fact
+        # behavior on it.
+        mkOperand = part: self.crds.${part}.out.mkCR;
 
         # Return the `spec.configuration.users` fields that use the
         # `k8s_secret_` or `k8s_secret_env_` syntax. The operator dropped

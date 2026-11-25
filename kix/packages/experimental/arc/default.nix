@@ -23,7 +23,10 @@
 # instance in a later deploy. A runner set's finalizer needs the controller
 # and the GitHub credentials to deregister the scale set, and prune deletes
 # without waiting for finalizers, so removing them together leaves the
-# AutoscalingRunnerSet and its supporting objects Terminating.
+# AutoscalingRunnerSet and its supporting objects Terminating. Every ARC
+# kind names the controller Deployment as its `controller`, so a prune
+# deletes the runner sets before the controller and waits for them, but it
+# does not order the credentials Secret.
 #
 # Changing `release` to another minor version: the new controller deletes
 # every AutoscalingRunnerSet that still carries the old version label, and
@@ -452,6 +455,7 @@ in
         crds = {
           autoscalingListeners = scope.mkCRD {
             spec = vendored "autoscalinglisteners";
+            controller = self.deployment;
             holdsData = false;
           };
           # The controller writes `Pending` when it first sees the runner set
@@ -468,6 +472,7 @@ in
           # from an old one while a new controller waits for its leader lease.
           autoscalingRunnerSets = scope.mkCRD {
             spec = vendored "autoscalingrunnersets";
+            controller = self.deployment;
             holdsData = false;
             readiness = {
               path = "/status/phase";
@@ -492,10 +497,12 @@ in
           };
           ephemeralRunnerSets = scope.mkCRD {
             spec = vendored "ephemeralrunnersets";
+            controller = self.deployment;
             holdsData = false;
           };
           ephemeralRunners = scope.mkCRD {
             spec = vendored "ephemeralrunners";
+            controller = self.deployment;
             holdsData = false;
           };
         };

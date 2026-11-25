@@ -74,7 +74,7 @@ let
   # api-approved.kubernetes.io annotation, so the upstream value goes with
   # the spec.
   approvedCrd =
-    file:
+    file: extra:
     let
       crd = vendored file;
     in
@@ -83,7 +83,8 @@ let
       annotations."api-approved.kubernetes.io" = crd.metadata.annotations."api-approved.kubernetes.io";
       # A snapshot, class, or content object runs no pods.
       usesAtLeast = _: { };
-    };
+    }
+    // extra;
 
 in
 {
@@ -219,9 +220,13 @@ in
       in
       {
         crds = {
-          volumeSnapshotClasses = approvedCrd "volumesnapshotclasses.snapshot.storage.k8s.io.json";
-          volumeSnapshotContents = approvedCrd "volumesnapshotcontents.snapshot.storage.k8s.io.json";
-          volumeSnapshots = approvedCrd "volumesnapshots.snapshot.storage.k8s.io.json";
+          volumeSnapshotClasses = approvedCrd "volumesnapshotclasses.snapshot.storage.k8s.io.json" { };
+          volumeSnapshotContents = approvedCrd "volumesnapshotcontents.snapshot.storage.k8s.io.json" {
+            controller = self.deployment;
+          };
+          volumeSnapshots = approvedCrd "volumesnapshots.snapshot.storage.k8s.io.json" {
+            controller = self.deployment;
+          };
         };
 
         serviceAccount = scope.mkResource {

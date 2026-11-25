@@ -478,6 +478,7 @@ in
           # declares no readiness that a default install would never meet.
           backends = scope.mkCRD {
             spec = vendored "backends.gateway.envoyproxy.io.json";
+            controller = self.deployment;
             holdsData = false;
             usesAtLeast = _: { };
           };
@@ -499,6 +500,7 @@ in
               # status.ancestors, with no top-level conditions.
               scope.mkCRD {
                 spec = vendored "${plural}.gateway.envoyproxy.io.json";
+                controller = self.deployment;
                 holdsData = false;
                 usesAtLeast = _: { };
               }

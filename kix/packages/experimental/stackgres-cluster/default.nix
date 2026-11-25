@@ -16,7 +16,33 @@
 #                                 `persistentVolume.storageClass` is null.
 #   sgObjectStorage (optional)    `stackgres-object-storage` in this namespace,
 #                                 read when `backups` is set.
+#   backupIdentity (optional)     The cloud identity of the database pods
+#                                 for backups, when the sgObjectStorage
+#                                 instance turns on pod credentials.
 #   prometheus (optional)         PodMonitor and PrometheusRule alerts.
+#
+# Backup identity: wal-g in each database pod writes the backups, as the
+# `<cluster>-patroni` ServiceAccount that the operator creates. When the
+# sgObjectStorage instance sets `useIAMRole` (s3) or
+# `fetchCredentialsFromMetadataService` (gcs), it publishes the cloud in
+# `out.ambientCloud`, and `deps.backupIdentity` takes a cloud identity for
+# that cloud. The package writes it to the SGCluster's
+# `spec.metadata.annotations.serviceAccount` through
+# `kix.cloudIdentity.annotationsFor`, and `extraSpec` cannot replace those
+# keys. Without `backupIdentity`, the pods use the node's credentials. An
+# identity is refused without `backups`, when the storage reads a Secret,
+# and for another cloud. Kix does not build the pods, so a changed identity
+# reaches running pods only when they restart: create an SGDbOps with
+# `op: restart`. The role must trust
+# `system:serviceaccount:<namespace>:<instance>-patroni`.
+#
+#   instances.data.postgres = {
+#     package = packages.experimental.stackgres-cluster;
+#     deps.backupIdentity = kix.cloudIdentity.aws {
+#       roleArn = "arn:aws:iam::111122223333:role/postgres-backup";
+#     };
+#     config.backups = [ { } ];
+#   };
 #
 # Network policy, with an enforcer: the PostgreSQL pods reach DNS, the API
 # server, each other, and the object store; the operator reaches Patroni.
@@ -184,7 +210,7 @@ in
   };
 
   assertions =
-    { config, ... }:
+    { config, deps, ... }:
     map (message: {
       assertion = false;
       inherit message;
@@ -202,6 +228,12 @@ in
       {
         assertion = config.backups == null || builtins.all (b: !(b ? sgObjectStorage)) config.backups;
         message = "backups entries take sgObjectStorage from the sgObjectStorage dependency. Remove it.";
+      }
+      {
+        assertion = config.backups != null || (deps.backupIdentity or null) == null;
+        dependency = "backupIdentity";
+        message = "`deps.backupIdentity` is set while `backups` is `null` (backups are disabled), so Kix rejected this instance.";
+        fix = "Set `backups` (for example, `config.backups = [ { } ];`) to enable backups with this identity, or remove `deps.backupIdentity`.";
       }
       {
         assertion = config.backups == null || builtins.length config.backups <= 1;
@@ -242,6 +274,8 @@ in
         stackgresOperator,
         storageClasses ? null,
         sgObjectStorage ? null,
+        backupIdentity ? null,
+        cloudIdentity ? null,
         prometheus ? null,
         ...
       }:
@@ -281,6 +315,40 @@ in
             }
           else
             null;
+
+        credentials = kix.cloudIdentity.useIdentity {
+          inherit scope;
+          dep = if backupsOn then backupIdentity else null;
+          arg = "backupIdentity";
+          cloud =
+            sgObjectStorage.out.ambientCloud or (scope.fail {
+              dependency = "sgObjectStorage";
+              message = "`deps.backupIdentity` is set, but the `sgObjectStorage` dependency does not report which cloud it uses (`out.ambientCloud` is missing), so Kix cannot verify that the cloud identity matches the backup storage. Kix rejected this instance.";
+              fix = "Point `deps.sgObjectStorage` to a `packages.experimental.stackgres-object-storage` instance, or remove `deps.backupIdentity`.";
+            });
+          secretGoesTo = "`deps.storageCredentials` on the `stackgres-object-storage` instance";
+        };
+        # The operator creates the `<cluster>-patroni` ServiceAccount from
+        # `spec.metadata`, so `bind` cannot reach it, and Kix cannot stamp
+        # the pods to restart them when the identity changes.
+        identityMetadata = kix.cloudIdentity.annotationsFor {
+          inherit scope;
+          inherit (credentials) identity;
+          provider = cloudIdentity;
+        };
+        identityLocks =
+          map (key: [
+            "metadata"
+            "annotations"
+            "serviceAccount"
+            key
+          ]) (builtins.attrNames identityMetadata.serviceAccountAnnotations)
+          ++ map (key: [
+            "metadata"
+            "labels"
+            "clusterPods"
+            key
+          ]) (builtins.attrNames identityMetadata.podLabels);
 
         storageClass =
           if config.persistentVolume.storageClass != null then
@@ -338,11 +406,21 @@ in
         }
         // lib.optionalAttrs (config.scripts != [ ]) {
           managedSql.scripts = [ { sgScript = self.scripts.out.name; } ];
+        }
+        // lib.optionalAttrs (identityLocks != [ ]) {
+          metadata =
+            lib.optionalAttrs (identityMetadata.serviceAccountAnnotations != { }) {
+              annotations.serviceAccount = identityMetadata.serviceAccountAnnotations;
+            }
+            // lib.optionalAttrs (identityMetadata.podLabels != { }) {
+              labels.clusterPods = identityMetadata.podLabels;
+            };
         };
 
         spec = builtins.seq _flavor (
           kix.mergeGuarded {
-            inherit scope locked;
+            inherit scope;
+            locked = locked ++ identityLocks;
           } baseSpec config.extraSpec
         );
 

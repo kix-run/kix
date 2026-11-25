@@ -192,7 +192,7 @@ is a finding from the upstream source, not a default.
 3. If it replicates with configuration, configure it (keycloak's jdbc-ping,
    header 74-81).
 4. A ceiling needs evidence from upstream source, in the comment beside it
-   and in the header's `Limits:` line (grafana:67, 425; tempo:37). A
+   and in the header's `Limits:` line (grafana:67, 425; tempo:57). A
    program-wide limit is `meta.availability.max = "none";`; a limit that
    depends on config, wiring, or one workload is `availability.max` on that
    builder (pattern table, "Ceilings"). Both accept an optional `reason`
@@ -204,7 +204,7 @@ is a finding from the upstream source, not a default.
    "`pick`" row). Strategy: W8.
 6. Operator-placed operands map the level into the CR (`instances`,
    `podDistribution`) and use `kix.availability.spreadConstraints` where the
-   CR takes a spread list (cnpg-cluster:276); never raw anti-affinity (W2).
+   CR takes a spread list (cnpg-cluster:317); never raw anti-affinity (W2).
 7. Dependencies resolve their own level from the cluster default
    (`kix/lib/eval/instance.nix:74-85`); no consumer channel raises a
    provider's level. So check the mapping of each provider the package can
@@ -403,7 +403,7 @@ The header is the package's contract for a reader who will not open the code
 5. `` `out`: `` the fields consumers read.
 6. `Escape hatches:` the hatches and their locked paths.
 7. `Limits:` ceilings with the upstream reason and where each is declared,
-   what a restart loses, untested paths, host prerequisites (tempo:37,
+   what a restart loses, untested paths, host prerequisites (tempo:57,
    falco:46).
 
 A comment that states an upstream fact names the upstream path, and copies
@@ -475,7 +475,7 @@ The only place in this skill with package line numbers. `pkg:N` is
 | `mergeEnv` defaults and owned groups | metabase:168-232 |
 | Discrete database variables through `keyRef`, owned `_FILE` twins | metabase:187-203 |
 | URL-shaped credential through `$(VAR)` | vaultwarden:143-147, 212-233 |
-| `mergeArgs`, owned flags stated once with their values | `cert-manager/controller.nix`:381-401 |
+| `mergeArgs`, owned flags stated once with their values | `cert-manager/controller.nix`:388-407 |
 | `mergeArgs`, refused flags from owned env groups | keycloak:404-429 |
 | `mergeArgs` with `defaults` that `extraArgs` can override | node-exporter:108-143; a default kept first, `victoria-metrics-operator/operator.nix`:303-317 |
 | `mergeArgs` with `parser = "go"`, `parser = "paerser"`, and `families` | loki:344; traefik:429, 495 |
@@ -483,14 +483,14 @@ The only place in this skill with package line numbers. `pkg:N` is
 | `mergeArgs` with a flag and its value as two words, written as a list item of `flags` | `clickhouse-logs/vector-agent.nix`:213-229; several values, spegel:301-303 |
 | `mergeArgs` on an attribute set of flags | victoria-metrics-agent:189-210 |
 | `argValues` to read what `extraArgs` gives a flag | external-dns:441; reloader:106-110 |
-| `mergeGuarded` on `settings` or `extraSpec` | tempo:447; cnpg-cluster:323, 430, 514 |
+| `mergeGuarded` on `settings` or `extraSpec` | tempo:489; cnpg-cluster:418, 565, 680 |
 | Migrations at start: Recreate, deadline from `startupSeconds`, probes | metabase:94-97, 252-256, 284-304 |
 | Config injection into a dependency | metabase:109-112; stackgres-database:120-125; cnpg-database:94-115 |
-| Contracts: consumer `assertions`, provider `check` | metabase:112; stackgres-database:553; keycloak:566; tempo:718 |
+| Contracts: consumer `assertions`, provider `check` | metabase:112; stackgres-database:553; keycloak:566; tempo:788 |
 | `pick` as an option default with `defaultText` | `cnpg-cluster/options.nix`:12-18 |
 | `pick` inline, header names the instance override (O19) | keycloak:256, header 74-76 |
 | `atLeast` | valkey:122 |
-| Ceilings: package-wide, per builder | tempo:299; valkey:566, `harbor/registry.nix`:245, `harbor/jobservice.nix`:338 |
+| Ceilings: package-wide, per builder | tempo:318; valkey:566, `harbor/registry.nix`:245, `harbor/jobservice.nix`:338 |
 | `kix.expose`, `exposure.urlOrNull` | metabase:172-175, 367 |
 | Metrics toggle that does not restart the workload | metabase:152-157; keycloak header 30-35 |
 | `kix.monitor` with alerts | openbao:393; clickhouse:626-636 and `alerts.nix` |
@@ -505,12 +505,13 @@ The only place in this skill with package line numbers. `pkg:N` is
 | Migrations in an init container sharing the server's env and mounts (`kix.withMountsOn [ "migrate" "plausible" ]`) | plausible:620-626, 693; vaultwarden:180-202, 277 |
 | One volume written by an init container and read by the main containers (two mount records, one `readOnly`) | n8n:499-513, 679-680 |
 | Literal credentials refused in `env` | plausible:338-358 |
-| Config-derived egress (a port read from config) through `kix.operandPolicy` | plausible:712-737; cnpg-cluster:591-656 |
+| Config-derived egress (a port read from config) through `kix.operandPolicy` | plausible:712-737; cnpg-cluster:474-490, 759-778 |
 | A step after the migrations on one replica of a dependency: an init container running a sibling script from a ConfigMap, with a checksum annotation | plausible:518-561, 605-606; `plausible/replicate.py` |
 | One alias, two implementations, a contract file | `kix/contracts/experimental/clickhouse.nix`; clickhouse:101, clickhouse-cluster:90 |
 | Renamed dependency with `renamedFrom` | immich:209-212; `kix/contracts/stable/redis.nix` (`helpers.renamedFrom`) |
 | Credentials dependency accepting either a Secret or a cloud identity (`kix.cloudIdentity.use` and `credentials.bind`) | external-dns:164-169, 608-615; `providers.nix` (`cloud`) |
-| Cloud identity when one package owns the ServiceAccount and another chooses the cloud (`kix.cloudIdentity.useIdentity`, `ambientProblem`, `out.identityCloud`, `out.ambientCloud`) | `kix/lib/tests/units/cloud-identity.nix` (`holderPackage`, `callerPackage`, `storagePackage`, `databasePackage`) |
+| Cloud identity when one package owns the ServiceAccount and another chooses the cloud (`kix.cloudIdentity.useIdentity`, `ambientProblem`, `out.identityCloud`, `out.ambientCloud`) | `cert-manager/common.nix`:44-59, `cert-manager/controller.nix`:18, 256, cert-manager:405 (`useIdentity`, `out.identityCloud`); cluster-issuer:138-184, 357-375 (`ambientProblem` per solver without credential fields), 388-394 (`use` with `cloud = null` and `identityGoesTo`); `kix/lib/tests/units/cloud-identity.nix` (`holderPackage`, `callerPackage`, `storagePackage`, `databasePackage`); publishing `out.ambientCloud` from an upstream spec field: stackgres-object-storage:138-158, 346-368, 469; `useIdentity` and `annotationsFor` for an operator-created ServiceAccount, locked in `extraSpec`: stackgres-cluster:232-237, 319-351, 410-425 |
+| Cloud identity on a ServiceAccount created by an operator (`kix.cloudIdentity.annotationsFor`, written to the custom resource and locked against `extraSpec`) | cnpg-cluster:359-385, 635-642 |
 
 Always declare a cloud identity dependency on the package that owns the
 ServiceAccount, because a ServiceAccount carries a single identity:
@@ -545,6 +546,12 @@ setting for using ambient pod credentials. If the ServiceAccount package
 depends on it, publish `out.ambientCloud` (`"aws"`, `"gcp"`, `"azure"`, or
 `null` when using a Secret). If it depends on the ServiceAccount package, check
 `kix.cloudIdentity.ambientProblem { cloud; holder; }` in `assertions`.
+When the ServiceAccount package itself exposes an `out` builder that chooses
+the cloud (such as `out.mkSecretStore` in `external-secrets`), there is no
+`holder` dependency to pass. Instead, call
+`kix.cloudIdentity.ambientProblem { cloud; holderName = "${scope.namespaceName}/${scope.instanceName}"; identityCloud = credentials.cloud; }`
+in the builder, and pass any non-null result to the consumer's `scope.fail` so
+the error names the consumer instance.
 
 A script of more than a few lines is a sibling file read with
 `builtins.readFile`, so it can be linted and run alone

@@ -21,7 +21,10 @@
 #   prometheus (optional)        ServiceMonitor and PrometheusRule alerts.
 #   storageCredentials           Secret or secret-ref with S3 keys
 #                                (`accessKeyId` and `secretAccessKey`, or as
-#                                mapped in `objectStorage.credentialKeys`).
+#                                mapped in `objectStorage.credentialKeys`),
+#                                or an AWS IAM role
+#                                (`kix.cloudIdentity.aws { roleArn = "..."; }`)
+#                                for a store outside the cluster.
 #                                Required when `objectStorage` is set.
 #   endpointService (optional)   In-cluster S3 Service when `objectStorage` is
 #                                set; derives `storage.trace.s3.endpoint` and
@@ -33,6 +36,23 @@
 # Exposes (`root.out`, checked by `kix.contracts.experimental.otlpEndpoint`):
 #   out.otlpGrpcUrl, out.otlpHttpUrl, out.tls (false), out.queryUrl.
 #   out.version, the Tempo version `image.tag` names.
+#
+# With an IAM role, the package sets no keys, so Tempo's S3 client (minio-go)
+# skips its static and environment keys and reads the role from the
+# variables the cluster's identity webhook adds to the pod (IRSA's
+# `AWS_WEB_IDENTITY_TOKEN_FILE` and `AWS_ROLE_ARN`, or EKS Pod Identity's
+# `AWS_CONTAINER_CREDENTIALS_FULL_URI`). Tempo needs no setting for this.
+#
+#   instances.tracing.tempo = {
+#     package = packages.experimental.tempo;
+#     deps.storageCredentials = kix.cloudIdentity.aws {
+#       roleArn = "arn:aws:iam::111122223333:role/tempo";
+#     };
+#     config = {
+#       objectStorage.bucket = "traces";
+#       settings.storage.trace.s3.endpoint = "s3.eu-west-1.amazonaws.com";
+#     };
+#   };
 #
 # Limits: single replica (`meta.availability.max = "none"`) and single tenant.
 #
@@ -377,23 +397,45 @@ in
         objectStorageOn = os != null;
         inClusterStore = objectStorageOn && endpointService != null;
 
+        # An IAM role reaches only a store outside the cluster: an
+        # in-cluster store does not accept AWS credentials.
+        access = kix.cloudIdentity.use {
+          inherit scope;
+          dep = storageCredentials;
+          arg = "storageCredentials";
+          cloud = if objectStorageOn && !inClusterStore then "aws" else null;
+        };
+        identity = access.identity;
+
         credentialKeys = lib.genAttrs credentialSelectors (
           s: if os.credentialKeys.${s} != null then os.credentialKeys.${s} else s
         );
-        credentials = kix.contracts.secret.helpers.use {
-          inherit scope;
-          arg = "storageCredentials";
-          dep =
-            if storageCredentials == null then
+        mappedKeys = builtins.filter (s: os.credentialKeys.${s} != null) credentialSelectors;
+        credentials =
+          if identity != null then
+            if mappedKeys != [ ] then
               scope.fail {
-                option = "objectStorage";
-                message = "objectStorage is set and no storageCredentials dependency resolved in namespace ${scope.namespaceName}.";
-                fix = "Add a secret or secret-ref instance there with the keys ${lib.concatStringsSep " and " (builtins.attrValues credentialKeys)} and the alias storageCredentials, or set objectStorage = null.";
+                option = "objectStorage.credentialKeys";
+                message = "objectStorage.credentialKeys sets ${lib.concatStringsSep ", " mappedKeys}, but deps.storageCredentials is an AWS IAM role, which has no Secret keys to map, so Kix rejected this instance.";
+                fix = "Remove objectStorage.credentialKeys to authenticate with the IAM role, or point deps.storageCredentials = ref.<namespace>.<instance> at a secret or secret-ref instance holding the S3 keys.";
               }
             else
-              storageCredentials;
-          keys = builtins.attrValues credentialKeys;
-        };
+              null
+          else
+            kix.contracts.secret.helpers.use {
+              inherit scope;
+              arg = "storageCredentials";
+              dep =
+                if access.secret == null then
+                  scope.fail {
+                    option = "objectStorage";
+                    message = "objectStorage is set and no storageCredentials dependency resolved in namespace ${scope.namespaceName}.";
+                    fix = "Set deps.storageCredentials = ref.<namespace>.<instance> to a secret or secret-ref instance with keys ${lib.concatStringsSep " and " (builtins.attrValues credentialKeys)} (or add one in that namespace with aliases = [ \"storageCredentials\" ]). For an external AWS S3 bucket, set deps.storageCredentials = kix.cloudIdentity.aws { roleArn = \"...\"; } instead, or set objectStorage = null.";
+                  }
+                else
+                  access.secret;
+              keys = builtins.attrValues credentialKeys;
+            };
 
         endpointScheme = if os.endpointScheme != null then os.endpointScheme else "http";
         store =
@@ -529,14 +571,32 @@ in
 
         env = kix.mergeEnv {
           inherit scope;
-          owned = lib.optional objectStorageOn {
-            vars = {
-              AWS_ACCESS_KEY_ID = credentials.out.keyRef credentialKeys.accessKeyId;
-              AWS_SECRET_ACCESS_KEY = credentials.out.keyRef credentialKeys.secretAccessKey;
-            };
-            from = "the storageCredentials dependency";
-            fix = "Remove those variables from env; the storageCredentials Secret supplies the keys.";
-          };
+          owned =
+            if identity != null then
+              # minio-go reads these before the role, so a key here would
+              # replace the IAM role.
+              [
+                {
+                  names = [
+                    "AWS_ACCESS_KEY_ID"
+                    "AWS_ACCESS_KEY"
+                    "AWS_SECRET_ACCESS_KEY"
+                    "AWS_SECRET_KEY"
+                    "AWS_SESSION_TOKEN"
+                  ];
+                  reason = "deps.storageCredentials is an AWS IAM role, and AWS credential variables in env override the IAM role in Tempo's S3 client.";
+                  fix = "Remove AWS credential variables from env to authenticate with the IAM role. To use S3 access keys instead, remove those variables from env and point deps.storageCredentials = ref.<namespace>.<instance> at a secret or secret-ref instance holding the S3 keys.";
+                }
+              ]
+            else
+              lib.optional objectStorageOn {
+                vars = {
+                  AWS_ACCESS_KEY_ID = credentials.out.keyRef credentialKeys.accessKeyId;
+                  AWS_SECRET_ACCESS_KEY = credentials.out.keyRef credentialKeys.secretAccessKey;
+                };
+                from = "the storageCredentials dependency";
+                fix = "Remove those variables from env; the storageCredentials Secret supplies the keys.";
+              };
         } config.env;
       in
       {
@@ -562,12 +622,17 @@ in
           sizeLimit = "256Mi";
         };
 
-        serviceAccount = scope.mkResource {
-          apiVersion = "v1";
-          kind = "ServiceAccount";
-          inherit name;
-          extra.automountServiceAccountToken = false;
-        };
+        # The identity webhooks project their own token into the pod, so
+        # Tempo needs no API token mounted.
+        serviceAccount =
+          {
+            apiVersion = "v1";
+            kind = "ServiceAccount";
+            inherit name;
+            extra.automountServiceAccountToken = false;
+          }
+          |> access.bind
+          |> scope.mkResource;
 
         statefulSet =
           {
@@ -581,7 +646,7 @@ in
                 metadata.annotations = {
                   "checksum/config" = self.configMap.out.contentHash;
                 }
-                // lib.optionalAttrs (objectStorageOn && credentials.out ? contentHash) {
+                // lib.optionalAttrs (objectStorageOn && credentials != null && credentials.out ? contentHash) {
                   "checksum/storage-credentials" = credentials.out.contentHash;
                 };
                 spec = {
@@ -703,7 +768,12 @@ in
                             port = storeWorldPort;
                             protocol = "TCP";
                           }
-                        ];
+                        ]
+                        # IRSA exchanges the pod's token at AWS STS on 443.
+                        ++ lib.optional (identity != null && storeWorldPort != 443) {
+                          port = 443;
+                          protocol = "TCP";
+                        };
                       }
                     ];
                   }).egressRules;

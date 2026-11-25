@@ -643,6 +643,7 @@ in
         cdis = scope.mkCRD {
           spec = (readJSON ./crds/cdis.cdi.kubevirt.io.json).spec;
           ownership.cede = [ "spec.versions" ];
+          controller = self.deployment;
           readiness = {
             path = "/status/phase";
             equals = "Deployed";

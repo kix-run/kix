@@ -346,6 +346,9 @@ in
           plural = "diskpools";
           version = "v1beta3";
           installedBy = self.operatorDiskpool;
+          # The DiskPool operator creates the pool on the node and removes
+          # its finalizer.
+          controller = self.operatorDiskpool;
           # A pool is the disk the replicas of every volume on it live on.
           holdsData = true;
           # The io-engine on the node serves the pool; no pod is created for it.
