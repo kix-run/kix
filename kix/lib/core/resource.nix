@@ -1086,6 +1086,58 @@ rec {
         fix = "Set crRequires to a list of resources, such as [ self.webhookCheck ].";
       };
 
+  # Arguments `scope.mkCRD` and `scope.mkCRDRef` accept. `scope.mkCRDRef`
+  # takes the CRD's identity as arguments and `scope.mkCRD` reads it from
+  # `spec`.
+  crdSharedArguments = [
+    "factBehavior"
+    "readiness"
+    "usesAtLeast"
+    "holdsData"
+    "crRequires"
+    "controller"
+  ];
+  mkCRDArguments = [
+    "spec"
+    "labels"
+    "annotations"
+    "ownership"
+  ]
+  ++ crdSharedArguments;
+  mkCRDRefArguments = [
+    "group"
+    "kind"
+    "plural"
+    "version"
+    "servedVersions"
+    "crdScope"
+    "installedBy"
+  ]
+  ++ crdSharedArguments;
+
+  # Return `null` when every name in `args` is in `accepted`, or fail naming
+  # the unknown ones. `site` is the builder, such as `scope.mkCRD`, and
+  # `declares` names the kind being declared.
+  refuseUnknownCrdArguments =
+    {
+      site,
+      declares,
+      accepted,
+      args,
+    }:
+    let
+      unknown = builtins.filter (n: !(builtins.elem n accepted)) (builtins.attrNames args);
+      list = names: builtins.concatStringsSep ", " names;
+    in
+    if unknown == [ ] then
+      null
+    else
+      fail {
+        id = "K9267";
+        message = "${site} for ${declares} does not take ${list unknown}. Kix rejected it instead of ignoring the setting.";
+        fix = "Use only these arguments: ${list accepted}.";
+      };
+
   # Return `controller` as a list of workloads, and stop the build when it is
   # anything other than null, a workload, or a list of workloads. A workload
   # is a Deployment, StatefulSet, or DaemonSet, or an import marker for one
@@ -1324,7 +1376,7 @@ rec {
       namespaceName,
       site ? "scope.mkCRDRef",
     }:
-    {
+    args@{
       group,
       kind,
       plural,
@@ -1350,6 +1402,7 @@ rec {
       # The workload, workloads, or import marker that handles CRs of the
       # kind; see validateController.
       controller ? null,
+      ...
     }:
     let
       declaration = "${site} in ${namespaceName}/${instanceName}";
@@ -1414,9 +1467,16 @@ rec {
 
       _validatedCrRequires = validateCrRequires declaration "${group}/${kind}" crRequires;
       _validatedControllers = validateController declaration "${group}/${kind}" controller;
-      _validated = builtins.seq _validatedServed (
-        builtins.seq _validatedScope (
-          builtins.seq _validatedCrRequires (builtins.seq _validatedControllers _validatedReadiness)
+      _validatedArguments = refuseUnknownCrdArguments {
+        inherit site args;
+        declares = "${group}/${kind}";
+        accepted = mkCRDRefArguments;
+      };
+      _validated = builtins.seq _validatedArguments (
+        builtins.seq _validatedServed (
+          builtins.seq _validatedScope (
+            builtins.seq _validatedCrRequires (builtins.seq _validatedControllers _validatedReadiness)
+          )
         )
       );
 
