@@ -537,12 +537,12 @@ setting for using ambient pod credentials. If the ServiceAccount package
 depends on it, publish `out.ambientCloud` (`"aws"`, `"gcp"`, `"azure"`, or
 `null` when using a Secret). If it depends on the ServiceAccount package, check
 `kix.cloudIdentity.ambientProblem { cloud; holder; }` in `assertions`.
-When the code that picks the cloud is a builder in the ServiceAccount
-package's own `out`, such as external-secrets' `out.mkSecretStore`, that
-builder has no dependency value for its own instance. It calls
-`kix.cloudIdentity.ambientProblem { cloud; holderName; identityCloud; }` with
-`"${scope.namespaceName}/${scope.instanceName}"` and `credentials.cloud`, and
-raises a non-null result with the consumer's `scope.fail`.
+When the ServiceAccount package itself exposes an `out` builder that chooses
+the cloud (such as `out.mkSecretStore` in `external-secrets`), there is no
+`holder` dependency to pass. Instead, call
+`kix.cloudIdentity.ambientProblem { cloud; holderName = "${scope.namespaceName}/${scope.instanceName}"; identityCloud = credentials.cloud; }`
+in the builder, and pass any non-null result to the consumer's `scope.fail` so
+the error names the consumer instance.
 
 A script of more than a few lines is a sibling file read with
 `builtins.readFile`, so it can be linted and run alone

@@ -472,7 +472,7 @@ When the package that chooses the cloud depends on the ServiceAccount owner, cal
 
 `ambientProblem` returns `{ message, fix }` when `cloud` and `holder.out.identityCloud` are both non-null and differ, or `null` otherwise (including when `holder` has no cloud identity, since pods may fall back to node credentials). Wrap a non-null result with `// { assertion = false; }` in the package's `assertions` list.
 
-A builder in the ServiceAccount package's own `out` has no dependency value for its own instance. Such a builder (for example, `out.mkSecretStore` in `external-secrets`, which a consumer calls) passes the instance's name and identity cloud directly instead of `holder`:
+When the ServiceAccount owner exposes a builder function in `out` that chooses the cloud (such as `out.mkSecretStore` in `external-secrets`), the package cannot pass itself as `holder`. Pass `holderName` and `identityCloud` instead:
 
 ```nix
 kix.cloudIdentity.ambientProblem {
@@ -482,7 +482,10 @@ kix.cloudIdentity.ambientProblem {
 }
 ```
 
-Both forms return the same result and message. Give either `holder` or both `holderName` and `identityCloud`; any other combination fails evaluation. Raise a non-null result with the consumer's `scope.fail`, so the error names the consumer's instance.
+- `holderName`: `"<namespace>/<instance>"` of the ServiceAccount owner, shown in mismatch errors.
+- `identityCloud`: `"aws"`, `"gcp"`, `"azure"`, or `null` (from `credentials.cloud` on `useIdentity`).
+
+Both forms return the same `{ message, fix }` attribute set or `null`. Pass `cloud` with either `holder` or both `holderName` and `identityCloud`; any other combination fails evaluation. Inside an `out` builder, pass a non-null result to the consumer's `scope.fail` so the error points to the consumer instance.
 
 #### Choosing a helper
 

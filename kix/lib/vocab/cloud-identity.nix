@@ -367,13 +367,13 @@ let
       || (hasDirect && !(args ? holderName && args ? identityCloud))
     then
       errors.fail {
-        message = "`kix.cloudIdentity.ambientProblem` takes `cloud` and either `holder` or both `holderName` and `identityCloud`, but got ${
+        message = "`kix.cloudIdentity.ambientProblem` expects `cloud` and either `holder` or both `holderName` and `identityCloud`, but got ${
           if builtins.attrNames args == [ ] then
             "no arguments"
           else
             "`${lib.concatStringsSep "`, `" (builtins.attrNames args)}`"
-        }.";
-        fix = "Pass `{ cloud; holder; }` with the dependency whose pods make the call, or `{ cloud; holderName; identityCloud; }` for the package's own instance.";
+        }, so Kix could not check the cloud identity.";
+        fix = "Pass `{ cloud; holder; }` when checking a dependency instance, or `{ cloud; holderName; identityCloud; }` (with `holderName` set to `\"<namespace>/<instance>\"`) when checking this package's own instance.";
       }
     else if hasHolder then
       ambientProblemOf {
@@ -395,7 +395,7 @@ let
     else
       {
         message = "This instance uses the pod credentials of `${holderName}` to call ${clouds.${cloud}}, but `${holderName}` has a cloud identity for ${clouds.${identityCloud}}, so Kix rejected this configuration.";
-        fix = "Change the cloud identity on `${holderName}` to `kix.cloudIdentity.${cloud} { ... }`, or change this instance's `config` to use ${clouds.${identityCloud}}.";
+        fix = "Change the cloud identity on `${holderName}` to `kix.cloudIdentity.${cloud} { ... }`, configure this instance to use ${clouds.${identityCloud}}, or authenticate with separate credentials instead of pod credentials.";
       };
 
   # Return the ServiceAccount annotations and pod labels of `identity` for a
