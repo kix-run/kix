@@ -210,7 +210,7 @@ in
   };
 
   assertions =
-    { config, ... }:
+    { config, deps, ... }:
     map (message: {
       assertion = false;
       inherit message;
@@ -228,6 +228,12 @@ in
       {
         assertion = config.backups == null || builtins.all (b: !(b ? sgObjectStorage)) config.backups;
         message = "backups entries take sgObjectStorage from the sgObjectStorage dependency. Remove it.";
+      }
+      {
+        assertion = config.backups != null || (deps.backupIdentity or null) == null;
+        dependency = "backupIdentity";
+        message = "`deps.backupIdentity` is set while `backups` is `null` (backups are disabled), so Kix rejected this instance.";
+        fix = "Set `backups` (for example, `config.backups = [ { } ];`) to enable backups with this identity, or remove `deps.backupIdentity`.";
       }
       {
         assertion = config.backups == null || builtins.length config.backups <= 1;
@@ -310,15 +316,6 @@ in
           else
             null;
 
-        _backupIdentity =
-          if backupIdentity != null && !backupsOn then
-            scope.fail {
-              dependency = "backupIdentity";
-              message = "`deps.backupIdentity` is set while `backups` is `null` (backups are disabled), so Kix rejected this instance.";
-              fix = "Set `backups` (for example, `config.backups = [ { } ];`) to enable backups with this identity, or remove `deps.backupIdentity`.";
-            }
-          else
-            null;
         credentials = kix.cloudIdentity.useIdentity {
           inherit scope;
           dep = if backupsOn then backupIdentity else null;
@@ -420,12 +417,10 @@ in
         };
 
         spec = builtins.seq _flavor (
-          builtins.seq _backupIdentity (
-            kix.mergeGuarded {
-              inherit scope;
-              locked = locked ++ identityLocks;
-            } baseSpec config.extraSpec
-          )
+          kix.mergeGuarded {
+            inherit scope;
+            locked = locked ++ identityLocks;
+          } baseSpec config.extraSpec
         );
 
         profile = spec.profile or "production";
