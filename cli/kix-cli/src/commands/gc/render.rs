@@ -48,10 +48,10 @@ pub(super) fn print_unattributed(
 ) {
     println!();
     println!(
-        "{} {} Kix-labeled object(s) name no deployment record on this cluster, so Kix \
-         cannot tell which Kix cluster they belong to. They may come from an earlier \
-         deploy whose records were retired, or from another Kix cluster whose \
-         records were deleted:",
+        "{} {} Kix-labeled object(s) do not match any deployment record on this cluster, \
+         so Kix cannot tell which Kix cluster owns them. They may be left over from an \
+         earlier deploy whose records were retired, or belong to another Kix cluster \
+         whose records were deleted:",
         output::bold("Objects with no matching deployment record:"),
         objects.len(),
     );
@@ -64,12 +64,10 @@ pub(super) fn print_unattributed(
         println!("    {} {rid}", output::dim("?"));
     }
     let note = if included {
-        format!(
-            "--include unattributed: objects that name no deployment record on this cluster are checked against {compared} like this cluster's own objects."
-        )
+        format!("--include unattributed: Kix checks these objects against {compared}.")
     } else {
         format!(
-            "Kept running on the cluster. Review them and pass `--include unattributed` to check them against {compared} and delete any not in it."
+            "Kept on the cluster. Review these objects, then pass `--include unattributed` to delete any that are not in {compared}."
         )
     };
     println!("  {}", output::dim(&note));
@@ -94,12 +92,10 @@ pub(super) fn print_copies(objects: &[kube::api::DynamicObject], included: bool,
         println!("    {} {rid}", output::dim("?"));
     }
     let note = if included {
-        format!(
-            "--include copies: objects whose labels were copied by another program are checked against {compared} like Kix's own objects."
-        )
+        format!("--include copies: Kix checks these objects against {compared}.")
     } else {
         format!(
-            "Kept running on the cluster, because Kix did not make them. Pass `--include copies` to check them against {compared} and delete any not in it."
+            "Kept on the cluster because Kix did not create them. Review these objects, then pass `--include copies` to delete any that are not in {compared}."
         )
     };
     println!("  {}", output::dim(&note));
@@ -114,7 +110,7 @@ pub(super) fn print_garbage_plan(garbage: &[GarbageEntry], compared: &str) {
 
     println!();
     println!(
-        "{} ({}, not in {compared}):",
+        "{} ({} on the cluster):",
         output::bold("Objects to delete"),
         garbage.len(),
     );

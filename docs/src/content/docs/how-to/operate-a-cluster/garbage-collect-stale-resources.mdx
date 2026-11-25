@@ -72,15 +72,17 @@ judges only the named cluster's resources. It finds them through the
 Activation records each resource names, skips the other clusters' resources,
 and keeps a resource another cluster's current build also contains.
 
-A resource left by a deploy without `--prune` stays this cluster's after
-`kix gc` retires the record that deployed it, because the Active record lists
-its build under `status.orphansKeptFrom`. A full scan judges it like the
-default mode does.
+Leftover resources from a deploy or rollback without `--prune` are still
+deleted by a full scan even after `kix gc` retires the Activation record that
+deployed them. Because the `Active` record lists their build under
+`status.orphansKeptFrom`, Kix still knows they belong to this cluster and
+deletes them without `--include unattributed`.
 
-If no Activation record on the cluster names a resource's build, Kix cannot
-tell which Kix cluster it belongs to. A full scan lists it under "Objects with
-no matching deployment record" and keeps it, even when only one Kix cluster
-has records there. The resource may come from an earlier deploy whose records
+If a resource does not match any Activation record on the cluster (including
+`status.orphansKeptFrom`), Kix cannot tell which Kix cluster owns it. A full
+scan lists it under "Objects with no matching deployment record" and keeps it,
+even when only one Kix cluster has records there. The resource may come from an
+earlier deploy whose records
 `kix gc` has retired, or from another Kix cluster whose records were deleted.
 Review the listed resources, then pass `--include unattributed` to check them
 against the active deployment's build and delete any not in it.
