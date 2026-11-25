@@ -105,13 +105,13 @@ say:
 - `Prune:`, objects that left the build and stay on the cluster
   because another Kix cluster deploys them or they changed since they were
   read.
-- `Prune: N delete(s) will wait until the object is gone:`, one line per
-  object the prune deletes that has finalizers or is already being deleted,
-  naming the finalizers. When the object's kind names its controller
-  (`controller` on `scope.mkCRD`) and that controller is not ready, not on
-  the cluster, or unreadable, a `!` line warns that the delete waits for it
-  and that the deploy fails if the finalizers stay past `--timeout`. A
-  warning does not change the exit code.
+- `Prune: N deletes will wait for finalizers or ongoing deletion:`, one line
+  for each pruned object that has finalizers or is already being deleted,
+  showing any `deletionTimestamp` and finalizers. When a custom resource's
+  kind declares a `controller` (on `scope.mkCRD` or `scope.mkCRDRef`) that is
+  not ready, missing from the cluster, or unreadable, a `!` warning explains
+  why cleanup may stall and how to fix it before deploying. Warnings do not
+  change the exit code.
 - `Not checked by the dry run (N)`, grouped by reason, five names per group.
 - A closing note that no preview checks whether Pods start, pull their
   images, and pass their readiness probes.
@@ -178,7 +178,7 @@ Its JSON Schema is `cli/kix-cli/schema/plan.schema.json`.
 | `admission` | Checked section of `{ resource, reason, webhook, message }`. See [Refusal reasons](#refusal-reasons). |
 | `drift` | Checked section of `{ resource, path, live, deployed, managers, reverted }`. A plan lists the drift on the objects the deploy applies, so `reverted` is always true; `kix plan --read-only` also lists drift the deploy leaves alone, with `reverted` false. |
 | `being_deleted` | Array of `{ resource, since, finalizers, holds_data }` for each object this deploy applies that is currently being deleted on the cluster. `since` is `metadata.deletionTimestamp`, `finalizers` lists the finalizers still holding the object, and `holds_data` is `true` when the object may hold data (which the recreated object will not keep). Omitted when empty, and omitted by `kix plan --read-only` and `kix diff`. |
-| `prune` | Checked section of `{ resource, fate, detail, finalizers, deleting_since, controllers }`. See [Prune fates](#prune-fates). The last three appear only for a `delete` fate, each omitted when empty: `finalizers` lists the finalizers the delete waits for, `deleting_since` is `metadata.deletionTimestamp` when the object is already being deleted (the deploy waits for it and sends no second delete), and `controllers` lists, for a delete that waits for a finalizer, each workload the object's kind names as its controller, as `{ resource, state, detail }` with `state` one of `ready`, `not_ready`, `missing`, or `unread`, and `detail` giving the reason. |
+| `prune` | Checked section of `{ resource, fate, detail, finalizers, deleting_since, controllers }`. See [Prune fates](#prune-fates). The last three fields appear only when `fate` is `delete` and are omitted when unset or empty. `finalizers` lists any finalizers on the object. `deleting_since` is `metadata.deletionTimestamp` when the object is already being deleted (the deploy waits for that deletion instead of sending a second delete). When `finalizers` is non-empty, `controllers` lists each controller declared for the object's kind (`controller` on `scope.mkCRD` or `scope.mkCRDRef`) as `{ resource, state, detail }`, where `state` is `ready`, `not_ready`, `missing`, or `unread`, and `detail` (when present) explains `not_ready` or `unread`. |
 | `readiness` | Always `{ "status": "not_checked", "reason": "not_previewable" }`. |
 | `warnings` | The Kix library's warnings for the build, each with the fields [`kix check`](/docs/reference/cli/check/#library-warnings) gives a warning, without `severity`. Left out when there are none, and for a build read from a bundle. |
 | `not_checked` | Array of `{ resource, reason, because, detail }`. `because` names the Namespace, CustomResourceDefinition, or Service that this deploy changes and that the answer depends on, when Kix knows which. Empty unless `made_by` is `dry_run`. |

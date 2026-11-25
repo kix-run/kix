@@ -568,7 +568,7 @@ fn prune_wait_detail(p: &PruneEntry) -> String {
     let waits = if p.finalizers.is_empty() {
         String::new()
     } else {
-        format!("waits for {}", p.finalizers.join(", "))
+        format!("waiting for {}", p.finalizers.join(", "))
     };
     match (&p.deleting_since, waits.is_empty()) {
         (Some(since), true) => format!("already being deleted since {since}"),
@@ -580,23 +580,58 @@ fn prune_wait_detail(p: &PruneEntry) -> String {
 /// Return a warning for each controller of a prune delete that is not
 /// running, so cannot remove the finalizers the delete waits for.
 fn controller_warnings(p: &PruneEntry) -> Vec<String> {
+    let object = &p.resource;
+    let finalizers = p.finalizers.join(", ");
+    let stay = if p.finalizers.len() == 1 {
+        "the finalizer stays"
+    } else {
+        "the finalizers stay"
+    };
     p.controllers
         .iter()
         .filter_map(|c| {
-            let state = match (c.state, &c.detail) {
+            let controller = &c.resource;
+            let (problem, fix) = match (c.state, &c.detail) {
                 (PruneControllerState::Ready, _) => return None,
-                (PruneControllerState::NotReady, Some(why)) => format!("is not ready ({why})"),
-                (PruneControllerState::NotReady, None) => "is not ready".to_string(),
-                (PruneControllerState::Missing, _) => "is not on the cluster".to_string(),
-                (PruneControllerState::Unread, Some(e)) => format!("could not be read ({e})"),
-                (PruneControllerState::Unread, None) => "could not be read".to_string(),
+                (PruneControllerState::NotReady, Some(why)) => (
+                    format!(
+                        "Controller {controller} is not ready ({why}), so it cannot remove \
+                         {finalizers} from {object}"
+                    ),
+                    format!("Get {controller} running before pruning."),
+                ),
+                (PruneControllerState::NotReady, None) => (
+                    format!(
+                        "Controller {controller} is not ready, so it cannot remove {finalizers} \
+                         from {object}"
+                    ),
+                    format!("Get {controller} running before pruning."),
+                ),
+                (PruneControllerState::Missing, _) => (
+                    format!(
+                        "Controller {controller} is not on the cluster, so it cannot remove \
+                         {finalizers} from {object}"
+                    ),
+                    format!("Deploy {controller} again so cleanup can finish."),
+                ),
+                (PruneControllerState::Unread, Some(e)) => (
+                    format!(
+                        "Kix could not read controller {controller} ({e}) to check whether it \
+                         can remove {finalizers} from {object}"
+                    ),
+                    format!("Check that {controller} is running before pruning."),
+                ),
+                (PruneControllerState::Unread, None) => (
+                    format!(
+                        "Kix could not read controller {controller} to check whether it can \
+                         remove {finalizers} from {object}"
+                    ),
+                    format!("Check that {controller} is running before pruning."),
+                ),
             };
             Some(format!(
-                "{} waits for its controller {} to remove {}, and the controller {state}. \
-                 The deploy fails if the finalizers stay past `--timeout` (3 minutes by default).",
-                p.resource,
-                c.resource,
-                p.finalizers.join(", "),
+                "{problem}. Kix still allows the deploy, which will fail with `[K2794]` if \
+                 {stay} past `--timeout` (3 minutes by default). {fix}"
             ))
         })
         .collect()
@@ -609,12 +644,13 @@ fn write_prune_waits(out: &mut String, plan: &Plan) -> fmt::Result {
     if waits.is_empty() {
         return Ok(());
     }
+    let n = waits.len();
     writeln!(out)?;
     writeln!(
         out,
-        "{} {} delete(s) will wait until the object is gone:",
+        "{} {n} {} will wait for finalizers or ongoing deletion:",
         output::bold("Prune:"),
-        waits.len()
+        if n == 1 { "delete" } else { "deletes" },
     )?;
     for p in &waits {
         writeln!(
@@ -830,7 +866,8 @@ fn write_markdown(out: &mut String, plan: &Plan) -> fmt::Result {
         writeln!(out)?;
         writeln!(
             out,
-            "The deploy waits until each object is gone before it deletes what the object needs:"
+            "The deploy will wait until each object is removed from the cluster, and deletes its \
+             dependencies only after it is gone:"
         )?;
         writeln!(out)?;
         for p in &waits {
@@ -1068,26 +1105,28 @@ mod tests {
         plan.prune = Checked::found(vec![worker, db, prune_entry("ConfigMap/plain@app", &[])]);
         let text = render_text(&plan);
         assert!(
-            text.contains("2 delete(s) will wait until the object is gone:"),
+            text.contains("2 deletes will wait for finalizers or ongoing deletion:"),
             "{text}"
         );
         assert!(
-            text.contains("ScaledObject.keda.sh/worker@app waits for finalizer.keda.sh"),
+            text.contains("ScaledObject.keda.sh/worker@app waiting for finalizer.keda.sh"),
             "{text}"
         );
         assert!(
             text.contains(
                 "Database.kinda.rocks/app-db@apps already being deleted since \
-                 2026-11-24T15:54:00Z, waits for db.app-db"
+                 2026-11-24T15:54:00Z, waiting for db.app-db"
             ),
             "{text}"
         );
         assert!(!text.contains("ConfigMap/plain@app"), "{text}");
         assert!(
             text.contains(
-                "! ScaledObject.keda.sh/worker@app waits for its controller \
-                 Deployment.apps/keda-operator@keda to remove finalizer.keda.sh, and the \
-                 controller is not ready (0/1 ready)."
+                "! Controller Deployment.apps/keda-operator@keda is not ready (0/1 ready), so it \
+                 cannot remove finalizer.keda.sh from ScaledObject.keda.sh/worker@app. Kix still \
+                 allows the deploy, which will fail with `[K2794]` if the finalizer stays past \
+                 `--timeout` (3 minutes by default). Get Deployment.apps/keda-operator@keda \
+                 running before pruning."
             ),
             "{text}"
         );
@@ -1095,11 +1134,13 @@ mod tests {
         assert!(!plan.stops());
         let markdown = render_markdown(&plan);
         assert!(
-            markdown.contains("- `ScaledObject.keda.sh/worker@app`: waits for finalizer.keda.sh"),
+            markdown.contains("- `ScaledObject.keda.sh/worker@app`: waiting for finalizer.keda.sh"),
             "{markdown}"
         );
         assert!(
-            markdown.contains(":warning: ScaledObject.keda.sh/worker@app waits for its controller"),
+            markdown.contains(
+                ":warning: Controller Deployment.apps/keda-operator@keda is not ready (0/1 ready)"
+            ),
             "{markdown}"
         );
 

@@ -568,8 +568,8 @@ fn an_object_being_deleted_is_its_own_problem() {
     let text = text::render(&doc, text::Detail::Problems, &two_days_ago);
     assert!(
         text.contains(
-            "being deleted, started 2d0h ago, waiting for example.com/hold. The next deploy \
-             creates it again once it is gone."
+            "being deleted (started 2d0h ago), waiting for example.com/hold; run \
+             `kix deploy <cluster> --reconcile` to recreate it once deletion finishes"
         ),
         "{text}"
     );
@@ -609,13 +609,13 @@ fn an_object_that_left_the_build_and_is_being_deleted_is_listed() {
     let text = text::render(&doc, text::Detail::Packages, &two_days_ago);
     assert!(
         text.contains(
-            "Left the build, still being deleted\n  ScaledObject.keda.sh db/worker  being \
-             deleted, started 2d0h ago, waiting for finalizer.keda.sh"
+            "Not in the current deploy, still being deleted\n  ScaledObject.keda.sh db/worker  \
+             being deleted (started 2d0h ago), waiting for finalizer.keda.sh"
         ),
         "{text}"
     );
     assert!(
-        text.contains("1 object that left the build is still being deleted."),
+        text.contains("1 object not in the current deploy is still being deleted."),
         "{text}"
     );
 

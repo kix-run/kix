@@ -155,7 +155,7 @@ fn render_cluster(
             .map(|l| leaving_label(l).chars().count())
             .max()
             .unwrap_or(0);
-        let mut title = "Left the build, still being deleted".to_string();
+        let mut title = "Not in the current deploy, still being deleted".to_string();
         if detail == Detail::Problems && doc.clusters.len() > 1 {
             title = format!("{} {title}", c.cluster);
         }
@@ -179,8 +179,8 @@ fn render_cluster(
         if s.deleting + s.leaving > 0 {
             let _ = writeln!(
                 out,
-                "An object being deleted stays until each finalizer on it is removed, usually by \
-                 the controller that added it. Check that the controller is running."
+                "Kubernetes keeps a deleting object until every finalizer on it is removed. \
+                 If deletion is stuck on a finalizer, check that its controller is running."
             );
         }
     }
@@ -310,9 +310,9 @@ fn summary_line(s: &Summary) -> String {
     );
     match s.leaving {
         0 => {}
-        1 => line.push_str(" 1 object that left the build is still being deleted."),
+        1 => line.push_str(" 1 object not in the current deploy is still being deleted."),
         n => line.push_str(&format!(
-            " {n} objects that left the build are still being deleted."
+            " {n} objects not in the current deploy are still being deleted."
         )),
     }
     line
@@ -336,7 +336,7 @@ fn leaving_label(l: &LeavingStatus) -> String {
 
 /// Describe an unfinished delete: when it started and what it waits for.
 fn deletion_state(since: &str, finalizers: &[String], age: &dyn Fn(&str) -> String) -> String {
-    let started = format!("being deleted, started {}", age(since));
+    let started = format!("being deleted (started {})", age(since));
     if finalizers.is_empty() {
         started
     } else {
@@ -360,7 +360,7 @@ fn resource_state(r: &ResourceStatus, age: &dyn Fn(&str) -> String) -> String {
                 None => output::red("not ready").into_owned(),
             },
             Problem::Deleting => format!(
-                "{}. The next deploy creates it again once it is gone.",
+                "{}; run `kix deploy <cluster> --reconcile` to recreate it once deletion finishes",
                 output::red(&deletion_state(
                     r.deleting_since.as_deref().unwrap_or_default(),
                     &r.finalizers,
