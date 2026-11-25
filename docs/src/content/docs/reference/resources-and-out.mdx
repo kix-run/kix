@@ -384,7 +384,7 @@ In Nix, strings derived from a built resource carry hidden metadata called **str
 
 1. Each `scope.mk*` resource writes its sealed JSON identity file to Kix's local store (`outPath`) and attaches that store path's context to every string in `resource.out`.
 2. When resource `B` interpolates `resourceA.out.name`, `resourceA.out.fqdn`, or `resourceA.out.selector` anywhere inside `B`'s manifest, `resourceA`'s store-path context propagates into `B`'s serialized manifest JSON.
-3. `scope.mkResource` calls `builtins.getContext` on `B`'s serialized manifest JSON, extracts the 32-character store hash of every referenced resource (plus `"requires:<hash>"` for entries in `requires` and `"extra:<hash>"` for entries in `extraDeps`), and writes the comma-separated list to `metadata.annotations."kix.run/depends-on"`.
+3. `scope.mkResource` calls `builtins.getContext` on `B`'s serialized manifest JSON, extracts the 32-character store hash of every referenced resource (plus `"requires:<hash>"` for entries in `requires`, `"controller:<hash>"` for the `controller` of a custom resource's kind, and `"extra:<hash>"` for entries in `extraDeps`), and writes the comma-separated list to `metadata.annotations."kix.run/depends-on"`.
 
 :::caution[Use `self.x.out.name`, never `"${self.x}"`]
 Interpolating a resource object directly (`"${self.configMap}"`) evaluates to its JSON identity file path in Kix's local store, not its Kubernetes resource name. Always reference `.out` fields such as `self.configMap.out.name` or `self.service.out.fqdn`.

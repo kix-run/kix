@@ -226,9 +226,9 @@ in
       builtins.toJSON (map (m: m.metadata.name or null) missing)
     }";
 
-  # Every custom resource requires the operator, so a deploy creates it after
-  # the operator and a prune deletes it before, while the operator can still
-  # remove finalizer.keda.sh. Ready is the readiness rule, with no observed
+  # Every custom resource names the operator as its controller, so a deploy
+  # creates it after the operator and a prune deletes it before, while the
+  # operator can still remove finalizer.keda.sh. Ready is the readiness rule, with no observed
   # generation.
   keda-crs-require-operator =
     let
@@ -239,7 +239,7 @@ in
         (find "ScaledJob" "batch")
         (find "TriggerAuthentication" "source")
       ];
-      ungated = builtins.filter (m: !(builtins.elem "requires:${operator}" (dependsOn m))) crs;
+      ungated = builtins.filter (m: !(builtins.elem "controller:${operator}" (dependsOn m))) crs;
       so = find "ScaledObject" "worker";
       readiness = builtins.fromJSON so.metadata.annotations.${kixKeys.readiness};
     in

@@ -402,6 +402,15 @@ edge but NO netpol hole. Consequences when authoring:
   operator's convention goes in its package, never in `readiness.rs`.
   Without a declaration, deploys time out waiting on healthy CRs.
 
+  Name the workload that reconciles the kind with `controller =
+  self.operator;` on each `scope.mkCRD` or `scope.mkCRDRef` call (a
+  Deployment, StatefulSet, DaemonSet, a list of them, or an import marker
+  for one outside Kix). Every custom resource of the kind then depends on it
+  through a `controller:` entry of `kix.run/depends-on`: deploy creates the
+  resource after the operator, prune deletes it first and keeps the
+  operator until the resource is gone, and a stuck delete (`[K2794]`) says
+  whether the operator is ready. See `kix/packages/experimental/keda`.
+
   If the operator's admission webhook refuses its own kinds until it is
   ready (cert-manager's `failurePolicy: Fail` webhook before cainjector
   injects the CA), set `crRequires = [ self.apiCheck ];` on each

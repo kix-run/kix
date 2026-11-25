@@ -143,9 +143,13 @@ Set `KIX_TUI_HEIGHT` to a number of rows to cap the live view of
    orphans that the build records as dependencies of the stuck object, reports
    them as kept (`prune_kept` in `--log-format json`), and keeps the builds
    they came from in `status.orphansKeptFrom` so the next `kix deploy --prune`
-   or `kix gc` tries again. Most packages do not yet record that a custom
-   resource depends on its operator, so removing both at once can delete the
-   operator before it clears the custom resource's finalizer. If cleanup is
+   or `kix gc` tries again. A custom resource depends on its operator when the
+   package that defines its kind names the operator as `controller` on
+   `scope.mkCRD` or `scope.mkCRDRef`; the `[K2794]` error then also names the
+   operator and says whether it is ready, not ready, or not on the cluster.
+   Most packages do not name a controller yet, so removing a custom resource
+   and its operator at once can delete the operator before it clears the
+   custom resource's finalizer. If cleanup is
    still running normally, such as pods with a long termination grace period or
    a cloud load balancer teardown, deploy again later or pass a longer
    `--timeout` (up to `5m` per delete). Kix never removes finalizers itself;

@@ -46,12 +46,11 @@
 # trusts its certificate.
 #
 # Every KEDA kind carries the operator's finalizer (finalizer.keda.sh), so
-# every custom resource built from `out.crds` requires the operator
-# Deployment (`crRequires`). A deploy creates the custom resources after the
-# operator, and a prune sends their deletes before the operator's. Prune
-# does not wait for a delete to finish, so remove the custom resources in a
-# deploy before the one that removes KEDA, or they can stay Terminating
-# with no operator to remove the finalizer.
+# every kind names the operator Deployment as its `controller`. A deploy
+# creates the custom resources after the operator, and a prune deletes them
+# and waits for them to be gone before it deletes the operator. A custom
+# resource still being deleted keeps the operator, and the deploy names the
+# operator and says whether it is ready.
 #
 # Every webhook entry has failurePolicy Ignore, as upstream ships it, and
 # the webhooks only validate. A ScaledObject written while the webhooks do
@@ -856,7 +855,7 @@ in
             spec = vendored "scaledobjects.keda.sh.json";
             readiness = ready;
             holdsData = false;
-            crRequires = [ self.operator ];
+            controller = self.operator;
             factBehavior = scalerFacts;
             usesAtLeast = _: { };
           };
@@ -864,34 +863,34 @@ in
             spec = vendored "scaledjobs.keda.sh.json";
             readiness = ready;
             holdsData = false;
-            crRequires = [ self.operator ];
+            controller = self.operator;
             factBehavior = scalerFacts;
           };
           # Neither authentication kind reports conditions.
           triggerAuthentications = scope.mkCRD {
             spec = vendored "triggerauthentications.keda.sh.json";
             holdsData = false;
-            crRequires = [ self.operator ];
+            controller = self.operator;
             factBehavior = scalerFacts;
             usesAtLeast = _: { };
           };
           clusterTriggerAuthentications = scope.mkCRD {
             spec = vendored "clustertriggerauthentications.keda.sh.json";
             holdsData = false;
-            crRequires = [ self.operator ];
+            controller = self.operator;
             factBehavior = scalerFacts;
             usesAtLeast = _: { };
           };
           cloudEventSources = scope.mkCRD {
             spec = vendored "cloudeventsources.eventing.keda.sh.json";
             holdsData = false;
-            crRequires = [ self.operator ];
+            controller = self.operator;
             usesAtLeast = _: { };
           };
           clusterCloudEventSources = scope.mkCRD {
             spec = vendored "clustercloudeventsources.eventing.keda.sh.json";
             holdsData = false;
-            crRequires = [ self.operator ];
+            controller = self.operator;
             usesAtLeast = _: { };
           };
         };
