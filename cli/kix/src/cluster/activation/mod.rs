@@ -53,8 +53,8 @@ pub use retention::{
 pub(crate) use record::KeptOrphans;
 
 use record::{
-    FINISHED_REQUEST_FIELD, REQUEST_FIELD, STARTED_REQUEST_FIELD, is_current_phase, phase_on_abort,
-    phase_on_begin, read_phase, sort_newest_first,
+    FAILED_ATTEMPTS_FIELD, FINISHED_REQUEST_FIELD, REQUEST_FIELD, STARTED_REQUEST_FIELD,
+    is_current_phase, phase_on_abort, phase_on_begin, read_phase, sort_newest_first,
 };
 
 #[cfg(test)]
@@ -964,6 +964,44 @@ impl Records {
 
         tracing::info!(activation = %activation_name, reason, "marked as Failed");
         Ok(())
+    }
+
+    /// Clear the count of failed runs on record `name`, as the operator does
+    /// when it starts a new deploy of the record.
+    pub async fn clear_failed_attempts(&self, name: &str) -> Result<(), RecordsError> {
+        self.patch_status(name, &json!({ "status": { FAILED_ATTEMPTS_FIELD: null } }))
+            .await
+    }
+
+    /// Record that the operator's run number `attempts` of record `name`
+    /// stopped with `reason`. With `give_up`, also mark the record `Failed`
+    /// when [`phase_on_abort`] permits it, as [`Records::fail_deploy`] does.
+    /// Return whether the record is now `Failed`.
+    pub async fn fail_attempt(
+        &self,
+        name: &str,
+        attempts: u32,
+        reason: &str,
+        give_up: bool,
+    ) -> Result<bool, RecordsError> {
+        let mut status = serde_json::Map::new();
+        status.insert(FAILED_ATTEMPTS_FIELD.to_string(), json!(attempts));
+        status.insert(
+            "failure".to_string(),
+            json!({ "reason": reason, "at": chrono::Utc::now().to_rfc3339() }),
+        );
+        let failed = if give_up {
+            let phase = phase_on_abort(&self.phase_of(name).await?);
+            if let Some(phase) = phase {
+                status.insert("phase".to_string(), json!(phase));
+            }
+            phase.is_some()
+        } else {
+            false
+        };
+        self.patch_status(name, &json!({ "status": status }))
+            .await?;
+        Ok(failed)
     }
 
     /// Record the completion status of waves on the Activation CR.

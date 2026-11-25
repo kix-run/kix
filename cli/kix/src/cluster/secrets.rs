@@ -33,7 +33,7 @@ pub(crate) enum SecretError {
          No matching key is configured, or `sops` could not reach or use the key service (age, PGP, cloud KMS, or Vault).\n\n  \
          Next:\n    \
          - For `kix plan`, `kix deploy`, or `kix rollback`: set `SOPS_AGE_KEY_FILE` (or configure your cloud KMS, Vault, or PGP key) on the machine running `kix`, then run the command again.\n    \
-         - With `--operator`: configure the key on the Kix operator pod; the operator retries every 30 seconds. See https://kix.run/docs/reference/cli/operator-mode/#secrets-from-sops-files.\n\n  \
+         - With `--operator`: configure the key on the Kix operator pod. The operator retries every 30 seconds (up to 10 times by default; set `KIX_DEPLOY_RETRIES` to change this) before marking the deploy `Failed`. If it is already `Failed`, run the command again. See https://kix.run/docs/reference/cli/operator-mode/#secrets-from-sops-files.\n\n  \
          sops error:\n    {}",
         sops_file_name(path),
         message.replace('\n', "\n    ")
