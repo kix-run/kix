@@ -115,7 +115,7 @@ Even when an object carries `app.kubernetes.io/managed-by=kix`, Kix separates wh
 - **Unstamped objects** carry the label without `kix.run/identity-hash` (excluding controller-owned child objects and Service `Endpoints`, which Kix ignores). Kix never applied them.
 - **Copies** carry `kix.run/identity-hash` without a `kix` field-manager entry, because an operator copied Kix's labels and annotations onto a new object (such as a database operator's volume claim).
 
-[`kix gc --full-scan`](/docs/reference/cli/gc/) lists unstamped objects, copies, and unattributed objects (objects that name no Activation record on the cluster), and deletes them only when `--include unstamped,copies,unattributed` names them.
+[`kix gc --full-scan`](/docs/reference/cli/gc/) lists unstamped objects, copies, and unattributed objects (objects with no matching Activation record on the cluster) and keeps them unless you include them with `--include` (for example, `--include unstamped,copies,unattributed`).
 
 The one exception for unlabelled objects is a name collision: if an unlabelled live object has the same kind, namespace, and name as a resource in the build, `kix plan` and `kix deploy` target that object. `kix plan` reports field ownership conflicts and names each field's current manager, and `kix deploy` stops on those conflicts unless `--force-conflicts` is passed.
 

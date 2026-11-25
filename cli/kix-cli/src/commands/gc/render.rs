@@ -44,9 +44,9 @@ pub(super) fn print_unstamped(unstamped: &[GarbageEntry]) {
 pub(super) fn print_unattributed(objects: &[kube::api::DynamicObject], included: bool) {
     println!();
     println!(
-        "{} {} Kix-labeled object(s) name no deployment record on this cluster, so Kix \
-         cannot tell which Kix cluster they belong to. They may be leftovers of this \
-         cluster whose records were retired, or objects of another Kix cluster whose \
+        "{} {} Kix-labeled object(s) have no matching deployment record, so Kix \
+         cannot tell which Kix cluster they belong to. They may come from an earlier \
+         deploy whose records were retired, or from another Kix cluster whose \
          records were deleted:",
         output::bold("No deployment record on this cluster:"),
         objects.len(),
