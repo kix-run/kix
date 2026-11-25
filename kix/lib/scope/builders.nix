@@ -941,21 +941,30 @@ in
           crRequires = k8s.validateCrRequires declaredBy "${group}/${crKind}" (attrs.crRequires or [ ]);
           controllers = k8s.validateController declaredBy "${group}/${crKind}" (attrs.controller or null);
 
-          crdResource = builtins.seq readiness (
-            builtins.seq crRequires (
-              builtins.seq controllers (scopeMkClusterResource {
-                apiVersion = "apiextensions.k8s.io/v1";
-                kind = "CustomResourceDefinition";
-                name = "${plural}.${group}";
-                inherit labels;
-                ownership = attrs.ownership or { };
-                extra = {
-                  spec = crdSpec;
-                }
-                // lib.optionalAttrs (annotations != { }) {
-                  metadata = { inherit annotations; };
-                };
-              })
+          unknownArguments = k8s.refuseUnknownCrdArguments {
+            site = "scope.mkCRD";
+            declares = "${group}/${crKind}";
+            accepted = k8s.mkCRDArguments;
+            args = attrs;
+          };
+
+          crdResource = builtins.seq unknownArguments (
+            builtins.seq readiness (
+              builtins.seq crRequires (
+                builtins.seq controllers (scopeMkClusterResource {
+                  apiVersion = "apiextensions.k8s.io/v1";
+                  kind = "CustomResourceDefinition";
+                  name = "${plural}.${group}";
+                  inherit labels;
+                  ownership = attrs.ownership or { };
+                  extra = {
+                    spec = crdSpec;
+                  }
+                  // lib.optionalAttrs (annotations != { }) {
+                    metadata = { inherit annotations; };
+                  };
+                })
+              )
             )
           );
 

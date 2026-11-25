@@ -245,4 +245,41 @@ in
       && !(evalFails (declaredOnly viaRef (self: self.operator)))
     )
     || throw "a kind declared with a controller that is not a workload built, or a control failed";
+
+  # A misspelt argument is refused with the id, the argument, the kind, and
+  # the accepted names. The same declaration without it builds.
+  lib-crd-unknown-argument-message =
+    let
+      full = (helpers.loadCaughtFull ../../core/resource.nix) { inherit lib; };
+      refused =
+        site:
+        full.refuseUnknownCrdArguments {
+          inherit site;
+          declares = "example.test/Widget";
+          accepted = full.mkCRDArguments;
+          args.controler = true;
+        };
+      text = (refused "scope.mkCRD").thrown;
+    in
+    lib.all (needle: lib.hasInfix needle text) [
+      "[K9267]"
+      "scope.mkCRD for example.test/Widget received unknown argument(s): controler. Kix rejected this CRD declaration."
+      "Rename or remove the unknown argument(s). Accepted arguments: spec, labels, annotations, ownership"
+      "controller"
+    ]
+    || throw "unknown CRD argument message: ${text}";
+
+  lib-crd-unknown-argument-refused =
+    let
+      typo = self: {
+        controler = self.operator;
+      };
+    in
+    (
+      evalFails (build (viaCRD typo))
+      && evalFails (build (viaRef typo))
+      && !(evalFails (build (viaCRD (_: { }))))
+      && !(evalFails (build (viaRef (_: { }))))
+    )
+    || throw "scope.mkCRD or scope.mkCRDRef accepted an unknown argument, or a valid declaration failed";
 }
