@@ -116,8 +116,8 @@ in
     in
     (
       result ? thrown
-      && lib.hasInfix ''Pods in namespace "apps" use priorityClassName "system-cluster-critical".'' result.thrown
-      && lib.hasInfix ''admits that class only in "kube-system"'' result.thrown
+      && lib.hasInfix ''Pods in namespace "apps" set priorityClassName "system-cluster-critical"'' result.thrown
+      && lib.hasInfix ''allows only in "kube-system"'' result.thrown
     )
     || throw "unexpected check result: ${builtins.toJSON result}";
 
@@ -129,6 +129,6 @@ in
     let
       result = checkIn [ ] "kube-system";
     in
-    (result ? thrown && lib.hasInfix "admits that class in no namespace" result.thrown)
+    (result ? thrown && lib.hasInfix "does not allow in any namespace" result.thrown)
     || throw "unexpected check result: ${builtins.toJSON result}";
 }

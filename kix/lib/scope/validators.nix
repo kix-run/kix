@@ -410,9 +410,16 @@ in
           ];
           where =
             if allowed == [ ] then
-              "in no namespace"
+              "does not allow in any namespace"
             else
-              "only in " + lib.concatMapStringsSep ", " (n: "\"${n}\"") allowed;
+              "allows only in " + lib.concatMapStringsSep ", " (n: "\"${n}\"") allowed;
+          firstFix =
+            if allowed == [ ] then
+              "Remove priorityClassName or use a custom PriorityClass."
+            else
+              "Move the instance to ${
+                lib.concatMapStringsSep " or " (n: "\"${n}\"") allowed
+              }, remove priorityClassName, or use a custom PriorityClass.";
         in
         if allowed == null || !critical || builtins.elem namespaceName allowed then
           [ ]
@@ -421,12 +428,12 @@ in
             id = "K7426";
             clusterOption = "cluster.capabilities.criticalPriorityNamespaces";
             message =
-              "Pods in namespace \"${namespaceName}\" use priorityClassName \"${class}\". "
-              + "This cluster admits that class ${where} "
-              + "(cluster.capabilities.criticalPriorityNamespaces), so the API server would refuse every pod of this workload.";
+              "Pods in namespace \"${namespaceName}\" set priorityClassName \"${class}\", "
+              + "which this cluster ${where} (cluster.capabilities.criticalPriorityNamespaces). "
+              + "Kubernetes would reject every pod this workload creates, so Kix stopped the build.";
             fix =
-              "Move the instance to one of those namespaces, or give the workload a PriorityClass that is not built in."
-              + "\nIf you created a ResourceQuota for this PriorityClass in \"${namespaceName}\", add \"${namespaceName}\" to cluster.capabilities.criticalPriorityNamespaces.";
+              firstFix
+              + "\nIf \"${namespaceName}\" has a ResourceQuota for \"${class}\", add \"${namespaceName}\" to cluster.capabilities.criticalPriorityNamespaces.";
           };
 
       # Check that multi-replica workloads with required anti-affinity or

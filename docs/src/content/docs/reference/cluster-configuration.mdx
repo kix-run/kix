@@ -181,7 +181,7 @@ Some packages derive runtime settings from `resources.limits.memory` or require 
 | `privilegedContainers` | `nullOr bool` | `null` | Whether pods may run privileged containers or use host namespaces (`hostNetwork`, `hostPID`, `hostIPC`). Set to `false` by `gke-autopilot` and `openshift`. |
 | `podSecurityEnforcement` | `nullOr ("privileged" \| "baseline" \| "restricted")` | `null` | Cluster-wide Pod Security Admission or Security Context Constraint level enforced by the platform. |
 | `daemonSets` | `nullOr bool` | `null` | Whether DaemonSets may be deployed (`false` on `gke-autopilot`). |
-| `criticalPriorityNamespaces` | `nullOr (listOf str)` | `null` | Namespaces where the platform admits pods that use the built-in `system-node-critical` or `system-cluster-critical` PriorityClass. A workload that uses one of these classes in another namespace fails evaluation. `null` means no known restriction. Set to `[ "kube-system" ]` by `gke`. |
+| `criticalPriorityNamespaces` | `nullOr (listOf str)` | `null` | Namespaces where the cluster allows pods with the built-in `system-node-critical` or `system-cluster-critical` PriorityClass. Workloads using either class in any other namespace fail the build. `null` means no known restriction. Set to `[ "kube-system" ]` by `gke`. |
 
 ### `cluster.nodes`
 
