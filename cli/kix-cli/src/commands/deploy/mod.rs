@@ -707,13 +707,12 @@ async fn run_deploy_async(
     // Reuse the pre-confirm client, which the plan ran the target checks
     // through and read the Jobs with, or connect now, run the checks, filter
     // orphans shared with other Kix clusters, and read the Jobs.
-    let (client, offline_runs) = match connected {
-        Some(c) => (c.client, None),
+    let (client, connection, offline_runs) = match connected {
+        Some(c) => (c.client, c.connection, None),
         None => {
-            let client = client::make_client(global.context.as_deref())
+            let (client, connection) = client::connect(global.context.as_deref())
                 .await
                 .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
-            let connection = binding::Connection::of_context(global.context.as_deref());
             checked
                 .target_checks()
                 .run(&client, &connection)
@@ -732,7 +731,7 @@ async fn run_deploy_async(
                 .await
                 .map_err(|e| miette!("{e}"))?;
             plan::print_reruns(checked.plan(), &[RerunReason::LastRunFailed]);
-            (client, Some(last_runs))
+            (client, connection, Some(last_runs))
         }
     };
 
@@ -750,8 +749,7 @@ async fn run_deploy_async(
         .into_records();
 
     if let Some(hash) = cached_baseline {
-        let context = binding::Connection::of_context(global.context.as_deref());
-        let context = match &context {
+        let context = match &connection {
             binding::Connection::Context { name, .. } => name.as_deref(),
             binding::Connection::InCluster => None,
         };
@@ -821,6 +819,9 @@ async fn run_deploy_async(
     // summary line.
     let json_log = (tui_driver.is_none() && options.log_format == LogFormat::Json)
         .then(|| Arc::new(super::deploy_log::JsonObserver::new()));
+    if let Some(json) = &json_log {
+        json.kubernetes(&connection);
+    }
     let observer: Arc<dyn DeployObserver> = match (&tui_driver, &json_log) {
         (Some(d), _) => d.observer(),
         (None, Some(json)) => json.clone(),
@@ -1107,11 +1108,10 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
     let source_path = result_path.display().to_string();
 
     let reconciled = ctx.runtime()?.block_on(async {
-        let (client, records) =
+        let (client, records, connection) =
             super::operator::connect_and_verify(global.context.as_deref()).await?;
         super::operator::require_requests(&client).await?;
         if let Some(checks) = &target_checks {
-            let connection = binding::Connection::of_context(global.context.as_deref());
             checks
                 .run(&client, &connection)
                 .await

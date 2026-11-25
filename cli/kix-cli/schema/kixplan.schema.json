@@ -1191,6 +1191,18 @@
           "$ref": "#/$defs/KixBuild",
           "description": "The Kix that made the plan."
         },
+        "kubernetes": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Target"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The Kubernetes cluster the plan read: the context and API server\nthat `kix plan` and `kix deploy` connected to. `null` when the plan\ndid not connect, as with `--offline` and `kix diff`."
+        },
         "made_by": {
           "$ref": "#/$defs/MadeBy"
         },
@@ -1585,6 +1597,26 @@
         "changed",
         "unchanged"
       ],
+      "type": "object"
+    },
+    "Target": {
+      "description": "The Kubernetes cluster a command connected to, as its JSON output names\nit.",
+      "properties": {
+        "context": {
+          "description": "The kubeconfig context. `null` when the kubeconfig names none, or\nfor the operator, which uses the API server it runs on.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "server": {
+          "description": "The URL of the context's API server in the kubeconfig. `null` when\nthe kubeconfig does not give it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
       "type": "object"
     },
     "UncheckedObject": {

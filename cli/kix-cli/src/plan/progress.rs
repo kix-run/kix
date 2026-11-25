@@ -1,5 +1,6 @@
 //! Progress and warning output for cluster planning.
 
+use kix::cluster::binding;
 use kix::manifest::keys;
 use kix::plan::PlanEvent;
 
@@ -66,7 +67,16 @@ pub fn print(event: PlanEvent<'_>) {
                 "  This plan cannot list or delete the orphaned objects kept from {activation}."
             );
         }
-        PlanEvent::Connecting => crate::say!("Connecting to cluster..."),
+        PlanEvent::Connecting(connection) => crate::say!("{}", connection.connecting()),
+        PlanEvent::Unbound {
+            cluster,
+            connection,
+            uid,
+        } => crate::say!(
+            "{} {}",
+            output::dim("Note:"),
+            binding::unbound_note(cluster, connection, uid),
+        ),
         PlanEvent::NoCachedBuild => {
             crate::say!("No previous deployment in local cache. First deploy.")
         }

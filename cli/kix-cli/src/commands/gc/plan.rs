@@ -301,7 +301,7 @@ pub(super) async fn plan_record_retirement(
     cluster: &str,
     policy: &RetentionPolicy,
 ) -> Result<RecordRetirement> {
-    let client = client::make_client(global.context.as_deref())
+    let (client, _) = client::connect(global.context.as_deref())
         .await
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
     let discovery = discovery::discover_resources(&client)

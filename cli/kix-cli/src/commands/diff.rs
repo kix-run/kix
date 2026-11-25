@@ -9,6 +9,7 @@ use crate::client;
 use kix::build_source;
 use kix::cluster::activation::{self, Records};
 use kix::cluster::apply::ApplyError;
+use kix::cluster::binding::Connection;
 use kix::cluster::drift::{self, DriftReport, DriftVerdict};
 use kix::cluster::migrate::{MigrationPair, detect_migration_pairs};
 use kix::cluster::owned_view;
@@ -193,11 +194,13 @@ pub(super) fn compare(args: &Comparison, ctx: &mut CommandContext) -> Result<Exi
             loaded
         }
         Baseline::Live => {
-            let spinner = output::spinner("Fetching live cluster state...");
             let global = ctx.global.clone();
+            let connection = Connection::of_context(global.context.as_deref());
+            crate::esay!("{}", connection.connecting());
+            let spinner = output::spinner("Fetching live cluster state...");
             let mut live = ctx
                 .runtime()?
-                .block_on(fetch_live_manifests(&global, &new_graph))?;
+                .block_on(fetch_live_manifests(&global, connection, &new_graph))?;
             clear_spinner(&spinner);
             let current = live.current.as_ref().map(activation::Record::of);
             super::deploy::stops::warn(args.cluster, current.as_ref());
@@ -335,6 +338,7 @@ fn diff_graphs(old: &StoreGraph, new: &StoreGraph, side: &OldSide, detail: Detai
                 &migration_pairs,
                 NotCheckedReason::ReadOnly,
             );
+            doc.kubernetes = Some((&live.connection).into());
             doc.deployed = live
                 .current
                 .as_ref()
@@ -438,6 +442,8 @@ struct LiveSide {
     /// The live objects a deploy of the build would find orphaned: each
     /// stamped, prunable object that is not in the build, sorted.
     orphans: Vec<ResourceId>,
+    /// The Kubernetes cluster the objects were read from.
+    connection: Connection,
 }
 
 impl LiveSide {
@@ -474,9 +480,11 @@ impl LiveSide {
     }
 }
 
-/// Fetch the live cluster's Kix-owned view for `new_graph`'s cluster.
+/// Fetch the live cluster's Kix-owned view for `new_graph`'s cluster from
+/// the Kubernetes cluster of `connection`.
 async fn fetch_live_manifests(
     global: &crate::cli::GlobalArgs,
+    connection: Connection,
     new_graph: &StoreGraph,
 ) -> Result<LiveSide> {
     let client = client::make_client(global.context.as_deref())
@@ -576,6 +584,7 @@ async fn fetch_live_manifests(
         drifted,
         drift_unchecked,
         orphans: Vec::new(),
+        connection,
     })
 }
 
@@ -786,6 +795,7 @@ mod tests {
             drifted,
             drift_unchecked,
             orphans: Vec::new(),
+            connection: Connection::InCluster,
         }));
         let result = diff_graphs(&old, &new, &side, Detail::Plain);
 
@@ -857,6 +867,7 @@ mod tests {
             drifted: Vec::new(),
             drift_unchecked: 0,
             orphans: Vec::new(),
+            connection: Connection::InCluster,
         };
         live.set_aside_left_earlier(&new, Some(&deployed));
         let names = |ids: &[ResourceId]| ids.iter().map(|r| r.name.clone()).collect::<Vec<_>>();

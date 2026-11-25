@@ -47,6 +47,11 @@ pub struct Plan {
     pub kix: KixBuild,
     /// The name the build gives the Kix cluster, which its records carry.
     pub cluster: String,
+    /// The Kubernetes cluster the plan read: the context and API server
+    /// that `kix plan` and `kix deploy` connected to. `null` when the plan
+    /// did not connect, as with `--offline` and `kix diff`.
+    #[serde(default)]
+    pub kubernetes: Option<crate::cluster::binding::Target>,
     /// The build the plan is for: the new side.
     pub build: Build,
     /// The build the plan compares against: the cluster's current
@@ -804,6 +809,7 @@ impl Plan {
             made_by,
             kix,
             cluster: cluster.to_string(),
+            kubernetes: None,
             build,
             deployed: None,
             flags: None,
@@ -1173,6 +1179,42 @@ mod tests {
         plan.prune = Checked::found(vec![entry(PruneFate::Delete)]);
         assert!(plan.has_changes());
         assert!(!plan.stops());
+    }
+
+    /// A plan names the Kubernetes cluster it read, and a plan file written
+    /// before the field existed reads as one that names none.
+    #[test]
+    fn a_plan_names_its_kubernetes_cluster() {
+        let empty = super::super::diff_graphs(
+            &crate::eval::store_graph::StoreGraph::empty("c"),
+            &crate::eval::store_graph::StoreGraph::empty("c"),
+        );
+        let mut plan = Plan::new(
+            KixBuild::current(&crate::version::running().to_string()),
+            MadeBy::DryRun,
+            "c",
+            Build::of(&crate::eval::store_graph::StoreGraph::empty("c")),
+            &empty,
+            Detail::Plain,
+            &[],
+            NotCheckedReason::BuildsOnly,
+        );
+        plan.kubernetes = Some(crate::cluster::binding::Target {
+            context: Some("prod".into()),
+            server: Some("https://prod.example:6443".into()),
+        });
+        let mut value = serde_json::to_value(&plan).unwrap();
+        assert_eq!(
+            value["kubernetes"],
+            serde_json::json!({"context": "prod", "server": "https://prod.example:6443"})
+        );
+        assert_eq!(serde_json::from_value::<Plan>(value.clone()).unwrap(), plan);
+
+        value.as_object_mut().unwrap().remove("kubernetes");
+        assert_eq!(
+            serde_json::from_value::<Plan>(value).unwrap().kubernetes,
+            None
+        );
     }
 
     #[test]

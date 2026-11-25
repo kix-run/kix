@@ -43,6 +43,8 @@ pub struct StatusDocument {
 pub struct Kubernetes {
     /// The kubeconfig context, when known.
     pub context: Option<String>,
+    /// The URL of the context's API server in the kubeconfig, when known.
+    pub server: Option<String>,
     /// The UID of the `kube-system` Namespace, which `cluster.kubernetes.uid`
     /// names. `null` when this account may not read it.
     pub uid: Option<String>,

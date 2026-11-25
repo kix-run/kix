@@ -151,6 +151,13 @@
             "null"
           ]
         },
+        "server": {
+          "description": "The URL of the context's API server in the kubeconfig, when known.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "uid": {
           "description": "The UID of the `kube-system` Namespace, which `cluster.kubernetes.uid`\nnames. `null` when this account may not read it.",
           "type": [
@@ -168,6 +175,7 @@
       },
       "required": [
         "context",
+        "server",
         "uid",
         "version"
       ],

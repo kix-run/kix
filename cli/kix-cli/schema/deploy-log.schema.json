@@ -713,6 +713,33 @@
   "description": "One line of the log.\n\nLater versions of Kix may add fields and new types of line. Skip the ones\nyou do not know.",
   "oneOf": [
     {
+      "description": "The Kubernetes cluster the deploy writes to. The first line of the\nlog.",
+      "properties": {
+        "context": {
+          "description": "The kubeconfig context, or `null` when the kubeconfig names none.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "server": {
+          "description": "The URL of the context's API server in the kubeconfig, or `null`\nwhen the kubeconfig does not give it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "const": "kubernetes",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
+    {
       "description": "The plan, before any node runs. `edges` say which node waits on which.",
       "properties": {
         "edges": {

@@ -89,7 +89,10 @@ probes, so `readiness` is always `not_checked`.
 
 ### Text
 
-The package-grouped plan `kix deploy` prints, with every field change shown.
+Before it connects, `kix plan` prints the kubeconfig context and API server it
+reads, such as `Connecting to context prod (https://prod.example:6443)...`.
+Then comes the package-grouped plan `kix deploy` prints, with every field
+change shown.
 A change that puts back a drifted field is tagged `(reverts drift)`.
 After the packages come these sections, each only when it has something to
 say:
@@ -169,6 +172,7 @@ Its JSON Schema is `cli/kix-cli/schema/plan.schema.json`.
 | `made_by` | `dry_run` from `kix plan`; `builds` from `kix plan --offline` or `kix diff --from <build>`; `live_read` from `kix plan --read-only` or `kix diff --from <snapshot>`. |
 | `kix` | `{ version, store_path }` of the Kix that made the plan. `store_path` is the store path of the binary, or `null` for a binary built outside the store. |
 | `cluster` | The name the build gives the Kix cluster. |
+| `kubernetes` | The Kubernetes cluster the plan read: `{ context, server }`, the kubeconfig context and its API server URL, each `null` when the kubeconfig does not give it. `null` when the plan did not connect: `kix plan --offline` and `kix diff --from`. |
 | `build` | The build the plan is for: `{ store_path, identity_hash }`. `store_path` is the build's result directory, the path a deploy records as `kix.run/built-via`; it locates the build. `identity_hash` is the Activation record's `kix.run/identity-hash`, a hash of every rendered manifest and what is upstream of it; two builds with the same identity hash deploy the same objects. Present whether or not anything changes. |
 | `deployed` | The build the plan compares against: `{ activation, identity_hash, store_path }` from the cluster's current Activation record (the cached record with `--offline`). `null` on a first deploy. |
 | `flags` | The planning flags: `{ prune, reconcile, force_conflicts, accept_migrations }`. `prune` says what the deploy does with orphans: `delete` with `--prune`, `skip` with `--skip-orphan-check`, and `warn_only` otherwise. `null` from `kix plan --read-only` and `kix diff`. |

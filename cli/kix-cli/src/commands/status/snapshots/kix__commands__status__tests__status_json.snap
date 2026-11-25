@@ -6,6 +6,7 @@ expression: "serde_json::to_string_pretty(&doc).unwrap()"
   "schema_version": "2026-11-15",
   "kubernetes": {
     "context": "prod",
+    "server": "https://prod.example:6443",
     "uid": "4d7b1c2e",
     "version": "v1.33.1"
   },

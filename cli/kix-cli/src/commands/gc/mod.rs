@@ -470,14 +470,13 @@ async fn run_hard_async(
     kubernetes_uid: Option<&str>,
     build_hash: Option<&str>,
 ) -> Result<()> {
-    crate::say!("Fetching live cluster state...");
-
-    let client = client::make_client(global.context.as_deref())
+    let (client, connection) = client::connect(global.context.as_deref())
         .await
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
+    crate::say!("Fetching live cluster state...");
     binding::check(
         &client,
-        &binding::Connection::of_context(global.context.as_deref()),
+        &connection,
         binding::Action::GarbageCollect,
         cluster_name,
         kubernetes_uid,
@@ -632,7 +631,8 @@ async fn run_hard_async(
 }
 
 async fn run_operator(args: &GcArgs, cluster: &str, ctx: &CommandContext) -> Result<()> {
-    let (_, records) = super::operator::connect_and_verify(ctx.global.context.as_deref()).await?;
+    let (_, records, _) =
+        super::operator::connect_and_verify(ctx.global.context.as_deref()).await?;
 
     let policy = retention_policy(args)?;
     let retirement = plan_records_with(Some(records.clone()), cluster, &policy).await?;

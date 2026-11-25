@@ -27,6 +27,8 @@ use k8s_openapi::api::core::v1::Namespace;
 use kube::api::Api;
 use kube::client::Client;
 use kube::config::Kubeconfig;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use super::activation::{self, RecordsError};
@@ -115,6 +117,57 @@ impl Connection {
             Connection::InCluster => "the API server the operator runs on".to_string(),
         }
     }
+
+    /// Return the line a command prints before it connects, so the reader
+    /// sees which Kubernetes cluster it is about to read or change.
+    pub fn connecting(&self) -> String {
+        format!("Connecting to {}...", self.describe())
+    }
+}
+
+/// The Kubernetes cluster a command connected to, as its JSON output names
+/// it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct Target {
+    /// The kubeconfig context. `null` when the kubeconfig names none, or
+    /// for the operator, which uses the API server it runs on.
+    pub context: Option<String>,
+    /// The URL of the context's API server in the kubeconfig. `null` when
+    /// the kubeconfig does not give it.
+    pub server: Option<String>,
+}
+
+impl From<&Connection> for Target {
+    fn from(connection: &Connection) -> Target {
+        match connection {
+            Connection::Context { name, server } => Target {
+                context: name.clone(),
+                server: server.clone(),
+            },
+            Connection::InCluster => Target {
+                context: None,
+                server: None,
+            },
+        }
+    }
+}
+
+/// Return the note for the first deploy of `cluster`, whose definition
+/// names no Kubernetes cluster, through `connection`. `uid` is the live
+/// `kube-system` UID, or `None` when it could not be read.
+pub fn unbound_note(cluster: &str, connection: &Connection, uid: Option<&str>) -> String {
+    let set = match uid {
+        Some(uid) => format!(
+            "To bind it to this Kubernetes cluster, set `cluster.kubernetes.uid = \"{uid}\";` in the definition."
+        ),
+        None => format!(
+            "To bind it, set `cluster.kubernetes.uid` to the UID of the {NAMESPACE} Namespace (`kubectl get namespace {NAMESPACE} -o jsonpath='{{.metadata.uid}}'`)."
+        ),
+    };
+    format!(
+        "The definition of '{cluster}' does not name its Kubernetes cluster, so Kix cannot check that {} is the one you mean.\n  {set} Kix then refuses to deploy it anywhere else. See {DOCS_URL}{HOW_TO_PATH}.",
+        connection.describe()
+    )
 }
 
 /// What a failed read of the `kube-system` Namespace was going to confirm.
@@ -649,6 +702,71 @@ pub async fn check_name(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn prod() -> Connection {
+        Connection::Context {
+            name: Some("prod".into()),
+            server: Some("https://prod.example:6443".into()),
+        }
+    }
+
+    /// The line a command prints before it connects names the context and
+    /// its API server, and says so when the kubeconfig names neither.
+    #[test]
+    fn the_connecting_line_names_the_context_and_server() {
+        assert_eq!(
+            prod().connecting(),
+            "Connecting to context prod (https://prod.example:6443)..."
+        );
+        let unknown = Connection::Context {
+            name: None,
+            server: None,
+        };
+        assert_eq!(unknown.connecting(), "Connecting to the current context...");
+    }
+
+    /// JSON output names the context and server, and leaves both `null`
+    /// for the operator's own API server.
+    #[test]
+    fn the_target_carries_the_context_and_server() {
+        assert_eq!(
+            Target::from(&prod()),
+            Target {
+                context: Some("prod".into()),
+                server: Some("https://prod.example:6443".into()),
+            }
+        );
+        assert_eq!(
+            Target::from(&Connection::InCluster),
+            Target {
+                context: None,
+                server: None,
+            }
+        );
+    }
+
+    /// The note on an unbound first deploy gives the line to add when the
+    /// UID was read, and the command that reads it when it was not.
+    #[test]
+    fn the_unbound_note_says_how_to_bind() {
+        let note = unbound_note("shop", &prod(), Some("4d7b1c2e"));
+        assert!(note.contains("'shop'"), "{note}");
+        assert!(
+            note.contains("context prod (https://prod.example:6443)"),
+            "{note}"
+        );
+        assert!(
+            note.contains("cluster.kubernetes.uid = \"4d7b1c2e\";"),
+            "{note}"
+        );
+        assert!(note.contains(&format!("{DOCS_URL}{HOW_TO_PATH}")), "{note}");
+
+        let note = unbound_note("shop", &prod(), None);
+        assert!(
+            note.contains("kubectl get namespace kube-system -o jsonpath='{.metadata.uid}'"),
+            "{note}"
+        );
+    }
     use crate::cluster::fake_api::{FakeApi, kube_system};
     use crate::manifest::keys;
     use crate::manifest::lifecycle::{PHASE_ACTIVE, RECORD_KIND};

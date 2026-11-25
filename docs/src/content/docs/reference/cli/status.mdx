@@ -118,7 +118,7 @@ The text output has four parts:
    `--force-conflicts`.
 
 ```text
-Cluster shop on Kubernetes v1.33.1 (context prod)
+Cluster shop on Kubernetes v1.33.1 (context prod, https://prod.example:6443)
 Last deploy: shop-7f3a2b1c0d9e  Active  2d0h ago
 
   db/postgres              2 resources  1 changed
@@ -143,7 +143,7 @@ Kubernetes cluster ID (the UID of the `kube-system` Namespace, the value
 [`cluster.kubernetes.uid`](/docs/reference/cluster-configuration/) takes):
 
 ```text
-Cluster shop on Kubernetes v1.33.1 (context prod)
+Cluster shop on Kubernetes v1.33.1 (context prod, https://prod.example:6443)
 Kubernetes cluster ID: 4d7b1c2e
 Last deploy: shop-7f3a2b1c0d9e  Active  2d0h ago
 ...
@@ -204,7 +204,7 @@ fields and values they do not know.
 | Field | Meaning |
 | --- | --- |
 | `schema_version` | Version of the document's shape. |
-| `kubernetes` | The Kubernetes cluster read: `context`, `uid` (`null` when the account may not read the `kube-system` Namespace), and `version`. |
+| `kubernetes` | The Kubernetes cluster read: `context`, `server` (the context's API server URL in the kubeconfig), `uid` (`null` when the account may not read the `kube-system` Namespace), and `version`. |
 | `checks` | The checks that ran: `presence`, `drift`, `readiness`. |
 | `unreadable` | Resource types the account may not list, such as `secrets`. |
 | `clusters[]` | One entry for each Kix cluster checked. |

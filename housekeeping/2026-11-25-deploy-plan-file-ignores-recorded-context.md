@@ -1,0 +1,3 @@
+# 2026-11-25 · `cli/kix/src/plan/saved.rs` · `kix deploy --plan` does not compare the cluster the plan names with the one it deploys to.
+
+The plan document now records `kubernetes.context` and `kubernetes.server`. `kix deploy --plan <file>` compares the reviewed plan with a fresh one by objects digest and deployed build, but not by this field. Two Kubernetes clusters with the same deployed build, or a first deploy to either, pass, so a plan reviewed against staging can be applied to production with no message. An unbound definition is not stopped by the binding check either. Whether a different context should refuse or only warn is open, since a context can be renamed.

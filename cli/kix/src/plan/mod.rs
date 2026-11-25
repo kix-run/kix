@@ -64,8 +64,17 @@ use crate::manifest::types::ResourceId;
 /// Progress events emitted by the planner for the caller to display.
 #[derive(Debug, Clone, Copy)]
 pub enum PlanEvent<'a> {
-    /// Connecting to the cluster before reading state.
-    Connecting,
+    /// Connecting to the Kubernetes cluster of this connection before
+    /// reading state.
+    Connecting(&'a crate::cluster::binding::Connection),
+    /// The first deploy of Kix cluster `cluster`, whose definition names no
+    /// Kubernetes cluster, through `connection`. `uid` is the live
+    /// `kube-system` UID, or `None` when it could not be read.
+    Unbound {
+        cluster: &'a str,
+        connection: &'a crate::cluster::binding::Connection,
+        uid: Option<&'a str>,
+    },
     /// `--offline` found no cached build, so this is a first deploy.
     NoCachedBuild,
     /// `--offline` is loading the cached build.

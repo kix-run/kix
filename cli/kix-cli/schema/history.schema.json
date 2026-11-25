@@ -74,6 +74,30 @@
         "available_locally"
       ],
       "type": "object"
+    },
+    "Target": {
+      "description": "The Kubernetes cluster a command connected to, as its JSON output names\nit.",
+      "properties": {
+        "context": {
+          "description": "The kubeconfig context. `null` when the kubeconfig names none, or\nfor the operator, which uses the API server it runs on.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "server": {
+          "description": "The URL of the context's API server in the kubeconfig. `null` when\nthe kubeconfig does not give it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "context",
+        "server"
+      ],
+      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -93,6 +117,10 @@
       ],
       "description": "The deploy live on the cluster, or null when there is none."
     },
+    "kubernetes": {
+      "$ref": "#/$defs/Target",
+      "description": "The Kubernetes cluster whose deploy records these are."
+    },
     "superseded": {
       "description": "Earlier deploys that ran to completion, most recent first.",
       "items": {
@@ -103,6 +131,7 @@
   },
   "required": [
     "cluster",
+    "kubernetes",
     "current",
     "superseded"
   ],

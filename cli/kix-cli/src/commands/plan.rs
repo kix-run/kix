@@ -468,6 +468,7 @@ pub(crate) fn document(p: &mut Planned, report: Option<&DryRunReport>, manifests
         NotCheckedReason::BuildsOnly,
     );
     doc.warnings = p.build.warnings().to_vec();
+    doc.kubernetes = p.connected.as_ref().map(|c| (&c.connection).into());
     doc.deployed = p.baseline.active().map(|a| DeployedBuild {
         activation: a.name.clone(),
         identity_hash: a.identity_hash.clone(),

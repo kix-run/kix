@@ -1,0 +1,4 @@
++++
+kind = "added"
++++
+`kix plan`, `kix deploy`, `kix rollback`, `kix gc`, and `kix migrate domain` now name the kubeconfig context and API server before they connect, such as `Connecting to context prod (https://prod.example:6443)...`, so you can stop a command that points at the wrong cluster. `kix plan --read-only` and `kix diff` print the same line on stderr. JSON output names them too: a `kubernetes` field with `context` and `server` in the plan document and in `kix history`, a first line with `"type": "kubernetes"` in the `--log-format json` deploy log, and `server` beside `context` in `kix status`. The first `kix plan` or `kix deploy` of a definition that does not set `cluster.kubernetes.uid` prints a note with the line that binds the definition to the Kubernetes cluster it connected to.
