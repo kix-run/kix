@@ -10,6 +10,7 @@
   "facts": {
     "capabilities": {
       "availabilityZones": null,
+      "criticalPriorityNamespaces": null,
       "daemonSets": null,
       "gpu": null,
       "managedControlPlane": null,

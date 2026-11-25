@@ -58,6 +58,8 @@ let
       importName = marker.metadata.annotations.${kixKeys.importName};
     };
 
+  importNamespace = name: if name == "gke-autopilot" then "gke-managed" else "kube-system";
+
   expected = {
     aks = "kube-dns.kube-system";
     eks = "kube-dns.kube-system";
@@ -89,5 +91,38 @@ in
       && facts.importName == service
     )
     || throw "flavour ${name}: platform-dns gives ${builtins.toJSON facts}"
+  ) (builtins.attrNames expected);
+
+  # On every flavour, a cluster definition can set `platform-dns.optional`
+  # to either value without lib.mkForce. Setting it to false activates the
+  # import with no dependent, and the marker appears.
+  flavor-dns-optional-is-overridable = lib.all (
+    name:
+    let
+      ns = importNamespace name;
+      markerWhen =
+        optional:
+        byName "platform-dns" (
+          ofKind "PackageInstance" (
+            manifests (mkCluster [
+              (flavor name)
+              { instances.${ns}.platform-dns.optional = optional; }
+            ])
+          )
+        );
+    in
+    (markerWhen false != null && markerWhen true == null)
+    || throw "flavour ${name}: platform-dns.optional does not follow the cluster definition"
+  ) (builtins.attrNames expected);
+
+  # Without a dependent or an override, the import stays dormant on every
+  # flavour except kind, which needs DNS to exist.
+  flavor-dns-optional-default = lib.all (
+    name:
+    let
+      marker = byName "platform-dns" (ofKind "PackageInstance" (manifests (mkCluster [ (flavor name) ])));
+    in
+    (marker != null) == (name == "kind")
+    || throw "flavour ${name}: platform-dns active is ${builtins.toJSON (marker != null)}"
   ) (builtins.attrNames expected);
 }

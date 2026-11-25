@@ -395,6 +395,40 @@ in
         else
           [ ];
 
+      # Check that a pod using a built-in critical PriorityClass runs in a
+      # namespace where the platform admits that class. The API server
+      # accepts the workload but refuses each of its pods, so the deploy would
+      # wait until it timed out.
+      checkCriticalPriority =
+        templateSpec:
+        let
+          allowed = capabilities.criticalPriorityNamespaces or null;
+          class = templateSpec.priorityClassName or null;
+          critical = builtins.elem class [
+            "system-node-critical"
+            "system-cluster-critical"
+          ];
+          where =
+            if allowed == [ ] then
+              "in no namespace"
+            else
+              "only in " + lib.concatMapStringsSep ", " (n: "\"${n}\"") allowed;
+        in
+        if allowed == null || !critical || builtins.elem namespaceName allowed then
+          [ ]
+        else
+          failHere {
+            id = "K7426";
+            clusterOption = "cluster.capabilities.criticalPriorityNamespaces";
+            message =
+              "Pods in namespace \"${namespaceName}\" use priorityClassName \"${class}\". "
+              + "This cluster admits that class ${where} "
+              + "(cluster.capabilities.criticalPriorityNamespaces), so the API server would refuse every pod of this workload.";
+            fix =
+              "Move the instance to one of those namespaces, or give the workload a PriorityClass that is not built in."
+              + "\nIf you created a ResourceQuota for this PriorityClass in \"${namespaceName}\", add \"${namespaceName}\" to cluster.capabilities.criticalPriorityNamespaces.";
+          };
+
       # Check that multi-replica workloads with required anti-affinity or
       # `DoNotSchedule` spread constraints do not target a single-node cluster,
       # where extra replicas would remain Pending.

@@ -578,6 +578,19 @@ in
           the platform manages all node-level daemons. null = unknown.
         '';
       };
+
+      criticalPriorityNamespaces = lib.mkOption {
+        type = lib.types.nullOr (lib.types.listOf lib.types.str);
+        default = null;
+        description = ''
+          The namespaces where the platform admits pods that use the
+          built-in `system-node-critical` or `system-cluster-critical`
+          PriorityClass. GKE admits them only in namespaces that hold a
+          ResourceQuota for these classes, and it creates one in
+          `kube-system`. A workload that uses one of these classes in
+          another namespace fails evaluation. null = no restriction known.
+        '';
+      };
     };
 
     cluster.defaultLimits = {

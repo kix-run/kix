@@ -5,7 +5,11 @@
 # Service, so `kix deploy` checks that it exists in the namespace of the
 # import instance before it applies the workloads that depend on DNS.
 
-{ kix, clusterDomain }:
+{
+  lib,
+  kix,
+  clusterDomain,
+}:
 {
   name,
   namespace,
@@ -21,7 +25,7 @@
       fqdn = "${name}.${namespace}.svc.${clusterDomain}";
     };
   };
+  # The flavour's choice is a default, so a cluster definition can set
+  # `optional` either way without `lib.mkForce`.
+  optional = lib.mkDefault optional;
 }
-# A flavour that needs DNS to exist leaves `optional` at the option's default,
-# so a cluster definition can still set it.
-// (if optional then { optional = true; } else { })

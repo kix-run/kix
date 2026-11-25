@@ -23,7 +23,7 @@
 }:
 let
   platformDns = import ./platform-dns.nix {
-    inherit kix;
+    inherit lib kix;
     inherit (config) clusterDomain;
   };
   inherit (import ../core/error.nix { inherit lib; }) fail;

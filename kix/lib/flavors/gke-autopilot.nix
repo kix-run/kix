@@ -1,12 +1,18 @@
 # GKE Autopilot flavor.
 #
-# Google manages both the control plane and worker nodes. Autopilot forbids
-# privileged containers, DaemonSets, and user deployments in `kube-system`,
-# enforces the `baseline` Pod Security Standard, and owns `cni` and
-# `loadBalancer` exclusively.
+# Google manages both the control plane and worker nodes. Autopilot refuses
+# privileged containers and workloads in GKE-managed namespaces such as
+# `kube-system`. Its own admission policy includes every rule of the
+# `baseline` Pod Security Standard. It owns `cni` and `loadBalancer`
+# exclusively, and its default StorageClass is `standard-rwo`.
+#
+# NodeLocal DNSCache is always on in Autopilot. Kix does not model it.
 #
 # Pods get Google Cloud identities through Workload Identity Federation for
 # GKE, which the `cloud-identity` import in `gke-managed` declares.
+#
+# No one has tested this flavor on a live Autopilot cluster. Its
+# `daemonSets = false` does not come from Google's documentation.
 
 {
   config,
@@ -16,7 +22,7 @@
 }:
 let
   platformDns = import ./platform-dns.nix {
-    inherit kix;
+    inherit lib kix;
     inherit (config) clusterDomain;
   };
   platformCloudIdentity = import ./cloud-identity.nix { inherit kix; };
@@ -67,8 +73,8 @@ in
         apiVersion = "storage.k8s.io/v1";
         roles = [ "storageClasses" ];
         out = {
-          storageClassName = "premium-rwo";
-          name = "premium-rwo";
+          storageClassName = "standard-rwo";
+          name = "standard-rwo";
         };
       };
     };
