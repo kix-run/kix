@@ -371,9 +371,23 @@ pub async fn reconcile_activation(
                 .start_request(name, request)
                 .await
                 .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
-            let action = run_reconcile(&activation, &ctx, name, Reconcile::Redeploy).await?;
-            finish_request(&ctx, name, Some(request)).await?;
-            Ok(action)
+            match run_reconcile(&activation, &ctx, name, Reconcile::Redeploy).await {
+                Ok(action) => {
+                    finish_request(&ctx, name, Some(request)).await?;
+                    Ok(action)
+                }
+                // The record stays current, and a later reconcile repairs it
+                // but never runs this request again. The request is answered
+                // with the failure now, so the command waiting on it stops.
+                Err(e) => {
+                    let reason = redeploy_failed_reason(&record.phase, &e);
+                    ctx.records
+                        .fail_request(name, request, &reason)
+                        .await
+                        .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
+                    Err(e)
+                }
+            }
         }
 
         // Resume an interrupted operator deployment. Records without
@@ -755,7 +769,7 @@ async fn after_run(
         // operator starts again, and does not count as a failed attempt.
         Err(e) if !reconcile.counts_failed_runs() || ctx.shutdown.is_cancelled() => {
             tracing::error!(name, error = %e, "Reconciliation failed");
-            Err(OperatorError::ReconcileError(e.to_string()))
+            Err(OperatorError::ReconcileError(stop_cause(&e)))
         }
         Err(e) => after_failed_run(activation, ctx, name, &e).await,
     }
@@ -845,6 +859,22 @@ fn gave_up_reason(attempts: u32, retries: u32, cause: &str) -> String {
          Fix the cause below, then run `kix deploy --operator` or `kix rollback --operator` again.\n\n  \
          Last failure:\n    {}",
         plural(attempts, "attempt", "attempts"),
+        cause.replace('\n', "\n    "),
+    )
+}
+
+/// Return the reason `kix deploy --operator` prints when the redeploy of a
+/// record in `phase`, which stays current, failed with `error`.
+fn redeploy_failed_reason(phase: &str, error: &OperatorError) -> String {
+    let cause = match error {
+        OperatorError::ReconcileError(cause) => cause.clone(),
+        other => other.to_string(),
+    };
+    format!(
+        "the Kix operator could not deploy this build again, and the Activation stays {phase}. \
+         The operator keeps repairing drift from this build, but does not run this request again. \
+         Fix the cause below, then run `kix deploy --operator` again.\n\n  \
+         Last failure:\n    {}",
         cause.replace('\n', "\n    "),
     )
 }
@@ -1633,6 +1663,43 @@ mod tests {
         assert_eq!(after["status"]["phase"], PHASE_ACTIVE);
         assert_eq!(after["status"]["startedRequest"], "r1");
         assert!(after["status"].get("finishedRequest").is_none());
+    }
+
+    /// A redeploy of the current record that fails answers its request
+    /// with the failure in `status.failedRequest`, and leaves
+    /// `status.finishedRequest` alone so an older CLI does not take it for
+    /// success. The record stays current. A repair that fails, with no
+    /// request, answers nothing.
+    #[tokio::test]
+    async fn a_failed_redeploy_answers_its_request() {
+        let mut record = deploying(0);
+        record["status"] = json!({ "phase": PHASE_DEGRADED, "finishedRequest": "r0" });
+        let api = FakeApi::new([record.clone()]);
+        let (result, after) = reconcile_on(&api, record.clone()).await;
+        assert!(result.is_err());
+        let status = &after["status"];
+        assert_eq!(status["phase"], PHASE_DEGRADED);
+        assert_eq!(status["startedRequest"], "r1");
+        assert_eq!(status["finishedRequest"], "r0");
+        assert_eq!(status["failedRequest"]["request"], "r1");
+        let reason = status["failedRequest"]["reason"].as_str().unwrap();
+        assert!(
+            reason.starts_with("the Kix operator could not deploy this build again, and the Activation stays Degraded.")
+                && reason.contains("Last failure:\n    ")
+                && reason.contains("/nonexistent"),
+            "{reason}"
+        );
+
+        // The next reconcile finds the request started and only repairs.
+        let (result, after) = reconcile_on(&api, api.object("Activation", "a-new").unwrap()).await;
+        assert!(result.is_err());
+        assert_eq!(after["status"]["failedRequest"]["request"], "r1");
+
+        record["spec"].as_object_mut().unwrap().remove("request");
+        let api = FakeApi::new([record.clone()]);
+        let (result, after) = reconcile_on(&api, record).await;
+        assert!(result.is_err());
+        assert!(after["status"].get("failedRequest").is_none(), "{after}");
     }
 
     /// A request the operator already started is not started again: a

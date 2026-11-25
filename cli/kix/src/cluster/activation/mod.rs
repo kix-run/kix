@@ -43,7 +43,8 @@ use serde_json::{Value, json};
 use thiserror::Error;
 
 pub use record::{
-    KeptOrphanSource, PinnedInterface, Record, WaveRecord, WaveStatus, current_record, new_request,
+    FailedRequest, KeptOrphanSource, PinnedInterface, Record, WaveRecord, WaveStatus,
+    current_record, new_request,
 };
 pub use retention::{
     DEFAULT_KEEP_MAX, DEFAULT_KEEP_MIN, RetentionPolicy, RetireReason, Retired, Retirement,
@@ -53,8 +54,9 @@ pub use retention::{
 pub(crate) use record::KeptOrphans;
 
 use record::{
-    FAILED_ATTEMPTS_FIELD, FINISHED_REQUEST_FIELD, REQUEST_FIELD, STARTED_REQUEST_FIELD,
-    is_current_phase, phase_on_abort, phase_on_begin, read_phase, sort_newest_first,
+    FAILED_ATTEMPTS_FIELD, FAILED_REQUEST_FIELD, FINISHED_REQUEST_FIELD, REQUEST_FIELD,
+    STARTED_REQUEST_FIELD, is_current_phase, phase_on_abort, phase_on_begin, read_phase,
+    sort_newest_first,
 };
 
 #[cfg(test)]
@@ -683,6 +685,28 @@ impl Records {
         self.patch_status(
             name,
             &json!({ "status": { FINISHED_REQUEST_FIELD: request } }),
+        )
+        .await
+    }
+
+    /// Record that the operator could not finish the run of `request` on
+    /// record `name`, which stays current, because of `reason`. A command
+    /// waiting on the request reads this as its answer. A Kix that does not
+    /// know the field keeps waiting, because `status.finishedRequest` does
+    /// not change.
+    pub async fn fail_request(
+        &self,
+        name: &str,
+        request: &str,
+        reason: &str,
+    ) -> Result<(), RecordsError> {
+        self.patch_status(
+            name,
+            &json!({ "status": { FAILED_REQUEST_FIELD: {
+                "request": request,
+                "reason": reason,
+                "at": chrono::Utc::now().to_rfc3339(),
+            } } }),
         )
         .await
     }

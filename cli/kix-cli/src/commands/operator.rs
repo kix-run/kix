@@ -247,6 +247,17 @@ pub async fn watch_activation_progress(
             crate::say!("{line}");
         }
 
+        // A run of the request on a record that stays current, such as a
+        // redeploy of the build already deployed, that the operator could
+        // not finish.
+        if let Some(failed) = act.failed_request.as_ref().filter(|f| f.request == request) {
+            return Err(miette!(
+                "Operator reconciliation failed for '{}': {}",
+                activation_name,
+                failed.reason,
+            ));
+        }
+
         // Completion: phase is Active or Degraded (deploy finished, possibly
         // with failures; Activation status contains the failed-resource list.)
         let finished = act.finished_request.as_deref() == Some(request);
@@ -376,6 +387,31 @@ mod tests {
             rec["status"]["phase"] = json!("Degraded");
         });
         assert_eq!(watched.await.unwrap().unwrap(), Reconciled::Degraded);
+    }
+
+    /// A request the operator could not finish on the current record ends
+    /// the watch with the operator's reason. A failure recorded for an
+    /// earlier request is not this request's answer.
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_request_on_the_current_record_is_the_answer() {
+        let mut active = record("rec", "Active");
+        active["status"]["finishedRequest"] = json!("r0");
+        active["status"]["failedRequest"] = json!({ "request": "r0", "reason": "old" });
+        let api = FakeApi::new([active]);
+        let records = open_records(&api.client()).await.unwrap();
+        let watched =
+            tokio::spawn(async move { watch_activation_progress(&records, "rec", "r1").await });
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        assert!(!watched.is_finished());
+        api.after_get("rec", |rec| {
+            rec["status"]["failedRequest"] =
+                json!({ "request": "r1", "reason": "the Kix operator could not deploy this build again" });
+        });
+        let err = watched.await.unwrap().unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "Operator reconciliation failed for 'rec': the Kix operator could not deploy this build again"
+        );
     }
 
     /// A command refuses before it writes a request when the operator has

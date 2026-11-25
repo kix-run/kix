@@ -122,9 +122,21 @@ Error:   × Operator reconciliation failed for 'shop-mxfi8rx0piys': the Kix oper
 To deploy after a record reaches `Failed`, fix the cause and run
 `kix deploy --operator` or `kix rollback --operator` again. Each new deploy or
 rollback request resets `status.failedAttempts`. Redeploying the build that is
-already `Active` or `Degraded` does not count toward `KIX_DEPLOY_RETRIES`; if
-that run fails, the record keeps its phase and the operator repairs any drift
-on later reconciles.
+already `Active` or `Degraded` does not count toward `KIX_DEPLOY_RETRIES`. The
+operator tries it once. If that run fails, the record keeps its phase, the
+operator repairs any drift on later reconciles, and `kix deploy --operator`
+exits with the failure reason from `status.failedRequest`:
+
+```text
+Error:   × Operator reconciliation failed for 'shop-mxfi8rx0piys': the Kix operator could not deploy this build again, and the Activation stays Active. The operator keeps repairing drift from this build, but does not run this request again. Fix the cause below, then run `kix deploy --operator` again.
+  │
+  │   Last failure:
+  │     Secret/db@shop: could not prepare secret values for deployment: cannot decrypt SOPS file db.sops.yaml: `sops` could not get a decryption key
+```
+
+An operator older than this version of Kix does not write
+`status.failedRequest`, so with it the command waits the full 600 seconds and
+times out.
 
 Submitting a newer deploy or rollback request does not cancel a running deploy.
 The operator runs one deploy per cluster at a time, so the new request waits
@@ -252,6 +264,7 @@ redeploying the current build) from ending the wait early.
 | `Active` | Success (exit code `0`) |
 | `Degraded` | Error (exit code `1`), after printing the failed resources or `status.failure.reason` |
 | `Failed` | Error (exit code `1`), with the record's `status.failure.reason` (or `unknown error` if unset) |
+| `Active` or `Degraded` with `status.failedRequest.request` matching `spec.request` | Error (exit code `1`), with the operator's reason |
 | `Deploying` after a failed attempt | Prints `Attempt <n> failed. The Kix operator will retry in 30 seconds.` and the first line of the failure reason, then keeps waiting |
 | `Superseded` | Error: a newer activation took over |
 | No terminal phase after 600 seconds | Error: timed out |
