@@ -54,8 +54,7 @@ pub(crate) fn normalize_for_diff(obj: &mut DynamicObject) {
 /// metadata stripped.
 ///
 /// Every `data` key on a `Secret` is replaced with [`HIDDEN_SECRET_VALUE`] (see
-/// [`redact_secret`]). Values Kix applied through `stringData` are absent
-/// because the server stores them only in `data`.
+/// [`redact_secret`]).
 /// [`kix_owned_manifests_against`] compares both against a build.
 pub(crate) fn kix_owned_view(obj: &DynamicObject) -> serde_json::Value {
     let mut view = unredacted_view(obj);
@@ -99,18 +98,21 @@ pub const HIDDEN_SECRET_VALUE: &str = "(live value differs from the build, not s
 /// Replace live `Secret` values in `view` with build values when equal, or
 /// [`HIDDEN_SECRET_VALUE`] when different.
 ///
-/// Each key under `view`'s `data` is replaced with `built`'s value when the
-/// decoded live bytes match `built` (under `data` or `stringData` according to
-/// where `built` declares the key). Every other key, and every key when `built`
-/// is `None`, becomes [`HIDDEN_SECRET_VALUE`].
+/// Each key under `view`'s `data` moves to `stringData` when `built` sets it
+/// there, and takes `built`'s value when the decoded live bytes match it.
+/// Every other key, and every key when `built` is `None`, becomes
+/// [`HIDDEN_SECRET_VALUE`].
 ///
-/// Because the API server merges `stringData` into `data` and never stores
-/// `stringData`, the projection of a `Secret` that Kix applied with
-/// `stringData` contains neither field. For each `stringData` key declared in
-/// `built` and listed in Kix's fieldset, the decoded live `data` value is
-/// compared and restored under `stringData` (or omitted if missing or not valid
-/// UTF-8). A SOPS `Secret` manifest has no `stringData` in the build, so its
-/// keys are not restored.
+/// Kix applies a Secret's values as `data`, so it owns each key there. A key
+/// that `built` takes from its SOPS file (`kix.run/secret-sources`) has no
+/// value in the build, so the key is left out of the view.
+///
+/// Older releases of Kix applied values as `stringData`, which the API
+/// server merges into `data` and never stores, so the projection of a
+/// `Secret` they applied contains neither field. For each `stringData` key
+/// declared in `built` and listed in Kix's fieldset, the decoded live `data`
+/// value is compared and restored under `stringData` (or omitted if missing or
+/// not valid UTF-8).
 fn redact_secret(
     view: &mut serde_json::Value,
     obj: &DynamicObject,
@@ -126,6 +128,14 @@ fn redact_secret(
     let built_string_data = built
         .and_then(|b| b.get("stringData"))
         .and_then(Value::as_object);
+    let from_sops: Vec<&str> = built
+        .and_then(|b| keys::get(b, keys::SECRET_SOURCES))
+        .into_iter()
+        .flat_map(|sources| sources.split(','))
+        .filter_map(|pair| pair.trim().split_once('='))
+        .filter(|(_, source)| *source == "sops")
+        .map(|(key, _)| key)
+        .collect();
     let live_data = obj.data.get("data").and_then(Value::as_object);
     let live_text = |key: &str| -> Option<String> {
         let bytes = decode_base64(live_data?.get(key)?.as_str()?)?;
@@ -143,6 +153,23 @@ fn redact_secret(
     if let Some(Value::Object(data)) = map.get_mut("data") {
         let keys: Vec<String> = data.keys().cloned().collect();
         for key in keys {
+            if from_sops.contains(&key.as_str()) {
+                data.remove(&key);
+                continue;
+            }
+            // A key in both takes its `stringData` value, as it does on the
+            // server, so the live value is compared with that one. The build's
+            // own `data` value for the key never reaches the cluster.
+            if let Some(built_value) = built_string_data.and_then(|d| d.get(&key)) {
+                match built_data.and_then(|d| d.get(&key)) {
+                    Some(ignored) => data.insert(key.clone(), ignored.clone()),
+                    None => data.remove(&key),
+                };
+                let same = built_value.as_str().is_some()
+                    && built_value.as_str() == live_text(&key).as_deref();
+                string_data.insert(key, if same { built_value.clone() } else { hidden() });
+                continue;
+            }
             let live_bytes = live_data
                 .and_then(|d| d.get(&key))
                 .and_then(Value::as_str)
@@ -151,19 +178,7 @@ fn redact_secret(
                 let built_bytes = b.as_str().and_then(decode_base64);
                 built_bytes.is_some() && built_bytes == live_bytes
             });
-            if let Some(value) = from_data {
-                data.insert(key, value.clone());
-                continue;
-            }
-            let from_string_data = built_string_data
-                .and_then(|d| d.get(&key))
-                .filter(|b| b.as_str().is_some() && b.as_str() == live_text(&key).as_deref());
-            if let Some(value) = from_string_data {
-                data.remove(&key);
-                string_data.insert(key, value.clone());
-            } else {
-                data.insert(key, hidden());
-            }
+            data.insert(key, from_data.cloned().unwrap_or_else(hidden));
         }
         if data.is_empty() {
             map.remove("data");
@@ -882,6 +897,67 @@ mod tests {
         }
     }
 
+    /// A Secret that Kix applied as `data`, with `user` inline and `password`
+    /// from its SOPS file: the build holds no value for `password`, so the
+    /// view leaves it out and the comparison shows no change. A key the
+    /// build no longer declares still shows, hidden, as one the deploy
+    /// removes.
+    #[test]
+    fn a_sops_secret_applied_as_data_compares_unchanged_without_its_values() {
+        let annotations = |sources: &str| {
+            json!({
+                keys::SOPS_SOURCE: "/nix/store/abc-secrets.yaml",
+                keys::SECRET_SOURCES: sources,
+            })
+        };
+        let built = |sources: &str| {
+            json!({
+                "apiVersion": "v1", "kind": "Secret", "type": "Opaque",
+                "metadata": {"name": "creds", "namespace": "app",
+                             "annotations": annotations(sources)},
+                "stringData": {"user": "admin"}
+            })
+        };
+        let live = || {
+            let mut obj = data_secret(vec![managed(
+                "kix",
+                "Apply",
+                None,
+                json!({
+                    "f:metadata": {"f:annotations": {
+                        format!("f:{}", keys::SOPS_SOURCE): {},
+                        format!("f:{}", keys::SECRET_SOURCES): {},
+                    }},
+                    "f:data": {".": {}, "f:user": {}, "f:password": {}, "f:other": {}},
+                    "f:type": {}
+                }),
+            )]);
+            let anns = obj.metadata.annotations.get_or_insert_default();
+            anns.clear();
+            for (k, v) in annotations("user=inline,password=sops,other=sops")
+                .as_object()
+                .unwrap()
+            {
+                anns.insert(k.clone(), v.as_str().unwrap().into());
+            }
+            obj
+        };
+
+        let same = built("user=inline,password=sops,other=sops");
+        let compared = compare_with_build(live(), &same);
+        let config = crate::manifest::diff::DiffConfig::default();
+        assert_eq!(
+            crate::manifest::diff::engine::structural_diff(&same, &compared, "$", &config),
+            vec![]
+        );
+        assert_no_live_value(&compared);
+
+        let without_other = built("user=inline,password=sops");
+        let compared = compare_with_build(live(), &without_other);
+        assert_eq!(compared["data"], json!({"other": HIDDEN_SECRET_VALUE}));
+        assert_no_live_value(&compared);
+    }
+
     /// Build a live `Secret` with `data` keys `user`, `password`, and `other`
     /// and the given `managed_fields`.
     fn data_secret(
@@ -980,10 +1056,53 @@ mod tests {
             "stringData": {"user": "admin", "password": "dev-password"}
         });
         let compared = compare_with_build(live(), &built);
-        assert_eq!(compared["stringData"], json!({"user": "admin"}));
+        assert_eq!(
+            compared["stringData"],
+            json!({"user": "admin", "password": HIDDEN_SECRET_VALUE})
+        );
+        assert_eq!(compared["data"], json!({"other": HIDDEN_SECRET_VALUE}));
+        assert_no_live_value(&compared);
+    }
+
+    /// A key the build sets in both `data` and `stringData` is compared with
+    /// its `stringData` value, which is the one Kix sends. The build's `data`
+    /// value for it stays as the build has it, so a matching live value
+    /// shows no change.
+    #[test]
+    fn a_key_in_both_data_and_string_data_compares_with_string_data() {
+        let live = || {
+            data_secret(vec![managed(
+                "kix",
+                "Apply",
+                None,
+                json!({"f:data": {".": {}, "f:user": {}, "f:password": {}}, "f:type": {}}),
+            )])
+        };
+        let built = |password: &str| {
+            json!({
+                "apiVersion": "v1", "kind": "Secret", "type": "Opaque",
+                "metadata": {"name": "creds", "namespace": "app"},
+                // "ignored"
+                "data": {"user": "YWRtaW4=", "password": "aWdub3JlZA=="},
+                "stringData": {"password": password}
+            })
+        };
+        let same = built("rotated");
+        let compared = compare_with_build(live(), &same);
+        let config = crate::manifest::diff::DiffConfig::default();
+        assert_eq!(
+            crate::manifest::diff::engine::structural_diff(&same, &compared, "$", &config),
+            vec![]
+        );
+
+        let compared = compare_with_build(live(), &built("new"));
+        assert_eq!(
+            compared["stringData"],
+            json!({"password": HIDDEN_SECRET_VALUE})
+        );
         assert_eq!(
             compared["data"],
-            json!({"password": HIDDEN_SECRET_VALUE, "other": HIDDEN_SECRET_VALUE})
+            json!({"user": "YWRtaW4=", "password": "aWdub3JlZA=="})
         );
         assert_no_live_value(&compared);
     }

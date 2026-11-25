@@ -308,6 +308,8 @@ pods do not restart when the role changes.
 | external-dns takes an identity in `providerCredentials` and drops `serviceAccountAnnotations` | Experimental. The old option is refused with an error naming the new line. A cloud provider with no credentials is refused. | two `error` records |
 | Velero, cert-manager, Tempo, external-secrets, cnpg-cluster, stackgres-object-storage | Additive in each package | `added` each |
 
+cert-manager and StackGres split the ServiceAccount and the cloud choice across two packages; `180_cloud_identity_across_packages.md` decides where the identity goes for them.
+
 Three packages are not on this list. The VictoriaMetrics operator pod calls no
 cloud API, so its `serviceAccountAnnotations` option is a general
 pass-through and stays. The pod that does call one is the backup sidecar in

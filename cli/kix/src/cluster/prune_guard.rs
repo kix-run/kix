@@ -33,7 +33,7 @@ use super::discovery;
 use super::errors::FetchError;
 use super::graph::{DeleteOrder, Walked};
 use super::inventory::SharedOrphan;
-use super::readiness::{Deletion, Stuck, wait_gone};
+use super::readiness::{Controller, Deletion, Stuck, controller_state, wait_gone};
 use super::tenancy::{self, Tenancy};
 use crate::legacy_domain::LegacyDomainError;
 use crate::manifest::lifecycle;
@@ -245,6 +245,22 @@ pub enum DeleteInOrderError {
     Domain(#[from] LegacyDomainError),
 }
 
+/// Read the live object `id`, or `None` when it is not on the cluster or
+/// Kubernetes does not serve its kind.
+async fn read_live(
+    client: &Client,
+    discovery: &[(ApiResource, Scope)],
+    id: &ResourceId,
+) -> Result<Option<DynamicObject>, String> {
+    let Some((ar, scope)) = discovery::find(discovery, &id.group, &id.kind) else {
+        return Ok(None);
+    };
+    discovery::api_for(client, ar, scope, id)
+        .get_opt(&id.name)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// How many deletes [`delete_in_order`] runs at a time.
 const DELETE_CONCURRENCY: usize = 64;
 
@@ -294,9 +310,11 @@ pub async fn delete_in_order(
             report(rid, step);
         }
     };
+    let controllers = order.controllers().clone();
     let start = |rid: &ResourceId| {
         let rid = rid.clone();
-        let (guard, params, discovery, say) = (&guard, &params, &discovery, &say);
+        let (guard, params, discovery, say, controllers) =
+            (&guard, &params, &discovery, &say, &controllers);
         async move {
             if protected(&rid) {
                 return Removal::NeverPruned;
@@ -318,7 +336,15 @@ pub async fn delete_in_order(
             .await;
             match waited {
                 Ok(Deletion::Gone) => Removal::Pruned(pruned),
-                Ok(Deletion::Stuck(stuck)) => Removal::Stuck(stuck),
+                Ok(Deletion::Stuck(mut stuck)) => {
+                    for id in controllers.get(&rid).into_iter().flatten() {
+                        stuck.controllers.push(Controller {
+                            id: id.clone(),
+                            state: controller_state(id, read_live(client, discovery, id).await),
+                        });
+                    }
+                    Removal::Stuck(stuck)
+                }
                 Ok(Deletion::Cancelled) => Removal::Cancelled,
                 Err(e) => Removal::Failed(e.into()),
             }
@@ -362,6 +388,7 @@ type Report<'a> = dyn FnMut(&ResourceId, Step<'_>) + Send + 'a;
 mod tests {
     use super::*;
     use crate::cluster::fake_api::FakeApi;
+    use crate::cluster::readiness;
     use crate::manifest::keys;
     use crate::manifest::lifecycle;
     use crate::manifest::types::CLUSTER_SCOPED;
@@ -699,6 +726,112 @@ mod tests {
             .filter(|r| r.starts_with("DELETE"))
             .collect();
         assert_eq!(deletes.len(), 2, "{deletes:?}");
+    }
+
+    /// A ConfigMap `cm` held by a finalizer that depends on the Deployment
+    /// `operator` through the `relation` entry of its depends-on, both named
+    /// by cluster `a`'s record. `operator` is on the cluster with
+    /// `ready_replicas` of 1 replica when it is `Some`.
+    fn custom_resource_and_operator(
+        relation: &str,
+        ready_replicas: Option<u32>,
+    ) -> (FakeApi, DeleteOrder) {
+        let annotations = |hash: &str, deps: &str| {
+            json!({
+                (keys::ACTIVATIONS): "a1",
+                (keys::IDENTITY_HASH): hash,
+                (keys::DEPENDS_ON): deps,
+            })
+        };
+        let cm = json!({
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {
+                "name": "cm",
+                "namespace": "app",
+                "finalizers": ["example.com/hold"],
+                "annotations": annotations("hash_cm", &format!("{relation}hash_op")),
+            },
+        });
+        let operator = json!({
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "metadata": {
+                "name": "operator",
+                "namespace": "app",
+                "generation": 1,
+                "annotations": annotations("hash_op", ""),
+            },
+            "spec": { "replicas": 1 },
+            "status": {
+                "observedGeneration": 1,
+                "replicas": 1,
+                "updatedReplicas": ready_replicas,
+                "readyReplicas": ready_replicas,
+                "availableReplicas": ready_replicas,
+            },
+        });
+        let order = DeleteOrder::of_manifests(&[cm.clone(), operator.clone()]);
+        let mut objects = vec![record("a", "a1", lifecycle::PHASE_ACTIVE), cm];
+        if ready_replicas.is_some() {
+            objects.push(operator);
+        }
+        (FakeApi::new(objects), order)
+    }
+
+    /// Return the message for the stuck `cm` after deleting the objects of
+    /// `custom_resource_and_operator`.
+    async fn stuck_cm_message(relation: &str, ready_replicas: Option<u32>) -> String {
+        let (api, order) = custom_resource_and_operator(relation, ready_replicas);
+        let removals = walk(&api, order, &CancelToken::new()).await;
+        let Removal::Stuck(stuck) = removal(&removals, "cm") else {
+            panic!("{removals:?}");
+        };
+        if ready_replicas.is_some() {
+            assert!(
+                matches!(removal(&removals, "operator"), Removal::HeldBack { by, .. } if by.name == "cm"),
+                "{removals:?}"
+            );
+        }
+        let cm = ResourceId::new("", "ConfigMap", "app", "cm");
+        readiness::stuck_message(&cm, stuck)
+    }
+
+    /// A stuck object whose kind names a controller says whether the
+    /// controller runs: not ready, ready, or not on the cluster.
+    #[tokio::test(start_paused = true)]
+    async fn a_stuck_delete_names_the_controller_and_its_state() {
+        let not_ready = stuck_cm_message("controller:", Some(0)).await;
+        assert!(
+            not_ready.contains("ConfigMap controller Deployment.apps/operator@app is not ready ("),
+            "{not_ready}"
+        );
+        let ready = stuck_cm_message("controller:", Some(1)).await;
+        assert!(
+            ready.contains("ConfigMap controller Deployment.apps/operator@app is ready."),
+            "{ready}"
+        );
+        let missing = stuck_cm_message("controller:", None).await;
+        assert!(
+            missing.contains(
+                "ConfigMap controller Deployment.apps/operator@app is not on the cluster"
+            ),
+            "{missing}"
+        );
+    }
+
+    /// The same dependency without the `controller:` relation still holds
+    /// the operator back, and the message names no controller.
+    #[tokio::test(start_paused = true)]
+    async fn a_stuck_delete_without_a_controller_names_none() {
+        for relation in ["requires:", ""] {
+            let message = stuck_cm_message(relation, Some(0)).await;
+            assert!(
+                message.contains("waiting for example.com/hold."),
+                "{message}"
+            );
+            assert!(!message.contains("ConfigMap controller"), "{message}");
+        }
     }
 
     /// A ConfigMap `cm` that depends on Secret `needed`, both named by

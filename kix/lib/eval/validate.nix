@@ -83,10 +83,11 @@ rec {
       instanceClause = owner: if owner == null then "" else " (instance ${owner})";
 
       # Map each resource hash to the dependency hashes in `kix.run/depends-on`,
-      # stripping `requires:` and `extra:` prefixes.
+      # stripping the relation before the hash (`requires:`, `controller:`,
+      # `extra:`).
       depHashesByHash = lib.mapAttrs (
         _: e:
-        map (d: lib.removePrefix "extra:" (lib.removePrefix "requires:" d)) (
+        map (d: lib.last (lib.splitString ":" d)) (
           splitList (e.r.metadata.annotations.${kixKeys.dependsOn} or "")
         )
       ) byHash;

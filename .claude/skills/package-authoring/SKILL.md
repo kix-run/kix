@@ -99,7 +99,11 @@ rewrites the later ones.
   `scope.mkCRD` or `scope.mkCRDRef` call for the kinds those webhooks admit (C21). Every declaration sets `holdsData`: `true` when deleting a custom
   resource of the kind loses data (a database, a storage pool, a backup),
   `false` otherwise (C24). A stateful package that renders a custom resource
-  of a kind without it fails to build.
+  of a kind without it fails to build. When a workload reconciles the kind,
+  set `controller` on the declaration to that workload, usually
+  `self.operator` (C27). Kix then creates custom resources after the operator,
+  deletes them before the operator, and names the operator if a delete gets
+  stuck.
 - Admission webhooks: Kix applies webhook configurations in `requires` order,
   so the package sets the order. When the operator does not read or patch its
   webhook configuration at startup, the configuration `requires` the workload
@@ -200,7 +204,7 @@ is a finding from the upstream source, not a default.
    "`pick`" row). Strategy: W8.
 6. Operator-placed operands map the level into the CR (`instances`,
    `podDistribution`) and use `kix.availability.spreadConstraints` where the
-   CR takes a spread list (cnpg-cluster:314); never raw anti-affinity (W2).
+   CR takes a spread list (cnpg-cluster:317); never raw anti-affinity (W2).
 7. Dependencies resolve their own level from the cluster default
    (`kix/lib/eval/instance.nix:74-85`); no consumer channel raises a
    provider's level. So check the mapping of each provider the package can
@@ -478,8 +482,8 @@ The only place in this skill with package line numbers. `pkg:N` is
 | `mergeArgs` with `parser = "component-base"` | descheduler:265-272 |
 | `mergeArgs` with a flag and its value as two words, written as a list item of `flags` | `clickhouse-logs/vector-agent.nix`:213-229; several values, spegel:301-303 |
 | `mergeArgs` on an attribute set of flags | victoria-metrics-agent:189-210 |
-| `argValues` to read what `extraArgs` gives a flag | external-dns:398; reloader:106-110 |
-| `mergeGuarded` on `settings` or `extraSpec` | tempo:447; cnpg-cluster:414, 561, 676 |
+| `argValues` to read what `extraArgs` gives a flag | external-dns:441; reloader:106-110 |
+| `mergeGuarded` on `settings` or `extraSpec` | tempo:447; cnpg-cluster:418, 565, 680 |
 | Migrations at start: Recreate, deadline from `startupSeconds`, probes | metabase:94-97, 252-256, 284-304 |
 | Config injection into a dependency | metabase:109-112; stackgres-database:120-125; cnpg-database:94-115 |
 | Contracts: consumer `assertions`, provider `check` | metabase:112; stackgres-database:553; keycloak:566; tempo:718 |
@@ -501,12 +505,47 @@ The only place in this skill with package line numbers. `pkg:N` is
 | Migrations in an init container sharing the server's env and mounts (`kix.withMountsOn [ "migrate" "plausible" ]`) | plausible:620-626, 693; vaultwarden:180-202, 277 |
 | One volume written by an init container and read by the main containers (two mount records, one `readOnly`) | n8n:499-513, 679-680 |
 | Literal credentials refused in `env` | plausible:338-358 |
-| Config-derived egress (a port read from config) through `kix.operandPolicy` | plausible:712-737; cnpg-cluster:470-486, 755-774 |
+| Config-derived egress (a port read from config) through `kix.operandPolicy` | plausible:712-737; cnpg-cluster:474-490, 759-778 |
 | A step after the migrations on one replica of a dependency: an init container running a sibling script from a ConfigMap, with a checksum annotation | plausible:518-561, 605-606; `plausible/replicate.py` |
 | One alias, two implementations, a contract file | `kix/contracts/experimental/clickhouse.nix`; clickhouse:101, clickhouse-cluster:90 |
 | Renamed dependency with `renamedFrom` | immich:209-212; `kix/contracts/stable/redis.nix` (`helpers.renamedFrom`) |
-| Credentials dependency accepting either a Secret or a cloud identity (`kix.cloudIdentity.use` and `credentials.bind`) | external-dns:179-187, 600-607; `providers.nix` (`cloud`) |
-| Cloud identity on a ServiceAccount created by an operator (`kix.cloudIdentity.annotationsFor`, written to the custom resource and locked against `extraSpec`) | cnpg-cluster:356-383, 631-639 |
+| Credentials dependency accepting either a Secret or a cloud identity (`kix.cloudIdentity.use` and `credentials.bind`) | external-dns:164-169, 608-615; `providers.nix` (`cloud`) |
+| Cloud identity when one package owns the ServiceAccount and another chooses the cloud (`kix.cloudIdentity.useIdentity`, `ambientProblem`, `out.identityCloud`, `out.ambientCloud`) | `kix/lib/tests/units/cloud-identity.nix` (`holderPackage`, `callerPackage`, `storagePackage`, `databasePackage`) |
+| Cloud identity on a ServiceAccount created by an operator (`kix.cloudIdentity.annotationsFor`, written to the custom resource and locked against `extraSpec`) | cnpg-cluster:359-385, 635-642 |
+
+Always declare a cloud identity dependency on the package that owns the
+ServiceAccount, because a ServiceAccount carries a single identity:
+
+- `kix.cloudIdentity.use { inherit scope dep cloud; arg; identityGoesTo ? null; }`:
+  unpacks a dependency that accepts a Secret or (when `cloud` is `"aws"`,
+  `"gcp"`, or `"azure"`) a cloud identity, such as `external-dns`. When
+  `cloud` is `null` because another package owns the ServiceAccount, pass
+  `identityGoesTo` naming that instance's identity dependency so the error's
+  fix points there.
+- `kix.cloudIdentity.useIdentity { inherit scope dep secretGoesTo; arg; cloud ? ...; }`:
+  unpacks an optional cloud identity on a package that owns the ServiceAccount
+  while another package chooses the cloud and accepts any Secret (`secretGoesTo`
+  names where to pass a Secret instead). Omit `cloud` and publish
+  `out.identityCloud = credentials.cloud` when dependents choose the cloud; or
+  pass `cloud = <dep>.out.ambientCloud` when a dependency chooses the cloud.
+- Set `arg` to the dependency argument name in `build` (for example,
+  `arg = "providerCredentials";`) in both helpers. Evaluation errors then name
+  `deps.<arg>` and set the error's `dependency` field, so cluster authors know
+  which dependency to fix even when a package has more than one.
+- Rendering the identity: pipe a Kix-built ServiceAccount through
+  `credentials.bind`. When an operator creates the ServiceAccount from a custom
+  resource instead, take `cloudIdentity ? null` in `build` and pass
+  `credentials.identity` (from `use` or `useIdentity`) to
+  `kix.cloudIdentity.annotationsFor { inherit scope; identity = credentials.identity; provider = cloudIdentity; }`
+  (returns empty `serviceAccountAnnotations` and `podLabels` when `identity` is
+  `null`).
+
+A package that chooses the cloud while another package owns the ServiceAccount
+never accepts a cloud identity. It keeps any static Secret and any upstream
+setting for using ambient pod credentials. If the ServiceAccount package
+depends on it, publish `out.ambientCloud` (`"aws"`, `"gcp"`, `"azure"`, or
+`null` when using a Secret). If it depends on the ServiceAccount package, check
+`kix.cloudIdentity.ambientProblem { cloud; holder; }` in `assertions`.
 
 A script of more than a few lines is a sibling file read with
 `builtins.readFile`, so it can be linted and run alone

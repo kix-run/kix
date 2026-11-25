@@ -1,0 +1,3 @@
+# 2026-11-24 · `cli/kix/src/plan/origin.rs` · The read-only plan's drift entry for a changed Secret key names no key and says no other manager owns it.
+
+After `kubectl patch` changes `data.api_token` on a SOPS Secret, `kix status` says `changed since deploy (data.api_token by kubectl-edit)`, but `kix plan --read-only` prints one `$` entry, "fields Kix applied changed on the live cluster (no other field manager recorded)". `live_drift` keeps a foreign field only when `field.value_in(new)` finds a value at that path in the build. A Secret's build holds inline keys under `stringData` (the apply sends them as `data`) and SOPS keys not at all, so every Secret key is dropped and the entry falls back to `$` with the wrong manager text. Seen on kind on 2026-11-24.

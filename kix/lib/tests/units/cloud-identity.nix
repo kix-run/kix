@@ -60,6 +60,296 @@ let
     in
     if r ? failed then r.failed.message + " " + (r.failed.fix or "") else "";
 
+  # The result of `useIdentity` for `args`, with `bind` applied to an empty
+  # set, or the message and fix it raises as `failure`.
+  useIdentityResult =
+    args:
+    let
+      r = ci.useIdentity (
+        {
+          scope = recordingScope;
+          secretGoesTo = "`deps.storageCredentials` of the storage instance";
+        }
+        // args
+      );
+    in
+    if r ? failed then
+      { failure = r.failed.message + " " + (r.failed.fix or ""); }
+    else
+      {
+        inherit (r) identity cloud;
+        bound = r.bind { };
+      };
+
+  # A dependency on another instance, as a package reads it.
+  instanceDep = ns: inst: out: {
+    _meta = {
+      namespaceName = ns;
+      instanceName = inst;
+    };
+    inherit out;
+  };
+
+  # A ServiceAccount and a Deployment whose cloud identity another package
+  # configures. It takes the identity in `identity` and publishes its cloud
+  # as `out.identityCloud`.
+  holderPackage = {
+    meta.version = "test";
+    build =
+      {
+        self,
+        scope,
+        identity ? null,
+        ...
+      }:
+      let
+        credentials = kixlib.cloudIdentity.useIdentity {
+          inherit scope;
+          dep = identity;
+          secretGoesTo = "`deps.credentials` of a caller instance";
+        };
+      in
+      {
+        serviceAccount =
+          {
+            apiVersion = "v1";
+            kind = "ServiceAccount";
+            name = "holder";
+          }
+          |> credentials.bind
+          |> scope.mkResource;
+        deployment = scope.mkDeployment {
+          name = "holder";
+          spec = {
+            selector.matchLabels = scope.selectorLabels;
+            template = {
+              metadata.labels = scope.selectorLabels;
+              spec = {
+                serviceAccount = self.serviceAccount;
+                containers = [ container ];
+              };
+            };
+          };
+        };
+        root = {
+          resource = self.deployment;
+          out.identityCloud = credentials.cloud;
+        };
+      };
+  };
+
+  # A ConfigMap that tells the holder's pods to call `config.cloud` with
+  # their own credentials, and refuses a holder whose identity is for
+  # another cloud.
+  callerPackage = {
+    meta.version = "test";
+    options.cloud = lib.mkOption {
+      type = lib.types.enum [
+        "aws"
+        "gcp"
+        "azure"
+      ];
+    };
+    assertions =
+      { config, deps, ... }:
+      let
+        problem = kixlib.cloudIdentity.ambientProblem {
+          inherit (config) cloud;
+          holder = deps.holder;
+        };
+      in
+      lib.optional (problem != null) (problem // { assertion = false; });
+    # `holder` is read by the assertions only, and is named here so the
+    # package takes it.
+    build =
+      {
+        self,
+        scope,
+        holder,
+        ...
+      }:
+      assert holder != null;
+      {
+        cm = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ConfigMap";
+          name = "caller";
+        };
+        root = self.cm;
+      };
+  };
+
+  # The holder with `identity` (or null) and a caller for `cloud`, on EKS.
+  holderAndCaller =
+    { identity, cloud }:
+    [
+      (flavor "eks")
+      (
+        { ref, ... }:
+        {
+          instances.platform.holder = {
+            package = holderPackage;
+          }
+          // lib.optionalAttrs (identity != null) { deps.identity = identity; };
+          instances.platform.caller = {
+            package = callerPackage;
+            deps.holder = ref.platform.holder;
+            config = { inherit cloud; };
+          };
+        }
+      )
+    ];
+
+  # Storage that the pods reach with their own credentials for
+  # `config.ambientCloud`, or with a Secret when it is null. It publishes
+  # that as `out.ambientCloud`.
+  storagePackage = {
+    meta.version = "test";
+    options.ambientCloud = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+    };
+    build =
+      {
+        self,
+        scope,
+        config,
+        ...
+      }:
+      {
+        cm = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ConfigMap";
+          name = "storage";
+        };
+        root = {
+          resource = self.cm;
+          out.ambientCloud = config.ambientCloud;
+        };
+      };
+  };
+
+  # A custom resource from which an operator creates the ServiceAccount, as
+  # a ConfigMap whose data holds the annotations and pod labels. The
+  # identity goes in `backupIdentity`, and the cloud comes from `storage`.
+  databasePackage = {
+    meta.version = "test";
+    build =
+      {
+        self,
+        scope,
+        storage,
+        cloudIdentity ? null,
+        backupIdentity ? null,
+        ...
+      }:
+      let
+        credentials = kixlib.cloudIdentity.useIdentity {
+          inherit scope;
+          dep = backupIdentity;
+          cloud = storage.out.ambientCloud;
+          secretGoesTo = "`deps.storageCredentials` of the storage instance";
+        };
+        rendered = kixlib.cloudIdentity.annotationsFor {
+          inherit scope;
+          inherit (credentials) identity;
+          provider = cloudIdentity;
+        };
+      in
+      {
+        cm = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ConfigMap";
+          name = "database";
+          data = rendered.serviceAccountAnnotations // rendered.podLabels;
+        };
+        root = self.cm;
+      };
+  };
+
+  # Storage for `ambientCloud` and a database with `identity` (or null), on
+  # EKS.
+  storageAndDatabase =
+    { ambientCloud, identity }:
+    [
+      (flavor "eks")
+      (
+        { ref, ... }:
+        {
+          instances.data.storage = {
+            package = storagePackage;
+            config = { inherit ambientCloud; };
+          };
+          instances.data.db = {
+            package = databasePackage;
+            deps = {
+              storage = ref.data.storage;
+            }
+            // lib.optionalAttrs (identity != null) { backupIdentity = identity; };
+          };
+        }
+      )
+    ];
+
+  # The evaluator loaded so that `scope.fail` returns `{ thrown = ...; }`
+  # with the full text of the error, so a test reads its fields.
+  evalCaughtFull = helpers.loadCaughtFull ../../eval {
+    inherit lib k8s;
+    self = ../../../..;
+  };
+
+  # A package with two credentials dependencies, `primary` and `backup`,
+  # that reads both with `config.helper` (`use` or `useIdentity`) for AWS.
+  # Its ConfigMap holds, for each dependency, the text of the refusal or
+  # "ok".
+  twoCredentialsPackage = {
+    meta.version = "test";
+    options.helper = lib.mkOption {
+      type = lib.types.enum [
+        "use"
+        "useIdentity"
+      ];
+    };
+    build =
+      {
+        self,
+        scope,
+        config,
+        primary ? null,
+        backup ? null,
+        ...
+      }:
+      let
+        read =
+          arg: dep:
+          (
+            if config.helper == "use" then
+              ci.use {
+                inherit scope dep arg;
+                cloud = "aws";
+              }
+            else
+              ci.useIdentity {
+                inherit scope dep arg;
+                cloud = "aws";
+                secretGoesTo = "`deps.credentials` of a caller instance";
+              }
+          ).thrown or "ok";
+      in
+      {
+        cm = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ConfigMap";
+          name = "two-credentials";
+          data = {
+            primary = read "primary" primary;
+            backup = read "backup" backup;
+          };
+        };
+        root = self.cm;
+      };
+  };
+
   scorecardOn = {
     scorecard = {
       enable = true;
@@ -493,11 +783,13 @@ in
   # and what a package reads. The mechanisms stay inside the library.
   cloud-identity-public-names =
     builtins.attrNames ci == [
+      "ambientProblem"
       "annotationsFor"
       "aws"
       "azure"
       "gcp"
       "use"
+      "useIdentity"
     ]
     || throw "kix.cloudIdentity: ${builtins.toJSON (builtins.attrNames ci)}";
 
@@ -892,4 +1184,325 @@ in
       a: (a.id or null) == "K0771" && lib.hasInfix "kix.cloudIdentity.aws" (a.message + (a.fix or ""))
     ) failed
     || throw "removed option: ${builtins.toJSON failed}";
+
+  # `useIdentity` takes a cloud identity or nothing. Without `cloud` it
+  # checks the identity's own fields only, and returns the identity's cloud.
+  cloud-identity-use-identity-reads-dep =
+    let
+      none = useIdentityResult { dep = null; };
+      aws = useIdentityResult { dep = ci.aws { inherit roleArn; }; };
+      gcp = useIdentityResult { dep = ci.gcp { }; };
+      malformed = useIdentityResult { dep = ci.aws { rolearn = roleArn; }; };
+    in
+    (
+      none == {
+        identity = null;
+        cloud = null;
+        bound = { };
+      }
+      && aws.cloud == "aws"
+      && aws.identity.cloud == "aws"
+      && aws.bound._cloudIdentity.cloud == "aws"
+      && gcp.cloud == "gcp"
+      && lib.hasInfix "no field `rolearn`" malformed.failure
+    )
+    || throw "useIdentity: ${
+      builtins.toJSON [
+        none
+        aws.cloud
+        gcp.cloud
+        malformed
+      ]
+    }";
+
+  # A Secret instance in the dependency is refused, naming the instance and
+  # where a Secret goes, with `cloud` set or not. The same call with a cloud
+  # identity passes.
+  cloud-identity-use-identity-refuses-a-secret =
+    let
+      secret = instanceDep "data" "keys" { name = "keys"; };
+      omitted = useIdentityResult { dep = secret; };
+      withCloud = useIdentityResult {
+        dep = secret;
+        cloud = "aws";
+      };
+      good = useIdentityResult {
+        dep = ci.aws { inherit roleArn; };
+        cloud = "aws";
+      };
+    in
+    (
+      lib.hasInfix "but got `data/keys`" omitted.failure
+      && lib.hasInfix "`deps.storageCredentials` of the storage instance" omitted.failure
+      && withCloud ? failure
+      && !(good ? failure)
+      && good.cloud == "aws"
+    )
+    || throw "useIdentity with a Secret: ${
+      builtins.toJSON [
+        omitted
+        withCloud
+      ]
+    }";
+
+  # With `cloud` set, an identity for another cloud is refused and one for
+  # the same cloud passes. With `cloud = null` any identity is refused, and
+  # no identity passes.
+  cloud-identity-use-identity-checks-cloud =
+    let
+      mismatched = useIdentityResult {
+        dep = ci.gcp { };
+        cloud = "aws";
+      };
+      matching = useIdentityResult {
+        dep = ci.gcp { };
+        cloud = "gcp";
+      };
+      unused = useIdentityResult {
+        dep = ci.aws { inherit roleArn; };
+        cloud = null;
+      };
+      nothing = useIdentityResult {
+        dep = null;
+        cloud = null;
+      };
+    in
+    (
+      lib.hasInfix "but this instance's pods call AWS" mismatched.failure
+      && lib.hasInfix "`kix.cloudIdentity.aws { ... }`" mismatched.failure
+      && matching.cloud == "gcp"
+      && lib.hasInfix "read their cloud credentials from a Secret" unused.failure
+      && lib.hasInfix "`deps.storageCredentials` of the storage instance" unused.failure
+      && nothing.identity == null
+    )
+    || throw "useIdentity cloud: ${
+      builtins.toJSON [
+        mismatched
+        unused
+      ]
+    }";
+
+  # `ambientProblem` refuses a holder whose identity is for another cloud
+  # than the one reached, naming the holder and both clouds. A holder with
+  # no identity, or with no `out.identityCloud`, and a matching one pass.
+  cloud-identity-ambient-problem =
+    let
+      holder = instanceDep "platform" "cert-manager";
+      check =
+        cloud: out:
+        ci.ambientProblem {
+          inherit cloud;
+          holder = holder out;
+        };
+      mismatched = check "gcp" { identityCloud = "aws"; };
+    in
+    (
+      check "aws" { identityCloud = null; } == null
+      && check "aws" { } == null
+      && check "aws" { identityCloud = "aws"; } == null
+      && lib.hasInfix "`platform/cert-manager`" mismatched.message
+      && lib.hasInfix "to call Google Cloud" mismatched.message
+      && lib.hasInfix "identity for AWS" mismatched.message
+      && lib.hasInfix "`kix.cloudIdentity.gcp { ... }`" mismatched.fix
+    )
+    || throw "ambientProblem: ${builtins.toJSON mismatched}";
+
+  # `use` adds `identityGoesTo` to the fix when it refuses an identity on a
+  # package that takes none, and leaves it out when not given.
+  cloud-identity-use-identity-goes-to =
+    let
+      failureWith =
+        extra:
+        let
+          r = ci.use (
+            {
+              scope = recordingScope;
+              dep = ci.aws { inherit roleArn; };
+              cloud = null;
+            }
+            // extra
+          );
+        in
+        r.failed.fix;
+      named = failureWith { identityGoesTo = "`deps.controllerIdentity` of the cert-manager instance"; };
+      plain = failureWith { };
+    in
+    (
+      lib.hasInfix "move it to `deps.controllerIdentity` of the cert-manager instance" named
+      && !(lib.hasInfix "controllerIdentity" plain)
+      && useFailure (ci.aws { inherit roleArn; }) "aws" == ""
+    )
+    || throw "identityGoesTo: ${named}; ${plain}";
+
+  # `annotationsFor` with no identity returns empty sets without reading
+  # the provider. An identity with no provider is still refused.
+  cloud-identity-annotations-for-no-identity =
+    let
+      empty = ci.annotationsFor {
+        scope = recordingScope;
+        identity = null;
+        provider = null;
+      };
+      refused = ci.annotationsFor {
+        scope = recordingScope;
+        identity = ci.aws { inherit roleArn; };
+        provider = null;
+      };
+    in
+    (
+      empty == {
+        serviceAccountAnnotations = { };
+        podLabels = { };
+      }
+      && lib.hasInfix "not configured for cloud identities" refused.failed.message
+    )
+    || throw "annotationsFor without identity: ${builtins.toJSON empty}";
+
+  # The package that owns the ServiceAccount binds the identity and
+  # publishes its cloud. A dependent that calls the same cloud with the
+  # pod's credentials builds, one that calls another cloud fails with the
+  # holder named, and a holder without an identity passes any cloud. A
+  # Secret on the holder fails evaluation.
+  cloud-identity-ambient-across-packages =
+    let
+      awsIdentity = ci.aws { inherit roleArn; };
+      ms = manifests (
+        mkCluster (holderAndCaller {
+          identity = awsIdentity;
+          cloud = "aws";
+        })
+      );
+      sa = (byName "holder" (ofKind "ServiceAccount" ms)).metadata.annotations;
+      pod = (byName "holder" (ofKind "Deployment" ms)).spec.template.metadata;
+      mismatched = failedOf (holderAndCaller {
+        identity = awsIdentity;
+        cloud = "gcp";
+      });
+      nodeCredentials = failedOf (holderAndCaller {
+        identity = null;
+        cloud = "gcp";
+      });
+      withSecret = mkCluster [
+        (flavor "eks")
+        (
+          { ref, ... }:
+          {
+            instances.platform.keys = {
+              package = secretRefPackage;
+              config.keys = [ "AWS_ACCESS_KEY_ID" ];
+            };
+            instances.platform.holder = {
+              package = holderPackage;
+              deps.identity = ref.platform.keys;
+            };
+          }
+        )
+      ];
+    in
+    (
+      sa."eks.amazonaws.com/role-arn" == roleArn
+      && pod.annotations ? "checksum/cloud-identity"
+      && builtins.any (a: lib.hasInfix "`platform/holder`" a.message) mismatched
+      && nodeCredentials == [ ]
+      && evalFails withSecret
+    )
+    || throw "across packages: mismatched ${builtins.toJSON mismatched}, node ${builtins.toJSON nodeCredentials}";
+
+  # The package that owns an operator's ServiceAccount reads the cloud from
+  # the storage package's `out.ambientCloud` and renders the identity with
+  # `annotationsFor`. Storage that reads a Secret refuses an identity, and
+  # builds without one.
+  cloud-identity-use-identity-from-ambient-cloud =
+    let
+      dataOf =
+        args:
+        (byName "database" (ofKind "ConfigMap" (manifests (mkCluster (storageAndDatabase args))))).data
+          or { };
+      awsIdentity = ci.aws { inherit roleArn; };
+      bound = dataOf {
+        ambientCloud = "aws";
+        identity = awsIdentity;
+      };
+      secretOnly = dataOf {
+        ambientCloud = null;
+        identity = null;
+      };
+    in
+    (
+      bound."eks.amazonaws.com/role-arn" == roleArn
+      && bound ? ${kixKeys.cloudIdentity}
+      && secretOnly == { }
+      && evalFails (
+        mkCluster (storageAndDatabase {
+          ambientCloud = null;
+          identity = awsIdentity;
+        })
+      )
+      && evalFails (
+        mkCluster (storageAndDatabase {
+          ambientCloud = "aws";
+          identity = ci.gcp { };
+        })
+      )
+    )
+    || throw "from ambientCloud: ${builtins.toJSON bound}";
+
+  # On a package with two credentials dependencies, a refusal from `use`
+  # and from `useIdentity` names the dependency that holds the bad value,
+  # in the message and in the error's `dependency` field.
+  cloud-identity-refusal-names-dependency =
+    let
+      dataOf =
+        helper:
+        (byName "two-credentials" (
+          ofKind "ConfigMap" (
+            manifests (
+              evalCaughtFull.buildCluster {
+                name = "test";
+                modules = [
+                  (flavor "eks")
+                  {
+                    instances.platform.two = {
+                      package = twoCredentialsPackage;
+                      config = { inherit helper; };
+                      deps = {
+                        primary = ci.aws { inherit roleArn; };
+                        backup = ci.gcp { };
+                      };
+                    };
+                  }
+                ];
+              }
+            )
+          )
+        )).data;
+      refusalOf =
+        helper:
+        let
+          data = dataOf helper;
+        in
+        {
+          inherit (data) primary;
+          record = builtins.head (helpers.records data.backup);
+        };
+      use = refusalOf "use";
+      useIdentity = refusalOf "useIdentity";
+      namesBackup =
+        r:
+        r.primary == "ok"
+        && r.record.dependency == "backup"
+        && r.record.instance == "platform/two"
+        && lib.hasInfix "`deps.backup` is set to `kix.cloudIdentity.gcp { ... }` (Google Cloud)" r.record.message
+        && lib.hasInfix "Set `deps.backup` to" r.record.fix;
+      # Without `arg`, the message keeps its general wording.
+      unnamed = useFailure (ci.gcp { }) "aws";
+    in
+    (
+      namesBackup use
+      && namesBackup useIdentity
+      && !(lib.hasInfix "deps." unnamed)
+      && lib.hasInfix "This dependency is set to" unnamed
+      && lib.hasInfix "Set this dependency to" unnamed
+    )
+    || throw "refusal names dependency: use ${builtins.toJSON use}, useIdentity ${builtins.toJSON useIdentity}";
 }

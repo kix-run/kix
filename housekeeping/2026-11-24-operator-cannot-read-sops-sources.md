@@ -1,3 +1,0 @@
-# 2026-11-24 · `cli/kix/src/plan/live.rs` · The operator reads SOPS sources as local paths, so it cannot apply a SOPS Secret.
-
-`LivePlan::run` builds its `Cluster` with `SopsSources::default()`, which is `Local`: each Secret's `kix.run/sops-source` is read as a path on the operator's own filesystem. That path is a store path on the machine that built the cluster, so in the operator pod `resolve_sops_path` fails with "SOPS source file not found" whenever a reconcile must apply a SOPS Secret (a new build, or drift on the Secret). The operator does not mark the record Failed and retries on requeue, so it fails the same way on every reconcile. Found by reading the code, not on a cluster. Nothing in the docs says `kix deploy --operator` cannot carry SOPS Secrets.

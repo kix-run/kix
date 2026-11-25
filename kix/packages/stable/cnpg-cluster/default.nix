@@ -55,7 +55,10 @@
 # the Cluster's `spec.serviceAccountTemplate`, through
 # `kix.cloudIdentity.annotationsFor`. Kix does not stamp those pods, so a
 # changed role reaches them only when they restart
-# (`kubectl cnpg restart <cluster>`). The role must trust
+# (`kubectl cnpg restart <cluster>`). With the package's defaults, the
+# operator recreates the primary pod last and does not switch over to a
+# replica first, so the database is unavailable until the new primary pod is
+# ready. The role must trust
 # `system:serviceaccount:<namespace>:<instance>`. The package writes only
 # `s3://` destinations, so it takes no Google Cloud or Azure identity.
 #
@@ -356,6 +359,7 @@ in
         storage = kix.cloudIdentity.use {
           inherit scope;
           dep = storageCredentials;
+          arg = "storageCredentials";
           cloud = if backupOn then "aws" else null;
         };
         identity = storage.identity;
@@ -384,8 +388,8 @@ in
           if identity != null && builtins.any (k: k != null) (builtins.attrValues bk.credentialKeys) then
             scope.fail {
               option = "backup.credentialKeys";
-              message = "`backup.credentialKeys` is set, but `deps.storageCredentials` uses a cloud identity instead of a Secret. With a cloud identity, the backup `ObjectStore` authenticates with the IAM role and reads no Secret keys, so Kix rejected `backup.credentialKeys`.";
-              fix = "Remove `backup.credentialKeys` to use the cloud identity, or pass a Secret instance (`ref.<namespace>.<instance>`) in `deps.storageCredentials` instead.";
+              message = "`backup.credentialKeys` is set while `deps.storageCredentials` uses an AWS IAM role (`kix.cloudIdentity.aws`). The backup `ObjectStore` authenticates with that role instead of a Secret, so Kix rejected `backup.credentialKeys`.";
+              fix = "Remove `backup.credentialKeys` to use the IAM role, or set `deps.storageCredentials` to a Secret instance (`ref.<namespace>.<instance>`).";
             }
           else
             null;
@@ -659,8 +663,8 @@ in
           else if identity != null && config.extraSpec ? serviceAccountName then
             scope.fail {
               option = "extraSpec.serviceAccountName";
-              message = "`extraSpec.serviceAccountName` is set while `deps.storageCredentials` uses a cloud identity. Kix writes the cloud identity to `spec.serviceAccountTemplate` on the `Cluster` for the ServiceAccount that CloudNativePG creates. Because CloudNativePG does not create a ServiceAccount when `serviceAccountName` is set, Kix rejected this `Cluster`.";
-              fix = "Remove `extraSpec.serviceAccountName` so CloudNativePG creates the ServiceAccount with the cloud identity, or pass a Secret instance (`ref.<namespace>.<instance>`) in `deps.storageCredentials` instead.";
+              message = "`extraSpec.serviceAccountName` tells CloudNativePG to use an existing ServiceAccount instead of creating one, while `deps.storageCredentials` uses an AWS IAM role (`kix.cloudIdentity.aws`). Kix writes that cloud identity to `spec.serviceAccountTemplate` on the `Cluster`, which only applies when CloudNativePG creates the ServiceAccount, so Kix rejected this `Cluster`.";
+              fix = "Remove `extraSpec.serviceAccountName` so CloudNativePG creates the ServiceAccount, or set `deps.storageCredentials` to a Secret instance (`ref.<namespace>.<instance>`).";
             }
           else if backupOn && (config.extraSpec.backup or { }) ? barmanObjectStore then
             scope.fail {

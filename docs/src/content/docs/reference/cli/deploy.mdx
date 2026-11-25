@@ -76,7 +76,9 @@ Set `KIX_TUI_HEIGHT` to a number of rows to cap the live view of
    Unchanged resources are skipped. A deploy with nothing to change exits
    without applying. When a Secret carries `kix.run/sops-source`, the deploy
    decrypts the SOPS file and keeps any plain keys already in the Secret's
-   `stringData` or `data`. Before the record is created, the run stops if the
+   `stringData` or `data`. Kix converts any `stringData` entries and sends all
+   Secret values base64-encoded under `data`, so Kix owns each key on the
+   cluster. Before the record is created, the run stops if the
    cluster serves a resource's kind as namespaced and its manifest has no
    `metadata.namespace`, naming each such resource. Cross-resource
    [check 18](/docs/reference/validation-checks/)
@@ -141,9 +143,12 @@ Set `KIX_TUI_HEIGHT` to a number of rows to cap the live view of
    orphans that the build records as dependencies of the stuck object, reports
    them as kept (`prune_kept` in `--log-format json`), and keeps the builds
    they came from in `status.orphansKeptFrom` so the next `kix deploy --prune`
-   or `kix gc` tries again. Most packages do not yet record that a custom
-   resource depends on its operator, so removing both at once can delete the
-   operator before it clears the custom resource's finalizer. If cleanup is
+   or `kix gc` tries again. When a package sets `controller` on `scope.mkCRD`
+   or `scope.mkCRDRef`, custom resources of that kind depend on the operator,
+   and `[K2794]` also names the operator and reports whether it is ready, not
+   ready, or not on the cluster. Most packages do not set `controller` yet, so
+   removing a custom resource and its operator in the same deploy can delete
+   the operator before it removes the custom resource's finalizer. If cleanup is
    still running normally, such as pods with a long termination grace period or
    a cloud load balancer teardown, deploy again later or pass a longer
    `--timeout` (up to `5m` per delete). Kix never removes finalizers itself;

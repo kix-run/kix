@@ -244,6 +244,10 @@ pub const SOPS_DIGEST: &str = key!("sops-digest");
 /// it.
 pub const CONTENT_HASH: &str = key!("content-hash");
 
+/// Where each key of a Secret gets its value: comma-separated `key=source`
+/// pairs, where the source is `inline`, `plain`, `sops`, or `controller`.
+pub const SECRET_SOURCES: &str = key!("secret-sources");
+
 /// Comma-separated keys a Secret carries. The deploy takes the keys from the
 /// SOPS file instead; tests stamp it to show that.
 #[cfg(any(test, feature = "test-util"))]
@@ -302,15 +306,31 @@ pub fn contains_meta(map: &BTreeMap<String, String>, key: &str) -> bool {
 /// Return the identity hashes a [`DEPENDS_ON`] value lists.
 ///
 /// Each comma-separated entry is a hash, or a hash after a `<relation>:`
-/// prefix. The library writes `requires:` and `extra:` today. Every relation
-/// is a dependency the deploy orders on, so the prefix is dropped whatever
-/// it says.
+/// prefix. The library writes `requires:`, `controller:`, and `extra:`
+/// today. Every relation is a dependency the deploy orders on, so the prefix
+/// is dropped whatever it says.
 pub fn depends_on_hashes(value: &str) -> impl Iterator<Item = &str> {
     value
         .split(',')
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(|s| s.rsplit_once(':').map_or(s, |(_, hash)| hash))
+}
+
+/// The [`DEPENDS_ON`] relation of a custom resource's controller: the
+/// workload that its kind's `scope.mkCRD` or `scope.mkCRDRef` names as
+/// `controller`. Older releases of Kix order on it like any other entry.
+pub const CONTROLLER_RELATION: &str = "controller";
+
+/// Return the identity hashes a [`DEPENDS_ON`] value lists under
+/// [`CONTROLLER_RELATION`].
+pub fn controller_hashes(value: &str) -> impl Iterator<Item = &str> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter_map(|s| s.split_once(':'))
+        .filter(|(relation, _)| *relation == CONTROLLER_RELATION)
+        .map(|(_, hash)| hash)
 }
 
 /// Return the `namespace/instance` key of the package that stamped
@@ -381,8 +401,19 @@ mod tests {
 
     #[test]
     fn depends_on_drops_any_relation_prefix() {
-        let hashes: Vec<_> = depends_on_hashes(" a,requires:b,, extra:c ,later:d").collect();
-        assert_eq!(hashes, ["a", "b", "c", "d"]);
+        let hashes: Vec<_> =
+            depends_on_hashes(" a,requires:b,, extra:c ,later:d,controller:e").collect();
+        assert_eq!(hashes, ["a", "b", "c", "d", "e"]);
+    }
+
+    /// Only `controller:` entries name a controller; a plain or `requires:`
+    /// entry for the same object does not.
+    #[test]
+    fn controller_hashes_reads_only_controller_entries() {
+        let hashes: Vec<_> =
+            controller_hashes("a,requires:b, controller:c ,extra:d,controller:e").collect();
+        assert_eq!(hashes, ["c", "e"]);
+        assert_eq!(controller_hashes("a,requires:b").count(), 0);
     }
 
     #[test]
