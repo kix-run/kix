@@ -11,6 +11,7 @@
   ofKind,
   byName,
   evalFails,
+  kixKeys,
   ...
 }:
 
@@ -160,7 +161,7 @@ in
     in
     (
       r.serviceAccount."eks.amazonaws.com/role-arn" == roleArn
-      && r.serviceAccount ? "kix.run/cloud-identity"
+      && r.serviceAccount ? ${kixKeys.cloudIdentity}
       && ambient r
       && r.snapshotLocation != null
       && !(r.nodeAgentPodLabels ? "azure.workload.identity/use")
@@ -279,7 +280,7 @@ in
       && builtins.elem "AWS_SHARED_CREDENTIALS_FILE" (envNames r.server)
       && r.backupLocation.credential.key == "cloud"
       && !(stamped r.server)
-      && !(r.serviceAccount ? "kix.run/cloud-identity")
+      && !(r.serviceAccount ? ${kixKeys.cloudIdentity})
     )
     || throw "velero secret: ${builtins.toJSON r}";
 
