@@ -1,7 +1,7 @@
 # 181a: Build plan for network policy on managed clouds
 
 **Status:** Draft implementation plan for `181_network_policy_on_managed_clouds.md`. Implementation has not started.
-**Related:** `181_network_policy_on_managed_clouds.md` (design decisions and `Fn` finding numbers cited below)
+**Related:** `181_network_policy_on_managed_clouds.md` (design decisions and the `Fn` and `AWS Fn` finding numbers cited below)
 
 ## 1. Implementation steps
 
@@ -11,8 +11,8 @@
 | 2 | CLI: fail `kix plan` immediately when a resource's kind is unserved and the build holds only a CRD reference with no CRD manifest (F5). Treat unserved kinds as already absent during prune (F29). | none | `fixed` |
 | 3 | Repair the enforcer envelope: add `selector`, `ingress`, and `egress` arguments to `mkPolicy` and `kix.operandPolicy`, migrate all in-tree callers, and restrict `entities` on `meta.network.intents` to the fixed list. Keep `spec` working on the Cilium renderer for now. Every cluster in `clusters/` must build identical manifests. | none | `added` |
 | 4 | Add `out.dnsPeers` to the `dns` role and read it in the Cilium renderer and `cilium` package. Audit all 11 `all-pods` callers and split out explicit node or API server rules where needed. Existing manifests must stay unchanged. | 3 | `added` |
-| 5 | Skip default-deny on import-only and inactive namespaces, and add `networkPolicy.platformNamespaces` (decision 5). | none | `silent` (minor release) |
-| 6 | Implement the standard `NetworkPolicy` renderer, `cluster.network.apiServer`, `cluster.network.nodeCidrs`, unsupported-rule refusals, the `networkPolicyWidened` scorecard rule, the policy-kind validation check, and the `kix deploy` API server IP check. Enable the standard renderer in `gke` and `gke-autopilot`, plus `k3s` and `kind` once live tests confirm stock enforcement. | 3, 4, 5 | `added` |
+| 5 | Skip default-deny in namespaces whose only instances are imports or inactive optional instances, and add `networkPolicy.platformNamespaces` (decision 5). | none | `silent` (minor release) |
+| 6 | Implement the standard `NetworkPolicy` renderer, `cluster.network.apiServer`, `cluster.network.nodeCidrs`, unsupported-rule refusals, the `networkPolicyWidened` scorecard rule, the policy-kind validation check, the check 12 exemptions (AWS F17), and the `kix deploy` API server IP check. Enable the standard renderer in `gke` and `gke-autopilot`, plus `k3s` and `kind` once live tests confirm stock enforcement. | 3, 4, 5 | `added` |
 | 7 | Add `egress` rules on cloud identity mechanisms, the `"node-local"` intent target, and `networkIntents` on bound identity values. | 3 | `fixed` (adds egress rules on Cilium clusters using cloud identity; no user action needed) |
 | 8 | Add `cluster.flavor.eks.networkPolicy` and the verified VPC CNI behavior flags. | 6 + EKS test C | `added` |
 | 9 | Remove the legacy `spec` argument with an error naming `selector`, `ingress`, and `egress`. | 3 (next minor release) | `error` (with an id) |
@@ -75,7 +75,11 @@ Kix changes are built.
 Tests 2 through 9 can run immediately in a scratch namespace using explicit
 `NetworkPolicy` manifests before any step is built; their results determine the
 VPC CNI settings for step 8. Test 1 runs once step 8 is built. Enable
-`enableNetworkPolicy` on the VPC CNI add-on for all nine tests:
+`enableNetworkPolicy` on the VPC CNI add-on for all nine tests.
+
+The 2026-11-25 EKS test (AWS F18) already covered tests 5, 6, and 9, plus test
+8 with `instance` targets behind a classic load balancer. Tests 2, 3, 4, and 7,
+along with test 8 using `ip` targets, still need to run:
 
 1. With `cluster.flavor.eks.networkPolicy` unset, verify that `kix check` fails
    and names `cluster.flavor.eks.networkPolicy`. Set it to `"vpc-cni"` and

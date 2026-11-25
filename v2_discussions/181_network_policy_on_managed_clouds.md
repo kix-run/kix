@@ -15,32 +15,25 @@ the cluster installs.
 
 Every platform claim below is marked with its evidence:
 
-- **V (Fn):** verified on a live cluster (`Fn` cites the finding in the
-  2026-11-25 GKE test report).
-- **D [ref]:** documented by the vendor as of 2026-11-25 (links in section 12).
+- **V (Fn):** verified on a live cluster. `Fn` cites a finding in the
+  2026-11-25 GKE test report, and `AWS Fn` cites a finding in the EKS test
+  report from the same day.
+- **D [ref]:** documented by the vendor as of 2026-11-25 (links in `181b_network_policy_platform_facts.md`).
 - **A:** unverified assumption.
 
-The live EKS network policy test ("test C") had not been written when this doc
-was drafted, so every EKS claim is marked **D** or **A**. Section 11 lists what
-those test results could change.
+The EKS network policy test (AWS F16 to F18) finished while this doc was being
+written. It verified the DNS, cloud identity, and load balancer rules. It did
+not test Service address translation, `ipBlock` matching against pod IPs, the
+API server address a rule must name, or the source of webhook calls. Those EKS
+claims remain **A**, and `181b` lists them.
 
 ## 2. How managed cloud platforms enforce policy
 
-| Behavior | GKE Dataplane V2 | EKS with Amazon VPC CNI | AKS |
-|---|---|---|---|
-| Enforces standard `NetworkPolicy` | Always on, with no toggle. V (F19), D [g-dpv2] | Off on new clusters; requires setting `enableNetworkPolicy` on the add-on. D [a-bp] | Depends on the chosen policy engine: none, Azure NPM, Calico, or Cilium. D [z-np] |
-| Serves `CiliumNetworkPolicy` | No. V (F3) | No. A | Yes (layers 3 and 4) on Azure CNI Powered by Cilium. D [z-cil] |
-| `ipBlock` matches pod IPs | Never. D [g-np] | Unknown (A: yes) | Never on Cilium. D [z-cil] |
-| `ipBlock` or selector matches nodes and host-network pods | No field can match them. D [g-np] | Unknown (A: `ipBlock` can) | Never on Cilium. D [z-cil] |
-| When policy evaluates Service calls | After Service address translation; rules must match the endpoint IP. V (F21) | A: before translation. AWS docs require the Service port to match the container port. D [a-np] | Unknown |
-| Where cluster DNS answers from | `kube-dns` pods, or `node-local-dns` pods when NodeLocal DNSCache is enabled (default from 1.34). V (F20), D [g-nldns]. With Cloud DNS (Autopilot default): `169.254.169.254` or `169.254.20.10`. D [g-clouddns] | CoreDNS pods labeled `k8s-app: kube-dns`. D [a-bp] | CoreDNS pods, or LocalDNS at `169.254.10.10` and `169.254.10.11`. D [z-ldns] |
-| How pods reach the API server | Control-plane internal IP on TCP 443; changes during IP rotation. V (F21), D [g-iprot] | Network interfaces in the cluster subnets; changes on cluster version upgrades. D [a-net] | Varies by cluster type. D [z-wi] |
-| Outbound traffic needed for cloud identity | `169.254.169.254/32` on TCP 80 (V, F19) and TCP 8080 (D [g-np]) | IRSA: STS endpoint on TCP 443. D [a-sts]. Pod Identity: host-network agent at `169.254.170.23` on TCP 80. D [a-pi] | `login.microsoftonline.com` on TCP 443; no metadata IP. D [z-wi] |
-| Pod startup window | Unknown | In the default `standard` mode, all traffic is allowed until the pod's policies load. D [a-npcfg] | Unknown |
-
-Kubernetes leaves it up to each network plugin how `ipBlock` handles in-cluster
-pods, nodes, and Service address translation (D [k-np]). Because of that, each
-platform flavor must declare those behaviors explicitly for Kix.
+The table in `181b_network_policy_platform_facts.md` (section 1) compares
+network policy behavior across GKE Dataplane V2, EKS with the Amazon VPC CNI,
+and AKS, marking each claim **V**, **D**, or **A**. The decisions below rely on
+that table, and the platform behavior flags in decision 2 correspond to its
+`ipBlock` and Service address translation rows.
 
 ## 3. Decision 1: one set of rule builders, two renderers
 
@@ -134,6 +127,13 @@ inbound traffic to pods covered by an egress-only policy (D [k-np]).
 Kix does not generate FQDN or layer 7 rules anywhere today, so the standard
 renderer loses neither.
 
+Validation check 12 refuses any `NetworkPolicy` whose `podSelector` matches no
+pod template in the build (AWS F17). Policies for operator-created pods and
+platform-intent policies target pods that have no template in the build, so
+check 12 skips generated policies of those types. When a package defines a
+`NetworkPolicy` directly, check 12 honors the `kix.run/operand-of` annotation,
+just as check 14 does for a `PodDisruptionBudget`.
+
 `all-pods` is the one narrower translation. In the standard renderer, it
 matches every pod in every namespace, excluding nodes and the API server. Nine
 packages and two flavors currently use `all-pods`. Build step 4 audits those 11
@@ -164,7 +164,7 @@ whenever a new rule builder is added, and asking cluster authors on standard
 - *Derive the renderer from the `cni` role.* Pod networking and network policy
   enforcement are independent settings on EKS, AKS, and k3s.
 
-## 4. Decision 2: flavors declare the platform enforcer and block conflicting CNIs
+## 4. Decision 2: flavors declare the platform's enforcer, and Kix refuses a second one
 
 **Decision.** Each flavor declares what enforces network policy by adding a
 platform import that claims `network-policy-enforcer` and supplies the renderer
@@ -189,7 +189,7 @@ networkPolicy.platformNamespaces = lib.mkDefault [ "kube-system" ];
 ```
 
 Those three flags correspond to the `ipBlock` and Service translation rows in
-section 2 and determine whether each rule is *same*, *wider*, or *refused*.
+`181b` and determine whether each rule is *same*, *wider*, or *refused*.
 When `egressBeforeServiceTranslation = true`, a Service egress rule allows both
 the Service port and the pod port.
 
@@ -206,7 +206,7 @@ Behavior per flavor:
 | Flavor | Enforcer declaration | Rationale |
 |---|---|---|
 | `gke`, `gke-autopilot` | Standard renderer, `exclusive` binding | Dataplane V2 enforcement is always on. D [g-dpv2] |
-| `eks` | New option `cluster.flavor.eks.networkPolicy`: `"none"` (default) or `"vpc-cni"` | VPC CNI enforcement is off until enabled on the add-on, and Kix cannot read add-on settings at build time (D [a-bp]). When `networkPolicy.enable = true` and this option is `"none"`, the flavor fails evaluation and names both the add-on setting and `cluster.flavor.eks.networkPolicy`. |
+| `eks` | New option `cluster.flavor.eks.networkPolicy`: `"none"` (default) or `"vpc-cni"` | VPC CNI enforcement is off until enabled on the add-on, and Kix cannot read add-on settings at build time (V, AWS F18; D [a-bp]). When `networkPolicy.enable = true` and this option is `"none"`, the flavor fails evaluation and names both the add-on setting and `cluster.flavor.eks.networkPolicy`. |
 | `aks` | New option `cluster.flavor.aks.networkPolicy`: `"none"`, `"cilium"`, `"calico"`, or `"azure"` | `"cilium"` uses the Cilium renderer via a `platform-cilium` import because Azure CNI Powered by Cilium serves `CiliumNetworkPolicy` (D [z-cil]). `"calico"` and `"azure"` use the standard renderer. All AKS behavior is **A** until tested on a live AKS cluster. |
 | `k3s` | Standard renderer, `shadowable` binding | Stock k3s embeds a policy controller (D [k3s]); `shadowable` still lets clusters replace Flannel with Cilium. |
 | `kind` | Standard renderer, `shadowable` binding (once verified on stock kind) | **A:** kind 0.24 and later enforce `NetworkPolicy` by default, letting tests run the standard renderer locally without a cloud cluster. |
@@ -264,8 +264,8 @@ gke = mkMechanism {
 | Mechanism | Required egress | Standard renderer | Cilium renderer | Evidence |
 |---|---|---|---|---|
 | `gke` | `169.254.169.254/32` TCP 80, 8080 | `ipBlock` | Unused (GKE serves no Cilium kind) | Port 80: V (F19). Port 8080: D [g-np] |
-| `irsa` | `world` TCP 443 (STS) | `0.0.0.0/0` | `world` entity | Endpoint: D [a-sts]. **A** that nothing else is needed |
-| `eks-pod-identity` | `169.254.170.23/32` and `fd00:ec2::23/128` TCP 80 | `ipBlock` | Both `toCIDR` and `host` entity on TCP 80 | Addresses: D [a-pi]. **A** whether VPC CNI needs an explicit rule (it always allows traffic to the pod's own node; D [a-bp]), and **A** on Cilium |
+| `irsa` | `world` TCP 443 (STS) | `0.0.0.0/0` | `world` entity | V (AWS F18): the pod receives credentials with this rule and DNS, and calls hang without it |
+| `eks-pod-identity` | `169.254.170.23/32` and `fd00:ec2::23/128` TCP 80 | `ipBlock` | Both `toCIDR` and `host` entity on TCP 80 | V (AWS F18) for IPv4: the pod receives credentials with this rule and gets none without it. IPv6 address: D [a-pi]. **A** on Cilium |
 | `azure-workload-id` | `world` TCP 443 | `0.0.0.0/0` | `world` entity | D [z-wi] |
 
 For `"node-local"` targets, the Cilium renderer writes both `toCIDR` and the
@@ -281,13 +281,18 @@ so the netpol workload hook can append the rules. For operator-created pods
 (such as `cnpg-cluster`), the identity dependency exposes `networkIntents`,
 which the package passes into its `kix.operandPolicy` call.
 
-On GKE, even a pod with no linked Google service account still queries the
-metadata server to call Google Cloud APIs (F12). Packages request that egress
-rule by binding `kix.cloudIdentity.gcp { }`.
+On GKE, a pod whose package declares no cloud identity still authenticates
+through the metadata server as its Kubernetes `ServiceAccount`'s own principal
+(F12). Because Kix adds the metadata egress rule only when a cloud identity is
+bound, a package that calls Google Cloud APIs must bind
+`kix.cloudIdentity.gcp { }` to get the rule, even when it links no Google
+service account.
 
-**Cost.** IRSA and Microsoft Entra Workload ID open outbound TCP 443 to any
-external IP because Kix generates no hostname-based rules. Most workloads with
-a cloud identity already hold that rule to reach the cloud APIs themselves.
+**Cost.** IRSA and Microsoft Entra Workload ID open outbound TCP 443 to
+`0.0.0.0/0` (any address, including pod IPs on platforms where `ipBlock`
+matches them) because Kix generates no hostname-based rules. Most workloads
+with a cloud identity already hold that rule to reach the cloud APIs
+themselves.
 
 **Rejected.**
 
@@ -351,9 +356,10 @@ Cloud flavors default `networkPolicy.platformNamespaces` to
 `[ "kube-system" ]`. Any workload Kix deploys into `kube-system` still gets its
 own pod-selecting policies (which isolate the selected pods in Kubernetes),
 while cloud-managed `kube-system` pods remain untouched. Self-managed and local
-flavors (`kind`, `k3s`, `rke2`, and `talos`) leave `platformNamespaces` empty
-and continue describing their `kube-system` pods with
-`networkPolicy.platformIntents`.
+flavors (`kind`, `k3s`, `rke2`, and `talos`) leave `platformNamespaces` empty,
+so their behavior does not change. `kind` and `rke2` continue describing their
+`kube-system` pods with `networkPolicy.platformIntents`, while `k3s` and
+`talos` declare none.
 
 Inside a `platformNamespaces` namespace, Kix also writes no policy selecting
 pods that Kix does not deploy, unless configured in
@@ -404,8 +410,10 @@ the cluster author sets `sources` or `kix check` fails.
 
 **Load balancer ingress.** Backend pods for `LoadBalancer` Services allow
 ingress from `0.0.0.0/0`. That worked on GKE behind a passthrough Network Load
-Balancer (V, F21), and it is the only CIDR rule that works across every AWS
-target mode, where traffic can arrive from a node IP, a load balancer IP, or
+Balancer (V, F21). On EKS behind a classic load balancer, the pod saw a node IP
+as the source, and an ingress rule for the VPC range allowed the traffic
+(V, AWS F18). `0.0.0.0/0` is the only CIDR rule that works across every AWS
+target mode, since traffic can arrive from a node IP, a load balancer IP, or
 the client IP (D [a-lb]). Where `ipBlock` matches pod IPs, `0.0.0.0/0` is wider
 than Cilium's `world` entity, and `networkPolicyWidened` reports it.
 
@@ -450,12 +458,13 @@ clusters build.
    documenting `networkPolicy.directions = "ingress"` as the workaround
    (decision 6). The alternative is omitting the rule with a warning and
    letting node scrapes fail at runtime.
-4. **Default `networkPolicyWidened` to a warning?** Recommended: yes. Almost
+4. **Default `networkPolicyWidened` to a warning?** Recommended: yes. If an
+   `ipBlock` matches pod IPs on the VPC CNI (an untested assumption), almost
    every EKS cluster will trigger at least one widened policy, so defaulting to
    an error would block EKS clusters out of the box.
-5. **Apply the stricter default-deny namespace rule across all flavors (`silent`
-   breaking change)?** Recommended: yes, so every flavor follows one rule. The
-   alternative is keeping the old rule and adding only
+5. **Apply the default-deny namespace rule of decision 5 across all flavors
+   (`silent` breaking change)?** Recommended: yes, so every flavor follows one
+   rule. The alternative is keeping the old rule and adding only
    `networkPolicy.platformNamespaces`, which leaves F4's root cause in place
    for namespaces holding only imports.
 6. **Add a post-deploy enforcement probe as a follow-up step?** Recommended:
@@ -465,48 +474,17 @@ clusters build.
    every check.
 7. **Default `cluster.flavor.eks.networkPolicy` to `"none"`?** Recommended:
    yes, because AWS disables enforcement by default on new EKS clusters.
+8. **Report the EKS startup window as a widening?** Recommended: yes. On EKS, a
+   new pod runs briefly with no policy applied (V, AWS F18), and
+   `networkPolicyWidened` can report that once per cluster under `"vpc-cni"`.
+   The add-on's `strict` mode closes the window, but it also blocks every pod
+   that has no policy, including the `kube-system` pods that decision 5 leaves
+   untouched. Kix should not require `strict` mode until a flavor can describe
+   those pods.
 
-## 11. What the EKS tests could change
+## 11. Evidence
 
-Decisions 1, 2, 4, and 5 do not depend on the live EKS results. These details
-in decisions 2, 3, and 6 do:
-
-- **VPC CNI behavior flags:** whether `ipBlock` matches pod and node IPs, and
-  whether policy evaluates Service calls before translation (if after,
-  `egressBeforeServiceTranslation` goes away).
-- **`cluster.network.apiServer.cidrs` on EKS:** which IP it must hold, and
-  whether the `eks` flavor can derive it automatically from
-  `cluster.network.serviceCidr`.
-- **EKS Pod Identity egress:** whether Pod Identity needs an explicit
-  `169.254.170.23/32` rule if the VPC CNI always allows traffic to the pod's
-  own node (leaving `egress` empty on the standard renderer).
-- **Default `cluster.network.apiServer.sources` on EKS:** which source ranges
-  webhook requests arrive from.
-- **Startup policy window:** whether `standard` mode leaves new pods briefly
-  open in practice, and whether the `eks` flavor should require VPC CNI
-  `strict` mode.
-- **AWS rule-count limits:** AWS allows 24 port/protocol pairs per CIDR across
-  all policies (D [a-np]), and `0.0.0.0/0` rules from multiple packages share
-  one range.
-
-## 12. Sources
-
-- [g-np] https://docs.cloud.google.com/kubernetes-engine/docs/how-to/network-policy
-- [g-dpv2] https://docs.cloud.google.com/kubernetes-engine/docs/concepts/dataplane-v2
-- [g-nldns] https://docs.cloud.google.com/kubernetes-engine/docs/how-to/nodelocal-dns-cache
-- [g-clouddns] https://docs.cloud.google.com/kubernetes-engine/docs/how-to/cloud-dns
-- [g-iprot] https://docs.cloud.google.com/kubernetes-engine/docs/how-to/ip-rotation
-- [a-np] https://docs.aws.amazon.com/eks/latest/userguide/cni-network-policy.html
-- [a-npcfg] https://docs.aws.amazon.com/eks/latest/userguide/cni-network-policy-configure.html
-- [a-bp] https://docs.aws.amazon.com/eks/latest/best-practices/network-security.html
-- [a-pi] https://docs.aws.amazon.com/eks/latest/userguide/pod-identities.html
-- [a-lb] https://docs.aws.amazon.com/eks/latest/best-practices/load-balancing.html
-- [a-sts] https://docs.aws.amazon.com/eks/latest/userguide/configure-sts-endpoint.html
-- [a-net] https://docs.aws.amazon.com/eks/latest/userguide/network-reqs.html
-- [a-auto] https://docs.aws.amazon.com/eks/latest/userguide/auto-net-pol.html
-- [z-np] https://learn.microsoft.com/en-us/azure/aks/use-network-policies
-- [z-cil] https://learn.microsoft.com/en-us/azure/aks/azure-cni-powered-by-cilium
-- [z-wi] https://learn.microsoft.com/en-us/azure/aks/outbound-rules-control-egress
-- [z-ldns] https://learn.microsoft.com/en-us/azure/aks/localdns-custom
-- [k-np] https://kubernetes.io/docs/concepts/services-networking/network-policies/
-- [k3s] https://docs.k3s.io/networking/networking-services
+`181b_network_policy_platform_facts.md` records the platform evidence for this
+design: the comparison table in section 1, the verified EKS test findings
+(**V**) and open EKS assumptions (**A**) in section 2, and the documentation
+links in section 3 for every **D** mark.
