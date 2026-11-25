@@ -1,9 +1,13 @@
 # GKE Standard flavor.
 #
 # GKE Standard provides a managed control plane, GKE Dataplane V2 (exclusive
-# `cni` role that exposes standard Kubernetes NetworkPolicy rather than
-# CiliumNetworkPolicy), `kube-dns`, GCP Network Load Balancer, and the PD CSI
-# driver with `standard-rwo` as the default StorageClass.
+# `cni` role), `kube-dns`, GCP Network Load Balancer, and the PD CSI driver
+# with `standard-rwo` as the default StorageClass.
+#
+# Dataplane V2 always enforces standard Kubernetes NetworkPolicy and does not
+# serve CiliumNetworkPolicy. Kix generates only CiliumNetworkPolicy today, and
+# no enforcer can claim the role here, so `networkPolicy.enable = true` fails
+# evaluation on this flavor.
 #
 # Pods get Google Cloud identities through Workload Identity Federation for
 # GKE, which the `cloud-identity` import declares.

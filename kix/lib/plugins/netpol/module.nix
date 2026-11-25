@@ -16,6 +16,28 @@ let
 
   inherit (cfg) enforced;
 
+  # An exclusive `cni` binding means the environment owns the pod network, so
+  # a `cilium` instance would be refused. The missing-enforcer error must not
+  # recommend one there.
+  cniRole = config.cluster.roles.cni or { };
+  cniExclusive = (cniRole.binding or null) == "exclusive";
+  cniName =
+    if (cniRole.provider or null) != null then "`${cniRole.provider}`" else "the environment's network";
+
+  ciliumFix =
+    "Declare a `cilium` instance. Where the environment installs Cilium, a flavour sets "
+    + "cluster.roles.cni.binding = \"shadowable\" and declares a "
+    + "platform-cilium import (on RKE2: "
+    + "cluster.flavor.rke2.cni = [ \"cilium\" ]), and the instance "
+    + "configures or uses that Cilium instead of installing one.";
+
+  exclusiveCniFix =
+    "This cluster's pod network is ${cniName} (cluster.roles.cni.binding = \"exclusive\"), "
+    + "so Kix cannot install Cilium here. Kix generates only Cilium network policy today, "
+    + "and no enforcer for this pod network exists yet. Set `networkPolicy.enable = false`. "
+    + "If the environment runs Cilium, set cluster.roles.cni.binding = \"shadowable\", "
+    + "declare a platform-cilium import, and declare a `cilium` instance.";
+
   resolveEnforcerOut =
     {
       cluster,
@@ -210,12 +232,7 @@ in
               fail {
                 clusterOption = "networkPolicy.enable";
                 message = "`networkPolicy.enable = true` but no instance declares `meta.roles = [\"network-policy-enforcer\"]`.";
-                fix =
-                  "Declare a `cilium` instance. Where the environment installs Cilium, a flavour sets "
-                  + "cluster.roles.cni.binding = \"shadowable\" and declares a "
-                  + "platform-cilium import (on RKE2: "
-                  + "cluster.flavor.rke2.cni = [ \"cilium\" ]), and the instance "
-                  + "configures or uses that Cilium instead of installing one.";
+                fix = if cniExclusive then exclusiveCniFix else ciliumFix;
               }
             else
               null

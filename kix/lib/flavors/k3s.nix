@@ -1,9 +1,12 @@
 # k3s flavor.
 #
 # k3s bundles Flannel CNI, CoreDNS, the `local-path` StorageClass, ServiceLB,
-# and metrics-server. Flannel does not enforce NetworkPolicy. To replace it
-# with Cilium, start k3s with `--flannel-backend=none --disable-network-policy`
-# and set `cluster.roles.cni.binding = "absent"`. If k3s is started with
+# and metrics-server. It also runs an embedded network policy controller that
+# enforces standard NetworkPolicy unless k3s starts with
+# `--disable-network-policy`. Kix generates only CiliumNetworkPolicy today, so
+# `networkPolicy.enable = true` needs Cilium. To replace Flannel with Cilium,
+# start k3s with `--flannel-backend=none --disable-network-policy` and set
+# `cluster.roles.cni.binding = "absent"`. If k3s is started with
 # `--disable local-storage`, override `cluster.roles.storageClasses.binding`.
 
 {

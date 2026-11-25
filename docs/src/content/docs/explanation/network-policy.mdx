@@ -16,6 +16,8 @@ Writing default-deny Kubernetes network policies by hand is tedious and fragile.
 
 To generate network policies, your cluster must include an instance whose package claims the `network-policy-enforcer` role. Setting `networkPolicy.enable = true` without an enforcer instance fails evaluation. Today, `packages.experimental.cilium` is the only enforcer package: Kix generates Cilium policy resources only and cannot emit standard Kubernetes `NetworkPolicy` objects or policies for other CNIs such as Calico.
 
+Some platforms own the pod network and set `cluster.roles.cni.binding = "exclusive"`: GKE Dataplane V2, EKS with the Amazon VPC CNI, and k3s with Flannel. Kix cannot install Cilium there, and these networks enforce standard `NetworkPolicy` instead of `CiliumNetworkPolicy`. On these clusters, `networkPolicy.enable = true` fails evaluation, and the error says that Kix cannot yet generate policy for that pod network.
+
 Most generated policies are namespaced `CiliumNetworkPolicy` objects (`apiVersion: cilium.io/v2`). Kix writes cluster-wide `CiliumClusterwideNetworkPolicy` objects in three cases:
 
 | Policy | Kind | Scope | Written when |
