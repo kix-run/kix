@@ -1,19 +1,26 @@
 //! Garbage-collect stale Kix-managed resources from the cluster.
 //!
+//! Every mode keeps what the build of the cluster's Active record contains,
+//! the build the cluster runs. That build comes from this machine, or from the
+//! current files when they make the same build. gc refuses when it has neither
+//! (`check_files_build`), so it never deletes an object of the build a
+//! rollback restored, or of a deployed build whose files changed since.
+//!
 //! Supports three modes:
-//! - **Soft (default):** Diff the previous and new activation store graphs
-//!   locally, plus any closures listed in the Active record's
-//!   `status.orphansKeptFrom` from warn-only deploys. Deletes orphaned
-//!   resources in reverse dependency order without scanning every resource kind
-//!   on the cluster.
-//! - **Full scan (`--full-scan`):** Build the cluster and scan all live Kix-managed
-//!   resources attributed to this cluster via `kix.run/activations`
+//! - **Soft (default):** Delete the objects of the builds the Active record
+//!   lists under `status.orphansKeptFrom` (orphans that warn-only deploys and
+//!   rollbacks kept) that the Active build does not contain. Deletes them in
+//!   reverse dependency order without scanning every resource kind on the
+//!   cluster.
+//! - **Full scan (`--full-scan`):** Scan all live Kix-managed resources
+//!   attributed to this cluster via `kix.run/activations`
 //!   (`inventory::SweepScope::Cluster`). Resources whose `kix.run/identity-hash`
-//!   is absent from the new build are garbage (or, for resources stamped before
-//!   the domain move, resources whose Kubernetes identity is absent). Unstamped
-//!   label carriers, unattributed resources on multi-cluster targets, and
-//!   copies other programs made of Kix objects are reported and only deleted when
-//!   `--include` names them.
+//!   is absent from the Active build are garbage (or, for resources stamped
+//!   before the domain move, resources whose Kubernetes identity is absent).
+//!   With no Active record, the build from the current files takes its place.
+//!   Unstamped label carriers, unattributed resources on multi-cluster targets,
+//!   and copies other programs made of Kix objects are reported and only
+//!   deleted when `--include` names them.
 //! - **Operator (`--operator`):** Delete retired Superseded Activation records
 //!   and wait for the operator's finalizer.
 //!
@@ -43,11 +50,9 @@ use crate::cli::{GcArgs, Include};
 use crate::client;
 use crate::exit::{Exit, Stopped};
 use crate::output;
-use crate::plan::{
-    print_never_pruned, print_package_plan, print_plan_summary, print_shared, progress,
-};
-use kix::build_source::{Build, FlakeBuildError};
-use kix::cluster::activation::Records;
+use crate::plan::{print_never_pruned, print_shared, progress};
+use kix::build_source::Build;
+use kix::cluster::activation::{Record, Records};
 use kix::cluster::binding;
 use kix::cluster::discovery;
 use kix::cluster::graph::DeleteOrder;
@@ -55,7 +60,7 @@ use kix::cluster::inventory;
 use kix::cluster::prune_guard::{self, Pruned, Removal, Step};
 use kix::cluster::readiness::{self, DeletePath};
 use kix::eval::store;
-use kix::eval::store_graph::store_hash;
+use kix::eval::store_graph::{StoreGraph, store_hash};
 use kix::manifest::keys;
 use kix::manifest::lifecycle;
 use kix::manifest::types::ResourceId;
@@ -91,119 +96,40 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         .runtime()?
         .block_on(plan_record_retirement(&global, &cluster, &policy))?;
 
-    // Validate the cached build path against the Active record so a cache entry
-    // written by another context with the same cluster name is not used.
-    let (old_path, warning) = baseline::active_build_dir(
-        &cluster,
-        store::load_activation_path(&cluster),
-        retirement.active.as_ref(),
-    );
-    if let Some(warning) = warning {
-        eprintln!("{} {warning}", output::yellow("warning:"));
-    }
-    let Some(old_result_dir) = old_path else {
-        let what = if retirement.active.is_some() {
-            "The Active build of"
-        } else {
-            "No Active record, so no previous build, for"
-        };
+    let Some(active) = &retirement.active else {
         crate::say!(
-            "{what} '{}' is not on this machine. Run {} first, or use {}.",
+            "No Active record for '{}', so there is no deployed build to compare with. Run {} first.",
             output::bold(&cluster),
             output::bold("kix deploy"),
-            output::bold("kix gc --full-scan"),
         );
         return Ok(());
     };
+    let graph = active_build(args, ctx, &cluster, active)?;
 
-    crate::say!("Loading current deployment's build...");
-    let old_graph = Build::local(&old_result_dir, &|_| {})
-        .map_err(|e| {
-            miette!("could not read the previous build's resources and dependencies: {e}")
-        })?
-        .into_graph();
-
-    crate::say!("Building cluster '{}'...", output::bold(&args.cluster));
-    let status = |msg: &str| output::status_line(msg);
-    let flake_path = super::resolve_flake_path(&ctx.global.flake)?;
-    let overrides = ctx.global.input_overrides();
-    let new_graph = Build::of_flake(&flake_path, &args.cluster, &overrides, &status)
-        .map_err(|e| match e {
-            FlakeBuildError::Build(e) => miette!("{}: {e}", super::BUILD_FAILED),
-            FlakeBuildError::Load(e) => {
-                miette!("could not read the new build's resources and dependencies: {e}")
-            }
-        })?
-        .into_graph();
-    output::clear_status_line();
-    // Refuse to proceed if the built cluster name differs from the pre-build
-    // cluster identity used to load the records and previous build.
-    if new_graph.cluster_name != cluster {
-        return Err(miette!(
-            "flake attribute '{}' builds cluster '{}', but the Activation records read before the build are those of cluster '{}'. Nothing was deleted.",
-            args.cluster,
-            new_graph.cluster_name,
-            cluster,
-        ));
-    }
-
-    let new_hashes: HashSet<String> = new_graph.resources.keys().map(|p| store_hash(p)).collect();
-    let new_ids: HashSet<String> = new_graph
+    let hashes: HashSet<String> = graph.resources.keys().map(|p| store_hash(p)).collect();
+    let ids: HashSet<String> = graph
         .resources
         .values()
         .map(|r| k8s_identity(&r.manifest))
         .collect();
-    let garbage_manifests = soft_garbage(
-        old_graph.resources.iter().map(|(p, r)| (p, &r.manifest)),
-        &new_hashes,
-        &new_ids,
-    );
+    let kept_baseline = baseline::load_kept(active, None, &cluster, &progress::print, None);
+    let garbage = kept_garbage(&kept_baseline.closures, &hashes, &ids);
+    let active_hash = active.identity_hash.as_deref();
 
-    // Include orphans recorded in `status.orphansKeptFrom` by earlier warn-only
-    // deploys, which are absent from `old_graph` when `old_graph` is the latest build.
-    let kept_baseline = match &retirement.active {
-        Some(active) => baseline::load_kept(active, None, &cluster, &progress::print, None),
-        None => baseline::KeptBaseline::default(),
-    };
-    let kept_garbage = kept_garbage(
-        &kept_baseline.closures,
-        &garbage_manifests,
-        &new_hashes,
-        &new_ids,
-    );
-    let new_activation_hash = lifecycle::record_of(
-        &new_graph
-            .resources
-            .values()
-            .map(|r| r.manifest.clone())
-            .collect::<Vec<_>>(),
-    )
-    .and_then(|m| keys::get(m, keys::IDENTITY_HASH).map(str::to_string));
-
-    if garbage_manifests.is_empty() && kept_garbage.is_empty() && retirement.plan.retire.is_empty()
-    {
-        if args.dry_run {
-            crate::say!(
-                "{}",
-                output::green(&format!(
-                    "Nothing to delete ({}, {}).",
-                    in_use(new_hashes.len()),
-                    retirement.kept_note(),
-                ))
-            );
-            return Ok(());
+    if garbage.is_empty() && retirement.plan.retire.is_empty() {
+        if !args.dry_run {
+            ctx.runtime()?.block_on(clear_kept(
+                &cluster,
+                &retirement,
+                kept_baseline.unresolved.is_empty(),
+                active_hash,
+            ));
         }
-        ctx.runtime()?.block_on(clear_kept(
-            &cluster,
-            &retirement,
-            kept_baseline.unresolved.is_empty(),
-            new_activation_hash.as_deref(),
-        ));
         crate::say!(
             "{}",
             output::green(&format!(
                 "Nothing to delete ({}, {}).",
-                in_use(new_hashes.len()),
+                in_use(hashes.len()),
                 retirement.kept_note(),
             ))
         );
@@ -212,23 +138,16 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
 
     // Order deletions in reverse topological order (dependents before
     // dependencies) and exclude resources still deployed by another Kix cluster.
-    let kept_rids: Vec<ResourceId> = kept_garbage.iter().map(ResourceId::from_value).collect();
-    let garbage_values: Vec<Value> = garbage_manifests
-        .values()
-        .cloned()
-        .chain(kept_garbage)
-        .collect();
-    // The dependencies come from the whole previous build, so one that
-    // passes through an object still in use orders the deletes too.
-    let known: Vec<Value> = old_graph
+    // The dependencies come from the Active build too, so one that passes
+    // through an object still in use orders the deletes.
+    let known: Vec<Value> = graph
         .resources
         .values()
         .map(|r| r.manifest.clone())
-        .chain(garbage_values.iter().cloned())
+        .chain(garbage.iter().cloned())
         .collect();
     let mut order = DeleteOrder::of_manifests(&known);
-    let garbage_ids: HashSet<ResourceId> =
-        garbage_values.iter().map(ResourceId::from_value).collect();
+    let garbage_ids: HashSet<ResourceId> = garbage.iter().map(ResourceId::from_value).collect();
     order.retain(|rid| garbage_ids.contains(rid));
     for rid in &garbage_ids {
         order.push(rid.clone());
@@ -243,46 +162,30 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
             &client,
             &binding::Connection::of_context(global.context.as_deref()),
             binding::Action::GarbageCollect,
-            &new_graph.cluster_name,
-            new_graph.kubernetes_uid.as_deref(),
+            &cluster,
+            graph.kubernetes_uid.as_deref(),
         ))
         .map_err(|e| miette!("{e}"))?;
     let (ordered_rids, shared) = ctx
         .runtime()?
-        .block_on(kix::plan::keep_shared(
-            &client,
-            &new_graph.cluster_name,
-            ordered_rids,
-        ))
+        .block_on(kix::plan::keep_shared(&client, &cluster, ordered_rids))
         .map_err(|e| miette!("{e}"))?;
 
-    if !garbage_manifests.is_empty() {
-        let mut pkg_diff = kix::plan::diff_garbage(&old_graph, &new_graph);
-        pkg_diff.keep_shared(&shared);
-        if !output::quiet() {
-            println!();
-            println!("{}", output::bold("Garbage collection plan"));
-            print_package_plan(&pkg_diff, true);
-            print_plan_summary(&pkg_diff);
-        }
-    }
-    let mut kept_rids: Vec<&ResourceId> = kept_rids
+    let mut listed: Vec<&ResourceId> = ordered_rids
         .iter()
-        .filter(|r| {
-            !lifecycle::never_pruned(r.group_kind()) && !shared.iter().any(|s| &s.rid == *r)
-        })
+        .filter(|r| !shared.iter().any(|s| &s.rid == *r))
         .collect();
-    if !kept_rids.is_empty() {
+    if !listed.is_empty() {
         crate::say!();
         crate::say!(
             "{}",
             output::bold(&format!(
                 "Objects that left the build in earlier deploys, still on the cluster ({} to delete):",
-                kept_rids.len()
+                listed.len()
             ))
         );
-        kept_rids.sort();
-        for rid in kept_rids {
+        listed.sort();
+        for rid in listed {
             crate::say!("  {} {rid}", output::red("-"));
         }
     }
@@ -305,19 +208,16 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     let deleting: HashSet<&ResourceId> = ordered_rids.iter().collect();
     order.retain(|rid| deleting.contains(rid));
     let budget = super::deploy::parse_timeout(args.timeout.as_deref())?;
-    let done = ctx.runtime()?.block_on(delete_resources(
-        &client,
-        &new_graph.cluster_name,
-        order,
-        budget,
-    ))?;
+    let done = ctx
+        .runtime()?
+        .block_on(delete_resources(&client, &cluster, order, budget))?;
     let (retired, records_failed) = ctx.runtime()?.block_on(delete_records(&retirement))?;
     if done.all_gone() {
         ctx.runtime()?.block_on(clear_kept(
             &cluster,
             &retirement,
             kept_baseline.unresolved.is_empty(),
-            new_activation_hash.as_deref(),
+            active_hash,
         ));
     }
     finish(
@@ -326,6 +226,93 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         done.failed + records_failed,
         Some((retired, retirement.plan.kept.len())),
     )
+}
+
+/// Return the build that `active` names, the build gc keeps.
+///
+/// The build comes from this machine's cache or Kix's local store when it is
+/// there. Otherwise gc builds the cluster from the current files and uses
+/// that build only when it is the same build. gc deletes nothing the Active
+/// build contains, so after a rollback, or with files not yet deployed, it
+/// never undoes what the cluster runs.
+fn active_build(
+    args: &GcArgs,
+    ctx: &CommandContext,
+    cluster: &str,
+    active: &Record,
+) -> Result<StoreGraph> {
+    let (dir, warning) =
+        baseline::active_build_dir(cluster, store::load_activation_path(cluster), Some(active));
+    if let Some(warning) = warning {
+        eprintln!("{} {warning}", output::yellow("warning:"));
+    }
+    if let Some(dir) = dir {
+        crate::say!("Loading the Active build of '{}'...", output::bold(cluster));
+        return Ok(Build::local(&dir, &|_| {})
+            .map_err(|e| {
+                miette!("could not read the Active build's resources and dependencies: {e}")
+            })?
+            .into_graph());
+    }
+    let graph = files_build(args, ctx, cluster)?;
+    let built = build_hash(&graph);
+    check_files_build(cluster, active, built.as_deref())?;
+    Ok(graph)
+}
+
+/// Build `cluster` from the current files.
+fn files_build(args: &GcArgs, ctx: &CommandContext, cluster: &str) -> Result<StoreGraph> {
+    crate::say!("Building cluster '{}'...", output::bold(&args.cluster));
+    let graph =
+        super::build_flake(&ctx.global, &args.cluster, &|_| {}, super::BUILD_FAILED)?.into_graph();
+    // The records gc read are those of `cluster`, so a flake attribute that
+    // builds another cluster must not be judged against them.
+    if graph.cluster_name != cluster {
+        return Err(miette!(
+            "flake attribute '{}' builds cluster '{}', but the Activation records read before the build are those of cluster '{}'. Nothing was deleted.",
+            args.cluster,
+            graph.cluster_name,
+            cluster,
+        ));
+    }
+    Ok(graph)
+}
+
+/// Return the identity hash of the Activation record in `graph`, which names
+/// the whole build.
+fn build_hash(graph: &StoreGraph) -> Option<String> {
+    let manifests: Vec<Value> = graph
+        .resources
+        .values()
+        .map(|r| r.manifest.clone())
+        .collect();
+    lifecycle::record_of(&manifests)
+        .and_then(|m| keys::get(m, keys::IDENTITY_HASH).map(str::to_string))
+}
+
+/// Refuse to collect garbage against a build from the current files that is
+/// not the build `active` names. `built` is that build's identity hash.
+pub(super) fn check_files_build(cluster: &str, active: &Record, built: Option<&str>) -> Result<()> {
+    let active_hash = active.identity_hash.as_deref();
+    if built.is_some() && built == active_hash {
+        return Ok(());
+    }
+    let short = |h: Option<&str>| match h {
+        Some(h) => h[..8.min(h.len())].to_string(),
+        None => "unknown".to_string(),
+    };
+    Err(miette!(
+        "the build of '{cluster}' from the current files is not the build the cluster runs. Nothing was deleted.\n\n  \
+         Active on cluster:          {} (build {})\n  \
+         Built from current files:   build {}\n\n  \
+         Why:\n    \
+         kix gc deletes only what the Active build does not contain. The Active build is not on this machine, and the current files make a different build, so gc cannot tell which objects the cluster still uses.\n\n  \
+         Next:\n    \
+         Run `kix gc {cluster}` on the machine that ran the last deploy or rollback, or run `kix deploy {cluster} --prune` to deploy the current files and delete what they no longer contain.",
+        active.name,
+        short(active_hash),
+        short(built),
+    ))
 }
 
 /// Order the garbage `entries` of a full scan by the `kix.run/depends-on`
@@ -417,9 +404,20 @@ async fn clear_kept(
 }
 
 fn run_hard(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
-    crate::say!("Building cluster '{}'...", output::bold(&args.cluster));
-    let graph =
-        super::build_flake(&ctx.global, &args.cluster, &|_| {}, super::BUILD_FAILED)?.into_graph();
+    let cluster = ctx.cluster_identity(&args.cluster, super::Lookup::Mutating)?;
+    let global = ctx.global.clone();
+    let active = ctx.runtime()?.block_on(async {
+        match open_records(&global).await? {
+            Some(records) => records.active(&cluster).await.map_err(|e| miette!("{e}")),
+            None => Ok(None),
+        }
+    })?;
+    // With no Active record the cluster runs no build, so the build from the
+    // current files is the only one to compare with.
+    let graph = match &active {
+        Some(active) => active_build(args, ctx, &cluster, active)?,
+        None => files_build(args, ctx, &cluster)?,
+    };
 
     let expected_hashes: HashSet<String> = graph
         .resources
@@ -432,22 +430,17 @@ fn run_hard(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         .map(|r| k8s_identity(&r.manifest))
         .collect();
 
+    let compared = match &active {
+        Some(active) => format!("the Active build ({})", active.name),
+        None => "the build from the current files (no Active record)".to_string(),
+    };
     crate::say!(
-        "Cluster {}: {} expected resources",
+        "Cluster {}: {} resources in {compared}",
         output::bold(&graph.cluster_name),
         expected_hashes.len(),
     );
 
-    let build_hash = lifecycle::record_of(
-        &graph
-            .resources
-            .values()
-            .map(|r| r.manifest.clone())
-            .collect::<Vec<_>>(),
-    )
-    .and_then(|m| keys::get(m, keys::IDENTITY_HASH).map(str::to_string));
-
-    let global = ctx.global.clone();
+    let build_hash = build_hash(&graph);
     let cluster_name = graph.cluster_name.clone();
     ctx.runtime()?.block_on(run_hard_async(
         args,

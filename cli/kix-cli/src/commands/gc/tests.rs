@@ -1,48 +1,9 @@
-use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::collections::HashSet;
 
 use kix::cluster::activation::{Record, RetentionPolicy, RetireReason, retire_plan};
 use kix::manifest::types::CLUSTER_SCOPED;
 
 use super::*;
-
-mod soft_garbage_tests {
-    use super::*;
-    use serde_json::json;
-
-    fn path(hash32: &str, name: &str) -> PathBuf {
-        PathBuf::from(format!("/nix/store/{hash32}-{name}"))
-    }
-
-    #[test]
-    fn only_resources_absent_by_identity_are_garbage() {
-        let record = json!({"kind": lifecycle::RECORD_KIND, "metadata": {"name": "stage1-aaaa"}});
-        let removed = json!({"kind": "ConfigMap", "metadata": {"name": "old", "namespace": "d"}});
-        let changed = json!({"kind": "Deployment", "metadata": {"name": "web", "namespace": "d"}});
-        let old_record_path = path("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "activation");
-        let old_cm_path = path("cccccccccccccccccccccccccccccccc", "configmap");
-        let old_dep_path = path("dddddddddddddddddddddddddddddddd", "deployment");
-        let old = vec![
-            (&old_record_path, &record),
-            (&old_cm_path, &removed),
-            (&old_dep_path, &changed),
-        ];
-        // The new build: a different record hash, the Deployment with new
-        // content (new hash, same name), and no ConfigMap.
-        let new_hashes: HashSet<String> = [
-            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
-            "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee".to_string(),
-        ]
-        .into();
-        let new_ids: HashSet<String> = ["Deployment/d/web".to_string()].into();
-        let garbage = soft_garbage(old, &new_hashes, &new_ids);
-        assert_eq!(
-            garbage.keys().collect::<Vec<_>>(),
-            vec!["cccccccccccccccccccccccccccccccc"],
-            "the changed Deployment and the rebuilt record are not garbage: {garbage:?}"
-        );
-    }
-}
 
 mod kept_garbage_tests {
     use super::*;
@@ -71,16 +32,76 @@ mod kept_garbage_tests {
             ],
             vec![m("ConfigMap", "old", "h1"), m("Secret", "listed", "h3")],
         ];
-        let new_hashes: HashSet<String> = ["h9".to_string()].into();
-        let new_ids: HashSet<String> = ["Deployment/d/web".to_string()].into();
-        let mut already = HashMap::new();
-        already.insert("h3".to_string(), m("Secret", "listed", "h3"));
+        let active_hashes: HashSet<String> = ["h3".to_string()].into();
+        let active_ids: HashSet<String> = ["Deployment/d/web".to_string()].into();
 
-        let got: Vec<String> = kept_garbage(&kept, &already, &new_hashes, &new_ids)
+        let got: Vec<String> = kept_garbage(&kept, &active_hashes, &active_ids)
             .iter()
             .map(k8s_identity)
             .collect();
         assert_eq!(got, vec!["ConfigMap/d/old"]);
+    }
+
+    /// Verify that after a rollback gc deletes what the build rolled back
+    /// from left behind, and keeps the workload of the restored build.
+    ///
+    /// `web` was renamed to `web2` and deployed (build B), then the cluster
+    /// rolled back to build A without `--prune`. A is Active and lists B under
+    /// `orphansKeptFrom`; the files still make B.
+    #[test]
+    fn after_a_rollback_gc_deletes_the_newer_build_s_leftovers() {
+        let build_a = [
+            m("Deployment", "web", "a-web"),
+            m("Service", "web", "a-svc"),
+        ];
+        let build_b = [
+            m("Deployment", "web2", "b-web2"),
+            m("Service", "web2", "b-svc"),
+        ];
+        let kept = [build_b.to_vec()];
+        let hashes = |b: &[Value]| -> HashSet<String> {
+            b.iter()
+                .filter_map(|m| keys::get(m, keys::IDENTITY_HASH).map(str::to_string))
+                .collect()
+        };
+        let ids = |b: &[Value]| -> HashSet<String> { b.iter().map(k8s_identity).collect() };
+
+        let got: Vec<String> = kept_garbage(&kept, &hashes(&build_a), &ids(&build_a))
+            .iter()
+            .map(k8s_identity)
+            .collect();
+        assert_eq!(got, vec!["Deployment/d/web2", "Service/d/web2"]);
+
+        // The same kept build compared with the build from the files (B)
+        // finds nothing, and the files build is refused below, so `web` is
+        // never planned for deletion.
+        assert!(kept_garbage(&kept, &hashes(&build_b), &ids(&build_b)).is_empty());
+    }
+
+    /// Verify that gc uses the build from the current files only when it is
+    /// the build the Active record names.
+    #[test]
+    fn a_files_build_other_than_the_active_build_is_refused() {
+        let active = Record {
+            name: "c-a".into(),
+            identity_hash: Some("aaaaaaaa1111".into()),
+            ..Default::default()
+        };
+        assert!(check_files_build("c", &active, Some("aaaaaaaa1111")).is_ok());
+
+        let err = check_files_build("c", &active, Some("bbbbbbbb2222"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Nothing was deleted"), "{err}");
+        assert!(err.contains("c-a (build aaaaaaaa)"), "{err}");
+        assert!(err.contains("build bbbbbbbb"), "{err}");
+        assert!(check_files_build("c", &active, None).is_err());
+
+        let unhashed = Record {
+            identity_hash: None,
+            ..active
+        };
+        assert!(check_files_build("c", &unhashed, None).is_err());
     }
 
     /// Verify that `may_clear_kept` permits clearing only when the build hash

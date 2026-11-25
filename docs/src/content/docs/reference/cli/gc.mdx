@@ -5,11 +5,19 @@ description: "Delete Kix-managed resources a cluster no longer declares, and ret
 
 import Command from '/src/components/Command.astro';
 
-`kix gc` removes what a cluster's build no longer contains. It has three
-modes: the default compares the last deployed build with a fresh one,
-`--full-scan` scans every Kix-managed resource of the named cluster, and `--operator`
-deletes Activation records and lets the Kix operator clean up after them.
-Every mode also retires old Superseded Activation records.
+`kix gc` removes what earlier deploys and rollbacks left on the cluster. It
+has three modes: the default deletes the objects that deploys and rollbacks
+without `--prune` kept, `--full-scan` scans every Kix-managed resource of the
+named cluster, and `--operator` deletes Activation records and lets the Kix
+operator clean up after them. Every mode also retires old Superseded
+Activation records.
+
+`kix gc` keeps every object in the build the cluster's Active record names,
+which is the build the last deploy or rollback applied. It does not compare
+with your current files. To delete what you removed from the files, deploy
+them with `kix deploy --prune`. After `kix rollback`, `kix gc` deletes what
+the build you rolled back from left behind and keeps the build you rolled back
+to.
 
 This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
 `cli/kix-cli/src/commands/gc/{mod,plan,render}.rs` when in doubt.
@@ -27,7 +35,7 @@ kix gc <CLUSTER> [-y] [--dry-run] [--full-scan [--include unstamped,unattributed
 | `<CLUSTER>` | Cluster name to build from the flake. |
 | `-y`, `--yes` | Skip the confirmation prompt. Required when stdin is not a terminal. |
 | `--dry-run` | Print what gc would delete, both resources and Activation records, and delete nothing. |
-| `--full-scan` | Scan the named cluster's resources carrying the Kix managed-by label and delete those whose identity hash is not in the fresh build. |
+| `--full-scan` | Scan the named cluster's resources carrying the Kix managed-by label and delete those whose identity hash is not in the Active build. |
 | `--include <KINDS>` | With `--full-scan` (required), also judge the kinds of resource a full scan only lists by default. A comma-separated list of the values below. |
 
 | `--include` value | Resources it adds |
@@ -44,19 +52,21 @@ kix gc <CLUSTER> [-y] [--dry-run] [--full-scan [--include unstamped,unattributed
 
 ## Modes
 
-| Mode | Old side | What is deleted |
+| Mode | What gc checks | What is deleted |
 | --- | --- | --- |
-| Default | The build the cluster's Active record names, from this machine's cache of the last `kix deploy` or `kix rollback` when that is the same build, else from Kix's local store; and the builds the Active record lists under `status.orphansKeptFrom` | Resources whose kind, namespace, and name are absent from the fresh build. Exits with a message if the cluster has no Active record or its build is not on this machine. A cached build of another context's cluster of the same name is set aside with a warning. |
-| `--full-scan` | Every Kix-managed resource of the named cluster | Resources whose identity hash is not in the fresh build |
+| Default | The builds the Active record lists under `status.orphansKeptFrom` | Their resources whose kind, namespace, and name are absent from the Active build. Exits with a message if the cluster has no Active record. |
+| `--full-scan` | Every Kix-managed resource of the named cluster | Resources whose identity hash is not in the Active build. With no Active record, resources whose identity hash is not in the build from the current files. |
 | `--operator` | Activation records | Retired records; the operator deletes their resources |
 
-Default mode, `--full-scan`, and the Kix operator inspect only objects carrying the label `app.kubernetes.io/managed-by=kix`. `kix gc` never lists or deletes unlabelled objects, such as resources applied with `kubectl`. See [Objects Kix did not apply](/docs/reference/cli/diff/#objects-kix-did-not-apply).
+Both the default mode and `--full-scan` read the Active build from this
+machine's cache of the last `kix deploy` or `kix rollback` when that is the
+same build, else from Kix's local store. A cached build of another context's
+cluster of the same name is set aside with a warning. When the Active build is
+not on this machine, gc builds the cluster from the current files and uses
+that build only if it is the Active build. Otherwise gc stops, deletes
+nothing, and names both builds.
 
-:::caution[The default mode can omit cluster-level garbage from its plan]
-The default mode currently deletes stale resources that belong to no package,
-but its confirmation plan does not list them. Use `--full-scan` when you need
-the plan to inventory those resources before deletion.
-:::
+Default mode, `--full-scan`, and the Kix operator inspect only objects carrying the label `app.kubernetes.io/managed-by=kix`. `kix gc` never lists or deletes unlabelled objects, such as resources applied with `kubectl`. See [Objects Kix did not apply](/docs/reference/cli/diff/#objects-kix-did-not-apply).
 
 `--full-scan` judges the resources of the cluster you name. Each resource Kix
 deploys lists, in its `kix.run/activations` annotation, the Activation records
@@ -103,11 +113,11 @@ removes the custom resource's finalizer. A
 slow cleanup may still finish on its own; run `kix gc` again later, or pass a
 longer `--timeout` (up to `5m`).
 
-A deploy without `--prune` keeps its orphans and lists the builds they came
-from on the new Activation, under `status.orphansKeptFrom`. The default
-mode deletes those orphans too, listed under "Orphans kept by earlier
-deploys". When gc deletes without failures in either mode and the fresh build
-is the one the Active record describes, it removes the list. The default mode
+A deploy or rollback without `--prune` keeps its orphans and lists the builds
+they came from on the new Activation, under `status.orphansKeptFrom`. The
+default mode deletes those orphans, listed under "Objects that left the build
+in earlier deploys". When gc deletes without failures in either mode, it
+removes the list. The default mode
 leaves the list if this machine could not read one of the builds, and a full
 scan leaves it if it was forbidden to list some kinds. Deploying with
 `--prune` every time keeps the list empty, so the default mode has no kept
