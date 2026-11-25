@@ -128,6 +128,13 @@ pub enum PlanEvent<'a> {
         sources: &'a [KeptOrphanSource],
         cluster: &'a str,
     },
+    /// Objects the build leaves unchanged that are absent from the cluster
+    /// or being deleted. The plan writes them again.
+    NotHeld(&'a [ResourceId]),
+    /// Kinds of unchanged objects that this account may not list, as
+    /// `Kind` or `Kind.group`. The plan does not know whether the cluster
+    /// still holds those objects, and leaves them unchanged.
+    KindsUnread(&'a [String]),
 }
 
 /// Why a plan could not be made.
@@ -155,6 +162,8 @@ pub enum PlanError {
     Reconstruct(String),
     #[error("cannot check whether another Kix cluster deploys an orphan: {0}")]
     SharedOrphans(Box<FetchError>),
+    #[error("cannot list the build's objects on the cluster: {0}")]
+    ReadLive(Box<FetchError>),
     #[error("{0}")]
     Graph(GraphError),
     #[error("{0}")]

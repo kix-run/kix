@@ -11,6 +11,7 @@ use crate::manifest::types::{CLUSTER_SCOPED, ResourceId};
 
 use super::super::apply::{ChangeAction, Deployed, changed, wants_rerun};
 use super::super::graph::ResourceGraph;
+use super::super::inventory::{Live, LiveObjects};
 use super::super::readiness::{self, ImportTarget};
 use super::super::stream::{NodeId, NodeMeta, PlanNode, TransitionKind};
 
@@ -173,39 +174,52 @@ impl DeployPlan {
         self.nodes.iter().any(reads_last_run)
     }
 
-    /// Read the live object of every Job whose last run decides what the
-    /// plan does with it, and apply [`DeployPlan::rerun_failed`] to the Jobs
-    /// whose last run failed. A plan with no such Job reads nothing.
+    /// List the Jobs whose last run decides what the plan does with them,
+    /// one LIST per kind, and read their last runs
+    /// ([`DeployPlan::last_runs_from`]). A plan with no such Job lists
+    /// nothing.
     pub(crate) async fn read_last_runs(
         &mut self,
         client: &kube::Client,
         discovery: &[(kube::discovery::ApiResource, kube::discovery::Scope)],
     ) -> LastRuns {
+        let jobs: Vec<ResourceId> = self
+            .nodes
+            .iter()
+            .filter(|e| reads_last_run(e))
+            .filter_map(|e| match &e.id {
+                NodeId::Resource(rid) => Some(rid.clone()),
+                _ => None,
+            })
+            .collect();
+        match LiveObjects::list(client, discovery, &jobs).await {
+            Ok(live) => self.last_runs_from(&live),
+            Err(e) => {
+                tracing::debug!(error = %e, "could not list the Jobs whose last run the plan reads");
+                LastRuns::Unreadable
+            }
+        }
+    }
+
+    /// Read in `live` the last run of every Job whose last run decides what
+    /// the plan does with it, and apply [`DeployPlan::rerun_failed`] to the
+    /// Jobs whose last run failed.
+    pub(crate) fn last_runs_from(&mut self, live: &LiveObjects) -> LastRuns {
         let mut failed = HashSet::new();
         let mut all_read = true;
         for entry in self.nodes.iter().filter(|e| reads_last_run(e)) {
             let NodeId::Resource(rid) = &entry.id else {
                 continue;
             };
-            let Some((ar, scope)) = super::super::discovery::find(discovery, &rid.group, &rid.kind)
-            else {
-                tracing::debug!(resource = %rid, group = %rid.group, "no API serves a Job's kind");
-                all_read = false;
-                continue;
-            };
-            let api = super::super::discovery::api_for(client, ar, scope, rid);
-            match api.get_opt(&rid.name).await {
-                Ok(Some(live))
-                    if readiness::classify_workload_terminal(&live.data, rid.group_kind())
+            match live.get(rid) {
+                Live::Present(obj)
+                    if readiness::classify_workload_terminal(&obj.data, rid.group_kind())
                         .is_some() =>
                 {
                     failed.insert(rid.clone());
                 }
-                Ok(_) => {}
-                Err(e) => {
-                    tracing::debug!(resource = %rid, error = %e, "could not read a Job's live object");
-                    all_read = false;
-                }
+                Live::Unread => all_read = false,
+                Live::Present(_) | Live::Absent => {}
             }
         }
         let reported = self.rerun_failed(&failed);

@@ -161,6 +161,24 @@ pub fn print(event: PlanEvent<'_>) {
                 some_names(sources.iter().map(|s| s.activation.as_str())),
             );
         }
+        PlanEvent::NotHeld(objects) => {
+            let names: Vec<String> = objects.iter().map(|rid| rid.display_id()).collect();
+            crate::say!(
+                "  {} {} unchanged object(s) are missing from the cluster or being deleted, so this deploy writes them again: {}",
+                output::yellow("!"),
+                objects.len(),
+                some_names(names.iter().map(String::as_str)),
+            );
+        }
+        PlanEvent::KindsUnread(kinds) => {
+            warning(&format!(
+                "this account cannot list {} on the cluster.",
+                some_names(kinds.iter().map(String::as_str))
+            ));
+            crate::esay!(
+                "  This plan cannot tell whether unchanged objects of these kinds are missing or being deleted, so it leaves them as they are."
+            );
+        }
         PlanEvent::KeptUnresolved { sources, cluster } => {
             let names = some_names(sources.iter().map(|s| s.activation.as_str()));
             warning(&format!(

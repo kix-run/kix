@@ -1,7 +1,7 @@
 //! Sweep Kix-labeled objects on a cluster using parallel LIST requests, then
 //! attribute each object to the Kix clusters whose records it names.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use super::activation::OpenedRecords;
 use super::discovery::api_for;
@@ -481,6 +481,83 @@ pub(crate) async fn split_shared_orphans_live(
         .await
         .map_err(FetchError::RecordsError)?;
     Ok(split_by_lookup(orphans, |rid| live.get(rid), &tenancy))
+}
+
+/// What [`LiveObjects::get`] knows about one object.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Live<'a> {
+    Present(&'a DynamicObject),
+    /// The listing of its kind does not hold it, or the cluster does not
+    /// serve its kind.
+    Absent,
+    /// This account may not list its kind.
+    Unread,
+}
+
+/// The objects of some kinds that carry the `managed-by=kix` label, read with
+/// one cluster-wide LIST per kind.
+#[derive(Debug, Default)]
+pub(crate) struct LiveObjects {
+    objects: HashMap<ResourceId, DynamicObject>,
+    /// `(group, kind)` of each kind this account may not list.
+    unread: HashSet<(String, String)>,
+}
+
+impl LiveObjects {
+    /// List the objects of each kind of `ids` that the cluster serves. A
+    /// kind the account may not list (403) is recorded as unread. Any other
+    /// failure returns an error, so no caller reads a missing listing as an
+    /// empty one.
+    pub(crate) async fn list<'a>(
+        client: &Client,
+        discovery: &[(ApiResource, Scope)],
+        ids: impl IntoIterator<Item = &'a ResourceId>,
+    ) -> Result<LiveObjects, FetchError> {
+        let mut kinds: Vec<(ApiResource, Scope)> = Vec::new();
+        for rid in ids {
+            let listed = kinds
+                .iter()
+                .any(|(ar, _)| ar.group == rid.group && ar.kind == rid.kind);
+            if !listed
+                && let Some(served) = super::discovery::find(discovery, &rid.group, &rid.kind)
+            {
+                kinds.push(served.clone());
+            }
+        }
+        let lp = ListParams::default().labels(MANAGED_BY_LABEL);
+        let listed = fetch_parallel(client, &kinds, &lp).await?;
+        let unread = kinds
+            .iter()
+            .filter(|(ar, _)| listed.forbidden.contains(&resource_fqn(ar)))
+            .map(|(ar, _)| (ar.group.clone(), ar.kind.clone()))
+            .collect();
+        let objects = listed
+            .objects
+            .into_iter()
+            .map(|obj| (super::drift::resource_id(&obj), obj))
+            .collect();
+        Ok(LiveObjects { objects, unread })
+    }
+
+    pub(crate) fn get(&self, rid: &ResourceId) -> Live<'_> {
+        if self.unread.contains(&(rid.group.clone(), rid.kind.clone())) {
+            return Live::Unread;
+        }
+        self.objects.get(rid).map_or(Live::Absent, Live::Present)
+    }
+}
+
+impl Live<'_> {
+    /// Return whether the cluster no longer holds the object: it is absent,
+    /// or it is being deleted. An object of a kind Kix may not list is not
+    /// known to be lost.
+    pub(crate) fn lost(self) -> bool {
+        match self {
+            Live::Absent => true,
+            Live::Present(obj) => obj.metadata.deletion_timestamp.is_some(),
+            Live::Unread => false,
+        }
+    }
 }
 
 /// Results of a single parallel LIST pass.
