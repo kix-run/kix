@@ -1571,9 +1571,9 @@ async fn rerun_job_still_present_after_delete_fails_the_node() {
         rid("Job", "probe"),
         NodeScript::default()
             .live(Behaviour::Now(Ok(Some(live_job(false)))))
-            .recreate(Behaviour::Now(Err(
+            .recreate(Behaviour::Now(Err(ApplyFailure::Other(
                 "Job/default/probe still exists 30s after delete (stuck finalizer?); not re-applied".into(),
-            ))),
+            )))),
     );
     let rec = Arc::new(Recorder::default());
     let result = run(
@@ -3431,4 +3431,303 @@ async fn fields_the_server_did_not_keep_warn_and_the_run_goes_on() {
         })
         .collect();
     assert_eq!(warned, vec![(rid("Widget", "w"), pruned)]);
+}
+
+/// Return the `DeletionUnfinished` detail of the failed event of `node`, if
+/// its failure carried one.
+fn deletion_detail(rec: &Recorder, node: &ResourceId) -> Option<NodeDetail> {
+    rec.0.lock().unwrap().iter().find_map(|e| match e {
+        DeployEvent::NodeStateChanged {
+            node: NodeId::Resource(r),
+            verdict: Verdict::Failed { .. },
+            detail: Some(d @ NodeDetail::DeletionUnfinished { .. }),
+            ..
+        } if r == node => Some(d.clone()),
+        _ => None,
+    })
+}
+
+fn stuck(finalizer: &str) -> crate::cluster::readiness::Stuck {
+    crate::cluster::readiness::Stuck {
+        elapsed: secs(180),
+        finalizers: vec![finalizer.into()],
+        controllers: Vec::new(),
+    }
+}
+
+/// A Deployment `operator` whose one pod is not ready.
+fn operator_not_ready() -> (Value, NodeScript) {
+    let mut operator = m("Deployment", "operator", &[]);
+    operator["apiVersion"] = json!("apps/v1");
+    let live = NodeScript::default().live(Behaviour::Now(Ok(Some(json!({
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": { "name": "operator", "namespace": "default", "generation": 1 },
+        "spec": { "replicas": 1 },
+        "status": { "observedGeneration": 1, "replicas": 1, "readyReplicas": 0 },
+    })))));
+    (operator, live)
+}
+
+/// An apply onto an object being deleted whose delete does not finish names
+/// the controller its kind names, and carries the delete's detail. An object
+/// that needs the same workload through `requires:` names no controller and
+/// still carries the detail.
+#[tokio::test(start_paused = true)]
+async fn a_stuck_apply_names_the_controller_and_carries_the_detail() {
+    let (operator, operator_live) = operator_not_ready();
+    let operator_rid = ResourceId::from_value(&operator);
+    let with_deps = |name: &str, deps: &str| {
+        let mut v = m("ConfigMap", name, &[]);
+        v["metadata"]["annotations"][keys::DEPENDS_ON] = json!(deps);
+        v
+    };
+    let manifests = vec![
+        operator,
+        with_deps("cr", "controller:h_operator"),
+        with_deps("plain", "requires:h_operator"),
+    ];
+    let ops = Arc::new(ScriptedOps::new());
+    ops.script(operator_rid.clone(), operator_live);
+    for name in ["cr", "plain"] {
+        ops.script(
+            rid("ConfigMap", name),
+            NodeScript::default().apply(Behaviour::Now(Err(ApplyFailure::StillBeingDeleted(
+                stuck("example.com/hold"),
+            )))),
+        );
+    }
+    let rec = Arc::new(Recorder::default());
+    let result = run(
+        &ops,
+        plan_of(&manifests),
+        &config(quiet_watchdog()),
+        rec.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.failed, 2);
+
+    let Some(NodeDetail::DeletionUnfinished {
+        elapsed,
+        finalizers,
+        controllers,
+        message,
+    }) = deletion_detail(&rec, &rid("ConfigMap", "cr"))
+    else {
+        panic!("no deletion detail for cr");
+    };
+    assert_eq!(elapsed, secs(180));
+    assert_eq!(finalizers, ["example.com/hold"]);
+    assert_eq!(controllers.len(), 1);
+    assert_eq!(controllers[0].id, operator_rid);
+    assert!(matches!(
+        controllers[0].state,
+        crate::cluster::readiness::ControllerState::NotReady(_)
+    ));
+    assert!(message.starts_with("[K2794] "), "{message}");
+    assert!(
+        message.contains("ConfigMap controller Deployment.apps/operator@default is not ready ("),
+        "{message}"
+    );
+    assert!(message.contains("already being deleted"), "{message}");
+
+    let Some(NodeDetail::DeletionUnfinished {
+        controllers,
+        message,
+        ..
+    }) = deletion_detail(&rec, &rid("ConfigMap", "plain"))
+    else {
+        panic!("no deletion detail for plain");
+    };
+    assert!(controllers.is_empty());
+    assert!(!message.contains("ConfigMap controller"), "{message}");
+}
+
+/// A Job run again whose old object does not go names the controller its
+/// kind names, keeps the rerun prefix in the message and the detail, and
+/// fails the node. Any other recreate failure still carries `apply_failed`.
+#[tokio::test(start_paused = true)]
+async fn a_stuck_recreate_names_the_controller() {
+    let (operator, operator_live) = operator_not_ready();
+    let operator_rid = ResourceId::from_value(&operator);
+    let mut job = rerun_m("Job", "probe", &[]);
+    job["metadata"]["annotations"][keys::DEPENDS_ON] = json!("controller:h_operator");
+    let ops = Arc::new(ScriptedOps::new());
+    ops.script(operator_rid.clone(), operator_live);
+    ops.script(
+        rid("Job", "probe"),
+        NodeScript::default()
+            .live(Behaviour::Now(Ok(Some(live_job(false)))))
+            .recreate(Behaviour::Now(Err(ApplyFailure::StillBeingDeleted(stuck(
+                "example.com/hold",
+            ))))),
+    );
+    let rec = Arc::new(Recorder::default());
+    let result = run(
+        &ops,
+        plan_of(&[operator, job]),
+        &config(quiet_watchdog()),
+        rec.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.failed, 1);
+    let Some(NodeDetail::DeletionUnfinished {
+        controllers,
+        message,
+        ..
+    }) = deletion_detail(&rec, &rid("Job", "probe"))
+    else {
+        panic!("no deletion detail for the Job");
+    };
+    assert_eq!(controllers.len(), 1);
+    assert!(message.starts_with("rerun ("), "{message}");
+    assert!(
+        message.contains("Job controller Deployment.apps/operator@default is not ready ("),
+        "{message}"
+    );
+    assert_eq!(result.failures[0].message, message);
+
+    let ops = Arc::new(ScriptedOps::new());
+    ops.script(
+        rid("Job", "probe"),
+        NodeScript::default()
+            .live(Behaviour::Now(Ok(Some(live_job(false)))))
+            .recreate(Behaviour::Now(Err(ApplyFailure::Other("boom".into())))),
+    );
+    let rec = Arc::new(Recorder::default());
+    run(
+        &ops,
+        plan_of(&[rerun_m("Job", "probe", &[])]),
+        &config(quiet_watchdog()),
+        rec.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(deletion_detail(&rec, &rid("Job", "probe")).is_none());
+}
+
+/// A stuck prune delete carries the delete's detail with the controller, and
+/// one that names none carries an empty list.
+#[tokio::test(start_paused = true)]
+async fn a_stuck_prune_carries_the_deletion_detail() {
+    use crate::cluster::readiness::Deletion;
+    let (operator, operator_live) = operator_not_ready();
+    let operator_rid = ResourceId::from_value(&operator);
+    let with_deps = |name: &str, deps: &str| {
+        let mut v = m("ConfigMap", name, &[]);
+        v["metadata"]["annotations"][keys::DEPENDS_ON] = json!(deps);
+        v
+    };
+    let old = [
+        with_deps("cr", "controller:h_operator"),
+        with_deps("plain", ""),
+        operator,
+    ];
+    let ops = Arc::new(ScriptedOps::new());
+    ops.script(operator_rid.clone(), operator_live);
+    for name in ["cr", "plain"] {
+        ops.gone_behaviour(
+            rid("ConfigMap", name),
+            None,
+            Behaviour::Now(Ok(Deletion::Stuck(stuck("example.com/hold")))),
+        );
+    }
+    let rec = Arc::new(Recorder::default());
+    run_with_orphans(
+        &ops,
+        plan_of(&[m("ConfigMap", "keep", &[])]),
+        &[
+            rid("ConfigMap", "cr"),
+            rid("ConfigMap", "plain"),
+            operator_rid.clone(),
+        ],
+        &old,
+        PrunePolicy::Delete,
+        &config(quiet_watchdog()),
+        rec.clone(),
+    )
+    .await
+    .unwrap();
+    let Some(NodeDetail::DeletionUnfinished { controllers, .. }) =
+        deletion_detail(&rec, &rid("ConfigMap", "cr"))
+    else {
+        panic!("no deletion detail for cr");
+    };
+    assert_eq!(controllers.len(), 1);
+    assert_eq!(controllers[0].id, operator_rid);
+    let Some(NodeDetail::DeletionUnfinished { controllers, .. }) =
+        deletion_detail(&rec, &rid("ConfigMap", "plain"))
+    else {
+        panic!("no deletion detail for plain");
+    };
+    assert!(controllers.is_empty());
+}
+
+/// A prune delete that waits is reported by the watchdog in the `deletion`
+/// phase, with what it waits for and the budget, and stops being reported
+/// once the object is gone.
+#[tokio::test(start_paused = true)]
+async fn a_slow_prune_delete_is_reported_while_it_waits() {
+    use crate::cluster::readiness::Deletion;
+    let ops = Arc::new(ScriptedOps::new());
+    ops.gone_behaviour(
+        rid("ConfigMap", "slow"),
+        Some("being deleted, waiting for example.com/hold"),
+        Behaviour::After(secs(100), Ok(Deletion::Gone)),
+    );
+    let rec = Arc::new(Recorder::default());
+    let cfg = config(StallPolicy {
+        warn_after: secs(30),
+        abort_after: None,
+    });
+    let result = run_with_orphans(
+        &ops,
+        plan_of(&[m("ConfigMap", "keep", &[])]),
+        &[rid("ConfigMap", "slow")],
+        &[m("ConfigMap", "slow", &[])],
+        PrunePolicy::Delete,
+        &cfg,
+        rec.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!((result.pruned, result.failed), (1, 0));
+    let waits: Vec<(Phase, Option<String>, Option<Duration>)> = rec
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|e| match e {
+            DeployEvent::Waiting {
+                node: NodeId::Resource(r),
+                phase,
+                status,
+                budget,
+                ..
+            } if *r == rid("ConfigMap", "slow") => Some((*phase, status.clone(), *budget)),
+            _ => None,
+        })
+        .collect();
+    assert!(!waits.is_empty(), "no waiting line for the delete");
+    assert!(
+        waits
+            .iter()
+            .all(|(phase, status, budget)| *phase == Phase::Deletion
+                && status.as_deref() == Some("being deleted, waiting for example.com/hold")
+                && *budget == Some(secs(300))),
+        "{waits:?}"
+    );
+    // Nothing waits once the delete is done.
+    let last_wait = rec
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .rposition(|e| matches!(e, DeployEvent::Waiting { .. }));
+    let ready = rec.0.lock().unwrap().iter().position(|e| {
+        matches!(e, DeployEvent::NodeStateChanged { node: NodeId::Resource(r), verdict: Verdict::Ready, .. } if *r == rid("ConfigMap", "slow"))
+    });
+    assert!(last_wait < ready, "{last_wait:?} {ready:?}");
 }

@@ -489,6 +489,30 @@ mod tests {
                 }),
             ),
             state(
+                node("ScaledObject", "worker"),
+                TransitionKind::Delete,
+                Verdict::Failed {
+                    message: "[K2794] still being deleted".into(),
+                },
+                Some(NodeDetail::DeletionUnfinished {
+                    elapsed: Duration::from_secs(180),
+                    finalizers: vec!["finalizer.keda.sh".into()],
+                    controllers: vec![
+                        kix::cluster::readiness::Controller {
+                            id: rid("Deployment", "keda-operator"),
+                            state: kix::cluster::readiness::ControllerState::NotReady(
+                                "0/1 ready".into(),
+                            ),
+                        },
+                        kix::cluster::readiness::Controller {
+                            id: rid("Deployment", "keda-admission"),
+                            state: kix::cluster::readiness::ControllerState::Missing,
+                        },
+                    ],
+                    message: "[K2794] still being deleted".into(),
+                }),
+            ),
+            state(
                 node("Pod", "after"),
                 TransitionKind::Drain,
                 Verdict::Cancelled {
@@ -577,6 +601,15 @@ mod tests {
                 budget: Some(Duration::from_secs(180)),
                 holds: vec![node("Deployment", "api"), node("Job", "migrate")],
                 holds_total: 3,
+            },
+            DeployEvent::Waiting {
+                node: node("ScaledObject", "worker"),
+                phase: Phase::Deletion,
+                since: Duration::from_secs(60),
+                status: Some("being deleted, waiting for finalizer.keda.sh".into()),
+                budget: Some(Duration::from_secs(180)),
+                holds: vec![],
+                holds_total: 0,
             },
             DeployEvent::BestEffortFailed {
                 what: "checkpoint".into(),

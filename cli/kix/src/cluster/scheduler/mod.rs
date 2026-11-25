@@ -351,6 +351,7 @@ impl<'a> Run<'a> {
             timeout: config.timeout,
             // Preauthorized delete set for immutable-conflict recovery.
             orphan_set: orphan_rids.iter().cloned().collect(),
+            controllers: plan.controllers.clone(),
             dry_run,
             progress: progress.clone(),
             observer: observer.clone(),
@@ -1120,6 +1121,7 @@ impl<'a> Run<'a> {
                 && verdict.is_terminal()
             {
                 progress.finished(node);
+                progress.clear(node);
             }
             observer.on_event(&event);
         };
@@ -1219,15 +1221,22 @@ impl<'a> Run<'a> {
                         });
                     }
                     Walked::Done(Pruning::Unfinished(
-                        unfinished @ (Unfinished::Failed(_) | Unfinished::Stuck(_)),
+                        unfinished @ (Unfinished::Failed(_) | Unfinished::Stuck { .. }),
                     )) => {
-                        let message = match unfinished {
-                            Unfinished::Stuck(message) if !explained => {
-                                explained = true;
-                                format!("{message}\n\n{}", readiness::stuck_explanation(path))
+                        let (message, detail) = match unfinished {
+                            Unfinished::Stuck { stuck, message } => {
+                                let message = if explained {
+                                    message
+                                } else {
+                                    explained = true;
+                                    format!("{message}\n\n{}", readiness::stuck_explanation(path))
+                                };
+                                let detail =
+                                    NodeDetail::deletion_unfinished(&stuck, message.clone());
+                                (message, Some(detail))
                             }
-                            Unfinished::Stuck(message) | Unfinished::Failed(message) => message,
-                            Unfinished::Cancelled => String::new(),
+                            Unfinished::Failed(message) => (message, None),
+                            Unfinished::Cancelled => (String::new(), None),
                         };
                         orphans_left = true;
                         result.failed += 1;
@@ -1235,12 +1244,12 @@ impl<'a> Run<'a> {
                             node: NodeId::Resource(rid.clone()),
                             message: message.clone(),
                         });
-                        emit(state(
-                            rid,
-                            Verdict::Failed {
-                                message: message.clone(),
-                            },
-                        ));
+                        emit(DeployEvent::NodeStateChanged {
+                            node: NodeId::Resource(rid.clone()),
+                            kind: TransitionKind::Delete,
+                            verdict: Verdict::Failed { message },
+                            detail,
+                        });
                     }
                     Walked::Done(Pruning::Unfinished(Unfinished::Cancelled))
                     | Walked::NotStarted => {
@@ -1356,7 +1365,10 @@ enum Unfinished {
     Failed(String),
     /// The object was still being deleted when the wait ended, with the
     /// message to report.
-    Stuck(String),
+    Stuck {
+        stuck: readiness::Stuck,
+        message: String,
+    },
 }
 
 /// Wait for the orphan `rid` with uid `uid`, deleted by this prune or
@@ -1375,8 +1387,11 @@ async fn wait_gone(
     timeout: Duration,
     cancel: &CancelToken,
 ) -> Result<(), Unfinished> {
+    let node = NodeId::Resource(rid.clone());
+    progress.set_phase(&node, Phase::Deletion);
     let last = std::sync::Mutex::new(String::new());
     let on_status = |status: &str| {
+        progress.set_status(&node, status);
         let Ok(mut last) = last.lock() else {
             return;
         };
@@ -1401,7 +1416,8 @@ async fn wait_gone(
             for id in controllers {
                 stuck.controllers.push(read_controller(resources, id).await);
             }
-            Err(Unfinished::Stuck(readiness::stuck_message(rid, &stuck)))
+            let message = readiness::stuck_message(rid, &stuck);
+            Err(Unfinished::Stuck { stuck, message })
         }
         Ok(Deletion::Cancelled) => Err(Unfinished::Cancelled),
         Err(e) => Err(Unfinished::Failed(format!(

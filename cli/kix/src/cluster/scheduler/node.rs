@@ -1,6 +1,6 @@
 //! Per-node execution, recreation refusal, and orphan pruning order.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -30,6 +30,9 @@ pub(super) struct NodeCtx {
     pub(super) cancel: CancelToken,
     pub(super) timeout: Duration,
     pub(super) orphan_set: HashSet<ResourceId>,
+    /// The controllers that the kind of each object names, read when a
+    /// delete before a recreate or an apply does not finish.
+    pub(super) controllers: HashMap<ResourceId, Vec<ResourceId>>,
     pub(super) dry_run: bool,
     pub(super) progress: Arc<Progress>,
     pub(super) observer: Arc<dyn DeployObserver>,
@@ -71,15 +74,83 @@ pub(super) enum NodeOutcome {
     Cancelled,
 }
 
+/// A step of a node that failed: what it reports, and the detail the
+/// stream carries.
+struct StepFailed {
+    message: String,
+    detail: NodeDetail,
+}
+
+impl StepFailed {
+    fn apply(message: String) -> Self {
+        StepFailed {
+            detail: NodeDetail::ApplyFailed(message.clone()),
+            message,
+        }
+    }
+
+    /// Put `prefix` before the message, in the detail too.
+    fn prefixed(self, prefix: &str) -> Self {
+        let message = format!("{prefix}{}", self.message);
+        let detail = match self.detail {
+            NodeDetail::DeletionUnfinished {
+                elapsed,
+                finalizers,
+                controllers,
+                ..
+            } => NodeDetail::DeletionUnfinished {
+                elapsed,
+                finalizers,
+                controllers,
+                message: message.clone(),
+            },
+            _ => NodeDetail::ApplyFailed(message.clone()),
+        };
+        StepFailed { message, detail }
+    }
+
+    fn outcome(self) -> NodeOutcome {
+        NodeOutcome::Failed {
+            detail: self.detail,
+            message: self.message,
+        }
+    }
+}
+
+/// Return the failure of a delete on `path` that did not finish: read each
+/// controller that the kind of `rid` names, so the message says whether it
+/// runs, and explain what Kix did.
+async fn deletion_unfinished(
+    ctx: &NodeCtx,
+    rid: &ResourceId,
+    mut stuck: readiness::Stuck,
+    path: DeletePath,
+) -> StepFailed {
+    for id in ctx.controllers.get(rid).into_iter().flatten() {
+        stuck
+            .controllers
+            .push(super::read_controller(&*ctx.resources, id).await);
+    }
+    let message = format!(
+        "{}\n\n{}",
+        readiness::stuck_message(rid, &stuck),
+        readiness::stuck_explanation(path)
+    );
+    StepFailed {
+        detail: NodeDetail::deletion_unfinished(&stuck, message.clone()),
+        message,
+    }
+}
+
 /// Delete and recreate a resource through `ResourceIo::recreate_in_place`
 /// unless `recreate_refusal` rejects its kind.
 async fn recreate(
     ctx: &NodeCtx,
     manifest: &Value,
     rid: &ResourceId,
-) -> Result<ApplyResult, String> {
+) -> Result<ApplyResult, StepFailed> {
     if let Some(refusal) = recreate_refusal(rid) {
-        return Err(refusal);
+        return Err(StepFailed::apply(refusal));
     }
     match ctx
         .resources
@@ -87,11 +158,10 @@ async fn recreate(
         .await
     {
         Ok(result) => Ok(result),
-        Err(e @ RecreateError::StillExists { .. }) => Err(format!(
-            "{e}\n\n{}",
-            readiness::stuck_explanation(DeletePath::Recreate(ctx.runner))
-        )),
-        Err(e) => Err(e.to_string()),
+        Err(RecreateError::StillExists { rid, stuck }) => {
+            Err(deletion_unfinished(ctx, &rid, stuck, DeletePath::Recreate(ctx.runner)).await)
+        }
+        Err(e) => Err(StepFailed::apply(e.to_string())),
     }
 }
 
@@ -324,7 +394,7 @@ async fn apply_or_recreate(
     if let Some(reason) = rerun_reason {
         return match recreate(ctx, manifest, rid).await {
             Ok(result) => Ok((result, None)),
-            Err(e) => Err(apply_failed(format!("rerun ({reason}) failed: {e}"))),
+            Err(e) => Err(e.prefixed(&format!("rerun ({reason}) failed: ")).outcome()),
         };
     }
     let node = NodeId::Resource(rid.clone());
@@ -339,13 +409,16 @@ async fn apply_or_recreate(
             let reason = source.to_string();
             match recreate(ctx, manifest, rid).await {
                 Ok(result) => Ok((result, Some(reason))),
-                Err(e) => Err(apply_failed(e)),
+                Err(e) => Err(e.outcome()),
             }
         }
-        Err(e @ ApplyError::StillBeingDeleted { .. }) => Err(apply_failed(format!(
-            "{e}\n\n{}",
-            readiness::stuck_explanation(DeletePath::Apply(ctx.runner))
-        ))),
+        Err(ApplyError::StillBeingDeleted { rid, stuck }) => {
+            Err(
+                deletion_unfinished(ctx, &rid, stuck, DeletePath::Apply(ctx.runner))
+                    .await
+                    .outcome(),
+            )
+        }
         Err(e) => Err(apply_failed(e.to_string())),
     }
 }

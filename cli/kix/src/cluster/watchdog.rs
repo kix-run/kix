@@ -310,7 +310,9 @@ impl Progress {
                     phase,
                     since,
                     status,
-                    budget: (phase == Phase::Readiness).then_some(budget).flatten(),
+                    budget: matches!(phase, Phase::Readiness | Phase::Deletion)
+                        .then_some(budget)
+                        .flatten(),
                     holds: holds.direct,
                     holds_total: holds.total,
                 }
@@ -433,9 +435,10 @@ pub fn describe_wait(
         (None, Phase::Apply) => "apply request outstanding".to_string(),
         (None, Phase::Hydrate) => "decrypting secrets".to_string(),
         (None, Phase::Discovery) => "refreshing API discovery".to_string(),
+        (None, Phase::Deletion) => "being deleted".to_string(),
     };
     let age = match budget {
-        Some(budget) if phase == Phase::Readiness => {
+        Some(budget) if matches!(phase, Phase::Readiness | Phase::Deletion) => {
             format!("{}s of {}s", since.as_secs(), budget.as_secs())
         }
         _ => format!("{}s", since.as_secs()),

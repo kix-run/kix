@@ -31,7 +31,7 @@ use super::super::cancel::CancelToken;
 use super::super::errors::FetchError;
 use super::super::kept::NotKeptField;
 use super::super::prune_guard::Pruned;
-use super::super::readiness::{Deletion, ImportTarget, ReadinessError, ReadinessResult};
+use super::super::readiness::{Deletion, ImportTarget, ReadinessError, ReadinessResult, Stuck};
 use super::super::secrets::{HydrationResult, SecretError};
 pub use super::Finalized;
 use super::{
@@ -117,7 +117,7 @@ pub enum Ready {
 pub struct NodeScript {
     pub hydrate: Behaviour<Result<(), String>>,
     pub apply: Behaviour<Result<ApplyAction, ApplyFailure>>,
-    pub recreate: Behaviour<Result<ApplyAction, String>>,
+    pub recreate: Behaviour<Result<ApplyAction, ApplyFailure>>,
     pub ready: Behaviour<Ready>,
     /// What [`ResourceIo::get_live`] answers. Defaults to `Ok(None)`.
     pub live: Behaviour<Result<Option<Value>, String>>,
@@ -133,6 +133,10 @@ pub enum ApplyFailure {
     /// Immutable-field conflict, which triggers an in-place recreate when
     /// pre-authorized.
     ImmutableConflict,
+    /// The object is being deleted, and was still there when the wait ended:
+    /// `ApplyError::StillBeingDeleted` from an apply,
+    /// `RecreateError::StillExists` from a recreate.
+    StillBeingDeleted(Stuck),
 }
 
 impl Default for NodeScript {
@@ -161,7 +165,7 @@ impl NodeScript {
         self.hydrate = b;
         self
     }
-    pub fn recreate(mut self, b: Behaviour<Result<ApplyAction, String>>) -> Self {
+    pub fn recreate(mut self, b: Behaviour<Result<ApplyAction, ApplyFailure>>) -> Self {
         self.recreate = b;
         self
     }
@@ -463,6 +467,9 @@ impl ResourceIo for ScriptedOps {
                     "scripted immutable conflict".into(),
                 )),
             }),
+            Err(ApplyFailure::StillBeingDeleted(stuck)) => {
+                Err(ApplyError::StillBeingDeleted { rid, stuck })
+            }
         }
     }
 
@@ -490,7 +497,13 @@ impl ResourceIo for ScriptedOps {
                 preview: None,
                 not_kept: Vec::new(),
             })
-            .map_err(RecreateError::Scripted)
+            .map_err(|failure| match failure {
+                ApplyFailure::StillBeingDeleted(stuck) => RecreateError::StillExists { rid, stuck },
+                ApplyFailure::Other(message) => RecreateError::Scripted(message),
+                ApplyFailure::ImmutableConflict => {
+                    RecreateError::Scripted("scripted immutable conflict".into())
+                }
+            })
     }
 
     async fn wait_ready(

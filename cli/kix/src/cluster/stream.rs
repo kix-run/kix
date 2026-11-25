@@ -18,7 +18,7 @@ use crate::manifest::types::ResourceId;
 
 use super::apply::ApplyAction;
 use super::kept::NotKeptField;
-use super::readiness::ImportTarget;
+use super::readiness::{Controller, ImportTarget, Stuck};
 
 /// What kind of operation a node represents.
 ///
@@ -216,6 +216,28 @@ pub enum NodeDetail {
     /// `OnDelete` DaemonSet that run the previous template. It is `None` for
     /// a custom resource in its declared `pendingRestart` state.
     PendingRestart { stale: Option<i64>, message: String },
+    /// A delete did not finish within the wait: the object is still on the
+    /// cluster. `controllers` are the workloads its kind names, as Kix found
+    /// them after the wait. `message` is the whole text the failure reports.
+    DeletionUnfinished {
+        elapsed: Duration,
+        finalizers: Vec<String>,
+        controllers: Vec<Controller>,
+        message: String,
+    },
+}
+
+impl NodeDetail {
+    /// Return the detail of a delete that did not finish, reported with
+    /// `message`.
+    pub fn deletion_unfinished(stuck: &Stuck, message: String) -> Self {
+        NodeDetail::DeletionUnfinished {
+            elapsed: stuck.elapsed,
+            finalizers: stuck.finalizers.clone(),
+            controllers: stuck.controllers.clone(),
+            message,
+        }
+    }
 }
 
 /// Metadata attached to a node at plan-time.
@@ -341,6 +363,8 @@ pub enum Phase {
     Readiness,
     /// API discovery refresh behind a CRD barrier.
     Discovery,
+    /// Waiting for a deleted object to be gone.
+    Deletion,
 }
 
 impl Phase {
@@ -351,6 +375,7 @@ impl Phase {
             Phase::Apply => "apply",
             Phase::Readiness => "readiness",
             Phase::Discovery => "discovery",
+            Phase::Deletion => "deletion",
         }
     }
 }

@@ -58,6 +58,10 @@ pub enum LastRuns {
 pub struct DeployPlan {
     pub(crate) nodes: Vec<PlanNodeEntry>,
     pub(crate) edges: Vec<(NodeId, NodeId)>,
+    /// The controllers that the kind of each object names
+    /// ([`super::super::graph::controllers_of`]), which a stuck delete before
+    /// a recreate or an apply reports on.
+    pub(crate) controllers: HashMap<ResourceId, Vec<ResourceId>>,
 }
 
 impl DeployPlan {
@@ -156,7 +160,11 @@ impl DeployPlan {
             }
         }
 
-        Ok(DeployPlan { nodes, edges })
+        Ok(DeployPlan {
+            nodes,
+            edges,
+            controllers: super::super::graph::controllers_of(manifests()),
+        })
     }
 
     /// Return whether the plan has a Job whose last run decides what the

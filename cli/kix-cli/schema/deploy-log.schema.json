@@ -81,6 +81,54 @@
       ],
       "type": "object"
     },
+    "ControllerFound": {
+      "description": "What Kix found when it read a controller.",
+      "oneOf": [
+        {
+          "const": "ready",
+          "description": "Ready, with at least one ready pod.",
+          "type": "string"
+        },
+        {
+          "const": "not_ready",
+          "description": "On the cluster and not ready, or scaled to no ready pod.",
+          "type": "string"
+        },
+        {
+          "const": "missing",
+          "description": "Not on the cluster.",
+          "type": "string"
+        },
+        {
+          "const": "unread",
+          "description": "Kix could not read it.",
+          "type": "string"
+        }
+      ]
+    },
+    "DeletionController": {
+      "description": "A controller of an object whose delete did not finish.",
+      "properties": {
+        "detail": {
+          "description": "Why it is not ready, or why Kix could not read it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "resource": {
+          "$ref": "#/$defs/ResourceId"
+        },
+        "state": {
+          "$ref": "#/$defs/ControllerFound"
+        }
+      },
+      "required": [
+        "resource",
+        "state"
+      ],
+      "type": "object"
+    },
     "Detail": {
       "description": "What a node's state change carries, named by its one key.",
       "oneOf": [
@@ -266,6 +314,47 @@
             "awaiting_restart"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A delete did not finish within the wait: after `elapsed_ms`, the\nobject was still on the cluster, held by `finalizers`. `controllers`\nlists the workloads its kind names as its controller (`controller` on\n`scope.mkCRD`), with what Kix found when it read them. `message` is\nthe text the failure reports.",
+          "properties": {
+            "deletion_unfinished": {
+              "properties": {
+                "controllers": {
+                  "items": {
+                    "$ref": "#/$defs/DeletionController"
+                  },
+                  "type": "array"
+                },
+                "elapsed_ms": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "finalizers": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "elapsed_ms",
+                "finalizers",
+                "controllers",
+                "message"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "deletion_unfinished"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -389,6 +478,11 @@
         {
           "const": "discovery",
           "description": "API discovery refresh behind a CRD barrier.",
+          "type": "string"
+        },
+        {
+          "const": "deletion",
+          "description": "Waiting for a deleted object to be gone.",
           "type": "string"
         }
       ]

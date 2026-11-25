@@ -398,6 +398,31 @@ fn controller_id(manifest: &serde_json::Value) -> ResourceId {
     }
 }
 
+/// Return the controllers that the kind of each object of `manifests` names,
+/// from its `controller:` entries of `kix.run/depends-on`, for the objects
+/// whose kind names any. A controller that is an import marker is listed as
+/// the object the marker stands for. An entry whose manifest is not in
+/// `manifests` is skipped.
+pub fn controllers_of<'a>(
+    manifests: impl IntoIterator<Item = &'a serde_json::Value>,
+) -> HashMap<ResourceId, Vec<ResourceId>> {
+    let manifests: Vec<&serde_json::Value> = manifests.into_iter().collect();
+    let by_hash: HashMap<String, &serde_json::Value> = manifests
+        .iter()
+        .filter_map(|m| Some((get_annotation(m, keys::IDENTITY_HASH)?, *m)))
+        .collect();
+    manifests
+        .iter()
+        .filter_map(|m| {
+            let deps = get_annotation(m, keys::DEPENDS_ON)?;
+            let named: Vec<ResourceId> = keys::controller_hashes(&deps)
+                .filter_map(|hash| by_hash.get(hash).map(|c| controller_id(c)))
+                .collect();
+            (!named.is_empty()).then(|| (ResourceId::from_value(m), named))
+        })
+        .collect()
+}
+
 /// Objects to delete, in an order that deletes each object before the
 /// objects it depends on, together with the dependencies of a whole build.
 ///
@@ -451,15 +476,12 @@ impl DeleteOrder {
     /// to delete.
     pub fn of_manifests(manifests: &[serde_json::Value]) -> Self {
         let mut by_hash: HashMap<String, ResourceId> = HashMap::new();
-        let mut manifest_by_hash: HashMap<String, &serde_json::Value> = HashMap::new();
         for m in manifests {
             if let Some(hash) = get_annotation(m, keys::IDENTITY_HASH) {
-                by_hash.insert(hash.clone(), ResourceId::from_value(m));
-                manifest_by_hash.insert(hash, m);
+                by_hash.insert(hash, ResourceId::from_value(m));
             }
         }
         let mut needs: HashMap<ResourceId, Vec<ResourceId>> = HashMap::new();
-        let mut controllers: HashMap<ResourceId, Vec<ResourceId>> = HashMap::new();
         for m in manifests {
             let Some(deps) = get_annotation(m, keys::DEPENDS_ON) else {
                 continue;
@@ -472,12 +494,6 @@ impl DeleteOrder {
                     needs.entry(id.clone()).or_default().push(dep.clone());
                 }
             }
-            let named: Vec<ResourceId> = keys::controller_hashes(&deps)
-                .filter_map(|hash| manifest_by_hash.get(hash).map(|c| controller_id(c)))
-                .collect();
-            if !named.is_empty() {
-                controllers.insert(id, named);
-            }
         }
         let ids = match ResourceGraph::from_manifests(manifests) {
             Ok(graph) => graph.reverse_topo_ids(),
@@ -487,7 +503,7 @@ impl DeleteOrder {
             ids,
             needs,
             held: HashMap::new(),
-            controllers,
+            controllers: controllers_of(manifests.iter()),
         }
     }
 

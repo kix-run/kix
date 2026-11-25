@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use super::apply::ApplyAction;
 use super::kept;
+use super::readiness::ControllerState;
 use super::stream::{
     CancelReason, DeployEvent, DeployResult, NodeDetail, NodeId, Phase, TransitionKind, Verdict,
 };
@@ -21,7 +22,7 @@ use crate::manifest::types::ResourceId;
 
 /// Schema version (`YYYY-MM-DD`) of the last breaking change to the log format.
 /// Readers should reject versions they do not recognize.
-pub const SCHEMA_VERSION: &str = "2026-11-15";
+pub const SCHEMA_VERSION: &str = "2026-11-25";
 
 /// One line of the log.
 ///
@@ -254,6 +255,41 @@ pub enum Detail {
     AwaitingRestart {
         message: String,
     },
+    /// A delete did not finish within the wait: after `elapsed_ms`, the
+    /// object was still on the cluster, held by `finalizers`. `controllers`
+    /// lists the workloads its kind names as its controller (`controller` on
+    /// `scope.mkCRD`), with what Kix found when it read them. `message` is
+    /// the text the failure reports.
+    DeletionUnfinished {
+        elapsed_ms: u64,
+        finalizers: Vec<String>,
+        controllers: Vec<DeletionController>,
+        message: String,
+    },
+}
+
+/// A controller of an object whose delete did not finish.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct DeletionController {
+    pub resource: ResourceId,
+    pub state: ControllerFound,
+    /// Why it is not ready, or why Kix could not read it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+/// What Kix found when it read a controller.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ControllerFound {
+    /// Ready, with at least one ready pod.
+    Ready,
+    /// On the cluster and not ready, or scaled to no ready pod.
+    NotReady,
+    /// Not on the cluster.
+    Missing,
+    /// Kix could not read it.
+    Unread,
 }
 
 /// A field Kix applied that Kubernetes did not store as sent.
@@ -484,6 +520,36 @@ impl Detail {
                 stale: None,
                 message,
             } => Detail::AwaitingRestart {
+                message: message.clone(),
+            },
+            NodeDetail::DeletionUnfinished {
+                elapsed,
+                finalizers,
+                controllers,
+                message,
+            } => Detail::DeletionUnfinished {
+                elapsed_ms: elapsed.as_millis() as u64,
+                finalizers: finalizers.clone(),
+                controllers: controllers
+                    .iter()
+                    .map(|c| {
+                        let (state, detail) = match &c.state {
+                            ControllerState::Ready => (ControllerFound::Ready, None),
+                            ControllerState::NotReady(why) => {
+                                (ControllerFound::NotReady, Some(why.clone()))
+                            }
+                            ControllerState::Missing => (ControllerFound::Missing, None),
+                            ControllerState::Unread(e) => {
+                                (ControllerFound::Unread, Some(e.clone()))
+                            }
+                        };
+                        DeletionController {
+                            resource: c.id.clone(),
+                            state,
+                            detail,
+                        }
+                    })
+                    .collect(),
                 message: message.clone(),
             },
         })

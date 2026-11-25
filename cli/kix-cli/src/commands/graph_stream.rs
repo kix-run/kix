@@ -465,6 +465,7 @@ fn detail_message(detail: &Option<NodeDetail>) -> Option<String> {
         NodeDetail::ApplyFailed(msg) => Some(msg.clone()),
         NodeDetail::ReadinessTimeout { message, .. } => Some(message.clone()),
         NodeDetail::ReadinessFailed { message, .. } => Some(message.clone()),
+        NodeDetail::DeletionUnfinished { message, .. } => Some(message.clone()),
         NodeDetail::SecretHydrated { keys } => Some(format!("hydrated {keys} keys")),
         NodeDetail::SecretHydrationFailed(msg) => Some(msg.clone()),
         NodeDetail::RecreatedInPlace { .. } => {
