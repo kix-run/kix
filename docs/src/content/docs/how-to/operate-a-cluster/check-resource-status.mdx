@@ -159,6 +159,30 @@ The health-check Job's logs say whether the post-deploy probe passed:
 
 <Command {...jobLogs} />
 
+## What readiness does not show
+
+Kix reports what Kubernetes and the controllers on the cluster say about each
+object. A Deployment is ready when its pods pass their readiness probes. A
+Service of type `LoadBalancer` is ready once its load balancer gives it an
+address. A custom resource is ready when its controller sets the condition
+its package declares. Kix does not call the services your pods use, so some
+failures leave every object ready:
+
+- A pod whose cloud identity the cloud refuses runs and passes its probes, and
+  only its calls to the cloud fail. This happens when the IAM role lacks the
+  rights it needs, or when its trust policy or Workload Identity binding names
+  another ServiceAccount. Read the workload's logs for the refusal, such as
+  `AccessDenied` or `403`.
+- An operator can report its resource ready while one of its features
+  fails. A CloudNativePG `Cluster` stays `Ready=True` while archiving to its
+  backup store fails, and reports the failure in its `ContinuousArchiving`
+  condition:
+
+  ```sh
+  kubectl get cluster.postgresql.cnpg.io <name> -n <namespace> \
+    -o jsonpath='{.status.conditions[?(@.type=="ContinuousArchiving")]}'
+  ```
+
 ## Use the check in a script
 
 `kix status` exits with a code a script or a cron job can branch on:

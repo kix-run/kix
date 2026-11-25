@@ -566,7 +566,7 @@ fn readiness_of(obj: &DynamicObject) -> Readiness {
     let kind = rid.group_kind();
     if let Some(reason) = readiness::deletion_reason(obj) {
         Readiness::NotReady(reason)
-    } else if readiness::is_immediate_kind(kind) {
+    } else if readiness::is_immediate(kind, &obj.data) {
         Readiness::NotApplicable
     } else if readiness::check_readiness(obj, kind) {
         Readiness::Ready

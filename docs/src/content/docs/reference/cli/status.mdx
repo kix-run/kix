@@ -62,6 +62,11 @@ not in the current deploy and are still being deleted (see
 objects on the cluster, whether orphaned from an earlier deploy or created
 outside Kix. See [Objects Kix did not apply](/docs/reference/cli/diff/#objects-kix-did-not-apply).
 
+Readiness is what Kubernetes and the object's controller report. A pod that
+runs and passes its probes is ready even when every call it makes to a cloud
+API is refused. See
+[What readiness does not show](/docs/how-to/operate-a-cluster/check-resource-status/#what-readiness-does-not-show).
+
 A missing object is a problem under every check, because no check can run on
 an object that is gone. `kix status --check drift` and
 `kix status --check readiness` therefore also report missing objects.
@@ -226,7 +231,7 @@ Each entry of `resources[]`:
 | `named` | `false` when Kix could not name a missing object. |
 | `present` | `yes`, `no`, `external` (an import marker for an object Kix does not manage), `unknown` (the account may not list the kind), or `ambiguous` (no live object matches its identity hash, multiple API groups serve its kind, and an older deploy record lacks its API group; run `kix deploy <cluster> --reconcile` to record it). |
 | `drift` | `null` when the drift check did not run or the object is gone. Otherwise `verdict` (`in_sync`, `changed`, `unstamped`, or `no_fieldset`), `foreign_owners` (other field managers, each with `manager`, `operation`, `subresource`, `time`, `paths`, and `unshared_paths`; `unshared_paths` lists the paths Kix does not co-own, which can conflict on deploy), and `unrecorded_scale` (a replica count changed through `/scale` that Kubernetes recorded no owner for). |
-| `ready` | `true` or `false` (always `false` while an object is being deleted). `null` when the readiness check did not run, the object is gone, or its kind has no readiness check (such as a ConfigMap) and it is not being deleted. |
+| `ready` | `true` or `false` (always `false` while an object is being deleted). `null` when the readiness check did not run, the object is gone, or the object has no readiness check (such as a ConfigMap, or a Service of any type but `LoadBalancer`) and it is not being deleted. |
 | `not_ready_reason` | Why the object is not ready, such as `0/1 ready, 0/1 updated`. |
 | `needed_by` | For a missing object, the objects that depend on it, as `Kind.group namespace/name` (or `Kind namespace/name` for core `v1` kinds). |
 | `deleting_since`, `finalizers` | When the object is being deleted, `deleting_since` is `metadata.deletionTimestamp` and `finalizers` lists any finalizers still on it. `deleting_since` is omitted when the object is not being deleted; `finalizers` is omitted when empty. |

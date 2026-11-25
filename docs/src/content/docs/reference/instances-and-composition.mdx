@@ -207,6 +207,8 @@ When one package owns the ServiceAccount and another configures the cloud provid
 
 Kix does not create cloud IAM resources. Configure the AWS IAM role trust policy (or EKS Pod Identity association), Google Cloud IAM binding, or Azure federated credential outside Kix for `system:serviceaccount:<namespace>:<serviceaccount-name>`.
 
+Kix cannot tell whether the cloud accepts an identity. A pod whose role lacks rights, or whose trust policy or binding names another ServiceAccount, still starts and passes its probes, so `kix deploy` and `kix status` report it ready while its calls to the cloud fail. A package whose workload stops at startup without its cloud access, such as `tempo`, fails the deploy instead. After you deploy a new identity, read the workload's logs for a refusal such as `AccessDenied` or `403`. See [What readiness does not show](/docs/how-to/operate-a-cluster/check-resource-status/#what-readiness-does-not-show).
+
 Always set the cloud identity on the instance whose pods call the cloud API. When a separate instance configures the cloud service (such as backup storage), enable pod credentials or pass a static Secret on that instance instead. For example, to back up StackGres with a cloud identity, enable `useIAMRole` or `fetchCredentialsFromMetadataService` on `stackgres-object-storage` (with no Secret) and set `deps.backupIdentity` on each `stackgres-cluster` instance (see [Back up with a cloud identity](/docs/how-to/package-task-guides/deploy-stackgres/#back-up-with-a-cloud-identity)). When an operator creates the ServiceAccount and pods from a custom resource, as StackGres does, Kix cannot restart running pods automatically when the identity changes.
 
 Evaluation fails when:

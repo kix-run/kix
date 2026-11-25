@@ -679,6 +679,215 @@ pub(super) async fn scan_terminal(
     }
 }
 
+/// Return the readiness message for a rollout workload, read from the pods of
+/// its current revision: how many of them are ready, and why the first one
+/// that is not ready waits. The workload's own counts cannot say this, because
+/// a Deployment's `readyReplicas` also counts pods of the old revision. `pods`
+/// holds only current-revision pods, as [`scan_terminal`] lists them. Return
+/// `None` for other kinds, for a workload with a declared readiness rule, or
+/// when no pod was listed.
+pub(super) fn rollout_message(
+    obj: &DynamicObject,
+    kind: GroupKind<'_>,
+    pods: &[Value],
+) -> Option<String> {
+    let desired = match kind {
+        kinds::DEPLOYMENT | kinds::STATEFUL_SET => obj
+            .data
+            .pointer("/spec/replicas")
+            .and_then(Value::as_i64)
+            .unwrap_or(1),
+        kinds::DAEMON_SET => obj
+            .data
+            .pointer("/status/desiredNumberScheduled")
+            .and_then(Value::as_i64)?,
+        _ => return None,
+    };
+    if super::declared::declared_rule(obj).is_some() {
+        return None;
+    }
+    let pods: Vec<&Value> = pods
+        .iter()
+        .filter(|p| p.pointer("/metadata/deletionTimestamp").is_none())
+        .collect();
+    if pods.is_empty() {
+        return None;
+    }
+    let ready = pods.iter().filter(|p| pod_ready(p)).count();
+    let mut message = format!("{ready}/{desired} updated pods ready");
+    if kind == kinds::DEPLOYMENT {
+        let total = obj
+            .data
+            .pointer("/status/replicas")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        let updated = obj
+            .data
+            .pointer("/status/updatedReplicas")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        match total - updated {
+            n if n <= 0 => {}
+            1 => message.push_str(", 1 old pod still running"),
+            n => message.push_str(&format!(", {n} old pods still running")),
+        }
+    }
+    if let Some(waiting) = pods.iter().find_map(|p| pod_not_ready_reason(p)) {
+        message.push_str("; ");
+        message.push_str(&waiting);
+    }
+    let name = obj.metadata.name.as_deref().unwrap_or("unknown");
+    Some(format!("{}/{name}: {message}", kind.kind))
+}
+
+/// Return true when a pod's `Ready` condition is `True`.
+fn pod_ready(pod: &Value) -> bool {
+    pod_condition(pod, "Ready").and_then(|c| c.get("status").and_then(Value::as_str))
+        == Some("True")
+}
+
+fn pod_condition<'a>(pod: &'a Value, condition_type: &str) -> Option<&'a Value> {
+    pod.pointer("/status/conditions")?
+        .as_array()?
+        .iter()
+        .find(|c| c.get("type").and_then(Value::as_str) == Some(condition_type))
+}
+
+/// Return why a pod is not ready, in the words of the scheduler or the
+/// kubelet, or `None` for a ready pod. A pod the scheduler cannot place
+/// reports `PodScheduled=False` with the scheduler's message. A placed pod
+/// names its first container that waits, or that runs and is not ready.
+pub(super) fn pod_not_ready_reason(pod: &Value) -> Option<String> {
+    if pod_ready(pod) {
+        return None;
+    }
+    let name = pod
+        .pointer("/metadata/name")
+        .and_then(Value::as_str)
+        .unwrap_or("?");
+    if let Some(c) = pod_condition(pod, "PodScheduled")
+        && c.get("status").and_then(Value::as_str) == Some("False")
+    {
+        let text = c
+            .get("message")
+            .or_else(|| c.get("reason"))
+            .and_then(Value::as_str)
+            .unwrap_or("not scheduled");
+        return Some(format!("pod {name} cannot be scheduled: {text}"));
+    }
+    for slot in ["/status/initContainerStatuses", "/status/containerStatuses"] {
+        let Some(statuses) = pod.pointer(slot).and_then(Value::as_array) else {
+            continue;
+        };
+        for cs in statuses {
+            let container = cs.get("name").and_then(Value::as_str).unwrap_or("?");
+            if let Some(reason) = cs.pointer("/state/waiting/reason").and_then(Value::as_str) {
+                return Some(
+                    match cs.pointer("/state/waiting/message").and_then(Value::as_str) {
+                        Some(m) if !m.is_empty() => {
+                            format!("pod {name}/{container} is waiting: {reason}: {m}")
+                        }
+                        _ => format!("pod {name}/{container} is waiting: {reason}"),
+                    },
+                );
+            }
+            if slot == "/status/containerStatuses"
+                && cs.pointer("/state/running").is_some()
+                && cs.get("ready").and_then(Value::as_bool) == Some(false)
+            {
+                return Some(format!(
+                    "pod {name}/{container} is running and its readiness probe has not passed"
+                ));
+            }
+        }
+    }
+    let phase = pod
+        .pointer("/status/phase")
+        .and_then(Value::as_str)
+        .unwrap_or("Unknown");
+    Some(format!("pod {name} is {phase}"))
+}
+
+/// Return what to do about the pods that hold back a StatefulSet's rolling
+/// update, or `None` when none do.
+///
+/// With `podManagementPolicy: OrderedReady` (the default) and the
+/// `RollingUpdate` strategy, the StatefulSet controller replaces no pod while
+/// any of its pods is not ready. A pod left on an older revision that is not
+/// ready therefore stays on that revision, even after its template is
+/// reverted to one that works. The Kubernetes documentation calls this a
+/// forced rollback and tells the user to delete the pod. `pods` are the pods
+/// the StatefulSet's selector matches.
+pub(super) fn statefulset_held_pods(sts: &DynamicObject, pods: &[Value]) -> Option<String> {
+    let data = &sts.data;
+    let policy = data
+        .pointer("/spec/podManagementPolicy")
+        .and_then(Value::as_str)
+        .unwrap_or("OrderedReady");
+    let strategy = data
+        .pointer("/spec/updateStrategy/type")
+        .and_then(Value::as_str)
+        .unwrap_or("RollingUpdate");
+    if policy != "OrderedReady" || strategy != "RollingUpdate" {
+        return None;
+    }
+    let update = data
+        .pointer("/status/updateRevision")
+        .and_then(Value::as_str)?;
+    let uid = sts.metadata.uid.as_deref();
+    let held: Vec<(&str, &str)> = pods
+        .iter()
+        .filter(|p| uid.is_none_or(|uid| owned_by(p, uid)))
+        .filter(|p| p.pointer("/metadata/deletionTimestamp").is_none())
+        .filter(|p| !pod_ready(p))
+        .filter_map(|p| {
+            let revision = p
+                .pointer("/metadata/labels/controller-revision-hash")
+                .and_then(Value::as_str)?;
+            let name = p.pointer("/metadata/name").and_then(Value::as_str)?;
+            (revision != update).then_some((name, revision))
+        })
+        .collect();
+    if held.is_empty() {
+        return None;
+    }
+    let names: Vec<&str> = held.iter().map(|(name, _)| *name).collect();
+    let listed = held
+        .iter()
+        .map(|(name, revision)| format!("{name} (revision {revision})"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let namespace = sts.metadata.namespace.as_deref().unwrap_or("default");
+    let command = format!("kubectl delete pod -n {namespace} {}", names.join(" "));
+    let rule = "The StatefulSet uses OrderedReady pod management, so Kubernetes replaces no pod \
+                while one of its pods is not ready.";
+    Some(if let [(name, revision)] = held.as_slice() {
+        format!(
+            "Pod {name} runs revision {revision}, not the current revision {update}, and is not ready. {rule} \
+             The pod will not move to {update} on its own. Delete it so the StatefulSet \
+             recreates it from {update}: {command}"
+        )
+    } else {
+        format!(
+            "Pods {listed} are not on the current revision {update} and are not ready. {rule} \
+             The pods will not move to {update} on their own. Delete them so the StatefulSet \
+             recreates them from {update}: {command}"
+        )
+    })
+}
+
+/// List the pods a StatefulSet's selector matches and return
+/// [`statefulset_held_pods`] for them.
+pub(super) async fn statefulset_held_pods_live(
+    client: &Client,
+    sts: &DynamicObject,
+) -> Option<String> {
+    let selector = workload_label_selector(&sts.data)?;
+    let namespace = sts.metadata.namespace.as_deref().unwrap_or("default");
+    let pods = list_pods_for_workload(client, namespace, &selector).await;
+    statefulset_held_pods(sts, &pods)
+}
+
 /// Build a stable string fingerprint of a resource's progress state.
 ///
 /// Whenever this fingerprint changes between two polls, Kix treats it as
