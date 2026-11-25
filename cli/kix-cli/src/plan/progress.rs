@@ -164,7 +164,7 @@ pub fn print(event: PlanEvent<'_>) {
         PlanEvent::NotHeld(objects) => {
             let names: Vec<String> = objects.iter().map(|rid| rid.display_id()).collect();
             crate::say!(
-                "  {} {} unchanged object(s) are missing from the cluster or being deleted, so this deploy writes them again: {}",
+                "  {} {} object(s) unchanged from the current deployment are missing from the cluster or being deleted, so this plan reapplies them: {}",
                 output::yellow("!"),
                 objects.len(),
                 some_names(names.iter().map(String::as_str)),
@@ -172,11 +172,11 @@ pub fn print(event: PlanEvent<'_>) {
         }
         PlanEvent::KindsUnread(kinds) => {
             warning(&format!(
-                "this account cannot list {} on the cluster.",
+                "this Kubernetes account cannot list {} across the cluster.",
                 some_names(kinds.iter().map(String::as_str))
             ));
             crate::esay!(
-                "  This plan cannot tell whether unchanged objects of these kinds are missing or being deleted, so it leaves them as they are."
+                "  Without `--reconcile`, this plan skips objects of these kinds that are unchanged from the current deployment, even if they were deleted or are being deleted on the cluster.\n  To check them, grant this account cluster-wide `list` permission for these kinds, or pass `--reconcile` on `kix plan` or `kix deploy` to reapply every resource."
             );
         }
         PlanEvent::KeptUnresolved { sources, cluster } => {

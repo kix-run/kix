@@ -195,7 +195,7 @@ impl DeployPlan {
         match LiveObjects::list(client, discovery, &jobs).await {
             Ok(live) => self.last_runs_from(&live),
             Err(e) => {
-                tracing::debug!(error = %e, "could not list the Jobs whose last run the plan reads");
+                tracing::debug!(error = %e, "could not list Jobs to check their last runs");
                 LastRuns::Unreadable
             }
         }

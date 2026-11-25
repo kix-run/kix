@@ -162,7 +162,12 @@ pub enum PlanError {
     Reconstruct(String),
     #[error("cannot check whether another Kix cluster deploys an orphan: {0}")]
     SharedOrphans(Box<FetchError>),
-    #[error("cannot list the build's objects on the cluster: {0}")]
+    #[error(
+        "cannot read live resources on the cluster: {0}. \
+         Nothing was planned or applied to the cluster. \
+         Check your cluster connection and credentials, or wait for the Kubernetes API server \
+         to recover, then run the command again."
+    )]
     ReadLive(Box<FetchError>),
     #[error("{0}")]
     Graph(GraphError),
