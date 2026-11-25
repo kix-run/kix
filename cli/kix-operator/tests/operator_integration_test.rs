@@ -4,6 +4,11 @@
 //! Creates a temporary kind cluster, starts the operator as a subprocess,
 //! creates Activation CRs, and verifies reconciliation and GC.
 //!
+//! The test writes the cluster's credentials to a kubeconfig file of its own
+//! and passes that file to every `kind` and `kubectl` call and to the
+//! operator. It never reads or changes the default kubeconfig, so it cannot
+//! reach another cluster.
+//!
 //! Run with: cargo test --test operator_integration_test -- --ignored
 //! (ignored by default because it requires kind and nix, and is slow)
 
@@ -33,38 +38,40 @@ fn has_kubectl() -> bool {
         .is_ok()
 }
 
-fn kind_create(name: &str) -> bool {
+fn kind_create(name: &str, kubeconfig: &Path) -> bool {
     Command::new("kind")
-        .args(["create", "cluster", "--name", name])
+        .args(["create", "cluster", "--name", name, "--kubeconfig"])
+        .arg(kubeconfig)
         .output()
         .is_ok_and(|o| o.status.success())
 }
 
-fn kind_delete(name: &str) {
+fn kind_delete(name: &str, kubeconfig: &Path) {
     let _ = Command::new("kind")
-        .args(["delete", "cluster", "--name", name])
+        .args(["delete", "cluster", "--name", name, "--kubeconfig"])
+        .arg(kubeconfig)
         .output();
 }
 
-fn kubectl(context: &str, args: &[&str]) -> std::process::Output {
+fn kubectl(kubeconfig: &Path, args: &[&str]) -> std::process::Output {
     Command::new("kubectl")
-        .arg("--context")
-        .arg(context)
+        .arg("--kubeconfig")
+        .arg(kubeconfig)
         .args(args)
         .output()
         .expect("kubectl should work")
 }
 
-fn kubectl_stdout(context: &str, args: &[&str]) -> String {
-    let output = kubectl(context, args);
+fn kubectl_stdout(kubeconfig: &Path, args: &[&str]) -> String {
+    let output = kubectl(kubeconfig, args);
     String::from_utf8_lossy(&output.stdout).to_string()
 }
 
-fn kubectl_apply_stdin(context: &str, yaml: &str) -> std::process::Output {
+fn kubectl_apply_stdin(kubeconfig: &Path, yaml: &str) -> std::process::Output {
     use std::io::Write;
     let mut child = Command::new("kubectl")
-        .arg("--context")
-        .arg(context)
+        .arg("--kubeconfig")
+        .arg(kubeconfig)
         .args(["apply", "-f", "-"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -87,14 +94,14 @@ fn build_activation() -> PathBuf {
         .expect("the kind cluster should evaluate")
 }
 
-/// Start the operator as a background subprocess.
-fn start_operator(_context: &str) -> Child {
-    // Build the operator binary path
+/// Start the operator as a background subprocess that reaches the cluster
+/// through `kubeconfig` only.
+fn start_operator(kubeconfig: &Path) -> Child {
     let operator_bin = assert_cmd::cargo::cargo_bin("kix-operator");
     eprintln!("Starting operator: {}", operator_bin.display());
 
     Command::new(operator_bin)
-        .env("KUBECONFIG", kubeconfig_path())
+        .env("KUBECONFIG", kubeconfig)
         .env("RUST_LOG", "info,kix_operator=debug,kix_cluster=debug")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -102,15 +109,8 @@ fn start_operator(_context: &str) -> Child {
         .expect("operator should start")
 }
 
-fn kubeconfig_path() -> String {
-    std::env::var("KUBECONFIG").unwrap_or_else(|_| {
-        let home = std::env::var("HOME").unwrap();
-        format!("{home}/.kube/config")
-    })
-}
-
 /// Apply the Kix CRDs to the cluster.
-fn apply_crds(context: &str) {
+fn apply_crds(kubeconfig: &Path) {
     let activation_crd = r#"
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
@@ -171,14 +171,14 @@ spec:
               x-kubernetes-preserve-unknown-fields: true
 "#;
 
-    let result = kubectl_apply_stdin(context, activation_crd);
+    let result = kubectl_apply_stdin(kubeconfig, activation_crd);
     assert!(
         result.status.success(),
         "Activation CRD apply should succeed: {}",
         String::from_utf8_lossy(&result.stderr)
     );
 
-    let result = kubectl_apply_stdin(context, pi_crd);
+    let result = kubectl_apply_stdin(kubeconfig, pi_crd);
     assert!(
         result.status.success(),
         "PackageInstance CRD apply should succeed: {}",
@@ -186,7 +186,7 @@ spec:
     );
 
     let result = kubectl(
-        context,
+        kubeconfig,
         &[
             "wait",
             "--for=condition=Established",
@@ -203,7 +203,7 @@ spec:
 }
 
 /// Create an Activation CR pointing to a store path.
-fn create_activation(context: &str, name: &str, store_path: &Path, cluster: &str) {
+fn create_activation(kubeconfig: &Path, name: &str, store_path: &Path, cluster: &str) {
     let yaml = format!(
         r#"
 apiVersion: kix.run/v1alpha1
@@ -225,7 +225,7 @@ spec:
         path = store_path.display(),
     );
 
-    let result = kubectl_apply_stdin(context, &yaml);
+    let result = kubectl_apply_stdin(kubeconfig, &yaml);
     assert!(
         result.status.success(),
         "Activation CR apply should succeed: {}",
@@ -247,7 +247,6 @@ fn wait_until(description: &str, timeout: Duration, check: impl Fn() -> bool) ->
 }
 
 const KIND_CLUSTER: &str = "kix-operator-test";
-const KUBE_CTX: &str = "kind-kix-operator-test";
 const KIX_CLUSTER: &str = "kind";
 
 #[test]
@@ -264,39 +263,46 @@ fn operator_reconcile_and_gc() {
     eprintln!("Activation built at: {}", result_dir.display());
 
     eprintln!("\n=== Setup: Creating kind cluster ===");
-    kind_delete(KIND_CLUSTER);
-    if !kind_create(KIND_CLUSTER) {
+    let config_dir = tempfile::tempdir().expect("a temporary directory");
+    let kubeconfig = config_dir.path().join("kubeconfig");
+    let kubeconfig = kubeconfig.as_path();
+    kind_delete(KIND_CLUSTER, kubeconfig);
+    if !kind_create(KIND_CLUSTER, kubeconfig) {
         panic!("failed to create kind cluster");
     }
 
     // Always clean up
-    struct CleanupGuard {
+    struct CleanupGuard<'a> {
         operator: Option<Child>,
+        kubeconfig: &'a Path,
     }
-    impl Drop for CleanupGuard {
+    impl Drop for CleanupGuard<'_> {
         fn drop(&mut self) {
             if let Some(ref mut child) = self.operator {
                 let _ = child.kill();
                 let _ = child.wait();
             }
-            kind_delete(KIND_CLUSTER);
+            kind_delete(KIND_CLUSTER, self.kubeconfig);
         }
     }
-    let mut guard = CleanupGuard { operator: None };
+    let mut guard = CleanupGuard {
+        operator: None,
+        kubeconfig,
+    };
 
     eprintln!("\n=== Setup: Applying CRDs ===");
-    apply_crds(KUBE_CTX);
+    apply_crds(kubeconfig);
 
     // Phase 1: Start operator, create Activation, and verify resources
     eprintln!("\n=== Phase 1: Start operator and create Activation ===");
 
-    let operator = start_operator(KUBE_CTX);
+    let operator = start_operator(kubeconfig);
     guard.operator = Some(operator);
 
     // The operator lists Activations when it starts, so one created before
     // its watch begins is still reconciled.
     // Create Activation CR
-    create_activation(KUBE_CTX, "test-activation", &result_dir, KIX_CLUSTER);
+    create_activation(kubeconfig, "test-activation", &result_dir, KIX_CLUSTER);
     eprintln!("Activation CR created");
 
     // Wait for operator to reconcile: look for managed resources in the echo namespace
@@ -305,7 +311,7 @@ fn operator_reconcile_and_gc() {
         Duration::from_secs(120),
         || {
             let managed = kubectl_stdout(
-                KUBE_CTX,
+                kubeconfig,
                 &[
                     "get",
                     "all,configmap",
@@ -323,7 +329,7 @@ fn operator_reconcile_and_gc() {
     assert!(resources_created, "operator should create resources");
 
     let managed = kubectl_stdout(
-        KUBE_CTX,
+        kubeconfig,
         &[
             "get",
             "all,configmap",
@@ -338,7 +344,7 @@ fn operator_reconcile_and_gc() {
     eprintln!("Managed resources after reconcile:\n{managed}");
 
     // Verify Activation CR exists and has the right cluster label
-    let activation_list = kubectl_stdout(KUBE_CTX, &["get", keys::ACTIVATIONS_CRD, "-o", "name"]);
+    let activation_list = kubectl_stdout(kubeconfig, &["get", keys::ACTIVATIONS_CRD, "-o", "name"]);
     eprintln!("Activations: {activation_list}");
     assert!(
         activation_list.contains("test-activation"),
@@ -349,7 +355,7 @@ fn operator_reconcile_and_gc() {
     eprintln!("\n=== Phase 2: Delete Activation, verify GC ===");
 
     let delete_result = kubectl(
-        KUBE_CTX,
+        kubeconfig,
         &[
             "delete",
             &format!("activation.{}", keys::GROUP),
@@ -368,7 +374,7 @@ fn operator_reconcile_and_gc() {
         Duration::from_secs(90),
         || {
             let managed = kubectl_stdout(
-                KUBE_CTX,
+                kubeconfig,
                 &[
                     "get",
                     "all,configmap",
@@ -389,7 +395,7 @@ fn operator_reconcile_and_gc() {
     // The echo namespace itself won't be deleted (Namespace pruning is skipped).
     // Check for non-Namespace resources being cleaned up.
     let remaining = kubectl_stdout(
-        KUBE_CTX,
+        kubeconfig,
         &[
             "get",
             "all,configmap,serviceaccount",
@@ -413,7 +419,7 @@ fn operator_reconcile_and_gc() {
 
     // Verify the Activation CR itself is deleted
     let activation_after = kubectl_stdout(
-        KUBE_CTX,
+        kubeconfig,
         &[
             "get",
             keys::ACTIVATIONS_CRD,
