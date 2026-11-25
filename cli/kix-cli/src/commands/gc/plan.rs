@@ -32,7 +32,9 @@ pub(super) enum GarbageReason {
 impl GarbageReason {
     pub(super) fn label(&self) -> &'static str {
         match self {
-            GarbageReason::HashNotExpected => "build hash is not in the build gc compares with",
+            GarbageReason::HashNotExpected => {
+                "not in the active deployment's build (or local build if none is active)"
+            }
             GarbageReason::NoIdentityHash => {
                 "carries Kix's label but no Kix build annotation (`--include unstamped`)"
             }

@@ -98,7 +98,7 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
 
     let Some(active) = &retirement.active else {
         crate::say!(
-            "No Active record for '{}', so there is no deployed build to compare with. Run {} first.",
+            "Cluster '{}' has no active deployment record on this cluster, so there is nothing to clean up. Run {} first.",
             output::bold(&cluster),
             output::bold("kix deploy"),
         );
@@ -247,10 +247,15 @@ fn active_build(
         eprintln!("{} {warning}", output::yellow("warning:"));
     }
     if let Some(dir) = dir {
-        crate::say!("Loading the Active build of '{}'...", output::bold(cluster));
+        crate::say!(
+            "Loading current deployment's build for '{}'...",
+            output::bold(cluster)
+        );
         return Ok(Build::local(&dir, &|_| {})
             .map_err(|e| {
-                miette!("could not read the Active build's resources and dependencies: {e}")
+                miette!(
+                    "could not read the current deployment's local build: {e}. Nothing was deleted."
+                )
             })?
             .into_graph());
     }
@@ -269,7 +274,7 @@ fn files_build(args: &GcArgs, ctx: &CommandContext, cluster: &str) -> Result<Sto
     // builds another cluster must not be judged against them.
     if graph.cluster_name != cluster {
         return Err(miette!(
-            "flake attribute '{}' builds cluster '{}', but the Activation records read before the build are those of cluster '{}'. Nothing was deleted.",
+            "cluster definition '{}' builds cluster '{}', which does not match the deployment records for '{}' on this cluster. Nothing was deleted. Check `name` in your cluster definition, or run `kix gc` with the matching cluster name.",
             args.cluster,
             graph.cluster_name,
             cluster,
@@ -302,13 +307,15 @@ pub(super) fn check_files_build(cluster: &str, active: &Record, built: Option<&s
         None => "unknown".to_string(),
     };
     Err(miette!(
-        "the build of '{cluster}' from the current files is not the build the cluster runs. Nothing was deleted.\n\n  \
-         Active on cluster:          {} (build {})\n  \
-         Built from current files:   build {}\n\n  \
+        "local files for '{cluster}' do not match the active deployment on the cluster\n  \
+         Nothing was deleted.\n\n  \
+         Active on cluster:        {} (build {})\n  \
+         Built from local files:   build {}\n\n  \
          Why:\n    \
-         kix gc deletes only what the Active build does not contain. The Active build is not on this machine, and the current files make a different build, so gc cannot tell which objects the cluster still uses.\n\n  \
-         Next:\n    \
-         Run `kix gc {cluster}` on the machine that ran the last deploy or rollback, or run `kix deploy {cluster} --prune` to deploy the current files and delete what they no longer contain.",
+         `kix gc` keeps every resource in the active deployment's build and only deletes leftover objects outside it. That deployed build is not in Kix's local store on this machine, and your local files produce a different build, so Kix cannot tell which resources the cluster still needs.\n\n  \
+         Next (choose one):\n    \
+         - To keep the current deployment and clean up old objects, run `kix gc {cluster}` on the machine that ran the last deploy or rollback (or from a checkout that builds the active deployment).\n    \
+         - To deploy your local files and delete resources they removed, run `kix deploy {cluster} --prune`.",
         active.name,
         short(active_hash),
         short(built),
@@ -431,8 +438,8 @@ fn run_hard(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         .collect();
 
     let compared = match &active {
-        Some(active) => format!("the Active build ({})", active.name),
-        None => "the build from the current files (no Active record)".to_string(),
+        Some(active) => format!("active deployment {}", active.name),
+        None => "local build (no active deployment record on cluster)".to_string(),
     };
     crate::say!(
         "Cluster {}: {} resources in {compared}",

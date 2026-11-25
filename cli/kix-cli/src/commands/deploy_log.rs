@@ -250,7 +250,7 @@ fn prune_lines(resources: &[ResourceId], kept: &[ResourceId], delete: bool) -> V
             format!("prune> deleting {count} object(s) that left the build")
         } else {
             format!(
-                "prune> {count} object(s) left the build, still on the cluster; run `kix gc` to delete them"
+                "prune> {count} object(s) left the build and remain on the cluster; run `kix gc` to delete them"
             )
         });
         let each = if delete {
@@ -728,7 +728,7 @@ mod tests {
         assert_eq!(
             lines,
             vec![
-                "prune> 1 object(s) left the build, still on the cluster; run `kix gc` to delete them",
+                "prune> 1 object(s) left the build and remain on the cluster; run `kix gc` to delete them",
                 "ConfigMap/old@app> left the build, still on the cluster",
                 "prune> 1 object(s) left the build and are never deleted automatically",
                 "Namespace/gone@app> left the build, kept (never deleted automatically)",
