@@ -571,7 +571,7 @@
         "how-to/package-stackgres/check",
         "how-to/package-stackgres/database-resources"
       ],
-      "unverifiedNixBlocks": 2,
+      "unverifiedNixBlocks": 3,
       "packages": [
         "experimental/stackgres-operator",
         "experimental/stackgres-cluster",
