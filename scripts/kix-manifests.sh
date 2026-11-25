@@ -9,7 +9,15 @@
 #
 # usage: scripts/kix-manifests.sh <flake-dir> <cluster> <out-link>
 #
-# Set KIX to the `kix` command to run (default: `kix` on PATH).
+# The script picks which Kix renders the cluster:
+#
+# - KIX, when set, names the `kix` command to run.
+# - A project whose `kix.toml` sets `library = "self"` (the Kix repository)
+#   runs the Kix its own flake builds, `nix run <flake-dir>#kix`. A released
+#   Kix would pair its own binary with this checkout's library, and an older
+#   one refuses the `library` key.
+# - Any other project runs `kix` on PATH, which runs the Kix version the
+#   project's `flake.lock` names.
 
 set -euo pipefail
 
@@ -26,7 +34,15 @@ out="$3"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-"${KIX:-kix}" --flake "$flake" --quiet build -o json "$cluster" >"$tmp/manifests.json"
+if [[ -n "${KIX:-}" ]]; then
+  kix=("$KIX")
+elif grep -Eqs '^[[:space:]]*library[[:space:]]*=[[:space:]]*"self"' "$flake/kix.toml"; then
+  kix=(nix run --extra-experimental-features 'nix-command flakes pipe-operators' "$(cd "$flake" && pwd)#kix" --)
+else
+  kix=(kix)
+fi
+
+"${kix[@]}" --flake "$flake" --quiet build -o json "$cluster" >"$tmp/manifests.json"
 
 nix build --out-link "$out" --impure \
   --extra-experimental-features 'nix-command flakes pipe-operators' \
