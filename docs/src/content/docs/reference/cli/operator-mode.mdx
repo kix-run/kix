@@ -81,11 +81,11 @@ unchanged resources.
 ### Retries after a failure
 
 When a deploy fails, the operator keeps the Activation record in `Deploying`,
-posts a `DeployRetrying` Warning Event, and retries 30 seconds later. An
-attempt also fails when the operator cannot read the build at
-`spec.source.path` (for example, when the build is not in the store the
-operator reads) or cannot list the cluster's objects. If the operator cannot
-read the build of a new record, the record stays `Queued` while it retries. By
+posts a `DeployRetrying` Warning Event, and retries 30 seconds later. If the
+operator pod cannot read `spec.source.path` (for example, because the build is
+not in the store the operator reads) or cannot list live cluster resources,
+that failure counts toward the same retry limit. When a new record fails there
+before the deploy starts, it stays `Queued` while the operator retries. By
 default, it retries up to 10 times (11 attempts in total). If every retry
 fails, the operator marks the record `Failed`, writes the attempt count and
 last error to `status.failure.reason`, and posts a `DeployFailed` Warning

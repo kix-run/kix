@@ -131,7 +131,10 @@ pub enum OperatorError {
     #[error("missing spec.source.path on Activation")]
     MissingSourcePath,
 
-    #[error("cannot read the build at {path} in the store the Kix operator reads: {reason}")]
+    #[error(
+        "the operator pod cannot read the build at {path} (`spec.source.path`): {reason}\n\
+         Check that the build exists at that path in the store the operator reads."
+    )]
     StoreGraphError { path: String, reason: String },
 
     #[error("failed to run API discovery: {0}")]
@@ -2113,7 +2116,7 @@ mod tests {
         let reason = status["failure"]["reason"].as_str().unwrap();
         assert!(
             reason.starts_with(
-                "cannot read the build at /nonexistent in the store the Kix operator reads: "
+                "the operator pod cannot read the build at /nonexistent (`spec.source.path`): "
             ),
             "{reason}"
         );
