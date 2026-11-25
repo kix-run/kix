@@ -523,10 +523,10 @@ ServiceAccount, because a ServiceAccount carries a single identity:
   names where to pass a Secret instead). Omit `cloud` and publish
   `out.identityCloud = credentials.cloud` when dependents choose the cloud; or
   pass `cloud = <dep>.out.ambientCloud` when a dependency chooses the cloud.
-- Pass `arg`, the name the package takes the dependency under (such as
-  `arg = "providerCredentials";`), to both. Their errors then name
-  `deps.<arg>` and set the error's `dependency` field, which a package with
-  two credentials dependencies needs so the reader knows which one to fix.
+- Set `arg` to the dependency argument name in `build` (for example,
+  `arg = "providerCredentials";`) in both helpers. Evaluation errors then name
+  `deps.<arg>` and set the error's `dependency` field, so cluster authors know
+  which dependency to fix even when a package has more than one.
 - Rendering the identity: pipe a Kix-built ServiceAccount through
   `credentials.bind`. When an operator creates the ServiceAccount from a custom
   resource instead, take `cloudIdentity ? null` in `build` and pass

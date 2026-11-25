@@ -1268,7 +1268,7 @@ in
       };
     in
     (
-      lib.hasInfix "but its pods call AWS" mismatched.failure
+      lib.hasInfix "but this instance's pods call AWS" mismatched.failure
       && lib.hasInfix "`kix.cloudIdentity.aws { ... }`" mismatched.failure
       && matching.cloud == "gcp"
       && lib.hasInfix "read their cloud credentials from a Secret" unused.failure
@@ -1492,8 +1492,8 @@ in
         r.primary == "ok"
         && r.record.dependency == "backup"
         && r.record.instance == "platform/two"
-        && lib.hasInfix "(Google Cloud) in `deps.backup`" r.record.message
-        && lib.hasInfix "Change `deps.backup` to" r.record.fix;
+        && lib.hasInfix "`deps.backup` is set to `kix.cloudIdentity.gcp { ... }` (Google Cloud)" r.record.message
+        && lib.hasInfix "Set `deps.backup` to" r.record.fix;
       # Without `arg`, the message keeps its general wording.
       unnamed = useFailure (ci.gcp { }) "aws";
     in
@@ -1501,7 +1501,8 @@ in
       namesBackup use
       && namesBackup useIdentity
       && !(lib.hasInfix "deps." unnamed)
-      && lib.hasInfix "Change the dependency to" unnamed
+      && lib.hasInfix "This dependency is set to" unnamed
+      && lib.hasInfix "Set this dependency to" unnamed
     )
     || throw "refusal names dependency: use ${builtins.toJSON use}, useIdentity ${builtins.toJSON useIdentity}";
 }
