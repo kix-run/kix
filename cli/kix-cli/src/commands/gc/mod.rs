@@ -50,7 +50,7 @@ use crate::cli::{GcArgs, Include};
 use crate::client;
 use crate::exit::{Exit, Stopped};
 use crate::output;
-use crate::plan::{print_never_pruned, print_shared, progress};
+use crate::plan::{KeptFrom, print_never_pruned, print_shared, progress};
 use kix::build_source::Build;
 use kix::cluster::activation::{Record, Records};
 use kix::cluster::binding;
@@ -191,7 +191,7 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     }
     if !output::quiet() {
         print_record_plan(&retirement, &policy);
-        print_never_pruned(&kept);
+        print_never_pruned(&kept, KeptFrom::LeftTheBuild);
         print_shared(&shared);
     }
     if ordered_rids.is_empty() && retirement.plan.retire.is_empty() {
@@ -606,7 +606,7 @@ async fn run_hard_async(
     }
     if !output::quiet() {
         let kept: Vec<ResourceId> = kept.into_iter().map(|g| g.id).collect();
-        print_never_pruned(&kept);
+        print_never_pruned(&kept, KeptFrom::FullScan);
         print_record_plan(&retirement, &policy);
     }
     if resource_entries.is_empty() && record_entries.is_empty() {

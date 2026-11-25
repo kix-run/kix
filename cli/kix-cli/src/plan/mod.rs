@@ -519,23 +519,36 @@ fn write_kept_line(out: &mut String, id: &ResourceId) {
 
 /// Print resources that left the build and are retained because deleting them
 /// would also delete objects outside the build.
-pub fn print_never_pruned(kept: &[ResourceId]) {
-    print!("{}", render_never_pruned(kept));
+/// Why the objects a never-pruned list shows are candidates for deletion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeptFrom {
+    /// They were in an earlier build of this cluster and left it.
+    LeftTheBuild,
+    /// A full scan found them on the cluster. Some may never have been in
+    /// this cluster's build, such as objects that name no deployment record.
+    FullScan,
 }
 
-pub fn render_never_pruned(kept: &[ResourceId]) -> String {
+pub fn print_never_pruned(kept: &[ResourceId], from: KeptFrom) {
+    print!("{}", render_never_pruned(kept, from));
+}
+
+/// Render the objects kept because Kix never deletes their kind, with a
+/// heading that says why they came up for deletion only where `from` makes
+/// that true.
+pub fn render_never_pruned(kept: &[ResourceId], from: KeptFrom) -> String {
     use std::fmt::Write;
     let mut out = String::new();
     if kept.is_empty() {
         return out;
     }
     let _ = writeln!(out);
-    let _ = writeln!(
-        out,
-        "{} ({} left the build, never deleted automatically):",
-        output::bold("Kept on the cluster"),
-        kept.len(),
-    );
+    let count = kept.len();
+    let what = match from {
+        KeptFrom::LeftTheBuild => format!("{count} left the build, never deleted automatically"),
+        KeptFrom::FullScan => format!("{count} never deleted automatically"),
+    };
+    let _ = writeln!(out, "{} ({what}):", output::bold("Kept on the cluster"));
     for rid in kept {
         let _ = writeln!(out, "    {} {}", output::yellow("!"), rid);
     }
@@ -612,7 +625,7 @@ pub fn render_plan_orphans(orphans: &[ResourceId], fate: &str) -> String {
             let _ = writeln!(out, "    {} {}", output::red("-"), rid.display_id());
         }
     }
-    out.push_str(&render_never_pruned(&kept));
+    out.push_str(&render_never_pruned(&kept, KeptFrom::LeftTheBuild));
     out
 }
 
@@ -938,5 +951,30 @@ mod render_tests {
         assert!(text.contains("- ConfigMap/old@app"), "{text}");
         assert!(!text.contains("- Namespace"), "{text}");
         assert!(text.contains("! Namespace/gone"), "{text}");
+    }
+}
+
+#[cfg(test)]
+mod never_pruned_tests {
+    use super::*;
+
+    /// A full scan may keep a Namespace that was never in this cluster's
+    /// build, so only a list of objects that left the build says they did.
+    #[test]
+    fn only_objects_that_left_the_build_are_said_to_have_left_it() {
+        let ns = ResourceId {
+            group: String::new(),
+            kind: "Namespace".into(),
+            namespace: kix::manifest::types::CLUSTER_SCOPED.into(),
+            name: "second".into(),
+        };
+        let left = render_never_pruned(std::slice::from_ref(&ns), KeptFrom::LeftTheBuild);
+        assert!(
+            left.contains("1 left the build, never deleted automatically"),
+            "{left}"
+        );
+        let scan = render_never_pruned(std::slice::from_ref(&ns), KeptFrom::FullScan);
+        assert!(scan.contains("(1 never deleted automatically)"), "{scan}");
+        assert!(!scan.contains("left the build"), "{scan}");
     }
 }
