@@ -175,8 +175,9 @@ impl<'a> Context<'a> {
                     reason: UncheckedReason::CrdInstalledOutsideKix,
                     because: crd_source.and_then(CrdSource::imported),
                     detail: format!(
-                        "kind {kind} is served once something other than Kix installs its CRD, \
-                         which the deploy waits for"
+                        "the CustomResourceDefinition for {kind} is not on the cluster yet. \
+                         Kix does not create it, and the deploy waits for an operator or \
+                         external tool to install it"
                     ),
                 },
             },

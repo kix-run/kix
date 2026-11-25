@@ -793,7 +793,7 @@ pub(super) async fn delete_resources(
             }
             Removal::Pruned(Pruned::NotServed) => {
                 println!(
-                    "  {} {} already gone, because this Kubernetes cluster does not serve its kind",
+                    "  {} {} already gone (Kubernetes does not recognize its kind)",
                     output::dim("="),
                     rid
                 );

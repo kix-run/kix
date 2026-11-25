@@ -108,7 +108,7 @@ pub enum PruneError {
     #[error("cannot tell whether another Kix cluster still deploys it: {0}")]
     Records(#[from] RecordsError),
     /// Kix could not tell whether the cluster serves the object's kind.
-    #[error("cannot tell whether this Kubernetes cluster serves its kind: {0}")]
+    #[error("not deleted because Kix could not check whether Kubernetes recognizes its kind: {0}")]
     Discovery(#[from] FetchError),
 }
 

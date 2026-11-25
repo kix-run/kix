@@ -280,7 +280,7 @@ to restore what the build defines.
 | `reason` | Meaning |
 | --- | --- |
 | `crd_created_by_this_deploy` | Its kind comes from a CRD this deploy creates. |
-| `crd_installed_outside_kix` | Its kind comes from a CRD that is not on the cluster, and the build declares it with an import marker (`scope.mkCRDRef`). Kix does not create the CRD. The deploy waits for something else to install it, such as an operator in the build or another tool, and fails at the import marker if it never appears. `because` names the CRD when the marker is the only one for its API group. |
+| `crd_installed_outside_kix` | Its kind comes from a CRD that is not on the cluster yet and is referenced externally (`scope.mkCRDRef` or `kix.mkImport`). Kix does not create the CRD. During deploy, Kix waits for an operator in the build or an external tool to install it, and fails if it never appears. `because` names the CRD when the build references only one external CRD in that API group. Otherwise, `because` is left out. |
 | `crd_changed_by_this_deploy` | Its kind's CRD is changed by this deploy, and the cluster refused the object when checking it against the CRD it has now. The deploy applies the CRD first, so the refusal may not happen. |
 | `namespace_created_by_this_deploy` | Its namespace is created by this deploy. |
 | `webhook_no_dry_run` | An admission webhook that would be called does not support dry run. |
