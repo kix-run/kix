@@ -420,7 +420,10 @@ in
         };
 
         # The operator watches every kind, so every definition is applied,
-        # with or without a handle.
+        # with or without a handle. The operator Deployment is the controller
+        # of every kind, so a prune deletes a custom resource and waits for
+        # it to be gone before it deletes the operator, which removes the
+        # finalizers it puts on its custom resources.
         #
         # A Cluster keeps its databases on its volumes, and a Database is one
         # of them. The operator keeps a Database's contents when the custom
@@ -431,6 +434,7 @@ in
         crds = {
           backups = scope.mkCRD {
             spec = vendored "backups.${group}.json";
+            controller = self.operatorDeployment;
             holdsData = false;
             usesAtLeast = _: { };
           };
@@ -438,12 +442,14 @@ in
           # consumers wait on its Service's endpoints instead.
           scheduledBackups = scope.mkCRD {
             spec = vendored "scheduledbackups.${group}.json";
+            controller = self.operatorDeployment;
             crRequires = checked;
             holdsData = false;
             usesAtLeast = _: { };
           };
           poolers = scope.mkCRD {
             spec = vendored "poolers.${group}.json";
+            controller = self.operatorDeployment;
             crRequires = checked;
             holdsData = false;
             # Count `spec.instances` PgBouncer pods (default 1), each with
@@ -460,11 +466,13 @@ in
           };
           failoverQuorums = scope.mkCRD {
             spec = vendored "failoverquorums.${group}.json";
+            controller = self.operatorDeployment;
             holdsData = false;
             usesAtLeast = _: { };
           };
           clusters = scope.mkCRD {
             spec = vendored "clusters.${group}.json";
+            controller = self.operatorDeployment;
             crRequires = checked;
             readiness = ready;
             holdsData = true;
@@ -522,6 +530,7 @@ in
           };
           databases = scope.mkCRD {
             spec = vendored "databases.${group}.json";
+            controller = self.operatorDeployment;
             crRequires = checked;
             readiness = applied;
             holdsData = true;
@@ -529,6 +538,7 @@ in
           };
           databaseRoles = scope.mkCRD {
             spec = vendored "databaseroles.${group}.json";
+            controller = self.operatorDeployment;
             crRequires = checked;
             readiness = applied;
             holdsData = false;
@@ -536,6 +546,7 @@ in
           };
           publications = scope.mkCRD {
             spec = vendored "publications.${group}.json";
+            controller = self.operatorDeployment;
             crRequires = checked;
             readiness = applied;
             holdsData = false;
@@ -543,6 +554,7 @@ in
           };
           subscriptions = scope.mkCRD {
             spec = vendored "subscriptions.${group}.json";
+            controller = self.operatorDeployment;
             crRequires = checked;
             readiness = applied;
             holdsData = false;
@@ -550,12 +562,14 @@ in
           };
           imageCatalogs = scope.mkCRD {
             spec = vendored "imagecatalogs.${group}.json";
+            controller = self.operatorDeployment;
             crRequires = checked;
             holdsData = false;
             usesAtLeast = _: { };
           };
           clusterImageCatalogs = scope.mkCRD {
             spec = vendored "clusterimagecatalogs.${group}.json";
+            controller = self.operatorDeployment;
             crRequires = checked;
             holdsData = false;
             usesAtLeast = _: { };

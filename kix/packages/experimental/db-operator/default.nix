@@ -490,6 +490,9 @@ in
               spec = crdSpec file;
               # Every custom resource waits for the webhook check.
               crRequires = [ self.webhookCheck ];
+              # The controller removes the finalizers it puts on these
+              # kinds, so a prune deletes their custom resources first.
+              controller = self.deployment;
             }
             // extra
           );

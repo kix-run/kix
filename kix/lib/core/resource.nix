@@ -291,9 +291,11 @@ rec {
       # to check namespace ResourceQuotas.
       usesAtLeast ? null,
       # Set only by the typed CRD builders (`cr` and `mkCR`), not by packages:
-      # `{ declaredBy; holdsData; }`, the declaration the kind comes from and
-      # its `holdsData` (a boolean or null). `holdsData` is written as
-      # `kix.run/holds-data` (see `holdsDataOf`).
+      # `{ declaredBy; holdsData; controllers; }`, the declaration the kind
+      # comes from, its `holdsData` (a boolean or null), and the workloads
+      # that handle it. `holdsData` is written as `kix.run/holds-data` (see
+      # `holdsDataOf`), and each controller as a `controller:` entry of
+      # `kix.run/depends-on`.
       _crd ? null,
       # Field paths (`ownership.cede = [ "spec.versions" "webhooks[*].rules" ]`)
       # that another controller takes over after creation. When a subsequent
@@ -419,13 +421,24 @@ rec {
       ) (builtins.attrNames (builtins.getContext manifestJson));
       implicitEntries = map extractStoreHash implicitCtxPaths;
 
+      # A custom resource's controllers are in `requires` too. Their entries
+      # say `controller:` instead of `requires:`, so the deploy can name the
+      # controller when the resource's delete does not finish.
+      controllerHashes = map extractStoreHash (
+        resourcesIn (if _crd == null then [ ] else _crd.controllers or [ ])
+      );
+      controllerEntries = map (hash: "controller:${hash}") controllerHashes;
       requiresResources = resourcesIn requires;
-      requiresEntries = map (dep: "requires:${extractStoreHash dep}") requiresResources;
+      requiresEntries = map (hash: "requires:${hash}") (
+        builtins.filter (hash: !(builtins.elem hash controllerHashes)) (
+          map extractStoreHash requiresResources
+        )
+      );
 
       extraResources = resourcesIn extraDeps;
       extraEntries = map (dep: "extra:${extractStoreHash dep}") extraResources;
 
-      depEntries = implicitEntries ++ requiresEntries ++ extraEntries;
+      depEntries = implicitEntries ++ requiresEntries ++ controllerEntries ++ extraEntries;
 
       untrackedMarkers = builtins.filter markers.isUntrackedRefPath (
         builtins.attrNames (builtins.getContext manifestJson)
@@ -1073,6 +1086,45 @@ rec {
         fix = "Set crRequires to a list of resources, such as [ self.webhookCheck ].";
       };
 
+  # Return `controller` as a list of workloads, and stop the build when it is
+  # anything other than null, a workload, or a list of workloads. A workload
+  # is a Deployment, StatefulSet, or DaemonSet, or an import marker for one
+  # that runs outside Kix. `scope.mkCRD` and `scope.mkCRDRef` call it when
+  # the kind is declared, so a wrong value fails even when no custom resource
+  # of the kind is built.
+  validateController =
+    declaredBy: groupKind: controller:
+    let
+      listed =
+        if controller == null then
+          [ ]
+        else if builtins.isList controller then
+          controller
+        else
+          [ controller ];
+      isWorkload =
+        r:
+        builtins.isAttrs r
+        && r ? outPath
+        && (
+          builtins.elem (r.kind or null) workloadKinds.servingKinds || (r.kind or null) == "PackageInstance"
+        );
+      wrong = builtins.filter (r: !(isWorkload r)) listed;
+      describe =
+        r:
+        if builtins.isAttrs r && r ? kind then
+          "${r.kind} ${builtins.toJSON (r.name or null)}"
+        else
+          "type ${builtins.typeOf r}";
+    in
+    if wrong == [ ] then
+      listed
+    else
+      fail {
+        message = "${declaredBy}: controller for ${groupKind} must be a workload or list of workloads (got ${describe (builtins.head wrong)}).";
+        fix = "Set controller to the Deployment, StatefulSet, or DaemonSet that reconciles ${groupKind} objects (such as self.operator), an import marker for an external workload, or a list of them. Omit controller or set it to null when nothing in the cluster reconciles this kind.";
+      };
+
   mkCRDBuilders =
     {
       crdOrRef,
@@ -1095,6 +1147,12 @@ rec {
       # on `scope.mkCRD` or `scope.mkCRDRef`. They come before the CRD in
       # each CR's `requires`.
       crRequires ? [ ],
+      # The workloads that handle custom resources of the kind, from
+      # `validateController`. Every CR requires them, so a deploy creates
+      # the CR after its controller and deletes it before. They are written
+      # to `kix.run/depends-on` as `controller:` entries, which the deploy
+      # reads to name the controller when a CR's delete does not finish.
+      controllers ? [ ],
       # Appended to every CR's `requires` after the CRD (a chart's workloads,
       # any of which can be the CRD's webhook).
       extraRequires ? [ ],
@@ -1188,13 +1246,14 @@ rec {
         // {
           apiVersion = "${group}/${checkServed consumer args (args.version or version)}";
           kind = crKind;
-          requires = (args.requires or [ ]) ++ _validatedCrRequires ++ [ crdOrRef ] ++ extraRequires;
+          requires =
+            (args.requires or [ ]) ++ _validatedCrRequires ++ controllers ++ [ crdOrRef ] ++ extraRequires;
         }
         // lib.optionalAttrs (factBehavior != null) { inherit factBehavior; }
         // lib.optionalAttrs (usesAtLeast != null) { inherit usesAtLeast; }
         // {
           _crd = {
-            inherit declaredBy;
+            inherit declaredBy controllers;
             holdsData = _validatedHoldsData;
           };
         }
@@ -1288,6 +1347,9 @@ rec {
       holdsData ? null,
       # Resources every CR of the kind requires; see mkCRDBuilders.
       crRequires ? [ ],
+      # The workload, workloads, or import marker that handles CRs of the
+      # kind; see validateController.
+      controller ? null,
     }:
     let
       declaration = "${site} in ${namespaceName}/${instanceName}";
@@ -1351,8 +1413,11 @@ rec {
           [ installedBy ];
 
       _validatedCrRequires = validateCrRequires declaration "${group}/${kind}" crRequires;
+      _validatedControllers = validateController declaration "${group}/${kind}" controller;
       _validated = builtins.seq _validatedServed (
-        builtins.seq _validatedScope (builtins.seq _validatedCrRequires _validatedReadiness)
+        builtins.seq _validatedScope (
+          builtins.seq _validatedCrRequires (builtins.seq _validatedControllers _validatedReadiness)
+        )
       );
 
       marker = builtins.seq _validated (
@@ -1377,6 +1442,7 @@ rec {
         readiness = _validatedReadiness;
         inherit usesAtLeast holdsData;
         crRequires = _validatedCrRequires;
+        controllers = _validatedControllers;
         version = _validatedVersion;
         servedVersions = _validatedServed;
         crdScope = _validatedScope;

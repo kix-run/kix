@@ -939,28 +939,31 @@ in
           );
           declaredBy = "scope.mkCRD ${plural}.${group} in ${namespaceName}/${instanceName}";
           crRequires = k8s.validateCrRequires declaredBy "${group}/${crKind}" (attrs.crRequires or [ ]);
+          controllers = k8s.validateController declaredBy "${group}/${crKind}" (attrs.controller or null);
 
           crdResource = builtins.seq readiness (
-            builtins.seq crRequires (scopeMkClusterResource {
-              apiVersion = "apiextensions.k8s.io/v1";
-              kind = "CustomResourceDefinition";
-              name = "${plural}.${group}";
-              inherit labels;
-              ownership = attrs.ownership or { };
-              extra = {
-                spec = crdSpec;
-              }
-              // lib.optionalAttrs (annotations != { }) {
-                metadata = { inherit annotations; };
-              };
-            })
+            builtins.seq crRequires (
+              builtins.seq controllers (scopeMkClusterResource {
+                apiVersion = "apiextensions.k8s.io/v1";
+                kind = "CustomResourceDefinition";
+                name = "${plural}.${group}";
+                inherit labels;
+                ownership = attrs.ownership or { };
+                extra = {
+                  spec = crdSpec;
+                }
+                // lib.optionalAttrs (annotations != { }) {
+                  metadata = { inherit annotations; };
+                };
+              })
+            )
           );
 
           crdBuilders = k8s.mkCRDBuilders {
             crdOrRef = crdResource;
             group = group;
             kind = crKind;
-            inherit declaredBy crRequires;
+            inherit declaredBy crRequires controllers;
             inherit
               version
               servedVersions

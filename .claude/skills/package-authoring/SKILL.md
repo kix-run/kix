@@ -99,7 +99,11 @@ rewrites the later ones.
   `scope.mkCRD` or `scope.mkCRDRef` call for the kinds those webhooks admit (C21). Every declaration sets `holdsData`: `true` when deleting a custom
   resource of the kind loses data (a database, a storage pool, a backup),
   `false` otherwise (C24). A stateful package that renders a custom resource
-  of a kind without it fails to build.
+  of a kind without it fails to build. When a workload reconciles the kind,
+  set `controller` on the declaration to that workload, usually
+  `self.operator` (C27). Kix then creates custom resources after the operator,
+  deletes them before the operator, and names the operator if a delete gets
+  stuck.
 - Admission webhooks: Kix applies webhook configurations in `requires` order,
   so the package sets the order. When the operator does not read or patch its
   webhook configuration at startup, the configuration `requires` the workload
