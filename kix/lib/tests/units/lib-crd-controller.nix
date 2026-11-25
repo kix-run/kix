@@ -263,8 +263,8 @@ in
     in
     lib.all (needle: lib.hasInfix needle text) [
       "[K9267]"
-      "scope.mkCRD for example.test/Widget does not take controler"
-      "Use only these arguments: spec, labels, annotations, ownership"
+      "scope.mkCRD for example.test/Widget received unknown argument(s): controler. Kix rejected this CRD declaration."
+      "Rename or remove the unknown argument(s). Accepted arguments: spec, labels, annotations, ownership"
       "controller"
     ]
     || throw "unknown CRD argument message: ${text}";

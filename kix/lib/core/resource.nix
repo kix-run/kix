@@ -1134,8 +1134,8 @@ rec {
     else
       fail {
         id = "K9267";
-        message = "${site} for ${declares} does not take ${list unknown}. Kix rejected it instead of ignoring the setting.";
-        fix = "Use only these arguments: ${list accepted}.";
+        message = "${site} for ${declares} received unknown argument(s): ${list unknown}. Kix rejected this CRD declaration.";
+        fix = "Rename or remove the unknown argument(s). Accepted arguments: ${list accepted}.";
       };
 
   # Return `controller` as a list of workloads, and stop the build when it is

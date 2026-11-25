@@ -3,4 +3,4 @@ kind = "error"
 library = ["scope.mkCRD", "scope.mkCRDRef"]
 id = "K9267"
 +++
-`scope.mkCRD` and `scope.mkCRDRef` now refuse an argument they do not take. Before, a misspelt argument such as `controler` was ignored, so the setting did nothing. Kix now stops with `[K9267]`, which names the argument, the kind and the arguments the builder accepts. Correct the spelling, or remove the argument.
+Rename or remove any unknown argument passed to `scope.mkCRD` or `scope.mkCRDRef`. Both functions now reject unknown arguments with `[K9267]`, listing the unknown arguments, the custom resource kind, and the accepted arguments. Previously, `scope.mkCRD` ignored unknown arguments, so a misspelled argument such as `controler` had no effect.
