@@ -363,7 +363,7 @@ pub async fn reconcile_activation(
             // The record stays current while a newer one deploys, and its
             // repair would undo that deploy, so it waits.
             if let Some(newer) = newer_deploy(&ctx.records, &cluster, name).await? {
-                tracing::info!(name, newer = %newer, "A newer record of this cluster is deploying, waiting");
+                tracing::info!(name, newer = %newer, "Waiting while another Activation for this cluster is queued or deploying");
                 return Ok(Action::requeue(QUEUED_REQUEUE_INTERVAL));
             }
 
@@ -915,7 +915,7 @@ fn stop_cause(error: &DeployError) -> String {
 fn gave_up_reason(attempts: u32, retries: u32, current: Option<&str>, cause: &str) -> String {
     let restore = match current {
         Some(current) => format!(
-            "Activation '{current}' stays current, and the operator returns the cluster to its build. "
+            "Activation '{current}' remains the current deployment, and the operator will restore the cluster to match it. "
         ),
         None => String::new(),
     };
@@ -2358,7 +2358,7 @@ mod tests {
         let reason = status["failure"]["reason"].as_str().unwrap();
         assert!(
             reason.contains(
-                "Activation 'a-old' stays current, and the operator returns the cluster to its build."
+                "Activation 'a-old' remains the current deployment, and the operator will restore the cluster to match it."
             ),
             "{reason}"
         );
@@ -2378,7 +2378,7 @@ mod tests {
         let (_, status) = reconcile_retrying(&api, record, 0).await;
         assert_eq!(status["phase"], PHASE_FAILED);
         let reason = status["failure"]["reason"].as_str().unwrap();
-        assert!(!reason.contains("stays current"), "{reason}");
+        assert!(!reason.contains("current deployment"), "{reason}");
     }
 
     /// Return `record` with the `managed-by` label that
