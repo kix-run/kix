@@ -156,10 +156,15 @@ impl Refusal {
             }
             ApplyError::PatchFailed { source, .. }
             | ApplyError::Conflict { source, .. }
+            | ApplyError::SecretDataConflict { source, .. }
             | ApplyError::ImmutableConflict { source, .. }
             | ApplyError::CrdStoredVersion { source, .. }
             | ApplyError::BookkeepingAnnotationsFailed { source, .. } => source,
-            ApplyError::ExpectationUnmet { .. } | ApplyError::NoNamespace { .. } => {
+            ApplyError::ExpectationUnmet { .. }
+            | ApplyError::NoNamespace { .. }
+            | ApplyError::BeingDeleted { .. }
+            | ApplyError::StillBeingDeleted { .. }
+            | ApplyError::Interrupted { .. } => {
                 return Refusal::Other {
                     message: err.to_string(),
                 };

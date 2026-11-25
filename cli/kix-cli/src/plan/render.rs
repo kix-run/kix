@@ -12,8 +12,8 @@ use std::fmt::{self, Write};
 use crate::output;
 
 use kix::plan::document::{
-    AdmissionRefusal, Checked, FieldNotKept, MadeBy, NotCheckedReason, NotKept, Plan, PruneFate,
-    RefusalReason, UncheckedReason, WriteChange,
+    AdmissionRefusal, BeingDeleted, Checked, FieldNotKept, MadeBy, NotCheckedReason, NotKept, Plan,
+    PruneFate, RefusalReason, UncheckedReason, WriteChange,
 };
 use kix::plan::origin::ChangeLabel;
 use kix::plan::saved::{Comparison, Rule};
@@ -34,6 +34,7 @@ pub fn label_tag(labels: &[ChangeLabel]) -> String {
 pub fn render_text(plan: &Plan) -> String {
     written(|out| {
         write_stops(out, plan)?;
+        write_being_deleted(out, plan)?;
         write_not_kept(out, plan)?;
         write_drift(out, plan)?;
         write_prune(out, plan)?;
@@ -149,6 +150,60 @@ fn write_stops(out: &mut String, plan: &Plan) -> fmt::Result {
         }
     }
     Ok(())
+}
+
+/// Write the objects of the build that are being deleted on the cluster. The
+/// deploy waits for each to be gone and then creates it, so this is a
+/// warning, not a stop.
+fn write_being_deleted(out: &mut String, plan: &Plan) -> fmt::Result {
+    if plan.being_deleted.is_empty() {
+        return Ok(());
+    }
+    let n = plan.being_deleted.len();
+    writeln!(out)?;
+    writeln!(
+        out,
+        "{}",
+        output::yellow(&format!(
+            "{n} object{} in the build {} being deleted on the cluster. The deploy will wait until {} gone, then recreate {}:",
+            if n == 1 { "" } else { "s" },
+            if n == 1 { "is" } else { "are" },
+            if n == 1 { "it is" } else { "they are" },
+            if n == 1 { "it" } else { "them" },
+        ))
+    )?;
+    for d in &plan.being_deleted {
+        writeln!(
+            out,
+            "  {} {} {}",
+            output::yellow("↻"),
+            d.resource,
+            output::dim(&being_deleted_detail(d)),
+        )?;
+        if d.holds_data {
+            writeln!(
+                out,
+                "      {}",
+                output::yellow(
+                    "may hold data: the new object starts empty and keeps none of the old object's data"
+                )
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Describe what a delete waits for and since when.
+fn being_deleted_detail(d: &BeingDeleted) -> String {
+    if d.finalizers.is_empty() {
+        format!("being deleted since {}", d.since)
+    } else {
+        format!(
+            "being deleted since {}, waiting for {}",
+            d.since,
+            d.finalizers.join(", ")
+        )
+    }
 }
 
 /// Write the fields Kubernetes would not keep as the build sets them. The
@@ -666,6 +721,27 @@ fn write_markdown(out: &mut String, plan: &Plan) -> fmt::Result {
         }
         writeln!(out)?;
     }
+    if !plan.being_deleted.is_empty() {
+        writeln!(
+            out,
+            "#### :warning: These objects are being deleted on the cluster"
+        )?;
+        writeln!(out)?;
+        writeln!(
+            out,
+            "The deploy will wait until each object is gone, then recreate it from the build:"
+        )?;
+        writeln!(out)?;
+        for d in &plan.being_deleted {
+            let data = if d.holds_data {
+                " (may hold data: the new object starts empty and keeps none of the old object's data)"
+            } else {
+                ""
+            };
+            writeln!(out, "- `{}`: {}{data}", d.resource, being_deleted_detail(d))?;
+        }
+        writeln!(out)?;
+    }
     if !plan.not_kept.is_empty() {
         writeln!(out, "#### :warning: Kubernetes would not keep these fields")?;
         writeln!(out)?;
@@ -828,6 +904,39 @@ mod tests {
         );
         plan.drift = Checked::found(drift);
         plan
+    }
+
+    /// An object being deleted is listed as a warning, with what its delete
+    /// waits for, and one that may hold data says the new object starts
+    /// empty. The section is not a stop.
+    #[test]
+    fn an_object_being_deleted_is_a_warning() {
+        let mut plan = plan_with(Vec::new());
+        plan.being_deleted = vec![BeingDeleted {
+            resource: "PersistentVolumeClaim app/data".into(),
+            since: "2026-11-24T15:54:00Z".into(),
+            finalizers: vec!["example.com/hold".into()],
+            holds_data: true,
+        }];
+        let text = render_text(&plan);
+        assert!(
+            text.contains("1 object in the build is being deleted"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "PersistentVolumeClaim app/data being deleted since 2026-11-24T15:54:00Z, waiting for example.com/hold"
+            ),
+            "{text}"
+        );
+        assert!(text.contains("the new object starts empty"), "{text}");
+        assert!(!plan.stops());
+        assert!(plan.has_changes());
+        let markdown = render_markdown(&plan);
+        assert!(
+            markdown.contains("- `PersistentVolumeClaim app/data`: being deleted since"),
+            "{markdown}"
+        );
     }
 
     /// A warning that holds a code fence stays inside the warnings block,

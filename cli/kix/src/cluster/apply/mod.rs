@@ -27,8 +27,8 @@ pub(crate) use ssa::{
 };
 #[cfg(test)]
 use ssa::{
-    is_immutable_field_message, is_stored_version_message, merge_activation_set, parse_path,
-    without_ceded_conflicts,
+    conflict_error, is_immutable_field_message, is_stored_version_message, merge_activation_set,
+    parse_path, string_data_as_data, without_ceded_conflicts,
 };
 
 /// Return `true` if `manifest` is a `Job` with `kix.run/rerun: on-change`.
@@ -439,9 +439,15 @@ pub(crate) fn detect_changes_live(
     let mut live_content: HashMap<ResourceId, Option<&str>> = HashMap::new();
     let mut live_stamps: HashMap<ResourceId, [Option<&str>; 3]> = HashMap::new();
     let mut live_prunable: HashSet<ResourceId> = HashSet::new();
+    // An object being deleted will be gone after the deploy, so it is
+    // written again: the apply waits for it to go, then creates it.
+    let mut live_deleting: HashSet<ResourceId> = HashSet::new();
 
     for obj in live_resources {
         let k8s_id = super::drift::resource_id(obj);
+        if obj.metadata.deletion_timestamp.is_some() {
+            live_deleting.insert(k8s_id.clone());
+        }
 
         let hash = obj
             .metadata
@@ -477,6 +483,7 @@ pub(crate) fn detect_changes_live(
         match (live_by_k8s_id.get(&rid), desired_hash) {
             (Some(Some(live_hash)), Some(desired_h))
                 if *live_hash == desired_h
+                    && !live_deleting.contains(&rid)
                     && (is_record(manifest)
                         || live_stamps.get(&rid) == Some(&owner_stamps(manifest))) =>
             {

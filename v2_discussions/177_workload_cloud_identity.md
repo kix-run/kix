@@ -60,12 +60,13 @@ selectors and delivers them through a CSI socket. This doc leaves both out.
 A survey of 21 projects (sources in section 12) found:
 
 - About 16 attach the identity to their own ServiceAccount: external-dns,
-  cert-manager, Velero, Loki, Tempo, Mimir, Harbor's registry, Karpenter,
+  cert-manager, Velero, Loki, Tempo, Mimir, Harbor's registry (on GCS only, see section 8), Karpenter,
   the AWS Load Balancer Controller, the CSI drivers, cluster-autoscaler,
   Thanos. Two CSI drivers have two ServiceAccounts.
 - Five attach it to a ServiceAccount that an operator creates or that a
   custom resource names: CloudNativePG (`serviceAccountTemplate` on the
-  Cluster), StackGres, the VictoriaMetrics operator, Argo Workflows, and
+  Cluster), StackGres, VictoriaMetrics (the backup sidecar in the vmstorage
+  pods of a VMCluster), Argo Workflows, and
   the recommended mode of External Secrets.
 - Nearly every storage user also needs an application switch that differs
   per cloud: `inheritFromIAMRole`, `gkeEnvironment`, `useIAMRole`,
@@ -81,7 +82,8 @@ config already names the cloud (`provider = "aws"`, an S3 block).
 
 - 52 packages build a ServiceAccount. Two have a `serviceAccountAnnotations`
   option: `experimental/external-dns` and `stable/victoria-metrics-operator`
-  (no description). Velero and `stackgres-object-storage` list cloud
+  (no description). The operator pod calls no cloud API, so its option is a
+  general pass-through and not a cloud credential setting. Velero and `stackgres-object-storage` list cloud
   identity under known limits and point at `partsOverlays` and `extraSpec`.
 - `architecture.annotationDomainOwnership` (`kix/lib/rules/architecture.nix`)
   warns when an annotation's domain is not reserved, not in
@@ -304,8 +306,22 @@ pods do not restart when the role changes.
 | Role, constructors, `use`, flavor imports, webhook modules | New surface. The flavor's import adds a marker object to existing EKS, GKE, and AKS clusters. | `added`, plus a `note` |
 | A package's `assertions` see plain `deps` values | They did not before. | `changed` |
 | external-dns takes an identity in `providerCredentials` and drops `serviceAccountAnnotations` | Experimental. The old option is refused with an error naming the new line. A cloud provider with no credentials is refused. | two `error` records |
-| victoria-metrics-operator | Stable. Its option goes in 0.11. | `error` in 0.11 |
-| Velero, cert-manager, Loki, Tempo, Harbor, external-secrets, cnpg-cluster, stackgres-object-storage | Additive in each package | `added` each |
+| Velero, cert-manager, Tempo, external-secrets, cnpg-cluster, stackgres-object-storage | Additive in each package | `added` each |
+
+cert-manager and StackGres split the ServiceAccount and the cloud choice across two packages; `180_cloud_identity_across_packages.md` decides where the identity goes for them.
+
+Three packages are not on this list. The VictoriaMetrics operator pod calls no
+cloud API, so its `serviceAccountAnnotations` option is a general
+pass-through and stays. The pod that does call one is the backup sidecar in
+the vmstorage pods of `victoria-metrics-cluster`, which can take a cloud
+identity when a user asks for it. Kix's `loki` package keeps its data on a
+volume and calls no cloud API, so it takes a cloud identity once it has an
+object store. Kix's `harbor` package also keeps its registry data on a
+volume, and refuses every object storage driver. Harbor 2.15.5 builds its
+registry from `goharbor/distribution` `v2.8.3-harbor.4`. The S3 driver there
+cannot use a web identity token, so IRSA and EKS Pod Identity fail, and the
+Azure driver needs an account key. Harbor stays off the list until Harbor
+ships a registry whose S3 and Azure drivers use the ambient identity.
 
 ## 9. Recommendation and plan
 
@@ -376,9 +392,10 @@ until a user asks for a package or for Pod Identity.
    *Recommended: keep it.*
 6. **Remove the two existing annotation options?** external-dns is
    experimental, so its option can go in any release with an error naming
-   the new setting. The VictoriaMetrics operator is stable, so its option
-   can only go in 0.11. *Recommended: remove the external-dns one when it
-   adopts the new setting, and remove the VictoriaMetrics one in 0.11.*
+   the new setting. The VictoriaMetrics operator's option is not for cloud
+   credentials, because the operator pod calls no cloud API. *Recommended:
+   remove the external-dns one when it adopts the new setting. Keep the
+   VictoriaMetrics operator's option.*
 7. **Should Kix record the declared role on the ServiceAccount under its
    own annotation?** For the two mechanisms that put nothing in the cluster,
    this is the only way a preview shows that a role changed, and the only

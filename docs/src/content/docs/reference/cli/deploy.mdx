@@ -76,12 +76,28 @@ Set `KIX_TUI_HEIGHT` to a number of rows to cap the live view of
    Unchanged resources are skipped. A deploy with nothing to change exits
    without applying. When a Secret carries `kix.run/sops-source`, the deploy
    decrypts the SOPS file and keeps any plain keys already in the Secret's
-   `stringData` or `data`. Before the record is created, the run stops if the
+   `stringData` or `data`. Kix converts any `stringData` entries and sends all
+   Secret values base64-encoded under `data`, so Kix owns each key on the
+   cluster. Before the record is created, the run stops if the
    cluster serves a resource's kind as namespaced and its manifest has no
    `metadata.namespace`, naming each such resource. Cross-resource
    [check 18](/docs/reference/validation-checks/)
    refuses most of these at evaluation; this covers custom kinds whose
    CustomResourceDefinition is not in the build.
+
+   If an object the deploy applies is already being deleted on the cluster
+   (it has a `deletionTimestamp`, usually while a finalizer runs), Kix waits
+   for Kubernetes to finish deleting the old object and then creates a new
+   one from the build. Applying onto a deleting object would let Kubernetes
+   remove it as soon as its finalizers cleared. The replacement keeps none of
+   the old object's data; for example, a PersistentVolumeClaim starts with an
+   empty volume. The plan warns about these objects under
+   `... being deleted on the cluster`. If the old object is still on the
+   cluster after `--timeout` passes without a finalizer being removed, or
+   after 5 minutes in total, the deploy fails with `[K2794]` without creating
+   the replacement. Because a normal deploy skips unchanged resources without
+   reading them on the cluster, it catches a deleting object only when that
+   resource changed in the build or when you pass `--reconcile`.
 6. Prunes orphans when asked. Namespaces and CustomResourceDefinitions are
    reported as kept and never deleted, with or without `--prune`. In
    `--log-format json`, the `prune_start` event lists them under `kept`,

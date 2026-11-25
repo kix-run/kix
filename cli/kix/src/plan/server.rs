@@ -18,7 +18,7 @@ use crate::manifest::lifecycle;
 use crate::manifest::types::{self, ResourceId};
 use serde_json::Value;
 
-use super::document::{DriftChange, FieldNotKept};
+use super::document::{BeingDeleted, DriftChange, FieldNotKept};
 use super::origin::{ChangeLabel, ThreeWay};
 use super::{CLUSTER_LEVEL_KEY, PackageChangeDiff, PackageDiff, partition_propagation};
 
@@ -98,6 +98,37 @@ pub fn not_kept(answers: &[DryRunAnswer], skip: impl Fn(&ResourceId) -> bool) ->
         })
         .collect();
     out.sort_by(|a, b| (&a.resource, &a.path).cmp(&(&b.resource, &b.path)));
+    out
+}
+
+/// Return the objects of the build that the dry run found being deleted on
+/// the cluster, sorted by resource. The deploy waits for each to be gone and
+/// then creates it. `manifest` returns the build's manifest of an object,
+/// which says whether it may hold data.
+pub fn being_deleted<'a>(
+    answers: &[DryRunAnswer],
+    manifest: impl Fn(&ResourceId) -> Option<&'a Value>,
+) -> Vec<BeingDeleted> {
+    let mut out: Vec<BeingDeleted> = answers
+        .iter()
+        .filter_map(|a| {
+            let DryRunOutcome::Recreated {
+                live: Some(live), ..
+            } = &a.outcome
+            else {
+                return None;
+            };
+            let since = live.pointer("/metadata/deletionTimestamp")?.as_str()?;
+            let obj: kube::api::DynamicObject = serde_json::from_value(live.clone()).ok()?;
+            Some(BeingDeleted {
+                resource: a.rid.display_id(),
+                since: since.to_string(),
+                finalizers: crate::cluster::readiness::finalizers_of(&obj),
+                holds_data: manifest(&a.rid).is_some_and(crate::cluster::migrate::may_hold_data),
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| a.resource.cmp(&b.resource));
     out
 }
 
@@ -579,6 +610,59 @@ mod tests {
             .map(|(id, d)| (id, d.len()))
             .collect();
         assert_eq!(listed, vec![(&rid("a"), 1), (&rid("b"), 0)], "{listed:?}");
+    }
+
+    /// A recreate whose live object has a `deletionTimestamp` is an object
+    /// the deploy waits for, and the plan lists it with its finalizers and
+    /// whether it may hold data. A recreate of a live object that is not
+    /// being deleted is not listed.
+    #[test]
+    fn an_object_being_deleted_is_listed_with_what_it_waits_for() {
+        let held = |name: &str| {
+            let mut live = configmap("app", name, &"a".repeat(32), json!({"k": "1"}));
+            live["metadata"]["deletionTimestamp"] = json!("2026-11-24T15:54:00Z");
+            live["metadata"]["finalizers"] = json!(["example.com/hold"]);
+            live
+        };
+        let recreated = |name: &str, live: Value| DryRunAnswer {
+            rid: rid(name),
+            outcome: DryRunOutcome::Recreated {
+                live: Some(live),
+                result: None,
+                not_kept: Vec::new(),
+            },
+        };
+        let claim = json!({
+            "apiVersion": "v1",
+            "kind": "PersistentVolumeClaim",
+            "metadata": { "name": "b", "namespace": "app" },
+            "spec": { "resources": { "requests": { "storage": "1Gi" } } },
+        });
+        let answers = vec![
+            recreated("b", held("b")),
+            recreated("a", held("a")),
+            recreated(
+                "c",
+                configmap("app", "c", &"a".repeat(32), json!({"k": "1"})),
+            ),
+        ];
+        let found = being_deleted(&answers, |r| (r.name == "b").then_some(&claim));
+        let listed: Vec<(&str, &str, bool)> = found
+            .iter()
+            .map(|d| (d.resource.as_str(), d.since.as_str(), d.holds_data))
+            .collect();
+        assert_eq!(
+            listed,
+            vec![
+                (
+                    rid("a").display_id().as_str(),
+                    "2026-11-24T15:54:00Z",
+                    false
+                ),
+                (rid("b").display_id().as_str(), "2026-11-24T15:54:00Z", true),
+            ]
+        );
+        assert_eq!(found[0].finalizers, vec!["example.com/hold".to_string()]);
     }
 
     #[test]

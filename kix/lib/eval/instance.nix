@@ -91,7 +91,16 @@ in
           inherit where;
         };
 
+        defaultLimits = clusterConfig.cluster.defaultLimits or (import ../core/default-limits.nix).default;
+
+        # Give the package a `kix.options.resources` whose default limits
+        # follow `cluster.defaultLimits`.
+        clusterOptions = import ../vocab/options.nix { inherit lib defaultLimits; };
+
         packageKix = kixlib // {
+          options = kixlib.options // {
+            inherit (clusterOptions) resources;
+          };
           availability =
             kixlib.availability
             // availabilityLib.underCeiling {
@@ -665,6 +674,7 @@ in
                 ruleOverrides = scorecardConfig.ruleOverrides or { };
                 maxSeverity = scorecardConfig.maxSeverity or "error";
                 acceptedSecretSources = clusterConfig.cluster.secrets.accept or null;
+                inherit defaultLimits;
               }
             ) (builtins.filter (r: r ? kind) (map (r: r.rawManifest or { }) shippedResources))
           else

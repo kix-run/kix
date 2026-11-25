@@ -217,6 +217,7 @@ in
       {
         self,
         config,
+        clusterConfig,
         scope,
         kix,
         clickhouseOperator,
@@ -390,8 +391,20 @@ in
       if (config.resources.limits.memory or null) == null then
         scope.fail {
           option = "resources.limits.memory";
-          message = "resources.limits.memory is unset. ClickHouse sizes its memory cap from the container limit and falls back to the node's RAM without one.";
-          fix = "Set config.resources.limits.memory.";
+          message =
+            "resources.limits.memory is not set"
+            + (
+              if clusterConfig.cluster.defaultLimits.memory == "none" then
+                " (cluster.defaultLimits.memory = \"none\" removed the package default)."
+              else
+                "."
+            )
+            + " ClickHouse calculates its memory cap from the container's memory limit, and without one it uses the node's full RAM.";
+          fix =
+            if clusterConfig.cluster.defaultLimits.memory == "none" then
+              "Set config.resources.limits.memory on this instance, or set cluster.defaultLimits.memory = \"package\"."
+            else
+              "Set config.resources.limits.memory on this instance.";
         }
       else
         {

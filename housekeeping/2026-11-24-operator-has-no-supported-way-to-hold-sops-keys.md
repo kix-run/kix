@@ -1,0 +1,3 @@
+# 2026-11-24 · `cli/kix-operator` · Kix gives the operator no supported way to hold a SOPS key, so each user writes the key mount into a Deployment Kix does not ship.
+
+The operator decrypts SOPS files with the keys in its own pod, and Kix provides no package or manifest for the operator (`docs/src/content/docs/reference/cli/operator-mode.mdx`). The docs now show a hand-written `SOPS_AGE_KEY_FILE` mount, but nothing checks it: a missing key shows up only as a deploy that retries until someone reads the Activation's Events. An operator package with an option for the decryption key would let a build check it.

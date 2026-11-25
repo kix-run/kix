@@ -25,6 +25,21 @@ pub(crate) enum SecretError {
     #[error("SOPS decryption failed for {path}: {message}")]
     DecryptionFailed { path: String, message: String },
 
+    /// `sops` exited with [`SOPS_NO_DATA_KEY`]: no key the file is encrypted
+    /// to gave it the data key. `message` is what `sops` wrote to stderr.
+    #[error(
+        "cannot decrypt SOPS file {}: `sops` could not get a decryption key\n  \
+         Kix did not apply this Secret, and any existing Secret on the cluster is unchanged. \
+         No matching key is configured, or `sops` could not reach or use the key service (age, PGP, cloud KMS, or Vault).\n\n  \
+         Next:\n    \
+         - For `kix plan`, `kix deploy`, or `kix rollback`: set `SOPS_AGE_KEY_FILE` (or configure your cloud KMS, Vault, or PGP key) on the machine running `kix`, then run the command again.\n    \
+         - With `--operator`: configure the key on the Kix operator pod; the operator retries every 30 seconds. See https://kix.run/docs/reference/cli/operator-mode/#secrets-from-sops-files.\n\n  \
+         sops error:\n    {}",
+        sops_file_name(path),
+        message.replace('\n', "\n    ")
+    )]
+    NoKey { path: String, message: String },
+
     #[error("SOPS source file not found: {path}")]
     SourceNotFound { path: String },
 
@@ -605,6 +620,12 @@ fn resolve_sops_path(source: &str) -> Result<PathBuf, SecretError> {
     })
 }
 
+/// The exit status `sops` returns when no key the file is encrypted to
+/// yields the data key (`CouldNotRetrieveKey` in sops'
+/// `cmd/sops/codes/codes.go`). It covers a missing key, a key that does not
+/// match, a denied key service, and a key service that cannot be reached.
+const SOPS_NO_DATA_KEY: i32 = 128;
+
 /// Decrypt a SOPS file using the `sops` CLI.
 fn decrypt_sops(path: &Path, input_type: Option<&str>) -> Result<String, SecretError> {
     let failed = |message: String| SecretError::DecryptionFailed {
@@ -615,17 +636,29 @@ fn decrypt_sops(path: &Path, input_type: Option<&str>) -> Result<String, SecretE
         .map_err(|e| failed(e.to_string()))?
         .output()
         .map_err(|e| failed(format!("failed to run sops: {e}")))?;
+    decrypted(path, output)
+}
 
+/// Return the plaintext `sops` wrote for `path`, or the error its exit
+/// status and stderr describe.
+fn decrypted(path: &Path, output: std::process::Output) -> Result<String, SecretError> {
+    let path_text = path.display().to_string();
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(SecretError::DecryptionFailed {
-            path: path.display().to_string(),
-            message: stderr.trim().to_string(),
+        let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(match output.status.code() {
+            Some(SOPS_NO_DATA_KEY) => SecretError::NoKey {
+                path: path_text,
+                message,
+            },
+            _ => SecretError::DecryptionFailed {
+                path: path_text,
+                message,
+            },
         });
     }
 
     String::from_utf8(output.stdout).map_err(|e| SecretError::DecryptionFailed {
-        path: path.display().to_string(),
+        path: path_text,
         message: format!("invalid UTF-8 in decrypted output: {e}"),
     })
 }
@@ -1017,6 +1050,74 @@ mod tests {
         assert_eq!(
             bundle(&flat, true).unwrap(),
             json!({"password": "kix-placeholder", "port": "kix-placeholder", "username": "kix-placeholder"})
+        );
+    }
+
+    /// A process with no age identity gets `sops`' no-data-key exit status,
+    /// and the error names the file and says no key here decrypts it. The
+    /// same file decrypts once the identity is given.
+    #[test]
+    fn a_sops_file_with_no_key_here_says_so() {
+        const RECIPIENT: &str = "age12uaczkdv3uvyrw6kmvc4s4srykpwtd9uqzejlqt9yzajd986qp8qvtfjmv";
+        const IDENTITY: &str =
+            "AGE-SECRET-KEY-17GL4UCEWMVTVSTEJKYL6PA4KMKC88MEV9E5CG8E8UQ7TSY4WA2HQ9XDQMR\n";
+        let dir = tempfile::tempdir().unwrap();
+        let key_file = dir.path().join("age-key.txt");
+        std::fs::write(&key_file, IDENTITY).unwrap();
+        let path = dir.path().join("app-db.sops.yaml");
+        std::fs::write(&path, "password: s3cr3t\n").unwrap();
+        let out = runtime::tool(Tool::Sops, Want::Shipped)
+            .unwrap()
+            .args(["encrypt", "--age", RECIPIENT, "--in-place"])
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+
+        // Keep the test runner's own keys out of `sops`' reach.
+        let run = |key: Option<&Path>| {
+            let mut command = decrypt_command(&path, None).unwrap();
+            for var in [
+                "SOPS_AGE_KEY",
+                "SOPS_AGE_KEY_FILE",
+                "SOPS_AGE_KEY_CMD",
+                "SOPS_AGE_SSH_PRIVATE_KEY_FILE",
+                "SOPS_AGE_SSH_PRIVATE_KEY_CMD",
+            ] {
+                command.env_remove(var);
+            }
+            command
+                .env("HOME", dir.path())
+                .env("XDG_CONFIG_HOME", dir.path());
+            if let Some(key) = key {
+                command.env("SOPS_AGE_KEY_FILE", key);
+            }
+            decrypted(&path, command.output().unwrap())
+        };
+
+        let err = run(None).unwrap_err();
+        assert!(matches!(err, SecretError::NoKey { .. }), "{err:?}");
+        let text = err.to_string();
+        assert!(
+            text.starts_with(
+                "cannot decrypt SOPS file app-db.sops.yaml: `sops` could not get a decryption key"
+            ),
+            "{text}"
+        );
+        assert!(text.contains("Kix operator"), "{text}");
+        assert!(
+            text.contains("sops error:\n    Failed to get the data key"),
+            "{text}"
+        );
+
+        let plaintext = run(Some(&key_file)).unwrap();
+        assert_eq!(
+            parse_secret_data(&path, &plaintext).unwrap(),
+            BTreeMap::from([("password".into(), "s3cr3t".into())])
         );
     }
 

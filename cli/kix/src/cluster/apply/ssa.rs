@@ -1,5 +1,6 @@
 //! Server-side apply execution, conflict classification, and bookkeeping annotations.
 
+use std::borrow::Cow;
 use std::collections::HashSet;
 
 use super::super::errors::FailureClass;
@@ -38,6 +39,15 @@ pub enum ApplyError {
     },
 
     #[error(
+        "[K9044] field ownership conflict on {resource} (not updated). Another field manager owns keys in `data` with different values, so Kix did not overwrite them. Run the command again with `--force-conflicts` to write the build's values, or copy the cluster's values into `stringData` or the SOPS file and deploy again. Kubernetes reported: {}", reported(.source)
+    )]
+    SecretDataConflict {
+        resource: String,
+        #[source]
+        source: kube::Error,
+    },
+
+    #[error(
         "immutable field changed on {resource} (not updated). Kubernetes does not allow changing this field in place, and Kix did not recreate {resource} automatically; review the impact of deleting {resource}, delete it, and run the deploy again. Kubernetes reported: {}", reported(.source)
     )]
     ImmutableConflict {
@@ -66,6 +76,32 @@ pub enum ApplyError {
         #[source]
         source: kube::Error,
     },
+
+    #[error(
+        "{resource} is {reason} (not applied). Applying changes now would let Kubernetes finish deleting it after the deploy. Wait for {resource} to be removed, then run the deploy again."
+    )]
+    BeingDeleted {
+        resource: String,
+        reason: String,
+        /// The uid of the object being deleted, to wait for.
+        uid: Option<String>,
+    },
+
+    /// The object was being deleted and was still there after the wait.
+    #[error(
+        "{}",
+        super::super::readiness::stuck_message(.rid, .stuck)
+    )]
+    StillBeingDeleted {
+        rid: ResourceId,
+        stuck: super::super::readiness::Stuck,
+    },
+
+    /// The cancel token fired while Kix waited for the object to be deleted.
+    #[error(
+        "interrupted while waiting for {resource} to finish deleting (not applied). Wait for deletion to finish, then run the deploy again."
+    )]
+    Interrupted { resource: String },
 
     #[error(
         "the API server does not serve kind `{kind}` (not applied). Check the kind and `apiVersion`, and make sure the CustomResourceDefinition for `{kind}` is installed if it is a custom resource."
@@ -240,6 +276,7 @@ pub(crate) async fn apply_resource(
         });
     }
     let api: Api<DynamicObject> = super::super::discovery::api_for(client, ar, &scope, &rid);
+    let manifest = &*string_data_as_data(manifest);
 
     // Default to non-force SSA so ownership conflicts return their field paths
     // and current manager. --force-conflicts opts into taking ownership.
@@ -255,6 +292,16 @@ pub(crate) async fn apply_resource(
     // keeps the live object for its preview.
     let live = api.get_opt(&name).await.ok().flatten();
     let existed = live.is_some();
+    if let Some(reason) = live
+        .as_ref()
+        .and_then(super::super::readiness::deletion_reason)
+    {
+        return Err(ApplyError::BeingDeleted {
+            resource: rid.display_id(),
+            reason,
+            uid: live.as_ref().and_then(|o| o.metadata.uid.clone()),
+        });
+    }
 
     // Transient errors (429, 5xx, connection loss) are retried by the
     // client transport (cluster::client), not here. 409 conflicts are
@@ -280,7 +327,7 @@ pub(crate) async fn apply_resource(
                     let echo = apply_patch(&api, &name, &pp, &stripped, &rid).await?;
                     (echo, Some(stripped))
                 }
-                None => return Err(ApplyError::Conflict { resource, source }),
+                None => return Err(conflict_error(&rid, resource, source)),
             }
         }
         Err(e) => return Err(e),
@@ -346,6 +393,73 @@ pub(crate) async fn apply_resource(
         preview,
         not_kept,
     })
+}
+
+/// Return `manifest` with a Secret's `stringData` written into `data` as
+/// base64, the form the API server stores. A key in both takes its
+/// `stringData` value, as it does on the server.
+///
+/// Every apply and dry run sends this form. The server never stores
+/// `stringData`, so a field manager that applies it owns no stored field.
+/// Sent as `data`, each key belongs to Kix: a key removed from the build is
+/// removed from the cluster, and a key another manager changed is a conflict.
+/// Any other manifest is returned unchanged, and so is a Secret whose
+/// `stringData` or `data` is not a map of strings, which the server refuses
+/// with its own message.
+pub(crate) fn string_data_as_data(manifest: &Value) -> Cow<'_, Value> {
+    use base64::Engine as _;
+
+    if !crate::manifest::types::is_secret(manifest) {
+        return Cow::Borrowed(manifest);
+    }
+    let Some(Value::Object(strings)) = manifest.get("stringData") else {
+        return Cow::Borrowed(manifest);
+    };
+    let data_is_map = matches!(
+        manifest.get("data"),
+        None | Some(Value::Null | Value::Object(_))
+    );
+    if !data_is_map || !strings.values().all(Value::is_string) {
+        return Cow::Borrowed(manifest);
+    }
+    let mut data = match manifest.get("data") {
+        Some(Value::Object(data)) => data.clone(),
+        _ => serde_json::Map::new(),
+    };
+    for (key, value) in strings {
+        let text = value.as_str().unwrap_or_default();
+        let encoded = base64::engine::general_purpose::STANDARD.encode(text);
+        data.insert(key.clone(), Value::String(encoded));
+    }
+    let mut out = manifest.clone();
+    if let Some(obj) = out.as_object_mut() {
+        obj.remove("stringData");
+        if !strings.is_empty() {
+            obj.insert("data".into(), Value::Object(data));
+        }
+    }
+    Cow::Owned(out)
+}
+
+/// Return the error for a conflict that no ceded field explains. A conflict
+/// on a Secret's `data` gets [`ApplyError::SecretDataConflict`], which says
+/// what overwriting the other manager's values means.
+pub(super) fn conflict_error(
+    rid: &ResourceId,
+    resource: String,
+    source: kube::Error,
+) -> ApplyError {
+    let on_data = match &source {
+        kube::Error::Api(resp) => conflict_paths(&resp.message)
+            .iter()
+            .any(|p| p == ".data" || p.starts_with(".data.")),
+        _ => false,
+    };
+    if on_data && rid.group_kind() == crate::manifest::kinds::SECRET {
+        ApplyError::SecretDataConflict { resource, source }
+    } else {
+        ApplyError::Conflict { resource, source }
+    }
 }
 
 /// Send the SSA patch and classify a failure: 409 conflicts become

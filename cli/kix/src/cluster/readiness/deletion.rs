@@ -5,8 +5,8 @@
 //! `metadata.finalizers` is removed, usually by the controller that added it
 //! once its cleanup is done. [`wait_gone`] decides when a deletion is done.
 //! Every path that deletes an object of a build calls it: deploy's prune,
-//! `kix gc`, the operator's teardown, and the delete before an in-place
-//! recreate.
+//! `kix gc`, the operator's teardown, the delete before an in-place
+//! recreate, and an apply onto an object that is already being deleted.
 //! `kix migrate domain` waits for the retired CustomResourceDefinitions it
 //! deletes by name through its own retry loop instead: it is a one-off
 //! layer that is removed once no cluster needs it, and it tests its steps
@@ -115,7 +115,7 @@ pub fn deletion_reason(obj: &DynamicObject) -> Option<String> {
 /// Return the finalizers that hold `obj`: `metadata.finalizers`, and for a
 /// Namespace also `spec.finalizers`, where Kubernetes keeps the finalizer
 /// that empties the namespace.
-fn finalizers_of(obj: &DynamicObject) -> Vec<String> {
+pub fn finalizers_of(obj: &DynamicObject) -> Vec<String> {
     let mut finalizers = obj.metadata.finalizers.clone().unwrap_or_default();
     if let Some(spec) = obj
         .data
@@ -233,6 +233,9 @@ pub enum DeletePath {
     /// The delete before Kix creates an object again (an immutable field
     /// changed, or a Job runs again).
     Recreate(Runner),
+    /// An object of the build that was already being deleted when Kix
+    /// came to apply it.
+    Apply(Runner),
 }
 
 /// Return the message for one object whose delete did not finish within the
@@ -294,6 +297,8 @@ pub fn stuck_explanation(path: DeletePath) -> String {
     let recreated = "Kix deleted each object above to create it again because an immutable \
                      field changed or a Job must run again; Kix held no other objects back and \
                      has not created the new object yet, and";
+    let already = "This object was already being deleted on the cluster, so Kix waited for \
+                   deletion to finish and has not created the new object yet.";
     let (retry, did) = match path {
         DeletePath::Prune(Runner::Cli) => (
             cli_retry.to_string(),
@@ -338,6 +343,17 @@ pub fn stuck_explanation(path: DeletePath) -> String {
                  object is gone."
             ),
         ),
+        DeletePath::Apply(Runner::Cli) => (
+            cli_retry.to_string(),
+            format!("{already} Once the old object is gone, run the command again to create it."),
+        ),
+        DeletePath::Apply(Runner::Operator) => (
+            operator_retry.to_string(),
+            format!(
+                "{already} Once the old object is gone, the Kix operator will create it on its \
+                 next reconcile."
+            ),
+        ),
     };
     format!(
         "Kix stopped waiting, but these deletes may still finish: slow cleanups, such as \
@@ -371,10 +387,11 @@ pub fn held_back_reason(
         DeletePath::Gc => "the next `kix gc`",
         DeletePath::Teardown
         | DeletePath::Prune(Runner::Operator)
-        | DeletePath::Recreate(Runner::Operator) => "the Kix operator",
-        DeletePath::Prune(Runner::Cli) | DeletePath::Recreate(Runner::Cli) => {
-            "the next `kix deploy --prune` or `kix gc`"
-        }
+        | DeletePath::Recreate(Runner::Operator)
+        | DeletePath::Apply(Runner::Operator) => "the Kix operator",
+        DeletePath::Prune(Runner::Cli)
+        | DeletePath::Recreate(Runner::Cli)
+        | DeletePath::Apply(Runner::Cli) => "the next `kix deploy --prune` or `kix gc`",
     };
     format!(
         "kept {rid} because {holder} depends on it and is still on the cluster; {rid} stays \
@@ -710,8 +727,8 @@ mod tests {
 
     /// Each path's explanation says what is true for it: prune and gc keep
     /// what the objects need and name what tries again; the operator never
-    /// tells its reader to run a command or pass a flag; the recreate path
-    /// keeps nothing. Each says the deletes may still finish.
+    /// tells its reader to run a command or pass a flag; the recreate and apply
+    /// paths keep nothing. Each says the deletes may still finish.
     #[test]
     fn each_path_gets_its_own_explanation() {
         let all = [
@@ -721,6 +738,8 @@ mod tests {
             DeletePath::Teardown,
             DeletePath::Recreate(Runner::Cli),
             DeletePath::Recreate(Runner::Operator),
+            DeletePath::Apply(Runner::Cli),
+            DeletePath::Apply(Runner::Operator),
         ];
         for path in all {
             assert!(
@@ -736,6 +755,7 @@ mod tests {
             DeletePath::Prune(Runner::Operator),
             DeletePath::Teardown,
             DeletePath::Recreate(Runner::Operator),
+            DeletePath::Apply(Runner::Operator),
         ] {
             let text = stuck_explanation(path);
             assert!(!text.contains("--timeout"), "{path:?}: {text}");
@@ -748,5 +768,8 @@ mod tests {
             "{recreate}"
         );
         assert!(!recreate.contains("depending on"), "{recreate}");
+        let apply = stuck_explanation(DeletePath::Apply(Runner::Cli));
+        assert!(apply.contains("already being deleted"), "{apply}");
+        assert!(!apply.contains("depending on"), "{apply}");
     }
 }
