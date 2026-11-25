@@ -192,7 +192,7 @@ is a finding from the upstream source, not a default.
 3. If it replicates with configuration, configure it (keycloak's jdbc-ping,
    header 74-81).
 4. A ceiling needs evidence from upstream source, in the comment beside it
-   and in the header's `Limits:` line (grafana:67, 425; tempo:37). A
+   and in the header's `Limits:` line (grafana:67, 425; tempo:57). A
    program-wide limit is `meta.availability.max = "none";`; a limit that
    depends on config, wiring, or one workload is `availability.max` on that
    builder (pattern table, "Ceilings"). Both accept an optional `reason`
@@ -403,7 +403,7 @@ The header is the package's contract for a reader who will not open the code
 5. `` `out`: `` the fields consumers read.
 6. `Escape hatches:` the hatches and their locked paths.
 7. `Limits:` ceilings with the upstream reason and where each is declared,
-   what a restart loses, untested paths, host prerequisites (tempo:37,
+   what a restart loses, untested paths, host prerequisites (tempo:57,
    falco:46).
 
 A comment that states an upstream fact names the upstream path, and copies
@@ -483,14 +483,14 @@ The only place in this skill with package line numbers. `pkg:N` is
 | `mergeArgs` with a flag and its value as two words, written as a list item of `flags` | `clickhouse-logs/vector-agent.nix`:213-229; several values, spegel:301-303 |
 | `mergeArgs` on an attribute set of flags | victoria-metrics-agent:189-210 |
 | `argValues` to read what `extraArgs` gives a flag | external-dns:441; reloader:106-110 |
-| `mergeGuarded` on `settings` or `extraSpec` | tempo:447; cnpg-cluster:323, 430, 514 |
+| `mergeGuarded` on `settings` or `extraSpec` | tempo:489; cnpg-cluster:323, 430, 514 |
 | Migrations at start: Recreate, deadline from `startupSeconds`, probes | metabase:94-97, 252-256, 284-304 |
 | Config injection into a dependency | metabase:109-112; stackgres-database:120-125; cnpg-database:94-115 |
-| Contracts: consumer `assertions`, provider `check` | metabase:112; stackgres-database:553; keycloak:566; tempo:718 |
+| Contracts: consumer `assertions`, provider `check` | metabase:112; stackgres-database:553; keycloak:566; tempo:788 |
 | `pick` as an option default with `defaultText` | `cnpg-cluster/options.nix`:12-18 |
 | `pick` inline, header names the instance override (O19) | keycloak:256, header 74-76 |
 | `atLeast` | valkey:122 |
-| Ceilings: package-wide, per builder | tempo:299; valkey:566, `harbor/registry.nix`:245, `harbor/jobservice.nix`:338 |
+| Ceilings: package-wide, per builder | tempo:318; valkey:566, `harbor/registry.nix`:245, `harbor/jobservice.nix`:338 |
 | `kix.expose`, `exposure.urlOrNull` | metabase:172-175, 367 |
 | Metrics toggle that does not restart the workload | metabase:152-157; keycloak header 30-35 |
 | `kix.monitor` with alerts | openbao:393; clickhouse:626-636 and `alerts.nix` |

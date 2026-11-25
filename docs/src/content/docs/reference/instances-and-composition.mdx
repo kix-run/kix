@@ -163,7 +163,7 @@ Every cluster module receives `ref` in its module arguments. Writing `ref.<names
 
 ### Cloud identities
 
-Packages that call AWS, Google Cloud, or Azure APIs can accept a cloud identity instead of a Secret instance on the same dependency. For example, `external-dns` accepts one in `deps.providerCredentials`, and `velero` accepts one in `deps.cloudCredentials` (see [Deploy Velero](/docs/how-to/package-task-guides/deploy-velero/#use-a-cloud-identity-instead-of-keys)):
+Packages that call AWS, Google Cloud, or Azure APIs can accept a cloud identity instead of a Secret instance on the same dependency. `external-dns` accepts AWS, Google Cloud, and Azure identities on `deps.providerCredentials`. `velero` accepts one in `deps.cloudCredentials` (see [Deploy Velero](/docs/how-to/package-task-guides/deploy-velero/#use-a-cloud-identity-instead-of-keys)). `tempo` accepts an AWS IAM role (`kix.cloudIdentity.aws`) on `deps.storageCredentials` for an external S3 bucket. For example:
 
 ```nix
 instances.external-dns.route53 = {

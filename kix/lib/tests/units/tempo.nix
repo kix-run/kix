@@ -2,8 +2,9 @@
 # contract, `retention` reaches the rendered config, and the settings
 # locks, owned flags, backslashes in settings, and retentions outside
 # Tempo's duration grammar are refused. `objectStorage` renders an S3
-# backend with the keys in env and refuses the shapes Tempo or the network
-# policy cannot serve; `metricsGenerator` remote-writes to the
+# backend with the keys in env, or with an AWS IAM role in
+# `storageCredentials`, and refuses the shapes Tempo or the network policy
+# cannot serve; `metricsGenerator` remote-writes to the
 # prometheusServer dependency. Tempo runs in namespace `tracing` on a
 # persistent-volume-claim. The alert rules render as the claim, the memory
 # limit, the backend, and the dependencies say, with the prometheus stub in
@@ -24,6 +25,7 @@
   prometheusStub,
   containerBase,
   baseInstances,
+  kixKeys,
   ...
 }:
 
@@ -33,18 +35,24 @@ let
 
   secretPackage = import ../../../packages/stable/secret;
   ciliumPackage = import ../../../packages/experimental/cilium;
+  eksFlavor = import ../../flavors/eks.nix;
+  irsaModule = ../../../modules/experimental/irsa-webhook.nix;
+  ci = kixlib.cloudIdentity;
+  roleArn = "arn:aws:iam::111122223333:role/tempo";
 
   tempoCluster = config: tempoClusterWith { inherit config; };
 
   # `credentials` is the stringData of the storageCredentials Secret (none
   # when null). `inClusterStore` wires the base instances' db Service as
-  # endpointService. `remoteWrite` adds a prometheusServer provider in
+  # endpointService. `deps` is merged into the tempo instance's deps.
+  # `remoteWrite` adds a prometheusServer provider in
   # `metrics` whose out.remoteWriteUrl is that value (none when null).
   tempoClusterWith =
     {
       config ? { },
       credentials ? null,
       inClusterStore ? false,
+      deps ? { },
       remoteWrite ? null,
       modules ? [ ],
     }:
@@ -66,8 +74,8 @@ let
               tempo = {
                 package = tempoPackage;
                 inherit config;
-              }
-              // lib.optionalAttrs inClusterStore { deps.endpointService = ref.dbns.db; };
+                deps = lib.optionalAttrs inClusterStore { endpointService = ref.dbns.db; } // deps;
+              };
             }
             // lib.optionalAttrs (credentials != null) {
               s3-credentials = {
@@ -661,4 +669,150 @@ in
         ) egress;
     in
     toPort "8480" || throw "tempo generator egress: ${builtins.toJSON egress}";
+
+  # An AWS IAM role in storageCredentials puts the role on Tempo's
+  # ServiceAccount and stamps the pod, and the package sets no keys, so
+  # minio-go falls through to the role. A Secret on the same cluster still
+  # gives the keys in env and no stamp.
+  tempo-object-storage-iam-role =
+    let
+      external = {
+        objectStorage.bucket = "traces";
+        settings.storage.trace.s3.endpoint = "s3.eu-west-1.amazonaws.com";
+      };
+      roleCluster = tempoClusterWith {
+        config = external;
+        deps.storageCredentials = ci.aws { inherit roleArn; };
+        modules = [ eksFlavor ];
+      };
+      secretCluster = tempoClusterWith {
+        config = external;
+        credentials = keys;
+        modules = [ eksFlavor ];
+      };
+      sa = (byName "tempo" (ofKind "ServiceAccount" (manifests roleCluster))).metadata.annotations;
+      template = (statefulSetOf roleCluster).spec.template;
+      env = (builtins.head template.spec.containers).env or [ ];
+      s3 = (tempoConfigOf roleCluster).storage.trace.s3;
+      secretTemplate = (statefulSetOf secretCluster).spec.template;
+      secretEnv = map (e: e.name) ((builtins.head secretTemplate.spec.containers).env or [ ]);
+      secretSa = (byName "tempo" (ofKind "ServiceAccount" (manifests secretCluster))).metadata;
+    in
+    (
+      sa."eks.amazonaws.com/role-arn" == roleArn
+      && sa ? ${kixKeys.cloudIdentity}
+      && template.metadata.annotations ? "checksum/cloud-identity"
+      && !(template.metadata.annotations ? "checksum/storage-credentials")
+      && !(builtins.any (e: lib.hasPrefix "AWS_" e.name) env)
+      && !(s3 ? access_key)
+      && s3.bucket == "traces"
+      && builtins.elem "AWS_ACCESS_KEY_ID" secretEnv
+      && secretTemplate.metadata.annotations ? "checksum/storage-credentials"
+      && !(secretTemplate.metadata.annotations ? "checksum/cloud-identity")
+      && !((secretSa.annotations or { }) ? "eks.amazonaws.com/role-arn")
+    )
+    || throw "tempo IAM role: ${builtins.toJSON { inherit sa template; }}";
+
+  # Under Cilium, a store outside the cluster on a port other than 443 also
+  # gets 443 with an IAM role, for AWS STS. A Secret adds no port.
+  tempo-object-storage-iam-role-egress =
+    let
+      egressOf =
+        deps: credentials:
+        (byName "tempo-object-storage" (
+          ofKind "CiliumNetworkPolicy" (
+            manifests (tempoClusterWith {
+              config = {
+                objectStorage.bucket = "traces";
+                settings.storage.trace.s3.endpoint = "s3.example.com:9000";
+              };
+              inherit deps credentials;
+              modules = cilium ++ [
+                irsaModule
+                { irsaWebhook.annotationPrefix = "irsa.example.com"; }
+              ];
+            })
+          )
+        )).spec.egress;
+      ports = egress: map (p: p.port) (builtins.head (builtins.head egress).toPorts).ports;
+      role = ports (egressOf { storageCredentials = ci.aws { inherit roleArn; }; } null);
+      secret = ports (egressOf { } keys);
+    in
+    (
+      role == [
+        "9000"
+        "443"
+      ]
+      && secret == [ "9000" ]
+    )
+    || throw "tempo IAM role egress: ${builtins.toJSON { inherit role secret; }}";
+
+  # Each refusal of an IAM role beside a control that differs by the one
+  # setting: the role with an in-cluster store, without objectStorage, with
+  # credentialKeys, with an AWS key variable in env, on a cluster with no
+  # AWS identity mechanism, and a Google Cloud identity on EKS.
+  tempo-object-storage-iam-role-refusals =
+    let
+      role = ci.aws { inherit roleArn; };
+      external = extra: {
+        config = lib.recursiveUpdate {
+          objectStorage.bucket = "traces";
+          settings.storage.trace.s3.endpoint = "s3.eu-west-1.amazonaws.com";
+        } extra;
+      };
+      build =
+        args:
+        tempoClusterWith (
+          {
+            deps.storageCredentials = role;
+            modules = [ eksFlavor ];
+          }
+          // args
+        );
+      cases = {
+        control = !evalFails (build (external { }));
+        control-env =
+          !evalFails (
+            build (external {
+              env.LOG_FORMAT = "json";
+            })
+          );
+        in-cluster-store = evalFails (build {
+          config.objectStorage.bucket = "traces";
+          inClusterStore = true;
+        });
+        control-in-cluster-secret =
+          !evalFails (build {
+            config.objectStorage.bucket = "traces";
+            inClusterStore = true;
+            deps = { };
+            credentials = keys;
+          });
+        without-object-storage = evalFails (build { });
+        control-secret-without-object-storage =
+          !evalFails (build {
+            deps = { };
+            credentials = keys;
+          });
+        credential-keys = evalFails (
+          build (external {
+            objectStorage.credentialKeys.accessKeyId = "id";
+          })
+        );
+        env-access-key = evalFails (
+          build (external {
+            env.AWS_ACCESS_KEY_ID = "x";
+          })
+        );
+        env-session-token = evalFails (
+          build (external {
+            env.AWS_SESSION_TOKEN = "x";
+          })
+        );
+        no-mechanism = evalFails (build (external { } // { modules = [ ]; }));
+        gcp-on-eks = evalFails (build (external { } // { deps.storageCredentials = ci.gcp { }; }));
+      };
+      wrong = lib.attrNames (lib.filterAttrs (_: ok: !ok) cases);
+    in
+    wrong == [ ] || throw "tempo IAM role refusals: these cases did not behave: ${toString wrong}";
 }
