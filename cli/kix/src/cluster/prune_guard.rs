@@ -19,11 +19,12 @@
 //! kind, and reports an object of a kind it does not serve as
 //! [`Pruned::NotServed`].
 
+use std::collections::HashMap;
 use std::time::Duration;
 
 use kube::{
     Client,
-    api::{DeleteParams, DynamicObject, Preconditions, PropagationPolicy},
+    api::{DeleteParams, DynamicObject, Preconditions},
     discovery::{ApiResource, Scope},
 };
 use thiserror::Error;
@@ -309,7 +310,8 @@ async fn read_live(
 const DELETE_CONCURRENCY: usize = 64;
 
 /// Delete the objects of `order` of `cluster` through a [`PruneGuard`] with
-/// `Background` propagation, as deploy's prune does, walking the order with
+/// the propagation [`DeleteOrder::propagation`] gives, as deploy's prune
+/// does, walking the order with
 /// [`DeleteOrder::walk`]. After each delete, wait up to `budget` without
 /// progress for the object to be gone ([`wait_gone`]). An object still there
 /// after the wait holds back what it depends on. Report each step to `report`
@@ -341,10 +343,6 @@ pub async fn delete_in_order(
     }
     let discovery = discovery::discover_resources(client).await?;
     let guard = PruneGuard::new(client.clone(), Records::open(client, &discovery)?, cluster);
-    let params = DeleteParams {
-        propagation_policy: Some(PropagationPolicy::Background),
-        ..DeleteParams::default()
-    };
     let mut shared: std::collections::HashSet<ResourceId> = std::collections::HashSet::new();
     // Deletes run concurrently and report while they wait, so the reporter
     // is shared behind a lock that no one holds across an await.
@@ -355,10 +353,20 @@ pub async fn delete_in_order(
         }
     };
     let controllers = order.controllers().clone();
+    let params: HashMap<ResourceId, DeleteParams> = ids
+        .iter()
+        .map(|rid| {
+            let params = DeleteParams {
+                propagation_policy: Some(order.propagation(rid)),
+                ..DeleteParams::default()
+            };
+            (rid.clone(), params)
+        })
+        .collect();
     let start = |rid: &ResourceId| {
         let rid = rid.clone();
         let (guard, params, discovery, say, controllers) =
-            (&guard, &params, &discovery, &say, &controllers);
+            (&guard, &params[&rid], &discovery, &say, &controllers);
         async move {
             if protected(&rid) {
                 return Removal::NeverPruned;
@@ -970,6 +978,121 @@ mod tests {
 
     fn removal<'a>(removals: &'a [(ResourceId, Removal)], name: &str) -> &'a Removal {
         &removals.iter().find(|(r, _)| r.name == name).unwrap().1
+    }
+
+    /// Return the objects of a custom resource `cr` whose kind names the
+    /// controller `operator`, and that owns `child`, an object the controller
+    /// made for it that carries the controller's finalizer. `relation`
+    /// prefixes the custom resource's dependency on the controller.
+    fn custom_resource_with_a_child(relation: &str, blocks: bool) -> (FakeApi, DeleteOrder) {
+        let annotations = |hash: &str, deps: &str| {
+            json!({
+                (keys::ACTIVATIONS): "a1",
+                (keys::IDENTITY_HASH): hash,
+                (keys::DEPENDS_ON): deps,
+            })
+        };
+        let cr = json!({
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {
+                "name": "cr",
+                "namespace": "app",
+                "uid": "uid-cr",
+                "annotations": annotations("hash_cr", &format!("{relation}hash_op")),
+            },
+        });
+        let operator = json!({
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "metadata": {
+                "name": "operator",
+                "namespace": "app",
+                "generation": 1,
+                "annotations": annotations("hash_op", ""),
+            },
+            "spec": { "replicas": 1 },
+            "status": { "observedGeneration": 1, "replicas": 1, "readyReplicas": 1 },
+        });
+        let child = json!({
+            "apiVersion": "v1",
+            "kind": "Secret",
+            "metadata": {
+                "name": "child",
+                "namespace": "app",
+                "finalizers": ["example.com/cleanup"],
+                "ownerReferences": [{
+                    "apiVersion": "v1",
+                    "kind": "ConfigMap",
+                    "name": "cr",
+                    "uid": "uid-cr",
+                    "controller": true,
+                    "blockOwnerDeletion": blocks,
+                }],
+            },
+        });
+        let order = DeleteOrder::of_manifests(&[cr.clone(), operator.clone()]);
+        let objects = [
+            record("a", "a1", lifecycle::PHASE_ACTIVE),
+            cr,
+            operator,
+            child,
+        ];
+        (FakeApi::new(objects), order)
+    }
+
+    /// A custom resource whose kind names a controller is deleted in the
+    /// foreground. It stays until the object its controller made for it is
+    /// gone, so the controller stays to remove that object's finalizer.
+    #[tokio::test(start_paused = true)]
+    async fn a_controllers_object_waits_for_what_the_controller_made_for_it() {
+        let (api, order) = custom_resource_with_a_child("controller:", true);
+        let removals = walk(&api, order, &CancelToken::new()).await;
+        let Removal::Stuck(stuck) = removal(&removals, "cr") else {
+            panic!("{removals:?}");
+        };
+        assert_eq!(stuck.finalizers, vec!["foregroundDeletion"]);
+        assert!(
+            matches!(removal(&removals, "operator"), Removal::HeldBack { by, .. } if by.name == "cr"),
+            "{removals:?}"
+        );
+        assert_eq!(api.names("Deployment"), vec!["operator"]);
+
+        // Once the controller has cleaned up, the custom resource goes and the
+        // next walk deletes the controller.
+        api.remove_finalizers("Secret", "child");
+        assert!(api.names("ConfigMap").is_empty());
+        assert!(api.names("Secret").is_empty());
+    }
+
+    /// An object the controller made with `blockOwnerDeletion: false` does
+    /// not hold its owner, as in Kubernetes, so the custom resource goes at
+    /// once and the controller is deleted while that object still waits.
+    #[tokio::test(start_paused = true)]
+    async fn a_child_that_does_not_block_its_owner_is_not_waited_for() {
+        let (api, order) = custom_resource_with_a_child("controller:", false);
+        let removals = walk(&api, order, &CancelToken::new()).await;
+        assert!(
+            matches!(removal(&removals, "cr"), Removal::Pruned(_)),
+            "{removals:?}"
+        );
+        assert!(api.names("Deployment").is_empty());
+        assert_eq!(api.names("Secret"), vec!["child"]);
+    }
+
+    /// An object whose kind names no controller is deleted in the background
+    /// and does not wait for what it owns, so the operator it only requires
+    /// is deleted while the owned object still waits for its finalizer.
+    #[tokio::test(start_paused = true)]
+    async fn an_object_without_a_controller_does_not_wait_for_what_it_owns() {
+        let (api, order) = custom_resource_with_a_child("requires:", true);
+        let removals = walk(&api, order, &CancelToken::new()).await;
+        assert!(
+            matches!(removal(&removals, "cr"), Removal::Pruned(_)),
+            "{removals:?}"
+        );
+        assert!(api.names("Deployment").is_empty());
+        assert_eq!(api.names("Secret"), vec!["child"]);
     }
 
     /// A dependent whose delete request fails holds back what it depends on.

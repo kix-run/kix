@@ -686,6 +686,40 @@ pub struct PruneEntry {
     /// only when the delete waits for a finalizer.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub controllers: Vec<PruneController>,
+    /// For a CustomResourceDefinition, or a reference to one, that leaves the
+    /// build with nothing else in the build declaring its kind: the objects
+    /// of that kind on the cluster that this prune does not delete.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub left_behind: Option<LeftBehind>,
+}
+
+/// The objects of a kind that stay on the cluster after the definition of
+/// the kind leaves the build. Kix did not create them, or keeps them for
+/// another reason, so the prune does not delete them. Once the package
+/// that handled the kind is gone, nothing removes their finalizers or
+/// cleans up what they made outside the cluster.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct LeftBehind {
+    /// The kind, as `Kind.group`.
+    pub kind: String,
+    /// How many objects of the kind stay.
+    pub count: usize,
+    /// How many of them have finalizers.
+    #[serde(default)]
+    pub with_finalizers: usize,
+    /// The first [`LEFT_BEHIND_LISTED`] of them, objects with finalizers
+    /// first.
+    pub objects: Vec<LeftObject>,
+}
+
+/// How many objects a [`LeftBehind`] names.
+pub const LEFT_BEHIND_LISTED: usize = 20;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct LeftObject {
+    pub resource: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub finalizers: Vec<String>,
 }
 
 impl PruneEntry {
@@ -698,6 +732,7 @@ impl PruneEntry {
             finalizers: Vec::new(),
             deleting_since: None,
             controllers: Vec::new(),
+            left_behind: None,
         }
     }
 }

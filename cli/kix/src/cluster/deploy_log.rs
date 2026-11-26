@@ -78,8 +78,18 @@ impl Line {
                 cancelled: r.cancelled,
                 pruned: r.pruned,
                 nothing_to_apply: false,
+                left_behind: Vec::new(),
             },
         }
+    }
+
+    /// Return the line with `left` as the objects the prune left behind, when
+    /// it is a summary line.
+    pub fn with_left_behind(mut self, left: Vec<crate::plan::document::LeftBehind>) -> Line {
+        if let Event::Summary { left_behind, .. } = &mut self.event {
+            *left_behind = left;
+        }
+        self
     }
 
     /// Build the summary line of a deploy that stopped before it ran because
@@ -100,6 +110,7 @@ impl Line {
                 cancelled: 0,
                 pruned: 0,
                 nothing_to_apply: true,
+                left_behind: Vec::new(),
             },
         }
     }
@@ -203,6 +214,12 @@ pub enum Event {
         /// log then holds no `plan` or `node` lines.
         #[serde(default)]
         nothing_to_apply: bool,
+        /// For each kind whose definition left the build, the objects of it
+        /// that are still on the cluster after the prune. Kix did not create
+        /// them, and nothing clears their finalizers once their controller
+        /// is gone. Left out when there are none.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        left_behind: Vec<crate::plan::document::LeftBehind>,
     },
 }
 
