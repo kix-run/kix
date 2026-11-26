@@ -95,7 +95,13 @@ identical manifests. A pod peer without `namespace` means the provider
 instance's own namespace. The `coredns` package declares
 `meta.dnsPeers = [ { podSelector."k8s-app" = "kube-dns"; } ]` and therefore no
 longer has to run in `kube-system`. The `cilium` package's cluster-wide DNS
-policy reads the same `meta.dnsPeers` value.
+policy reads the same `meta.dnsPeers` value. Kix computes the cluster's DNS
+peers once from the active provider of the `dns` role, and when no provider is
+active it takes them from the single import that claims the `dns` role, even if
+that import is optional and inactive. The GKE flavors' `platform-dns` import is
+optional and stays inactive unless a workload depends on DNS, so without this
+rule a GKE cluster would fall back to the `kube-dns` selector alone. The `gke`
+and `gke-autopilot` flavors share one list of four peers.
 
 The GKE flavors list all four documented GKE DNS destinations. Any single GKE
 cluster uses only one or two of them, and rules for absent peers open nothing
