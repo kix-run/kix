@@ -3915,3 +3915,48 @@ async fn a_fresh_external_secrets_deploy_finishes() {
         result.failures
     );
 }
+
+/// A fresh deploy of a rendered build with network policy, cert-manager and
+/// the monitoring module finishes, with each workload applied after the
+/// policies that select its pods.
+#[tokio::test(start_paused = true)]
+async fn a_fresh_deploy_under_network_policy_finishes() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/operator-graphs/netpol-eks.json");
+    let manifests: Vec<Value> =
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let ops = Arc::new(ScriptedOps::new());
+    let cfg = config(StallPolicy {
+        warn_after: secs(30),
+        abort_after: Some(secs(600)),
+    });
+    let result = run(
+        &ops,
+        plan_of(&manifests),
+        &cfg,
+        Arc::new(Recorder::default()),
+    )
+    .await
+    .expect("the deploy finishes");
+    assert_eq!(
+        (result.failed, result.cancelled),
+        (0, 0),
+        "{:?}",
+        result.failures
+    );
+    let calls = ops.calls();
+    let applied = |rid: &ResourceId| {
+        calls
+            .iter()
+            .position(|c| *c == Call::ApplyStart(rid.clone()))
+            .unwrap()
+    };
+    let webhook = ResourceId::new("apps", "Deployment", "cert-manager", "cert-manager-webhook");
+    let policy = ResourceId::new(
+        "networking.k8s.io",
+        "NetworkPolicy",
+        "cert-manager",
+        "cert-manager-webhook-apiserver-ingress",
+    );
+    assert!(applied(&policy) < applied(&webhook));
+}

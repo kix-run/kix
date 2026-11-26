@@ -1711,6 +1711,41 @@ mod tests {
         assert!(unnamed > 0, "every held policy is named by its workload");
     }
 
+    /// In a rendered build with network policy, cert-manager and the
+    /// monitoring module, no network policy records a dependency on a workload
+    /// whose pods it selects, so every such pair orders the workload after the
+    /// policy. A policy that admits a scraper, or the API server to a webhook,
+    /// then stays until the pods it admits to are gone.
+    #[test]
+    fn no_policy_depends_on_the_pods_it_selects() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/operator-graphs/netpol-eks.json");
+        let manifests: Vec<serde_json::Value> =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let pairs: std::collections::HashSet<(usize, usize)> =
+            dependency_pairs(&manifests).into_iter().collect();
+        let selected = selecting_policies(&manifests);
+        let name = |i: usize| ResourceId::from_value(&manifests[i]).to_string();
+        let skipped: Vec<(String, String)> = selected
+            .iter()
+            .filter(|p| !pairs.contains(p))
+            .map(|&(w, p)| (name(w), name(p)))
+            .collect();
+        assert!(selected.len() > 20, "{}", selected.len());
+        assert!(skipped.is_empty(), "{skipped:#?}");
+        let order = DeleteOrder::of_manifests(&manifests);
+        let ids = order.ids();
+        let pos = |rid: &ResourceId| ids.iter().position(|r| r == rid).unwrap();
+        let webhook = ResourceId::new("apps", "Deployment", "cert-manager", "cert-manager-webhook");
+        let policy = ResourceId::new(
+            "networking.k8s.io",
+            "NetworkPolicy",
+            "cert-manager",
+            "cert-manager-webhook-apiserver-ingress",
+        );
+        assert!(pos(&webhook) < pos(&policy), "{ids:?}");
+    }
+
     /// A dependency through an object that is not deleted still orders the
     /// walk and still holds back what the stuck object needs: the custom
     /// resource needs a Job that stays, and the Job needs the operator.
