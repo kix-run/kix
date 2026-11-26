@@ -7,7 +7,7 @@
 Dump live Kubernetes cluster resources into a normalized YAML directory.
 
 Output uses the same file naming convention as Kix ({namespace}--{name}-{kind}.yaml)
-so it can be directly compared with `kix-diff.py` or even plain `diff -r`.
+so it can be compared with `scripts/compare-cluster-dump.py` or plain `diff -r`.
 
 Secret resources are included, but their data/stringData fields are stripped
 during normalization: only metadata and type are preserved for comparison.

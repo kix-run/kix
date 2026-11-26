@@ -7,7 +7,7 @@
 
 let
   # Local test chart (no network fetch needed).
-  testChartPath = ../tests/helm-test-chart;
+  testChartPath = ./test-helm/helm-test-chart;
 
   # Inline package using importChart with a local chart path.
   testChartPackage =

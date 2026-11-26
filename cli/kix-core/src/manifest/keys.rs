@@ -477,12 +477,10 @@ mod tests {
             // domains for the same reason `legacy_domain` does, and it
             // cannot reach either constants file.
             "scripts/parity/normalize.py",
-            // Read live objects straight from the API server with jq or
-            // Python, so they carry their own fallback to a retired domain
-            // and have no constant to import.
+            // Reads live objects straight from the API server with jq, so it
+            // carries its own fallback to a retired domain and has no
+            // constant to import.
             "tools/k9s-plugin/plugins.yaml",
-            "tools/lib/kix_model.py",
-            "tools/nix-browse/nix-browse.py",
             // The release client names the website kix.run, which Kix
             // downloads releases from. It spells no annotation or label.
             "cli/kix/src/release/",

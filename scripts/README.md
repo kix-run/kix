@@ -18,6 +18,7 @@ installs them.
 | `cluster-checks.sh` | By hand | Runs the schema check and the alert rule tests of one cluster on those manifests. |
 | `kix-rollback-check.sh` | By hand | Builds one cluster, a variant of it, and the first again, and checks the first and last builds are identical. |
 | `kind-gateway.sh`, `kind-mayastor.sh`, `kind-operators.sh`, `kind-spread.sh`, `kind-velero.sh`, `kind-virtualization.sh` | By hand | Each creates a kind cluster, deploys the test cluster its header names, and checks the result. |
+| `kind-secrets.sh` | By hand | Deploys `clusters/test-secrets.nix` to a new kind cluster and checks that `kix deploy` decrypts the SOPS secret and the pod can read it. |
 | `test-monitoring-integration.sh` | By hand | Deploys `clusters/test-monitoring-native.nix` to a new kind cluster and checks that Prometheus, Alertmanager, and Grafana work. |
 | `kix-dump.py` | By hand | Dumps live cluster resources into a directory of normalized YAML. |
 | `compare-cluster-dump.py` | By hand | Compares a Kix build with a dump from `kix-dump.py` and reports the differences. |
