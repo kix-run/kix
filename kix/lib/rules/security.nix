@@ -438,13 +438,13 @@ in
         [ ];
   };
 
-  # Report generated NetworkPolicies that allow more traffic than the Cilium
-  # policy Kix writes for the same rules. The standard enforcer marks each
+  # Report generated NetworkPolicies that admit traffic their rules did not
+  # ask for. The standard enforcer marks each
   # such policy with `kix.run/network-policy-widened`. The rule reports each
   # reason once with a count, and each policy as a detail that
   # `kix check -v` lists.
   networkPolicyWidened = {
-    description = "Generated NetworkPolicy objects should not allow broader traffic than equivalent Cilium policies";
+    description = "Generated NetworkPolicy objects should admit only the traffic their rules ask for";
     level = "cluster";
     severity = "warning";
     tags = [
@@ -475,6 +475,7 @@ in
           widening.${id} or {
             summary = "Marked with unknown widening reason `${id}` in `kix.run/network-policy-widened`.";
             fix = "";
+            detail = "it is marked with the unknown reason `${id}`";
           };
         count = n: if n == 1 then "1 network policy" else "${toString n} network policies";
       in
@@ -493,7 +494,9 @@ in
         detail = true;
         namespace = p.metadata.namespace or null;
         resource = "NetworkPolicy/${p.metadata.name}";
-        message = "allows broader traffic than the equivalent Cilium policy: ${lib.concatStringsSep ", " (widenedIds p)}.";
+        message = "admits more than its rules ask for: ${
+          lib.concatMapStringsSep "; " (id: "${(describe id).detail} (${id})") (widenedIds p)
+        }.";
       }) policies;
   };
 }
