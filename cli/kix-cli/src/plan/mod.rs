@@ -600,12 +600,21 @@ pub fn orphans_fate(flags: PlanFlags, connected: bool, cluster: &str) -> String 
     }
 }
 
-/// Return the fate of orphans a deploy of `cluster` keeps without `--prune`.
-/// The new Activation records them under `status.orphansKeptFrom`.
+/// Return the fate of orphans a deploy or rollback of `cluster` keeps
+/// without `--prune`. The new Activation records them under
+/// `status.orphansKeptFrom`.
 pub fn kept_orphans_fate(cluster: &str) -> String {
     format!(
-        "still on the cluster; `kix deploy {cluster} --prune` or `kix gc {cluster}` deletes them"
+        "still on the cluster; {} deletes them",
+        kept_orphans_cleanup(cluster)
     )
+}
+
+/// Return the command that deletes the orphans a deploy or rollback of
+/// `cluster` kept. Every message that names it calls this. `kix gc` keeps the
+/// Active build, so it never undoes a rollback, as `kix deploy --prune` would.
+pub fn kept_orphans_cleanup(cluster: &str) -> String {
+    format!("`kix gc {cluster}`")
 }
 
 /// Render the orphaned and protected-resource sections of a deploy or rollback

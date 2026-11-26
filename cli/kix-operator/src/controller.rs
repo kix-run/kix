@@ -1296,7 +1296,7 @@ mod tests {
             .as_str()
             .unwrap_or_default();
         assert!(
-            reason.contains(&format!("`cluster.kubernetes.uid` in 'a':  {ELSEWHERE}"))
+            reason.contains(&format!("`cluster.kubernetes.uid` in 'a':    {ELSEWHERE}"))
                 && reason.contains("Nothing was applied"),
             "{reason}"
         );

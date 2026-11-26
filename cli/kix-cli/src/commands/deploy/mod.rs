@@ -830,10 +830,12 @@ async fn run_deploy_async(
         {
             Arc::new(StreamCliObserver {
                 verbose: global.verbose > 0,
+                cluster: cluster_name.to_string(),
             })
         }
         (None, None) => Arc::new(super::deploy_log::LineObserver {
             verbose: global.verbose > 0,
+            cluster: cluster_name.to_string(),
         }),
     };
 

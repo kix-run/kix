@@ -621,6 +621,42 @@ mod hard_scope_tests {
         let (garbage, _) = judge_hard(&judged, &expected, &HashSet::new(), &tenancy);
         assert_eq!(names(&garbage), vec!["b-web", "leftover"]);
     }
+
+    /// Verify that a full scan lists a package instance record under the
+    /// instance its spec names, like the objects of that instance, even
+    /// though the build stamps every record `kix.run/package: _cluster`.
+    #[test]
+    fn a_package_instance_record_is_listed_under_its_instance() {
+        let stamped = |kind: &str, pkg: &str, pkg_ns: &str| -> DynamicObject {
+            let mut obj = live(kind, "web2", Some("h-old"), "");
+            let anns = obj.metadata.annotations.get_or_insert_default();
+            anns.insert(keys::PACKAGE.into(), pkg.into());
+            anns.insert(keys::PACKAGE_NAMESPACE.into(), pkg_ns.into());
+            obj
+        };
+        let mut record = stamped("PackageInstance", "_cluster", "_cluster");
+        record.data["spec"] = json!({ "instanceName": "web2", "namespaceName": "baseline" });
+        let deployment = stamped("Deployment", "web2", "baseline");
+        let tenancy = kix::cluster::tenancy::Tenancy::fixture(&[], "a");
+
+        let (garbage, _) = judge_hard(
+            &[record, deployment],
+            &HashSet::new(),
+            &HashSet::new(),
+            &tenancy,
+        );
+        let packages: Vec<(Option<&str>, Option<&str>)> = garbage
+            .iter()
+            .map(|g| (g.package_namespace.as_deref(), g.package.as_deref()))
+            .collect();
+        assert_eq!(
+            packages,
+            vec![
+                (Some("baseline"), Some("web2")),
+                (Some("baseline"), Some("web2"))
+            ]
+        );
+    }
 }
 
 mod live_order_tests {

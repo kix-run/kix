@@ -190,11 +190,18 @@ pub(super) fn judge_hard(
             continue;
         }
 
+        // A package instance record names its instance in its spec, not in
+        // its `kix.run/package` stamp.
+        let (package, package_namespace) =
+            match kix::eval::store_graph::instance_of_record(&to_manifest_value(obj)) {
+                Some((ns, name)) => (Some(name), Some(ns)),
+                None => (ann_get(keys::PACKAGE), ann_get(keys::PACKAGE_NAMESPACE)),
+            };
         garbage.push(GarbageEntry {
             id: kix::cluster::drift::resource_id(obj),
             identity_hash,
-            package: ann_get(keys::PACKAGE),
-            package_namespace: ann_get(keys::PACKAGE_NAMESPACE),
+            package,
+            package_namespace,
             activations: ann_get(keys::ACTIVATIONS),
             reason,
             deleting: kix::cluster::readiness::deletion_reason(obj),

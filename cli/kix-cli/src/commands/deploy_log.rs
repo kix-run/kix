@@ -26,6 +26,9 @@ use kix::manifest::types::ResourceId;
 
 pub struct LineObserver {
     pub verbose: bool,
+    /// The Kix cluster being deployed, named in the command that deletes
+    /// kept orphans.
+    pub cluster: String,
 }
 
 impl DeployObserver for LineObserver {
@@ -117,7 +120,7 @@ impl DeployObserver for LineObserver {
                 delete,
                 ..
             } => {
-                for line in prune_lines(resources, kept, *delete) {
+                for line in prune_lines(resources, kept, *delete, &self.cluster) {
                     println!("{line}");
                 }
             }
@@ -249,7 +252,12 @@ pub(crate) fn deleting(status: &str) -> String {
 
 /// Format `PruneStart` lines for `LineObserver`, listing deleted or reported
 /// orphans followed by protected orphans.
-fn prune_lines(resources: &[ResourceId], kept: &[ResourceId], delete: bool) -> Vec<String> {
+fn prune_lines(
+    resources: &[ResourceId],
+    kept: &[ResourceId],
+    delete: bool,
+    cluster: &str,
+) -> Vec<String> {
     let mut lines = Vec::new();
     if !resources.is_empty() {
         let count = resources.len();
@@ -257,7 +265,8 @@ fn prune_lines(resources: &[ResourceId], kept: &[ResourceId], delete: bool) -> V
             format!("prune> deleting {count} object(s) that left the build")
         } else {
             format!(
-                "prune> {count} object(s) left the build and remain on the cluster; run `kix gc` to delete them"
+                "prune> {count} object(s) left the build, {}",
+                crate::plan::kept_orphans_fate(cluster)
             )
         });
         let each = if delete {
@@ -701,7 +710,7 @@ mod tests {
     /// Under `--prune`, each object is listed as one Kix will delete.
     #[test]
     fn prune_lines_say_what_will_be_deleted() {
-        let lines = prune_lines(&[rid("ConfigMap", "old")], &[], true);
+        let lines = prune_lines(&[rid("ConfigMap", "old")], &[], true, "app");
         assert_eq!(
             lines,
             vec![
@@ -748,11 +757,12 @@ mod tests {
             &[rid("ConfigMap", "old")],
             &[rid("Namespace", "gone")],
             false,
+            "app",
         );
         assert_eq!(
             lines,
             vec![
-                "prune> 1 object(s) left the build and remain on the cluster; run `kix gc` to delete them",
+                "prune> 1 object(s) left the build, still on the cluster; `kix gc app` deletes them",
                 "ConfigMap/old@app> left the build, still on the cluster",
                 "prune> 1 object(s) left the build and are never deleted automatically",
                 "Namespace/gone@app> left the build, kept (never deleted automatically)",

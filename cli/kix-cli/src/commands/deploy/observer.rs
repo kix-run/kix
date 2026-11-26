@@ -14,6 +14,9 @@ use kix::manifest::types::ResourceId;
 /// heartbeats to stderr under `-v`.
 pub(crate) struct StreamCliObserver {
     pub(crate) verbose: bool,
+    /// The Kix cluster being deployed, named in the command that deletes
+    /// kept orphans.
+    pub(crate) cluster: String,
 }
 
 impl DeployObserver for StreamCliObserver {
@@ -38,7 +41,10 @@ impl DeployObserver for StreamCliObserver {
                 kept,
                 delete,
                 ..
-            } => print!("{}", render_prune_start(resources, kept, *delete)),
+            } => print!(
+                "{}",
+                render_prune_start(resources, kept, *delete, &self.cluster)
+            ),
             DeployEvent::PruneKept { reason, .. } => {
                 println!("  {} prune: {reason}", output::yellow("="));
             }
@@ -297,6 +303,7 @@ pub(super) fn render_prune_start(
     resources: &[ResourceId],
     kept: &[ResourceId],
     delete: bool,
+    cluster: &str,
 ) -> String {
     use std::fmt::Write;
     let mut out = String::new();
@@ -312,9 +319,10 @@ pub(super) fn render_prune_start(
         } else {
             let _ = writeln!(
                 out,
-                "{} {} object(s) left the build and remain on the cluster; run `kix gc` to delete them:",
+                "{} {} object(s) left the build, {}:",
                 output::bold("prune:"),
                 resources.len(),
+                crate::plan::kept_orphans_fate(cluster),
             );
         }
         for rid in resources {
