@@ -1,15 +1,16 @@
 +++
 kind = "fixed"
 +++
-A network policy no longer depends on the pods it names. Before, a policy
-that read a workload's selector, such as the policies that let Prometheus
-scrape a target or let the API server call cert-manager's webhook, recorded
-the workload as a dependency. Deploy then created the pods before that
-policy, and prune deleted the policy while the pods still ran, so the API
-server could not reach a webhook it was still configured to call. Kix now
-ignores the references in a NetworkPolicy's, CiliumNetworkPolicy's, or
-CiliumClusterwideNetworkPolicy's `spec` when it orders them, creates every
-policy that selects a workload's pods before the workload, and deletes it
-after. A dependency a policy really needs can still be given with `requires`.
-The first deploy after the upgrade applies those policies again, because
-their recorded dependencies change.
+`kix deploy` now applies `NetworkPolicy`, `CiliumNetworkPolicy`, and
+`CiliumClusterwideNetworkPolicy` resources before the workloads whose pods they
+select, and pruning deletes them after those workloads, even when a policy's
+`spec` references a workload's selector. Previously, those `spec` references
+recorded a dependency on the workload. For policies such as Prometheus scrape
+policies and cert-manager's webhook ingress policy, `kix deploy` created the
+workload before the policy, and pruning deleted the policy while the pods were
+still running. Deleting the webhook policy early blocked the Kubernetes API
+server from reaching a webhook it was still configured to call. Kix no longer
+records dependencies from a network policy's `spec`. If a policy must wait for
+another resource, list that resource in `requires`. The first deploy after
+upgrading re-applies affected policies because their recorded dependencies
+change.
