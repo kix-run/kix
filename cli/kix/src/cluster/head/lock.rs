@@ -255,7 +255,7 @@ struct Watch {
 }
 
 /// Take the deploy lock of `request.cluster` through `client`, creating the
-/// head's CRD and the head itself when absent.
+/// head itself, its CRD, and the revisions' CRD when absent.
 ///
 /// When another run holds the lock, watch it for up to [`LEASE`]: refuse
 /// with [`TakeError::Held`] once it renews, take it over if it never does. A
@@ -275,7 +275,8 @@ pub async fn take(
     clock: Arc<dyn Clock>,
     on_watch: &(dyn Fn(&LockState) + Send + Sync),
 ) -> Result<Lock, TakeError> {
-    ensure_crd(client).await?;
+    ensure_crd(client, &super::crd::own()).await?;
+    ensure_crd(client, &crate::cluster::revision::own_crd()).await?;
     let cluster = request.cluster.clone();
     let api_error = |source| TakeError::Api {
         cluster: cluster.clone(),

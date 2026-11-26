@@ -1,8 +1,8 @@
-//! The head's CustomResourceDefinition, which Kix creates itself.
+//! The CustomResourceDefinitions that Kix creates itself, and the head's.
 //!
-//! The definition carries no status subresource. Every write replaces the
-//! whole object with its `resourceVersion`, so the lock and the commit point
-//! are each one write that Kubernetes orders.
+//! The head's definition carries no status subresource. Every write replaces
+//! the whole object with its `resourceVersion`, so the lock and the commit
+//! point are each one write that Kubernetes orders.
 
 use std::time::Duration;
 
@@ -16,6 +16,35 @@ use crate::manifest::keys;
 
 /// How long [`ensure_crd`] waits for a definition it created to be served.
 const ESTABLISH_WAIT: Duration = Duration::from_secs(30);
+
+/// A CustomResourceDefinition that the Kix program carries and creates
+/// itself, instead of a build.
+#[derive(Debug, Clone)]
+pub struct OwnCrd {
+    /// The definition's name, `<plural>.<group>`.
+    pub name: String,
+    /// The kind the definition serves.
+    pub resource: ApiResource,
+    /// The definition, as Kix creates it.
+    pub definition: Value,
+    /// What Kix keeps in objects of the kind, completing "the definition
+    /// for ...", such as `the deploy lock`.
+    pub holds: &'static str,
+    /// The permissions an account needs on the kind, as a sentence names
+    /// them.
+    pub verbs: &'static str,
+}
+
+/// Return the head's definition and what an account needs to use it.
+pub(super) fn own() -> OwnCrd {
+    OwnCrd {
+        name: crd_name(),
+        resource: super::resource(),
+        definition: definition(),
+        holds: "the deploy lock",
+        verbs: "`get`, `list`, `create`, and `update`",
+    }
+}
 
 fn crds(client: &Client) -> Api<DynamicObject> {
     let resource = ApiResource::from_gvk_with_plural(
@@ -109,15 +138,17 @@ fn established(crd: &DynamicObject) -> bool {
         })
 }
 
-/// Why [`ensure_crd`] could not make the head's kind available.
+/// Why [`ensure_crd`] could not make a kind available.
 #[derive(Debug, thiserror::Error)]
 pub enum CrdError {
     #[error(
-        "[K9557] cannot read or create CustomResourceDefinition `{name}` for the deploy lock: {}. Nothing was changed on the cluster. Grant this account `get` and `create` on `customresourcedefinitions` (or have an account with those permissions create `{name}` once, and grant this account `get`, `list`, `create`, and `update` on `{name}`)",
+        "[K9557] cannot read or create CustomResourceDefinition `{name}` for {holds}: {}. Nothing was changed on the cluster. Grant this account `get` and `create` on `customresourcedefinitions` (or have an account with those permissions create `{name}` once, and grant this account {verbs} on `{name}`)",
         crate::cluster::errors::describe(.source)
     )]
     Api {
         name: String,
+        holds: &'static str,
+        verbs: &'static str,
         #[source]
         source: kube::Error,
     },
@@ -128,14 +159,15 @@ pub enum CrdError {
     NotEstablished { name: String },
 }
 
-/// Create the head's CustomResourceDefinition when the cluster does not have
-/// it, and wait until Kubernetes serves the kind. A definition that exists is
-/// left as it is.
-pub async fn ensure_crd(client: &Client) -> Result<(), CrdError> {
+/// Create `crd` when the cluster does not have it, and wait until
+/// Kubernetes serves the kind. A definition that exists is left as it is.
+pub async fn ensure_crd(client: &Client, crd: &OwnCrd) -> Result<(), CrdError> {
     let api = crds(client);
-    let name = crd_name();
+    let name = crd.name.clone();
     let fail = |source| CrdError::Api {
-        name: crd_name(),
+        name: crd.name.clone(),
+        holds: crd.holds,
+        verbs: crd.verbs,
         source,
     };
     match api.get_opt(&name).await {
@@ -147,7 +179,7 @@ pub async fn ensure_crd(client: &Client) -> Result<(), CrdError> {
             if crate::cluster::errors::classify(&e)
                 == crate::cluster::errors::FailureClass::Forbidden =>
         {
-            if super::api(client)
+            if Api::<DynamicObject>::all_with(client.clone(), &crd.resource)
                 .list(&kube::api::ListParams::default().limit(1))
                 .await
                 .is_ok()
@@ -158,8 +190,8 @@ pub async fn ensure_crd(client: &Client) -> Result<(), CrdError> {
         }
         Err(e) => return Err(fail(e)),
     }
-    let definition: DynamicObject =
-        serde_json::from_value(definition()).expect("the head's definition is an object");
+    let definition: DynamicObject = serde_json::from_value(crd.definition.clone())
+        .expect("a definition Kix carries is an object");
     match api.create(&PostParams::default(), &definition).await {
         Ok(_) => {}
         Err(kube::Error::Api(e)) if e.code == 409 => {}

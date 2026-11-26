@@ -3,7 +3,8 @@
 //! It serves discovery for a fixed set of kinds (ConfigMap, Secret, Namespace,
 //! Service, Pod, Event in two groups, CustomResourceDefinition, Deployment,
 //! StatefulSet,
-//! Job, ClusterRole, Kix's Activation and ActivationHead, and two kinds of a group served at two
+//! Job, ClusterRole, Kix's Activation, ActivationHead, and
+//! PackageInstanceRevision, and two kinds of a group served at two
 //! versions), and GET, LIST (with an equality or existence label
 //! selector), PATCH (as a JSON merge patch, on the object or its `status`),
 //! POST (create, 409 when the name is taken), PUT (replace, honoring
@@ -77,6 +78,13 @@ const KINDS: &[(&str, &str, &str, &str, bool)] = &[
         "v1alpha1",
         super::head::KIND,
         super::head::PLURAL,
+        false,
+    ),
+    (
+        keys::DOMAIN,
+        "v1alpha1",
+        super::revision::KIND,
+        super::revision::PLURAL,
         false,
     ),
     ("events.k8s.io", "v1", "Event", "events", true),

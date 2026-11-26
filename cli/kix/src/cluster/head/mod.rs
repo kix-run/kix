@@ -16,8 +16,9 @@
 //!   last renewal. It measures that time with the monotonic clock and with
 //!   the wall clock and uses the longer, because the monotonic clock stops
 //!   on some systems while the machine sleeps.
-//! - The head's CRD is part of the Kix program. [`ensure_crd`] creates it
-//!   when it is absent, before any lock is taken.
+//! - The head's CRD is part of the Kix program. [`take`] creates it with
+//!   [`ensure_crd`] when it is absent, before it takes any lock, and the
+//!   revisions' CRD with it.
 //!
 //! The phases on Activation records are still written and read as before.
 //! [`take`] rebuilds the head from them when an older Kix wrote after it,
@@ -41,7 +42,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::manifest::keys;
 
-pub use crd::{CrdError, ensure_crd};
+pub use crd::{CrdError, OwnCrd, ensure_crd};
 pub use guard::WritesStopped;
 pub use lock::{CommitError, Held, Lock, Request, TakeError, settle, take};
 

@@ -19,6 +19,7 @@
 //! read `names`.
 
 use std::collections::{BTreeMap, HashSet};
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -106,6 +107,56 @@ impl ObjectName {
     }
 }
 
+/// The objects of a build, grouped by the package instance that lists them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstanceGroups<'a> {
+    /// Instances keyed `namespace/instance`, as plans key them.
+    pub instances: BTreeMap<String, InstanceGroup<'a>>,
+    /// Store paths of the build's objects that no instance lists, in no
+    /// fixed order. The build's Activation record is among them.
+    pub cluster_level: Vec<&'a Path>,
+}
+
+/// The objects one package instance lists.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstanceGroup<'a> {
+    /// Store path of the instance's own `PackageInstance`.
+    pub instance: &'a Path,
+    /// Store paths of the instance's resources, in the build's order.
+    pub resources: &'a [PathBuf],
+}
+
+impl<'a> InstanceGroups<'a> {
+    /// Group the objects of `graph`. When two instances have the same key,
+    /// the later one in the build wins, and the objects of both stay out of
+    /// the cluster level.
+    pub fn of(graph: &'a StoreGraph) -> InstanceGroups<'a> {
+        let mut in_package = HashSet::new();
+        let mut instances = BTreeMap::new();
+        for p in graph.packages.values() {
+            in_package.insert(&p.store_path);
+            in_package.extend(&p.resource_paths);
+            instances.insert(
+                format!("{}/{}", p.namespace, p.instance_name),
+                InstanceGroup {
+                    instance: &p.store_path,
+                    resources: &p.resource_paths,
+                },
+            );
+        }
+        let cluster_level = graph
+            .resources
+            .keys()
+            .filter(|p| !in_package.contains(p))
+            .map(PathBuf::as_path)
+            .collect();
+        InstanceGroups {
+            instances,
+            cluster_level,
+        }
+    }
+}
+
 /// One package of a [`RecordPackageIndex`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IndexedPackage {
@@ -118,25 +169,20 @@ pub struct IndexedPackage {
 impl RecordPackageIndex {
     /// Return the index of `graph`.
     pub fn of(graph: &StoreGraph) -> RecordPackageIndex {
-        let mut in_package = HashSet::new();
-        let mut packages = BTreeMap::new();
-        for p in graph.packages.values() {
-            in_package.insert(&p.store_path);
-            in_package.extend(&p.resource_paths);
-            packages.insert(
-                format!("{}/{}", p.namespace, p.instance_name),
-                IndexedPackage {
-                    instance: store_hash(&p.store_path),
-                    resources: p.resource_paths.iter().map(|r| store_hash(r)).collect(),
-                },
-            );
-        }
-        let mut cluster_level: Vec<String> = graph
-            .resources
-            .keys()
-            .filter(|p| !in_package.contains(p))
-            .map(|p| store_hash(p))
+        let groups = InstanceGroups::of(graph);
+        let packages = groups
+            .instances
+            .iter()
+            .map(|(key, group)| {
+                let indexed = IndexedPackage {
+                    instance: store_hash(group.instance),
+                    resources: group.resources.iter().map(|r| store_hash(r)).collect(),
+                };
+                (key.clone(), indexed)
+            })
             .collect();
+        let mut cluster_level: Vec<String> =
+            groups.cluster_level.iter().map(|p| store_hash(p)).collect();
         cluster_level.sort();
         let mut names = BTreeMap::new();
         let mut groups = BTreeMap::new();

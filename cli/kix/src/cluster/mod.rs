@@ -26,6 +26,7 @@ pub mod owned_view;
 pub mod preview;
 pub mod prune_guard;
 pub mod readiness;
+pub mod revision;
 pub mod scheduler;
 /// Scripted test fakes for the deploy engine's external interfaces.
 #[cfg(any(test, feature = "test-util"))]
