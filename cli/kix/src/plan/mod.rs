@@ -172,15 +172,17 @@ pub enum PlanError {
     )]
     Reconstruct(String),
     #[error(
-        "cannot read which objects an earlier deploy that did not finish left on the cluster: {0}. \
-         Nothing was planned or applied to the cluster. Run the command again when the apiserver answers."
+        "cannot read cluster resources from an earlier unfinished deploy: {0}. \
+         Nothing was planned or applied to the cluster. Check your cluster connection and \
+         permissions, or wait for the Kubernetes API server to recover, then run the command again."
     )]
     FoldedLeftovers(Box<FetchError>),
     #[error("cannot check whether another Kix cluster deploys an orphan: {0}")]
     SharedOrphans(Box<FetchError>),
     #[error(
-        "cannot check which objects an unfinished deploy of this cluster wrote: {0}. \
-         Nothing was deleted. Run the command again when the apiserver answers."
+        "cannot check whether candidate resources belong to an unfinished deploy: {0}. \
+         Nothing was deleted. Check your cluster connection and permissions, or wait for the \
+         Kubernetes API server to recover, then run the command again."
     )]
     HeldObjects(Box<FetchError>),
     #[error(
@@ -206,18 +208,19 @@ pub enum PlanError {
     )]
     AliasedMove(Vec<String>),
     #[error(
-        "`--only` needs a cluster that Kix has deployed in full before. Nothing was planned or \
-         applied to the cluster. Kix cluster '{0}' has no current deploy record, so a deploy of \
-         part of its build would leave nothing for the next deploy to finish from. \
-         Next: deploy the whole build with `kix deploy {0}`, then use `--only` for later upgrades."
+        "cannot use `--only` on Kix cluster '{0}' because it has not been deployed in full yet. \
+         Nothing was planned or applied to the cluster. A `--only` deploy updates selected \
+         instances on top of an active deployment, and '{0}' has no active deployment record on \
+         the cluster. Next: deploy the full build first with `kix deploy {0}`, then use `--only` \
+         for later updates."
     )]
     OnlyFirstDeploy(String),
     #[error(
-        "`--only` cannot deploy part of the build of Kix cluster '{cluster}' while the Kix \
-         operator keeps its current deploy record {record} in place. Nothing was planned or \
-         applied to the cluster. The operator repairs the build of a record it deployed, so it \
-         would put back what this deploy applies and delete the objects it adds. Next: deploy \
-         the whole build, with `kix deploy {cluster}` or `kix deploy {cluster} --operator`."
+        "cannot use `--only` on Kix cluster '{cluster}' because its active deployment ({record}) \
+         is managed by the Kix operator. Nothing was planned or applied to the cluster. The \
+         operator reconciles {record} to match its build, so it would revert changes from `--only` \
+         and delete any new resources it creates. Next: deploy the full build with \
+         `kix deploy {cluster} --operator`, or take over from this machine with `kix deploy {cluster}`."
     )]
     OnlyUnderOperator { cluster: String, record: String },
     #[error("{0}")]
@@ -244,9 +247,14 @@ impl std::fmt::Display for UnknownInstances {
             .iter()
             .map(|n| format!("'{}'", crate::text::printable_up_to(n, 200)))
             .collect();
+        let noun = if unknown.len() == 1 {
+            "package instance"
+        } else {
+            "package instances"
+        };
         writeln!(
             f,
-            "the build of Kix cluster '{}' has no instance {}. Nothing was planned or applied to the cluster.",
+            "Kix cluster '{}' has no {noun} {}. Nothing was planned or applied to the cluster.",
             self.cluster,
             unknown.join(", ")
         )?;
@@ -266,20 +274,20 @@ impl std::fmt::Display for UnknownInstances {
         }
         writeln!(
             f,
-            "  `--only` takes an instance as <namespace>/<instance>, as `kix plan` lists packages."
+            "  Pass each instance to `--only` as `<namespace>/<instance>` (the format shown in `kix plan`)."
         )?;
         let listed = closest(&self.unknown, &self.valid, LISTED_INSTANCES);
         if listed.is_empty() {
-            return write!(f, "  The build has no instances.");
+            return write!(f, "  This cluster build defines no package instances.");
         }
         if listed.len() < self.valid.len() {
             writeln!(
                 f,
-                "  The closest of the build's {} instances:",
+                "  Closest matches among the build's {} instances:",
                 self.valid.len()
             )?;
         } else {
-            writeln!(f, "  The build's instances:")?;
+            writeln!(f, "  Available instances in this build:")?;
         }
         let lines: Vec<String> = listed.iter().map(|n| format!("    {n}")).collect();
         write!(f, "{}", lines.join("\n"))

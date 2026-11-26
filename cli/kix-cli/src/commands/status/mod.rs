@@ -208,11 +208,9 @@ fn stopped_note(cluster: &str, record: &Record, active: &str) -> String {
     let name = &record.name;
     match record.partly_deployed() {
         Some(partial) => format!(
-            "Deploy record {name} ({build}) is partly deployed: `kix deploy --only` applied {} \
-             of its build, and the cluster still runs {active}. When the project's files still \
-             make that build, `kix deploy {cluster}` applies the rest of it. When they make \
-             another build, `kix deploy {cluster}` deploys that build instead, which replaces \
-             or undoes what `--only` applied.",
+            "Deployment record {name} ({build}) is in phase Partial: `kix deploy --only` applied {}, \
+             while {active} remains the active deployment. Run `kix deploy {cluster}` to deploy \
+             the rest of that build, or to replace it if your local files have changed.",
             partial.only.join(", ")
         ),
         None => {
@@ -222,9 +220,9 @@ fn stopped_note(cluster: &str, record: &Record, active: &str) -> String {
                 .and_then(|r| r.lines().next())
                 .unwrap_or("no reason recorded");
             format!(
-                "Deploy record {name} ({build}) failed ({reason}), and the cluster still runs \
-                 {active}. The next `kix deploy {cluster}` includes what that deploy applied in \
-                 its plan."
+                "Deployment record {name} ({build}) failed ({reason}), while {active} remains \
+                 the active deployment. The next `kix deploy {cluster}` will reconcile any \
+                 resources that {name} applied."
             )
         }
     }

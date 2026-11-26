@@ -702,26 +702,26 @@ async fn failed_and_partial_records_are_noted() {
         .unwrap();
     assert_eq!(notes.len(), 3, "{notes:?}");
     assert!(
-        notes[0].starts_with("Deploy record old (build old-01234567) failed (interrupted)"),
+        notes[0].starts_with("Deployment record old (build old-01234567) failed (interrupted)"),
         "{notes:?}"
     );
     assert!(
         notes[1].starts_with(
-            "Deploy record broken (build broken-01234) failed (Job/migrate@app failed)"
+            "Deployment record broken (build broken-01234) failed (Job/migrate@app failed)"
         ),
         "{notes:?}"
     );
     let partial = &notes[2];
     assert!(
-        partial.starts_with("Deploy record new (build new-01234567) is partly deployed: `kix deploy --only` applied app/api, web/shop of its build, and the cluster still runs prod-old."),
+        partial.starts_with("Deployment record new (build new-01234567) is in phase Partial: `kix deploy --only` applied app/api, web/shop, while prod-old remains the active deployment."),
         "{partial}"
     );
     assert!(
-        partial.contains("still make that build, `kix deploy prod` applies the rest"),
+        partial.contains("Run `kix deploy prod` to deploy the rest of that build"),
         "{partial}"
     );
     assert!(
-        partial.contains("another build, `kix deploy prod` deploys that build instead"),
+        partial.contains("or to replace it if your local files have changed."),
         "{partial}"
     );
 

@@ -923,23 +923,26 @@ mod partial_closing_tests {
             },
         );
         assert!(
-            text.starts_with("Deploy of part of 'c' complete: 2 created, 1 configured"),
+            text.starts_with("Partial deploy of 'c' complete: 2 created, 1 configured"),
             "{text}"
         );
-        assert!(text.contains("Applied in full, as named: app/a."), "{text}");
         assert!(
-            text.contains("Applied in full, because the named instance(s) need them: app/b."),
+            text.contains("Applied selected instance(s) in full: app/a."),
+            "{text}"
+        );
+        assert!(
+            text.contains("Applied required dependency instance(s) in full: app/b."),
             "{text}"
         );
         assert!(
             text.contains(
-                "c-new is marked partly deployed, and c-old remains the Active deployment record"
+                "c-new is marked Partial, and c-old remains the Active deployment record"
             ),
             "{text}"
         );
-        assert!(text.contains("7 object(s) of this build that differ from the current deploy record were outside this deploy: 5 to write and 2 that left the build."), "{text}");
+        assert!(text.contains("7 other resource change(s) compared with the active deployment were outside this run: 5 to create or update and 2 removed from the build."), "{text}");
         assert!(
-            text.contains("apply the rest of the build with `kix deploy c`"),
+            text.contains("deploy the rest of the build with `kix deploy c`"),
             "{text}"
         );
 
@@ -960,7 +963,7 @@ mod partial_closing_tests {
             text.contains("c-new remains the Active deployment record"),
             "{text}"
         );
-        assert!(!text.contains("outside this deploy"), "{text}");
-        assert!(!text.contains("need them"), "{text}");
+        assert!(!text.contains("outside this run"), "{text}");
+        assert!(!text.contains("dependency instance"), "{text}");
     }
 }

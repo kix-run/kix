@@ -134,7 +134,7 @@ pub fn print(event: PlanEvent<'_>) {
         }
         PlanEvent::FailedFolded(record) => match record.partly_deployed() {
             Some(partial) => crate::say!(
-                "  {} including resources from partly deployed {} ({}...), which applied {}",
+                "  {} including resources from partial deployment {} ({}...), which applied {}",
                 output::yellow("!"),
                 output::bold(&record.name),
                 short(record.identity_hash.as_deref().unwrap_or_default()),

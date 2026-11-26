@@ -173,32 +173,39 @@ pub fn flags_for(
                 .collect::<Vec<_>>()
                 .join(" ")
         };
-        let (saved, next) = if planned.only.is_empty() {
+        let (mismatch, next) = if planned.only.is_empty() {
+            let asked = only(&given.only);
             (
-                "without `--only`, as a plan of the whole build".to_string(),
                 format!(
-                    "deploy it without `--only`, or save and review a plan with \
-                     `kix plan {cluster} {} --out {file}`",
-                    only(&given.only)
+                    "the plan was saved without `--only` (for the full build), so it cannot be deployed with `{asked}`"
+                ),
+                format!(
+                    "remove `--only` to deploy the full plan, or save and review a new plan with \
+                     `kix plan {cluster} {asked} --out {file}`"
+                ),
+            )
+        } else if given.only.is_empty() {
+            let saved_flags = only(&planned.only);
+            (
+                format!("the plan was saved with `{saved_flags}`, so `--only` must match"),
+                format!(
+                    "pass `{saved_flags}` to deploy this plan, or save and review a full plan with \
+                     `kix plan {cluster} --out {file}`"
                 ),
             )
         } else {
+            let saved_flags = only(&planned.only);
+            let asked = only(&given.only);
             (
-                format!("with `{}`", only(&planned.only)),
+                format!("the plan was saved with `{saved_flags}`, which does not match `{asked}`"),
                 format!(
-                    "deploy it with `{}`, or save and review a plan with \
-                     `kix plan {cluster}{} --out {file}`",
-                    only(&planned.only),
-                    if given.only.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" {}", only(&given.only))
-                    }
+                    "pass `{saved_flags}` to deploy this plan, or save and review a new plan with \
+                     `kix plan {cluster} {asked} --out {file}`"
                 ),
             )
         };
         return Err(format!(
-            "the plan was saved {saved}. Nothing was applied to the cluster. Next: {next}."
+            "{mismatch}. Nothing was applied to the cluster. Next: {next}."
         ));
     }
     let mut contradicted = Vec::new();
@@ -803,7 +810,7 @@ mod tests {
         );
         let err = flags_for(&plan(), &only(&["app/web"]), "p.kixplan", "c").unwrap_err();
         assert!(
-            err.contains("the plan was saved without `--only`, as a plan of the whole build."),
+            err.contains("the plan was saved without `--only` (for the full build)"),
             "{err}"
         );
 
