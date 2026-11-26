@@ -1,12 +1,13 @@
 +++
 kind = "fixed"
 +++
-A prune that removes custom resources and their operator in the same run no
-longer deletes the operator's RoleBindings, ClusterRoleBindings, and the roles
-they bind while the operator still has to remove the resources' finalizers.
-Kix now treats a workload as depending on every binding that grants rights to
-the ServiceAccount its pods run as. Deploy creates those bindings before the
-workload, and prune deletes them after it. When a delete times out and the
-operator's pods are ready, the `[K2794]` message no longer says the operator
-is ready to act. It says only that its pods are ready and asks you to check
-its logs.
+Pruning custom resources together with their operator no longer deletes the
+operator's RBAC roles and bindings while the operator still needs them to
+remove finalizers. Kix now makes every workload depend on the `RoleBinding` and
+`ClusterRoleBinding` objects for its `ServiceAccount`, unless a binding already
+depends on the workload. In Helm charts, bindings now also depend on the `Role`
+or `ClusterRole` they reference. Kix applies those RBAC objects before the
+workload during deployment and deletes them after the workload when pruning. If
+deleting a custom resource times out (`[K2794]`) while its controller has ready
+pods, Kix now reports pod readiness instead of calling the controller ready,
+and tells you to check its logs for errors such as missing permissions.

@@ -353,8 +353,8 @@ fn controller_line(rid: &ResourceId, controller: &Controller) -> String {
         // Ready pods do not show that the controller can act: it may lack
         // the rights, settings, or network access that cleanup needs.
         ControllerState::Ready => format!(
-            "{kind} controller {id} has ready pods, but that does not show it can remove the \
-             finalizers. Check its logs to see what stops it, such as a missing permission."
+            "{kind} controller {id} has ready pods but may be failing to remove the \
+             finalizers. Check its logs for errors such as missing permissions."
         ),
         ControllerState::NotReady(reason) => format!(
             "{kind} controller {id} is not ready ({reason}), so it cannot remove the finalizers. \
@@ -787,7 +787,7 @@ mod tests {
             "{not_ready}"
         );
         assert!(with(ControllerState::Ready).contains(
-            "ScaledObject controller Deployment.apps/keda-operator@keda has ready pods, but"
+            "ScaledObject controller Deployment.apps/keda-operator@keda has ready pods but"
         ));
         assert!(with(ControllerState::Missing).contains("is not on the cluster"));
         assert!(
