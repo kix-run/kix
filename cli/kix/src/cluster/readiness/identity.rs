@@ -117,13 +117,22 @@ pub(crate) fn classify_pod_identity(pod: &Value, expected: &IdentityEnv) -> Opti
             .map(String::as_str)
             .filter(|k| !env.contains_key(k))
             .collect();
+        // A variable the container already carries with another value. The
+        // platform does not replace a variable a container sets itself.
+        let differs = expected.env.iter().find_map(|(key, want)| {
+            let want = want.as_deref()?;
+            let got = env.get(key.as_str())?;
+            (*got != Some(want)).then_some((key.as_str(), *got, want))
+        });
         // A container that carries every variable of another mechanism got
         // that mechanism from the platform instead.
         let instead = expected
             .alternatives
             .iter()
             .find(|a| !a.env.is_empty() && a.env.iter().all(|k| env.contains_key(k.as_str())));
-        let problem = if let (false, Some(other)) = (missing.is_empty(), instead) {
+        let problem: Option<(String, Option<String>)> = if let (false, Some(other)) =
+            (missing.is_empty(), instead)
+        {
             let names: Vec<&str> = other.env.iter().map(String::as_str).collect();
             Some((
                 format!(
@@ -132,7 +141,36 @@ pub(crate) fn classify_pod_identity(pod: &Value, expected: &IdentityEnv) -> Opti
                     other.description,
                     expected.description
                 ),
-                other.fix.as_deref().or(expected.fix.as_deref()),
+                other.fix.clone().or_else(|| expected.fix.clone()),
+            ))
+        } else if let Some((key, got, want)) = differs {
+            let got = got.map_or_else(
+                || "a value from `valueFrom`".to_string(),
+                |g| format!("`{g}`"),
+            );
+            let also = if missing.is_empty() {
+                String::new()
+            } else {
+                format!(", and it is missing {}", quoted_list(&missing))
+            };
+            let exempt = expected
+                .skip
+                .as_ref()
+                .map(|s| {
+                    format!(
+                        " If the container should keep its own credentials, list it in the pod annotation `{}` instead.",
+                        s.annotation
+                    )
+                })
+                .unwrap_or_default();
+            Some((
+                format!(
+                    "container `{name}` sets `{key}` to {got} itself, but the cloud identity in the definition is `{want}`{also}. {} does not replace a variable that a container already sets",
+                    expected.description
+                ),
+                Some(format!(
+                    "Remove `{key}` from the `env` of container `{name}`, then deploy again.{exempt}"
+                )),
             ))
         } else if !missing.is_empty() {
             Some((
@@ -141,21 +179,10 @@ pub(crate) fn classify_pod_identity(pod: &Value, expected: &IdentityEnv) -> Opti
                     quoted_list(&missing),
                     expected.description
                 ),
-                expected.fix.as_deref(),
+                expected.fix.clone(),
             ))
         } else {
-            expected.env.iter().find_map(|(key, want)| {
-                let want = want.as_deref()?;
-                let got = env.get(key.as_str()).copied().flatten().unwrap_or("");
-                (got != want).then(|| {
-                    (
-                        format!(
-                            "container `{name}` has `{key}` set to `{got}`, but Kix expected `{want}`"
-                        ),
-                        expected.fix.as_deref(),
-                    )
-                })
-            })
+            None
         };
         if let Some((problem, fix)) = problem {
             let fix = fix.map(|f| format!(" {f}")).unwrap_or_default();
@@ -270,10 +297,15 @@ mod tests {
         let message = classify_pod_identity(&p, &irsa()).expect("refused");
         assert!(
             message.contains(
-                "has `AWS_ROLE_ARN` set to `arn:aws:iam::111122223333:role/other`, but Kix expected `arn:aws:iam::111122223333:role/worker`"
+                "container `worker` sets `AWS_ROLE_ARN` to `arn:aws:iam::111122223333:role/other` itself, but the cloud identity in the definition is `arn:aws:iam::111122223333:role/worker`"
             ),
             "{message}"
         );
+        assert!(
+            message.ends_with("Remove `AWS_ROLE_ARN` from the `env` of container `worker`, then deploy again. If the container should keep its own credentials, list it in the pod annotation `eks.amazonaws.com/skip-containers` instead."),
+            "{message}"
+        );
+        assert!(!message.contains("Delete the association"), "{message}");
     }
 
     // Every container must carry the variables, not only the first.
@@ -326,5 +358,21 @@ mod tests {
         assert_eq!(classify_pod_identity(&p, &irsa()), None);
         p["metadata"]["annotations"] = json!({ "eks.amazonaws.com/skip-containers": "other" });
         assert!(classify_pod_identity(&p, &irsa()).is_some());
+    }
+
+    // A sidecar that sets its own `AWS_ROLE_ARN` is left alone by the
+    // webhook, so it also lacks the token file. The message names the
+    // differing value first, and the missing variable after it.
+    #[test]
+    fn a_container_with_its_own_role_names_both_values() {
+        let p = pod(json!([
+            { "name": "AWS_ROLE_ARN", "value": "arn:aws:iam::111122223333:role/sidecar" }
+        ]));
+        let message = classify_pod_identity(&p, &irsa()).expect("refused");
+        assert!(
+            message.contains("sets `AWS_ROLE_ARN` to `arn:aws:iam::111122223333:role/sidecar` itself, but the cloud identity in the definition is `arn:aws:iam::111122223333:role/worker`, and it is missing `AWS_WEB_IDENTITY_TOKEN_FILE`"),
+            "{message}"
+        );
+        assert!(message.contains("Remove `AWS_ROLE_ARN`"), "{message}");
     }
 }
