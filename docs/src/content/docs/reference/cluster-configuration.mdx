@@ -450,7 +450,7 @@ Each `networkPolicy.platformIntents.<name>` entry supports:
 | `targetNamespace` | `nullOr str` | Optional `io.kubernetes.pod.namespace` filter on a clusterwide policy's endpoint selector. |
 | `podSelector` | `attrsOf str` | Pod labels selected by the policy. |
 | `ingress` | `listOf attrs` | Ingress rules (`{ from = "world" \| "all-pods" \| "apiserver"; ports?; entities?; }`). |
-| `egress` | `listOf attrs` | Egress rules (`{ to = "world" \| "pods" \| "all-pods" \| "apiserver" \| "dns"; ports?; entities?; }`). |
+| `egress` | `listOf attrs` | Egress rules (`{ to = "world" \| "pods" \| "all-pods" \| "apiserver" \| "dns" \| "node-local"; ports?; entities?; cidr?; }`). `cidr` names the address for `"node-local"`. |
 
 :::note[Explanation]
 See [Network policy derivation from the graph](/docs/explanation/network-policy/) for how Kix discovers traffic paths and synthesizes policies.

@@ -202,7 +202,7 @@ when a check fails or the path is not evaluated by default.
 - C11. Do `extraArgs` flags enable features needing RBAC the package never grants? Fix: refuse the flag at eval.
 - C12. Is webhook ownership split between operator and Kix without one owner? Fix: one owner; `ownership.cede` only for fields the operator rewrites.
 - C13. Are operand images hardcoded, tag-only, or absent from `out.extraImages`? Fix: `operandImages.<name>` options, each in `out.extraImages`.
-- C14. Do operator-spawned pods lack published selectors (`out.operandSelectors.<operand>`) and network policy? Does a consumer copy a provider's operand labels (grep the provider's `factBehavior.podSelector` keys in consumers)? Fix: publish selectors; `kix.operandPolicy { scope; name; selector; ingress; egress; }`.
+- C14. Do operator-spawned pods lack published selectors (`out.operandSelectors.<operand>`) and network policy? Does a consumer copy a provider's operand labels (grep the provider's `factBehavior.podSelector` keys in consumers)? Does an operand policy over pods with a cloud identity (`annotationsFor`) leave out `networkIntents`, so the pods cannot fetch credentials under default deny? Fix: publish selectors; `kix.operandPolicy { scope; name; selector; ingress; egress; }`, with `translateIntentRules { intents.identity = identityMetadata.networkIntents; }` in `egress`.
 - C15. Does a webhook have no ingress from the apiserver under default deny? Fix: the `from = "apiserver"` ingress source.
 - C16. Does a CR cross-reference (a class, a storage location, a Secret) stay a raw string? Fix: take the resource, derive the name, add the edge.
 - C17. Does upstream ship a singleton CR while a builder lets two consumers create two? Fix: fixed name so the duplicate check fires.

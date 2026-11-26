@@ -102,6 +102,10 @@ The DNS egress rule allows UDP and TCP port 53 to the cluster's DNS peers. By de
 
 Kix reads `out.dnsPeers` only from an import. A package that provides DNS itself, such as `coredns`, gets the default peers, so under `networkPolicy.enable` it must run in `kube-system` with the `k8s-app: kube-dns` label. The `cilium` enforcer cannot write a DNS rule to an address range, and fails evaluation when the peers include one.
 
+### Cloud credentials
+
+A workload whose ServiceAccount has a [cloud identity](/docs/reference/composition-helpers/#cloudidentity) needs to reach the endpoint that hands out its credentials. Each cloud identity mechanism declares that traffic, and Kix adds it to the workload's egress policy: AWS STS on port 443 for IRSA, the EKS Pod Identity agent at `169.254.170.23` on port 80, the GKE metadata server at `169.254.169.254` on ports 80 and 8080, and Microsoft Entra ID on port 443 for AKS. Workloads without a cloud identity get none of these rules.
+
 ## Three-phase policy assembly
 
 Different network facts become available at different stages of evaluation. Kix attaches its network policy plugin across three phases so each policy is built as soon as its inputs exist:

@@ -135,16 +135,17 @@ in
                     // {
                       packageLabels = labels;
                       _builtBy = builtBy;
-                      # The pod labels and restart stamp of a ServiceAccount
-                      # bound with `kix.cloudIdentity.use`, or null. The
-                      # workload builders read it from the pod's
-                      # ServiceAccount, outside the manifest.
+                      # The pod labels, restart stamp, and credential egress
+                      # of a ServiceAccount bound with
+                      # `kix.cloudIdentity.use`, or null. The workload
+                      # builders read it from the pod's ServiceAccount,
+                      # outside the manifest.
                       _cloudIdentity =
                         if identity == null then
                           null
                         else
                           {
-                            inherit (rendered) podLabels stamp;
+                            inherit (rendered) podLabels stamp egress;
                           };
                       # Warnings raised while building the resource, outside the
                       # manifest. `eval/instance.nix` collects them from the
@@ -213,6 +214,16 @@ in
                   serviceAccountNamespace = saNs;
                 };
             };
+
+      # Return the credential egress rules of the cloud identity bound to the
+      # ServiceAccount the pod spec names, or [ ] without one.
+      _cloudIdentityEgress =
+        rawTemplateSpec:
+        let
+          sa = rawTemplateSpec.serviceAccount or null;
+          identity = if sa == null then null else sa._cloudIdentity or null;
+        in
+        if identity == null then [ ] else identity.egress;
 
       # Return pod template metadata with the cloud identity of the
       # ServiceAccount the pod spec names: the pod labels its mechanism needs
@@ -288,6 +299,9 @@ in
           workloadCeiling ? null,
           # Why the workload cannot run above `workloadCeiling`, or null.
           workloadCeilingReason ? null,
+          # Credential egress of the pod's cloud identity
+          # (`_cloudIdentityEgress`).
+          cloudIdentityEgress ? [ ],
         }:
         let
           # Apply a builder ceiling to this workload only. Keep the package's
@@ -375,6 +389,7 @@ in
                 emit
                 instanceName
                 namespaceName
+                cloudIdentityEgress
                 ;
               inherit (edgeAnalysis) serviceRegistry serviceRefRegistry;
               packageMeta = peekedPackageMeta;
@@ -592,6 +607,7 @@ in
             workloadKind = kind;
             inherit selector hostNetwork workloadCeiling;
             workloadCeilingReason = attrs.availability.reason or null;
+            cloudIdentityEgress = _cloudIdentityEgress rawTemplateSpec;
           });
 
       # Process a CronJob's nested pod template through the same validation,
@@ -662,6 +678,7 @@ in
             workloadKind = kind;
             inherit selector hostNetwork workloadCeiling;
             workloadCeilingReason = attrs.availability.reason or null;
+            cloudIdentityEgress = _cloudIdentityEgress rawTemplateSpec;
           });
 
       mkJob =
@@ -740,6 +757,7 @@ in
             workloadKind = kind;
             inherit selector hostNetwork workloadCeiling;
             workloadCeilingReason = attrs.availability.reason or null;
+            cloudIdentityEgress = _cloudIdentityEgress rawTemplateSpec;
           });
 
       # Apply workload validation to chart output. Skip checkNamespacedRefs

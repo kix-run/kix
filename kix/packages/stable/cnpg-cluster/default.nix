@@ -795,6 +795,16 @@ in
           else
             null;
 
+        # The instance pods fetch their cloud credentials, which the netpol
+        # plugin cannot see because the operator creates the pods. Null
+        # without an identity, since no rule remains.
+        identityEgress = kix.operandPolicy {
+          inherit scope;
+          name = "${name}-cloud-identity-egress";
+          selector = instanceSelector;
+          egress =
+            (netpol.translateIntentRules { intents.identity = identityMetadata.networkIntents; }).egressRules;
+        };
         operandEgress = kix.operandPolicy {
           inherit scope;
           name = "${name}-operand-egress";
@@ -839,6 +849,7 @@ in
           ++ builtins.filter (r: r != null) [
             self.scheduledBackup
             self.backupEgress
+            self.identityEgress
             self.operandEgress
             self.operandIngress
             self.operatorEgress

@@ -11,6 +11,10 @@ let
 
   # Return a mechanism record. `render` takes the value of the mechanism's
   # cloud and returns the ServiceAccount annotations and pod labels it needs.
+  # `egress` lists the outbound traffic a pod needs to fetch its credentials,
+  # as `meta.network.intents` egress rules. The netpol plugin adds it to the
+  # egress policy of every workload that runs as a ServiceAccount bound to
+  # an identity.
   mkMechanism =
     {
       cloud,
@@ -18,6 +22,7 @@ let
       description,
       annotationDomains,
       render,
+      egress,
     }:
     {
       _type = mechanismType;
@@ -27,8 +32,14 @@ let
         description
         annotationDomains
         render
+        egress
         ;
     };
+
+  tcp = port: {
+    inherit port;
+    protocol = "TCP";
+  };
 
   # Return the IAM roles for service accounts (IRSA) mechanism, which EKS
   # and the self-hosted amazon-eks-pod-identity-webhook read from a
@@ -47,6 +58,15 @@ let
         serviceAccountAnnotations."${annotationPrefix}/role-arn" = value.roleArn;
         podLabels = { };
       };
+      # The pod exchanges its token at AWS STS, outside the cluster, on 443.
+      # A live EKS cluster under default deny gave the pod credentials with
+      # this rule and DNS, and the calls hung without it.
+      egress = [
+        {
+          to = "world";
+          ports = [ (tcp 443) ];
+        }
+      ];
     };
 
   # Return the EKS Pod Identity mechanism. The link between the
@@ -64,6 +84,24 @@ let
         serviceAccountAnnotations = { };
         podLabels = { };
       };
+      # The EKS Pod Identity agent listens on the pod's own node at these
+      # link-local addresses, on port 80. A live EKS cluster under default
+      # deny gave the pod credentials with the IPv4 rule and none without it.
+      # The IPv6 address comes from the AWS documentation
+      # (https://docs.aws.amazon.com/eks/latest/userguide/pod-identities.html)
+      # and was not tested.
+      egress = [
+        {
+          to = "node-local";
+          cidr = "169.254.170.23/32";
+          ports = [ (tcp 80) ];
+        }
+        {
+          to = "node-local";
+          cidr = "fd00:ec2::23/128";
+          ports = [ (tcp 80) ];
+        }
+      ];
     };
 
   # Return the GKE Workload Identity Federation mechanism. With no Google
@@ -82,6 +120,21 @@ let
         };
         podLabels = { };
       };
+      # The GKE metadata server answers on the pod's own node at this
+      # address. A live GKE cluster under default deny needed port 80 for
+      # credentials. Port 8080 comes from Google's network policy guide
+      # (https://cloud.google.com/kubernetes-engine/docs/how-to/network-policy)
+      # and was not tested.
+      egress = [
+        {
+          to = "node-local";
+          cidr = "169.254.169.254/32";
+          ports = [
+            (tcp 80)
+            (tcp 8080)
+          ];
+        }
+      ];
     };
 
   # Return the Microsoft Entra Workload ID mechanism. Its webhook acts only
@@ -102,6 +155,17 @@ let
         };
         podLabels."azure.workload.identity/use" = "true";
       };
+      # The pod exchanges its token at Microsoft Entra ID
+      # (login.microsoftonline.com), outside the cluster, on 443. This comes
+      # from the AKS documentation
+      # (https://learn.microsoft.com/en-us/azure/aks/outbound-rules-control-egress)
+      # and was not tested.
+      egress = [
+        {
+          to = "world";
+          ports = [ (tcp 443) ];
+        }
+      ];
     };
 
 in

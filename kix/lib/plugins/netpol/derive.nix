@@ -32,6 +32,8 @@ in
       edges,
       enforced,
       packageIntents ? { },
+      # Credential egress of the pod's cloud identity, as intent rules.
+      cloudIdentityEgress ? [ ],
       networkPolicyEnforcer ? null,
     }:
     let
@@ -63,6 +65,14 @@ in
               }
             ) edges;
 
+            identityRules =
+              if cloudIdentityEgress == [ ] then
+                [ ]
+              else
+                (enforcerApi.translateIntentRules {
+                  intents.cloudIdentity.egress = cloudIdentityEgress;
+                }).egressRules;
+
             selfRules = enforcerApi.mkSelfRules { selector = wSelector; };
             selfEgress = lib.optional (workloadKind == "StatefulSet") (builtins.head selfRules.egress);
 
@@ -71,7 +81,8 @@ in
             ]
             ++ serviceRules
             ++ selfEgress
-            ++ intentRules.egressRules;
+            ++ intentRules.egressRules
+            ++ identityRules;
 
             selfIngress = lib.optional (workloadKind == "StatefulSet") (builtins.head selfRules.ingress);
 

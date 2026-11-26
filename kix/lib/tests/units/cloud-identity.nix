@@ -18,6 +18,7 @@
   byName,
   evalFails,
   containerBase,
+  netpolOn,
   ...
 }:
 
@@ -1398,6 +1399,7 @@ in
       empty == {
         serviceAccountAnnotations = { };
         podLabels = { };
+        networkIntents.egress = [ ];
       }
       && lib.hasInfix "not configured for cloud identities" refused.failed.message
     )
@@ -1550,4 +1552,170 @@ in
       && lib.hasInfix "Set this dependency to" unnamed
     )
     || throw "refusal names dependency: use ${builtins.toJSON use}, useIdentity ${builtins.toJSON useIdentity}";
+
+  # Binding a cloud identity adds the mechanism's credential egress to the
+  # egress policy of every workload that runs as the ServiceAccount, on
+  # each cloud: STS on 443 for IRSA, the Pod Identity agent's addresses on
+  # port 80, the GKE metadata server on 80 and 8080, and Entra ID on 443
+  # for AKS. Without an identity no such rule is added.
+  cloud-identity-credential-egress =
+    let
+      tcp = port: {
+        inherit port;
+        protocol = "TCP";
+      };
+      # The intent rules the test enforcer echoes on the worker's three
+      # egress policies.
+      intentRulesOf =
+        modules:
+        let
+          ms = manifests (mkCluster (modules ++ [ netpolOn ]));
+          rulesOf =
+            name:
+            map (r: removeAttrs r [ "stubRule" ]) (
+              builtins.filter (r: (r.stubRule or null) == "intent-egress") (byName name ms).spec.egress
+            );
+        in
+        {
+          deployment = rulesOf "worker-deployment-worker-egress";
+          job = rulesOf "worker-job-worker-once-egress";
+          cronJob = rulesOf "worker-cronjob-worker-nightly-egress";
+        };
+      onEvery = rules: {
+        deployment = rules;
+        job = rules;
+        cronJob = rules;
+      };
+      world443 = [
+        {
+          to = "world";
+          ports = [ (tcp 443) ];
+        }
+      ];
+      cases = {
+        irsa = {
+          got = intentRulesOf (workerOn irsa);
+          want = onEvery world443;
+        };
+        eksPodIdentity = {
+          got = intentRulesOf (
+            workerOn (irsa // { extra.cluster.flavor.eks.cloudIdentity = "pod-identity"; })
+          );
+          want = onEvery [
+            {
+              to = "node-local";
+              cidr = "169.254.170.23/32";
+              ports = [ (tcp 80) ];
+            }
+            {
+              to = "node-local";
+              cidr = "fd00:ec2::23/128";
+              ports = [ (tcp 80) ];
+            }
+          ];
+        };
+        gke = {
+          got = intentRulesOf (workerOn {
+            flavorName = "gke";
+            identity = ci.gcp { };
+          });
+          want = onEvery [
+            {
+              to = "node-local";
+              cidr = "169.254.169.254/32";
+              ports = [
+                (tcp 80)
+                (tcp 8080)
+              ];
+            }
+          ];
+        };
+        aks = {
+          got = intentRulesOf (workerOn {
+            flavorName = "aks";
+            identity = ci.azure { clientId = "00000000-0000-0000-0000-000000000000"; };
+          });
+          want = onEvery world443;
+        };
+        withoutIdentity = {
+          got = intentRulesOf (workerOn {
+            flavorName = "gke";
+            identity = null;
+            cloud = "gcp";
+          });
+          want = onEvery [ ];
+        };
+      };
+      wrong = lib.filterAttrs (_: c: c.got != c.want) cases;
+    in
+    wrong == { } || throw "credential egress: ${builtins.toJSON wrong}";
+
+  # The cilium enforcer writes a node-local rule twice: once as the address
+  # and once as the `host` entity, because Cilium 1.16 and 1.17 match a
+  # node-bound link-local address differently.
+  cloud-identity-cilium-node-local =
+    let
+      cilium = import ../../../packages/experimental/cilium/netpol-rules.nix { inherit lib; };
+      ports = [
+        {
+          ports = [
+            {
+              port = "80";
+              protocol = "TCP";
+            }
+          ];
+        }
+      ];
+      got =
+        (cilium.translateIntentRules {
+          intents.identity.egress = (mechanisms.eksPodIdentity { }).egress;
+        }).egressRules;
+    in
+    got == [
+      {
+        toCIDR = [ "169.254.170.23/32" ];
+        toPorts = ports;
+      }
+      {
+        toEntities = [ "host" ];
+        toPorts = ports;
+      }
+      {
+        toCIDR = [ "fd00:ec2::23/128" ];
+        toPorts = ports;
+      }
+      {
+        toEntities = [ "host" ];
+        toPorts = ports;
+      }
+    ]
+    || throw "cilium node-local: ${builtins.toJSON got}";
+
+  # For pods an operator creates, `annotationsFor` returns the credential
+  # egress as intent rules, and empty rules without an identity.
+  cloud-identity-annotations-for-network-intents =
+    let
+      provider = {
+        _meta = {
+          namespaceName = "kube-system";
+          instanceName = "cloud-identity";
+        };
+        out.cloudIdentity = mechanisms.gke { };
+      };
+      withIdentity = ci.annotationsFor {
+        scope = recordingScope;
+        identity = ci.gcp { };
+        inherit provider;
+      };
+      without = ci.annotationsFor {
+        scope = recordingScope;
+        identity = null;
+        inherit provider;
+      };
+    in
+    (
+      withIdentity.networkIntents.egress == (mechanisms.gke { }).egress
+      && without.networkIntents.egress == [ ]
+    )
+    || throw "annotationsFor networkIntents: ${builtins.toJSON withIdentity.networkIntents}";
 }

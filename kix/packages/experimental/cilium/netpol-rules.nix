@@ -362,20 +362,41 @@ let
                 failWith {
                   package = "cilium";
                   message = "unknown egress intent target '${toString target}'.";
-                  fix = "Set `to` to \"apiserver\", \"world\", \"dns\", \"pods\", or \"all-pods\".";
+                  fix = "Set `to` to \"apiserver\", \"world\", \"dns\", \"pods\", \"all-pods\", or \"node-local\".";
                 };
+            withPorts =
+              r:
+              r
+              // lib.optionalAttrs (rule ? ports) {
+                toPorts = [
+                  {
+                    ports = portsToCilium rule.ports;
+                  }
+                ];
+              };
           in
           if target == "dns" then
-            baseRule # DNS rule already includes ports
+            [ baseRule ] # DNS rule already includes ports
+          # An address on the pod's own node, such as a cloud metadata
+          # server. Cilium matched node-bound link-local addresses with
+          # `toCIDR` through 1.16 and gives them the `host` identity from
+          # 1.17, so both rules are written. Cilium refuses one rule that
+          # holds both.
+          else if target == "node-local" then
+            [
+              (withPorts {
+                toCIDR = [
+                  (rule.cidr or (failWith {
+                    package = "cilium";
+                    message = "A node-local egress intent rule must have a `cidr` field.";
+                  })
+                  )
+                ];
+              })
+              (withPorts { toEntities = [ "host" ]; })
+            ]
           else
-            baseRule
-            // lib.optionalAttrs (rule ? ports) {
-              toPorts = [
-                {
-                  ports = portsToCilium rule.ports;
-                }
-              ];
-            };
+            [ (withPorts baseRule) ];
 
         translateIngressRule =
           rule:
@@ -413,7 +434,9 @@ let
         allIntents = builtins.attrValues intents;
       in
       {
-        egressRules = builtins.concatMap (i: map translateEgressRule (i.egress or [ ])) allIntents;
+        egressRules = builtins.concatMap (
+          i: builtins.concatMap translateEgressRule (i.egress or [ ])
+        ) allIntents;
         ingressRules = builtins.concatMap (i: map translateIngressRule (i.ingress or [ ])) allIntents;
       };
   };

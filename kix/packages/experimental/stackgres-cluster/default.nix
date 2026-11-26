@@ -582,7 +582,11 @@ in
             ]
             ++ self'.egress
             ++ lib.optionals (extensions != [ ]) (worldEgress [ 443 ])
-            ++ lib.optionals (storagePort != null) (worldEgress [ storagePort ]);
+            ++ lib.optionals (storagePort != null) (worldEgress [ storagePort ])
+            # The operator creates the pods, so the netpol plugin does not
+            # add their cloud credential egress.
+            ++ (netpol.translateIntentRules { intents.identity = identityMetadata.networkIntents; })
+              .egressRules;
           };
           operandIngress = kix.operandPolicy {
             inherit scope;

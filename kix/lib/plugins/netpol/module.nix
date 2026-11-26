@@ -147,6 +147,7 @@ in
           inherit enforced;
           networkPolicyEnforcer = resolveEnforcerOut { inherit (ctx) cluster instanceName namespaceName; };
           packageIntents = ctx.packageMeta.network.intents or { };
+          cloudIdentityEgress = ctx.cloudIdentityEgress or [ ];
         };
       in
       {
