@@ -1,0 +1,151 @@
+#!/usr/bin/env python3
+"""Refuse text that contains a name from a private list.
+
+The list is not in this repository. It comes from the `KIX_PRIVATE_NAMES`
+environment variable, or from the file `KIX_PRIVATE_NAMES_FILE` names
+(default `~/.config/kix/private-names`). Either holds one name to a line;
+blank lines and lines that start with `#` are skipped. With no list the
+script prints a note and passes, so a contributor without one is not blocked.
+
+A name matches in any letter case, and only as a whole word: `ab1` matches
+`ab1` and `clusters/ab1.nix`, not `tab10`. The report gives the place of each
+match and hides the name, because CI logs are public.
+
+    scripts/private-names --staged        lines added to the index
+    scripts/private-names --base REF      lines and commit messages added since REF
+    scripts/private-names --stdin LABEL   text on standard input
+"""
+
+import argparse
+import os
+import pathlib
+import re
+import subprocess
+import sys
+
+# A short name can turn up by chance inside base64 or a hash. Skip a match of
+# a name this short when it sits in an unbroken run of such characters this
+# long.
+SHORT_NAME = 4
+ENCODED_RUN = 32
+ENCODED_CHARS = re.compile(r"[A-Za-z0-9+/=]+")
+HUNK_HEADER = re.compile(r"@@ -\S+ \+(\d+)")
+
+
+def load_names():
+    text = os.environ.get("KIX_PRIVATE_NAMES")
+    if text is None:
+        default = pathlib.Path.home() / ".config" / "kix" / "private-names"
+        path = pathlib.Path(os.environ.get("KIX_PRIVATE_NAMES_FILE", default))
+        text = path.read_text() if path.is_file() else ""
+    names = [line.strip() for line in text.splitlines()]
+    return [n for n in names if n and not n.startswith("#")]
+
+
+def compile_names(names):
+    alternatives = "|".join(re.escape(n) for n in sorted(names, key=len, reverse=True))
+    return re.compile(rf"(?<![A-Za-z0-9])(?:{alternatives})(?![A-Za-z0-9])", re.IGNORECASE)
+
+
+def in_encoded_run(line, match):
+    if len(match.group(0)) > SHORT_NAME:
+        return False
+    for run in ENCODED_CHARS.finditer(line):
+        if run.start() <= match.start() and match.end() <= run.end():
+            return len(run.group(0)) >= ENCODED_RUN
+    return False
+
+
+def find(pattern, line):
+    """Return the line with each match hidden, or None when nothing matches."""
+    matches = [m for m in pattern.finditer(line) if not in_encoded_run(line, m)]
+    if not matches:
+        return None
+    for match in reversed(matches):
+        line = line[: match.start()] + "***" + line[match.end() :]
+    return line.strip()[:160]
+
+
+def git(*args):
+    result = subprocess.run(["git", *args], capture_output=True, check=True)
+    return result.stdout.decode("utf-8", "replace")
+
+
+def added_lines(diff):
+    """Yield (path, line number, text) for each line a unified diff adds."""
+    path, number = None, 0
+    # Split on newlines only. `splitlines` also splits on form feeds and
+    # other separators, which can sit inside a line of a file.
+    for line in diff.split("\n"):
+        hunk = HUNK_HEADER.match(line)
+        if line.startswith("+++ "):
+            path = line[6:] if line.startswith("+++ b/") else None
+        elif hunk:
+            number = int(hunk.group(1))
+        elif path and line.startswith("+"):
+            yield path, number, line[1:]
+            number += 1
+        elif path and not line.startswith("-"):
+            number += 1
+
+
+def check_diff(pattern, diff):
+    hits = []
+    for path, number, text in added_lines(diff):
+        hidden = find(pattern, path + " " + text)
+        if hidden is not None:
+            hits.append(f"{path}:{number}: {find(pattern, text) or '(the file name)'}")
+    return hits
+
+
+def check_messages(pattern, base):
+    hits = []
+    for entry in git("log", "--format=%h%x00%B%x01", f"{base}..HEAD").split("\x01"):
+        if "\x00" not in entry:
+            continue
+        commit, message = entry.strip().split("\x00", 1)
+        for text in message.splitlines():
+            hidden = find(pattern, text)
+            if hidden is not None:
+                hits.append(f"commit {commit} message: {hidden}")
+    return hits
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--staged", action="store_true")
+    mode.add_argument("--base", metavar="REF")
+    mode.add_argument("--stdin", metavar="LABEL")
+    args = parser.parse_args()
+
+    names = load_names()
+    if not names:
+        print("private-names: no list of private names is set up here, so nothing was checked.")
+        return 0
+    pattern = compile_names(names)
+
+    diff_options = ["--no-color", "--no-ext-diff", "--unified=0", "--text"]
+    if args.staged:
+        hits = check_diff(pattern, git("diff", "--cached", *diff_options))
+    elif args.base:
+        hits = check_diff(pattern, git("diff", *diff_options, f"{args.base}...HEAD"))
+        hits += check_messages(pattern, args.base)
+    else:
+        hits = []
+        for number, text in enumerate(sys.stdin.read().splitlines(), 1):
+            hidden = find(pattern, text)
+            if hidden is not None:
+                hits.append(f"{args.stdin}:{number}: {hidden}")
+
+    if not hits:
+        return 0
+    print("ERROR: this text contains a name from the private list (shown as ***):")
+    for hit in hits:
+        print(f"  {hit}")
+    print("Replace it with a made-up name, such as `dev`, `prod`, or `example.com`.")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

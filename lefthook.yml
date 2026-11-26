@@ -32,6 +32,10 @@ commit-msg:
           echo "Please remove the Co-Authored-By line and try again."
           exit 1
         fi
+    # Refuse a commit message that names a private cluster or client. The
+    # list of names is kept outside the repository; see scripts/private-names.
+    private-names:
+      run: python3 scripts/private-names --stdin "commit message" < "{1}"
 
 post-commit:
   commands:
@@ -128,6 +132,11 @@ pre-commit:
       exclude:
         - "docs/src/snippets/**/*.nix"
       run: nix run --inputs-from . nixpkgs#deadnix -- --fail --no-lambda-pattern-names {staged_files}
+
+    # Refuse staged lines that name a private cluster or client. The check
+    # passes with a note on a machine that has no list of names.
+    private-names:
+      run: python3 scripts/private-names --staged
 
     format-python:
       glob: "*.py"
