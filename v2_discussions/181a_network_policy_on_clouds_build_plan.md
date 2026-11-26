@@ -40,9 +40,10 @@ are built. Test 10 can run immediately in a scratch namespace using an explicit
 `NetworkPolicy` manifest before any Kix changes are built.
 
 The live GKE tests already answered the platform questions in tests 5 (N1,
-webhook source) and 7 (N2, node kubelet egress), plus test 10 (N4, excluding
-the node range from `0.0.0.0/0` egress). Tests 1 through 9 still need to run
-against Kix once steps 6 and 7 land:
+webhook source), 7 (N2, node kubelet egress), and 9 (N5, Autopilot DNS via
+`169.254.20.10/32`), plus test 10 (N4, excluding the node range from
+`0.0.0.0/0` egress). Tests 1 through 9 still need to run against Kix once steps
+6 and 7 land:
 
 1. Deploy a cluster with `kix.flavors.gke`, `networkPolicy.enable = true`, and
    one `echo-server` instance in namespace `np`. Verify that `kix build`
@@ -70,8 +71,9 @@ against Kix once steps 6 and 7 land:
    the node range and verify that Prometheus scrapes `node-exporter` (N2).
 8. Empty the cluster definition and verify that `kix deploy --prune` finishes
    without errors.
-9. If a GKE Autopilot cluster is available, read `/etc/resolv.conf` inside a
-   pod, repeat test 2, and record which DNS peer matched.
+9. If a GKE Autopilot cluster is available, repeat test 2 with the
+   `gke-autopilot` flavor and verify that DNS resolves through
+   `169.254.20.10/32` (N5).
 10. Under default-deny egress, allow `0.0.0.0/0` except the node range on TCP
     10250 and record whether a node is still reachable.
 
