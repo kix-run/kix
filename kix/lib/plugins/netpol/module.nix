@@ -31,7 +31,8 @@ let
 
   exclusiveCniFix =
     "Set `networkPolicy.enable = false`. This cluster's pod network is ${cniName} (`cluster.roles.cni.binding = \"exclusive\"`), "
-    + "so Kix cannot install Cilium here, and Kix only generates Cilium network policies today. "
+    + "so Kix cannot install Cilium here, and the cluster declares no other network policy enforcer. "
+    + "Where the platform enforces the standard NetworkPolicy, a flavor declares it with a `platform-network-policy` import, as the `gke` and `gke-autopilot` flavors do, and the `eks` flavor does with `cluster.flavor.eks.networkPolicy = \"vpc-cni\"`. "
     + "If you disabled the built-in CNI so Kix can install Cilium, set `cluster.roles.cni.binding = \"absent\"` and add `packages.experimental.cilium` under `instances`. "
     + "If the cluster already runs Cilium, set `cluster.roles.cni.binding = \"shadowable\"`, add a `platform-cilium` import, and add `packages.experimental.cilium` under `instances`.";
 
@@ -59,7 +60,7 @@ in
           enable = lib.mkOption {
             type = lib.types.bool;
             default = false;
-            description = "Generate CiliumNetworkPolicies from DI graph.";
+            description = "Generate network policies from the cluster's dependency graph, in the policy kind of the cluster's network policy enforcer.";
           };
           defaultDeny = lib.mkOption {
             type = lib.types.bool;
@@ -132,13 +133,16 @@ in
     );
     default = { };
     description = ''
-      Automatic `CiliumNetworkPolicy` generation from the cluster's dependency
+      Automatic network policy generation from the cluster's dependency
       graph. Kix finds the policy enforcer automatically from the instance that
-      claims `"network-policy-enforcer"` in `meta.roles` (see
-      `kix/packages/experimental/cilium`). You do not need to wire `deps`, but
-      you must declare an enforcer instance when `enable = true` or evaluation
-      fails. Every generated policy depends on that enforcer so Kix waits for
-      Cilium and its CRDs before applying policies. When the cluster environment
+      claims `"network-policy-enforcer"` in `meta.roles`: the `cilium`
+      package, which writes `CiliumNetworkPolicy`, or a flavor's
+      `platform-network-policy` import, which writes the standard
+      `NetworkPolicy` (the `gke` and `gke-autopilot` flavors, and `eks` with
+      `cluster.flavor.eks.networkPolicy = "vpc-cni"`). You do not need to wire
+      `deps`, but evaluation fails when `enable = true` and no enforcer is
+      declared. Every generated policy depends on the `cilium` instance, so
+      Kix waits for Cilium and its CRDs before applying policies. When the cluster environment
       already runs Cilium, a flavor or cluster module sets
       `cluster.roles.cni.binding = "shadowable"` and declares a
       `platform-cilium` import, and the `cilium` instance configures or uses

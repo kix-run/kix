@@ -170,6 +170,10 @@ let
     };
 
   gkeCluster = modules: clusterWith publicKix.flavors.gke modules;
+  eksCluster = modules: clusterWith publicKix.flavors.eks modules;
+  vpcCni = {
+    cluster.flavor.eks.networkPolicy = "vpc-cni";
+  };
 
   withWeb = args: { instances.app.web.package = webPackage args; };
 
@@ -574,4 +578,58 @@ in
     in
     (evalFails withCilium && !(evalFails without))
     || throw "GKE with cilium fails ${toString (evalFails withCilium)}";
+
+  # EKS creates clusters with network policy off in the VPC CNI, so
+  # generated policy needs `cluster.flavor.eks.networkPolicy = "vpc-cni"`.
+  netpol-standard-eks-needs-vpc-cni =
+    let
+      none = eksCluster [ (withWeb { }) ];
+      on = eksCluster [
+        vpcCni
+        (withWeb { })
+      ];
+      off = publicKix.buildCluster {
+        name = "test";
+        modules = [
+          publicKix.flavors.eks
+          (withWeb { })
+        ];
+      };
+    in
+    (
+      evalFails none
+      && !(evalFails on)
+      && !(evalFails off)
+      && byName "app-default-deny" (policiesOf on) != null
+      && byName "platform-network-policy" (manifests off) == null
+    )
+    || throw "EKS network policy option: none fails ${toString (evalFails none)}, on fails ${toString (evalFails on)}";
+
+  # The scorecard reports each reason a policy is wider once, with a count,
+  # and each policy as a detail at `info`.
+  netpol-standard-widened-scorecard =
+    let
+      cluster = eksCluster [
+        vpcCni
+        (withWeb { serviceType = "LoadBalancer"; })
+      ];
+      findings = builtins.filter (f: lib.hasSuffix "networkPolicyWidened" f.rule) (
+        cluster.scorecardReport.findings
+      );
+      summaries = builtins.filter (f: f.severity == "warning") findings;
+      details = builtins.filter (f: f.severity == "info") findings;
+      startup = lib.findFirst (f: lib.hasInfix "(pod-start-egress-open)" f.message) null summaries;
+      gke = gkeCluster [ (withWeb { }) ];
+      gkeFindings = builtins.filter (f: lib.hasSuffix "networkPolicyWidened" f.rule) (
+        gke.scorecardReport.findings
+      );
+    in
+    (
+      startup != null
+      && lib.hasPrefix "2 network policies" startup.message
+      && builtins.any (f: f.resource == "NetworkPolicy/app-default-deny") details
+      && builtins.any (f: lib.hasInfix "(world-ingress-pods)" f.message) summaries
+      && gkeFindings == [ ]
+    )
+    || throw "widened findings: ${builtins.toJSON findings}; GKE ${builtins.toJSON gkeFindings}";
 }

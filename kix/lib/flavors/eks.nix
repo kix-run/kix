@@ -12,6 +12,12 @@
 # by default, or through EKS Pod Identity when
 # `cluster.flavor.eks.cloudIdentity = "pod-identity"`. The pod identity
 # webhook reads `eks.amazonaws.com` annotations either way.
+#
+# The VPC CNI enforces the standard Kubernetes NetworkPolicy only after
+# network policy is turned on in the add-on's configuration, which Kix cannot
+# read. `cluster.flavor.eks.networkPolicy = "vpc-cni"` says it is on, and
+# declares the `platform-network-policy` import that writes NetworkPolicy
+# objects.
 
 {
   config,
@@ -25,6 +31,12 @@ let
     inherit (config) clusterDomain;
   };
   platformCloudIdentity = import ./cloud-identity.nix { inherit kix; };
+  platformNetworkPolicy = import ./platform-network-policy.nix {
+    inherit lib kix;
+    inherit (config.cluster) network;
+  };
+  inherit (import ../core/error.nix { inherit lib; }) fail;
+  vpcCni = config.cluster.flavor.eks.networkPolicy == "vpc-cni";
   cloudIdentityMechanisms = import ../vocab/cloud-identity-mechanisms.nix { inherit lib; };
   mechanisms = {
     irsa = cloudIdentityMechanisms.irsa { };
@@ -47,6 +59,23 @@ in
     '';
   };
 
+  options.cluster.flavor.eks.networkPolicy = lib.mkOption {
+    type = lib.types.enum [
+      "none"
+      "vpc-cni"
+    ];
+    default = "none";
+    description = ''
+      What enforces network policy on this EKS cluster. `"vpc-cni"` means
+      the Amazon VPC CNI add-on has network policy turned on
+      (`enableNetworkPolicy` in its configuration), so Kix writes standard
+      NetworkPolicy objects when `networkPolicy.enable = true`. `"none"`
+      means nothing enforces it, which is how EKS creates a cluster, and
+      `networkPolicy.enable = true` stops the build. Kix cannot read the
+      add-on's configuration, so keep this in step with it.
+    '';
+  };
+
   config = {
     cluster.provider = lib.mkDefault "eks";
     # The cloud runs and upgrades the pods in kube-system, so Kix writes no
@@ -59,6 +88,10 @@ in
         provider = lib.mkDefault "aws-vpc-cni";
       };
       dns.binding = lib.mkDefault "shadowable";
+      network-policy-enforcer = lib.mkIf vpcCni {
+        binding = lib.mkDefault "exclusive";
+        provider = lib.mkDefault "Amazon VPC CNI";
+      };
       storageClasses.binding = lib.mkDefault "absent";
       # EKS does not install metrics-server by default.
       metricsApi.binding = lib.mkDefault "absent";
@@ -89,6 +122,34 @@ in
         mechanism = mechanisms.${config.cluster.flavor.eks.cloudIdentity};
         annotationDomains = [ "eks.amazonaws.com" ];
       };
+
+      # How the VPC CNI matches an ipBlock, each tested on a live EKS
+      # cluster: against pod and node addresses, and for an egress peer,
+      # against the Service address and Service port before translation. In
+      # its default `standard` mode, a new pod runs for about a second
+      # before its policy applies.
+      platform-network-policy = lib.mkIf vpcCni (platformNetworkPolicy {
+        provider = "Amazon VPC CNI";
+        ipBlockSelectsPods = true;
+        ipBlockSelectsNodes = true;
+        ipBlockSeesServiceAddress = true;
+        podStartsBeforePolicy = true;
+      });
+    };
+
+    hooks.clusterProcessors.eks-network-policy = _: {
+      checks = [
+        (
+          if (config.networkPolicy.enable or false) && !vpcCni then
+            fail {
+              clusterOption = "cluster.flavor.eks.networkPolicy";
+              message = "`networkPolicy.enable = true`, and `cluster.flavor.eks.networkPolicy` is \"none\", so nothing on this EKS cluster enforces the policies Kix would write.";
+              fix = "Turn on network policy in the Amazon VPC CNI add-on (set `enableNetworkPolicy` to \"true\" in its configuration), then set `cluster.flavor.eks.networkPolicy = \"vpc-cni\";`. Or set `networkPolicy.enable = false`.";
+            }
+          else
+            null
+        )
+      ];
     };
   };
 }
