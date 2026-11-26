@@ -444,7 +444,7 @@ in
   # reason once with a count, and each policy as a detail that
   # `kix check -v` lists.
   networkPolicyWidened = {
-    description = "Generated NetworkPolicy objects should admit only the traffic their rules ask for";
+    description = "Generated NetworkPolicy objects should allow only the intended traffic";
     level = "cluster";
     severity = "warning";
     tags = [
@@ -473,9 +473,9 @@ in
         describe =
           id:
           widening.${id} or {
-            summary = "Marked with unknown widening reason `${id}` in `kix.run/network-policy-widened`.";
+            summary = "This policy carries the unknown reason code `${id}` in `kix.run/network-policy-widened`.";
             fix = "";
-            detail = "it is marked with the unknown reason `${id}`";
+            detail = "it carries the unknown reason code `${id}` in `kix.run/network-policy-widened`";
           };
         count = n: if n == 1 then "1 network policy" else "${toString n} network policies";
       in
@@ -494,7 +494,7 @@ in
         detail = true;
         namespace = p.metadata.namespace or null;
         resource = "NetworkPolicy/${p.metadata.name}";
-        message = "admits more than its rules ask for: ${
+        message = "allows more traffic than intended: ${
           lib.concatMapStringsSep "; " (id: "${(describe id).detail} (${id})") (widenedIds p)
         }.";
       }) policies;

@@ -1,4 +1,4 @@
 +++
 kind = "changed"
 +++
-A generated workload policy now writes each rule once when two sources ask for the same one, such as a package's own egress to the internet on port 443 and its cloud identity's credential egress. The policies allow the same traffic, so the first deploy after the upgrade applies the affected policies again.
+Generated workload network policies now deduplicate identical rules, such as when both a package intent and a cloud identity allow outbound traffic to `world` on TCP port 443. Allowed traffic does not change; the first deploy after upgrading re-applies any policy whose duplicate rules were removed.

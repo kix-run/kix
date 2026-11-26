@@ -1,3 +1,3 @@
-# 2026-11-26 · `kix/lib/plugins/netpol/derive.nix` · A NodePort Service's backend gets no ingress rule from outside the cluster.
+# 2026-11-26 · `kix/lib/plugins/netpol/derive.nix` · Workloads behind a NodePort Service get no external ingress rule.
 
-`processInstance` writes the `world` ingress supplement only for workloads a `LoadBalancer` Service selects. Under default deny, traffic to a `NodePort` Service from outside the cluster reaches its pods with no rule that admits it, so a package must add a `from = "world"` intent by hand. Before the external ingress rule named the LoadBalancer's ports, such a backend was admitted by accident when the instance also had a LoadBalancer Service.
+`processInstance` generates `external-ingress-supplement` policies only for workloads selected by a `LoadBalancer` Service. Under default deny, network policy blocks outside traffic to a `NodePort` Service's pods unless the package declares a `from = "world"` ingress rule in `meta.network.intents`.
