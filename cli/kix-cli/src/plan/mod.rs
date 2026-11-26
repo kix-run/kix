@@ -575,7 +575,13 @@ pub fn kix_build() -> kix::plan::document::KixBuild {
 /// with what happens to them (`fate`).
 pub fn print_checked(checked: &CheckedPlan, fate: &str, verbose: bool) {
     print_package_plan(checked.pkg_diff(), verbose);
-    print_plan_summary(checked.pkg_diff());
+    let reapplied = checked
+        .objects()
+        .writes
+        .iter()
+        .filter(|w| w.change == kix::plan::document::WriteChange::Reapplied)
+        .count();
+    print_plan_summary(checked.pkg_diff(), reapplied);
     print_reruns(
         checked.plan(),
         &[RerunReason::Changed, RerunReason::LastRunFailed],
@@ -605,7 +611,7 @@ pub fn orphans_fate(flags: PlanFlags, connected: bool, cluster: &str) -> String 
 /// `status.orphansKeptFrom`.
 pub fn kept_orphans_fate(cluster: &str) -> String {
     format!(
-        "still on the cluster; {} deletes them",
+        "still on the cluster (run {} to delete them)",
         kept_orphans_cleanup(cluster)
     )
 }
@@ -679,7 +685,17 @@ pub fn print_reruns(plan: &DeployPlan, reasons: &[RerunReason]) {
 }
 
 /// Print plan summary line.
-pub fn print_plan_summary(diff: &PackageDiff) {
+/// Print the one-line summary of a plan. `diff` compares the new build with
+/// the deployed one. `reapplied` counts the unchanged objects the deploy
+/// writes again: what a stopped deploy left, objects the cluster lost, and
+/// everything under `--reconcile`. The diff shows none of them, so the
+/// summary counts them itself and agrees with the plan's `Objects:` line.
+pub fn print_plan_summary(diff: &PackageDiff, reapplied: usize) {
+    crate::say!("{}", render_plan_summary(diff, reapplied));
+}
+
+/// Render the lines [`print_plan_summary`] prints.
+pub fn render_plan_summary(diff: &PackageDiff, reapplied: usize) -> String {
     let updated = diff.changed.len();
     let added = diff.added.len();
     let removed = diff.removed.len();
@@ -711,32 +727,34 @@ pub fn print_plan_summary(diff: &PackageDiff) {
         };
         parts.push(output::yellow(s).into_owned());
     }
-
-    if parts.is_empty() && diff.activation.is_none() {
-        crate::say!();
-        crate::say!("  {}", output::green("Everything up to date."));
-    } else if parts.is_empty() {
-        crate::say!();
-        crate::say!(
-            "  Plan: {}",
-            output::dim("only the deployment record changes (no object changes)")
-        );
-    } else {
-        crate::say!();
-        crate::say!("  Plan: {}", parts.join(", "));
-        if totals.any() {
-            let kept = if totals.kept > 0 {
-                format!(", {} kept", totals.kept)
-            } else {
-                String::new()
-            };
-            let res_line = format!(
-                "  Resources: {} changed in content{kept}, {} tracking annotation only (no spec change or restart)",
-                totals.real_content, totals.dep_affected,
-            );
-            crate::say!("{}", output::dim(&res_line));
-        }
+    if reapplied > 0 {
+        let s = format!("{reapplied} unchanged object(s) reapplied");
+        parts.push(output::yellow(&s).into_owned());
     }
+    let writes_objects = updated + added + removed + reapplied > 0 || diff.cluster_level.is_some();
+    if !writes_objects && diff.activation.is_some() {
+        let s = "only the deployment record changes";
+        parts.push(output::dim(s).into_owned());
+    }
+
+    if parts.is_empty() {
+        return format!("\n  {}", output::green("Everything up to date."));
+    }
+    let mut out = format!("\n  Plan: {}", parts.join(", "));
+    if totals.any() {
+        let kept = if totals.kept > 0 {
+            format!(", {} kept", totals.kept)
+        } else {
+            String::new()
+        };
+        let res_line = format!(
+            "  Resources: {} changed in content{kept}, {} tracking annotation only (no spec change or restart)",
+            totals.real_content, totals.dep_affected,
+        );
+        out.push('\n');
+        out.push_str(&output::dim(&res_line));
+    }
+    out
 }
 
 enum PlanEntry<'a> {
@@ -989,5 +1007,48 @@ mod never_pruned_tests {
             "{scan}"
         );
         assert!(!scan.contains("left the build"), "{scan}");
+    }
+
+    fn diff(unchanged: usize, new_record: bool) -> PackageDiff {
+        PackageDiff {
+            added: Vec::new(),
+            removed: Vec::new(),
+            changed: Vec::new(),
+            unchanged,
+            cluster_level: None,
+            activation: new_record.then(|| kix::plan::RecordChange {
+                old: Some("c-old".into()),
+                new: Some("c-new".into()),
+            }),
+            labelled: false,
+            labels: Default::default(),
+            shown: Default::default(),
+        }
+    }
+
+    /// The summary agrees with the plan's `Objects:` line: a new deployment
+    /// record and unchanged objects written again are counted, not hidden
+    /// behind "unchanged".
+    #[test]
+    fn the_summary_counts_every_write() {
+        let only_record = render_plan_summary(&diff(2, true), 0);
+        assert!(only_record.contains("2 unchanged"), "{only_record}");
+        assert!(
+            only_record.contains("only the deployment record changes"),
+            "{only_record}"
+        );
+
+        let repair = render_plan_summary(&diff(2, true), 4);
+        assert!(
+            repair.contains("4 unchanged object(s) reapplied"),
+            "{repair}"
+        );
+        assert!(!repair.contains("only the deployment record"), "{repair}");
+
+        let nothing = render_plan_summary(&diff(2, false), 0);
+        assert!(
+            nothing.contains("Plan:") && !nothing.contains("record"),
+            "{nothing}"
+        );
     }
 }

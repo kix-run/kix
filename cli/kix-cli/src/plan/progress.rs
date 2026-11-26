@@ -31,7 +31,7 @@ pub fn print(event: PlanEvent<'_>) {
             ));
             rollback_rewrites_everything();
             eprintln!(
-                "  Objects that exist only in {activation} are not deleted by this rollback; the new deployment record keeps {activation} listed for cleanup, so a later {} on a machine that has {activation}'s build (or `kix gc --full-scan {cluster}` from any machine) will remove them.",
+                "  This rollback leaves objects that exist only in {activation} on the cluster and records {activation} for cleanup. To delete them later, run {} on a machine that has {activation}'s build, or run `kix gc --full-scan {cluster}` from any machine.",
                 super::kept_orphans_cleanup(cluster)
             );
         }
@@ -56,7 +56,7 @@ pub fn print(event: PlanEvent<'_>) {
             ));
             rollback_rewrites_everything();
             eprintln!(
-                "  Objects that exist only in {current} are not deleted by this rollback; the new deployment record keeps {current} listed for cleanup, so a later {} on a machine that has {current}'s build (or `kix gc --full-scan {cluster}` from any machine) will remove them.",
+                "  This rollback leaves objects that exist only in {current} on the cluster and records {current} for cleanup. To delete them later, run {} on a machine that has {current}'s build, or run `kix gc --full-scan {cluster}` from any machine.",
                 super::kept_orphans_cleanup(cluster)
             );
         }

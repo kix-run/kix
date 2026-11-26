@@ -80,7 +80,7 @@ fn write_objects(out: &mut String, plan: &Plan) -> fmt::Result {
     if reapplied > 0 {
         writeln!(
             out,
-            "  {} {reapplied} written again unchanged from an earlier deploy (changes nothing unless edited on the cluster)",
+            "  {} {reapplied} unchanged object(s) reapplied (restores them if they were changed or deleted on the cluster, including by a stopped deploy)",
             output::yellow("↻"),
         )?;
     }
