@@ -6,7 +6,7 @@ index, `kix.run/releases/index.json`. The site build in
 index with the private key in the repository secret `KIX_INDEX_SIGNING_KEY`
 and writes `kix.run/releases/index.json.sig`. The release rehearsal in
 `.github/workflows/cli-tests.yml` signs its copy of the site the same way. The
-design is `v2_discussions/163_cli_install_versions_and_upgrades.md` § 3.
+design is `discussions/163_cli_install_versions_and_upgrades.md` § 3.
 
 ## Why the index has its own key
 

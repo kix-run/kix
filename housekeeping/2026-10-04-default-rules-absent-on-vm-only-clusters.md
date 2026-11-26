@@ -13,4 +13,4 @@ Decision required from the maintainers: have prometheus-default-rules render thr
 any rule and monitor builder (the VictoriaMetrics operator's `mkVMRule` and
 VMServiceScrape as well as prometheus-operator's), or keep it
 Prometheus-only and say in Mo19 that a VM-only cluster carries no generic
-rules. See `v2_discussions/101_monitoring_provider_landscape.md`.
+rules. See `discussions/101_monitoring_provider_landscape.md`.

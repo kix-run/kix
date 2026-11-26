@@ -65,7 +65,7 @@ Size: M. It adds to what Kix writes into a cluster. Old records stay readable, s
 The design: one planner with three labelled inputs. They are the new build, the deployed builds named by the records, and drift (live objects that no longer match what Kix applied). Every command renders the same plan document, which already exists. The operator uses the same planner. The only difference left between commands is policy: whether drift is healed and whether orphans are deleted.
 
 Settled without asking:
-- One plan document for every command, with "not checked" typed apart from "nothing found". Evidence: `v2_discussions/archive/157_kix_plan_primary_preview.md` section 3, shipped.
+- One plan document for every command, with "not checked" typed apart from "nothing found". Evidence: `discussions/archive/157_kix_plan_primary_preview.md` section 3, shipped.
 - What a build changes is decided from compiler outputs. Evidence: `cli/README.md`, "Baseline: what a plan compares against".
 - An object that a new package adopts shows as a change to an existing object.
 - A dry-run refusal counts as "not checked" when anything the refused object depends on changes in the same deploy. The dependency graph gives this, and it replaces the three special cases. Evidence: CLAUDE.md "Fixing bugs", and `housekeeping/2026-11-13-webhook-backend-counted-repaired-by-package.md`.
@@ -83,7 +83,7 @@ Size: L. If the answer to question 1 is "heal", the same definition gives a diff
 
 Some fields cannot change on a live object: a Service's cluster IP, a Deployment's selector, and a PriorityClass value. Some operators also refuse or rewrite changes. Today these stop the deploy partway, and detection is a list of phrases from server messages.
 
-The design: replacement is a planned step, shown in the plan before anything is written, as `v2_discussions/81_deploy_as_lifecycle_engine.md` section 5 proposes.
+The design: replacement is a planned step, shown in the plan before anything is written, as `discussions/81_deploy_as_lifecycle_engine.md` section 5 proposes.
 - For built-in kinds, a table of fields that cannot change decides it by comparing the deployed build with the new build.
 - For custom resources, the package declares "replace on change" where it defines the type.
 - A replace deletes with cascade, waits until the object is gone, then creates.
@@ -201,7 +201,7 @@ The design has three levels, as doc 167 mostly decided:
 - A value that changes between deploys belongs to a controller in the cluster, because Kix is not running then. The secret helper wires the reloader for any secret dependency without a content hash, and warns when no reloader is present.
 
 Settled without asking:
-- No option holds a Secret's name. Alertmanager's and Grafana's pass-through credentials become secret dependencies. Evidence: `v2_discussions/167_secrets_only_through_dependencies.md`, decision 1.
+- No option holds a Secret's name. Alertmanager's and Grafana's pass-through credentials become secret dependencies. Evidence: `discussions/167_secrets_only_through_dependencies.md`, decision 1.
 - The external secret store becomes a dependency. Evidence: doc 167, listed as not built.
 - The helper returns the checksum and reloader wiring. Evidence: doc 167 rule S10, listed as not built.
 - Rerun Jobs fold in the hash of what they require, so the checksum lists by hand go away.
@@ -222,7 +222,7 @@ Kix does not know whether the cluster runs kube-proxy, which containerd version 
 The design: these are cluster facts stated in the definition and filled in by the flavour where it knows them. The build never reads the live cluster. The deploy compares stated facts with the live cluster, as it does for the Kubernetes version.
 
 Settled without asking:
-- The Kubernetes version stays optional. A package with a version range on a cluster with no version gets a warning that names the option. Evidence: `v2_discussions/155_platform_versions_and_compatibility.md` principle 4, "unknown warns, false fails".
+- The Kubernetes version stays optional. A package with a version range on a cluster with no version gets a warning that names the option. Evidence: `discussions/155_platform_versions_and_compatibility.md` principle 4, "unknown warns, false fails".
 - The build does not read the live cluster. Evidence: doc 155 principle 5.
 - Chart rendering uses the cluster's Kubernetes version, not Helm's default.
 - kube-proxy presence and containerd version become cluster facts that flavours set.
@@ -327,4 +327,4 @@ I recommend (a). A name identifies an instance, and an alias declares what it pr
 - **Whether one field-manager name per Kix cluster turns a shared-object disagreement into a conflict.** It needs a two-cluster test on kind.
 - **Whether CloudNativePG publishes any signal that ties "ready" to the current spec.** This needs a read of upstream's status code or an upstream issue.
 - **How a package takes a list of secret dependencies whose length the user chooses.** Dependencies are named build arguments today, and I did not find a list form.
-- **Whether the planner already re-applies objects whose applied hash no longer matches.** `v2_discussions/122_runtime_content_drift.md` step 3 proposes it. The 2026-11-12 entry about deleted objects suggests it is not built.
+- **Whether the planner already re-applies objects whose applied hash no longer matches.** `discussions/122_runtime_content_drift.md` step 3 proposes it. The 2026-11-12 entry about deleted objects suggests it is not built.

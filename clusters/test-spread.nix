@@ -4,7 +4,7 @@
 # kind itself is one node per container, so zones are node labels set by
 # the kind config (scripts/kind-spread.sh); the flavor's multiNode = false
 # and availabilityZones = [ ] are overridden here to say so.
-# Design: v2_discussions/archive/145_availability_level.md (spread mechanism: archive/143).
+# Design: discussions/archive/145_availability_level.md (spread mechanism: archive/143).
 #
 # The descheduler instance restores zone spread once a zone returns: the
 # "movable" fixture has no volumes, so the descheduler may evict it. The

@@ -3,7 +3,7 @@
 #
 # The pod reads the keys username, password, host, and port of its
 # `credentials` dependency into environment variables and serves them in
-# plain text on its HTTP page, where tests/secrets-integration.sh reads
+# plain text on its HTTP page, where scripts/kind-secrets.sh reads
 # them. It publishes the credentials it receives, so it is no package a
 # cluster should run, and the package set does not offer it.
 #

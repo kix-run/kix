@@ -1,7 +1,7 @@
 # clusters/test-kind-probe.nix: a kind cluster with Cilium enforcing
 # network policy and one package whose health probe dials its own Service.
 #
-# The live proof for kix.healthCheck's egress edge (v2_discussions/136 item
+# The live proof for kix.healthCheck's egress edge (discussions/136 item
 # 4): under default-deny the probe passes only because the address it dials
 # derived a CiliumNetworkPolicy for the probe pod. Set `refOnly = true` on
 # the web instance and the same probe must time out.

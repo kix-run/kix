@@ -119,7 +119,7 @@ little or no Nix experience:
   check CLI facts against `cli/kix-cli/src/cli.rs` and command behavior against
   `cli/kix-cli/src/commands/`.
 - Treat older broad docs as source material, not truth. Verify before importing
-  from `kix/lib/architecture.md`, `ROADMAP.md`, or raw `v2_discussions/` notes.
+  from `kix/lib/architecture.md`, `ROADMAP.md`, or raw `discussions/` notes.
 
 ## Page Openings, Titles, and `Helpful background`
 

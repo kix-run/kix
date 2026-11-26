@@ -39,7 +39,8 @@ Two scripts inspect or validate built manifests:
 ## Test clusters
 
 Files and directories starting with `test-` define test clusters (except
-`test-secrets/`, which holds encrypted test data). Each cluster file opens with
+`test-secrets/`, which holds encrypted test data, and `test-helm/`, which
+holds the Helm chart `test-helm.nix` renders). Each cluster file opens with
 a comment explaining what it tests and how to build or deploy it.
 They fall into five categories:
 

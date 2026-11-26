@@ -5,7 +5,7 @@ description: >
   Use when the user wants to brainstorm, analyze, design, or think through something:
   keywords like "think about", "brainstorm", "let's figure out", "what should we do about",
   "design", "explore the idea of". Also use when the user references business_discussions/
-  (in kix-run/planning-private) or v2_discussions/ directly. Prefer this over plan mode for bigger new features or ideas.
+  (in kix-run/planning-private) or discussions/ directly. Prefer this over plan mode for bigger new features or ideas.
 ---
 
 # Structured Thinking
@@ -14,8 +14,8 @@ Turn loose thinking into a short, durable document that someone can pick up late
 
 ## Ground yourself first (mandatory)
 
-1. Read `v2_discussions/README.md` (has Status + Relevance markers, Recently Archived, `interesting_thoughts/` index). For business topics, also list `business_discussions/` in the private `kix-run/planning-private` repository (checked out beside this one).
-2. For loose/abstract technical topics, skim `v2_discussions/29_compiler-design.md` to know what Kix *is*.
+1. Read `discussions/README.md` (has Status + Relevance markers, Recently Archived, `interesting_thoughts/` index). For business topics, also list `business_discussions/` in the private `kix-run/planning-private` repository (checked out beside this one).
+2. For loose/abstract technical topics, skim `discussions/29_compiler-design.md` to know what Kix *is*.
 3. For technical opinions, read the relevant files in `kix/lib/` and `cli/README.md`. Opine on code, not on stale docs.
 
 ## Orient, then propose
@@ -25,8 +25,8 @@ Answer to the user in one message:
 1. **Topic:** restate in one sentence.
 2. **Destination:**
    - `business_discussions/` in the private `kix-run/planning-private` repository: market, GTM, pricing, positioning, fundraising. Never write these into this repository, which is public.
-   - `v2_discussions/`: technical, near-term, would be opened in the next 1–2 milestones.
-   - `v2_discussions/interesting_thoughts/`: technical, future/curious, no near-term driver. Signals: "at some point", "cool idea, not blocking", requires scale/hardware/customers we don't have. **Default here when in doubt.**
+   - `discussions/`: technical, near-term, would be opened in the next 1–2 milestones.
+   - `discussions/interesting_thoughts/`: technical, future/curious, no near-term driver. Signals: "at some point", "cool idea, not blocking", requires scale/hardware/customers we don't have. **Default here when in doubt.**
 3. **Existing docs on the topic:** list the leading active doc, relevant archived docs, related `interesting_thoughts/` entries.
 4. **Plan:** new doc or iteration on existing (see next section). Propose a number and name.
 5. **Mode:** Interactive (ask questions one at a time with AskUserQuestion) or First draft (write, then react). Ask the user.
@@ -43,7 +43,7 @@ As a default, wait for confirmation before writing.
    - Carry forward **only** the undiscussed / still-important parts, rewritten tight, not copy-pasted.
    - Not re-litigate settled points. A one-line "we decided X in NN_old" is enough.
 3. Move the old doc to `archive/` with `**Status:** Superseded by NN`.
-4. Update `v2_discussions/README.md`: replace the old row, add a one-line "Recently archived" entry.
+4. Update `discussions/README.md`: replace the old row, add a one-line "Recently archived" entry.
 
 Variants / counter-proposals use `NN[a-z]_variant.md` naming so the relationship is obvious.
 
@@ -69,7 +69,7 @@ Two-digit prefix, next available number (check the README for the current highes
 
 ## Document types
 
-Pick the one that matches the maturity of the thinking. All v2_discussions docs start with:
+Pick the one that matches the maturity of the thinking. All discussions docs start with:
 
 ```
 # NN: Title

@@ -20,7 +20,7 @@ to take as `Kind/name`.
 `--check` runs in CI on every pull request that touches a package. The
 script is deliberately dumb: fetch, keep the CustomResourceDefinition
 documents, sort, write. Anything project-specific belongs in that package's
-`sources.txt`. Design: v2_discussions/146_crd_vendoring_and_upgrades.md.
+`sources.txt`. Design: discussions/146_crd_vendoring_and_upgrades.md.
 """
 
 from __future__ import annotations

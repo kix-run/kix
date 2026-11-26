@@ -16,6 +16,7 @@ Helper scripts for building, testing, checking, and releasing Kix.
 | [`cluster-checks.sh`](#build-and-check-cluster-manifests) | By hand | Runs the schema check and alert rule tests for one cluster on manifests from `kix-manifests.sh`. |
 | `kix-rollback-check.sh` | By hand | Builds one cluster, a variant of it, and the first cluster again, then checks that the first and last builds are identical. |
 | `kind-gateway.sh`, `kind-mayastor.sh`, `kind-operators.sh`, `kind-spread.sh`, `kind-velero.sh`, `kind-virtualization.sh` | By hand | Each script creates a kind cluster, deploys the test cluster named in its header, and checks the result. `kind-spread-config.yaml` configures the three-zone cluster for `kind-operators.sh` and `kind-spread.sh`. |
+| `kind-secrets.sh` | By hand | Deploys `clusters/test-secrets.nix` to a new kind cluster and checks that `kix deploy` decrypts the SOPS secret and the pod can read it. |
 | `test-monitoring-integration.sh` | By hand | Deploys `clusters/test-monitoring-native.nix` to a new kind cluster and checks that Prometheus, Alertmanager, and Grafana work. |
 
 ### Live-cluster comparison
