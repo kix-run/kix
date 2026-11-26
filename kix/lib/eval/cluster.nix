@@ -37,6 +37,7 @@ let
   versions = import ../core/version.nix { inherit lib; };
   kubernetes = import ../core/kubernetes.nix;
   packageLib = import ../core/package.nix { inherit lib; };
+  dnsPeersLib = import ../core/dns-peers.nix { inherit lib; };
 in
 {
   buildCluster =
@@ -430,8 +431,33 @@ in
         ) (builtins.attrNames mergedInstances)
       );
 
+      # Where pods send DNS queries, from the `meta.dnsPeers` of the `dns`
+      # role's active provider. Without one, an import that claims the role
+      # still describes the platform's DNS, so its peers apply although it
+      # is optional and nothing activated it (a flavour's `platform-dns`).
+      # Workloads do not order on an inactive import, and the peers order
+      # nothing.
+      dnsPeerSource =
+        let
+          active = findRoleProvider "dns";
+          inactiveImports = builtins.filter (c: c.isImport) (
+            hooks.roleCandidates {
+              role = "dns";
+              rolesIndex = rolesIndexAll;
+            }
+          );
+          withMeta = c: c // { meta = peekedMetas.${c.ns}.${c.inst}; };
+        in
+        if active != null then
+          active
+        else if builtins.length inactiveImports == 1 then
+          withMeta (builtins.head inactiveImports)
+        else
+          null;
+
       clusterCtx = {
         config = cfg;
+        dnsPeers = dnsPeersLib.dnsPeersOf dnsPeerSource;
         inherit
           findRoleProvider
           inactiveOptionalKeys
