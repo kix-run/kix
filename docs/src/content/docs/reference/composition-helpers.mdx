@@ -377,6 +377,40 @@ Kix models cluster availability across four ordered levels: `"none"` < `"pod"` <
 
 ---
 
+## operandPolicy
+
+`kix.operandPolicy` writes a network policy for pods that an operator creates at runtime from a custom resource, such as database replicas or proxy pods. Kix does not build those pods, so it cannot derive their policy from a workload. The package that writes the custom resource describes the traffic instead:
+
+```nix
+build = { self, scope, kix, ... }: {
+  replicasEgress = kix.operandPolicy {
+    inherit scope;
+    name = "pg-replicas-egress";
+    selector = { "cnpg.io/cluster" = "pg"; };
+    egress = [
+      scope.networkPolicyEnforcer.netpol.dnsEgressRule
+      scope.networkPolicyEnforcer.netpol.apiServerEgressRule
+    ];
+  };
+  root = {
+    resource = self.cluster;
+    requires = builtins.filter (p: p != null) [ self.replicasEgress ];
+  };
+};
+```
+
+| Argument | Type | Default | Description |
+|---|---|---|---|
+| `scope` | scope | required | The package's `scope`. The policy goes in its namespace. |
+| `name` | string | required | Name of the policy resource. |
+| `selector` | attrset | required | The `matchLabels` of the operand pods. |
+| `ingress` | list | `[ ]` | Ingress rules built with `scope.networkPolicyEnforcer.netpol` (such as `mkCallerIngressRule` or `mkSelfRules`). |
+| `egress` | list | `[ ]` | Egress rules built with `scope.networkPolicyEnforcer.netpol` (such as `dnsEgressRule`, `mkServiceEgressRule`, or `translateIntentRules`). |
+
+`kix.operandPolicy` returns `null` when the cluster has no network policy enforcer, so filter out nulls before you add the result to `root.requires`. Kix reads `ingress` and `egress` only when an enforcer exists, so they can call `scope.networkPolicyEnforcer.netpol` directly. Kix drops the rules for a direction that `networkPolicy.directions` does not enforce, and returns `null` when no rules remain.
+
+The older `spec` argument, a whole `CiliumNetworkPolicy` spec with `endpointSelector`, still works. Passing both `spec` and `selector`, or neither, fails evaluation.
+
 ## cloudIdentity
 
 Packages that call AWS, Google Cloud, or Azure APIs can accept either a [cloud identity](/docs/reference/instances-and-composition/#cloud-identities) or a Secret instance on the same dependency and unpack it with `kix.cloudIdentity.use`:

@@ -449,52 +449,48 @@ in
             vmalert = kix.operandPolicy {
               inherit scope;
               name = "${name}-vmalert";
-              spec = {
-                endpointSelector.matchLabels = alertSelector;
-                egress = [
-                  netpol.dnsEgressRule
-                  netpol.apiServerEgressRule
-                  (netpol.mkServiceEgressRule {
-                    selector = amSelector;
-                    namespace = ns;
-                    sourceNamespace = ns;
-                    ports = [ amPort ];
-                  })
-                ];
-              };
+              selector = alertSelector;
+              egress = [
+                netpol.dnsEgressRule
+                netpol.apiServerEgressRule
+                (netpol.mkServiceEgressRule {
+                  selector = amSelector;
+                  namespace = ns;
+                  sourceNamespace = ns;
+                  ports = [ amPort ];
+                })
+              ];
             };
             alertmanager = kix.operandPolicy {
               inherit scope;
               name = "${name}-vmalertmanager";
-              spec = {
-                endpointSelector.matchLabels = amSelector;
-                egress = [
-                  netpol.dnsEgressRule
-                  netpol.apiServerEgressRule
-                ]
-                ++ lib.optionals (replicas > 1) peers.egress
-                ++
-                  lib.optionals (ports != [ ])
-                    (netpol.translateIntentRules {
-                      intents.receivers.egress = [
-                        {
-                          to = "world";
-                          ports = map (port: {
-                            inherit port;
-                            protocol = "TCP";
-                          }) ports;
-                        }
-                      ];
-                    }).egressRules;
-                ingress = [
-                  (netpol.mkCallerIngressRule {
-                    callerSelector = alertSelector;
-                    callerNamespace = ns;
-                    ports = [ amPort ];
-                  })
-                ]
-                ++ lib.optionals (replicas > 1) peers.ingress;
-              };
+              selector = amSelector;
+              egress = [
+                netpol.dnsEgressRule
+                netpol.apiServerEgressRule
+              ]
+              ++ lib.optionals (replicas > 1) peers.egress
+              ++
+                lib.optionals (ports != [ ])
+                  (netpol.translateIntentRules {
+                    intents.receivers.egress = [
+                      {
+                        to = "world";
+                        ports = map (port: {
+                          inherit port;
+                          protocol = "TCP";
+                        }) ports;
+                      }
+                    ];
+                  }).egressRules;
+              ingress = [
+                (netpol.mkCallerIngressRule {
+                  callerSelector = alertSelector;
+                  callerNamespace = ns;
+                  ports = [ amPort ];
+                })
+              ]
+              ++ lib.optionals (replicas > 1) peers.ingress;
             };
           };
 

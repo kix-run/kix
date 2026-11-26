@@ -751,6 +751,14 @@ rec {
         b:
         scope.networkPolicyEnforcer.netpol.mkPolicy {
           mkResource = scope.mkResource;
+          selector = selectorOf b;
+          ingress = [
+            (scope.networkPolicyEnforcer.netpol.mkCallerIngressRule {
+              callerSelector = controllerSelector;
+              callerNamespace = controllerNamespace;
+              ports = podPortsFor b;
+            })
+          ];
           extraArgs = {
             # Use the Kubernetes Service name rather than the Nix part key,
             # which may be camelCase (such as `coreService`).
@@ -758,16 +766,6 @@ rec {
             labels = {
               ${kixKeys.derived} = "true";
               ${kixKeys.policyType} = if useGateway then "gateway" else "ingress-controller";
-            };
-            spec = {
-              endpointSelector.matchLabels = selectorOf b;
-              ingress = [
-                (scope.networkPolicyEnforcer.netpol.mkCallerIngressRule {
-                  callerSelector = controllerSelector;
-                  callerNamespace = controllerNamespace;
-                  ports = podPortsFor b;
-                })
-              ];
             };
             # Attach the policy to the Service so it is included in the built
             # resource graph even though `spec.selector` has no string context.
@@ -785,26 +783,24 @@ rec {
 
       acmeSolverEdge = scope.networkPolicyEnforcer.netpol.mkPolicy {
         mkResource = scope.mkResource;
+        selector = acmeSolverSelector;
+        ingress = [
+          (scope.networkPolicyEnforcer.netpol.mkCallerIngressRule {
+            callerSelector = controllerSelector;
+            callerNamespace = controllerNamespace;
+            ports = [
+              {
+                port = acmeSolverPort;
+                protocol = "TCP";
+              }
+            ];
+          })
+        ];
         extraArgs = {
           name = "${name}-acme-solver-from-ingress-controller";
           labels = {
             ${kixKeys.derived} = "true";
             ${kixKeys.policyType} = "ingress-controller";
-          };
-          spec = {
-            endpointSelector.matchLabels = acmeSolverSelector;
-            ingress = [
-              (scope.networkPolicyEnforcer.netpol.mkCallerIngressRule {
-                callerSelector = controllerSelector;
-                callerNamespace = controllerNamespace;
-                ports = [
-                  {
-                    port = acmeSolverPort;
-                    protocol = "TCP";
-                  }
-                ];
-              })
-            ];
           };
           extraDeps = [ ];
         };

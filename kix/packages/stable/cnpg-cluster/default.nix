@@ -761,18 +761,16 @@ in
             kix.operandPolicy {
               inherit scope;
               name = "${name}-backup-egress";
-              spec = {
-                endpointSelector.matchLabels = instanceSelector;
-                egress =
-                  (netpol.translateIntentRules {
-                    intents.store.egress = [
-                      {
-                        to = "world";
-                        ports = [ (tcp storeWorldPort) ];
-                      }
-                    ];
-                  }).egressRules;
-              };
+              selector = instanceSelector;
+              egress =
+                (netpol.translateIntentRules {
+                  intents.store.egress = [
+                    {
+                      to = "world";
+                      ports = [ (tcp storeWorldPort) ];
+                    }
+                  ];
+                }).egressRules;
             }
           else
             null;
@@ -800,43 +798,37 @@ in
         operandEgress = kix.operandPolicy {
           inherit scope;
           name = "${name}-operand-egress";
-          spec = {
-            endpointSelector.matchLabels = operandSelector;
-            egress = [
-              netpol.dnsEgressRule
-              netpol.apiServerEgressRule
-            ]
-            ++ self'.egress;
-          };
+          selector = operandSelector;
+          egress = [
+            netpol.dnsEgressRule
+            netpol.apiServerEgressRule
+          ]
+          ++ self'.egress;
         };
         operandIngress = kix.operandPolicy {
           inherit scope;
           name = "${name}-operand-ingress";
-          spec = {
-            endpointSelector.matchLabels = operandSelector;
-            ingress = self'.ingress ++ [
-              (netpol.mkCallerIngressRule {
-                callerSelector = operator.podSelector;
-                callerNamespace = operatorNamespace;
-                ports = operatorPorts;
-              })
-            ];
-          };
+          selector = operandSelector;
+          ingress = self'.ingress ++ [
+            (netpol.mkCallerIngressRule {
+              callerSelector = operator.podSelector;
+              callerNamespace = operatorNamespace;
+              ports = operatorPorts;
+            })
+          ];
         };
         operatorEgress = kix.operandPolicy {
           scope = scope.forService cnpgOperator;
           name = "${ns}-${name}-operator-egress";
-          spec = {
-            endpointSelector.matchLabels = operator.podSelector;
-            egress = [
-              (netpol.mkServiceEgressRule {
-                selector = operandSelector;
-                namespace = ns;
-                sourceNamespace = operatorNamespace;
-                ports = operatorPorts;
-              })
-            ];
-          };
+          selector = operator.podSelector;
+          egress = [
+            (netpol.mkServiceEgressRule {
+              selector = operandSelector;
+              namespace = ns;
+              sourceNamespace = operatorNamespace;
+              ports = operatorPorts;
+            })
+          ];
         };
 
         root = {

@@ -546,31 +546,27 @@ in
       operatorIngress = kix.operandPolicy {
         inherit scope;
         name = "${name}-operator-ingress";
-        spec = {
-          endpointSelector.matchLabels = self.deployment.out.selector;
-          ingress = [
-            (netpol.mkCallerIngressRule {
-              callerSelector = operator.podSelector;
-              callerNamespace = ns;
-              ports = [ (tcp grpcPort) ];
-            })
-          ];
-        };
+        selector = self.deployment.out.selector;
+        ingress = [
+          (netpol.mkCallerIngressRule {
+            callerSelector = operator.podSelector;
+            callerNamespace = ns;
+            ports = [ (tcp grpcPort) ];
+          })
+        ];
       };
       operatorEgress = kix.operandPolicy {
         inherit scope;
         name = "${name}-operator-egress";
-        spec = {
-          endpointSelector.matchLabels = operator.podSelector;
-          egress = [
-            (netpol.mkServiceEgressRule {
-              selector = self.deployment.out.selector;
-              namespace = ns;
-              sourceNamespace = ns;
-              ports = [ (tcp grpcPort) ];
-            })
-          ];
-        };
+        selector = operator.podSelector;
+        egress = [
+          (netpol.mkServiceEgressRule {
+            selector = self.deployment.out.selector;
+            namespace = ns;
+            sourceNamespace = ns;
+            ports = [ (tcp grpcPort) ];
+          })
+        ];
       };
 
       root = {

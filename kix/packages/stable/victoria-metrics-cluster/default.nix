@@ -513,14 +513,14 @@ in
               };
             policy =
               component: rules:
-              kix.operandPolicy {
-                inherit scope;
-                name = "${name}-${component}";
-                spec = {
-                  endpointSelector.matchLabels = componentSelector component;
+              kix.operandPolicy (
+                {
+                  inherit scope;
+                  name = "${name}-${component}";
+                  selector = componentSelector component;
                 }
-                // rules;
-              };
+                // rules
+              );
           in
           {
             vmstorage = policy "vmstorage" {

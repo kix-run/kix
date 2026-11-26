@@ -486,7 +486,7 @@ The only place in this skill with package line numbers. `pkg:N` is
 | `mergeGuarded` on `settings` or `extraSpec` | tempo:489; cnpg-cluster:418, 565, 680 |
 | Migrations at start: Recreate, deadline from `startupSeconds`, probes | metabase:94-97, 252-256, 284-304 |
 | Config injection into a dependency | metabase:109-112; stackgres-database:120-125; cnpg-database:94-115 |
-| Contracts: consumer `assertions`, provider `check` | metabase:112; stackgres-database:553; keycloak:566; tempo:788 |
+| Contracts: consumer `assertions`, provider `check` | metabase:112; stackgres-database:553; keycloak:213; tempo:787 |
 | `pick` as an option default with `defaultText` | `cnpg-cluster/options.nix`:12-18 |
 | `pick` inline, header names the instance override (O19) | keycloak:256, header 74-76 |
 | `atLeast` | valkey:122 |
@@ -496,7 +496,7 @@ The only place in this skill with package line numbers. `pkg:N` is
 | `kix.monitor` with alerts | openbao:393; clickhouse:626-636 and `alerts.nix` |
 | `kix.alerts` over a PodMonitor | `cnpg-cluster/alerts.nix`:54 |
 | `kix.reconcileErrorsAlert` for an operator | cnpg-operator:942; victoria-metrics-operator:346 (`job` labels) |
-| `kix.healthCheck` with a script file | victoria-metrics-agent:365-382 |
+| `kix.healthCheck` with a script file | victoria-metrics-agent:363-380 |
 | Checksum annotations from `out.contentHash`, `enableServiceLinks = false` | metabase:258-271 |
 | Facade: consumer-namespace Secret, server-namespace Job | clickhouse-database:1-36; stackgres-database |
 | Facade resources in the server's namespace named with the consumer's namespace | clickhouse-database:356 (`serverSideName`) |
@@ -505,7 +505,7 @@ The only place in this skill with package line numbers. `pkg:N` is
 | Migrations in an init container sharing the server's env and mounts (`kix.withMountsOn [ "migrate" "plausible" ]`) | plausible:620-626, 693; vaultwarden:180-202, 277 |
 | One volume written by an init container and read by the main containers (two mount records, one `readOnly`) | n8n:499-513, 679-680 |
 | Literal credentials refused in `env` | plausible:338-358 |
-| Config-derived egress (a port read from config) through `kix.operandPolicy` | plausible:712-737; cnpg-cluster:474-490, 759-778 |
+| Config-derived egress (a port read from config) through `kix.operandPolicy` | plausible:712-737; cnpg-cluster:474-490, 759-776 |
 | A step after the migrations on one replica of a dependency: an init container running a sibling script from a ConfigMap, with a checksum annotation | plausible:518-561, 605-606; `plausible/replicate.py` |
 | One alias, two implementations, a contract file | `kix/contracts/experimental/clickhouse.nix`; clickhouse:101, clickhouse-cluster:90 |
 | Renamed dependency with `renamedFrom` | immich:209-212; `kix/contracts/stable/redis.nix` (`helpers.renamedFrom`) |

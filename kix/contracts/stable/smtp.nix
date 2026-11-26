@@ -131,28 +131,21 @@ let
           null
         else
           compose.operandPolicy {
-            inherit scope name;
-            spec =
-              let
-                netpol = scope.networkPolicyEnforcer.netpol;
-              in
-              netpol.mkEndpointSelector selector
-              // {
-                egress =
-                  (netpol.translateIntentRules {
-                    intents.mail.egress = [
+            inherit scope name selector;
+            egress =
+              (scope.networkPolicyEnforcer.netpol.translateIntentRules {
+                intents.mail.egress = [
+                  {
+                    to = "world";
+                    ports = [
                       {
-                        to = "world";
-                        ports = [
-                          {
-                            port = smtp.portNumber;
-                            protocol = "TCP";
-                          }
-                        ];
+                        port = smtp.portNumber;
+                        protocol = "TCP";
                       }
                     ];
-                  }).egressRules;
-              };
+                  }
+                ];
+              }).egressRules;
           };
 
       # Build the `mail` option set for a package that takes `smtp`.

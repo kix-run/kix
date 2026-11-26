@@ -80,21 +80,19 @@ let
         else
           enforcer.netpol.mkPolicy {
             mkResource = consumerScope.mkResource;
+            inherit selector;
+            ingress = [
+              (enforcer.netpol.mkCallerIngressRule {
+                callerSelector = managedLabels;
+                callerNamespace = ns;
+                inherit ports;
+              })
+            ];
             extraArgs = {
               name = "${policyName}-from-tailscale";
               labels = {
                 ${kix.keys.derived} = "true";
                 ${kix.keys.policyType} = "ingress-controller";
-              };
-              spec = {
-                endpointSelector.matchLabels = selector;
-                ingress = [
-                  (enforcer.netpol.mkCallerIngressRule {
-                    callerSelector = managedLabels;
-                    callerNamespace = ns;
-                    inherit ports;
-                  })
-                ];
               };
               extraDeps = [ service ];
             };

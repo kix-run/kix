@@ -746,6 +746,8 @@ in
 
           egressPolicy = enforcerApi.mkPolicy {
             mkResource = core.mkResource;
+            selector = scraperSelector;
+            egress = egressRules;
             extraArgs = {
               name = "${stem}-scrape-egress";
               namespace = nsResources.${promNs};
@@ -753,10 +755,6 @@ in
                 ${kixKeys.derived} = "true";
                 ${kixKeys.policyType} = "scrape";
                 "app.kubernetes.io/managed-by" = "kix";
-              };
-              spec = {
-                endpointSelector.matchLabels = scraperSelector;
-                egress = egressRules;
               };
             };
           };
@@ -787,6 +785,14 @@ in
             t:
             enforcerApi.mkPolicy {
               mkResource = core.mkResource;
+              selector = t.podSelector;
+              ingress = [
+                (enforcerApi.mkCallerIngressRule {
+                  callerSelector = scraperSelector;
+                  callerNamespace = promNs;
+                  inherit (t) ports;
+                })
+              ];
               extraArgs = {
                 name = ingressPolicyName t;
                 namespace = nsResources.${plain t.namespace};
@@ -794,16 +800,6 @@ in
                   ${kixKeys.derived} = "true";
                   ${kixKeys.policyType} = "scrape";
                   "app.kubernetes.io/managed-by" = "kix";
-                };
-                spec = {
-                  endpointSelector.matchLabels = t.podSelector;
-                  ingress = [
-                    (enforcerApi.mkCallerIngressRule {
-                      callerSelector = scraperSelector;
-                      callerNamespace = promNs;
-                      inherit (t) ports;
-                    })
-                  ];
                 };
               };
             };

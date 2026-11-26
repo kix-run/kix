@@ -788,7 +788,29 @@ let
 
         netpolApi = {
           policyKinds = [ "CiliumNetworkPolicy" ];
-          mkPolicy = { mkResource, extraArgs }: mkResource (crdRef.out.cr extraArgs);
+          mkPolicy =
+            {
+              mkResource,
+              extraArgs,
+              selector ? null,
+              ingress ? [ ],
+              egress ? [ ],
+            }:
+            mkResource (
+              crdRef.out.cr (
+                if selector == null then
+                  extraArgs
+                else
+                  extraArgs
+                  // {
+                    spec = {
+                      endpointSelector.matchLabels = selector;
+                    }
+                    // lib.optionalAttrs (ingress != [ ]) { inherit ingress; }
+                    // lib.optionalAttrs (egress != [ ]) { inherit egress; };
+                  }
+              )
+            );
           mkDefaultDenySpec =
             { denyIngress, denyEgress }:
             {

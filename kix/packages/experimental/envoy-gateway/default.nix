@@ -730,16 +730,14 @@ in
             kix.operandPolicy {
               inherit scope;
               name = "${name}-proxy-ingress";
-              spec = {
-                endpointSelector.matchLabels = proxySelector;
-                ingress =
-                  (netpol.translateIntentRules {
-                    intents.front-door.ingress = map (from: {
-                      inherit from;
-                      ports = frontDoorPorts;
-                    }) config.clientSources;
-                  }).ingressRules;
-              };
+              selector = proxySelector;
+              ingress =
+                (netpol.translateIntentRules {
+                  intents.front-door.ingress = map (from: {
+                    inherit from;
+                    ports = frontDoorPorts;
+                  }) config.clientSources;
+                }).ingressRules;
             };
 
         # HTTPRoutes name their backends at runtime, on any port, so the
@@ -749,15 +747,13 @@ in
         proxyEgress = kix.operandPolicy {
           inherit scope;
           name = "${name}-proxy-egress";
-          spec = {
-            endpointSelector.matchLabels = proxySelector;
-            egress = [
-              netpol.dnsEgressRule
-            ]
-            ++ (netpol.translateIntentRules {
-              intents.backends.egress = [ { to = "pods"; } ];
-            }).egressRules;
-          };
+          selector = proxySelector;
+          egress = [
+            netpol.dnsEgressRule
+          ]
+          ++ (netpol.translateIntentRules {
+            intents.backends.egress = [ { to = "pods"; } ];
+          }).egressRules;
         };
 
         # One Certificate per HTTPS listener that names no Secret of its own.

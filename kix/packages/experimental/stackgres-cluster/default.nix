@@ -575,35 +575,31 @@ in
           operandEgress = kix.operandPolicy {
             inherit scope;
             name = "${name}-operand-egress";
-            spec = {
-              endpointSelector.matchLabels = operandSelector;
-              egress = [
-                netpol.dnsEgressRule
-                netpol.apiServerEgressRule
-              ]
-              ++ self'.egress
-              ++ lib.optionals (extensions != [ ]) (worldEgress [ 443 ])
-              ++ lib.optionals (storagePort != null) (worldEgress [ storagePort ]);
-            };
+            selector = operandSelector;
+            egress = [
+              netpol.dnsEgressRule
+              netpol.apiServerEgressRule
+            ]
+            ++ self'.egress
+            ++ lib.optionals (extensions != [ ]) (worldEgress [ 443 ])
+            ++ lib.optionals (storagePort != null) (worldEgress [ storagePort ]);
           };
           operandIngress = kix.operandPolicy {
             inherit scope;
             name = "${name}-operand-ingress";
-            spec = {
-              endpointSelector.matchLabels = operandSelector;
-              ingress = self'.ingress ++ [
-                (netpol.mkCallerIngressRule {
-                  callerSelector = operator.podSelector;
-                  callerNamespace = operatorNamespace;
-                  ports = patroniPorts;
-                })
-                (netpol.mkCallerIngressRule {
-                  callerSelector = operator.operandSelectors.dbOps;
-                  callerNamespace = ns;
-                  ports = [ (tcp postgresPort) ];
-                })
-              ];
-            };
+            selector = operandSelector;
+            ingress = self'.ingress ++ [
+              (netpol.mkCallerIngressRule {
+                callerSelector = operator.podSelector;
+                callerNamespace = operatorNamespace;
+                ports = patroniPorts;
+              })
+              (netpol.mkCallerIngressRule {
+                callerSelector = operator.operandSelectors.dbOps;
+                callerNamespace = ns;
+                ports = [ (tcp postgresPort) ];
+              })
+            ];
           };
           # SGDbOps Job pods carry no cluster label, so this selects every
           # one in the namespace. They exec into the PostgreSQL pods through
@@ -611,47 +607,41 @@ in
           dbOpsEgress = kix.operandPolicy {
             inherit scope;
             name = "${name}-dbops-egress";
-            spec = {
-              endpointSelector.matchLabels = operator.operandSelectors.dbOps;
-              egress = [
-                netpol.dnsEgressRule
-                netpol.apiServerEgressRule
-                (netpol.mkServiceEgressRule {
-                  selector = operandSelector;
-                  namespace = ns;
-                  sourceNamespace = ns;
-                  ports = [ (tcp postgresPort) ];
-                })
-              ];
-            };
+            selector = operator.operandSelectors.dbOps;
+            egress = [
+              netpol.dnsEgressRule
+              netpol.apiServerEgressRule
+              (netpol.mkServiceEgressRule {
+                selector = operandSelector;
+                namespace = ns;
+                sourceNamespace = ns;
+                ports = [ (tcp postgresPort) ];
+              })
+            ];
           };
           # The Job of a manually created SGBackup runs the backup through
           # the API server, by exec into the primary.
           backupJobEgress = kix.operandPolicy {
             inherit scope;
             name = "${name}-backup-job-egress";
-            spec = {
-              endpointSelector.matchLabels = operator.operandSelectors.backup;
-              egress = [
-                netpol.dnsEgressRule
-                netpol.apiServerEgressRule
-              ];
-            };
+            selector = operator.operandSelectors.backup;
+            egress = [
+              netpol.dnsEgressRule
+              netpol.apiServerEgressRule
+            ];
           };
           operatorEgress = kix.operandPolicy {
             scope = scope.forService stackgresOperator;
             name = "${ns}-${name}-operator-egress";
-            spec = {
-              endpointSelector.matchLabels = operator.podSelector;
-              egress = [
-                (netpol.mkServiceEgressRule {
-                  selector = operandSelector;
-                  namespace = ns;
-                  sourceNamespace = operatorNamespace;
-                  ports = patroniPorts;
-                })
-              ];
-            };
+            selector = operator.podSelector;
+            egress = [
+              (netpol.mkServiceEgressRule {
+                selector = operandSelector;
+                namespace = ns;
+                sourceNamespace = operatorNamespace;
+                ports = patroniPorts;
+              })
+            ];
           };
 
           root = {

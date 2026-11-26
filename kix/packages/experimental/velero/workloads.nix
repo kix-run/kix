@@ -607,17 +607,15 @@ in
       kix.operandPolicy {
         inherit scope;
         name = "${name}-data-path";
-        spec =
+        selector = dataPathLabels;
+        egress =
           let
             netpol = scope.networkPolicyEnforcer.netpol;
           in
-          {
-            endpointSelector.matchLabels = dataPathLabels;
-            egress = [
-              netpol.dnsEgressRule
-              netpol.apiServerEgressRule
-            ];
-          };
+          [
+            netpol.dnsEgressRule
+            netpol.apiServerEgressRule
+          ];
       };
 
   # Egress outside the cluster for every pod of the instance; see
@@ -629,20 +627,18 @@ in
       kix.operandPolicy {
         inherit scope;
         name = "${name}-external-store";
-        spec = {
-          endpointSelector.matchLabels = scope.selectorLabels;
-          egress =
-            (scope.networkPolicyEnforcer.netpol.translateIntentRules {
-              intents.store.egress = [
-                {
-                  to = "world";
-                  ports = map (port: {
-                    inherit port;
-                    protocol = "TCP";
-                  }) externalPorts;
-                }
-              ];
-            }).egressRules;
-        };
+        selector = scope.selectorLabels;
+        egress =
+          (scope.networkPolicyEnforcer.netpol.translateIntentRules {
+            intents.store.egress = [
+              {
+                to = "world";
+                ports = map (port: {
+                  inherit port;
+                  protocol = "TCP";
+                }) externalPorts;
+              }
+            ];
+          }).egressRules;
       };
 }

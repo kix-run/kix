@@ -363,28 +363,24 @@ in
         imagePullPolicy = config.image.pullPolicy;
       };
 
-      # Policies for the pods virt-operator runs in this namespace. The spec
-      # is read only when an enforcer exists.
+      # Policies for the pods virt-operator runs in this namespace. The rules
+      # are read only when an enforcer exists.
       operandPolicy =
         suffix: selector:
         {
           intents,
           extra ? _: { },
         }:
+        let
+          netpol = scope.networkPolicyEnforcer.netpol;
+          translated = netpol.translateIntentRules { intents.operand = intents; };
+          more = extra netpol;
+        in
         kix.operandPolicy {
-          inherit scope;
+          inherit scope selector;
           name = "${name}-${suffix}";
-          spec =
-            let
-              netpol = scope.networkPolicyEnforcer.netpol;
-              translated = netpol.translateIntentRules { intents.operand = intents; };
-              more = extra netpol;
-              egress = translated.egressRules ++ more.egress or [ ];
-              ingress = translated.ingressRules ++ more.ingress or [ ];
-            in
-            netpol.mkEndpointSelector selector
-            // lib.optionalAttrs (egress != [ ]) { inherit egress; }
-            // lib.optionalAttrs (ingress != [ ]) { inherit ingress; };
+          egress = translated.egressRules ++ more.egress or [ ];
+          ingress = translated.ingressRules ++ more.ingress or [ ];
         };
       clusterAccess = [
         { to = "dns"; }

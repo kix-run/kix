@@ -323,26 +323,24 @@ in
           kix.operandPolicy {
             inherit scope;
             name = "${name}-egress";
-            spec = {
-              endpointSelector.matchLabels = podSelector;
-              egress = [
-                netpol.dnsEgressRule
-              ]
-              ++ lib.optionals (replicas > 1) peers.egress
-              ++
-                lib.optionals (ports != [ ])
-                  (netpol.translateIntentRules {
-                    intents.receivers.egress = [
-                      {
-                        to = "world";
-                        ports = map (port: {
-                          inherit port;
-                          protocol = "TCP";
-                        }) ports;
-                      }
-                    ];
-                  }).egressRules;
-            };
+            selector = podSelector;
+            egress = [
+              netpol.dnsEgressRule
+            ]
+            ++ lib.optionals (replicas > 1) peers.egress
+            ++
+              lib.optionals (ports != [ ])
+                (netpol.translateIntentRules {
+                  intents.receivers.egress = [
+                    {
+                      to = "world";
+                      ports = map (port: {
+                        inherit port;
+                        protocol = "TCP";
+                      }) ports;
+                    }
+                  ];
+                }).egressRules;
           };
 
       # Gossip between the replicas.
@@ -351,10 +349,8 @@ in
           kix.operandPolicy {
             inherit scope;
             name = "${name}-peers";
-            spec = {
-              endpointSelector.matchLabels = podSelector;
-              ingress = peers.ingress;
-            };
+            selector = podSelector;
+            ingress = peers.ingress;
           }
         else
           null;

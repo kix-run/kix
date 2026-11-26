@@ -390,7 +390,8 @@ meta.network = {
 
 - `intents.<partName>.egress`: list of rules where `to` is `"world"`, `"pods"`, `"all-pods"`, `"apiserver"`, `"dns"`, or `{ entities = [ ... ]; }`, with optional `ports = [ { port; protocol ? "TCP"; } ]`. `"pods"` allows traffic only to pods. `"all-pods"` maps to Cilium's `cluster` entity, which also includes cluster nodes and the Kubernetes API server.
 - `intents.<partName>.ingress`: list of rules where `from` is `"world"`, `"all-pods"`, or `{ entities = [ ... ]; }`, with optional `ports`.
-- `externalIngressEntities`: list of Cilium entity names (such as `["world"]` or `["remote-node"]`) used when this package acts as a cluster ingress controller.
+- `externalIngressEntities`: list of entity names (such as `["world"]` or `["remote-node"]`) used when this package acts as a cluster ingress controller.
+- `entities` on a rule and `externalIngressEntities` accept only `"world"`, `"host"`, `"remote-node"`, `"kube-apiserver"`, `"cluster"`, and `"all"`. Any other name fails evaluation with `[K2060]`. The cluster's network policy enforcer maps each name to its own rule format.
 
 ---
 

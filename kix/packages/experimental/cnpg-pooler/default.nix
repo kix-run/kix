@@ -337,33 +337,29 @@ in
       poolerEgress = kix.operandPolicy {
         inherit scope;
         name = "${name}-pooler-egress";
-        spec = {
-          endpointSelector.matchLabels = poolerSelector;
-          egress = [
-            netpol.dnsEgressRule
-            netpol.apiServerEgressRule
-            (netpol.mkServiceEgressRule {
-              selector = cluster.selector;
-              namespace = ns;
-              sourceNamespace = ns;
-              ports = postgresPorts;
-            })
-          ];
-        };
+        selector = poolerSelector;
+        egress = [
+          netpol.dnsEgressRule
+          netpol.apiServerEgressRule
+          (netpol.mkServiceEgressRule {
+            selector = cluster.selector;
+            namespace = ns;
+            sourceNamespace = ns;
+            ports = postgresPorts;
+          })
+        ];
       };
       instanceIngress = kix.operandPolicy {
         inherit scope;
         name = "${name}-pooler-to-instances";
-        spec = {
-          endpointSelector.matchLabels = cluster.selector;
-          ingress = [
-            (netpol.mkCallerIngressRule {
-              callerSelector = poolerSelector;
-              callerNamespace = ns;
-              ports = postgresPorts;
-            })
-          ];
-        };
+        selector = cluster.selector;
+        ingress = [
+          (netpol.mkCallerIngressRule {
+            callerSelector = poolerSelector;
+            callerNamespace = ns;
+            ports = postgresPorts;
+          })
+        ];
       };
 
       root = {

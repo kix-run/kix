@@ -10,6 +10,7 @@
 
 let
   failWith = (import ../../../lib/core/error.nix { inherit lib; }).fail;
+  inherit (import ../../../lib/plugins/netpol/interface.nix { inherit lib; }) checkEntities;
 
   rules = rec {
     # The kinds this enforcer emits. Rules that look for a policy in a
@@ -42,13 +43,41 @@ let
 
     # Build a network-policy resource routed through the CNP CRD ref.
     # mkResource is the caller's scope.mkResource or k8s.mkResource.
+    # `selector` is the matchLabels of the pods the policy selects, and
+    # `ingress` and `egress` are rules from this contract's builders. An
+    # empty list writes no section for that direction. Without `selector`,
+    # `extraArgs.spec` is the whole Cilium spec, as `mkDefaultDenySpec`
+    # builds it.
     mkPolicy =
       {
         crdRef,
         mkResource,
         extraArgs,
+        selector ? null,
+        ingress ? [ ],
+        egress ? [ ],
       }:
-      mkResource (crdRef.out.cr extraArgs);
+      mkResource (
+        crdRef.out.cr (
+          if selector == null then
+            extraArgs
+          else if extraArgs ? spec then
+            failWith {
+              package = "cilium";
+              message = "network policy '${extraArgs.name or "<unnamed>"}' passes both `selector` and `extraArgs.spec`.";
+              fix = "Pass the rules as `ingress` and `egress` next to `selector`, and leave `spec` out.";
+            }
+          else
+            extraArgs
+            // {
+              spec = {
+                endpointSelector.matchLabels = selector;
+              }
+              // lib.optionalAttrs (ingress != [ ]) { inherit ingress; }
+              // lib.optionalAttrs (egress != [ ]) { inherit egress; };
+            }
+        )
+      );
 
     # Spec for a default-deny policy. One empty rule per direction: it
     # matches no peer, so the selected endpoints go into default deny for
@@ -107,13 +136,14 @@ let
       ];
     };
 
-    # External ingress (world / custom entities).
+    # External ingress (world / custom entities). Kix's entity names are
+    # Cilium's, so they pass through unchanged.
     mkExternalIngressRule =
       {
         entities ? [ "world" ],
       }:
       {
-        fromEntities = entities;
+        fromEntities = checkEntities "An external ingress rule" entities;
       };
 
     # External egress (world / custom entities).
@@ -122,7 +152,7 @@ let
         entities ? [ "world" ],
       }:
       {
-        toEntities = entities;
+        toEntities = checkEntities "An external egress rule" entities;
       };
 
     # Egress to a Service's backing pods.
@@ -383,11 +413,13 @@ rules
     rules
     // {
       mkPolicy =
-        { mkResource, extraArgs }:
-        rules.mkPolicy {
-          crdRef = cnpCrd;
-          inherit mkResource extraArgs;
-        };
+        args:
+        rules.mkPolicy (
+          args
+          // {
+            crdRef = cnpCrd;
+          }
+        );
 
       # A platform intent targets pods outside any Kix scope, so the caller
       # passes the namespace resource (or `clusterScoped`) explicitly. A

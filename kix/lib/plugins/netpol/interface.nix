@@ -6,7 +6,7 @@ let
   requiredAttrs = {
     policyKinds = "[kind]. the policy kinds this enforcer emits; the hasNetworkPolicy rule accepts them as a namespace's policy";
 
-    mkPolicy = "{ mkResource, extraArgs } -> resource. build a network-policy resource";
+    mkPolicy = "{ mkResource, extraArgs, selector, ingress ? [ ], egress ? [ ] } -> resource. build a network-policy resource selecting pods by the matchLabels `selector`, with rules from the builders below; an empty list writes no section for that direction. Without `selector`, `extraArgs.spec` is the enforcer's own spec (from mkDefaultDenySpec)";
 
     mkDefaultDenySpec = "{ denyIngress, denyEgress } -> spec attrs for a default-deny policy";
 
@@ -57,7 +57,53 @@ let
         fix = "Add them to the enforcer's `out.netpol`. See kix/lib/plugins/netpol/interface.nix for the full contract.";
       };
 
+  # The entities an intent rule (`entities` on `meta.network.intents` or a
+  # platform intent) and `meta.network.externalIngressEntities` may name.
+  # Each enforcer maps them to its own peers.
+  entityNames = [
+    "world"
+    "host"
+    "remote-node"
+    "kube-apiserver"
+    "cluster"
+    "all"
+  ];
+
+  # Return `entities` when every name is in `entityNames`, or fail naming
+  # `where` and the unknown names.
+  checkEntities =
+    where: entities:
+    let
+      unknown = builtins.filter (e: !(builtins.elem e entityNames)) entities;
+    in
+    if unknown == [ ] then
+      entities
+    else
+      fail {
+        id = "K2060";
+        message = "${where} names the network entities ${builtins.toJSON unknown}, which Kix does not know.";
+        fix = "Use only ${lib.concatMapStringsSep ", " (e: "\"${e}\"") entityNames}.";
+      };
+
+  # Return `intents` (an attrset of `{ ingress, egress }` rule lists) after
+  # checking the `entities` of every rule with `checkEntities`.
+  checkIntentEntities =
+    where: intents:
+    let
+      rulesOf = i: (i.ingress or [ ]) ++ (i.egress or [ ]);
+      allRules = builtins.concatMap rulesOf (builtins.attrValues intents);
+    in
+    builtins.foldl' (
+      acc: rule: if rule ? entities then builtins.seq (checkEntities where rule.entities) acc else acc
+    ) intents allRules;
+
 in
 {
-  inherit requiredAttrs validateEnforcerInterface;
+  inherit
+    requiredAttrs
+    validateEnforcerInterface
+    entityNames
+    checkEntities
+    checkIntentEntities
+    ;
 }

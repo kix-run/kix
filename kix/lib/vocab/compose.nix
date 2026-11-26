@@ -116,6 +116,48 @@ let
         else
           null;
     };
+  # Build an operand policy from a whole Cilium `spec`, the older form of
+  # `operandPolicy`.
+  legacyOperandPolicy =
+    {
+      scope,
+      name,
+      spec,
+    }:
+    let
+      enforced = scope.networkPolicyEnforced;
+      sections = {
+        ingress = [
+          "ingress"
+          "ingressDeny"
+        ];
+        egress = [
+          "egress"
+          "egressDeny"
+        ];
+      };
+      unenforced =
+        lib.optionals (!enforced.ingress) sections.ingress
+        ++ lib.optionals (!enforced.egress) sections.egress;
+      enforcedSpec = removeAttrs spec unenforced;
+      hasSection = s: builtins.any (k: s ? ${k}) (sections.ingress ++ sections.egress);
+    in
+    if scope.networkPolicyEnforcer == null || (hasSection spec && !hasSection enforcedSpec) then
+      null
+    else
+      scope.networkPolicyEnforcer.netpol.mkPolicy {
+        mkResource = scope.mkResource;
+        extraArgs = {
+          inherit name;
+          spec = enforcedSpec;
+          labels = {
+            ${kixKeys.derived} = "true";
+            ${kixKeys.policyType} = "operator-managed-workload";
+          };
+          extraDeps = [ ];
+        };
+      };
+
 in
 
 rec {
@@ -737,47 +779,64 @@ rec {
   # Build a network policy for operand pods created at runtime by an operator,
   # or return null when no policy is needed.
   #
-  # Drops `ingress`/`ingressDeny` or `egress`/`egressDeny` sections for
-  # directions the cluster does not enforce (`scope.networkPolicyEnforced`),
-  # because including an unenforced direction would isolate the pods in that
-  # direction. Returns null when `scope` has no enforcer or all sections were
-  # dropped.
+  # `selector` is the matchLabels of the operand pods. `ingress` and `egress`
+  # are rules from the enforcer's builders (`scope.networkPolicyEnforcer.netpol`),
+  # and Kix reads them only when the scope has an enforcer. Kix drops the
+  # rules for a direction the cluster does not enforce
+  # (`scope.networkPolicyEnforced`), because a policy with rules in that
+  # direction would isolate the pods in it. Returns null when `scope` has no
+  # enforcer or no rules remain.
+  #
+  # `spec` is the older form: a whole Cilium spec with `endpointSelector`.
+  # Kix drops `ingress`/`ingressDeny` or `egress`/`egressDeny` from it the
+  # same way.
   operandPolicy =
     {
       scope,
       name,
-      spec,
+      selector ? null,
+      ingress ? [ ],
+      egress ? [ ],
+      spec ? null,
     }:
     let
       enforced = scope.networkPolicyEnforced;
-      sections = {
-        ingress = [
-          "ingress"
-          "ingressDeny"
-        ];
-        egress = [
-          "egress"
-          "egressDeny"
-        ];
+      enforcedIngress = if enforced.ingress then ingress else [ ];
+      enforcedEgress = if enforced.egress then egress else [ ];
+      labels = {
+        ${kixKeys.derived} = "true";
+        ${kixKeys.policyType} = "operator-managed-workload";
       };
-      unenforced =
-        lib.optionals (!enforced.ingress) sections.ingress
-        ++ lib.optionals (!enforced.egress) sections.egress;
-      enforcedSpec = removeAttrs spec unenforced;
-      hasSection = s: builtins.any (k: s ? ${k}) (sections.ingress ++ sections.egress);
+      scopeFail = failOf "kix.operandPolicy" {
+        inherit scope;
+        who = null;
+      };
     in
-    if scope.networkPolicyEnforcer == null || (hasSection spec && !hasSection enforcedSpec) then
+    if scope.networkPolicyEnforcer == null then
+      null
+    else if spec != null then
+      if selector != null then
+        scopeFail {
+          message = "kix.operandPolicy \"${name}\" passes both `selector` and `spec`.";
+          fix = "Pass `selector`, `ingress`, and `egress`, and leave `spec` out.";
+        }
+      else
+        legacyOperandPolicy { inherit scope name spec; }
+    else if selector == null then
+      scopeFail {
+        message = "kix.operandPolicy \"${name}\" has no `selector`.";
+        fix = "Pass `selector`, the matchLabels of the operand pods.";
+      }
+    else if enforcedIngress == [ ] && enforcedEgress == [ ] then
       null
     else
       scope.networkPolicyEnforcer.netpol.mkPolicy {
         mkResource = scope.mkResource;
+        inherit selector;
+        ingress = enforcedIngress;
+        egress = enforcedEgress;
         extraArgs = {
-          inherit name;
-          spec = enforcedSpec;
-          labels = {
-            ${kixKeys.derived} = "true";
-            ${kixKeys.policyType} = "operator-managed-workload";
-          };
+          inherit name labels;
           extraDeps = [ ];
         };
       };

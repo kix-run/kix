@@ -202,7 +202,7 @@ when a check fails or the path is not evaluated by default.
 - C11. Do `extraArgs` flags enable features needing RBAC the package never grants? Fix: refuse the flag at eval.
 - C12. Is webhook ownership split between operator and Kix without one owner? Fix: one owner; `ownership.cede` only for fields the operator rewrites.
 - C13. Are operand images hardcoded, tag-only, or absent from `out.extraImages`? Fix: `operandImages.<name>` options, each in `out.extraImages`.
-- C14. Do operator-spawned pods lack published selectors (`out.operandSelectors.<operand>`) and network policy? Does a consumer copy a provider's operand labels (grep the provider's `factBehavior.podSelector` keys in consumers)? Fix: publish selectors; `kix.operandPolicy { scope; name; spec; }`.
+- C14. Do operator-spawned pods lack published selectors (`out.operandSelectors.<operand>`) and network policy? Does a consumer copy a provider's operand labels (grep the provider's `factBehavior.podSelector` keys in consumers)? Fix: publish selectors; `kix.operandPolicy { scope; name; selector; ingress; egress; }`.
 - C15. Does a webhook have no ingress from the apiserver under default deny? Fix: the `from = "apiserver"` ingress source.
 - C16. Does a CR cross-reference (a class, a storage location, a Secret) stay a raw string? Fix: take the resource, derive the name, add the edge.
 - C17. Does upstream ship a singleton CR while a builder lets two consumers create two? Fix: fixed name so the duplicate check fires.
@@ -268,7 +268,7 @@ when a check fails or the path is not evaluated by default.
 - N2. Is an intent wider than needed (`all-pods`, `world` with no ports)? Package intents apply to every non-host-network workload of the package (lib limit), so check what each port opens on every pod and say so in a multi-workload header. Could a build-time `kix.operandPolicy`, which can read config, replace a broad `meta.network.intents` rule? Fix: narrow ports; comment each broad rule.
 - N3. Is egress to external services missing, so the package breaks under default deny? Fix: `meta.network.intents` with `to = "world"` and ports. When the port comes from config (a mail relay's port in `env`, a store's endpoint), build the policy in the build with `kix.operandPolicy` over the workload's `out.selector` and `translateIntentRules` (plausible's `mailEgress`, cnpg-cluster's `backupEgress`); destinations left closed are named in the header.
 - N4. Does the package open its metrics port with an intent? Fix: remove; the netpol plugin derives the scrape path from the monitors a Prometheus selects (`docs/src/content/docs/explanation/network-policy.mdx` `#how-kix-discovers-connections-from-endpoint-facts`). Kix derives nothing for host-network pods it did not build (the kubelet, control-plane static pods). Does a PodMonitor select its pods with `matchExpressions`? Fix: `matchLabels`, which the derivation reads. Does a monitor over operator-created pods name its port? Fix: `portNumber` (PodMonitor) or a numeric `targetPort`; both fail evaluation under default deny.
-- N5. Is an enforcer-specific selector or rule written out (an `endpointSelector`, `k8s:io.kubernetes.pod.namespace`, Cilium `entities` outside a `world` egress rule)? Fix: `scope.networkPolicyEnforcer.netpol.mkEndpointSelector`, `mkCallerIngressRule`, `mkServiceEgressRule`, `mkSelfRules`.
+- N5. Is an enforcer-specific selector or rule written out (an `endpointSelector`, `toEndpoints`, `fromEndpoints`, `k8s:io.kubernetes.pod.namespace`, Cilium `entities` outside a `world` egress rule), or a `kix.operandPolicy` call that passes `spec`? Fix: pass `selector`, `ingress`, and `egress` to `kix.operandPolicy`, with rules from `scope.networkPolicyEnforcer.netpol` (`mkCallerIngressRule`, `mkServiceEgressRule`, `mkSelfRules`, `translateIntentRules`). Intent `entities` accept only `world`, `host`, `remote-node`, `kube-apiserver`, `cluster`, and `all`.
 - N6. Does a config path (config file key, URL option) bypass the dep that drives the derived edge? Detection: wire the dep, set the config key it fills, and diff the policies. Fix: lock that path with `kix.mergeGuarded`. A package that derives egress from a passthrough (alertmanager's receivers) reads only the keys the program dials, from a table taken from upstream's config source, and refuses keys it does not know; a key-suffix match picks up links that are never dialled (`icon_url`, `client_url`).
 - N7. Is a Service dialled by `out.name` or short name, or handed over through an object no pod spec references (a ConfigMap a sidecar reads through the API, a CR the program reads), so no edge forms? Fix: `out.fqdn` or `out.url` in the pod spec, or an intent.
 - N8. Does a safety argument rely on network policy for an unauthenticated port, or does an intent open an unauthenticated port to `all-pods`? Fix: auth in the program.
@@ -500,7 +500,7 @@ I4 bitnami
 I7 pullPolicy = "Always"
 N1 kind = "\w*NetworkPolicy"
 N2 all-pods|to = "world"
-N5 entities =|k8s:io\.kubernetes\.pod\.namespace|endpointSelector
+N5 entities =|k8s:io\.kubernetes\.pod\.namespace|endpointSelector|toEndpoints|fromEndpoints|mkEndpointSelector
 Mo2 kind = "(ServiceMonitor|PodMonitor|PrometheusRule)"
 Mo4 prometheus\.io/
 Mo5 job=~

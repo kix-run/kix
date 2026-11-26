@@ -379,12 +379,8 @@ in
         operatorNamespace = operatorScope.namespaceName;
         httpOnly = [
           {
-            ports = [
-              {
-                port = toString ports.http;
-                protocol = "TCP";
-              }
-            ];
+            port = ports.http;
+            protocol = "TCP";
           }
         ];
       in
@@ -527,55 +523,39 @@ in
           replicaEgress = kix.operandPolicy {
             inherit scope;
             name = "${name}-replicas-egress";
-            spec = {
-              endpointSelector.matchLabels = podSelector;
-              egress = [
-                netpol.dnsEgressRule
-                { toEndpoints = [ { matchLabels = podSelector; } ]; }
-              ];
-            };
+            selector = podSelector;
+            egress = [
+              netpol.dnsEgressRule
+            ]
+            ++ (netpol.mkSelfRules { selector = podSelector; }).egress;
           };
           replicaIngress = kix.operandPolicy {
             inherit scope;
             name = "${name}-replicas-ingress";
-            spec = {
-              endpointSelector.matchLabels = podSelector;
-              ingress = [
-                { fromEndpoints = [ { matchLabels = podSelector; } ]; }
-                # The operator propagates schema to a new replica and its
-                # exporter reads metrics, both over HTTP.
-                {
-                  fromEndpoints = [
-                    {
-                      matchLabels = clickhouseOperator.out.podSelector // {
-                        "k8s:io.kubernetes.pod.namespace" = operatorNamespace;
-                      };
-                    }
-                  ];
-                  toPorts = httpOnly;
-                }
-              ];
-            };
+            selector = podSelector;
+            ingress = (netpol.mkSelfRules { selector = podSelector; }).ingress ++ [
+              # The operator propagates schema to a new replica and its
+              # exporter reads metrics, both over HTTP.
+              (netpol.mkCallerIngressRule {
+                callerSelector = clickhouseOperator.out.podSelector;
+                callerNamespace = operatorNamespace;
+                ports = httpOnly;
+              })
+            ];
           };
           # The other end of that second rule, in the operator's namespace.
           operatorEgress = kix.operandPolicy {
             scope = operatorScope;
             name = "${scope.namespaceName}-${name}-operator-egress";
-            spec = {
-              endpointSelector.matchLabels = clickhouseOperator.out.podSelector;
-              egress = [
-                {
-                  toEndpoints = [
-                    {
-                      matchLabels = podSelector // {
-                        "k8s:io.kubernetes.pod.namespace" = scope.namespaceName;
-                      };
-                    }
-                  ];
-                  toPorts = httpOnly;
-                }
-              ];
-            };
+            selector = clickhouseOperator.out.podSelector;
+            egress = [
+              (netpol.mkServiceEgressRule {
+                selector = podSelector;
+                namespace = scope.namespaceName;
+                sourceNamespace = operatorNamespace;
+                ports = httpOnly;
+              })
+            ];
           };
 
           root = {
