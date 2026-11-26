@@ -677,6 +677,7 @@ mod tests {
             configured: 2,
             unchanged: 3,
             failed: 4,
+            failed_after_apply: 2,
             cancelled: 5,
             pruned: 6,
             ..DeployResult::default()

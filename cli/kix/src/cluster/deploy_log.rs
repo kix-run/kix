@@ -74,6 +74,7 @@ impl Line {
                 configured: r.configured,
                 unchanged: r.unchanged,
                 failed: r.failed,
+                failed_after_apply: r.failed_after_apply,
                 cancelled: r.cancelled,
                 pruned: r.pruned,
                 nothing_to_apply: false,
@@ -95,6 +96,7 @@ impl Line {
                 configured: 0,
                 unchanged,
                 failed: 0,
+                failed_after_apply: 0,
                 cancelled: 0,
                 pruned: 0,
                 nothing_to_apply: true,
@@ -190,6 +192,10 @@ pub enum Event {
         configured: usize,
         unchanged: usize,
         failed: usize,
+        /// The objects in `failed` that the run wrote to the cluster and
+        /// that then did not become ready. Older logs leave it out.
+        #[serde(default)]
+        failed_after_apply: usize,
         cancelled: usize,
         pruned: usize,
         /// True when the plan had nothing to apply or prune, so the deploy

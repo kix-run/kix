@@ -2842,11 +2842,19 @@ fn unschedulable_pod_status() -> Value {
     })
 }
 
+fn rollout_pods(current: &[Value], held: Option<&str>) -> terminal::RolloutPods {
+    terminal::RolloutPods {
+        current: current.to_vec(),
+        held: held.map(str::to_string),
+    }
+}
+
 /// A rollout stuck on a pod the scheduler cannot place: the Deployment
-/// counts one new and one old pod as ready, and the message counts only the
-/// pods of the new revision and quotes the scheduler.
+/// counts one new and one old pod as ready, and the description counts only
+/// the pods of the new revision and quotes the scheduler. Without its pods,
+/// the description falls back to the object's counts.
 #[test]
-fn a_rollout_message_counts_updated_pods_and_quotes_the_scheduler() {
+fn a_rollout_description_counts_updated_pods_and_quotes_the_scheduler() {
     let deployment = make_obj_gen(
         3,
         json!({
@@ -2863,28 +2871,53 @@ fn a_rollout_message_counts_updated_pods_and_quotes_the_scheduler() {
         pod("hello-new-a", "new", ready_pod_status()),
         pod("hello-new-b", "new", unschedulable_pod_status()),
     ];
+    let describe = |pods: Option<&terminal::RolloutPods>, kind| {
+        terminal::rollout_not_ready_reason(&deployment, gk(kind), pods)
+    };
     assert_eq!(
-        terminal::rollout_message(&deployment, gk("Deployment"), &pods).as_deref(),
-        Some(
-            "Deployment/test: 1/2 updated pods ready, 1 old pod still running; \
-             pod hello-new-b cannot be scheduled: 0/2 nodes are available: 1 Insufficient cpu."
-        )
+        describe(Some(&rollout_pods(&pods, None)), "Deployment"),
+        "1/2 updated pods ready, 1 old pod still running; \
+         pod hello-new-b cannot be scheduled: 0/2 nodes are available: 1 Insufficient cpu."
     );
     let both_ready = [
         pod("hello-new-a", "new", ready_pod_status()),
         pod("hello-new-b", "new", ready_pod_status()),
     ];
     assert_eq!(
-        terminal::rollout_message(&deployment, gk("Deployment"), &both_ready).as_deref(),
-        Some("Deployment/test: 2/2 updated pods ready, 1 old pod still running")
+        describe(Some(&rollout_pods(&both_ready, None)), "Deployment"),
+        "2/2 updated pods ready, 1 old pod still running"
     );
     assert_eq!(
-        terminal::rollout_message(&deployment, gk("Deployment"), &[]),
-        None
+        describe(Some(&rollout_pods(&[], None)), "Deployment"),
+        "0/2 updated pods ready, 1 old pod still running"
     );
     assert_eq!(
-        terminal::rollout_message(&deployment, gk("Job"), &pods),
-        None
+        describe(None, "Deployment"),
+        not_ready_reason(&deployment, gk("Deployment"))
+    );
+    assert_eq!(
+        describe(Some(&rollout_pods(&pods, None)), "Job"),
+        not_ready_reason(&deployment, gk("Job"))
+    );
+}
+
+/// A StatefulSet held back by a pod of another revision says so while the
+/// deploy still waits, beside its counts.
+#[test]
+fn a_held_statefulset_is_described_at_once() {
+    let sts = statefulset(json!({}), "hello-good");
+    let held = terminal::statefulset_held_pods(
+        &sts,
+        &[pod("hello-0", "hello-bad", crash_looping_pod_status())],
+    );
+    let described = terminal::rollout_not_ready_reason(
+        &sts,
+        gk("StatefulSet"),
+        Some(&rollout_pods(&[], held.as_deref())),
+    );
+    assert!(
+        described.starts_with("0/1 updated pods ready. Pod hello-0 is not ready"),
+        "{described}"
     );
 }
 
@@ -3065,9 +3098,69 @@ mod workload_waits {
         assert!(message.contains("status.loadBalancer.ingress"), "{message}");
         assert!(message.contains("loadBalancer.binding"), "{message}");
 
+        let mut classed = lb_service(json!({}));
+        classed["spec"]["loadBalancerClass"] = json!("example.com/none");
+        let api = FakeApi::new([classed]);
+        let result = wait(&api, "", "Service", "services", "hello").await;
+        let ReadinessResult::TimedOut { message, .. } = result else {
+            panic!("expected a timeout, got {result:?}");
+        };
+        assert!(message.starts_with("[K1243] "), "{message}");
+        assert!(
+            message.contains("spec.loadBalancerClass \"example.com/none\"")
+                && message.contains("remove spec.loadBalancerClass")
+                && !message.contains("loadBalancer.binding"),
+            "{message}"
+        );
+
         let api = FakeApi::new([lb_service(json!({"ingress": [{"ip": "203.0.113.7"}]}))]);
         let result = wait(&api, "", "Service", "services", "hello").await;
         assert_eq!(result, ReadinessResult::Ready);
+    }
+
+    /// The first waiting line already names the pod that holds the
+    /// StatefulSet back.
+    #[tokio::test(start_paused = true)]
+    async fn a_held_statefulset_says_so_on_the_first_poll() {
+        let mut sts = serde_json::to_value(statefulset(json!({}), "hello-good")).unwrap();
+        sts["metadata"]["name"] = json!("hello");
+        sts["metadata"]["generation"] = json!(5);
+        sts["metadata"]["uid"] = json!("sts-uid");
+        let mut held = pod("hello-0", "hello-bad", crash_looping_pod_status());
+        held["metadata"]["ownerReferences"] = json!([{"uid": "sts-uid"}]);
+        let api = FakeApi::new([sts, held]);
+        let ar = ApiResource {
+            group: "apps".into(),
+            version: "v1".into(),
+            api_version: "apps/v1".into(),
+            kind: "StatefulSet".into(),
+            plural: "statefulsets".into(),
+        };
+        let rid = ResourceId {
+            group: "apps".into(),
+            kind: "StatefulSet".into(),
+            namespace: "demo".into(),
+            name: "hello".into(),
+        };
+        let seen = std::sync::Mutex::new(Vec::<String>::new());
+        let _ = wait_for_ready(
+            &api.client(),
+            &ar,
+            &Scope::Namespaced,
+            &rid,
+            None,
+            DEFAULT_TIMEOUT,
+            &CancelToken::new(),
+            |status| seen.lock().unwrap().push(status.to_string()),
+        )
+        .await
+        .unwrap();
+        let first = seen.lock().unwrap().first().cloned().unwrap_or_default();
+        assert!(
+            first
+                .starts_with("StatefulSet/hello: 0/1 updated pods ready. Pod hello-0 is not ready"),
+            "{first}"
+        );
     }
 
     #[tokio::test(start_paused = true)]

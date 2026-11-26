@@ -373,13 +373,19 @@ line has `"type": "kubernetes"` and identifies the target cluster with
 `null` when not set in the kubeconfig. When the run
 reaches the deploy engine, the last JSON line is the `summary` object, with
 `succeeded` (which matches the exit status), `dry_run`, and the `created`,
-`configured`, `unchanged`, `failed`, `cancelled`, and `pruned` counts. Runs
-that reach the deploy engine also set `"nothing_to_apply": false` on `summary`.
-When the plan has nothing to apply or prune, Kix writes only the `kubernetes`
-line and a `summary` line with `"nothing_to_apply": true`, `"succeeded": true`,
-`unchanged` set to the number of unchanged objects, and all other counts set to
-`0`. If the build has no resources, Kix does not connect to the cluster and
-writes only that `summary` line, with `"unchanged": 0`. Every
+`configured`, `unchanged`, `failed`, `cancelled`, and `pruned` counts. Each
+object is counted once by its final state: if Kix applies an object and it
+does not become ready, Kix counts it in `failed` rather than `created` or
+`configured`. The `summary` object also includes `failed_after_apply`, the
+number of `failed` objects whose new manifest Kix applied before they failed
+readiness. Text output shows this count as `1 failed (1 applied but not ready)`.
+Runs that reach the deploy engine also set `"nothing_to_apply": false` on
+`summary`. When the plan has nothing to apply or prune, Kix writes only the
+`kubernetes` line and a `summary` line with `"nothing_to_apply": true`,
+`"succeeded": true`, `unchanged` set to the number of unchanged objects, and
+all other counts set to `0`. If the build has no resources, Kix does not
+connect to the cluster and writes only that `summary` line, with
+`"unchanged": 0`. Every
 line includes `schema_version` (currently `"2026-11-25"`), the date of the
 latest breaking change to the log format. For a deleted object
 (`"kind": "delete"`), Kix emits the `ready` event only after the object is

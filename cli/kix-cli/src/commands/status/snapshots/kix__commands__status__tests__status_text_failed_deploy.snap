@@ -1,0 +1,18 @@
+---
+source: kix-cli/src/commands/status/tests.rs
+expression: "text::render(&doc, text::Detail::Packages, &two_days_ago)"
+---
+Cluster shop on Kubernetes v1.33.1 (context prod, https://prod.example:6443)
+Last deploy: shop-9a8b7c6d5e4f  Failed  2d0h ago
+  1 resource failed: Service/pending@ingress
+Current deploy: shop-7f3a2b1c0d9e  Active  2d0h ago
+
+  ingress/ingress-nginx    1 resource   ok
+
+Only in the failed deploy shop-9a8b7c6d5e4f
+  Service ingress/pending  not ready (no load balancer address in status.loadBalancer.ingress yet)
+
+1 resource: 1 ok. Last deploy failed.
+Next: fix what caused the last deploy to fail and run `kix deploy shop` again.
+
+This account may not list secrets, so Kix did not check objects of those kinds.

@@ -1080,6 +1080,13 @@
           "minimum": 0,
           "type": "integer"
         },
+        "failed_after_apply": {
+          "default": 0,
+          "description": "The objects in `failed` that the run wrote to the cluster and\nthat then did not become ready. Older logs leave it out.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
         "nothing_to_apply": {
           "default": false,
           "description": "True when the plan had nothing to apply or prune, so the deploy\nwrote nothing and the active deployment record stays current. The\nlog then holds no `plan` or `node` lines.",

@@ -366,6 +366,7 @@ fn counts_labelled(r: &DeployResult, held_back: Option<&str>) -> String {
             output::dim(&failed_str)
         },
     );
+    text.push_str(&applied_then_not_ready(r));
     if let Some(label) = held_back {
         text.push_str(&format!(
             ", {} {label}",
@@ -376,6 +377,25 @@ fn counts_labelled(r: &DeployResult, held_back: Option<&str>) -> String {
         text.push_str(&format!(", {} pruned", output::red(&r.pruned.to_string())));
     }
     text
+}
+
+/// Return how many failed objects this run wrote before they failed
+/// readiness, as ` (N applied, then not ready)`, or nothing when none did.
+/// They are on the cluster with the new spec, though the counts of created
+/// and configured objects leave them out.
+fn applied_then_not_ready(r: &DeployResult) -> String {
+    match r.failed_after_apply {
+        0 => String::new(),
+        n => format!(" ({n} applied but not ready)"),
+    }
+}
+
+fn failed_cluster_state(r: &DeployResult) -> String {
+    match r.failed_after_apply {
+        0 => String::new(),
+        1 => " (1 applied but not ready; its new manifest is on the cluster)".to_string(),
+        n => format!(" ({n} applied but not ready; their new manifests are on the cluster)"),
+    }
 }
 
 /// Format the one-line summary of a deploy or dry run that succeeded, or of
@@ -553,8 +573,12 @@ pub(super) fn closing(r: &DeployResult, c: &Closing<'_>) -> String {
             let _ = writeln!(out, "  Cluster state:");
             let _ = writeln!(
                 out,
-                "    - {} created and {} configured object(s) from this run finished and are ready on the cluster, {} failed (during apply or after being applied), and {} were never sent to the cluster.",
-                r.created, r.configured, r.failed, r.cancelled
+                "    - {} created and {} configured object(s) from this run are ready on the cluster. {} failed{}, and {} were never sent to the cluster.",
+                r.created,
+                r.configured,
+                r.failed,
+                failed_cluster_state(r),
+                r.cancelled
             );
             if let Some(line) = record_line {
                 let _ = writeln!(out, "    - {line}");

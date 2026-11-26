@@ -3791,3 +3791,42 @@ async fn a_slow_prune_delete_is_reported_while_it_waits() {
     });
     assert!(last_wait < ready, "{last_wait:?} {ready:?}");
 }
+
+/// A node the run applied that then fails readiness counts as failed, and
+/// also as applied then not ready. An apply the API server refused and an
+/// unchanged node that is not ready count only as failed.
+#[tokio::test(start_paused = true)]
+async fn an_applied_node_that_is_not_ready_is_counted_as_written() {
+    let manifests = vec![
+        m("Deployment", "stuck", &[]),
+        m("Deployment", "refused", &[]),
+        m("Deployment", "old", &[]),
+        m("Deployment", "web", &["old"]),
+    ];
+    let ops = Arc::new(ScriptedOps::new());
+    ops.script(
+        rid("Deployment", "stuck"),
+        NodeScript::default().ready(Behaviour::Now(Ready::TimedOut)),
+    );
+    ops.script(
+        rid("Deployment", "refused"),
+        NodeScript::default().apply(Behaviour::Now(Err(ApplyFailure::Other("boom".into())))),
+    );
+    ops.script(
+        rid("Deployment", "old"),
+        NodeScript::default().ready(Behaviour::Now(Ready::Failed("CrashLoopBackOff".into()))),
+    );
+    let mut cfg = config(quiet_watchdog());
+    cfg.on_error = OnErrorPolicy::Continue;
+    let result = run(
+        &ops,
+        plan_with_skips(&manifests, &["old"]),
+        &cfg,
+        Arc::new(NullObserver),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result.failed, 3, "{result:?}");
+    assert_eq!(result.failed_after_apply, 1, "{result:?}");
+}
