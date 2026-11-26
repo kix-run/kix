@@ -102,7 +102,7 @@ let
           annotation = "eks.amazonaws.com/skip-containers";
           separator = ",";
         };
-        podEnvOverrideFix = "Delete the EKS Pod Identity association for this ServiceAccount in AWS, then restart the workload's pods.";
+        podEnvOverrideFix = "To use IRSA, delete the EKS Pod Identity association for this ServiceAccount in AWS and restart the workload's pods. To use EKS Pod Identity instead, set `cluster.flavor.eks.cloudIdentity = \"pod-identity\"` and run `kix deploy`.";
       };
     };
 

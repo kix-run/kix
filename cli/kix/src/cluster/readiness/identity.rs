@@ -127,9 +127,8 @@ pub(crate) fn classify_pod_identity(pod: &Value, expected: &IdentityEnv) -> Opti
             let names: Vec<&str> = other.env.iter().map(String::as_str).collect();
             Some((
                 format!(
-                    "container `{name}` has {}, which {} sets, so the platform applied {} instead of {}",
+                    "container `{name}` has {}, so the cluster applied {} instead of {}",
                     quoted_list(&names),
-                    other.description,
                     other.description,
                     expected.description
                 ),
@@ -308,7 +307,7 @@ mod tests {
         ]));
         let message = classify_pod_identity(&p, &irsa()).expect("refused");
         assert!(
-            message.contains("so the platform applied EKS Pod Identity instead of IAM roles for service accounts (IRSA)"),
+            message.contains("so the cluster applied EKS Pod Identity instead of IAM roles for service accounts (IRSA)"),
             "{message}"
         );
         assert!(
