@@ -11,6 +11,7 @@ use sha2::{Digest, Sha256};
 
 use crate::eval::package_index::InstanceGroups;
 use crate::eval::store_graph::{StoreGraph, store_hash};
+use crate::manifest::keys;
 use crate::manifest::types::{CLUSTER_SCOPED, ResourceId};
 
 /// Hex digits of the spec's hash in a revision's name. It is as long as a
@@ -39,9 +40,21 @@ pub struct RevisionObject {
 
 impl RevisionObject {
     fn of(path: &Path, manifest: &Value) -> RevisionObject {
+        RevisionObject::with_hash(store_hash(path), manifest)
+    }
+
+    /// Return the object `manifest` describes, with the build hash its
+    /// `kix.run/identity-hash` annotation carries, or `None` when it has
+    /// none. A stamped manifest and a live object Kix applied both carry it.
+    pub fn of_manifest(manifest: &Value) -> Option<RevisionObject> {
+        let hash = keys::get(manifest, keys::IDENTITY_HASH).filter(|h| !h.is_empty())?;
+        Some(RevisionObject::with_hash(hash.to_string(), manifest))
+    }
+
+    fn with_hash(hash: String, manifest: &Value) -> RevisionObject {
         let rid = ResourceId::from_value(manifest);
         RevisionObject {
-            hash: store_hash(path),
+            hash,
             group: rid.group,
             kind: rid.kind,
             namespace: (rid.namespace != CLUSTER_SCOPED).then_some(rid.namespace),
@@ -189,11 +202,24 @@ impl RevisionSet {
     /// and hash change with every build, so including it would give the
     /// cluster level a new revision on every deploy.
     pub fn of(cluster: &str, graph: &StoreGraph) -> RevisionSet {
+        RevisionSet::of_applied(cluster, graph, |_| true)
+    }
+
+    /// Split the objects of `graph` as [`RevisionSet::of`] does, keeping only
+    /// those whose manifest `applies` accepts. The operator applies a build
+    /// without its CustomResourceDefinitions, and its revisions name only
+    /// what it applies.
+    pub fn of_applied(
+        cluster: &str,
+        graph: &StoreGraph,
+        applies: impl Fn(&Value) -> bool,
+    ) -> RevisionSet {
         let groups = InstanceGroups::of(graph);
         let object = |path: &Path| {
             graph
                 .resources
                 .get(path)
+                .filter(|node| applies(&node.manifest))
                 .map(|node| RevisionObject::of(path, &node.manifest))
         };
         let instances = groups
@@ -237,5 +263,10 @@ impl RevisionSet {
         self.instances
             .values()
             .chain(std::iter::once(&self.cluster_level))
+    }
+
+    /// Return the Kix cluster the set belongs to.
+    pub fn cluster(&self) -> &str {
+        &self.cluster_level.spec.cluster
     }
 }

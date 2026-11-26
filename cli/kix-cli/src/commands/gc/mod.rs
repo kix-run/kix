@@ -59,6 +59,7 @@ use kix::cluster::graph::DeleteOrder;
 use kix::cluster::inventory;
 use kix::cluster::prune_guard::{self, Pruned, Removal, Step};
 use kix::cluster::readiness::{self, DeletePath};
+use kix::cluster::revision::keep;
 use kix::eval::store;
 use kix::eval::store_graph::{StoreGraph, store_hash};
 use kix::manifest::keys;
@@ -238,6 +239,7 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
             if done.all_gone() {
                 clear_kept(&cluster, &retirement, examined_all, active_hash.as_deref()).await;
             }
+            clean_revisions(&cluster, &retirement).await;
             Ok::<_, miette::Report>((done, retired, records_failed))
         }
         .await;
@@ -456,25 +458,50 @@ async fn clear_kept(
     }
 }
 
-/// Clear `status.orphansKeptFrom` as [`clear_kept`] does, under the deploy
-/// lock, which is taken only when there is something to clear.
+/// Clear `status.orphansKeptFrom` as [`clear_kept`] does, and delete the
+/// revisions no record needs, under the deploy lock. The lock is taken only
+/// when there is something to clear or delete.
 async fn clear_kept_locked(
     cluster: &str,
     retirement: &mut RecordRetirement,
     examined_all: bool,
     build_hash: Option<&str>,
 ) -> Result<()> {
-    let (Some(records), Some(active)) = (&retirement.records, &retirement.active) else {
+    let Some(records) = &retirement.records else {
         return Ok(());
     };
-    if !may_clear_kept(active, examined_all, build_hash) {
+    let clear = retirement
+        .active
+        .as_ref()
+        .is_some_and(|active| may_clear_kept(active, examined_all, build_hash));
+    let unneeded = match keep::unneeded(records.client(), records, cluster).await {
+        Ok(names) => !names.is_empty(),
+        Err(e) => {
+            tracing::warn!(error = %e, "could not list the revisions no record needs");
+            false
+        }
+    };
+    if !clear && !unneeded {
         return Ok(());
     }
     let client = records.client().clone();
     let lock = retirement.lock(&client, cluster).await?;
     clear_kept(cluster, retirement, examined_all, build_hash).await;
+    clean_revisions(cluster, retirement).await;
     super::lock::release(&lock).await;
     Ok(())
+}
+
+/// Delete the revisions no record of `cluster` needs. Call it after
+/// [`RecordRetirement::lock`], so the records write through the lock. A
+/// failure only warns, because the next deploy or `kix gc` deletes them.
+async fn clean_revisions(cluster: &str, retirement: &RecordRetirement) {
+    let Some(records) = &retirement.records else {
+        return;
+    };
+    if let Err(e) = keep::clean(records.client(), records, cluster).await {
+        tracing::warn!(error = %e, "could not delete the revisions no record needs; the next deploy or `kix gc` deletes them");
+    }
 }
 
 fn run_hard(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
@@ -717,6 +744,7 @@ async fn run_hard_async(
         if done.all_gone() {
             clear_kept(cluster_name, &retirement, examined_all, build_hash).await;
         }
+        clean_revisions(cluster_name, &retirement).await;
         Ok::<_, miette::Report>((done, retired, records_failed))
     }
     .await;

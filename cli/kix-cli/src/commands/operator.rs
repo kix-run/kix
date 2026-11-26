@@ -8,7 +8,6 @@
 use std::time::Duration;
 
 use kix::cluster::activation::{Record, Records, WaveStatus};
-use kix::eval::package_index::RecordPackageIndex;
 use kix::manifest::lifecycle::{
     PHASE_ACTIVE, PHASE_DEGRADED, PHASE_DEPLOYING, PHASE_FAILED, PHASE_QUEUED, PHASE_SUPERSEDED,
 };
@@ -111,7 +110,9 @@ pub async fn require_features(client: &Client) -> Result<()> {
 /// The CR is created without a phase. The operator treats it as Queued and
 /// advances it through Deploying to Active. `kubernetes_uid` is the build's
 /// `cluster.kubernetes.uid`, which the record carries as a label.
-#[allow(clippy::too_many_arguments)]
+///
+/// The command holds no deploy lock, so it writes no revisions and no map of
+/// them. The operator writes both when it deploys the record.
 pub async fn apply_activation(
     records: &Records,
     activation_name: &str,
@@ -120,7 +121,6 @@ pub async fn apply_activation(
     identity_hash: Option<&str>,
     kubernetes_uid: Option<&str>,
     receipt: Option<&Value>,
-    package_index: &RecordPackageIndex,
 ) -> Result<String> {
     let request = kix::cluster::activation::new_request();
     records
@@ -143,12 +143,6 @@ pub async fn apply_activation(
             .await
             .map_err(|e| miette!("failed to record the deploy receipt: {e}"))?;
     }
-
-    // The operator holds no build graph, so the CLI writes the index of the
-    // build the record now names. A failure only warns.
-    records
-        .write_package_index(activation_name, package_index)
-        .await;
 
     Ok(request)
 }
@@ -583,5 +577,30 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.ends_with("'rec': cancelled"), "{err}");
+    }
+
+    /// `kix deploy --operator` holds no deploy lock, so the record it
+    /// submits names no revisions and has no package index, and it creates
+    /// no revisions. The operator writes the map when it deploys.
+    #[tokio::test]
+    async fn submitting_a_record_writes_no_revisions_and_no_index() {
+        let api = FakeApi::new([]);
+        let client = api.client();
+        let records = open_records(&client).await.unwrap();
+        apply_activation(
+            &records,
+            "rec",
+            "c",
+            "/nix/store/x",
+            Some("h"),
+            None,
+            Some(&json!({ "source": {} })),
+        )
+        .await
+        .unwrap();
+        let status = api.object(RECORD_KIND, "rec").unwrap()["status"].clone();
+        assert!(status.get("revisions").is_none(), "{status}");
+        assert!(status.get(keys::PACKAGE_INDEX_FIELD).is_none(), "{status}");
+        assert!(api.names(kix::cluster::revision::KIND).is_empty());
     }
 }

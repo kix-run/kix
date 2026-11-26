@@ -50,6 +50,7 @@ use kix::cluster::head::{self, Holder, Lock, Purpose, TakeError, WritesStopped};
 use kix::cluster::kubernetes_version;
 use kix::cluster::prune_guard::{self, Pruned, Removal, Step};
 use kix::cluster::readiness::{self, DeletePath};
+use kix::cluster::revision::RevisionSet;
 use kix::cluster::scheduler::{self, DeployError, OnErrorPolicy, SchedulerConfig};
 use kix::cluster::stops;
 use kix::cluster::stream::{DeployObserver, DeployResult};
@@ -238,16 +239,29 @@ fn source_path(activation: &DynamicObject) -> Option<std::path::PathBuf> {
 /// `kix rollback --operator`), and `kix deploy` validates new builds before
 /// writing the record.
 fn load_manifests(path: &Path) -> Result<Vec<Value>, OperatorError> {
-    let build = Build::local(path, &|_| {}).map_err(|e| OperatorError::StoreGraphError {
-        path: path.display().to_string(),
-        reason: e.to_string(),
-    })?;
-    Ok(build
+    Ok(load_build(path)?
         .graph()
         .resources
         .values()
         .map(|r| r.manifest.clone())
         .collect())
+}
+
+/// Load the build in `path`, as [`load_manifests`] does.
+fn load_build(path: &Path) -> Result<Build, OperatorError> {
+    Build::local(path, &|_| {}).map_err(|e| OperatorError::StoreGraphError {
+        path: path.display().to_string(),
+        reason: e.to_string(),
+    })
+}
+
+/// Return whether the operator applies `manifest`. It leaves out
+/// CustomResourceDefinitions, because applying them again restarts API
+/// watches, and the Activation record, because applying the manifest the
+/// build holds would overwrite `spec.source` through server-side apply.
+fn operator_applies(manifest: &Value) -> bool {
+    ResourceId::from_value(manifest).kind != "CustomResourceDefinition"
+        && !kix::manifest::lifecycle::is_record(manifest)
 }
 
 /// What the binding check decided for a Queued record.
@@ -735,22 +749,18 @@ async fn sweep(
     name: &str,
 ) -> Result<Option<LivePlan>, OperatorError> {
     let path = source_path(activation).ok_or(OperatorError::MissingSourcePath)?;
-    let new_manifests = load_manifests(&path)?;
+    let graph = load_build(&path)?.into_graph();
 
-    if new_manifests.is_empty() {
+    if graph.resources.is_empty() {
         tracing::warn!(name, "No manifests found in store graph");
         return Ok(None);
     }
 
-    // Exclude CRDs (re-applying them triggers API watch restarts) and
-    // Activation CRs (applying the Nix-generated manifest would overwrite
-    // `spec.source` via server-side apply).
-    let managed_manifests: Vec<Value> = new_manifests
-        .iter()
-        .filter(|m| {
-            ResourceId::from_value(m).kind != "CustomResourceDefinition"
-                && !kix::manifest::lifecycle::is_record(m)
-        })
+    let managed_manifests: Vec<Value> = graph
+        .resources
+        .values()
+        .map(|r| &r.manifest)
+        .filter(|m| operator_applies(m))
         .cloned()
         .collect();
 
@@ -759,7 +769,11 @@ async fn sweep(
         return Ok(None);
     }
 
-    LivePlan::sweep(client, activation, &managed_manifests)
+    // The revisions are labelled with the record's Kix cluster, which the
+    // cleanup lists them by. A record that names none gets no revisions.
+    let revisions = cluster_of(activation)
+        .map(|cluster| RevisionSet::of_applied(&cluster, &graph, operator_applies));
+    LivePlan::sweep(client, activation, &managed_manifests, revisions)
         .await
         .map(Some)
         .map_err(operator_error)

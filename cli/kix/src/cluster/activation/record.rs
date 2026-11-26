@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::cluster::revision::RevisionMap;
 use crate::eval::package_index::RecordPackageIndex;
 use crate::manifest::keys;
 use crate::manifest::lifecycle::{
@@ -67,6 +68,10 @@ pub struct Record {
     /// before Kix wrote it do, or when it is in a format this release does
     /// not read.
     pub package_index: Option<RecordPackageIndex>,
+    /// `status.revisions`, the revisions the record's deploy is made of.
+    /// `None` when the record has none, as records an earlier Kix wrote do,
+    /// or when it is in a format this release does not read.
+    pub revisions: Option<RevisionMap>,
     /// `status.waves`, recording per-wave progress for commands waiting on the operator.
     pub waves: Vec<WaveRecord>,
     pub total_waves: usize,
@@ -166,6 +171,9 @@ pub(crate) const FAILED_REQUEST_FIELD: &str = "failedRequest";
 /// The `status` field that names the instances a deploy with `--only`
 /// applied of the record's build.
 pub(crate) const PARTIAL_FIELD: &str = "partial";
+/// The `status` field that names the revisions the record's deploy is made
+/// of.
+pub(crate) const REVISIONS_FIELD: &str = "revisions";
 /// The `status` field that counts the failed runs of the operator's current
 /// deploy.
 pub(crate) const FAILED_ATTEMPTS_FIELD: &str = "failedAttempts";
@@ -226,6 +234,10 @@ impl Record {
                 .data
                 .pointer(&format!("/status/{}", keys::PACKAGE_INDEX_FIELD))
                 .and_then(RecordPackageIndex::from_value),
+            revisions: obj
+                .data
+                .pointer(&format!("/status/{REVISIONS_FIELD}"))
+                .and_then(RevisionMap::from_value),
             waves: obj
                 .data
                 .pointer("/status/waves")

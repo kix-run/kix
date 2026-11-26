@@ -14,10 +14,17 @@
 //! - Revisions are cluster-scoped and labelled with their Kix cluster, so one
 //!   list request returns every revision of a Kix cluster.
 //!
+//! - An Activation record names its revisions in `status.revisions`
+//!   ([`RevisionMap`]). A revision stays while a record that Kix needs names
+//!   it ([`keep::needed`]), and a lock holder deletes the rest
+//!   ([`keep::clean`]).
+//!
 //! The CRD is part of the Kix program. Taking the deploy lock creates it when
 //! it is absent ([`own_crd`]).
 
 mod crd;
+pub mod keep;
+mod map;
 mod spec;
 mod store;
 #[cfg(test)]
@@ -30,6 +37,7 @@ use kube::discovery::ApiResource;
 use crate::manifest::keys;
 
 pub use crd::own_crd;
+pub use map::RevisionMap;
 pub use spec::{ReadError, Revision, RevisionObject, RevisionSet, RevisionSpec, Slot, name_of};
 pub use store::{Created, RevisionError, Revisions};
 

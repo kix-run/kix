@@ -599,7 +599,6 @@ async fn run_operator_async(
         // A rollback passes no receipt, so the target record keeps the
         // receipt its own deploy wrote.
         None,
-        planned.checked.package_index(),
     )
     .await?;
 

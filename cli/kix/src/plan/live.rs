@@ -27,6 +27,7 @@ use crate::cluster::inventory;
 use crate::cluster::inventory::SharedOrphan;
 use crate::cluster::ops::{Cluster, KubeResources, RecordConfig};
 use crate::cluster::readiness::MalformedMarker;
+use crate::cluster::revision::RevisionSet;
 use crate::cluster::scheduler::{
     self, DeployError, DeployPlan, LastRuns, PrunePolicy, SchedulerConfig,
 };
@@ -86,6 +87,10 @@ pub struct LivePlan {
     compared: usize,
     foreign: inventory::Foreign,
     unattributed: usize,
+    /// The revisions of the objects the plan applies, which a run that
+    /// writes the record names in it. `None` when the record names no Kix
+    /// cluster to label them with.
+    revisions: Option<RevisionSet>,
 }
 
 impl LivePlan {
@@ -94,6 +99,9 @@ impl LivePlan {
     /// A record that names no cluster sweeps under the empty name, under
     /// which no record counts as this cluster's own.
     ///
+    /// `revisions` are the revisions of `desired`, built from the same
+    /// objects, so no revision names an object the run does not apply.
+    ///
     /// The plan has not read the last runs of its Jobs. Until
     /// [`LivePlan::read_last_runs`] does, a Job under `kix.run/rerun` whose
     /// last run failed does not run again, and the run reports it as failed.
@@ -101,6 +109,7 @@ impl LivePlan {
         client: &Client,
         activation: &DynamicObject,
         desired: &[Value],
+        revisions: Option<RevisionSet>,
     ) -> Result<LivePlan, LivePlanError> {
         let cluster = cluster_of(activation).unwrap_or_default();
         let discovery = discovery::discover_resources(client)
@@ -143,6 +152,7 @@ impl LivePlan {
             compared: actions.len(),
             foreign: sweep.foreign,
             unattributed: sweep.unattributed.len(),
+            revisions,
         })
     }
 
@@ -244,9 +254,8 @@ impl LivePlan {
                 // Its orphans are live objects the next reconcile finds
                 // again, so there are no builds to record.
                 kept_orphans: Default::default(),
-                // `kix deploy --operator` and `kix rollback --operator` write
-                // the index when they submit the record.
-                package_index: None,
+                // Only a run that writes the record names revisions in it.
+                revisions: self.revisions.filter(|_| manage_lifecycle),
                 // The operator deploys whole builds.
                 only: Vec::new(),
                 mark_failed_on_abort: false,
@@ -467,6 +476,7 @@ mod tests {
             compared: actions.len(),
             foreign: inventory::Foreign::default(),
             unattributed: 0,
+            revisions: None,
         };
         assert_eq!(operator.applies(), 0);
         assert_eq!(

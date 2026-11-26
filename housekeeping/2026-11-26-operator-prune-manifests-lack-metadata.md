@@ -1,0 +1,3 @@
+# 2026-11-26 · `cli/kix/src/plan/live.rs` · The operator passes live objects without their `metadata` as the manifests of its orphans.
+
+`LivePlan::sweep` keeps `obj.data` of each live object, and `DynamicObject::data` never holds `metadata`, which kube keeps in its own field. The operator's run then gets manifests with no name, namespace or annotations. `prune_order` (`cluster/scheduler/node.rs`) matches orphans to these manifests by `ResourceId`, so it finds none and deletes the operator's orphans in no dependency order. The kept-orphans revision that `ActivationRecord::finalize` writes reads each left object's identity hash from the same manifests, so an operator deploy lists no kept orphans.

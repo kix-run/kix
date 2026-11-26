@@ -216,14 +216,33 @@ pub(crate) trait DeployRecord: Send + Sync + 'static {
     /// Degraded) and the old one Superseded. Returns `Ok(None)` when there is
     /// no Activation to finalize (no name configured or CRD absent).
     ///
-    /// `orphans_left` is true when the run reported orphans it did not delete
-    /// (warn-only, skip, or a failed delete), so the record must keep naming
-    /// the builds they came from.
+    /// `left` names the orphans the run did not delete (warn-only, skip, or
+    /// a failed delete). While there are any, the record must keep naming
+    /// the builds they came from, and it lists them in a kept-orphans
+    /// revision.
     async fn finalize(
         &self,
         had_failures: bool,
-        orphans_left: bool,
+        left: Left<'_>,
     ) -> Result<Option<Finalized>, RecordWriteError>;
+}
+
+/// The orphans a run left on the cluster.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Left<'a> {
+    /// Each orphan the run did not delete, leaving out the kinds Kix never
+    /// prunes.
+    pub(crate) orphans: &'a [ResourceId],
+    /// The manifests the run's orphans came from: the earlier builds for the
+    /// CLI, the live objects for the operator.
+    pub(crate) manifests: &'a [Value],
+}
+
+impl Left<'_> {
+    /// Return whether the run left any orphan.
+    pub(crate) fn any(&self) -> bool {
+        !self.orphans.is_empty()
+    }
 }
 
 /// Decrypts SOPS-backed data in a Secret manifest before it is applied.
@@ -325,6 +344,9 @@ pub(crate) enum RecordWriteError {
     /// The deploy lock could not be written at the commit point.
     #[error(transparent)]
     Commit(super::head::CommitError),
+    /// A revision the record names could not be created.
+    #[error(transparent)]
+    Revisions(super::revision::RevisionError),
     /// The write did not answer within the implementation's bound.
     #[error("no answer within {}s", .0.as_secs())]
     NoAnswer(Duration),

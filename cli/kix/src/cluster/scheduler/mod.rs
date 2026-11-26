@@ -46,7 +46,7 @@ use crate::manifest::{keys, lifecycle, types::CLUSTER_SCOPED};
 use super::apply::ApplyAction;
 use super::cancel::CancelToken;
 use super::graph::Walked;
-use super::ops::{Cluster, DeployRecord, RecordWriteError, ResourceIo};
+use super::ops::{Cluster, DeployRecord, Left, RecordWriteError, ResourceIo};
 use super::prune_guard::Pruned;
 use super::readiness::{self, DeletePath, Deletion, Runner};
 use super::stream::{
@@ -297,9 +297,9 @@ pub(crate) async fn run_deploy(
         return run.end_partial().await;
     }
     run.stamp_unchanged().await;
-    let orphans_left = run.prune().await;
+    let left = run.prune().await;
     run.stop_if_cancelled().await?;
-    run.finalize(orphans_left).await
+    run.finalize(left).await
 }
 
 /// State for a single execution of [`run_deploy`].
@@ -1093,15 +1093,15 @@ impl<'a> Run<'a> {
     }
 
     /// Prune orphaned resources after all plan nodes reach a terminal verdict.
-    /// Returns `true` if any prunable orphans remain on the cluster so
-    /// finalization can record their source builds.
+    /// Returns the prunable orphans that remain on the cluster so
+    /// finalization can record them and their source builds.
     ///
     /// The orphans are deleted through [`DeleteOrder::walk`], and each delete
     /// waits for its object to be gone. An object still there after the wait
     /// fails the run, stays recorded as an orphan, and holds back the orphans
     /// it depends on, which the next prune deletes. When the cancel token
     /// fires during the prune, every orphan not deleted counts as cancelled.
-    async fn prune(&mut self) -> bool {
+    async fn prune(&mut self) -> Vec<ResourceId> {
         let prune = self.prune;
         let effective_orphans: Vec<ResourceId> = self
             .orphan_rids
@@ -1109,12 +1109,17 @@ impl<'a> Run<'a> {
             .filter(|rid| !self.consumed_orphans.contains(rid))
             .cloned()
             .collect();
-        let mut orphans_left = prune != PrunePolicy::Delete
-            && effective_orphans
+        let mut left: Vec<ResourceId> = if prune == PrunePolicy::Delete {
+            Vec::new()
+        } else {
+            effective_orphans
                 .iter()
-                .any(|rid| !never_pruned(rid.group_kind()));
+                .filter(|rid| !never_pruned(rid.group_kind()))
+                .cloned()
+                .collect()
+        };
         if effective_orphans.is_empty() || prune == PrunePolicy::Skip {
-            return orphans_left;
+            return left;
         }
         let mut order = prune_order(&effective_orphans, self.old_manifests);
         let delete = prune == PrunePolicy::Delete;
@@ -1130,7 +1135,7 @@ impl<'a> Run<'a> {
             delete,
         });
         if prune == PrunePolicy::WarnOnly {
-            return orphans_left;
+            return left;
         }
         order.retain(|rid| !never_pruned(rid.group_kind()));
         if let Some(record) = &self.record
@@ -1281,7 +1286,7 @@ impl<'a> Run<'a> {
                             Unfinished::Failed(message) => (message, None),
                             Unfinished::Cancelled => (String::new(), None),
                         };
-                        orphans_left = true;
+                        left.push(rid.clone());
                         result.failed += 1;
                         result.failures.push(NodeFailure {
                             node: NodeId::Resource(rid.clone()),
@@ -1296,7 +1301,7 @@ impl<'a> Run<'a> {
                     }
                     Walked::Done(Pruning::Unfinished(Unfinished::Cancelled))
                     | Walked::NotStarted => {
-                        orphans_left = true;
+                        left.push(rid.clone());
                         result.cancelled += 1;
                         emit(state(
                             rid,
@@ -1306,7 +1311,7 @@ impl<'a> Run<'a> {
                         ));
                     }
                     Walked::HeldBack(stuck) => {
-                        orphans_left = true;
+                        left.push(rid.clone());
                         if !shared.contains(stuck) {
                             result.kept += 1;
                         }
@@ -1321,7 +1326,7 @@ impl<'a> Run<'a> {
                         });
                     }
                     Walked::Cycle => {
-                        orphans_left = true;
+                        left.push(rid.clone());
                         result.kept += 1;
                         emit(DeployEvent::PruneKept {
                             resource: rid.clone(),
@@ -1332,7 +1337,7 @@ impl<'a> Run<'a> {
             )
             .await;
         self.result = result;
-        orphans_left
+        left
     }
 
     /// Stop a run that was cancelled while it pruned: report it, mark the
@@ -1383,7 +1388,8 @@ impl<'a> Run<'a> {
     }
 
     /// Finalize the Activation record unless the run was a no-op or a dry run.
-    async fn finalize(self, orphans_left: bool) -> Result<DeployResult, DeployError> {
+    /// `left` names the orphans the prune left on the cluster.
+    async fn finalize(self, left: Vec<ResourceId>) -> Result<DeployResult, DeployError> {
         let r = &self.result;
         let actually_changed = r.created > 0
             || r.configured > 0
@@ -1396,7 +1402,13 @@ impl<'a> Run<'a> {
         {
             match tokio::time::timeout(
                 INLINE_BEST_EFFORT_TIMEOUT,
-                record.finalize(r.failed > 0, orphans_left),
+                record.finalize(
+                    r.failed > 0,
+                    Left {
+                        orphans: &left,
+                        manifests: self.old_manifests,
+                    },
+                ),
             )
             .await
             {

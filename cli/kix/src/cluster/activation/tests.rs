@@ -864,45 +864,22 @@ mod listing_tests {
     }
 }
 
-mod package_index_tests {
+mod revision_map_tests {
     use super::super::*;
     use crate::cluster::fake_api::FakeApi;
-    use crate::eval::package_index::{FORMAT, IndexedPackage};
+    use crate::cluster::revision::RevisionMap;
+    use crate::eval::package_index::{FORMAT, IndexedPackage, RecordPackageIndex};
     use std::collections::BTreeMap;
 
-    fn index(resources: usize) -> RecordPackageIndex {
-        let hash = |i: usize| format!("{i:0>32}");
-        RecordPackageIndex {
-            format: FORMAT,
-            packages: BTreeMap::from([(
-                "app/web".to_string(),
-                IndexedPackage {
-                    instance: hash(0),
-                    resources: (1..=resources).map(hash).collect(),
-                },
-            )]),
-            cluster_level: vec![hash(resources + 1)],
-            names: BTreeMap::new(),
-            groups: None,
+    fn map(kept: Option<&str>) -> RevisionMap {
+        RevisionMap {
+            instances: BTreeMap::from([
+                ("app/web".to_string(), "c-1".to_string()),
+                ("data/db".to_string(), "c-2".to_string()),
+            ]),
+            cluster_level: "c-3".into(),
+            kept_orphans: kept.map(str::to_string),
         }
-    }
-
-    /// An index of `resources` objects with a name for each.
-    fn named(resources: usize) -> RecordPackageIndex {
-        let mut index = index(resources);
-        index.names = (0..=resources + 1)
-            .map(|i| {
-                (
-                    format!("{i:0>32}"),
-                    crate::eval::package_index::ObjectName(
-                        "ConfigMap".into(),
-                        "app".into(),
-                        format!("web-config-{i}"),
-                    ),
-                )
-            })
-            .collect();
-        index
     }
 
     async fn records_with(api: &FakeApi) -> Records {
@@ -921,66 +898,88 @@ mod package_index_tests {
         })
     }
 
-    /// `begin_deploy` writes the build's package index, with its format
-    /// number, beside the wave counters, and the record reads it back.
+    /// `begin_deploy` writes the map of revisions, with its format number,
+    /// in the same write as the phase, and no package index. The record
+    /// reads the map back.
     #[tokio::test]
-    async fn begin_deploy_writes_the_package_index() {
+    async fn begin_deploy_writes_the_revisions_and_no_package_index() {
         let api = FakeApi::new([record("c-new")]);
         let records = records_with(&api).await;
         records
-            .begin_deploy("c-new", 1, Some(&index(2)))
+            .begin_deploy("c-new", 1, Some(&map(None)))
             .await
             .unwrap();
         let read = records.get("c-new").await.unwrap().unwrap();
         assert_eq!(read.phase, PHASE_DEPLOYING);
-        assert_eq!(read.package_index, Some(index(2)));
+        assert_eq!(read.revisions, Some(map(None)));
 
-        let obj = records.api().get("c-new").await.unwrap();
-        let stored = &obj.data["status"][keys::PACKAGE_INDEX_FIELD];
-        assert_eq!(stored["format"], json!(FORMAT));
-        assert_eq!(
-            stored["packages"]["app/web"]["resources"],
-            json!([format!("{:0>32}", 1), format!("{:0>32}", 2)])
-        );
-        assert_eq!(stored["clusterLevel"], json!([format!("{:0>32}", 3)]));
+        let status = &records.api().get("c-new").await.unwrap().data["status"];
+        assert_eq!(status["revisions"]["format"], json!(1));
+        assert_eq!(status["revisions"]["clusterLevel"], "c-3");
+        assert_eq!(status["revisions"]["instances"]["app/web"], "c-1");
+        assert!(status.get(keys::PACKAGE_INDEX_FIELD).is_none(), "{status}");
+        let patches: Vec<String> = api
+            .requests()
+            .into_iter()
+            .filter(|r| r.starts_with("PATCH"))
+            .collect();
+        assert_eq!(patches.len(), 1, "{patches:?}");
     }
 
-    /// An index over the size limit is not written, and the deploy still
-    /// begins. A record without an index reads as having none.
+    /// A deploy that begins again on a record keeps the kept orphans a
+    /// finished deploy named. `record_finish` replaces them, and a map
+    /// that names none clears them.
     #[tokio::test]
-    async fn an_oversized_index_is_skipped_and_the_deploy_begins() {
-        let api = FakeApi::new([record("c-big")]);
+    async fn only_a_finished_deploy_changes_the_kept_orphans() {
+        let api = FakeApi::new([record("c-new")]);
         let records = records_with(&api).await;
-        let big = index(crate::eval::package_index::MAX_BYTES / 32);
-        records.begin_deploy("c-big", 1, Some(&big)).await.unwrap();
-        let read = records.get("c-big").await.unwrap().unwrap();
-        assert_eq!(read.phase, PHASE_DEPLOYING);
-        assert_eq!(read.package_index, None);
+        records
+            .record_finish("c", "c-new", None, None, &[], Some(&map(Some("c-4"))))
+            .await
+            .unwrap();
+        records
+            .begin_deploy("c-new", 1, Some(&map(None)))
+            .await
+            .unwrap();
+        let read = records.get("c-new").await.unwrap().unwrap();
+        assert_eq!(read.revisions, Some(map(Some("c-4"))));
+
+        records
+            .record_finish("c", "c-new", None, None, &[], Some(&map(None)))
+            .await
+            .unwrap();
+        let read = records.get("c-new").await.unwrap().unwrap();
+        assert_eq!(read.revisions, Some(map(None)));
     }
 
-    /// An index that fits only without its names is written without them.
+    /// A record an earlier Kix wrote has a package index and no map. The
+    /// index still reads, and a map in a format this release does not know
+    /// reads as none.
     #[tokio::test]
-    async fn an_index_too_large_for_its_names_is_written_without_them() {
-        let api = FakeApi::new([record("c-names")]);
+    async fn an_earlier_records_index_still_reads() {
+        let index = RecordPackageIndex {
+            format: FORMAT,
+            packages: BTreeMap::from([(
+                "app/web".to_string(),
+                IndexedPackage {
+                    instance: format!("{:0>32}", 0),
+                    resources: vec![format!("{:0>32}", 1)],
+                },
+            )]),
+            cluster_level: Vec::new(),
+            names: BTreeMap::new(),
+            groups: None,
+        };
+        let mut old = record("c-old");
+        old["status"] = json!({
+            (keys::PACKAGE_INDEX_FIELD): index.to_value(),
+            "revisions": { "format": 2, "instances": {}, "clusterLevel": "c-9" },
+        });
+        let api = FakeApi::new([old]);
         let records = records_with(&api).await;
-        let small = named(2);
-        records
-            .begin_deploy("c-names", 1, Some(&small))
-            .await
-            .unwrap();
-        let read = records.get("c-names").await.unwrap().unwrap();
-        assert_eq!(read.package_index, Some(small));
-
-        let api = FakeApi::new([record("c-many")]);
-        let records = records_with(&api).await;
-        let many = named(crate::eval::package_index::MAX_BYTES / 80);
-        assert!(many.to_value().to_string().len() > crate::eval::package_index::MAX_BYTES);
-        records
-            .begin_deploy("c-many", 1, Some(&many))
-            .await
-            .unwrap();
-        let read = records.get("c-many").await.unwrap().unwrap();
-        assert_eq!(read.package_index, Some(many.without_names()));
+        let read = records.get("c-old").await.unwrap().unwrap();
+        assert_eq!(read.package_index, Some(index));
+        assert_eq!(read.revisions, None);
     }
 }
 

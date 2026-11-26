@@ -312,3 +312,228 @@ async fn deleting_a_missing_revision_succeeds() {
     store.delete(&rev.name).await.unwrap();
     assert_eq!(store.get(&rev.name).await.unwrap(), None);
 }
+
+#[test]
+fn of_applied_names_only_what_the_filter_keeps() {
+    let g = graph(&[web("3"), db()], &namespaces(), "8");
+    let all = RevisionSet::of(CLUSTER, &g);
+    let no_b = RevisionSet::of_applied(CLUSTER, &g, |m| m["metadata"]["name"] != "b");
+    let names =
+        |r: &Revision| -> Vec<String> { r.spec.objects.iter().map(|o| o.name.clone()).collect() };
+    assert_eq!(names(&all.instances["apps/web"]), ["web", "a", "b"]);
+    assert_eq!(names(&no_b.instances["apps/web"]), ["web", "a"]);
+    assert_eq!(all.instances["data/db"], no_b.instances["data/db"]);
+    assert_eq!(all.cluster_level, no_b.cluster_level);
+}
+
+#[test]
+fn a_map_round_trips_and_names_every_revision() {
+    let set = RevisionSet::of(CLUSTER, &graph(&[web("3"), db()], &namespaces(), "8"));
+    let mut map = RevisionMap::of(&set);
+    assert_eq!(map.kept_orphans, None);
+    assert_eq!(map.to_value()["keptOrphans"], Value::Null);
+    assert_eq!(RevisionMap::from_value(&map.to_value()), Some(map.clone()));
+    map.kept_orphans = Some("c1-kept".into());
+    assert_eq!(RevisionMap::from_value(&map.to_value()), Some(map.clone()));
+    let mut names: Vec<&str> = map.names().collect();
+    names.sort();
+    let mut expected: Vec<&str> = set
+        .all()
+        .map(|r| r.name.as_str())
+        .chain(["c1-kept"])
+        .collect();
+    expected.sort();
+    assert_eq!(names, expected);
+
+    let mut other = map.to_value();
+    other["format"] = json!(2);
+    assert_eq!(RevisionMap::from_value(&other), None);
+    assert_eq!(RevisionMap::from_value(&json!({})), None);
+}
+
+#[test]
+fn a_manifest_names_its_object_by_its_identity_hash() {
+    let mut manifest = cm("apps", "a");
+    assert_eq!(RevisionObject::of_manifest(&manifest), None);
+    manifest["metadata"]["annotations"] = json!({ (keys::IDENTITY_HASH): "h1" });
+    assert_eq!(
+        RevisionObject::of_manifest(&manifest),
+        Some(RevisionObject {
+            hash: "h1".into(),
+            group: String::new(),
+            kind: "ConfigMap".into(),
+            namespace: Some("apps".into()),
+            name: "a".into(),
+        })
+    );
+}
+
+mod keep_tests {
+    use super::*;
+    use crate::cluster::activation::{Record, Records};
+    use crate::cluster::head::{HeadStatus, LockState, Purpose};
+    use crate::manifest::lifecycle::{
+        PHASE_ACTIVE, PHASE_DEGRADED, PHASE_DEPLOYING, PHASE_FAILED, PHASE_PARTIAL, PHASE_QUEUED,
+        PHASE_SUPERSEDED,
+    };
+
+    fn map(name: &str) -> RevisionMap {
+        RevisionMap {
+            instances: BTreeMap::from([("apps/web".to_string(), format!("{name}-web"))]),
+            cluster_level: format!("{name}-cl"),
+            kept_orphans: Some(format!("{name}-kept")),
+        }
+    }
+
+    fn rec(name: &str, phase: &str) -> Record {
+        Record {
+            name: name.into(),
+            phase: phase.into(),
+            revisions: Some(map(name)),
+            ..Default::default()
+        }
+    }
+
+    fn head(current: Option<&str>, deploying: Option<&str>) -> HeadStatus {
+        HeadStatus {
+            current: current.map(str::to_string),
+            lock: deploying.map(|a| LockState {
+                holder: "h".into(),
+                hint: String::new(),
+                activation: Some(a.into()),
+                purpose: Purpose::Deploy,
+                renewed: "2026-11-26T00:00:00Z".into(),
+                duration_seconds: 30,
+                waiting: None,
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// Return which of the records' revisions `needed` keeps, as record
+    /// names.
+    fn kept(head: Option<&HeadStatus>, records: &[Record]) -> Vec<String> {
+        let names = keep::needed(head, records);
+        let mut out: Vec<String> = records
+            .iter()
+            .filter(|r| {
+                let all: Vec<String> = map(&r.name).names().map(str::to_string).collect();
+                let some = all.iter().any(|n| names.contains(n));
+                assert_eq!(some, all.iter().all(|n| names.contains(n)), "{}", r.name);
+                some
+            })
+            .map(|r| r.name.clone())
+            .collect();
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn needed_keeps_what_every_record_but_a_superseded_one_names() {
+        let records = [
+            rec("active", PHASE_ACTIVE),
+            rec("degraded", PHASE_DEGRADED),
+            rec("deploying", PHASE_DEPLOYING),
+            rec("failed", PHASE_FAILED),
+            rec("partial", PHASE_PARTIAL),
+            rec("queued", PHASE_QUEUED),
+            rec("new", ""),
+            rec("superseded", PHASE_SUPERSEDED),
+            rec("rollback", PHASE_SUPERSEDED),
+            rec("committed", PHASE_SUPERSEDED),
+        ];
+        let cases: [(Option<HeadStatus>, &[&str]); 3] = [
+            (
+                None,
+                &[
+                    "active",
+                    "degraded",
+                    "deploying",
+                    "failed",
+                    "new",
+                    "partial",
+                    "queued",
+                ],
+            ),
+            (
+                Some(head(Some("committed"), Some("rollback"))),
+                &[
+                    "active",
+                    "committed",
+                    "degraded",
+                    "deploying",
+                    "failed",
+                    "new",
+                    "partial",
+                    "queued",
+                    "rollback",
+                ],
+            ),
+            (
+                Some(head(None, None)),
+                &[
+                    "active",
+                    "degraded",
+                    "deploying",
+                    "failed",
+                    "new",
+                    "partial",
+                    "queued",
+                ],
+            ),
+        ];
+        for (head, expected) in cases {
+            assert_eq!(kept(head.as_ref(), &records), expected, "{head:?}");
+        }
+
+        let no_map = Record {
+            name: "old".into(),
+            phase: PHASE_ACTIVE.into(),
+            ..Default::default()
+        };
+        assert!(keep::needed(None, &[no_map]).is_empty());
+    }
+
+    fn activation(name: &str, phase: &str, map: &RevisionMap) -> Value {
+        json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": "Activation",
+            "metadata": {
+                "name": name,
+                "labels": { "app.kubernetes.io/managed-by": "kix", (keys::CLUSTER_LABEL): CLUSTER },
+            },
+            "status": { "phase": phase, "revisions": map.to_value() },
+        })
+    }
+
+    /// `clean` deletes the revisions only a `Superseded` record names and
+    /// leaves another Kix cluster's revisions alone.
+    #[tokio::test]
+    async fn clean_deletes_what_no_needed_record_names() {
+        let current = RevisionSet::of(CLUSTER, &graph(&[web("3"), db()], &namespaces(), "8"));
+        let old = RevisionSet::of(CLUSTER, &graph(&[web("9"), db()], &namespaces(), "b"));
+        let theirs = revision("c2", "apps/web");
+        let api = FakeApi::new([
+            activation("now", PHASE_ACTIVE, &RevisionMap::of(&current)),
+            activation("before", PHASE_SUPERSEDED, &RevisionMap::of(&old)),
+        ]);
+        let client = api.client();
+        let store = Revisions::new(&client);
+        for rev in current.all().chain(old.all()).chain([&theirs]) {
+            store.create(rev).await.unwrap();
+        }
+        let discovery = crate::cluster::discovery::discover_resources(&client)
+            .await
+            .unwrap();
+        let records = Records::open_installed(&client, &discovery).unwrap();
+        let deleted = keep::clean(&client, &records, CLUSTER).await.unwrap();
+        assert_eq!(deleted, vec![old.instances["apps/web"].name.clone()]);
+        let mut expected: Vec<String> = current
+            .all()
+            .map(|r| r.name.clone())
+            .chain([theirs.name.clone()])
+            .collect();
+        expected.sort();
+        assert_eq!(api.names(KIND), expected);
+    }
+}

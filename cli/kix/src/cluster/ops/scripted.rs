@@ -664,11 +664,11 @@ impl DeployRecord for ScriptedOps {
     async fn finalize(
         &self,
         had_failures: bool,
-        orphans_left: bool,
+        left: super::Left<'_>,
     ) -> Result<Option<Finalized>, RecordWriteError> {
         self.record(Call::Finalize {
             had_failures,
-            orphans_left,
+            orphans_left: left.any(),
         });
         let b = self.finalize.lock().unwrap().clone();
         b.run().await.map_err(RecordWriteError::Scripted)

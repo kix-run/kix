@@ -30,7 +30,7 @@ mod tests;
 
 use std::collections::{BTreeMap, HashSet};
 
-use crate::eval::package_index::{self, RecordPackageIndex};
+use crate::cluster::revision::RevisionMap;
 use crate::legacy_domain::{self, LegacyDomainError};
 use crate::manifest::keys;
 use crate::manifest::lifecycle::{
@@ -58,8 +58,9 @@ pub(crate) use record::KeptOrphans;
 
 use record::{
     FAILED_ATTEMPTS_FIELD, FAILED_REQUEST_FIELD, FINISHED_REQUEST_FIELD, PARTIAL_FIELD,
-    REQUEST_FIELD, STARTED_REQUEST_FIELD, is_current_phase, parse_time, phase_on_abort,
-    phase_on_begin, phase_on_end_partial, pick_current, read_phase, sort_newest_first,
+    REQUEST_FIELD, REVISIONS_FIELD, STARTED_REQUEST_FIELD, is_current_phase, parse_time,
+    phase_on_abort, phase_on_begin, phase_on_end_partial, pick_current, read_phase,
+    sort_newest_first,
 };
 
 /// Return whether `phase` makes a record current (`Active` or `Degraded`).
@@ -924,6 +925,7 @@ impl Records {
             old_activation,
             receipt,
             orphans_kept_from,
+            None,
         )
         .await?;
         self.settle_phases(
@@ -939,6 +941,8 @@ impl Records {
     /// becomes current: the predecessor link, deployment timestamp, cluster
     /// label, and receipt. `orphans_kept_from` replaces
     /// `status.orphansKeptFrom` (an empty slice clears the field).
+    /// `revisions`, when given, replaces `status.revisions`, and a map that
+    /// names no kept orphans clears an earlier `keptOrphans`.
     pub(crate) async fn record_finish(
         &self,
         cluster_name: &str,
@@ -946,6 +950,7 @@ impl Records {
         old_activation: Option<&Record>,
         receipt: Option<&Value>,
         orphans_kept_from: &[KeptOrphanSource],
+        revisions: Option<&RevisionMap>,
     ) -> Result<(), RecordsError> {
         let now = chrono::Utc::now().to_rfc3339();
 
@@ -997,6 +1002,9 @@ impl Records {
                 json!(orphans_kept_from)
             },
         );
+        if let Some(map) = revisions {
+            status.insert(REVISIONS_FIELD.to_string(), map.to_value());
+        }
         self.patch_status(new_activation_name, &json!({ "status": status }))
             .await
     }
@@ -1059,7 +1067,7 @@ impl Records {
     }
 
     /// Set the Activation phase to `Deploying`, initialize wave counters, and
-    /// write the build's package index.
+    /// write the revisions the deploy is made of.
     ///
     /// Called at the start of the apply loop after the record is created. Sets
     /// `status.phase = Deploying` and `status.totalWaves = total_waves`, unless
@@ -1072,16 +1080,16 @@ impl Records {
     /// build adds to the list. A run that stops ends `Failed` with no
     /// `status.partial`.
     ///
-    /// Then writes `package_index` to `status.packageIndex` with a patch of
-    /// its own. The index only helps a later diff group objects, so a failure
-    /// to write it, or an index over [`package_index::MAX_BYTES`], logs a
-    /// warning and the deploy goes on. Writing it separately keeps such a
-    /// failure from losing the phase.
+    /// `revisions` goes to `status.revisions` in the same write as the
+    /// phase, so a record never shows a deploy without the revisions it
+    /// names. The caller creates the revisions after this write. The
+    /// `keptOrphans` entry is left as it is, because only a finished deploy
+    /// changes it ([`Records::record_finish`]).
     pub(crate) async fn begin_deploy(
         &self,
         activation_name: &str,
         total_waves: usize,
-        package_index: Option<&RecordPackageIndex>,
+        revisions: Option<&RevisionMap>,
     ) -> Result<Vec<String>, RecordsError> {
         let item = self
             .api()
@@ -1103,44 +1111,17 @@ impl Records {
         // Clear any failure status from a prior attempt on the same record.
         status.insert("failure".to_string(), Value::Null);
         status.insert(PARTIAL_FIELD.to_string(), Value::Null);
+        if let Some(map) = revisions {
+            let mut value = map.to_value();
+            if let Some(fields) = value.as_object_mut() {
+                fields.remove("keptOrphans");
+            }
+            status.insert(REVISIONS_FIELD.to_string(), value);
+        }
 
         self.patch_status(activation_name, &json!({ "status": status }))
             .await?;
-
-        if let Some(index) = package_index {
-            self.write_package_index(activation_name, index).await;
-        }
         Ok(earlier_only)
-    }
-
-    /// Write `index` to the record's `status.packageIndex`, warning instead
-    /// of failing. The index only helps later commands group and name
-    /// objects, so a failure must not stop a deploy. See
-    /// [`Records::begin_deploy`].
-    ///
-    /// An index over [`package_index::MAX_BYTES`] is written without its
-    /// names, and one still over the limit is not written.
-    pub async fn write_package_index(&self, activation_name: &str, index: &RecordPackageIndex) {
-        let Some(value) = sized_index(index) else {
-            tracing::warn!(
-                activation = %activation_name,
-                limit = package_index::MAX_BYTES,
-                "the build's package index is too large to store on its record; \
-                 a diff on a machine without this build will show an object that \
-                 moved between packages only under its new package",
-            );
-            return;
-        };
-        let patch = json!({ "status": { (keys::PACKAGE_INDEX_FIELD): value } });
-        if let Err(e) = self.patch_status(activation_name, &patch).await {
-            tracing::warn!(
-                activation = %activation_name,
-                error = %e,
-                "could not store the build's package index on its record; \
-                 a diff on a machine without this build will show an object that \
-                 moved between packages only under its new package",
-            );
-        }
     }
 
     /// Mark a `Queued` record `Failed` with `reason` before the operator
@@ -1331,22 +1312,4 @@ fn current_of<'a>(items: &'a [DynamicObject], cluster: &str) -> Option<&'a Dynam
         );
     }
     current_record(current)
-}
-
-/// Return `index` as the JSON a record stores: with its names when it fits
-/// in [`package_index::MAX_BYTES`], else without them, else `None`.
-fn sized_index(index: &RecordPackageIndex) -> Option<Value> {
-    let fits = |v: &Value| v.to_string().len() <= package_index::MAX_BYTES;
-    let full = index.to_value();
-    if fits(&full) {
-        return Some(full);
-    }
-    let bare = index.without_names().to_value();
-    if fits(&bare) {
-        tracing::debug!(
-            "writing the package index without object names to stay under its size limit"
-        );
-        return Some(bare);
-    }
-    None
 }

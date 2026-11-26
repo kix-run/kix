@@ -66,11 +66,11 @@ use crate::cluster::migrate::{MigrationPair, detect_migration_pairs};
 use crate::cluster::ops::ResourceIo;
 use crate::cluster::ops::{Cluster, DryRun, KubeResources, RecordConfig};
 use crate::cluster::preview::{DryRunAnswer, DryRunOutcome, PruneAnswer};
+use crate::cluster::revision::RevisionSet;
 use crate::cluster::scheduler::{
     self, DeployError, DeployPlan, Ending, LastRuns, PrunePolicy, SchedulerConfig,
 };
 use crate::cluster::stream::{DeployObserver, DeployResult, NodeId};
-use crate::eval::package_index::RecordPackageIndex;
 use crate::eval::store_graph::StoreGraph;
 use crate::manifest::types::ResourceId;
 use crate::manifest::{keys, lifecycle};
@@ -161,8 +161,9 @@ pub struct CheckedPlan {
     /// The baseline's manifests ([`Baseline::manifests`]), which order the
     /// prune.
     old_manifests: Vec<Value>,
-    /// The new build's package index, for the record's `status.packageIndex`.
-    package_index: RecordPackageIndex,
+    /// The new build's revisions, which the run's record names. A plan
+    /// made with `--only` names every instance of the build too.
+    revisions: RevisionSet,
     /// What the checks a run makes when it connects after the plan
     /// (`--offline`) read from the new build.
     target_checks: TargetChecks,
@@ -389,12 +390,6 @@ impl CheckedPlan {
         self.activation_name.as_deref()
     }
 
-    /// Return the new build's package index, for the record's
-    /// `status.packageIndex`.
-    pub fn package_index(&self) -> &RecordPackageIndex {
-        &self.package_index
-    }
-
     /// Return the identity hash of the new build's Activation record.
     pub fn activation_identity_hash(&self) -> Option<&str> {
         self.activation_identity_hash.as_deref()
@@ -586,7 +581,7 @@ impl CheckedPlan {
                 receipt,
                 consumed_failed: self.consumed_failed,
                 kept_orphans: self.kept_orphans,
-                package_index: Some(self.package_index),
+                revisions: Some(self.revisions),
                 only,
                 mark_failed_on_abort: true,
                 lock: Some(lock),
@@ -1238,7 +1233,7 @@ impl<'a> Planner<'a> {
             consumed_failed,
             cluster: cluster.to_string(),
             old_manifests: baseline.manifests(),
-            package_index: RecordPackageIndex::of(new_graph),
+            revisions: RevisionSet::of(cluster, new_graph),
             target_checks: TargetChecks::of(new_graph),
             left_alone: selection.as_ref().map(|s| s.left_alone),
             needed: selection.map(|s| s.needed).unwrap_or_default(),

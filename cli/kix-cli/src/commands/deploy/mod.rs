@@ -1311,7 +1311,6 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
         .then(|| p.checked.target_checks().clone());
     let activation_identity_hash = p.checked.activation_identity_hash().map(str::to_string);
     let kubernetes_uid = p.build.graph().kubernetes_uid.clone();
-    let package_index = p.checked.package_index().clone();
     let build = p.build;
     let result_path = build.graph().built_via.clone();
 
@@ -1366,7 +1365,6 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
             activation_identity_hash.as_deref(),
             kubernetes_uid.as_deref(),
             Some(&receipt),
-            &package_index,
         )
         .await?;
         // The operator may already be deploying, so a failed note warns
