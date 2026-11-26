@@ -557,7 +557,7 @@ mod tests {
                 discovery,
                 "a".into(),
                 None,
-                false,
+                crate::cluster::ops::Force::None,
             )),
             RecordConfig {
                 name: name.map(str::to_string),

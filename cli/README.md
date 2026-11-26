@@ -658,16 +658,18 @@ new Build (Build::of_flake, or --bundle → Build::carried; checked for a retire
       → load the builds the Active record's status.orphansKeptFrom names
       → leave out the Failed records if another (non-operator) deploy of this cluster is Deploying
       → else load every Failed record and resolve each to its closure in the local store
-    → the changes: Baseline::changes
-      → detect_changes (identity-hash set diff, local only)
-      → fold_failed_closures (re-apply what a failed deploy may have changed, orphan what it left)
-      → fold_kept_closures (orphan what the builds in the Active record's status.orphansKeptFrom declared and this build does not)
+    → the changes, chosen by `decide::Ledger::of` (see "Baseline: what a plan compares against"):
+      a Kix cluster read from revisions, connected → the one planner: list the build's objects and the ones its records name (`listed_ids`), then `decide::decide` (three rules per object; orphans from the current, kept-orphans, Failed, and Partial revisions)
+      any other, or --offline → Baseline::changes
+        → detect_changes (identity-hash set diff, local only)
+        → fold_failed_closures (re-apply what a failed deploy may have changed, orphan what it left)
+        → fold_kept_closures (orphan what the builds in the Active record's status.orphansKeptFrom declared and this build does not)
     → Planner::plan: keep_shared, DeployPlan::from_graph_and_changes (no wave layer), the package diff
       → plan::objects::of: refuse unless every write and delete is one the package-grouped plan shows (see "Writes the plan shows")
   → when connected and there is something to write: the engine over the plan as a dry run (`kix plan`)
   → show package-grouped plan, refused writes, drift → stop if a write would be refused (`--on-error stop`) → confirm
   → head::take (the deploy lock, bound to the generation the plan read; see "Deploy lock")
-  → CheckedPlan::run → scheduler::run_deploy (DAG-streaming, SSA + readiness per node, every write through Lock::guarded)
+  → CheckedPlan::run → scheduler::run_deploy (DAG-streaming, SSA + readiness per node, every write through Lock::guarded; the objects labelled `RevertsDrift` applied with force)
     → record.begin: create the Activation CR and mark it Deploying
   → DeployRecord::before_prune renews the lock → prune orphans (named in the plan and in `DeployEvent::PruneStart { resources, kept, delete }`, which carries the never-pruned Namespaces and CRDs in `kept` apart from `resources` under every policy, so each renderer lists them as kept; warn-only unless `--prune`) → finalize activation
     (finalize: record_finish → Lock::commit → settle_phases; the caller releases the lock)
@@ -1374,11 +1376,75 @@ entirely and restores the previous behaviour.
 
 ## Baseline: what a plan compares against
 
-A deploy or rollback decides what to do by comparing compiler outputs: the
-closure it is about to apply against the closure the cluster already runs.
-Live cluster state is consulted to *execute* (SSA, delete) and to *observe*
-(readiness), never to decide. Do not add a live read to the
-decision path; if the from-side looks wrong, the from-side is what to fix.
+### The one planner (a Kix cluster read from revisions)
+
+For a Kix cluster read from revisions (`Tenancy::own_source() ==
+Source::Revisions`: its head names a current record with a readable
+`status.revisions`), one function decides what a deploy does to each object:
+`plan::decide::decide(new, made, live, ledger, reconcile) -> Decided`
+(`kix/src/plan/decide.rs`). `kix plan`, `kix deploy`, `kix rollback`, and the
+operator's deploy and repair all call it, from the same stored facts: the new
+build, the live objects (`inventory::LiveObjects`, one LIST per kind of the
+build and of every object the ledger names), and the Kix cluster's records and
+revisions (`decide::Ledger`, read from the `Tenancy` the plan already holds,
+with the applied hashes of `revision::AppliedHashes`). Live state decides.
+
+For each object of the new build, in this order:
+
+1. The live object is missing or being deleted, or its build hash
+   (`kix.run/identity-hash`) or owner stamps differ from the new build's:
+   apply. Label: none for an intended change; `AppliedByRecord(record)` when a
+   `Failed` or `Partial` record's revision names the live build hash;
+   `LeftByDegraded(record)` when the current `Degraded` record names the
+   object with a hash the live object does not carry.
+2. The build hashes match and Kix has no applied hash: apply, labelled
+   `AppliedHashMissing`. The run writes the applied hash
+   (`DeployRecord::write_applied`), so the next plan leaves it unchanged. A
+   missing hash never reads as in sync.
+3. The applied hash differs from the hash of the live object's Kix-owned
+   fields (`drift::check_object`): apply, labelled `RevertsDrift(report)`.
+
+Otherwise the object is unchanged and nothing is written to it. The
+Activation record is decided by rule 1 only, because no revision names it. A
+kind the account may not list is left alone (`Label::NotListed`) and reported
+through `PlanEvent::KindsUnread`.
+
+An orphan is a live, prunable object that the new build does not make and that
+the current record's revisions, its kept-orphans revision, or a `Failed` or
+`Partial` record's revisions name. A `Failed` or `Partial` record left an
+object only when the live object carries the build hash its revision gives the
+object, so a run that died before it wrote applied hashes still leaves objects
+the next deploy takes in. `Failed` and `Partial` records are left out while
+another deploy may be running (`FailedBaseline::left_out`); otherwise the run
+supersedes each one it took in (`Ledger::taken_in`). `made` is every object of
+the build, so the CRDs and the record the operator leaves out of `new` are not
+orphans. Objects another Kix cluster still deploys are kept (`keep_shared`).
+
+The plan document carries the labels as `objects.writes[].reason`
+(`document::WriteReason`), and the text plan counts them. `kix deploy` applies
+with force exactly the objects labelled `RevertsDrift` (`ops::Force::Only`;
+`--force-conflicts` still forces every apply), so a revert of drift takes back
+the fields others changed and any other conflict still stops the deploy. The
+operator never forces: a conflict fails the object, the run reports it through
+its Events and logs, and the next try comes at the operator's requeue
+interval.
+
+The builds stay the source of three things: the old side of the package diff
+people review (`Baseline::diff_side`), migration pairs, and `--offline`. A
+plan under `--offline` compares builds, and `kix deploy --offline` runs that
+plan; it does not plan again once it connects.
+
+`Ledger::of` returns `None` for any other Kix cluster, and the plan compares
+builds as below. A Kix cluster that no Kix with revisions has deployed plans
+that way on its first deploy by this Kix.
+
+### Comparing builds (a Kix cluster not read from revisions)
+
+A deploy or rollback of such a cluster decides what to do by comparing
+compiler outputs: the closure it is about to apply against the closure the
+cluster already runs. Live state is read only to write again an unchanged
+object the cluster no longer holds, to find which objects a `Failed` deploy
+created (`Baseline::read_folded_leftovers`), and to keep shared orphans.
 
 The from-side has three parts:
 
@@ -1532,7 +1598,8 @@ a record line need regenerating.
 #### plan (`kix/src/plan/`)
 
 - `planner.rs`: `Planner::new(PlanFlags, &dyn Fn(PlanEvent))`. `run(InstallableBuild, &OldSide) -> Planned` connects unless `OldSide::LocalCache`, loads the baseline, and runs `plan`. `plan(build graph, cluster, &Baseline, Option<&Client>) -> CheckedPlan` with a client lists the build's kinds (`read_live`), computes the changes (`Baseline::changes`, writing again the unchanged objects the cluster no longer holds, and the kept-orphan list), keeps apart the orphans another Kix cluster deploys (`keep_shared`, under `cluster`, the name the records were found by), builds the `DeployPlan` and the `PackageDiff`, and runs the objects check, refused with `PlanError::Unshown`. `Planned` is plain data with public fields: the build, its manifests, `connected: Option<Connected>` (the client and the `LastRuns` the plan read with it; `None` under `--offline`, so code cannot ask a cache-made plan what only the cluster answers), the baseline, the migration pairs, and the `CheckedPlan`. Its manifests stay private, so `Planned::annotate_record`, which refuses Kix's own keys, is the only way to change them. `CheckedPlan` is made only by the check: its fields are private and read through accessors, and the only changes after the check are `Planned::annotate_record` (`--record-annotation` on the record, refused under Kix's own domain), `Planned::overlay` (the dry run's answers in the package diff, returning `Differences { drift, earlier }`, or `None` without the deployed build; a live value that differs from the deployed build and equals the value in a folded record's build, compared exactly by `origin::ThreeWay` against `Overlay::folded`, is labelled `applied_by_earlier_deploy` and listed in `Plan.earlier_deploys` instead of the drift), and `CheckedPlan::keep_shared` (a plan made without a client, once connected; it only removes orphans from the prune), and `CheckedPlan::read_last_runs` (it recreates rerun Jobs whose last run failed, which `objects` already lists as re-applies, and returns `LastRuns`: `Read { failed }` with the unchanged Jobs whose last run failed, or `Unreadable` when Kix could not read one, so the run reads it itself). `Planner::run` reads them when it connects and keeps the answer in `Connected`; `Planner::rollback` reads them the same way; `kix deploy --offline` reads them once it connects. Only that read makes a `LastRuns`, and `CheckedPlan::work(&LastRuns) -> Work` (`Nothing`, `JobsOnly`, `Changes`) and `CheckedPlan::start(client, &LastRuns) -> Start` take one, so nothing can ask whether there is work before the plan has read the cluster. `start` returns `Start::Nothing { superseded }` after marking the Failed records the plan folded in Superseded (no run finalizes them), and `Start::Run` otherwise. `CheckedPlan` also keeps the record's manifest (created before the first node), the Failed records the baseline folded in (superseded on finalize), the Kix cluster the check found its records and shared orphans by, and the baseline's manifests (which order the prune); `annotate_record` writes the record copy too. `CheckedPlan::dry_run(Target, config, observer)` runs the engine over the plan through `ops::DryRun` and returns the apiserver's answers with the result (`kix plan`, `kix deploy`'s preview). `CheckedPlan::run(Target, receipt, config, observer)` is how deploy and rollback reach the engine, with the prune policy and conflict handling of the flags the check used. It builds the run's `ops::Cluster` itself, with the cluster, prune policy, conflict handling, old manifests, and the Activation record's name, identity hash, manifest, kept-orphans list, and consumed Failed records all from the checked plan, so the run finalizes and prunes under the cluster the check used and writes the record the check saw; it returns the `status.orphansKeptFrom` finalize wrote with the result. The caller supplies a `Target` and, for a deploy, the receipt. `Target::connect(client, sops)` is the only way to make a `Target`: it discovers through its own client, so the run's records are opened from what that cluster serves, and callers read `Target::discovery` for their own checks. Rollback refuses a target whose build names another Kix cluster than the one it found its records by. `scheduler::run_deploy` is private to the library: the only other way to it is the operator's `live::LivePlan`. So are the writes a run makes on its own: `apply::apply_resource`, `apply::record_activation_on_skipped`, and the record lifecycle writes `Records::begin_deploy`, `fail_deploy`, `record_waves`, and `finalize_deploy`. The one way in to a write outside the engine is `prune_guard` (`PruneGuard::new`, `PruneGuard::delete`, and `delete_in_order` stay public), because `kix gc` and the operator's finalizer delete through it. `Baseline` has no public constructor but `of_record`. `Planner::planned`, connected, first runs `Baseline::read_folded_leftovers`: every object of a folded (Failed) build that neither the new build nor the Active closure holds is read once (parallel gets, a failed read is `PlanError::FoldedLeftovers`), and `FailedBaseline::keep_created` drops it from the folded build unless the cluster holds it with that record's identity hash in `kix.run/activations`. Every apply stamps that hash (`apply_resource`, which fails when it cannot), and an object a run left unchanged is in the Active closure, so the folded builds then list only what their deploys created, and the orphans, `status.orphansKeptFrom`, and its GC roots follow. `PlanEvent` and `PlanError` are in `mod.rs`. `PlanFlags::prune_policy` (in `document.rs`) says what a run's prune deletes. Rollback runs `Planner::rollback` (`run`'s tail, `planned`, over `Baseline::of_record` instead of a connect and `of_cluster`), which loads the current record's build through `record_graph`; when it cannot (not on this machine, will not load, or another build), the rollback says so, compares with no current build, and lists the current record as unexamined in the target's `orphansKeptFrom`, so a later prune that can read it removes its objects. A current record with no identity hash names no build to look for and cannot be listed, so the rollback says so (`PlanEvent::ActiveWithoutHash`) and points at `kix gc --full-scan`. The objects check's tests (`plan_bound_tests.rs`, `kix-bundle/tests/plan_bound.rs`) run `plan`
-- `live.rs`: the operator's plan. `LivePlan::sweep(client, &activation, &desired)` takes the Activation record being reconciled, discovers, opens the records past the domain gate (`LivePlanError::Domain`; a failed discovery or sweep is `LivePlanError::Fetch`), sweeps the live objects of the record's Kix cluster (`live::cluster_of`: the `kix.run/cluster` label, else `spec.cluster`; `SweepScope::Cluster`), compares the build with them by identity hash (`detect_changes_live`) and keeps out the orphans another Kix cluster's current build contains, and builds the engine plan from the changes (failing on a graph error or a malformed import marker). `LivePlan::read_last_runs` reads the last runs of its Jobs through the same `DeployPlan::read_last_runs` the CLI's plan uses, so a failed Job under `kix.run/rerun` runs again; the operator calls it only when it starts a Queued record (`Reconcile::Start` in `kix-operator/src/controller.rs`), never on a resume or a repair, which it retries. The `LivePlan` it returns carries the counts, the shared orphans, and what the sweep left out for the operator's logs, and `LivePlan::run(manage_lifecycle, config, observer)` runs the engine with `PrunePolicy::Delete` and the operator's record settings: that record's identity hash stamped on every write, its lifecycle written only with `manage_lifecycle` (drift correction leaves it alone), no receipt, no record manifest, no conflict takeover, and never marked Failed on abort. `sweep` is the only way to make one, so the operator's plan is always one made from the live objects and its run writes the record it was made for. No check holds it to a package diff.
+- `decide.rs`: the one planner for a Kix cluster read from revisions; see "Baseline: what a plan compares against". `Ledger::of(&Tenancy, take_in_stopped)` is the one place that chooses it over the comparison of builds.
+- `live.rs`: the operator's plan. `LivePlan::sweep(client, &activation, &desired, revisions)` takes the Activation record being reconciled, discovers, opens the records past the domain gate (`LivePlanError::Domain`; a failed discovery or sweep is `LivePlanError::Fetch`), sweeps the live objects of the record's Kix cluster (`live::cluster_of`: the `kix.run/cluster` label, else `spec.cluster`; `SweepScope::Cluster`), decides the changes through the one planner (`decide::decide`, with `made` holding every object the build's revisions name) for a Kix cluster read from revisions or else compares the build with them by identity hash (`detect_changes_live`), keeps out the orphans another Kix cluster's current build contains, and builds the engine plan from the changes (failing on a graph error or a malformed import marker). `LivePlan::read_last_runs` reads the last runs of its Jobs through the same `DeployPlan::read_last_runs` the CLI's plan uses, so a failed Job under `kix.run/rerun` runs again; the operator calls it only when it starts a Queued record (`Reconcile::Start` in `kix-operator/src/controller.rs`), never on a resume or a repair, which it retries. The `LivePlan` it returns carries the counts, the shared orphans, and what the sweep left out for the operator's logs, and `LivePlan::run(manage_lifecycle, config, observer)` runs the engine with `PrunePolicy::Delete` and the operator's record settings: that record's identity hash stamped on every write, its lifecycle written only with `manage_lifecycle` (drift correction leaves it alone), no receipt, no record manifest, no conflict takeover, and never marked Failed on abort. `sweep` is the only way to make one, so the operator's plan is always one made from the live objects and its run writes the record it was made for. No check holds it to a package diff.
 - `baseline.rs`: the from-side of a plan, shared by deploy, rollback, and soft gc: `Baseline` (the Active record, where its closure came from (`ActiveSource`), the failed and kept closures), made by `of_cluster`, `of_cache`, and `of_record`; `Baseline::changes` (detect, fold failed, fold kept, `--reconcile`), `orphans_kept_from` (the `KeptOrphans` the new record's list is made from), `manifests` (the merged set for display and prune ordering), `ran` (every closure the cluster ran, for the objects check), and `diff_side` (the old side of the package diff); `load_kept` (gc uses it too), `record_graph`, `active_build_dir`, and `sync_kept_roots`, which keeps the GC roots for the listed builds. See "Baseline" above.
 - `mod.rs`, `diff.rs`, and `redact.rs`: `PackageDiff`/`PackageChangeDiff` types, `diff_graphs()` for package-level comparison (`diff_garbage()`, in `diff.rs`), `split_never_pruned()`, and `document::Packages::of(&PackageDiff, Detail)` (the `packages` section of the `Plan` document). Every format the CLI prints, JSON, YAML, text, and Markdown, starts from the same `PackageDiff`, so they stay in sync. A removed resource whose kind `lifecycle::never_pruned` protects (Namespace, CRD) is never shown as a deletion in any format: `PackageChangeDiff::removed_and_kept()` splits it out, and JSON puts it in `kept_resources`. How much the JSON says is `document::Detail` (`--detail` on `kix diff` and `kix plan --read-only`): `Plain` gives each `modified_resources[]` entry `diff_count`; `Fields` adds `changes`, one `{path, change, old?, new?, labels?}` per field (`change` is `added`, `removed`, or `changed`; old to new); `Manifests` adds to that a `manifests` object on each package entry (`changed[]`, `cluster_level`, `added[]`, `removed[]`), `{"<display id>": {"old"?, "new"?}}` for every modified, added, and removed resource (kept ones left out), read through `ManifestIndex` (`redact.rs`): the two graphs for `kix diff`, and for `kix plan` the live object and the dry-run result of each object the apiserver answered for (`ManifestIndex::answered`). A Secret's `data` and `stringData` values read `SECRET_NOT_SHOWN`, and its `kix.run/content-hash` and `kix.run/applied-hash` and every `checksum/*` annotation read `HASH_NOT_SHOWN`, or the `CHANGED` form of each on the new side when the old side holds a different value at the same path (so a line diff of the two manifests still shows it); a field value over `MAX_SHOWN_VALUE_BYTES` (16 KiB serialized) and a manifest over `MAX_SHOWN_MANIFEST_BYTES` (3 MiB, the apiserver's request body limit) read `(N bytes, not shown)`. Literal `env` values and ConfigMap data are shown as they are. A removed package lists its kept resources too (`PackageInfo::kept`), and every JSON package entry (`added[]`, `removed[]`, `changed[]`, `cluster_level`) carries a `kept_resources` list of display ids, empty where nothing is kept; `added[]`/`removed[]` `resources` is the package's total, kept included. `PackageDiff::resource_totals()` feeds the "changed in content" count of the text summary and markdown, which leaves kept resources out and counts them as kept. `without_secrets` (`redact.rs`) hides the same values for the text plan. `PackageDiff::labels` holds one label list per entry of a resource's `resource_diffs`. `fixtures` (tests and the `test-util` feature) builds the small graphs the library's and the CLI's diff tests compare
 - `objects.rs`: `of` (the writes and deletes of a deploy, each matched to `PackageDiff::shown` or a re-apply, or `Unshown`), and `digest` (the document's `objects_digest`); see "Writes the plan shows"

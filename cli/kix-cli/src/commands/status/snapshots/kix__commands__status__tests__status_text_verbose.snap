@@ -18,7 +18,7 @@ ingress/ingress-nginx
   Deployment ingress/ingress-nginx  ok
 vault/vaultwarden
   Deployment vault/vaultwarden      not ready (0/1 ready, 0/1 updated)
-  ConfigMap vault/vaultwarden-env   not checked for changes: no applied-hash stamp yet, the next deploy adds it
+  ConfigMap vault/vaultwarden-env   not checked for changes: Kix has no record of what it applied; `kix deploy` applies it again and records it
   Secret vault/vaultwarden-db       missing, needed by Deployment vault/vaultwarden
   Secret vault/vaultwarden-admin    not checked: this account may not list its kind
 (cluster-level)

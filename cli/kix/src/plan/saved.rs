@@ -628,6 +628,7 @@ mod tests {
                 package: "app/web".into(),
                 change: WriteChange::Added,
                 group: String::new(),
+                reason: None,
             }],
             deletes: vec![ObjectDelete {
                 kind: "ConfigMap".into(),
@@ -1012,6 +1013,7 @@ mod tests {
             package: "app/web".into(),
             change: WriteChange::Added,
             group: String::new(),
+            reason: None,
         });
         let c = compare(&plan(), &with_objects(plan(), more));
         assert_eq!(rules(&c), vec![Rule::Objects]);

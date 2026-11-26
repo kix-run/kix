@@ -552,6 +552,9 @@ pub struct FailedBaseline {
     /// The folded-in records in phase `Partial`, which a deploy with
     /// `--only` left partly deployed. A subset of `consumed`.
     pub partly_deployed: Vec<String>,
+    /// Another deploy of the Kix cluster may still be applying objects, so
+    /// no `Failed` or `Partial` record was read.
+    pub left_out: bool,
 }
 
 impl FailedBaseline {
@@ -696,11 +699,15 @@ async fn load_failed_unless_in_flight(
     report: &dyn Fn(PlanEvent<'_>),
     live: Option<&LiveClosures>,
 ) -> FailedBaseline {
+    let left_out = FailedBaseline {
+        left_out: true,
+        ..FailedBaseline::default()
+    };
     match deploy_in_flight(records, cluster).await {
-        InFlight::Locked => return FailedBaseline::default(),
+        InFlight::Locked => return left_out,
         InFlight::Unlocked(record) => {
             report(PlanEvent::DeployInFlight(&record));
-            return FailedBaseline::default();
+            return left_out;
         }
         InFlight::No => {}
     }
@@ -740,6 +747,14 @@ async fn load_failed(
         let closure = match (from_store, live) {
             (Ok(Some(closure)), _) => closure,
             (Ok(None) | Err(_), Some(live)) => live.closure_of(&hash),
+            // The record's revisions name what it applied, so the plan takes
+            // it in without its build.
+            (Ok(None), None)
+                if tenancy.own_source() == tenancy::Source::Revisions
+                    && matches!(record.revisions, Some(Ok(_))) =>
+            {
+                Vec::new()
+            }
             (Ok(None), None) => {
                 out.unresolved.push(record);
                 continue;
@@ -1645,6 +1660,7 @@ mod tests {
             unresolved: vec![],
             indexes: vec![],
             partly_deployed: vec![],
+            left_out: false,
         };
         let got = baseline(
             active("v1", vec![]),
@@ -2193,6 +2209,7 @@ mod tests {
             unresolved: vec![],
             indexes: vec![],
             partly_deployed: vec![],
+            left_out: false,
         };
         let new = StoreGraph::synthesize(&[m("ConfigMap", "web", "h1")], &StoreGraph::empty("c"));
         let live = baseline(
@@ -2240,6 +2257,7 @@ mod tests {
                 "app/two": { "instance": "pi-two", "resources": ["hb", "hc"] },
             }))],
             partly_deployed: vec![],
+            left_out: false,
         };
         let new = StoreGraph::synthesize(&[m("ConfigMap", "z", "hz")], &StoreGraph::empty("c"));
         let live = baseline(

@@ -199,6 +199,10 @@ pub struct Tenancy {
     /// Every other Kix cluster with a record. A record without a
     /// `kix.run/cluster` label is listed under `?`.
     other_clusters: BTreeSet<String>,
+    /// Every record of this Kix cluster, in any phase.
+    own: Vec<Record>,
+    /// The record this Kix cluster's head names as current.
+    own_current: Option<String>,
     problems: Vec<Problem>,
 }
 
@@ -238,6 +242,8 @@ impl Tenancy {
             settled: HashSet::new(),
             own_records: false,
             other_clusters: BTreeSet::new(),
+            own: Vec::new(),
+            own_current: None,
             problems: Vec::new(),
         }
     }
@@ -285,6 +291,7 @@ impl Tenancy {
         revisions: Result<Option<&Listed>, String>,
     ) -> Self {
         let mut tenancy = Tenancy::empty(cluster);
+        tenancy.own_current = heads.get(cluster).and_then(|h| h.current.clone());
         let parsed: Vec<(Option<&str>, Record)> = records
             .iter()
             .map(|r| (cluster_label(r), Record::of(r)))
@@ -296,6 +303,7 @@ impl Tenancy {
                 .insert(record.name.clone(), owner.to_string());
             if !cluster.is_empty() && owner == cluster {
                 tenancy.own_records = true;
+                tenancy.own.push(record.clone());
             } else {
                 tenancy.other_clusters.insert(owner.to_string());
             }
@@ -570,6 +578,16 @@ impl Tenancy {
     /// Return where the Kix cluster this tenancy is read for is read from.
     pub fn own_source(&self) -> Source {
         self.source_of(&self.cluster)
+    }
+
+    /// Return every record of this Kix cluster, in any phase.
+    pub(crate) fn own_records(&self) -> &[Record] {
+        &self.own
+    }
+
+    /// Return the record this Kix cluster's head names as current.
+    pub(crate) fn own_current(&self) -> Option<&str> {
+        self.own_current.as_deref()
     }
 
     /// Return whether a later read cannot show the record with identity hash

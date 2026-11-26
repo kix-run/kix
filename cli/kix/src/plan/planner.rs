@@ -5,8 +5,10 @@
 //!
 //! 1. the baseline: the closures the build is compared with (see
 //!    [`super::baseline`]);
-//! 2. the changes: the build against the Active closure, with what failed
-//!    and kept deploys left folded in;
+//! 2. the changes: for a Kix cluster read from revisions, what the one
+//!    planner decides from the live objects and the cluster's records
+//!    ([`super::decide`]); for any other, the build against the Active
+//!    closure, with what failed and kept deploys left folded in;
 //! 3. the plan: the engine plan, the package diff people review, and the
 //!    check that refuses a write or delete the diff does not show
 //!    ([`super::objects::of`]).
@@ -41,7 +43,8 @@ use serde_json::Value;
 use crate::manifest::kinds::{self, GroupKind};
 
 use super::baseline::Baseline;
-use super::document::{DriftChange, LeftAlone, Objects, PlanFlags, WriteChange};
+use super::decide::{self, Label, Ledger};
+use super::document::{DriftChange, LeftAlone, Objects, PlanFlags, WriteChange, WriteReason};
 use super::objects;
 use super::origin::FoldedBy;
 use super::server::Overlay;
@@ -64,7 +67,7 @@ use crate::cluster::inventory::{Live, LiveObjects};
 use crate::cluster::kubernetes_version;
 use crate::cluster::migrate::{MigrationPair, detect_migration_pairs};
 use crate::cluster::ops::ResourceIo;
-use crate::cluster::ops::{Cluster, DryRun, KubeResources, RecordConfig};
+use crate::cluster::ops::{Cluster, DryRun, Force, KubeResources, RecordConfig};
 use crate::cluster::preview::{DryRunAnswer, DryRunOutcome, PruneAnswer};
 use crate::cluster::revision::RevisionSet;
 use crate::cluster::scheduler::{
@@ -99,6 +102,18 @@ struct Changes {
     /// What the record the run finalizes lists under
     /// `status.orphansKeptFrom` if the run leaves orphans on the cluster.
     kept_orphans: KeptOrphans,
+    /// The objects the run applies with force: the ones that revert drift.
+    force: HashSet<ResourceId>,
+    /// Why the run writes each object whose write the new build alone does
+    /// not explain.
+    reasons: HashMap<ResourceId, WriteReason>,
+    /// The `Failed` and `Partial` records whose leftovers the plan takes
+    /// in, or `None` when the plan compared builds and folded in the ones
+    /// the baseline resolved.
+    consumed: Option<Vec<String>>,
+    /// The live objects of the orphans, as manifests, which order the prune
+    /// and describe the kept orphans when no build on this machine has them.
+    orphan_manifests: Vec<Value>,
 }
 
 /// Where a plan runs: a connection to the cluster, its discovery read
@@ -173,6 +188,9 @@ pub struct CheckedPlan {
     /// The instances that the instances `--only` names need, which a plan
     /// made with `--only` applies in full too. Empty otherwise.
     needed: Vec<String>,
+    /// The objects the plan labels as reverting drift, which the run applies
+    /// with force.
+    force: HashSet<ResourceId>,
 }
 
 /// What a run of a [`CheckedPlan`] would do ([`CheckedPlan::work`]).
@@ -332,6 +350,19 @@ impl CheckedPlan {
 
     pub fn plan(&self) -> &DeployPlan {
         &self.plan
+    }
+
+    /// Return which applies of a run take ownership of fields another field
+    /// manager owns: every apply under `--force-conflicts`, else the applies
+    /// of the objects the plan labels as reverting drift.
+    pub(crate) fn force(&self) -> Force {
+        if self.flags.force_conflicts {
+            Force::All
+        } else if self.force.is_empty() {
+            Force::None
+        } else {
+            Force::Only(self.force.clone())
+        }
     }
 
     /// Return the orphans that this cluster's prune may delete. Orphans that
@@ -519,7 +550,7 @@ impl CheckedPlan {
             target.discovery,
             self.cluster.clone(),
             self.activation_identity_hash.clone(),
-            self.flags.force_conflicts,
+            self.force(),
             target.sops,
         ));
         let result = scheduler::run_deploy(
@@ -562,6 +593,7 @@ impl CheckedPlan {
     ) {
         let ending = self.ending();
         let only = self.applied_instances();
+        let force = self.force();
         lock.stop_with(&config.cancel);
         let (cluster, record) = Cluster::new(
             KubeResources::new(
@@ -569,7 +601,7 @@ impl CheckedPlan {
                 target.discovery,
                 self.cluster,
                 self.activation_identity_hash,
-                self.flags.force_conflicts,
+                force,
             ),
             RecordConfig {
                 name: self.activation_name,
@@ -976,7 +1008,11 @@ impl<'a> Planner<'a> {
     ) -> Result<Planned, PlanError> {
         let new_graph = build.graph();
         let new_manifests = manifests_of(new_graph);
-        if let Some((client, _)) = &client {
+        let ledger = match &client {
+            Some(_) => ledger_of(&baseline)?,
+            None => None,
+        };
+        if let (Some((client, _)), None) = (&client, &ledger) {
             baseline
                 .read_folded_leftovers(client, &new_manifests)
                 .await?;
@@ -988,7 +1024,7 @@ impl<'a> Planner<'a> {
         let read = match client {
             Some((client, connection)) => {
                 let head = read_head(&client, &new_graph.cluster_name).await?;
-                let live = read_live(&client, &new_manifests).await?;
+                let live = read_live(&client, &listed_ids(&new_manifests, ledger.as_ref())).await?;
                 Some((client, connection, live, head))
             }
             None => None,
@@ -1000,6 +1036,7 @@ impl<'a> Planner<'a> {
                 &new_graph.cluster_name,
                 &baseline,
                 read.as_ref().map(|(client, _, live, _)| (client, live)),
+                ledger.as_ref(),
             )
             .await?;
         // A deploy with `--only` makes only the migrations whose new object
@@ -1050,8 +1087,14 @@ impl<'a> Planner<'a> {
         client: Option<&Client>,
     ) -> Result<CheckedPlan, PlanError> {
         let new_manifests = manifests_of(new_graph);
+        let ledger = match client {
+            Some(_) => ledger_of(baseline)?,
+            None => None,
+        };
         let live = match client {
-            Some(client) => Some(read_live(client, &new_manifests).await?),
+            Some(client) => {
+                Some(read_live(client, &listed_ids(&new_manifests, ledger.as_ref())).await?)
+            }
             None => None,
         };
         self.check(
@@ -1060,6 +1103,7 @@ impl<'a> Planner<'a> {
             cluster,
             baseline,
             client.zip(live.as_ref()),
+            ledger.as_ref(),
         )
         .await
     }
@@ -1117,6 +1161,66 @@ impl<'a> Planner<'a> {
             actions,
             orphans,
             kept_orphans,
+            force: HashSet::new(),
+            reasons: HashMap::new(),
+            consumed: None,
+            orphan_manifests: Vec::new(),
+        }
+    }
+
+    /// Decide what `new_manifests` change with the one planner
+    /// ([`decide::decide`]), from `live`, the objects of the build and the
+    /// ones `ledger` names as the cluster holds them. The baseline still
+    /// gives the builds behind `status.orphansKeptFrom`.
+    fn decided(
+        &self,
+        new_manifests: &[Value],
+        baseline: &Baseline,
+        ledger: &Ledger,
+        live: &LiveObjects,
+    ) -> Changes {
+        let made: HashSet<ResourceId> = new_manifests.iter().map(ResourceId::from_value).collect();
+        let decided = decide::decide(new_manifests, &made, live, ledger, self.flags.reconcile);
+        if !decided.lost.is_empty() {
+            (self.report)(PlanEvent::NotHeld(&decided.lost));
+        }
+        if !decided.unread.is_empty() {
+            let unread: Vec<String> = decided.unread.iter().cloned().collect();
+            (self.report)(PlanEvent::KindsUnread(&unread));
+        }
+        let mut force = HashSet::new();
+        let mut reasons = HashMap::new();
+        let mut actions = Vec::with_capacity(decided.decisions.len() + decided.orphans.len());
+        for decision in decided.decisions {
+            if let Label::RevertsDrift(_) = decision.label {
+                force.insert(decision.id.clone());
+            }
+            if let Some(reason) = write_reason(&decision.label) {
+                reasons.insert(decision.id, reason);
+            }
+            actions.push(decision.action);
+        }
+        let orphan_manifests = decided
+            .orphans
+            .iter()
+            .filter_map(|rid| match live.get(rid) {
+                Live::Present(obj) => Some(crate::manifest::types::to_manifest_value(obj)),
+                Live::Absent | Live::Unread => None,
+            })
+            .collect();
+        actions.extend(decided.orphans.iter().cloned().map(ChangeAction::Orphan));
+        // The plan read every kept orphan from the cluster, so the run's
+        // kept-orphans revision carries nothing forward unexamined.
+        let mut kept_orphans = baseline.orphans_kept_from(new_manifests);
+        kept_orphans.unexamined.clear();
+        Changes {
+            actions,
+            orphans: decided.orphans,
+            kept_orphans,
+            force,
+            reasons,
+            consumed: Some(ledger.taken_in().to_vec()),
+            orphan_manifests,
         }
     }
 
@@ -1130,6 +1234,7 @@ impl<'a> Planner<'a> {
         cluster: &str,
         baseline: &Baseline,
         read: Option<(&Client, &LiveObjects)>,
+        ledger: Option<&Ledger>,
     ) -> Result<CheckedPlan, PlanError> {
         let partial = !self.flags.only.is_empty();
         if partial {
@@ -1148,16 +1253,27 @@ impl<'a> Planner<'a> {
             }
         }
         let client = read.map(|(client, _)| client);
-        let changes = self.changes(new_manifests, baseline, read.map(|(_, live)| live));
+        let Changes {
+            actions,
+            orphans,
+            kept_orphans,
+            force,
+            reasons,
+            consumed,
+            orphan_manifests,
+        } = match (ledger, read) {
+            (Some(ledger), Some((_, live))) => self.decided(new_manifests, baseline, ledger, live),
+            _ => self.changes(new_manifests, baseline, read.map(|(_, live)| live)),
+        };
         // A deploy with `--only` leaves every orphan alone, so it does not
         // ask which ones another Kix cluster deploys.
         let (orphans, shared_orphans) = match client {
-            Some(client) if !partial => keep_shared(client, cluster, changes.orphans).await?,
-            _ => (changes.orphans, Vec::new()),
+            Some(client) if !partial => keep_shared(client, cluster, orphans).await?,
+            _ => (orphans, Vec::new()),
         };
         let resource_graph =
             ResourceGraph::from_manifests(new_manifests).map_err(PlanError::Graph)?;
-        let mut plan = DeployPlan::from_graph_and_changes(&resource_graph, &changes.actions)
+        let mut plan = DeployPlan::from_graph_and_changes(&resource_graph, &actions)
             .map_err(PlanError::Marker)?;
 
         let record = lifecycle::record_of(new_manifests);
@@ -1199,8 +1315,8 @@ impl<'a> Planner<'a> {
             (
                 orphans,
                 shared_orphans,
-                changes.kept_orphans,
-                baseline.failed().consumed.clone(),
+                kept_orphans,
+                consumed.unwrap_or_else(|| baseline.failed().consumed.clone()),
                 None,
             )
         };
@@ -1209,7 +1325,7 @@ impl<'a> Planner<'a> {
             Some(_) => &orphans,
             None => &[],
         };
-        let objects = objects::of(
+        let mut objects = objects::of(
             &pkg_diff.shown,
             new_graph,
             &plan,
@@ -1218,6 +1334,9 @@ impl<'a> Planner<'a> {
             baseline.ran(),
         )
         .map_err(PlanError::Unshown)?;
+        for write in &mut objects.writes {
+            write.reason = reasons.get(&write.resource_id()).cloned();
+        }
         // Before the lock is taken, so a build no deploy can record stops
         // here with a message that names the instance.
         let revisions = RevisionSet::of(cluster, new_graph);
@@ -1238,12 +1357,59 @@ impl<'a> Planner<'a> {
             record: record.cloned(),
             consumed_failed,
             cluster: cluster.to_string(),
-            old_manifests: baseline.manifests(),
+            old_manifests: crate::cluster::apply::baseline_manifests(
+                &baseline.manifests(),
+                &[orphan_manifests],
+            ),
             revisions,
             target_checks: TargetChecks::of(new_graph),
             left_alone: selection.as_ref().map(|s| s.left_alone),
             needed: selection.map(|s| s.needed).unwrap_or_default(),
+            force,
         })
+    }
+}
+
+/// Return the ledger of the one planner for the Kix cluster `baseline` was
+/// read for, or `None` when that Kix cluster is not read from revisions
+/// ([`Ledger::of`]). Refuse when a revision its records name could not be
+/// read, because the plan could not tell which objects are orphans.
+fn ledger_of(baseline: &Baseline) -> Result<Option<Ledger>, PlanError> {
+    let Some(ledger) = Ledger::of(&baseline.tenancy, !baseline.failed().left_out) else {
+        return Ok(None);
+    };
+    baseline
+        .tenancy
+        .complete_for_own()
+        .map_err(|e| PlanError::Tenancy(Box::new(e)))?;
+    Ok(Some(ledger))
+}
+
+/// Return the objects a plan lists on the cluster: those of
+/// `new_manifests`, and those `ledger` names that the build does not make.
+fn listed_ids(new_manifests: &[Value], ledger: Option<&Ledger>) -> Vec<ResourceId> {
+    let made: HashSet<ResourceId> = new_manifests.iter().map(ResourceId::from_value).collect();
+    let candidates: Vec<ResourceId> = ledger
+        .map(|l| l.candidates(&made).cloned().collect())
+        .unwrap_or_default();
+    made.into_iter().chain(candidates).collect()
+}
+
+/// Return what the plan document says about a write labelled `label`, or
+/// `None` for a change the new build makes.
+fn write_reason(label: &Label) -> Option<WriteReason> {
+    match label {
+        Label::AppliedByRecord(record) => Some(WriteReason::AppliedByRecord {
+            record: record.clone(),
+        }),
+        Label::LeftByDegraded(record) => Some(WriteReason::LeftByDegraded {
+            record: record.clone(),
+        }),
+        Label::AppliedHashMissing => Some(WriteReason::AppliedHashMissing),
+        Label::RevertsDrift(report) => Some(WriteReason::RevertsDrift {
+            changed_by: super::document::DriftOwner::of_report(report),
+        }),
+        Label::Intended | Label::Reconciled | Label::Unchanged | Label::NotListed => None,
     }
 }
 
@@ -1355,13 +1521,12 @@ fn select_only(
     })
 }
 
-/// List each kind of `manifests` on the cluster behind `client`, once.
-async fn read_live(client: &Client, manifests: &[Value]) -> Result<LiveObjects, PlanError> {
+/// List each kind of `ids` on the cluster behind `client`, once.
+async fn read_live(client: &Client, ids: &[ResourceId]) -> Result<LiveObjects, PlanError> {
     let discovery = discovery::discover_resources(client)
         .await
         .map_err(|e| PlanError::Discovery(Box::new(e)))?;
-    let ids: Vec<ResourceId> = manifests.iter().map(ResourceId::from_value).collect();
-    LiveObjects::list(client, &discovery, &ids)
+    LiveObjects::list(client, &discovery, ids)
         .await
         .map_err(|e| PlanError::ReadLive(Box::new(e)))
 }
@@ -1759,6 +1924,7 @@ mod tests {
             package: "web/web".into(),
             change: WriteChange::Reapplied,
             group: String::new(),
+            reason: None,
         };
         checked.objects.writes = vec![write("reverted"), write("same")];
         checked
@@ -1954,6 +2120,7 @@ mod tests {
             &new_manifests,
             "kix-enterprise-test",
             &baseline,
+            None,
             None,
         ))
         .unwrap();

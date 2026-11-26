@@ -100,7 +100,7 @@ const SCALE_KINDS: &[(&str, &str)] = &[
 const SCALE_SEARCH_LIMIT: i64 = 1024;
 
 /// Drift report for a single resource.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DriftReport {
     pub rid: ResourceId,
     pub verdict: DriftVerdict,

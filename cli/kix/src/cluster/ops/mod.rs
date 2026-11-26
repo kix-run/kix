@@ -60,7 +60,7 @@ mod sops;
 
 pub(crate) use dry_run::DryRun;
 pub(crate) use record::{ActivationRecord, RecordConfig};
-pub(crate) use resources::KubeResources;
+pub(crate) use resources::{Force, KubeResources};
 pub(crate) use sops::SopsHydrator;
 
 /// The Activation lifecycle was finalized.

@@ -461,6 +461,20 @@ pub(crate) fn split_shared_orphans(
     split_by_lookup(orphans, |rid| by_id.get(rid).copied(), tenancy)
 }
 
+/// Split orphan candidates as [`split_shared_orphans`] does, reading each
+/// candidate from `live`.
+pub(crate) fn split_shared_orphans_listed(
+    orphans: Vec<ResourceId>,
+    live: &LiveObjects,
+    tenancy: &Tenancy,
+) -> (Vec<ResourceId>, Vec<SharedOrphan>) {
+    let lookup = |rid: &ResourceId| match live.get(rid) {
+        Live::Present(obj) => Some(obj),
+        Live::Absent | Live::Unread => None,
+    };
+    split_by_lookup(orphans, lookup, tenancy)
+}
+
 fn split_by_lookup<'a>(
     orphans: Vec<ResourceId>,
     live: impl Fn(&ResourceId) -> Option<&'a DynamicObject>,
@@ -639,6 +653,22 @@ impl LiveObjects {
             .map(|obj| (super::drift::resource_id(&obj), obj))
             .collect();
         Ok(LiveObjects { objects, unread })
+    }
+
+    /// Hold `objects` as listed, with the kinds in `unread` as kinds this
+    /// account may not list, for tests.
+    #[cfg(test)]
+    pub(crate) fn of(
+        objects: impl IntoIterator<Item = DynamicObject>,
+        unread: impl IntoIterator<Item = (String, String)>,
+    ) -> LiveObjects {
+        LiveObjects {
+            objects: objects
+                .into_iter()
+                .map(|obj| (super::drift::resource_id(&obj), obj))
+                .collect(),
+            unread: unread.into_iter().collect(),
+        }
     }
 
     pub(crate) fn get(&self, rid: &ResourceId) -> Live<'_> {

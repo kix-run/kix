@@ -64,6 +64,31 @@ enum Writes {
     DryRun,
 }
 
+/// Which applies take ownership of fields another field manager owns.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) enum Force {
+    /// None: an apply that would change another manager's field is refused
+    /// with a conflict.
+    #[default]
+    None,
+    /// Every apply (`--force-conflicts`).
+    All,
+    /// The applies of these objects: the ones the plan labels as reverting
+    /// drift.
+    Only(HashSet<ResourceId>),
+}
+
+impl Force {
+    /// Return whether the apply of `rid` takes ownership.
+    pub(crate) fn of(&self, rid: &ResourceId) -> bool {
+        match self {
+            Force::None => false,
+            Force::All => true,
+            Force::Only(ids) => ids.contains(rid),
+        }
+    }
+}
+
 /// Live cluster resource I/O for a single deploy run. Constructed with
 /// [`KubeResources::new`] for persistent writes, or [`KubeResources::dry_run`]
 /// inside [`super::DryRun`].
@@ -76,8 +101,8 @@ pub(crate) struct KubeResources {
     /// Identity hash of the run's Activation, stamped into
     /// `kix.run/activations` on every object written.
     identity_hash: Option<String>,
-    /// Take ownership of fields another manager owns.
-    force_conflicts: bool,
+    /// Which applies take ownership of fields another manager owns.
+    force: Force,
     /// Identity hashes of every Activation CR on the cluster, used to prune
     /// `kix.run/activations`. Set by the record when the run begins, or `None`
     /// to leave the annotation unpruned.
@@ -96,7 +121,7 @@ impl KubeResources {
         discovery: Vec<(ApiResource, Scope)>,
         cluster: String,
         identity_hash: Option<String>,
-        force_conflicts: bool,
+        force: Force,
     ) -> Self {
         Self::with_writes(
             Writes::Persist,
@@ -104,7 +129,7 @@ impl KubeResources {
             discovery,
             cluster,
             identity_hash,
-            force_conflicts,
+            force,
         )
     }
 
@@ -115,7 +140,7 @@ impl KubeResources {
         discovery: Vec<(ApiResource, Scope)>,
         cluster: String,
         identity_hash: Option<String>,
-        force_conflicts: bool,
+        force: Force,
     ) -> Self {
         Self::with_writes(
             Writes::DryRun,
@@ -123,7 +148,7 @@ impl KubeResources {
             discovery,
             cluster,
             identity_hash,
-            force_conflicts,
+            force,
         )
     }
 
@@ -133,7 +158,7 @@ impl KubeResources {
         discovery: Vec<(ApiResource, Scope)>,
         cluster: String,
         identity_hash: Option<String>,
-        force_conflicts: bool,
+        force: Force,
     ) -> Self {
         Self {
             client,
@@ -141,7 +166,7 @@ impl KubeResources {
             discovery: Arc::new(RwLock::new(discovery)),
             cluster,
             identity_hash,
-            force_conflicts,
+            force,
             live_activations: std::sync::RwLock::new(None),
             prune_guard: tokio::sync::OnceCell::new(),
             applied: std::sync::Mutex::new(BTreeMap::new()),
@@ -321,7 +346,7 @@ impl KubeResources {
             self.dry(),
             self.identity_hash.as_deref(),
             live.as_ref(),
-            self.force_conflicts,
+            self.force.of(&ResourceId::from_value(manifest)),
         )
         .await?;
         if let Some(hash) = &result.applied_hash {
@@ -602,7 +627,7 @@ mod prune_tests {
         ]);
         let client = api.client();
         let discovery = discovery::discover_resources(&client).await.unwrap();
-        let ops = KubeResources::new(client, discovery, "a".into(), None, false);
+        let ops = KubeResources::new(client, discovery, "a".into(), None, Force::None);
         let rid = |name: &str| ResourceId {
             group: "rbac.authorization.k8s.io".into(),
             kind: "ClusterRole".into(),
@@ -640,7 +665,7 @@ mod prune_tests {
             .into_iter()
             .filter(|(ar, _)| ar.kind != "ClusterRole")
             .collect();
-        let ops = KubeResources::new(client, discovery, "a".into(), None, false);
+        let ops = KubeResources::new(client, discovery, "a".into(), None, Force::None);
         let rid = |group: &str, kind: &str| ResourceId {
             group: group.into(),
             kind: kind.into(),
@@ -691,7 +716,7 @@ mod prune_tests {
         api.serve_retired_records();
         let client = api.client();
         let discovery = discovery::discover_resources(&client).await.unwrap();
-        let ops = KubeResources::new(client, discovery, "a".into(), None, false);
+        let ops = KubeResources::new(client, discovery, "a".into(), None, Force::None);
         let rid = ResourceId {
             group: "rbac.authorization.k8s.io".into(),
             kind: "ClusterRole".into(),
@@ -740,7 +765,7 @@ mod apply_tests {
     async fn ops(api: &FakeApi) -> KubeResources {
         let client = api.client();
         let discovery = discovery::discover_resources(&client).await.unwrap();
-        KubeResources::new(client, discovery, "a".into(), None, false)
+        KubeResources::new(client, discovery, "a".into(), None, Force::None)
     }
 
     /// An apply onto an object being deleted waits for it to be gone, then
@@ -818,7 +843,7 @@ mod group_tests {
         let api = FakeApi::new([job("batch/v1", "batch"), job(&other_version, "other")]);
         let client = api.client();
         let discovery = discovery::discover_resources(&client).await.unwrap();
-        let ops = KubeResources::new(client, discovery, "a".into(), None, false);
+        let ops = KubeResources::new(client, discovery, "a".into(), None, Force::None);
         let rid = |group: &str| ResourceId::from_value(&job(group, ""));
 
         let note = |live: Option<Value>| live.unwrap()["spec"]["note"].clone();
@@ -850,7 +875,7 @@ mod discovery_tests {
     /// Create a [`KubeResources`] instance over `api` with an empty discovery
     /// cache, modeling a cache before the group is served.
     fn ops(api: &FakeApi) -> KubeResources {
-        KubeResources::new(api.client(), Vec::new(), String::new(), None, false)
+        KubeResources::new(api.client(), Vec::new(), String::new(), None, Force::None)
     }
 
     async fn cached(ops: &KubeResources, group: &str, kind: &str) -> bool {
@@ -932,5 +957,46 @@ mod discovery_tests {
         let start = tokio::time::Instant::now();
         assert_eq!(ops(&api).get_live(&rid).await.unwrap(), None);
         assert_eq!(start.elapsed(), Duration::ZERO);
+    }
+
+    /// An apply takes ownership of another manager's fields only for the
+    /// objects the plan labels as reverting drift, so any other conflict
+    /// still stops the deploy.
+    #[tokio::test]
+    async fn only_the_objects_that_revert_drift_are_applied_with_force() {
+        let api = FakeApi::new([]);
+        let client = api.client();
+        let discovery = discovery::discover_resources(&client).await.unwrap();
+        let (ar, scope) = discovery::find(&discovery, "", "ConfigMap")
+            .unwrap()
+            .clone();
+        let config_map = |name: &str| {
+            json!({
+                "apiVersion": "v1",
+                "kind": "ConfigMap",
+                "metadata": { "name": name, "namespace": "app" },
+            })
+        };
+        let drifted = ResourceId::from_value(&config_map("drifted"));
+        let ops = KubeResources::new(
+            client,
+            discovery,
+            "a".into(),
+            None,
+            Force::Only([drifted].into()),
+        );
+        for name in ["drifted", "other"] {
+            ops.apply_as(&ar, scope.clone(), &config_map(name))
+                .await
+                .unwrap();
+        }
+        let applies: Vec<String> = api
+            .requests()
+            .into_iter()
+            .filter(|r| r.starts_with("PATCH"))
+            .collect();
+        assert_eq!(applies.len(), 2, "{applies:?}");
+        assert!(applies[0].contains("/drifted?") && applies[0].contains("force=true"));
+        assert!(applies[1].contains("/other?") && !applies[1].contains("force=true"));
     }
 }

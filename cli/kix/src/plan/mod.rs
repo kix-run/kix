@@ -8,6 +8,7 @@
 //! [`live`] builds the operator's plan from live cluster objects.
 
 pub mod baseline;
+mod decide;
 mod diff;
 pub mod document;
 pub mod file;

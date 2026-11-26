@@ -170,6 +170,13 @@ fn live_owner_stamps(obj: &DynamicObject) -> [Option<&str>; 3] {
     OWNER_STAMPS.map(|key| annotations.and_then(|a| keys::get_meta(a, key)))
 }
 
+/// Return whether the owner stamps of the live object `obj` differ from those
+/// of `manifest`, so an apply must rewrite them although the content is the
+/// same.
+pub(crate) fn owner_stamps_moved(manifest: &Value, obj: &DynamicObject) -> bool {
+    live_owner_stamps(obj) != owner_stamps(manifest)
+}
+
 /// Detect changes by diffing two sets of stamped manifests locally.
 ///
 /// Matches resources by Kubernetes identity ([`ResourceId`]) and

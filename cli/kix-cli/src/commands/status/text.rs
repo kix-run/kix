@@ -471,9 +471,9 @@ fn resource_state(r: &ResourceStatus, age: &dyn Fn(&str) -> String) -> String {
             (Present::Ambiguous, _) => Some(
                 "not checked: multiple API groups serve this kind, and this object's API group is not in the deploy record; run `kix deploy <cluster> --reconcile` to record it",
             ),
-            (_, Some(DriftState::Unstamped)) => {
-                Some("not checked for changes: no applied-hash stamp yet, the next deploy adds it")
-            }
+            (_, Some(DriftState::Unstamped)) => Some(
+                "not checked for changes: Kix has no record of what it applied; `kix deploy` applies it again and records it",
+            ),
             (_, Some(DriftState::NoFieldset)) => {
                 Some("not checked for changes: Kubernetes records no fields Kix owns")
             }
