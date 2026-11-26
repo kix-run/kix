@@ -598,13 +598,26 @@ impl ResourceIo for ScriptedOps {
         let Some((status, b)) = scripted else {
             return Ok(Deletion::Gone);
         };
-        if let Some(status) = status {
-            on_status(&status);
+        // The real wait reads the object every few seconds and reports its
+        // status after each read, and so does this. It ends when the cancel
+        // token fires.
+        if let Some(status) = &status {
+            on_status(status);
         }
-        // The real wait ends when the cancel token fires, and so does this.
-        tokio::select! {
-            out = b.run() => out.map_err(ReadError::Scripted),
-            _ = cancel.cancelled() => Ok(Deletion::Cancelled),
+        let run = b.run();
+        tokio::pin!(run);
+        let every = Duration::from_secs(5);
+        let mut reads = tokio::time::interval_at(tokio::time::Instant::now() + every, every);
+        loop {
+            tokio::select! {
+                out = &mut run => return out.map_err(ReadError::Scripted),
+                _ = cancel.cancelled() => return Ok(Deletion::Cancelled),
+                _ = reads.tick() => {
+                    if let Some(status) = &status {
+                        on_status(status);
+                    }
+                }
+            }
         }
     }
 }

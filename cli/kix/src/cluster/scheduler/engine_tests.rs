@@ -3737,6 +3737,15 @@ async fn a_slow_prune_delete_is_reported_while_it_waits() {
         })
         .collect();
     assert!(!waits.is_empty(), "no waiting line for the delete");
+    // The wait reads the object every few seconds, so it is never a stall.
+    assert!(
+        !rec.0
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|e| matches!(e, DeployEvent::Stalled { .. })),
+        "a delete wait that reads the object was reported as a stall"
+    );
     assert!(
         waits
             .iter()

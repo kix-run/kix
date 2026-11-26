@@ -423,6 +423,58 @@
       ],
       "type": "object"
     },
+    "LeftBehind": {
+      "description": "The objects of a kind that stay on the cluster after the definition of\nthe kind leaves the build. Kix did not create them, or keeps them for\nanother reason, so the prune does not delete them. Once the package\nthat handled the kind is gone, nothing removes their finalizers or\ncleans up what they made outside the cluster.",
+      "properties": {
+        "count": {
+          "description": "How many objects of the kind stay.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "kind": {
+          "description": "The kind, as `Kind.group`.",
+          "type": "string"
+        },
+        "objects": {
+          "description": "The first [`LEFT_BEHIND_LISTED`] of them, objects with finalizers\nfirst.",
+          "items": {
+            "$ref": "#/$defs/LeftObject"
+          },
+          "type": "array"
+        },
+        "with_finalizers": {
+          "default": 0,
+          "description": "How many of them have finalizers.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "count",
+        "objects"
+      ],
+      "type": "object"
+    },
+    "LeftObject": {
+      "properties": {
+        "finalizers": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "resource": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "resource"
+      ],
+      "type": "object"
+    },
     "NodeRef": {
       "anyOf": [
         {
@@ -1066,6 +1118,13 @@
           "format": "uint",
           "minimum": 0,
           "type": "integer"
+        },
+        "left_behind": {
+          "description": "For each kind whose definition left the build, the objects of it\nthat are still on the cluster after the prune. Kix did not create\nthem, and nothing clears their finalizers once their controller\nis gone. Left out when there are none.",
+          "items": {
+            "$ref": "#/$defs/LeftBehind"
+          },
+          "type": "array"
         },
         "nothing_to_apply": {
           "default": false,

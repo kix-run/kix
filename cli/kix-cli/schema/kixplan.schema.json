@@ -681,6 +681,13 @@
             "$ref": "#/$defs/LeftObject"
           },
           "type": "array"
+        },
+        "with_finalizers": {
+          "default": 0,
+          "description": "How many of them have finalizers.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
         }
       },
       "required": [

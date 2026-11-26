@@ -1398,8 +1398,13 @@ async fn wait_gone(
     let node = NodeId::Resource(rid.clone());
     progress.set_phase(&node, Phase::Deletion);
     let last = std::sync::Mutex::new(String::new());
+    // Each read of the object counts as activity, as a readiness poll does.
+    // The wait has its own budget, so the watchdog's stall warning would only
+    // repeat a wait that the `Waiting` events already describe, such as a
+    // foreground delete whose owned objects Kubernetes is still removing.
     let on_status = |status: &str| {
         progress.set_status(&node, status);
+        progress.touch();
         let Ok(mut last) = last.lock() else {
             return;
         };
@@ -1407,7 +1412,6 @@ async fn wait_gone(
             return;
         }
         *last = status.to_string();
-        progress.touch();
         observer.on_event(&DeployEvent::NodeStateChanged {
             node: NodeId::Resource(rid.clone()),
             kind: TransitionKind::Delete,

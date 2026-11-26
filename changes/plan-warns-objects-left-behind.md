@@ -9,6 +9,10 @@ created with `kubectl`). Kix still allows the deploy; to clean those objects up
 while their controller is still running, delete them before deploying with
 `--prune`. The warning lists up to 20 objects, those with finalizers first,
 because once the kind's controller is removed, nothing clears their finalizers
-or cleans up external resources they manage. In the `Plan` document, the prune
+or cleans up external resources they manage. Objects owned, through
+`ownerReferences`, by an object the prune deletes are not counted, because
+Kubernetes deletes them with their owner. In the `Plan` document, the prune
 entry for the CustomResourceDefinition or CRD reference now lists them under
-`left_behind`.
+`left_behind`. After the prune, `kix deploy` and `kix rollback` list the objects
+still left in the same way after their summary, and in the `left_behind` field
+of the JSON log's `summary` line.

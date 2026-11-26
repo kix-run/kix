@@ -225,29 +225,42 @@ pub(crate) struct DryRunReport {
 /// Return, for each orphan that declares a kind no object of the new build
 /// declares, the objects of that kind that the prune leaves on the cluster.
 /// Only a prune that deletes removes the controller that handles them, so a
-/// plan with another prune policy lists none. A kind Kix cannot list is
-/// left out, with a warning.
+/// plan with another prune policy lists none.
 async fn left_behind_of(
     checked: &CheckedPlan,
     client: &kube::Client,
 ) -> HashMap<ResourceId, LeftBehind> {
-    let mut found = HashMap::new();
     if checked.flags().prune != PrunePolicy::Delete {
-        return found;
+        return HashMap::new();
     }
     let deleting: HashSet<ResourceId> = checked.orphans().iter().cloned().collect();
-    for (declarer, crd) in checked.kinds_leaving() {
-        match kix::cluster::left_behind::list(client, &crd, &deleting).await {
-            Ok(Some(left)) if left.count > 0 => {
-                found.insert(declarer, left);
-            }
-            Ok(_) => {}
+    left_behind(client, &checked.kinds_leaving(), &deleting).await
+}
+
+/// Return, for each `(declarer, crd)` of `leaving`, the objects of the kind
+/// `crd` defines that stay on the cluster when a prune deletes `deleting`
+/// ([`kix::cluster::left_behind::left_behind`]). A kind Kix cannot list is
+/// left out, with a warning.
+pub(crate) async fn left_behind(
+    client: &kube::Client,
+    leaving: &[(ResourceId, String)],
+    deleting: &HashSet<ResourceId>,
+) -> HashMap<ResourceId, LeftBehind> {
+    let mut listed = Vec::new();
+    for (_, crd) in leaving {
+        match kix::cluster::left_behind::list(client, crd).await {
+            Ok(Some(kind)) => listed.push(kind),
+            Ok(None) => {}
             Err(e) => eprintln!(
                 "warning: could not check CustomResourceDefinition {crd} for custom resources left on the cluster: {e}\n  Kix skipped this check and continued, so the plan will not warn if custom resources for {crd} remain after `--prune`.\n  Grant this account `get` permission on CustomResourceDefinition {crd} and cluster-wide `list` permission on its custom resources (or fix the error above), then run the command again."
             ),
         }
     }
-    found
+    let mut by_crd = kix::cluster::left_behind::left_behind(&listed, deleting);
+    leaving
+        .iter()
+        .filter_map(|(declarer, crd)| Some((declarer.clone(), by_crd.remove(crd)?)))
+        .collect()
 }
 
 /// Run the deploy's engine plan with every write sent as a dry run

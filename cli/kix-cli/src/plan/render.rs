@@ -694,11 +694,49 @@ fn left_behind_warning(p: &PruneEntry, left: &LeftBehind) -> String {
     };
     format!(
         "{resource} is no longer in the build, and this prune leaves {n} {kind} {objects} \
-         on the cluster. If this prune removes the {kind} controller, nothing will clear \
+         on the cluster. If this prune removes the controller that handles {kind}, nothing will clear \
          finalizers on {those} or clean up external resources {they_manage}. Kix still \
          allows the deploy. If you no longer need {them}, delete {them} while the \
          controller is still running, before running `--prune`."
     )
+}
+
+/// Return the text a deploy prints after its prune for the objects it left
+/// behind, by the orphan that declared each kind, or `None` when it left
+/// none.
+pub fn left_behind_after_prune(left: &[(String, LeftBehind)]) -> Option<String> {
+    if left.is_empty() {
+        return None;
+    }
+    let text = written(|out| {
+        for (declarer, l) in left {
+            let n = l.count;
+            let objects = if n == 1 { "object" } else { "objects" };
+            let held = l.with_finalizers;
+            writeln!(
+                out,
+                "{} {declarer} left the build, and the prune left {n} {} {objects} on the \
+                 cluster that Kix did not create ({held} with finalizers). Once the controller \
+                 that handles {} is gone, nothing clears their finalizers or cleans up what \
+                 they made outside the cluster.",
+                output::yellow("!"),
+                l.kind,
+                l.kind,
+            )?;
+            for o in &l.objects {
+                writeln!(out, "    {}", left_object_detail(o))?;
+            }
+            if l.count > l.objects.len() {
+                writeln!(
+                    out,
+                    "    {}",
+                    output::dim(&format!("and {} more", l.count - l.objects.len()))
+                )?;
+            }
+        }
+        Ok(())
+    });
+    Some(text)
 }
 
 /// Describe one object a [`LeftBehind`] names.
@@ -1244,6 +1282,7 @@ mod tests {
         crd.left_behind = Some(LeftBehind {
             kind: "Challenge.acme.cert-manager.io".into(),
             count: 22,
+            with_finalizers: 1,
             objects: vec![LeftObject {
                 resource: "Challenge.acme.cert-manager.io/dns01-1@dnstest".into(),
                 finalizers: vec!["acme.cert-manager.io/finalizer".into()],
@@ -1261,7 +1300,8 @@ mod tests {
                 "! CustomResourceDefinition.apiextensions.k8s.io/challenges.acme.cert-manager.io \
                  is no longer in the build, and this prune leaves 22 \
                  Challenge.acme.cert-manager.io objects on the cluster. If this prune removes \
-                 the Challenge.acme.cert-manager.io controller, nothing will clear finalizers on \
+                 the controller that handles Challenge.acme.cert-manager.io, nothing will clear \
+                 finalizers on \
                  those objects or clean up external resources they manage. Kix still allows the \
                  deploy. If you no longer need them, delete them while the controller is still \
                  running, before running `--prune`."
@@ -1287,6 +1327,42 @@ mod tests {
             markdown.contains("- `Challenge.acme.cert-manager.io/dns01-1@dnstest (finalizers:"),
             "{markdown}"
         );
+    }
+
+    /// After a prune, each kind with objects left on the cluster is named
+    /// with its objects and how many have finalizers. Nothing left prints
+    /// nothing.
+    #[test]
+    fn a_deploy_says_what_its_prune_left_behind() {
+        let left = vec![(
+            "CustomResourceDefinition.apiextensions.k8s.io/challenges.acme.cert-manager.io"
+                .to_string(),
+            LeftBehind {
+                kind: "Challenge.acme.cert-manager.io".into(),
+                count: 1,
+                with_finalizers: 1,
+                objects: vec![LeftObject {
+                    resource: "Challenge.acme.cert-manager.io/c@app".into(),
+                    finalizers: vec!["acme.cert-manager.io/finalizer".into()],
+                }],
+            },
+        )];
+        let text = left_behind_after_prune(&left).unwrap();
+        assert!(
+            text.contains(
+                "CustomResourceDefinition.apiextensions.k8s.io/challenges.acme.cert-manager.io \
+                 left the build, and the prune left 1 Challenge.acme.cert-manager.io object on \
+                 the cluster that Kix did not create (1 with finalizers)."
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "    Challenge.acme.cert-manager.io/c@app (finalizers: acme.cert-manager.io/finalizer)"
+            ),
+            "{text}"
+        );
+        assert!(left_behind_after_prune(&[]).is_none());
     }
 
     /// A warning that holds a code fence stays inside the warnings block,

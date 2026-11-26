@@ -704,6 +704,9 @@ pub struct LeftBehind {
     pub kind: String,
     /// How many objects of the kind stay.
     pub count: usize,
+    /// How many of them have finalizers.
+    #[serde(default)]
+    pub with_finalizers: usize,
     /// The first [`LEFT_BEHIND_LISTED`] of them, objects with finalizers
     /// first.
     pub objects: Vec<LeftObject>,

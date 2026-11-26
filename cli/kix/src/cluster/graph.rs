@@ -50,6 +50,15 @@ impl ResourceGraph {
     /// Build a dependency graph from annotated manifests, with the
     /// dependencies [`dependency_pairs`] finds.
     pub fn from_manifests(manifests: &[serde_json::Value]) -> Result<Self, GraphError> {
+        Self::with_pairs(manifests, dependency_pairs(manifests))
+    }
+
+    /// Build the graph of `manifests` with the dependencies `pairs` gives,
+    /// as indexes into `manifests`, the dependent first.
+    fn with_pairs(
+        manifests: &[serde_json::Value],
+        pairs: Vec<(usize, usize)>,
+    ) -> Result<Self, GraphError> {
         let mut graph = DiGraph::new();
         let mut id_to_node = HashMap::new();
 
@@ -66,7 +75,7 @@ impl ResourceGraph {
 
         // Each edge points from the dependent to its dependency.
         let node_of = |i: usize| id_to_node[&ResourceId::from_value(&manifests[i])];
-        for (from, to) in dependency_pairs(manifests) {
+        for (from, to) in pairs {
             graph.add_edge(node_of(from), node_of(to), ());
         }
 
@@ -363,22 +372,17 @@ fn get_annotation(manifest: &serde_json::Value, key: &str) -> Option<String> {
 }
 
 /// Return each dependency among `manifests` as a pair of indexes into it,
-/// the dependent first.
+/// the dependent first. Apply creates a dependency before its dependent and
+/// waits for it to be ready, and a delete removes the dependent first.
 ///
 /// Most dependencies are the `kix.run/depends-on` entries that name another
 /// manifest of the set. The library writes those from the references in a
-/// manifest. Two more come from what Kubernetes does with a manifest, whatever
-/// the package wrote:
-///
-/// - A workload depends on each RoleBinding or ClusterRoleBinding whose
-///   subjects include the ServiceAccount its pods run as ([`grants`]).
-/// - A webhook configuration depends on the Service that each of its
-///   webhooks calls ([`webhook_services`]).
-///
-/// Apply then creates what an object needs before the object, and a delete
-/// removes the object first. A controller keeps its rights while it removes
-/// the finalizers of custom resources deleted in the same run. The API server
-/// stops calling a webhook before its Service and the pods behind it go.
+/// manifest. One more comes from what Kubernetes does with a manifest,
+/// whatever the package wrote: a workload depends on each RoleBinding or
+/// ClusterRoleBinding whose subjects include the ServiceAccount its pods run
+/// as ([`grants`]). A controller then gets its rights before it starts, and
+/// keeps them while it removes the finalizers of custom resources deleted in
+/// the same run.
 ///
 /// An added dependency that the recorded ones already contradict, because its
 /// target depends on its dependent directly or through other objects, is left
@@ -386,6 +390,28 @@ fn get_annotation(manifest: &serde_json::Value, key: &str) -> Option<String> {
 /// removes the finalizer of a binding it manages for its own ServiceAccount is
 /// one case.
 pub fn dependency_pairs(manifests: &[serde_json::Value]) -> Vec<(usize, usize)> {
+    with_added(manifests, recorded_pairs(manifests), grants(manifests))
+}
+
+/// Return the pairs of [`dependency_pairs`], and the pairs that order only
+/// deletes: a webhook configuration is deleted before each Service of the set
+/// that its webhooks call ([`webhook_services`]), so the API server never
+/// calls a webhook that has nothing behind it. These pairs do not order
+/// apply, because a configuration often has to exist before what serves it
+/// can start, for example when a controller writes the webhook's certificate
+/// into it.
+pub fn removal_pairs(manifests: &[serde_json::Value]) -> Vec<(usize, usize)> {
+    with_added(
+        manifests,
+        dependency_pairs(manifests),
+        webhook_services(manifests),
+    )
+}
+
+/// Return the pairs of each `kix.run/depends-on` entry that names another
+/// manifest of `manifests`. An entry may name an imported object outside
+/// the set.
+fn recorded_pairs(manifests: &[serde_json::Value]) -> Vec<(usize, usize)> {
     let mut by_hash: HashMap<String, usize> = HashMap::new();
     for (i, m) in manifests.iter().enumerate() {
         if let Some(hash) = get_annotation(m, keys::IDENTITY_HASH) {
@@ -394,26 +420,32 @@ pub fn dependency_pairs(manifests: &[serde_json::Value]) -> Vec<(usize, usize)> 
     }
     let mut pairs = Vec::new();
     for (i, m) in manifests.iter().enumerate() {
-        // An entry may name an imported object outside this set.
         if let Some(deps) = get_annotation(m, keys::DEPENDS_ON) {
             pairs.extend(
                 keys::depends_on_hashes(&deps).filter_map(|hash| Some((i, *by_hash.get(hash)?))),
             );
         }
     }
+    pairs
+}
 
-    let mut recorded: DiGraph<(), ()> = DiGraph::new();
-    let nodes: Vec<NodeIndex> = manifests.iter().map(|_| recorded.add_node(())).collect();
+/// Return `pairs` with each pair of `added` whose target does not already
+/// depend on its dependent, directly or through other pairs.
+fn with_added(
+    manifests: &[serde_json::Value],
+    mut pairs: Vec<(usize, usize)>,
+    mut added: Vec<(usize, usize)>,
+) -> Vec<(usize, usize)> {
+    let mut graph: DiGraph<(), ()> = DiGraph::new();
+    let nodes: Vec<NodeIndex> = manifests.iter().map(|_| graph.add_node(())).collect();
     for &(from, to) in &pairs {
-        recorded.add_edge(nodes[from], nodes[to], ());
+        graph.add_edge(nodes[from], nodes[to], ());
     }
-    let mut added = grants(manifests);
-    added.extend(webhook_services(manifests));
     added.sort_unstable();
     added.dedup();
     for (from, to) in added {
-        if !petgraph::algo::has_path_connecting(&recorded, nodes[to], nodes[from], None) {
-            recorded.add_edge(nodes[from], nodes[to], ());
+        if !petgraph::algo::has_path_connecting(&graph, nodes[to], nodes[from], None) {
+            graph.add_edge(nodes[from], nodes[to], ());
             pairs.push((from, to));
         }
     }
@@ -617,21 +649,22 @@ pub enum Walked<'a, T> {
 
 impl DeleteOrder {
     /// Order the objects of `manifests` by the dependencies
-    /// [`dependency_pairs`] finds, dependents first, and record those dependencies. When
+    /// [`removal_pairs`] finds, dependents first, and record those dependencies. When
     /// they form a cycle, keep the order of `manifests`; the walk then
     /// reports the objects of the cycle instead of deleting them. Callers
     /// pass every manifest they know and [`DeleteOrder::retain`] the objects
     /// to delete.
     pub fn of_manifests(manifests: &[serde_json::Value]) -> Self {
+        let pairs = removal_pairs(manifests);
         let mut needs: HashMap<ResourceId, Vec<ResourceId>> = HashMap::new();
-        for (from, to) in dependency_pairs(manifests) {
+        for &(from, to) in &pairs {
             let id = ResourceId::from_value(&manifests[from]);
             let dep = ResourceId::from_value(&manifests[to]);
             if dep != id {
                 needs.entry(id).or_default().push(dep);
             }
         }
-        let ids = match ResourceGraph::from_manifests(manifests) {
+        let ids = match ResourceGraph::with_pairs(manifests, pairs) {
             Ok(graph) => graph.reverse_topo_ids(),
             Err(_) => manifests.iter().map(ResourceId::from_value).collect(),
         };
@@ -1217,11 +1250,53 @@ mod tests {
             ),
         ];
         let names = |i: usize| manifests[i]["metadata"]["name"].as_str().unwrap();
-        let pairs: Vec<(&str, &str)> = dependency_pairs(&manifests)
+        let pairs: Vec<(&str, &str)> = removal_pairs(&manifests)
             .into_iter()
             .map(|(from, to)| (names(from), names(to)))
             .collect();
         assert_eq!(pairs, vec![("validate", "webhook"), ("mutate", "webhook")]);
+        assert!(dependency_pairs(&manifests).is_empty());
+    }
+
+    /// A controller that writes a webhook's certificate into its
+    /// configuration requires the configuration, and the webhook's pods start
+    /// only once the certificate exists. Apply does not make the configuration
+    /// wait for the webhook's Service, so the controller can start. Delete
+    /// still removes the configuration before the Service.
+    #[test]
+    fn a_webhook_service_orders_deletes_but_not_applies() {
+        let config = json!({
+            "apiVersion": "admissionregistration.k8s.io/v1",
+            "kind": "ValidatingWebhookConfiguration",
+            "metadata": { "name": "validate", "annotations": { (keys::IDENTITY_HASH): "hash_v" } },
+            "webhooks": [{ "clientConfig": { "service": { "namespace": "ops", "name": "webhook" } } }],
+        });
+        let manifests = [
+            manifest("Deployment", "webhook", "ops", "hash_wd", ""),
+            manifest("Service", "webhook", "ops", "hash_svc", "hash_wd"),
+            config,
+            manifest(
+                "Deployment",
+                "cert-controller",
+                "ops",
+                "hash_cc",
+                "requires:hash_v",
+            ),
+        ];
+        let graph = ResourceGraph::from_manifests(&manifests).expect("no cycle");
+        let config_id = ResourceId::new(
+            "admissionregistration.k8s.io",
+            "ValidatingWebhookConfiguration",
+            CLUSTER_SCOPED,
+            "validate",
+        );
+        assert!(dependencies(&graph, &config_id).is_empty());
+        let order = DeleteOrder::of_manifests(&manifests);
+        let service = ResourceId::new("", "Service", "ops", "webhook");
+        assert_eq!(order.needs[&config_id], vec![service.clone()]);
+        let ids = order.ids();
+        let pos = |rid: &ResourceId| ids.iter().position(|r| r == rid).unwrap();
+        assert!(pos(&config_id) < pos(&service), "{ids:?}");
     }
 
     /// In the builds of real operator packages, prune deletes each webhook
