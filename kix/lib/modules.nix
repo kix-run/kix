@@ -724,7 +724,8 @@ in
           IP ranges of the cluster's nodes. Standard `NetworkPolicy` can match
           nodes only by IP range, so on GKE and EKS Kix uses these ranges to
           build node rules (`host`, `remote-node`, `cluster`, and host-network
-          scrape targets) and excludes them from `world` egress rules. If this
+          scrape targets). Where the node range holds only nodes (GKE), Kix also
+          excludes it from `world` egress rules. If this
           list is empty and a policy targets nodes, evaluation fails. Ignored
           when Cilium is the network policy enforcer.
         '';
@@ -742,7 +743,10 @@ in
             can derive its first IPv4 address automatically. Required under
             standard `NetworkPolicy` whenever a workload or rule needs API
             server egress (such as any workload bound to a `Role` or
-            `ClusterRole`). Ignored when Cilium is the network policy enforcer.
+            `ClusterRole`). Kix does not yet compare this value with the live
+            cluster, so a wrong address shows up as controllers that cannot
+            reach the API server. Ignored when Cilium is the network policy
+            enforcer.
           '';
         };
         port = lib.mkOption {

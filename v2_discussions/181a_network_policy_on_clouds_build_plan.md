@@ -19,6 +19,28 @@
 | 10 | Add `cluster.flavor.aks.networkPolicy`. | 6 + live AKS cluster | `added` |
 | 11 | Add the post-deploy enforcement probe, if approved (`181`, section 10). | 6 | `added` |
 
+Step 6 shipped without two of its parts, which are not built and form a
+separate piece of work:
+
+- The `kix deploy` API server address check. It needs the build to record
+  `cluster.network.apiServer.cidrs` and the platform's
+  `ipBlockSeesServiceAddress` as state on the `platform-network-policy`
+  import record (`state = true`), and refusal code in `kix deploy`,
+  `kix rollback`, and the operator, beside `cluster/stops.rs`. Until then a
+  wrong address shows as controllers failing to reach the API server, and
+  GKE test 4's wrong-address step cannot pass.
+- The policy-kind validation check. It needs a list of the policy kinds Kix
+  knows and a check in `eval/validate.nix` that reads the enforcer's
+  `policyKinds`.
+
+Step 6 also added the platform fact `nodeRangeHoldsOnlyNodes` (true on GKE,
+false on EKS): a `world` egress rule leaves out `cluster.network.nodeCidrs`
+only where it is true, and elsewhere stays wide and reports
+`world-egress-node-subnets`, because the EKS node range is the VPC subnets,
+which also hold VPC endpoints, load balancers, and databases. Check 12 skips
+every policy Kix derives (`kix.run/derived`), since caller-ingress and scrape
+policies also select operator-created pods.
+
 Steps 1, 2, 3, and 5 have no dependencies and can run in parallel; steps 4 and
 7 can run in parallel once step 3 lands. Check before starting steps 1 and 2,
 as fixes for those findings may already be underway separately. Each step

@@ -13,6 +13,8 @@
 # - `ipBlockSeesServiceAddress`: an ipBlock egress peer is matched against
 #   the Service address and Service port, before the platform translates it
 #   to a pod.
+# - `nodeRangeHoldsOnlyNodes`: the node range (`cluster.network.nodeCidrs`)
+#   holds nothing but nodes, so a `world` rule can leave it out.
 # - `podStartsBeforePolicy`: a new pod runs for a moment before the platform
 #   applies its egress policy.
 #
@@ -28,6 +30,7 @@
   ipBlockSelectsPods,
   ipBlockSelectsNodes,
   ipBlockSeesServiceAddress,
+  nodeRangeHoldsOnlyNodes,
   podStartsBeforePolicy ? false,
 }:
 {
@@ -40,6 +43,7 @@
           ipBlockSelectsPods
           ipBlockSelectsNodes
           ipBlockSeesServiceAddress
+          nodeRangeHoldsOnlyNodes
           podStartsBeforePolicy
           ;
       };

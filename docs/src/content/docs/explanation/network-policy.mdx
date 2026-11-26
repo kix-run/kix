@@ -91,7 +91,7 @@ Standard `NetworkPolicy` has no built-in selectors for cluster nodes, the Kubern
 | Pods by label, default deny, DNS, StatefulSet peers, callers | Pod and namespace selectors; DNS peers by selector or IP range | Matches Cilium | Matches Cilium |
 | API server egress | `ipBlock` over `cluster.network.apiServer.cidrs` on `cluster.network.apiServer.port` | Matches Cilium; fails the build while `cidrs` is empty | Matches Cilium; derives the first IPv4 address of `cluster.network.serviceCidr` when `cidrs` is empty |
 | Admission webhook and aggregated API ingress (`from = "apiserver"`) | Peers in `cluster.network.apiServer.sources` | Matches Cilium; defaults to the `konnectivity-agent` pods in `kube-system` | Wider: set `sources` to the control plane subnets, which also match pods in those ranges |
-| `world` egress | `0.0.0.0/0` and `::/0`, always excluding link-local `169.254.0.0/16` and `fe80::/10` | Matches Cilium once `cluster.network.nodeCidrs` is set; wider while empty | Matches Cilium once `podCidr`, `nodeCidrs`, and `serviceCidr` are all set; wider while any is unset |
+| `world` egress | `0.0.0.0/0` and `::/0`, always excluding link-local `169.254.0.0/16` and `fe80::/10` | Matches Cilium once `cluster.network.nodeCidrs` is set; wider while empty | Wider: the node range is the VPC subnets, which also hold VPC endpoints, load balancers, and databases, so Kix keeps it in `world` (`world-egress-node-subnets`); also wider while `podCidr` or `serviceCidr` is unset |
 | `world` ingress (LoadBalancer backends and `from = "world"`) | `0.0.0.0/0` and `::/0`, excluding link-local ranges | Wider: also admits cluster nodes | Wider: also admits pods and cluster nodes |
 | `host`, `remote-node`, host-network scrape targets | `ipBlock` over `cluster.network.nodeCidrs` | Fails while `nodeCidrs` is empty; matches Cilium for all nodes, or wider (`host-all-nodes`) when `host` is used without `remote-node` | Fails while `nodeCidrs` is empty; wider because pods share node subnets (plus `host-all-nodes` for `host` alone) |
 | `cluster` entity | All pods, cluster nodes, and the API server | Requires `nodeCidrs` plus the API server setting for that direction | Requires `nodeCidrs` plus the API server setting for that direction |
@@ -102,7 +102,7 @@ When a generated `NetworkPolicy` allows broader traffic than Cilium would, Kix r
 
 `kix check` requires `cluster.network` address options only when a policy in the build uses them. A GKE cluster with no RBAC-bound workloads builds without `cluster.network.apiServer.cidrs`, and a cluster with no node rules or host-network scrape targets builds without `cluster.network.nodeCidrs`.
 
-Kix never queries a live cluster during evaluation, so keep these IP ranges in sync with your infrastructure. On GKE, rotating the control plane IP changes the API server endpoint address, so update `cluster.network.apiServer.cidrs` whenever you rotate it.
+Kix never queries a live cluster during evaluation, so keep these IP ranges in sync with your infrastructure. Kix does not yet compare `cluster.network.apiServer.cidrs` with the live cluster at deploy time either, so a wrong address shows up as controllers that cannot reach the API server. On GKE, rotating the control plane IP changes the API server endpoint address, so update `cluster.network.apiServer.cidrs` whenever you rotate it.
 
 ## Default-deny baseline and paired rules
 

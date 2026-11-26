@@ -723,6 +723,22 @@ in
     ]
   );
 
+  # A policy the netpol plugin derives selects pods by the selector of a
+  # Service, an operator's operand pods, or a platform intent, which other
+  # checks cover, so check 12 skips it. The same policy without
+  # `kix.run/derived`, as a package would define it, is still refused
+  # (v12-networkpolicy-selects-nothing).
+  p12d-derived-networkpolicy-over-operator-pods = clean (
+    base "a"
+    ++ [
+      (res "NetworkPolicy" "a" "np" {
+        apiVersion = "networking.k8s.io/v1";
+        metadata.labels."kix.run/derived" = "true";
+        spec.podSelector.matchLabels.app = "nope";
+      })
+    ]
+  );
+
   # A NetworkPolicy over operator-created pods names the custom resource
   # with `kix.run/operand-of`, as a PodDisruptionBudget does (check 14).
   v12b-networkpolicy-operand-of-missing-cr = onlyFailure "is not in namespace 'a' in this build" (

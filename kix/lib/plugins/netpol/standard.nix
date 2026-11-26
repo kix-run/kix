@@ -123,6 +123,12 @@ let
 
       selectsPods = platform.ipBlockSelectsPods;
       selectsNodes = platform.ipBlockSelectsNodes;
+      nodeRangeHoldsOnlyNodes = platform.nodeRangeHoldsOnlyNodes;
+      # A `world` rule leaves out the node range only where that range holds
+      # nothing else. Where it is shared, such as the VPC subnets on EKS that
+      # also hold VPC endpoints, load balancers, and databases, leaving it out
+      # would cut traffic Cilium's `world` allows.
+      excludesNodesFromWorld = selectsNodes && nodeRangeHoldsOnlyNodes;
       seesServiceAddress = platform.ipBlockSeesServiceAddress;
       podStartsBeforePolicy = platform.podStartsBeforePolicy or false;
 
@@ -336,14 +342,15 @@ let
       # left out, so a `world` rule never reaches a cloud metadata server
       # or a node-local agent. On egress, the pod, node, and Service ranges
       # are left out where an ipBlock would match them and the cluster
-      # declares them, and the rule is marked wider where it does not.
+      # declares them (the node range only where it holds only nodes), and
+      # the rule is marked wider where they are not.
       world =
         direction:
         let
           egress = direction == "egress";
           excluded =
             lib.optionals (egress && selectsPods && podCidr != null) [ podCidr ]
-            ++ lib.optionals (egress && selectsNodes) nodeCidrs
+            ++ lib.optionals (egress && excludesNodesFromWorld) nodeCidrs
             ++ lib.optionals (egress && seesServiceAddress && serviceCidr != null) [ serviceCidr ];
           v4 = [ linkLocal4 ] ++ builtins.filter (c: !(isIpv6 c)) excluded;
           v6 = [ linkLocal6 ] ++ builtins.filter isIpv6 excluded;
@@ -366,7 +373,8 @@ let
           widened =
             if egress then
               lib.optional (selectsPods && podCidr == null) "world-egress-pods"
-              ++ lib.optional (selectsNodes && nodeCidrs == [ ]) "world-egress-nodes"
+              ++ lib.optional (excludesNodesFromWorld && nodeCidrs == [ ]) "world-egress-nodes"
+              ++ lib.optional (selectsNodes && !nodeRangeHoldsOnlyNodes) "world-egress-node-subnets"
               ++ lib.optional (seesServiceAddress && serviceCidr == null) "world-egress-services"
             else
               lib.optional selectsPods "world-ingress-pods" ++ lib.optional selectsNodes "world-ingress-nodes";
@@ -699,7 +707,7 @@ in
 
   # Return `out.netpol` for a platform. `platform` holds `provider` (the
   # name in messages) and the facts `ipBlockSelectsPods`,
-  # `ipBlockSelectsNodes`, `ipBlockSeesServiceAddress`, and
-  # `podStartsBeforePolicy`. `network` is `cluster.network`.
+  # `ipBlockSelectsNodes`, `ipBlockSeesServiceAddress`,
+  # `nodeRangeHoldsOnlyNodes`, and `podStartsBeforePolicy`. `network` is `cluster.network`.
   mkNetpol = { platform, network }: mkBound { inherit platform network; } defaultDnsPeers;
 }

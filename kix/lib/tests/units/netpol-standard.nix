@@ -26,12 +26,14 @@ let
     ipBlockSelectsPods = false;
     ipBlockSelectsNodes = true;
     ipBlockSeesServiceAddress = false;
+    nodeRangeHoldsOnlyNodes = true;
   };
   eksFacts = {
     provider = "Amazon VPC CNI";
     ipBlockSelectsPods = true;
     ipBlockSelectsNodes = true;
     ipBlockSeesServiceAddress = true;
+    nodeRangeHoldsOnlyNodes = false;
     podStartsBeforePolicy = true;
   };
 
@@ -294,8 +296,11 @@ in
     )
     || throw "GKE world: unset ${builtins.toJSON unset}, set ${builtins.toJSON set}";
 
-  # On EKS an ipBlock matches pods, nodes, and Services, so `world` leaves
-  # out each declared range and names each one that is missing.
+  # On EKS an ipBlock matches pods, nodes, and Services. `world` leaves out
+  # each declared pod and Service range and names each missing one. The node
+  # range is the VPC subnets, which also hold VPC endpoints such as STS, so
+  # `world` keeps it and says it is wider: an STS endpoint inside the subnets
+  # stays reachable on 443.
   netpol-standard-world-egress-eks =
     let
       unset = (rulesFor eksFacts { }).mkExternalEgressRule { };
@@ -306,21 +311,31 @@ in
           nodeCidrs = [ "192.168.0.0/16" ];
         }).mkExternalEgressRule
           { };
+      # An STS interface endpoint in the node subnets.
+      stsEndpoint = "192.168.12.34";
+      inRange =
+        cidr: ip:
+        let
+          parts = lib.splitString "/" cidr;
+          octets = s: map lib.toInt (lib.splitString "." s);
+          prefixOctets = lib.toInt (lib.last parts) / 8;
+        in
+        lib.take prefixOctets (octets (builtins.head parts)) == lib.take prefixOctets (octets ip);
     in
     (
       unset._widened == [
         "world-egress-pods"
-        "world-egress-nodes"
+        "world-egress-node-subnets"
         "world-egress-services"
       ]
       &&
         exceptOf set == [
           "169.254.0.0/16"
           "100.64.0.0/16"
-          "192.168.0.0/16"
           "10.100.0.0/16"
         ]
-      && !(set ? _widened)
+      && !(builtins.any (c: inRange c stsEndpoint) (exceptOf set))
+      && set._widened == [ "world-egress-node-subnets" ]
     )
     || throw "EKS world: unset ${builtins.toJSON unset}, set ${builtins.toJSON set}";
 
@@ -552,6 +567,37 @@ in
       && widenedOf external == "world-ingress-nodes"
     )
     || throw "GKE cluster policies: ${builtins.toJSON (map (p: p.metadata.name) policies)}";
+
+  # On both GKE flavours, with nothing depending on `platform-dns`, the
+  # NetworkPolicy DNS rule allows every DNS destination the flavour lists:
+  # kube-dns and node-local-dns pods, and the two Cloud DNS addresses.
+  netpol-standard-gke-dns-all-peers =
+    let
+      dnsTo =
+        flavor:
+        let
+          egress = byName "web-deployment-web-egress" (policiesOf (clusterWith flavor [ (withWeb { }) ]));
+        in
+        (lib.findFirst (
+          r: builtins.any (p: (p.port or null) == 53) (r.ports or [ ])
+        ) { } egress.spec.egress).to or [ ];
+      want = [
+        {
+          namespaceSelector.matchLabels."kubernetes.io/metadata.name" = "kube-system";
+          podSelector.matchLabels."k8s-app" = "kube-dns";
+        }
+        {
+          namespaceSelector.matchLabels."kubernetes.io/metadata.name" = "kube-system";
+          podSelector.matchLabels."k8s-app" = "node-local-dns";
+        }
+        { ipBlock.cidr = "169.254.169.254/32"; }
+        { ipBlock.cidr = "169.254.20.10/32"; }
+      ];
+      standardTo = dnsTo publicKix.flavors.gke;
+      autopilotTo = dnsTo publicKix.flavors.gke-autopilot;
+    in
+    (standardTo == want && autopilotTo == want)
+    || throw "GKE DNS peers: standard ${builtins.toJSON standardTo}, autopilot ${builtins.toJSON autopilotTo}";
 
   # A workload bound to a Role needs the API server's address on GKE, and
   # builds once `cluster.network.apiServer.cidrs` names it.

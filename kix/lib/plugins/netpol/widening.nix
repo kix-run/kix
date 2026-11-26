@@ -12,6 +12,10 @@
     summary = "`world` egress rules also allow traffic to cluster nodes because `cluster.network.nodeCidrs` is empty and `ipBlock` rules match node IPs on this platform.";
     fix = "Set `cluster.network.nodeCidrs` so Kix excludes node IPs from `world` egress.";
   };
+  world-egress-node-subnets = {
+    summary = "`world` egress rules also allow traffic to cluster nodes, because on this platform the node range also holds other addresses that `world` must reach, such as VPC endpoints, load balancers, and databases, so Kix does not exclude it.";
+    fix = "No Kix setting narrows this rule while the node range holds other addresses. Accept this finding.";
+  };
   world-egress-services = {
     summary = "`world` egress rules also allow traffic to in-cluster Services (including the API server) on the allowed ports because `cluster.network.serviceCidr` is unset and `ipBlock` rules match Service IPs on this platform.";
     fix = "Set `cluster.network.serviceCidr` so Kix excludes Service IPs from `world` egress.";

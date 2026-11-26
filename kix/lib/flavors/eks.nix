@@ -147,6 +147,9 @@ in
         ipBlockSelectsPods = true;
         ipBlockSelectsNodes = true;
         ipBlockSeesServiceAddress = true;
+        # The node range is the VPC subnets, which also hold pods, VPC
+        # endpoints such as STS, load balancers, and databases.
+        nodeRangeHoldsOnlyNodes = false;
         podStartsBeforePolicy = true;
       });
     };

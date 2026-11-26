@@ -108,6 +108,11 @@ in
       ipBlockSelectsPods = false;
       ipBlockSelectsNodes = true;
       ipBlockSeesServiceAddress = false;
+      # Google documents that a VPC-native cluster, which Dataplane V2
+      # requires, gives nodes the subnet's primary range and pods and
+      # Services other ranges. On a live GKE cluster, leaving the node range
+      # out of `0.0.0.0/0` kept internet egress working.
+      nodeRangeHoldsOnlyNodes = true;
     };
 
     platform-storage = {
