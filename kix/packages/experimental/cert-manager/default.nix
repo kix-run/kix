@@ -54,7 +54,10 @@
 # (`--cluster-issuer-ambient-credentials`), and the package leaves
 # `--issuer-ambient-credentials` off, so a namespaced Issuer cannot use the
 # controller's role. Those credentials come from the cloud identity bound to
-# the controller's ServiceAccount, or from the node when there is none.
+# the controller's ServiceAccount. With none, they are what the platform
+# gives a pod without an identity: on GKE with Workload Identity Federation,
+# the ServiceAccount's own principal, and on EKS or AKS, the node's identity
+# when pods can reach the instance metadata service.
 # Changing the identity restarts the controller pod.
 #
 #   instances.cert-manager.cert-manager = {

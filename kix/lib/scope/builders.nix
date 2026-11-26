@@ -135,16 +135,25 @@ in
                     // {
                       packageLabels = labels;
                       _builtBy = builtBy;
-                      # The pod labels and restart stamp of a ServiceAccount
-                      # bound with `kix.cloudIdentity.use`, or null. The
-                      # workload builders read it from the pod's
-                      # ServiceAccount, outside the manifest.
+                      # The pod labels, restart stamp, and the mechanism's
+                      # facts about pods of a ServiceAccount bound with
+                      # `kix.cloudIdentity.use`, or null. The workload
+                      # builders read it from the pod's ServiceAccount,
+                      # outside the manifest.
                       _cloudIdentity =
                         if identity == null then
                           null
                         else
                           {
-                            inherit (rendered) podLabels stamp;
+                            # The dependency that holds the identity, or null.
+                            inherit (identity) dependency;
+                            inherit (rendered)
+                              podLabels
+                              stamp
+                              podCheck
+                              servesHostNetwork
+                              description
+                              ;
                           };
                       # Warnings raised while building the resource, outside the
                       # manifest. `eval/instance.nix` collects them from the
@@ -219,14 +228,26 @@ in
       # and a `checksum/cloud-identity` annotation. A cloud's webhook gives
       # credentials to a pod only when the pod starts, so the stamp makes a
       # changed identity roll the pods.
+      #
+      # A pod with `hostNetwork: true` on a platform that does not serve such
+      # pods would run with the node's credentials, so it is refused.
       _withCloudIdentity =
-        rawTemplateSpec: metadata:
+        workload: rawTemplateSpec: metadata:
         let
           sa = rawTemplateSpec.serviceAccount or null;
-          identity = if sa == null then null else sa._cloudIdentity or null;
+          identity = _templateIdentity rawTemplateSpec;
         in
         if identity == null then
           metadata
+        else if (rawTemplateSpec.hostNetwork or false) && !identity.servesHostNetwork then
+          fail {
+            id = "K2669";
+            instance = builtBy;
+            message = "${workload} sets `hostNetwork: true` and uses ServiceAccount `${sa.out.name}`, which has a cloud identity${
+              lib.optionalString (identity.dependency != null) " from `deps.${identity.dependency}`"
+            }. ${identity.description} does not grant cloud identities to host-network pods, so they would run with the node's credentials. Kix rejected ${workload}.";
+            fix = "Use a separate ServiceAccount without a cloud identity, or remove `hostNetwork: true`.";
+          }
         else
           metadata
           // {
@@ -234,6 +255,31 @@ in
             annotations = (metadata.annotations or { }) // {
               "checksum/cloud-identity" = identity.stamp;
             };
+          };
+
+      _templateIdentity =
+        rawTemplateSpec:
+        let
+          sa = rawTemplateSpec.serviceAccount or null;
+        in
+        if sa == null then null else sa._cloudIdentity or null;
+
+      # Return the workload annotation that tells the deploy which
+      # environment variables the cloud identity's platform adds to each
+      # container of the workload's pods, or an empty set when the
+      # mechanism adds none the deploy can check. Only Deployments,
+      # StatefulSets, and DaemonSets carry it. A Job is left out because a
+      # changed annotation makes the deploy run it again.
+      _cloudIdentityEnvAnnotation =
+        rawTemplateSpec:
+        let
+          identity = _templateIdentity rawTemplateSpec;
+        in
+        if identity == null || identity.podCheck == null then
+          { }
+        else
+          {
+            ${kixKeys.cloudIdentityEnv} = builtins.toJSON identity.podCheck;
           };
 
       _expandHeadlessService =
@@ -541,7 +587,7 @@ in
             // {
               selector.matchLabels = selector;
               template = {
-                metadata = _withCloudIdentity rawTemplateSpec (
+                metadata = _withCloudIdentity "${kind} `${attrs.name or "?"}`" rawTemplateSpec (
                   templateMeta
                   // {
                     labels = effectiveTemplateLabels;
@@ -562,6 +608,9 @@ in
               inherit apiVersion kind;
               spec = finalSpec;
               labels = workloadLabels;
+            }
+            // lib.optionalAttrs (_cloudIdentityEnvAnnotation rawTemplateSpec != { }) {
+              annotations = (attrs.annotations or { }) // _cloudIdentityEnvAnnotation rawTemplateSpec;
             };
         in
         withChecks
@@ -622,7 +671,7 @@ in
             jobTemplate = (rawSpec.jobTemplate or { }) // {
               spec = jobSpec // {
                 template = {
-                  metadata = _withCloudIdentity rawTemplateSpec (
+                  metadata = _withCloudIdentity "${kind} `${attrs.name or "?"}`" rawTemplateSpec (
                     templateMeta
                     // {
                       labels = selector;
@@ -693,7 +742,7 @@ in
             }
             // {
               template = {
-                metadata = _withCloudIdentity rawTemplateSpec (
+                metadata = _withCloudIdentity "${kind} `${attrs.name or "?"}`" rawTemplateSpec (
                   templateMeta
                   // {
                     labels = effectiveTemplateLabels;

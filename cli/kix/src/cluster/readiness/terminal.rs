@@ -8,6 +8,7 @@ use kube::{
 use serde_json::Value;
 
 use super::declared::{readiness_message, status_observed_generation};
+use super::identity::{classify_pod_identity, identity_env};
 use crate::manifest::kinds::{self, GroupKind};
 
 /// Number of container restarts required before CrashLoopBackOff is treated
@@ -30,6 +31,9 @@ pub enum TerminalReason {
     ProgressDeadline,
     /// Job exceeded spec.backoffLimit.
     JobBackoffExceeded,
+    /// A pod of the current revision lacks the environment variables that
+    /// the platform adds when it gives the pod its cloud identity.
+    CloudIdentityNotApplied,
 }
 
 impl TerminalReason {
@@ -40,6 +44,7 @@ impl TerminalReason {
             TerminalReason::CrashLoop => "CrashLoopBackOff",
             TerminalReason::ProgressDeadline => "ProgressDeadlineExceeded",
             TerminalReason::JobBackoffExceeded => "JobBackoffExceeded",
+            TerminalReason::CloudIdentityNotApplied => "CloudIdentityNotApplied",
         }
     }
 }
@@ -760,13 +765,29 @@ pub(super) async fn scan_terminal(
     let Some(selector) = workload_label_selector(&obj.data) else {
         return nothing();
     };
-    let selector = match current_revision_pods(client, obj, kind, namespace, &selector).await {
-        RevisionPods::Matching(revision) => format!("{selector},{revision}"),
-        RevisionPods::All => selector,
-        RevisionPods::NotCreated => return nothing(),
-    };
+    let (selector, current_only) =
+        match current_revision_pods(client, obj, kind, namespace, &selector).await {
+            RevisionPods::Matching(revision) => (format!("{selector},{revision}"), true),
+            RevisionPods::All => (selector, false),
+            RevisionPods::NotCreated => return nothing(),
+        };
     let pods = list_pods_for_workload(client, namespace, &selector).await;
-    let terminal = pods.iter().find_map(classify_pod_terminal);
+    // Only pods of the current revision can show whether the current pod
+    // template got its cloud identity.
+    let identity = if current_only {
+        obj.metadata
+            .annotations
+            .as_ref()
+            .and_then(identity_env)
+            .and_then(|expected| {
+                pods.iter()
+                    .find_map(|p| classify_pod_identity(p, &expected))
+                    .map(|m| (TerminalReason::CloudIdentityNotApplied, m))
+            })
+    } else {
+        None
+    };
+    let terminal = identity.or_else(|| pods.iter().find_map(classify_pod_terminal));
     let pull_retrying = pods.iter().find_map(transient_pull_error);
     ScanResult {
         terminal,

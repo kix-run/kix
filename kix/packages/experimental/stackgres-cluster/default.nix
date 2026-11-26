@@ -29,7 +29,8 @@
 # that cloud. The package writes it to the SGCluster's
 # `spec.metadata.annotations.serviceAccount` through
 # `kix.cloudIdentity.annotationsFor`, and `extraSpec` cannot replace those
-# keys. Without `backupIdentity`, the pods use the node's credentials. An
+# keys. Without `backupIdentity`, the pods get what the platform gives a
+# pod without an identity, such as the node's credentials. An
 # identity is refused without `backups`, when the storage reads a Secret,
 # and for another cloud. Kix does not build the pods, so a changed identity
 # reaches running pods only when they restart: create an SGDbOps with

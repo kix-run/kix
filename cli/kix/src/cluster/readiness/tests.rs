@@ -3221,3 +3221,121 @@ mod workload_waits {
         assert!(!message.contains("kubectl delete pod"), "{message}");
     }
 }
+
+mod identity_rollout {
+    use super::*;
+    use crate::cluster::fake_api::FakeApi;
+
+    const ROLE: &str = "arn:aws:iam::111122223333:role/worker";
+
+    /// A StatefulSet whose current revision is `rev-2`, ready, with the
+    /// IRSA variables declared.
+    fn statefulset() -> Value {
+        json!({
+            "apiVersion": "apps/v1",
+            "kind": "StatefulSet",
+            "metadata": {
+                "name": "worker",
+                "namespace": "work",
+                "generation": 2,
+                "annotations": {
+                    keys::CLOUD_IDENTITY_ENV: json!({
+                        "description": "IAM roles for service accounts (IRSA)",
+                        "env": { "AWS_ROLE_ARN": ROLE, "AWS_WEB_IDENTITY_TOKEN_FILE": null },
+                        "fix": "Check the webhook."
+                    }).to_string()
+                }
+            },
+            "spec": { "replicas": 1, "selector": { "matchLabels": { "app": "worker" } } },
+            "status": {
+                "observedGeneration": 2,
+                "replicas": 2,
+                "readyReplicas": 1,
+                "updatedReplicas": 1,
+                "updateRevision": "rev-2",
+            }
+        })
+    }
+
+    fn pod(name: &str, revision: &str, env: Value) -> Value {
+        json!({
+            "apiVersion": "v1",
+            "kind": "Pod",
+            "metadata": {
+                "name": name,
+                "namespace": "work",
+                "labels": { "app": "worker", "controller-revision-hash": revision }
+            },
+            "spec": {
+                "serviceAccountName": "worker",
+                "containers": [{ "name": "worker", "env": env }]
+            },
+            "status": { "phase": "Running" }
+        })
+    }
+
+    fn with_identity() -> Value {
+        json!([
+            { "name": "AWS_ROLE_ARN", "value": ROLE },
+            { "name": "AWS_WEB_IDENTITY_TOKEN_FILE", "value": "/token" }
+        ])
+    }
+
+    async fn wait(api: &FakeApi) -> ReadinessResult {
+        let ar = ApiResource {
+            group: "apps".into(),
+            version: "v1".into(),
+            api_version: "apps/v1".into(),
+            kind: "StatefulSet".into(),
+            plural: "statefulsets".into(),
+        };
+        let rid = ResourceId {
+            group: "apps".into(),
+            kind: "StatefulSet".into(),
+            namespace: "work".into(),
+            name: "worker".into(),
+        };
+        wait_for_ready(
+            &api.client(),
+            &ar,
+            &Scope::Namespaced,
+            &rid,
+            None,
+            DEFAULT_TIMEOUT,
+            &CancelToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap()
+    }
+
+    // Mid-rollout, a pod of the previous revision without the variables is
+    // not judged. Only the current revision's pod is, and it has them.
+    #[tokio::test(start_paused = true)]
+    async fn an_old_revision_pod_is_not_judged() {
+        let api = FakeApi::new([
+            statefulset(),
+            pod("worker-1", "rev-1", json!([])),
+            pod("worker-0", "rev-2", with_identity()),
+        ]);
+        assert_eq!(wait(&api).await, ReadinessResult::Ready);
+    }
+
+    // A pod of the current revision without the variables fails the wait.
+    #[tokio::test(start_paused = true)]
+    async fn a_current_revision_pod_without_its_identity_fails() {
+        let api = FakeApi::new([
+            statefulset(),
+            pod("worker-1", "rev-1", with_identity()),
+            pod("worker-0", "rev-2", json!([])),
+        ]);
+        let result = wait(&api).await;
+        let ReadinessResult::Failed { message, .. } = result else {
+            panic!("expected a failure, got {result:?}");
+        };
+        assert!(
+            message.starts_with("CloudIdentityNotApplied: pod worker-0"),
+            "{message}"
+        );
+    }
+}

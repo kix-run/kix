@@ -136,7 +136,9 @@ storage and the database cluster:
   cloud identity in `deps.backupIdentity`. Because the database pods run
   backups under the `<cluster>-patroni` ServiceAccount created by the StackGres
   operator, each cluster carries its own identity. Leave `deps.backupIdentity`
-  unset if the pods should use the node's credentials.
+  unset if the pods should use the cluster's default pod credentials (such as
+  the node's credentials on EKS when pods can reach the instance metadata
+  service).
 
 ```nix
 instances.database = {
