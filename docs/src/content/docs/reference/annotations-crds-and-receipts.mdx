@@ -110,7 +110,7 @@ Generated from the experimental attribute-set form of [`kix.untrackedRef`](/docs
 | Annotation | Meaning |
 | --- | --- |
 | `kix.run/operand-of` | `"<group>/<Kind>/<name>"` of the operator custom resource whose runtime pods a `Service`, `NetworkPolicy`, or `PodDisruptionBudget` selects. |
-| `kix.run/network-policy-widened` | Comma-separated reason codes (such as `world-egress-pods` or `pod-start-egress-open`) stamped on a generated `NetworkPolicy` when it allows more traffic than intended, such as in-cluster pods or nodes matching a `world` CIDR rule or outbound traffic during pod startup. Written by the standard `NetworkPolicy` enforcer and read by the [`security.networkPolicyWidened`](/docs/reference/scorecard-and-rules/#built-in-security-rules) scorecard rule. |
+| `kix.run/network-policy-widened` | Comma-separated reason codes (such as `world-egress-services` or `pod-start-egress-open`) added to a generated `NetworkPolicy` when it allows broader traffic than intended, such as CIDR rules matching in-cluster IPs or brief outbound traffic during pod startup. Written by the standard `NetworkPolicy` enforcer and checked by the [`security.networkPolicyWidened`](/docs/reference/scorecard-and-rules/#built-in-security-rules) scorecard rule, which warns when a `cluster.network` setting can narrow the rule and reports platform limits at `info`. |
 | `kix.run/monitors-external-service` | `"true"` on a `ServiceMonitor` or `VMServiceScrape` that intentionally targets a Service outside the Kix build. |
 | `kix.run/role` | Reserved key (`kix.keys.role`); not currently stamped by built-in builders or packages. |
 

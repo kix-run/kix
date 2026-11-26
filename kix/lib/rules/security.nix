@@ -439,10 +439,11 @@ in
   };
 
   # Report generated NetworkPolicies that admit traffic their rules did not
-  # ask for. The standard enforcer marks each
-  # such policy with `kix.run/network-policy-widened`. The rule reports each
-  # reason once with a count, and each policy as a detail that
-  # `kix check -v` lists.
+  # ask for. The standard enforcer marks each such policy with
+  # `kix.run/network-policy-widened`. The rule reports each reason once with
+  # a count, at the rule's severity when a cluster setting removes it
+  # (`fixable` in widening.nix) and at info when it is a platform limit, and
+  # each policy as an info detail that `kix check -v` lists.
   networkPolicyWidened = {
     description = "Generated NetworkPolicy objects should allow only the intended traffic";
     level = "cluster";
@@ -473,9 +474,10 @@ in
         describe =
           id:
           widening.${id} or {
-            summary = "This policy carries the unknown reason code `${id}` in `kix.run/network-policy-widened`.";
-            fix = "";
-            detail = "it carries the unknown reason code `${id}` in `kix.run/network-policy-widened`";
+            summary = "Annotation `kix.run/network-policy-widened` contains unknown reason code `${id}`. Kix kept the policy and could not check whether a cluster setting narrows it.";
+            fix = "If you set `kix.run/network-policy-widened` directly on a `NetworkPolicy`, remove `${id}`.";
+            fixable = false;
+            detail = "unknown reason code in `kix.run/network-policy-widened`";
           };
         count = n: if n == 1 then "1 network policy" else "${toString n} network policies";
       in
@@ -485,6 +487,10 @@ in
           d = describe id;
         in
         {
+          # A platform limit is reported at info whatever the rule's
+          # severity, so raising the rule to error fails only on reasons a
+          # cluster setting removes.
+          detail = !(d.fixable or false);
           message = "${count (builtins.length ps)} (${id}): ${d.summary}${
             lib.optionalString (d.fix != "") " ${d.fix}"
           }";
@@ -494,7 +500,7 @@ in
         detail = true;
         namespace = p.metadata.namespace or null;
         resource = "NetworkPolicy/${p.metadata.name}";
-        message = "allows more traffic than intended: ${
+        message = "allows broader traffic than intended: ${
           lib.concatMapStringsSep "; " (id: "${(describe id).detail} (${id})") (widenedIds p)
         }.";
       }) policies;
