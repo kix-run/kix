@@ -14,7 +14,7 @@ set -euo pipefail
 FIX="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KIX="${KIX:-kix}"
 
-for cluster in cert-manager velero external-secrets; do
+for cluster in cert-manager velero external-secrets netpol-eks; do
   "$KIX" build "$cluster" -o json | python3 -I -c '
 import json, sys
 templates = {
