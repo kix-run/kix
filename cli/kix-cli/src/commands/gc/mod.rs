@@ -531,6 +531,11 @@ async fn run_hard_async(
     }
     let forbidden_none = sweep.forbidden.is_empty();
     let unattributed_judged = sweep.unattributed.is_empty() || args.includes(Include::Unattributed);
+    let copies: HashSet<ResourceId> = sweep
+        .copies
+        .iter()
+        .map(kix::cluster::drift::resource_id)
+        .collect();
     let live = judged_objects(
         sweep,
         args.includes(Include::Unattributed),
@@ -563,14 +568,8 @@ async fn run_hard_async(
     let retirement = plan_records_with(records.into_records(), cluster_name, &policy).await?;
     garbage.extend(record_garbage(&retirement.plan));
 
-    // Separate unstamped resources unless `--include unstamped` is set.
-    // Protected kinds remain in `garbage` so they are listed as kept below.
-    let (unstamped, garbage): (Vec<GarbageEntry>, Vec<GarbageEntry>) =
-        garbage.into_iter().partition(|g| {
-            g.reason == GarbageReason::NoIdentityHash
-                && !args.includes(Include::Unstamped)
-                && !lifecycle::never_pruned(g.id.group_kind())
-        });
+    let (unstamped, garbage) =
+        hold_back_unstamped(garbage, &copies, args.includes(Include::Unstamped));
     if !unstamped.is_empty() && !output::quiet() {
         print_unstamped(&unstamped);
     }

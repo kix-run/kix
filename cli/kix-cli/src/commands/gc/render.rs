@@ -33,7 +33,7 @@ pub(super) fn print_unstamped(unstamped: &[GarbageEntry]) {
     println!(
         "  {}",
         output::dim(
-            "Kept running on the cluster, because Kix never applied them. \
+            "Kept running on the cluster, because no Kix build lists them. \
              Pass `--include unstamped` to delete them too."
         ),
     );

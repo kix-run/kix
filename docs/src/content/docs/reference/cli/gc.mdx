@@ -43,7 +43,7 @@ kix gc <CLUSTER> [-y] [--dry-run] [--full-scan [--include unstamped,unattributed
 | --- | --- |
 | `unstamped` | Resources written by Kix that carry the label without `kix.run/identity-hash`. Kix cannot match them to a build, so by default they are only listed. |
 | `unattributed` | Resources with no matching Activation record on the cluster. Kix cannot tell which Kix cluster they belong to, so by default they are only listed. |
-| `copies` | Resources carrying Kix's labels that Kix never wrote, because another controller or tool (such as an operator) copied those labels onto a new object, like a database volume claim or an Event for a custom resource. By default copies are only listed. Copies that also lack `kix.run/identity-hash` require `--include copies,unstamped` to delete. |
+| `copies` | Resources carrying Kix's labels that Kix never wrote, because another controller or tool (such as an operator) copied those labels onto a new object, like a database volume claim or an Event for a custom resource. By default copies are only listed. |
 | `--operator` | Delete the retired Activation records only; the operator's finalizer removes their resources. |
 | `--timeout <DURATION>` | How long to wait for a deleted resource while its finalizers do not change (`5m`, `300s`, or seconds). Default `3m`. Each removed finalizer resets the timer, up to 5 minutes in total per resource. Not with `--operator`. |
 | `--keep <N>` | Always keep at least the `N` newest Superseded records, whatever their age. Default `10`. `0` keeps none. |

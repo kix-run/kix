@@ -591,6 +591,64 @@ mod hard_scope_tests {
         assert_eq!(names(&garbage), vec!["web-x-guest"]);
     }
 
+    /// An operator's Event carries Kix's labels but no Kix annotation and no
+    /// `kix` field-manager entry. `--include copies` alone judges it, while an
+    /// object Kix wrote without a hash still waits for `--include unstamped`.
+    #[test]
+    fn include_copies_judges_a_copy_without_a_hash() {
+        let tenancy = Tenancy::fixture(&[record("a", "a2")], "a");
+        let mut event = live("Event", "db.1a2b", None, "");
+        event.metadata.managed_fields = Some(vec![
+            k8s_openapi::apimachinery::pkg::apis::meta::v1::ManagedFieldsEntry {
+                manager: Some("stackgres-operator".into()),
+                operation: Some("Update".into()),
+                ..Default::default()
+            },
+        ]);
+        let sweep = inventory::scope_sweep(
+            inventory::partition_sweep(vec![
+                live("ConfigMap", "a-current", Some("h-cur"), "a2"),
+                event,
+                live("ConfigMap", "unannotated", None, ""),
+            ]),
+            inventory::SweepScope::Cluster("a"),
+            tenancy.clone(),
+        );
+        let object_names = |objs: &[DynamicObject]| -> Vec<String> {
+            objs.iter()
+                .filter_map(|o| o.metadata.name.clone())
+                .collect()
+        };
+        assert_eq!(object_names(&sweep.copies), ["db.1a2b"]);
+        assert_eq!(object_names(&sweep.unattributed), ["unannotated"]);
+        let copies: HashSet<ResourceId> = sweep
+            .copies
+            .iter()
+            .map(kix::cluster::drift::resource_id)
+            .collect();
+        let expected: HashSet<String> = ["h-cur".to_string()].into();
+        let judged = judged_objects(sweep, true, true);
+        let (garbage, _) = judge_hard(&judged, &expected, &HashSet::new(), &tenancy);
+
+        let (held, rest) = hold_back_unstamped(garbage, &copies, false);
+        assert_eq!(names(&rest), vec!["db.1a2b"]);
+        assert_eq!(names(&held), vec!["unannotated"]);
+
+        let judged = judged_objects(
+            inventory::scope_sweep(
+                inventory::partition_sweep(vec![live("ConfigMap", "unannotated", None, "")]),
+                inventory::SweepScope::Cluster("a"),
+                tenancy.clone(),
+            ),
+            true,
+            true,
+        );
+        let (garbage, _) = judge_hard(&judged, &expected, &HashSet::new(), &tenancy);
+        let (held, rest) = hold_back_unstamped(garbage, &copies, true);
+        assert!(held.is_empty());
+        assert_eq!(names(&rest), vec!["unannotated"]);
+    }
+
     /// Verify that hard GC does not delete another Kix cluster's objects
     /// after that cluster's records are gone. They name no record, so they are
     /// judged only with `--include unattributed`, like a leftover of this

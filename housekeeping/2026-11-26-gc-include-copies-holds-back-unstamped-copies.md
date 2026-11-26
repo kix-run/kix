@@ -1,3 +1,0 @@
-# 2026-11-26 · `cli/kix-cli/src/commands/gc/mod.rs` · `kix gc --full-scan --include copies` does not judge a copy that has no `kix.run/identity-hash`.
-
-The sweep puts an object Kix never wrote in `ManagedSweep::copies` whether or not it carries Kix's stamp, such as an Event an operator posts with a custom resource's labels. With `--include copies`, `judge_hard` gives such a copy the reason `NoIdentityHash`, and gc then holds it back under "No Kix build annotation" unless `--include unstamped` is also set, so the object shows in two lists. The cause is the one in `2026-11-25-cluster-sweep-unstamped-bucket-always-empty.md`: gc decides what `--include unstamped` covers from the garbage reason, not from the sweep's bucket.
