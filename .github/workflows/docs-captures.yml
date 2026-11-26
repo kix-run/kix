@@ -27,10 +27,9 @@ name: Documentation captures
 # `nix run ./docs#regen-captures-offline -- --apply` locally, or with
 # `--group <a>/<b>` for one group, and commit the result.
 #
-# The captures need the private kix-run/kix-examples repository, which
-# only the KIX_EXAMPLES_TOKEN secret can read. GitHub gives no secrets to a
-# pull request from a fork or from Dependabot, so the job skips its steps
-# there and says so in a notice.
+# The captures read the public kix-run/kix-examples repository. The job
+# needs no secrets, so it also runs on a pull request from a fork or from
+# Dependabot.
 
 on:
   pull_request:
@@ -67,19 +66,7 @@ jobs:
         accept-flake-config = true
         access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
     steps:
-      - name: Check for the kix-examples token
-        id: token
-        env:
-          TOKEN: ${{ secrets.KIX_EXAMPLES_TOKEN }}
-        run: |
-          if [ -n "$TOKEN" ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "::notice title=Documentation captures skipped::This run has no KIX_EXAMPLES_TOKEN secret, which pull requests from forks and from Dependabot never get. The captures need the private kix-examples repository, so they did not run. A maintainer can run this workflow on the branch."
-          fi
-
       - name: Checkout kix
-        if: steps.token.outputs.present == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: kix
@@ -88,7 +75,6 @@ jobs:
       # Decide what to check: every capture, some groups, or nothing. The
       # header of this file gives the rule.
       - name: Choose the captures to check
-        if: steps.token.outputs.present == 'true'
         id: scope
         working-directory: kix
         env:
@@ -143,16 +129,14 @@ jobs:
         id: examples-rev
         run: echo "rev=$(nix eval --raw --impure --expr '(builtins.fromJSON (builtins.readFile ./kix/docs/flake.lock)).nodes.kix-examples.locked.rev')" >> "$GITHUB_OUTPUT"
 
-      # kix-examples is a separate private repository, which the job's
-      # GITHUB_TOKEN cannot read, so it is checked out with its own token
-      # and the flake input is overridden to point at it.
+      # kix-examples is a separate public repository. It is checked out
+      # here and the flake input is overridden to point at the checkout.
       - name: Checkout kix-examples
         if: steps.scope.outputs.all == 'true' || steps.scope.outputs.groups != ''
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: kix-run/kix-examples
           ref: ${{ steps.examples-rev.outputs.rev }}
-          token: ${{ secrets.KIX_EXAMPLES_TOKEN }}
           path: kix-examples
           fetch-depth: 0
 
