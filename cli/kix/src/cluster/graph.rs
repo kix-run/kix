@@ -377,12 +377,18 @@ fn get_annotation(manifest: &serde_json::Value, key: &str) -> Option<String> {
 ///
 /// Most dependencies are the `kix.run/depends-on` entries that name another
 /// manifest of the set. The library writes those from the references in a
-/// manifest. One more comes from what Kubernetes does with a manifest,
-/// whatever the package wrote: a workload depends on each RoleBinding or
-/// ClusterRoleBinding whose subjects include the ServiceAccount its pods run
-/// as ([`grants`]). A controller then gets its rights before it starts, and
-/// keeps them while it removes the finalizers of custom resources deleted in
-/// the same run.
+/// manifest. Two more come from what Kubernetes does with a manifest,
+/// whatever the package wrote, because the object a workload needs names the
+/// workload's pods and nothing in the workload names it:
+///
+/// - A workload depends on each RoleBinding or ClusterRoleBinding whose
+///   subjects include the ServiceAccount its pods run as ([`grants`]).
+/// - A workload depends on each network policy whose selector matches its
+///   pods ([`selecting_policies`]).
+///
+/// A controller then gets its rights and its network access before it
+/// starts, and keeps both while it removes the finalizers of custom resources
+/// deleted in the same run.
 ///
 /// An added dependency that the recorded ones already contradict, because its
 /// target depends on its dependent directly or through other objects, is left
@@ -390,7 +396,9 @@ fn get_annotation(manifest: &serde_json::Value, key: &str) -> Option<String> {
 /// removes the finalizer of a binding it manages for its own ServiceAccount is
 /// one case.
 pub fn dependency_pairs(manifests: &[serde_json::Value]) -> Vec<(usize, usize)> {
-    with_added(manifests, recorded_pairs(manifests), grants(manifests))
+    let mut added = grants(manifests);
+    added.extend(selecting_policies(manifests));
+    with_added(manifests, recorded_pairs(manifests), added)
 }
 
 /// Return the pairs of [`dependency_pairs`], and the pairs that order only
@@ -509,6 +517,152 @@ fn grants(manifests: &[serde_json::Value]) -> Vec<(usize, usize)> {
         }
     }
     pairs
+}
+
+/// Return a pair for each workload and each NetworkPolicy,
+/// CiliumNetworkPolicy, or CiliumClusterwideNetworkPolicy whose pod selector
+/// matches the labels of the workload's pod template, unless its pods use the
+/// host network, which network policies do not cover. A policy that selects
+/// a pod limits what it may reach and adds what other policies allow it, so
+/// the pod needs every such policy while it runs, a namespace's default deny
+/// included. Apply creates them before the pods start, and a delete removes
+/// them only after the pods are gone.
+fn selecting_policies(manifests: &[serde_json::Value]) -> Vec<(usize, usize)> {
+    let policies: Vec<(usize, PolicyScope<'_>, &serde_json::Value)> = manifests
+        .iter()
+        .enumerate()
+        .filter_map(|(i, m)| {
+            let gk = GroupKind::of_manifest(m);
+            let (scope, selector) = if gk == kinds::NETWORK_POLICY {
+                (
+                    PolicyScope::Namespace(namespace_of(m)?),
+                    m.pointer("/spec/podSelector")?,
+                )
+            } else if gk == CILIUM_NETWORK_POLICY {
+                (
+                    PolicyScope::Namespace(namespace_of(m)?),
+                    m.pointer("/spec/endpointSelector")?,
+                )
+            } else if gk == CILIUM_CLUSTERWIDE_NETWORK_POLICY {
+                (PolicyScope::Cluster, m.pointer("/spec/endpointSelector")?)
+            } else {
+                return None;
+            };
+            Some((i, scope, selector))
+        })
+        .collect();
+    let mut pairs = Vec::new();
+    for (i, m) in manifests.iter().enumerate() {
+        // Network policies do not apply to pods on the host network.
+        let Some(spec) = workload::pod_spec(m) else {
+            continue;
+        };
+        if spec.get("hostNetwork").and_then(|h| h.as_bool()) == Some(true) {
+            continue;
+        }
+        let Some(namespace) = namespace_of(m) else {
+            continue;
+        };
+        let labels = pod_labels(m);
+        for (policy, scope, selector) in &policies {
+            let in_scope = match scope {
+                PolicyScope::Namespace(ns) => *ns == namespace,
+                PolicyScope::Cluster => true,
+            };
+            if in_scope && selector_matches(selector, &labels, namespace) {
+                pairs.push((i, *policy));
+            }
+        }
+    }
+    pairs
+}
+
+const CILIUM_NETWORK_POLICY: GroupKind<'static> =
+    GroupKind::new("cilium.io", "CiliumNetworkPolicy");
+const CILIUM_CLUSTERWIDE_NETWORK_POLICY: GroupKind<'static> =
+    GroupKind::new("cilium.io", "CiliumClusterwideNetworkPolicy");
+
+/// Where a network policy selects pods.
+enum PolicyScope<'a> {
+    /// Only in this namespace.
+    Namespace(&'a str),
+    /// In every namespace.
+    Cluster,
+}
+
+/// Return the labels of the pod template of a workload, or of a Pod.
+fn pod_labels(manifest: &serde_json::Value) -> HashMap<&str, &str> {
+    let path = match GroupKind::of_manifest(manifest) {
+        kinds::POD => "/metadata/labels",
+        kinds::CRON_JOB => "/spec/jobTemplate/spec/template/metadata/labels",
+        _ => "/spec/template/metadata/labels",
+    };
+    manifest
+        .pointer(path)
+        .and_then(|l| l.as_object())
+        .into_iter()
+        .flatten()
+        .filter_map(|(k, v)| Some((k.as_str(), v.as_str()?)))
+        .collect()
+}
+
+/// Return whether the label selector `selector` matches a pod with `labels`
+/// in `namespace`. An empty selector matches every pod. Cilium writes a label
+/// with its source as a prefix: `k8s:` and `any:` name a pod label, and
+/// `k8s:io.kubernetes.pod.namespace` the pod's namespace. A label of another
+/// source, such as `reserved:`, names something other than a pod, so it
+/// matches none.
+fn selector_matches(
+    selector: &serde_json::Value,
+    labels: &HashMap<&str, &str>,
+    namespace: &str,
+) -> bool {
+    let value_of = |key: &str| -> Option<Option<&str>> {
+        // A Kubernetes label key holds no `:`, so one marks a Cilium source.
+        let key = match key.split_once(':') {
+            Some(("k8s" | "any", rest)) => rest,
+            Some(_) => return None,
+            None => key,
+        };
+        if key == "io.kubernetes.pod.namespace" {
+            return Some(Some(namespace));
+        }
+        Some(labels.get(key).copied())
+    };
+    let match_labels = selector
+        .get("matchLabels")
+        .and_then(|l| l.as_object())
+        .into_iter()
+        .flatten()
+        .all(|(k, v)| match value_of(k) {
+            Some(Some(found)) => Some(found) == v.as_str(),
+            _ => false,
+        });
+    let match_expressions = selector
+        .get("matchExpressions")
+        .and_then(|e| e.as_array())
+        .into_iter()
+        .flatten()
+        .all(|e| {
+            let Some(found) = e.get("key").and_then(|k| k.as_str()).and_then(value_of) else {
+                return false;
+            };
+            let values: Vec<&str> = e
+                .get("values")
+                .and_then(|v| v.as_array())
+                .into_iter()
+                .flatten()
+                .filter_map(|v| v.as_str())
+                .collect();
+            match e.get("operator").and_then(|o| o.as_str()) {
+                Some("In") => found.is_some_and(|f| values.contains(&f)),
+                Some("NotIn") => found.is_none_or(|f| !values.contains(&f)),
+                Some("Exists") => found.is_some(),
+                Some("DoesNotExist") => found.is_none(),
+                _ => false,
+            }
+        });
+    match_labels && match_expressions
 }
 
 /// Return a pair for each ValidatingWebhookConfiguration or
@@ -1386,6 +1540,175 @@ mod tests {
                 "{cluster}: no custom resource names a controller"
             );
         }
+    }
+
+    /// A workload depends on each network policy that selects its pods: a
+    /// NetworkPolicy or CiliumNetworkPolicy in its namespace, a namespace's
+    /// default deny (an empty selector), and a CiliumClusterwideNetworkPolicy
+    /// that names its namespace. A policy for other labels, one in another
+    /// namespace, and one that selects only `reserved:` entities add nothing.
+    #[test]
+    fn a_workload_depends_on_the_policies_that_select_its_pods() {
+        let policy = |api: &str,
+                      kind: &str,
+                      name: &str,
+                      ns: Option<&str>,
+                      field: &str,
+                      selector: serde_json::Value| {
+            let mut m = json!({
+                "apiVersion": api,
+                "kind": kind,
+                "metadata": { "name": name, "annotations": { (keys::IDENTITY_HASH): format!("hash_{name}") } },
+                "spec": { field: selector },
+            });
+            if let Some(ns) = ns {
+                m["metadata"]["namespace"] = json!(ns);
+            }
+            m
+        };
+        let np = |name: &str, ns: &str, sel: serde_json::Value| {
+            policy(
+                "networking.k8s.io/v1",
+                "NetworkPolicy",
+                name,
+                Some(ns),
+                "podSelector",
+                sel,
+            )
+        };
+        let cnp = |name: &str, ns: &str, sel: serde_json::Value| {
+            policy(
+                "cilium.io/v2",
+                "CiliumNetworkPolicy",
+                name,
+                Some(ns),
+                "endpointSelector",
+                sel,
+            )
+        };
+        let ccnp = |name: &str, sel: serde_json::Value| {
+            policy(
+                "cilium.io/v2",
+                "CiliumClusterwideNetworkPolicy",
+                name,
+                None,
+                "endpointSelector",
+                sel,
+            )
+        };
+        let web = with(
+            manifest("Deployment", "web", "app", "hash_web", ""),
+            "/spec/template",
+            json!({ "metadata": { "labels": { "app": "web", "tier": "front" } }, "spec": { "containers": [] } }),
+        );
+        let host = with(
+            manifest("DaemonSet", "agent", "app", "hash_agent", ""),
+            "/spec/template",
+            json!({ "metadata": { "labels": { "app": "web" } }, "spec": { "hostNetwork": true } }),
+        );
+        let manifests = [
+            web,
+            np("deny", "app", json!({})),
+            cnp(
+                "egress",
+                "app",
+                json!({ "matchLabels": { "k8s:app": "web" } }),
+            ),
+            np(
+                "tier",
+                "app",
+                json!({ "matchExpressions": [
+                { "key": "tier", "operator": "In", "values": ["front", "back"] },
+                { "key": "debug", "operator": "DoesNotExist" },
+            ] }),
+            ),
+            ccnp("cluster-dns", json!({})),
+            ccnp(
+                "app-ns",
+                json!({ "matchLabels": { "k8s:io.kubernetes.pod.namespace": "app" } }),
+            ),
+            np(
+                "other-labels",
+                "app",
+                json!({ "matchLabels": { "app": "db" } }),
+            ),
+            np("other-ns", "ops", json!({})),
+            ccnp(
+                "health",
+                json!({ "matchLabels": { "reserved:health": "" } }),
+            ),
+            ccnp(
+                "ops-ns",
+                json!({ "matchLabels": { "k8s:io.kubernetes.pod.namespace": "ops" } }),
+            ),
+            host,
+        ];
+        let names = |i: usize| manifests[i]["metadata"]["name"].as_str().unwrap();
+        let mut deps: Vec<&str> = dependency_pairs(&manifests)
+            .into_iter()
+            .filter(|(from, _)| *from == 0)
+            .map(|(_, to)| names(to))
+            .collect();
+        deps.sort();
+        assert_eq!(deps, ["app-ns", "cluster-dns", "deny", "egress", "tier"]);
+        let agent = manifests.len() - 1;
+        assert!(
+            dependency_pairs(&manifests)
+                .iter()
+                .all(|(from, _)| *from != agent)
+        );
+    }
+
+    /// In the builds of real operator packages, every network policy that
+    /// selects a held controller's pods is held with it, so the controller
+    /// keeps its access to the API server while it removes finalizers. Some
+    /// of those policies, such as the API-server egress, are not named by the
+    /// workload.
+    #[test]
+    fn operator_graphs_keep_the_policies_of_held_workloads() {
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/operator-graphs");
+        let mut unnamed = 0;
+        for cluster in ["cert-manager", "velero", "external-secrets"] {
+            let text = std::fs::read_to_string(dir.join(format!("{cluster}.json"))).unwrap();
+            let manifests: Vec<serde_json::Value> = serde_json::from_str(&text).unwrap();
+            let base = DeleteOrder::of_manifests(&manifests);
+            // A pair the recorded dependencies contradict is left out, as
+            // `dependency_pairs` does: a policy that needs its enforcer's own
+            // agent, for example.
+            let kept: std::collections::HashSet<(usize, usize)> =
+                dependency_pairs(&manifests).into_iter().collect();
+            let selects: Vec<(usize, usize)> = selecting_policies(&manifests)
+                .into_iter()
+                .filter(|p| kept.contains(p))
+                .collect();
+            assert!(
+                !selects.is_empty(),
+                "{cluster}: no policy selects a workload"
+            );
+            for resource in base.controllers().keys() {
+                let mut order = base.clone();
+                order.hold_back(resource);
+                for &(w, p) in &selects {
+                    let workload = ResourceId::from_value(&manifests[w]);
+                    if order.held_by(&workload) != Some(resource) {
+                        continue;
+                    }
+                    let policy = ResourceId::from_value(&manifests[p]);
+                    assert_eq!(
+                        order.held_by(&policy),
+                        Some(resource),
+                        "{cluster}: {policy} is deleted while {workload} still runs"
+                    );
+                    let named = get_annotation(&manifests[w], keys::DEPENDS_ON).unwrap_or_default();
+                    let hash = get_annotation(&manifests[p], keys::IDENTITY_HASH).unwrap();
+                    if !named.contains(&hash) {
+                        unnamed += 1;
+                    }
+                }
+            }
+        }
+        assert!(unnamed > 0, "every held policy is named by its workload");
     }
 
     /// A dependency through an object that is not deleted still orders the

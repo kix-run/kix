@@ -12,6 +12,14 @@
   },
   "spec": {
    "template": {
+    "metadata": {
+     "labels": {
+      "app.kubernetes.io/name": "cilium-agent",
+      "app.kubernetes.io/part-of": "cilium",
+      "helm.sh/chart": "cilium-1.20.5",
+      "k8s-app": "cilium"
+     }
+    },
     "spec": {
      "serviceAccountName": "cilium"
     }
@@ -31,6 +39,15 @@
   },
   "spec": {
    "template": {
+    "metadata": {
+     "labels": {
+      "app.kubernetes.io/name": "cilium-envoy",
+      "app.kubernetes.io/part-of": "cilium",
+      "helm.sh/chart": "cilium-1.20.5",
+      "k8s-app": "cilium-envoy",
+      "name": "cilium-envoy"
+     }
+    },
     "spec": {
      "serviceAccountName": "cilium-envoy"
     }
@@ -50,6 +67,14 @@
   },
   "spec": {
    "template": {
+    "metadata": {
+     "labels": {
+      "app.kubernetes.io/component": "node-agent",
+      "app.kubernetes.io/instance": "velero",
+      "app.kubernetes.io/name": "velero",
+      "role": "node-agent"
+     }
+    },
     "spec": {
      "serviceAccountName": "velero-server"
     }
@@ -69,6 +94,15 @@
   },
   "spec": {
    "template": {
+    "metadata": {
+     "labels": {
+      "app.kubernetes.io/name": "cilium-operator",
+      "app.kubernetes.io/part-of": "cilium",
+      "helm.sh/chart": "cilium-1.20.5",
+      "io.cilium/app": "operator",
+      "name": "cilium-operator"
+     }
+    },
     "spec": {
      "serviceAccountName": "cilium-operator"
     }
@@ -88,6 +122,12 @@
   },
   "spec": {
    "template": {
+    "metadata": {
+     "labels": {
+      "app.kubernetes.io/instance": "prometheus-operator",
+      "app.kubernetes.io/name": "prometheus-operator"
+     }
+    },
     "spec": {
      "serviceAccountName": "prometheus-operator"
     }
@@ -107,6 +147,12 @@
   },
   "spec": {
    "template": {
+    "metadata": {
+     "labels": {
+      "app.kubernetes.io/instance": "s3",
+      "app.kubernetes.io/name": "s3"
+     }
+    },
     "spec": {}
    }
   }
@@ -124,6 +170,13 @@
   },
   "spec": {
    "template": {
+    "metadata": {
+     "labels": {
+      "app.kubernetes.io/component": "server",
+      "app.kubernetes.io/instance": "velero",
+      "app.kubernetes.io/name": "velero"
+     }
+    },
     "spec": {
      "serviceAccountName": "velero-server"
     }
@@ -143,6 +196,12 @@
   },
   "spec": {
    "template": {
+    "metadata": {
+     "labels": {
+      "app.kubernetes.io/instance": "smoke",
+      "app.kubernetes.io/name": "smoke"
+     }
+    },
     "spec": {}
    }
   }
@@ -156,6 +215,9 @@
     "kix.run/identity-hash": "5hb3cxapih2vxgfgykqrdxg31sb8xyrl"
    },
    "name": "cilium-cluster-dns-egress"
+  },
+  "spec": {
+   "endpointSelector": {}
   }
  },
  {
@@ -167,6 +229,13 @@
     "kix.run/identity-hash": "w5c6a6r5i46dskmg5k5cm7x4fwkz9289"
    },
    "name": "cilium-health-probes"
+  },
+  "spec": {
+   "endpointSelector": {
+    "matchLabels": {
+     "reserved:health": ""
+    }
+   }
   }
  },
  {
@@ -178,6 +247,14 @@
     "kix.run/identity-hash": "1kpni30a3lv8jip461094gyynv68zaas"
    },
    "name": "local-path-provisioner-egress"
+  },
+  "spec": {
+   "endpointSelector": {
+    "matchLabels": {
+     "app": "local-path-provisioner",
+     "k8s:io.kubernetes.pod.namespace": "local-path-storage"
+    }
+   }
   }
  },
  {
@@ -190,6 +267,13 @@
    },
    "name": "coredns-egress",
    "namespace": "kube-system"
+  },
+  "spec": {
+   "endpointSelector": {
+    "matchLabels": {
+     "k8s-app": "kube-dns"
+    }
+   }
   }
  },
  {
@@ -202,6 +286,13 @@
    },
    "name": "coredns-ingress",
    "namespace": "kube-system"
+  },
+  "spec": {
+   "endpointSelector": {
+    "matchLabels": {
+     "k8s-app": "kube-dns"
+    }
+   }
   }
  },
  {
@@ -214,6 +305,9 @@
    },
    "name": "kube-system-default-deny",
    "namespace": "kube-system"
+  },
+  "spec": {
+   "endpointSelector": {}
   }
  },
  {
@@ -226,6 +320,9 @@
    },
    "name": "monitoring-default-deny",
    "namespace": "monitoring"
+  },
+  "spec": {
+   "endpointSelector": {}
   }
  },
  {
@@ -238,6 +335,14 @@
    },
    "name": "prometheus-operator-deployment-prometheus-operator-apiserver-egress",
    "namespace": "monitoring"
+  },
+  "spec": {
+   "endpointSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/instance": "prometheus-operator",
+     "app.kubernetes.io/name": "prometheus-operator"
+    }
+   }
   }
  },
  {
@@ -250,6 +355,14 @@
    },
    "name": "prometheus-operator-deployment-prometheus-operator-egress",
    "namespace": "monitoring"
+  },
+  "spec": {
+   "endpointSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/instance": "prometheus-operator",
+     "app.kubernetes.io/name": "prometheus-operator"
+    }
+   }
   }
  },
  {
@@ -262,6 +375,14 @@
    },
    "name": "s3-deployment-s3-egress",
    "namespace": "velero"
+  },
+  "spec": {
+   "endpointSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/instance": "s3",
+     "app.kubernetes.io/name": "s3"
+    }
+   }
   }
  },
  {
@@ -274,6 +395,14 @@
    },
    "name": "velero-backupstoragelocation-default-egress",
    "namespace": "velero"
+  },
+  "spec": {
+   "endpointSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/instance": "velero",
+     "app.kubernetes.io/name": "velero"
+    }
+   }
   }
  },
  {
@@ -286,6 +415,14 @@
    },
    "name": "velero-backupstoragelocation-default-to-s3-ingress",
    "namespace": "velero"
+  },
+  "spec": {
+   "endpointSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/instance": "s3",
+     "app.kubernetes.io/name": "s3"
+    }
+   }
   }
  },
  {
@@ -298,6 +435,16 @@
    },
    "name": "velero-daemonset-node-agent-apiserver-egress",
    "namespace": "velero"
+  },
+  "spec": {
+   "endpointSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/component": "node-agent",
+     "app.kubernetes.io/instance": "velero",
+     "app.kubernetes.io/name": "velero",
+     "role": "node-agent"
+    }
+   }
   }
  },
  {
@@ -310,6 +457,16 @@
    },
    "name": "velero-daemonset-node-agent-egress",
    "namespace": "velero"
+  },
+  "spec": {
+   "endpointSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/component": "node-agent",
+     "app.kubernetes.io/instance": "velero",
+     "app.kubernetes.io/name": "velero",
+     "role": "node-agent"
+    }
+   }
   }
  },
  {
@@ -322,6 +479,15 @@
    },
    "name": "velero-data-path",
    "namespace": "velero"
+  },
+  "spec": {
+   "endpointSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/component": "data-path",
+     "app.kubernetes.io/instance": "velero",
+     "app.kubernetes.io/name": "velero"
+    }
+   }
   }
  },
  {
@@ -334,6 +500,9 @@
    },
    "name": "velero-default-deny",
    "namespace": "velero"
+  },
+  "spec": {
+   "endpointSelector": {}
   }
  },
  {
@@ -346,6 +515,15 @@
    },
    "name": "velero-deployment-velero-apiserver-egress",
    "namespace": "velero"
+  },
+  "spec": {
+   "endpointSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/component": "server",
+     "app.kubernetes.io/instance": "velero",
+     "app.kubernetes.io/name": "velero"
+    }
+   }
   }
  },
  {
@@ -358,6 +536,15 @@
    },
    "name": "velero-deployment-velero-egress",
    "namespace": "velero"
+  },
+  "spec": {
+   "endpointSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/component": "server",
+     "app.kubernetes.io/instance": "velero",
+     "app.kubernetes.io/name": "velero"
+    }
+   }
   }
  },
  {
@@ -370,6 +557,14 @@
    },
    "name": "smoke-deployment-smoke-egress",
    "namespace": "velero-smoke"
+  },
+  "spec": {
+   "endpointSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/instance": "smoke",
+     "app.kubernetes.io/name": "smoke"
+    }
+   }
   }
  },
  {
@@ -382,6 +577,9 @@
    },
    "name": "velero-smoke-default-deny",
    "namespace": "velero-smoke"
+  },
+  "spec": {
+   "endpointSelector": {}
   }
  },
  {

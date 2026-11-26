@@ -56,6 +56,14 @@
   },
   "spec": {
    "template": {
+    "metadata": {
+     "labels": {
+      "app.kubernetes.io/name": "cilium-agent",
+      "app.kubernetes.io/part-of": "cilium",
+      "helm.sh/chart": "cilium-1.20.5",
+      "k8s-app": "cilium"
+     }
+    },
     "spec": {
      "serviceAccountName": "cilium"
     }
@@ -75,6 +83,15 @@
   },
   "spec": {
    "template": {
+    "metadata": {
+     "labels": {
+      "app.kubernetes.io/name": "cilium-envoy",
+      "app.kubernetes.io/part-of": "cilium",
+      "helm.sh/chart": "cilium-1.20.5",
+      "k8s-app": "cilium-envoy",
+      "name": "cilium-envoy"
+     }
+    },
     "spec": {
      "serviceAccountName": "cilium-envoy"
     }
@@ -94,6 +111,13 @@
   },
   "spec": {
    "template": {
+    "metadata": {
+     "labels": {
+      "app.kubernetes.io/component": "controller",
+      "app.kubernetes.io/instance": "cert-manager",
+      "app.kubernetes.io/name": "cert-manager"
+     }
+    },
     "spec": {
      "serviceAccountName": "cert-manager"
     }
@@ -113,6 +137,13 @@
   },
   "spec": {
    "template": {
+    "metadata": {
+     "labels": {
+      "app.kubernetes.io/component": "cainjector",
+      "app.kubernetes.io/instance": "cert-manager",
+      "app.kubernetes.io/name": "cainjector"
+     }
+    },
     "spec": {
      "serviceAccountName": "cert-manager-cainjector"
     }
@@ -132,6 +163,13 @@
   },
   "spec": {
    "template": {
+    "metadata": {
+     "labels": {
+      "app.kubernetes.io/component": "webhook",
+      "app.kubernetes.io/instance": "cert-manager",
+      "app.kubernetes.io/name": "webhook"
+     }
+    },
     "spec": {
      "serviceAccountName": "cert-manager-webhook"
     }
@@ -151,6 +189,15 @@
   },
   "spec": {
    "template": {
+    "metadata": {
+     "labels": {
+      "app.kubernetes.io/name": "cilium-operator",
+      "app.kubernetes.io/part-of": "cilium",
+      "helm.sh/chart": "cilium-1.20.5",
+      "io.cilium/app": "operator",
+      "name": "cilium-operator"
+     }
+    },
     "spec": {
      "serviceAccountName": "cilium-operator"
     }
@@ -170,6 +217,13 @@
   },
   "spec": {
    "template": {
+    "metadata": {
+     "labels": {
+      "app.kubernetes.io/component": "startupapicheck",
+      "app.kubernetes.io/instance": "cert-manager",
+      "app.kubernetes.io/name": "startupapicheck"
+     }
+    },
     "spec": {
      "serviceAccountName": "cert-manager-startupapicheck"
     }
@@ -196,6 +250,9 @@
     "kix.run/identity-hash": "5hb3cxapih2vxgfgykqrdxg31sb8xyrl"
    },
    "name": "cilium-cluster-dns-egress"
+  },
+  "spec": {
+   "endpointSelector": {}
   }
  },
  {
@@ -207,6 +264,13 @@
     "kix.run/identity-hash": "w5c6a6r5i46dskmg5k5cm7x4fwkz9289"
    },
    "name": "cilium-health-probes"
+  },
+  "spec": {
+   "endpointSelector": {
+    "matchLabels": {
+     "reserved:health": ""
+    }
+   }
   }
  },
  {
@@ -218,6 +282,14 @@
     "kix.run/identity-hash": "1kpni30a3lv8jip461094gyynv68zaas"
    },
    "name": "local-path-provisioner-egress"
+  },
+  "spec": {
+   "endpointSelector": {
+    "matchLabels": {
+     "app": "local-path-provisioner",
+     "k8s:io.kubernetes.pod.namespace": "local-path-storage"
+    }
+   }
   }
  },
  {
@@ -230,6 +302,9 @@
    },
    "name": "cert-manager-default-deny",
    "namespace": "cert-manager"
+  },
+  "spec": {
+   "endpointSelector": {}
   }
  },
  {
@@ -242,6 +317,15 @@
    },
    "name": "cert-manager-deployment-cert-manager-apiserver-egress",
    "namespace": "cert-manager"
+  },
+  "spec": {
+   "endpointSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/component": "controller",
+     "app.kubernetes.io/instance": "cert-manager",
+     "app.kubernetes.io/name": "cert-manager"
+    }
+   }
   }
  },
  {
@@ -254,6 +338,15 @@
    },
    "name": "cert-manager-deployment-cert-manager-cainjector-apiserver-egress",
    "namespace": "cert-manager"
+  },
+  "spec": {
+   "endpointSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/component": "cainjector",
+     "app.kubernetes.io/instance": "cert-manager",
+     "app.kubernetes.io/name": "cainjector"
+    }
+   }
   }
  },
  {
@@ -266,6 +359,15 @@
    },
    "name": "cert-manager-deployment-cert-manager-cainjector-egress",
    "namespace": "cert-manager"
+  },
+  "spec": {
+   "endpointSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/component": "cainjector",
+     "app.kubernetes.io/instance": "cert-manager",
+     "app.kubernetes.io/name": "cainjector"
+    }
+   }
   }
  },
  {
@@ -278,6 +380,15 @@
    },
    "name": "cert-manager-deployment-cert-manager-cainjector-ingress",
    "namespace": "cert-manager"
+  },
+  "spec": {
+   "endpointSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/component": "cainjector",
+     "app.kubernetes.io/instance": "cert-manager",
+     "app.kubernetes.io/name": "cainjector"
+    }
+   }
   }
  },
  {
@@ -290,6 +401,15 @@
    },
    "name": "cert-manager-deployment-cert-manager-egress",
    "namespace": "cert-manager"
+  },
+  "spec": {
+   "endpointSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/component": "controller",
+     "app.kubernetes.io/instance": "cert-manager",
+     "app.kubernetes.io/name": "cert-manager"
+    }
+   }
   }
  },
  {
@@ -302,6 +422,15 @@
    },
    "name": "cert-manager-deployment-cert-manager-ingress",
    "namespace": "cert-manager"
+  },
+  "spec": {
+   "endpointSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/component": "controller",
+     "app.kubernetes.io/instance": "cert-manager",
+     "app.kubernetes.io/name": "cert-manager"
+    }
+   }
   }
  },
  {
@@ -314,6 +443,15 @@
    },
    "name": "cert-manager-deployment-cert-manager-webhook-apiserver-egress",
    "namespace": "cert-manager"
+  },
+  "spec": {
+   "endpointSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/component": "webhook",
+     "app.kubernetes.io/instance": "cert-manager",
+     "app.kubernetes.io/name": "webhook"
+    }
+   }
   }
  },
  {
@@ -326,6 +464,15 @@
    },
    "name": "cert-manager-deployment-cert-manager-webhook-egress",
    "namespace": "cert-manager"
+  },
+  "spec": {
+   "endpointSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/component": "webhook",
+     "app.kubernetes.io/instance": "cert-manager",
+     "app.kubernetes.io/name": "webhook"
+    }
+   }
   }
  },
  {
@@ -338,6 +485,15 @@
    },
    "name": "cert-manager-deployment-cert-manager-webhook-ingress",
    "namespace": "cert-manager"
+  },
+  "spec": {
+   "endpointSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/component": "webhook",
+     "app.kubernetes.io/instance": "cert-manager",
+     "app.kubernetes.io/name": "webhook"
+    }
+   }
   }
  },
  {
@@ -350,6 +506,15 @@
    },
    "name": "cert-manager-job-cert-manager-startupapicheck-apiserver-egress",
    "namespace": "cert-manager"
+  },
+  "spec": {
+   "endpointSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/component": "startupapicheck",
+     "app.kubernetes.io/instance": "cert-manager",
+     "app.kubernetes.io/name": "startupapicheck"
+    }
+   }
   }
  },
  {
@@ -362,6 +527,15 @@
    },
    "name": "cert-manager-job-cert-manager-startupapicheck-egress",
    "namespace": "cert-manager"
+  },
+  "spec": {
+   "endpointSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/component": "startupapicheck",
+     "app.kubernetes.io/instance": "cert-manager",
+     "app.kubernetes.io/name": "startupapicheck"
+    }
+   }
   }
  },
  {
@@ -374,6 +548,15 @@
    },
    "name": "cert-manager-job-cert-manager-startupapicheck-ingress",
    "namespace": "cert-manager"
+  },
+  "spec": {
+   "endpointSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/component": "startupapicheck",
+     "app.kubernetes.io/instance": "cert-manager",
+     "app.kubernetes.io/name": "startupapicheck"
+    }
+   }
   }
  },
  {
@@ -386,6 +569,9 @@
    },
    "name": "certs-default-deny",
    "namespace": "certs"
+  },
+  "spec": {
+   "endpointSelector": {}
   }
  },
  {
@@ -398,6 +584,13 @@
    },
    "name": "coredns-egress",
    "namespace": "kube-system"
+  },
+  "spec": {
+   "endpointSelector": {
+    "matchLabels": {
+     "k8s-app": "kube-dns"
+    }
+   }
   }
  },
  {
@@ -410,6 +603,13 @@
    },
    "name": "coredns-ingress",
    "namespace": "kube-system"
+  },
+  "spec": {
+   "endpointSelector": {
+    "matchLabels": {
+     "k8s-app": "kube-dns"
+    }
+   }
   }
  },
  {
@@ -422,6 +622,9 @@
    },
    "name": "kube-system-default-deny",
    "namespace": "kube-system"
+  },
+  "spec": {
+   "endpointSelector": {}
   }
  },
  {
