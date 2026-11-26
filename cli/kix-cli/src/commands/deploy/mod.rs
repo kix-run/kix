@@ -651,7 +651,7 @@ fn say_nothing_to_apply(
     }
     match (checked.activation_identity_hash(), active_hash) {
         (Some(new), Some(old)) if new == old => crate::say!(
-            "{} activation identical to active ({}...). Nothing to apply ({unchanged} unchanged).",
+            "{} This build ({}...) matches the active deployment. Nothing to apply ({unchanged} unchanged).",
             output::dim("="),
             &new[..8.min(new.len())],
         ),

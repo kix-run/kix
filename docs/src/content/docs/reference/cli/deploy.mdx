@@ -377,16 +377,17 @@ reaches the deploy engine, the last JSON line is the `summary` object, with
 that reach the deploy engine also set `"nothing_to_apply": false` on `summary`.
 When the plan has nothing to apply or prune, Kix writes only the `kubernetes`
 line and a `summary` line with `"nothing_to_apply": true`, `"succeeded": true`,
-`unchanged` set to the number of objects, and every other count set to `0`
-(or only that `summary` line, with every count `0`, when the build has no
-resources, since Kix does not connect to the cluster). Every
+`unchanged` set to the number of unchanged objects, and all other counts set to
+`0`. If the build has no resources, Kix does not connect to the cluster and
+writes only that `summary` line, with `"unchanged": 0`. Every
 line includes `schema_version` (currently `"2026-11-25"`), the date of the
 latest breaking change to the log format. For a deleted object
 (`"kind": "delete"`), Kix emits the `ready` event only after the object is
-removed from the cluster. When a prune finds nothing to delete, its `ready`
-event carries `"detail": {"already_gone": "<why>"}`, such as `"already gone
-(Kubernetes does not recognize its kind)"`, and the text log prints the same
-words in place of `deleted`. A run
+removed from the cluster. If an object being pruned is already absent, its
+`ready` event includes `"detail": {"already_gone": "already gone"}` (or
+`"already gone (Kubernetes does not recognize its kind)"` when the cluster has
+no API for that kind), and text output prints the same message instead of
+`deleted`. A run
 that stops before the engine starts, such as a refused plan or a failed
 connection, writes no `summary` line; its error goes to stderr and the exit
 status is non-zero.
