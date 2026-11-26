@@ -6,6 +6,7 @@
 
 {
   lib,
+  kixKeys,
   publicKix,
   manifests,
   byName,
@@ -183,7 +184,7 @@ let
 
   policiesOf = cluster: ofKind "NetworkPolicy" (manifests cluster);
 
-  widenedOf = p: p.metadata.annotations."kix.run/network-policy-widened" or null;
+  widenedOf = p: p.metadata.annotations.${kixKeys.networkPolicyWidened} or null;
 in
 {
   # Every policy sets `policyTypes`, because a policy without it also
@@ -574,7 +575,7 @@ in
     (
       thrownHas "clusterwide" clusterwide
       && namespaced.kind == "NetworkPolicy"
-      && namespaced.labels."kix.run/policy-type" == "platform-intent"
+      && namespaced.labels.${kixKeys.policyType} == "platform-intent"
       && namespaced.spec.policyTypes == [ "Egress" ]
     )
     || throw "platform intent: ${builtins.toJSON namespaced}";
@@ -881,7 +882,7 @@ in
         metadata = {
           inherit name;
           namespace = "app";
-          annotations."kix.run/network-policy-widened" = ids;
+          annotations.${kixKeys.networkPolicyWidened} = ids;
         };
       };
       findings = rule.check {

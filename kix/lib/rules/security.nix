@@ -474,10 +474,10 @@ in
         describe =
           id:
           widening.${id} or {
-            summary = "Annotation `kix.run/network-policy-widened` contains unknown reason code `${id}`. Kix kept the policy and could not check whether a cluster setting narrows it.";
-            fix = "If you set `kix.run/network-policy-widened` directly on a `NetworkPolicy`, remove `${id}`.";
+            summary = "Annotation `${kixKeys.networkPolicyWidened}` contains unknown reason code `${id}`. Kix kept the policy and could not check whether a cluster setting narrows it.";
+            fix = "If you set `${kixKeys.networkPolicyWidened}` directly on a `NetworkPolicy`, remove `${id}`.";
             fixable = false;
-            detail = "unknown reason code in `kix.run/network-policy-widened`";
+            detail = "unknown reason code in `${kixKeys.networkPolicyWidened}`";
           };
         count = n: if n == 1 then "1 network policy" else "${toString n} network policies";
       in
