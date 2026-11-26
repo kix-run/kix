@@ -208,6 +208,7 @@ pub enum Call {
         reason: String,
     },
     EndPartial,
+    WriteApplied,
 }
 
 #[derive(Clone, Debug)]
@@ -475,6 +476,7 @@ impl ResourceIo for ScriptedOps {
                 action,
                 preview: None,
                 not_kept: script.not_kept.clone(),
+                applied_hash: None,
             }),
             Err(ApplyFailure::Other(msg)) => Err(ApplyError::UnknownKind { kind: msg }),
             Err(ApplyFailure::ImmutableConflict) => Err(ApplyError::ImmutableConflict {
@@ -512,6 +514,7 @@ impl ResourceIo for ScriptedOps {
                 action,
                 preview: None,
                 not_kept: Vec::new(),
+                applied_hash: None,
             })
             .map_err(|failure| match failure {
                 ApplyFailure::StillBeingDeleted(stuck) => RecreateError::StillExists { rid, stuck },
@@ -670,6 +673,11 @@ impl DeployRecord for ScriptedOps {
         });
         let b = self.finalize.lock().unwrap().clone();
         b.run().await.map_err(RecordWriteError::Scripted)
+    }
+
+    async fn write_applied(&self) -> Result<(), RecordWriteError> {
+        self.record(Call::WriteApplied);
+        Ok(())
     }
 
     async fn abort(&self, reason: &str) -> Result<(), RecordWriteError> {

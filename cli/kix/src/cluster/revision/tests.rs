@@ -700,3 +700,227 @@ mod keep_tests {
         assert_eq!(api.names(KIND), expected);
     }
 }
+
+mod applied_tests {
+    use std::collections::BTreeMap;
+
+    use kube::api::DynamicObject;
+    use serde_json::{Value, json};
+
+    use super::super::applied::pending;
+    use super::*;
+    use crate::cluster::activation::Record;
+    use crate::cluster::drift::{self, DriftVerdict};
+    use crate::cluster::fieldsv1;
+    use crate::manifest::lifecycle::{PHASE_ACTIVE, PHASE_SUPERSEDED};
+
+    fn object(hash: &str, name: &str) -> RevisionObject {
+        RevisionObject {
+            hash: format!("{hash:a>32}"),
+            group: String::new(),
+            kind: "ConfigMap".into(),
+            namespace: Some("app".into()),
+            name: name.into(),
+        }
+    }
+
+    fn web(objects: Vec<RevisionObject>, applied: &[(&RevisionObject, &str)]) -> Revision {
+        let mut revision = Revision::new(RevisionSpec::new(
+            CLUSTER,
+            Slot::Instance {
+                namespace: "app".into(),
+                name: "web".into(),
+            },
+            objects,
+        ));
+        revision.applied = applied
+            .iter()
+            .map(|(o, h)| (o.hash.clone(), h.to_string()))
+            .collect();
+        revision
+    }
+
+    fn applied(entries: &[(&RevisionObject, &str)]) -> BTreeMap<RevisionObject, String> {
+        entries
+            .iter()
+            .map(|(o, h)| ((*o).clone(), h.to_string()))
+            .collect()
+    }
+
+    fn entries(pairs: &[(&RevisionObject, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(o, h)| (o.hash.clone(), h.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn a_run_that_applied_nothing_writes_nothing() {
+        let (x, y) = (object("x", "x"), object("y1", "y"));
+        let old = web(vec![x.clone(), y.clone()], &[(&x, "hx")]);
+        let new = web(vec![x.clone(), object("y2", "y")], &[]);
+        assert!(pending(&BTreeMap::new(), &[&old, &new], &[(&old, &new)]).is_empty());
+    }
+
+    /// An object that two kept revisions name with the same build hash gets
+    /// its applied hash in both. A revision that names it with another
+    /// build hash gets nothing.
+    #[test]
+    fn an_object_two_kept_revisions_name_gets_its_hash_in_both() {
+        let (z, other) = (object("z", "z"), object("z2", "z"));
+        let failed = web(vec![z.clone(), object("f", "f")], &[]);
+        let current = web(vec![z.clone(), object("n", "n")], &[]);
+        let elsewhere = web(vec![other.clone()], &[]);
+        let writes = pending(
+            &applied(&[(&z, "hz")]),
+            &[&failed, &current, &elsewhere],
+            &[],
+        );
+        assert_eq!(
+            writes,
+            BTreeMap::from([
+                (failed.name.clone(), entries(&[(&z, "hz")])),
+                (current.name.clone(), entries(&[(&z, "hz")])),
+            ])
+        );
+    }
+
+    /// The new revision of a changed instance takes the old revision's
+    /// hash of each object the run did not apply, and the run's hash of
+    /// each object it applied. The old revision gets nothing, because it
+    /// names no object the run applied.
+    #[test]
+    fn carry_forward_copies_the_hashes_of_unchanged_objects() {
+        let (x, w, y1, y2) = (
+            object("x", "x"),
+            object("w", "w"),
+            object("y1", "y"),
+            object("y2", "y"),
+        );
+        let old = web(
+            vec![x.clone(), w.clone(), y1.clone()],
+            &[(&x, "hx"), (&y1, "hy1")],
+        );
+        let new = web(vec![x.clone(), w.clone(), y2.clone()], &[]);
+        let writes = pending(&applied(&[(&y2, "hy2")]), &[&old, &new], &[(&old, &new)]);
+        assert_eq!(
+            writes,
+            BTreeMap::from([(new.name.clone(), entries(&[(&x, "hx"), (&y2, "hy2")]))])
+        );
+    }
+
+    /// An entry a revision already holds with the same value is not sent
+    /// again.
+    #[test]
+    fn entries_a_revision_holds_are_not_written_again() {
+        let x = object("x", "x");
+        let held = web(vec![x.clone()], &[(&x, "hx")]);
+        assert!(pending(&applied(&[(&x, "hx")]), &[&held], &[]).is_empty());
+        let writes = pending(&applied(&[(&x, "hx2")]), &[&held], &[]);
+        assert_eq!(
+            writes,
+            BTreeMap::from([(held.name.clone(), entries(&[(&x, "hx2")]))])
+        );
+    }
+
+    fn record(phase: &str, revision: Option<&Revision>) -> Record {
+        Record {
+            name: "r".into(),
+            phase: phase.into(),
+            revisions: revision.map(|r| {
+                Ok(RevisionMap {
+                    instances: BTreeMap::from([("app/web".to_string(), r.name.clone())]),
+                    cluster_level: "none".into(),
+                    kept_orphans: None,
+                })
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// A live ConfigMap whose build hash is `x`'s, with Kix's `Apply`
+    /// entry owning its data, and `annotation` as its applied-hash
+    /// annotation.
+    fn live(x: &RevisionObject, annotation: Option<&str>) -> DynamicObject {
+        let mut annotations = json!({ (keys::IDENTITY_HASH): x.hash });
+        if let Some(stamp) = annotation {
+            annotations[keys::APPLIED_HASH] = Value::from(stamp);
+        }
+        serde_json::from_value(json!({
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {
+                "name": x.name,
+                "namespace": "app",
+                "annotations": annotations,
+                "managedFields": [{
+                    "manager": fieldsv1::KIX_FIELD_MANAGER,
+                    "operation": "Apply",
+                    "apiVersion": "v1",
+                    "fieldsType": "FieldsV1",
+                    "fieldsV1": { "f:data": { "f:k": {} } },
+                }],
+            },
+            "data": { "k": "v" },
+        }))
+        .unwrap()
+    }
+
+    fn verdict(obj: &DynamicObject, source: &AppliedHashes) -> DriftVerdict {
+        drift::check_object(obj, source.applied(obj)).verdict
+    }
+
+    /// The drift check gives the same verdict whether the applied hash comes
+    /// from a revision or from the annotation.
+    #[test]
+    fn drift_verdicts_are_the_same_from_a_revision_and_from_the_annotation() {
+        let x = object("x", "x");
+        let current = fieldsv1::applied_content_hash(&live(&x, None)).unwrap();
+        let cases: [(Option<&str>, DriftVerdict); 3] = [
+            (Some(&current), DriftVerdict::InSync),
+            (
+                Some("edited"),
+                DriftVerdict::Drifted {
+                    foreign: Vec::new(),
+                    unrecorded_scale: None,
+                },
+            ),
+            (None, DriftVerdict::Unstamped),
+        ];
+        for (hash, expected) in cases {
+            let stamped = live(&x, hash);
+            let from_annotation = verdict(&stamped, &AppliedHashes::from_annotations());
+            let revision = match hash {
+                Some(h) => web(vec![x.clone()], &[(&x, h)]),
+                None => web(vec![x.clone()], &[]),
+            };
+            let source = AppliedHashes::of(
+                &[record(PHASE_ACTIVE, Some(&revision))],
+                std::slice::from_ref(&revision),
+            );
+            let from_revision = verdict(&live(&x, None), &source);
+            assert_eq!(from_annotation, expected, "{hash:?}");
+            assert_eq!(from_revision, expected, "{hash:?}");
+        }
+    }
+
+    /// A record that names its revisions is read from them, so an
+    /// annotation does not stand in for a missing entry. A record with no
+    /// map, as an earlier Kix wrote, and a `Superseded` record, whose
+    /// revisions Kix deletes, are read from the annotation.
+    #[test]
+    fn a_record_without_a_map_reads_the_annotation() {
+        let x = object("x", "x");
+        let obj = live(&x, Some("from-annotation"));
+        let empty = web(vec![x.clone()], &[]);
+        let revisions = std::slice::from_ref(&empty);
+        let with_map = AppliedHashes::of(&[record(PHASE_ACTIVE, Some(&empty))], revisions);
+        assert_eq!(with_map.applied(&obj), None);
+        let without = AppliedHashes::of(&[record(PHASE_ACTIVE, None)], revisions);
+        assert_eq!(without.applied(&obj), Some("from-annotation"));
+        let superseded = AppliedHashes::of(&[record(PHASE_SUPERSEDED, Some(&empty))], revisions);
+        assert_eq!(superseded.applied(&obj), Some("from-annotation"));
+        let other = live(&object("y", "x"), Some("from-annotation"));
+        assert_eq!(with_map.applied(&other), Some("from-annotation"));
+    }
+}

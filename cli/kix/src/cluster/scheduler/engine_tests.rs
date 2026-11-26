@@ -629,6 +629,16 @@ async fn a_failed_node_under_stop_aborts_the_activation() {
         !calls.iter().any(|c| matches!(c, Call::Finalize { .. })),
         "and must not also finalize: {calls:?}",
     );
+    assert!(
+        first(&calls, |c| *c == Call::WriteApplied)
+            < first(&calls, |c| matches!(c, Call::Abort { .. })),
+        "a halted run writes what it applied before it aborts: {calls:?}",
+    );
+}
+
+/// Return the position of the first call that `matches`, or the end.
+fn first(calls: &[Call], matches: impl Fn(&Call) -> bool) -> usize {
+    calls.iter().position(matches).unwrap_or(calls.len())
 }
 
 /// A run under `--on-error=continue` that leaves nodes never attempted
@@ -739,6 +749,15 @@ async fn a_run_that_attempted_everything_still_finalizes() {
         "expected a Degraded finalize: {calls:?}",
     );
     assert!(!calls.iter().any(|c| matches!(c, Call::Abort { .. })));
+    let last_apply = calls
+        .iter()
+        .rposition(|c| matches!(c, Call::ApplyEnd(_)))
+        .unwrap();
+    let written = first(&calls, |c| *c == Call::WriteApplied);
+    assert!(
+        last_apply < written && written < first(&calls, |c| matches!(c, Call::Finalize { .. })),
+        "the applied hashes are written after the nodes and before the finalize: {calls:?}",
+    );
 }
 
 /// Run the plan of `manifests`, with `skip` unchanged, as a deploy with
@@ -781,6 +800,10 @@ async fn a_partial_run_marks_the_record_and_nothing_else() {
     assert_eq!((result.failed, result.cancelled, result.pruned), (0, 0, 0));
     let calls = ops.calls();
     assert!(calls.contains(&Call::EndPartial), "{calls:?}");
+    assert!(
+        first(&calls, |c| *c == Call::WriteApplied) < first(&calls, |c| *c == Call::EndPartial),
+        "{calls:?}"
+    );
     assert!(
         !calls.iter().any(|c| matches!(
             c,

@@ -17,7 +17,7 @@ use kube::Client;
 use thiserror::Error;
 
 use super::map::UnreadableMap;
-use super::store::{RevisionError, Revisions};
+use super::store::{Listed, RevisionError, Revisions};
 use crate::cluster::activation::{Record, Records, RecordsError};
 use crate::cluster::errors::describe;
 use crate::cluster::head::{self, HeadStatus};
@@ -92,6 +92,50 @@ pub enum CleanError {
     MissingRecord { cluster: String, record: String },
 }
 
+/// What Kix reads about a Kix cluster to decide which revisions it keeps.
+pub(crate) struct State {
+    pub(crate) revisions: Listed,
+    pub(crate) records: Vec<Record>,
+    pub(crate) head: Option<HeadStatus>,
+}
+
+impl State {
+    /// Read the revisions of Kix cluster `cluster`, then its records, then
+    /// its head. A revision created after the list is the lock holder's,
+    /// whose record the later reads see.
+    pub(crate) async fn read(
+        client: &Client,
+        records: &Records,
+        cluster: &str,
+    ) -> Result<State, CleanError> {
+        let revisions = Revisions::new(client).list(cluster).await?;
+        let records = records.of_cluster(cluster).await?;
+        let head = head::read(client, cluster)
+            .await
+            .map_err(|source| CleanError::Head {
+                cluster: cluster.to_string(),
+                source,
+            })?
+            .and_then(|h| h.status);
+        Ok(State {
+            revisions,
+            records,
+            head,
+        })
+    }
+
+    /// Return the record the head names as current.
+    pub(crate) fn current(&self) -> Option<&Record> {
+        let name = self.head.as_ref()?.current.as_deref()?;
+        self.records.iter().find(|r| r.name == name)
+    }
+
+    /// Return the names of the revisions that must stay ([`needed`]).
+    pub(crate) fn needed(&self) -> Result<BTreeSet<String>, CleanError> {
+        needed(self.head.as_ref(), &self.records)
+    }
+}
+
 /// Return the revisions of Kix cluster `cluster` that [`needed`] does not
 /// name, readable or not. List the revisions first, then the records, then
 /// the head.
@@ -100,29 +144,23 @@ pub async fn unneeded(
     records: &Records,
     cluster: &str,
 ) -> Result<Vec<String>, CleanError> {
-    let revisions = Revisions::new(client).list(cluster).await?;
-    let listed = records.of_cluster(cluster).await?;
-    let head = head::read(client, cluster)
-        .await
-        .map_err(|source| CleanError::Head {
-            cluster: cluster.to_string(),
-            source,
-        })?;
-    let status = head.as_ref().and_then(|h| h.status.as_ref());
+    let state = State::read(client, records, cluster).await?;
+    let status = state.head.as_ref();
     let current = status.and_then(|h| h.current.as_deref());
     let deploying = status
         .and_then(|h| h.lock.as_ref())
         .and_then(|l| l.activation.as_deref());
     for record in current.into_iter().chain(deploying) {
-        if !listed.iter().any(|r| r.name == record) {
+        if !state.records.iter().any(|r| r.name == record) {
             return Err(CleanError::MissingRecord {
                 cluster: cluster.to_string(),
                 record: record.to_string(),
             });
         }
     }
-    let keep = needed(status, &listed)?;
-    Ok(revisions
+    let keep = state.needed()?;
+    Ok(state
+        .revisions
         .names()
         .filter(|name| !keep.contains(*name))
         .map(str::to_string)

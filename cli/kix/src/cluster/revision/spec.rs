@@ -36,7 +36,7 @@ const OVERHEAD_BYTES: usize = 4096;
 /// One object of a revision.
 ///
 /// The field order is the sort order, so objects sort by build hash first.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct RevisionObject {
     /// The object's build hash, as `kix.run/identity-hash` carries it.
     pub hash: String,

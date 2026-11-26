@@ -1,9 +1,10 @@
 //! Runtime content drift checks.
 //!
 //! For each Kix-managed live object, project it onto Kix's current server-side
-//! apply fieldset, hash the projection, and compare it against the
-//! `kix.run/applied-hash` annotation written from the SSA response at apply
-//! time. When they match, every field Kix applied is identical to what the
+//! apply fieldset, hash the projection, and compare it against the applied
+//! hash computed from the SSA response at apply time. A revision's
+//! `status.applied` holds that hash, and an object an earlier Kix applied
+//! holds it in its `kix.run/applied-hash` annotation. When they match, every field Kix applied is identical to what the
 //! server committed. When they differ, `managedFields` attributes which manager
 //! modified each field and when.
 //!
@@ -14,7 +15,6 @@ use kube::api::DynamicObject;
 use serde_json::Value;
 
 use super::fieldsv1::{self, KIX_FIELD_MANAGER};
-use crate::manifest::keys;
 use crate::manifest::types::ResourceId;
 
 /// Per-resource drift verdict.
@@ -23,8 +23,9 @@ pub enum DriftVerdict {
     /// Every field Kix applied is byte-identical to the state committed at
     /// apply time.
     InSync,
-    /// The Kix-owned projection no longer hashes to the stamp because content
-    /// changed under Kix's ownership or another manager took ownership.
+    /// The Kix-owned projection no longer hashes to the applied hash, because
+    /// content changed under Kix's ownership or another manager took
+    /// ownership.
     /// `foreign` lists the other managers' recorded fields, and
     /// `unrecorded_scale` is set when the change is a replicas write that
     /// Kubernetes recorded no owner for.
@@ -32,8 +33,8 @@ pub enum DriftVerdict {
         foreign: Vec<ForeignOwner>,
         unrecorded_scale: Option<UnrecordedScale>,
     },
-    /// The resource has no `kix.run/applied-hash` annotation and will be
-    /// stamped on the next deploy.
+    /// Kix does not know the object's applied hash: no revision records it,
+    /// and the object has no `kix.run/applied-hash` annotation.
     Unstamped,
     /// `managedFields` is missing or has no Kix entry, so the drift check
     /// cannot run for this object.
@@ -77,8 +78,7 @@ pub struct ForeignOwner {
 pub struct UnrecordedScale {
     /// Field path, always `spec.replicas`.
     pub path: String,
-    /// The value Kix applied, recovered from the `kix.run/applied-hash`
-    /// stamp.
+    /// The value Kix applied, recovered from the applied hash.
     pub deployed: i64,
     /// The value on the live object.
     pub live: i64,
@@ -95,7 +95,7 @@ const SCALE_KINDS: &[(&str, &str)] = &[
 ];
 
 /// Highest deployed replicas value [`unrecorded_scale`] tries. Because the
-/// stamp is a hash, recovering the deployed value requires hashing each
+/// applied hash is a hash, recovering the deployed value requires hashing each
 /// candidate up to this bound.
 const SCALE_SEARCH_LIMIT: i64 = 1024;
 
@@ -106,18 +106,16 @@ pub struct DriftReport {
     pub verdict: DriftVerdict,
 }
 
-/// Run the drift check on one live object.
-pub fn check_object(obj: &DynamicObject) -> DriftReport {
+/// Run the drift check on the live object `obj`, whose applied hash is
+/// `applied`. Take `applied` from [`AppliedHashes::applied`], which reads
+/// the revisions of a record that names its revisions and the annotation
+/// otherwise. `None` means the applied hash is not known.
+///
+/// [`AppliedHashes::applied`]: super::revision::AppliedHashes::applied
+pub fn check_object(obj: &DynamicObject, applied: Option<&str>) -> DriftReport {
     let rid = resource_id(obj);
 
-    let stamped = obj
-        .metadata
-        .annotations
-        .as_ref()
-        .and_then(|a| keys::get_meta(a, keys::APPLIED_HASH))
-        .map(str::to_string);
-
-    let Some(stamped) = stamped else {
+    let Some(stamped) = applied else {
         return DriftReport {
             rid,
             verdict: DriftVerdict::Unstamped,
@@ -147,7 +145,7 @@ pub fn check_object(obj: &DynamicObject) -> DriftReport {
             rid,
             verdict: DriftVerdict::Drifted {
                 foreign: foreign_owners(obj),
-                unrecorded_scale: unrecorded_scale(obj, &stamped),
+                unrecorded_scale: unrecorded_scale(obj, stamped),
             },
         }
     }

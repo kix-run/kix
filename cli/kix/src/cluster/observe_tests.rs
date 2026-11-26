@@ -363,10 +363,17 @@ fn a_record_without_names_names_a_missing_object_from_the_store() {
         name: "web-db".into(),
     };
 
-    let view = view("shop".into(), record, &live, &Apis::default(), |hashes| {
-        assert_eq!(hashes, [h(SECRET).as_str()]);
-        HashMap::from([(h(SECRET), StoreEntry::Resource(secret.clone()))])
-    });
+    let view = view(
+        "shop".into(),
+        record,
+        &live,
+        &Apis::default(),
+        &AppliedHashes::from_annotations(),
+        |hashes| {
+            assert_eq!(hashes, [h(SECRET).as_str()]);
+            HashMap::from([(h(SECRET), StoreEntry::Resource(secret.clone()))])
+        },
+    );
 
     let missing = by_name(&view, "web-db");
     assert_eq!(missing.presence, Presence::Missing);
@@ -395,6 +402,7 @@ fn an_object_live_under_another_hash_is_present() {
         record,
         &Live::of(&objects),
         &Apis::default(),
+        &AppliedHashes::from_annotations(),
         |_| unreachable!(),
     );
 
@@ -438,6 +446,7 @@ fn a_record_without_an_index_follows_depends_on() {
         record,
         &Live::of(&objects),
         &Apis::default(),
+        &AppliedHashes::from_annotations(),
         |hashes| {
             let mut hashes = hashes.to_vec();
             hashes.sort();
@@ -474,6 +483,7 @@ fn a_record_with_nothing_to_follow_lists_no_objects() {
         record,
         &Live::of(&[]),
         &Apis::default(),
+        &AppliedHashes::from_annotations(),
         |_| unreachable!(),
     );
     assert_eq!(view.expected_from, ExpectedFrom::Nothing);
@@ -564,6 +574,7 @@ fn an_object_from_an_index_without_groups_is_found_through_discovery() {
             record.clone(),
             &Live::of(&objects),
             apis,
+            &AppliedHashes::from_annotations(),
             |_| HashMap::new(),
         );
         by_name(&view, "fixture-web").clone()

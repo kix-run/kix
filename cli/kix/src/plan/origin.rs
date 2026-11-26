@@ -477,6 +477,7 @@ fn segments(path: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cluster::revision::AppliedHashes;
     use serde_json::json;
 
     fn deployment(replicas: i64, image: &str) -> Value {
@@ -694,7 +695,10 @@ mod tests {
         });
         obj["metadata"]["managedFields"] = Value::Array(entries);
         let obj: kube::api::DynamicObject = serde_json::from_value(obj).unwrap();
-        (drift::check_object(&obj), obj)
+        (
+            drift::check_object(&obj, AppliedHashes::from_annotations().applied(&obj)),
+            obj,
+        )
     }
 
     fn new_build(image: &str) -> Value {

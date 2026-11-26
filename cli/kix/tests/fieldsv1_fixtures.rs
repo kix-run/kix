@@ -13,6 +13,7 @@ use serde_json::Value;
 
 use kix::cluster::drift::{self, DriftVerdict};
 use kix::cluster::fieldsv1;
+use kix::cluster::revision::AppliedHashes;
 use kix::manifest::keys;
 
 fn load(json: &str) -> DynamicObject {
@@ -280,7 +281,7 @@ fn check_object_in_sync_when_stamp_matches() {
         .as_mut()
         .unwrap()
         .insert(keys::APPLIED_HASH.to_string(), hash);
-    let report = drift::check_object(&obj);
+    let report = drift::check_object(&obj, AppliedHashes::from_annotations().applied(&obj));
     assert_eq!(report.verdict, DriftVerdict::InSync);
     assert_eq!(report.rid.name, "fixture-web");
 }
@@ -295,7 +296,10 @@ fn check_object_unstamped_without_annotation() {
         .as_mut()
         .unwrap()
         .retain(|k, _| !keys::is_kix_key(k));
-    assert_eq!(drift::check_object(&obj).verdict, DriftVerdict::Unstamped);
+    assert_eq!(
+        drift::check_object(&obj, AppliedHashes::from_annotations().applied(&obj)).verdict,
+        DriftVerdict::Unstamped
+    );
 }
 
 /// Verify that an object stamped by Kix under a retired domain still reads as
@@ -312,14 +316,20 @@ fn check_object_reads_a_stamp_under_a_retired_domain() {
         format!("{legacy}/applied-hash"),
         "some-old-hash".to_string(),
     );
-    assert_ne!(drift::check_object(&obj).verdict, DriftVerdict::Unstamped);
+    assert_ne!(
+        drift::check_object(&obj, AppliedHashes::from_annotations().applied(&obj)).verdict,
+        DriftVerdict::Unstamped
+    );
 }
 
 #[test]
 fn check_object_no_fieldset_when_managed_fields_stripped() {
     let mut obj = deployment();
     obj.metadata.managed_fields = None;
-    assert_eq!(drift::check_object(&obj).verdict, DriftVerdict::NoFieldset);
+    assert_eq!(
+        drift::check_object(&obj, AppliedHashes::from_annotations().applied(&obj)).verdict,
+        DriftVerdict::NoFieldset
+    );
 }
 
 #[test]
@@ -352,7 +362,7 @@ fn check_object_drifted_with_attribution() {
         .unwrap()
         .insert(keys::APPLIED_HASH.to_string(), stamped_hash);
 
-    let report = drift::check_object(&obj);
+    let report = drift::check_object(&obj, AppliedHashes::from_annotations().applied(&obj));
     let DriftVerdict::Drifted {
         foreign,
         unrecorded_scale,
@@ -441,7 +451,7 @@ fn release_replicas(obj: &mut DynamicObject) {
 }
 
 fn unrecorded_scale(obj: &DynamicObject) -> Option<drift::UnrecordedScale> {
-    match drift::check_object(obj).verdict {
+    match drift::check_object(obj, AppliedHashes::from_annotations().applied(obj)).verdict {
         DriftVerdict::Drifted {
             foreign,
             unrecorded_scale,

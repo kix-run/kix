@@ -112,6 +112,7 @@ impl ResourceIo for DryRun {
                 action: ApplyAction::Created,
                 preview: None,
                 not_kept: Vec::new(),
+                applied_hash: None,
             });
         }
         match &applied {
@@ -174,6 +175,7 @@ impl ResourceIo for DryRun {
                 action: ApplyAction::Created,
                 preview: None,
                 not_kept: Vec::new(),
+                applied_hash: None,
             }),
             Err(e) => Err(RecreateError::DryRunReapply(e)),
         }

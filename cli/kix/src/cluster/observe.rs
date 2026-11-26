@@ -24,6 +24,7 @@ use super::drift::{self, DriftVerdict};
 use super::errors::FetchError;
 use super::inventory;
 use super::readiness;
+use super::revision::AppliedHashes;
 use crate::eval::package_index::{IndexedName, ObjectName};
 use crate::eval::store_graph::{self, StoreEntry};
 use crate::manifest::keys;
@@ -251,19 +252,33 @@ pub async fn observe(
         inventory::sweep_managed(client, discovery, records, inventory::SweepScope::All).await?;
     let apis = Apis::of(discovery, &sweep.forbidden);
     let live = Live::of(&sweep.managed);
-    let mut clusters: Vec<ClusterView> = current
-        .into_iter()
-        .map(|(cluster, deploy)| {
-            let lookup = |hashes: &[&str]| store_graph::lookup_hashes(hashes.iter().copied());
-            let mut view = view(cluster.clone(), deploy.current, &live, &apis, lookup);
-            view.leaving = leaving(&view, &sweep.managed, |obj| sweep.tenancy.owners_of(obj));
-            view.failed = deploy.failed_since.map(|record| {
-                let failed = self::view(cluster, record, &live, &apis, lookup);
-                failed_only(&view, failed)
-            });
-            view
-        })
-        .collect();
+    let mut clusters: Vec<ClusterView> = Vec::with_capacity(current.len());
+    for (cluster, deploy) in current {
+        let applied = AppliedHashes::load(
+            client,
+            &cluster,
+            &std::iter::once(&deploy.current)
+                .chain(deploy.failed_since.as_ref())
+                .collect::<Vec<_>>(),
+        )
+        .await
+        .map_err(FetchError::Revisions)?;
+        let lookup = |hashes: &[&str]| store_graph::lookup_hashes(hashes.iter().copied());
+        let mut view = view(
+            cluster.clone(),
+            deploy.current,
+            &live,
+            &apis,
+            &applied,
+            lookup,
+        );
+        view.leaving = leaving(&view, &sweep.managed, |obj| sweep.tenancy.owners_of(obj));
+        view.failed = deploy.failed_since.map(|record| {
+            let failed = self::view(cluster, record, &live, &apis, &applied, lookup);
+            failed_only(&view, failed)
+        });
+        clusters.push(view);
+    }
     for view in &mut clusters {
         describe_from_pods(client, &mut view.objects, &live).await;
         if let Some(failed) = &mut view.failed {
@@ -352,6 +367,7 @@ fn view(
     record: Record,
     live: &Live<'_>,
     apis: &Apis,
+    applied: &AppliedHashes,
     lookup: impl FnOnce(&[&str]) -> HashMap<String, StoreEntry>,
 ) -> ClusterView {
     let root = record.identity_hash.clone().unwrap_or_default();
@@ -475,7 +491,7 @@ fn view(
                         } else {
                             Presence::Present
                         },
-                        Some(drift::check_object(obj).verdict),
+                        Some(drift::check_object(obj, applied.applied(obj)).verdict),
                         if marker {
                             Readiness::NotApplicable
                         } else {

@@ -16,7 +16,8 @@ use super::super::activation::{
 };
 use super::super::apply;
 use super::super::revision::{
-    Revision, RevisionMap, RevisionObject, RevisionSet, RevisionSpec, Revisions, Slot, keep,
+    Revision, RevisionMap, RevisionObject, RevisionSet, RevisionSpec, Revisions, Slot, applied,
+    keep,
 };
 use super::{DeployRecord, Finalized, KubeResources, Left, RecordWriteError, StampError};
 
@@ -233,6 +234,36 @@ impl ActivationRecord {
         Ok(Some(revision.name))
     }
 
+    /// Return each revision the record names that replaces the revision of
+    /// the same instance, or of the cluster level, that `current` names,
+    /// paired as `(old, new)`. Read both from `listed` when they are there,
+    /// so the pairs carry the hashes already written.
+    fn replaced<'a>(
+        &'a self,
+        current: Option<&Record>,
+        listed: &'a [Revision],
+    ) -> Vec<(&'a Revision, &'a Revision)> {
+        let (Some(set), Some(Ok(old_map))) = (
+            self.config.revisions.as_ref(),
+            current.and_then(|c| c.revisions.as_ref()),
+        ) else {
+            return Vec::new();
+        };
+        let find = |name: &str| listed.iter().find(|r| r.name == name);
+        let instances = set
+            .instances
+            .iter()
+            .map(|(key, new)| (old_map.instances.get(key), new));
+        let cluster_level = std::iter::once((Some(&old_map.cluster_level), &set.cluster_level));
+        instances
+            .chain(cluster_level)
+            .filter_map(|(old, new)| {
+                let old = find(old.filter(|o| **o != new.name)?)?;
+                Some((old, find(&new.name).unwrap_or(new)))
+            })
+            .collect()
+    }
+
     /// Delete the revisions no record needs any more, under the run's lock.
     /// The deploy is already current, so a failure only warns, and the next
     /// cleanup deletes them.
@@ -357,6 +388,39 @@ impl DeployRecord for ActivationRecord {
         )
         .await
         .map_err(StampError::Apply)
+    }
+
+    async fn write_applied(&self) -> Result<(), RecordWriteError> {
+        let applied = self.resources.take_applied();
+        if applied.is_empty() {
+            return Ok(());
+        }
+        let records = self
+            .resources
+            .records()
+            .await
+            .map_err(RecordWriteError::Domain)?;
+        let client = self.resources.client();
+        let work = async {
+            let state = keep::State::read(client, &records, self.resources.cluster()).await?;
+            let needed = state.needed()?;
+            let listed = &state.revisions.readable;
+            let kept: Vec<&Revision> = listed.iter().filter(|r| needed.contains(&r.name)).collect();
+            let replaced = self.replaced(state.current(), listed);
+            let writes = applied::pending(&applied, &kept, &replaced);
+            let store = Revisions::new(client);
+            futures::future::try_join_all(
+                writes
+                    .iter()
+                    .map(|(name, entries)| store.write_applied(name, entries)),
+            )
+            .await?;
+            Ok::<_, keep::CleanError>(())
+        };
+        match tokio::time::timeout(BEST_EFFORT_TIMEOUT, work).await {
+            Ok(result) => result.map_err(RecordWriteError::Applied),
+            Err(_) => Err(RecordWriteError::NoAnswer(BEST_EFFORT_TIMEOUT)),
+        }
     }
 
     async fn abort(&self, reason: &str) -> Result<(), RecordWriteError> {
@@ -1276,6 +1340,176 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(stored_map(&api, "one"), Some(RevisionMap::of(&build("1"))));
+        }
+
+        /// The manifest of `object` as a run applies it, carrying its build
+        /// hash.
+        fn manifest(object: &RevisionObject) -> Value {
+            json!({
+                "apiVersion": "v1",
+                "kind": object.kind,
+                "metadata": {
+                    "name": object.name,
+                    "namespace": object.namespace,
+                    "annotations": { (keys::IDENTITY_HASH): object.hash },
+                },
+            })
+        }
+
+        fn status_writes(api: &FakeApi) -> usize {
+            api.requests()
+                .iter()
+                .filter(|r| {
+                    r.starts_with("PATCH ") && r.contains(revision::PLURAL) && r.contains("/status")
+                })
+                .count()
+        }
+
+        fn applied_of(api: &FakeApi, revision: &Revision) -> BTreeMap<String, String> {
+            let obj = api.object(revision::KIND, &revision.name).unwrap();
+            serde_json::from_value(obj["status"]["applied"].clone()).unwrap_or_default()
+        }
+
+        fn web_revision(objects: Vec<RevisionObject>) -> Revision {
+            Revision::new(RevisionSpec::new(
+                "a",
+                Slot::Instance {
+                    namespace: "app".into(),
+                    name: "web".into(),
+                },
+                objects,
+            ))
+        }
+
+        /// Step 5 writes one status patch for each revision that names an
+        /// object the run applied, and none for a revision with no applies.
+        /// A second call with nothing new writes nothing.
+        #[tokio::test]
+        async fn the_applied_hashes_go_once_to_each_revision_with_applies() {
+            let api = FakeApi::new([activation("one", "Deploying", None)]);
+            let set = build("1");
+            let run = run(&api, "one", Some(set.clone()), None).await;
+            run.begin().await.unwrap();
+            let web = object("1", "app", "web");
+            let shared = object("e", "app", "shared");
+            run.resources.note_applied(&manifest(&web), "w1".into());
+            run.resources.note_applied(&manifest(&shared), "s1".into());
+            run.write_applied().await.unwrap();
+            assert_eq!(status_writes(&api), 2);
+            assert_eq!(
+                applied_of(&api, &set.instances["app/web"]),
+                BTreeMap::from([(web.hash.clone(), "w1".to_string())])
+            );
+            assert_eq!(
+                applied_of(&api, &set.cluster_level),
+                BTreeMap::from([(shared.hash.clone(), "s1".to_string())])
+            );
+            assert!(applied_of(&api, &set.instances["data/db"]).is_empty());
+            run.write_applied().await.unwrap();
+            assert_eq!(status_writes(&api), 2);
+        }
+
+        #[tokio::test]
+        async fn a_run_that_applied_nothing_writes_no_hashes() {
+            let api = FakeApi::new([activation("one", "Deploying", None)]);
+            let run = run(&api, "one", Some(build("1")), None).await;
+            run.begin().await.unwrap();
+            run.write_applied().await.unwrap();
+            assert_eq!(status_writes(&api), 0);
+        }
+
+        /// A changed instance's new revision takes the old revision's hash
+        /// of each object the run did not apply, in the same write as the
+        /// hashes the run applied. The old revision is the one the current
+        /// record names.
+        #[tokio::test]
+        async fn a_changed_instance_carries_the_hashes_of_unchanged_objects() {
+            let (x, y1, y2) = (
+                object("x", "app", "x"),
+                object("y1", "app", "y"),
+                object("y2", "app", "y"),
+            );
+            let mut old = build("1");
+            old.instances
+                .insert("app/web".into(), web_revision(vec![x.clone(), y1.clone()]));
+            let mut new = old.clone();
+            new.instances
+                .insert("app/web".into(), web_revision(vec![x.clone(), y2.clone()]));
+            let api = FakeApi::new([
+                activation("old", "Active", Some(&RevisionMap::of(&old))),
+                activation("new", "Deploying", None),
+            ]);
+            let store = Revisions::new(&api.client());
+            for revision in old.all() {
+                store.create(revision).await.unwrap();
+            }
+            let old_web = &old.instances["app/web"];
+            store
+                .write_applied(
+                    &old_web.name,
+                    &BTreeMap::from([
+                        (x.hash.clone(), "hx".to_string()),
+                        (y1.hash.clone(), "hy1".to_string()),
+                    ]),
+                )
+                .await
+                .unwrap();
+            let committed = lock(&api, "old").await;
+            committed.commit("old").await.unwrap();
+            committed.release().await.unwrap();
+
+            let run = run(&api, "new", Some(new.clone()), None).await;
+            run.begin().await.unwrap();
+            let before = status_writes(&api);
+            run.resources.note_applied(&manifest(&y2), "hy2".into());
+            run.write_applied().await.unwrap();
+            assert_eq!(status_writes(&api) - before, 1);
+            assert_eq!(
+                applied_of(&api, &new.instances["app/web"]),
+                BTreeMap::from([
+                    (x.hash.clone(), "hx".to_string()),
+                    (y2.hash.clone(), "hy2".to_string()),
+                ])
+            );
+            assert_eq!(applied_of(&api, old_web).len(), 2);
+        }
+
+        /// An object that the current record's revision and a Failed
+        /// record's revision both name with one build hash gets its applied
+        /// hash in both. A Superseded record's revision is not kept, so it
+        /// gets nothing. A run that writes no record, as the operator's
+        /// repair, writes the same way.
+        #[tokio::test]
+        async fn an_object_two_kept_revisions_name_gets_its_hash_in_both() {
+            let z = object("z", "app", "z");
+            let revision_of = |other: &str| {
+                let mut set = build("1");
+                set.instances.insert(
+                    "app/web".into(),
+                    web_revision(vec![z.clone(), object(other, "app", other)]),
+                );
+                set
+            };
+            let (current, failed, gone) = (revision_of("c"), revision_of("f"), revision_of("g"));
+            let api = FakeApi::new([
+                activation("current", "Active", Some(&RevisionMap::of(&current))),
+                activation("failed", "Failed", Some(&RevisionMap::of(&failed))),
+                activation("gone", "Superseded", Some(&RevisionMap::of(&gone))),
+            ]);
+            let store = Revisions::new(&api.client());
+            for set in [&current, &failed, &gone] {
+                for revision in set.all() {
+                    store.create(revision).await.unwrap();
+                }
+            }
+            let repair = record(&api, None).await;
+            repair.resources.note_applied(&manifest(&z), "hz".into());
+            repair.write_applied().await.unwrap();
+            let expected = BTreeMap::from([(z.hash.clone(), "hz".to_string())]);
+            assert_eq!(applied_of(&api, &current.instances["app/web"]), expected);
+            assert_eq!(applied_of(&api, &failed.instances["app/web"]), expected);
+            assert!(applied_of(&api, &gone.instances["app/web"]).is_empty());
+            assert_eq!(status_writes(&api), 2);
         }
     }
 }

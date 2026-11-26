@@ -13,6 +13,7 @@ use kix::cluster::binding::Connection;
 use kix::cluster::drift::{self, DriftReport, DriftVerdict};
 use kix::cluster::migrate::{MigrationPair, detect_migration_pairs};
 use kix::cluster::owned_view;
+use kix::cluster::revision::AppliedHashes;
 use kix::cluster::scheduler::PrunePolicy;
 use kix::cluster::{discovery, inventory};
 use kix::eval::build_files::BuildFiles;
@@ -593,6 +594,19 @@ async fn fetch_live_manifests(
         );
     }
 
+    let records: Vec<activation::Record> = compared
+        .iter()
+        .filter(|obj| lifecycle::lifecycle_of_live(obj) == Lifecycle::Record)
+        .map(activation::Record::of)
+        .collect();
+    let applied = AppliedHashes::load(
+        &client,
+        &new_graph.cluster_name,
+        &records.iter().collect::<Vec<_>>(),
+    )
+    .await
+    .map_err(|e| miette!("{e}"))?;
+
     // Keep only the current Activation record alongside non-record resources so
     // Superseded and Failed records do not appear in the diff.
     let current = activation::current_record(
@@ -608,7 +622,7 @@ async fn fetch_live_manifests(
                 .is_some_and(|c| c.metadata.name == obj.metadata.name)
     });
 
-    let (drifted, drift_unchecked) = check_drift(&compared);
+    let (drifted, drift_unchecked) = check_drift(&compared, &applied);
     let built = new_graph.manifests_by_hash();
     let managed: HashMap<ResourceId, Value> = compared
         .iter()
@@ -632,14 +646,18 @@ async fn fetch_live_manifests(
     })
 }
 
-/// Run [`drift::check_object`] on each of `objects`. Return the drifted ones
-/// with their reports, and how many the check cannot judge because they carry
-/// no applied-hash stamp or no Kix `managedFields` entry.
-fn check_drift(objects: &[DynamicObject]) -> (Vec<(DriftReport, DynamicObject)>, usize) {
+/// Run [`drift::check_object`] on each of `objects`, reading each one's
+/// applied hash from `applied`. Return the drifted ones with their reports,
+/// and how many the check cannot judge because their applied hash is not
+/// known or they have no Kix `managedFields` entry.
+fn check_drift(
+    objects: &[DynamicObject],
+    applied: &AppliedHashes,
+) -> (Vec<(DriftReport, DynamicObject)>, usize) {
     let mut drifted = Vec::new();
     let mut unchecked = 0;
     for obj in objects {
-        let report = drift::check_object(obj);
+        let report = drift::check_object(obj, applied.applied(obj));
         match report.verdict {
             DriftVerdict::Drifted { .. } => drifted.push((report, obj.clone())),
             DriftVerdict::Unstamped | DriftVerdict::NoFieldset => unchecked += 1,
@@ -829,7 +847,10 @@ mod tests {
             o.metadata.managed_fields = None;
             o
         };
-        let (drifted, drift_unchecked) = check_drift(&[live, unstamped, no_fieldset]);
+        let (drifted, drift_unchecked) = check_drift(
+            &[live, unstamped, no_fieldset],
+            &AppliedHashes::from_annotations(),
+        );
         assert_eq!((drifted.len(), drift_unchecked), (1, 2));
         let side = OldSide::Live(Box::new(LiveSide {
             manifests,

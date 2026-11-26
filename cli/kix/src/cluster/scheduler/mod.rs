@@ -290,6 +290,7 @@ pub(crate) async fn run_deploy(
     run.begin().await?;
     run.run_nodes().await?;
     run.close_out().await?;
+    run.write_applied().await;
     if run.stop_partial_closure().await {
         return Ok(run.result);
     }
@@ -880,6 +881,7 @@ impl<'a> Run<'a> {
     /// may have already applied part of its closure, and the `Failed` record
     /// tells the next deploy to fold those changes into its plan.
     async fn abort_record(&self, reason: &str) {
+        self.write_applied().await;
         let Some(record) = &self.record else {
             return;
         };
@@ -891,6 +893,25 @@ impl<'a> Run<'a> {
             };
         self.emit(DeployEvent::BestEffortFailed {
             what: "activation abort".into(),
+            message: failed,
+        });
+    }
+
+    /// Write the applied hashes of the objects the run applied to the
+    /// revisions that name them, and emit an event if the write fails. A
+    /// later call writes only what the run applied since.
+    async fn write_applied(&self) {
+        let Some(record) = &self.record else {
+            return;
+        };
+        let failed =
+            match tokio::time::timeout(INLINE_BEST_EFFORT_TIMEOUT, record.write_applied()).await {
+                Ok(Ok(())) => return,
+                Ok(Err(e)) => e.to_string(),
+                Err(_) => format!("no answer within {}s", INLINE_BEST_EFFORT_TIMEOUT.as_secs()),
+            };
+        self.emit(DeployEvent::BestEffortFailed {
+            what: "applied hashes".into(),
             message: failed,
         });
     }

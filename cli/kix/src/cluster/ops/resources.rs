@@ -1,6 +1,6 @@
 //! [`ResourceIo`] against a real cluster.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -26,6 +26,7 @@ use super::super::discovery::{self, KindLookup};
 use super::super::errors::FetchError;
 use super::super::prune_guard::{PruneGuard, Pruned};
 use super::super::readiness::{self, Deletion, ImportTarget, ReadinessError, ReadinessResult};
+use super::super::revision::RevisionObject;
 use super::{DeleteError, NotDiscovered, OnStatus, ReadError, RecreateError, ResourceIo};
 
 /// Shared discovery cache of every kind the cluster serves, refreshed after
@@ -83,6 +84,10 @@ pub(crate) struct KubeResources {
     live_activations: std::sync::RwLock<Option<HashSet<String>>>,
     /// Initialized on the first prune delete, after discovery has settled.
     prune_guard: tokio::sync::OnceCell<PruneGuard>,
+    /// Each object the run applied, with the applied hash of the server's
+    /// answer, until the record writes them to the revisions
+    /// ([`KubeResources::take_applied`]).
+    applied: std::sync::Mutex<BTreeMap<RevisionObject, String>>,
 }
 
 impl KubeResources {
@@ -139,6 +144,7 @@ impl KubeResources {
             force_conflicts,
             live_activations: std::sync::RwLock::new(None),
             prune_guard: tokio::sync::OnceCell::new(),
+            applied: std::sync::Mutex::new(BTreeMap::new()),
         }
     }
 
@@ -167,6 +173,27 @@ impl KubeResources {
         if let Ok(mut slot) = self.live_activations.write() {
             *slot = live;
         }
+    }
+
+    /// Remember that the run applied `manifest` and the server's answer
+    /// hashed to `hash`. A manifest with no build hash is not remembered,
+    /// because no revision names it.
+    pub(super) fn note_applied(&self, manifest: &Value, hash: String) {
+        let Some(object) = RevisionObject::of_manifest(manifest) else {
+            return;
+        };
+        if let Ok(mut applied) = self.applied.lock() {
+            applied.insert(object, hash);
+        }
+    }
+
+    /// Return the objects the run applied since the last call, with their
+    /// applied hashes, and forget them.
+    pub(super) fn take_applied(&self) -> BTreeMap<RevisionObject, String> {
+        self.applied
+            .lock()
+            .map(|mut applied| std::mem::take(&mut *applied))
+            .unwrap_or_default()
     }
 
     /// Open `Activation` records past the domain gate using the current
@@ -286,7 +313,7 @@ impl KubeResources {
         manifest: &Value,
     ) -> Result<ApplyResult, ApplyError> {
         let live = self.live_activations();
-        apply::apply_resource(
+        let result = apply::apply_resource(
             &self.client,
             ar,
             scope,
@@ -296,7 +323,11 @@ impl KubeResources {
             live.as_ref(),
             self.force_conflicts,
         )
-        .await
+        .await?;
+        if let Some(hash) = &result.applied_hash {
+            self.note_applied(manifest, hash.clone());
+        }
+        Ok(result)
     }
 
     /// Delete the live object as the first step of an in-place recreate.

@@ -20,6 +20,7 @@ use serde_json::{Value, json};
 
 use crate::cluster::activation::{self, Record};
 use crate::cluster::drift::{self, DriftVerdict};
+use crate::cluster::revision::{self, AppliedHashes, Revision};
 use crate::cluster::tenancy::Tenancy;
 use crate::manifest::keys;
 use crate::manifest::lifecycle;
@@ -178,6 +179,13 @@ fn read_back(folder: &Path) -> Value {
         .unwrap_or_default()
         .to_string();
     let tenancy = Tenancy::from_records(&records, &cluster);
+    let parsed: Vec<Record> = records.iter().map(Record::of).collect();
+    let revisions: Vec<Revision> = all
+        .iter()
+        .filter(|(_, o)| kind(o) == revision::KIND)
+        .filter_map(|(_, o)| Revision::from_object(o).ok())
+        .collect();
+    let applied = AppliedHashes::of(&parsed, &revisions);
     let current = activation::current_record(&records);
 
     let others: Vec<Value> = all
@@ -191,7 +199,7 @@ fn read_back(folder: &Path) -> Value {
                 "name": o.metadata.name,
                 "lifecycle": format!("{:?}", lifecycle::lifecycle_of(&manifest)),
                 "owners": tenancy.owners_of(o),
-                "drift": verdict_name(&drift::check_object(o).verdict),
+                "drift": verdict_name(&drift::check_object(o, applied.applied(o)).verdict),
             })
         })
         .collect();

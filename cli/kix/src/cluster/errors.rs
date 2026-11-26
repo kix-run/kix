@@ -226,6 +226,9 @@ pub enum FetchError {
 
     #[error("{0}")]
     RecordsError(#[source] activation::RecordsError),
+
+    #[error("{0}")]
+    Revisions(#[source] super::revision::RevisionError),
 }
 
 #[cfg(test)]

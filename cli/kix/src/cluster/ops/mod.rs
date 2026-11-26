@@ -187,6 +187,15 @@ pub(crate) trait DeployRecord: Send + Sync + 'static {
     /// because it was unchanged.
     async fn stamp_unchanged(&self, rid: &ResourceId) -> Result<(), StampError>;
 
+    /// Write the applied hash of each object the run applied since the last
+    /// call to `status.applied` of every kept revision of the run's Kix
+    /// cluster that names the object, and carry the hashes of the objects
+    /// the run did not apply into the new revisions of changed instances
+    /// ([`super::revision::applied::pending`]). The engine calls it once the
+    /// nodes finish and before it marks a stopped run `Failed`. A call with
+    /// nothing new writes nothing.
+    async fn write_applied(&self) -> Result<(), RecordWriteError>;
+
     /// Mark the Activation record `Failed` when the run ends without finalizing
     /// (cancelled, stopped on a failed node, discovery failed, or a task
     /// panicked) so the next deploy can see that this closure was partially
@@ -346,6 +355,12 @@ pub(crate) enum RecordWriteError {
     /// A revision the record names could not be created.
     #[error(transparent)]
     Revisions(super::revision::RevisionError),
+    /// The applied hashes of the objects the run applied could not be
+    /// written to the revisions.
+    #[error(
+        "cannot record the applied hashes of the objects this run applied: {0}. The next deploy reads their hashes as unknown"
+    )]
+    Applied(super::revision::keep::CleanError),
     /// The list of objects a deploy left on the cluster could not be read
     /// or written, so finalizing would lose track of them.
     #[error(

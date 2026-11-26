@@ -172,6 +172,10 @@ pub(crate) struct ApplyResult {
     /// Fields of the applied manifest the server did not store as sent
     /// ([`kept::not_kept`]).
     pub not_kept: Vec<NotKeptField>,
+    /// The hash of the Kix-owned fields of the object the server stored
+    /// ([`fieldsv1::applied_content_hash`]). `None` for a dry run, and when
+    /// the server's answer has no Kix entry in `managedFields`.
+    pub applied_hash: Option<String>,
 }
 
 /// Live and dry-run result objects compared by a dry-run apply.
@@ -392,6 +396,7 @@ pub(crate) async fn apply_resource(
         action,
         preview,
         not_kept,
+        applied_hash,
     })
 }
 
