@@ -1,4 +1,4 @@
 +++
 kind = "fixed"
 +++
-A cluster with network policy on and a Prometheus server that scrapes a Service named after another resource, such as the metrics Services of `external-secrets`, no longer fails evaluation with "the string ... is not allowed to refer to a store path". This happened with both the `cilium` enforcer and standard `NetworkPolicy`.
+Clusters with `networkPolicy.enable = true` no longer fail the build with `"the string ... is not allowed to refer to a store path"` when Prometheus or `VMAgent` scrapes a Service or monitor whose `name` comes from another resource's `.out` (such as the metrics Services in `external-secrets`). This affected both Cilium and standard `NetworkPolicy`.

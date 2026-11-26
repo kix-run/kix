@@ -2,4 +2,4 @@
 kind = "fixed"
 packages = ["experimental/cert-manager"]
 +++
-Under generated network policy, cert-manager admits calls from the API server only on its webhook pods and only on `webhook.securePort`. Before, the controller, cainjector, and startupapicheck pods also accepted calls from the API server, on every port.
+When `networkPolicy.enable = true`, `cert-manager` now allows inbound traffic from the Kubernetes API server only to its webhook pods on TCP `webhook.securePort`. Previously, all four `cert-manager` workloads (controller, webhook, cainjector, and `startupapicheck`) accepted API server traffic on every port.
