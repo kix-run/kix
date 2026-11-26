@@ -244,6 +244,15 @@ impl CommandResponse for InspectResponse {
                 table.add_row([subject.as_str(), id.mechanism.as_str(), &identity]);
             }
             out.push_str(&table.to_string());
+            if self
+                .cloud_identities
+                .iter()
+                .any(|id| !id.subject_placeholders.is_empty())
+            {
+                out.push_str(&format!(
+                    "\n{PROJECT_ID} and {PROJECT_NUMBER} stand for the ID and the number of the Google Cloud project that holds the cluster. Replace them before you use a subject.\n"
+                ));
+            }
         }
 
         out.trim_end().to_string()
@@ -356,6 +365,10 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("Kubernetes ServiceAccount"), "{text}");
+        assert!(
+            text.contains("<project-id> and <project-number> stand for the ID and the number of the Google Cloud project that holds the cluster."),
+            "{text}"
+        );
     }
 }
 
@@ -447,5 +460,6 @@ mod subject_tests {
             ),
             "{text}"
         );
+        assert!(!text.contains("<project-id>"), "{text}");
     }
 }
