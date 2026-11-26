@@ -15,6 +15,7 @@ deletes them with their owner. In the `Plan` document, the prune entry for the
 CustomResourceDefinition or CRD reference now lists them under `left_behind`.
 After pruning, `kix deploy` and `kix rollback` warn about any remaining objects
 after the summary, and include them under `left_behind` in the
-`--log-format json` `summary` line. `kix plan --read-only -o json`, which
-cannot take `--prune`, carries the same `left_behind` on its prune entries,
-so a CI job with read-only credentials sees what a prune would leave.
+`--log-format json` `summary` line. `kix plan --read-only` also sets
+`left_behind` on those prune entries (and prints the warning when the plan has
+changes), so CI jobs with read-only cluster access can see what
+`kix deploy --prune` would leave behind.

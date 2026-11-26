@@ -700,7 +700,7 @@ fn left_behind_warning(plan: &Plan, p: &PruneEntry, left: &LeftBehind) -> String
     let (leaves, removes) = if pruning {
         ("this prune leaves", "this prune removes")
     } else {
-        ("`kix deploy --prune` would leave", "that prune removes")
+        ("`kix deploy --prune` would leave", "pruning removes")
     };
     format!(
         "{resource} is no longer in the build, and {leaves} {n} {kind} {objects} \
@@ -1355,7 +1355,7 @@ mod tests {
         assert!(
             text.contains(
                 "is no longer in the build, and `kix deploy --prune` would leave 22 \
-                 Challenge.acme.cert-manager.io objects on the cluster. If that prune removes"
+                 Challenge.acme.cert-manager.io objects on the cluster. If pruning removes"
             ),
             "{text}"
         );

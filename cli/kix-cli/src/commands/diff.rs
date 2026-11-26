@@ -209,7 +209,9 @@ pub(super) fn compare(args: &Comparison, ctx: &mut CommandContext) -> Result<Exi
             let deployed = current.and_then(|record| record.package_index);
             let before_set_aside = live.manifests.clone();
             live.set_aside_left_earlier(&new_graph, deployed.as_ref());
-            let spinner = output::spinner("Listing objects a prune would leave behind...");
+            let spinner = output::spinner(
+                "Checking for custom resources `--prune` would leave on the cluster...",
+            );
             live.left_behind = ctx.runtime()?.block_on(left_behind_of(
                 &global,
                 &before_set_aside,
