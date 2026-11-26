@@ -113,6 +113,10 @@ in
       # Services other ranges. On a live GKE cluster, leaving the node range
       # out of `0.0.0.0/0` kept internet egress working.
       nodeRangeHoldsOnlyNodes = true;
+      # The pod range is a secondary range of its own on a VPC-native
+      # cluster (documented by Google). An ipBlock never matches pods here,
+      # so Kix never needs to leave it out of `world`.
+      podRangeHoldsOnlyPods = true;
     };
 
     platform-storage = {

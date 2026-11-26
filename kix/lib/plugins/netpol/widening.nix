@@ -9,6 +9,11 @@
     summary = "Outbound `world` rules (`0.0.0.0/0` and `::/0`) also allow traffic to pods in the cluster. On this platform, `ipBlock` rules match pod IPs, and `cluster.network.podCidr` is unset.";
     fix = "Set `cluster.network.podCidr` so Kix excludes the pod IP range from outbound `world` rules.";
   };
+  world-egress-pod-subnets = {
+    detail = "its outbound `world` rule also reaches pods in the cluster, which share subnets with addresses outside the cluster";
+    summary = "Outbound `world` rules (`0.0.0.0/0` and `::/0`) also allow traffic to pods in the cluster. On this platform, `ipBlock` rules match pod IPs, and pods take addresses from the same VPC subnets as VPC endpoints, load balancers, and databases, so Kix cannot exclude the pod range without cutting those off.";
+    fix = "No Kix setting narrows this rule while pods share subnets with other addresses. Do not set `cluster.network.podCidr` to narrow it.";
+  };
   world-egress-nodes = {
     detail = "its outbound `world` rule also reaches cluster nodes";
     summary = "Outbound `world` rules (`0.0.0.0/0` and `::/0`) also allow traffic to cluster nodes. On this platform, `ipBlock` rules match node IPs, and `cluster.network.nodeCidrs` is empty.";
@@ -47,7 +52,7 @@
   apiserver-sources-pods = {
     detail = "its `apiserver` ingress rule also accepts traffic from pods with IPs in `cluster.network.apiServer.sources`";
     summary = "Ingress rules for calls from the Kubernetes API server (admission webhooks and aggregated APIs) allow the CIDR ranges in `cluster.network.apiServer.sources`, and `ipBlock` rules on this platform also match pods in those ranges.";
-    fix = "Set `cluster.network.apiServer.sources` to the narrowest CIDR ranges the control plane calls from; when pods share those subnets, Kix cannot exclude pod IPs.";
+    fix = "Set `cluster.network.apiServer.sources` to the subnets the control plane uses (on EKS, the subnets given when the cluster was created), and no narrower, because the control plane's addresses move within them. When pods share those subnets, Kix cannot exclude pod IPs.";
   };
   pod-start-egress-open = {
     detail = "new pods it selects can send outbound traffic for about one second before egress rules apply";

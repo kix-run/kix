@@ -745,8 +745,10 @@ in
             API server egress (for example, any workload bound to a `Role` or
             `ClusterRole`), the build fails if this list is empty (unless
             `cluster.network.serviceCidr` is set on EKS). Kix does not check
-            this value against the live cluster, so a wrong address blocks pods
-            from reaching the API server. Cilium ignores this option.
+            this value against the live cluster, and plan and deploy succeed
+            with a wrong address. Open connections survive the policy change,
+            so pods fail to reach the API server only after they next restart.
+            Cilium ignores this option.
           '';
         };
         port = lib.mkOption {

@@ -26,6 +26,7 @@ let
     ipBlockSelectsPods = false;
     ipBlockSelectsNodes = true;
     ipBlockSeesServiceAddress = false;
+    podRangeHoldsOnlyPods = true;
     nodeRangeHoldsOnlyNodes = true;
   };
   eksFacts = {
@@ -33,6 +34,7 @@ let
     ipBlockSelectsPods = true;
     ipBlockSelectsNodes = true;
     ipBlockSeesServiceAddress = true;
+    podRangeHoldsOnlyPods = false;
     nodeRangeHoldsOnlyNodes = false;
     podStartsBeforePolicy = true;
   };
@@ -296,22 +298,29 @@ in
     )
     || throw "GKE world: unset ${builtins.toJSON unset}, set ${builtins.toJSON set}";
 
-  # On EKS an ipBlock matches pods, nodes, and Services. `world` leaves out
-  # each declared pod and Service range and names each missing one. The node
-  # range is the VPC subnets, which also hold VPC endpoints such as STS, so
-  # `world` keeps it and says it is wider: an STS endpoint inside the subnets
-  # stays reachable on 443.
+  # On EKS an ipBlock matches pods, nodes, and Services. Pods and nodes take
+  # addresses from the VPC subnets, which also hold VPC endpoints such as
+  # STS, so `world` keeps both ranges, names why, and never asks for
+  # `podCidr`: an STS endpoint inside the subnets stays reachable on 443.
+  # Only the Service range, which is not in the VPC, is left out. A platform
+  # whose pod range holds only pods leaves it out and asks for it when unset.
   netpol-standard-world-egress-eks =
     let
+      network = {
+        podCidr = "192.168.0.0/16";
+        serviceCidr = "10.100.0.0/16";
+        nodeCidrs = [ "192.168.0.0/16" ];
+      };
       unset = (rulesFor eksFacts { }).mkExternalEgressRule { };
-      set =
-        (rulesFor eksFacts {
-          podCidr = "100.64.0.0/16";
-          serviceCidr = "10.100.0.0/16";
-          nodeCidrs = [ "192.168.0.0/16" ];
-        }).mkExternalEgressRule
+      set = (rulesFor eksFacts network).mkExternalEgressRule { };
+      dedicatedFacts = eksFacts // {
+        podRangeHoldsOnlyPods = true;
+      };
+      dedicatedUnset = (rulesFor dedicatedFacts { }).mkExternalEgressRule { };
+      dedicated =
+        (rulesFor dedicatedFacts (network // { podCidr = "100.64.0.0/16"; })).mkExternalEgressRule
           { };
-      # An STS interface endpoint in the node subnets.
+      # An STS interface endpoint in the VPC subnets.
       stsEndpoint = "192.168.12.34";
       inRange =
         cidr: ip:
@@ -324,20 +333,40 @@ in
     in
     (
       unset._widened == [
-        "world-egress-pods"
+        "world-egress-pod-subnets"
         "world-egress-node-subnets"
         "world-egress-services"
       ]
       &&
         exceptOf set == [
           "169.254.0.0/16"
-          "100.64.0.0/16"
           "10.100.0.0/16"
         ]
       && !(builtins.any (c: inRange c stsEndpoint) (exceptOf set))
-      && set._widened == [ "world-egress-node-subnets" ]
+      &&
+        set._widened == [
+          "world-egress-pod-subnets"
+          "world-egress-node-subnets"
+        ]
+      && builtins.elem "world-egress-pods" dedicatedUnset._widened
+      && builtins.elem "100.64.0.0/16" (exceptOf dedicated)
     )
-    || throw "EKS world: unset ${builtins.toJSON unset}, set ${builtins.toJSON set}";
+    || throw "EKS world: unset ${builtins.toJSON unset}, set ${builtins.toJSON set}, dedicated ${builtins.toJSON dedicated}";
+
+  # Every "set this option" in a reason's fix is safe where the reason can be
+  # printed: no reason that EKS can print asks for `podCidr` or
+  # `nodeCidrs` to narrow `world`.
+  netpol-standard-widening-advice-safe-on-eks =
+    let
+      widening = import ../../plugins/netpol/widening.nix;
+      eksOnly = [
+        "world-egress-pod-subnets"
+        "world-egress-node-subnets"
+      ];
+      asksToSet = id: opt: lib.hasInfix "Set `cluster.network.${opt}`" widening.${id}.fix;
+    in
+    (builtins.all (id: !(asksToSet id "podCidr") && !(asksToSet id "nodeCidrs")) eksOnly)
+    || throw "unsafe advice in ${builtins.toJSON (map (id: widening.${id}.fix) eksOnly)}";
 
   # API server egress needs its address. On EKS the first address of the
   # Service range is the `kubernetes` Service, so `serviceCidr` is enough.

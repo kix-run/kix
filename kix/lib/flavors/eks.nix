@@ -150,6 +150,11 @@ in
         # The node range is the VPC subnets, which also hold pods, VPC
         # endpoints such as STS, load balancers, and databases.
         nodeRangeHoldsOnlyNodes = false;
+        # By default the VPC CNI gives pods addresses from the node subnets.
+        # Custom networking gives pods subnets of their own, but Kix cannot
+        # tell whether those hold only pods, so the pod range is treated as
+        # shared too.
+        podRangeHoldsOnlyPods = false;
         podStartsBeforePolicy = true;
       });
     };
