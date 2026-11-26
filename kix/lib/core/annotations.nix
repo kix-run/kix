@@ -108,6 +108,10 @@ rec {
     derived = key "derived";
     policyType = key "policy-type";
     operandOf = key "operand-of";
+    # Comma-separated ids from `plugins/netpol/widening.nix` on a generated
+    # NetworkPolicy that allows more traffic than the Cilium policy for the
+    # same rules. The `networkPolicyWidened` scorecard rule reads it.
+    networkPolicyWidened = key "network-policy-widened";
     monitorsExternalService = key "monitors-external-service";
     role = key "role";
     dbCluster = key "db-cluster";

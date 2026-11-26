@@ -241,7 +241,11 @@ A `_cluster` instance and an instance in the record namespace cannot share a nam
 | `clusterDomain` | `str` | `"cluster.local"` | Internal Kubernetes DNS suffix used to build `<name>.<namespace>.svc.<clusterDomain>` on every resource's `out.fqdn`. Change this only if your cluster's kubelet and DNS service use a custom domain. |
 | `cluster.domain` | `nullOr str` | `null` | Public base domain for ingress routes. When set, `kix.expose` derives `<instanceName>.<cluster.domain>` for instances that do not set `config.ingress.host`. |
 | `cluster.network.podCidr` | `nullOr str` | `null` | Pod network CIDR (`"10.244.0.0/16"` on `kind`; `"10.42.0.0/16"` on `k3s` and `rke2`). Read by the `cilium` package when deploying its chart with `cluster-pool` IPAM. |
-| `cluster.network.serviceCidr` | `nullOr str` | `null` | Service network CIDR (for example, `"10.96.0.0/16"`). |
+| `cluster.network.serviceCidr` | `nullOr str` | `null` | Service network CIDR (for example, `"10.96.0.0/16"`). On EKS, standard `NetworkPolicy` generation excludes this range from outbound `world` rules and uses its first IPv4 address for API server egress when `cluster.network.apiServer.cidrs` is empty. |
+| `cluster.network.nodeCidrs` | `listOf str` | `[ ]` | IP ranges of the cluster's nodes. Standard `NetworkPolicy` generation uses these ranges for rules targeting nodes (`host`, `remote-node`, `cluster`, and host-network scrape targets), failing the build if a policy targets nodes while this list is empty. Excluded from outbound `world` rules on GKE, and kept on EKS where nodes share VPC subnets with VPC endpoints, load balancers, and databases. Ignored by Cilium. |
+| `cluster.network.apiServer.cidrs` | `listOf str` | `[ ]` | IP ranges that pods dial to reach the Kubernetes API server in standard `NetworkPolicy` egress rules. On GKE, set the control plane endpoint `/32` addresses (update after control plane IP rotation). On EKS, derived automatically from `cluster.network.serviceCidr`, or set to the `kubernetes` Service `/32` address. Required whenever a standard `NetworkPolicy` needs API server egress and `serviceCidr` cannot supply it. Not checked against the live cluster: `kix plan` and `kix deploy` succeed with a wrong address, and pods lose API server access on their next restart after open connections close. Ignored by Cilium. |
+| `cluster.network.apiServer.port` | `port` | `443` | TCP port of the Kubernetes API server for standard `NetworkPolicy` egress rules. Ignored by Cilium. |
+| `cluster.network.apiServer.sources` | list of `{ cidr; }` or `{ namespace; podSelector; }` | `[ ]` | IP ranges (`{ cidr = "..."; }`) or pods (`{ namespace = "..."; podSelector = { ... }; }`) from which the Kubernetes API server calls admission webhooks and aggregated APIs in standard `NetworkPolicy` ingress rules. Defaults to the `konnectivity-agent` pods in `kube-system` on `gke` and `gke-autopilot`; on `eks`, set the control plane subnets. Required when a standard `NetworkPolicy` accepts ingress from `apiserver`. Ignored by Cilium. |
 | `cluster.network.dnsUpstream` | `listOf str` | `[ ]` | Upstream DNS resolver addresses read by the `coredns` package's `forward` plugin. When empty, CoreDNS forwards to `/etc/resolv.conf`. |
 
 ```nix
@@ -276,7 +280,7 @@ Role names come from the closed registry in `kix/lib/eval/roles.nix`. Every role
 | Role | Provider `out` contract | Packages claiming the role | How Kix checks it |
 | --- | --- | --- | --- |
 | `cni` | none | `cilium` | Prevents deploying a second CNI when the environment binds `cni` as `exclusive`. |
-| `network-policy-enforcer` | `netpol` rule builders | `cilium` | Required when `networkPolicy.enable = true`. |
+| `network-policy-enforcer` | `netpol` rule builders | `cilium`, or `platform-network-policy` (built into `gke` and `gke-autopilot`, and into `eks` when `cluster.flavor.eks.networkPolicy = "vpc-cni"`) | Required when `networkPolicy.enable = true`. |
 | `dns` | `fqdn` | `coredns` | Workloads with cross-instance Service dependencies are ordered after the active DNS provider. |
 | `storageClasses` | `storageClassName` | `storage-classes` | Default StorageClass provider for PVCs and StatefulSets. |
 | `loadBalancer` | none | none (environment role) | Checked by `scope.mkResource` on `Service` objects with `type: LoadBalancer` (unless `loadBalancerClass` comes from `kix.providedLoadBalancerClass`). |
@@ -417,7 +421,7 @@ See [Use auto-instantiation with `availablePackages`, `optional`, and `autoNames
 
 `networkPolicy` controls automatic network policy generation from the dependency graph. When enabled, Kix uses the cluster's `network-policy-enforcer` provider (such as `cilium`) to emit policies for service-to-service traffic, DNS, API server access, ingress controllers, Prometheus and VictoriaMetrics scraping, StatefulSet peer traffic, and package intents.
 
-Today, `packages.experimental.cilium` is the only `network-policy-enforcer` package: Kix generates Cilium policy resources (`cilium.io/v2`) only and cannot emit standard Kubernetes `NetworkPolicy` objects or policies for other CNIs such as Calico. Most generated policies are namespaced `CiliumNetworkPolicy` objects; Kix writes cluster-wide `CiliumClusterwideNetworkPolicy` objects in three cases:
+The active `network-policy-enforcer` provider determines which Kubernetes resources Kix writes. On `gke` and `gke-autopilot`, and on `eks` when `cluster.flavor.eks.networkPolicy = "vpc-cni"`, the flavor provides `platform-network-policy` and Kix writes every generated policy as a namespaced `NetworkPolicy` (`networking.k8s.io/v1`). Standard `NetworkPolicy` generation reads cluster IP ranges from [`cluster.network`](#cluster-network) and rejects `networkPolicy.platformIntents` entries with `scope = "clusterwide"` (see [Standard NetworkPolicy](/docs/explanation/network-policy/#standard-networkpolicy)). With `packages.experimental.cilium`, most generated policies are namespaced `CiliumNetworkPolicy` objects, and Kix writes cluster-wide `CiliumClusterwideNetworkPolicy` objects in three cases:
 
 | Object | Kind | Scope | Written when |
 | --- | --- | --- | --- |

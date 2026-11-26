@@ -1201,7 +1201,12 @@ impl<'a> Run<'a> {
                     )),
                 };
                 match deleted {
-                    Ok(kept @ (Pruned::Kept(_) | Pruned::Changed(_))) => Pruning::Kept(kept),
+                    Ok(kept @ Pruned::Kept(_)) => Pruning::Kept(kept),
+                    // This cluster's object is still on the cluster, so the
+                    // prune did not do what was asked.
+                    Ok(changed @ Pruned::Changed(_)) => Pruning::Unfinished(Unfinished::Failed(
+                        changed.kept_reason().unwrap_or_default(),
+                    )),
                     Ok(pruned) => match pruned.deleting() {
                         Some(uid) => {
                             let waited = wait_gone(
@@ -1238,7 +1243,10 @@ impl<'a> Run<'a> {
                 |p| matches!(p, Pruning::Unfinished(_) | Pruning::Kept(_)),
                 |rid, walked| match walked {
                     Walked::Done(Pruning::Gone { already }) => {
-                        result.pruned += 1;
+                        match already {
+                            Some(_) => result.already_gone += 1,
+                            None => result.pruned += 1,
+                        }
                         emit(DeployEvent::NodeStateChanged {
                             node: NodeId::Resource(rid.clone()),
                             kind: TransitionKind::Delete,
@@ -1247,17 +1255,9 @@ impl<'a> Run<'a> {
                         });
                     }
                     Walked::Done(Pruning::Kept(outcome)) => {
-                        // An object kept because its content drifted still
-                        // belongs to this cluster, so preserve its source
-                        // build for the next prune. An object shared with
-                        // another Kix cluster is managed by that cluster.
-                        match &outcome {
-                            Pruned::Changed(_) => orphans_left = true,
-                            Pruned::Kept(_) => {
-                                shared.insert(rid.clone());
-                            }
-                            _ => {}
-                        }
+                        // An object shared with another Kix cluster is
+                        // managed by that cluster.
+                        shared.insert(rid.clone());
                         emit(DeployEvent::PruneKept {
                             resource: rid.clone(),
                             reason: outcome.kept_reason().unwrap_or_default(),
@@ -1307,6 +1307,9 @@ impl<'a> Run<'a> {
                     }
                     Walked::HeldBack(stuck) => {
                         orphans_left = true;
+                        if !shared.contains(stuck) {
+                            result.kept += 1;
+                        }
                         emit(DeployEvent::PruneKept {
                             resource: rid.clone(),
                             reason: readiness::held_back_reason(
@@ -1319,6 +1322,7 @@ impl<'a> Run<'a> {
                     }
                     Walked::Cycle => {
                         orphans_left = true;
+                        result.kept += 1;
                         emit(DeployEvent::PruneKept {
                             resource: rid.clone(),
                             reason: readiness::cycle_reason(rid),
@@ -1381,7 +1385,12 @@ impl<'a> Run<'a> {
     /// Finalize the Activation record unless the run was a no-op or a dry run.
     async fn finalize(self, orphans_left: bool) -> Result<DeployResult, DeployError> {
         let r = &self.result;
-        let actually_changed = r.created > 0 || r.configured > 0 || r.pruned > 0 || r.failed > 0;
+        let actually_changed = r.created > 0
+            || r.configured > 0
+            || r.pruned > 0
+            || r.already_gone > 0
+            || r.kept > 0
+            || r.failed > 0;
         if let Some(record) = &self.record
             && actually_changed
         {

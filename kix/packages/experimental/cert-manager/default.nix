@@ -174,10 +174,6 @@ in
           ];
         }
       ];
-      # The API server calls the admission webhook on webhook.securePort.
-      # meta cannot read config, so the rule admits the API server on any
-      # port.
-      webhook.ingress = [ { from = "apiserver"; } ];
     };
   };
 
@@ -376,6 +372,7 @@ in
             self.webhookServiceAccount
             self.webhookService
             self.webhookDeployment
+            self.webhookIngressPolicy
             self.mutatingWebhookConfiguration
             self.validatingWebhookConfiguration
             self.cainjectorServiceAccount

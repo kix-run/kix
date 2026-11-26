@@ -1139,6 +1139,13 @@
           "minimum": 0,
           "type": "integer"
         },
+        "kept": {
+          "default": 0,
+          "description": "Orphans of this Kix cluster the prune left on the cluster, held\nback by an object whose delete failed or by a dependency cycle.\nThe `prune_kept` lines name them.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
         "left_behind": {
           "description": "For each kind whose definition left the build, the objects of it\nthat are still on the cluster after the prune. Kix did not create\nthem, and nothing clears their finalizers once their controller\nis gone. Left out when there are none.",
           "items": {
@@ -1159,6 +1166,7 @@
           "type": "array"
         },
         "pruned": {
+          "description": "Orphans this run deleted. An orphan already gone is not counted.",
           "format": "uint",
           "minimum": 0,
           "type": "integer"

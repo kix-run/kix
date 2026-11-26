@@ -27,6 +27,10 @@ let
     inherit (config) clusterDomain;
   };
   platformCloudIdentity = import ./cloud-identity.nix { inherit kix; };
+  platformNetworkPolicy = import ./platform-network-policy.nix {
+    inherit lib kix;
+    inherit (config.cluster) network;
+  };
   mechanisms = import ../vocab/cloud-identity-mechanisms.nix { inherit lib; };
 in
 {
@@ -39,6 +43,12 @@ in
     cni = {
       binding = lib.mkDefault "exclusive";
       provider = lib.mkDefault "gke-native (dataplane v2)";
+    };
+    # Dataplane V2 always enforces the standard NetworkPolicy, and a second
+    # enforcer such as Cilium cannot run beside it.
+    network-policy-enforcer = {
+      binding = lib.mkDefault "exclusive";
+      provider = lib.mkDefault "GKE Dataplane V2";
     };
     dns.binding = lib.mkDefault "shadowable";
     storageClasses.binding = lib.mkDefault "shadowable";
@@ -67,6 +77,17 @@ in
     criticalPriorityNamespaces = lib.mkDefault [ ];
   };
 
+  # The API server calls admission webhooks and aggregated APIs through the
+  # konnectivity-agent pods in kube-system, which a live GKE Standard
+  # cluster showed. A private cluster or one without konnectivity is
+  # untested.
+  cluster.network.apiServer.sources = lib.mkDefault [
+    {
+      namespace = "kube-system";
+      podSelector."k8s-app" = "konnectivity-agent";
+    }
+  ];
+
   # Place platform imports in `gke-managed` because Autopilot refuses user
   # objects in `kube-system`. Each import names the namespace of the object
   # it stands for.
@@ -78,6 +99,25 @@ in
     };
 
     cloud-identity = platformCloudIdentity { mechanism = mechanisms.gke { }; };
+
+    # How Dataplane V2 matches an ipBlock, each tested on a live GKE cluster:
+    # never against pod addresses, against node addresses when the ipBlock
+    # covers the node range, and after Service address translation.
+    platform-network-policy = platformNetworkPolicy {
+      provider = "GKE Dataplane V2";
+      ipBlockSelectsPods = false;
+      ipBlockSelectsNodes = true;
+      ipBlockSeesServiceAddress = false;
+      # Google documents that a VPC-native cluster, which Dataplane V2
+      # requires, gives nodes the subnet's primary range and pods and
+      # Services other ranges. On a live GKE cluster, leaving the node range
+      # out of `0.0.0.0/0` kept internet egress working.
+      nodeRangeHoldsOnlyNodes = true;
+      # The pod range is a secondary range of its own on a VPC-native
+      # cluster (documented by Google). An ipBlock never matches pods here,
+      # so Kix never needs to leave it out of `world`.
+      podRangeHoldsOnlyPods = true;
+    };
 
     platform-storage = {
       package = kix.mkImport {

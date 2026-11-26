@@ -122,7 +122,11 @@ in
         };
 
       # Collect Services with pod selectors and ServiceRef markers as
-      # `{ namespace, name, labels, selector, ports }`.
+      # `{ namespace, name, labels, selector, ports }`. A package can name a
+      # Service after another resource (`self.deployment.out.name`), whose
+      # string context points at that resource's store path, so `namespace`
+      # and `name` are made plain here. Target ids and policy names built from
+      # them are then plain too, and an id can be an attribute name.
       services = builtins.concatMap (
         r:
         let
@@ -132,8 +136,8 @@ in
         if (r.kind or "") == "Service" && (raw.spec.selector or { }) != { } then
           [
             {
-              namespace = nsOfRaw raw;
-              name = raw.metadata.name;
+              namespace = plain (nsOfRaw raw);
+              name = plain raw.metadata.name;
               labels = raw.metadata.labels or { };
               selector = raw.spec.selector;
               ports = raw.spec.ports or [ ];
@@ -142,8 +146,8 @@ in
         else if isServiceRef r && anns ? ${kixKeys.serviceSelector} then
           [
             {
-              namespace = nsOfRaw raw;
-              name = anns.${kixKeys.importName};
+              namespace = plain (nsOfRaw raw);
+              name = plain anns.${kixKeys.importName};
               labels = builtins.fromJSON (anns.${kixKeys.serviceLabels} or "{}");
               selector = builtins.fromJSON anns.${kixKeys.serviceSelector};
               ports = builtins.fromJSON (anns.${kixKeys.servicePorts} or "[]");
@@ -302,6 +306,7 @@ in
           sel = mon.spec.selector or { };
           podSelector = sel.matchLabels or { };
           monNs = plain (nsOfRaw mon);
+          monName = plain mon.metadata.name;
           ports = lib.unique (
             builtins.concatMap (
               ep:
@@ -320,8 +325,8 @@ in
           map (
             namespace:
             mkTarget {
-              key = "pods-${mon.metadata.name}";
-              id = "${idPrefix}/${monNs}/${mon.metadata.name}";
+              key = "pods-${monName}";
+              id = "${idPrefix}/${monNs}/${monName}";
               inherit namespace podSelector ports;
             }
           ) (monitorNamespaces mon);

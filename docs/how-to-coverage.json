@@ -1032,6 +1032,31 @@
       "status": "implemented"
     },
     {
+      "page": "start-and-inspect/deploy-to-eks",
+      "scenario": "platform",
+      "status": "implemented",
+      "snippets": [
+        "eksIrsaInstance",
+        "eksPodIdentity",
+        "eksCertManager",
+        "importedStorageClass",
+        "eksNetworkPolicy"
+      ],
+      "unverifiedNixBlocks": 1
+    },
+    {
+      "page": "start-and-inspect/deploy-to-gke",
+      "scenario": "platform",
+      "status": "implemented",
+      "snippets": [
+        "gkeIdentityDirect",
+        "gkeIdentityLinked",
+        "veleroGkeIdentity",
+        "gkeNetworkPolicy"
+      ],
+      "unverifiedNixBlocks": 1
+    },
+    {
       "page": "start-and-inspect/deploy-to-kind",
       "scenario": "application",
       "status": "implemented",

@@ -28,12 +28,15 @@ kix.buildCluster {
     kix.flavors.gke
 
     {
+      # region:gkeIdentityDirect
       instances.external-dns.clouddns = {
         package = packages.experimental.external-dns;
         deps.providerCredentials = kix.cloudIdentity.gcp { };
         config = externalDns "cloud-identity-gke/direct";
       };
+      # endregion:gkeIdentityDirect
 
+      # region:gkeIdentityLinked
       instances.external-dns-linked.clouddns = {
         package = packages.experimental.external-dns;
         deps.providerCredentials = kix.cloudIdentity.gcp {
@@ -41,6 +44,7 @@ kix.buildCluster {
         };
         config = externalDns "cloud-identity-gke/linked";
       };
+      # endregion:gkeIdentityLinked
     }
   ];
 }

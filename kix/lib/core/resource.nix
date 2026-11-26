@@ -70,6 +70,33 @@ rec {
   # Attach `ctx` to every string in `value`. A number or a boolean cannot
   # carry string context, so a consumer that reads one from `.manifest`
   # gets no dependency on the resource.
+  # Return whether `apiVersion` and `kind` name a network policy kind.
+  isNetworkPolicy =
+    { apiVersion, kind }:
+    let
+      group = builtins.head (lib.splitString "/" apiVersion);
+    in
+    (group == "networking.k8s.io" && kind == "NetworkPolicy")
+    || (
+      group == "cilium.io"
+      && builtins.elem kind [
+        "CiliumNetworkPolicy"
+        "CiliumClusterwideNetworkPolicy"
+      ]
+    );
+
+  # Return `value` with the string context of every string in it dropped.
+  discardContextDeep =
+    value:
+    if builtins.isString value then
+      builtins.unsafeDiscardStringContext value
+    else if builtins.isAttrs value then
+      lib.mapAttrs (_: discardContextDeep) value
+    else if builtins.isList value then
+      map discardContextDeep value
+    else
+      value;
+
   attachCtxDeep =
     ctx: value:
     if value == null then
@@ -388,27 +415,45 @@ rec {
         else
           null;
 
+      # A network policy's spec only names pods by label: the pods it
+      # governs and the peers it admits. Those pods need the policy in place
+      # while they run, and a peer need not exist for a rule to name it, so
+      # the policy depends on none of them. Drop the string context of the
+      # spec, which a package fills from workloads' `out.selector`. The
+      # deploy orders each workload after the policies that select its pods,
+      # and deletes them after it. A dependency the policy really has, such
+      # as its CustomResourceDefinition, comes through `requires` or
+      # `extraDeps`, which this keeps.
+      withoutSpecDependencies =
+        manifest:
+        if !(isNetworkPolicy { inherit apiVersion kind; }) || !(manifest ? spec) then
+          manifest
+        else
+          manifest // { spec = discardContextDeep manifest.spec; };
+
       # resolveKeeps runs here so rawManifest (and the identity JSON derived
       # from it) never carries the _kixKeep marker, and so rawManifest
       # consumers see keep-built containers the way they will render.
       rawManifest = builtins.seq _ownershipCheck (
         builtins.seq _extraShadowCheck (
-          normalize.resolveKeeps (
-            stripKixMeta (
-              lib.recursiveUpdate (
-                {
-                  inherit apiVersion kind;
-                  metadata = {
-                    inherit name;
+          withoutSpecDependencies (
+            normalize.resolveKeeps (
+              stripKixMeta (
+                lib.recursiveUpdate (
+                  {
+                    inherit apiVersion kind;
+                    metadata = {
+                      inherit name;
+                    }
+                    // lib.optionalAttrs (nsName != null) { namespace = nsName; }
+                    // lib.optionalAttrs (labels != { }) { inherit labels; }
+                    // lib.optionalAttrs (allAnnotations != { }) { annotations = allAnnotations; };
                   }
-                  // lib.optionalAttrs (nsName != null) { namespace = nsName; }
-                  // lib.optionalAttrs (labels != { }) { inherit labels; }
-                  // lib.optionalAttrs (allAnnotations != { }) { annotations = allAnnotations; };
-                }
-                // lib.optionalAttrs (spec != { }) { inherit spec; }
-                // lib.optionalAttrs (data != { }) { inherit data; }
-                // lib.optionalAttrs (stringData != { }) { inherit stringData; }
-              ) extra
+                  // lib.optionalAttrs (spec != { }) { inherit spec; }
+                  // lib.optionalAttrs (data != { }) { inherit data; }
+                  // lib.optionalAttrs (stringData != { }) { inherit stringData; }
+                ) extra
+              )
             )
           )
         )

@@ -525,6 +525,8 @@ in
       cluster = mkCluster [
         (import ../../flavors/gke.nix)
         netpolOn
+        # The test enforcer takes the role from the flavour's own.
+        { cluster.roles.network-policy-enforcer.binding = lib.mkForce "shadowable"; }
         baseInstances
         (
           { ref, ... }:
@@ -563,4 +565,27 @@ in
       ) platformEgress.spec.egress
     )
     || throw "caller ingress: kube-system ${builtins.toJSON (callerIngress "kube-system")}, dbns ${builtins.toJSON (callerIngress "dbns")}";
+
+  # The gke flavour's `platform-dns` is an optional import, and a workload
+  # that dials no Service does not activate it. Its peers still describe
+  # where the platform answers DNS, so every DNS rule names them.
+  netpol-clouds-dns-peers-from-inactive-platform-import =
+    let
+      cluster = mkCluster [
+        (import ../../flavors/gke.nix)
+        netpolOn
+        # The test enforcer takes the role from the flavour's own.
+        { cluster.roles.network-policy-enforcer.binding = lib.mkForce "shadowable"; }
+        { instances.app.web.package = intentPackage { } false; }
+      ];
+      ms = manifests cluster;
+      rule = lib.findFirst (
+        r: (r.stubRule or null) == "dns-egress"
+      ) null (byName "web-deployment-web-egress" ms).spec.egress;
+      platformDnsActive = builtins.any (
+        m: m.kind == "PackageInstance" && (m.metadata.name or "") == "platform-dns"
+      ) ms;
+    in
+    (!platformDnsActive && rule.dnsPeers == import ../../flavors/gke-dns-peers.nix)
+    || throw "inactive platform-dns: active ${toString platformDnsActive}, rule ${builtins.toJSON rule}";
 }

@@ -193,7 +193,7 @@ Nothing was deleted from cluster prod.
 | Code | Meaning |
 | --- | --- |
 | `0` | Nothing to collect, everything planned was deleted, `--dry-run` printed the plan, or the prompt was declined |
-| `1` | A deletion failed or timed out; confirmation was needed on a non-interactive terminal; another run holds the deploy lock or changed the cluster since gc read it; a newer Kix wrote to the cluster last; or a build or cluster error |
+| `1` | A deletion failed or timed out, or `kix gc` left a planned object in place because an undeleted object depends on it or its dependencies form a cycle; confirmation was needed on a non-interactive terminal; another run holds the deploy lock or changed the cluster since gc read it; a newer Kix wrote to the cluster last; or a build or cluster error |
 
 :::tip[Use it in a task]
 See [Garbage-collect stale resources](/docs/how-to/operate-a-cluster/garbage-collect-stale-resources/)

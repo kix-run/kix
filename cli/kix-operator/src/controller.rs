@@ -2145,9 +2145,9 @@ mod tests {
 
     /// A run that stopped at a Secret whose SOPS file could not be
     /// decrypted.
-    fn stopped() -> Result<DeployResult, DeployError> {
+    fn stopped() -> DeployError {
         use kix::cluster::stream::{NodeFailure, NodeId};
-        Err(DeployError::NodesFailed {
+        DeployError::NodesFailed {
             count: 1,
             partial: DeployResult {
                 failed: 1,
@@ -2157,7 +2157,7 @@ mod tests {
                 }],
                 ..Default::default()
             },
-        })
+        }
     }
 
     /// Return a Context on `api` that retries a stopped deploy `retries`
@@ -2252,7 +2252,7 @@ mod tests {
         let api = FakeApi::new([deploying(0)]);
         let ctx = operator(&api, 2).await;
         for attempt in 1..=2 {
-            let (answer, status) = after_a_run(&api, &ctx, Reconcile::Resume, stopped()).await;
+            let (answer, status) = after_a_run(&api, &ctx, Reconcile::Resume, Err(stopped())).await;
             assert!(answer.is_err(), "{answer:?}");
             assert_eq!(status["phase"], PHASE_DEPLOYING);
             assert_eq!(status["failedAttempts"], attempt);
@@ -2275,7 +2275,7 @@ mod tests {
     async fn a_deploy_that_keeps_stopping_is_marked_failed_after_the_retries() {
         let api = FakeApi::new([deploying(2)]);
         let ctx = operator(&api, 2).await;
-        let (answer, status) = after_a_run(&api, &ctx, Reconcile::Resume, stopped()).await;
+        let (answer, status) = after_a_run(&api, &ctx, Reconcile::Resume, Err(stopped())).await;
         assert_eq!(answer.unwrap(), Action::await_change());
         assert_eq!(status["phase"], PHASE_FAILED);
         assert_eq!(status["failedAttempts"], 3);
@@ -2295,7 +2295,7 @@ mod tests {
     async fn zero_retries_fail_the_deploy_at_the_first_stop() {
         let api = FakeApi::new([deploying(0)]);
         let ctx = operator(&api, 0).await;
-        let (answer, status) = after_a_run(&api, &ctx, Reconcile::Start, stopped()).await;
+        let (answer, status) = after_a_run(&api, &ctx, Reconcile::Start, Err(stopped())).await;
         assert_eq!(answer.unwrap(), Action::await_change());
         assert_eq!(status["phase"], PHASE_FAILED);
         assert_eq!(status["failedAttempts"], 1);
@@ -2325,7 +2325,8 @@ mod tests {
         // The next operator's resume stops once more, which is the third
         // failed attempt.
         let restarted = operator(&api, 2).await;
-        let (answer, status) = after_a_run(&api, &restarted, Reconcile::Resume, stopped()).await;
+        let (answer, status) =
+            after_a_run(&api, &restarted, Reconcile::Resume, Err(stopped())).await;
         assert_eq!(answer.unwrap(), Action::await_change());
         assert_eq!(status["phase"], PHASE_FAILED);
         assert_eq!(status["failedAttempts"], 3);
@@ -2362,7 +2363,7 @@ mod tests {
         record["status"]["phase"] = json!(PHASE_ACTIVE);
         let api = FakeApi::new([record]);
         let ctx = operator(&api, 0).await;
-        let (answer, status) = after_a_run(&api, &ctx, Reconcile::Redeploy, stopped()).await;
+        let (answer, status) = after_a_run(&api, &ctx, Reconcile::Redeploy, Err(stopped())).await;
         assert!(answer.is_err(), "{answer:?}");
         assert_eq!(status["phase"], PHASE_ACTIVE);
         assert_eq!(status["failedAttempts"], 0);

@@ -1,0 +1,3557 @@
+[
+ {
+  "apiVersion": "admissionregistration.k8s.io/v1",
+  "kind": "MutatingWebhookConfiguration",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "3r4z0726xbai58s5wz47wwkf35sjqhn0",
+    "kix.run/identity-hash": "fnij0dvpkc0z5q3mr8jvm9vskd42ixfa"
+   },
+   "name": "cert-manager-webhook"
+  },
+  "webhooks": [
+   {
+    "clientConfig": {
+     "service": {
+      "name": "cert-manager-webhook",
+      "namespace": "cert-manager",
+      "path": "/mutate"
+     }
+    }
+   }
+  ]
+ },
+ {
+  "apiVersion": "admissionregistration.k8s.io/v1",
+  "kind": "MutatingWebhookConfiguration",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "ghc4i76ykdic1bd2y1x5apq0axk8c5fg"
+   },
+   "name": "cnpg-mutating-webhook-configuration"
+  },
+  "webhooks": [
+   {
+    "clientConfig": {
+     "service": {
+      "name": "cnpg-webhook-service",
+      "namespace": "cnpg-system",
+      "path": "/mutate-postgresql-cnpg-io-v1-backup",
+      "port": 443
+     }
+    }
+   },
+   {
+    "clientConfig": {
+     "service": {
+      "name": "cnpg-webhook-service",
+      "namespace": "cnpg-system",
+      "path": "/mutate-postgresql-cnpg-io-v1-cluster",
+      "port": 443
+     }
+    }
+   },
+   {
+    "clientConfig": {
+     "service": {
+      "name": "cnpg-webhook-service",
+      "namespace": "cnpg-system",
+      "path": "/mutate-postgresql-cnpg-io-v1-database",
+      "port": 443
+     }
+    }
+   },
+   {
+    "clientConfig": {
+     "service": {
+      "name": "cnpg-webhook-service",
+      "namespace": "cnpg-system",
+      "path": "/mutate-postgresql-cnpg-io-v1-scheduledbackup",
+      "port": 443
+     }
+    }
+   }
+  ]
+ },
+ {
+  "apiVersion": "admissionregistration.k8s.io/v1",
+  "kind": "ValidatingWebhookConfiguration",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "3r4z0726xbai58s5wz47wwkf35sjqhn0",
+    "kix.run/identity-hash": "brkym0dcir77mv7nkp4q7iakgai4jpj4"
+   },
+   "name": "cert-manager-webhook"
+  },
+  "webhooks": [
+   {
+    "clientConfig": {
+     "service": {
+      "name": "cert-manager-webhook",
+      "namespace": "cert-manager",
+      "path": "/validate"
+     }
+    }
+   }
+  ]
+ },
+ {
+  "apiVersion": "admissionregistration.k8s.io/v1",
+  "kind": "ValidatingWebhookConfiguration",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "3sdnr6f23h8i5mzh927nmzwikvrdi83s"
+   },
+   "name": "cnpg-validating-webhook-configuration"
+  },
+  "webhooks": [
+   {
+    "clientConfig": {
+     "service": {
+      "name": "cnpg-webhook-service",
+      "namespace": "cnpg-system",
+      "path": "/validate-postgresql-cnpg-io-v1-backup",
+      "port": 443
+     }
+    }
+   },
+   {
+    "clientConfig": {
+     "service": {
+      "name": "cnpg-webhook-service",
+      "namespace": "cnpg-system",
+      "path": "/validate-postgresql-cnpg-io-v1-cluster",
+      "port": 443
+     }
+    }
+   },
+   {
+    "clientConfig": {
+     "service": {
+      "name": "cnpg-webhook-service",
+      "namespace": "cnpg-system",
+      "path": "/validate-postgresql-cnpg-io-v1-database",
+      "port": 443
+     }
+    }
+   },
+   {
+    "clientConfig": {
+     "service": {
+      "name": "cnpg-webhook-service",
+      "namespace": "cnpg-system",
+      "path": "/validate-postgresql-cnpg-io-v1-pooler",
+      "port": 443
+     }
+    }
+   },
+   {
+    "clientConfig": {
+     "service": {
+      "name": "cnpg-webhook-service",
+      "namespace": "cnpg-system",
+      "path": "/validate-postgresql-cnpg-io-v1-scheduledbackup",
+      "port": 443
+     }
+    }
+   }
+  ]
+ },
+ {
+  "apiVersion": "apps/v1",
+  "kind": "DaemonSet",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "a1f6lllzc1qnjdfafdp5m61jpga79qpr,vfwh4jzq81zbcfs4fmj5m31af99prq8z",
+    "kix.run/identity-hash": "wjzajv3fjz49v7wyj43j78c7s9h00pph"
+   },
+   "name": "node-exporter",
+   "namespace": "monitoring-system"
+  },
+  "spec": {
+   "template": {
+    "metadata": {
+     "labels": {
+      "app.kubernetes.io/instance": "node-exporter",
+      "app.kubernetes.io/name": "node-exporter"
+     }
+    },
+    "spec": {
+     "serviceAccountName": "node-exporter"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "apps/v1",
+  "kind": "Deployment",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3,svvs642f2s14f7vgkxvmqy0maaw7yind,requires:nw2213arbn6igz9iqjm6yq0m3g321dy5,requires:8x66blrsqgb7mwpx42l0y6ds81jy16dz,requires:lzryf37cifpr0bshzxdn5mq9p8q8gs3c,requires:af6scy8za7ad1l4103w5w3b6bk8pxy3m,requires:y5y6pqvclmi8z5sj93r0xjsm367ngi64,requires:i202j6300m05y4rbcndmjfwzcbiinyyr,requires:gjaf568ccd125xw44si0y027yx1rb5vk",
+    "kix.run/identity-hash": "r5z3xliw14vh8v22rfii8693f7bwwjqp"
+   },
+   "name": "cert-manager",
+   "namespace": "cert-manager"
+  },
+  "spec": {
+   "template": {
+    "metadata": {
+     "labels": {
+      "app.kubernetes.io/component": "controller",
+      "app.kubernetes.io/instance": "cert-manager",
+      "app.kubernetes.io/name": "cert-manager"
+     }
+    },
+    "spec": {
+     "serviceAccountName": "cert-manager"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "apps/v1",
+  "kind": "Deployment",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "4l3lzcsh4m85gfq4il7by9hqcfzw80p9,rn40hbw8756809l5h5bwh65g8klv5bg3,requires:nw2213arbn6igz9iqjm6yq0m3g321dy5,requires:8x66blrsqgb7mwpx42l0y6ds81jy16dz,requires:lzryf37cifpr0bshzxdn5mq9p8q8gs3c,requires:af6scy8za7ad1l4103w5w3b6bk8pxy3m,requires:y5y6pqvclmi8z5sj93r0xjsm367ngi64,requires:i202j6300m05y4rbcndmjfwzcbiinyyr,requires:45nx6g53cyrn2h25pfkyfk2b0f2xcz30",
+    "kix.run/identity-hash": "2wiywf9c595pp2cg2lchlqdss0mlc8rw"
+   },
+   "name": "cert-manager-cainjector",
+   "namespace": "cert-manager"
+  },
+  "spec": {
+   "template": {
+    "metadata": {
+     "labels": {
+      "app.kubernetes.io/component": "cainjector",
+      "app.kubernetes.io/instance": "cert-manager",
+      "app.kubernetes.io/name": "cainjector"
+     }
+    },
+    "spec": {
+     "serviceAccountName": "cert-manager-cainjector"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "apps/v1",
+  "kind": "Deployment",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "9azxwlyfjbrdxw5lj1djz51fssqw34gj,rn40hbw8756809l5h5bwh65g8klv5bg3,requires:bnwbicaa16rgr1pf0lnixvwm1f3309h1",
+    "kix.run/identity-hash": "08zcjsk2klsmm3pji8wbr464chy5nlqb"
+   },
+   "name": "cert-manager-webhook",
+   "namespace": "cert-manager"
+  },
+  "spec": {
+   "template": {
+    "metadata": {
+     "labels": {
+      "app.kubernetes.io/component": "webhook",
+      "app.kubernetes.io/instance": "cert-manager",
+      "app.kubernetes.io/name": "webhook"
+     }
+    },
+    "spec": {
+     "serviceAccountName": "cert-manager-webhook"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "apps/v1",
+  "kind": "Deployment",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "0vlg2q091w14vgfnd2imr7a055ypwp57,2dv0d6d3wq5p8vf94xf40m5vbm1kygfl,4hfl8xn384m06ycajlq7yvh6gaf46yi7,dgqqdlwcgif6akic2rr67ri3njljk835,requires:2qi89ywx8mjvbdv9s77lw2gswxmd6x3m,requires:77hckqz6wzbd77pwk1qj1inyynqcqk0l,requires:h0w3qx4j5z9dmpcn6y5ws984vwl84j3a,requires:04brfrk775pkzkriv2w70nm043frv13w",
+    "kix.run/identity-hash": "24in44lnpf6dvdvd9qbhdvn6wwpjra95"
+   },
+   "name": "cnpg-barman-cloud",
+   "namespace": "cnpg-system"
+  },
+  "spec": {
+   "template": {
+    "metadata": {
+     "labels": {
+      "app.kubernetes.io/instance": "cnpg-barman-cloud",
+      "app.kubernetes.io/name": "cnpg-barman-cloud"
+     }
+    },
+    "spec": {
+     "serviceAccountName": "cnpg-barman-cloud"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "apps/v1",
+  "kind": "Deployment",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "dgqqdlwcgif6akic2rr67ri3njljk835,mbpaz6av1r7jhdilp512wh3kffzyyvqh,w5rplva4aadpvx55i3ydxxacs4zx0jr9,requires:ghc4i76ykdic1bd2y1x5apq0axk8c5fg,requires:3sdnr6f23h8i5mzh927nmzwikvrdi83s,requires:w7a57byc332rfjvhqrpraw9i1mlc8rzd,requires:fz1dvakcdx7vzp3f3jsbggpxw332zqls,requires:6bar47lvzh6jv9cz05h45gap81lr8p7x,requires:9za82vdvxhpzp1l2hvclvp1r82qx0yw4,requires:chhap578f6swhqfa6fz174xqfqwvgcwb,requires:bm8bq3600kmsnsj56r02w49amppqdsx8,requires:9290ih0r6qknq74cdg3bi6gb6ds6ifqy,requires:7r06dy882c64mpvp4a0ypykdil60nf67,requires:kyn28q76flrlws0rk2ndqk1lzpkrd863,requires:mfcfmzxdchn95fq0vd34ri86y66ys4ix,requires:bjvl4kvrp2a3s0lb2ifyfimhvp42adfl,requires:cnjjkc032fab4rx54nm2zgp86h2781cj,requires:p4vz79gcy4pqv7v71rhwa8qkn857wi10,requires:l58b7vrgfbz1zpl11frzvi3yfzm6p1y7,requires:8g9zl3w43sqjmkhi06lfk8s6swf2xmvv",
+    "kix.run/identity-hash": "j5rmna75di2n40lgz3da9smvcainbxs3"
+   },
+   "name": "cnpg-operator",
+   "namespace": "cnpg-system"
+  },
+  "spec": {
+   "template": {
+    "metadata": {
+     "labels": {
+      "app.kubernetes.io/instance": "cnpg-operator",
+      "app.kubernetes.io/name": "cloudnative-pg"
+     }
+    },
+    "spec": {
+     "serviceAccountName": "cnpg-operator"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "apps/v1",
+  "kind": "Deployment",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "9s3g3mpxgfilhbgjxsa1zn231q7yx2xm,q0v377qpsk08503qn4865wfkrdi8k0vc,requires:rmpp4sqwsi39ab2q8klj3wfbh8c0i5rj,requires:a2lj36h1diblyvxc8yf99vr8x8p95a8n,requires:wxx6i94gbrp9j9ba9ld5y58jjxr3fnag",
+    "kix.run/identity-hash": "f11h5xq349r4c605ydn9zh30v54kmnyc"
+   },
+   "name": "route53",
+   "namespace": "external-dns"
+  },
+  "spec": {
+   "template": {
+    "metadata": {
+     "labels": {
+      "app.kubernetes.io/instance": "route53",
+      "app.kubernetes.io/name": "route53"
+     }
+    },
+    "spec": {
+     "serviceAccountName": "route53"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "apps/v1",
+  "kind": "Deployment",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "0szv9wvc9hvrh1my4h32pdg9j6l40fa4,bixyy2nhs8q47bsm3nq87ra0g4qhvg0j,jyk5pl7cvblqy2bb5iicsp11v6dl84gi,mnjc2b8913y9al1cw094a2b12q3jrq7k,mp6z3bsfvzdc104qmzxcyg5ikiggcjjp,vfwh4jzq81zbcfs4fmj5m31af99prq8z,wy3g8j0n1h1jlwcldx7zqirmbhw2dx43,requires:xf840gd69nwbkh3f7sklnmlblz1w9d82,requires:2g9nqimdh6c4m4kyi74dxbcdf3wqjm2d,requires:jcpy3picxl0222vk8bk0g15ddq4l05z9",
+    "kix.run/identity-hash": "q65vbk2hx8mr3gml5j7aj3vf1mf8b252"
+   },
+   "name": "grafana",
+   "namespace": "monitoring-system"
+  },
+  "spec": {
+   "template": {
+    "metadata": {
+     "labels": {
+      "app.kubernetes.io/instance": "grafana",
+      "app.kubernetes.io/name": "grafana"
+     }
+    },
+    "spec": {
+     "serviceAccountName": "grafana"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "apps/v1",
+  "kind": "Deployment",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "9iw0vzsyw6w6sjjbmwnpl1amydh19m9n,vfwh4jzq81zbcfs4fmj5m31af99prq8z,requires:2p8av1gxhngpgpixsas23xbj3d0fq1c5",
+    "kix.run/identity-hash": "2fg626mjq7c92iq6mx8z6gz2cm2r44h5"
+   },
+   "name": "kube-state-metrics",
+   "namespace": "monitoring-system"
+  },
+  "spec": {
+   "template": {
+    "metadata": {
+     "labels": {
+      "app.kubernetes.io/instance": "kube-state-metrics",
+      "app.kubernetes.io/name": "kube-state-metrics"
+     }
+    },
+    "spec": {
+     "serviceAccountName": "kube-state-metrics"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "apps/v1",
+  "kind": "Deployment",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "1c3n5x7d3x6z5lkyyxjpw2cz785cwbwm,vfwh4jzq81zbcfs4fmj5m31af99prq8z,requires:masdp84gwnp2d9xk5i5q0a9j55z4y57y,requires:b142mwbw0x1kvhraa79zxgjsfx97bb04,requires:4zb1j8a5hx1vk4c9zhld6rr4y6i6k4rw,requires:xk4hyb7bcxwmwhaq76iwwrq7wpvpa2c6,requires:3d1rwbxm8py7iz0in0nrckrx0r4xhcq7,requires:bj06wnxvwzxmw1mr0f4s1bssji8wi7c8,requires:nfz59zz8nwhdc3xd8kl6gsr93rvn97ah,requires:ihdnhf5d8ir36ij6sc5664kwrppjdacz,requires:5abcifbbdqabdni93zlxiyhqy8jasgdg,requires:ps066fgm4s0zdd95hak4b64ginkwiyrz,requires:nwh097idrxjs417g84cf3z92knd8wx6j",
+    "kix.run/identity-hash": "v3lw8bkrd5j7nkqn90k34z63icrnbhqj"
+   },
+   "name": "prometheus-operator",
+   "namespace": "monitoring-system"
+  },
+  "spec": {
+   "template": {
+    "metadata": {
+     "labels": {
+      "app.kubernetes.io/instance": "prometheus-operator",
+      "app.kubernetes.io/name": "prometheus-operator"
+     }
+    },
+    "spec": {
+     "serviceAccountName": "prometheus-operator"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "apps/v1",
+  "kind": "Deployment",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "3bxp9nfqmz4mi6dqvqsh9h45n71yj54d,b3md5zbg97wv6a8dm27zyahqza8kh5nl,requires:xq4cy4alacj2ywv7w0r26zmqkd4igqdi",
+    "kix.run/identity-hash": "wzkln4wh83vhq8vhq3zb1zxn6s7k3a08"
+   },
+   "name": "echo-server",
+   "namespace": "np"
+  },
+  "spec": {
+   "template": {
+    "metadata": {
+     "labels": {
+      "app.kubernetes.io/instance": "echo-server",
+      "app.kubernetes.io/name": "echo-server"
+     }
+    },
+    "spec": {}
+   }
+  }
+ },
+ {
+  "apiVersion": "barmancloud.cnpg.io/v1",
+  "kind": "ObjectStore",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "gl5ff1nmald4z3qncpqz8q5sxam1hpi4,requires:2qi89ywx8mjvbdv9s77lw2gswxmd6x3m",
+    "kix.run/identity-hash": "p4dq1z27m86gfp9k0miihqn6pmd2w5sh"
+   },
+   "name": "pg-backup",
+   "namespace": "data"
+  }
+ },
+ {
+  "apiVersion": "batch/v1",
+  "kind": "Job",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "08zcjsk2klsmm3pji8wbr464chy5nlqb,2wiywf9c595pp2cg2lchlqdss0mlc8rw,3lg69xyk7w34lqdikvyvgfn50k2igynz,3r4z0726xbai58s5wz47wwkf35sjqhn0,brkym0dcir77mv7nkp4q7iakgai4jpj4,fnij0dvpkc0z5q3mr8jvm9vskd42ixfa,nw2213arbn6igz9iqjm6yq0m3g321dy5,rn40hbw8756809l5h5bwh65g8klv5bg3,requires:70m64229kycd2yz5dbqzj1xipqrh9p82,requires:8sx3pzvsgqa2gfazpc4m088q97k5jrj8,requires:snrciab4006yphah1kqcv1nix342wz4s",
+    "kix.run/identity-hash": "aw9majhvzsq5ak4c4avgmzph57sdymss"
+   },
+   "name": "cert-manager-startupapicheck",
+   "namespace": "cert-manager"
+  },
+  "spec": {
+   "template": {
+    "metadata": {
+     "labels": {
+      "app.kubernetes.io/component": "startupapicheck",
+      "app.kubernetes.io/instance": "cert-manager",
+      "app.kubernetes.io/name": "startupapicheck"
+     }
+    },
+    "spec": {
+     "serviceAccountName": "cert-manager-startupapicheck"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "batch/v1",
+  "kind": "Job",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "3sdnr6f23h8i5mzh927nmzwikvrdi83s,6bar47lvzh6jv9cz05h45gap81lr8p7x,6y18hnnbmnlgs1wa1mj1vsqjbqm1aagr,d00j7klzkyflb9dk9kn01mbi6w2sp48k,dgqqdlwcgif6akic2rr67ri3njljk835,ghc4i76ykdic1bd2y1x5apq0axk8c5fg,j5rmna75di2n40lgz3da9smvcainbxs3,z7lynvyrsjqi3816d0x78nc361691mzb,requires:bqbjwzcb3y5qy6zkgvpqy6qp7if6qkl3,requires:dkc2bzh1rf0hkdsp9gpvf1sdx469np71,requires:hhhc2jvpgakc13i70a16cvjqnmndhgy1,requires:xx7rxcbhcqj175d324km6pwrf5fk62i0",
+    "kix.run/identity-hash": "fcg8xf1vqbjs5g75g2qsvnv1ngv7nayw"
+   },
+   "name": "cnpg-operator-webhook-check",
+   "namespace": "cnpg-system"
+  },
+  "spec": {
+   "template": {
+    "metadata": {
+     "labels": {
+      "app.kubernetes.io/name": "cnpg-operator-webhook-check"
+     }
+    },
+    "spec": {
+     "serviceAccountName": "cnpg-operator-webhook-check"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "cert-manager.io/v1",
+  "kind": "Certificate",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "dgqqdlwcgif6akic2rr67ri3njljk835,v1v857k4q4wmhc2yvx7b8s01583p3qy6,requires:aw9majhvzsq5ak4c4avgmzph57sdymss,requires:8x66blrsqgb7mwpx42l0y6ds81jy16dz,controller:r5z3xliw14vh8v22rfii8693f7bwwjqp",
+    "kix.run/identity-hash": "4hfl8xn384m06ycajlq7yvh6gaf46yi7"
+   },
+   "name": "cnpg-barman-cloud-client",
+   "namespace": "cnpg-system"
+  }
+ },
+ {
+  "apiVersion": "cert-manager.io/v1",
+  "kind": "Certificate",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "dgqqdlwcgif6akic2rr67ri3njljk835,v1v857k4q4wmhc2yvx7b8s01583p3qy6,requires:aw9majhvzsq5ak4c4avgmzph57sdymss,requires:8x66blrsqgb7mwpx42l0y6ds81jy16dz,controller:r5z3xliw14vh8v22rfii8693f7bwwjqp",
+    "kix.run/identity-hash": "2dv0d6d3wq5p8vf94xf40m5vbm1kygfl"
+   },
+   "name": "cnpg-barman-cloud-server",
+   "namespace": "cnpg-system"
+  }
+ },
+ {
+  "apiVersion": "cert-manager.io/v1",
+  "kind": "Issuer",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "dgqqdlwcgif6akic2rr67ri3njljk835,requires:aw9majhvzsq5ak4c4avgmzph57sdymss,requires:y5y6pqvclmi8z5sj93r0xjsm367ngi64,controller:r5z3xliw14vh8v22rfii8693f7bwwjqp",
+    "kix.run/identity-hash": "v1v857k4q4wmhc2yvx7b8s01583p3qy6"
+   },
+   "name": "cnpg-barman-cloud-selfsigned",
+   "namespace": "cnpg-system"
+  }
+ },
+ {
+  "apiVersion": "kix.run/v1alpha1",
+  "kind": "Activation",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "0nh8dg8ym70khfs21xbka3dhhyk97gdy,2pmgbsm87h2z50l52isd01b3g8dlh3kk,3qw4iz75bznjnzinvx7c61a6yz70hsrh,3sab35w7rrvsvdrr3xx4j881vi87iw72,5bxr22xv97lbwrgkajyx6f5idcm2scyy,5v95npkxlyw0kcd95m79ny4y92012c59,9q5pcdzn010nyzgf03p3n6cbhkl6qvhh,apn881r668y1sacpxr8p2hyib2q25m90,byww2jm847pkk7a6n2hgld86mj38qkab,cijq7cfanhq12mv24sb7qapdqbsr7a9p,gy2g1af15g8zi7sby6pzghl5igf9rg03,h3ihai4bgydp3am00r8j0ss1fqrzywjz,iawlbbavhcik8hcfb3jf9g6ds7xacxck,qza6k5aark8fkjfjnamxlx228pnw0z6k,r520fcjwpfbnpi077sb9zk6wfh324rbk,rwpf1lv7zlmzrwps3gd5fix8s04vv65w,zka1yinjswn2kdz1yywwxf4xrhqy8v99,requires:gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj,extra:p03ypqggcy41cqwnyarnbp30cx50p0d2,extra:3zqd6cccwn2572y62ndm3l5k62fg8fx1,extra:2z8jwnfpf1xjfcv7ygxic6ng29q02r1l,extra:m85a6ljg5zx9nbcwhl579n283295graf,extra:z8y1yaw9md6qgmgx1irz1avpyvc9qq69,extra:yhrivp2dhr8zv3zxmfvr8cm8ifh75lmk,extra:63afqzzazqyzdf6k6hwqa3wnl5h4nvz3,extra:86dkh6haxk7aji04b910gpmyjjjkdvd8,extra:5dxqgi62s3lflc0pdv5iwfjmx9yjcwji,extra:nz0y00nz50fvck9f1cprscn22xxmpj43,extra:qf9wmxzsij4jjkigdwr2ykxp0v5r09gv,extra:xj7hs9zmfar3pv5fxi266awg9h6mj8kq,extra:2h7qz6452qh4hqn7byyjp5l0aj13qs92,extra:4jd796fgydvdzrypqal89zsqll2k7c46,extra:l7s26hdnmr2c3zlfgjzn92fk9q3wflqd,extra:32194ri7n5p9gskgjl7xpb9djyq751ms,extra:y3v2zllsgsaawlqgvn5p8wb1psm54461,extra:1v6m5r6g6cl6xi3c1g95b2l2sfy5xvs7",
+    "kix.run/identity-hash": "16nv1mb0v94dk0gwcv5nr5hvg7g887nl"
+   },
+   "name": "netpol-eks-16nv1mb0v94d"
+  }
+ },
+ {
+  "apiVersion": "kix.run/v1alpha1",
+  "kind": "PackageInstance",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "08zcjsk2klsmm3pji8wbr464chy5nlqb,0ljk6yz6rfdc12pn412afn2g5z47x8z2,25xvhq7m8rbshx3dbwakx242h30b951h,2imr8c3vkplwsyw3q3f85aiah750w90y,2wiywf9c595pp2cg2lchlqdss0mlc8rw,3awsxa87lik5xd0qrdbb29vp448g0fhv,3n82h2sx2mfr58fqcsgkjaqcah8mbn69,3r4z0726xbai58s5wz47wwkf35sjqhn0,3zribl5yn7h7q1l70akj94f1fb3jca18,4l3lzcsh4m85gfq4il7by9hqcfzw80p9,5m46bqzc84i7l8p7413g1x7ihsm1l3f1,8i1nja3j9nqjp5dgja6wamazx5gnm29v,9azxwlyfjbrdxw5lj1djz51fssqw34gj,9sr80l02ha5596y7k9mmkhj2488ak6sh,afa1mcipmvfbblw8ra75ggyi5r6ix679,ag37lg0khib5js3j4qbzd5697rd9s441,aw9majhvzsq5ak4c4avgmzph57sdymss,brkym0dcir77mv7nkp4q7iakgai4jpj4,cg8y1inl9rz556fyxxas5ji7lnd0914w,cmlgzi7l0iabrz8fwgg37iksmn0dm3wg,dpmdmiy2fxrfygxki5v3m7gizc3z2yv1,fnij0dvpkc0z5q3mr8jvm9vskd42ixfa,gzvjyjsjdcy7hh1g8f8fqxrcrn16akmn,idcjr6wprawdki9xj4x30r4ixpq165mi,in3dxh90m35x18j9p08skfnx4q9flay4,iw2w5v9a1skm2fi4wwx9mhg5mg57g545,j6n7i3w0isl2akiddm3vci18qj49fic0,jhvw48asyiv014vak9gfm0dbx7g72m37,k0c93kvp8nrdqihlch8kl0nx04i9syjf,lz66hsfawmvpdw3cvkls4lhqxyvswnr3,msni67ffxdvvjbdx69pqldsbq09jzqxs,mxj220inqfqg5mf7cqa8a2i3cx3yi3xx,nwymin89x7ijj54zij19b8974mr0zah3,r5z3xliw14vh8v22rfii8693f7bwwjqp,rn40hbw8756809l5h5bwh65g8klv5bg3,svvs642f2s14f7vgkxvmqy0maaw7yind,wm8pqb2g1swrlagz0ismwyhaf607jc8z,xfvkhvncmwx13syqm7n0hvcr7x6pp5ma,xxc0k04jhr2mnfwb7bbyd32jprv1biv2,xzi59q84zkvi1x52fakl97dlawn1ra4n,z1kzfjpg47025z1ilakpwc368zrgxqf5,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
+    "kix.run/identity-hash": "iawlbbavhcik8hcfb3jf9g6ds7xacxck"
+   },
+   "name": "cert-manager",
+   "namespace": "cert-manager"
+  }
+ },
+ {
+  "apiVersion": "kix.run/v1alpha1",
+  "kind": "PackageInstance",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "0awal83ny10ih2wfbfbv3jyid2mmwk2s,0sa53m858ljdfp43cjax7g55qrxyd1zd,24in44lnpf6dvdvd9qbhdvn6wwpjra95,837di1zj9i48lf8w7ns0cx0vqcfm5gk8,a66656cjfs8v8kdrxk28hpzlv1dyqxzm,cab57qn64zpw21qxms3ysany2sc6yv2i,dgqqdlwcgif6akic2rr67ri3njljk835,f86i509dj1vc7qdbns8yr3vmkv3m59ix,jqb9nzgw2a1ay74yp2zxym8y3sjwc2s4,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
+    "kix.run/identity-hash": "0nh8dg8ym70khfs21xbka3dhhyk97gdy"
+   },
+   "name": "cnpg-barman-cloud",
+   "namespace": "cnpg-system"
+  }
+ },
+ {
+  "apiVersion": "kix.run/v1alpha1",
+  "kind": "PackageInstance",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "20ixh81irimiaapi3wpj67p250i3d60v,3pymmqwhv9g3vzy2vj0xq1kw845gkmgq,4f9ssfddvfws56di4wvg0c86rv86s2ip,dgqqdlwcgif6akic2rr67ri3njljk835,f9jnsgg6jispm7z4ml673flmqcfxsp70,fcg8xf1vqbjs5g75g2qsvnv1ngv7nayw,j5rmna75di2n40lgz3da9smvcainbxs3,qaj184yw1krkaahwahv88wppshn63yc3,s7acbsglya2kc7rwc845c83jis916d3j,z7lynvyrsjqi3816d0x78nc361691mzb,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
+    "kix.run/identity-hash": "gy2g1af15g8zi7sby6pzghl5igf9rg03"
+   },
+   "name": "cnpg-operator",
+   "namespace": "cnpg-system"
+  }
+ },
+ {
+  "apiVersion": "kix.run/v1alpha1",
+  "kind": "PackageInstance",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "2k94c66gr5j6zsig9lnkr3axphjjn704,2xmivk7i96jfq36h5acckf0ssa2wcjxd,6xb0kc8ybcnvx2dgvachvs9qxy1rv0hr,88wsgcxncgc4vhcbsas137fbaxb2mx0m,gl5ff1nmald4z3qncpqz8q5sxam1hpi4,iylkfggvff82vdndsijk7qajpmhrif9r,kk1n5l9bnkv3ij733k9dzdm0jfx4v1s5,nn7zklv2cddpz6z7izvq4ph4gzpqz42i,s6h8dq3mfhccjpnq4vimmkmr5wl51c1y,wc23ki91m9xlv1bmmlampwqixs7dsqcz,x4i266vk8wx6pkh3lfi7dyjcri4msk8w,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
+    "kix.run/identity-hash": "2pmgbsm87h2z50l52isd01b3g8dlh3kk"
+   },
+   "name": "pg",
+   "namespace": "data"
+  }
+ },
+ {
+  "apiVersion": "kix.run/v1alpha1",
+  "kind": "PackageInstance",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "gl5ff1nmald4z3qncpqz8q5sxam1hpi4,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:x4i266vk8wx6pkh3lfi7dyjcri4msk8w",
+    "kix.run/identity-hash": "nn7zklv2cddpz6z7izvq4ph4gzpqz42i"
+   },
+   "name": "service-ref-pg-pg-rw",
+   "namespace": "data"
+  }
+ },
+ {
+  "apiVersion": "kix.run/v1alpha1",
+  "kind": "PackageInstance",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "9s3g3mpxgfilhbgjxsa1zn231q7yx2xm,f11h5xq349r4c605ydn9zh30v54kmnyc,k6hgkl1ckmnlcxr3jkwl90vm93cvky9d,l7sakscipb61avz9imjqhg1nbcnlbc84,mzinqb60sys38rn04zskbvll71gh3pzl,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
+    "kix.run/identity-hash": "zka1yinjswn2kdz1yywwxf4xrhqy8v99"
+   },
+   "name": "route53",
+   "namespace": "external-dns"
+  }
+ },
+ {
+  "apiVersion": "kix.run/v1alpha1",
+  "kind": "PackageInstance",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
+    "kix.run/identity-hash": "5v95npkxlyw0kcd95m79ny4y92012c59"
+   },
+   "name": "cloud-identity",
+   "namespace": "kube-system"
+  }
+ },
+ {
+  "apiVersion": "kix.run/v1alpha1",
+  "kind": "PackageInstance",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
+    "kix.run/identity-hash": "5bxr22xv97lbwrgkajyx6f5idcm2scyy"
+   },
+   "name": "platform-network-policy",
+   "namespace": "kube-system"
+  }
+ },
+ {
+  "apiVersion": "kix.run/v1alpha1",
+  "kind": "PackageInstance",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "0vqs5zh2dnayl6vjblh4vgfri3kxax7q,5y4lwdlwbb953002r5m99yj9s59lr2mb,7wlzc773ayfhffhs4phw82dh239903vp,8sdb1z7yk4ni11ps7zvlx8h3is1si64a,b8my5597dji6nvn1gdr0gsinzwb3x5d7,h9482fx4n9jf8fb986jc5di0f4ixk94h,hsx2n97a7q56a8578fja7dhiw14wh1vl,rvz87pwx1q2387p40890fz8w9302wki8,vfwh4jzq81zbcfs4fmj5m31af99prq8z,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
+    "kix.run/identity-hash": "9q5pcdzn010nyzgf03p3n6cbhkl6qvhh"
+   },
+   "name": "alertmanager",
+   "namespace": "monitoring-system"
+  }
+ },
+ {
+  "apiVersion": "kix.run/v1alpha1",
+  "kind": "PackageInstance",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "0fqasr9bl1xccjs1fqzk7pbn36ywhv9k,0szv9wvc9hvrh1my4h32pdg9j6l40fa4,13fhaqjswds8v4psz6y5jyg0ljflg0yn,bibfqm01y57mlgbdbqy6hm8ddqlpqgcw,bixyy2nhs8q47bsm3nq87ra0g4qhvg0j,mp6z3bsfvzdc104qmzxcyg5ikiggcjjp,q65vbk2hx8mr3gml5j7aj3vf1mf8b252,vfwh4jzq81zbcfs4fmj5m31af99prq8z,wy3g8j0n1h1jlwcldx7zqirmbhw2dx43,y8llqkwxkl88qvq8v763np8dpqy1zmca,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
+    "kix.run/identity-hash": "apn881r668y1sacpxr8p2hyib2q25m90"
+   },
+   "name": "grafana",
+   "namespace": "monitoring-system"
+  }
+ },
+ {
+  "apiVersion": "kix.run/v1alpha1",
+  "kind": "PackageInstance",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "mnjc2b8913y9al1cw094a2b12q3jrq7k,vfwh4jzq81zbcfs4fmj5m31af99prq8z,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
+    "kix.run/identity-hash": "cijq7cfanhq12mv24sb7qapdqbsr7a9p"
+   },
+   "name": "grafana-admin",
+   "namespace": "monitoring-system"
+  }
+ },
+ {
+  "apiVersion": "kix.run/v1alpha1",
+  "kind": "PackageInstance",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "2fg626mjq7c92iq6mx8z6gz2cm2r44h5,2r3qhcz1ckm4bp4587hc31qnjih8d453,4f7iamgrvbw6zb5gfzw7abm41q9vi3nk,4w3k4bdk1cpsnn285x9m436443fnyfbf,9iw0vzsyw6w6sjjbmwnpl1amydh19m9n,c6nz0kwr6c4x4q72gy0bi8v2j6i03jmi,vfwh4jzq81zbcfs4fmj5m31af99prq8z,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
+    "kix.run/identity-hash": "r520fcjwpfbnpi077sb9zk6wfh324rbk"
+   },
+   "name": "kube-state-metrics",
+   "namespace": "monitoring-system"
+  }
+ },
+ {
+  "apiVersion": "kix.run/v1alpha1",
+  "kind": "PackageInstance",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "1bfsmqrv9bhgdxmvbpllkv4j18wk6wgc,3l8nsb8wjjbkzwjjp79gy76x3skqqr8y,a1f6lllzc1qnjdfafdp5m61jpga79qpr,prvv6sflwlmgjx5ib2jqz07lhlrhga0z,vfwh4jzq81zbcfs4fmj5m31af99prq8z,wjzajv3fjz49v7wyj43j78c7s9h00pph,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
+    "kix.run/identity-hash": "qza6k5aark8fkjfjnamxlx228pnw0z6k"
+   },
+   "name": "node-exporter",
+   "namespace": "monitoring-system"
+  }
+ },
+ {
+  "apiVersion": "kix.run/v1alpha1",
+  "kind": "PackageInstance",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "1c3n5x7d3x6z5lkyyxjpw2cz785cwbwm,4jx79c4yrab2p1q8bcx2fpmdv6kzmp05,fy897iqg899q8jxp6kfiyzfss5rs3vj4,lw7ayks87rhad33wch7ap5lrzv9pz8x9,pr8sm84941wj2g4fsr8k9vwc89r9mzg4,v3lw8bkrd5j7nkqn90k34z63icrnbhqj,vfwh4jzq81zbcfs4fmj5m31af99prq8z,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
+    "kix.run/identity-hash": "h3ihai4bgydp3am00r8j0ss1fqrzywjz"
+   },
+   "name": "prometheus-operator",
+   "namespace": "monitoring-system"
+  }
+ },
+ {
+  "apiVersion": "kix.run/v1alpha1",
+  "kind": "PackageInstance",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "6pwn3mqg18rcxgfgbb2ngnnha2w0ncd4,a8izx8wkzqksz4ip42w2pgj8n5h0zhs6,dd0lx1zssmp312im911mfr5wfvxkzp2r,n6cvq0kn3avk67m30132rbivim4dhnka,vfwh4jzq81zbcfs4fmj5m31af99prq8z,wa97m8fvr4jryqn7dndx8bqiy192mfnr,waqz2bkkg8xgfbarja4i5x10ivqhyd8y,ym5w0il9pl4rs2jf6byjmqmb6c3dd0fx,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
+    "kix.run/identity-hash": "3sab35w7rrvsvdrr3xx4j881vi87iw72"
+   },
+   "name": "prometheus-server",
+   "namespace": "monitoring-system"
+  }
+ },
+ {
+  "apiVersion": "kix.run/v1alpha1",
+  "kind": "PackageInstance",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "jyk5pl7cvblqy2bb5iicsp11v6dl84gi,vfwh4jzq81zbcfs4fmj5m31af99prq8z,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
+    "kix.run/identity-hash": "3qw4iz75bznjnzinvx7c61a6yz70hsrh"
+   },
+   "name": "storage",
+   "namespace": "monitoring-system"
+  }
+ },
+ {
+  "apiVersion": "kix.run/v1alpha1",
+  "kind": "PackageInstance",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "3bxp9nfqmz4mi6dqvqsh9h45n71yj54d,gb55pgixqnfapa8g8hsg04v1824if3vy,lx25ijzxc38pmryav0zdxwljybxrlm1g,n8wfbpspywkmvvaxcbd94b899bgmarqh,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
+    "kix.run/identity-hash": "rwpf1lv7zlmzrwps3gd5fix8s04vv65w"
+   },
+   "name": "echo-server",
+   "namespace": "np"
+  }
+ },
+ {
+  "apiVersion": "kix.run/v1alpha1",
+  "kind": "PackageInstance",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "ybkdj5zv68pdym9rgnpwfbchjkl7khry,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
+    "kix.run/identity-hash": "byww2jm847pkk7a6n2hgld86mj38qkab"
+   },
+   "name": "gp3",
+   "namespace": "storage"
+  }
+ },
+ {
+  "apiVersion": "monitoring.coreos.com/v1",
+  "kind": "Alertmanager",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "5y4lwdlwbb953002r5m99yj9s59lr2mb,7wlzc773ayfhffhs4phw82dh239903vp,8sdb1z7yk4ni11ps7zvlx8h3is1si64a,vfwh4jzq81zbcfs4fmj5m31af99prq8z,requires:b142mwbw0x1kvhraa79zxgjsfx97bb04,controller:v3lw8bkrd5j7nkqn90k34z63icrnbhqj",
+    "kix.run/identity-hash": "0vqs5zh2dnayl6vjblh4vgfri3kxax7q"
+   },
+   "name": "alertmanager",
+   "namespace": "monitoring-system"
+  }
+ },
+ {
+  "apiVersion": "monitoring.coreos.com/v1",
+  "kind": "PodMonitor",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "gl5ff1nmald4z3qncpqz8q5sxam1hpi4,requires:x4i266vk8wx6pkh3lfi7dyjcri4msk8w,requires:4zb1j8a5hx1vk4c9zhld6rr4y6i6k4rw",
+    "kix.run/identity-hash": "kk1n5l9bnkv3ij733k9dzdm0jfx4v1s5"
+   },
+   "name": "pg",
+   "namespace": "data"
+  }
+ },
+ {
+  "apiVersion": "monitoring.coreos.com/v1",
+  "kind": "Prometheus",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "6pwn3mqg18rcxgfgbb2ngnnha2w0ncd4,8sdb1z7yk4ni11ps7zvlx8h3is1si64a,vfwh4jzq81zbcfs4fmj5m31af99prq8z,wa97m8fvr4jryqn7dndx8bqiy192mfnr,requires:nfz59zz8nwhdc3xd8kl6gsr93rvn97ah,controller:v3lw8bkrd5j7nkqn90k34z63icrnbhqj",
+    "kix.run/identity-hash": "a8izx8wkzqksz4ip42w2pgj8n5h0zhs6"
+   },
+   "name": "prometheus-server",
+   "namespace": "monitoring-system"
+  }
+ },
+ {
+  "apiVersion": "monitoring.coreos.com/v1",
+  "kind": "PrometheusRule",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "mxj220inqfqg5mf7cqa8a2i3cx3yi3xx,r5z3xliw14vh8v22rfii8693f7bwwjqp,rn40hbw8756809l5h5bwh65g8klv5bg3,requires:bj06wnxvwzxmw1mr0f4s1bssji8wi7c8",
+    "kix.run/identity-hash": "dpmdmiy2fxrfygxki5v3m7gizc3z2yv1"
+   },
+   "name": "cert-manager-alerts",
+   "namespace": "cert-manager"
+  }
+ },
+ {
+  "apiVersion": "monitoring.coreos.com/v1",
+  "kind": "PrometheusRule",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "dgqqdlwcgif6akic2rr67ri3njljk835,requires:bj06wnxvwzxmw1mr0f4s1bssji8wi7c8",
+    "kix.run/identity-hash": "20ixh81irimiaapi3wpj67p250i3d60v"
+   },
+   "name": "cnpg-operator-alerts",
+   "namespace": "cnpg-system"
+  }
+ },
+ {
+  "apiVersion": "monitoring.coreos.com/v1",
+  "kind": "PrometheusRule",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "gl5ff1nmald4z3qncpqz8q5sxam1hpi4,requires:bj06wnxvwzxmw1mr0f4s1bssji8wi7c8",
+    "kix.run/identity-hash": "6xb0kc8ybcnvx2dgvachvs9qxy1rv0hr"
+   },
+   "name": "pg-alerts",
+   "namespace": "data"
+  }
+ },
+ {
+  "apiVersion": "monitoring.coreos.com/v1",
+  "kind": "PrometheusRule",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "9s3g3mpxgfilhbgjxsa1zn231q7yx2xm,requires:bj06wnxvwzxmw1mr0f4s1bssji8wi7c8",
+    "kix.run/identity-hash": "l7sakscipb61avz9imjqhg1nbcnlbc84"
+   },
+   "name": "route53-alerts",
+   "namespace": "external-dns"
+  }
+ },
+ {
+  "apiVersion": "monitoring.coreos.com/v1",
+  "kind": "PrometheusRule",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "vfwh4jzq81zbcfs4fmj5m31af99prq8z,requires:bj06wnxvwzxmw1mr0f4s1bssji8wi7c8",
+    "kix.run/identity-hash": "prvv6sflwlmgjx5ib2jqz07lhlrhga0z"
+   },
+   "name": "node-exporter-alerts",
+   "namespace": "monitoring-system"
+  }
+ },
+ {
+  "apiVersion": "monitoring.coreos.com/v1",
+  "kind": "ServiceMonitor",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "mxj220inqfqg5mf7cqa8a2i3cx3yi3xx,rn40hbw8756809l5h5bwh65g8klv5bg3,requires:5abcifbbdqabdni93zlxiyhqy8jasgdg",
+    "kix.run/identity-hash": "ag37lg0khib5js3j4qbzd5697rd9s441"
+   },
+   "name": "cert-manager",
+   "namespace": "cert-manager"
+  }
+ },
+ {
+  "apiVersion": "monitoring.coreos.com/v1",
+  "kind": "ServiceMonitor",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3,xzi59q84zkvi1x52fakl97dlawn1ra4n,requires:5abcifbbdqabdni93zlxiyhqy8jasgdg",
+    "kix.run/identity-hash": "0ljk6yz6rfdc12pn412afn2g5z47x8z2"
+   },
+   "name": "cert-manager-cainjector",
+   "namespace": "cert-manager"
+  }
+ },
+ {
+  "apiVersion": "monitoring.coreos.com/v1",
+  "kind": "ServiceMonitor",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "3r4z0726xbai58s5wz47wwkf35sjqhn0,rn40hbw8756809l5h5bwh65g8klv5bg3,requires:5abcifbbdqabdni93zlxiyhqy8jasgdg",
+    "kix.run/identity-hash": "gzvjyjsjdcy7hh1g8f8fqxrcrn16akmn"
+   },
+   "name": "cert-manager-webhook",
+   "namespace": "cert-manager"
+  }
+ },
+ {
+  "apiVersion": "monitoring.coreos.com/v1",
+  "kind": "ServiceMonitor",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "dgqqdlwcgif6akic2rr67ri3njljk835,f9jnsgg6jispm7z4ml673flmqcfxsp70,requires:5abcifbbdqabdni93zlxiyhqy8jasgdg",
+    "kix.run/identity-hash": "3pymmqwhv9g3vzy2vj0xq1kw845gkmgq"
+   },
+   "name": "cnpg-operator",
+   "namespace": "cnpg-system"
+  }
+ },
+ {
+  "apiVersion": "monitoring.coreos.com/v1",
+  "kind": "ServiceMonitor",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "9s3g3mpxgfilhbgjxsa1zn231q7yx2xm,kvsm9rn1p799zn7388xwcfkxra9fxk2x,requires:5abcifbbdqabdni93zlxiyhqy8jasgdg",
+    "kix.run/identity-hash": "k6hgkl1ckmnlcxr3jkwl90vm93cvky9d"
+   },
+   "name": "route53",
+   "namespace": "external-dns"
+  }
+ },
+ {
+  "apiVersion": "monitoring.coreos.com/v1",
+  "kind": "ServiceMonitor",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "8sdb1z7yk4ni11ps7zvlx8h3is1si64a,vfwh4jzq81zbcfs4fmj5m31af99prq8z,requires:5abcifbbdqabdni93zlxiyhqy8jasgdg",
+    "kix.run/identity-hash": "b8my5597dji6nvn1gdr0gsinzwb3x5d7"
+   },
+   "name": "alertmanager",
+   "namespace": "monitoring-system"
+  }
+ },
+ {
+  "apiVersion": "monitoring.coreos.com/v1",
+  "kind": "ServiceMonitor",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "13fhaqjswds8v4psz6y5jyg0ljflg0yn,vfwh4jzq81zbcfs4fmj5m31af99prq8z,requires:5abcifbbdqabdni93zlxiyhqy8jasgdg",
+    "kix.run/identity-hash": "bibfqm01y57mlgbdbqy6hm8ddqlpqgcw"
+   },
+   "name": "grafana",
+   "namespace": "monitoring-system"
+  }
+ },
+ {
+  "apiVersion": "monitoring.coreos.com/v1",
+  "kind": "ServiceMonitor",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "2r3qhcz1ckm4bp4587hc31qnjih8d453,vfwh4jzq81zbcfs4fmj5m31af99prq8z,requires:5abcifbbdqabdni93zlxiyhqy8jasgdg",
+    "kix.run/identity-hash": "c6nz0kwr6c4x4q72gy0bi8v2j6i03jmi"
+   },
+   "name": "kube-state-metrics",
+   "namespace": "monitoring-system"
+  }
+ },
+ {
+  "apiVersion": "monitoring.coreos.com/v1",
+  "kind": "ServiceMonitor",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "3l8nsb8wjjbkzwjjp79gy76x3skqqr8y,vfwh4jzq81zbcfs4fmj5m31af99prq8z,requires:5abcifbbdqabdni93zlxiyhqy8jasgdg",
+    "kix.run/identity-hash": "1bfsmqrv9bhgdxmvbpllkv4j18wk6wgc"
+   },
+   "name": "node-exporter",
+   "namespace": "monitoring-system"
+  }
+ },
+ {
+  "apiVersion": "monitoring.coreos.com/v1",
+  "kind": "ServiceMonitor",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "4jx79c4yrab2p1q8bcx2fpmdv6kzmp05,vfwh4jzq81zbcfs4fmj5m31af99prq8z,requires:5abcifbbdqabdni93zlxiyhqy8jasgdg",
+    "kix.run/identity-hash": "fy897iqg899q8jxp6kfiyzfss5rs3vj4"
+   },
+   "name": "prometheus-operator",
+   "namespace": "monitoring-system"
+  }
+ },
+ {
+  "apiVersion": "monitoring.coreos.com/v1",
+  "kind": "ServiceMonitor",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "6pwn3mqg18rcxgfgbb2ngnnha2w0ncd4,vfwh4jzq81zbcfs4fmj5m31af99prq8z,requires:5abcifbbdqabdni93zlxiyhqy8jasgdg",
+    "kix.run/identity-hash": "dd0lx1zssmp312im911mfr5wfvxkzp2r"
+   },
+   "name": "prometheus-server",
+   "namespace": "monitoring-system"
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3",
+    "kix.run/identity-hash": "p03ypqggcy41cqwnyarnbp30cx50p0d2"
+   },
+   "name": "cert-manager-default-deny",
+   "namespace": "cert-manager"
+  },
+  "spec": {
+   "podSelector": {}
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3",
+    "kix.run/identity-hash": "3awsxa87lik5xd0qrdbb29vp448g0fhv"
+   },
+   "name": "cert-manager-deployment-cert-manager-apiserver-egress",
+   "namespace": "cert-manager"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/component": "controller",
+     "app.kubernetes.io/instance": "cert-manager",
+     "app.kubernetes.io/name": "cert-manager"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3",
+    "kix.run/identity-hash": "3zribl5yn7h7q1l70akj94f1fb3jca18"
+   },
+   "name": "cert-manager-deployment-cert-manager-cainjector-apiserver-egress",
+   "namespace": "cert-manager"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/component": "cainjector",
+     "app.kubernetes.io/instance": "cert-manager",
+     "app.kubernetes.io/name": "cainjector"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3",
+    "kix.run/identity-hash": "45nx6g53cyrn2h25pfkyfk2b0f2xcz30"
+   },
+   "name": "cert-manager-deployment-cert-manager-cainjector-egress",
+   "namespace": "cert-manager"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/component": "cainjector",
+     "app.kubernetes.io/instance": "cert-manager",
+     "app.kubernetes.io/name": "cainjector"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3",
+    "kix.run/identity-hash": "gjaf568ccd125xw44si0y027yx1rb5vk"
+   },
+   "name": "cert-manager-deployment-cert-manager-egress",
+   "namespace": "cert-manager"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/component": "controller",
+     "app.kubernetes.io/instance": "cert-manager",
+     "app.kubernetes.io/name": "cert-manager"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3",
+    "kix.run/identity-hash": "k0c93kvp8nrdqihlch8kl0nx04i9syjf"
+   },
+   "name": "cert-manager-deployment-cert-manager-webhook-apiserver-egress",
+   "namespace": "cert-manager"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/component": "webhook",
+     "app.kubernetes.io/instance": "cert-manager",
+     "app.kubernetes.io/name": "webhook"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3",
+    "kix.run/identity-hash": "bnwbicaa16rgr1pf0lnixvwm1f3309h1"
+   },
+   "name": "cert-manager-deployment-cert-manager-webhook-egress",
+   "namespace": "cert-manager"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/component": "webhook",
+     "app.kubernetes.io/instance": "cert-manager",
+     "app.kubernetes.io/name": "webhook"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3",
+    "kix.run/identity-hash": "cg8y1inl9rz556fyxxas5ji7lnd0914w"
+   },
+   "name": "cert-manager-job-cert-manager-startupapicheck-apiserver-egress",
+   "namespace": "cert-manager"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/component": "startupapicheck",
+     "app.kubernetes.io/instance": "cert-manager",
+     "app.kubernetes.io/name": "startupapicheck"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3",
+    "kix.run/identity-hash": "snrciab4006yphah1kqcv1nix342wz4s"
+   },
+   "name": "cert-manager-job-cert-manager-startupapicheck-egress",
+   "namespace": "cert-manager"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/component": "startupapicheck",
+     "app.kubernetes.io/instance": "cert-manager",
+     "app.kubernetes.io/name": "startupapicheck"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3",
+    "kix.run/identity-hash": "cmlgzi7l0iabrz8fwgg37iksmn0dm3wg"
+   },
+   "name": "cert-manager-webhook-apiserver-ingress",
+   "namespace": "cert-manager"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/component": "webhook",
+     "app.kubernetes.io/instance": "cert-manager",
+     "app.kubernetes.io/name": "webhook"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3",
+    "kix.run/identity-hash": "86dkh6haxk7aji04b910gpmyjjjkdvd8"
+   },
+   "name": "monitoring-system-prometheus-server-scrape-svc-cert-manager-849e8f47",
+   "namespace": "cert-manager"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/component": "controller",
+     "app.kubernetes.io/instance": "cert-manager",
+     "app.kubernetes.io/name": "cert-manager"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3",
+    "kix.run/identity-hash": "5dxqgi62s3lflc0pdv5iwfjmx9yjcwji"
+   },
+   "name": "monitoring-system-prometheus-server-scrape-svc-cert-manager-cainjector-ad4a333a",
+   "namespace": "cert-manager"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/component": "cainjector",
+     "app.kubernetes.io/instance": "cert-manager",
+     "app.kubernetes.io/name": "cainjector"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3",
+    "kix.run/identity-hash": "nz0y00nz50fvck9f1cprscn22xxmpj43"
+   },
+   "name": "monitoring-system-prometheus-server-scrape-svc-cert-manager-webhook-48fadc5a",
+   "namespace": "cert-manager"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/component": "webhook",
+     "app.kubernetes.io/instance": "cert-manager",
+     "app.kubernetes.io/name": "webhook"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "dgqqdlwcgif6akic2rr67ri3njljk835",
+    "kix.run/identity-hash": "cab57qn64zpw21qxms3ysany2sc6yv2i"
+   },
+   "name": "cnpg-barman-cloud-deployment-cnpg-barman-cloud-apiserver-egress",
+   "namespace": "cnpg-system"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/instance": "cnpg-barman-cloud",
+     "app.kubernetes.io/name": "cnpg-barman-cloud"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "dgqqdlwcgif6akic2rr67ri3njljk835",
+    "kix.run/identity-hash": "04brfrk775pkzkriv2w70nm043frv13w"
+   },
+   "name": "cnpg-barman-cloud-deployment-cnpg-barman-cloud-egress",
+   "namespace": "cnpg-system"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/instance": "cnpg-barman-cloud",
+     "app.kubernetes.io/name": "cnpg-barman-cloud"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "dgqqdlwcgif6akic2rr67ri3njljk835",
+    "kix.run/identity-hash": "0sa53m858ljdfp43cjax7g55qrxyd1zd"
+   },
+   "name": "cnpg-barman-cloud-operator-egress",
+   "namespace": "cnpg-system"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/instance": "cnpg-operator",
+     "app.kubernetes.io/name": "cloudnative-pg"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "dgqqdlwcgif6akic2rr67ri3njljk835",
+    "kix.run/identity-hash": "f86i509dj1vc7qdbns8yr3vmkv3m59ix"
+   },
+   "name": "cnpg-barman-cloud-operator-ingress",
+   "namespace": "cnpg-system"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/instance": "cnpg-barman-cloud",
+     "app.kubernetes.io/name": "cnpg-barman-cloud"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "dgqqdlwcgif6akic2rr67ri3njljk835",
+    "kix.run/identity-hash": "s7acbsglya2kc7rwc845c83jis916d3j"
+   },
+   "name": "cnpg-operator-deployment-cnpg-operator-apiserver-egress",
+   "namespace": "cnpg-system"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/instance": "cnpg-operator",
+     "app.kubernetes.io/name": "cloudnative-pg"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "dgqqdlwcgif6akic2rr67ri3njljk835",
+    "kix.run/identity-hash": "l58b7vrgfbz1zpl11frzvi3yfzm6p1y7"
+   },
+   "name": "cnpg-operator-deployment-cnpg-operator-egress",
+   "namespace": "cnpg-system"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/instance": "cnpg-operator",
+     "app.kubernetes.io/name": "cloudnative-pg"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "dgqqdlwcgif6akic2rr67ri3njljk835",
+    "kix.run/identity-hash": "8g9zl3w43sqjmkhi06lfk8s6swf2xmvv"
+   },
+   "name": "cnpg-operator-deployment-cnpg-operator-ingress",
+   "namespace": "cnpg-system"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/instance": "cnpg-operator",
+     "app.kubernetes.io/name": "cloudnative-pg"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "dgqqdlwcgif6akic2rr67ri3njljk835",
+    "kix.run/identity-hash": "4f9ssfddvfws56di4wvg0c86rv86s2ip"
+   },
+   "name": "cnpg-operator-job-cnpg-operator-webhook-check-apiserver-egress",
+   "namespace": "cnpg-system"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/name": "cnpg-operator-webhook-check"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "dgqqdlwcgif6akic2rr67ri3njljk835",
+    "kix.run/identity-hash": "hhhc2jvpgakc13i70a16cvjqnmndhgy1"
+   },
+   "name": "cnpg-operator-job-cnpg-operator-webhook-check-egress",
+   "namespace": "cnpg-system"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/name": "cnpg-operator-webhook-check"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "dgqqdlwcgif6akic2rr67ri3njljk835",
+    "kix.run/identity-hash": "xx7rxcbhcqj175d324km6pwrf5fk62i0"
+   },
+   "name": "cnpg-operator-job-cnpg-operator-webhook-check-ingress",
+   "namespace": "cnpg-system"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/name": "cnpg-operator-webhook-check"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "dgqqdlwcgif6akic2rr67ri3njljk835",
+    "kix.run/identity-hash": "3zqd6cccwn2572y62ndm3l5k62fg8fx1"
+   },
+   "name": "cnpg-system-default-deny",
+   "namespace": "cnpg-system"
+  },
+  "spec": {
+   "podSelector": {}
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "dgqqdlwcgif6akic2rr67ri3njljk835",
+    "kix.run/identity-hash": "2xmivk7i96jfq36h5acckf0ssa2wcjxd"
+   },
+   "name": "data-pg-operator-egress",
+   "namespace": "cnpg-system"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/instance": "cnpg-operator",
+     "app.kubernetes.io/name": "cloudnative-pg"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "dgqqdlwcgif6akic2rr67ri3njljk835",
+    "kix.run/identity-hash": "qf9wmxzsij4jjkigdwr2ykxp0v5r09gv"
+   },
+   "name": "monitoring-system-prometheus-server-scrape-svc-cnpg-operator-metrics-5efdd629",
+   "namespace": "cnpg-system"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/instance": "cnpg-operator",
+     "app.kubernetes.io/name": "cloudnative-pg"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "gl5ff1nmald4z3qncpqz8q5sxam1hpi4",
+    "kix.run/identity-hash": "2z8jwnfpf1xjfcv7ygxic6ng29q02r1l"
+   },
+   "name": "data-default-deny",
+   "namespace": "data"
+  },
+  "spec": {
+   "podSelector": {}
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "gl5ff1nmald4z3qncpqz8q5sxam1hpi4",
+    "kix.run/identity-hash": "xj7hs9zmfar3pv5fxi266awg9h6mj8kq"
+   },
+   "name": "monitoring-system-prometheus-server-scrape-pods-pg-64a5f0a9",
+   "namespace": "data"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "cnpg.io/cluster": "pg",
+     "cnpg.io/podRole": "instance"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "gl5ff1nmald4z3qncpqz8q5sxam1hpi4",
+    "kix.run/identity-hash": "iylkfggvff82vdndsijk7qajpmhrif9r"
+   },
+   "name": "pg-backup-egress",
+   "namespace": "data"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "cnpg.io/cluster": "pg",
+     "cnpg.io/podRole": "instance"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "gl5ff1nmald4z3qncpqz8q5sxam1hpi4",
+    "kix.run/identity-hash": "2k94c66gr5j6zsig9lnkr3axphjjn704"
+   },
+   "name": "pg-cloud-identity-egress",
+   "namespace": "data"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "cnpg.io/cluster": "pg",
+     "cnpg.io/podRole": "instance"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "gl5ff1nmald4z3qncpqz8q5sxam1hpi4",
+    "kix.run/identity-hash": "s6h8dq3mfhccjpnq4vimmkmr5wl51c1y"
+   },
+   "name": "pg-operand-egress",
+   "namespace": "data"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "cnpg.io/cluster": "pg"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "gl5ff1nmald4z3qncpqz8q5sxam1hpi4",
+    "kix.run/identity-hash": "wc23ki91m9xlv1bmmlampwqixs7dsqcz"
+   },
+   "name": "pg-operand-ingress",
+   "namespace": "data"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "cnpg.io/cluster": "pg"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "9s3g3mpxgfilhbgjxsa1zn231q7yx2xm",
+    "kix.run/identity-hash": "m85a6ljg5zx9nbcwhl579n283295graf"
+   },
+   "name": "external-dns-default-deny",
+   "namespace": "external-dns"
+  },
+  "spec": {
+   "podSelector": {}
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "9s3g3mpxgfilhbgjxsa1zn231q7yx2xm",
+    "kix.run/identity-hash": "2h7qz6452qh4hqn7byyjp5l0aj13qs92"
+   },
+   "name": "monitoring-system-prometheus-server-scrape-svc-route53-ff3ddf13",
+   "namespace": "external-dns"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/instance": "route53",
+     "app.kubernetes.io/name": "route53"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "9s3g3mpxgfilhbgjxsa1zn231q7yx2xm",
+    "kix.run/identity-hash": "mzinqb60sys38rn04zskbvll71gh3pzl"
+   },
+   "name": "route53-deployment-route53-apiserver-egress",
+   "namespace": "external-dns"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/instance": "route53",
+     "app.kubernetes.io/name": "route53"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "9s3g3mpxgfilhbgjxsa1zn231q7yx2xm",
+    "kix.run/identity-hash": "wxx6i94gbrp9j9ba9ld5y58jjxr3fnag"
+   },
+   "name": "route53-deployment-route53-egress",
+   "namespace": "external-dns"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/instance": "route53",
+     "app.kubernetes.io/name": "route53"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "vfwh4jzq81zbcfs4fmj5m31af99prq8z",
+    "kix.run/identity-hash": "rvz87pwx1q2387p40890fz8w9302wki8"
+   },
+   "name": "alertmanager-egress",
+   "namespace": "monitoring-system"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "alertmanager": "alertmanager",
+     "app.kubernetes.io/name": "alertmanager"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "vfwh4jzq81zbcfs4fmj5m31af99prq8z",
+    "kix.run/identity-hash": "hsx2n97a7q56a8578fja7dhiw14wh1vl"
+   },
+   "name": "alertmanager-peers",
+   "namespace": "monitoring-system"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "alertmanager": "alertmanager",
+     "app.kubernetes.io/name": "alertmanager"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "vfwh4jzq81zbcfs4fmj5m31af99prq8z",
+    "kix.run/identity-hash": "0fqasr9bl1xccjs1fqzk7pbn36ywhv9k"
+   },
+   "name": "grafana-deployment-grafana-apiserver-egress",
+   "namespace": "monitoring-system"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/instance": "grafana",
+     "app.kubernetes.io/name": "grafana"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "vfwh4jzq81zbcfs4fmj5m31af99prq8z,extra:8sdb1z7yk4ni11ps7zvlx8h3is1si64a,extra:6pwn3mqg18rcxgfgbb2ngnnha2w0ncd4",
+    "kix.run/identity-hash": "xf840gd69nwbkh3f7sklnmlblz1w9d82"
+   },
+   "name": "grafana-deployment-grafana-egress",
+   "namespace": "monitoring-system"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/instance": "grafana",
+     "app.kubernetes.io/name": "grafana"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "vfwh4jzq81zbcfs4fmj5m31af99prq8z,extra:8sdb1z7yk4ni11ps7zvlx8h3is1si64a",
+    "kix.run/identity-hash": "2g9nqimdh6c4m4kyi74dxbcdf3wqjm2d"
+   },
+   "name": "grafana-deployment-grafana-to-alertmanager-ingress",
+   "namespace": "monitoring-system"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "alertmanager": "alertmanager",
+     "app.kubernetes.io/name": "alertmanager"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "vfwh4jzq81zbcfs4fmj5m31af99prq8z,extra:6pwn3mqg18rcxgfgbb2ngnnha2w0ncd4",
+    "kix.run/identity-hash": "jcpy3picxl0222vk8bk0g15ddq4l05z9"
+   },
+   "name": "grafana-deployment-grafana-to-prometheus-server-ingress",
+   "namespace": "monitoring-system"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/name": "prometheus",
+     "operator.prometheus.io/name": "prometheus-server"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "vfwh4jzq81zbcfs4fmj5m31af99prq8z",
+    "kix.run/identity-hash": "4w3k4bdk1cpsnn285x9m436443fnyfbf"
+   },
+   "name": "kube-state-metrics-deployment-kube-state-metrics-apiserver-egress",
+   "namespace": "monitoring-system"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/instance": "kube-state-metrics",
+     "app.kubernetes.io/name": "kube-state-metrics"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "vfwh4jzq81zbcfs4fmj5m31af99prq8z",
+    "kix.run/identity-hash": "2p8av1gxhngpgpixsas23xbj3d0fq1c5"
+   },
+   "name": "kube-state-metrics-deployment-kube-state-metrics-egress",
+   "namespace": "monitoring-system"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/instance": "kube-state-metrics",
+     "app.kubernetes.io/name": "kube-state-metrics"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "vfwh4jzq81zbcfs4fmj5m31af99prq8z",
+    "kix.run/identity-hash": "z8y1yaw9md6qgmgx1irz1avpyvc9qq69"
+   },
+   "name": "monitoring-system-default-deny",
+   "namespace": "monitoring-system"
+  },
+  "spec": {
+   "podSelector": {}
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "vfwh4jzq81zbcfs4fmj5m31af99prq8z",
+    "kix.run/identity-hash": "4jd796fgydvdzrypqal89zsqll2k7c46"
+   },
+   "name": "monitoring-system-prometheus-server-scrape-svc-alertmanager-c520fd24",
+   "namespace": "monitoring-system"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "alertmanager": "alertmanager",
+     "app.kubernetes.io/name": "alertmanager"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "vfwh4jzq81zbcfs4fmj5m31af99prq8z",
+    "kix.run/identity-hash": "l7s26hdnmr2c3zlfgjzn92fk9q3wflqd"
+   },
+   "name": "monitoring-system-prometheus-server-scrape-svc-grafana-cf203a87",
+   "namespace": "monitoring-system"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/instance": "grafana",
+     "app.kubernetes.io/name": "grafana"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "vfwh4jzq81zbcfs4fmj5m31af99prq8z",
+    "kix.run/identity-hash": "32194ri7n5p9gskgjl7xpb9djyq751ms"
+   },
+   "name": "monitoring-system-prometheus-server-scrape-svc-kube-state-metrics-73dc8a21",
+   "namespace": "monitoring-system"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/instance": "kube-state-metrics",
+     "app.kubernetes.io/name": "kube-state-metrics"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "vfwh4jzq81zbcfs4fmj5m31af99prq8z",
+    "kix.run/identity-hash": "y3v2zllsgsaawlqgvn5p8wb1psm54461"
+   },
+   "name": "monitoring-system-prometheus-server-scrape-svc-prometheus-operator-635ff59b",
+   "namespace": "monitoring-system"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/instance": "prometheus-operator",
+     "app.kubernetes.io/name": "prometheus-operator"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "vfwh4jzq81zbcfs4fmj5m31af99prq8z",
+    "kix.run/identity-hash": "1v6m5r6g6cl6xi3c1g95b2l2sfy5xvs7"
+   },
+   "name": "monitoring-system-prometheus-server-scrape-svc-prometheus-server-8dc0d5b8",
+   "namespace": "monitoring-system"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/name": "prometheus",
+     "operator.prometheus.io/name": "prometheus-server"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "vfwh4jzq81zbcfs4fmj5m31af99prq8z",
+    "kix.run/identity-hash": "pr8sm84941wj2g4fsr8k9vwc89r9mzg4"
+   },
+   "name": "prometheus-operator-deployment-prometheus-operator-apiserver-egress",
+   "namespace": "monitoring-system"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/instance": "prometheus-operator",
+     "app.kubernetes.io/name": "prometheus-operator"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "vfwh4jzq81zbcfs4fmj5m31af99prq8z",
+    "kix.run/identity-hash": "nwh097idrxjs417g84cf3z92knd8wx6j"
+   },
+   "name": "prometheus-operator-deployment-prometheus-operator-egress",
+   "namespace": "monitoring-system"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/instance": "prometheus-operator",
+     "app.kubernetes.io/name": "prometheus-operator"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "vfwh4jzq81zbcfs4fmj5m31af99prq8z",
+    "kix.run/identity-hash": "63afqzzazqyzdf6k6hwqa3wnl5h4nvz3"
+   },
+   "name": "prometheus-server-scrape-egress",
+   "namespace": "monitoring-system"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/name": "prometheus",
+     "operator.prometheus.io/name": "prometheus-server"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "vfwh4jzq81zbcfs4fmj5m31af99prq8z",
+    "kix.run/identity-hash": "ym5w0il9pl4rs2jf6byjmqmb6c3dd0fx"
+   },
+   "name": "prometheus-server-server-egress",
+   "namespace": "monitoring-system"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/name": "prometheus",
+     "operator.prometheus.io/name": "prometheus-server"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "3bxp9nfqmz4mi6dqvqsh9h45n71yj54d",
+    "kix.run/identity-hash": "xq4cy4alacj2ywv7w0r26zmqkd4igqdi"
+   },
+   "name": "echo-server-deployment-echo-server-egress",
+   "namespace": "np"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/instance": "echo-server",
+     "app.kubernetes.io/name": "echo-server"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "3bxp9nfqmz4mi6dqvqsh9h45n71yj54d",
+    "kix.run/identity-hash": "lx25ijzxc38pmryav0zdxwljybxrlm1g"
+   },
+   "name": "echo-server-deployment-echo-server-external-ingress",
+   "namespace": "np"
+  },
+  "spec": {
+   "podSelector": {
+    "matchLabels": {
+     "app.kubernetes.io/instance": "echo-server",
+     "app.kubernetes.io/name": "echo-server"
+    }
+   }
+  }
+ },
+ {
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "3bxp9nfqmz4mi6dqvqsh9h45n71yj54d",
+    "kix.run/identity-hash": "yhrivp2dhr8zv3zxmfvr8cm8ifh75lmk"
+   },
+   "name": "np-default-deny",
+   "namespace": "np"
+  },
+  "spec": {
+   "podSelector": {}
+  }
+ },
+ {
+  "apiVersion": "policy/v1",
+  "kind": "PodDisruptionBudget",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3",
+    "kix.run/identity-hash": "msni67ffxdvvjbdx69pqldsbq09jzqxs"
+   },
+   "name": "cert-manager",
+   "namespace": "cert-manager"
+  }
+ },
+ {
+  "apiVersion": "policy/v1",
+  "kind": "PodDisruptionBudget",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3",
+    "kix.run/identity-hash": "25xvhq7m8rbshx3dbwakx242h30b951h"
+   },
+   "name": "cert-manager-cainjector",
+   "namespace": "cert-manager"
+  }
+ },
+ {
+  "apiVersion": "policy/v1",
+  "kind": "PodDisruptionBudget",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3",
+    "kix.run/identity-hash": "j6n7i3w0isl2akiddm3vci18qj49fic0"
+   },
+   "name": "cert-manager-webhook",
+   "namespace": "cert-manager"
+  }
+ },
+ {
+  "apiVersion": "policy/v1",
+  "kind": "PodDisruptionBudget",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "dgqqdlwcgif6akic2rr67ri3njljk835",
+    "kix.run/identity-hash": "837di1zj9i48lf8w7ns0cx0vqcfm5gk8"
+   },
+   "name": "cnpg-barman-cloud",
+   "namespace": "cnpg-system"
+  }
+ },
+ {
+  "apiVersion": "policy/v1",
+  "kind": "PodDisruptionBudget",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "dgqqdlwcgif6akic2rr67ri3njljk835",
+    "kix.run/identity-hash": "qaj184yw1krkaahwahv88wppshn63yc3"
+   },
+   "name": "cnpg-operator",
+   "namespace": "cnpg-system"
+  }
+ },
+ {
+  "apiVersion": "policy/v1",
+  "kind": "PodDisruptionBudget",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "vfwh4jzq81zbcfs4fmj5m31af99prq8z,requires:0vqs5zh2dnayl6vjblh4vgfri3kxax7q",
+    "kix.run/identity-hash": "h9482fx4n9jf8fb986jc5di0f4ixk94h"
+   },
+   "name": "alertmanager",
+   "namespace": "monitoring-system"
+  }
+ },
+ {
+  "apiVersion": "policy/v1",
+  "kind": "PodDisruptionBudget",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "vfwh4jzq81zbcfs4fmj5m31af99prq8z,requires:a8izx8wkzqksz4ip42w2pgj8n5h0zhs6",
+    "kix.run/identity-hash": "n6cvq0kn3avk67m30132rbivim4dhnka"
+   },
+   "name": "prometheus-server",
+   "namespace": "monitoring-system"
+  }
+ },
+ {
+  "apiVersion": "policy/v1",
+  "kind": "PodDisruptionBudget",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "3bxp9nfqmz4mi6dqvqsh9h45n71yj54d",
+    "kix.run/identity-hash": "n8wfbpspywkmvvaxcbd94b899bgmarqh"
+   },
+   "name": "echo-server",
+   "namespace": "np"
+  }
+ },
+ {
+  "apiVersion": "postgresql.cnpg.io/v1",
+  "kind": "Cluster",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "24in44lnpf6dvdvd9qbhdvn6wwpjra95,gl5ff1nmald4z3qncpqz8q5sxam1hpi4,p4dq1z27m86gfp9k0miihqn6pmd2w5sh,requires:fcg8xf1vqbjs5g75g2qsvnv1ngv7nayw,requires:6bar47lvzh6jv9cz05h45gap81lr8p7x,controller:j5rmna75di2n40lgz3da9smvcainbxs3",
+    "kix.run/identity-hash": "x4i266vk8wx6pkh3lfi7dyjcri4msk8w"
+   },
+   "name": "pg",
+   "namespace": "data"
+  }
+ },
+ {
+  "apiVersion": "postgresql.cnpg.io/v1",
+  "kind": "ScheduledBackup",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "24in44lnpf6dvdvd9qbhdvn6wwpjra95,gl5ff1nmald4z3qncpqz8q5sxam1hpi4,x4i266vk8wx6pkh3lfi7dyjcri4msk8w,requires:fcg8xf1vqbjs5g75g2qsvnv1ngv7nayw,requires:mfcfmzxdchn95fq0vd34ri86y66ys4ix,controller:j5rmna75di2n40lgz3da9smvcainbxs3",
+    "kix.run/identity-hash": "88wsgcxncgc4vhcbsas137fbaxb2mx0m"
+   },
+   "name": "pg",
+   "namespace": "data"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRole",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "97djdpz42fmri0j0jniig1vqrz329fyr"
+   },
+   "name": "cert-manager-cainjector"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRole",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "xfvkhvncmwx13syqm7n0hvcr7x6pp5ma"
+   },
+   "name": "cert-manager-cluster-view"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRole",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "6fivrqzbrliig39p1awnzfp8ybl1pza5"
+   },
+   "name": "cert-manager-controller-approve:cert-manager-io"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRole",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "7m8zp48sklh0a5aibwhxcira76gs9as1"
+   },
+   "name": "cert-manager-controller-certificates"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRole",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "m4ixba68pp9yxywklx6ag0zzsfh8pf3a"
+   },
+   "name": "cert-manager-controller-certificatesigningrequests"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRole",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "q7lzk6j86r00iaysy6525s9nc22snrk6"
+   },
+   "name": "cert-manager-controller-challenges"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRole",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "sa0f54nvkxqkps5ybwvyy6w1hw38v2zc"
+   },
+   "name": "cert-manager-controller-clusterissuers"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRole",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "8bfmlcz9m022ilj9jvhjbd9xazq4rvh0"
+   },
+   "name": "cert-manager-controller-ingress-shim"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRole",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "4jjp7ms3hqzh8acgyiiprl6jkzhpwcyg"
+   },
+   "name": "cert-manager-controller-issuers"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRole",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "gqwlshryblh1my2vs7pwrbly8mx659si"
+   },
+   "name": "cert-manager-controller-orders"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRole",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "afa1mcipmvfbblw8ra75ggyi5r6ix679"
+   },
+   "name": "cert-manager-edit"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRole",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "idcjr6wprawdki9xj4x30r4ixpq165mi"
+   },
+   "name": "cert-manager-view"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRole",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "v95n12q58bidq63nd8hmizcvp7a4xrsy"
+   },
+   "name": "cert-manager-webhook:subjectaccessreviews"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRole",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "77hckqz6wzbd77pwk1qj1inyynqcqk0l"
+   },
+   "name": "cnpg-barman-cloud"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRole",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "cnjjkc032fab4rx54nm2zgp86h2781cj"
+   },
+   "name": "cnpg-operator"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRole",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "vam1jzikz2h83w5nh7ky0701hr76kb5x"
+   },
+   "name": "grafana"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRole",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "g9hfqnlv70rs41aihqxg2bk7yy2gkwz3"
+   },
+   "name": "kube-state-metrics"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRole",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "98fvsfk4y882ibl4z41qsgin7ilvvwnh"
+   },
+   "name": "prometheus-operator"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRole",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "da3zq7hksqrn6cwk1gky2mkhfyi2zk53"
+   },
+   "name": "prometheus-server"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRole",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "rmpp4sqwsi39ab2q8klj3wfbh8c0i5rj"
+   },
+   "name": "route53-external-dns"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRoleBinding",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "4l3lzcsh4m85gfq4il7by9hqcfzw80p9,97djdpz42fmri0j0jniig1vqrz329fyr",
+    "kix.run/identity-hash": "lz66hsfawmvpdw3cvkls4lhqxyvswnr3"
+   },
+   "name": "cert-manager-cainjector"
+  },
+  "roleRef": {
+   "apiGroup": "rbac.authorization.k8s.io",
+   "kind": "ClusterRole",
+   "name": "cert-manager-cainjector"
+  },
+  "subjects": [
+   {
+    "kind": "ServiceAccount",
+    "name": "cert-manager-cainjector",
+    "namespace": "cert-manager"
+   }
+  ]
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRoleBinding",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "6fivrqzbrliig39p1awnzfp8ybl1pza5,svvs642f2s14f7vgkxvmqy0maaw7yind",
+    "kix.run/identity-hash": "8i1nja3j9nqjp5dgja6wamazx5gnm29v"
+   },
+   "name": "cert-manager-controller-approve:cert-manager-io"
+  },
+  "roleRef": {
+   "apiGroup": "rbac.authorization.k8s.io",
+   "kind": "ClusterRole",
+   "name": "cert-manager-controller-approve:cert-manager-io"
+  },
+  "subjects": [
+   {
+    "kind": "ServiceAccount",
+    "name": "cert-manager",
+    "namespace": "cert-manager"
+   }
+  ]
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRoleBinding",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "7m8zp48sklh0a5aibwhxcira76gs9as1,svvs642f2s14f7vgkxvmqy0maaw7yind",
+    "kix.run/identity-hash": "nwymin89x7ijj54zij19b8974mr0zah3"
+   },
+   "name": "cert-manager-controller-certificates"
+  },
+  "roleRef": {
+   "apiGroup": "rbac.authorization.k8s.io",
+   "kind": "ClusterRole",
+   "name": "cert-manager-controller-certificates"
+  },
+  "subjects": [
+   {
+    "kind": "ServiceAccount",
+    "name": "cert-manager",
+    "namespace": "cert-manager"
+   }
+  ]
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRoleBinding",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "m4ixba68pp9yxywklx6ag0zzsfh8pf3a,svvs642f2s14f7vgkxvmqy0maaw7yind",
+    "kix.run/identity-hash": "2imr8c3vkplwsyw3q3f85aiah750w90y"
+   },
+   "name": "cert-manager-controller-certificatesigningrequests"
+  },
+  "roleRef": {
+   "apiGroup": "rbac.authorization.k8s.io",
+   "kind": "ClusterRole",
+   "name": "cert-manager-controller-certificatesigningrequests"
+  },
+  "subjects": [
+   {
+    "kind": "ServiceAccount",
+    "name": "cert-manager",
+    "namespace": "cert-manager"
+   }
+  ]
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRoleBinding",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "q7lzk6j86r00iaysy6525s9nc22snrk6,svvs642f2s14f7vgkxvmqy0maaw7yind",
+    "kix.run/identity-hash": "z1kzfjpg47025z1ilakpwc368zrgxqf5"
+   },
+   "name": "cert-manager-controller-challenges"
+  },
+  "roleRef": {
+   "apiGroup": "rbac.authorization.k8s.io",
+   "kind": "ClusterRole",
+   "name": "cert-manager-controller-challenges"
+  },
+  "subjects": [
+   {
+    "kind": "ServiceAccount",
+    "name": "cert-manager",
+    "namespace": "cert-manager"
+   }
+  ]
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRoleBinding",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "sa0f54nvkxqkps5ybwvyy6w1hw38v2zc,svvs642f2s14f7vgkxvmqy0maaw7yind",
+    "kix.run/identity-hash": "jhvw48asyiv014vak9gfm0dbx7g72m37"
+   },
+   "name": "cert-manager-controller-clusterissuers"
+  },
+  "roleRef": {
+   "apiGroup": "rbac.authorization.k8s.io",
+   "kind": "ClusterRole",
+   "name": "cert-manager-controller-clusterissuers"
+  },
+  "subjects": [
+   {
+    "kind": "ServiceAccount",
+    "name": "cert-manager",
+    "namespace": "cert-manager"
+   }
+  ]
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRoleBinding",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "8bfmlcz9m022ilj9jvhjbd9xazq4rvh0,svvs642f2s14f7vgkxvmqy0maaw7yind",
+    "kix.run/identity-hash": "3n82h2sx2mfr58fqcsgkjaqcah8mbn69"
+   },
+   "name": "cert-manager-controller-ingress-shim"
+  },
+  "roleRef": {
+   "apiGroup": "rbac.authorization.k8s.io",
+   "kind": "ClusterRole",
+   "name": "cert-manager-controller-ingress-shim"
+  },
+  "subjects": [
+   {
+    "kind": "ServiceAccount",
+    "name": "cert-manager",
+    "namespace": "cert-manager"
+   }
+  ]
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRoleBinding",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "4jjp7ms3hqzh8acgyiiprl6jkzhpwcyg,svvs642f2s14f7vgkxvmqy0maaw7yind",
+    "kix.run/identity-hash": "iw2w5v9a1skm2fi4wwx9mhg5mg57g545"
+   },
+   "name": "cert-manager-controller-issuers"
+  },
+  "roleRef": {
+   "apiGroup": "rbac.authorization.k8s.io",
+   "kind": "ClusterRole",
+   "name": "cert-manager-controller-issuers"
+  },
+  "subjects": [
+   {
+    "kind": "ServiceAccount",
+    "name": "cert-manager",
+    "namespace": "cert-manager"
+   }
+  ]
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRoleBinding",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "gqwlshryblh1my2vs7pwrbly8mx659si,svvs642f2s14f7vgkxvmqy0maaw7yind",
+    "kix.run/identity-hash": "in3dxh90m35x18j9p08skfnx4q9flay4"
+   },
+   "name": "cert-manager-controller-orders"
+  },
+  "roleRef": {
+   "apiGroup": "rbac.authorization.k8s.io",
+   "kind": "ClusterRole",
+   "name": "cert-manager-controller-orders"
+  },
+  "subjects": [
+   {
+    "kind": "ServiceAccount",
+    "name": "cert-manager",
+    "namespace": "cert-manager"
+   }
+  ]
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRoleBinding",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "9azxwlyfjbrdxw5lj1djz51fssqw34gj,v95n12q58bidq63nd8hmizcvp7a4xrsy",
+    "kix.run/identity-hash": "xxc0k04jhr2mnfwb7bbyd32jprv1biv2"
+   },
+   "name": "cert-manager-webhook:subjectaccessreviews"
+  },
+  "roleRef": {
+   "apiGroup": "rbac.authorization.k8s.io",
+   "kind": "ClusterRole",
+   "name": "cert-manager-webhook:subjectaccessreviews"
+  },
+  "subjects": [
+   {
+    "kind": "ServiceAccount",
+    "name": "cert-manager-webhook",
+    "namespace": "cert-manager"
+   }
+  ]
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRoleBinding",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "0vlg2q091w14vgfnd2imr7a055ypwp57,77hckqz6wzbd77pwk1qj1inyynqcqk0l",
+    "kix.run/identity-hash": "h0w3qx4j5z9dmpcn6y5ws984vwl84j3a"
+   },
+   "name": "cnpg-barman-cloud"
+  },
+  "roleRef": {
+   "apiGroup": "rbac.authorization.k8s.io",
+   "kind": "ClusterRole",
+   "name": "cnpg-barman-cloud"
+  },
+  "subjects": [
+   {
+    "kind": "ServiceAccount",
+    "name": "cnpg-barman-cloud",
+    "namespace": "cnpg-system"
+   }
+  ]
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRoleBinding",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "cnjjkc032fab4rx54nm2zgp86h2781cj,mbpaz6av1r7jhdilp512wh3kffzyyvqh",
+    "kix.run/identity-hash": "p4vz79gcy4pqv7v71rhwa8qkn857wi10"
+   },
+   "name": "cnpg-operator"
+  },
+  "roleRef": {
+   "apiGroup": "rbac.authorization.k8s.io",
+   "kind": "ClusterRole",
+   "name": "cnpg-operator"
+  },
+  "subjects": [
+   {
+    "kind": "ServiceAccount",
+    "name": "cnpg-operator",
+    "namespace": "cnpg-system"
+   }
+  ]
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRoleBinding",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "vam1jzikz2h83w5nh7ky0701hr76kb5x,wy3g8j0n1h1jlwcldx7zqirmbhw2dx43",
+    "kix.run/identity-hash": "y8llqkwxkl88qvq8v763np8dpqy1zmca"
+   },
+   "name": "grafana"
+  },
+  "roleRef": {
+   "apiGroup": "rbac.authorization.k8s.io",
+   "kind": "ClusterRole",
+   "name": "grafana"
+  },
+  "subjects": [
+   {
+    "kind": "ServiceAccount",
+    "name": "grafana",
+    "namespace": "monitoring-system"
+   }
+  ]
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRoleBinding",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "9iw0vzsyw6w6sjjbmwnpl1amydh19m9n,g9hfqnlv70rs41aihqxg2bk7yy2gkwz3",
+    "kix.run/identity-hash": "4f7iamgrvbw6zb5gfzw7abm41q9vi3nk"
+   },
+   "name": "kube-state-metrics"
+  },
+  "roleRef": {
+   "apiGroup": "rbac.authorization.k8s.io",
+   "kind": "ClusterRole",
+   "name": "kube-state-metrics"
+  },
+  "subjects": [
+   {
+    "kind": "ServiceAccount",
+    "name": "kube-state-metrics",
+    "namespace": "monitoring-system"
+   }
+  ]
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRoleBinding",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "1c3n5x7d3x6z5lkyyxjpw2cz785cwbwm,98fvsfk4y882ibl4z41qsgin7ilvvwnh",
+    "kix.run/identity-hash": "lw7ayks87rhad33wch7ap5lrzv9pz8x9"
+   },
+   "name": "prometheus-operator"
+  },
+  "roleRef": {
+   "apiGroup": "rbac.authorization.k8s.io",
+   "kind": "ClusterRole",
+   "name": "prometheus-operator"
+  },
+  "subjects": [
+   {
+    "kind": "ServiceAccount",
+    "name": "prometheus-operator",
+    "namespace": "monitoring-system"
+   }
+  ]
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRoleBinding",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "da3zq7hksqrn6cwk1gky2mkhfyi2zk53,wa97m8fvr4jryqn7dndx8bqiy192mfnr",
+    "kix.run/identity-hash": "waqz2bkkg8xgfbarja4i5x10ivqhyd8y"
+   },
+   "name": "prometheus-server"
+  },
+  "roleRef": {
+   "apiGroup": "rbac.authorization.k8s.io",
+   "kind": "ClusterRole",
+   "name": "prometheus-server"
+  },
+  "subjects": [
+   {
+    "kind": "ServiceAccount",
+    "name": "prometheus-server",
+    "namespace": "monitoring-system"
+   }
+  ]
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRoleBinding",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "q0v377qpsk08503qn4865wfkrdi8k0vc,rmpp4sqwsi39ab2q8klj3wfbh8c0i5rj",
+    "kix.run/identity-hash": "a2lj36h1diblyvxc8yf99vr8x8p95a8n"
+   },
+   "name": "route53-external-dns"
+  },
+  "roleRef": {
+   "apiGroup": "rbac.authorization.k8s.io",
+   "kind": "ClusterRole",
+   "name": "route53-external-dns"
+  },
+  "subjects": [
+   {
+    "kind": "ServiceAccount",
+    "name": "route53",
+    "namespace": "external-dns"
+   }
+  ]
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "Role",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3",
+    "kix.run/identity-hash": "i5pgnlhxqsn4rbq4r813fc6bdvkanyq2"
+   },
+   "name": "cert-manager-cainjector:leaderelection",
+   "namespace": "cert-manager"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "Role",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3",
+    "kix.run/identity-hash": "70m64229kycd2yz5dbqzj1xipqrh9p82"
+   },
+   "name": "cert-manager-startupapicheck:create-cert",
+   "namespace": "cert-manager"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "Role",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3",
+    "kix.run/identity-hash": "w9r54ahgyvnji9clrb3dvscvaxvapni9"
+   },
+   "name": "cert-manager-webhook:dynamic-serving",
+   "namespace": "cert-manager"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "Role",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3",
+    "kix.run/identity-hash": "qiwzllp0zmk2zvsf26733x2yh04nxpka"
+   },
+   "name": "cert-manager:leaderelection",
+   "namespace": "cert-manager"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "Role",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "dgqqdlwcgif6akic2rr67ri3njljk835",
+    "kix.run/identity-hash": "a66656cjfs8v8kdrxk28hpzlv1dyqxzm"
+   },
+   "name": "cnpg-barman-cloud-leader-election",
+   "namespace": "cnpg-system"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "Role",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "dgqqdlwcgif6akic2rr67ri3njljk835",
+    "kix.run/identity-hash": "bqbjwzcb3y5qy6zkgvpqy6qp7if6qkl3"
+   },
+   "name": "cnpg-operator-webhook-check",
+   "namespace": "cnpg-system"
+  }
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "RoleBinding",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "4l3lzcsh4m85gfq4il7by9hqcfzw80p9,i5pgnlhxqsn4rbq4r813fc6bdvkanyq2,rn40hbw8756809l5h5bwh65g8klv5bg3",
+    "kix.run/identity-hash": "5m46bqzc84i7l8p7413g1x7ihsm1l3f1"
+   },
+   "name": "cert-manager-cainjector:leaderelection",
+   "namespace": "cert-manager"
+  },
+  "roleRef": {
+   "apiGroup": "rbac.authorization.k8s.io",
+   "kind": "Role",
+   "name": "cert-manager-cainjector:leaderelection"
+  },
+  "subjects": [
+   {
+    "kind": "ServiceAccount",
+    "name": "cert-manager-cainjector",
+    "namespace": "cert-manager"
+   }
+  ]
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "RoleBinding",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "3lg69xyk7w34lqdikvyvgfn50k2igynz,70m64229kycd2yz5dbqzj1xipqrh9p82,rn40hbw8756809l5h5bwh65g8klv5bg3",
+    "kix.run/identity-hash": "8sx3pzvsgqa2gfazpc4m088q97k5jrj8"
+   },
+   "name": "cert-manager-startupapicheck:create-cert",
+   "namespace": "cert-manager"
+  },
+  "roleRef": {
+   "apiGroup": "rbac.authorization.k8s.io",
+   "kind": "Role",
+   "name": "cert-manager-startupapicheck:create-cert"
+  },
+  "subjects": [
+   {
+    "kind": "ServiceAccount",
+    "name": "cert-manager-startupapicheck",
+    "namespace": "cert-manager"
+   }
+  ]
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "RoleBinding",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "9azxwlyfjbrdxw5lj1djz51fssqw34gj,rn40hbw8756809l5h5bwh65g8klv5bg3,w9r54ahgyvnji9clrb3dvscvaxvapni9",
+    "kix.run/identity-hash": "9sr80l02ha5596y7k9mmkhj2488ak6sh"
+   },
+   "name": "cert-manager-webhook:dynamic-serving",
+   "namespace": "cert-manager"
+  },
+  "roleRef": {
+   "apiGroup": "rbac.authorization.k8s.io",
+   "kind": "Role",
+   "name": "cert-manager-webhook:dynamic-serving"
+  },
+  "subjects": [
+   {
+    "kind": "ServiceAccount",
+    "name": "cert-manager-webhook",
+    "namespace": "cert-manager"
+   }
+  ]
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "RoleBinding",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "qiwzllp0zmk2zvsf26733x2yh04nxpka,rn40hbw8756809l5h5bwh65g8klv5bg3,svvs642f2s14f7vgkxvmqy0maaw7yind",
+    "kix.run/identity-hash": "wm8pqb2g1swrlagz0ismwyhaf607jc8z"
+   },
+   "name": "cert-manager:leaderelection",
+   "namespace": "cert-manager"
+  },
+  "roleRef": {
+   "apiGroup": "rbac.authorization.k8s.io",
+   "kind": "Role",
+   "name": "cert-manager:leaderelection"
+  },
+  "subjects": [
+   {
+    "kind": "ServiceAccount",
+    "name": "cert-manager",
+    "namespace": "cert-manager"
+   }
+  ]
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "RoleBinding",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "0vlg2q091w14vgfnd2imr7a055ypwp57,a66656cjfs8v8kdrxk28hpzlv1dyqxzm,dgqqdlwcgif6akic2rr67ri3njljk835",
+    "kix.run/identity-hash": "0awal83ny10ih2wfbfbv3jyid2mmwk2s"
+   },
+   "name": "cnpg-barman-cloud-leader-election",
+   "namespace": "cnpg-system"
+  },
+  "roleRef": {
+   "apiGroup": "rbac.authorization.k8s.io",
+   "kind": "Role",
+   "name": "cnpg-barman-cloud-leader-election"
+  },
+  "subjects": [
+   {
+    "kind": "ServiceAccount",
+    "name": "cnpg-barman-cloud",
+    "namespace": "cnpg-system"
+   }
+  ]
+ },
+ {
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "RoleBinding",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "bqbjwzcb3y5qy6zkgvpqy6qp7if6qkl3,d00j7klzkyflb9dk9kn01mbi6w2sp48k,dgqqdlwcgif6akic2rr67ri3njljk835",
+    "kix.run/identity-hash": "dkc2bzh1rf0hkdsp9gpvf1sdx469np71"
+   },
+   "name": "cnpg-operator-webhook-check",
+   "namespace": "cnpg-system"
+  },
+  "roleRef": {
+   "apiGroup": "rbac.authorization.k8s.io",
+   "kind": "Role",
+   "name": "cnpg-operator-webhook-check"
+  },
+  "subjects": [
+   {
+    "kind": "ServiceAccount",
+    "name": "cnpg-operator-webhook-check",
+    "namespace": "cnpg-system"
+   }
+  ]
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "ConfigMap",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "dgqqdlwcgif6akic2rr67ri3njljk835",
+    "kix.run/identity-hash": "w5rplva4aadpvx55i3ydxxacs4zx0jr9"
+   },
+   "name": "cnpg-operator-default-monitoring",
+   "namespace": "cnpg-system"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "ConfigMap",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "dgqqdlwcgif6akic2rr67ri3njljk835",
+    "kix.run/identity-hash": "6y18hnnbmnlgs1wa1mj1vsqjbqm1aagr"
+   },
+   "name": "cnpg-operator-webhook-check",
+   "namespace": "cnpg-system"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "ConfigMap",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "vfwh4jzq81zbcfs4fmj5m31af99prq8z",
+    "kix.run/identity-hash": "0szv9wvc9hvrh1my4h32pdg9j6l40fa4"
+   },
+   "name": "grafana-config",
+   "namespace": "monitoring-system"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "ConfigMap",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "6pwn3mqg18rcxgfgbb2ngnnha2w0ncd4,8sdb1z7yk4ni11ps7zvlx8h3is1si64a,vfwh4jzq81zbcfs4fmj5m31af99prq8z",
+    "kix.run/identity-hash": "mp6z3bsfvzdc104qmzxcyg5ikiggcjjp"
+   },
+   "name": "grafana-datasources",
+   "namespace": "monitoring-system"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "ConfigMap",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "vfwh4jzq81zbcfs4fmj5m31af99prq8z",
+    "kix.run/identity-hash": "bixyy2nhs8q47bsm3nq87ra0g4qhvg0j"
+   },
+   "name": "grafana-sc-dashboard-provider",
+   "namespace": "monitoring-system"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "ConfigMap",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "3bxp9nfqmz4mi6dqvqsh9h45n71yj54d",
+    "kix.run/identity-hash": "b3md5zbg97wv6a8dm27zyahqza8kh5nl"
+   },
+   "name": "echo-server",
+   "namespace": "np"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "Namespace",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "rn40hbw8756809l5h5bwh65g8klv5bg3"
+   },
+   "name": "cert-manager"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "Namespace",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "dgqqdlwcgif6akic2rr67ri3njljk835"
+   },
+   "name": "cnpg-system"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "Namespace",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "gl5ff1nmald4z3qncpqz8q5sxam1hpi4"
+   },
+   "name": "data"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "Namespace",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "9s3g3mpxgfilhbgjxsa1zn231q7yx2xm"
+   },
+   "name": "external-dns"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "Namespace",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "sj0fv5bs2hnh9zcqdh62ph34l2wm0b1m"
+   },
+   "name": "kube-system"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "Namespace",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "vfwh4jzq81zbcfs4fmj5m31af99prq8z"
+   },
+   "name": "monitoring-system"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "Namespace",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "3bxp9nfqmz4mi6dqvqsh9h45n71yj54d"
+   },
+   "name": "np"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "Namespace",
+  "metadata": {
+   "annotations": {
+    "kix.run/identity-hash": "ybkdj5zv68pdym9rgnpwfbchjkl7khry"
+   },
+   "name": "storage"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "PersistentVolumeClaim",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "vfwh4jzq81zbcfs4fmj5m31af99prq8z",
+    "kix.run/identity-hash": "jyk5pl7cvblqy2bb5iicsp11v6dl84gi"
+   },
+   "name": "storage",
+   "namespace": "monitoring-system"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "Secret",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "vfwh4jzq81zbcfs4fmj5m31af99prq8z",
+    "kix.run/identity-hash": "5y4lwdlwbb953002r5m99yj9s59lr2mb"
+   },
+   "name": "alertmanager-config",
+   "namespace": "monitoring-system"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "Secret",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "vfwh4jzq81zbcfs4fmj5m31af99prq8z",
+    "kix.run/identity-hash": "mnjc2b8913y9al1cw094a2b12q3jrq7k"
+   },
+   "name": "grafana-admin",
+   "namespace": "monitoring-system"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "Service",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "r5z3xliw14vh8v22rfii8693f7bwwjqp,rn40hbw8756809l5h5bwh65g8klv5bg3",
+    "kix.run/identity-hash": "mxj220inqfqg5mf7cqa8a2i3cx3yi3xx"
+   },
+   "name": "cert-manager",
+   "namespace": "cert-manager"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "Service",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "2wiywf9c595pp2cg2lchlqdss0mlc8rw,rn40hbw8756809l5h5bwh65g8klv5bg3",
+    "kix.run/identity-hash": "xzi59q84zkvi1x52fakl97dlawn1ra4n"
+   },
+   "name": "cert-manager-cainjector",
+   "namespace": "cert-manager"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "Service",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "08zcjsk2klsmm3pji8wbr464chy5nlqb,rn40hbw8756809l5h5bwh65g8klv5bg3",
+    "kix.run/identity-hash": "3r4z0726xbai58s5wz47wwkf35sjqhn0"
+   },
+   "name": "cert-manager-webhook",
+   "namespace": "cert-manager"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "Service",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "24in44lnpf6dvdvd9qbhdvn6wwpjra95,dgqqdlwcgif6akic2rr67ri3njljk835",
+    "kix.run/identity-hash": "jqb9nzgw2a1ay74yp2zxym8y3sjwc2s4"
+   },
+   "name": "cnpg-barman-cloud",
+   "namespace": "cnpg-system"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "Service",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "dgqqdlwcgif6akic2rr67ri3njljk835,j5rmna75di2n40lgz3da9smvcainbxs3",
+    "kix.run/identity-hash": "f9jnsgg6jispm7z4ml673flmqcfxsp70"
+   },
+   "name": "cnpg-operator-metrics",
+   "namespace": "cnpg-system"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "Service",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "dgqqdlwcgif6akic2rr67ri3njljk835,j5rmna75di2n40lgz3da9smvcainbxs3",
+    "kix.run/identity-hash": "z7lynvyrsjqi3816d0x78nc361691mzb"
+   },
+   "name": "cnpg-webhook-service",
+   "namespace": "cnpg-system"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "Service",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "9s3g3mpxgfilhbgjxsa1zn231q7yx2xm,f11h5xq349r4c605ydn9zh30v54kmnyc",
+    "kix.run/identity-hash": "kvsm9rn1p799zn7388xwcfkxra9fxk2x"
+   },
+   "name": "route53",
+   "namespace": "external-dns"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "Service",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "vfwh4jzq81zbcfs4fmj5m31af99prq8z",
+    "kix.run/identity-hash": "8sdb1z7yk4ni11ps7zvlx8h3is1si64a"
+   },
+   "name": "alertmanager",
+   "namespace": "monitoring-system"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "Service",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "q65vbk2hx8mr3gml5j7aj3vf1mf8b252,vfwh4jzq81zbcfs4fmj5m31af99prq8z",
+    "kix.run/identity-hash": "13fhaqjswds8v4psz6y5jyg0ljflg0yn"
+   },
+   "name": "grafana",
+   "namespace": "monitoring-system"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "Service",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "2fg626mjq7c92iq6mx8z6gz2cm2r44h5,vfwh4jzq81zbcfs4fmj5m31af99prq8z",
+    "kix.run/identity-hash": "2r3qhcz1ckm4bp4587hc31qnjih8d453"
+   },
+   "name": "kube-state-metrics",
+   "namespace": "monitoring-system"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "Service",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "vfwh4jzq81zbcfs4fmj5m31af99prq8z,wjzajv3fjz49v7wyj43j78c7s9h00pph",
+    "kix.run/identity-hash": "3l8nsb8wjjbkzwjjp79gy76x3skqqr8y"
+   },
+   "name": "node-exporter",
+   "namespace": "monitoring-system"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "Service",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "v3lw8bkrd5j7nkqn90k34z63icrnbhqj,vfwh4jzq81zbcfs4fmj5m31af99prq8z",
+    "kix.run/identity-hash": "4jx79c4yrab2p1q8bcx2fpmdv6kzmp05"
+   },
+   "name": "prometheus-operator",
+   "namespace": "monitoring-system"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "Service",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "vfwh4jzq81zbcfs4fmj5m31af99prq8z",
+    "kix.run/identity-hash": "6pwn3mqg18rcxgfgbb2ngnnha2w0ncd4"
+   },
+   "name": "prometheus-server",
+   "namespace": "monitoring-system"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "Service",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "3bxp9nfqmz4mi6dqvqsh9h45n71yj54d,wzkln4wh83vhq8vhq3zb1zxn6s7k3a08",
+    "kix.run/identity-hash": "gb55pgixqnfapa8g8hsg04v1824if3vy"
+   },
+   "name": "echo-server",
+   "namespace": "np"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "ServiceAccount",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3",
+    "kix.run/identity-hash": "svvs642f2s14f7vgkxvmqy0maaw7yind"
+   },
+   "name": "cert-manager",
+   "namespace": "cert-manager"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "ServiceAccount",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3",
+    "kix.run/identity-hash": "4l3lzcsh4m85gfq4il7by9hqcfzw80p9"
+   },
+   "name": "cert-manager-cainjector",
+   "namespace": "cert-manager"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "ServiceAccount",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3",
+    "kix.run/identity-hash": "3lg69xyk7w34lqdikvyvgfn50k2igynz"
+   },
+   "name": "cert-manager-startupapicheck",
+   "namespace": "cert-manager"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "ServiceAccount",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "rn40hbw8756809l5h5bwh65g8klv5bg3",
+    "kix.run/identity-hash": "9azxwlyfjbrdxw5lj1djz51fssqw34gj"
+   },
+   "name": "cert-manager-webhook",
+   "namespace": "cert-manager"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "ServiceAccount",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "dgqqdlwcgif6akic2rr67ri3njljk835",
+    "kix.run/identity-hash": "0vlg2q091w14vgfnd2imr7a055ypwp57"
+   },
+   "name": "cnpg-barman-cloud",
+   "namespace": "cnpg-system"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "ServiceAccount",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "dgqqdlwcgif6akic2rr67ri3njljk835",
+    "kix.run/identity-hash": "mbpaz6av1r7jhdilp512wh3kffzyyvqh"
+   },
+   "name": "cnpg-operator",
+   "namespace": "cnpg-system"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "ServiceAccount",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "dgqqdlwcgif6akic2rr67ri3njljk835",
+    "kix.run/identity-hash": "d00j7klzkyflb9dk9kn01mbi6w2sp48k"
+   },
+   "name": "cnpg-operator-webhook-check",
+   "namespace": "cnpg-system"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "ServiceAccount",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "9s3g3mpxgfilhbgjxsa1zn231q7yx2xm,requires:5v95npkxlyw0kcd95m79ny4y92012c59",
+    "kix.run/identity-hash": "q0v377qpsk08503qn4865wfkrdi8k0vc"
+   },
+   "name": "route53",
+   "namespace": "external-dns"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "ServiceAccount",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "vfwh4jzq81zbcfs4fmj5m31af99prq8z",
+    "kix.run/identity-hash": "7wlzc773ayfhffhs4phw82dh239903vp"
+   },
+   "name": "alertmanager",
+   "namespace": "monitoring-system"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "ServiceAccount",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "vfwh4jzq81zbcfs4fmj5m31af99prq8z",
+    "kix.run/identity-hash": "wy3g8j0n1h1jlwcldx7zqirmbhw2dx43"
+   },
+   "name": "grafana",
+   "namespace": "monitoring-system"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "ServiceAccount",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "vfwh4jzq81zbcfs4fmj5m31af99prq8z",
+    "kix.run/identity-hash": "9iw0vzsyw6w6sjjbmwnpl1amydh19m9n"
+   },
+   "name": "kube-state-metrics",
+   "namespace": "monitoring-system"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "ServiceAccount",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "vfwh4jzq81zbcfs4fmj5m31af99prq8z",
+    "kix.run/identity-hash": "a1f6lllzc1qnjdfafdp5m61jpga79qpr"
+   },
+   "name": "node-exporter",
+   "namespace": "monitoring-system"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "ServiceAccount",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "vfwh4jzq81zbcfs4fmj5m31af99prq8z",
+    "kix.run/identity-hash": "1c3n5x7d3x6z5lkyyxjpw2cz785cwbwm"
+   },
+   "name": "prometheus-operator",
+   "namespace": "monitoring-system"
+  }
+ },
+ {
+  "apiVersion": "v1",
+  "kind": "ServiceAccount",
+  "metadata": {
+   "annotations": {
+    "kix.run/depends-on": "vfwh4jzq81zbcfs4fmj5m31af99prq8z",
+    "kix.run/identity-hash": "wa97m8fvr4jryqn7dndx8bqiy192mfnr"
+   },
+   "name": "prometheus-server",
+   "namespace": "monitoring-system"
+  }
+ }
+]
