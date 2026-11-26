@@ -8,18 +8,14 @@ use serde_json::Value;
 
 use std::collections::HashSet;
 
-use crate::manifest::keys;
 use crate::manifest::types::ResourceId;
 
-use super::super::activation::{
-    KeptOrphanSource, KeptOrphans, Record, Records, WaveRecord, WaveStatus,
-};
-use super::super::apply;
+use super::super::activation::{KeptOrphans, Record, Records, WaveRecord, WaveStatus};
 use super::super::revision::{
     Revision, RevisionMap, RevisionObject, RevisionSet, RevisionSpec, Revisions, Slot, applied,
     keep,
 };
-use super::{DeployRecord, Finalized, KubeResources, Left, RecordWriteError, StampError};
+use super::{DeployRecord, Finalized, KubeResources, Left, RecordWriteError};
 
 /// Timeout for best-effort writes (checkpoint and finalize). These writes run
 /// on their own tasks so a slow write does not block the scheduler, and this
@@ -49,8 +45,14 @@ pub(crate) struct RecordConfig {
     /// Failed records whose leftovers this run's plan folded in. Superseded
     /// on finalize, because by then they describe nothing outstanding.
     pub(crate) consumed_failed: Vec<String>,
-    /// What finalize writes to the record's `status.orphansKeptFrom`.
+    /// What the run's kept-orphans revision names besides the orphans the
+    /// run leaves on the cluster.
     pub(crate) kept_orphans: KeptOrphans,
+    /// The orphans the plan found on a Kix cluster an older Kix deployed
+    /// last, which [`DeployRecord::begin`] names in a kept-orphans revision
+    /// before the run removes the notes that name them. A run that stops
+    /// then leaves a record that names them. `None` for any other run.
+    pub(crate) kept_at_begin: Option<Vec<RevisionObject>>,
     /// The revisions of the build the run deploys. [`DeployRecord::begin`]
     /// creates them and then names them in the record's `status.revisions`,
     /// and
@@ -76,13 +78,9 @@ pub(crate) struct RecordConfig {
 /// A run's Activation record, written through
 /// [`super::super::activation::Records`].
 pub(crate) struct ActivationRecord {
-    /// The objects of the same run. The record is applied, and unchanged
-    /// objects are stamped, through them.
+    /// The objects of the same run. The record is applied through them.
     resources: Arc<KubeResources>,
     config: RecordConfig,
-    /// The `status.orphansKeptFrom` that [`DeployRecord::finalize`] wrote,
-    /// for the caller's GC roots. `None` until a finalize succeeds.
-    recorded_kept: std::sync::Mutex<Option<Vec<KeptOrphanSource>>>,
     /// The instances that earlier deploys with `--only` of the same build
     /// applied, read from the record's `status.partial` when the run began.
     /// [`DeployRecord::end_partial`] adds them to this run's.
@@ -97,16 +95,9 @@ impl ActivationRecord {
         ActivationRecord {
             resources,
             config,
-            recorded_kept: std::sync::Mutex::new(None),
             earlier_only: std::sync::Mutex::new(Vec::new()),
             carried: std::sync::atomic::AtomicBool::new(false),
         }
-    }
-
-    /// Return the `status.orphansKeptFrom` written by `finalize`, or `None` if
-    /// the run did not finalize.
-    pub(crate) fn orphans_kept_from(&self) -> Option<Vec<KeptOrphanSource>> {
-        self.recorded_kept.lock().ok().and_then(|g| g.clone())
     }
 
     /// Open the `Activation` records API for optional writes, logging a
@@ -204,18 +195,38 @@ impl ActivationRecord {
         Ok(())
     }
 
+    /// Create the kept-orphans revision of [`RecordConfig::kept_at_begin`]
+    /// and return its name, or `None` when there is none.
+    async fn create_kept_at_begin(&self) -> Result<Option<String>, RecordWriteError> {
+        let (Some(set), Some(objects)) = (&self.config.revisions, &self.config.kept_at_begin)
+        else {
+            return Ok(None);
+        };
+        if objects.is_empty() {
+            return Ok(None);
+        }
+        let revision = Revision::new(RevisionSpec::new(
+            set.cluster(),
+            Slot::KeptOrphans,
+            objects.clone(),
+        ));
+        Revisions::new(self.resources.client())
+            .create(&revision)
+            .await
+            .map_err(|e| RecordWriteError::KeptOrphans(e.to_string()))?;
+        Ok(Some(revision.name))
+    }
+
     /// Create the kept-orphans revision of a finished deploy and return its
     /// name, or `None` when the deploy left nothing or the run names no
     /// revisions.
     ///
     /// It lists the orphans the run left, as the manifests they came from
-    /// describe them. When the plan could not examine every earlier kept
-    /// orphan, because it did not read the cluster or could not resolve a
-    /// kept build, it also carries forward the objects of `current`'s
-    /// kept-orphans revision unexamined, as `status.orphansKeptFrom` carries
-    /// such builds forward. Refuse when that revision cannot be read, or
-    /// the new one cannot be created, because the finalize that follows
-    /// deletes the old one and the list would be lost.
+    /// describe them. When the plan did not read the cluster (`--offline`),
+    /// it also carries forward the objects of `current`'s kept-orphans
+    /// revision unexamined. Refuse when that revision cannot be read, or the
+    /// new one cannot be created, because the finalize that follows deletes
+    /// the old one and the list would be lost.
     async fn write_kept_orphans(
         &self,
         current: Option<&Record>,
@@ -234,7 +245,7 @@ impl ActivationRecord {
             .collect();
         let kept = &self.config.kept_orphans;
         objects.extend(kept.unknown.iter().cloned());
-        if kept.carry_current || !kept.unexamined.is_empty() {
+        if kept.carry_current {
             let earlier = match current.and_then(|c| c.revisions.as_ref()) {
                 None => None,
                 Some(Ok(map)) => map.kept_orphans.as_deref(),
@@ -337,18 +348,6 @@ impl DeployRecord for ActivationRecord {
             },
         };
 
-        // Read the live set BEFORE creating the record, so the annotation
-        // stamped on the record itself is computed the same way as every
-        // other resource's. The set only prunes `kix.run/activations`, so a
-        // read that fails or hangs skips that pruning and the run goes on.
-        let live = tokio::time::timeout(BEST_EFFORT_TIMEOUT, records.live_hashes())
-            .await
-            .unwrap_or_else(|_| {
-                tracing::warn!(annotation = keys::ACTIVATIONS, "listing the deployment records did not finish in time, so this run does not prune the annotation");
-                None
-            });
-        self.resources.set_live_activations(live);
-
         let Some(name) = self.config.name.as_deref() else {
             return Ok(());
         };
@@ -357,7 +356,11 @@ impl DeployRecord for ActivationRecord {
         // anything is applied, and leaves the record as it was.
         self.create_record(name, &records).await?;
         self.create_revisions(&records).await?;
-        let map = self.config.revisions.as_ref().map(RevisionMap::of);
+        let kept = self.create_kept_at_begin().await?;
+        let map = self.config.revisions.as_ref().map(|set| RevisionMap {
+            kept_orphans: kept,
+            ..RevisionMap::of(set)
+        });
         let earlier = records
             .begin_deploy(name, self.resources.cluster(), 1, map.as_ref())
             .await
@@ -398,32 +401,6 @@ impl DeployRecord for ActivationRecord {
             Ok(Err(e)) => Err(RecordWriteError::Records(e)),
             Err(_) => Err(RecordWriteError::NoAnswer(BEST_EFFORT_TIMEOUT)),
         }
-    }
-
-    async fn stamp_unchanged(&self, rid: &ResourceId) -> Result<(), StampError> {
-        let Some(hash) = self.resources.identity_hash() else {
-            return Ok(());
-        };
-        // A skipped resource is by definition live, so its kind should be in
-        // discovery. If it is not, say so rather than dropping it from the
-        // count.
-        let (ar, scope) = self
-            .resources
-            .cached(rid)
-            .await
-            .ok_or(StampError::NotDiscovered)?;
-        let live = self.resources.live_activations();
-        apply::record_activation_on_skipped(
-            self.resources.client(),
-            &ar,
-            scope,
-            rid,
-            self.resources.manager(),
-            hash,
-            live.as_ref(),
-        )
-        .await
-        .map_err(StampError::Apply)
     }
 
     async fn write_applied(&self) -> Result<(), RecordWriteError> {
@@ -518,10 +495,6 @@ impl DeployRecord for ActivationRecord {
                 .active(cluster)
                 .await
                 .map_err(RecordWriteError::Records)?;
-            let kept = self.config.kept_orphans.recorded(
-                current.as_ref().map(|c| c.orphans_kept_from.as_slice()),
-                left.any(),
-            );
             let map = match &self.config.revisions {
                 Some(set) => Some(RevisionMap {
                     kept_orphans: self.write_kept_orphans(current.as_ref(), left).await?,
@@ -536,7 +509,6 @@ impl DeployRecord for ActivationRecord {
                     name,
                     old.as_ref(),
                     self.config.receipt.as_ref(),
-                    &kept,
                     map.as_ref(),
                 )
                 .await
@@ -545,9 +517,6 @@ impl DeployRecord for ActivationRecord {
             // stops after it leaves phases the next run repairs from the head.
             if let Some(lock) = &self.config.lock {
                 lock.commit(name).await.map_err(RecordWriteError::Commit)?;
-            }
-            if let Ok(mut recorded) = self.recorded_kept.lock() {
-                *recorded = Some(kept);
             }
             records
                 .settle_phases(
@@ -609,6 +578,7 @@ mod tests {
                 receipt: None,
                 consumed_failed: Vec::new(),
                 kept_orphans: KeptOrphans::default(),
+                kept_at_begin: None,
                 revisions: None,
                 only,
                 mark_failed_on_abort: true,

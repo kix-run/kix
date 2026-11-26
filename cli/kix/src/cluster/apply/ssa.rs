@@ -1,7 +1,6 @@
-//! Server-side apply execution, conflict classification, and bookkeeping annotations.
+//! Server-side apply execution and conflict classification.
 
 use std::borrow::Cow;
-use std::collections::HashSet;
 
 use super::super::errors::FailureClass;
 use super::super::field_manager::{FieldManager, Whose};
@@ -83,17 +82,10 @@ pub enum ApplyError {
         source: kube::Error,
     },
 
-    #[error(
-        "could not write Kix tracking annotations (`{}`, `{}`) on {resource}. Run the deploy again to finish writing the tracking annotations. Kubernetes reported: {}",
-        keys::ACTIVATIONS,
-        keys::APPLIED_HASH,
-        reported(.source)
-    )]
-    BookkeepingAnnotationsFailed {
-        resource: String,
-        #[source]
-        source: kube::Error,
-    },
+    /// The migration write that runs before the object's first apply under
+    /// this Kix cluster's manager failed ([`super::super::migration_write`]).
+    #[error(transparent)]
+    Migration(Box<super::super::migration_write::WriteError>),
 
     #[error(
         "{resource} is {reason} (not applied). Applying changes now would let Kubernetes finish deleting it after the deploy. Wait for {resource} to be removed, then run the deploy again."
@@ -282,36 +274,6 @@ impl std::fmt::Display for ApplyAction {
     }
 }
 
-/// Record this activation on a resource the deploy did NOT apply.
-///
-/// An unchanged resource is still part of the current activation. Add the
-/// activation to `kix.run/activations` even though no content patch is needed,
-/// keeping the reference set complete for garbage collection.
-///
-/// Leave `kix.run/applied-hash` unchanged because no content was applied.
-/// Writes nothing when the annotation already says the right thing.
-pub(crate) async fn record_activation_on_skipped(
-    client: &Client,
-    ar: &ApiResource,
-    scope: Scope,
-    rid: &ResourceId,
-    manager: &FieldManager,
-    activation_hash: &str,
-    live_activations: Option<&HashSet<String>>,
-) -> Result<(), ApplyError> {
-    let api = super::super::discovery::api_for(client, ar, &scope, rid);
-    update_bookkeeping_annotations_checked(
-        &api,
-        &rid.name,
-        manager,
-        Some(activation_hash),
-        None,
-        live_activations,
-        rid,
-    )
-    .await
-}
-
 /// Whether an apply takes ownership of fields another field manager owns.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Takeover {
@@ -327,10 +289,6 @@ pub(crate) enum Takeover {
 }
 
 /// Apply a single resource via server-side apply under `manager`.
-///
-/// If `activation_hash` is provided, the resource's `kix.run/activations`
-/// annotation is updated to include this activation (read-modify-write).
-#[allow(clippy::too_many_arguments)]
 pub(crate) async fn apply_resource(
     client: &Client,
     ar: &ApiResource,
@@ -338,8 +296,6 @@ pub(crate) async fn apply_resource(
     manager: &FieldManager,
     manifest: &Value,
     dry_run: bool,
-    activation_hash: Option<&str>,
-    live_activations: Option<&HashSet<String>>,
     takeover: Takeover,
 ) -> Result<ApplyResult, ApplyError> {
     let rid = ResourceId::from_value(manifest);
@@ -442,32 +398,11 @@ pub(crate) async fn apply_resource(
             tracing::warn!(
                 resource = %rid.display_id(),
                 manager = %manager,
-                "SSA response has no managedFields entry for this field manager; skipping applied-hash stamp"
+                "SSA response has no managedFields entry for this field manager, so no applied hash is recorded"
             );
         }
         h
     };
-
-    // Update Kix bookkeeping annotations by merging the current activation into
-    // `kix.run/activations` and stamping `kix.run/applied-hash`.
-    //
-    // Uses a separate read-modify-write merge patch so existing entries in the
-    // comma-separated `kix.run/activations` set written by other activations
-    // are preserved. If the patch fails after transport retries, surface a hard
-    // error because dropping this update would leave reference counts incomplete
-    // for garbage collection.
-    if !dry_run && (activation_hash.is_some() || applied_hash.is_some()) {
-        update_bookkeeping_annotations_checked(
-            &api,
-            &name,
-            manager,
-            activation_hash,
-            applied_hash.as_deref(),
-            live_activations,
-            &rid,
-        )
-        .await?;
-    }
 
     let action = if existed {
         ApplyAction::Configured
@@ -595,32 +530,6 @@ async fn apply_patch(
     api.patch(name, pp, &Patch::Apply(manifest))
         .await
         .map_err(|e| classify_apply_error(rid, e))
-}
-
-/// Call [`update_bookkeeping_annotations`] and map errors to
-/// [`ApplyError::BookkeepingAnnotationsFailed`].
-async fn update_bookkeeping_annotations_checked(
-    api: &Api<DynamicObject>,
-    name: &str,
-    manager: &FieldManager,
-    activation_hash: Option<&str>,
-    applied_hash: Option<&str>,
-    live_activations: Option<&HashSet<String>>,
-    rid: &ResourceId,
-) -> Result<(), ApplyError> {
-    update_bookkeeping_annotations(
-        api,
-        name,
-        manager,
-        activation_hash,
-        applied_hash,
-        live_activations,
-    )
-    .await
-    .map_err(|e| ApplyError::BookkeepingAnnotationsFailed {
-        resource: rid.display_id(),
-        source: e,
-    })
 }
 
 /// One segment of an API server field path: `.spec`, `[name="x"]`,
@@ -909,114 +818,4 @@ pub(super) fn is_immutable_field_message(msg: &str) -> bool {
         || msg.contains("cannot be changed")
         || msg.contains("updates to statefulset spec for fields other than")
         || msg.contains("updates to daemonset spec for fields other than")
-}
-
-/// Fold `activation_hash` into the comma-separated `kix.run/activations` set,
-/// dropping entries that name an activation no longer on the cluster.
-///
-/// The activation being deployed is always kept, even when `live` does not
-/// list it: its CR is applied in the last wave, so it is legitimately absent
-/// while its own resources are being stamped.
-///
-/// `live == None` means the set could not be established and disables pruning.
-/// Output is sorted and deduplicated so a re-run is byte-identical and
-/// the caller can compare against `existing` to decide whether to write.
-pub(super) fn merge_activation_set(
-    existing: &str,
-    activation_hash: &str,
-    live: Option<&HashSet<String>>,
-) -> String {
-    let mut hashes: std::collections::BTreeSet<&str> = existing
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .filter(|s| live.is_none_or(|live| live.contains(*s)))
-        .collect();
-    hashes.insert(activation_hash);
-    hashes.into_iter().collect::<Vec<_>>().join(",")
-}
-
-/// Update Kix's bookkeeping annotations in a single merge patch: merge
-/// `activation_hash` into `kix.run/activations` (dropping entries that are not
-/// in `live_activations`) and set `kix.run/applied-hash` when provided.
-///
-/// When `live_activations` is `None`, existing activation references are
-/// retained without pruning.
-async fn update_bookkeeping_annotations(
-    api: &Api<DynamicObject>,
-    name: &str,
-    manager: &FieldManager,
-    activation_hash: Option<&str>,
-    applied_hash: Option<&str>,
-    live_activations: Option<&HashSet<String>>,
-) -> Result<(), kube::Error> {
-    let mut annotations = serde_json::Map::new();
-    let mut live: Option<DynamicObject> = None;
-
-    if let Some(activation_hash) = activation_hash {
-        let current = api.get(name).await?;
-        let existing = current
-            .metadata
-            .annotations
-            .as_ref()
-            .and_then(|a| keys::get_meta(a, keys::ACTIVATIONS))
-            .unwrap_or("");
-
-        let merged = merge_activation_set(existing, activation_hash, live_activations);
-
-        // Skip writing when the merged set is unchanged and no new applied-hash
-        // is being recorded, avoiding unnecessary resourceVersion bumps.
-        if merged != existing || applied_hash.is_some() {
-            annotations.insert(keys::ACTIVATIONS.to_string(), Value::String(merged));
-        }
-        live = Some(current);
-    }
-
-    if let Some(applied_hash) = applied_hash {
-        annotations.insert(
-            keys::APPLIED_HASH.to_string(),
-            Value::String(applied_hash.to_string()),
-        );
-    }
-
-    if annotations.is_empty() {
-        return Ok(());
-    }
-
-    // Because bookkeeping annotations are written via merge patch rather than
-    // server-side apply, explicitly null out any retired domain keys for the
-    // annotations replaced by this patch.
-    let writing: Vec<&str> = annotations.keys().map(String::as_str).collect();
-    for old in crate::legacy_domain::bookkeeping_null_outs(&writing) {
-        annotations.insert(old, Value::Null);
-    }
-
-    // On a full apply (`applied_hash.is_some()`), also null out any retired
-    // build-time annotation keys remaining on the live object (for example,
-    // from an earlier client-side `kubectl apply` where `kix` did not own the
-    // field in `managedFields`). Skip this when `applied_hash` is `None` so an
-    // unapplied resource does not lose its only identity annotations.
-    if applied_hash.is_some()
-        && let Some(present) = live.as_ref().and_then(|o| o.metadata.annotations.as_ref())
-    {
-        for old in crate::legacy_domain::retired_keys(present) {
-            annotations.insert(old, Value::Null);
-        }
-    }
-
-    // Write under the cluster's field manager so the update does not alter
-    // its server-side apply field set or record an "unknown" manager in
-    // `managedFields`.
-    let patch = serde_json::json!({
-        "metadata": {
-            "annotations": annotations,
-        }
-    });
-    let pp = PatchParams {
-        field_manager: Some(manager.name().to_string()),
-        ..PatchParams::default()
-    };
-    api.patch(name, &pp, &Patch::Merge(&patch)).await?;
-
-    Ok(())
 }

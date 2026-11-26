@@ -21,6 +21,7 @@ pub mod kept;
 pub mod kubernetes_version;
 pub mod left_behind;
 pub mod migrate;
+pub mod migration_write;
 pub mod observe;
 pub(crate) mod ops;
 pub mod own_crds;

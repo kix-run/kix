@@ -276,6 +276,7 @@ pub async fn observe(
         );
         let lookup = |hashes: &[&str]| store_graph::lookup_hashes(hashes.iter().copied());
         let index = tenancy.index_of(&deploy.current);
+        let manager = tenancy.manager_of(&cluster);
         let mut view = view(
             cluster.clone(),
             deploy.current,
@@ -283,12 +284,15 @@ pub async fn observe(
             &live,
             &apis,
             &applied,
+            &manager,
             lookup,
         );
         view.leaving = leaving(&view, &sweep.managed, |obj| tenancy.owners_of(obj));
         view.failed = deploy.failed_since.map(|record| {
             let index = tenancy.index_of(&record);
-            let failed = self::view(cluster, record, index, &live, &apis, &applied, lookup);
+            let failed = self::view(
+                cluster, record, index, &live, &apis, &applied, &manager, lookup,
+            );
             failed_only(&view, failed)
         });
         clusters.push(view);
@@ -378,6 +382,7 @@ struct Expected {
 /// `lookup` names identity hashes from the local store (see
 /// [`store_graph::lookup_hashes`]). It runs at most once, and only for a
 /// record without names.
+#[allow(clippy::too_many_arguments)]
 fn view(
     cluster: String,
     record: Record,
@@ -385,9 +390,9 @@ fn view(
     live: &Live<'_>,
     apis: &Apis,
     applied: &AppliedHashes,
+    manager: &FieldManager,
     lookup: impl FnOnce(&[&str]) -> HashMap<String, StoreEntry>,
 ) -> ClusterView {
-    let manager = FieldManager::of(&cluster);
     let root = record.identity_hash.clone().unwrap_or_default();
     let (expected_from, mut expected) = match &index {
         Some(index) => {
@@ -509,7 +514,7 @@ fn view(
                         } else {
                             Presence::Present
                         },
-                        Some(drift::check_object(obj, applied.applied(obj), &manager).verdict),
+                        Some(drift::check_object(obj, applied.applied(obj), manager).verdict),
                         if marker {
                             Readiness::NotApplicable
                         } else {

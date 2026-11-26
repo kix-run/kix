@@ -268,58 +268,6 @@ mod orphans_kept_from_tests {
             BTreeMap::from([("acme".to_string(), "bb".to_string())])
         );
     }
-
-    fn source(name: &str) -> KeptOrphanSource {
-        KeptOrphanSource {
-            activation: name.into(),
-            identity_hash: format!("{name}-hash"),
-            built_via: None,
-        }
-    }
-
-    fn names(sources: &[KeptOrphanSource]) -> Vec<&str> {
-        sources.iter().map(|s| s.activation.as_str()).collect()
-    }
-
-    /// Found sources are written only while an orphan is left; unexamined
-    /// ones are written either way, so a `--prune` run on a machine that
-    /// cannot read a listed build does not forget it.
-    #[test]
-    fn unexamined_sources_survive_a_run_that_left_no_orphans() {
-        let kept = KeptOrphans {
-            found: vec![source("v1")],
-            unexamined: vec![source("elsewhere")],
-            carry_current: false,
-            unknown: Vec::new(),
-        };
-        assert_eq!(names(&kept.recorded(None, true)), vec!["v1", "elsewhere"]);
-        assert_eq!(names(&kept.recorded(None, false)), vec!["elsewhere"]);
-        assert!(KeptOrphans::default().recorded(None, true).is_empty());
-    }
-
-    /// The current record's list is carried only when asked for, deduplicated
-    /// against what the plan found.
-    #[test]
-    fn the_current_list_is_carried_when_the_plan_did_not_read_it() {
-        let current = [source("v1"), source("v0")];
-        let mut kept = KeptOrphans {
-            found: vec![source("v1")],
-            unexamined: vec![],
-            carry_current: false,
-            unknown: Vec::new(),
-        };
-        assert_eq!(names(&kept.recorded(Some(&current), true)), vec!["v1"]);
-        kept.carry_current = true;
-        assert_eq!(
-            names(&kept.recorded(Some(&current), true)),
-            vec!["v1", "v0"]
-        );
-        assert_eq!(
-            names(&kept.recorded(Some(&current), false)),
-            vec!["v1", "v0"]
-        );
-        assert!(kept.recorded(None, false).is_empty());
-    }
 }
 
 mod retire_plan_tests {
@@ -973,7 +921,7 @@ mod revision_map_tests {
         let api = FakeApi::new([record("c-new"), record("c-old")]);
         let records = records_with(&api).await;
         records
-            .record_finish("c", "c-new", None, None, &[], Some(&map(Some("c-4"))))
+            .record_finish("c", "c-new", None, None, Some(&map(Some("c-4"))))
             .await
             .unwrap();
         let read = records.get("c-new").await.unwrap().unwrap();
@@ -995,7 +943,7 @@ mod revision_map_tests {
         let api = FakeApi::new([record("c-new")]);
         let records = records_with(&api).await;
         records
-            .record_finish("c", "c-new", None, None, &[], Some(&map(Some("c-4"))))
+            .record_finish("c", "c-new", None, None, Some(&map(Some("c-4"))))
             .await
             .unwrap();
         records.supersede("c-new").await.unwrap();
@@ -1012,7 +960,7 @@ mod revision_map_tests {
         let api = FakeApi::new([record("c-new")]);
         let records = records_with(&api).await;
         records
-            .record_finish("c", "c-new", None, None, &[], Some(&map(Some("c-4"))))
+            .record_finish("c", "c-new", None, None, Some(&map(Some("c-4"))))
             .await
             .unwrap();
         records
@@ -1023,7 +971,7 @@ mod revision_map_tests {
         assert_eq!(read.revisions, Some(Ok(map(Some("c-4")))));
 
         records
-            .record_finish("c", "c-new", None, None, &[], Some(&map(None)))
+            .record_finish("c", "c-new", None, None, Some(&map(None)))
             .await
             .unwrap();
         let read = records.get("c-new").await.unwrap().unwrap();
@@ -1252,15 +1200,7 @@ mod partial_tests {
         let records = records_with(&api).await;
         let old = records.get("old").await.unwrap();
         records
-            .finalize_deploy(
-                "c",
-                "new",
-                old.as_ref(),
-                false,
-                None,
-                &["other".into()],
-                &[],
-            )
+            .finalize_deploy("c", "new", old.as_ref(), false, None, &["other".into()])
             .await
             .unwrap();
         let new = status(&api, "new");

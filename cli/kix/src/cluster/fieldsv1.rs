@@ -27,10 +27,10 @@ pub fn kix_fieldset(obj: &DynamicObject, manager: &FieldManager) -> Option<Value
 /// Return whether any `managedFields` entry names a field manager that a Kix
 /// cluster writes under, its own or the legacy one.
 ///
-/// Kix writes every object it applies under its cluster's manager, through
-/// its server-side apply and the bookkeeping update after it. The API server
-/// records the manager of each write, so an object a controller made from a
-/// Kix object's labels and annotations has no such entry.
+/// Kix writes every object it applies under its cluster's manager, and an
+/// older Kix wrote it under the legacy manager. The API server records the
+/// manager of each write, so an object a controller made from a Kix
+/// object's labels and annotations has no such entry.
 pub(crate) fn written_by_kix(entries: &[ManagedFieldsEntry]) -> bool {
     entries.iter().any(|e| {
         e.manager

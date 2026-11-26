@@ -66,7 +66,7 @@ pub struct DeployPlan {
 
 impl DeployPlan {
     /// Build a plan from the resource dependency graph and the change
-    /// actions produced by `detect_changes` or `detect_changes_live`.
+    /// actions the planner decided ([`crate::plan`]).
     ///
     /// Orphans are excluded from the plan and passed to the scheduler
     /// separately for pruning after all plan nodes terminate.

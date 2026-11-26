@@ -1184,7 +1184,7 @@ mod tests {
             .await
             .unwrap();
         records
-            .finalize_deploy("cluster-a", "cluster-a-1", None, false, None, &[], &[])
+            .finalize_deploy("cluster-a", "cluster-a-1", None, false, None, &[])
             .await
             .unwrap();
         assert_eq!(bound_record(&client).await.unwrap(), None);
@@ -1201,7 +1201,7 @@ mod tests {
             .unwrap();
         assert_eq!(bound_record(&client).await.unwrap(), None);
         records
-            .finalize_deploy("lab1", "lab1-1", None, false, None, &[], &[])
+            .finalize_deploy("lab1", "lab1-1", None, false, None, &[])
             .await
             .unwrap();
         let bound = bound_record(&client).await.unwrap().unwrap();

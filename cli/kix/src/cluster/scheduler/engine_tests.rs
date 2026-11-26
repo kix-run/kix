@@ -807,7 +807,7 @@ async fn a_partial_run_marks_the_record_and_nothing_else() {
     assert!(
         !calls.iter().any(|c| matches!(
             c,
-            Call::Finalize { .. } | Call::Abort { .. } | Call::Stamp(_) | Call::Delete(_)
+            Call::Finalize { .. } | Call::Abort { .. } | Call::Migrate(_) | Call::Delete(_)
         )),
         "{calls:?}"
     );
@@ -1392,7 +1392,7 @@ async fn skipped_rerun_job_that_succeeded_is_left_alone() {
     assert_eq!(result.configured, 0);
     let calls = ops.calls();
     assert!(calls.contains(&Call::GetLive(rid("Job", "probe"))));
-    assert!(calls.contains(&Call::Stamp(rid("Job", "probe"))));
+    assert!(calls.contains(&Call::Migrate(rid("Job", "probe"))));
     assert!(!calls.iter().any(|c| matches!(c, Call::RecreateStart(_))));
     assert!(!calls.iter().any(|c| matches!(c, Call::ApplyStart(_))));
     assert!(rerun_details(&rec).is_empty());
@@ -1786,12 +1786,12 @@ async fn hung_rediscovery_is_reported_and_aborted() {
     assert_eq!(rec.terminal_count(&NodeId::Resource(rid("Widget", "w"))), 1);
 }
 
-/// Stamping an unchanged resource is bounded by the watchdog.
+/// The migration write to an unchanged resource is bounded by the watchdog.
 #[tokio::test(start_paused = true)]
-async fn hung_stamp_of_unchanged_resource_is_bounded() {
+async fn hung_migration_write_of_unchanged_resource_is_bounded() {
     let manifests = vec![m("ConfigMap", "same", &[]), m("ConfigMap", "new", &[])];
     let ops = Arc::new(ScriptedOps::new());
-    ops.stamp_behaviour(Behaviour::Hang);
+    ops.migrate_behaviour(Behaviour::Hang);
     let rec = Arc::new(Recorder::default());
     let cfg = config(quiet_watchdog());
 
@@ -1807,11 +1807,17 @@ async fn hung_stamp_of_unchanged_resource_is_bounded() {
 
     assert_eq!(result.unchanged, 1);
     assert_eq!(result.created, 1);
-    assert!(ops.calls().contains(&Call::Stamp(rid("ConfigMap", "same"))));
+    assert!(
+        ops.calls()
+            .contains(&Call::Migrate(rid("ConfigMap", "same")))
+    );
     assert_eq!(start.elapsed(), INLINE_BEST_EFFORT_TIMEOUT);
     let failures = rec.best_effort_failures();
     assert_eq!(failures.len(), 1, "{failures:?}");
-    assert!(failures[0].starts_with("activation stamp on unchanged resources: 1 of 1"));
+    assert!(
+        failures[0].starts_with("migration write to unchanged resources: 1 of 1"),
+        "{failures:?}"
+    );
 }
 
 /// A hung prune delete is reported as failed. Namespaces are never pruned.
@@ -2717,7 +2723,10 @@ async fn an_unchanged_predecessor_is_checked_before_its_dependent_runs() {
     let check = ops.time_of(|c| *c == Call::ReadyEnd(rid("Deployment", "db")));
     let apply = ops.time_of(|c| *c == Call::ApplyStart(rid("Deployment", "api")));
     assert!(check.is_some() && check <= apply, "{:?}", ops.calls());
-    assert!(ops.calls().contains(&Call::Stamp(rid("Deployment", "db"))));
+    assert!(
+        ops.calls()
+            .contains(&Call::Migrate(rid("Deployment", "db")))
+    );
     assert!(failures(&rec).is_empty());
 }
 
@@ -2750,7 +2759,10 @@ async fn an_unchanged_predecessor_that_failed_fails_the_deploy_on_itself() {
     assert_eq!(result.cancelled, 2);
     assert_eq!(result.unchanged, 0);
     assert!(!ops.calls().iter().any(|c| matches!(c, Call::ApplyStart(_))));
-    assert!(!ops.calls().contains(&Call::Stamp(rid("Deployment", "db"))));
+    assert!(
+        !ops.calls()
+            .contains(&Call::Migrate(rid("Deployment", "db")))
+    );
 
     let failed = failures(&rec);
     assert_eq!(failed.len(), 1);
@@ -3046,7 +3058,8 @@ async fn unchanged_nodes_are_checked_through_other_unchanged_nodes() {
     );
     for name in ["a", "b", "below", "lone"] {
         assert!(
-            ops.calls().contains(&Call::Stamp(rid("Deployment", name))),
+            ops.calls()
+                .contains(&Call::Migrate(rid("Deployment", name))),
             "{name} is stamped"
         );
     }
@@ -3072,7 +3085,7 @@ async fn an_unchanged_immediate_kind_is_not_read() {
     let cm = rid("ConfigMap", "cm");
     assert!(!ops.calls().contains(&Call::ReadyStart(cm.clone())));
     assert!(!ops.calls().contains(&Call::GetLive(cm.clone())));
-    assert!(ops.calls().contains(&Call::Stamp(cm)));
+    assert!(ops.calls().contains(&Call::Migrate(cm)));
 }
 
 /// An unchanged CRD is checked like any other predecessor but does not hold

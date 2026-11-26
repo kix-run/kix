@@ -1686,3 +1686,301 @@ fn drift_is_reverted_and_ceded_fields_are_left_alone() {
     assert_eq!(get("drift-ceded", "rotated").trim(), "rotated");
     assert_eq!(plan(&flake).0, Some(0), "the deploy left nothing to do");
 }
+
+/// Put Kix cluster `kix_cluster` on `ctx` back into the state an older Kix
+/// left: every object it applied has its `Apply` entry under the legacy
+/// manager `kix`, and an `Update` entry under `kix` that owns the two notes
+/// naming the current record and the applied hash. The record names no
+/// revisions, and the head and the revisions are gone. This binary cannot
+/// deploy the way an older Kix did, so the test writes that state through
+/// the API.
+fn put_back_in_the_older_state(ctx: &str, kix_cluster: &str) {
+    let selector = format!("{}={kix_cluster}", keys::CLUSTER_LABEL);
+    let records: serde_json::Value = serde_json::from_str(&kubectl_stdout(
+        ctx,
+        &["get", keys::ACTIVATIONS_CRD, "-l", &selector, "-o", "json"],
+    ))
+    .unwrap();
+    let record = records["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["status"]["phase"] == "Active")
+        .expect("an Active record")
+        .clone();
+    let record_name = record["metadata"]["name"].as_str().unwrap().to_string();
+    let record_hash = record["metadata"]["annotations"][keys::IDENTITY_HASH]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let revisions: serde_json::Value = serde_json::from_str(&kubectl_stdout(
+        ctx,
+        &[
+            "get",
+            &kix::cluster::revision::crd_name(),
+            "-l",
+            &selector,
+            "-o",
+            "json",
+        ],
+    ))
+    .unwrap();
+    let mut applied = std::collections::HashMap::new();
+    for revision in revisions["items"].as_array().unwrap() {
+        for (hash, value) in revision["status"]["applied"]
+            .as_object()
+            .into_iter()
+            .flatten()
+        {
+            applied.insert(hash.clone(), value.as_str().unwrap().to_string());
+        }
+    }
+    let objects: serde_json::Value = serde_json::from_str(&kubectl_stdout(
+        ctx,
+        &[
+            "get",
+            "namespaces,deployments,services,configmaps,serviceaccounts",
+            "-A",
+            "-l",
+            "app.kubernetes.io/managed-by=kix",
+            "--show-managed-fields",
+            "-o",
+            "json",
+        ],
+    ))
+    .unwrap();
+    let own = format!("kix/{kix_cluster}");
+    let mut moved = 0;
+    for obj in objects["items"].as_array().unwrap() {
+        let Some(hash) = obj["metadata"]["annotations"][keys::IDENTITY_HASH].as_str() else {
+            continue;
+        };
+        let Some(index) = obj["metadata"]["managedFields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .position(|e| e["manager"] == own.as_str() && e["operation"] == "Apply")
+        else {
+            continue;
+        };
+        let kind = obj["kind"].as_str().unwrap();
+        let name = obj["metadata"]["name"].as_str().unwrap();
+        let mut target = vec![kind.to_string(), name.to_string()];
+        if let Some(ns) = obj["metadata"]["namespace"].as_str() {
+            target.extend(["-n".to_string(), ns.to_string()]);
+        }
+        let rename = serde_json::json!([
+            { "op": "test", "path": format!("/metadata/managedFields/{index}/manager"), "value": own },
+            { "op": "replace", "path": format!("/metadata/managedFields/{index}/manager"), "value": "kix" },
+        ])
+        .to_string();
+        let mut args: Vec<&str> = vec!["patch"];
+        args.extend(target.iter().map(String::as_str));
+        args.extend(["--type=json", "-p", &rename]);
+        let out = kubectl(ctx, &args);
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let activations = format!("{}={record_hash}", keys::ACTIVATIONS);
+        let stamp = format!(
+            "{}={}",
+            keys::APPLIED_HASH,
+            applied.get(hash).cloned().unwrap_or_default()
+        );
+        let mut args: Vec<&str> = vec!["annotate", "--overwrite", "--field-manager=kix"];
+        args.extend(target.iter().map(String::as_str));
+        args.extend([activations.as_str(), stamp.as_str()]);
+        let out = kubectl(ctx, &args);
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        moved += 1;
+    }
+    assert!(moved > 0, "no object to put back");
+    let remove = r#"[{"op":"remove","path":"/status/revisions"}]"#;
+    let out = kubectl(
+        ctx,
+        &[
+            "patch",
+            keys::ACTIVATIONS_CRD,
+            &record_name,
+            "--type=json",
+            "--subresource=status",
+            "-p",
+            remove,
+        ],
+    );
+    if !out.status.success() {
+        let out = kubectl(
+            ctx,
+            &[
+                "patch",
+                keys::ACTIVATIONS_CRD,
+                &record_name,
+                "--type=json",
+                "-p",
+                remove,
+            ],
+        );
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let out = kubectl(
+        ctx,
+        &["delete", &kix::cluster::head::crd_name(), kix_cluster],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let out = kubectl(
+        ctx,
+        &[
+            "delete",
+            &kix::cluster::revision::crd_name(),
+            "-l",
+            &selector,
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// Verify that the first deploy by this Kix of a Kix cluster an older Kix
+/// deployed moves every object to revisions: the plan says how many
+/// objects it rewrites, the deploy leaves one `Apply` entry under the
+/// cluster's own manager and neither note on each object, the record names
+/// revisions again, and the Pods of the Deployment do not restart.
+///
+/// The kind cluster is `$KIX_KIND_CLUSTER` (default `kix-migration`); the
+/// test creates and deletes it.
+#[test]
+#[ignore] // Run explicitly: cargo test --test kind_integration_test -- --ignored
+fn the_first_deploy_moves_a_cluster_an_older_kix_deployed() {
+    if !has_kind() || !has_kubectl() {
+        eprintln!("skipping: kind or kubectl not available");
+        return;
+    }
+    let kind_cluster = std::env::var("KIX_KIND_CLUSTER").unwrap_or_else(|_| "kix-migration".into());
+    let ctx = format!("kind-{kind_cluster}");
+    kind_delete(&kind_cluster);
+    clear_activation_cache(KIX_CLUSTER);
+    assert!(kind_create(&kind_cluster), "failed to create kind cluster");
+    struct Cleanup(String);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            kind_delete(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(kind_cluster.clone());
+
+    let first = kix(&kind_cluster)
+        .args(["deploy", KIX_CLUSTER, "--yes"])
+        .output()
+        .unwrap();
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    put_back_in_the_older_state(&ctx, KIX_CLUSTER);
+    let pods = |ctx: &str| {
+        kubectl_stdout(
+            ctx,
+            &[
+                "get",
+                "pods",
+                "-n",
+                "echo",
+                "-o",
+                "jsonpath={.items[*].metadata.uid}",
+            ],
+        )
+    };
+    let before = pods(&ctx);
+    assert!(!before.trim().is_empty(), "the Deployment runs Pods");
+    let deployment = kubectl_stdout(&ctx, &["get", "deploy", "-n", "echo", "-o", "name"]);
+    let deployment = deployment
+        .lines()
+        .next()
+        .expect("a Deployment")
+        .trim_start_matches("deployment.apps/")
+        .to_string();
+    assert_eq!(
+        apply_managers(&ctx, "deployment", "echo", &deployment),
+        ["kix"]
+    );
+
+    let plan = kix(&kind_cluster)
+        .args(["plan", KIX_CLUSTER])
+        .output()
+        .unwrap();
+    let text = unwrapped(&String::from_utf8_lossy(&plan.stdout));
+    assert!(text.contains("rewrites the metadata of"), "{text}");
+
+    let second = kix(&kind_cluster)
+        .args(["deploy", KIX_CLUSTER, "--yes"])
+        .output()
+        .unwrap();
+    assert!(
+        second.status.success(),
+        "{}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    assert_eq!(
+        apply_managers(&ctx, "deployment", "echo", &deployment),
+        [format!("kix/{KIX_CLUSTER}")]
+    );
+    let annotations: serde_json::Value = serde_json::from_str(&kubectl_stdout(
+        &ctx,
+        &[
+            "get",
+            "deployment",
+            &deployment,
+            "-n",
+            "echo",
+            "-o",
+            "jsonpath={.metadata.annotations}",
+        ],
+    ))
+    .unwrap();
+    assert!(
+        annotations.get(keys::ACTIVATIONS).is_none(),
+        "{annotations}"
+    );
+    assert!(
+        annotations.get(keys::APPLIED_HASH).is_none(),
+        "{annotations}"
+    );
+    let revisions = kubectl_stdout(
+        &ctx,
+        &[
+            "get",
+            &kix::cluster::revision::crd_name(),
+            "-l",
+            &format!("{}={KIX_CLUSTER}", keys::CLUSTER_LABEL),
+            "-o",
+            "name",
+        ],
+    );
+    assert!(!revisions.trim().is_empty(), "the record names revisions");
+    assert_eq!(pods(&ctx), before, "the Pods did not restart");
+
+    let again = kix(&kind_cluster)
+        .args(["plan", KIX_CLUSTER])
+        .output()
+        .unwrap();
+    let text = unwrapped(&String::from_utf8_lossy(&again.stdout));
+    assert!(!text.contains("rewrites the metadata of"), "{text}");
+}

@@ -512,7 +512,7 @@ mod tests {
         let new = deployment(1, "web:2");
         let mut live = deployment(3, "web:1");
         live["metadata"]["managedFields"] = json!([
-            {"manager": "kix", "operation": "Apply",
+            {"manager": "kix/a", "operation": "Apply",
              "fieldsV1": {"f:spec": {"f:replicas": {}}}},
             {"manager": "kubectl", "operation": "Update", "subresource": "scale",
              "fieldsV1": {"f:spec": {"f:replicas": {}}}},
@@ -700,7 +700,7 @@ mod tests {
         others: Value,
     ) -> (drift::DriftReport, kube::api::DynamicObject) {
         let mut entries = vec![json!({
-            "manager": "kix", "operation": "Apply",
+            "manager": "kix/a", "operation": "Apply",
             "fieldsV1": {"f:spec": kix_fields},
         })];
         entries.extend(others.as_array().cloned().unwrap_or_default());

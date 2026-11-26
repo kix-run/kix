@@ -9,7 +9,9 @@ use super::errors::{FailureClass, FetchError, classify};
 use super::tenancy::{self, Tenancy};
 use crate::manifest::keys;
 use crate::manifest::lifecycle::{Lifecycle, lifecycle_of_live, never_pruned};
-use crate::manifest::types::{ResourceId, to_manifest_value};
+use crate::manifest::types::ResourceId;
+#[cfg(test)]
+use crate::manifest::types::to_manifest_value;
 use kube::{
     api::{Api, DynamicObject, ListParams},
     client::Client,
@@ -459,10 +461,9 @@ pub struct HeldObject {
     pub records: Vec<String>,
 }
 
-/// Split orphan candidates into those to prune and those still deployed by
-/// another Kix cluster, using `live` objects already in memory. Kinds
-/// protected by [`never_pruned`] stay in the prune list so the prune step can
-/// report them as kept.
+/// Split orphan candidates as [`split_shared_orphans_listed`] does, from the
+/// objects `live`.
+#[cfg(test)]
 pub(crate) fn split_shared_orphans(
     orphans: Vec<ResourceId>,
     live: &[DynamicObject],
@@ -475,8 +476,10 @@ pub(crate) fn split_shared_orphans(
     split_by_lookup(orphans, |rid| by_id.get(rid).copied(), tenancy)
 }
 
-/// Split orphan candidates as [`split_shared_orphans`] does, reading each
-/// candidate from `live`.
+/// Split orphan candidates into those to prune and those still deployed by
+/// another Kix cluster, reading each candidate from `live`. Kinds protected
+/// by [`never_pruned`] stay in the prune list so the prune step can report
+/// them as kept.
 pub(crate) fn split_shared_orphans_listed(
     orphans: Vec<ResourceId>,
     live: &LiveObjects,
@@ -793,19 +796,6 @@ fn is_labelled(obj: &DynamicObject) -> bool {
         .as_ref()
         .and_then(|l| l.get(key))
         .is_some_and(|v| v == value)
-}
-
-impl Live<'_> {
-    /// Return whether the cluster no longer holds the object: it is absent,
-    /// its kind is not served, or it is being deleted. An object this
-    /// account may not read is not known to be lost.
-    pub(crate) fn lost(self) -> bool {
-        match self {
-            Live::Absent | Live::Unserved => true,
-            Live::Present(obj) => obj.metadata.deletion_timestamp.is_some(),
-            Live::Unread => false,
-        }
-    }
 }
 
 /// Kix may neither list nor get objects that a deploy must read.

@@ -6,7 +6,9 @@
 //! Job, ClusterRole, Kix's Activation, ActivationHead, and
 //! PackageInstanceRevision, and two kinds of a group served at two
 //! versions), and GET, LIST (with an equality or existence label
-//! selector), PATCH (as a JSON merge patch, on the object or its `status`),
+//! selector), PATCH (as a JSON merge patch, on the object or its `status`,
+//! or as a JSON patch of `test`, `add`, `replace`, and `remove` operations,
+//! refused with 422 when one fails, with `managedFields` patched as given),
 //! POST (create, 409 when the name is taken), PUT (replace, honoring
 //! `metadata.resourceVersion`), DELETE (honoring `preconditions` and `metadata.finalizers`), and
 //! server-side apply on the objects it holds. A DELETE of an object with
@@ -472,13 +474,16 @@ impl FakeApi {
                 let query = req.uri().query().unwrap_or("").to_string();
                 // Kubernetes tells a server-side apply from a merge patch by
                 // the request's content type, so the fake does too.
-                let apply = req
+                let content_type = req
                     .headers()
                     .get(http::header::CONTENT_TYPE)
-                    .is_some_and(|v| v.as_bytes().starts_with(b"application/apply-patch"));
+                    .map(|v| v.as_bytes().to_vec())
+                    .unwrap_or_default();
+                let apply = content_type.starts_with(b"application/apply-patch");
+                let json_patch = content_type.starts_with(b"application/json-patch");
                 let body = req.into_body().collect().await.unwrap().to_bytes();
                 let (status, content_type, body) =
-                    api.respond(&method, &path, &query, &body, apply);
+                    api.respond(&method, &path, &query, &body, apply, json_patch);
                 let resp = http::Response::builder()
                     .status(status)
                     .header("content-type", content_type)
@@ -497,6 +502,7 @@ impl FakeApi {
         query: &str,
         body: &[u8],
         apply: bool,
+        json_patch: bool,
     ) -> (u16, &'static str, String) {
         {
             let mut st = self.state.lock().unwrap();
@@ -518,7 +524,7 @@ impl FakeApi {
                 return (code, "text/plain", format!("{code} page not found\n"));
             }
         }
-        let (status, value) = self.handle(method, path, query, body, apply);
+        let (status, value) = self.handle(method, path, query, body, apply, json_patch);
         (status, "application/json", value.to_string())
     }
 
@@ -529,6 +535,7 @@ impl FakeApi {
         query: &str,
         body: &[u8],
         apply: bool,
+        json_patch: bool,
     ) -> (u16, Value) {
         let mut st = self.state.lock().unwrap();
         if path == "/version" {
@@ -734,6 +741,20 @@ impl FakeApi {
                     }
                 }
                 (if existing.is_some() { 200 } else { 201 }, obj)
+            }
+            ("PATCH", Some(_)) if json_patch => {
+                let Some(i) = st.objects.iter().position(&matches) else {
+                    return not_found(path);
+                };
+                let ops: Vec<Value> = serde_json::from_slice(body).unwrap_or_default();
+                let mut patched = st.objects[i].clone();
+                if let Err(message) = apply_json_patch(&mut patched, &ops) {
+                    return status(422, "Invalid", &message);
+                }
+                let rv = st.bump();
+                patched["metadata"]["resourceVersion"] = json!(rv);
+                st.objects[i] = patched.clone();
+                (200, patched)
             }
             ("PATCH", Some(_)) => {
                 let Some(i) = st.objects.iter().position(&matches) else {
@@ -1037,13 +1058,16 @@ mod owners {
                 kept.push(e);
             }
         }
-        // An entry the manager had keeps its place, as on the API server.
+        // An entry the manager had keeps its place, as on the API server,
+        // which drops an entry that owns no field.
         let at = all_before
             .iter()
             .position(|e| is_apply_of(e, manager))
             .unwrap_or(0)
             .min(kept.len());
-        kept.insert(at, entry(manager, "Apply", None, &sent_fields));
+        if !sent_fields.is_empty() {
+            kept.insert(at, entry(manager, "Apply", None, &sent_fields));
+        }
         merged["metadata"]["managedFields"] = Value::Array(kept);
         Ok(merged)
     }
@@ -1081,6 +1105,83 @@ mod owners {
 }
 
 /// Apply `patch` to `target` as a JSON merge patch (RFC 7386).
+/// Apply the JSON patch `ops` (RFC 6902: `test`, `add`, `replace`, and
+/// `remove`) to `target`, or return why an operation failed. The API server
+/// refuses a patch with any failed operation and changes nothing.
+fn apply_json_patch(target: &mut Value, ops: &[Value]) -> Result<(), String> {
+    fn segments(path: &str) -> Vec<String> {
+        path.split('/')
+            .skip(1)
+            .map(|s| s.replace("~1", "/").replace("~0", "~"))
+            .collect()
+    }
+    fn parent<'v>(target: &'v mut Value, segs: &[String]) -> Option<&'v mut Value> {
+        let mut at = target;
+        for s in segs {
+            at = match at {
+                Value::Object(m) => m.get_mut(s)?,
+                Value::Array(a) => a.get_mut(s.parse::<usize>().ok()?)?,
+                _ => return None,
+            };
+        }
+        Some(at)
+    }
+    for op in ops {
+        let path = op["path"].as_str().unwrap_or_default();
+        let segs = segments(path);
+        let Some((last, init)) = segs.split_last() else {
+            return Err(format!("bad path {path}"));
+        };
+        let failed = || format!("the {} operation on {path} failed", op["op"]);
+        let Some(holder) = parent(target, init) else {
+            return Err(failed());
+        };
+        match op["op"].as_str() {
+            Some("test") => {
+                let found = match holder {
+                    Value::Object(m) => m.get(last),
+                    Value::Array(a) => last.parse::<usize>().ok().and_then(|i| a.get(i)),
+                    _ => None,
+                };
+                if found != Some(&op["value"]) {
+                    return Err(format!("testing value {path} failed"));
+                }
+            }
+            Some("add" | "replace") => match holder {
+                Value::Object(m) => {
+                    if op["op"] == "replace" && !m.contains_key(last) {
+                        return Err(failed());
+                    }
+                    m.insert(last.clone(), op["value"].clone());
+                }
+                Value::Array(a) => {
+                    let i = last.parse::<usize>().map_err(|_| failed())?;
+                    if i >= a.len() {
+                        return Err(failed());
+                    }
+                    a[i] = op["value"].clone();
+                }
+                _ => return Err(failed()),
+            },
+            Some("remove") => match holder {
+                Value::Object(m) => {
+                    m.remove(last).ok_or_else(failed)?;
+                }
+                Value::Array(a) => {
+                    let i = last.parse::<usize>().map_err(|_| failed())?;
+                    if i >= a.len() {
+                        return Err(failed());
+                    }
+                    a.remove(i);
+                }
+                _ => return Err(failed()),
+            },
+            _ => return Err(failed()),
+        }
+    }
+    Ok(())
+}
+
 fn merge_patch(target: &mut Value, patch: &Value) {
     let Value::Object(fields) = patch else {
         *target = patch.clone();

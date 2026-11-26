@@ -175,9 +175,9 @@ impl Refusal {
             | ApplyError::KixClusterConflict { source, .. }
             | ApplyError::SecretDataConflict { source, .. }
             | ApplyError::ImmutableConflict { source, .. }
-            | ApplyError::CrdStoredVersion { source, .. }
-            | ApplyError::BookkeepingAnnotationsFailed { source, .. } => source,
+            | ApplyError::CrdStoredVersion { source, .. } => source,
             ApplyError::ExpectationUnmet { .. }
+            | ApplyError::Migration(_)
             | ApplyError::NoNamespace { .. }
             | ApplyError::BeingDeleted { .. }
             | ApplyError::StillBeingDeleted { .. }

@@ -413,9 +413,13 @@ pub(crate) fn conflicts(obj: &DynamicObject, manifest: &Value, manager: &FieldMa
         .any(|f| f.value_in(manifest).is_some())
 }
 
-/// Return the other Kix clusters, sorted, that own a field of `obj` that
-/// `manifest` sets and the object does not cede: the fields another Kix
-/// cluster applied with other values than `manager`'s Kix cluster did.
+/// Return the field managers of other Kix clusters, sorted, that own a
+/// field of `obj` that `manifest` sets and the object does not cede: the
+/// fields another Kix cluster applied with other values than `manager`'s
+/// Kix cluster did. Another Kix cluster's manager is named by the cluster's
+/// name. The legacy manager `kix` counts too when `manager` does not count
+/// it as its own, because an older Kix may apply under it for another Kix
+/// cluster.
 pub(crate) fn held_by_other_clusters(
     obj: &DynamicObject,
     manifest: &Value,
@@ -426,7 +430,8 @@ pub(crate) fn held_by_other_clusters(
         .filter(|f| f.value_in(manifest).is_some())
         .filter_map(|f| match manager.whose(&f.manager) {
             Whose::OtherCluster(cluster) => Some(cluster.to_string()),
-            Whose::This | Whose::Legacy | Whose::NotKix => None,
+            Whose::Legacy => Some(f.manager.clone()),
+            Whose::This | Whose::NotKix => None,
         })
         .collect();
     clusters.sort();
@@ -608,7 +613,7 @@ mod tests {
                 "name": "coredns",
                 "namespace": "kube-system",
                 "managedFields": [
-                    entry("kix", "Apply", json!({"f:data": {"f:Corefile": {}}})),
+                    entry("kix/a", "Apply", json!({"f:data": {"f:Corefile": {}}})),
                     entry("kubeadm", "Update", json!({"f:data": {"f:Corefile": {}}})),
                     entry("kubectl-patch", "Update", json!({"f:data": {"f:hosts": {}}})),
                 ],
@@ -629,9 +634,10 @@ mod tests {
         );
     }
 
-    /// Another Kix cluster's entry is another manager, and the legacy entry
-    /// counts as the cluster's own. A cluster's own entry holds the fields
-    /// it applied, and the legacy one stands in only when it has none.
+    /// Another Kix cluster's entry is another manager, and so is the legacy
+    /// entry of a Kix cluster this Kix has deployed. A cluster's own entry
+    /// holds the fields it applied, and the legacy one stands in only for a
+    /// reader of a cluster that is not migrated.
     #[test]
     fn another_kix_cluster_is_another_manager() {
         let entry = |manager: &str, fields: Value| {
@@ -665,13 +671,23 @@ mod tests {
         };
         assert_eq!(
             owners("a"),
-            [("kix/b".to_string(), vec!["data.b".to_string()])]
+            [
+                ("kix".to_string(), vec!["data.old".to_string()]),
+                ("kix/b".to_string(), vec!["data.b".to_string()]),
+            ]
         );
-        assert_eq!(owners("b"), [("kix/a".to_string(), Vec::<String>::new())]);
+        assert_eq!(
+            owners("b"),
+            [
+                ("kix".to_string(), vec!["data.old".to_string()]),
+                ("kix/a".to_string(), Vec::<String>::new()),
+            ]
+        );
         let fields = |cluster: &str| fieldsv1::kix_fieldset(&obj, &FieldManager::of(cluster));
         assert_eq!(fields("a"), Some(json!({"f:data": {"f:a": {}}})));
+        assert_eq!(fields("c"), None);
         assert_eq!(
-            fields("c"),
+            fieldsv1::kix_fieldset(&obj, &FieldManager::unmigrated("c")),
             Some(json!({"f:data": {"f:a": {}, "f:old": {}}}))
         );
     }

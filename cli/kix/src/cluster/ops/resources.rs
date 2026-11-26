@@ -25,10 +25,13 @@ use super::super::cancel::CancelToken;
 use super::super::discovery::{self, KindLookup};
 use super::super::errors::FetchError;
 use super::super::field_manager::FieldManager;
+use super::super::migration_write::{self, WriteError};
 use super::super::prune_guard::{PruneGuard, Pruned};
 use super::super::readiness::{self, Deletion, ImportTarget, ReadinessError, ReadinessResult};
 use super::super::revision::RevisionObject;
-use super::{DeleteError, NotDiscovered, OnStatus, ReadError, RecreateError, ResourceIo};
+use super::{
+    DeleteError, Migrations, NotDiscovered, OnStatus, ReadError, RecreateError, ResourceIo,
+};
 
 /// Shared discovery cache of every kind the cluster serves, refreshed after
 /// CRDs land. Refreshes merge into the existing cache (see
@@ -103,18 +106,16 @@ pub(crate) struct KubeResources {
     discovery: DiscoveryCache,
     /// The Kix cluster whose orphans a prune deletes.
     cluster: String,
-    /// The field manager of `cluster`, which every apply and bookkeeping
+    /// The field manager of `cluster`, which every apply and migration
     /// write of the run names.
     manager: FieldManager,
-    /// Identity hash of the run's Activation, stamped into
-    /// `kix.run/activations` on every object written.
-    identity_hash: Option<String>,
     /// Which applies take ownership of fields another manager owns.
     force: Force,
-    /// Identity hashes of every Activation CR on the cluster, used to prune
-    /// `kix.run/activations`. Set by the record when the run begins, or `None`
-    /// to leave the annotation unpruned.
-    live_activations: std::sync::RwLock<Option<HashSet<String>>>,
+    /// The migration writes the plan listed.
+    migrations: Migrations,
+    /// The objects of [`Migrations::objects`] the run has not written the
+    /// migration write to yet.
+    unmigrated: std::sync::Mutex<HashSet<ResourceId>>,
     /// Initialized on the first prune delete, after discovery has settled.
     prune_guard: tokio::sync::OnceCell<PruneGuard>,
     /// Each object the run applied, with the applied hash of the server's
@@ -168,18 +169,106 @@ impl KubeResources {
         identity_hash: Option<String>,
         force: Force,
     ) -> Self {
+        let _ = identity_hash;
         Self {
             client,
             writes,
             discovery: Arc::new(RwLock::new(discovery)),
             manager: FieldManager::of(&cluster),
             cluster,
-            identity_hash,
             force,
-            live_activations: std::sync::RwLock::new(None),
+            migrations: Migrations::default(),
+            unmigrated: std::sync::Mutex::new(HashSet::new()),
             prune_guard: tokio::sync::OnceCell::new(),
             applied: std::sync::Mutex::new(BTreeMap::new()),
         }
+    }
+
+    /// Make the migration writes the plan listed ([`Migrations`]).
+    pub(crate) fn with_migrations(mut self, migrations: Migrations) -> Self {
+        self.unmigrated = std::sync::Mutex::new(migrations.objects.clone());
+        self.applied = std::sync::Mutex::new(migrations.carried.iter().cloned().collect());
+        self.migrations = migrations;
+        self
+    }
+
+    /// Return whether the object `rid` still waits for the migration write,
+    /// and forget it, so the run writes it once.
+    fn take_unmigrated(&self, rid: &ResourceId) -> bool {
+        self.unmigrated
+            .lock()
+            .map(|mut pending| pending.remove(rid))
+            .unwrap_or(false)
+    }
+
+    /// Write the migration write to the object `rid` of kind `ar`.
+    async fn migrate(
+        &self,
+        ar: &ApiResource,
+        scope: &Scope,
+        rid: &ResourceId,
+    ) -> Result<bool, WriteError> {
+        let api = self.api_for(ar, scope, rid);
+        let written = migration_write::write(
+            &api,
+            &rid.name,
+            &rid.display_id(),
+            &self.manager,
+            &self.migrations.rule,
+        )
+        .await?;
+        Ok(written == migration_write::Written::Rewritten)
+    }
+
+    /// Give up this Kix cluster's fields on the object `rid`, which another
+    /// Kix cluster still deploys, with an apply of nothing under its
+    /// manager. Fields no other manager owns go from the object. An object
+    /// without an `Apply` entry under the manager needs nothing.
+    async fn release(&self, rid: &ResourceId) -> Result<bool, String> {
+        let Some((ar, scope)) = self.cached(rid).await else {
+            return Ok(false);
+        };
+        if let Err(e) = self.migrate(&ar, &scope, rid).await {
+            return Err(e.to_string());
+        }
+        let api = self.api_for(&ar, &scope, rid);
+        let Some(live) = api
+            .get_opt(&rid.name)
+            .await
+            .map_err(|e| format!("could not read {}: {e}", rid.display_id()))?
+        else {
+            return Ok(false);
+        };
+        let applies = live.metadata.managed_fields.iter().flatten().any(|e| {
+            e.manager.as_deref() == Some(self.manager.name())
+                && e.operation.as_deref() == Some("Apply")
+                && e.subresource.is_none()
+        });
+        if !applies {
+            return Ok(false);
+        }
+        let mut metadata = serde_json::json!({ "name": rid.name });
+        if let Some(ns) = &live.metadata.namespace {
+            metadata["namespace"] = Value::String(ns.clone());
+        }
+        let nothing = serde_json::json!({
+            "apiVersion": ar.api_version,
+            "kind": ar.kind,
+            "metadata": metadata,
+        });
+        api.patch(
+            &rid.name,
+            &kube::api::PatchParams::apply(self.manager.name()),
+            &kube::api::Patch::Apply(&nothing),
+        )
+        .await
+        .map_err(|e| {
+            format!(
+                "could not give up this Kix cluster's fields on {}, which another Kix cluster still deploys: {e}",
+                rid.display_id()
+            )
+        })?;
+        Ok(true)
     }
 
     pub(super) fn client(&self) -> &Client {
@@ -193,24 +282,6 @@ impl KubeResources {
 
     pub(super) fn cluster(&self) -> &str {
         &self.cluster
-    }
-
-    pub(super) fn manager(&self) -> &FieldManager {
-        &self.manager
-    }
-
-    pub(super) fn identity_hash(&self) -> Option<&str> {
-        self.identity_hash.as_deref()
-    }
-
-    pub(super) fn live_activations(&self) -> Option<HashSet<String>> {
-        self.live_activations.read().ok().and_then(|g| g.clone())
-    }
-
-    pub(super) fn set_live_activations(&self, live: Option<HashSet<String>>) {
-        if let Ok(mut slot) = self.live_activations.write() {
-            *slot = live;
-        }
     }
 
     /// Remember that the run applied `manifest` and the server's answer
@@ -342,25 +413,42 @@ impl KubeResources {
         discovery::api_for(&self.client, ar, scope, rid)
     }
 
-    /// Server-side apply `manifest` as the kind `ar`, stamped with the run's
-    /// Activation.
+    /// Server-side apply `manifest` as the kind `ar` under the cluster's
+    /// manager, after the migration write when the plan listed the object.
+    /// A dry run writes no migration write, so it applies an object whose
+    /// entry under `kix` the write would move under `kix` instead, which
+    /// owns the same fields until then.
     pub(super) async fn apply_as(
         &self,
         ar: &ApiResource,
         scope: Scope,
         manifest: &Value,
     ) -> Result<ApplyResult, ApplyError> {
-        let live = self.live_activations();
+        let rid = ResourceId::from_value(manifest);
+        let legacy;
+        let manager = if self.dry() {
+            if self.migrations.renamed.contains(&rid) {
+                legacy = FieldManager::legacy_for(&self.cluster);
+                &legacy
+            } else {
+                &self.manager
+            }
+        } else {
+            if self.take_unmigrated(&rid) {
+                self.migrate(ar, &scope, &rid)
+                    .await
+                    .map_err(|e| ApplyError::Migration(Box::new(e)))?;
+            }
+            &self.manager
+        };
         let result = apply::apply_resource(
             &self.client,
             ar,
             scope,
-            &self.manager,
+            manager,
             manifest,
             self.dry(),
-            self.identity_hash.as_deref(),
-            live.as_ref(),
-            self.force.of(&ResourceId::from_value(manifest)),
+            self.force.of(&rid),
         )
         .await?;
         if let Some(hash) = &result.applied_hash {
@@ -408,6 +496,38 @@ impl KubeResources {
 
 #[async_trait]
 impl ResourceIo for KubeResources {
+    async fn migrate_unchanged(&self, rid: &ResourceId) -> Result<bool, WriteError> {
+        if self.dry() || !self.take_unmigrated(rid) {
+            return Ok(false);
+        }
+        let Some((ar, scope)) = self.cached(rid).await else {
+            return Ok(false);
+        };
+        self.migrate(&ar, &scope, rid).await
+    }
+
+    async fn after_finalize(&self, left: &[ResourceId]) -> Vec<String> {
+        if self.dry() {
+            return Vec::new();
+        }
+        let left: HashSet<&ResourceId> = left.iter().collect();
+        let mut failed = Vec::new();
+        for rid in self.migrations.orphans.iter().filter(|r| left.contains(r)) {
+            let Some((ar, scope)) = self.cached(rid).await else {
+                continue;
+            };
+            if let Err(e) = self.migrate(&ar, &scope, rid).await {
+                failed.push(e.to_string());
+            }
+        }
+        for rid in &self.migrations.releases {
+            if let Err(e) = self.release(rid).await {
+                failed.push(e);
+            }
+        }
+        failed
+    }
+
     async fn prune(
         &self,
         rid: &ResourceId,

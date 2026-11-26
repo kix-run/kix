@@ -28,7 +28,7 @@ mod retention;
 #[cfg(test)]
 mod tests;
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 
 use crate::cluster::revision::RevisionMap;
 use crate::legacy_domain::{self, LegacyDomainError};
@@ -565,26 +565,6 @@ impl Records {
         }))
     }
 
-    /// Return the identity hashes of all Activation CRs across all clusters and
-    /// phases, or `None` if listing fails.
-    ///
-    /// Used when pruning dead hashes from `kix.run/activations` annotations.
-    /// Queries across all clusters because a cluster-scoped resource can be
-    /// referenced by more than one cluster. Callers must treat `None` as "skip
-    /// pruning" rather than as an empty set.
-    pub(crate) async fn live_hashes(&self) -> Option<HashSet<String>> {
-        let all = self
-            .all()
-            .await
-            .map_err(|e| tracing::warn!("could not list activations, skipping prune: {e}"))
-            .ok()?;
-        Some(
-            all.iter()
-                .filter_map(|item| Record::of(item).identity_hash)
-                .collect(),
-        )
-    }
-
     /// List every Activation object on the cluster across all Kix clusters and
     /// phases.
     pub(crate) async fn all(&self) -> Result<Vec<DynamicObject>, RecordsError> {
@@ -939,14 +919,12 @@ impl Records {
         had_failures: bool,
         receipt: Option<&Value>,
         consumed_failed: &[String],
-        orphans_kept_from: &[KeptOrphanSource],
     ) -> Result<(), RecordsError> {
         self.record_finish(
             cluster_name,
             new_activation_name,
             old_activation,
             receipt,
-            orphans_kept_from,
             None,
         )
         .await?;
@@ -961,8 +939,8 @@ impl Records {
 
     /// Write what a finished deploy did onto its record, before the deploy
     /// becomes current: the predecessor link, deployment timestamp, cluster
-    /// label, and receipt. `orphans_kept_from` replaces
-    /// `status.orphansKeptFrom` (an empty slice clears the field).
+    /// label, and receipt. Clear `status.orphansKeptFrom`, which an earlier
+    /// release wrote on a record deployed again under the same name.
     /// `revisions`, when given, replaces `status.revisions`, and a map that
     /// names no kept orphans clears an earlier `keptOrphans`.
     pub(crate) async fn record_finish(
@@ -971,7 +949,6 @@ impl Records {
         new_activation_name: &str,
         old_activation: Option<&Record>,
         receipt: Option<&Value>,
-        orphans_kept_from: &[KeptOrphanSource],
         revisions: Option<&RevisionMap>,
     ) -> Result<(), RecordsError> {
         let now = chrono::Utc::now().to_rfc3339();
@@ -1016,15 +993,7 @@ impl Records {
         }
         // The whole build is deployed now.
         status.insert(PARTIAL_FIELD.to_string(), Value::Null);
-        // Write null when empty so a same-name redeploy clears any previous list.
-        status.insert(
-            keys::ORPHANS_KEPT_FROM_FIELD.to_string(),
-            if orphans_kept_from.is_empty() {
-                Value::Null
-            } else {
-                json!(orphans_kept_from)
-            },
-        );
+        status.insert(keys::ORPHANS_KEPT_FROM_FIELD.to_string(), Value::Null);
         if let Some(map) = revisions {
             status.insert(REVISIONS_FIELD.to_string(), map.to_value());
         }
@@ -1163,7 +1132,10 @@ impl Records {
         status.insert(PARTIAL_FIELD.to_string(), Value::Null);
         if let Some(map) = revisions {
             let mut value = map.to_value();
-            if let Some(fields) = value.as_object_mut() {
+            // A map without kept orphans keeps the ones the record names.
+            if map.kept_orphans.is_none()
+                && let Some(fields) = value.as_object_mut()
+            {
                 fields.remove("keptOrphans");
             }
             status.insert(REVISIONS_FIELD.to_string(), value);

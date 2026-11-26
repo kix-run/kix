@@ -12,6 +12,9 @@ use crate::output;
 /// deploy`) through `client`. `expect` is the generation the command's plan
 /// read, or `None` when nothing binds the command to one. Say once when
 /// another run holds the lock and this one waits for it.
+///
+/// Refuse first when a Kix operator older than this Kix is installed
+/// ([`super::operator::refuse_operator_without_revisions`]).
 pub(crate) async fn take(
     client: &kube::Client,
     cluster: &str,
@@ -20,6 +23,7 @@ pub(crate) async fn take(
     activation: Option<String>,
     expect: Option<u64>,
 ) -> Result<Arc<Lock>> {
+    super::operator::refuse_operator_without_revisions(client).await?;
     let request = Request {
         cluster: cluster.to_string(),
         holder: Holder::cli(command),

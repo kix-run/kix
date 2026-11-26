@@ -15,6 +15,8 @@ pub mod file;
 #[cfg(any(test, feature = "test-util"))]
 pub mod fixtures;
 pub mod live;
+#[cfg(test)]
+pub(crate) mod migration_tests;
 pub mod objects;
 pub mod offline;
 #[cfg(test)]
@@ -141,23 +143,11 @@ pub enum PlanEvent<'a> {
     /// the plan.
     KeptFolded(&'a [KeptOrphanSource]),
     /// A build from which an earlier deploy kept orphans failed to load, so
-    /// the plan cannot list or delete those orphans.
+    /// the package diff cannot show those orphans.
     KeptBuildUnusable { activation: &'a str, error: &'a str },
-    /// Builds from which an earlier deploy kept orphans that are not on this
-    /// machine and were not read from the cluster.
-    KeptUnresolved {
-        sources: &'a [KeptOrphanSource],
-        cluster: &'a str,
-    },
     /// Objects the build leaves unchanged that are absent from the cluster
     /// or being deleted. The plan writes them again.
     NotHeld(&'a [ResourceId]),
-    /// Kinds of unchanged objects that this account may neither list nor
-    /// get, as `Kind` or `Kind.group`. The plan does not know whether the
-    /// cluster still holds those objects, and leaves them unchanged. Only a
-    /// plan that compares builds reports this. The one planner refuses
-    /// instead ([`PlanError::ReadForbidden`]).
-    KindsUnread(&'a [String]),
 }
 
 /// Why a plan could not be made.
@@ -257,6 +247,14 @@ pub enum PlanError {
          for later updates."
     )]
     OnlyFirstDeploy(String),
+    #[error(
+        "cannot use `--only` on Kix cluster '{0}' because an earlier version of Kix deployed it last. \
+         Nothing was planned or applied to the cluster. The first deploy by this version of Kix \
+         moves every object of the Kix cluster to this version's bookkeeping, and a deploy with \
+         `--only` leaves objects out. Next: deploy the full build first with `kix deploy {0}`, \
+         then use `--only` for later updates."
+    )]
+    OnlyNotMigrated(String),
     #[error(
         "cannot use `--only` on Kix cluster '{cluster}' because its active deployment ({record}) \
          is managed by the Kix operator. Nothing was planned or applied to the cluster. The \

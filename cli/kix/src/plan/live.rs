@@ -7,9 +7,12 @@
 //! fields another manager owns. The plan lists such objects
 //! ([`LivePlan::drift_not_reverted`]) for the operator to report.
 //!
-//! For any other Kix cluster, it compares the build with every live object
-//! of its Kix cluster by build hash: those already include what failed and
-//! kept deploys left. [`LivePlan::sweep`]
+//! A Kix cluster an older Kix deployed last is read from the notes on its
+//! live objects ([`Ledger::of_notes`]). The operator's deploy of a queued
+//! record moves such a cluster to this Kix's bookkeeping, as `kix deploy`
+//! does. Its drift repair has no record to write, so it refuses
+//! ([`LivePlanError::NotMigrated`]) until a deploy has run.
+//! [`LivePlan::sweep`]
 //! takes the Activation record being reconciled, opens the records, reads
 //! the live objects itself, and plans from them. Because [`LivePlan::sweep`]
 //! is the only way to construct a [`LivePlan`], the operator always runs a
@@ -26,7 +29,7 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::cluster::activation::{Record, Records};
-use crate::cluster::apply::{ChangeAction, detect_changes_live};
+use crate::cluster::apply::ChangeAction;
 use crate::cluster::discovery;
 use crate::cluster::errors::FetchError;
 use crate::cluster::graph::{GraphError, ResourceGraph};
@@ -83,6 +86,11 @@ pub enum LivePlanError {
     /// This account may neither list nor get objects the plan must read.
     #[error("{0}. Nothing was applied or deleted")]
     ReadForbidden(Box<crate::cluster::inventory::ReadForbidden>),
+    /// A drift repair of a Kix cluster an older Kix deployed last.
+    #[error(
+        "the Kix operator does not repair drift on Kix cluster {cluster} yet, because an earlier version of Kix deployed it last. Nothing was applied or deleted. The first deploy by this version of Kix moves every object of the Kix cluster to this version's bookkeeping, and a repair writes no deployment record to do that. Run `kix deploy {cluster} --operator` or `kix deploy {cluster}` once, and the operator repairs drift after it"
+    )]
+    NotMigrated { cluster: String },
 }
 
 /// A drifted object the operator leaves as it is, because another field
@@ -119,9 +127,19 @@ pub struct LivePlan {
     /// The objects the records name whose kind the cluster does not serve,
     /// which the run's kept-orphans revision names again.
     unknown: Vec<crate::cluster::revision::RevisionObject>,
+    /// The migration writes the run makes.
+    migrations: crate::cluster::ops::Migrations,
+    /// The orphans a run that migrates names when it begins.
+    kept_at_begin: Option<Vec<crate::cluster::revision::RevisionObject>>,
 }
 
 impl LivePlan {
+    /// Return how many objects the run moves to this Kix's bookkeeping with
+    /// the migration write.
+    pub fn metadata_rewrites(&self) -> usize {
+        self.migrations.count()
+    }
+
     /// Read the live objects of the Kix cluster `activation` belongs to
     /// ([`cluster_of`]), compare `desired` with them, and plan the changes.
     /// A record that names no cluster sweeps under the empty name, under
@@ -133,11 +151,16 @@ impl LivePlan {
     /// The plan has not read the last runs of its Jobs. Until
     /// [`LivePlan::read_last_runs`] does, a Job under `kix.run/rerun` whose
     /// last run failed does not run again, and the run reports it as failed.
+    ///
+    /// `deploys` says that the run deploys the record, rather than repairing
+    /// drift without writing it. A repair refuses on a Kix cluster an older
+    /// Kix deployed last.
     pub async fn sweep(
         client: &Client,
         activation: &DynamicObject,
         desired: &[Value],
         revisions: Option<RevisionSet>,
+        deploys: bool,
     ) -> Result<LivePlan, LivePlanError> {
         let cluster = cluster_of(activation).unwrap_or_default();
         let discovery = discovery::discover_resources(client)
@@ -170,33 +193,33 @@ impl LivePlan {
         let mut live: Vec<Value> = sweep.managed.iter().map(to_manifest_value).collect();
         // The operator holds the deploy lock, so no other deploy is applying
         // what a `Failed` or `Partial` record names.
-        let ledger =
-            Ledger::of(&sweep.tenancy, true).map_err(|e| LivePlanError::Tenancy(Box::new(e)))?;
-        let mut drift_not_reverted = Vec::new();
-        let mut unknown = Vec::new();
-        let (actions, shared_orphans) = match ledger {
-            Some(ledger) => {
-                let made = made_by(desired, revisions.as_ref());
-                let ids: Vec<ResourceId> = desired
-                    .iter()
-                    .map(ResourceId::from_value)
-                    .chain(ledger.candidates(&made).cloned())
-                    .collect();
-                // The sweep's listing holds every labelled object of every
-                // kind, so the plan reads the build's objects from it.
-                let objects =
-                    LiveObjects::of_listing(client, &discovery, listed, ids.iter().collect())
-                        .await
-                        .map_err(fetch)?;
-                let decided = decided_changes(desired, &made, &objects, &ledger, &sweep.tenancy)?;
-                live =
-                    crate::cluster::apply::baseline_manifests(&live, &[decided.orphan_manifests]);
-                drift_not_reverted = decided.drift_not_reverted;
-                unknown = decided.unknown;
-                (decided.actions, decided.shared)
+        let tenancy_error = |e| LivePlanError::Tenancy(Box::new(e));
+        let mut ledger = match Ledger::of(&sweep.tenancy, true).map_err(tenancy_error)? {
+            Some(ledger) => ledger,
+            None if !deploys => return Err(LivePlanError::NotMigrated { cluster }),
+            None => {
+                let labelled = inventory::managed_of(listed.clone());
+                Ledger::of_notes(&sweep.tenancy, &labelled.managed, true).map_err(tenancy_error)?
             }
-            None => live_changes(desired, &sweep.managed, &sweep.tenancy),
         };
+        let record = Record::of(activation);
+        ledger.deploying(record.identity_hash.as_deref().filter(|_| deploys));
+        let made = made_by(desired, revisions.as_ref());
+        let ids: Vec<ResourceId> = desired
+            .iter()
+            .map(ResourceId::from_value)
+            .chain(ledger.candidates(&made).cloned())
+            .collect();
+        // The sweep's listing holds every labelled object of every kind, so
+        // the plan reads the build's objects from it.
+        let objects = LiveObjects::of_listing(client, &discovery, listed, ids.iter().collect())
+            .await
+            .map_err(fetch)?;
+        let decided = decided_changes(desired, &made, &objects, &ledger, &sweep.tenancy)?;
+        live = crate::cluster::apply::baseline_manifests(&live, &[decided.orphan_manifests]);
+        let drift_not_reverted = decided.drift_not_reverted;
+        let unknown = decided.unknown;
+        let (actions, shared_orphans) = (decided.actions, decided.shared);
         let orphans: Vec<ResourceId> = actions
             .iter()
             .filter_map(|a| match a {
@@ -212,7 +235,9 @@ impl LivePlan {
             client: client.clone(),
             discovery,
             cluster,
-            record: Record::of(activation),
+            record,
+            migrations: decided.migrations,
+            kept_at_begin: decided.kept_at_begin,
             plan,
             orphans,
             shared_orphans,
@@ -313,7 +338,8 @@ impl LivePlan {
                 // Activation status rather than silently clobbering fields
                 // owned by other controllers.
                 Force::None,
-            ),
+            )
+            .with_migrations(self.migrations),
             RecordConfig {
                 name: manage_lifecycle.then_some(self.record.name),
                 // The operator created the record itself and owns
@@ -327,13 +353,13 @@ impl LivePlan {
                 // The live objects already show a failed deploy's leftovers,
                 // so there is nothing to fold and nothing to supersede.
                 consumed_failed: Vec::new(),
-                // Its orphans are live objects the next reconcile finds
-                // again, so there are no builds to record. The objects whose
-                // kind the cluster does not serve keep their place.
+                // The objects whose kind the cluster does not serve keep
+                // their place.
                 kept_orphans: crate::cluster::activation::KeptOrphans {
                     unknown: self.unknown,
                     ..Default::default()
                 },
+                kept_at_begin: self.kept_at_begin.filter(|_| manage_lifecycle),
                 // Only a run that writes the record names revisions in it.
                 revisions: self.revisions.filter(|_| manage_lifecycle),
                 // The operator deploys whole builds.
@@ -362,6 +388,8 @@ impl LivePlan {
 struct DecidedChanges {
     actions: Vec<ChangeAction>,
     shared: Vec<SharedOrphan>,
+    migrations: crate::cluster::ops::Migrations,
+    kept_at_begin: Option<Vec<crate::cluster::revision::RevisionObject>>,
     /// The live objects of the orphans the prune may delete, as manifests.
     orphan_manifests: Vec<Value>,
     drift_not_reverted: Vec<DriftNotReverted>,
@@ -401,6 +429,9 @@ fn decided_changes(
             "objects earlier deploys left are of kinds the cluster does not serve now; they are not pruned, and the record keeps them listed"
         );
     }
+    let kept_at_begin = ledger
+        .is_from_notes()
+        .then(|| Ledger::live_orphans(&decided.orphans, live));
     let (orphans, shared) = inventory::split_shared_orphans_listed(decided.orphans, live, tenancy);
     let orphan_manifests = orphans
         .iter()
@@ -420,6 +451,16 @@ fn decided_changes(
             _ => None,
         })
         .collect();
+    // The operator always prunes, so an orphan it keeps is one it could
+    // not delete, which the next reconcile tries again.
+    let migrations = crate::cluster::ops::Migrations {
+        objects: decided.migrations.iter().cloned().collect(),
+        renamed: decided.renamed.iter().cloned().collect(),
+        orphans: Vec::new(),
+        releases: shared.iter().map(|s| s.rid.clone()).collect(),
+        carried: decided.carried.clone(),
+        rule: ledger.rule().clone(),
+    };
     let actions = decided
         .decisions
         .into_iter()
@@ -429,37 +470,12 @@ fn decided_changes(
     Ok(DecidedChanges {
         actions,
         shared,
+        migrations,
+        kept_at_begin,
         orphan_manifests,
         drift_not_reverted,
         unknown: decided.unknown,
     })
-}
-
-/// Compare desired manifests with this cluster's live objects by identity
-/// hash, keeping out of the orphans every object another Kix cluster's
-/// current build still contains.
-fn live_changes(
-    desired: &[Value],
-    live: &[DynamicObject],
-    tenancy: &Tenancy,
-) -> (Vec<ChangeAction>, Vec<SharedOrphan>) {
-    let actions = detect_changes_live(desired, live);
-    let orphans: Vec<ResourceId> = actions
-        .iter()
-        .filter_map(|a| match a {
-            ChangeAction::Orphan(rid) => Some(rid.clone()),
-            _ => None,
-        })
-        .collect();
-    let (_, shared) = inventory::split_shared_orphans(orphans, live, tenancy);
-    let actions = actions
-        .into_iter()
-        .filter(|a| match a {
-            ChangeAction::Orphan(rid) => !shared.iter().any(|s| &s.rid == rid),
-            _ => true,
-        })
-        .collect();
-    (actions, shared)
 }
 
 #[cfg(test)]
@@ -517,6 +533,21 @@ mod tests {
         v
     }
 
+    /// Decide `desired` against `objects` for a Kix cluster that an older
+    /// Kix deployed last, from the notes on the objects, as the operator's
+    /// deploy does.
+    fn notes_changes(
+        desired: &[Value],
+        objects: &[DynamicObject],
+        tenancy: &Tenancy,
+    ) -> (Vec<ChangeAction>, Vec<SharedOrphan>) {
+        let ledger = Ledger::of_notes(tenancy, objects, true).unwrap();
+        let made = made_by(desired, None);
+        let live = LiveObjects::of(objects.iter().cloned(), []);
+        let decided = decided_changes(desired, &made, &live, &ledger, tenancy).unwrap();
+        (decided.actions, decided.shared)
+    }
+
     /// The reconcile of Kix cluster `a` in a Kubernetes cluster that also
     /// runs `b`: it prunes its own stale object, never `b`'s, and keeps the
     /// ClusterRole both deployed after `a` dropped it.
@@ -537,7 +568,7 @@ mod tests {
             inventory::SweepScope::Cluster("a"),
             tenancy.clone(),
         );
-        let (actions, shared) = live_changes(&desired, &sweep.managed, &tenancy);
+        let (actions, shared) = notes_changes(&desired, &sweep.managed, &tenancy);
         assert_eq!(orphans(&actions), vec!["a-stale"]);
         assert_eq!(shared.len(), 1);
         assert_eq!(shared[0].rid.name, "shared");
@@ -553,7 +584,7 @@ mod tests {
             annotated("ConfigMap", "b-web", "h-b", ""),
             annotated("ClusterRole", "shared", "h-shared", ""),
         ];
-        let (actions, shared) = live_changes(&desired, &sweep.managed, &tenancy);
+        let (actions, shared) = notes_changes(&desired, &sweep.managed, &tenancy);
         assert!(orphans(&actions).is_empty());
         assert!(shared.is_empty());
     }
@@ -577,7 +608,7 @@ mod tests {
         );
         let desired = [annotated("ConfigMap", "a-web", "h-web", "")];
         assert_eq!(sweep.unattributed.len(), 2);
-        let (actions, _) = live_changes(&desired, &sweep.managed, &tenancy);
+        let (actions, _) = notes_changes(&desired, &sweep.managed, &tenancy);
         assert_eq!(orphans(&actions), vec!["a-stale"]);
     }
 
@@ -588,10 +619,24 @@ mod tests {
         job
     }
 
+    /// Return `job` as an older Kix left it after its last run failed,
+    /// with the applied hash it recorded in its note.
     fn failed(mut job: Value) -> Value {
-        job["metadata"]["managedFields"] = json!([{ "manager": "kix", "operation": "Apply" }]);
+        job["metadata"]["managedFields"] = json!([{
+            "manager": crate::cluster::field_manager::LEGACY,
+            "operation": "Apply",
+            "fieldsType": "FieldsV1",
+            "fieldsV1": { "f:spec": { "f:backoffLimit": {} } },
+        }]);
         job["spec"] = json!({ "backoffLimit": 0 });
         job["status"] = json!({ "failed": 1 });
+        let obj: DynamicObject = serde_json::from_value(job.clone()).unwrap();
+        let applied = crate::cluster::fieldsv1::applied_content_hash(
+            &obj,
+            &crate::cluster::field_manager::FieldManager::unmigrated("a"),
+        )
+        .unwrap();
+        job["metadata"]["annotations"][keys::APPLIED_HASH] = json!(applied);
         job
     }
 
@@ -619,7 +664,7 @@ mod tests {
         let live_job: DynamicObject = serde_json::from_value(failed(rerun_job("h-job"))).unwrap();
         let tenancy = Tenancy::fixture(&[record("a", "a2")], "a");
         let desired = [rerun_job("h-job")];
-        let (actions, _) = live_changes(&desired, std::slice::from_ref(&live_job), &tenancy);
+        let (actions, _) = notes_changes(&desired, std::slice::from_ref(&live_job), &tenancy);
         let graph = ResourceGraph::from_manifests(&desired).unwrap();
         let mut operator = LivePlan {
             client: client.clone(),
@@ -636,6 +681,8 @@ mod tests {
             revisions: None,
             drift_not_reverted: Vec::new(),
             unknown: Vec::new(),
+            migrations: Default::default(),
+            kept_at_begin: None,
         };
         assert_eq!(operator.applies(), 0);
         assert_eq!(
@@ -675,7 +722,7 @@ mod tests {
             serde_json::to_value(live("ConfigMap", "stale", "h-stale", "a1")).unwrap(),
         ]);
         let activation: DynamicObject = serde_json::from_value(rec).unwrap();
-        let plan = LivePlan::sweep(&api.client(), &activation, &[], None)
+        let plan = LivePlan::sweep(&api.client(), &activation, &[], None, true)
             .await
             .unwrap();
         assert_eq!(
@@ -828,6 +875,7 @@ mod tests {
                 &record,
                 &manifests(&new),
                 Some(RevisionSet::of("a", &new)),
+                true,
             )
             .await
             .unwrap();
@@ -861,7 +909,7 @@ mod tests {
             let graph = build(&[config_map("web", "1"), config_map("calm", "1")]);
             let owned = |mut m: Value| {
                 m["metadata"]["managedFields"] = json!([{
-                    "manager": crate::cluster::field_manager::LEGACY,
+                    "manager": "kix/a",
                     "operation": "Apply",
                     "apiVersion": "v1",
                     "fieldsV1": { "f:data": { "f:k": {} } },
@@ -932,7 +980,7 @@ mod tests {
                 Some(crate::plan::document::WriteReason::RevertsDrift { .. })
             ));
 
-            let operator = LivePlan::sweep(&client, &record, &manifests(&graph), Some(set))
+            let operator = LivePlan::sweep(&client, &record, &manifests(&graph), Some(set), false)
                 .await
                 .unwrap();
             assert_eq!(written(&operator.plan), ["web"]);
@@ -981,7 +1029,7 @@ mod tests {
             let graph = build(&[config_map("web", "1"), config_map("calm", "1")]);
             let owned = |mut m: Value| {
                 m["metadata"]["managedFields"] = json!([{
-                    "manager": crate::cluster::field_manager::LEGACY,
+                    "manager": "kix/a",
                     "operation": "Apply",
                     "apiVersion": "v1",
                     "fieldsV1": { "f:data": { "f:k": {} } },
@@ -1004,7 +1052,7 @@ mod tests {
                     store.write_applied(&revision.name, &entries).await.unwrap();
                 }
             }
-            let plan = LivePlan::sweep(&client, &record, &manifests(&graph), Some(set))
+            let plan = LivePlan::sweep(&client, &record, &manifests(&graph), Some(set), false)
                 .await
                 .unwrap();
             assert_eq!(written(&plan.plan), ["calm", "web"]);
@@ -1151,7 +1199,7 @@ mod tests {
                 crate::plan::Target::connect(client, crate::build_source::SopsSources::Local)
                     .await
                     .unwrap();
-            let (result, _) = checked
+            let result = checked
                 .run(
                     target,
                     lock.clone(),
@@ -1183,6 +1231,7 @@ mod tests {
                 &record,
                 &desired,
                 Some(RevisionSet::of("a", graph)),
+                false,
             )
             .await
             .unwrap()
@@ -1471,7 +1520,7 @@ mod tests {
                 crate::plan::Target::connect(client, crate::build_source::SopsSources::Local)
                     .await
                     .unwrap();
-            let (result, _) = checked
+            let result = checked
                 .run(
                     target,
                     lock.clone(),
@@ -1519,7 +1568,7 @@ mod tests {
             // Kubernetes answers an apply with the fields the manager owns.
             api.on_apply("web", |obj| {
                 obj["metadata"]["managedFields"] = json!([{
-                    "manager": crate::cluster::field_manager::LEGACY,
+                    "manager": "kix/a",
                     "operation": "Apply",
                     "apiVersion": "v1",
                     "fieldsV1": { "f:data": { "f:k": {} } },
@@ -1529,7 +1578,7 @@ mod tests {
             let desired = manifests(&graph);
             let set = RevisionSet::of("a", &graph);
 
-            let plan = LivePlan::sweep(&client, &record, &desired, Some(set.clone()))
+            let plan = LivePlan::sweep(&client, &record, &desired, Some(set.clone()), false)
                 .await
                 .unwrap();
             assert_eq!((plan.applies(), plan.unchanged()), (1, 0));
@@ -1558,7 +1607,7 @@ mod tests {
             .unwrap();
             lock.release().await.unwrap();
 
-            let again = LivePlan::sweep(&client, &record, &desired, Some(set))
+            let again = LivePlan::sweep(&client, &record, &desired, Some(set), false)
                 .await
                 .unwrap();
             assert_eq!((again.applies(), again.unchanged()), (0, 1));

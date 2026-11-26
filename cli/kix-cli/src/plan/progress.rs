@@ -66,7 +66,7 @@ pub fn print(event: PlanEvent<'_>) {
                 output::bold(activation)
             ));
             eprintln!(
-                "  This plan cannot list or delete the orphaned objects kept from {activation}."
+                "  The package diff cannot show the orphaned objects kept from {activation}."
             );
         }
         PlanEvent::Connecting(connection) => crate::say!("{}", connection.connecting()),
@@ -191,26 +191,6 @@ pub fn print(event: PlanEvent<'_>) {
                 output::yellow("!"),
                 objects.len(),
                 some_names(names.iter().map(String::as_str)),
-            );
-        }
-        PlanEvent::KindsUnread(kinds) => {
-            warning(&format!(
-                "this Kubernetes account can neither list {} across the cluster nor get them one by one.",
-                some_names(kinds.iter().map(String::as_str))
-            ));
-            crate::esay!(
-                "  Without `--reconcile`, this plan skips objects of these kinds that are unchanged from the current deployment, even if they were deleted or are being deleted on the cluster.\n  To check them, grant this account cluster-wide `list` permission for these kinds, or `get` in the namespaces the build uses, or pass `--reconcile` on `kix plan` or `kix deploy` to reapply every resource."
-            );
-        }
-        PlanEvent::KeptUnresolved { sources, cluster } => {
-            let names = some_names(sources.iter().map(|s| s.activation.as_str()));
-            warning(&format!(
-                "{} earlier deployment(s) ({names}) kept orphaned objects (deployed without `--prune`) from builds that are not in Kix's local store on this machine.",
-                sources.len()
-            ));
-            crate::esay!("  This plan cannot list or delete those orphaned objects.");
-            crate::esay!(
-                "  To remove them, run `kix deploy {cluster} --prune` from a machine that has those builds, or run `kix gc --full-scan {cluster}`."
             );
         }
     }

@@ -1,3 +1,0 @@
-# 2026-11-26 · `cli/kix/src/cluster/prune_guard.rs` · An object two Kix clusters once shared is never pruned after both stop deploying it.
-
-Each Kix cluster applies under its own field manager, and the prune guard keeps any object that carries another Kix cluster's `Apply` entry. When Kix cluster B stops deploying a shared object, B's prune keeps it because A still deploys it, and B's entry stays on the object. When A later stops deploying it too, A's prune keeps it because of B's stale entry, and reports it as "still deployed by Kix cluster B". Nothing removes the entry, so the object stays for good. See `Tenancy::still_deployed_by_others` in `cli/kix/src/cluster/tenancy.rs`.

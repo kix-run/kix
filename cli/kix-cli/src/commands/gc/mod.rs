@@ -803,6 +803,21 @@ async fn run_hard_async(
     .await
     .map_err(|e| miette!("failed to fetch live resources: {e}"))?;
     let tenancy = sweep.tenancy.clone();
+    if tenancy.only_kept_unreadable() {
+        return rebuild_kept_list(
+            args,
+            global,
+            &client,
+            &records,
+            &sweep,
+            (expected_hashes, expected_ids, in_build),
+            cluster_name,
+            kubernetes_uid,
+            build_hash,
+            compared,
+        )
+        .await;
+    }
     tenancy
         .complete()
         .map_err(|e| miette!("{e}. Nothing was deleted."))?;
@@ -983,6 +998,107 @@ async fn run_hard_async(
         done.left(),
         Some((retired, retirement.plan.kept.len())),
     )
+}
+
+/// Rebuild the kept-orphans list of Kix cluster `cluster_name` when the
+/// revision its current record names is missing or cannot be read, then
+/// run the full scan again. The new list names every live object that has
+/// an `Apply` entry under the cluster's field manager, that no other
+/// revision of the cluster names, and that the build compared with does not
+/// hold ([`kix::cluster::tenancy::Tenancy::unlisted_own`]). With
+/// `--dry-run`, say what the list would name and change nothing.
+#[allow(clippy::too_many_arguments)]
+async fn rebuild_kept_list(
+    args: &GcArgs,
+    global: &crate::cli::GlobalArgs,
+    client: &kube::Client,
+    records: &OpenedRecords,
+    sweep: &inventory::ManagedSweep,
+    build: (&HashSet<String>, &HashSet<String>, &HashSet<ResourceId>),
+    cluster_name: &str,
+    kubernetes_uid: Option<&str>,
+    build_hash: Option<&str>,
+    compared: &str,
+) -> Result<()> {
+    let (expected_hashes, expected_ids, in_build) = build;
+    let tenancy = &sweep.tenancy;
+    let problem = tenancy
+        .problems()
+        .first()
+        .map(ToString::to_string)
+        .unwrap_or_default();
+    let mut objects: Vec<RevisionObject> = sweep
+        .managed
+        .iter()
+        .chain(&sweep.unattributed)
+        .filter(|obj| lifecycle::lifecycle_of_live(obj).prunable())
+        .filter(|obj| tenancy.unlisted_own(obj))
+        .filter_map(|obj| {
+            let rid = kix::cluster::drift::resource_id(obj);
+            let hash = obj
+                .metadata
+                .annotations
+                .as_ref()
+                .and_then(|a| keys::get_meta(a, keys::IDENTITY_HASH))?;
+            (!in_build.contains(&rid)).then(|| RevisionObject::of_id(hash, &rid))
+        })
+        .collect();
+    objects.sort();
+    objects.dedup();
+    crate::say!(
+        "{} {problem}. Kix rebuilds the list from the {} live object(s) that this Kix cluster applied, that no other deployment record of it names, and that {compared} does not hold.",
+        output::yellow("Note:"),
+        objects.len(),
+    );
+    if args.dry_run {
+        crate::say!("Nothing was changed on the cluster, because `--dry-run` is set.");
+        return Ok(());
+    }
+    let Some(record) = tenancy.own_current().map(str::to_string) else {
+        return Err(miette!(
+            "{problem}. Kix cluster {cluster_name} has no current deployment record to name a rebuilt list on. Nothing was deleted."
+        ));
+    };
+    let Some(opened) = records.records() else {
+        return Err(miette!(
+            "the deployment records of '{cluster_name}' cannot be read. Nothing was deleted."
+        ));
+    };
+    let lock = super::lock::take(
+        client,
+        cluster_name,
+        "kix gc",
+        kix::cluster::head::Purpose::Gc,
+        None,
+        None,
+    )
+    .await?;
+    let guarded = lock.guarded(client);
+    let written = kix::cluster::revision::keep::rebuild_kept(
+        &guarded,
+        &opened.through(&guarded),
+        cluster_name,
+        &record,
+        objects,
+    )
+    .await;
+    super::lock::release(&lock).await;
+    let name = written.map_err(|e| {
+        miette!("could not write the rebuilt kept-orphans list: {e}. Nothing was deleted.")
+    })?;
+    crate::say!("Named kept-orphans revision {name} on deployment record {record}.");
+    Box::pin(run_hard_async(
+        args,
+        global,
+        expected_hashes,
+        expected_ids,
+        in_build,
+        cluster_name,
+        kubernetes_uid,
+        build_hash,
+        compared,
+    ))
+    .await
 }
 
 async fn run_operator(args: &GcArgs, cluster: &str, ctx: &CommandContext) -> Result<()> {

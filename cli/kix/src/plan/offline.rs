@@ -242,7 +242,7 @@ mod tests {
     use super::*;
     use crate::build_source::{Build, CarriedBuild, InstallableBuild, Provenance};
     use crate::cluster::fake_api::FakeApi;
-    use crate::cluster::field_manager::{FieldManager, LEGACY};
+    use crate::cluster::field_manager::FieldManager;
     use crate::cluster::fieldsv1::applied_content_hash;
     use crate::cluster::revision::{RevisionMap, RevisionSet, Revisions};
     use crate::eval::store_graph::StoreGraph;
@@ -323,7 +323,7 @@ mod tests {
     /// Return `manifest` as Kubernetes holds it after Kix applied it.
     fn applied(mut manifest: Value) -> Value {
         manifest["metadata"]["managedFields"] = json!([{
-            "manager": LEGACY,
+            "manager": "kix/a",
             "operation": "Apply",
             "apiVersion": "v1",
             "fieldsV1": { "f:data": { "f:k": {} } },
@@ -438,7 +438,7 @@ mod tests {
                 connection,
             )
             .await
-            .map(|r| r.is_some());
+            .map(|_| true);
         let writes = api.requests()[before..]
             .iter()
             .filter(|r| !r.starts_with("GET"))
@@ -459,7 +459,7 @@ mod tests {
 
     /// The live plan of a cluster that holds the confirmed build as Kix
     /// applied it matches the confirmed plan, and the run uses it. A Kix
-    /// cluster read from records is not planned again.
+    /// cluster read from records is planned again from its notes.
     #[tokio::test]
     async fn an_offline_plan_the_cluster_agrees_with_runs() {
         let new = build(&[config_map("web", "1"), config_map("calm", "1")], "a-cur");
@@ -468,17 +468,18 @@ mod tests {
         let api = cluster(&graph, None, &live, &["web", "calm"], &[]).await;
         assert!(recheck(&api, &graph, &new).await.0.unwrap());
 
-        // A Kix cluster read from records is not planned again, and the
-        // offline plan runs as made.
+        // A Kix cluster read from records is planned again too, from the
+        // notes on its objects. These carry no `kix.run/applied-hash` note,
+        // so the live plan writes them and the deploy is refused before it
+        // writes anything.
         let mut current = record(&graph, PHASE_ACTIVE);
         current["status"]
             .as_object_mut()
             .unwrap()
             .remove("revisions");
         let api = FakeApi::new([current].into_iter().chain(live));
-        let (result, writes) = recheck(&api, &graph, &new).await;
-        assert!(!result.unwrap());
-        assert!(writes.is_empty(), "{writes:?}");
+        let differs = refusal(recheck(&api, &graph, &new).await);
+        assert_eq!(differs.writes_added.len(), 2, "{differs:?}");
     }
 
     /// A drifted object, an object with no applied hash, and the leftover

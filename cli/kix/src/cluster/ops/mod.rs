@@ -6,8 +6,8 @@
 //! - `ResourceIo` manages the objects of the plan (apply, read, recreate, wait
 //!   for readiness, refresh discovery, and prune).
 //! - `DeployRecord` manages the engine's view of the run's Activation record
-//!   (begin, checkpoint, stamp unchanged objects, abort, finalize, and the
-//!   end of a partial deploy), built on
+//!   (begin, checkpoint, applied hashes, abort, finalize, and the end of a
+//!   partial deploy), built on
 //!   `activation::Records`.
 //! - `SecretHydrator` decrypts SOPS-backed Secret data before an apply.
 //!
@@ -141,6 +141,25 @@ pub(crate) trait ResourceIo: Send + Sync + 'static {
         propagation: kube::api::PropagationPolicy,
     ) -> Result<Pruned, DeleteError>;
 
+    /// Write the migration write ([`super::migration_write`]) to the
+    /// object `rid` of the build, which the run did not apply because it was
+    /// unchanged, when the plan listed it and the run has not written it
+    /// yet. Return whether it wrote.
+    async fn migrate_unchanged(
+        &self,
+        _rid: &ResourceId,
+    ) -> Result<bool, super::migration_write::WriteError> {
+        Ok(false)
+    }
+
+    /// Once the run's record is final: write the migration write to each
+    /// orphan of `left`, the ones the run left on the cluster, that the plan
+    /// listed, and give up the fields of each orphan another Kix cluster
+    /// still deploys. Return what failed, one message for each object.
+    async fn after_finalize(&self, _left: &[ResourceId]) -> Vec<String> {
+        Vec::new()
+    }
+
     /// Wait for the object `rid` with uid `uid`, which [`ResourceIo::prune`]
     /// deleted, to be gone ([`super::readiness::wait_gone`]). A dry run
     /// deleted nothing, so it does not wait.
@@ -163,9 +182,9 @@ pub(crate) trait ResourceIo: Send + Sync + 'static {
 /// checkpoint, abort, and finalize with a shorter limit of its own.
 #[async_trait]
 pub(crate) trait DeployRecord: Send + Sync + 'static {
-    /// Create the Activation record, mark it `Deploying`, and read the set of
-    /// live Activations used to prune `kix.run/activations`. Nothing is in
-    /// flight yet, so the engine may await this inline.
+    /// Create the Activation record and the revisions it names, and mark it
+    /// `Deploying`. Nothing is in flight yet, so the engine may await this
+    /// inline.
     ///
     /// Creating the record before the first node ensures that a run stopping
     /// midway still leaves a record of what it attempted. The record's kind is
@@ -182,10 +201,6 @@ pub(crate) trait DeployRecord: Send + Sync + 'static {
         failed: usize,
         finalizing: bool,
     ) -> Result<(), RecordWriteError>;
-
-    /// Stamp the current activation on a resource the run did not apply
-    /// because it was unchanged.
-    async fn stamp_unchanged(&self, rid: &ResourceId) -> Result<(), StampError>;
 
     /// Write the applied hash of each object the run applied since the last
     /// call to `status.applied` of every kept revision of the run's Kix
@@ -218,14 +233,45 @@ pub(crate) trait DeployRecord: Send + Sync + 'static {
     /// no Activation to finalize (no name configured or CRD absent).
     ///
     /// `left` names the orphans the run did not delete (warn-only, skip, or
-    /// a failed delete). While there are any, the record must keep naming
-    /// the builds they came from, and it lists them in a kept-orphans
-    /// revision.
+    /// a failed delete). The record lists them in a kept-orphans revision.
     async fn finalize(
         &self,
         had_failures: bool,
         left: Left<'_>,
     ) -> Result<Option<Finalized>, RecordWriteError>;
+}
+
+/// The migration writes a run makes ([`super::migration_write`]), as the
+/// plan listed them.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Migrations {
+    /// The objects of the build that need the write. The run writes it
+    /// right before it applies one, and once the nodes finish to each one
+    /// it did not apply because it was unchanged.
+    pub(crate) objects: std::collections::HashSet<ResourceId>,
+    /// The objects of `objects` whose `Apply` entry under `kix` the write
+    /// moves to the cluster's manager. A dry run applies them under `kix`.
+    pub(crate) renamed: std::collections::HashSet<ResourceId>,
+    /// The orphans that need the write. The run writes it to those it left
+    /// on the cluster once its record is final and lists them.
+    pub(crate) orphans: Vec<ResourceId>,
+    /// The orphans another Kix cluster still deploys. Once the record is
+    /// final, the run gives up its fields on each with an empty apply, so
+    /// its entry does not keep the object for ever.
+    pub(crate) releases: Vec<ResourceId>,
+    /// The applied hashes the notes of objects the run does not apply hold,
+    /// which the run writes to its revisions with the hashes of what it
+    /// applies ([`super::revision::applied::pending`]).
+    pub(crate) carried: Vec<(super::revision::RevisionObject, String)>,
+    pub(crate) rule: super::migration_write::Rule,
+}
+
+impl Migrations {
+    /// Return how many objects the run writes the migration write to, at
+    /// most.
+    pub(crate) fn count(&self) -> usize {
+        self.objects.len() + self.orphans.len()
+    }
 }
 
 /// The orphans a run left on the cluster.
@@ -235,19 +281,11 @@ pub(crate) struct Left<'a> {
     /// prunes.
     pub(crate) orphans: &'a [ResourceId],
     /// Each orphan of a kind Kix never prunes (`lifecycle::never_pruned`).
-    /// The kept-orphans revision names them so reports can list them, and
-    /// they leave `status.orphansKeptFrom` alone.
+    /// The kept-orphans revision names them so reports can list them.
     pub(crate) never_pruned: &'a [ResourceId],
     /// The manifests the run's orphans came from: the earlier builds for the
     /// CLI, the live objects for the operator.
     pub(crate) manifests: &'a [Value],
-}
-
-impl Left<'_> {
-    /// Return whether the run left any orphan.
-    pub(crate) fn any(&self) -> bool {
-        !self.orphans.is_empty()
-    }
 }
 
 /// Decrypts SOPS-backed data in a Secret manifest before it is applied.
@@ -420,19 +458,6 @@ pub(crate) enum RecreateError {
     Reapply(ApplyError),
     #[error("dry-run re-apply failed: {0}")]
     DryRunReapply(ApplyError),
-    /// A failure a test scripted, with its message.
-    #[cfg(any(test, feature = "test-util"))]
-    #[error("{0}")]
-    Scripted(String),
-}
-
-/// Why [`DeployRecord::stamp_unchanged`] did not stamp a resource.
-#[derive(Debug, Error)]
-pub(crate) enum StampError {
-    #[error("this Kubernetes cluster does not serve this resource's kind")]
-    NotDiscovered,
-    #[error(transparent)]
-    Apply(ApplyError),
     /// A failure a test scripted, with its message.
     #[cfg(any(test, feature = "test-util"))]
     #[error("{0}")]

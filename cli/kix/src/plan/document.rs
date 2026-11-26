@@ -134,6 +134,13 @@ pub struct Plan {
     /// --read-only`, or an account that may not read it.
     #[serde(default)]
     pub head: Option<PlanHead>,
+    /// How many objects the deploy moves to this version of Kix's
+    /// bookkeeping, once: it renames their field manager `kix` to the Kix
+    /// cluster's own, and removes the two annotations in which an earlier
+    /// version recorded which deploys name the object and what it applied.
+    /// Left out when there are none.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub metadata_rewrites: usize,
 }
 
 /// The deploy lock of a Kix cluster, as a plan read it.
@@ -1017,6 +1024,7 @@ impl Plan {
             only_needed: Vec::new(),
             earlier_deploys: Vec::new(),
             head: None,
+            metadata_rewrites: 0,
         }
     }
 
@@ -1031,6 +1039,7 @@ impl Plan {
             || p.activation.is_some()
             || !self.migrations.items().is_empty()
             || !self.being_deleted.is_empty()
+            || self.metadata_rewrites > 0
             || self
                 .prune
                 .items()

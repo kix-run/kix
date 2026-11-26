@@ -1,7 +1,6 @@
 use super::*;
 use crate::cluster::field_manager::FieldManager;
-use crate::cluster::test_fixtures::{api_version_of, manifest};
-use kube::api::ObjectMeta;
+use crate::cluster::test_fixtures::manifest;
 use serde_json::json;
 
 #[test]
@@ -114,68 +113,6 @@ fn immutable_rejection_is_not_a_stored_version_one() {
     assert!(!super::is_stored_version_message(msg));
 }
 
-fn live(hashes: &[&str]) -> HashSet<String> {
-    hashes.iter().map(|s| s.to_string()).collect()
-}
-
-#[test]
-fn merges_into_an_existing_set() {
-    assert_eq!(
-        merge_activation_set("bbb,ccc", "aaa", Some(&live(&["bbb", "ccc"]))),
-        "aaa,bbb,ccc"
-    );
-}
-
-#[test]
-fn first_activation_on_a_bare_resource() {
-    assert_eq!(merge_activation_set("", "aaa", Some(&live(&[]))), "aaa");
-}
-
-#[test]
-fn drops_activations_that_no_longer_exist() {
-    // `dead` names an Activation CR that has been garbage-collected.
-    assert_eq!(
-        merge_activation_set("bbb,dead", "aaa", Some(&live(&["bbb"]))),
-        "aaa,bbb"
-    );
-}
-
-#[test]
-fn keeps_the_current_activation_even_when_not_yet_on_cluster() {
-    // The Activation CR is applied in the last wave, so it is absent from
-    // the live set while its own resources are being stamped.
-    assert_eq!(
-        merge_activation_set("bbb", "aaa", Some(&live(&["bbb"]))),
-        "aaa,bbb"
-    );
-}
-
-#[test]
-fn unknown_live_set_never_prunes() {
-    assert_eq!(
-        merge_activation_set("bbb,dead", "aaa", None),
-        "aaa,bbb,dead"
-    );
-}
-
-#[test]
-fn is_idempotent_and_order_insensitive() {
-    let l = live(&["aaa", "bbb"]);
-    let once = merge_activation_set("bbb,aaa", "aaa", Some(&l));
-    assert_eq!(once, merge_activation_set(&once, "aaa", Some(&l)));
-    assert_eq!(once, merge_activation_set("aaa,bbb", "aaa", Some(&l)));
-    // Unchanged output is how the caller decides to skip the write.
-    assert_eq!(once, "aaa,bbb");
-}
-
-#[test]
-fn tolerates_whitespace_and_empty_entries() {
-    assert_eq!(
-        merge_activation_set(" bbb , , ccc ", "aaa", Some(&live(&["bbb", "ccc"]))),
-        "aaa,bbb,ccc"
-    );
-}
-
 #[test]
 fn unstamped_old_manifest_is_never_an_orphan() {
     let mut inherited = manifest("EndpointSlice", "web-abc", "default", "unused", "");
@@ -188,25 +125,6 @@ fn unstamped_old_manifest_is_never_an_orphan() {
         manifest("Deployment", "gone", "default", "id-gone", ""),
     ];
     let actions = detect_changes(&[], &old);
-    let orphans: Vec<_> = actions
-        .iter()
-        .filter_map(|a| match a {
-            ChangeAction::Orphan(rid) => Some(rid.name.as_str()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(orphans, vec!["gone"]);
-}
-
-#[test]
-fn unstamped_live_object_is_never_an_orphan() {
-    let mut inherited = live_object("EndpointSlice", "web-abc", "default", "unused");
-    inherited.metadata.annotations = None;
-    let live = vec![
-        inherited,
-        live_object("Deployment", "gone", "default", "id-gone"),
-    ];
-    let actions = detect_changes_live(&[], &live);
     let orphans: Vec<_> = actions
         .iter()
         .filter_map(|a| match a {
@@ -369,169 +287,6 @@ fn apply_action_eq() {
     assert_ne!(ApplyAction::Created, ApplyAction::Configured);
 }
 
-fn live_object(kind: &str, name: &str, ns: &str, identity_hash: &str) -> DynamicObject {
-    live_object_as(api_version_of(kind), kind, name, ns, identity_hash)
-}
-
-fn live_object_as(
-    api_version: &str,
-    kind: &str,
-    name: &str,
-    ns: &str,
-    identity_hash: &str,
-) -> DynamicObject {
-    let mut annotations = std::collections::BTreeMap::new();
-    annotations.insert(keys::IDENTITY_HASH.to_string(), identity_hash.to_string());
-    DynamicObject {
-        metadata: ObjectMeta {
-            name: Some(name.to_string()),
-            namespace: if ns == crate::manifest::types::CLUSTER_SCOPED {
-                None
-            } else {
-                Some(ns.to_string())
-            },
-            annotations: Some(annotations),
-            ..Default::default()
-        },
-        types: Some(kube::api::TypeMeta {
-            kind: kind.to_string(),
-            api_version: api_version.to_string(),
-        }),
-        data: json!({
-            "kind": kind,
-            "apiVersion": api_version,
-            "metadata": {
-                "name": name,
-                "namespace": ns,
-                "annotations": {
-                    keys::IDENTITY_HASH: identity_hash,
-                }
-            }
-        }),
-    }
-}
-
-#[test]
-fn live_detect_new_resource() {
-    let desired = vec![manifest("Deployment", "app", "default", "id1", "")];
-    let live: Vec<DynamicObject> = vec![];
-
-    let actions = detect_changes_live(&desired, &live);
-    assert_eq!(actions.len(), 1);
-    assert!(matches!(&actions[0], ChangeAction::Apply(_)));
-}
-
-#[test]
-fn live_detect_unchanged_resource() {
-    let desired = vec![manifest("Deployment", "app", "default", "id1", "")];
-    let live = vec![live_object("Deployment", "app", "default", "id1")];
-
-    let actions = detect_changes_live(&desired, &live);
-    assert_eq!(actions.len(), 1);
-    assert!(matches!(&actions[0], ChangeAction::Skip(_)));
-}
-
-/// An unchanged object that is being deleted is written again, so the
-/// deploy waits for it to go and creates it, instead of skipping it and
-/// leaving it to vanish.
-#[test]
-fn live_detect_unchanged_object_being_deleted_is_written() {
-    let desired = vec![manifest("Deployment", "app", "default", "id1", "")];
-    let mut live = vec![live_object("Deployment", "app", "default", "id1")];
-    live[0].metadata.deletion_timestamp =
-        Some(serde_json::from_value(serde_json::json!("2026-11-24T15:54:00Z")).unwrap());
-
-    let actions = detect_changes_live(&desired, &live);
-    assert_eq!(actions.len(), 1);
-    assert!(matches!(&actions[0], ChangeAction::Apply(_)), "{actions:?}");
-}
-
-/// Same as `detect_changed_owner_stamp` against live objects, the rule the
-/// operator and a plan without the old build use.
-#[test]
-fn live_detect_changed_owner_stamp() {
-    let desired = vec![with_package(
-        manifest("Deployment", "app", "default", "id1", ""),
-        "postgres",
-    )];
-    let stamped = |package: &str| {
-        let mut obj = live_object("Deployment", "app", "default", "id1");
-        let anns = obj
-            .metadata
-            .annotations
-            .get_or_insert_with(Default::default);
-        anns.insert(keys::PACKAGE.to_string(), package.to_string());
-        anns.insert(keys::PACKAGE_NAMESPACE.to_string(), "data".to_string());
-        obj
-    };
-
-    let actions = detect_changes_live(&desired, &[stamped("postgres")]);
-    assert!(matches!(&actions[0], ChangeAction::Skip(_)));
-    let actions = detect_changes_live(&desired, &[stamped("app-db")]);
-    assert_eq!(actions.len(), 1);
-    assert!(matches!(&actions[0], ChangeAction::Apply(_)));
-}
-
-#[test]
-fn live_detect_drifted_resource() {
-    let desired = vec![manifest("Deployment", "app", "default", "desired-hash", "")];
-    let live = vec![live_object("Deployment", "app", "default", "live-hash")];
-
-    let actions = detect_changes_live(&desired, &live);
-    assert_eq!(actions.len(), 1);
-    assert!(matches!(&actions[0], ChangeAction::Apply(_)));
-}
-
-#[test]
-fn live_detect_orphan() {
-    let desired: Vec<Value> = vec![];
-    let live = vec![live_object("Deployment", "orphan", "default", "id1")];
-
-    let actions = detect_changes_live(&desired, &live);
-    assert_eq!(actions.len(), 1);
-    assert!(matches!(&actions[0], ChangeAction::Orphan(_)));
-    if let ChangeAction::Orphan(rid) = &actions[0] {
-        assert_eq!(rid.name, "orphan");
-    }
-}
-
-#[test]
-fn live_detect_mixed() {
-    let desired = vec![
-        manifest("Deployment", "unchanged", "default", "id1", ""),
-        manifest("Deployment", "drifted", "default", "new-hash", ""),
-        manifest("Deployment", "new-app", "default", "id3", ""),
-    ];
-    let live = vec![
-        live_object("Deployment", "unchanged", "default", "id1"),
-        live_object("Deployment", "drifted", "default", "old-hash"),
-        live_object("Deployment", "orphan", "default", "id-orphan"),
-    ];
-
-    let actions = detect_changes_live(&desired, &live);
-    // 3 desired actions + 1 orphan = 4
-    assert_eq!(actions.len(), 4);
-
-    let skips = actions
-        .iter()
-        .filter(|a| matches!(a, ChangeAction::Skip(_)))
-        .count();
-    let applies = actions
-        .iter()
-        .filter(|a| matches!(a, ChangeAction::Apply(_)))
-        .count();
-    let orphans = actions
-        .iter()
-        .filter(|a| matches!(a, ChangeAction::Orphan(_)))
-        .count();
-
-    assert_eq!(skips, 1);
-    assert_eq!(applies, 2);
-    assert_eq!(orphans, 1);
-}
-
-// Deploy records do not participate in change detection.
-
 fn record(name: &str, hash: &str) -> Value {
     json!({
         "apiVersion": keys::API_VERSION,
@@ -541,10 +296,6 @@ fn record(name: &str, hash: &str) -> Value {
             "annotations": { keys::IDENTITY_HASH: hash, keys::PACKAGE: "_cluster" }
         }
     })
-}
-
-fn live_record(name: &str, hash: &str) -> DynamicObject {
-    serde_json::from_value(record(name, hash)).unwrap()
 }
 
 fn orphan_ids(actions: &[ChangeAction]) -> Vec<String> {
@@ -569,221 +320,6 @@ fn apply_ids(actions: &[ChangeAction]) -> Vec<String> {
         .collect();
     v.sort();
     v
-}
-
-fn skip_ids(actions: &[ChangeAction]) -> Vec<String> {
-    let mut v: Vec<String> = actions
-        .iter()
-        .filter_map(|a| match a {
-            ChangeAction::Skip(rid) => Some(rid.display_id()),
-            _ => None,
-        })
-        .collect();
-    v.sort();
-    v
-}
-
-#[test]
-fn an_object_only_a_kept_closure_has_is_an_orphan_again() {
-    let active = vec![manifest("Deployment", "web", "app", "h1", "")];
-    let new = active.clone();
-    let kept = vec![
-        manifest("Deployment", "web", "app", "h0", ""),
-        manifest("ConfigMap", "removed", "app", "h9", ""),
-        record("demo-old", "h8"),
-    ];
-
-    let folded = fold_kept_closures(detect_changes(&new, &active), &new, &[kept]);
-    assert_eq!(orphan_ids(&folded), vec!["ConfigMap/removed@app"]);
-    // A kept closure never turns a Skip into an Apply: A replaced it in full.
-    assert_eq!(skip_ids(&folded), vec!["Deployment.apps/web@app"]);
-    assert!(apply_ids(&folded).is_empty());
-}
-
-#[test]
-fn an_object_the_new_build_declares_again_is_not_an_orphan() {
-    let active = vec![manifest("Deployment", "web", "app", "h1", "")];
-    let new = vec![
-        manifest("Deployment", "web", "app", "h1", ""),
-        manifest("ConfigMap", "removed", "app", "h10", ""),
-    ];
-    let kept = vec![manifest("ConfigMap", "removed", "app", "h9", "")];
-
-    let folded = fold_kept_closures(detect_changes(&new, &active), &new, &[kept]);
-    assert!(orphan_ids(&folded).is_empty());
-}
-
-#[test]
-fn kept_closures_and_the_active_diff_do_not_duplicate_orphans() {
-    let active = vec![
-        manifest("Deployment", "web", "app", "h1", ""),
-        manifest("ConfigMap", "gone", "app", "h5", ""),
-    ];
-    let new = vec![manifest("Deployment", "web", "app", "h1", "")];
-    let first = vec![
-        manifest("ConfigMap", "gone", "app", "h4", ""),
-        manifest("Secret", "older", "app", "h3", ""),
-    ];
-    let second = vec![manifest("Secret", "older", "app", "h3", "")];
-
-    let folded = fold_kept_closures(detect_changes(&new, &active), &new, &[first, second]);
-    assert_eq!(
-        orphan_ids(&folded),
-        vec!["ConfigMap/gone@app", "Secret/older@app"]
-    );
-}
-
-#[test]
-fn a_closure_leaves_orphans_only_for_deletable_objects_the_new_build_lacks() {
-    let new = vec![manifest("Deployment", "web", "app", "h1", "")];
-    assert!(leaves_orphans(
-        &[manifest("ConfigMap", "removed", "app", "h9", "")],
-        &new
-    ));
-    // Same identity under a different hash is an update, not an orphan.
-    assert!(!leaves_orphans(
-        &[manifest("Deployment", "web", "app", "h0", "")],
-        &new
-    ));
-    // Records are superseded and Namespaces are never pruned.
-    assert!(!leaves_orphans(&[record("demo-old", "h8")], &new));
-    let mut ns = manifest("Namespace", "app", "app", "h7", "");
-    ns["apiVersion"] = json!("v1");
-    ns["metadata"].as_object_mut().unwrap().remove("namespace");
-    assert!(!leaves_orphans(&[ns], &new));
-}
-
-#[test]
-fn an_object_only_the_failed_closure_has_is_an_orphan() {
-    let active = vec![manifest("Deployment", "web", "app", "h1", "")];
-    let new = vec![manifest("Deployment", "web", "app", "h1", "")];
-    let failed = vec![
-        manifest("Deployment", "web", "app", "h2", ""),
-        manifest("ConfigMap", "leftover", "app", "h9", ""),
-    ];
-
-    let actions = detect_changes(&new, &active);
-    assert_eq!(orphan_ids(&actions), Vec::<String>::new());
-
-    let folded = fold_failed_closures(actions, &new, &[failed]);
-    assert_eq!(orphan_ids(&folded), vec!["ConfigMap/leftover@app"]);
-}
-
-#[test]
-fn an_object_the_failed_deploy_may_have_changed_is_reapplied() {
-    // When N is identical to A, detect_changes marks `web` as Skip, but if
-    // a failed deploy F had a different hash for `web`, it must be
-    // re-applied in case F overwrote the live object before aborting.
-    let active = vec![manifest("Deployment", "web", "app", "h1", "")];
-    let new = vec![manifest("Deployment", "web", "app", "h1", "")];
-    let failed = vec![manifest("Deployment", "web", "app", "h2", "")];
-
-    let actions = detect_changes(&new, &active);
-    assert_eq!(skip_ids(&actions), vec!["Deployment.apps/web@app"]);
-
-    let folded = fold_failed_closures(actions, &new, &[failed]);
-    assert_eq!(apply_ids(&folded), vec!["Deployment.apps/web@app"]);
-    assert!(skip_ids(&folded).is_empty());
-}
-
-#[test]
-fn a_hash_the_failed_closure_agrees_on_stays_skipped() {
-    // F never disagreed about this one, so nothing it did could have
-    // changed it and re-applying would be noise.
-    let active = vec![manifest("Deployment", "web", "app", "h1", "")];
-    let new = vec![manifest("Deployment", "web", "app", "h1", "")];
-    let failed = vec![manifest("Deployment", "web", "app", "h1", "")];
-
-    let folded = fold_failed_closures(detect_changes(&new, &active), &new, &[failed]);
-    assert_eq!(skip_ids(&folded), vec!["Deployment.apps/web@app"]);
-    assert!(apply_ids(&folded).is_empty());
-}
-
-#[test]
-fn retrying_the_closure_that_failed_applies_it_and_orphans_nothing() {
-    // N == F: every node is already an Apply, and nothing F touched is
-    // outside the set we are about to write.
-    let active = vec![manifest("Deployment", "web", "app", "h1", "")];
-    let new = vec![
-        manifest("Deployment", "web", "app", "h2", ""),
-        manifest("ConfigMap", "extra", "app", "h9", ""),
-    ];
-    let failed = new.clone();
-
-    let folded = fold_failed_closures(detect_changes(&new, &active), &new, &[failed]);
-    assert_eq!(
-        apply_ids(&folded),
-        vec!["ConfigMap/extra@app", "Deployment.apps/web@app"]
-    );
-    assert!(orphan_ids(&folded).is_empty());
-}
-
-#[test]
-fn stacked_failed_closures_union_their_leftovers() {
-    let active = vec![manifest("Deployment", "web", "app", "h1", "")];
-    let new = vec![manifest("Deployment", "web", "app", "h1", "")];
-    let first = vec![manifest("ConfigMap", "one", "app", "h7", "")];
-    let second = vec![manifest("ConfigMap", "two", "app", "h8", "")];
-
-    let folded = fold_failed_closures(detect_changes(&new, &active), &new, &[first, second]);
-    assert_eq!(
-        orphan_ids(&folded),
-        vec!["ConfigMap/one@app", "ConfigMap/two@app"]
-    );
-}
-
-#[test]
-fn a_record_in_a_failed_closure_is_never_an_orphan() {
-    // Records are superseded, not pruned. A failed closure always carries
-    // its own, and its name differs from the new one on every changed
-    // deploy, so without the lifecycle check every run would invent one.
-    let active = vec![manifest("Deployment", "web", "app", "h1", "")];
-    let new = vec![manifest("Deployment", "web", "app", "h1", "")];
-    let failed = vec![
-        manifest("Deployment", "web", "app", "h1", ""),
-        record("demo-abc123", "h2"),
-    ];
-
-    let folded = fold_failed_closures(detect_changes(&new, &active), &new, &[failed]);
-    assert!(orphan_ids(&folded).is_empty());
-}
-
-#[test]
-fn an_unstamped_manifest_in_a_failed_closure_is_never_an_orphan() {
-    let active = vec![manifest("Deployment", "web", "app", "h1", "")];
-    let new = vec![manifest("Deployment", "web", "app", "h1", "")];
-    let failed = vec![json!({
-        "apiVersion": "v1",
-        "kind": "ConfigMap",
-        "metadata": { "name": "unstamped", "namespace": "app" }
-    })];
-
-    let folded = fold_failed_closures(detect_changes(&new, &active), &new, &[failed]);
-    assert!(orphan_ids(&folded).is_empty());
-}
-
-#[test]
-fn an_orphan_detect_changes_already_found_is_not_duplicated() {
-    let active = vec![
-        manifest("Deployment", "web", "app", "h1", ""),
-        manifest("ConfigMap", "gone", "app", "h5", ""),
-    ];
-    let new = vec![manifest("Deployment", "web", "app", "h1", "")];
-    let failed = vec![manifest("ConfigMap", "gone", "app", "h6", "")];
-
-    let folded = fold_failed_closures(detect_changes(&new, &active), &new, &[failed]);
-    assert_eq!(orphan_ids(&folded), vec!["ConfigMap/gone@app"]);
-}
-
-#[test]
-fn no_failed_closures_changes_nothing() {
-    let active = vec![manifest("Deployment", "web", "app", "h1", "")];
-    let new = vec![manifest("Deployment", "web", "app", "h1", "")];
-    let before = detect_changes(&new, &active);
-    let after = fold_failed_closures(before.clone(), &new, &[]);
-    assert_eq!(skip_ids(&before), skip_ids(&after));
-    assert_eq!(apply_ids(&before), apply_ids(&after));
-    assert_eq!(orphan_ids(&before), orphan_ids(&after));
 }
 
 #[test]
@@ -838,7 +374,7 @@ fn record_rename_is_not_an_orphan() {
 }
 
 /// An unchanged build keeps the same record name and hash, and must
-/// produce `Skip` on both paths so `total_apply == 0` and the deploy can
+/// produce `Skip` so `total_apply == 0` and the deploy can
 /// short-circuit when the activation is identical.
 #[test]
 fn unchanged_record_is_skip_not_apply() {
@@ -854,20 +390,6 @@ fn unchanged_record_is_skip_not_apply() {
             .count(),
         2
     );
-
-    let live = vec![
-        live_object_as(
-            keys::API_VERSION,
-            "Activation",
-            "stage1-0f3g4dhhzqfd",
-            CLUSTER_SCOPED,
-            "0f3g4dhhzqfd0xvgwfw987lf0s8xhmkb",
-        ),
-        live_object("Deployment", "web", "default", "d1"),
-    ];
-    let actions = detect_changes_live(&[same, dep], &live);
-    assert!(apply_ids(&actions).is_empty(), "{:?}", apply_ids(&actions));
-    assert!(orphan_ids(&actions).is_empty());
 }
 
 /// Markers and plain PackageInstances are ordinary desired state for
@@ -927,207 +449,6 @@ fn records_are_never_orphans() {
     assert_eq!(orphan_ids(&actions), vec!["Deployment.apps/web@default"]);
 }
 
-/// Invariant 3: the store path and the live path agree on the orphan
-/// set for the same previous state, records included.
-#[test]
-fn store_and_live_paths_agree_on_orphans() {
-    let desired = vec![
-        record("c-new", "new"),
-        manifest("Deployment", "keep", "default", "k1", ""),
-    ];
-    let old = vec![
-        record("c-old", "old"),
-        manifest("Deployment", "keep", "default", "k1", ""),
-        manifest("Deployment", "gone", "default", "g1", ""),
-    ];
-    let live = vec![
-        live_record("c-old", "old"),
-        live_object("Deployment", "keep", "default", "k1"),
-        live_object("Deployment", "gone", "default", "g1"),
-    ];
-    let via_store = orphan_ids(&detect_changes(&desired, &old));
-    let via_live = orphan_ids(&detect_changes_live(&desired, &live));
-    assert_eq!(via_store, vec!["Deployment.apps/gone@default"]);
-    assert_eq!(via_store, via_live);
-    // Both paths still apply the new record.
-    assert!(
-        apply_ids(&detect_changes(&desired, &old))
-            .iter()
-            .any(|id| id.starts_with(&format!("Activation.{}/", keys::GROUP))),
-        "store path drops the new record"
-    );
-    assert!(
-        apply_ids(&detect_changes_live(&desired, &live))
-            .iter()
-            .any(|id| id.starts_with(&format!("Activation.{}/", keys::GROUP))),
-        "live path drops the new record"
-    );
-}
-
-/// When the operator strips the record from the desired manifest set, live
-/// Activation records must still not be reported as orphans.
-#[test]
-fn operator_shape_live_record_is_not_an_orphan() {
-    let desired = vec![manifest("Deployment", "web", "default", "d1", "")];
-    let live = vec![
-        live_record("c-active", "act"),
-        live_object("Deployment", "web", "default", "d1"),
-    ];
-    let actions = detect_changes_live(&desired, &live);
-    assert!(
-        orphan_ids(&actions).is_empty(),
-        "{:?}",
-        orphan_ids(&actions)
-    );
-}
-
-/// A ConfigMap manifest without metadata.namespace is refused before any
-/// request, so the apiserver never stores it in `default` under an id
-/// the build does not have. `namespaceless` reports only that case: not a
-/// ClusterRole, a ConfigMap with a namespace, or a kind discovery lacks.
-#[tokio::test]
-async fn a_namespaced_kind_without_a_namespace_is_refused() {
-    use crate::cluster::{discovery, fake_api::FakeApi};
-    use crate::manifest::types::{CLUSTER_SCOPED, ResourceId};
-
-    let api = FakeApi::default();
-    let client = api.client();
-    let discovery = discovery::discover_resources(&client).await.unwrap();
-    let before = api.requests().len();
-    let cm = serde_json::json!({
-        "apiVersion": "v1",
-        "kind": "ConfigMap",
-        "metadata": { "name": "shared" },
-    });
-    let (ar, scope) = discovery
-        .iter()
-        .find(|(ar, _)| ar.kind == "ConfigMap")
-        .unwrap();
-    let err = super::apply_resource(
-        &client,
-        ar,
-        scope.clone(),
-        &FieldManager::of("a"),
-        &cm,
-        false,
-        None,
-        None,
-        super::Takeover::No,
-    )
-    .await
-    .unwrap_err();
-    assert!(
-        matches!(&err, super::ApplyError::NoNamespace { resource } if resource == "ConfigMap/shared"),
-        "{err}"
-    );
-    assert_eq!(api.requests().len(), before, "{:?}", api.requests());
-
-    let rid = |group: &str, kind: &str, ns: &str| ResourceId {
-        group: group.into(),
-        kind: kind.into(),
-        namespace: ns.into(),
-        name: "shared".into(),
-    };
-    let candidates = [
-        rid("", "ConfigMap", CLUSTER_SCOPED),
-        rid("", "ConfigMap", "default"),
-        rid("rbac.authorization.k8s.io", "ClusterRole", CLUSTER_SCOPED),
-        rid("", "Widget", CLUSTER_SCOPED),
-    ];
-    assert_eq!(
-        super::namespaceless(&discovery, &candidates),
-        vec![rid("", "ConfigMap", CLUSTER_SCOPED)]
-    );
-}
-
-/// Each kind is looked up in its own group: a `batch` Job without a
-/// namespace is refused, and a cluster-scoped `Job` of another group that
-/// discovery lists first is not.
-#[tokio::test]
-async fn namespaceless_looks_each_kind_up_in_its_own_group() {
-    use crate::cluster::{discovery, fake_api::FakeApi, fake_api::OTHER_JOB_GROUP};
-    use crate::manifest::types::{CLUSTER_SCOPED, ResourceId};
-
-    let api = FakeApi::default();
-    let discovery = discovery::discover_resources(&api.client()).await.unwrap();
-    let job = |group: &str| ResourceId {
-        group: group.into(),
-        kind: "Job".into(),
-        namespace: CLUSTER_SCOPED.into(),
-        name: "x".into(),
-    };
-    assert_eq!(
-        super::namespaceless(&discovery, &[job("batch"), job(OTHER_JOB_GROUP)]),
-        vec![job("batch")]
-    );
-}
-
-/// An apply, real or dry run, reports a field the server did not store: a
-/// custom resource's field its CRD pruned, against the manifest sent.
-#[tokio::test]
-async fn an_apply_reports_the_fields_the_server_did_not_keep() {
-    use crate::cluster::kept::{NotKept, NotKeptField};
-    use crate::cluster::{discovery, fake_api::FakeApi, fake_api::TWO_VERSION_GROUP};
-
-    let api = FakeApi::default();
-    let client = api.client();
-    let discovery = discovery::discover_resources(&client).await.unwrap();
-    let (ar, scope) = discovery.iter().find(|(ar, _)| ar.kind == "Gizmo").unwrap();
-    let gizmo = serde_json::json!({
-        "apiVersion": format!("{TWO_VERSION_GROUP}/v1"),
-        "kind": "Gizmo",
-        "metadata": { "name": "g", "namespace": "app" },
-        "spec": { "size": 3, "colour": "red" },
-    });
-    let pruned = vec![NotKeptField {
-        path: "$.spec.colour".into(),
-        change: NotKept::Dropped,
-        sent: json!("red"),
-        stored: None,
-    }];
-    for dry_run in [true, false] {
-        let prune = |o: &mut serde_json::Value| {
-            o["spec"].as_object_mut().unwrap().remove("colour");
-        };
-        api.on_apply("g", prune);
-        let result = super::apply_resource(
-            &client,
-            ar,
-            scope.clone(),
-            &FieldManager::of("a"),
-            &gizmo,
-            dry_run,
-            None,
-            None,
-            super::Takeover::No,
-        )
-        .await
-        .unwrap();
-        assert_eq!(result.not_kept, pruned, "dry run {dry_run}");
-        if let Some(preview) = &result.preview {
-            assert_eq!(preview.not_kept, pruned);
-        }
-    }
-
-    // The same object stored as sent has nothing to report.
-    let result = super::apply_resource(
-        &client,
-        ar,
-        scope.clone(),
-        &FieldManager::of("a"),
-        &gizmo,
-        false,
-        None,
-        None,
-        super::Takeover::No,
-    )
-    .await
-    .unwrap();
-    assert!(result.not_kept.is_empty(), "{:?}", result.not_kept);
-}
-
-/// A Job under the rerun rule with `identity_hash` and, when given, the
-/// rerun hash the library stamps.
 fn rerun_job(identity_hash: &str, rerun_hash: Option<&str>) -> Value {
     let mut job = manifest("Job", "bootstrap", "db", identity_hash, "");
     job["apiVersion"] = json!("batch/v1");
@@ -1199,61 +520,6 @@ fn rerun_hash_on_a_plain_resource_is_ignored() {
     ));
 }
 
-/// The operator compares with the rerun hash on the live Job.
-#[test]
-fn live_rerun_job_compares_the_live_rerun_hash() {
-    let live_with = |rerun_hash: &str| {
-        let mut obj = live_object_as("batch/v1", "Job", "bootstrap", "db", "id1");
-        obj.metadata
-            .annotations
-            .as_mut()
-            .unwrap()
-            .insert(keys::RERUN_HASH.to_string(), rerun_hash.to_string());
-        obj
-    };
-    let desired = vec![rerun_job("id2", Some("c1"))];
-    assert!(matches!(
-        &detect_changes_live(&desired, &[live_with("c1")])[..],
-        [ChangeAction::Apply(_)]
-    ));
-    assert!(matches!(
-        &detect_changes_live(&desired, &[live_with("c0")])[..],
-        [ChangeAction::Recreate(..)]
-    ));
-    assert!(matches!(
-        &detect_changes_live(
-            &desired,
-            &[live_object_as("batch/v1", "Job", "bootstrap", "db", "id1")]
-        )[..],
-        [ChangeAction::Recreate(..)]
-    ));
-}
-
-/// A failed deploy may have recreated the Job with other content. The Job
-/// keeps its last run only when every failed closure agrees with the new
-/// build's rerun hash.
-#[test]
-fn rerun_job_a_failed_deploy_touched_follows_its_content() {
-    let active = vec![rerun_job("id1", Some("c1"))];
-    let new = vec![rerun_job("id1", Some("c1"))];
-    let same_content = vec![rerun_job("id2", Some("c1"))];
-    let other_content = vec![rerun_job("id3", Some("c2"))];
-
-    let folded = fold_failed_closures(
-        detect_changes(&new, &active),
-        &new,
-        std::slice::from_ref(&same_content),
-    );
-    assert!(matches!(&folded[..], [ChangeAction::Apply(_)]));
-
-    let folded = fold_failed_closures(
-        detect_changes(&new, &active),
-        &new,
-        &[same_content, other_content],
-    );
-    assert!(matches!(&folded[..], [ChangeAction::Recreate(..)]));
-}
-
 /// A Job under the rerun rule whose last run failed runs again, and the
 /// reason names the failed run, whether or not its content changed since the
 /// deployed build. A Job no build had runs as new. Without the rule a failed
@@ -1290,8 +556,7 @@ fn rerun_job_whose_last_run_failed_names_the_failed_run() {
 }
 
 /// Two kinds of one name in two groups are two objects. A build that swaps
-/// one for the other applies the new one and prunes the old one, from the
-/// old build or from the live objects.
+/// one for the other applies the new one and prunes the old one.
 #[test]
 fn a_kind_of_one_name_in_another_group_is_another_object() {
     let cert = |api_version: &str| {
@@ -1312,11 +577,6 @@ fn a_kind_of_one_name_in_another_group_is_another_object() {
     };
 
     let actions = detect_changes(std::slice::from_ref(&new), std::slice::from_ref(&old));
-    assert_eq!(apply_ids(&actions), vec!["Certificate.b.example/tls@app"]);
-    assert_eq!(orphan(&actions), vec![ResourceId::from_value(&old)]);
-
-    let live = live_object_as("a.example/v1", "Certificate", "tls", "app", "c1");
-    let actions = detect_changes_live(std::slice::from_ref(&new), &[live]);
     assert_eq!(apply_ids(&actions), vec!["Certificate.b.example/tls@app"]);
     assert_eq!(orphan(&actions), vec![ResourceId::from_value(&old)]);
 }
@@ -1357,8 +617,6 @@ async fn an_object_being_deleted_is_not_applied() {
         &FieldManager::of("a"),
         &cm,
         false,
-        None,
-        None,
         super::Takeover::No,
     )
     .await
@@ -1469,8 +727,6 @@ async fn an_apply_sends_secret_values_as_data() {
         &FieldManager::of("a"),
         &built,
         true,
-        None,
-        None,
         super::Takeover::No,
     )
     .await
@@ -1487,8 +743,6 @@ async fn an_apply_sends_secret_values_as_data() {
         &FieldManager::of("a"),
         &built,
         false,
-        None,
-        None,
         super::Takeover::No,
     )
     .await
@@ -1556,8 +810,8 @@ fn a_ceded_secret_key_is_stripped_from_data() {
     assert_eq!(stripped["data"], json!({"user": "YWRtaW4="}));
 }
 
-/// An apply and the bookkeeping write after it both name the Kix cluster's
-/// own field manager, and the applied hash is read from its entry.
+/// An apply names the Kix cluster's own field manager, writes nothing else,
+/// and the applied hash is read from its entry.
 #[tokio::test]
 async fn an_apply_writes_under_the_clusters_own_manager() {
     use crate::cluster::{discovery, fake_api::FakeApi};
@@ -1584,8 +838,6 @@ async fn an_apply_writes_under_the_clusters_own_manager() {
         &manager,
         &cm,
         false,
-        Some("rec1"),
-        None,
         super::Takeover::No,
     )
     .await
@@ -1596,7 +848,8 @@ async fn an_apply_writes_under_the_clusters_own_manager() {
         .into_iter()
         .filter(|r| r.starts_with("PATCH"))
         .collect();
-    assert_eq!(writes.len(), 2, "{writes:?}");
+    // The apply is the one write: no annotation write follows it.
+    assert_eq!(writes.len(), 1, "{writes:?}");
     assert!(
         writes.iter().all(|r| r.contains("fieldManager=kix%2Flab")),
         "{writes:?}"
@@ -1639,8 +892,6 @@ async fn a_conflict_with_another_kix_cluster_names_it() {
                 &manager,
                 &manifest,
                 false,
-                None,
-                None,
                 super::Takeover::No,
             )
             .await
@@ -1687,4 +938,143 @@ async fn a_conflict_with_another_kix_cluster_names_it() {
         ),
     );
     assert!(matches!(not_kix, ApplyError::Conflict { .. }), "{not_kix}");
+}
+
+/// A ConfigMap manifest without metadata.namespace is refused before any
+/// request, so the apiserver never stores it in `default` under an id
+/// the build does not have. `namespaceless` reports only that case: not a
+/// ClusterRole, a ConfigMap with a namespace, or a kind discovery lacks.
+#[tokio::test]
+async fn a_namespaced_kind_without_a_namespace_is_refused() {
+    use crate::cluster::{discovery, fake_api::FakeApi};
+    use crate::manifest::types::{CLUSTER_SCOPED, ResourceId};
+
+    let api = FakeApi::default();
+    let client = api.client();
+    let discovery = discovery::discover_resources(&client).await.unwrap();
+    let before = api.requests().len();
+    let cm = serde_json::json!({
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "metadata": { "name": "shared" },
+    });
+    let (ar, scope) = discovery
+        .iter()
+        .find(|(ar, _)| ar.kind == "ConfigMap")
+        .unwrap();
+    let err = super::apply_resource(
+        &client,
+        ar,
+        scope.clone(),
+        &FieldManager::of("a"),
+        &cm,
+        false,
+        super::Takeover::No,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(&err, super::ApplyError::NoNamespace { resource } if resource == "ConfigMap/shared"),
+        "{err}"
+    );
+    assert_eq!(api.requests().len(), before, "{:?}", api.requests());
+
+    let rid = |group: &str, kind: &str, ns: &str| ResourceId {
+        group: group.into(),
+        kind: kind.into(),
+        namespace: ns.into(),
+        name: "shared".into(),
+    };
+    let candidates = [
+        rid("", "ConfigMap", CLUSTER_SCOPED),
+        rid("", "ConfigMap", "default"),
+        rid("rbac.authorization.k8s.io", "ClusterRole", CLUSTER_SCOPED),
+        rid("", "Widget", CLUSTER_SCOPED),
+    ];
+    assert_eq!(
+        super::namespaceless(&discovery, &candidates),
+        vec![rid("", "ConfigMap", CLUSTER_SCOPED)]
+    );
+}
+
+/// Each kind is looked up in its own group: a `batch` Job without a
+/// namespace is refused, and a cluster-scoped `Job` of another group that
+/// discovery lists first is not.
+#[tokio::test]
+async fn namespaceless_looks_each_kind_up_in_its_own_group() {
+    use crate::cluster::{discovery, fake_api::FakeApi, fake_api::OTHER_JOB_GROUP};
+    use crate::manifest::types::{CLUSTER_SCOPED, ResourceId};
+
+    let api = FakeApi::default();
+    let discovery = discovery::discover_resources(&api.client()).await.unwrap();
+    let job = |group: &str| ResourceId {
+        group: group.into(),
+        kind: "Job".into(),
+        namespace: CLUSTER_SCOPED.into(),
+        name: "x".into(),
+    };
+    assert_eq!(
+        super::namespaceless(&discovery, &[job("batch"), job(OTHER_JOB_GROUP)]),
+        vec![job("batch")]
+    );
+}
+
+/// An apply, real or dry run, reports a field the server did not store: a
+/// custom resource's field its CRD pruned, against the manifest sent.
+#[tokio::test]
+async fn an_apply_reports_the_fields_the_server_did_not_keep() {
+    use crate::cluster::kept::{NotKept, NotKeptField};
+    use crate::cluster::{discovery, fake_api::FakeApi, fake_api::TWO_VERSION_GROUP};
+
+    let api = FakeApi::default();
+    let client = api.client();
+    let discovery = discovery::discover_resources(&client).await.unwrap();
+    let (ar, scope) = discovery.iter().find(|(ar, _)| ar.kind == "Gizmo").unwrap();
+    let gizmo = serde_json::json!({
+        "apiVersion": format!("{TWO_VERSION_GROUP}/v1"),
+        "kind": "Gizmo",
+        "metadata": { "name": "g", "namespace": "app" },
+        "spec": { "size": 3, "colour": "red" },
+    });
+    let pruned = vec![NotKeptField {
+        path: "$.spec.colour".into(),
+        change: NotKept::Dropped,
+        sent: json!("red"),
+        stored: None,
+    }];
+    for dry_run in [true, false] {
+        let prune = |o: &mut serde_json::Value| {
+            o["spec"].as_object_mut().unwrap().remove("colour");
+        };
+        api.on_apply("g", prune);
+        let result = super::apply_resource(
+            &client,
+            ar,
+            scope.clone(),
+            &FieldManager::of("a"),
+            &gizmo,
+            dry_run,
+            super::Takeover::No,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.not_kept, pruned, "dry run {dry_run}");
+        if let Some(preview) = &result.preview {
+            assert_eq!(preview.not_kept, pruned);
+        }
+    }
+
+    // The same object stored as sent has nothing to report.
+    let result = super::apply_resource(
+        &client,
+        ar,
+        scope.clone(),
+        &FieldManager::of("a"),
+        &gizmo,
+        false,
+        super::Takeover::No,
+    )
+    .await
+    .unwrap();
+    assert!(result.not_kept.is_empty(), "{:?}", result.not_kept);
 }

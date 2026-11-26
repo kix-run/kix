@@ -428,6 +428,42 @@ fn the_head_is_rebuilt_from_the_phases() {
     );
     assert_eq!(d.status.current, None);
 
+    // An older Kix deployed x, which has no revision map, after the head
+    // named y, a record this Kix deployed with a map, and left y Active.
+    let mapped = Record {
+        revisions: Some(Ok(crate::cluster::revision::RevisionMap {
+            instances: Default::default(),
+            cluster_level: "c-1".into(),
+            kept_orphans: None,
+        })),
+        deployed_at: Some("2026-01-01T00:00:00Z".into()),
+        ..rec("y", "Active")
+    };
+    let older = Record {
+        deployed_at: Some("2026-02-01T00:00:00Z".into()),
+        ..rec("x", "Active")
+    };
+    let head = written(7, Some("y"));
+    let d = decide(
+        Some(Some(&head)),
+        None,
+        &[older.clone(), mapped.clone()],
+        new_lock(),
+    );
+    assert_eq!(d.status.current.as_deref(), Some("x"));
+    assert_eq!(d.status.generation, 8);
+    assert_eq!(d.repair, None);
+    // A deploy by this Kix that stopped between its commit and its phases
+    // leaves its record without a current phase, and the phases are
+    // repaired from the head instead.
+    let committed = Record {
+        phase: "Deploying".into(),
+        ..mapped
+    };
+    let d = decide(Some(Some(&head)), None, &[older, committed], new_lock());
+    assert_eq!(d.status.current.as_deref(), Some("y"));
+    assert!(d.repair.is_some());
+
     // The head and the phases agree: nothing changes but the lock.
     let head = written(7, Some("x"));
     let d = decide(Some(Some(&head)), None, &records, new_lock());

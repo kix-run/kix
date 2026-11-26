@@ -75,7 +75,8 @@ pub fn run(args: &SnapshotArgs, ctx: &mut CommandContext) -> Result<()> {
         for note in sweep.scope_notes() {
             crate::esay!("{note}");
         }
-        let resources = snapshot_resources(sweep.managed, &FieldManager::of(&cluster));
+        let manager = sweep.tenancy.manager_of(&cluster);
+        let resources = snapshot_resources(sweep.managed, &manager);
 
         // Stage files in a sibling temporary directory and swap into place so
         // an interrupted snapshot does not leave a partial output directory.

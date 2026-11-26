@@ -7,10 +7,15 @@
 //! conflict instead of overwriting each other.
 //!
 //! Every Kix cluster applied under the one name `kix` before. An object
-//! applied then still carries an entry under that name, and the entry counts
-//! as this Kix cluster's own ([`FieldManager::counts_as_own`],
-//! [`FieldManager::apply_entry`]) until the migration moves it to the
-//! cluster's name.
+//! applied then still carries an entry under that name. The first deploy of
+//! a Kix cluster by this Kix moves the entry to the cluster's name
+//! ([`crate::cluster::migration_write`]). After that, an entry under `kix`
+//! belongs to a Kix cluster that an older Kix still deploys, which may be
+//! another one, so it is not this Kix cluster's ([`FieldManager::of`]).
+//! Before that, every entry under `kix` on the cluster's objects is one an
+//! older Kix wrote for it or for another Kix cluster, and a reader of a Kix
+//! cluster that is not migrated counts it as the cluster's own
+//! ([`FieldManager::unmigrated`]), as the older Kix did.
 //!
 //! The name is `kix/` followed by the cluster name. A cluster name holds only
 //! letters, digits, `-`, and `_` ([`crate::eval::nix::is_valid_cluster_name`]),
@@ -84,15 +89,49 @@ pub enum Whose<'a> {
 pub struct FieldManager {
     cluster: String,
     name: String,
+    /// Fields owned under [`LEGACY`] count as this Kix cluster's.
+    legacy_is_own: bool,
 }
 
 impl FieldManager {
-    /// Return the field manager of the Kix cluster `cluster`.
+    /// Return the field manager of the Kix cluster `cluster`, for a cluster
+    /// that this Kix has deployed. An entry under [`LEGACY`] is another
+    /// manager's.
     pub fn of(cluster: &str) -> Self {
         FieldManager {
             cluster: cluster.to_string(),
             name: format!("{PREFIX}{cluster}"),
+            legacy_is_own: false,
         }
+    }
+
+    /// Return the field manager of the Kix cluster `cluster` as an older Kix
+    /// wrote its objects: an entry under [`LEGACY`] counts as the cluster's
+    /// own. Read a Kix cluster that this Kix has not deployed yet with it,
+    /// and an object whose `kix` entry the migration write moves to the
+    /// cluster's name.
+    pub fn unmigrated(cluster: &str) -> Self {
+        FieldManager {
+            legacy_is_own: true,
+            ..FieldManager::of(cluster)
+        }
+    }
+
+    /// Return the manager that applies under the legacy name [`LEGACY`] for
+    /// the Kix cluster `cluster`. A dry run applies an object whose entry
+    /// under `kix` the migration write will move under it, because that
+    /// entry holds the fields the cluster's manager will own.
+    pub(crate) fn legacy_for(cluster: &str) -> Self {
+        FieldManager {
+            cluster: cluster.to_string(),
+            name: LEGACY.to_string(),
+            legacy_is_own: true,
+        }
+    }
+
+    /// Return this manager as [`FieldManager::unmigrated`] reads it.
+    pub fn as_unmigrated(&self) -> Self {
+        FieldManager::unmigrated(&self.cluster)
     }
 
     /// Return the name to apply under.
@@ -116,23 +155,24 @@ impl FieldManager {
     }
 
     /// Return whether fields owned under `name` count as this Kix cluster's.
-    /// They do under its own name, and under the legacy name until the
-    /// migration moves those entries to the cluster's name. Another Kix
-    /// cluster's name is another manager.
+    /// They do under its own name, and under the legacy name only for
+    /// [`FieldManager::unmigrated`]. Another Kix cluster's name is another
+    /// manager.
     ///
     /// Every reader that asks which fields Kix owns asks through this, or
     /// through [`FieldManager::apply_entry`], which uses it.
     pub fn counts_as_own(&self, name: Option<&str>) -> bool {
-        matches!(
-            name.map(|n| self.whose(n)),
-            Some(Whose::This | Whose::Legacy)
-        )
+        match name.map(|n| self.whose(n)) {
+            Some(Whose::This) => true,
+            Some(Whose::Legacy) => self.legacy_is_own,
+            Some(Whose::OtherCluster(_) | Whose::NotKix) | None => false,
+        }
     }
 
     /// Return the `Apply` entry of the object's main resource (no
     /// subresource) that holds the fields this Kix cluster applied. Its own
-    /// entry comes first. An object without one may still carry the legacy
-    /// entry, from before the cluster had its own name, and that one is
+    /// entry comes first. For [`FieldManager::unmigrated`], an object
+    /// without one may carry the legacy entry instead, and that one is
     /// returned.
     pub fn apply_entry<'a>(
         &self,
@@ -229,14 +269,19 @@ mod tests {
         assert_eq!(a.whose("kix"), Whose::Legacy);
         assert_eq!(a.whose("kube-controller-manager"), Whose::NotKix);
         assert!(a.counts_as_own(Some("kix/a")));
-        assert!(a.counts_as_own(Some("kix")));
+        assert!(!a.counts_as_own(Some("kix")));
         assert!(!a.counts_as_own(Some("kix/b")));
         assert!(!a.counts_as_own(None));
+        let unmigrated = FieldManager::unmigrated("a");
+        assert!(unmigrated.counts_as_own(Some("kix")));
+        assert!(unmigrated.counts_as_own(Some("kix/a")));
+        assert!(!unmigrated.counts_as_own(Some("kix/b")));
     }
 
     /// The cluster's own `Apply` entry comes before the legacy one, which
-    /// stands in when the object has no own entry. Another cluster's entry,
-    /// an `Update` entry, and a subresource entry never count.
+    /// stands in only for an unmigrated reader when the object has no own
+    /// entry. Another cluster's entry, an `Update` entry, and a subresource
+    /// entry never count.
     #[test]
     fn the_apply_entry_prefers_the_own_name() {
         let a = FieldManager::of("a");
@@ -245,9 +290,22 @@ mod tests {
             a.apply_entry(&both).unwrap().manager.as_deref(),
             Some("kix/a")
         );
-        let legacy = [entry("kix/b", "Apply"), entry("kix", "Apply")];
         assert_eq!(
-            a.apply_entry(&legacy).unwrap().manager.as_deref(),
+            a.as_unmigrated()
+                .apply_entry(&both)
+                .unwrap()
+                .manager
+                .as_deref(),
+            Some("kix/a")
+        );
+        let legacy = [entry("kix/b", "Apply"), entry("kix", "Apply")];
+        assert!(a.apply_entry(&legacy).is_none());
+        assert_eq!(
+            FieldManager::unmigrated("a")
+                .apply_entry(&legacy)
+                .unwrap()
+                .manager
+                .as_deref(),
             Some("kix")
         );
         let mut status = entry("kix/a", "Apply");

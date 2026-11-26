@@ -10,11 +10,14 @@
 //!   revision named by the current record, the record a lock holder is
 //!   deploying, a queued, `Failed`, or `Partial` record, or the kept-orphans
 //!   revision names it.
-//! - **Records.** Any other Kix cluster is read the way earlier releases
-//!   wrote it: every object a deploy touches names the deploying record's
-//!   identity hash in `kix.run/activations`, a record also owns the builds it
-//!   lists under `status.orphansKeptFrom`, and the package index lists a
-//!   record's objects.
+//! - **Records.** Any other Kix cluster is one an older Kix deployed last,
+//!   and is read the way that Kix wrote it: every object a deploy touches
+//!   names the deploying record's identity hash in `kix.run/activations`, a
+//!   record also owns the builds it lists under `status.orphansKeptFrom`,
+//!   and the package index lists a record's objects. The current record by
+//!   the head must not be `Superseded`, and no record an older Kix wrote may
+//!   be current by phase after it ([`older_kix_deployed_after`]), or the
+//!   Kix cluster is read from records too.
 //!
 //! Records are read through [`Records`](super::activation::Records) after the
 //! domain gate runs. Without that gate, a cluster whose records sit under a
@@ -223,6 +226,22 @@ pub enum Kept<'a> {
     Objects(Vec<&'a RevisionObject>),
 }
 
+/// Return whether an older Kix deployed a Kix cluster after the record
+/// `current` its head names, given `own`, the cluster's records: another
+/// record is current by phase, has no revision map, and `current` still has
+/// a current phase. A
+/// deploy by this Kix always writes a map, so only an older Kix wrote that
+/// record. A deploy by this Kix that stopped between making its record
+/// current on the head and setting the phases leaves its record without a
+/// current phase, so it does not count.
+pub(crate) fn older_kix_deployed_after(current: &Record, own: &[Record]) -> bool {
+    super::activation::current_among(own).is_some_and(|by_phase| {
+        by_phase.name != current.name
+            && by_phase.revisions.is_none()
+            && super::activation::phase_is_current(&current.phase)
+    })
+}
+
 fn is_pending(phase: &str) -> bool {
     !matches!(phase, PHASE_SUPERSEDED | PHASE_ACTIVE | PHASE_DEGRADED)
 }
@@ -350,6 +369,14 @@ impl Tenancy {
         let Some(current) = self.current_of(name, status, records) else {
             return false;
         };
+        let own: Vec<Record> = records
+            .iter()
+            .filter(|(owner, _)| *owner == Some(name))
+            .map(|(_, r)| r.clone())
+            .collect();
+        if current.phase == PHASE_SUPERSEDED || older_kix_deployed_after(current, &own) {
+            return false;
+        }
         match &current.revisions {
             Some(Ok(_)) => true,
             Some(Err(source)) => {
@@ -399,7 +426,10 @@ impl Tenancy {
 
     /// Index the objects that the needed records of each Kix cluster read
     /// from revisions name: the current record, the record the lock holder
-    /// deploys, and each record that is not `Superseded`.
+    /// deploys, and each record that is not `Superseded`. The records of the
+    /// Kix cluster this tenancy is read for are indexed too when it is read
+    /// from records, so the first deploy of it by this Kix sees what a
+    /// deploy by this Kix that did not finish left ([`Tenancy::revision`]).
     fn claim(
         &mut self,
         heads: &BTreeMap<String, HeadStatus>,
@@ -414,7 +444,9 @@ impl Tenancy {
         let unreadable: HashMap<&str, &revision::ReadError> =
             listed.unreadable.iter().map(|e| (e.name(), e)).collect();
         for (owner, record) in records {
-            let Some(cluster) = owner.filter(|c| self.revision_clusters.contains(*c)) else {
+            let Some(cluster) =
+                owner.filter(|c| self.revision_clusters.contains(*c) || self.is_own(c))
+            else {
                 continue;
             };
             let status = heads.get(cluster);
@@ -581,9 +613,27 @@ impl Tenancy {
         }
     }
 
+    /// Return the field manager to read the objects of Kix cluster
+    /// `cluster` with. A Kix cluster an older Kix deployed last holds its
+    /// fields under the legacy manager `kix` ([`FieldManager::unmigrated`]).
+    pub fn manager_of(&self, cluster: &str) -> FieldManager {
+        match self.source_of(cluster) {
+            Source::Revisions => FieldManager::of(cluster),
+            Source::Records => FieldManager::unmigrated(cluster),
+        }
+    }
+
     /// Return where the Kix cluster this tenancy is read for is read from.
     pub fn own_source(&self) -> Source {
         self.source_of(&self.cluster)
+    }
+
+    /// Return the identity hashes of the records of every other Kix cluster
+    /// that is read from records, in any phase, and of the builds they list
+    /// under `status.orphansKeptFrom`. An older Kix deploys those Kix
+    /// clusters ([`super::migration_write::Rule::others`]).
+    pub(crate) fn unmigrated_others(&self) -> HashSet<String> {
+        self.legacy.others.keys().cloned().collect()
     }
 
     /// Return every record of this Kix cluster, in any phase.
@@ -592,7 +642,7 @@ impl Tenancy {
     }
 
     /// Return the record this Kix cluster's head names as current.
-    pub(crate) fn own_current(&self) -> Option<&str> {
+    pub fn own_current(&self) -> Option<&str> {
         self.own_current.as_deref()
     }
 
@@ -643,6 +693,36 @@ impl Tenancy {
             None => true,
             Some(c) => c == own && (p.kept() || matches!(p, Problem::UnreadableMap { .. })),
         })
+    }
+
+    /// Return whether every problem this read found is that this Kix
+    /// cluster's kept-orphans revision is missing or cannot be read, and
+    /// there is at least one. `kix gc --full-scan` can then rebuild the
+    /// list from the live objects ([`Tenancy::unlisted_own`]).
+    pub fn only_kept_unreadable(&self) -> bool {
+        let own = self.cluster.as_str();
+        !self.problems.is_empty()
+            && self
+                .problems
+                .iter()
+                .all(|p| p.kept() && p.cluster() == Some(own))
+    }
+
+    /// Return whether `obj` has an `Apply` entry under this Kix cluster's
+    /// field manager and no revision of a needed record of this cluster
+    /// other than the kept-orphans revision names it: an object this
+    /// cluster applied that only a kept-orphans list can name.
+    pub fn unlisted_own(&self, obj: &DynamicObject) -> bool {
+        let applied = obj.metadata.managed_fields.iter().flatten().any(|e| {
+            e.manager.as_deref() == Some(self.manager.name())
+                && e.operation.as_deref() == Some("Apply")
+                && e.subresource.is_none()
+        });
+        applied
+            && !self
+                .claims_of(obj)
+                .iter()
+                .any(|c| !c.kept && self.is_own(&c.cluster))
     }
 
     /// Return the first problem about this Kix cluster, or about every Kix

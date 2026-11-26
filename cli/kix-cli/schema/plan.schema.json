@@ -1858,6 +1858,12 @@
     "made_by": {
       "$ref": "#/$defs/MadeBy"
     },
+    "metadata_rewrites": {
+      "description": "How many objects the deploy moves to this version of Kix's\nbookkeeping, once: it renames their field manager `kix` to the Kix\ncluster's own, and removes the two annotations in which an earlier\nversion recorded which deploys name the object and what it applied.\nLeft out when there are none.",
+      "format": "uint",
+      "minimum": 0,
+      "type": "integer"
+    },
     "migrations": {
       "$ref": "#/$defs/Checked",
       "description": "Stateful resources the change removes and adds in the same slot. A\ndeploy stops on them unless run with `--accept-migrations`."

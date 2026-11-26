@@ -48,9 +48,9 @@ pub(crate) fn normalize_for_diff(obj: &mut DynamicObject) {
 ///
 /// `kix plan --read-only` and `kix snapshot` compare this view against a build. Server
 /// defaults (such as deployment strategy, probe thresholds, and scheduler name)
-/// are unowned or owned by a controller, so they are excluded. Kix's
-/// bookkeeping annotations (`kix.run/activations` and `kix.run/applied-hash`)
-/// are written through a separate `Update` entry and are also excluded.
+/// are unowned or owned by a controller, so they are excluded. The notes an
+/// older Kix wrote (`kix.run/activations` and `kix.run/applied-hash`) sit
+/// under a separate `Update` entry and are also excluded.
 ///
 /// Objects without a Kix `Apply` entry fall back to the full object with server
 /// metadata stripped.
@@ -444,7 +444,10 @@ mod tests {
         };
 
         assert_eq!(
-            kix_owned_view(&obj, &crate::cluster::field_manager::FieldManager::of("a")),
+            kix_owned_view(
+                &obj,
+                &crate::cluster::field_manager::FieldManager::unmigrated("a")
+            ),
             json!({
                 "apiVersion": "apps/v1",
                 "kind": "Deployment",
@@ -529,7 +532,10 @@ mod tests {
             }),
         };
         assert_eq!(
-            kix_owned_view(&obj, &crate::cluster::field_manager::FieldManager::of("a"))["data"]["password"],
+            kix_owned_view(
+                &obj,
+                &crate::cluster::field_manager::FieldManager::unmigrated("a")
+            )["data"]["password"],
             json!("plain")
         );
     }
@@ -538,7 +544,7 @@ mod tests {
     fn kix_owned_view_of_a_string_data_secret_holds_no_values() {
         let view = kix_owned_view(
             &string_data_secret("ZGV2LXBhc3N3b3Jk", json!({})),
-            &crate::cluster::field_manager::FieldManager::of("a"),
+            &crate::cluster::field_manager::FieldManager::unmigrated("a"),
         );
         assert!(view.get("stringData").is_none());
         assert!(view.get("data").is_none());
@@ -596,7 +602,7 @@ mod tests {
             Some(h) => h.to_string(),
             None => crate::cluster::fieldsv1::applied_content_hash(
                 &obj,
-                &crate::cluster::field_manager::FieldManager::of("a"),
+                &crate::cluster::field_manager::FieldManager::unmigrated("a"),
             )
             .unwrap(),
         };
@@ -645,7 +651,7 @@ mod tests {
         let out = kix_owned_manifests_against(
             [moved],
             &by_hash,
-            &crate::cluster::field_manager::FieldManager::of("a"),
+            &crate::cluster::field_manager::FieldManager::unmigrated("a"),
         )
         .remove(0);
         assert_eq!(
@@ -665,7 +671,7 @@ mod tests {
         let out = kix_owned_manifests_against(
             [extra],
             &by_hash,
-            &crate::cluster::field_manager::FieldManager::of("a"),
+            &crate::cluster::field_manager::FieldManager::unmigrated("a"),
         )
         .remove(0);
         assert_eq!(
@@ -696,7 +702,7 @@ mod tests {
             kix_owned_manifests_against(
                 [in_sync],
                 &by_hash,
-                &crate::cluster::field_manager::FieldManager::of("a")
+                &crate::cluster::field_manager::FieldManager::unmigrated("a")
             ),
             std::slice::from_ref(&built)
         );
@@ -705,7 +711,7 @@ mod tests {
         let out = kix_owned_manifests_against(
             [drifted],
             &by_hash,
-            &crate::cluster::field_manager::FieldManager::of("a"),
+            &crate::cluster::field_manager::FieldManager::unmigrated("a"),
         );
         assert_eq!(out[0]["spec"], built["spec"]);
 
@@ -714,7 +720,7 @@ mod tests {
         let out = kix_owned_manifests_against(
             [renamed],
             &by_hash,
-            &crate::cluster::field_manager::FieldManager::of("a"),
+            &crate::cluster::field_manager::FieldManager::unmigrated("a"),
         );
         assert_eq!(out[0]["spec"]["postgres"]["extensions"], live_extensions);
 
@@ -722,7 +728,7 @@ mod tests {
         let out = kix_owned_manifests_against(
             [in_sync],
             &HashMap::new(),
-            &crate::cluster::field_manager::FieldManager::of("a"),
+            &crate::cluster::field_manager::FieldManager::unmigrated("a"),
         );
         assert_eq!(out[0]["spec"]["postgres"]["extensions"], live_extensions);
     }
@@ -768,7 +774,10 @@ mod tests {
         assert!(
             !diff_paths(
                 built,
-                &kix_owned_view(&live, &crate::cluster::field_manager::FieldManager::of("a"))
+                &kix_owned_view(
+                    &live,
+                    &crate::cluster::field_manager::FieldManager::unmigrated("a")
+                )
             )
             .is_empty(),
             "the case does not reproduce"
@@ -777,7 +786,7 @@ mod tests {
         let out = kix_owned_manifests_against(
             [live],
             &by_hash,
-            &crate::cluster::field_manager::FieldManager::of("a"),
+            &crate::cluster::field_manager::FieldManager::unmigrated("a"),
         )
         .remove(0);
         assert_eq!(diff_paths(built, &out), Vec::<String>::new());
@@ -883,7 +892,7 @@ mod tests {
         let out = kix_owned_manifests_against(
             [live],
             &by_hash,
-            &crate::cluster::field_manager::FieldManager::of("a"),
+            &crate::cluster::field_manager::FieldManager::unmigrated("a"),
         )
         .remove(0);
         assert_eq!(diff_paths(&built, &out), Vec::<String>::new());
@@ -897,7 +906,7 @@ mod tests {
         kix_owned_manifests_against(
             [live],
             &by_hash,
-            &crate::cluster::field_manager::FieldManager::of("a"),
+            &crate::cluster::field_manager::FieldManager::unmigrated("a"),
         )
         .remove(0)
     }
@@ -954,7 +963,7 @@ mod tests {
             compared,
             kix_owned_view(
                 &live(),
-                &crate::cluster::field_manager::FieldManager::of("a"),
+                &crate::cluster::field_manager::FieldManager::unmigrated("a"),
             ),
         ] {
             let text = out.to_string();
@@ -1075,7 +1084,7 @@ mod tests {
         };
         let view = kix_owned_view(
             &live(),
-            &crate::cluster::field_manager::FieldManager::of("a"),
+            &crate::cluster::field_manager::FieldManager::unmigrated("a"),
         );
         assert_eq!(
             view["data"],
@@ -1112,7 +1121,7 @@ mod tests {
         };
         let view = kix_owned_view(
             &live(),
-            &crate::cluster::field_manager::FieldManager::of("a"),
+            &crate::cluster::field_manager::FieldManager::unmigrated("a"),
         );
         assert_eq!(
             view["data"],
@@ -1120,7 +1129,9 @@ mod tests {
                    "other": HIDDEN_SECRET_VALUE})
         );
         assert_no_live_value(&view);
-        assert_no_live_value(&kix_owned_manifests([live()], &FieldManager::of("a")).remove(0));
+        assert_no_live_value(
+            &kix_owned_manifests([live()], &FieldManager::unmigrated("a")).remove(0),
+        );
 
         let built = json!({
             "apiVersion": "v1", "kind": "Secret", "type": "Opaque",
@@ -1199,7 +1210,10 @@ mod tests {
             types: None,
             data: json!({"apiVersion": "v1", "kind": "ConfigMap", "data": {"k": "v"}}),
         };
-        let view = kix_owned_view(&obj, &crate::cluster::field_manager::FieldManager::of("a"));
+        let view = kix_owned_view(
+            &obj,
+            &crate::cluster::field_manager::FieldManager::unmigrated("a"),
+        );
         assert_eq!(view["data"], json!({"k": "v"}));
         assert_eq!(view["metadata"]["name"], json!("cm"));
         assert!(view["metadata"].get("uid").is_none());

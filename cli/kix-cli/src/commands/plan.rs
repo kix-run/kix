@@ -556,6 +556,7 @@ pub(crate) fn document(p: &mut Planned, report: Option<&DryRunReport>, manifests
     doc.flags = Some(p.checked.flags().clone());
     doc.left_alone = p.checked.left_alone();
     doc.only_needed = p.checked.needed().to_vec();
+    doc.metadata_rewrites = p.checked.metadata_rewrites();
     doc.objects_digest = Some(kix::plan::objects::digest(p.checked.objects()));
     doc.objects = Some(p.checked.objects().clone());
     if !connected {

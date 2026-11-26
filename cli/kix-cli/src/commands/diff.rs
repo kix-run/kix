@@ -341,7 +341,7 @@ fn diff_graphs(old: &StoreGraph, new: &StoreGraph, side: &OldSide, detail: Detai
                     new: new_by_rid.clone(),
                     managed: &live.managed,
                     drifted: &drifted,
-                    manager: &FieldManager::of(cluster),
+                    manager: &live.manager,
                 };
                 origin::label_live(&mut packages, &sides);
             }
@@ -349,7 +349,7 @@ fn diff_graphs(old: &StoreGraph, new: &StoreGraph, side: &OldSide, detail: Detai
                 &live.drifted,
                 &new_by_rid,
                 deployed_by_rid.as_ref(),
-                &FieldManager::of(cluster),
+                &live.manager,
             );
             let mut doc = Plan::new(
                 plan::kix_build(),
@@ -463,6 +463,8 @@ struct LiveSide {
     /// Full live objects including `managedFields`, used to attribute drift to
     /// field managers.
     managed: HashMap<ResourceId, Value>,
+    /// The field manager the Kix cluster's fields are read under.
+    manager: FieldManager,
     /// Each compared object [`drift::check_object`] finds drifted, with its
     /// report.
     drifted: Vec<(DriftReport, DynamicObject)>,
@@ -631,7 +633,7 @@ async fn fetch_live_manifests(
         .as_ref()
         .map(activation::Record::of)
         .and_then(|record| tenancy.index_of(&record));
-    let manager = FieldManager::of(&new_graph.cluster_name);
+    let manager = tenancy.manager_of(&new_graph.cluster_name);
     let (drifted, drift_unchecked) = check_drift(&compared, &applied, &manager);
     let built = new_graph.manifests_by_hash();
     let managed: HashMap<ResourceId, Value> = compared
@@ -649,6 +651,7 @@ async fn fetch_live_manifests(
         current,
         deployed,
         managed,
+        manager,
         drifted,
         drift_unchecked,
         orphans: Vec::new(),
@@ -849,7 +852,7 @@ mod tests {
         let manifests = owned_view::kix_owned_manifests_against(
             [live.clone()],
             &new.manifests_by_hash(),
-            &FieldManager::of("a"),
+            &FieldManager::unmigrated("a"),
         );
         let old = StoreGraph::synthesize(&manifests, &new);
         let unstamped = {
@@ -865,7 +868,7 @@ mod tests {
         let (drifted, drift_unchecked) = check_drift(
             &[live, unstamped, no_fieldset],
             &AppliedHashes::from_annotations(),
-            &FieldManager::of("a"),
+            &FieldManager::unmigrated("a"),
         );
         assert_eq!((drifted.len(), drift_unchecked), (1, 2));
         let side = OldSide::Live(Box::new(LiveSide {
@@ -874,6 +877,7 @@ mod tests {
             current: None,
             deployed: None,
             managed: HashMap::new(),
+            manager: FieldManager::unmigrated("a"),
             drifted,
             drift_unchecked,
             orphans: Vec::new(),
@@ -947,6 +951,7 @@ mod tests {
             current: None,
             deployed: None,
             managed: HashMap::new(),
+            manager: FieldManager::unmigrated("a"),
             drifted: Vec::new(),
             drift_unchecked: 0,
             orphans: Vec::new(),

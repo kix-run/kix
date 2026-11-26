@@ -136,7 +136,7 @@ fn id(name: &str) -> ResourceId {
 }
 
 fn in_sync(name: &str, hash: &str) -> String {
-    fieldsv1::applied_content_hash(&live(name, hash), &FieldManager::of("a")).unwrap()
+    fieldsv1::applied_content_hash(&live(name, hash), &FieldManager::unmigrated("a")).unwrap()
 }
 
 /// Return each decision as `name: action label`.
@@ -350,8 +350,8 @@ fn an_unchanged_record_is_left_alone() {
     assert!(matches!(decided.decisions[0].label, Label::Unchanged));
 }
 
-/// A Kix cluster that is not read from revisions has no ledger, so its
-/// plans compare builds.
+/// A Kix cluster that is not read from revisions has no ledger from
+/// revisions, so a plan reads it from its notes ([`Ledger::of_notes`]).
 #[test]
 fn a_cluster_not_read_from_revisions_has_no_ledger() {
     let tenancy = Tenancy::fixture_of_state(CLUSTER, &BTreeMap::new(), &[], &[]);
@@ -564,7 +564,8 @@ fn deployment_ledger(applied: &str) -> Ledger {
 #[test]
 fn an_autoscaled_ceded_field_is_not_drift() {
     let applied =
-        fieldsv1::applied_content_hash(&deployment(1, None, None), &FieldManager::of("a")).unwrap();
+        fieldsv1::applied_content_hash(&deployment(1, None, None), &FieldManager::unmigrated("a"))
+            .unwrap();
     let ledger = deployment_ledger(&applied);
     let live = LiveObjects::of([deployment(5, Some("hpa"), None)], []);
     let new = [deployment_manifest()];
@@ -583,7 +584,8 @@ fn an_autoscaled_ceded_field_is_not_drift() {
 #[test]
 fn a_forced_revert_leaves_ceded_fields_to_their_manager_and_the_operator_reports_it() {
     let applied =
-        fieldsv1::applied_content_hash(&deployment(1, None, None), &FieldManager::of("a")).unwrap();
+        fieldsv1::applied_content_hash(&deployment(1, None, None), &FieldManager::unmigrated("a"))
+            .unwrap();
     let ledger = deployment_ledger(&applied);
     let live = LiveObjects::of([deployment(5, Some("hpa"), Some("kubectl-edit"))], []);
     let new = [deployment_manifest()];
@@ -706,7 +708,8 @@ fn leftovers_are_taken_in_only_with_the_clusters_own_entry() {
 #[test]
 fn a_field_another_kix_cluster_holds_is_not_taken_by_force() {
     let applied =
-        fieldsv1::applied_content_hash(&deployment(1, None, None), &FieldManager::of("a")).unwrap();
+        fieldsv1::applied_content_hash(&deployment(1, None, None), &FieldManager::unmigrated("a"))
+            .unwrap();
     let ledger = deployment_ledger(&applied);
     let live = LiveObjects::of([deployment(1, None, Some("kix/b"))], []);
     let new = [deployment_manifest()];
@@ -716,4 +719,95 @@ fn a_field_another_kix_cluster_holds_is_not_taken_by_force() {
     assert_eq!(shown(&cli), ["web: apply held by another cluster on web"]);
     let operator = decide(&new, &made, &live, &ledger, false, false).unwrap();
     assert_eq!(shown(&operator), ["web: skip reports drift on web"]);
+}
+
+/// Return the live ConfigMap `name` as an older Kix left it: applied under
+/// `kix`, with `notes` listing the record hashes that name it and the
+/// applied hash it recorded.
+fn noted(name: &str, hash: &str, notes: &str) -> DynamicObject {
+    let mut obj = live(name, hash);
+    let applied = in_sync(name, hash);
+    let annotations = obj.metadata.annotations.get_or_insert_default();
+    annotations.insert(keys::ACTIVATIONS.into(), notes.into());
+    annotations.insert(keys::APPLIED_HASH.into(), applied);
+    obj
+}
+
+fn legacy_record(name: &str, cluster: &str, phase: &str, kept_from: &[&str]) -> DynamicObject {
+    let kept: Vec<Value> = kept_from
+        .iter()
+        .map(|h| json!({ "activation": format!("{h}-record"), "identityHash": h }))
+        .collect();
+    serde_json::from_value(json!({
+        "apiVersion": keys::API_VERSION,
+        "kind": RECORD_KIND,
+        "metadata": {
+            "name": name,
+            "labels": { (keys::CLUSTER_LABEL): cluster },
+            "annotations": { (keys::IDENTITY_HASH): format!("rec-{name}") },
+        },
+        "status": { "phase": phase, (keys::ORPHANS_KEPT_FROM_FIELD): kept },
+    }))
+    .unwrap()
+}
+
+/// A Kix cluster an older Kix deployed last is read from the notes: the
+/// current record names what its note lists, the builds under
+/// `status.orphansKeptFrom` name kept orphans, and a `Failed` record left
+/// what its note lists, with the build hash the object carries. A
+/// `Superseded` record and another Kix cluster's record name nothing of
+/// it. Every object it holds needs the migration write, and drift is
+/// judged as the write leaves it. An object another Kix cluster an older
+/// Kix deploys also names keeps its entry under `kix`, so it is not
+/// renamed, and the plan applies it without force to add the cluster's
+/// own entry.
+#[test]
+fn a_cluster_not_read_from_revisions_is_read_from_its_notes() {
+    let records = [
+        legacy_record("cur", CLUSTER, PHASE_ACTIVE, &["old-build"]),
+        legacy_record("fail", CLUSTER, PHASE_FAILED, &[]),
+        legacy_record("sup", CLUSTER, lifecycle::PHASE_SUPERSEDED, &[]),
+        legacy_record("b-cur", "b", PHASE_ACTIVE, &[]),
+    ];
+    let tenancy = Tenancy::fixture(&records, CLUSTER);
+    let swept = [
+        noted("same", "h-same", "rec-cur"),
+        noted("gone", "h-gone", "rec-cur"),
+        noted("kept", "h-kept", "old-build"),
+        noted("left", "h-left", "rec-fail"),
+        noted("superseded", "h-sup", "rec-sup"),
+        noted("b-only", "h-b", "rec-b-cur"),
+        noted("shared", "h-shared", "rec-b-cur,rec-cur"),
+    ];
+    let mut ledger = Ledger::of_notes(&tenancy, &swept, true).unwrap();
+    ledger.deploying(Some("rec-new"));
+    assert!(ledger.is_from_notes());
+    assert_eq!(ledger.taken_in(), ["fail"]);
+    let new = [
+        manifest("ConfigMap", "same", "h-same"),
+        manifest("ConfigMap", "shared", "h-shared"),
+        manifest("ConfigMap", "left", "h-left-new"),
+    ];
+    let made: HashSet<ResourceId> = new.iter().map(ResourceId::from_value).collect();
+    let live = LiveObjects::of(swept.iter().cloned(), []);
+    let decided = decide(&new, &made, &live, &ledger, false, true).unwrap();
+    assert_eq!(
+        shown(&decided),
+        [
+            "same: skip unchanged",
+            "shared: apply held by another cluster on shared",
+            "left: apply applied by fail",
+        ]
+    );
+    let names = |ids: &[ResourceId]| ids.iter().map(|r| r.name.clone()).collect::<Vec<_>>();
+    assert_eq!(names(&decided.orphans), ["gone", "kept"]);
+    assert_eq!(names(&decided.migrations), ["left", "same", "shared"]);
+    assert_eq!(names(&decided.renamed), ["left", "same"]);
+    assert_eq!(names(&decided.orphan_migrations), ["gone", "kept"]);
+    let carried: Vec<&str> = decided
+        .carried
+        .iter()
+        .map(|(o, _)| o.name.as_str())
+        .collect();
+    assert_eq!(carried, ["same"]);
 }

@@ -46,8 +46,35 @@ pub fn render_text(plan: &Plan) -> String {
         write_left_behind(out, plan)?;
         write_not_checked(out, plan)?;
         write_objects(out, plan)?;
+        write_metadata_rewrites(out, plan, false)?;
         write_left_alone(out, plan, false)
     })
+}
+
+/// Write how many objects the deploy moves to this version of Kix's
+/// bookkeeping. Writes nothing when there are none.
+fn write_metadata_rewrites(out: &mut String, plan: &Plan, markdown: bool) -> fmt::Result {
+    let n = plan.metadata_rewrites;
+    if n == 0 {
+        return Ok(());
+    }
+    let objects = if n == 1 {
+        "1 object".to_string()
+    } else {
+        format!("{n} objects")
+    };
+    let line = format!(
+        "This deploy also rewrites the metadata of {objects} once, to move them to this version of Kix's bookkeeping. It renames their field manager `kix` to `kix/{cluster}` and removes the annotations `{activations}` and `{applied}`. Controllers that copy annotations may restart their Pods once.",
+        cluster = plan.cluster,
+        activations = kix::manifest::keys::ACTIVATIONS,
+        applied = kix::manifest::keys::APPLIED_HASH,
+    );
+    writeln!(out)?;
+    if markdown {
+        writeln!(out, "> {line}")
+    } else {
+        writeln!(out, "{} {line}", output::yellow("Upgrade:"))
+    }
 }
 
 /// Write which instances a plan made with `--only` applies in full, named
@@ -1162,6 +1189,7 @@ pub fn render_markdown(plan: &Plan) -> String {
 
 fn write_markdown(out: &mut String, plan: &Plan) -> fmt::Result {
     write_lock_holder(out, plan)?;
+    write_metadata_rewrites(out, plan, true)?;
     write_left_alone(out, plan, true)?;
     write_warnings_markdown(out, plan)?;
     let conflicts = plan.conflicts.items();

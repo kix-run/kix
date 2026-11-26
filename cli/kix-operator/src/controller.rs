@@ -348,9 +348,9 @@ fn operator_error(e: LivePlanError) -> OperatorError {
         LivePlanError::Graph(_) | LivePlanError::Marker(_) => {
             OperatorError::GraphError(e.to_string())
         }
-        LivePlanError::Tenancy(_) | LivePlanError::ReadForbidden(_) => {
-            OperatorError::ReconcileError(e.to_string())
-        }
+        LivePlanError::Tenancy(_)
+        | LivePlanError::ReadForbidden(_)
+        | LivePlanError::NotMigrated { .. } => OperatorError::ReconcileError(e.to_string()),
     }
 }
 
@@ -763,6 +763,7 @@ async fn sweep(
     activation: &DynamicObject,
     client: &Client,
     name: &str,
+    deploys: bool,
 ) -> Result<Option<LivePlan>, OperatorError> {
     let path = source_path(activation).ok_or(OperatorError::MissingSourcePath)?;
     let graph = load_build(&path)?.into_graph();
@@ -791,7 +792,7 @@ async fn sweep(
     // record's Kix cluster, which the cleanup lists them by. A record that
     // names none gets no revisions.
     let revisions = cluster_of(activation).map(|cluster| RevisionSet::of(&cluster, &graph));
-    LivePlan::sweep(client, activation, &managed_manifests, revisions)
+    LivePlan::sweep(client, activation, &managed_manifests, revisions, deploys)
         .await
         .map(Some)
         .map_err(operator_error)
@@ -847,7 +848,7 @@ async fn run_locked(
     let client = lock.guarded(&ctx.client);
     let records = ctx.records.through(&client);
     let manage_lifecycle = reconcile.manages_lifecycle();
-    let mut plan = match sweep(activation, &client, name).await {
+    let mut plan = match sweep(activation, &client, name, manage_lifecycle).await {
         Ok(Some(plan)) => plan,
         Ok(None) => return Ok(Action::requeue(requeue_interval())),
         Err(e) if reconcile.counts_failed_runs() => {
@@ -898,6 +899,7 @@ async fn run_locked(
         apply = plan.applies(),
         orphans = plan.orphans().len(),
         unchanged = plan.unchanged(),
+        metadata_rewrites = plan.metadata_rewrites(),
         lifecycle = manage_lifecycle,
         "Live change detection complete"
     );

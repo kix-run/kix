@@ -33,7 +33,7 @@
 //! which plans from a sweep of the live objects it makes itself without
 //! holding the plan to a package diff.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use kube::client::Client;
@@ -51,14 +51,13 @@ use super::server::Overlay;
 use super::{PackageDiff, PlanError, PlanEvent, UnknownInstances, diff_graphs};
 use crate::build_source::InstallableBuild;
 use crate::build_source::SopsSources;
-use crate::cluster::activation::{KeptOrphanSource, KeptOrphans, OpenedRecords, Record, Records};
+use crate::cluster::activation::{KeptOrphans, OpenedRecords, Record, Records};
 use crate::cluster::apply::ChangeAction;
 use crate::cluster::binding;
 use crate::cluster::client::{self, ResiliencePolicy};
 use crate::cluster::discovery;
 use crate::cluster::errors;
 use crate::cluster::errors::FetchError;
-use crate::cluster::field_manager::FieldManager;
 use crate::cluster::graph::DeleteOrder;
 use crate::cluster::graph::ResourceGraph;
 use crate::cluster::head::{self, HeadRead, Lock};
@@ -100,8 +99,8 @@ struct Changes {
     actions: Vec<ChangeAction>,
     /// The objects the build drops.
     orphans: Vec<ResourceId>,
-    /// What the record the run finalizes lists under
-    /// `status.orphansKeptFrom` if the run leaves orphans on the cluster.
+    /// What the run's kept-orphans revision names besides the orphans the
+    /// run leaves on the cluster.
     kept_orphans: KeptOrphans,
     /// The objects the run applies with force, the ones that revert drift,
     /// with the `resourceVersion` the plan read for each.
@@ -116,6 +115,10 @@ struct Changes {
     /// The live objects of the orphans, as manifests, which order the prune
     /// and describe the kept orphans when no build on this machine has them.
     orphan_manifests: Vec<Value>,
+    /// The objects that need the migration write.
+    migrations: Migrations,
+    /// The orphans a run that migrates names when it begins.
+    kept_at_begin: Option<Vec<crate::cluster::revision::RevisionObject>>,
 }
 
 /// Where a plan runs: a connection to the cluster, its discovery read
@@ -193,7 +196,15 @@ pub struct CheckedPlan {
     /// The objects the plan labels as reverting drift, which the run applies
     /// with force while each still has the `resourceVersion` the plan read.
     force: HashMap<ResourceId, String>,
+    /// The migration writes the run makes.
+    migrations: Migrations,
+    /// The orphans a run that migrates names in a kept-orphans revision
+    /// when it begins ([`RecordConfig::kept_at_begin`]).
+    kept_at_begin: Option<Vec<crate::cluster::revision::RevisionObject>>,
 }
+
+/// What [`CheckedPlan::run`] passes to the engine about the migration write.
+pub(crate) use crate::cluster::ops::Migrations;
 
 /// What a run of a [`CheckedPlan`] would do ([`CheckedPlan::work`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -450,7 +461,7 @@ impl CheckedPlan {
             .nodes()
             .iter()
             .any(|n| n.action.written().is_some());
-        if writes || !self.orphans.is_empty() {
+        if writes || !self.orphans.is_empty() || self.migrations.count() > 0 {
             return Work::Changes;
         }
         match last_runs {
@@ -521,6 +532,12 @@ impl CheckedPlan {
         }
     }
 
+    /// Return how many objects the run moves to this Kix's bookkeeping with
+    /// the migration write ([`crate::cluster::migration_write`]).
+    pub fn metadata_rewrites(&self) -> usize {
+        self.migrations.count()
+    }
+
     /// Return the failed Activation records whose leftovers the plan folded
     /// in. A run that finalizes supersedes them.
     pub fn consumed_failed(&self) -> &[String] {
@@ -554,6 +571,7 @@ impl CheckedPlan {
             self.activation_identity_hash.clone(),
             self.force(),
             target.sops,
+            self.migrations.clone(),
         ));
         let result = scheduler::run_deploy(
             Cluster::dry_run(dry.clone()),
@@ -579,9 +597,6 @@ impl CheckedPlan {
     /// with `receipt` as the provenance. Every write goes through `lock`'s
     /// guarded client, and the finalize commits the deploy on `lock`. The
     /// caller releases it. The prune follows the flags the check used.
-    ///
-    /// Also returns the `status.orphansKeptFrom` the run's finalize wrote,
-    /// or `None` when it did not finalize.
     pub async fn run(
         self,
         target: Target,
@@ -589,22 +604,20 @@ impl CheckedPlan {
         receipt: Option<Value>,
         config: SchedulerConfig,
         observer: Arc<dyn DeployObserver>,
-    ) -> (
-        Result<DeployResult, DeployError>,
-        Option<Vec<KeptOrphanSource>>,
-    ) {
+    ) -> Result<DeployResult, DeployError> {
         let ending = self.ending();
         let only = self.applied_instances();
         let force = self.force();
         lock.stop_with(&config.cancel);
-        let (cluster, record) = Cluster::new(
+        let (cluster, _) = Cluster::new(
             KubeResources::new(
                 lock.guarded(&target.client),
                 target.discovery,
                 self.cluster,
                 self.activation_identity_hash,
                 force,
-            ),
+            )
+            .with_migrations(self.migrations),
             RecordConfig {
                 name: self.activation_name,
                 // Created before the first node so a run that stops partway
@@ -615,6 +628,7 @@ impl CheckedPlan {
                 receipt,
                 consumed_failed: self.consumed_failed,
                 kept_orphans: self.kept_orphans,
+                kept_at_begin: self.kept_at_begin,
                 revisions: Some(self.revisions),
                 only,
                 mark_failed_on_abort: true,
@@ -622,7 +636,7 @@ impl CheckedPlan {
             },
             target.sops,
         );
-        let result = scheduler::run_deploy(
+        scheduler::run_deploy(
             cluster,
             self.plan,
             &self.orphans,
@@ -631,8 +645,7 @@ impl CheckedPlan {
             &config,
             observer,
         )
-        .await;
-        (result, record.orphans_kept_from())
+        .await
     }
 }
 
@@ -826,7 +839,9 @@ impl Planned {
             new_graph: self.build.graph(),
             deployed,
             folded,
-            manager: FieldManager::of(&self.build.graph().cluster_name),
+            manager: baseline
+                .tenancy
+                .manager_of(&self.build.graph().cluster_name),
         }
         .apply(&mut self.checked.pkg_diff, answers);
         self.checked.relabel_reverted_writes();
@@ -932,13 +947,10 @@ impl<'a> Planner<'a> {
     /// confirmed. `new_manifests` are the manifests that plan was made from,
     /// with the values `--record-annotation` put on the record.
     ///
-    /// Return `None` when the Kix cluster is not read from revisions: the
-    /// one planner does not plan it, and the offline plan runs as made.
-    /// Otherwise return the plan made from the live cluster, which the run
-    /// uses, or refuse when it writes or deletes other objects than
-    /// `confirmed` ([`super::offline::compare`]). The caller has already
-    /// run the target checks, and takes the deploy lock only after this
-    /// returns.
+    /// Return the plan made from the live cluster, which the run uses, or
+    /// refuse when it writes or deletes other objects than `confirmed`
+    /// ([`super::offline::compare`]). The caller has already run the target
+    /// checks, and takes the deploy lock only after this returns.
     pub async fn recheck(
         &self,
         confirmed: &CheckedPlan,
@@ -946,26 +958,14 @@ impl<'a> Planner<'a> {
         new_manifests: &[Value],
         client: Client,
         connection: binding::Connection,
-    ) -> Result<Option<Replanned>, PlanError> {
+    ) -> Result<Replanned, PlanError> {
         let graph = build.graph();
         let cluster = &graph.cluster_name;
-        // Ask first, so a Kix cluster read from records reads and reports
-        // nothing more than the offline path does.
-        let discovery = discovery::discover_resources(&client)
-            .await
-            .map_err(|e| PlanError::Discovery(Box::new(e)))?;
-        let opened = Records::open(&client, &discovery).map_err(PlanError::Domain)?;
-        let tenancy = super::baseline::read_tenancy(&opened, cluster).await?;
-        if tenancy.own_source() != crate::cluster::tenancy::Source::Revisions {
-            return Ok(None);
-        }
         if let Some(settle) = &self.settle {
             self.settle_lock(&client, graph, settle).await?;
         }
         let baseline = Baseline::of_cluster(&client, build, self.report).await?;
-        let Some(ledger) = ledger_of(&baseline)? else {
-            return Ok(None);
-        };
+        let ledger = ledger_for(&client, &baseline, new_manifests).await?;
         let head = read_head(&client, cluster).await?;
         let live = read_live(&client, &listed_ids(new_manifests, Some(&ledger))).await?;
         let mut checked = self
@@ -987,7 +987,7 @@ impl<'a> Planner<'a> {
         )
         .map_err(PlanError::OfflinePlanDiffers)?;
         let last_runs = checked.last_runs_from(&live);
-        Ok(Some(Replanned {
+        Ok(Replanned {
             checked,
             connected: Connected {
                 client,
@@ -995,7 +995,7 @@ impl<'a> Planner<'a> {
                 last_runs,
                 head,
             },
-        }))
+        })
     }
 
     /// Settle a lock another run holds on the Kix cluster of `graph`, saying
@@ -1084,20 +1084,15 @@ impl<'a> Planner<'a> {
     async fn planned(
         &self,
         build: InstallableBuild,
-        mut baseline: Baseline,
+        baseline: Baseline,
         client: Option<(Client, binding::Connection)>,
     ) -> Result<Planned, PlanError> {
         let new_graph = build.graph();
         let new_manifests = manifests_of(new_graph);
         let ledger = match &client {
-            Some(_) => ledger_of(&baseline)?,
+            Some((client, _)) => Some(ledger_for(client, &baseline, &new_manifests).await?),
             None => None,
         };
-        if let (Some((client, _)), None) = (&client, &ledger) {
-            baseline
-                .read_folded_leftovers(client, &new_manifests)
-                .await?;
-        }
         // A half-applied closure is not a previous intended state, so
         // pairing against it would invent migrations nobody declared.
         let mut migration_pairs =
@@ -1169,7 +1164,7 @@ impl<'a> Planner<'a> {
     ) -> Result<CheckedPlan, PlanError> {
         let new_manifests = manifests_of(new_graph);
         let ledger = match client {
-            Some(_) => ledger_of(baseline)?,
+            Some(client) => Some(ledger_for(client, baseline, &new_manifests).await?),
             None => None,
         };
         let live = match client {
@@ -1189,44 +1184,13 @@ impl<'a> Planner<'a> {
         .await
     }
 
-    /// Compute what `new_manifests` change against `baseline`
-    /// ([`Baseline::changes`]) and the kept-orphan sources for the new record.
-    ///
-    /// An object the build leaves unchanged is written again under
-    /// `--reconcile`, and when `live`, the build's objects as the cluster
-    /// holds them, shows it absent or being deleted. Without `live` the plan
-    /// did not read the cluster.
-    fn changes(
-        &self,
-        new_manifests: &[Value],
-        baseline: &Baseline,
-        live: Option<&LiveObjects>,
-    ) -> Changes {
-        let mut lost = Vec::new();
-        let mut unread = BTreeSet::new();
-        let actions = baseline.changes(new_manifests, |rid| {
-            match live.map(|live| live.get(rid)) {
-                Some(Live::Unread) => {
-                    unread.insert(match rid.group.as_str() {
-                        "" => rid.kind.clone(),
-                        group => format!("{}.{group}", rid.kind),
-                    });
-                }
-                Some(seen) if seen.lost() => {
-                    lost.push(rid.clone());
-                    return true;
-                }
-                _ => {}
-            }
-            self.flags.reconcile
-        });
-        if !lost.is_empty() {
-            (self.report)(PlanEvent::NotHeld(&lost));
-        }
-        if !unread.is_empty() {
-            let unread: Vec<String> = unread.into_iter().collect();
-            (self.report)(PlanEvent::KindsUnread(&unread));
-        }
+    /// Compute what `new_manifests` change against the build of `baseline`
+    /// ([`Baseline::changes`]), for a plan that did not read the cluster
+    /// (`--offline`). An object the build leaves unchanged is written again
+    /// under `--reconcile`. The run's kept-orphans revision carries the
+    /// current record's forward unexamined.
+    fn changes(&self, new_manifests: &[Value], baseline: &Baseline) -> Changes {
+        let actions = baseline.changes(new_manifests, |_| self.flags.reconcile);
         let orphans = actions
             .iter()
             .filter_map(|action| match action {
@@ -1234,29 +1198,28 @@ impl<'a> Planner<'a> {
                 _ => None,
             })
             .collect();
-        let mut kept_orphans = baseline.orphans_kept_from(new_manifests);
-        // A plan that did not read the Active record carries its list
-        // forward unexamined.
-        kept_orphans.carry_current = live.is_none();
         Changes {
             actions,
             orphans,
-            kept_orphans,
+            kept_orphans: KeptOrphans {
+                carry_current: true,
+                ..KeptOrphans::default()
+            },
             force: HashMap::new(),
             reasons: HashMap::new(),
             consumed: None,
             orphan_manifests: Vec::new(),
+            migrations: Migrations::default(),
+            kept_at_begin: None,
         }
     }
 
     /// Decide what `new_manifests` change with the one planner
     /// ([`decide::decide`]), from `live`, the objects of the build and the
-    /// ones `ledger` names as the cluster holds them. The baseline still
-    /// gives the builds behind `status.orphansKeptFrom`.
+    /// ones `ledger` names as the cluster holds them.
     fn decided(
         &self,
         new_manifests: &[Value],
-        baseline: &Baseline,
         ledger: &Ledger,
         live: &LiveObjects,
     ) -> Result<Changes, PlanError> {
@@ -1299,9 +1262,13 @@ impl<'a> Planner<'a> {
         // The plan read every kept orphan it could from the cluster. The
         // run's kept-orphans revision names again the ones whose kind the
         // cluster does not serve, and carries nothing else forward.
-        let mut kept_orphans = baseline.orphans_kept_from(new_manifests);
-        kept_orphans.unexamined.clear();
-        kept_orphans.unknown = decided.unknown;
+        let kept_orphans = KeptOrphans {
+            unknown: decided.unknown,
+            ..KeptOrphans::default()
+        };
+        let kept_at_begin = ledger
+            .is_from_notes()
+            .then(|| Ledger::live_orphans(&decided.orphans, live));
         Ok(Changes {
             actions,
             orphans: decided.orphans,
@@ -1310,6 +1277,15 @@ impl<'a> Planner<'a> {
             reasons,
             consumed: Some(ledger.taken_in().to_vec()),
             orphan_manifests,
+            kept_at_begin,
+            migrations: Migrations {
+                objects: decided.migrations.into_iter().collect(),
+                renamed: decided.renamed.into_iter().collect(),
+                orphans: decided.orphan_migrations,
+                releases: Vec::new(),
+                carried: decided.carried,
+                rule: ledger.rule().clone(),
+            },
         })
     }
 
@@ -1329,6 +1305,16 @@ impl<'a> Planner<'a> {
         if partial {
             match baseline.active() {
                 None => return Err(PlanError::OnlyFirstDeploy(cluster.to_string())),
+                // The first deploy by this Kix rewrites the metadata of every
+                // object, and a run that does not finalize leaves the Kix
+                // cluster read from its notes.
+                Some(_)
+                    if read.is_some()
+                        && baseline.tenancy.own_source()
+                            != crate::cluster::tenancy::Source::Revisions =>
+                {
+                    return Err(PlanError::OnlyNotMigrated(cluster.to_string()));
+                }
                 // The operator repairs the build of a record it deployed on
                 // every requeue, so it would put back what this deploy
                 // applies and delete the objects it adds.
@@ -1350,11 +1336,11 @@ impl<'a> Planner<'a> {
             reasons,
             consumed,
             orphan_manifests,
+            mut migrations,
+            kept_at_begin,
         } = match (ledger, read) {
-            (Some(ledger), Some((_, live))) => {
-                self.decided(new_manifests, baseline, ledger, live)?
-            }
-            _ => self.changes(new_manifests, baseline, read.map(|(_, live)| live)),
+            (Some(ledger), Some((_, live))) => self.decided(new_manifests, ledger, live)?,
+            _ => self.changes(new_manifests, baseline),
         };
         // A deploy with `--only` leaves every orphan alone, so it does not
         // ask which ones another Kix cluster deploys. The one planner read
@@ -1371,6 +1357,7 @@ impl<'a> Planner<'a> {
             (Some((client, _)), None) => keep_shared(client, cluster, orphans).await?,
             (None, _) => (orphans, Vec::new()),
         };
+        migrations.releases = shared_orphans.iter().map(|s| s.rid.clone()).collect();
         let resource_graph =
             ResourceGraph::from_manifests(new_manifests).map_err(PlanError::Graph)?;
         let mut plan = DeployPlan::from_graph_and_changes(&resource_graph, &actions)
@@ -1404,6 +1391,13 @@ impl<'a> Planner<'a> {
                 &mut pkg_diff,
                 orphans.len(),
             )?;
+            migrations.orphans.clear();
+            migrations.releases.clear();
+            migrations.objects.retain(|rid| {
+                plan.nodes()
+                    .iter()
+                    .any(|n| matches!(&n.id, NodeId::Resource(r) if r == rid))
+            });
             (
                 Vec::new(),
                 Vec::new(),
@@ -1443,6 +1437,10 @@ impl<'a> Planner<'a> {
         revisions
             .check_size()
             .map_err(|e| PlanError::RevisionTooLarge(Box::new(e)))?;
+        // An orphan the prune deletes needs no migration write.
+        let deleted: HashSet<ResourceId> =
+            deletes_of(self.flags.prune, &orphans).into_iter().collect();
+        migrations.orphans.retain(|rid| !deleted.contains(rid));
 
         Ok(CheckedPlan {
             flags: self.flags.clone(),
@@ -1466,18 +1464,43 @@ impl<'a> Planner<'a> {
             left_alone: selection.as_ref().map(|s| s.left_alone),
             needed: selection.map(|s| s.needed).unwrap_or_default(),
             force,
+            migrations,
+            kept_at_begin,
         })
     }
 }
 
 /// Return the ledger of the one planner for the Kix cluster `baseline` was
-/// read for, or `None` when that Kix cluster is not read from revisions
-/// ([`Ledger::of`]). Refuse when the tenancy could not read what this Kix
-/// cluster's records name, because the plan could not tell which objects
-/// are orphans or which planner plans it.
-fn ledger_of(baseline: &Baseline) -> Result<Option<Ledger>, PlanError> {
-    Ledger::of(&baseline.tenancy, !baseline.failed().left_out)
-        .map_err(|e| PlanError::Tenancy(Box::new(e)))
+/// read for, through `client`, for a deploy of `new_manifests`. A Kix
+/// cluster an older Kix deployed last is read from the notes on its live
+/// objects ([`Ledger::of_notes`]), so the plan lists every object that
+/// carries Kix's label first. Refuse when the tenancy could not read what
+/// this Kix cluster's records name, because the plan could not tell which
+/// objects are orphans.
+async fn ledger_for(
+    client: &Client,
+    baseline: &Baseline,
+    new_manifests: &[Value],
+) -> Result<Ledger, PlanError> {
+    let take_in_stopped = !baseline.failed().left_out;
+    let tenancy_error = |e| PlanError::Tenancy(Box::new(e));
+    let mut ledger = match Ledger::of(&baseline.tenancy, take_in_stopped).map_err(tenancy_error)? {
+        Some(ledger) => ledger,
+        None => {
+            let discovery = discovery::discover_resources(client)
+                .await
+                .map_err(|e| PlanError::Discovery(Box::new(e)))?;
+            let sweep = inventory::list_managed(client, &discovery)
+                .await
+                .map_err(|e| PlanError::Reconstruct(e.to_string()))?;
+            Ledger::of_notes(&baseline.tenancy, &sweep.managed, take_in_stopped)
+                .map_err(tenancy_error)?
+        }
+    };
+    let record =
+        lifecycle::record_of(new_manifests).and_then(|m| keys::get(m, keys::IDENTITY_HASH));
+    ledger.deploying(record);
+    Ok(ledger)
 }
 
 /// Return the objects a plan lists on the cluster: those of
@@ -1880,92 +1903,6 @@ mod tests {
         assert_eq!(prune, vec![rid("ConfigMap", "app", "mine")]);
         let kept: Vec<&str> = kept.iter().map(|s| s.rid.name.as_str()).collect();
         assert_eq!(kept, vec!["shared", "shared-cm"]);
-    }
-
-    /// A plan made while connected writes again each object the build leaves
-    /// unchanged that the cluster no longer holds: one that is gone and one
-    /// that is being deleted. It leaves unchanged an object the cluster holds
-    /// and one this account may neither list nor get. A plan made without
-    /// connecting writes none of them.
-    #[tokio::test]
-    async fn an_unchanged_object_the_cluster_no_longer_holds_is_written_again() {
-        use crate::eval::store_graph::StoreGraph;
-        let object = |kind: &str, name: &str| {
-            json!({
-                "apiVersion": "v1",
-                "kind": kind,
-                "metadata": {
-                    "name": name,
-                    "namespace": "app",
-                    "labels": { "app.kubernetes.io/managed-by": "kix" },
-                },
-            })
-        };
-        let mut going = object("ConfigMap", "going");
-        going["metadata"]["deletionTimestamp"] = json!("2026-11-24T15:54:00Z");
-        going["metadata"]["finalizers"] = json!(["example.com/hold"]);
-        let api = FakeApi::new([object("ConfigMap", "held"), going]);
-        api.fail_next("/api/v1/secrets", 1, 403);
-        api.fail_next("/api/v1/namespaces/app/secrets/hidden", 1, 403);
-        let client = api.client();
-
-        let build = StoreGraph::synthesize(
-            &[
-                object("ConfigMap", "held"),
-                object("ConfigMap", "going"),
-                object("ConfigMap", "gone"),
-                object("Secret", "hidden"),
-            ],
-            &StoreGraph::empty("a"),
-        );
-        let (graph, _) = crate::plan::fixtures::stamp(&build);
-        let baseline = crate::plan::fixtures::deployed(Some(&build));
-        let events = std::sync::Mutex::new(Vec::new());
-        let report = |event: PlanEvent<'_>| match event {
-            PlanEvent::NotHeld(ids) => events
-                .lock()
-                .unwrap()
-                .extend(ids.iter().map(|rid| format!("not held: {}", rid.name))),
-            PlanEvent::KindsUnread(kinds) => events
-                .lock()
-                .unwrap()
-                .extend(kinds.iter().map(|kind| format!("unread: {kind}"))),
-            _ => {}
-        };
-        let written = |checked: &CheckedPlan| {
-            let mut names: Vec<String> = checked
-                .plan()
-                .nodes()
-                .iter()
-                .filter_map(|n| n.action.written())
-                .map(|m| ResourceId::from_value(m).name)
-                .collect();
-            names.sort();
-            names
-        };
-        let planner = Planner::new(crate::plan::fixtures::flags(&[]), &report);
-
-        let connected = planner
-            .plan(&graph, "a", &baseline, Some(&client))
-            .await
-            .unwrap();
-        assert_eq!(written(&connected), ["going", "gone"]);
-        assert!(
-            connected
-                .objects()
-                .writes
-                .iter()
-                .all(|w| w.change == WriteChange::Reapplied)
-        );
-        let mut events = std::mem::take(&mut *events.lock().unwrap());
-        events.sort();
-        assert_eq!(
-            events,
-            ["not held: going", "not held: gone", "unread: Secret"]
-        );
-
-        let offline = planner.plan(&graph, "a", &baseline, None).await.unwrap();
-        assert!(written(&offline).is_empty());
     }
 
     fn failed_record(name: &str) -> Value {

@@ -118,7 +118,7 @@ fn object(
     let stamp = if in_sync {
         fieldsv1::applied_content_hash(
             &dynamic,
-            &crate::cluster::field_manager::FieldManager::of("a"),
+            &crate::cluster::field_manager::FieldManager::unmigrated("a"),
         )
         .unwrap()
     } else {
@@ -374,6 +374,7 @@ fn a_record_without_names_names_a_missing_object_from_the_store() {
         &live,
         &Apis::default(),
         &AppliedHashes::from_annotations(),
+        &crate::cluster::field_manager::FieldManager::unmigrated("shop"),
         |hashes| {
             assert_eq!(hashes, [h(SECRET).as_str()]);
             HashMap::from([(h(SECRET), StoreEntry::Resource(secret.clone()))])
@@ -409,6 +410,7 @@ fn an_object_live_under_another_hash_is_present() {
         &Live::of(&objects),
         &Apis::default(),
         &AppliedHashes::from_annotations(),
+        &crate::cluster::field_manager::FieldManager::unmigrated("shop"),
         |_| unreachable!(),
     );
 
@@ -454,6 +456,7 @@ fn a_record_without_an_index_follows_depends_on() {
         &Live::of(&objects),
         &Apis::default(),
         &AppliedHashes::from_annotations(),
+        &crate::cluster::field_manager::FieldManager::unmigrated("shop"),
         |hashes| {
             let mut hashes = hashes.to_vec();
             hashes.sort();
@@ -492,6 +495,7 @@ fn a_record_with_nothing_to_follow_lists_no_objects() {
         &Live::of(&[]),
         &Apis::default(),
         &AppliedHashes::from_annotations(),
+        &crate::cluster::field_manager::FieldManager::unmigrated("shop"),
         |_| unreachable!(),
     );
     assert_eq!(view.expected_from, ExpectedFrom::Nothing);
@@ -584,6 +588,7 @@ fn an_object_from_an_index_without_groups_is_found_through_discovery() {
             &Live::of(&objects),
             apis,
             &AppliedHashes::from_annotations(),
+            &crate::cluster::field_manager::FieldManager::unmigrated("shop"),
             |_| HashMap::new(),
         );
         by_name(&view, "fixture-web").clone()

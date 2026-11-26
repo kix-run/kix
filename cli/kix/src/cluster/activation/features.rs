@@ -24,8 +24,15 @@ pub const REQUESTS: &str = "requests";
 /// operator without it, which would deploy beside the lock.
 pub const HEAD_LOCK: &str = "head-lock";
 
+/// The operator keeps what a deploy did in revisions and writes no notes on
+/// the objects it applies ([`crate::cluster::revision`]). An older operator
+/// would write `kix.run/activations` and `kix.run/applied-hash` back after
+/// the CLI moved the objects to revisions, so a CLI with revisions refuses
+/// to take a Kix cluster's lock beside an operator without it.
+pub const REVISIONS: &str = "revisions";
+
 /// Every feature this release's operator handles.
-const HANDLED: &[&str] = &[REQUESTS, HEAD_LOCK];
+const HANDLED: &[&str] = &[REQUESTS, HEAD_LOCK, REVISIONS];
 
 /// The features a running operator published.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -35,6 +42,13 @@ impl OperatorFeatures {
     /// Return whether the operator handles `feature`.
     pub fn handles(&self, feature: &str) -> bool {
         self.0.iter().any(|f| f == feature)
+    }
+
+    /// Return whether an operator published any feature, which shows that
+    /// one is installed. An operator from before the annotation publishes
+    /// nothing.
+    pub fn published(&self) -> bool {
+        !self.0.is_empty()
     }
 
     fn parse(annotation: Option<&str>) -> Self {
@@ -109,5 +123,6 @@ mod tests {
         publish(&client).await.unwrap();
         assert!(read(&client).await.unwrap().handles(REQUESTS));
         assert!(read(&client).await.unwrap().handles(HEAD_LOCK));
+        assert!(read(&client).await.unwrap().handles(REVISIONS));
     }
 }

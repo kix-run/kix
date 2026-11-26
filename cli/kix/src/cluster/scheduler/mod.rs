@@ -297,7 +297,7 @@ pub(crate) async fn run_deploy(
     if ending == Ending::Partial {
         return run.end_partial().await;
     }
-    run.stamp_unchanged().await;
+    run.migrate_unchanged().await;
     let left = run.prune().await;
     run.stop_if_cancelled().await?;
     run.finalize(left).await
@@ -335,13 +335,16 @@ struct Run<'a> {
     halting: bool,
     halting_reason: Option<String>,
     discovery_failed: Option<String>,
-    // Unchanged resources still belong to this activation and are stamped in a
-    // batch after all nodes terminate (see `DeployRecord::stamp_unchanged`).
+    // Unchanged resources get the migration write the plan lists for them in
+    // a batch after all nodes terminate (see `ResourceIo::migrate_unchanged`).
     skipped: Vec<ResourceId>,
     /// Orphans that were deleted and recreated during immutable-conflict
     /// recovery. Excluded from post-deploy pruning because they now belong to
     /// the new build.
     consumed_orphans: HashSet<ResourceId>,
+    /// How many unchanged resources got the migration write. A run that
+    /// changed nothing else still finalizes its record when it wrote one.
+    migrated: usize,
 }
 
 impl<'a> Run<'a> {
@@ -406,6 +409,7 @@ impl<'a> Run<'a> {
             discovery_failed: None,
             skipped: Vec::new(),
             consumed_orphans: HashSet::new(),
+            migrated: 0,
         }
     }
 
@@ -1050,34 +1054,33 @@ impl<'a> Run<'a> {
         true
     }
 
-    /// Stamp the current activation onto unchanged resources. Without this,
-    /// `kix.run/activations` would only record deployments that modified a
-    /// resource, leaving stable resources with stale activation references.
+    /// Write the migration write to each unchanged resource the plan lists
+    /// for it ([`super::migration_write`]). An unchanged resource gets no
+    /// apply, so this is its one write.
     ///
-    /// Stamping is best-effort because nothing was written to these resources.
-    /// Failures are counted and reported rather than failing a deploy that
-    /// otherwise succeeded.
-    async fn stamp_unchanged(&self) {
-        let Some(record) = &self.record else {
-            return;
-        };
-        if self.skipped.is_empty() {
+    /// The write is best-effort. A resource it did not reach keeps what an
+    /// older Kix wrote, and the next deploy plans the write again. Failures
+    /// are counted and reported rather than failing a deploy that otherwise
+    /// succeeded.
+    async fn migrate_unchanged(&mut self) {
+        if self.record.is_none() || self.skipped.is_empty() {
             return;
         }
         let mut failures = 0usize;
+        let mut migrated = 0usize;
         for chunk in self.skipped.chunks(self.config.concurrency.max(1)) {
             let mut set = JoinSet::new();
             for rid in chunk {
-                let record = record.clone();
+                let resources = self.resources.clone();
                 let rid = rid.clone();
                 set.spawn(async move {
                     match tokio::time::timeout(
                         INLINE_BEST_EFFORT_TIMEOUT,
-                        record.stamp_unchanged(&rid),
+                        resources.migrate_unchanged(&rid),
                     )
                     .await
                     {
-                        Ok(Ok(())) => Ok(()),
+                        Ok(Ok(written)) => Ok(written),
                         Ok(Err(e)) => Err((rid, e.to_string())),
                         Err(_) => Err((
                             rid,
@@ -1087,18 +1090,54 @@ impl<'a> Run<'a> {
                 });
             }
             while let Some(joined) = set.join_next().await {
-                if let Ok(Err((rid, e))) = joined {
-                    failures += 1;
-                    tracing::warn!(resource = %rid.display_id(), error = %e, "could not record activation on unchanged resource");
+                match joined {
+                    Ok(Ok(true)) => migrated += 1,
+                    Ok(Err((rid, e))) => {
+                        failures += 1;
+                        tracing::warn!(resource = %rid.display_id(), error = %e, "could not write the migration write to an unchanged resource");
+                    }
+                    Ok(Ok(false)) | Err(_) => {}
                 }
             }
         }
+        self.migrated += migrated;
         if failures > 0 {
             self.emit(DeployEvent::BestEffortFailed {
-                what: "activation stamp on unchanged resources".into(),
+                what: "migration write to unchanged resources".into(),
                 message: format!(
-                    "{failures} of {} not stamped; the deploy itself is unaffected and the next deploy retries",
+                    "{failures} of {} not rewritten; the deploy itself is unaffected and the next deploy writes them",
                     self.skipped.len()
+                ),
+            });
+        }
+    }
+
+    /// Once the record is final, write the migration write to the orphans
+    /// the run left, and give up this Kix cluster's fields on the orphans
+    /// another Kix cluster still deploys ([`ResourceIo::after_finalize`]).
+    /// Best-effort: the next deploy plans what failed again.
+    async fn after_finalize(&self, left: &[ResourceId]) {
+        if self.record.is_none() {
+            return;
+        }
+        let failed = match tokio::time::timeout(
+            INLINE_BEST_EFFORT_TIMEOUT,
+            self.resources.after_finalize(left),
+        )
+        .await
+        {
+            Ok(failed) => failed,
+            Err(_) => vec![format!(
+                "no answer within {}s",
+                INLINE_BEST_EFFORT_TIMEOUT.as_secs()
+            )],
+        };
+        if !failed.is_empty() {
+            self.emit(DeployEvent::BestEffortFailed {
+                what: "metadata of orphans left on the cluster".into(),
+                message: format!(
+                    "{}; the deploy itself is unaffected and the next deploy writes them",
+                    failed.join("; ")
                 ),
             });
         }
@@ -1414,7 +1453,8 @@ impl<'a> Run<'a> {
             || r.pruned > 0
             || r.already_gone > 0
             || r.kept > 0
-            || r.failed > 0;
+            || r.failed > 0
+            || self.migrated > 0;
         if let Some(record) = &self.record
             && actually_changed
         {
@@ -1431,10 +1471,13 @@ impl<'a> Run<'a> {
             )
             .await
             {
-                Ok(Ok(Some(f))) => self.emit(DeployEvent::Finalized {
-                    activation: f.activation,
-                    previous: f.previous,
-                }),
+                Ok(Ok(Some(f))) => {
+                    self.emit(DeployEvent::Finalized {
+                        activation: f.activation,
+                        previous: f.previous,
+                    });
+                    self.after_finalize(&left).await;
+                }
                 Ok(Ok(None)) => {}
                 // Fail if the record could not be finalized so the caller does
                 // not cache the build as the cluster's active state.

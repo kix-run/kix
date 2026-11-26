@@ -20,7 +20,9 @@ use kix::manifest::keys;
 /// The field manager of the Kix cluster the fixtures are read for. They were
 /// applied under the legacy name, which counts as every Kix cluster's own.
 fn manager() -> FieldManager {
-    FieldManager::of("fixture")
+    // The fixtures were captured from objects an older Kix applied under the
+    // legacy field manager.
+    FieldManager::unmigrated("fixture")
 }
 
 fn load(json: &str) -> DynamicObject {

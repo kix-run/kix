@@ -215,3 +215,31 @@ pub async fn clean(
     }
     Ok(names)
 }
+
+/// Name a new kept-orphans revision of `objects` on record `record` of Kix
+/// cluster `cluster`, for `kix gc --full-scan` to rebuild a list that is
+/// missing or cannot be read. Create the revision before the write that
+/// names it, so the map names only revisions that exist. Hold the deploy
+/// lock while calling this.
+pub async fn rebuild_kept(
+    client: &Client,
+    records: &Records,
+    cluster: &str,
+    record: &str,
+    objects: Vec<super::RevisionObject>,
+) -> Result<String, String> {
+    let revision = super::Revision::new(super::RevisionSpec::new(
+        cluster,
+        super::Slot::KeptOrphans,
+        objects,
+    ));
+    Revisions::new(client)
+        .create(&revision)
+        .await
+        .map_err(|e| e.to_string())?;
+    records
+        .name_kept_orphans(record, &revision.name)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(revision.name)
+}

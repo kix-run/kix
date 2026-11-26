@@ -41,14 +41,17 @@ impl RevisionObject {
 /// An object that a revision of a record with a readable `status.revisions`
 /// names takes its hash from that revision's `status.applied`. Any other
 /// object, and a named object that no revision records a hash for, takes it
-/// from its `kix.run/applied-hash` annotation, which every Kix that applies
-/// an object still writes. Two revisions that record different hashes for
-/// one object leave its hash not known.
+/// from its `kix.run/applied-hash` annotation, which an older Kix wrote and
+/// the migration write removes. Two revisions that record different hashes
+/// for one object leave its hash not known.
 #[derive(Debug, Default)]
 pub struct AppliedHashes {
     /// Each object a consulted revision names, with what the revisions
     /// record for it.
     named: HashMap<RevisionObject, Recorded>,
+    /// The revisions a consulted record names that were not found or could
+    /// not be read, sorted.
+    missing: Vec<String>,
 }
 
 /// What the consulted revisions record for one object.
@@ -73,6 +76,11 @@ impl AppliedHashes {
     /// its revisions. When two revisions name the same object, a recorded
     /// hash wins over a missing one, and two different recorded hashes
     /// disagree.
+    ///
+    /// A named revision that `revisions` does not hold may name any object,
+    /// so then an object no other revision names reads as not known rather
+    /// than from its annotation. The missing revisions are reported once,
+    /// here.
     pub fn of<'a>(
         records: impl IntoIterator<Item = &'a Record>,
         revisions: impl IntoIterator<Item = &'a Revision>,
@@ -82,10 +90,16 @@ impl AppliedHashes {
             .map(|r| (r.name.as_str(), r))
             .collect();
         let mut named: HashMap<RevisionObject, Recorded> = HashMap::new();
+        let mut missing: Vec<String> = Vec::new();
         for record in records {
             let Some(map) = readable_map(record) else {
                 continue;
             };
+            missing.extend(
+                map.names()
+                    .filter(|n| !by_name.contains_key(n))
+                    .map(str::to_string),
+            );
             for revision in map.names().filter_map(|n| by_name.get(n)) {
                 for object in &revision.spec.objects {
                     let entry = named.entry(object.clone()).or_insert(Recorded::Nothing);
@@ -98,7 +112,21 @@ impl AppliedHashes {
                 }
             }
         }
-        AppliedHashes { named }
+        missing.sort();
+        missing.dedup();
+        if !missing.is_empty() {
+            tracing::warn!(
+                revisions = ?missing,
+                "deployment records name revisions Kix could not read; the applied hashes of the objects they name are not known, so those objects are applied again or reported as not checked"
+            );
+        }
+        AppliedHashes { named, missing }
+    }
+
+    /// Return the revisions a consulted record names that Kix could not
+    /// read, sorted.
+    pub fn missing(&self) -> &[String] {
+        &self.missing
     }
 
     /// Read what [`AppliedHashes::of`] needs for the records of Kix cluster
@@ -128,6 +156,7 @@ impl AppliedHashes {
         match recorded {
             Some(Recorded::Hash(hash)) => Some(hash),
             Some(Recorded::Disagree) => None,
+            None if !self.missing.is_empty() => None,
             Some(Recorded::Nothing) | None => keys::get_meta(annotations, keys::APPLIED_HASH),
         }
     }

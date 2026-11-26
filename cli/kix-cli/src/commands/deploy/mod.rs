@@ -509,10 +509,7 @@ pub(crate) async fn run_plan(
 ) -> (Result<DeployResult, scheduler::DeployError>, RunEnd) {
     crate::interrupt::cancel_on_interrupt(&config.cancel);
     let partial = !checked.flags().only.is_empty();
-    let (result, kept) = checked.run(target, lock, receipt, config, observer).await;
-    if let Some(recorded) = kept {
-        kix::plan::baseline::sync_kept_roots(cluster, &recorded);
-    }
+    let result = checked.run(target, lock, receipt, config, observer).await;
     let end = RunEnd::of(&result);
     // A deploy with `--only` never makes its record current, so this
     // machine keeps the build it had as the cluster's build.
@@ -520,6 +517,11 @@ pub(crate) async fn run_plan(
         current: end.current && !partial,
         ..end
     };
+    // The record lists kept orphans in a revision, so no plan needs the
+    // builds an earlier release kept GC roots for.
+    if end.current {
+        kix::plan::baseline::sync_kept_roots(cluster, &[]);
+    }
     (result, end)
 }
 
@@ -833,11 +835,11 @@ async fn run_deploy_async(
                 .run(&client, &connection)
                 .await
                 .map_err(|e| miette!("{e}"))?;
-            // A Kix cluster read from revisions is planned again from the
-            // live cluster, and the run uses that plan if it matches the
-            // confirmed one. It binds the run to the lock generation it read.
+            // The plan is made again from the live cluster, and the run uses
+            // it if it matches the confirmed one. It binds the run to the
+            // lock generation it read.
             let replanned = match &offline {
-                Some(offline) => {
+                Some(offline) => Some({
                     let report = |event: kix::plan::PlanEvent<'_>| plan::progress::print(event);
                     kix::plan::Planner::new(checked.flags().clone(), &report)
                         .settling(kix::plan::Settle {
@@ -853,7 +855,7 @@ async fn run_deploy_async(
                         )
                         .await
                         .map_err(|e| miette!("{e}"))?
-                }
+                }),
                 None => None,
             };
             if let Some(replanned) = replanned {

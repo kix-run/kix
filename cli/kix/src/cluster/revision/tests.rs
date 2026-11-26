@@ -836,7 +836,7 @@ mod applied_tests {
             revisions: revision.map(|r| {
                 Ok(RevisionMap {
                     instances: BTreeMap::from([("app/web".to_string(), r.name.clone())]),
-                    cluster_level: "none".into(),
+                    cluster_level: r.name.clone(),
                     kept_orphans: None,
                 })
             }),
@@ -860,7 +860,7 @@ mod applied_tests {
                 "namespace": "app",
                 "annotations": annotations,
                 "managedFields": [{
-                    "manager": crate::cluster::field_manager::LEGACY,
+                    "manager": "kix/a",
                     "operation": "Apply",
                     "apiVersion": "v1",
                     "fieldsType": "FieldsV1",
@@ -946,6 +946,27 @@ mod applied_tests {
         assert_eq!(superseded.applied(&obj), Some("from-annotation"));
         let other = live(&object("y", "x"), Some("from-annotation"));
         assert_eq!(with_map.applied(&other), Some("from-annotation"));
+    }
+
+    /// A revision a record names that Kix cannot read may name any object,
+    /// so an object no other revision names reads as not known, not from
+    /// its annotation, and the revision is reported.
+    #[test]
+    fn a_named_revision_that_cannot_be_read_leaves_hashes_not_known() {
+        let x = object("x", "x");
+        let recorded = web(vec![x.clone()], &[(&x, "from-revision")]);
+        let mut map_record = record(PHASE_ACTIVE, Some(&recorded));
+        if let Some(Ok(map)) = &mut map_record.revisions {
+            map.cluster_level = "a-missing".into();
+        }
+        let source = AppliedHashes::of(&[map_record], std::slice::from_ref(&recorded));
+        assert_eq!(source.missing(), ["a-missing"]);
+        assert_eq!(
+            source.applied(&live(&x, Some("from-annotation"))),
+            Some("from-revision")
+        );
+        let other = live(&object("y", "y"), Some("from-annotation"));
+        assert_eq!(source.applied(&other), None);
     }
 
     /// Two revisions that record different applied hashes for one object,

@@ -77,7 +77,7 @@ pub async fn require_features(client: &Client) -> Result<()> {
             crd = kix::manifest::keys::ACTIVATIONS_CRD,
         )
     })?;
-    let missing: Vec<&str> = [features::REQUESTS, features::HEAD_LOCK]
+    let missing: Vec<&str> = [features::REQUESTS, features::HEAD_LOCK, features::REVISIONS]
         .into_iter()
         .filter(|f| !found.handles(f))
         .collect();
@@ -94,7 +94,7 @@ pub async fn require_features(client: &Client) -> Result<()> {
          Nothing was applied to the cluster.\n\n  \
          Why:\n    \
          CustomResourceDefinition `{crd}` does not list {listed} in its `{key}` annotation. \
-         `--operator` commands require an operator that reads `spec.request` (`{requests}`) and takes the cluster's deploy lock before making changes (`{lock}`). \
+         `--operator` commands require an operator that reads `spec.request` (`{requests}`), takes the cluster's deploy lock before making changes (`{lock}`), and keeps what a deploy did in revisions (`{revisions}`). \
          Because the operator writes `{key}` at startup, it is either older than Kix {version}, still starting, or missing permission to patch `{crd}`.\n\n  \
          Next:\n    \
          Make sure the Kix operator is running Kix {version} or newer and its Kubernetes account can patch CustomResourceDefinition `{crd}`, then wait for it to start (or restart it) and run the command again.",
@@ -102,6 +102,52 @@ pub async fn require_features(client: &Client) -> Result<()> {
         crd = kix::manifest::keys::ACTIVATIONS_CRD,
         requests = features::REQUESTS,
         lock = features::HEAD_LOCK,
+        revisions = features::REVISIONS,
+    ))
+}
+
+/// Refuse to take a Kix cluster's deploy lock when a Kix operator is
+/// installed on the Kubernetes cluster and has not published that it keeps
+/// what a deploy did in revisions (`kix.run/operator-features` on the
+/// Activation CRD). Such an operator writes the notes `kix.run/activations`
+/// and `kix.run/applied-hash` back onto every object it applies, after this
+/// Kix moved them to revisions. A Kubernetes cluster without the CRD has no
+/// operator.
+pub(crate) async fn refuse_operator_without_revisions(client: &Client) -> Result<()> {
+    use kix::cluster::activation::features;
+    let found = match features::read(client).await {
+        Ok(found) => found,
+        Err(kube::Error::Api(e)) if e.code == 404 => return Ok(()),
+        Err(e) => {
+            return Err(miette!(
+                "could not read CustomResourceDefinition `{crd}` to check the Kix operator's features\n  \
+                 Nothing was changed on the cluster.\n\n  \
+                 Kubernetes API error:\n    \
+                 {e}\n\n  \
+                 Next:\n    \
+                 Check that your Kubernetes account has permission to read CustomResourceDefinition `{crd}`, then run the command again.",
+                crd = kix::manifest::keys::ACTIVATIONS_CRD,
+            ));
+        }
+    };
+    if !found.published() || found.handles(features::REVISIONS) {
+        return Ok(());
+    }
+    let version = kix::version::running();
+    Err(miette!(
+        "the Kix operator on this Kubernetes cluster is older than Kix {version}\n  \
+         Nothing was changed on the cluster.\n\n  \
+         Why:\n    \
+         CustomResourceDefinition `{crd}` does not list `{revisions}` in its `{key}` annotation. \
+         Kix {version} keeps what a deploy did in revisions and removes the annotations `{activations}` and `{applied}` from every object. \
+         An older operator writes those annotations back each time it applies an object.\n\n  \
+         Next:\n    \
+         Upgrade the Kix operator to Kix {version} or newer first, wait for it to start, then run the command again.",
+        crd = kix::manifest::keys::ACTIVATIONS_CRD,
+        key = kix::manifest::keys::OPERATOR_FEATURES,
+        revisions = features::REVISIONS,
+        activations = kix::manifest::keys::ACTIVATIONS,
+        applied = kix::manifest::keys::APPLIED_HASH,
     ))
 }
 
@@ -446,10 +492,69 @@ mod tests {
         let unlocked = FakeApi::new([crd(json!({ (keys::OPERATOR_FEATURES): "requests" }))]);
         let err = require_features(&unlocked.client()).await.unwrap_err();
         assert!(err.to_string().contains("older than Kix"), "{err}");
-        let new = FakeApi::new([crd(
+        // An operator that takes the lock but keeps no revisions is refused.
+        let without_revisions = FakeApi::new([crd(
             json!({ (keys::OPERATOR_FEATURES): "requests,head-lock" }),
         )]);
+        let err = require_features(&without_revisions.client())
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("`revisions`"), "{err}");
+        let new = FakeApi::new([crd(
+            json!({ (keys::OPERATOR_FEATURES): "requests,head-lock,revisions" }),
+        )]);
         assert!(require_features(&new.client()).await.is_ok());
+    }
+
+    /// Every command that takes a Kix cluster's deploy lock refuses while an
+    /// operator that keeps no revisions is installed, and says to upgrade
+    /// it first. No operator, an operator that publishes nothing, and an
+    /// operator with revisions pass. The refusal changes nothing.
+    #[tokio::test]
+    async fn the_lock_is_refused_beside_an_operator_without_revisions() {
+        let crd = |features: Option<&str>| {
+            let mut annotations = json!({});
+            if let Some(features) = features {
+                annotations[keys::OPERATOR_FEATURES] = json!(features);
+            }
+            json!({
+                "apiVersion": "apiextensions.k8s.io/v1",
+                "kind": "CustomResourceDefinition",
+                "metadata": { "name": keys::ACTIVATIONS_CRD, "annotations": annotations },
+            })
+        };
+        let old = FakeApi::new([crd(Some("requests,head-lock"))]);
+        let err = super::super::lock::take(
+            &old.client(),
+            "a",
+            "kix deploy",
+            kix::cluster::head::Purpose::Deploy,
+            None,
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("Upgrade the Kix operator"),
+            "{err}"
+        );
+        assert!(
+            old.requests().iter().all(|r| r.starts_with("GET")),
+            "{:?}",
+            old.requests()
+        );
+        assert!(old.object(kix::cluster::head::KIND, "a").is_none());
+        for found in [
+            FakeApi::new([]),
+            FakeApi::new([crd(None)]),
+            FakeApi::new([crd(Some("requests,head-lock,revisions"))]),
+        ] {
+            assert!(
+                refuse_operator_without_revisions(&found.client())
+                    .await
+                    .is_ok()
+            );
+        }
     }
 
     /// Verify that operator mode requires API discovery and rejects unmigrated clusters.
