@@ -30,11 +30,9 @@ solver. This example uses Cloudflare DNS-01:
 
 <Snippet {...acmeClusterIssuer} />
 
-Replace `<your-email>` with an address that can receive mail. Let's Encrypt
-rejects `example.com`, `example.org`, `example.net`, and any domain that cannot
-receive mail. If registration is rejected, the ClusterIssuer never becomes
-ready, and `kix deploy` waits until the readiness timeout before reporting the
-ACME error.
+Replace `<your-email>` with your own address. Let's Encrypt refuses
+`example.com`, and `kix deploy` waits for the readiness timeout before showing
+that error.
 
 The `cloudflare-api-token` instance declares a Secret created outside Kix that
 holds the token under the key `api-token`. Use

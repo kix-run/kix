@@ -54,7 +54,7 @@
 #     };
 #   };
 #
-# Replace `<your-email>` with an address that can receive mail. Let's Encrypt
+# Replace `<your-email>` with your own address. Let's Encrypt
 # refuses an `example.com` contact, and the issuer then stays not ready until
 # the deploy's readiness timeout.
 #
