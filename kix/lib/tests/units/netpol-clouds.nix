@@ -14,6 +14,8 @@
   containerBase,
   eval,
   mkCmPackage,
+  mkAppPackage,
+  baseInstances,
   ...
 }:
 
@@ -163,8 +165,8 @@ let
       out = {
         name = "kube-dns";
         fqdn = "kube-dns.kube-system.svc.cluster.local";
-      }
-      // lib.optionalAttrs (peers != null) { dnsPeers = peers; };
+      };
+      dnsPeers = peers;
     };
 
   # Return the DNS rule of the `web` Deployment's egress policy in a cluster
@@ -315,24 +317,33 @@ in
     )
     || throw "entities: known ${toString (evalFails known)}, unknown intent ${toString (evalFails unknownIntent)}, known external ${toString (evalFails knownExternal)}, unknown external ${toString (evalFails unknownExternal)}";
 
-  # The enforcer builds every workload's DNS rule from the `dns` import's
-  # `out.dnsPeers`, and from the kube-dns pods in kube-system when it sets
-  # none. A managed provider's `out` is not read, so it gets the default.
+  # The enforcer builds every workload's DNS rule from the `dns` provider's
+  # `meta.dnsPeers`, and from the kube-dns pods in kube-system when it sets
+  # none. A managed provider declares them in its package metadata, and a
+  # pod peer without `namespace` is in the provider's namespace.
   netpol-clouds-dns-peers-from-import =
     let
       custom = webDnsRuleWith (dnsImport customPeers);
       unset = webDnsRuleWith (dnsImport null);
       managed = webDnsRuleWith (mkCmPackage {
         name = "dns";
-        metaExtra.roles = [ "dns" ];
-        out = {
-          fqdn = "dns.kube-system.svc.cluster.local";
-          dnsPeers = customPeers;
+        metaExtra = {
+          roles = [ "dns" ];
+          dnsPeers = [ { podSelector.app = "resolver"; } ];
         };
+        out.fqdn = "dns.kube-system.svc.cluster.local";
       });
     in
     (
-      custom.dnsPeers == customPeers && unset.dnsPeers == defaultPeers && managed.dnsPeers == defaultPeers
+      custom.dnsPeers == customPeers
+      && unset.dnsPeers == defaultPeers
+      &&
+        managed.dnsPeers == [
+          {
+            namespace = "kube-system";
+            podSelector.app = "resolver";
+          }
+        ]
     )
     || throw "DNS peers: custom ${builtins.toJSON custom}, unset ${builtins.toJSON unset}, managed ${builtins.toJSON managed}";
 
@@ -474,4 +485,81 @@ in
         ) != null
     )
     || throw "default deny in ${builtins.toJSON denied}";
+
+  # Kix writes a caller-ingress policy over a Service's pods only when it
+  # deploys them, or when a default deny already isolates them. On a cloud
+  # flavour, a workload that dials an import in kube-system (a platform
+  # namespace) gets its own egress rule, and no policy selects the
+  # platform's pods. A workload that dials a Service Kix deploys gets the
+  # policy as before, and so does an import in a namespace with a default
+  # deny, because the default deny already isolates its pods.
+  netpol-clouds-caller-ingress-only-over-deployed-pods =
+    let
+      # An import of a Service with a selector, as a platform's.
+      platformService =
+        name:
+        eval.mkImport {
+          from = {
+            meta.version = "test";
+            build =
+              { self, scope, ... }:
+              {
+                service = scope.mkResource {
+                  apiVersion = "v1";
+                  kind = "Service";
+                  inherit name;
+                  spec = {
+                    selector."k8s-app" = name;
+                    ports = [ { port = 443; } ];
+                  };
+                };
+                root = self.service;
+              };
+          };
+        };
+      caller = dep: {
+        package = mkAppPackage { };
+        deps.db = dep;
+      };
+      cluster = mkCluster [
+        (import ../../flavors/gke.nix)
+        netpolOn
+        baseInstances
+        (
+          { ref, ... }:
+          {
+            instances.kube-system.metrics.package = platformService "metrics";
+            instances.dbns.legacy.package = platformService "legacy";
+            instances.platform-calls.platform-caller = caller ref.kube-system.metrics;
+            instances.legacy-calls.legacy-caller = caller ref.dbns.legacy;
+          }
+        )
+      ];
+      ms = manifests cluster;
+      callerIngress =
+        ns:
+        builtins.sort builtins.lessThan (
+          map (m: m.metadata.name) (
+            builtins.filter (
+              m:
+              (m.metadata.namespace or null) == ns
+              && (m.metadata.labels."kix.run/policy-type" or null) == "caller-ingress"
+            ) ms
+          )
+        );
+      egressOf = name: byName name ms;
+      platformEgress = egressOf "platform-caller-deployment-app-egress";
+    in
+    (
+      callerIngress "kube-system" == [ ]
+      &&
+        callerIngress "dbns" == [
+          "app-deployment-app-to-db-ingress"
+          "legacy-caller-deployment-app-to-legacy-ingress"
+        ]
+      && builtins.any (
+        r: (r.stubRule or null) == "service-egress" && r.namespace == "kube-system"
+      ) platformEgress.spec.egress
+    )
+    || throw "caller ingress: kube-system ${builtins.toJSON (callerIngress "kube-system")}, dbns ${builtins.toJSON (callerIngress "dbns")}";
 }

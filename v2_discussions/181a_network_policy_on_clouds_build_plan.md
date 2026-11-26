@@ -15,7 +15,7 @@
 | 6 | Implement the standard `NetworkPolicy` renderer, the link-local exclusion on `world` rules, `cluster.network.apiServer`, `cluster.network.nodeCidrs`, unsupported-rule refusals, the `networkPolicyWidened` scorecard rule, the policy-kind validation check, the check 12 skip for policies that Kix generates for operator-created pods and platform intents (AWS F17), and the `kix deploy` API server IP check. Enable the standard renderer in `gke` and `gke-autopilot`, plus `k3s` and `kind` once live tests confirm stock enforcement. | 3, 4, 5 | `added` |
 | 7 | Add `egress` rules on cloud identity mechanisms, the `"node-local"` intent target, and `networkIntents` on bound identity values. | 3 | `fixed` (adds egress rules on Cilium clusters using cloud identity; no user action needed) |
 | 8 | Add `cluster.flavor.eks.networkPolicy` and the verified VPC CNI behavior flags. | 6 | `added` |
-| 9 | Remove the legacy `spec` argument with an error naming `selector`, `ingress`, and `egress`. | 3 (next minor release) | `error` (with an id) |
+| 9 | Remove the legacy `spec` argument of `kix.operandPolicy` with an error naming `selector`, `ingress`, and `egress`. The enforcer contract keeps a `spec` path: default deny passes the enforcer's own `mkDefaultDenySpec` result as `extraArgs.spec`, and `mkEndpointSelector` has no callers left. Either keep that path or replace it with a `mkDefaultDenyPolicy` contract entry, and drop `mkEndpointSelector`. | 3 (next minor release) | `error` (with an id) |
 | 10 | Add `cluster.flavor.aks.networkPolicy`. | 6 + live AKS cluster | `added` |
 | 11 | Add the post-deploy enforcement probe, if approved (`181`, section 10). | 6 | `added` |
 

@@ -107,7 +107,7 @@ With `networkPolicy.defaultDeny = true` (the default when network policy is enab
 For every service dependency in the graph, Kix opens a narrow path on both ends:
 
 - **Caller egress:** A policy in the calling workload's namespace allowing egress to the target Service's pod selector and numeric ports, plus egress to the cluster DNS provider.
-- **Callee ingress:** A paired policy in the target Service's namespace (`emit.inNamespace`) allowing ingress from the caller's pod selector and namespace on those ports.
+- **Callee ingress:** A paired policy in the target Service's namespace (`emit.inNamespace`) allowing ingress from the caller's pod selector and namespace on those ports. Kix writes this policy whenever it deploys the target pods. For an imported Service (`kix.mkImport`), Kix writes it only if `<namespace>-default-deny` already isolates the target namespace. Otherwise, such as in `kube-system` on a cloud flavor, Kix omits the ingress policy so it does not block other traffic to pods managed outside Kix, while still writing the caller's egress rule.
 
 Because Kix compiles the whole cluster at once, it knows the pod labels, namespaces, and container ports of both the caller and the callee. The enforcer package (such as `packages.experimental.cilium`, which claims the `network-policy-enforcer` role) supplies the policy builder (`out.netpol.mkPolicy`). If `networkPolicy.enable = true` is set without an enforcer in the cluster, evaluation fails immediately rather than generating policies that nothing would enforce.
 
@@ -129,9 +129,9 @@ Beyond cross-package Service references, Kix automatically derives rules for fou
 
 ### DNS peers
 
-The DNS egress rule allows UDP and TCP port 53 to the cluster's DNS peers. By default, these are pods labeled `k8s-app: kube-dns` in `kube-system`, where kubeadm, kind, k3s, RKE2, and EKS run CoreDNS. A `dns` import (such as a flavor's `platform-dns`) can override this list in `out.dnsPeers`. Each entry selects either pods by label in a single namespace (`{ namespace; podSelector; }`) or an IP range (`{ cidr; }`). The `gke` and `gke-autopilot` flavors set `out.dnsPeers` to `kube-dns`, `node-local-dns`, `169.254.169.254/32`, and `169.254.20.10/32`, covering standard `kube-dns`, NodeLocal DNSCache, and Cloud DNS.
+The DNS egress rule allows UDP and TCP port 53 to the cluster's DNS peers. By default, these are pods labeled `k8s-app: kube-dns` in `kube-system`, where kubeadm, kind, k3s, RKE2, and EKS run CoreDNS. A package that claims the `dns` role can override this list in `meta.dnsPeers`, and a `dns` import (`kix.mkImport`, such as a flavor's `platform-dns`) accepts the same list as `dnsPeers`. Each entry selects either pods by label in one namespace (`{ namespace; podSelector; }`, where `namespace` defaults to the provider's namespace) or an IP range (`{ cidr; }`). `packages.experimental.coredns` declares its own pods in `meta.dnsPeers`, so generated policies reach it in whichever namespace it runs. The `gke` and `gke-autopilot` flavors set `dnsPeers` on `platform-dns` to `kube-dns`, `node-local-dns`, `169.254.169.254/32`, and `169.254.20.10/32`, covering standard `kube-dns`, NodeLocal DNSCache, and Cloud DNS.
 
-Kix reads `out.dnsPeers` only from `kix.mkImport` instances. When a managed package such as `coredns` provides the `dns` role, Kix uses the default peers, so with `networkPolicy.enable = true` that package must run in `kube-system` with the label `k8s-app: kube-dns`. Because Cilium cannot combine pod selectors and IP ranges in one DNS rule, the `cilium` enforcer accepts only `{ namespace; podSelector; }` entries and fails evaluation when `out.dnsPeers` includes `{ cidr; }`.
+Because Cilium cannot combine pod selectors and IP ranges in a single DNS rule, the `cilium` enforcer accepts only pod selector entries and fails evaluation when `dnsPeers` or `meta.dnsPeers` includes `{ cidr; }`.
 
 ### Cloud credentials
 

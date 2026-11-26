@@ -1,3 +1,0 @@
-# 2026-11-26 · `kix/lib/plugins/netpol/derive.nix` · Caller-ingress policies can still select pods the platform runs in a `networkPolicy.platformNamespaces` namespace.
-
-Doc 181 says Kix writes no policy in a platform namespace that selects pods Kix does not deploy. The default deny and the scrape ingress follow that, but the workload hook still writes a `<caller>-to-<service>-ingress` policy in the target's namespace for every edge, including an edge to a `scope.mkServiceRef` or an import there. Such a policy isolates the platform's pods for ingress. The hook does not know whether the target pods are Kix's own; `edge.service == null` is close to that but also covers indirect references, so it is not a safe test.

@@ -1324,6 +1324,7 @@ let
       baseInstances
       netpolOn
       mkCmPackage
+      mkAppPackage
       manifests
       ofKind
       namesOf

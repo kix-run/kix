@@ -18,6 +18,16 @@ let
   inherit (import ../../core/markers.nix { inherit lib; }) isProvidedLoadBalancerClass;
   inherit (import ../../core/pod-spec.nix { inherit lib; }) podSpecOf;
   inherit (import ./interface.nix { inherit lib; }) checkEntities checkIntentEntities;
+
+  # Return whether Kix may write an ingress policy over the target of
+  # `edge`: Kix deploys the target pods, or a default deny in their
+  # namespace already isolates them, so an allow rule only restores the
+  # caller's path. An edge to an import elsewhere, such as a platform's
+  # pods in kube-system on a cloud flavour, gets none, because the policy
+  # would isolate pods Kix does not deploy.
+  writesIngressOver =
+    defaultDenyNamespaces: edge:
+    (edge.targetDeployed or true) || builtins.elem edge.targetNamespace defaultDenyNamespaces;
 in
 {
   buildWorkloadCnps =
@@ -34,6 +44,8 @@ in
       packageIntents ? { },
       # Credential egress of the pod's cloud identity, as intent rules.
       cloudIdentityEgress ? [ ],
+      # The namespaces with `<namespace>-default-deny` (module.nix).
+      defaultDenyNamespaces ? [ ],
       networkPolicyEnforcer ? null,
     }:
     let
@@ -156,7 +168,7 @@ in
                       extraDeps = lib.optional (edge.service != null) edge.service;
                     };
                   }
-                ) edges;
+                ) (builtins.filter (writesIngressOver defaultDenyNamespaces) edges);
 
           in
           builtins.filter (c: c != null) (
@@ -180,6 +192,7 @@ in
       allPartResources,
       enforced,
       packageMeta,
+      defaultDenyNamespaces ? [ ],
       networkPolicyEnforcer ? null,
     }:
     let
@@ -350,6 +363,7 @@ in
             inherit (f.payload) name ports;
             targetSelector = f.payload.selector;
             targetNamespace = f.payload.namespace;
+            targetDeployed = !(f.payload.imported or false);
           }) r.absorbedEndpointFacts;
 
           egressCnp =
@@ -412,7 +426,7 @@ in
                     extraDeps = [ ];
                   };
                 }
-              ) crEdges;
+              ) (builtins.filter (writesIngressOver defaultDenyNamespaces) crEdges);
         in
         egressCnp ++ callerIngressCnps
       ) terminatingCrs;
