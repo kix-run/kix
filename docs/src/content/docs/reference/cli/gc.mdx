@@ -108,10 +108,11 @@ Resources are deleted dependents first. Namespaces and
 CustomResourceDefinitions are skipped. A resource that is already gone when
 gc deletes it is reported, not counted as a failure.
 
-Like `kix deploy --prune`, `kix gc` deletes resources with `Background`
-propagation, except a custom resource whose kind names a `controller`, which
-it deletes with `Foreground` propagation so that it stays until the objects its
-controller made for it are gone. It runs independent deletes in parallel, and waits for each resource
+Like `kix deploy --prune`, `kix gc` deletes most resources with `Background`
+propagation. For custom resources whose CRD declaration sets `controller`,
+`kix gc` uses `Foreground` propagation instead. That keeps the custom resource
+on the cluster until Kubernetes deletes any owned child objects that block its
+deletion. `kix gc` runs independent deletes in parallel and waits for each resource
 to be removed from the cluster. If a resource is already being deleted (marked
 in a `--full-scan` plan), `kix gc` waits for that deletion instead of sending a
 second delete request. It stops waiting if no finalizer is removed within
