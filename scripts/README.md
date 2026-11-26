@@ -10,6 +10,7 @@ installs them.
 | `change-kind.py` | Change kind workflow | Builds a set of clusters at a pull request's base and head and checks its change records against what changed. |
 | `change-records.py` | Changelog workflow, release skill | Checks the change records under `changes/` and writes the changelog from them. |
 | `copy-pass` | Authors, before a pull request | Hands the changed user-facing text to Antigravity for an edit (CLAUDE.md, "User-facing text"). |
+| `private-names` | Private names workflow, pre-commit and commit-msg hooks | Refuses added lines, commit messages, and pull request text that contain a name from a list of private names kept outside the repository. |
 | `vendor-crds.py` | CRD vendoring workflow, crd-vendoring skill | Refreshes the CRDs and operator roles packages vendor, or checks them with `--check`. |
 | `vendor-clickhouse-crd-schemas.py` | By hand, when bumping clickhouse-operator | Vendors the Altinity operator's CRD schemas into the package. |
 | `sign-release.sh` | Release job in `cli-tests.yml` | Signs a release's `SHA256SUMS`. |
