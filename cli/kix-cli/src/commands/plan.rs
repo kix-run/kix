@@ -29,8 +29,8 @@ use kix::eval::store_graph::StoreGraph;
 use kix::manifest::lifecycle;
 use kix::manifest::types::ResourceId;
 use kix::plan::document::{
-    AdmissionRefusal, Build, Checked, Conflict, ConflictOwner, DeployedBuild, Detail, MadeBy,
-    NotCheckedReason, ObjectWrite, Plan, PlanFlags, PruneController, PruneControllerState,
+    AdmissionRefusal, Build, Checked, Conflict, ConflictOwner, DeployedBuild, Detail, LeftBehind,
+    MadeBy, NotCheckedReason, ObjectWrite, Plan, PlanFlags, PruneController, PruneControllerState,
     PruneEntry, PruneFate, RefusalReason, UncheckedObject, UncheckedReason,
 };
 use kix::plan::server::comparable;
@@ -217,6 +217,37 @@ pub(crate) struct DryRunReport {
     pub cancelled: HashMap<ResourceId, Option<ResourceId>>,
     /// The APIs the apiserver serves, as discovery lists them.
     pub served: Vec<(kube::discovery::ApiResource, kube::discovery::Scope)>,
+    /// For each orphan that declares a kind no object of the new build
+    /// declares, the objects of that kind the prune leaves on the cluster.
+    pub left_behind: HashMap<ResourceId, LeftBehind>,
+}
+
+/// Return, for each orphan that declares a kind no object of the new build
+/// declares, the objects of that kind that the prune leaves on the cluster.
+/// Only a prune that deletes removes the controller that handles them, so a
+/// plan with another prune policy lists none. A kind Kix cannot list is
+/// left out, with a warning.
+async fn left_behind_of(
+    checked: &CheckedPlan,
+    client: &kube::Client,
+) -> HashMap<ResourceId, LeftBehind> {
+    let mut found = HashMap::new();
+    if checked.flags().prune != PrunePolicy::Delete {
+        return found;
+    }
+    let deleting: HashSet<ResourceId> = checked.orphans().iter().cloned().collect();
+    for (declarer, crd) in checked.kinds_leaving() {
+        match kix::cluster::left_behind::list(client, &crd, &deleting).await {
+            Ok(Some(left)) if left.count > 0 => {
+                found.insert(declarer, left);
+            }
+            Ok(_) => {}
+            Err(e) => eprintln!(
+                "warning: could not list the objects of {crd} that the prune leaves on the cluster: {e}"
+            ),
+        }
+    }
+    found
 }
 
 /// Run the deploy's engine plan with every write sent as a dry run
@@ -250,6 +281,7 @@ pub(crate) async fn dry_run_of(
     sops: SopsSources,
     names_flags: bool,
 ) -> Result<DryRunReport> {
+    let left_behind = left_behind_of(checked, &client).await;
     let target = Target::connect(client, sops)
         .await
         .map_err(|e| miette!("{e}"))?;
@@ -305,6 +337,7 @@ pub(crate) async fn dry_run_of(
         failed,
         cancelled: seen.cancelled,
         served,
+        left_behind,
     })
 }
 
@@ -611,7 +644,8 @@ pub(crate) fn fill_checks(
     doc.being_deleted = kix::plan::server::being_deleted(answers, |rid| {
         build.iter().find(|m| ResourceId::from_value(m) == *rid)
     });
-    doc.prune = Checked::found(prune_entries(checked, &prune_answers));
+    let left_behind = report.map(|r| &r.left_behind);
+    doc.prune = Checked::found(prune_entries(checked, &prune_answers, left_behind));
 }
 
 /// Return the reason the plan document gives for a refused write, and the
@@ -644,12 +678,17 @@ pub(crate) fn admission_reason(refusal: &Refusal) -> (RefusalReason, Option<Stri
 fn prune_entries(
     checked: &CheckedPlan,
     answers: &HashMap<ResourceId, PruneAnswer>,
+    left_behind: Option<&HashMap<ResourceId, LeftBehind>>,
 ) -> Vec<PruneEntry> {
     let policy = checked.flags().prune;
     let mut entries: Vec<PruneEntry> = checked
         .orphans()
         .iter()
-        .map(|rid| prune_entry(rid, policy, answers.get(rid)))
+        .map(|rid| {
+            let mut entry = prune_entry(rid, policy, answers.get(rid));
+            entry.left_behind = left_behind.and_then(|l| l.get(rid)).cloned();
+            entry
+        })
         .collect();
     entries.extend(checked.shared_orphans().iter().map(|s| {
         PruneEntry::new(

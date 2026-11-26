@@ -31,12 +31,14 @@
 //! which plans from a sweep of the live objects it makes itself without
 //! holding the plan to a package diff.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
 
 use kube::client::Client;
 use kube::discovery::{ApiResource, Scope};
 use serde_json::Value;
+
+use crate::manifest::kinds::{self, GroupKind};
 
 use super::baseline::Baseline;
 use super::document::{DriftChange, Objects, PlanFlags, WriteChange};
@@ -287,6 +289,16 @@ impl CheckedPlan {
 
     pub fn shared_orphans(&self) -> &[SharedOrphan] {
         &self.shared_orphans
+    }
+
+    /// Return each CustomResourceDefinition that the build no longer
+    /// declares, by name, with the orphan that declared it: the definition
+    /// itself, or else a reference to it (`scope.mkCRDRef`). A definition
+    /// that an object staying in the build, or an object the new build adds,
+    /// still declares is not listed.
+    pub fn kinds_leaving(&self) -> Vec<(ResourceId, String)> {
+        let added = self.plan.nodes().iter().filter_map(|n| n.action.written());
+        kinds_leaving(&self.old_manifests, &self.orphans, added)
     }
 
     /// Return the package-grouped comparison of the old side with the new build.
@@ -1025,6 +1037,59 @@ pub async fn keep_shared(
         .map_err(|e| PlanError::SharedOrphans(Box::new(e)))
 }
 
+/// Return each CustomResourceDefinition that an orphan of `old_manifests`
+/// declares and that no other object of `old_manifests` and none of `added`
+/// declares, with the orphan: the definition itself when it is an orphan,
+/// else the first reference to it.
+fn kinds_leaving<'a>(
+    old_manifests: &[Value],
+    orphans: &[ResourceId],
+    added: impl Iterator<Item = &'a Value>,
+) -> Vec<(ResourceId, String)> {
+    let orphans: HashSet<&ResourceId> = orphans.iter().collect();
+    let mut kept: HashSet<String> = added.filter_map(declared_crd).collect();
+    let mut leaving: BTreeMap<String, ResourceId> = BTreeMap::new();
+    for m in old_manifests {
+        let Some(crd) = declared_crd(m) else {
+            continue;
+        };
+        let rid = ResourceId::from_value(m);
+        if !orphans.contains(&rid) {
+            kept.insert(crd);
+            continue;
+        }
+        let is_definition = rid.group_kind() == kinds::CUSTOM_RESOURCE_DEFINITION;
+        let replace = match leaving.get(&crd) {
+            None => true,
+            Some(by) => is_definition && by.group_kind() != kinds::CUSTOM_RESOURCE_DEFINITION,
+        };
+        if replace {
+            leaving.insert(crd, rid);
+        }
+    }
+    leaving
+        .into_iter()
+        .filter(|(crd, _)| !kept.contains(crd))
+        .map(|(crd, rid)| (rid, crd))
+        .collect()
+}
+
+/// Return the name of the CustomResourceDefinition that `manifest` declares:
+/// its own name when it is one, or its target when it is an import marker
+/// for one.
+fn declared_crd(manifest: &Value) -> Option<String> {
+    if GroupKind::of_manifest(manifest) == kinds::CUSTOM_RESOURCE_DEFINITION {
+        return manifest
+            .pointer("/metadata/name")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+    }
+    match crate::cluster::readiness::import_target_from_manifest(manifest) {
+        Ok(Some(target)) if target.kind == "CustomResourceDefinition" => Some(target.name),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1477,5 +1542,78 @@ mod tests {
         p.note_withdrawn_kix(&"0.10.0+abc".parse().unwrap());
         let noted = record_annotation(&p, keys::WITHDRAWN_KIX);
         assert_eq!(noted, vec![Some("0.10.0".to_string()); 3]);
+    }
+
+    /// A definition leaves when every object declaring it is an orphan and
+    /// the new build adds none. The definition names the kind over a
+    /// reference to it. A definition a remaining object still declares, or a
+    /// new object declares, does not leave.
+    #[test]
+    fn kinds_leave_with_the_last_object_declaring_them() {
+        let crd = |name: &str| {
+            json!({
+                "apiVersion": "apiextensions.k8s.io/v1",
+                "kind": "CustomResourceDefinition",
+                "metadata": { "name": name },
+            })
+        };
+        let marker = |name: &str, crd: &str| {
+            json!({
+                "apiVersion": keys::API_VERSION,
+                "kind": "PackageInstance",
+                "metadata": {
+                    "name": name,
+                    "namespace": "app",
+                    "annotations": {
+                        (keys::MODE): "import",
+                        (keys::IMPORT_KIND): "CustomResourceDefinition",
+                        (keys::IMPORT_API_VERSION): "apiextensions.k8s.io/v1",
+                        (keys::IMPORT_NAME): crd,
+                        (keys::CRD_KIND): "Widget",
+                        (keys::CRD_SERVED_VERSIONS): "v1",
+                    },
+                },
+            })
+        };
+        let old = vec![
+            marker("ref-a", "a.example.com"),
+            crd("a.example.com"),
+            marker("ref-b", "b.example.com"),
+            crd("c.example.com"),
+            marker("ref-c", "c.example.com"),
+            crd("d.example.com"),
+        ];
+        let orphans: Vec<ResourceId> = ["ref-a", "ref-b", "ref-c"]
+            .iter()
+            .map(|n| ResourceId::from_value(&marker(n, "")))
+            .chain(
+                ["a.example.com", "c.example.com", "d.example.com"]
+                    .map(|n| ResourceId::from_value(&crd(n))),
+            )
+            .collect();
+        let added = [marker("ref-d", "d.example.com")];
+        let leaving = kinds_leaving(&old, &orphans, added.iter());
+        let names: Vec<(&str, &str)> = leaving
+            .iter()
+            .map(|(rid, crd)| (rid.name.as_str(), crd.as_str()))
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                ("a.example.com", "a.example.com"),
+                ("ref-b", "b.example.com"),
+                ("c.example.com", "c.example.com"),
+            ]
+        );
+        let kept_c: Vec<ResourceId> = orphans
+            .iter()
+            .filter(|r| r.name != "c.example.com")
+            .cloned()
+            .collect();
+        let leaving = kinds_leaving(&old, &kept_c, std::iter::empty());
+        assert!(
+            leaving.iter().all(|(_, crd)| crd != "c.example.com"),
+            "{leaving:?}"
+        );
     }
 }

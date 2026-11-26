@@ -662,6 +662,51 @@
       ],
       "type": "object"
     },
+    "LeftBehind": {
+      "description": "The objects of a kind that stay on the cluster after the definition of\nthe kind leaves the build. Kix did not create them, or keeps them for\nanother reason, so the prune does not delete them. Once the package\nthat handled the kind is gone, nothing removes their finalizers or\ncleans up what they made outside the cluster.",
+      "properties": {
+        "count": {
+          "description": "How many objects of the kind stay.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "kind": {
+          "description": "The kind, as `Kind.group`.",
+          "type": "string"
+        },
+        "objects": {
+          "description": "The first [`LEFT_BEHIND_LISTED`] of them, objects with finalizers\nfirst.",
+          "items": {
+            "$ref": "#/$defs/LeftObject"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "count",
+        "objects"
+      ],
+      "type": "object"
+    },
+    "LeftObject": {
+      "properties": {
+        "finalizers": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "resource": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "resource"
+      ],
+      "type": "object"
+    },
     "LibraryObject": {
       "description": "A Kubernetes object a record is about.",
       "properties": {
@@ -1385,6 +1430,17 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "left_behind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LeftBehind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "For a CustomResourceDefinition, or a reference to one, that leaves the\nbuild with nothing else in the build declaring its kind: the objects\nof that kind on the cluster that this prune does not delete."
         },
         "resource": {
           "type": "string"

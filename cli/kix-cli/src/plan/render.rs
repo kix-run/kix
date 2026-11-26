@@ -12,8 +12,9 @@ use std::fmt::{self, Write};
 use crate::output;
 
 use kix::plan::document::{
-    AdmissionRefusal, BeingDeleted, Checked, FieldNotKept, MadeBy, NotCheckedReason, NotKept, Plan,
-    PruneControllerState, PruneEntry, PruneFate, RefusalReason, UncheckedReason, WriteChange,
+    AdmissionRefusal, BeingDeleted, Checked, FieldNotKept, LeftBehind, LeftObject, MadeBy,
+    NotCheckedReason, NotKept, Plan, PruneControllerState, PruneEntry, PruneFate, RefusalReason,
+    UncheckedReason, WriteChange,
 };
 use kix::plan::origin::ChangeLabel;
 use kix::plan::saved::{Comparison, Rule};
@@ -39,6 +40,7 @@ pub fn render_text(plan: &Plan) -> String {
         write_drift(out, plan)?;
         write_prune(out, plan)?;
         write_prune_waits(out, plan)?;
+        write_left_behind(out, plan)?;
         write_not_checked(out, plan)?;
         write_objects(out, plan)
     })
@@ -669,6 +671,65 @@ fn write_prune_waits(out: &mut String, plan: &Plan) -> fmt::Result {
     Ok(())
 }
 
+/// Return the prune entries whose kind leaves the build while objects of it
+/// stay on the cluster.
+fn left_behind(plan: &Plan) -> Vec<(&PruneEntry, &LeftBehind)> {
+    plan.prune
+        .items()
+        .iter()
+        .filter_map(|p| Some((p, p.left_behind.as_ref()?)))
+        .collect()
+}
+
+/// Return the warning for objects of a kind that stay on the cluster after
+/// the kind's definition leaves the build.
+fn left_behind_warning(p: &PruneEntry, left: &LeftBehind) -> String {
+    let n = left.count;
+    let (objects, stay) = if n == 1 {
+        ("object", "stays")
+    } else {
+        ("objects", "stay")
+    };
+    format!(
+        "{} leaves the build, but {n} {} {objects} that this prune does not delete {stay} on          the cluster. Kix did not create them, so it leaves them there. If the controller          for this kind is removed, nothing will remove their finalizers or clean up what they          made outside the cluster. Delete them before the prune if that is intended.",
+        p.resource, left.kind
+    )
+}
+
+/// Describe one object a [`LeftBehind`] names.
+fn left_object_detail(o: &LeftObject) -> String {
+    if o.finalizers.is_empty() {
+        o.resource.clone()
+    } else {
+        format!("{} (finalizers: {})", o.resource, o.finalizers.join(", "))
+    }
+}
+
+/// Write a warning for each kind that leaves the build while objects of it
+/// stay on the cluster, with the objects it names.
+fn write_left_behind(out: &mut String, plan: &Plan) -> fmt::Result {
+    for (p, left) in left_behind(plan) {
+        writeln!(out)?;
+        writeln!(
+            out,
+            "{} {}",
+            output::yellow("!"),
+            output::yellow(&left_behind_warning(p, left))
+        )?;
+        for o in &left.objects {
+            writeln!(out, "    {}", left_object_detail(o))?;
+        }
+        if left.count > left.objects.len() {
+            writeln!(
+                out,
+                "    {}",
+                output::dim(&format!("and {} more", left.count - left.objects.len()))
+            )?;
+        }
+    }
+    Ok(())
+}
+
 fn write_not_checked(out: &mut String, plan: &Plan) -> fmt::Result {
     if plan.made_by == MadeBy::DryRun && !plan.not_checked.is_empty() {
         writeln!(out)?;
@@ -882,6 +943,17 @@ fn write_markdown(out: &mut String, plan: &Plan) -> fmt::Result {
             writeln!(out, ":warning: {warning}")?;
             writeln!(out)?;
         }
+    }
+    for (p, left) in left_behind(plan) {
+        writeln!(out, ":warning: {}", left_behind_warning(p, left))?;
+        writeln!(out)?;
+        for o in &left.objects {
+            writeln!(out, "- `{}`", left_object_detail(o))?;
+        }
+        if left.count > left.objects.len() {
+            writeln!(out, "- and {} more", left.count - left.objects.len())?;
+        }
+        writeln!(out)?;
     }
     if !plan.not_kept.is_empty() {
         writeln!(out, "#### :warning: Kubernetes would not keep these fields")?;
@@ -1151,6 +1223,60 @@ mod tests {
         quiet.prune = Checked::found(vec![prune_entry("ConfigMap/plain@app", &[])]);
         assert!(!render_text(&quiet).contains("will wait"));
         assert!(!render_markdown(&quiet).contains("will wait"));
+    }
+
+    /// A kind whose definition leaves the build while objects of it stay
+    /// gets a warning that names them, finalizers included. A kind with no
+    /// objects left adds nothing. The plan does not stop.
+    #[test]
+    fn objects_left_behind_by_a_kind_are_named() {
+        let mut plan = plan_with(Vec::new());
+        let mut crd = PruneEntry::new(
+            "CustomResourceDefinition.apiextensions.k8s.io/challenges.acme.cert-manager.io".into(),
+            PruneFate::KeptNeverPruned,
+            None,
+        );
+        crd.left_behind = Some(LeftBehind {
+            kind: "Challenge.acme.cert-manager.io".into(),
+            count: 22,
+            objects: vec![LeftObject {
+                resource: "Challenge.acme.cert-manager.io/dns01-1@dnstest".into(),
+                finalizers: vec!["acme.cert-manager.io/finalizer".into()],
+            }],
+        });
+        let plain = PruneEntry::new(
+            "CustomResourceDefinition.apiextensions.k8s.io/orders.acme.cert-manager.io".into(),
+            PruneFate::KeptNeverPruned,
+            None,
+        );
+        plan.prune = Checked::found(vec![crd, plain]);
+        let text = render_text(&plan);
+        assert!(
+            text.contains(
+                "! CustomResourceDefinition.apiextensions.k8s.io/challenges.acme.cert-manager.io \
+                 leaves the build, but 22 Challenge.acme.cert-manager.io objects"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "    Challenge.acme.cert-manager.io/dns01-1@dnstest (finalizers: \
+                 acme.cert-manager.io/finalizer)"
+            ),
+            "{text}"
+        );
+        assert!(text.contains("and 21 more"), "{text}");
+        assert!(!text.contains("orders.acme"), "{text}");
+        assert!(!plan.stops());
+        let markdown = render_markdown(&plan);
+        assert!(
+            markdown.contains(":warning: CustomResourceDefinition.apiextensions.k8s.io/challenges"),
+            "{markdown}"
+        );
+        assert!(
+            markdown.contains("- `Challenge.acme.cert-manager.io/dns01-1@dnstest (finalizers:"),
+            "{markdown}"
+        );
     }
 
     /// A warning that holds a code fence stays inside the warnings block,

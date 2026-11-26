@@ -964,6 +964,15 @@ over that plan through `ops::DryRun`, so every SSA and DELETE goes with
   `delete` fate only. `render::write_prune_waits` lists each delete that
   waits and prints a `!` warning for each controller that is not ready;
   Markdown does the same. A warning does not change the exit status.
+  Under `--prune`, `commands/plan.rs`'s `left_behind_of` also takes
+  `CheckedPlan::kinds_leaving` (each CRD that an orphan declares, as a
+  definition or a `crd-ref` marker, and that nothing else in the old or new
+  build declares) and lists the live objects of each kind that the prune
+  does not delete (`cluster::left_behind::list`). `prune_entry` puts them on
+  the declaring orphan's `PruneEntry::left_behind` (`{kind, count,
+  objects}`, at most `LEFT_BEHIND_LISTED` objects, finalizers first), and
+  `render::write_left_behind` prints a `!` warning naming them. A kind Kix
+  cannot list is skipped with a `warning:` line on stderr.
 - **Not checked.** `cluster::classify::classify` sorts the answers into
   `Verdict::Accepted`, `Refused`, and `NotChecked { reason, because }`.
   `kix plan`, the deploy gate, saved plans, and `kix rollback` all call it.
