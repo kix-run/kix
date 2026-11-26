@@ -229,6 +229,11 @@ pub enum FetchError {
 
     #[error("{0}")]
     Revisions(#[source] super::revision::RevisionError),
+
+    /// Kix could not read part of what says which objects a Kix cluster
+    /// deploys, so a command that deletes stops before it deletes.
+    #[error("{0}. Nothing was deleted")]
+    Tenancy(#[source] super::tenancy::Problem),
 }
 
 #[cfg(test)]

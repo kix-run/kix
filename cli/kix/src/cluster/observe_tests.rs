@@ -365,7 +365,8 @@ fn a_record_without_names_names_a_missing_object_from_the_store() {
 
     let view = view(
         "shop".into(),
-        record,
+        record.clone(),
+        record.package_index.clone(),
         &live,
         &Apis::default(),
         &AppliedHashes::from_annotations(),
@@ -399,7 +400,8 @@ fn an_object_live_under_another_hash_is_present() {
 
     let view = view(
         "shop".into(),
-        record,
+        record.clone(),
+        record.package_index.clone(),
         &Live::of(&objects),
         &Apis::default(),
         &AppliedHashes::from_annotations(),
@@ -443,7 +445,8 @@ fn a_record_without_an_index_follows_depends_on() {
 
     let view = view(
         "shop".into(),
-        record,
+        record.clone(),
+        record.package_index.clone(),
         &Live::of(&objects),
         &Apis::default(),
         &AppliedHashes::from_annotations(),
@@ -480,7 +483,8 @@ fn a_record_with_nothing_to_follow_lists_no_objects() {
     };
     let view = view(
         "shop".into(),
-        record,
+        record.clone(),
+        record.package_index.clone(),
         &Live::of(&[]),
         &Apis::default(),
         &AppliedHashes::from_annotations(),
@@ -572,6 +576,7 @@ fn an_object_from_an_index_without_groups_is_found_through_discovery() {
         let view = view(
             "fixtures".into(),
             record.clone(),
+            record.package_index.clone(),
             &Live::of(&objects),
             apis,
             &AppliedHashes::from_annotations(),
@@ -751,5 +756,62 @@ async fn status_describes_a_workload_from_its_pods() {
     assert!(
         reason.starts_with("0/1 updated pods ready. Pod db-0 is not ready"),
         "{reason}"
+    );
+}
+
+/// A Kix cluster read from revisions takes the objects its current deploy
+/// should have, and their names, from the revisions its record names. A
+/// revision another cluster's record names that is missing is reported, and
+/// the views hold what Kix could read.
+#[tokio::test]
+async fn expected_objects_come_from_the_revisions() {
+    use crate::cluster::tenancy_fixture::{Rec, Written, state};
+    use crate::manifest::lifecycle::PHASE_ACTIVE;
+    let recs = [
+        Rec {
+            name: "a-cur",
+            cluster: "a",
+            hash: "acur",
+            phase: PHASE_ACTIVE,
+            current: true,
+            objects: &["web", "gone"],
+            ..Rec::default()
+        },
+        Rec {
+            name: "b-cur",
+            cluster: "b",
+            hash: "bcur",
+            phase: PHASE_ACTIVE,
+            current: true,
+            objects: &["theirs"],
+            ..Rec::default()
+        },
+    ];
+    let mut state = state(&recs, |_| Written::Revisions);
+    state.objects.retain(|o| o["metadata"]["name"] != "gone");
+    let missing = state.revision_named("b-cur", "instance");
+    state.remove_revision(&missing);
+    let api = FakeApi::new(state.all());
+
+    let seen = observe_fake(&api, ObserveScope::Cluster("a")).await;
+    assert!(seen.problems.is_empty(), "{:?}", seen.problems);
+    let [view] = seen.clusters.as_slice() else {
+        panic!("one cluster: {:?}", seen.clusters);
+    };
+    assert_eq!(view.expected_from, ExpectedFrom::Index);
+    assert_eq!(by_name(view, "web").presence, Presence::Present);
+    let gone = by_name(view, "gone");
+    assert_eq!(gone.presence, Presence::Missing);
+    assert!(gone.named);
+    assert_eq!(gone.package.as_deref(), Some("d/app"));
+
+    let seen = observe_fake(&api, ObserveScope::All).await;
+    assert_eq!(seen.clusters.len(), 2);
+    assert!(
+        seen.problems
+            .iter()
+            .any(|p| p.to_string().contains(&missing)),
+        "{:?}",
+        seen.problems
     );
 }

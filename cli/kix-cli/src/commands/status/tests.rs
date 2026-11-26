@@ -257,6 +257,7 @@ fn shop() -> Observation {
             failed: None,
         }],
         unreadable: vec!["secrets".into()],
+        problems: vec![],
     }
 }
 

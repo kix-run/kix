@@ -53,8 +53,8 @@ pub struct ManagedSweep {
     /// cluster, so Kix cannot tell which cluster they belong to. Omitted from
     /// `managed` and `unstamped`.
     pub unattributed: Vec<DynamicObject>,
-    /// Under [`SweepScope::Records`], objects of the named cluster that name
-    /// none of the given records (such as leftovers from superseded builds).
+    /// Under [`SweepScope::Records`] or [`SweepScope::Revisions`], objects
+    /// of the named cluster that none of the given records or revisions name (such as leftovers from superseded builds).
     pub other_builds: usize,
     /// Activation records read after the object lists. Its `cluster` matches
     /// the scope, or is empty under [`SweepScope::All`].
@@ -104,10 +104,17 @@ impl ManagedSweep {
         }
     }
 
-    /// Format summary lines describing objects omitted by `scope` for CLI
-    /// output.
+    /// Format summary lines describing objects omitted by `scope`, and what
+    /// Kix could not read about which objects each Kix cluster deploys
+    /// ([`Tenancy::problems`]), for CLI output.
     pub fn scope_notes(&self) -> Vec<String> {
         let mut notes: Vec<String> = self.foreign_note().into_iter().collect();
+        notes.extend(
+            self.tenancy
+                .problems()
+                .iter()
+                .map(|p| format!("Warning: {p}. Kix shows what it could read.")),
+        );
         if !self.unattributed.is_empty() {
             let n = self.unattributed.len();
             notes.push(format!(
@@ -129,10 +136,16 @@ pub enum SweepScope<'a> {
     Cluster(&'a str),
     /// Objects naming one of `hashes` in `kix.run/activations` (the built
     /// resources of those records of `cluster`, whether or not the records
-    /// still exist).
+    /// still exist). For a Kix cluster read from records.
     Records {
         cluster: &'a str,
         hashes: &'a HashSet<String>,
+    },
+    /// Objects one of the revisions `names` lists names. For a Kix cluster
+    /// read from revisions.
+    Revisions {
+        cluster: &'a str,
+        names: &'a BTreeSet<String>,
     },
     /// Every Kix-labeled object, regardless of which cluster deployed it.
     All,
@@ -152,24 +165,17 @@ pub enum Attribution {
     Unattributed,
 }
 
-/// Attribute a swept object to Kix clusters through the record hashes it
-/// names (see `tenancy::named_hashes`).
+/// Attribute a swept object to the Kix clusters that deploy it
+/// ([`Tenancy::owners_of`]).
 pub fn attribute(obj: &DynamicObject, tenancy: &Tenancy) -> Attribution {
-    let mut ours = false;
-    let mut others: Vec<String> = Vec::new();
-    for hash in tenancy::named_hashes(obj) {
-        if tenancy.own.contains(hash) {
-            ours = true;
-        } else if let Some(owner) = tenancy.others.get(hash) {
-            others.push(owner.clone());
-        }
-    }
-    others.sort();
-    others.dedup();
-    match (ours, others.is_empty()) {
+    let mut owners = tenancy.owners_of(obj);
+    let own = &tenancy.cluster;
+    let ours = !own.is_empty() && owners.contains(own);
+    owners.retain(|o| o != own || own.is_empty());
+    match (ours, owners.is_empty()) {
         (true, true) => Attribution::Ours,
-        (true, false) => Attribution::Shared(others),
-        (false, false) => Attribution::Foreign(others),
+        (true, false) => Attribution::Shared(owners),
+        (false, false) => Attribution::Foreign(owners),
         (false, true) => Attribution::Unattributed,
     }
 }
@@ -179,25 +185,11 @@ pub fn attribute(obj: &DynamicObject, tenancy: &Tenancy) -> Attribution {
 pub fn scope_sweep(sweep: ManagedSweep, scope: SweepScope<'_>, tenancy: Tenancy) -> ManagedSweep {
     match scope {
         SweepScope::All => ManagedSweep { tenancy, ..sweep },
-        SweepScope::Records { hashes, .. } => {
-            let (managed, rest) = split_by_records(sweep.managed, hashes);
-            let (unstamped, _) = split_by_records(sweep.unstamped, hashes);
-            let other_builds = rest
-                .iter()
-                .filter(|o| {
-                    matches!(
-                        attribute(o, &tenancy),
-                        Attribution::Ours | Attribution::Shared(_)
-                    )
-                })
-                .count();
-            ManagedSweep {
-                managed,
-                unstamped,
-                other_builds,
-                tenancy,
-                ..sweep
-            }
+        SweepScope::Records { hashes, .. } => narrow_to(sweep, tenancy, |t, o| {
+            t.records_naming(o).iter().any(|h| hashes.contains(h))
+        }),
+        SweepScope::Revisions { names, .. } => {
+            narrow_to(sweep, tenancy, |t, o| t.named_by_revisions(o, names))
         }
         SweepScope::Cluster(_) => {
             let mut foreign = Foreign::default();
@@ -229,16 +221,36 @@ pub fn scope_sweep(sweep: ManagedSweep, scope: SweepScope<'_>, tenancy: Tenancy)
     }
 }
 
-/// Split objects into the ones naming one of `hashes` in
-/// `kix.run/activations` (the closures of exactly those records) and the
-/// rest.
-pub(crate) fn split_by_records(
-    objects: Vec<DynamicObject>,
-    hashes: &HashSet<String>,
-) -> (Vec<DynamicObject>, Vec<DynamicObject>) {
-    objects
+/// Keep the objects of `sweep` that `named` picks, and count the other
+/// objects of the tenancy's cluster as [`ManagedSweep::other_builds`].
+fn narrow_to(
+    sweep: ManagedSweep,
+    tenancy: Tenancy,
+    named: impl Fn(&Tenancy, &DynamicObject) -> bool,
+) -> ManagedSweep {
+    let (managed, rest): (Vec<_>, Vec<_>) =
+        sweep.managed.into_iter().partition(|o| named(&tenancy, o));
+    let unstamped = sweep
+        .unstamped
         .into_iter()
-        .partition(|o| tenancy::named_hashes(o).any(|h| hashes.contains(h)))
+        .filter(|o| named(&tenancy, o))
+        .collect();
+    let other_builds = rest
+        .iter()
+        .filter(|o| {
+            matches!(
+                attribute(o, &tenancy),
+                Attribution::Ours | Attribution::Shared(_)
+            )
+        })
+        .count();
+    ManagedSweep {
+        managed,
+        unstamped,
+        other_builds,
+        tenancy,
+        ..sweep
+    }
 }
 
 /// Fetch every resource Kix applied by running parallel LIST calls with the
@@ -273,6 +285,27 @@ pub async fn sweep_managed(
     records: &OpenedRecords,
     scope: SweepScope<'_>,
 ) -> Result<ManagedSweep, FetchError> {
+    let sweep = list_managed(client, discovery).await?;
+    let cluster = match scope {
+        SweepScope::Cluster(cluster)
+        | SweepScope::Records { cluster, .. }
+        | SweepScope::Revisions { cluster, .. } => cluster,
+        SweepScope::All => "",
+    };
+    let tenancy = tenancy::read(records, cluster)
+        .await
+        .map_err(FetchError::RecordsError)?;
+    Ok(scope_sweep(sweep, scope, tenancy))
+}
+
+/// List every Kix-labeled object and partition it ([`partition_sweep`]),
+/// without narrowing to a Kix cluster. A caller that needs the [`Tenancy`]
+/// to choose its scope reads it after this list ([`tenancy::read`]) and
+/// narrows with [`scope_sweep`].
+pub async fn list_managed(
+    client: &Client,
+    discovery: &[(ApiResource, Scope)],
+) -> Result<ManagedSweep, FetchError> {
     let lp = ListParams::default().labels(MANAGED_BY_LABEL);
     let listed = fetch_parallel(client, discovery, &lp).await?;
     // Earlier releases applied the Activation and PackageInstance
@@ -287,14 +320,7 @@ pub async fn sweep_managed(
         .collect();
     let mut sweep = partition_sweep(objects);
     sweep.forbidden = listed.forbidden;
-    let cluster = match scope {
-        SweepScope::Cluster(cluster) | SweepScope::Records { cluster, .. } => cluster,
-        SweepScope::All => "",
-    };
-    let tenancy = tenancy::read(records, cluster)
-        .await
-        .map_err(FetchError::RecordsError)?;
-    Ok(scope_sweep(sweep, scope, tenancy))
+    Ok(sweep)
 }
 
 /// Partition `managed-by=kix` objects into Kix-managed resources, controller
@@ -440,7 +466,7 @@ fn split_by_lookup<'a>(
     live: impl Fn(&ResourceId) -> Option<&'a DynamicObject>,
     tenancy: &Tenancy,
 ) -> (Vec<ResourceId>, Vec<SharedOrphan>) {
-    if tenancy.others_current.is_empty() {
+    if !tenancy.others_deploy_anything() {
         return (orphans, Vec::new());
     }
     let mut prune = Vec::new();
@@ -483,6 +509,7 @@ pub(crate) async fn split_shared_orphans_live(
     let tenancy = tenancy::read(records, cluster)
         .await
         .map_err(FetchError::RecordsError)?;
+    tenancy.complete_for_others().map_err(FetchError::Tenancy)?;
     Ok(split_by_lookup(orphans, |rid| live.get(rid), &tenancy))
 }
 
@@ -504,6 +531,7 @@ pub(crate) async fn split_held_live(
     let tenancy = tenancy::read(records, cluster)
         .await
         .map_err(FetchError::RecordsError)?;
+    tenancy.complete_for_own().map_err(FetchError::Tenancy)?;
     let mut rest = Vec::new();
     let mut held = Vec::new();
     for rid in candidates {

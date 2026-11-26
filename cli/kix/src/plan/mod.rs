@@ -184,6 +184,15 @@ pub enum PlanError {
          permissions, or wait for the Kubernetes API server to recover, then run the command again."
     )]
     FoldedLeftovers(Box<FetchError>),
+    /// Kix could not read part of what says which objects this Kix
+    /// cluster's records deploy, so it cannot tell which objects are
+    /// orphans.
+    #[error(
+        "{0}. Nothing was planned or applied to the cluster, because Kix cannot tell which objects earlier deploys left"
+    )]
+    Tenancy(Box<crate::cluster::tenancy::Problem>),
+    #[error("cannot read which objects each Kix cluster deploys: {0}")]
+    ReadTenancy(Box<crate::cluster::activation::RecordsError>),
     #[error("cannot check whether another Kix cluster deploys an orphan: {0}")]
     SharedOrphans(Box<FetchError>),
     #[error(

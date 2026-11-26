@@ -11,6 +11,7 @@ use crate::output;
 use kix::cluster::activation::{Record, Records, RetentionPolicy, Retirement, retire_plan};
 use kix::cluster::discovery;
 use kix::cluster::inventory;
+use kix::cluster::tenancy::Tenancy;
 use kix::manifest::keys;
 use kix::manifest::lifecycle;
 use kix::manifest::types::{CLUSTER_SCOPED, ResourceId, to_manifest_value};
@@ -145,7 +146,8 @@ pub(super) fn kept_garbage(
     out
 }
 
-/// Return `true` when `clear_kept` may clear `orphansKeptFrom` on `active`.
+/// Return `true` when gc may clear the builds `active` lists under
+/// `status.orphansKeptFrom`.
 ///
 /// Clearing is safe only when `active` matches `build_hash` and `examined_all`
 /// is true (soft GC resolved every listed build, or hard GC listed every
@@ -155,10 +157,7 @@ pub(super) fn may_clear_kept(
     examined_all: bool,
     build_hash: Option<&str>,
 ) -> bool {
-    !active.orphans_kept_from.is_empty()
-        && examined_all
-        && build_hash.is_some()
-        && active.identity_hash.as_deref() == build_hash
+    examined_all && build_hash.is_some() && active.identity_hash.as_deref() == build_hash
 }
 
 /// What [`judge_hard`] found.
@@ -174,16 +173,17 @@ pub(super) struct Judged {
 /// Classify `live` objects against `expected_hashes` and `expected_ids`,
 /// the objects of the build gc compares with.
 ///
-/// An object outside that build is kept, not garbage, when a record of this
-/// Kix cluster names it, such as a failed or partly deployed deploy that
-/// wrote it, or when another Kix cluster's current
-/// record names it. Activation records are skipped here and handled by the
-/// retention policy.
+/// An object outside that build is kept, not garbage, when a pending record
+/// of this Kix cluster deploys it, such as a failed or partly deployed
+/// deploy that wrote it, or when another Kix cluster deploys it. For a Kix
+/// cluster read from revisions, it is garbage only when its kept-orphans
+/// revision alone names it ([`Tenancy::gc_may_delete`]). Activation records
+/// are skipped here and handled by the retention policy.
 pub(super) fn judge_hard(
     live: &[kube::api::DynamicObject],
     expected_hashes: &HashSet<String>,
     expected_ids: &HashSet<String>,
-    tenancy: &kix::cluster::tenancy::Tenancy,
+    tenancy: &Tenancy,
 ) -> Judged {
     let mut garbage: Vec<GarbageEntry> = Vec::new();
     let mut shared: Vec<inventory::SharedOrphan> = Vec::new();
@@ -247,6 +247,13 @@ pub(super) fn judge_hard(
                 rid: ResourceId::from_value(&to_manifest_value(obj)),
                 clusters: others,
             });
+            continue;
+        }
+
+        // A cluster read from revisions names what it deploys. gc deletes
+        // only its kept orphans, so an object the current record names with
+        // another build hash stays.
+        if tenancy.gc_may_delete(obj) == Some(false) {
             continue;
         }
 

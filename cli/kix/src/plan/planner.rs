@@ -959,7 +959,7 @@ impl<'a> Planner<'a> {
         connection: binding::Connection,
     ) -> Result<Planned, PlanError> {
         let cluster = build.graph().cluster_name.clone();
-        let baseline = Baseline::of_record(records, &cluster, current, self.report).await;
+        let baseline = Baseline::of_record(records, &cluster, current, self.report).await?;
         self.planned(build, baseline, Some((client, connection)))
             .await
     }

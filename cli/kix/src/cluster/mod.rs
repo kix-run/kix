@@ -38,6 +38,8 @@ mod state_fixtures;
 pub mod stops;
 pub mod stream;
 pub mod tenancy;
+#[cfg(any(test, feature = "test-util"))]
+pub mod tenancy_fixture;
 #[cfg(test)]
 mod test_fixtures;
 pub mod topology;

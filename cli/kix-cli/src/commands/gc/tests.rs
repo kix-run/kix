@@ -176,7 +176,12 @@ mod kept_garbage_tests {
             record
         };
         assert!(may_clear_kept(&active(true), true, Some("h-v2")));
-        assert!(!may_clear_kept(&active(false), true, Some("h-v2")));
+        let nothing_listed = KeptUpdate::Builds {
+            listed: false,
+            examined_all: true,
+            build_hash: Some("h-v2".into()),
+        };
+        assert!(!nothing_listed.writes_without_deletes(&active(false)));
         assert!(!may_clear_kept(&active(true), false, Some("h-v2")));
         assert!(!may_clear_kept(&active(true), true, Some("h-v3")));
         assert!(!may_clear_kept(&active(true), true, None));
@@ -395,6 +400,7 @@ mod delete_tests {
                 changed: 0,
                 held: 0,
                 held_shared: 0,
+                gone: HashSet::from([rid("rbac.authorization.k8s.io", "ClusterRole", "mine")]),
             }
         );
         assert_eq!(api.names("ClusterRole"), vec!["racing", "shared"]);
@@ -483,6 +489,7 @@ mod delete_tests {
                 changed: 0,
                 held: 1,
                 held_shared: 0,
+                gone: HashSet::new(),
             }
         );
         assert!(!done.all_gone());
@@ -989,5 +996,167 @@ mod lock_tests {
             head(&kix::version::running().to_string()),
         ]);
         assert!(retirement(&same).await.check_writer("c").is_ok());
+    }
+}
+
+mod revision_tests {
+    use super::*;
+    use kix::cluster::fake_api::FakeApi;
+    use kix::cluster::tenancy_fixture::{Rec, State, Written, state};
+    use kix::manifest::lifecycle::{PHASE_ACTIVE, PHASE_PARTIAL};
+
+    /// Kix cluster `a`: its current record kept two orphans, and a deploy
+    /// with `--only` of the next build added one of them back.
+    fn recs() -> Vec<Rec<'static>> {
+        vec![
+            Rec {
+                name: "a-cur",
+                cluster: "a",
+                hash: "cur",
+                phase: PHASE_ACTIVE,
+                current: true,
+                objects: &["web"],
+                kept: &["left", "stuck", "added"],
+                ..Rec::default()
+            },
+            Rec {
+                name: "a-only",
+                cluster: "a",
+                hash: "part",
+                phase: PHASE_PARTIAL,
+                objects: &["web", "added"],
+                ..Rec::default()
+            },
+        ]
+    }
+
+    fn names(entries: &[GarbageEntry]) -> Vec<&str> {
+        let mut v: Vec<&str> = entries.iter().map(|g| g.id.name.as_str()).collect();
+        v.sort();
+        v
+    }
+
+    /// A full scan judges the same from records and from revisions: an
+    /// object only the kept orphans list is garbage, and one a `Partial`
+    /// record also names is held for that record.
+    #[test]
+    fn a_full_scan_judges_the_same_from_either_source() {
+        let expected: HashSet<String> = ["h-web".to_string()].into();
+        for written in [Written::Records, Written::Revisions] {
+            let state = state(&recs(), |_| written);
+            let tenancy = state.tenancy("a");
+            let live: Vec<_> = ["web", "left", "stuck", "added"]
+                .iter()
+                .map(|n| state.object(n))
+                .collect();
+            let judged = judge_hard(&live, &expected, &HashSet::new(), &tenancy);
+            assert_eq!(names(&judged.garbage), ["left", "stuck"], "{written:?}");
+            let held: Vec<(&str, &[String])> = judged
+                .held
+                .iter()
+                .map(|h| (h.rid.name.as_str(), h.records.as_slice()))
+                .collect();
+            assert_eq!(
+                held,
+                [("added", &["a-only".to_string()][..])],
+                "{written:?}"
+            );
+        }
+    }
+
+    async fn retirement_of(api: &FakeApi) -> RecordRetirement {
+        let client = api.client();
+        let discovery = kix::cluster::discovery::discover_resources(&client)
+            .await
+            .unwrap();
+        let records = Records::open(&client, &discovery)
+            .unwrap()
+            .into_records()
+            .unwrap();
+        let active = records.get("a-cur").await.unwrap();
+        RecordRetirement {
+            records: Some(records),
+            plan: Default::default(),
+            active,
+            head: None,
+        }
+    }
+
+    fn objects_update(state: &State) -> KeptUpdate {
+        let tenancy = state.tenancy("a");
+        let active = Record::of(&serde_json::from_value(state.records[0].clone()).unwrap());
+        let Kept::Objects(listed) = tenancy.kept(&active) else {
+            panic!("a is read from revisions");
+        };
+        KeptUpdate::Objects {
+            listed: listed.into_iter().cloned().collect(),
+            live: ["left", "stuck", "added"]
+                .map(|n| ResourceId::new("", "ConfigMap", "d", n))
+                .into(),
+            in_build: HashSet::new(),
+        }
+    }
+
+    /// gc that deleted some of the kept orphans writes a kept-orphans
+    /// revision of what remains and names it on the current record. gc that
+    /// deleted all of them removes the name.
+    #[tokio::test]
+    async fn gc_rewrites_the_kept_orphans_revision_to_what_remains() {
+        let state = state(&recs(), |_| Written::Revisions);
+        let api = FakeApi::new(state.all());
+        let retirement = retirement_of(&api).await;
+        let update = objects_update(&state);
+        let done = Deletions {
+            deleted: 1,
+            gone: [ResourceId::new("", "ConfigMap", "d", "left")].into(),
+            ..Deletions::default()
+        };
+        update_kept("a", &retirement, &update, &done).await.unwrap();
+        let record = api.object("Activation", "a-cur").unwrap();
+        let named = record["status"]["revisions"]["keptOrphans"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_ne!(named, state.revision_named("a-cur", "keptOrphans"));
+        let revision = api
+            .object(kix::cluster::revision::KIND, &named)
+            .expect("the new kept-orphans revision");
+        let kept: Vec<&str> = revision["spec"]["objects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|o| o["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(kept, ["added", "stuck"]);
+
+        let retirement = retirement_of(&api).await;
+        let done = Deletions {
+            gone: ["left", "stuck", "added"]
+                .map(|n| ResourceId::new("", "ConfigMap", "d", n))
+                .into(),
+            ..Deletions::default()
+        };
+        update_kept("a", &retirement, &update, &done).await.unwrap();
+        let record = api.object("Activation", "a-cur").unwrap();
+        assert!(record["status"]["revisions"]["keptOrphans"].is_null());
+    }
+
+    /// gc refuses before it deletes anything when a revision a record names
+    /// is missing.
+    #[tokio::test]
+    async fn gc_refuses_when_a_named_revision_is_missing() {
+        let mut state = state(&recs(), |_| Written::Revisions);
+        let missing = state.revision_named("a-only", "instance");
+        state.remove_revision(&missing);
+        let api = FakeApi::new(state.all());
+        let retirement = retirement_of(&api).await;
+        let err = read_tenancy(retirement.records.as_ref().unwrap(), "a")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains(&missing) && err.contains("a-only") && err.contains("Nothing was deleted"),
+            "{err}"
+        );
     }
 }

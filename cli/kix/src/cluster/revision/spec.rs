@@ -63,6 +63,20 @@ impl RevisionObject {
         Some(RevisionObject::with_hash(hash.to_string(), manifest))
     }
 
+    /// Return the object's group, kind, namespace, and name, without its
+    /// build hash.
+    pub fn resource_id(&self) -> ResourceId {
+        ResourceId {
+            group: self.group.clone(),
+            kind: self.kind.clone(),
+            namespace: self
+                .namespace
+                .clone()
+                .unwrap_or_else(|| CLUSTER_SCOPED.to_string()),
+            name: self.name.clone(),
+        }
+    }
+
     fn with_hash(hash: String, manifest: &Value) -> RevisionObject {
         let rid = ResourceId::from_value(manifest);
         RevisionObject {

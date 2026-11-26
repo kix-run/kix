@@ -62,10 +62,12 @@ impl AppliedHashes {
     /// hash wins over a missing one.
     pub fn of<'a>(
         records: impl IntoIterator<Item = &'a Record>,
-        revisions: &[Revision],
+        revisions: impl IntoIterator<Item = &'a Revision>,
     ) -> AppliedHashes {
-        let by_name: HashMap<&str, &Revision> =
-            revisions.iter().map(|r| (r.name.as_str(), r)).collect();
+        let by_name: HashMap<&str, &Revision> = revisions
+            .into_iter()
+            .map(|r| (r.name.as_str(), r))
+            .collect();
         let mut named: HashMap<RevisionObject, Option<String>> = HashMap::new();
         for record in records {
             let Some(map) = readable_map(record) else {

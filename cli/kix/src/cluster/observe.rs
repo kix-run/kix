@@ -7,11 +7,13 @@
 //! - content: does it still hold what Kix applied ([`DriftVerdict`]),
 //! - readiness: is it ready by the rules a deploy waits on ([`Readiness`]).
 //!
-//! The objects a deploy should have come from its record's package index,
-//! which every machine can read. A record written before Kix stored the index
-//! falls back to following `kix.run/depends-on` from the record's own object.
-//! The index also names each object. For a record without names, Kix names a
-//! missing object from the local Nix store when the build is there.
+//! The objects a deploy should have come from its record's revisions, or
+//! from its package index when its Kix cluster is not read from revisions
+//! ([`super::tenancy::Tenancy::index_of`]). Every machine can read both. A
+//! record with neither falls back to following `kix.run/depends-on` from the
+//! record's own object. The revisions and the index also name each object.
+//! For a record without names, Kix names a missing object from the local Nix
+//! store when the build is there.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -25,7 +27,8 @@ use super::errors::FetchError;
 use super::inventory;
 use super::readiness;
 use super::revision::AppliedHashes;
-use crate::eval::package_index::{IndexedName, ObjectName};
+use super::tenancy::Problem;
+use crate::eval::package_index::{IndexedName, ObjectName, RecordPackageIndex};
 use crate::eval::store_graph::{self, StoreEntry};
 use crate::manifest::keys;
 use crate::manifest::lifecycle::{Lifecycle, lifecycle_of_live};
@@ -49,6 +52,10 @@ pub struct Observation {
     /// Resource types this account may not list, such as `secrets`. Objects
     /// of these kinds are [`Presence::Unknown`] when Kix cannot see them.
     pub unreadable: Vec<String>,
+    /// What Kix could not read about which objects the Kix clusters in scope
+    /// deploy, such as a revision a record names that is missing. The views
+    /// hold what Kix could read.
+    pub problems: Vec<Problem>,
 }
 
 /// One Kix cluster's current deploy and its objects.
@@ -120,7 +127,8 @@ impl Deleting {
 /// Where [`ClusterView::objects`] came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExpectedFrom {
-    /// The record's package index.
+    /// The record's revisions, or its package index when its Kix cluster is
+    /// not read from revisions.
     Index,
     /// The `kix.run/depends-on` annotations of live objects, starting at the
     /// record's own object. Used for a record without an index.
@@ -250,31 +258,36 @@ pub async fn observe(
     }
     let sweep =
         inventory::sweep_managed(client, discovery, records, inventory::SweepScope::All).await?;
+    let tenancy = &sweep.tenancy;
+    let problems = tenancy
+        .problems()
+        .iter()
+        .filter(|p| p.cluster().is_none_or(|c| current.contains_key(c)))
+        .cloned()
+        .collect();
     let apis = Apis::of(discovery, &sweep.forbidden);
     let live = Live::of(&sweep.managed);
     let mut clusters: Vec<ClusterView> = Vec::with_capacity(current.len());
     for (cluster, deploy) in current {
-        let applied = AppliedHashes::load(
-            client,
-            &cluster,
-            &std::iter::once(&deploy.current)
-                .chain(deploy.failed_since.as_ref())
-                .collect::<Vec<_>>(),
-        )
-        .await
-        .map_err(FetchError::Revisions)?;
+        let applied = AppliedHashes::of(
+            std::iter::once(&deploy.current).chain(deploy.failed_since.as_ref()),
+            tenancy.revisions(),
+        );
         let lookup = |hashes: &[&str]| store_graph::lookup_hashes(hashes.iter().copied());
+        let index = tenancy.index_of(&deploy.current);
         let mut view = view(
             cluster.clone(),
             deploy.current,
+            index,
             &live,
             &apis,
             &applied,
             lookup,
         );
-        view.leaving = leaving(&view, &sweep.managed, |obj| sweep.tenancy.owners_of(obj));
+        view.leaving = leaving(&view, &sweep.managed, |obj| tenancy.owners_of(obj));
         view.failed = deploy.failed_since.map(|record| {
-            let failed = self::view(cluster, record, &live, &apis, &applied, lookup);
+            let index = tenancy.index_of(&record);
+            let failed = self::view(cluster, record, index, &live, &apis, &applied, lookup);
             failed_only(&view, failed)
         });
         clusters.push(view);
@@ -288,6 +301,7 @@ pub async fn observe(
     Ok(Observation {
         clusters,
         unreadable: sweep.forbidden,
+        problems,
     })
 }
 
@@ -359,19 +373,21 @@ struct Expected {
 
 /// Build the view of one cluster's current deploy from the live objects.
 ///
+/// `index` lists the record's objects ([`super::tenancy::Tenancy::index_of`]).
 /// `lookup` names identity hashes from the local store (see
 /// [`store_graph::lookup_hashes`]). It runs at most once, and only for a
 /// record without names.
 fn view(
     cluster: String,
     record: Record,
+    index: Option<RecordPackageIndex>,
     live: &Live<'_>,
     apis: &Apis,
     applied: &AppliedHashes,
     lookup: impl FnOnce(&[&str]) -> HashMap<String, StoreEntry>,
 ) -> ClusterView {
     let root = record.identity_hash.clone().unwrap_or_default();
-    let (expected_from, mut expected) = match &record.package_index {
+    let (expected_from, mut expected) = match &index {
         Some(index) => {
             let mut out = Vec::new();
             for (key, package) in &index.packages {
@@ -428,7 +444,7 @@ fn view(
 
     // Name each object: from the index, else from its live object, else from
     // the local store.
-    let index_name = |hash: &str| record.package_index.as_ref()?.name_of(hash);
+    let index_name = |hash: &str| index.as_ref()?.name_of(hash);
     let unnamed: Vec<&str> = expected
         .iter()
         .filter(|e| index_name(&e.hash).is_none() && !live.by_hash.contains_key(e.hash.as_str()))

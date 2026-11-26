@@ -127,6 +127,12 @@ impl LivePlan {
         )
         .await
         .map_err(|e| LivePlanError::Fetch(Box::new(e)))?;
+        // Which orphans another Kix cluster still deploys is decided below,
+        // so a run that cannot tell stops before it plans a prune.
+        sweep
+            .tenancy
+            .complete_for_others()
+            .map_err(|e| LivePlanError::Fetch(Box::new(FetchError::Tenancy(e))))?;
 
         let (actions, shared_orphans) = live_changes(desired, &sweep.managed, &sweep.tenancy);
         let orphans: Vec<ResourceId> = actions

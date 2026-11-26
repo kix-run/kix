@@ -32,6 +32,7 @@ mod lock;
 #[cfg(test)]
 mod tests;
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -247,6 +248,22 @@ pub async fn read(client: &Client, cluster: &str) -> Result<Option<Head>, kube::
         Err(kube::Error::Api(e)) if e.code == 404 => Ok(None),
         Err(e) => Err(e),
     }
+}
+
+/// Read the head of every Kix cluster on the Kubernetes cluster, keyed by
+/// Kix cluster name, with one list request. A head without `status` is left
+/// out. Return an empty map when the head's kind is not served.
+pub async fn list_all(client: &Client) -> Result<BTreeMap<String, HeadStatus>, kube::Error> {
+    let list = match api(client).list(&kube::api::ListParams::default()).await {
+        Ok(list) => list,
+        Err(kube::Error::Api(e)) if e.code == 404 => return Ok(BTreeMap::new()),
+        Err(e) => return Err(e),
+    };
+    Ok(list
+        .items
+        .iter()
+        .filter_map(|obj| Some((obj.metadata.name.clone()?, Head::of(obj).status?)))
+        .collect())
 }
 
 /// What a command that only reads says about a lock: who holds it and how

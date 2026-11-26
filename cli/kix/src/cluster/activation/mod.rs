@@ -728,6 +728,17 @@ impl Records {
             .await
     }
 
+    /// Name `revision` as the kept-orphans revision in the map of record
+    /// `name`, and leave the rest of the map as it is. Create the revision
+    /// before this write, so the map names only revisions that exist.
+    pub async fn name_kept_orphans(&self, name: &str, revision: &str) -> Result<(), RecordsError> {
+        self.patch_status(
+            name,
+            &json!({ "status": { REVISIONS_FIELD: { "keptOrphans": revision } } }),
+        )
+        .await
+    }
+
     /// Verify that the client has permission to list Activation records.
     pub async fn reachable(&self) -> Result<(), RecordsError> {
         self.api()

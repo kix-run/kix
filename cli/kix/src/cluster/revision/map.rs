@@ -6,7 +6,10 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::spec::RevisionSet;
+use super::spec::{Revision, RevisionSet, Slot};
+use crate::eval::package_index::{self, IndexedPackage, ObjectName, RecordPackageIndex};
+use crate::manifest::keys;
+use crate::manifest::lifecycle::PACKAGE_INSTANCE_KIND;
 
 /// The format of `status.revisions` this release reads and writes.
 pub const FORMAT: u64 = 1;
@@ -99,5 +102,75 @@ impl RevisionMap {
             .chain(std::iter::once(&self.cluster_level))
             .chain(self.kept_orphans.iter())
             .map(String::as_str)
+    }
+
+    /// Return the package index of the build the map names, read from the
+    /// revisions `find` returns: which instance holds each object, and each
+    /// object's group, kind, namespace, and name. A revision `find` does not
+    /// return is left out. The kept orphans are not part of the build.
+    pub fn package_index<'a>(
+        &self,
+        find: impl Fn(&str) -> Option<&'a Revision>,
+    ) -> RecordPackageIndex {
+        let mut names = BTreeMap::new();
+        let mut groups = BTreeMap::new();
+        let mut add_names = |revision: &Revision| {
+            for object in &revision.spec.objects {
+                let rid = object.resource_id();
+                if !rid.group.is_empty() {
+                    groups.insert(object.hash.clone(), rid.group.clone());
+                }
+                names.insert(object.hash.clone(), ObjectName::of(&rid));
+            }
+        };
+        let mut packages = BTreeMap::new();
+        for (key, revision) in &self.instances {
+            let Some(revision) = find(revision) else {
+                continue;
+            };
+            add_names(revision);
+            let is_instance = |o: &&super::RevisionObject| match &revision.spec.slot {
+                Slot::Instance { namespace, name } => {
+                    o.kind == PACKAGE_INSTANCE_KIND
+                        && o.group == keys::GROUP
+                        && o.namespace.as_deref() == Some(namespace.as_str())
+                        && &o.name == name
+                }
+                Slot::ClusterLevel | Slot::KeptOrphans => false,
+            };
+            let instance = revision.spec.objects.iter().find(is_instance);
+            let resources = revision
+                .spec
+                .objects
+                .iter()
+                .filter(|o| Some(*o) != instance)
+                .map(|o| o.hash.clone())
+                .collect();
+            packages.insert(
+                key.clone(),
+                IndexedPackage {
+                    instance: instance.map(|o| o.hash.clone()).unwrap_or_default(),
+                    resources,
+                },
+            );
+        }
+        let mut cluster_level = Vec::new();
+        if let Some(revision) = find(&self.cluster_level) {
+            add_names(revision);
+            cluster_level = revision
+                .spec
+                .objects
+                .iter()
+                .map(|o| o.hash.clone())
+                .collect();
+            cluster_level.sort();
+        }
+        RecordPackageIndex {
+            format: package_index::FORMAT,
+            packages,
+            cluster_level,
+            names,
+            groups: Some(groups),
+        }
     }
 }

@@ -208,9 +208,10 @@ pub(super) fn compare(args: &Comparison, ctx: &mut CommandContext) -> Result<Exi
                 args.cluster,
                 &kix::cluster::stops::LastWrite::of(None, current.as_ref()),
             );
-            // The current record's package index places each live object where
-            // the deployed build put it. Without one, the new build does.
-            let deployed = current.and_then(|record| record.package_index);
+            // The current record's revisions, or its package index, place
+            // each live object where the deployed build put it. Without
+            // either, the new build does.
+            let deployed = live.deployed.take();
             let before_set_aside = live.manifests.clone();
             live.set_aside_left_earlier(&new_graph, deployed.as_ref());
             let spinner = output::spinner(
@@ -449,6 +450,9 @@ struct LiveSide {
     namespaceless: Vec<ResourceId>,
     /// Current Activation record (newest Active or Degraded).
     current: Option<kube::api::DynamicObject>,
+    /// The package index of the current record's build: from its
+    /// revisions, or its stored index ([`kix::cluster::tenancy::Tenancy::index_of`]).
+    deployed: Option<RecordPackageIndex>,
     /// Full live objects including `managedFields`, used to attribute drift to
     /// field managers.
     managed: HashMap<ResourceId, Value>,
@@ -599,13 +603,7 @@ async fn fetch_live_manifests(
         .filter(|obj| lifecycle::lifecycle_of_live(obj) == Lifecycle::Record)
         .map(activation::Record::of)
         .collect();
-    let applied = AppliedHashes::load(
-        &client,
-        &new_graph.cluster_name,
-        &records.iter().collect::<Vec<_>>(),
-    )
-    .await
-    .map_err(|e| miette!("{e}"))?;
+    let applied = AppliedHashes::of(&records, tenancy.revisions());
 
     // Keep only the current Activation record alongside non-record resources so
     // Superseded and Failed records do not appear in the diff.
@@ -622,6 +620,10 @@ async fn fetch_live_manifests(
                 .is_some_and(|c| c.metadata.name == obj.metadata.name)
     });
 
+    let deployed = current
+        .as_ref()
+        .map(activation::Record::of)
+        .and_then(|record| tenancy.index_of(&record));
     let (drifted, drift_unchecked) = check_drift(&compared, &applied);
     let built = new_graph.manifests_by_hash();
     let managed: HashMap<ResourceId, Value> = compared
@@ -637,6 +639,7 @@ async fn fetch_live_manifests(
         manifests,
         namespaceless,
         current,
+        deployed,
         managed,
         drifted,
         drift_unchecked,
@@ -856,6 +859,7 @@ mod tests {
             manifests,
             namespaceless: Vec::new(),
             current: None,
+            deployed: None,
             managed: HashMap::new(),
             drifted,
             drift_unchecked,
@@ -929,6 +933,7 @@ mod tests {
             manifests: vec![web, left, removed],
             namespaceless: Vec::new(),
             current: None,
+            deployed: None,
             managed: HashMap::new(),
             drifted: Vec::new(),
             drift_unchecked: 0,
