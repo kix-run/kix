@@ -34,6 +34,8 @@ String context carries two distinct kinds of tokens:
 
 Sometimes one resource must be applied before another even though no string value flows between their manifests. A CustomResourceDefinition must be established before any custom resource of its kind is applied, and a network policy must be in place before the pod it governs starts. For those cases, builders accept `requires` (hard ordering dependencies that must be ready first) and `extraDeps` (additional ordering hints). Kix folds both into `kix.run/depends-on` before sealing the resource.
 
+RBAC is the one case where the reference points the wrong way. A RoleBinding or ClusterRoleBinding names the ServiceAccount it grants rights to, so the binding depends on the ServiceAccount. But the pods that run as that ServiceAccount need the binding, and nothing in their manifest names it. Kix adds that dependency itself when it reads the build: every workload depends on each binding whose subjects include the ServiceAccount its pods run as (`default` when the pod spec names none). Deploy creates the binding before the workload, and prune deletes it after the workload. An operator that must remove the finalizers of custom resources deleted in the same run keeps its rights until it is done.
+
 :::note[Reference]
 See [Resources and `out`](/docs/reference/resources-and-out/) for the attributes exposed on `out` and how `requires` and `extraDeps` affect resource sealing.
 :::

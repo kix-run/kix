@@ -105,6 +105,25 @@ rec {
         ) (listOr (r.subjects or [ ]))
       ) (builtins.filter (r: r.kind == "RoleBinding" || r.kind == "ClusterRoleBinding") resources);
 
+      # A binding grants the rules of the role it names, so it needs that
+      # role as much as the ServiceAccount it binds.
+      roleRefEdges = builtins.concatMap (
+        r:
+        let
+          roleKey = "${r.roleRef.kind or ""}/${r.roleRef.name or ""}";
+        in
+        if byKindName ? ${roleKey} then
+          [
+            {
+              from = r;
+              to = byKindName.${roleKey};
+              type = "binds-role";
+            }
+          ]
+        else
+          [ ]
+      ) (builtins.filter (r: r.kind == "RoleBinding" || r.kind == "ClusterRoleBinding") resources);
+
       serviceEdges = builtins.concatMap (
         svc:
         let
@@ -255,6 +274,7 @@ rec {
     saEdges
     ++ volumeEdges
     ++ bindingEdges
+    ++ roleRefEdges
     ++ serviceEdges
     ++ hpaEdges
     ++ pdbEdges
