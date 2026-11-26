@@ -18,7 +18,12 @@ default-deny policies and the allowances each workload needs.
 This guide assumes the cluster has a package that provides the
 `network-policy-enforcer` role. Follow [Install Cilium / network policy
 support](/docs/how-to/package-task-guides/install-cilium-network-policy-support/)
-first if the cluster does not have one.
+first if the cluster does not have one. On GKE, the `gke` and `gke-autopilot`
+flavors already provide it. On EKS, turn on network policy in the Amazon VPC
+CNI add-on and set `cluster.flavor.eks.networkPolicy = "vpc-cni"`. On both,
+Kix writes standard `NetworkPolicy` objects and may ask for the cluster's
+address ranges; see [Standard
+NetworkPolicy](/docs/explanation/network-policy/#standard-networkpolicy).
 
 ## Use a tracked Service endpoint
 

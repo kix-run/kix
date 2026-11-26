@@ -5,9 +5,9 @@
 # with `standard-rwo` as the default StorageClass.
 #
 # Dataplane V2 always enforces standard Kubernetes NetworkPolicy and does not
-# serve CiliumNetworkPolicy. Kix generates only CiliumNetworkPolicy today, and
-# no enforcer can claim the role here, so `networkPolicy.enable = true` fails
-# evaluation on this flavor.
+# serve CiliumNetworkPolicy. The `platform-network-policy` import claims the
+# `network-policy-enforcer` role, so generated policy is written as
+# NetworkPolicy objects.
 #
 # Pods get Google Cloud identities through Workload Identity Federation for
 # GKE, which the `cloud-identity` import declares.

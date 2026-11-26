@@ -40,7 +40,7 @@ scorecard.rules.organization.requiresOwner = {
 | `severity` | `"info" \| "warning" \| "error"` | no | `scorecard.ruleDefaults.severity`, then `"warning"` | Declared severity of findings produced by the rule before overrides and `scorecard.maxSeverity` are applied. |
 | `tags` | `listOf str` | no | `[ ]` | Free-form labels copied onto every finding from this rule. |
 | `appliesTo` | `ctx -> bool` | no | `_: true` | Optional filter predicate receiving the level context. When it returns `false`, `check` is skipped. |
-| `check` | `ctx -> listOf { message, namespace?, resource? }` | yes | none | Evaluates the target and returns `[ ]` when it passes, or a list of finding attribute sets when it fails. |
+| `check` | `ctx -> listOf { message, namespace?, resource?, detail? }` | yes | none | Evaluates the target and returns `[ ]` when it passes, or a list of finding attribute sets when it fails. A finding with `detail = true` backs up another finding of the rule and is reported at `info`, which `kix check` lists only with `-v`. |
 
 ### Evaluation context by level
 
@@ -49,7 +49,7 @@ scorecard.rules.organization.requiresOwner = {
 | `manifest` | Emitted Kubernetes resource | `resource`, `meta`, `instanceName`, `namespaceName`, `acceptedSecretSources`, `defaultLimits` | `namespace`, `instance`, `resource` |
 | `package` | Active package instance | `resources`, `parts`, `config`, `meta`, `instanceName`, `namespaceName` | `namespace`, `instance` |
 | `namespace` | Cluster namespace | `instances`, `resources`, `namespaceName`, `networkPolicyKinds` | `namespace` |
-| `cluster` | Cluster build | `allInstances`, `allResources`, `clusterConfig`, `externalNames` | none (the rule's finding may supply `namespace` and `resource`) |
+| `cluster` | Cluster build | `allInstances`, `allResources`, `clusterConfig`, `externalNames`, `derivedResources` (the manifests cluster processors derive, such as default-deny and scrape network policies) | none (the rule's finding may supply `namespace` and `resource`) |
 
 At the `manifest` and `package` levels, `resources` includes all resources shipped for the instance, including derived `PodDisruptionBudget` and network policy objects. Kix resolves a rule's effective severity before calling `appliesTo` or `check`; if a rule is disabled via `ruleOverrides.byRule.<name>.enabled = false`, neither function is called.
 
@@ -265,6 +265,7 @@ Defined in `kix.rules.security` (`kix/lib/rules/security.nix`). Unless noted oth
 | `security.noLatestTag` | `manifest` | `warning` | none | Every regular and init container image has an explicit tag other than `:latest`. |
 | `security.noUnresolvedPlaceholder` | `manifest` | `warning` | none | No container image string contains `REPLACE_ME`, `REPLACEME`, `CHANGE_ME`, `CHANGEME`, `PLACEHOLDER`, `TODO`, `FIXME`, `XXX`, or an unexpanded `${...}`. |
 | `security.hasNetworkPolicy` | `namespace` | `warning` | none | Every namespace containing a `Deployment`, `StatefulSet`, or `DaemonSet` also contains at least one `NetworkPolicy` or enforcer policy kind (`out.netpol.policyKinds`). |
+| `security.networkPolicyWidened` | `cluster` | `warning` | none | Reports generated `NetworkPolicy` objects that allow more traffic than the Cilium policy for the same rules would (`kix.run/network-policy-widened`). One warning per reason, with a count; each policy is an `info` finding that `kix check -v` lists. See [Standard NetworkPolicy](/docs/explanation/network-policy/#standard-networkpolicy). |
 
 When a package declares one of the four `meta.unsafe` grants above, the corresponding security rule is skipped for that package and [`architecture.unsafeGrants`](#built-in-architecture-rules) records an `info` finding so the exception stays visible in audits.
 
