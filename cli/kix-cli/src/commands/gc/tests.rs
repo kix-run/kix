@@ -529,7 +529,8 @@ mod hard_scope_tests {
         ]);
         let sweep =
             inventory::scope_sweep(sweep, inventory::SweepScope::Cluster("a"), tenancy.clone());
-        assert_eq!(sweep.foreign.get("b"), Some(&1));
+        assert_eq!(sweep.foreign.objects, 1);
+        assert_eq!(sweep.foreign.clusters, ["b".to_string()].into());
         assert_eq!(sweep.unattributed.len(), 1);
 
         let expected: HashSet<String> = ["h-cur".to_string()].into();
