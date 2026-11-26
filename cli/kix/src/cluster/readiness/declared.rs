@@ -1116,7 +1116,16 @@ pub fn not_ready_reason(obj: &DynamicObject, kind: GroupKind<'_>) -> String {
                 .unwrap_or("Unknown");
             format!("phase {phase}")
         }
-        kinds::SERVICE => "no load balancer address in status.loadBalancer.ingress yet".to_string(),
+        kinds::SERVICE => match obj
+            .data
+            .pointer("/spec/loadBalancerClass")
+            .and_then(Value::as_str)
+        {
+            Some(class) => format!(
+                "no load balancer address in status.loadBalancer.ingress yet, and only a controller for loadBalancerClass \"{class}\" can give one"
+            ),
+            None => "no load balancer address in status.loadBalancer.ingress yet".to_string(),
+        },
         _ => {
             // Show condition types when a generic custom resource has neither
             // Ready nor Available, so the missing readiness convention is visible.

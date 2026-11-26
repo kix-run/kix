@@ -9,6 +9,17 @@
         "deploy": {
           "$ref": "#/$defs/Deploy"
         },
+        "failed_deploy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FailedDeployStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The newest deploy that failed after `deploy`, or `null`. A failed\ndeploy leaves the previous record current, so `deploy` and\n`packages` describe that record."
+        },
         "leaving": {
           "description": "Objects of this cluster that left its build and are still being\ndeleted, because a finalizer or a slow shutdown holds them.",
           "items": {
@@ -44,6 +55,7 @@
         "notes",
         "packages",
         "leaving",
+        "failed_deploy",
         "summary"
       ],
       "type": "object"
@@ -140,6 +152,53 @@
           "type": "string"
         }
       ]
+    },
+    "FailedDeployStatus": {
+      "description": "A deploy that failed after the current one.",
+      "properties": {
+        "failed_at": {
+          "description": "When it failed (RFC 3339), when the record says.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "identity_hash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "packages": {
+          "description": "The objects of the failed build that the current deploy does not\nhave, by package, with the same checks as the cluster's `packages`.\nThey do not count in the cluster's `summary`, which counts the failed\ndeploy itself under `failed_deploys`.",
+          "items": {
+            "$ref": "#/$defs/PackageStatus"
+          },
+          "type": "array"
+        },
+        "reason": {
+          "description": "Why it failed, when the record says.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summary": {
+          "$ref": "#/$defs/Summary"
+        }
+      },
+      "required": [
+        "name",
+        "identity_hash",
+        "failed_at",
+        "reason",
+        "packages",
+        "summary"
+      ],
+      "type": "object"
     },
     "Kubernetes": {
       "description": "The Kubernetes cluster `kix status` read.",
@@ -579,6 +638,12 @@
           "minimum": 0,
           "type": "integer"
         },
+        "failed_deploys": {
+          "description": "Kix clusters whose newest deploy failed after their current one.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
         "leaving": {
           "description": "Objects that left the build and are still being deleted. They are\nnot counted in `resources`.",
           "format": "uint",
@@ -620,7 +685,8 @@
         "not_ready",
         "deleting",
         "leaving",
-        "not_checked"
+        "not_checked",
+        "failed_deploys"
       ],
       "type": "object"
     }

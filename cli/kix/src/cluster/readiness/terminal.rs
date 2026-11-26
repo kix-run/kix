@@ -503,14 +503,13 @@ async fn current_revision_pods(
     }
 }
 
-/// List pods matching a workload's label selector. Returns an empty `Vec` on
-/// API errors so the terminal classifier can continue using workload-level
-/// signals.
-async fn list_pods_for_workload(
+/// List pods matching a workload's label selector, or `None` when the API
+/// refuses or fails the request.
+async fn try_list_pods(
     client: &Client,
     namespace: &str,
     label_selector: &str,
-) -> Vec<Value> {
+) -> Option<Vec<Value>> {
     let pod_ar = ApiResource {
         group: "".into(),
         version: "v1".into(),
@@ -523,21 +522,101 @@ async fn list_pods_for_workload(
     match api.list(&lp).await {
         // `DynamicObject::data` leaves out `metadata`, which the pod name in
         // failure messages comes from, so serialize the whole object.
-        Ok(list) => list
-            .items
-            .into_iter()
-            .filter_map(|p| serde_json::to_value(p).ok())
-            .collect(),
+        Ok(list) => Some(
+            list.items
+                .into_iter()
+                .filter_map(|p| serde_json::to_value(p).ok())
+                .collect(),
+        ),
         Err(e) => {
             tracing::debug!(
                 namespace = namespace,
                 selector = label_selector,
                 error = %e,
-                "failed to list pods for terminal classification; skipping pod-level checks"
+                "failed to list a workload's pods; skipping pod-level checks"
             );
-            Vec::new()
+            None
         }
     }
+}
+
+/// List pods matching a workload's label selector. Returns an empty `Vec` on
+/// API errors so the terminal classifier can continue using workload-level
+/// signals.
+async fn list_pods_for_workload(
+    client: &Client,
+    namespace: &str,
+    label_selector: &str,
+) -> Vec<Value> {
+    try_list_pods(client, namespace, label_selector)
+        .await
+        .unwrap_or_default()
+}
+
+/// Return true for the kinds that roll pods from one revision to the next.
+pub fn is_rollout(kind: GroupKind<'_>) -> bool {
+    matches!(
+        kind,
+        kinds::DEPLOYMENT | kinds::STATEFUL_SET | kinds::DAEMON_SET
+    )
+}
+
+/// What one read of a rollout workload's pods found.
+#[derive(Debug, Clone)]
+pub struct RolloutPods {
+    /// The pods of the current revision.
+    pub current: Vec<Value>,
+    /// What to do about the pods that hold back a StatefulSet's update
+    /// ([`statefulset_held_pods`]).
+    pub held: Option<String>,
+}
+
+/// Read the pods of a Deployment, StatefulSet, or DaemonSet. Return `None`
+/// for another kind, for a workload whose controller has not acted on its
+/// current spec ([`rollout_observed`]), when its current revision does not
+/// exist yet, or when the pods cannot be listed.
+///
+/// A Deployment costs two list requests (its ReplicaSets, then the pods of
+/// the current one), a DaemonSet two (its ControllerRevisions, then the
+/// pods), and a StatefulSet one, because its pods carry the revision label
+/// that `status.updateRevision` names.
+pub(super) async fn read_rollout_pods(
+    client: &Client,
+    obj: &DynamicObject,
+    kind: GroupKind<'_>,
+) -> Option<RolloutPods> {
+    if !is_rollout(kind) || !rollout_observed(obj, kind) {
+        return None;
+    }
+    let selector = workload_label_selector(&obj.data)?;
+    let namespace = obj.metadata.namespace.as_deref().unwrap_or("default");
+    if kind == kinds::STATEFUL_SET {
+        let update = obj
+            .data
+            .pointer("/status/updateRevision")
+            .and_then(Value::as_str)?;
+        let all = try_list_pods(client, namespace, &selector).await?;
+        let held = statefulset_held_pods(obj, &all);
+        let current = all
+            .into_iter()
+            .filter(|p| {
+                p.pointer("/metadata/labels/controller-revision-hash")
+                    .and_then(Value::as_str)
+                    == Some(update)
+            })
+            .collect();
+        return Some(RolloutPods { current, held });
+    }
+    let selector = match current_revision_pods(client, obj, kind, namespace, &selector).await {
+        RevisionPods::Matching(revision) => format!("{selector},{revision}"),
+        RevisionPods::All => selector,
+        RevisionPods::NotCreated => return None,
+    };
+    let current = try_list_pods(client, namespace, &selector).await?;
+    Some(RolloutPods {
+        current,
+        held: None,
+    })
 }
 
 /// Return true if `kind` creates pods that can be inspected for terminal
@@ -562,6 +641,9 @@ pub(super) struct ScanResult {
     /// A transient image pull error the kubelet is retrying; see
     /// [`transient_pull_error`].
     pub pull_retrying: Option<String>,
+    /// The pods of a rollout workload, when the scan read them. `pods` then
+    /// holds the same current-revision pods.
+    pub rollout: Option<RolloutPods>,
 }
 
 /// Extract the termination message lines from the most recently started pod.
@@ -641,6 +723,7 @@ pub(super) async fn scan_terminal(
         terminal: None,
         pods: Vec::new(),
         pull_retrying: None,
+        rollout: None,
     };
     if !rollout_observed(obj, kind) {
         return nothing();
@@ -656,6 +739,19 @@ pub(super) async fn scan_terminal(
             terminal: Some(hit),
             pods,
             pull_retrying: None,
+            rollout: None,
+        };
+    }
+    if is_rollout(kind) {
+        let Some(rollout) = read_rollout_pods(client, obj, kind).await else {
+            return nothing();
+        };
+        let pods = rollout.current.clone();
+        return ScanResult {
+            terminal: pods.iter().find_map(classify_pod_terminal),
+            pull_retrying: pods.iter().find_map(transient_pull_error),
+            pods,
+            rollout: Some(rollout),
         };
     }
     if !has_pods(kind) {
@@ -676,44 +772,54 @@ pub(super) async fn scan_terminal(
         terminal,
         pods,
         pull_retrying,
+        rollout: None,
     }
 }
 
-/// Return the readiness message for a rollout workload, read from the pods of
-/// its current revision: how many of them are ready, and why the first one
-/// that is not ready waits. The workload's own counts cannot say this, because
-/// a Deployment's `readyReplicas` also counts pods of the old revision. `pods`
-/// holds only current-revision pods, as [`scan_terminal`] lists them. Return
-/// `None` for other kinds, for a workload with a declared readiness rule, or
-/// when no pod was listed.
-pub(super) fn rollout_message(
+/// Return why a Deployment, StatefulSet, or DaemonSet is not ready. Both a
+/// deploy's wait and `kix status` describe a workload with this function.
+///
+/// With `pods`, read from the cluster by [`read_rollout_pods`], it counts the
+/// ready pods of the current revision and says why the first one that is not
+/// ready waits. The workload's own counts cannot say this, because a
+/// Deployment's `readyReplicas` also counts pods of the old revision. It then
+/// adds what holds back a StatefulSet's update. Without `pods`, and for a
+/// workload being deleted or with a declared readiness rule, it returns
+/// [`super::not_ready_reason`], which reads only the object.
+pub fn rollout_not_ready_reason(
     obj: &DynamicObject,
     kind: GroupKind<'_>,
-    pods: &[Value],
-) -> Option<String> {
+    pods: Option<&RolloutPods>,
+) -> String {
+    let fallback = || super::declared::not_ready_reason(obj, kind);
+    let Some(pods) = pods else {
+        return fallback();
+    };
+    if super::deletion_reason(obj).is_some() || super::declared::declared_rule(obj).is_some() {
+        return fallback();
+    }
     let desired = match kind {
         kinds::DEPLOYMENT | kinds::STATEFUL_SET => obj
             .data
             .pointer("/spec/replicas")
             .and_then(Value::as_i64)
             .unwrap_or(1),
-        kinds::DAEMON_SET => obj
+        kinds::DAEMON_SET => match obj
             .data
             .pointer("/status/desiredNumberScheduled")
-            .and_then(Value::as_i64)?,
-        _ => return None,
+            .and_then(Value::as_i64)
+        {
+            Some(desired) => desired,
+            None => return fallback(),
+        },
+        _ => return fallback(),
     };
-    if super::declared::declared_rule(obj).is_some() {
-        return None;
-    }
-    let pods: Vec<&Value> = pods
+    let current: Vec<&Value> = pods
+        .current
         .iter()
         .filter(|p| p.pointer("/metadata/deletionTimestamp").is_none())
         .collect();
-    if pods.is_empty() {
-        return None;
-    }
-    let ready = pods.iter().filter(|p| pod_ready(p)).count();
+    let ready = current.iter().filter(|p| pod_ready(p)).count();
     let mut message = format!("{ready}/{desired} updated pods ready");
     if kind == kinds::DEPLOYMENT {
         let total = obj
@@ -732,12 +838,28 @@ pub(super) fn rollout_message(
             n => message.push_str(&format!(", {n} old pods still running")),
         }
     }
-    if let Some(waiting) = pods.iter().find_map(|p| pod_not_ready_reason(p)) {
+    if let Some(waiting) = current.iter().find_map(|p| pod_not_ready_reason(p)) {
         message.push_str("; ");
         message.push_str(&waiting);
     }
-    let name = obj.metadata.name.as_deref().unwrap_or("unknown");
-    Some(format!("{}/{name}: {message}", kind.kind))
+    if let Some(held) = &pods.held {
+        message.push_str(". ");
+        message.push_str(held);
+    }
+    message
+}
+
+/// Read a workload's pods and return [`rollout_not_ready_reason`] for it.
+/// `kix status` calls it for a workload that is not ready, so it describes
+/// the workload as a deploy's wait does. Another kind gets
+/// [`super::not_ready_reason`] and costs no request.
+pub async fn live_not_ready_reason(
+    client: &Client,
+    obj: &DynamicObject,
+    kind: GroupKind<'_>,
+) -> String {
+    let pods = read_rollout_pods(client, obj, kind).await;
+    rollout_not_ready_reason(obj, kind, pods.as_ref())
 }
 
 /// Return true when a pod's `Ready` condition is `True`.
@@ -864,26 +986,14 @@ pub(super) fn statefulset_held_pods(sts: &DynamicObject, pods: &[Value]) -> Opti
     Some(if let [(name, revision)] = held.as_slice() {
         format!(
             "Pod {name} is not ready and is still on revision {revision} (current revision: {update}). {rule} \
-             Delete it so the StatefulSet recreates it on the current revision: {command}"
+             If it does not become ready, delete it so the StatefulSet recreates it on the current revision: {command}"
         )
     } else {
         format!(
             "Pods {listed} are not ready (current revision: {update}). {rule} \
-             Delete them so the StatefulSet recreates them on the current revision: {command}"
+             If they do not become ready, delete them so the StatefulSet recreates them on the current revision: {command}"
         )
     })
-}
-
-/// List the pods a StatefulSet's selector matches and return
-/// [`statefulset_held_pods`] for them.
-pub(super) async fn statefulset_held_pods_live(
-    client: &Client,
-    sts: &DynamicObject,
-) -> Option<String> {
-    let selector = workload_label_selector(&sts.data)?;
-    let namespace = sts.metadata.namespace.as_deref().unwrap_or("default");
-    let pods = list_pods_for_workload(client, namespace, &selector).await;
-    statefulset_held_pods(sts, &pods)
 }
 
 /// Build a stable string fingerprint of a resource's progress state.

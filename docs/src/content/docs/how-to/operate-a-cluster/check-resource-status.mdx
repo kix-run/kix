@@ -159,6 +159,13 @@ The health-check Job's logs say whether the post-deploy probe passed:
 
 <Command {...jobLogs} />
 
+## When the last deploy failed
+
+A deploy that fails leaves the previous deploy current. `kix status` then
+starts with the failed deploy, when it failed, and why, and lists the objects
+only that deploy added under `Only in the failed deploy`. It exits `2` until
+a deploy succeeds. Fix what stopped the deploy, and run `kix deploy` again.
+
 ## What readiness does not show
 
 Kix checks the status that Kubernetes and cluster controllers report for each

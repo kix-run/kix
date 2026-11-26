@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use kix::cluster::drift::{DriftVerdict, ForeignOwner, UnrecordedScale};
 use kix::cluster::observe::{
-    ClusterView, ExpectedFrom, ObjectView, Observation, Presence, Readiness,
+    ClusterView, ExpectedFrom, FailedDeploy, ObjectView, Observation, Presence, Readiness,
 };
 use kix::manifest::types::{CLUSTER_SCOPED, ResourceId, qualified_kind};
 use schemars::JsonSchema;
@@ -66,6 +66,27 @@ pub struct ClusterStatus {
     /// Objects of this cluster that left its build and are still being
     /// deleted, because a finalizer or a slow shutdown holds them.
     pub leaving: Vec<LeavingStatus>,
+    /// The newest deploy that failed after `deploy`, or `null`. A failed
+    /// deploy leaves the previous record current, so `deploy` and
+    /// `packages` describe that record.
+    pub failed_deploy: Option<FailedDeployStatus>,
+    pub summary: Summary,
+}
+
+/// A deploy that failed after the current one.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct FailedDeployStatus {
+    pub name: String,
+    pub identity_hash: Option<String>,
+    /// When it failed (RFC 3339), when the record says.
+    pub failed_at: Option<String>,
+    /// Why it failed, when the record says.
+    pub reason: Option<String>,
+    /// The objects of the failed build that the current deploy does not
+    /// have, by package, with the same checks as the cluster's `packages`.
+    /// They do not count in the cluster's `summary`, which counts the failed
+    /// deploy itself under `failed_deploys`.
+    pub packages: Vec<PackageStatus>,
     pub summary: Summary,
 }
 
@@ -255,6 +276,8 @@ pub struct Summary {
     /// not counted in `resources`.
     pub leaving: usize,
     pub not_checked: usize,
+    /// Kix clusters whose newest deploy failed after their current one.
+    pub failed_deploys: usize,
 }
 
 impl Summary {
@@ -285,11 +308,18 @@ impl Summary {
         self.deleting += other.deleting;
         self.leaving += other.leaving;
         self.not_checked += other.not_checked;
+        self.failed_deploys += other.failed_deploys;
     }
 
     /// Return whether a check found something wrong.
     pub fn has_problems(&self) -> bool {
-        self.missing + self.changed + self.not_ready + self.deleting + self.leaving > 0
+        self.missing
+            + self.changed
+            + self.not_ready
+            + self.deleting
+            + self.leaving
+            + self.failed_deploys
+            > 0
     }
 }
 
@@ -365,6 +395,14 @@ pub fn build(
                 c.summary.merge(&p.summary);
             }
             c.summary.leaving = c.leaving.len();
+            if let Some(failed) = &mut c.failed_deploy {
+                failed.packages.retain(|p| matches(&p.name));
+                failed.summary = Summary::default();
+                for p in &failed.packages {
+                    failed.summary.merge(&p.summary);
+                }
+            }
+            c.summary.failed_deploys = usize::from(c.failed_deploy.is_some());
         }
         if clusters.iter().all(|c| c.packages.is_empty()) {
             return Err(no_such_package(wanted, &known));
@@ -423,31 +461,7 @@ fn cluster_status(
     notes: Option<&Vec<String>>,
     checks: &[StatusCheck],
 ) -> ClusterStatus {
-    let mut packages: BTreeMap<Option<String>, Vec<ResourceStatus>> = BTreeMap::new();
-    for obj in &view.objects {
-        packages
-            .entry(obj.package.clone())
-            .or_default()
-            .push(resource_status(view, obj, checks));
-    }
-    // Packages by name, then the objects no package owns.
-    let (cluster_level, named): (Vec<_>, Vec<_>) =
-        packages.into_iter().partition(|(name, _)| name.is_none());
-    let packages: Vec<PackageStatus> = named
-        .into_iter()
-        .chain(cluster_level)
-        .map(|(name, resources)| {
-            let mut summary = Summary::default();
-            for r in &resources {
-                summary.add(r);
-            }
-            PackageStatus {
-                name,
-                summary,
-                resources,
-            }
-        })
-        .collect();
+    let packages = group_packages(&view.objects, checks);
     let mut summary = Summary::default();
     for p in &packages {
         summary.merge(&p.summary);
@@ -466,6 +480,11 @@ fn cluster_status(
         })
         .collect();
     summary.leaving = leaving.len();
+    let failed_deploy = view
+        .failed
+        .as_ref()
+        .map(|f| failed_deploy_status(f, checks));
+    summary.failed_deploys = usize::from(failed_deploy.is_some());
     let record = &view.record;
     ClusterStatus {
         cluster: view.cluster.clone(),
@@ -484,11 +503,61 @@ fn cluster_status(
         notes: notes.cloned().unwrap_or_default(),
         packages,
         leaving,
+        failed_deploy,
         summary,
     }
 }
 
-fn resource_status(view: &ClusterView, obj: &ObjectView, checks: &[StatusCheck]) -> ResourceStatus {
+fn failed_deploy_status(failed: &FailedDeploy, checks: &[StatusCheck]) -> FailedDeployStatus {
+    let packages = group_packages(&failed.objects, checks);
+    let mut summary = Summary::default();
+    for p in &packages {
+        summary.merge(&p.summary);
+    }
+    FailedDeployStatus {
+        name: failed.record.name.clone(),
+        identity_hash: failed.record.identity_hash.clone(),
+        failed_at: failed.record.failed_at.clone(),
+        reason: failed.record.failure_reason.clone(),
+        packages,
+        summary,
+    }
+}
+
+/// Check `objects` and group them by package: packages by name, then the
+/// objects no package owns.
+fn group_packages(objects: &[ObjectView], checks: &[StatusCheck]) -> Vec<PackageStatus> {
+    let mut packages: BTreeMap<Option<String>, Vec<ResourceStatus>> = BTreeMap::new();
+    for obj in objects {
+        packages
+            .entry(obj.package.clone())
+            .or_default()
+            .push(resource_status(objects, obj, checks));
+    }
+    let (cluster_level, named): (Vec<_>, Vec<_>) =
+        packages.into_iter().partition(|(name, _)| name.is_none());
+    named
+        .into_iter()
+        .chain(cluster_level)
+        .map(|(name, resources)| {
+            let mut summary = Summary::default();
+            for r in &resources {
+                summary.add(r);
+            }
+            PackageStatus {
+                name,
+                summary,
+                resources,
+            }
+        })
+        .collect()
+}
+
+fn resource_status(
+    objects: &[ObjectView],
+    obj: &ObjectView,
+    checks: &[StatusCheck],
+) -> ResourceStatus {
     let present = match obj.presence {
         Presence::Present => Present::Yes,
         Presence::External => Present::External,
@@ -533,8 +602,9 @@ fn resource_status(view: &ClusterView, obj: &ObjectView, checks: &[StatusCheck])
     let needed_by = if on_cluster {
         Vec::new()
     } else {
-        view.needed_by(&obj.identity_hash)
+        objects
             .iter()
+            .filter(|o| o.depends_on.contains(&obj.identity_hash))
             .map(|o| label(&o.rid))
             .collect()
     };

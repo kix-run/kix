@@ -271,6 +271,17 @@ impl From<Records> for OpenedRecords {
     }
 }
 
+/// A Kix cluster's current deploy record, and the newest deploy that failed
+/// after it ([`Records::all_current_deploys`]).
+#[derive(Debug, Clone)]
+pub struct CurrentDeploy {
+    /// The `Active` or `Degraded` record.
+    pub current: Record,
+    /// The newest `Failed` record whose failure came after `current` was
+    /// deployed, or `None`.
+    pub failed_since: Option<Record>,
+}
+
 impl Records {
     /// Validate `discovery` against retired API groups and open a [`Records`]
     /// handle if the Activation CRD is served.
@@ -516,6 +527,52 @@ impl Records {
             .iter()
             .filter_map(|(cluster, items)| {
                 current_of(items, cluster).map(|r| (cluster.clone(), Record::of(r)))
+            })
+            .collect())
+    }
+
+    /// Return the current record of every Kix cluster with one, as
+    /// [`Records::all_current`] does, with the newest `Failed` record that
+    /// failed after the current record was deployed. Such a record means the
+    /// last deploy failed and left the current record in place. It reads
+    /// the same one list of records.
+    pub async fn all_current_deploys(
+        &self,
+    ) -> Result<BTreeMap<String, CurrentDeploy>, RecordsError> {
+        let mut by_cluster: BTreeMap<String, Vec<DynamicObject>> = BTreeMap::new();
+        for item in self.all().await? {
+            let cluster = item
+                .metadata
+                .labels
+                .as_ref()
+                .and_then(|l| keys::get_meta(l, keys::CLUSTER_LABEL))
+                .map(str::to_string);
+            if let Some(cluster) = cluster {
+                by_cluster.entry(cluster).or_default().push(item);
+            }
+        }
+        Ok(by_cluster
+            .iter()
+            .filter_map(|(cluster, items)| {
+                let current = Record::of(current_of(items, cluster)?);
+                let since = current.retention_time();
+                let failed_since = items
+                    .iter()
+                    .filter(|item| read_phase(item) == PHASE_FAILED)
+                    .map(Record::of)
+                    .filter(|r| r.retention_time() > since)
+                    .max_by(|a, b| {
+                        a.retention_time()
+                            .cmp(&b.retention_time())
+                            .then_with(|| a.name.cmp(&b.name))
+                    });
+                Some((
+                    cluster.clone(),
+                    CurrentDeploy {
+                        current,
+                        failed_since,
+                    },
+                ))
             })
             .collect())
     }

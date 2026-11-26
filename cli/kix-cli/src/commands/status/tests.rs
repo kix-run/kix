@@ -3,7 +3,7 @@ use crate::cli::StatusCheck;
 use document::{Kubernetes, Problem, build, selected};
 use kix::cluster::drift::{DriftVerdict, ForeignOwner};
 use kix::cluster::observe::{
-    ClusterView, Deleting, ExpectedFrom, Leaving, ObjectView, Presence, Readiness,
+    ClusterView, Deleting, ExpectedFrom, FailedDeploy, Leaving, ObjectView, Presence, Readiness,
 };
 use kix::manifest::types::ResourceId;
 
@@ -254,6 +254,7 @@ fn shop() -> Observation {
             expected_from: ExpectedFrom::Index,
             objects,
             leaving: vec![],
+            failed: None,
         }],
         unreadable: vec!["secrets".into()],
     }
@@ -642,4 +643,54 @@ fn an_object_that_left_the_build_and_is_being_deleted_is_listed() {
     assert_eq!(other.summary.leaving, 0);
     assert!(other.clusters[0].leaving.is_empty());
     assert_eq!(other.exit(), Exit::Success);
+}
+
+/// A deploy that failed after the current one is the headline, its own
+/// objects are checked, and the command exits 2 even when every object of
+/// the current deploy is fine.
+#[test]
+fn a_deploy_that_failed_after_the_current_one_is_reported() {
+    let mut seen = shop();
+    let view = &mut seen.clusters[0];
+    view.objects
+        .retain(|o| o.package.as_deref() == Some("ingress/ingress-nginx"));
+    view.objects
+        .iter_mut()
+        .for_each(|o| o.readiness = Readiness::Ready);
+    let healthy = build(&seen, kubernetes(), &BTreeMap::new(), &selected(&[]), None).unwrap();
+    assert_eq!(healthy.exit(), Exit::Success);
+
+    let mut pending = object(
+        'p',
+        "Service",
+        "ingress",
+        "pending",
+        Some("ingress/ingress-nginx"),
+        Presence::Present,
+    );
+    pending.readiness =
+        Readiness::NotReady("no load balancer address in status.loadBalancer.ingress yet".into());
+    seen.clusters[0].failed = Some(FailedDeploy {
+        record: Record {
+            name: "shop-9a8b7c6d5e4f".into(),
+            phase: "Failed".into(),
+            failed_at: Some("2026-11-12T10:00:00Z".into()),
+            failure_reason: Some("1 resource failed: Service/pending@ingress".into()),
+            ..Record::default()
+        },
+        objects: vec![pending],
+    });
+    let doc = build(&seen, kubernetes(), &BTreeMap::new(), &selected(&[]), None).unwrap();
+    assert_eq!(doc.summary.failed_deploys, 1);
+    assert_eq!(doc.exit(), Exit::StatusFoundProblem);
+    let failed = doc.clusters[0].failed_deploy.as_ref().unwrap();
+    assert_eq!(failed.summary.not_ready, 1);
+    assert_eq!(
+        doc.summary.not_ready, 0,
+        "objects of the failed deploy are counted apart"
+    );
+    insta::assert_snapshot!(
+        "status_text_failed_deploy",
+        text::render(&doc, text::Detail::Packages, &two_days_ago)
+    );
 }

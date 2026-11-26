@@ -65,6 +65,21 @@ pub struct ClusterView {
     /// being deleted, sorted by id. A prune deleted them, or someone did, and
     /// a finalizer or a slow shutdown still holds them.
     pub leaving: Vec<Leaving>,
+    /// The newest deploy that failed after the current one was deployed. A
+    /// failed deploy leaves the current record in place, so its objects are
+    /// checked here apart from the current deploy's.
+    pub failed: Option<FailedDeploy>,
+}
+
+/// A deploy that failed after the current deploy.
+#[derive(Debug, Clone)]
+pub struct FailedDeploy {
+    pub record: Record,
+    /// The objects of the failed build whose kind, namespace, and name are
+    /// not among the current deploy's objects, checked like those. An object
+    /// both builds have is checked once, as part of the current deploy,
+    /// against what the cluster holds now.
+    pub objects: Vec<ObjectView>,
 }
 
 /// An object of a Kix cluster that left its build and is still being
@@ -224,7 +239,7 @@ pub async fn observe(
 ) -> Result<Observation, FetchError> {
     let mut current = match records.records() {
         Some(records) => records
-            .all_current()
+            .all_current_deploys()
             .await
             .map_err(FetchError::RecordsError)?,
         None => BTreeMap::new(),
@@ -236,16 +251,25 @@ pub async fn observe(
         inventory::sweep_managed(client, discovery, records, inventory::SweepScope::All).await?;
     let apis = Apis::of(discovery, &sweep.forbidden);
     let live = Live::of(&sweep.managed);
-    let clusters = current
+    let mut clusters: Vec<ClusterView> = current
         .into_iter()
-        .map(|(cluster, record)| {
-            let mut view = view(cluster, record, &live, &apis, |hashes| {
-                store_graph::lookup_hashes(hashes.iter().copied())
-            });
+        .map(|(cluster, deploy)| {
+            let lookup = |hashes: &[&str]| store_graph::lookup_hashes(hashes.iter().copied());
+            let mut view = view(cluster.clone(), deploy.current, &live, &apis, lookup);
             view.leaving = leaving(&view, &sweep.managed, |obj| sweep.tenancy.owners_of(obj));
+            view.failed = deploy.failed_since.map(|record| {
+                let failed = self::view(cluster, record, &live, &apis, lookup);
+                failed_only(&view, failed)
+            });
             view
         })
         .collect();
+    for view in &mut clusters {
+        describe_from_pods(client, &mut view.objects, &live).await;
+        if let Some(failed) = &mut view.failed {
+            describe_from_pods(client, &mut failed.objects, &live).await;
+        }
+    }
     Ok(Observation {
         clusters,
         unreadable: sweep.forbidden,
@@ -487,6 +511,7 @@ fn view(
         expected_from,
         objects,
         leaving: Vec::new(),
+        failed: None,
     }
 }
 
@@ -557,6 +582,47 @@ fn walk_depends_on<'a>(
         }
     }
     (found, unresolved)
+}
+
+/// Return the failed deploy whose view is `failed`, keeping only its objects
+/// that `current` does not name.
+fn failed_only(current: &ClusterView, failed: ClusterView) -> FailedDeploy {
+    let names: HashSet<&ResourceId> = current.objects.iter().map(|o| &o.rid).collect();
+    let objects = failed
+        .objects
+        .into_iter()
+        .filter(|o| o.named && !names.contains(&o.rid))
+        .collect();
+    FailedDeploy {
+        record: failed.record,
+        objects,
+    }
+}
+
+/// Describe each object that is not ready as a deploy's wait describes it.
+/// A Deployment, StatefulSet, or DaemonSet is described from its pods
+/// ([`readiness::live_not_ready_reason`]), which costs one or two list
+/// requests per such workload. Ready objects and other kinds cost none.
+async fn describe_from_pods(client: &Client, objects: &mut [ObjectView], live: &Live<'_>) {
+    let reads = objects.iter_mut().filter_map(|o| {
+        if !matches!(o.readiness, Readiness::NotReady(_)) || o.deleting.is_some() {
+            return None;
+        }
+        let obj = live
+            .by_hash
+            .get(o.identity_hash.as_str())
+            .or_else(|| live.by_rid.get(&o.rid))
+            .copied()?;
+        if !readiness::is_rollout(o.rid.group_kind()) {
+            return None;
+        }
+        let rid = o.rid.clone();
+        Some(async move {
+            let reason = readiness::live_not_ready_reason(client, obj, rid.group_kind()).await;
+            o.readiness = Readiness::NotReady(reason);
+        })
+    });
+    futures::future::join_all(reads).await;
 }
 
 /// Return the readiness of a live object by the rules a deploy waits on. An
