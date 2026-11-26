@@ -30,7 +30,7 @@ mod prune_start_and_timeout_tests {
         let text = render_prune_start(&all[..1], &all[1..], false, "app");
         assert!(
             text.contains(
-                "1 object(s) left the build, still on the cluster; `kix gc app` deletes them"
+                "1 object(s) left the build, still on the cluster (run `kix gc app` to delete them)"
             ),
             "{text}"
         );

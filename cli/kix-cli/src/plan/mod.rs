@@ -611,7 +611,7 @@ pub fn orphans_fate(flags: PlanFlags, connected: bool, cluster: &str) -> String 
 /// `status.orphansKeptFrom`.
 pub fn kept_orphans_fate(cluster: &str) -> String {
     format!(
-        "still on the cluster; {} deletes them",
+        "still on the cluster (run {} to delete them)",
         kept_orphans_cleanup(cluster)
     )
 }
@@ -728,12 +728,12 @@ pub fn render_plan_summary(diff: &PackageDiff, reapplied: usize) -> String {
         parts.push(output::yellow(s).into_owned());
     }
     if reapplied > 0 {
-        let s = format!("{reapplied} unchanged object(s) written again");
+        let s = format!("{reapplied} unchanged object(s) reapplied");
         parts.push(output::yellow(&s).into_owned());
     }
     let writes_objects = updated + added + removed + reapplied > 0 || diff.cluster_level.is_some();
     if !writes_objects && diff.activation.is_some() {
-        let s = "only the deployment record changes (no object changes)";
+        let s = "only the deployment record changes";
         parts.push(output::dim(s).into_owned());
     }
 
@@ -1040,7 +1040,7 @@ mod never_pruned_tests {
 
         let repair = render_plan_summary(&diff(2, true), 4);
         assert!(
-            repair.contains("4 unchanged object(s) written again"),
+            repair.contains("4 unchanged object(s) reapplied"),
             "{repair}"
         );
         assert!(!repair.contains("only the deployment record"), "{repair}");

@@ -762,7 +762,7 @@ mod tests {
         assert_eq!(
             lines,
             vec![
-                "prune> 1 object(s) left the build, still on the cluster; `kix gc app` deletes them",
+                "prune> 1 object(s) left the build, still on the cluster (run `kix gc app` to delete them)",
                 "ConfigMap/old@app> left the build, still on the cluster",
                 "prune> 1 object(s) left the build and are never deleted automatically",
                 "Namespace/gone@app> left the build, kept (never deleted automatically)",
