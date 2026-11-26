@@ -294,6 +294,26 @@ impl CheckedPlan {
         &self.pkg_diff
     }
 
+    /// Mark as modified each write of an unchanged file that the package
+    /// diff now lists as changed. A dry run finds such a change when the
+    /// live object differs from the build, as after a stopped deploy, so the
+    /// write changes the object and the objects list says what the package
+    /// view says.
+    fn relabel_reverted_writes(&mut self) {
+        let changed: HashSet<&ResourceId> = self
+            .pkg_diff
+            .changed
+            .iter()
+            .chain(&self.pkg_diff.cluster_level)
+            .flat_map(|c| c.resource_diffs.iter().map(|(id, _)| id))
+            .collect();
+        for write in &mut self.objects.writes {
+            if write.change == WriteChange::Reapplied && changed.contains(&write.resource_id()) {
+                write.change = WriteChange::Modified;
+            }
+        }
+    }
+
     /// Return every object the plan writes and the prune deletes; see
     /// [`super::objects`].
     pub fn objects(&self) -> &Objects {
@@ -671,6 +691,7 @@ impl Planned {
             deployed,
         }
         .apply(&mut self.checked.pkg_diff, answers);
+        self.checked.relabel_reverted_writes();
         known.then_some(drift)
     }
 }
@@ -1277,6 +1298,52 @@ mod tests {
         let mut baseline = crate::plan::fixtures::deployed(Some(&build));
         baseline.failed.consumed = vec!["rec-failed".to_string()];
         crate::plan::fixtures::plan(&baseline, &build, crate::plan::fixtures::flags(&[])).unwrap()
+    }
+
+    /// After a stopped deploy, the dry run finds that the live object differs
+    /// from the build, and the package view lists it as changed. The write
+    /// of that object is then a modification, not a re-apply of an
+    /// unchanged object, while a re-apply the view does not list stays one.
+    #[test]
+    fn a_write_the_dry_run_finds_changed_is_not_a_reapply() {
+        let mut checked = unchanged_plan();
+        let write = |name: &str| crate::plan::document::ObjectWrite {
+            kind: "ConfigMap".into(),
+            namespace: "web".into(),
+            name: name.into(),
+            store_hash: "h".into(),
+            package: "web/web".into(),
+            change: WriteChange::Reapplied,
+            group: String::new(),
+        };
+        checked.objects.writes = vec![write("reverted"), write("same")];
+        checked
+            .pkg_diff
+            .changed
+            .push(super::super::PackageChangeDiff {
+                key: "web/web".into(),
+                old_version: None,
+                new_version: None,
+                resource_diffs: vec![(write("reverted").resource_id(), Vec::new())],
+                dep_affected_resources: Vec::new(),
+                added_resources: Vec::new(),
+                removed_resources: Vec::new(),
+                shared_kept: Vec::new(),
+            });
+        checked.relabel_reverted_writes();
+        let changes: Vec<(&str, WriteChange)> = checked
+            .objects
+            .writes
+            .iter()
+            .map(|w| (w.name.as_str(), w.change))
+            .collect();
+        assert_eq!(
+            changes,
+            [
+                ("reverted", WriteChange::Modified),
+                ("same", WriteChange::Reapplied)
+            ]
+        );
     }
 
     /// A plan with nothing to do starts no run, so no finalize supersedes
