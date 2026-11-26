@@ -2,6 +2,6 @@
 kind = "changed"
 cli = ["kix compliance audit"]
 +++
-The Markdown report from `kix compliance audit` names the design documents
-folder `discussions/` in its last line. The folder was called
-`v2_discussions/` before.
+The footer of `audit-report.md` from `kix compliance audit` now references
+`discussions/61_compliance_exports.md` instead of
+`v2_discussions/61_compliance_exports.md`.
