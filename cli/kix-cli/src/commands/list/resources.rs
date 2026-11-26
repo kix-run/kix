@@ -250,7 +250,7 @@ impl CommandResponse for InspectResponse {
                 .any(|id| !id.subject_placeholders.is_empty())
             {
                 out.push_str(&format!(
-                    "\n{PROJECT_ID} and {PROJECT_NUMBER} stand for the ID and the number of the Google Cloud project that holds the cluster. Replace them before you use a subject.\n"
+                    "\nReplace {PROJECT_ID} and {PROJECT_NUMBER} with the cluster's Google Cloud project ID and project number before using a subject in IAM.\n"
                 ));
             }
         }
@@ -366,7 +366,7 @@ mod tests {
         );
         assert!(text.contains("Kubernetes ServiceAccount"), "{text}");
         assert!(
-            text.contains("<project-id> and <project-number> stand for the ID and the number of the Google Cloud project that holds the cluster."),
+            text.contains("Replace <project-id> and <project-number> with the cluster's Google Cloud project ID and project number before using a subject in IAM."),
             "{text}"
         );
     }
