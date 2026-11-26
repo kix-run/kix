@@ -524,6 +524,8 @@ in
       cluster = mkCluster [
         (import ../../flavors/gke.nix)
         netpolOn
+        # The test enforcer takes the role from the flavour's own.
+        { cluster.roles.network-policy-enforcer.binding = lib.mkForce "shadowable"; }
         baseInstances
         (
           { ref, ... }:
