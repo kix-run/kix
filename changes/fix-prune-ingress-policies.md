@@ -11,6 +11,4 @@ workload before the policy, and pruning deleted the policy while the pods were
 still running. Deleting the webhook policy early blocked the Kubernetes API
 server from reaching a webhook it was still configured to call. Kix no longer
 records dependencies from a network policy's `spec`. If a policy must wait for
-another resource, list that resource in `requires`. The first deploy after
-upgrading re-applies affected policies because their recorded dependencies
-change.
+another resource, list that resource in `requires`.
