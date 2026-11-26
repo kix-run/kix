@@ -429,8 +429,9 @@ fn in_use(objects: usize) -> String {
     }
 }
 
-/// Clear `status.orphansKeptFrom` on the Active record and remove local GC
-/// roots for `cluster` when [`may_clear_kept`] permits.
+/// Clear `status.orphansKeptFrom` and the kept-orphans revision on the
+/// Active record, and remove local GC roots for `cluster`, when
+/// [`may_clear_kept`] permits. The cleanup that follows deletes the revision.
 async fn clear_kept(
     cluster: &str,
     retirement: &RecordRetirement,
@@ -443,7 +444,7 @@ async fn clear_kept(
     if !may_clear_kept(active, examined_all, build_hash) {
         return;
     }
-    match records.clear_orphans_kept_from(&active.name).await {
+    match records.clear_orphans_kept_from(active).await {
         Ok(()) => {
             baseline::sync_kept_roots(cluster, &[]);
             crate::say!(

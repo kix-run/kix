@@ -53,6 +53,7 @@ pub(crate) fn definition() -> Value {
                 "subresources": { "status": {} },
                 "schema": { "openAPIV3Schema": {
                     "type": "object",
+                    "required": ["spec"],
                     "description": "Lists the objects one Kix build makes for one package instance, and the hash of each object as Kix last applied it. Managed by Kix; do not edit.",
                     "properties": {
                         "spec": {

@@ -36,9 +36,12 @@ use kube::discovery::ApiResource;
 
 use crate::manifest::keys;
 
-pub use map::RevisionMap;
-pub use spec::{ReadError, Revision, RevisionObject, RevisionSet, RevisionSpec, Slot, name_of};
-pub use store::{Created, RevisionError, Revisions};
+pub use map::{RevisionMap, UnreadableMap};
+pub use spec::{
+    MAX_BYTES, ReadError, Revision, RevisionObject, RevisionSet, RevisionSpec, Slot, TooLarge,
+    name_of,
+};
+pub use store::{Created, Listed, RevisionError, Revisions};
 
 /// The kind of a revision.
 pub const KIND: &str = "PackageInstanceRevision";

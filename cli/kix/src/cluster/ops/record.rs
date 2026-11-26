@@ -8,13 +8,13 @@ use serde_json::Value;
 
 use std::collections::HashSet;
 
+use crate::manifest::keys;
 use crate::manifest::types::ResourceId;
 
 use super::super::activation::{
     KeptOrphanSource, KeptOrphans, Record, Records, WaveRecord, WaveStatus,
 };
 use super::super::apply;
-use super::super::errors::{FailureClass, classify};
 use super::super::revision::{
     Revision, RevisionMap, RevisionObject, RevisionSet, RevisionSpec, Revisions, Slot, keep,
 };
@@ -51,7 +51,8 @@ pub(crate) struct RecordConfig {
     /// What finalize writes to the record's `status.orphansKeptFrom`.
     pub(crate) kept_orphans: KeptOrphans,
     /// The revisions of the build the run deploys. [`DeployRecord::begin`]
-    /// names them in the record's `status.revisions` and creates them, and
+    /// creates them and then names them in the record's `status.revisions`,
+    /// and
     /// [`DeployRecord::finalize`] adds the kept orphans. `None` for a run
     /// that writes no record, such as the operator correcting drift.
     pub(crate) revisions: Option<RevisionSet>,
@@ -128,48 +129,27 @@ impl ActivationRecord {
         Ok(Some((name, records)))
     }
 
-    /// Create the Activation record `name` and mark it Deploying.
-    ///
-    /// The apply uses the same path as the plan's own node, so field manager,
-    /// identity hash, and annotation stamping all match and the later apply is
-    /// an unchanged no-op.
-    async fn create(&self, name: &str, records: &Records) {
-        // Only the CLI provides a manifest. When the operator reconciles an
-        // existing Activation, it skips creation and marks the phase directly.
-        if let Some(manifest) = self.config.manifest.as_ref()
-            && let Err(e) = self
-                .resources
-                .apply_as(
-                    records.watch_resource(),
-                    kube::discovery::Scope::Cluster,
-                    manifest,
-                )
-                .await
-        {
-            // Non-fatal: the deploy can still proceed and create the record
-            // as the final node in the plan. Marking the phase below will
-            // 404 and be ignored.
-            tracing::warn!(
-                activation = %name,
-                error = %e,
-                "could not create this run's deployment record before applying; continuing, \
-                 but if the deploy fails part way, no deployment record will list what it applied",
-            );
-        }
-
-        let map = self.config.revisions.as_ref().map(RevisionMap::of);
-        match records.begin_deploy(name, 1, map.as_ref()).await {
-            Ok(earlier) => {
-                if let Ok(mut guard) = self.earlier_only.lock() {
-                    *guard = earlier;
-                }
-            }
-            // 404 when the record does not exist: the up-front create failed,
-            // or the operator's record was deleted.
-            Err(e) => {
-                tracing::debug!(activation = %name, error = %e, "could not mark the record Deploying");
-            }
-        }
+    /// Create the Activation record `name` from the run's manifest. The
+    /// apply uses the same path as the plan's own node, so field manager,
+    /// identity hash, and annotation stamping all match and the later apply
+    /// is an unchanged no-op. Only the CLI provides a manifest. The operator
+    /// deploys a record that exists.
+    async fn create_record(&self, name: &str, records: &Records) -> Result<(), RecordWriteError> {
+        let Some(manifest) = self.config.manifest.as_ref() else {
+            return Ok(());
+        };
+        self.resources
+            .apply_as(
+                records.watch_resource(),
+                kube::discovery::Scope::Cluster,
+                manifest,
+            )
+            .await
+            .map(|_| ())
+            .map_err(|source| RecordWriteError::Create {
+                name: name.to_string(),
+                source,
+            })
     }
 
     /// Create every revision the record names. A revision that exists
@@ -198,10 +178,17 @@ impl ActivationRecord {
     /// orphan, because it did not read the cluster or could not resolve a
     /// kept build, it also carries forward the objects of `current`'s
     /// kept-orphans revision unexamined, as `status.orphansKeptFrom` carries
-    /// such builds forward. A revision that cannot be read or created is
-    /// left out with a warning, since nothing reads it yet.
-    async fn write_kept_orphans(&self, current: Option<&Record>, left: Left<'_>) -> Option<String> {
-        let set = self.config.revisions.as_ref()?;
+    /// such builds forward. Refuse when that revision cannot be read, or
+    /// the new one cannot be created, because the finalize that follows
+    /// deletes the old one and the list would be lost.
+    async fn write_kept_orphans(
+        &self,
+        current: Option<&Record>,
+        left: Left<'_>,
+    ) -> Result<Option<String>, RecordWriteError> {
+        let Some(set) = self.config.revisions.as_ref() else {
+            return Ok(None);
+        };
         let store = Revisions::new(self.resources.client());
         let wanted: HashSet<&ResourceId> = left.orphans.iter().collect();
         let mut objects: Vec<RevisionObject> = left
@@ -211,34 +198,39 @@ impl ActivationRecord {
             .filter_map(RevisionObject::of_manifest)
             .collect();
         let kept = &self.config.kept_orphans;
-        let earlier = current
-            .and_then(|c| c.revisions.as_ref())
-            .and_then(|m| m.kept_orphans.as_deref());
-        if (kept.carry_current || !kept.unexamined.is_empty())
-            && let Some(earlier) = earlier
-        {
-            match store.get(earlier).await {
-                Ok(Some(revision)) => objects.extend(revision.spec.objects),
-                Ok(None) => tracing::warn!(
-                    revision = earlier,
-                    "the current record's kept-orphans revision is missing; its objects are not carried forward"
-                ),
-                Err(e) => {
-                    tracing::warn!(error = %e, "could not read the current record's kept-orphans revision; its objects are not carried forward")
+        if kept.carry_current || !kept.unexamined.is_empty() {
+            let earlier = match current.and_then(|c| c.revisions.as_ref()) {
+                None => None,
+                Some(Ok(map)) => map.kept_orphans.as_deref(),
+                Some(Err(e)) => {
+                    let record = current.map_or("", |c| c.name.as_str());
+                    return Err(RecordWriteError::KeptOrphans(format!(
+                        "the current deployment record `{record}` cannot be read: {e}"
+                    )));
                 }
+            };
+            if let Some(earlier) = earlier {
+                let revision = store
+                    .get(earlier)
+                    .await
+                    .map_err(|e| RecordWriteError::KeptOrphans(e.to_string()))?
+                    .ok_or_else(|| {
+                        RecordWriteError::KeptOrphans(format!(
+                            "the current deployment record names kept-orphans revision `{earlier}`, which is missing"
+                        ))
+                    })?;
+                objects.extend(revision.spec.objects);
             }
         }
         if objects.is_empty() {
-            return None;
+            return Ok(None);
         }
         let revision = Revision::new(RevisionSpec::new(set.cluster(), Slot::KeptOrphans, objects));
-        match store.create(&revision).await {
-            Ok(_) => Some(revision.name),
-            Err(e) => {
-                tracing::warn!(error = %e, "could not record the objects this deploy left on the cluster");
-                None
-            }
-        }
+        store
+            .create(&revision)
+            .await
+            .map_err(|e| RecordWriteError::KeptOrphans(e.to_string()))?;
+        Ok(Some(revision.name))
     }
 
     /// Delete the revisions no record needs any more, under the run's lock.
@@ -281,14 +273,33 @@ impl DeployRecord for ActivationRecord {
 
         // Read the live set BEFORE creating the record, so the annotation
         // stamped on the record itself is computed the same way as every
-        // other resource's.
-        self.resources
-            .set_live_activations(records.live_hashes().await);
+        // other resource's. The set only prunes `kix.run/activations`, so a
+        // read that fails or hangs skips that pruning and the run goes on.
+        let live = tokio::time::timeout(BEST_EFFORT_TIMEOUT, records.live_hashes())
+            .await
+            .unwrap_or_else(|_| {
+                tracing::warn!(annotation = keys::ACTIVATIONS, "listing the deployment records did not finish in time, so this run does not prune the annotation");
+                None
+            });
+        self.resources.set_live_activations(live);
 
-        if let Some(name) = self.config.name.as_deref() {
-            self.create(name, &records).await;
+        let Some(name) = self.config.name.as_deref() else {
+            return Ok(());
+        };
+        // Create the revisions before the write that names them, so a record
+        // names only revisions that exist. A failure stops the run before
+        // anything is applied, and leaves the record as it was.
+        self.create_record(name, &records).await?;
+        self.create_revisions().await?;
+        let map = self.config.revisions.as_ref().map(RevisionMap::of);
+        let earlier = records
+            .begin_deploy(name, self.resources.cluster(), 1, map.as_ref())
+            .await
+            .map_err(RecordWriteError::Records)?;
+        if let Ok(mut guard) = self.earlier_only.lock() {
+            *guard = earlier;
         }
-        self.create_revisions().await
+        Ok(())
     }
 
     async fn checkpoint(
@@ -318,12 +329,6 @@ impl DeployRecord for ActivationRecord {
         match tokio::time::timeout(BEST_EFFORT_TIMEOUT, records.record_waves(name, &[record])).await
         {
             Ok(Ok(())) => Ok(()),
-            // 404 when `begin` could not create the record. The record is
-            // also a node of the plan, which creates it in the last wave.
-            Ok(Err(e)) if classify(&e.source) == FailureClass::NotFound => {
-                tracing::debug!("activation not yet on cluster; checkpoint skipped");
-                Ok(())
-            }
             Ok(Err(e)) => Err(RecordWriteError::Records(e)),
             Err(_) => Err(RecordWriteError::NoAnswer(BEST_EFFORT_TIMEOUT)),
         }
@@ -363,9 +368,6 @@ impl DeployRecord for ActivationRecord {
         };
         match tokio::time::timeout(BEST_EFFORT_TIMEOUT, records.fail_deploy(name, reason)).await {
             Ok(Ok(())) => Ok(()),
-            // Nothing to fail. `begin` could not create the record, and the
-            // run stopped before the record's own node.
-            Ok(Err(e)) if classify(&e.source) == FailureClass::NotFound => Ok(()),
             Ok(Err(e)) => Err(RecordWriteError::Records(e)),
             Err(_) => Err(RecordWriteError::NoAnswer(BEST_EFFORT_TIMEOUT)),
         }
@@ -405,14 +407,17 @@ impl DeployRecord for ActivationRecord {
         };
         let cluster = self.resources.cluster();
         let work = async {
-            let current = records.active(cluster).await.ok().flatten();
+            let current = records
+                .active(cluster)
+                .await
+                .map_err(RecordWriteError::Records)?;
             let kept = self.config.kept_orphans.recorded(
                 current.as_ref().map(|c| c.orphans_kept_from.as_slice()),
                 left.any(),
             );
             let map = match &self.config.revisions {
                 Some(set) => Some(RevisionMap {
-                    kept_orphans: self.write_kept_orphans(current.as_ref(), left).await,
+                    kept_orphans: self.write_kept_orphans(current.as_ref(), left).await?,
                     ..RevisionMap::of(set)
                 }),
                 None => None,
@@ -792,7 +797,8 @@ mod tests {
 
         fn stored_map(api: &FakeApi, name: &str) -> Option<RevisionMap> {
             let obj = api.object("Activation", name).unwrap();
-            RevisionMap::from_value(&obj["status"]["revisions"])
+            let map = &obj["status"]["revisions"];
+            (!map.is_null()).then(|| RevisionMap::read(map).unwrap())
         }
 
         fn revision_creates(api: &FakeApi) -> usize {
@@ -873,11 +879,13 @@ mod tests {
             assert_eq!(stored_map(&api, "one"), Some(RevisionMap::of(&set)));
         }
 
-        /// A deploy's run creates its record at the start, and then the
-        /// revisions the record names, on a cluster's first deploy too,
-        /// because taking the lock installed the record's kind.
+        /// A deploy's run creates its record at the start, then the
+        /// revisions, then names them on the record in the write that marks
+        /// it Deploying, so a record names only revisions that exist. This
+        /// holds on a cluster's first deploy too, because taking the lock
+        /// installed the record's kind.
         #[tokio::test]
-        async fn the_first_deploy_creates_the_record_then_the_revisions() {
+        async fn the_first_deploy_creates_the_record_then_the_revisions_then_names_them() {
             let api = FakeApi::new([]);
             let set = build("1");
             let mut run = run(&api, "one", Some(set.clone()), None).await;
@@ -891,15 +899,63 @@ mod tests {
                 "Deploying"
             );
             let requests = api.requests();
-            let record = requests
-                .iter()
-                .position(|r| r.starts_with("PATCH ") && r.contains("/activations/one"))
-                .unwrap();
-            let revision = requests
-                .iter()
-                .position(|r| r.starts_with("POST ") && r.contains(revision::PLURAL))
-                .unwrap();
-            assert!(record < revision, "{requests:?}");
+            let position = |want: &dyn Fn(&String) -> bool| requests.iter().position(want).unwrap();
+            let record = position(&|r| r.starts_with("PATCH ") && r.contains("/activations/one?"));
+            let revision = position(&|r| r.starts_with("POST ") && r.contains(revision::PLURAL));
+            let named =
+                position(&|r| r.starts_with("PATCH ") && r.contains("/activations/one/status"));
+            assert!(record < revision && revision < named, "{requests:?}");
+        }
+
+        /// A revision that cannot be created stops begin before the record
+        /// is marked Deploying or names anything, so no record is left
+        /// Deploying with a map of revisions that do not exist.
+        #[tokio::test]
+        async fn a_failed_create_stops_begin_before_the_record_names_anything() {
+            let mut queued = activation("one", "", None);
+            queued["status"] = json!({});
+            let api = FakeApi::new([queued]);
+            api.fail_next(
+                &format!("/apis/{}/{}", keys::API_VERSION, revision::PLURAL),
+                u32::MAX,
+                403,
+            );
+            let err = run(&api, "one", Some(build("1")), None)
+                .await
+                .begin()
+                .await
+                .unwrap_err();
+            assert!(matches!(err, RecordWriteError::Revisions(_)), "{err}");
+            let status = &api.object("Activation", "one").unwrap()["status"];
+            assert!(status.get("phase").is_none(), "{status}");
+            assert!(status.get("revisions").is_none(), "{status}");
+        }
+
+        /// Begin fails when the record cannot be marked Deploying, whatever
+        /// the reason: a record that is missing, or a write the API server
+        /// refuses. The run then applies nothing.
+        #[tokio::test]
+        async fn begin_fails_when_the_record_cannot_be_marked_deploying() {
+            let api = FakeApi::new([]);
+            let err = run(&api, "one", Some(build("1")), None)
+                .await
+                .begin()
+                .await
+                .unwrap_err();
+            assert!(matches!(err, RecordWriteError::Records(_)), "{err}");
+
+            let api = FakeApi::new([activation("one", "", None)]);
+            api.fail_next(
+                &format!("/apis/{}/activations/one/status", keys::API_VERSION),
+                1,
+                500,
+            );
+            let err = run(&api, "one", Some(build("1")), None)
+                .await
+                .begin()
+                .await
+                .unwrap_err();
+            assert!(matches!(err, RecordWriteError::Records(_)), "{err}");
         }
 
         /// The operator's run on a record that `kix deploy --operator`
@@ -1140,6 +1196,86 @@ mod tests {
             .unwrap();
             lock.release().await.unwrap();
             assert_eq!(kept_objects(&api, "new"), ["stale-a", "stale-c"]);
+        }
+
+        /// A finalize that must carry the previous kept orphans forward and
+        /// cannot read their revision fails before the commit. The record
+        /// stays Deploying and the previous record stays current, so the
+        /// list is not lost.
+        #[tokio::test]
+        async fn a_kept_orphans_revision_that_cannot_be_read_fails_finalize() {
+            let mut old_map = RevisionMap::of(&build("1"));
+            old_map.kept_orphans = Some("a-missing".into());
+            let api = FakeApi::new([
+                activation("old", "Active", Some(&old_map)),
+                activation("new", "Deploying", None),
+            ]);
+            let lock = lock(&api, "new").await;
+            let mut new = run(&api, "new", Some(build("2")), Some(lock.clone())).await;
+            new.config.kept_orphans.carry_current = true;
+            new.begin().await.unwrap();
+            let err = new.finalize(false, NONE_LEFT).await.unwrap_err();
+            assert!(matches!(err, RecordWriteError::KeptOrphans(_)), "{err}");
+            assert!(err.to_string().contains("a-missing"), "{err}");
+            assert_eq!(
+                api.object("Activation", "new").unwrap()["status"]["phase"],
+                "Deploying"
+            );
+            assert_eq!(
+                api.object("Activation", "old").unwrap()["status"]["phase"],
+                "Active"
+            );
+            lock.release().await.unwrap();
+        }
+
+        /// A kept-orphans revision that cannot be created fails finalize
+        /// too, rather than writing a record that names no kept orphans.
+        #[tokio::test]
+        async fn a_kept_orphans_revision_that_cannot_be_created_fails_finalize() {
+            let api = FakeApi::new([activation("one", "Deploying", None)]);
+            let manifests = [left_manifest("stale-a", "1")];
+            let orphans = vec![ResourceId::from_value(&manifests[0])];
+            let lock = lock(&api, "one").await;
+            let one = run(&api, "one", Some(build("1")), Some(lock.clone())).await;
+            one.begin().await.unwrap();
+            api.fail_next(
+                &format!("/apis/{}/{}", keys::API_VERSION, revision::PLURAL),
+                1,
+                403,
+            );
+            let err = one
+                .finalize(
+                    false,
+                    Left {
+                        orphans: &orphans,
+                        manifests: &manifests,
+                    },
+                )
+                .await
+                .unwrap_err();
+            assert!(matches!(err, RecordWriteError::KeptOrphans(_)), "{err}");
+            assert_eq!(
+                api.object("Activation", "one").unwrap()["status"]["phase"],
+                "Deploying"
+            );
+            lock.release().await.unwrap();
+        }
+
+        /// A record that was superseded and is deployed again names no kept
+        /// orphans from its earlier deploy, whose revision is gone.
+        #[tokio::test]
+        async fn a_record_deployed_again_after_it_was_superseded_names_no_old_kept_orphans() {
+            let mut map = RevisionMap::of(&build("1"));
+            map.kept_orphans = Some("a-gone".into());
+            let api = FakeApi::new([activation("one", "Active", Some(&map))]);
+            let records = Records::undiscovered(&api.client());
+            records.supersede("one").await.unwrap();
+            run(&api, "one", Some(build("1")), None)
+                .await
+                .begin()
+                .await
+                .unwrap();
+            assert_eq!(stored_map(&api, "one"), Some(RevisionMap::of(&build("1"))));
         }
     }
 }

@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::cluster::revision::RevisionMap;
+use crate::cluster::revision::{RevisionMap, UnreadableMap};
 use crate::eval::package_index::RecordPackageIndex;
 use crate::manifest::keys;
 use crate::manifest::lifecycle::{
@@ -69,9 +69,10 @@ pub struct Record {
     /// not read.
     pub package_index: Option<RecordPackageIndex>,
     /// `status.revisions`, the revisions the record's deploy is made of.
-    /// `None` when the record has none, as records an earlier Kix wrote do,
-    /// or when it is in a format this release does not read.
-    pub revisions: Option<RevisionMap>,
+    /// `None` when the record has none, as records an earlier Kix wrote and
+    /// `Superseded` records do. An error when it is there and this release
+    /// cannot read it, so the record may name revisions Kix cannot see.
+    pub revisions: Option<Result<RevisionMap, UnreadableMap>>,
     /// `status.waves`, recording per-wave progress for commands waiting on the operator.
     pub waves: Vec<WaveRecord>,
     pub total_waves: usize,
@@ -237,7 +238,8 @@ impl Record {
             revisions: obj
                 .data
                 .pointer(&format!("/status/{REVISIONS_FIELD}"))
-                .and_then(RevisionMap::from_value),
+                .filter(|v| !v.is_null())
+                .map(RevisionMap::read),
             waves: obj
                 .data
                 .pointer("/status/waves")

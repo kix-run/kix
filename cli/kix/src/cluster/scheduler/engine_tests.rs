@@ -876,6 +876,29 @@ async fn a_failed_begin_stops_the_run_before_any_node() {
     assert!(rec.stopped().is_some());
 }
 
+/// A begin that does not answer in time stops the run before any node, so
+/// no object is applied without the revisions that name it.
+#[tokio::test(start_paused = true)]
+async fn a_begin_that_does_not_answer_stops_the_run_before_any_node() {
+    let manifests = vec![m("Deployment", "a", &[])];
+    let ops = Arc::new(ScriptedOps::new());
+    ops.begin_behaviour(Behaviour::Hang);
+    let rec = Arc::new(Recorder::default());
+
+    let err = run(
+        &ops,
+        plan_of(&manifests),
+        &config(quiet_watchdog()),
+        rec.clone(),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(matches!(err, DeployError::BeginFailed { .. }), "{err}");
+    assert_eq!(ops.calls(), vec![Call::Begin]);
+    assert!(rec.best_effort_failures().is_empty());
+}
+
 /// An abort that will not go through is reported, not fatal. The run has
 /// already ended; the error it ends with must still be the real one.
 #[tokio::test(start_paused = true)]

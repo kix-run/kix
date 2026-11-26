@@ -8,9 +8,17 @@ use serde_json::Value;
 
 use super::spec::RevisionSet;
 
-/// The format of `status.revisions` this release reads and writes. A record
-/// in another format reads as having no map.
+/// The format of `status.revisions` this release reads and writes.
 pub const FORMAT: u64 = 1;
+
+/// A `status.revisions` this release cannot read: it does not parse, or it
+/// is in a format a later release wrote. The record may name revisions this
+/// release cannot see, so nothing may delete revisions on its account.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("its `status.revisions` {reason}")]
+pub struct UnreadableMap {
+    pub reason: String,
+}
 
 /// The revisions one Activation record names.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,11 +57,22 @@ impl RevisionMap {
         }
     }
 
-    /// Read `status.revisions`. Return `None` when it does not parse or is
-    /// in a format this release does not read.
-    pub fn from_value(value: &Value) -> Option<RevisionMap> {
-        let stored: Stored = serde_json::from_value(value.clone()).ok()?;
-        (stored.format == FORMAT).then_some(RevisionMap {
+    /// Read `status.revisions`. Refuse a value that does not parse or is in
+    /// a format this release does not read.
+    pub fn read(value: &Value) -> Result<RevisionMap, UnreadableMap> {
+        let format = value.get("format").and_then(Value::as_u64);
+        if format.is_some_and(|f| f != FORMAT) {
+            return Err(UnreadableMap {
+                reason: format!(
+                    "is in format {}, and this version of Kix reads format {FORMAT}",
+                    format.unwrap_or_default()
+                ),
+            });
+        }
+        let stored: Stored = serde_json::from_value(value.clone()).map_err(|e| UnreadableMap {
+            reason: format!("does not parse: {e}"),
+        })?;
+        Ok(RevisionMap {
             instances: stored.instances,
             cluster_level: stored.cluster_level,
             kept_orphans: stored.kept_orphans,

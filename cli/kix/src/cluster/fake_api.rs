@@ -28,6 +28,7 @@
 //! is answered, which models a concurrent writer between a read and a delete.
 //! [`FakeApi::on_apply`] changes what the next apply of an object stores,
 //! which models a CRD's pruning or a mutating admission webhook.
+//! [`FakeApi::on_create`] does the same for the next create of an object.
 //! [`FakeApi::fail_next`] answers the next requests for one path with a
 //! plain-text error, as the apiserver does for a path it has not registered.
 //! [`FakeApi::serve_retired_records`] adds the Activation kind under a
@@ -125,6 +126,7 @@ struct State {
     requests: Vec<String>,
     after_get: Vec<(String, Hook)>,
     on_apply: Vec<(String, Hook)>,
+    on_create: Vec<(String, Hook)>,
     /// `(path, remaining, status)`: answer that many requests for `path`
     /// with `status` and a plain-text body.
     failures: Vec<(String, u32, u16)>,
@@ -304,6 +306,16 @@ impl FakeApi {
             .lock()
             .unwrap()
             .on_apply
+            .push((name.to_string(), Box::new(f)));
+    }
+
+    /// Run `f` on what the next create (POST) of the object named `name`
+    /// stores and answers.
+    pub fn on_create(&self, name: &str, f: impl FnOnce(&mut Value) + Send + 'static) {
+        self.state
+            .lock()
+            .unwrap()
+            .on_create
             .push((name.to_string(), Box::new(f)));
     }
 
@@ -582,6 +594,11 @@ impl FakeApi {
                 meta["resourceVersion"] = json!(rv);
                 if let Some(ns) = &target.namespace {
                     meta["namespace"] = json!(ns);
+                }
+                let name = meta["name"].as_str().unwrap_or_default().to_string();
+                if let Some(h) = st.on_create.iter().position(|(n, _)| *n == name) {
+                    let (_, hook) = st.on_create.remove(h);
+                    hook(&mut obj);
                 }
                 st.objects.push(obj.clone());
                 (201, obj)

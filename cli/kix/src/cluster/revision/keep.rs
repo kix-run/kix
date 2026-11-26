@@ -1,20 +1,27 @@
 //! Which revisions Kix still needs, and the cleanup of the rest.
 //!
-//! Only a run that holds the deploy lock cleans up. Lock holders write a
-//! record before they create the revisions it names, and [`clean`] lists the
-//! revisions before it lists the records. So a revision that [`clean`] lists
-//! was either named by a record it then lists, or by none that a lock holder
-//! can still write, and no age rule is needed.
+//! Only a run that holds the deploy lock creates revisions, writes the map
+//! that names them, or cleans up. A run creates its revisions before it
+//! writes the map, so a revision no record names is either left over from a
+//! run that stopped in between, which nothing needs, or belongs to the lock
+//! holder that runs the cleanup, which writes its map before it cleans.
+//! Records and revisions are both selected by their `kix.run/cluster` label.
+//!
+//! The cleanup fails closed. It refuses when the record list cannot be read,
+//! when a record's map cannot be read, or when the record the head calls
+//! current, or the record the lock holder deploys, is missing from the list.
 
 use std::collections::BTreeSet;
 
 use kube::Client;
 use thiserror::Error;
 
+use super::map::UnreadableMap;
 use super::store::{RevisionError, Revisions};
 use crate::cluster::activation::{Record, Records, RecordsError};
 use crate::cluster::errors::describe;
 use crate::cluster::head::{self, HeadStatus};
+use crate::manifest::keys;
 use crate::manifest::lifecycle::PHASE_SUPERSEDED;
 
 /// Return the names of the revisions that must stay: every revision named by
@@ -25,21 +32,33 @@ use crate::manifest::lifecycle::PHASE_SUPERSEDED;
 ///
 /// A `Superseded` record keeps none: a rollback to it writes its revisions
 /// again from its build. A record with no `status.revisions` names none.
-pub fn needed(head: Option<&HeadStatus>, records: &[Record]) -> BTreeSet<String> {
+/// Refuse when a record's map cannot be read, because it may name
+/// revisions this release cannot see.
+pub fn needed(
+    head: Option<&HeadStatus>,
+    records: &[Record],
+) -> Result<BTreeSet<String>, CleanError> {
     let current = head.and_then(|h| h.current.as_deref());
     let deploying = head
         .and_then(|h| h.lock.as_ref())
         .and_then(|l| l.activation.as_deref());
-    records
-        .iter()
-        .filter(|r| {
-            r.phase != PHASE_SUPERSEDED
-                || Some(r.name.as_str()) == current
-                || Some(r.name.as_str()) == deploying
-        })
-        .filter_map(|r| r.revisions.as_ref())
-        .flat_map(|map| map.names().map(str::to_string))
-        .collect()
+    let mut names = BTreeSet::new();
+    for record in records {
+        let Some(map) = &record.revisions else {
+            continue;
+        };
+        let map = map.as_ref().map_err(|source| CleanError::UnreadableMap {
+            record: record.name.clone(),
+            source: source.clone(),
+        })?;
+        if record.phase != PHASE_SUPERSEDED
+            || Some(record.name.as_str()) == current
+            || Some(record.name.as_str()) == deploying
+        {
+            names.extend(map.names().map(str::to_string));
+        }
+    }
+    Ok(names)
 }
 
 /// Why [`clean`] stopped.
@@ -58,10 +77,24 @@ pub enum CleanError {
         #[source]
         source: kube::Error,
     },
+    #[error(
+        "deployment record `{record}` cannot be read by this version of Kix: {source}. A later version of Kix probably wrote it. This version deletes no revisions, and a version that reads the record can delete them"
+    )]
+    UnreadableMap {
+        record: String,
+        #[source]
+        source: UnreadableMap,
+    },
+    #[error(
+        "the ActivationHead of Kix cluster {cluster} names deployment record `{record}`, but no deployment record of that name carries the label `{}={cluster}`. Kix deletes no revisions until it can see that record",
+        keys::CLUSTER_LABEL
+    )]
+    MissingRecord { cluster: String, record: String },
 }
 
 /// Return the revisions of Kix cluster `cluster` that [`needed`] does not
-/// name. List the revisions first, then the records, then the head.
+/// name, readable or not. List the revisions first, then the records, then
+/// the head.
 pub async fn unneeded(
     client: &Client,
     records: &Records,
@@ -75,11 +108,24 @@ pub async fn unneeded(
             cluster: cluster.to_string(),
             source,
         })?;
-    let keep = needed(head.as_ref().and_then(|h| h.status.as_ref()), &listed);
+    let status = head.as_ref().and_then(|h| h.status.as_ref());
+    let current = status.and_then(|h| h.current.as_deref());
+    let deploying = status
+        .and_then(|h| h.lock.as_ref())
+        .and_then(|l| l.activation.as_deref());
+    for record in current.into_iter().chain(deploying) {
+        if !listed.iter().any(|r| r.name == record) {
+            return Err(CleanError::MissingRecord {
+                cluster: cluster.to_string(),
+                record: record.to_string(),
+            });
+        }
+    }
+    let keep = needed(status, &listed)?;
     Ok(revisions
-        .into_iter()
-        .map(|r| r.name)
-        .filter(|name| !keep.contains(name))
+        .names()
+        .filter(|name| !keep.contains(*name))
+        .map(str::to_string)
         .collect())
 }
 

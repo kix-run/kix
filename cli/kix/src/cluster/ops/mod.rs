@@ -172,7 +172,7 @@ pub(crate) trait DeployRecord: Send + Sync + 'static {
     /// always served, because taking the deploy lock installed it.
     ///
     /// Returns an error to stop the run before its first node when a record is
-    /// configured but cannot be written ([`RecordWriteError::Domain`]).
+    /// configured but it or the revisions it names cannot be written.
     async fn begin(&self) -> Result<(), RecordWriteError>;
 
     /// Record progress. `applied` and `failed` are running totals.
@@ -336,9 +336,22 @@ pub(crate) enum RecordWriteError {
     /// The deploy lock could not be written at the commit point.
     #[error(transparent)]
     Commit(super::head::CommitError),
+    /// The run's record could not be created before the first node.
+    #[error("cannot create deployment record `{name}`: {source}")]
+    Create {
+        name: String,
+        #[source]
+        source: ApplyError,
+    },
     /// A revision the record names could not be created.
     #[error(transparent)]
     Revisions(super::revision::RevisionError),
+    /// The list of objects a deploy left on the cluster could not be read
+    /// or written, so finalizing would lose track of them.
+    #[error(
+        "cannot record the objects this deploy left on the cluster: {0}. The deploy is not marked finished, so the next deploy or `kix gc` still sees the objects it left"
+    )]
+    KeptOrphans(String),
     /// The write did not answer within the implementation's bound.
     #[error("no answer within {}s", .0.as_secs())]
     NoAnswer(Duration),

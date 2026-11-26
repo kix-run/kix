@@ -47,6 +47,39 @@ pub enum RevisionError {
     },
     #[error(transparent)]
     Read(#[from] ReadError),
+    #[error(
+        "the Kubernetes API server stored {KIND} `{name}` with a different `spec` from the one Kix sent. The installed definition `{}` does not match this version of Kix, so it drops or changes fields this version writes. Check whether someone edited the definition or another version of Kix installed it",
+        crd_name()
+    )]
+    StoredDifferently { name: String },
+}
+
+/// The revisions one list request returned.
+#[derive(Debug)]
+pub struct Listed {
+    /// The revisions that match their names, sorted by name.
+    pub readable: Vec<Revision>,
+    /// The revisions that cannot be read, sorted by name.
+    pub unreadable: Vec<ReadError>,
+}
+
+impl Listed {
+    /// Return the name of every listed revision, readable or not.
+    pub fn names(&self) -> impl Iterator<Item = &str> {
+        self.readable
+            .iter()
+            .map(|r| r.name.as_str())
+            .chain(self.unreadable.iter().map(ReadError::name))
+    }
+
+    /// Return the readable revisions, or the first error when any revision
+    /// cannot be read. Use it where a revision decides what Kix owns.
+    pub fn all_readable(self) -> Result<Vec<Revision>, ReadError> {
+        match self.unreadable.into_iter().next() {
+            Some(e) => Err(e),
+            None => Ok(self.readable),
+        }
+    }
 }
 
 /// The revisions on one Kubernetes cluster.
@@ -64,6 +97,10 @@ impl Revisions {
     /// server drops `status` on a create, so write applied hashes with
     /// [`Revisions::write_applied`]. A revision of the same name counts as
     /// created, because the name is a hash of the `spec`.
+    ///
+    /// Refuse when the server stored a `spec` other than the one sent. The
+    /// definition prunes fields it does not know, and a revision whose
+    /// stored `spec` no longer matches its name cannot be read.
     pub async fn create(&self, revision: &Revision) -> Result<Created, RevisionError> {
         let obj = json!({
             "apiVersion": keys::API_VERSION,
@@ -76,7 +113,17 @@ impl Revisions {
         });
         let obj: DynamicObject = serde_json::from_value(obj).expect("a revision is an object");
         match self.api.create(&PostParams::default(), &obj).await {
-            Ok(_) => Ok(Created::Created),
+            Ok(stored) => {
+                let sent =
+                    serde_json::to_value(&revision.spec).expect("a revision spec serializes");
+                if stored.data.get("spec") == Some(&sent) {
+                    Ok(Created::Created)
+                } else {
+                    Err(RevisionError::StoredDifferently {
+                        name: revision.name.clone(),
+                    })
+                }
+            }
             Err(kube::Error::Api(e)) if e.code == 409 => Ok(Created::Exists),
             Err(source) => Err(RevisionError::Api {
                 action: "create",
@@ -100,37 +147,37 @@ impl Revisions {
         Ok(found.as_ref().map(Revision::from_object).transpose()?)
     }
 
-    /// Read every revision of Kix cluster `cluster`. Refuse when any of
-    /// them does not match its name.
-    pub async fn list(&self, cluster: &str) -> Result<Vec<Revision>, RevisionError> {
+    /// Read every revision of Kix cluster `cluster`.
+    pub async fn list(&self, cluster: &str) -> Result<Listed, RevisionError> {
         let params = ListParams::default().labels(&format!("{}={cluster}", keys::CLUSTER_LABEL));
         self.list_with(&params, format!("Kix cluster {cluster}"))
             .await
     }
 
     /// Read every revision on the Kubernetes cluster, of every Kix cluster.
-    /// Refuse when any of them does not match its name.
-    pub async fn list_all(&self) -> Result<Vec<Revision>, RevisionError> {
+    pub async fn list_all(&self) -> Result<Listed, RevisionError> {
         self.list_with(&ListParams::default(), "every Kix cluster".into())
             .await
     }
 
-    async fn list_with(
-        &self,
-        params: &ListParams,
-        scope: String,
-    ) -> Result<Vec<Revision>, RevisionError> {
+    async fn list_with(&self, params: &ListParams, scope: String) -> Result<Listed, RevisionError> {
         let list = match self.api.list(params).await {
             Ok(list) => list,
             Err(source) => return Err(RevisionError::List { scope, source }),
         };
-        let mut revisions = list
-            .items
-            .iter()
-            .map(Revision::from_object)
-            .collect::<Result<Vec<_>, _>>()?;
-        revisions.sort_by(|a, b| a.name.cmp(&b.name));
-        Ok(revisions)
+        let (mut readable, mut unreadable) = (Vec::new(), Vec::new());
+        for item in &list.items {
+            match Revision::from_object(item) {
+                Ok(revision) => readable.push(revision),
+                Err(e) => unreadable.push(e),
+            }
+        }
+        readable.sort_by(|a, b| a.name.cmp(&b.name));
+        unreadable.sort_by(|a, b| a.name().cmp(b.name()));
+        Ok(Listed {
+            readable,
+            unreadable,
+        })
     }
 
     /// Add `applied` to `status.applied` of revision `name`, as a merge

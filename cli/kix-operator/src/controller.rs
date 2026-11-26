@@ -769,10 +769,12 @@ async fn sweep(
         return Ok(None);
     }
 
-    // The revisions are labelled with the record's Kix cluster, which the
-    // cleanup lists them by. A record that names none gets no revisions.
-    let revisions = cluster_of(activation)
-        .map(|cluster| RevisionSet::of_applied(&cluster, &graph, operator_applies));
+    // The revisions name the whole build, as the CLI's do, so both name the
+    // same revisions for one build. What the operator leaves out shows as an
+    // object with no applied hash. The revisions are labelled with the
+    // record's Kix cluster, which the cleanup lists them by. A record that
+    // names none gets no revisions.
+    let revisions = cluster_of(activation).map(|cluster| RevisionSet::of(&cluster, &graph));
     LivePlan::sweep(client, activation, &managed_manifests, revisions)
         .await
         .map(Some)

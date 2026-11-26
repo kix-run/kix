@@ -424,30 +424,27 @@ impl<'a> Run<'a> {
     }
 
     /// Begin the Activation record, stopping the run before any resource is
-    /// applied if the record cannot be written.
+    /// applied if the record and its revisions cannot be written in time.
     async fn begin(&mut self) -> Result<(), DeployError> {
         // No nodes are in flight yet, so awaiting inline cannot block node tasks.
         let Some(record) = &self.record else {
             return Ok(());
         };
-        match tokio::time::timeout(INLINE_BEST_EFFORT_TIMEOUT, record.begin()).await {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => {
-                let message = e.to_string();
-                self.emit(DeployEvent::Stopped {
-                    reason: message.clone(),
-                });
-                return Err(DeployError::BeginFailed {
-                    message,
-                    partial: self.partial(),
-                });
-            }
-            Err(_) => self.emit(DeployEvent::BestEffortFailed {
-                what: "activation begin".into(),
-                message: format!("no answer within {}s", INLINE_BEST_EFFORT_TIMEOUT.as_secs()),
-            }),
-        }
-        Ok(())
+        let message = match tokio::time::timeout(INLINE_BEST_EFFORT_TIMEOUT, record.begin()).await {
+            Ok(Ok(())) => return Ok(()),
+            Ok(Err(e)) => e.to_string(),
+            Err(_) => format!(
+                "the deployment record did not answer within {}s",
+                INLINE_BEST_EFFORT_TIMEOUT.as_secs()
+            ),
+        };
+        self.emit(DeployEvent::Stopped {
+            reason: message.clone(),
+        });
+        Err(DeployError::BeginFailed {
+            message,
+            partial: self.partial(),
+        })
     }
 
     /// Execute plan nodes up to `concurrency` at a time until no nodes are

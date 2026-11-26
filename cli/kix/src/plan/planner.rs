@@ -1218,6 +1218,12 @@ impl<'a> Planner<'a> {
             baseline.ran(),
         )
         .map_err(PlanError::Unshown)?;
+        // Before the lock is taken, so a build no deploy can record stops
+        // here with a message that names the instance.
+        let revisions = RevisionSet::of(cluster, new_graph);
+        revisions
+            .check_size()
+            .map_err(|e| PlanError::RevisionTooLarge(Box::new(e)))?;
 
         Ok(CheckedPlan {
             flags: self.flags.clone(),
@@ -1233,7 +1239,7 @@ impl<'a> Planner<'a> {
             consumed_failed,
             cluster: cluster.to_string(),
             old_manifests: baseline.manifests(),
-            revisions: RevisionSet::of(cluster, new_graph),
+            revisions,
             target_checks: TargetChecks::of(new_graph),
             left_alone: selection.as_ref().map(|s| s.left_alone),
             needed: selection.map(|s| s.needed).unwrap_or_default(),

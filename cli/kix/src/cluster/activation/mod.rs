@@ -253,10 +253,13 @@ fn has_deployed(item: &DynamicObject) -> bool {
     is_current_phase(read_phase(item)) || Record::of(item).was_ever_current()
 }
 
+const MANAGED_BY_LABEL: &str = "app.kubernetes.io/managed-by";
+const MANAGED_BY: &str = "kix";
+
 /// Build the label selector matching all Activation records for `cluster`.
 fn cluster_selector(cluster: &str) -> String {
     format!(
-        "app.kubernetes.io/managed-by=kix,{}={cluster}",
+        "{MANAGED_BY_LABEL}={MANAGED_BY},{}={cluster}",
         keys::CLUSTER_LABEL
     )
 }
@@ -330,15 +333,14 @@ impl Records {
         }
     }
 
-    /// List every record of `cluster`, or none when the Activation CRD is
-    /// not installed.
+    /// List every record of `cluster` by its `kix.run/cluster` label alone,
+    /// the label revisions are listed by. The deploy lock and the cleanup of
+    /// revisions decide from this list, so a list that fails, even with a
+    /// 404, is an error. Taking the lock installs the record's kind.
     pub(crate) async fn of_cluster(&self, cluster: &str) -> Result<Vec<Record>, RecordsError> {
-        let lp = ListParams::default().labels(&cluster_selector(cluster));
-        match self.api().list(&lp).await {
-            Ok(list) => Ok(list.items.iter().map(Record::of).collect()),
-            Err(kube::Error::Api(e)) if e.code == 404 => Ok(Vec::new()),
-            Err(e) => Err(RecordsError::list(e)),
-        }
+        let lp = ListParams::default().labels(&format!("{}={cluster}", keys::CLUSTER_LABEL));
+        let list = self.api().list(&lp).await.map_err(RecordsError::list)?;
+        Ok(list.items.iter().map(Record::of).collect())
     }
 
     /// Make the phases agree with the head after a deploy stopped between
@@ -673,11 +675,17 @@ impl Records {
     }
 
     /// Mark a record Superseded, and clear the `status.partial` that a
-    /// `Partial` record has.
+    /// `Partial` record has and its `status.revisions`. A Superseded record
+    /// keeps no revisions, so a map would name revisions the cleanup may
+    /// delete. A later deploy of the record writes its map again.
     pub async fn supersede(&self, name: &str) -> Result<(), RecordsError> {
         self.patch_status(
             name,
-            &json!({ "status": { "phase": PHASE_SUPERSEDED, PARTIAL_FIELD: null } }),
+            &json!({ "status": {
+                "phase": PHASE_SUPERSEDED,
+                PARTIAL_FIELD: null,
+                REVISIONS_FIELD: null,
+            } }),
         )
         .await?;
         tracing::info!(activation = %name, "marked as Superseded");
@@ -707,14 +715,17 @@ impl Records {
         Ok(())
     }
 
-    /// Clear `status.orphansKeptFrom` on `name` after its orphans have been
-    /// deleted.
-    pub async fn clear_orphans_kept_from(&self, name: &str) -> Result<(), RecordsError> {
-        self.patch_status(
-            name,
-            &json!({ "status": { keys::ORPHANS_KEPT_FROM_FIELD: Value::Null } }),
-        )
-        .await
+    /// Clear `status.orphansKeptFrom` on `record` after its orphans have
+    /// been deleted, and in the same write remove the kept-orphans revision
+    /// from its map, which lists the same objects. A map this release
+    /// cannot read is left as it is.
+    pub async fn clear_orphans_kept_from(&self, record: &Record) -> Result<(), RecordsError> {
+        let mut status = json!({ keys::ORPHANS_KEPT_FROM_FIELD: Value::Null });
+        if let Some(Ok(_)) = &record.revisions {
+            status[REVISIONS_FIELD] = json!({ "keptOrphans": null });
+        }
+        self.patch_status(&record.name, &json!({ "status": status }))
+            .await
     }
 
     /// Verify that the client has permission to list Activation records.
@@ -967,6 +978,7 @@ impl Records {
         let spec_patch = json!({
             "metadata": {
                 "labels": {
+                    MANAGED_BY_LABEL: MANAGED_BY,
                     keys::CLUSTER_LABEL: cluster_name,
                 },
                 "annotations": annotations,
@@ -1081,13 +1093,18 @@ impl Records {
     /// `status.partial`.
     ///
     /// `revisions` goes to `status.revisions` in the same write as the
-    /// phase, so a record never shows a deploy without the revisions it
-    /// names. The caller creates the revisions after this write. The
-    /// `keptOrphans` entry is left as it is, because only a finished deploy
-    /// changes it ([`Records::record_finish`]).
+    /// phase. The caller creates the revisions before this write, so a
+    /// record names only revisions that exist. The `keptOrphans` entry is
+    /// left as it is, because only a finished deploy changes it
+    /// ([`Records::record_finish`]).
+    ///
+    /// Before that write, give the record the labels it lacks, so the
+    /// cleanup of revisions, which lists records by `kix.run/cluster`, sees
+    /// it. A record the operator deploys may have been written without them.
     pub(crate) async fn begin_deploy(
         &self,
         activation_name: &str,
+        cluster: &str,
         total_waves: usize,
         revisions: Option<&RevisionMap>,
     ) -> Result<Vec<String>, RecordsError> {
@@ -1096,6 +1113,28 @@ impl Records {
             .get(activation_name)
             .await
             .map_err(RecordsError::on("get", activation_name))?;
+        let labels = item.metadata.labels.clone().unwrap_or_default();
+        let wanted = [
+            (MANAGED_BY_LABEL, MANAGED_BY),
+            (keys::CLUSTER_LABEL, cluster),
+        ];
+        if wanted
+            .iter()
+            .any(|(key, value)| labels.get(*key).map(String::as_str) != Some(*value))
+        {
+            let labels: serde_json::Map<String, Value> = wanted
+                .iter()
+                .map(|(key, value)| ((*key).to_string(), json!(value)))
+                .collect();
+            self.api()
+                .patch(
+                    activation_name,
+                    &PatchParams::default(),
+                    &Patch::Merge(&json!({ "metadata": { "labels": labels } })),
+                )
+                .await
+                .map_err(RecordsError::on("patch", activation_name))?;
+        }
         let current = read_phase(&item);
         let earlier_only = Record::of(&item)
             .partial

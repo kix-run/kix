@@ -157,6 +157,9 @@ pub enum PlanEvent<'a> {
 pub enum PlanError {
     #[error("failed to connect to cluster: {0}")]
     Connect(Box<FetchError>),
+    /// A revision of the build would be too large to store on the cluster.
+    #[error("{0}")]
+    RevisionTooLarge(Box<crate::cluster::revision::TooLarge>),
     /// The build is bound to another Kubernetes cluster, names none while
     /// this one accepts only builds that name it, or would deploy a cluster
     /// that Kix 0.6 named `cluster` under a new name.

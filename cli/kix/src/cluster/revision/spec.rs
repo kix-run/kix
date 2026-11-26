@@ -21,6 +21,18 @@ const HASH_LEN: usize = 32;
 /// Longest name Kubernetes accepts for a cluster-scoped object.
 const MAX_NAME: usize = 253;
 
+/// The largest object the API server can store: etcd's default request
+/// limit (`--max-request-bytes`), which Kubernetes clusters keep.
+pub const MAX_BYTES: usize = 1_572_864;
+
+/// Room each object takes in `status.applied` once Kix writes its hashes:
+/// two 32-digit hashes and their punctuation, and the entry that records
+/// who wrote it in `metadata.managedFields`.
+const APPLIED_BYTES: usize = 120;
+
+/// Room for `apiVersion`, `kind`, and `metadata`.
+const OVERHEAD_BYTES: usize = 4096;
+
 /// One object of a revision.
 ///
 /// The field order is the sort order, so objects sort by build hash first.
@@ -143,7 +155,38 @@ pub enum ReadError {
     Malformed { name: String, reason: String },
 }
 
+/// A revision too large for the API server to store.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "{what} has {objects} objects, too many for Kix to record in one {} object: it would take about {bytes} bytes, and Kubernetes stores at most {MAX_BYTES} bytes in one object. {next}",
+    super::KIND
+)]
+pub struct TooLarge {
+    /// What the revision covers, such as `package instance apps/web`.
+    pub what: String,
+    pub objects: usize,
+    pub bytes: usize,
+    /// What a user can do about it.
+    pub next: &'static str,
+}
+
+impl ReadError {
+    /// Return the name of the revision that cannot be read.
+    pub fn name(&self) -> &str {
+        match self {
+            ReadError::NameMismatch { name, .. } | ReadError::Malformed { name, .. } => name,
+        }
+    }
+}
+
 impl Revision {
+    /// Return how many bytes the revision takes on the cluster once every
+    /// object has an applied hash, as an upper estimate.
+    pub fn stored_bytes(&self) -> usize {
+        let spec = serde_json::to_vec(&self.spec).expect("a revision spec serializes");
+        spec.len() + self.spec.objects.len() * APPLIED_BYTES + OVERHEAD_BYTES
+    }
+
     /// Return a new revision of `spec`, named for it, with no applied
     /// hashes.
     pub fn new(spec: RevisionSpec) -> Revision {
@@ -202,24 +245,11 @@ impl RevisionSet {
     /// and hash change with every build, so including it would give the
     /// cluster level a new revision on every deploy.
     pub fn of(cluster: &str, graph: &StoreGraph) -> RevisionSet {
-        RevisionSet::of_applied(cluster, graph, |_| true)
-    }
-
-    /// Split the objects of `graph` as [`RevisionSet::of`] does, keeping only
-    /// those whose manifest `applies` accepts. The operator applies a build
-    /// without its CustomResourceDefinitions, and its revisions name only
-    /// what it applies.
-    pub fn of_applied(
-        cluster: &str,
-        graph: &StoreGraph,
-        applies: impl Fn(&Value) -> bool,
-    ) -> RevisionSet {
         let groups = InstanceGroups::of(graph);
         let object = |path: &Path| {
             graph
                 .resources
                 .get(path)
-                .filter(|node| applies(&node.manifest))
                 .map(|node| RevisionObject::of(path, &node.manifest))
         };
         let instances = groups
@@ -254,6 +284,36 @@ impl RevisionSet {
                 Slot::ClusterLevel,
                 cluster_objects,
             )),
+        }
+    }
+
+    /// Refuse a set with a revision too large for the API server to store,
+    /// naming the first such instance.
+    pub fn check_size(&self) -> Result<(), TooLarge> {
+        let too_large = |what: String, next: &'static str, revision: &Revision| {
+            let bytes = revision.stored_bytes();
+            (bytes > MAX_BYTES).then_some(TooLarge {
+                what,
+                objects: revision.spec.objects.len(),
+                bytes,
+                next,
+            })
+        };
+        let instances = self.instances.iter().filter_map(|(key, revision)| {
+            too_large(
+                format!("package instance {key}"),
+                "Split the instance into several instances, then plan again.",
+                revision,
+            )
+        });
+        let cluster_level = too_large(
+            "the part of the build that belongs to no package instance".into(),
+            "Move some of these objects into package instances, then plan again.",
+            &self.cluster_level,
+        );
+        match instances.chain(cluster_level).next() {
+            Some(e) => Err(e),
+            None => Ok(()),
         }
     }
 

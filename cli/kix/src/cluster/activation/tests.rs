@@ -906,24 +906,100 @@ mod revision_map_tests {
         let api = FakeApi::new([record("c-new")]);
         let records = records_with(&api).await;
         records
-            .begin_deploy("c-new", 1, Some(&map(None)))
+            .begin_deploy("c-new", "c", 1, Some(&map(None)))
             .await
             .unwrap();
         let read = records.get("c-new").await.unwrap().unwrap();
         assert_eq!(read.phase, PHASE_DEPLOYING);
-        assert_eq!(read.revisions, Some(map(None)));
+        assert_eq!(read.revisions, Some(Ok(map(None))));
 
         let status = &records.api().get("c-new").await.unwrap().data["status"];
         assert_eq!(status["revisions"]["format"], json!(1));
         assert_eq!(status["revisions"]["clusterLevel"], "c-3");
         assert_eq!(status["revisions"]["instances"]["app/web"], "c-1");
         assert!(status.get(keys::PACKAGE_INDEX_FIELD).is_none(), "{status}");
-        let patches: Vec<String> = api
-            .requests()
-            .into_iter()
-            .filter(|r| r.starts_with("PATCH"))
-            .collect();
-        assert_eq!(patches.len(), 1, "{patches:?}");
+        let patches = |api: &FakeApi| -> Vec<String> {
+            api.requests()
+                .into_iter()
+                .filter(|r| r.starts_with("PATCH"))
+                .collect()
+        };
+        assert_eq!(patches(&api).len(), 2, "labels, then status");
+
+        // A second begin finds the labels and writes only the status.
+        let api = FakeApi::new([record("c-new")]);
+        let records = records_with(&api).await;
+        records
+            .begin_deploy("c-new", "c", 1, Some(&map(None)))
+            .await
+            .unwrap();
+        records
+            .begin_deploy("c-new", "c", 1, Some(&map(None)))
+            .await
+            .unwrap();
+        assert_eq!(patches(&api).len(), 3, "{:?}", patches(&api));
+    }
+
+    /// `begin_deploy` gives a record without Kix's labels both of them, so
+    /// the cleanup of revisions, which lists records by the cluster label,
+    /// sees the record. A record applied by hand may lack them.
+    #[tokio::test]
+    async fn begin_deploy_labels_a_record_that_lacks_the_labels() {
+        let api = FakeApi::new([record("c-new")]);
+        let records = records_with(&api).await;
+        records.begin_deploy("c-new", "c", 1, None).await.unwrap();
+        let labels = &records.api().get("c-new").await.unwrap().metadata.labels;
+        let labels = labels.clone().unwrap_or_default();
+        assert_eq!(
+            labels.get(keys::CLUSTER_LABEL).map(String::as_str),
+            Some("c")
+        );
+        assert_eq!(
+            labels
+                .get("app.kubernetes.io/managed-by")
+                .map(String::as_str),
+            Some("kix")
+        );
+        assert_eq!(records.of_cluster("c").await.unwrap().len(), 1);
+    }
+
+    /// Clearing the kept orphans after gc deleted them also removes the
+    /// kept-orphans revision from the record's map, and leaves the rest of
+    /// the map. A record with no map does not gain one.
+    #[tokio::test]
+    async fn clearing_the_kept_orphans_removes_their_revision_from_the_map() {
+        let api = FakeApi::new([record("c-new"), record("c-old")]);
+        let records = records_with(&api).await;
+        records
+            .record_finish("c", "c-new", None, None, &[], Some(&map(Some("c-4"))))
+            .await
+            .unwrap();
+        let read = records.get("c-new").await.unwrap().unwrap();
+        records.clear_orphans_kept_from(&read).await.unwrap();
+        let read = records.get("c-new").await.unwrap().unwrap();
+        assert_eq!(read.revisions, Some(Ok(map(None))));
+
+        let old = records.get("c-old").await.unwrap().unwrap();
+        records.clear_orphans_kept_from(&old).await.unwrap();
+        let status = &records.api().get("c-old").await.unwrap().data["status"];
+        assert!(status.get("revisions").is_none(), "{status}");
+    }
+
+    /// Superseding a record clears its map, because a Superseded record
+    /// keeps no revisions. A requeued record then has no map until a run
+    /// deploys it.
+    #[tokio::test]
+    async fn superseding_a_record_clears_its_map() {
+        let api = FakeApi::new([record("c-new")]);
+        let records = records_with(&api).await;
+        records
+            .record_finish("c", "c-new", None, None, &[], Some(&map(Some("c-4"))))
+            .await
+            .unwrap();
+        records.supersede("c-new").await.unwrap();
+        assert_eq!(records.get("c-new").await.unwrap().unwrap().revisions, None);
+        records.requeue("c-new", "r1").await.unwrap();
+        assert_eq!(records.get("c-new").await.unwrap().unwrap().revisions, None);
     }
 
     /// A deploy that begins again on a record keeps the kept orphans a
@@ -938,23 +1014,23 @@ mod revision_map_tests {
             .await
             .unwrap();
         records
-            .begin_deploy("c-new", 1, Some(&map(None)))
+            .begin_deploy("c-new", "c", 1, Some(&map(None)))
             .await
             .unwrap();
         let read = records.get("c-new").await.unwrap().unwrap();
-        assert_eq!(read.revisions, Some(map(Some("c-4"))));
+        assert_eq!(read.revisions, Some(Ok(map(Some("c-4")))));
 
         records
             .record_finish("c", "c-new", None, None, &[], Some(&map(None)))
             .await
             .unwrap();
         let read = records.get("c-new").await.unwrap().unwrap();
-        assert_eq!(read.revisions, Some(map(None)));
+        assert_eq!(read.revisions, Some(Ok(map(None))));
     }
 
     /// A record an earlier Kix wrote has a package index and no map. The
     /// index still reads, and a map in a format this release does not know
-    /// reads as none.
+    /// reads as unreadable, not as no map.
     #[tokio::test]
     async fn an_earlier_records_index_still_reads() {
         let index = RecordPackageIndex {
@@ -979,7 +1055,8 @@ mod revision_map_tests {
         let records = records_with(&api).await;
         let read = records.get("c-old").await.unwrap().unwrap();
         assert_eq!(read.package_index, Some(index));
-        assert_eq!(read.revisions, None);
+        let unreadable = read.revisions.unwrap().unwrap_err().to_string();
+        assert!(unreadable.contains("format 2"), "{unreadable}");
     }
 }
 
@@ -1101,7 +1178,7 @@ mod partial_tests {
         assert!(after["partial"]["at"].is_string(), "{after}");
         assert!(after.get("failure").is_none(), "{after}");
 
-        let earlier = records.begin_deploy("new", 1, None).await.unwrap();
+        let earlier = records.begin_deploy("new", "c", 1, None).await.unwrap();
         assert_eq!(earlier, ["app/a", "web/b"]);
         let during = status(&api, "new");
         assert_eq!(during["phase"], PHASE_DEPLOYING);
@@ -1128,7 +1205,7 @@ mod partial_tests {
             json!({ "phase": PHASE_PARTIAL, "partial": partial }),
         )]);
         let records = records_with(&api).await;
-        records.begin_deploy("rec", 1, None).await.unwrap();
+        records.begin_deploy("rec", "c", 1, None).await.unwrap();
         records
             .fail_deploy("rec", "Job/migrate failed")
             .await

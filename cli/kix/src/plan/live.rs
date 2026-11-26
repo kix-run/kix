@@ -35,7 +35,7 @@ use crate::cluster::stream::{DeployObserver, DeployResult};
 use crate::cluster::tenancy::Tenancy;
 use crate::legacy_domain::LegacyDomainError;
 use crate::manifest::keys;
-use crate::manifest::types::ResourceId;
+use crate::manifest::types::{ResourceId, to_manifest_value};
 
 /// Return the Kix cluster that `activation` belongs to, reading its
 /// `kix.run/cluster` label before `spec.cluster`.
@@ -148,7 +148,7 @@ impl LivePlan {
             plan,
             orphans,
             shared_orphans,
-            live: sweep.managed.into_iter().map(|obj| obj.data).collect(),
+            live: sweep.managed.iter().map(to_manifest_value).collect(),
             compared: actions.len(),
             foreign: sweep.foreign,
             unattributed: sweep.unattributed.len(),
@@ -501,6 +501,39 @@ mod tests {
         let last_runs = checked.read_last_runs(&client).await.unwrap();
         assert_eq!(last_runs, LastRuns::Read { failed: vec![] });
         assert_eq!(rerun_reasons(checked.plan()), [RerunReason::LastRunFailed]);
+    }
+
+    /// The live objects a sweep keeps are whole manifests, with the
+    /// `metadata` kube holds apart from the rest. The prune orders the
+    /// orphans by them, and the kept-orphans revision reads each one's
+    /// identity hash from them.
+    #[tokio::test]
+    async fn the_sweep_keeps_the_live_objects_metadata() {
+        let mut rec = serde_json::to_value(record("a", "a1")).unwrap();
+        rec["metadata"]["labels"]["app.kubernetes.io/managed-by"] = json!("kix");
+        let api = crate::cluster::fake_api::FakeApi::new([
+            rec.clone(),
+            serde_json::to_value(live("ConfigMap", "stale", "h-stale", "a1")).unwrap(),
+        ]);
+        let activation: DynamicObject = serde_json::from_value(rec).unwrap();
+        let plan = LivePlan::sweep(&api.client(), &activation, &[], None)
+            .await
+            .unwrap();
+        assert_eq!(
+            plan.orphans()
+                .iter()
+                .map(|r| r.name.as_str())
+                .collect::<Vec<_>>(),
+            ["stale"]
+        );
+        let kept: Vec<ResourceId> = plan.live.iter().map(ResourceId::from_value).collect();
+        assert!(kept.contains(&plan.orphans()[0]), "{:?}", plan.live);
+        let manifest = plan
+            .live
+            .iter()
+            .find(|m| ResourceId::from_value(m) == plan.orphans()[0])
+            .unwrap();
+        assert_eq!(keys::get(manifest, keys::IDENTITY_HASH), Some("h-stale"));
     }
 
     /// A record's cluster comes from its label before `spec.cluster`, and

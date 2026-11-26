@@ -248,7 +248,9 @@ async fn a_read_refuses_a_revision_whose_spec_does_not_match_its_name() {
         }
         other => panic!("{other:?}"),
     }
-    let message = store.list(CLUSTER).await.unwrap_err().to_string();
+    let listed = store.list(CLUSTER).await.unwrap();
+    assert_eq!(listed.names().collect::<Vec<_>>(), [rev.name.as_str()]);
+    let message = listed.all_readable().unwrap_err().to_string();
     assert!(message.contains(&rev.name), "{message}");
 }
 
@@ -267,12 +269,12 @@ async fn list_returns_only_the_named_clusters_revisions() {
         .list(CLUSTER)
         .await
         .unwrap()
-        .into_iter()
-        .map(|r| r.name)
+        .names()
+        .map(str::to_string)
         .collect();
     assert_eq!(listed, expected);
-    assert_eq!(store.list("c2").await.unwrap(), vec![theirs]);
-    assert_eq!(store.list_all().await.unwrap().len(), 3);
+    assert_eq!(store.list("c2").await.unwrap().readable, vec![theirs]);
+    assert_eq!(store.list_all().await.unwrap().readable.len(), 3);
 }
 
 #[tokio::test]
@@ -314,27 +316,14 @@ async fn deleting_a_missing_revision_succeeds() {
 }
 
 #[test]
-fn of_applied_names_only_what_the_filter_keeps() {
-    let g = graph(&[web("3"), db()], &namespaces(), "8");
-    let all = RevisionSet::of(CLUSTER, &g);
-    let no_b = RevisionSet::of_applied(CLUSTER, &g, |m| m["metadata"]["name"] != "b");
-    let names =
-        |r: &Revision| -> Vec<String> { r.spec.objects.iter().map(|o| o.name.clone()).collect() };
-    assert_eq!(names(&all.instances["apps/web"]), ["web", "a", "b"]);
-    assert_eq!(names(&no_b.instances["apps/web"]), ["web", "a"]);
-    assert_eq!(all.instances["data/db"], no_b.instances["data/db"]);
-    assert_eq!(all.cluster_level, no_b.cluster_level);
-}
-
-#[test]
 fn a_map_round_trips_and_names_every_revision() {
     let set = RevisionSet::of(CLUSTER, &graph(&[web("3"), db()], &namespaces(), "8"));
     let mut map = RevisionMap::of(&set);
     assert_eq!(map.kept_orphans, None);
     assert_eq!(map.to_value()["keptOrphans"], Value::Null);
-    assert_eq!(RevisionMap::from_value(&map.to_value()), Some(map.clone()));
+    assert_eq!(RevisionMap::read(&map.to_value()), Ok(map.clone()));
     map.kept_orphans = Some("c1-kept".into());
-    assert_eq!(RevisionMap::from_value(&map.to_value()), Some(map.clone()));
+    assert_eq!(RevisionMap::read(&map.to_value()), Ok(map.clone()));
     let mut names: Vec<&str> = map.names().collect();
     names.sort();
     let mut expected: Vec<&str> = set
@@ -347,8 +336,9 @@ fn a_map_round_trips_and_names_every_revision() {
 
     let mut other = map.to_value();
     other["format"] = json!(2);
-    assert_eq!(RevisionMap::from_value(&other), None);
-    assert_eq!(RevisionMap::from_value(&json!({})), None);
+    let later = RevisionMap::read(&other).unwrap_err().to_string();
+    assert!(later.contains("format 2"), "{later}");
+    assert!(RevisionMap::read(&json!({})).is_err());
 }
 
 #[test]
@@ -366,6 +356,58 @@ fn a_manifest_names_its_object_by_its_identity_hash() {
             name: "a".into(),
         })
     );
+}
+
+/// A create whose stored `spec` differs from the one sent, as when the
+/// installed definition prunes a field this version writes, is refused
+/// with a message that names the definition.
+#[tokio::test]
+async fn create_refuses_a_spec_the_server_stored_differently() {
+    let api = FakeApi::new([]);
+    let store = Revisions::new(&api.client());
+    let rev = revision(CLUSTER, "apps/web");
+    api.on_create(&rev.name, |o| {
+        o["spec"]["slot"].as_object_mut().unwrap().remove("name");
+    });
+    let err = store.create(&rev).await.unwrap_err();
+    assert!(
+        matches!(&err, RevisionError::StoredDifferently { name } if *name == rev.name),
+        "{err}"
+    );
+    assert!(err.to_string().contains(&crd_name()), "{err}");
+}
+
+/// A build with an instance too large to store as one revision is refused,
+/// naming the instance and its object count. One that fits passes.
+#[test]
+fn a_revision_too_large_to_store_names_its_instance() {
+    let mut set = RevisionSet::of(CLUSTER, &graph(&[web("3"), db()], &namespaces(), "8"));
+    assert_eq!(set.check_size(), Ok(()));
+    let objects: Vec<RevisionObject> = (0..20_000)
+        .map(|i| RevisionObject {
+            hash: format!("{i:a>32}"),
+            group: String::new(),
+            kind: "ConfigMap".into(),
+            namespace: Some("data".into()),
+            name: format!("config-{i}"),
+        })
+        .collect();
+    let slot = set.instances["data/db"].spec.slot.clone();
+    let big = Revision::new(RevisionSpec::new(CLUSTER, slot, objects));
+    assert!(big.stored_bytes() > MAX_BYTES);
+    set.instances.insert("data/db".into(), big);
+    let err = set.check_size().unwrap_err();
+    assert_eq!(err.objects, 20_000);
+    let message = err.to_string();
+    assert!(message.contains("package instance data/db"), "{message}");
+    assert!(message.contains("Split the instance"), "{message}");
+}
+
+#[test]
+fn the_definition_requires_a_spec() {
+    let definition = crd::definition();
+    let schema = &definition["spec"]["versions"][0]["schema"]["openAPIV3Schema"];
+    assert_eq!(schema["required"], json!(["spec"]));
 }
 
 mod keep_tests {
@@ -389,7 +431,7 @@ mod keep_tests {
         Record {
             name: name.into(),
             phase: phase.into(),
-            revisions: Some(map(name)),
+            revisions: Some(Ok(map(name))),
             ..Default::default()
         }
     }
@@ -413,7 +455,7 @@ mod keep_tests {
     /// Return which of the records' revisions `needed` keeps, as record
     /// names.
     fn kept(head: Option<&HeadStatus>, records: &[Record]) -> Vec<String> {
-        let names = keep::needed(head, records);
+        let names = keep::needed(head, records).unwrap();
         let mut out: Vec<String> = records
             .iter()
             .filter(|r| {
@@ -491,7 +533,7 @@ mod keep_tests {
             phase: PHASE_ACTIVE.into(),
             ..Default::default()
         };
-        assert!(keep::needed(None, &[no_map]).is_empty());
+        assert!(keep::needed(None, &[no_map]).unwrap().is_empty());
     }
 
     fn activation(name: &str, phase: &str, map: &RevisionMap) -> Value {
@@ -533,6 +575,127 @@ mod keep_tests {
             .map(|r| r.name.clone())
             .chain([theirs.name.clone()])
             .collect();
+        expected.sort();
+        assert_eq!(api.names(KIND), expected);
+    }
+
+    async fn records_of(api: &FakeApi) -> Records {
+        let client = api.client();
+        let discovery = crate::cluster::discovery::discover_resources(&client)
+            .await
+            .unwrap();
+        Records::open_installed(&client, &discovery).unwrap()
+    }
+
+    /// Two revisions, one named by an Active record and one by none, and the
+    /// records to list them with.
+    async fn one_needed_one_not(api: &FakeApi) -> (RevisionSet, RevisionSet) {
+        let current = RevisionSet::of(CLUSTER, &graph(&[web("3"), db()], &namespaces(), "8"));
+        let old = RevisionSet::of(CLUSTER, &graph(&[web("9"), db()], &namespaces(), "b"));
+        api.insert(activation("now", PHASE_ACTIVE, &RevisionMap::of(&current)));
+        let store = Revisions::new(&api.client());
+        for rev in current.all().chain(old.all()) {
+            store.create(rev).await.unwrap();
+        }
+        (current, old)
+    }
+
+    /// The cleanup lists records by the cluster label alone, as it lists
+    /// revisions, and refuses when the record the lock holder deploys is
+    /// not in that list. Nothing is deleted.
+    #[tokio::test]
+    async fn clean_refuses_when_the_lock_holders_record_is_not_listed() {
+        let api = FakeApi::new([]);
+        let (current, _) = one_needed_one_not(&api).await;
+        let mut unlabelled = activation("hand", PHASE_ACTIVE, &RevisionMap::of(&current));
+        unlabelled["metadata"]["labels"] = json!({});
+        api.insert(unlabelled);
+        let client = api.client();
+        let lock = crate::cluster::head::take(
+            &client,
+            crate::cluster::head::Request {
+                cluster: CLUSTER.into(),
+                holder: crate::cluster::head::Holder::cli("kix deploy"),
+                purpose: Purpose::Deploy,
+                activation: Some("hand".into()),
+                expect: None,
+            },
+            crate::cluster::head::system_clock(),
+            &|_| {},
+        )
+        .await
+        .unwrap();
+        let records = records_of(&api).await;
+        let before = api.names(KIND);
+        let err = keep::clean(&client, &records, CLUSTER).await.unwrap_err();
+        assert!(
+            matches!(&err, keep::CleanError::MissingRecord { record, .. } if record == "hand"),
+            "{err}"
+        );
+        assert_eq!(api.names(KIND), before);
+
+        // A record without `managed-by` but with the cluster label counts.
+        api.patch_object("Activation", "hand", |o| {
+            o["metadata"]["labels"] = json!({ (keys::CLUSTER_LABEL): CLUSTER });
+        });
+        keep::clean(&client, &records, CLUSTER).await.unwrap();
+        lock.release().await.unwrap();
+        assert!(current.all().all(|r| api.names(KIND).contains(&r.name)));
+    }
+
+    /// A record list that answers 404 is an error, not an empty list, so
+    /// the cleanup deletes nothing.
+    #[tokio::test]
+    async fn clean_refuses_when_the_records_cannot_be_listed() {
+        let api = FakeApi::new([]);
+        one_needed_one_not(&api).await;
+        let records = records_of(&api).await;
+        let before = api.names(KIND);
+        api.fail_next(&format!("/apis/{}/activations", keys::API_VERSION), 1, 404);
+        let err = keep::clean(&api.client(), &records, CLUSTER)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, keep::CleanError::Records(_)), "{err}");
+        assert_eq!(api.names(KIND), before);
+    }
+
+    /// A record with a map this release cannot read, such as one a later
+    /// release wrote in another format, stops the cleanup.
+    #[tokio::test]
+    async fn clean_refuses_a_map_it_cannot_read() {
+        let api = FakeApi::new([]);
+        let (_, old) = one_needed_one_not(&api).await;
+        let mut later = RevisionMap::of(&old).to_value();
+        later["format"] = json!(2);
+        let mut record = activation("later", PHASE_FAILED, &RevisionMap::of(&old));
+        record["status"]["revisions"] = later;
+        api.insert(record);
+        let records = records_of(&api).await;
+        let before = api.names(KIND);
+        let err = keep::clean(&api.client(), &records, CLUSTER)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, keep::CleanError::UnreadableMap { record, .. } if record == "later"),
+            "{err}"
+        );
+        assert_eq!(api.names(KIND), before);
+    }
+
+    /// A revision that cannot be read does not block the cleanup. It is
+    /// deleted by name when no record names it, and the others are cleaned.
+    #[tokio::test]
+    async fn clean_deletes_an_unreadable_revision_by_name() {
+        let api = FakeApi::new([]);
+        let (current, old) = one_needed_one_not(&api).await;
+        let broken = &old.instances["apps/web"].name;
+        api.patch_object(KIND, broken, |o| {
+            o["spec"]["objects"][0]["name"] = json!("changed");
+        });
+        let records = records_of(&api).await;
+        let deleted = keep::clean(&api.client(), &records, CLUSTER).await.unwrap();
+        assert_eq!(deleted, vec![broken.clone()]);
+        let mut expected: Vec<String> = current.all().map(|r| r.name.clone()).collect();
         expected.sort();
         assert_eq!(api.names(KIND), expected);
     }
