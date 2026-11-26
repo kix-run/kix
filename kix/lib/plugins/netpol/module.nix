@@ -16,6 +16,23 @@ let
 
   inherit (cfg) enforced;
 
+  # Return the namespaces where Kix isolates every pod with
+  # `<namespace>-default-deny`: those that hold an active instance Kix
+  # deploys (`cluster.deployedNsNames`) or that the cluster definition
+  # declares, except `platformNamespaces`. Imports run on pods Kix does not
+  # deploy, and a platform namespace runs pods the platform changes, so a
+  # default deny there would cut traffic Kix cannot see. Default deny,
+  # scrape ingress, and caller ingress all read this list.
+  defaultDenyNamespacesOf =
+    cluster:
+    lib.optionals cfg.defaultDeny (
+      builtins.filter (
+        nsName:
+        (builtins.elem nsName cluster.deployedNsNames || config.namespaces ? ${nsName})
+        && !(builtins.elem nsName cfg.platformNamespaces)
+      ) cluster.realNsNames
+    );
+
   # An exclusive `cni` binding means the environment owns the pod network, so
   # a `cilium` instance would be refused. The missing-enforcer error must not
   # recommend one there.
@@ -165,6 +182,7 @@ in
           inherit enforced;
           networkPolicyEnforcer = resolveEnforcerOut { inherit (ctx) cluster instanceName namespaceName; };
           packageIntents = ctx.packageMeta.network.intents or { };
+          defaultDenyNamespaces = defaultDenyNamespacesOf ctx.cluster;
           cloudIdentityEgress = ctx.cloudIdentityEgress or [ ];
         };
       in
@@ -185,6 +203,7 @@ in
             packageMeta
             ;
           inherit enforced;
+          defaultDenyNamespaces = defaultDenyNamespacesOf ctx.cluster;
           networkPolicyEnforcer = resolveEnforcerOut { inherit (ctx) cluster instanceName namespaceName; };
         };
       in
@@ -198,18 +217,7 @@ in
       let
         provider = ctx.cluster.findRoleProvider enforcerRole;
 
-        # The namespaces Kix manages workloads in: those that hold an
-        # active instance Kix deploys, and those the cluster definition
-        # declares. Imports run on pods Kix does not deploy, and a platform
-        # namespace runs pods the platform changes, so a default deny there
-        # would cut traffic Kix cannot see.
-        defaultDenyNamespaces = lib.optionals cfg.defaultDeny (
-          builtins.filter (
-            nsName:
-            (builtins.elem nsName ctx.deployedNsNames || config.namespaces ? ${nsName})
-            && !(builtins.elem nsName cfg.platformNamespaces)
-          ) ctx.realNsNames
-        );
+        defaultDenyNamespaces = defaultDenyNamespacesOf ctx.cluster;
         enforcerOut =
           if provider == null then null else interface.bindDnsPeers ctx.cluster.findRoleProvider provider.out;
 

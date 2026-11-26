@@ -104,7 +104,9 @@ rec {
     ) { } (builtins.filter isService resources);
 
   # Analyze a serialized workload manifest and return `{ edges, dnsEdges, warnings }`,
-  # where each edge has `{ name, targetSelector, targetNamespace, ports, service }`.
+  # where each edge has `{ name, targetSelector, targetNamespace, ports, service,
+  # targetDeployed }`. `targetDeployed` is false when an import minted the
+  # endpoint fact, so Kix does not deploy the target pods.
   analyzeEdges =
     {
       json,
@@ -123,6 +125,7 @@ rec {
         targetSelector = f.payload.selector;
         targetNamespace = f.payload.namespace;
         service = serviceIndex."${f.payload.namespace}/${f.payload.name}" or null;
+        targetDeployed = !(f.payload.imported or false);
       }) endpointFacts;
 
       ctxPaths = builtins.attrNames (builtins.getContext json);
@@ -139,6 +142,7 @@ rec {
             ports = svc.rawManifest.spec.ports or [ ];
             targetSelector = svc.rawManifest.spec.selector or { };
             targetNamespace = k8s.nsOf svc;
+            targetDeployed = true;
           }
         ) (builtins.filter (p: builtins.hasAttr p serviceRegistry) ctxPaths)
         ++ map (
@@ -154,6 +158,7 @@ rec {
               ports
               ;
             service = ref.marker;
+            targetDeployed = true;
           }
         ) (builtins.filter (p: builtins.hasAttr p serviceRefRegistry) ctxPaths);
 

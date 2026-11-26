@@ -14,6 +14,8 @@
   containerBase,
   eval,
   mkCmPackage,
+  mkAppPackage,
+  baseInstances,
   ...
 }:
 
@@ -483,4 +485,81 @@ in
         ) != null
     )
     || throw "default deny in ${builtins.toJSON denied}";
+
+  # Kix writes a caller-ingress policy over a Service's pods only when it
+  # deploys them, or when a default deny already isolates them. On a cloud
+  # flavour, a workload that dials an import in kube-system (a platform
+  # namespace) gets its own egress rule, and no policy selects the
+  # platform's pods. A workload that dials a Service Kix deploys gets the
+  # policy as before, and so does an import in a namespace with a default
+  # deny, because the default deny already isolates its pods.
+  netpol-clouds-caller-ingress-only-over-deployed-pods =
+    let
+      # An import of a Service with a selector, as a platform's.
+      platformService =
+        name:
+        eval.mkImport {
+          from = {
+            meta.version = "test";
+            build =
+              { self, scope, ... }:
+              {
+                service = scope.mkResource {
+                  apiVersion = "v1";
+                  kind = "Service";
+                  inherit name;
+                  spec = {
+                    selector."k8s-app" = name;
+                    ports = [ { port = 443; } ];
+                  };
+                };
+                root = self.service;
+              };
+          };
+        };
+      caller = dep: {
+        package = mkAppPackage { };
+        deps.db = dep;
+      };
+      cluster = mkCluster [
+        (import ../../flavors/gke.nix)
+        netpolOn
+        baseInstances
+        (
+          { ref, ... }:
+          {
+            instances.kube-system.metrics.package = platformService "metrics";
+            instances.dbns.legacy.package = platformService "legacy";
+            instances.platform-calls.platform-caller = caller ref.kube-system.metrics;
+            instances.legacy-calls.legacy-caller = caller ref.dbns.legacy;
+          }
+        )
+      ];
+      ms = manifests cluster;
+      callerIngress =
+        ns:
+        builtins.sort builtins.lessThan (
+          map (m: m.metadata.name) (
+            builtins.filter (
+              m:
+              (m.metadata.namespace or null) == ns
+              && (m.metadata.labels."kix.run/policy-type" or null) == "caller-ingress"
+            ) ms
+          )
+        );
+      egressOf = name: byName name ms;
+      platformEgress = egressOf "platform-caller-deployment-app-egress";
+    in
+    (
+      callerIngress "kube-system" == [ ]
+      &&
+        callerIngress "dbns" == [
+          "app-deployment-app-to-db-ingress"
+          "legacy-caller-deployment-app-to-legacy-ingress"
+        ]
+      && builtins.any (
+        r: (r.stubRule or null) == "service-egress" && r.namespace == "kube-system"
+      ) platformEgress.spec.egress
+    )
+    || throw "caller ingress: kube-system ${builtins.toJSON (callerIngress "kube-system")}, dbns ${builtins.toJSON (callerIngress "dbns")}";
 }

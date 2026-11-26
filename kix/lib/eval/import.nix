@@ -116,9 +116,12 @@ rec {
           # Attach an endpoint fact token so import-mode service refs
           # participate in network dependency detection without a store
           # resource.
+          # `imported` tells the netpol plugin that Kix does not deploy the
+          # pods.
           endpointFactCtx = k8s.facts.mkFact "endpoint" {
             inherit name selector ports;
             namespace = namespaceName;
+            imported = true;
           };
           attachConnectCtx = value: builtins.appendContext (toString value) endpointFactCtx;
         in

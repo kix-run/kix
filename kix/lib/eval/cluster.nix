@@ -432,7 +432,12 @@ in
 
       clusterCtx = {
         config = cfg;
-        inherit findRoleProvider inactiveOptionalKeys;
+        inherit
+          findRoleProvider
+          inactiveOptionalKeys
+          realNsNames
+          deployedNsNames
+          ;
       };
 
       workloadInterceptors = hooks.collectHooks cfg "workloadInterceptors";
@@ -639,7 +644,10 @@ in
 
       # Namespaces that hold at least one active instance Kix deploys. An
       # import (`kix.mkImport`) and an inactive optional instance deploy
-      # nothing, so they do not count.
+      # nothing, so they do not count. An import evaluates through the
+      # import scope, which marks the endpoint facts it mints as `imported`
+      # (`core/resource.nix`, `eval/import.nix`): the same test, seen from a
+      # dependency edge.
       deployedNsNames = builtins.filter (
         nsName:
         builtins.any (
@@ -653,7 +661,7 @@ in
       # including the policies instance hooks derived.
       clusterHookCtx = {
         cluster = clusterCtx;
-        inherit nsResources realNsNames deployedNsNames;
+        inherit nsResources realNsNames;
         resources = builtins.concatMap collectResources allInstancesList;
       };
       clusterHookResults = map (p: p clusterHookCtx) clusterProcessors;
