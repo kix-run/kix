@@ -1,30 +1,18 @@
-//! The revisions' CustomResourceDefinition, which Kix creates itself.
+//! The definition of the revisions' CustomResourceDefinition.
 //!
 //! `status` is a subresource, so a cluster can let an account edit
 //! workloads and still deny it the applied hashes.
 
 use serde_json::{Value, json};
 
-use super::{KIND, PLURAL, crd_name, resource, version};
-use crate::cluster::head::OwnCrd;
+use super::{KIND, PLURAL, crd_name, version};
 use crate::manifest::keys;
-
-/// Return the revisions' definition and what an account needs to use it.
-pub fn own_crd() -> OwnCrd {
-    OwnCrd {
-        name: crd_name(),
-        resource: resource(),
-        definition: definition(),
-        holds: "the objects each deploy applied",
-        verbs: "`get`, `list`, `create`, `patch`, and `delete` (`patch` also on its `status`)",
-    }
-}
 
 /// Return the definition of the revision kind.
 ///
 /// It has no `app.kubernetes.io/managed-by` label, so no sweep of Kix's own
 /// objects lists it or its objects as something a build made.
-fn definition() -> Value {
+pub(crate) fn definition() -> Value {
     let object = json!({
         "type": "object",
         "required": ["hash", "kind", "name"],

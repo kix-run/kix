@@ -849,14 +849,8 @@ impl<'a> Run<'a> {
             .set_stands_for(&DISCOVERY_NODE, &self.barrier.covered);
         self.progress.set_phase(&DISCOVERY_NODE, Phase::Discovery);
         let resources = self.resources.clone();
-        let record = self.record.clone();
         let handle = self.tasks.spawn(async move {
             let refreshed = resources.rediscover().await;
-            if refreshed.is_ok()
-                && let Some(record) = record
-            {
-                record.discovery_refreshed().await;
-            }
             Done::Rediscovery(refreshed.map_err(|e| e.to_string()))
         });
         self.kinds.insert(handle.id(), TaskKind::Rediscovery);

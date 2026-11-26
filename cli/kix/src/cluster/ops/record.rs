@@ -1,7 +1,6 @@
 //! [`DeployRecord`] on a real cluster's Activation records.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -79,11 +78,6 @@ pub(crate) struct ActivationRecord {
     /// objects are stamped, through them.
     resources: Arc<KubeResources>,
     config: RecordConfig,
-    /// Set when [`DeployRecord::begin`] wanted to create the record but its
-    /// CRD was not served yet, which is every cluster's first deploy.
-    /// [`DeployRecord::discovery_refreshed`] does it at the CRD barrier, the
-    /// earliest point at which it can succeed.
-    pending: AtomicBool,
     /// The `status.orphansKeptFrom` that [`DeployRecord::finalize`] wrote,
     /// for the caller's GC roots. `None` until a finalize succeeds.
     recorded_kept: std::sync::Mutex<Option<Vec<KeptOrphanSource>>>,
@@ -98,7 +92,6 @@ impl ActivationRecord {
         ActivationRecord {
             resources,
             config,
-            pending: AtomicBool::new(false),
             recorded_kept: std::sync::Mutex::new(None),
             earlier_only: std::sync::Mutex::new(Vec::new()),
         }
@@ -110,20 +103,19 @@ impl ActivationRecord {
         self.recorded_kept.lock().ok().and_then(|g| g.clone())
     }
 
-    /// Open the `Activation` records API for optional writes, logging any
-    /// domain-gate error and returning `None` when the CRD is not served or the
-    /// gate refuses.
+    /// Open the `Activation` records API for optional writes, logging a
+    /// domain-gate error and returning `None` when the gate refuses.
     async fn logged_records(&self) -> Option<Records> {
-        self.resources.records().await.unwrap_or_else(|e| {
-            tracing::error!("{e}");
-            None
-        })
+        self.resources
+            .records()
+            .await
+            .inspect_err(|e| tracing::error!("{e}"))
+            .ok()
     }
 
     /// Return the configured record name and `Records` handle, or `None` when
-    /// lifecycle recording is disabled or the CRD is not yet served. Propagates
-    /// domain-gate errors so a cluster with retired records does not finalize
-    /// as if it had none.
+    /// lifecycle recording is disabled. Propagates domain-gate errors so a
+    /// cluster with retired records does not finalize as if it had none.
     async fn named_records(&self) -> Result<Option<(&str, Records)>, RecordWriteError> {
         let Some(name) = self.config.name.as_deref() else {
             return Ok(None);
@@ -133,45 +125,36 @@ impl ActivationRecord {
             .records()
             .await
             .map_err(RecordWriteError::Domain)?;
-        Ok(records.map(|records| (name, records)))
+        Ok(Some((name, records)))
     }
 
-    /// Create the Activation record and mark it Deploying.
-    ///
-    /// Returns false when the record CRD is not served yet (such as on a
-    /// cluster's first deploy) so the caller can set `pending` and let
-    /// [`DeployRecord::discovery_refreshed`] retry at the CRD barrier.
+    /// Create the Activation record `name` and mark it Deploying.
     ///
     /// The apply uses the same path as the plan's own node, so field manager,
     /// identity hash, and annotation stamping all match and the later apply is
     /// an unchanged no-op.
-    async fn create(&self) -> bool {
-        let Some(name) = self.config.name.as_ref() else {
-            return true;
-        };
-        let Some(records) = self.logged_records().await else {
-            return false;
-        };
-
+    async fn create(&self, name: &str, records: &Records) {
         // Only the CLI provides a manifest. When the operator reconciles an
         // existing Activation, it skips creation and marks the phase directly.
-        if let Some(manifest) = self.config.manifest.as_ref() {
-            let rid = ResourceId::from_value(manifest);
-            let Some((manifest_ar, scope)) = self.resources.cached(&rid).await else {
-                return false;
-            };
-
-            if let Err(e) = self.resources.apply_as(&manifest_ar, scope, manifest).await {
-                // Non-fatal: the deploy can still proceed and create the record
-                // as the final node in the plan. Marking the phase below will
-                // 404 and be ignored.
-                tracing::warn!(
-                    activation = %name,
-                    error = %e,
-                    "could not create this run's deployment record before applying; continuing, \
-                     but if the deploy fails part way, no deployment record will list what it applied",
-                );
-            }
+        if let Some(manifest) = self.config.manifest.as_ref()
+            && let Err(e) = self
+                .resources
+                .apply_as(
+                    records.watch_resource(),
+                    kube::discovery::Scope::Cluster,
+                    manifest,
+                )
+                .await
+        {
+            // Non-fatal: the deploy can still proceed and create the record
+            // as the final node in the plan. Marking the phase below will
+            // 404 and be ignored.
+            tracing::warn!(
+                activation = %name,
+                error = %e,
+                "could not create this run's deployment record before applying; continuing, \
+                 but if the deploy fails part way, no deployment record will list what it applied",
+            );
         }
 
         let map = self.config.revisions.as_ref().map(RevisionMap::of);
@@ -181,14 +164,12 @@ impl ActivationRecord {
                     *guard = earlier;
                 }
             }
-            // 404 when the CRD is served but the record does not exist yet
-            // (either the up-front create failed or the operator's record was
-            // deleted).
+            // 404 when the record does not exist: the up-front create failed,
+            // or the operator's record was deleted.
             Err(e) => {
                 tracing::debug!(activation = %name, error = %e, "could not mark the record Deploying");
             }
         }
-        true
     }
 
     /// Create every revision the record names. A revision that exists
@@ -292,15 +273,10 @@ impl DeployRecord for ActivationRecord {
                 .records()
                 .await
                 .map_err(RecordWriteError::Domain)?,
-            None => self.logged_records().await,
-        };
-        let Some(records) = records else {
-            // No record CRD is served yet. On a cluster's first deploy, the CRD
-            // is in this plan and the record is created at the CRD barrier in
-            // `discovery_refreshed`. The revisions go first, which is safe
-            // because the run's lock keeps cleanup out until it finishes.
-            self.pending.store(true, Ordering::SeqCst);
-            return self.create_revisions().await;
+            None => match self.logged_records().await {
+                Some(records) => records,
+                None => return Ok(()),
+            },
         };
 
         // Read the live set BEFORE creating the record, so the annotation
@@ -309,25 +285,10 @@ impl DeployRecord for ActivationRecord {
         self.resources
             .set_live_activations(records.live_hashes().await);
 
-        if !self.create().await {
-            self.pending.store(true, Ordering::SeqCst);
+        if let Some(name) = self.config.name.as_deref() {
+            self.create(name, &records).await;
         }
         self.create_revisions().await
-    }
-
-    async fn discovery_refreshed(&self) {
-        // On a cluster's first deploy, `begin` defers creating the record until
-        // the Activation CRD applied by the plan is Established and discovery
-        // refreshes here.
-        if self.pending.load(Ordering::SeqCst)
-            && let Some(records) = self.logged_records().await
-        {
-            self.resources
-                .set_live_activations(records.live_hashes().await);
-            if self.create().await {
-                self.pending.store(false, Ordering::SeqCst);
-            }
-        }
     }
 
     async fn checkpoint(
@@ -357,9 +318,8 @@ impl DeployRecord for ActivationRecord {
         match tokio::time::timeout(BEST_EFFORT_TIMEOUT, records.record_waves(name, &[record])).await
         {
             Ok(Ok(())) => Ok(()),
-            // The Activation CR is itself a node of the plan and lands in the
-            // last wave, so on a cluster's first deploy every checkpoint
-            // before it is a 404. That is expected, not a failure.
+            // 404 when `begin` could not create the record. The record is
+            // also a node of the plan, which creates it in the last wave.
             Ok(Err(e)) if classify(&e.source) == FailureClass::NotFound => {
                 tracing::debug!("activation not yet on cluster; checkpoint skipped");
                 Ok(())
@@ -403,8 +363,8 @@ impl DeployRecord for ActivationRecord {
         };
         match tokio::time::timeout(BEST_EFFORT_TIMEOUT, records.fail_deploy(name, reason)).await {
             Ok(Ok(())) => Ok(()),
-            // Nothing to fail. The record never got created, which is the
-            // pre-CRD window on a first deploy.
+            // Nothing to fail. `begin` could not create the record, and the
+            // run stopped before the record's own node.
             Ok(Err(e)) if classify(&e.source) == FailureClass::NotFound => Ok(()),
             Ok(Err(e)) => Err(RecordWriteError::Records(e)),
             Err(_) => Err(RecordWriteError::NoAnswer(BEST_EFFORT_TIMEOUT)),
@@ -913,16 +873,33 @@ mod tests {
             assert_eq!(stored_map(&api, "one"), Some(RevisionMap::of(&set)));
         }
 
-        /// On a cluster's first deploy the record waits for its CRD, and the
-        /// revisions are created at the start of the run all the same.
+        /// A deploy's run creates its record at the start, and then the
+        /// revisions the record names, on a cluster's first deploy too,
+        /// because taking the lock installed the record's kind.
         #[tokio::test]
-        async fn the_first_deploy_creates_the_revisions_before_the_record() {
+        async fn the_first_deploy_creates_the_record_then_the_revisions() {
             let api = FakeApi::new([]);
             let set = build("1");
-            let run = run(&api, "one", Some(set.clone()), None).await;
+            let mut run = run(&api, "one", Some(set.clone()), None).await;
+            let mut manifest = activation("one", "", None);
+            manifest.as_object_mut().unwrap().remove("status");
+            run.config.manifest = Some(manifest);
             run.begin().await.unwrap();
             assert_eq!(api.names(revision::KIND).len(), set.all().count());
-            assert!(api.object("Activation", "one").is_none());
+            assert_eq!(
+                api.object("Activation", "one").unwrap()["status"]["phase"],
+                "Deploying"
+            );
+            let requests = api.requests();
+            let record = requests
+                .iter()
+                .position(|r| r.starts_with("PATCH ") && r.contains("/activations/one"))
+                .unwrap();
+            let revision = requests
+                .iter()
+                .position(|r| r.starts_with("POST ") && r.contains(revision::PLURAL))
+                .unwrap();
+            assert!(record < revision, "{requests:?}");
         }
 
         /// The operator's run on a record that `kix deploy --operator`

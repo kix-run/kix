@@ -144,9 +144,13 @@ pub fn load_manifests_from_dir(
         // A snapshot is a dump of live objects, so one taken before the
         // domain move carries the retired keys. Without this, diffing it
         // against a build made now shows every Kix annotation as a paired
-        // add and remove, and both of Kix's own CRDs as one addition plus
-        // one deletion, on a cluster that is in sync.
+        // add and remove, on a cluster that is in sync. A snapshot also holds
+        // the Activation and PackageInstance definitions, which no build
+        // holds any more ([`crate::manifest::lifecycle::is_kix_crd`]).
         crate::legacy_domain::upgrade_manifest(&mut value);
+        if crate::manifest::lifecycle::is_kix_crd(&value) {
+            continue;
+        }
 
         // Prefer the manifest's own identity over the filename's.
         //
@@ -154,8 +158,6 @@ pub fn load_manifests_from_dir(
         // `ResourceId::from_value`, so the two must be derived the same way
         // or nothing matches. A filename carries the kind lowercased, which
         // alone means no id from a nested dump ever equals one from a build.
-        // The upgrade above makes it worse: it can rename Kix's own CRDs,
-        // and the filename would then still hold the name they had before.
         // The filename stays as the fallback, for a file whose content does
         // not say what it is.
         let rid = if value.pointer("/kind").and_then(|v| v.as_str()).is_some()

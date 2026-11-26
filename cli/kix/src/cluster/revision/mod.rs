@@ -19,10 +19,10 @@
 //!   it ([`keep::needed`]), and a lock holder deletes the rest
 //!   ([`keep::clean`]).
 //!
-//! The CRD is part of the Kix program. Taking the deploy lock creates it when
-//! it is absent ([`own_crd`]).
+//! The CRD is part of the Kix program, which installs it with Kix's other
+//! own CRDs ([`crate::cluster::own_crds`]).
 
-mod crd;
+pub(crate) mod crd;
 pub mod keep;
 mod map;
 mod spec;
@@ -36,7 +36,6 @@ use kube::discovery::ApiResource;
 
 use crate::manifest::keys;
 
-pub use crd::own_crd;
 pub use map::RevisionMap;
 pub use spec::{ReadError, Revision, RevisionObject, RevisionSet, RevisionSpec, Slot, name_of};
 pub use store::{Created, RevisionError, Revisions};

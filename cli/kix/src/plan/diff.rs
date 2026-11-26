@@ -177,11 +177,8 @@ pub fn diff_graphs(old: &StoreGraph, new: &StoreGraph) -> PackageDiff {
 }
 
 /// Return the resources in `graph.resources` that no package owns, excluding
-/// PackageInstances (see [`resource_map_for_package`]), the deploy record, and
-/// CRDs that a consumer leaves to its platform (`lifecycle::left_to_platform`).
+/// PackageInstances (see [`resource_map_for_package`]) and the deploy record.
 fn unowned_resources(graph: &StoreGraph) -> BTreeMap<ResourceId, (&PathBuf, &Value)> {
-    let left_to_platform =
-        lifecycle::left_to_platform(graph.resources.values().map(|node| &node.manifest));
     graph
         .resources
         .iter()
@@ -194,7 +191,7 @@ fn unowned_resources(graph: &StoreGraph) -> BTreeMap<ResourceId, (&PathBuf, &Val
                 (path, &node.manifest),
             )
         })
-        .filter(|(id, _)| !lifecycle::is_record_kind(&id.kind) && !left_to_platform.contains(id))
+        .filter(|(id, _)| !lifecycle::is_record_kind(&id.kind))
         .collect()
 }
 

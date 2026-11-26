@@ -7,7 +7,7 @@ use std::path::Path;
 use kix::manifest::hash::strip_kix_annotations;
 use kix::manifest::keys;
 use kix::manifest::kinds::{self, GroupKind};
-use kix::manifest::lifecycle::is_kix_internal_kind;
+use kix::manifest::lifecycle::{is_kix_crd, is_kix_internal_kind};
 use kix::manifest::types::ResourceId;
 use serde_json::Value;
 
@@ -23,7 +23,8 @@ pub struct Object {
 }
 
 /// Read every manifest in `dir` and its subdirectories, keyed by its display
-/// id. Kix's own records (Activation, PackageInstance) are left out.
+/// id. Kix's own records (Activation, PackageInstance) and their definitions
+/// are left out.
 pub fn load_dir(dir: &Path) -> Result<BTreeMap<String, Object>, String> {
     let mut out = BTreeMap::new();
     let mut pending = vec![dir.to_path_buf()];
@@ -46,7 +47,7 @@ pub fn load_dir(dir: &Path) -> Result<BTreeMap<String, Object>, String> {
             let mut manifest: Value = kix::yaml::from_str(&text)
                 .map_err(|e| format!("{} is not a manifest: {e}", path.display()))?;
             let id = ResourceId::from_value(&manifest);
-            if is_kix_internal_kind(&id.kind) {
+            if is_kix_internal_kind(&id.kind) || is_kix_crd(&manifest) {
                 continue;
             }
             let package = manifest

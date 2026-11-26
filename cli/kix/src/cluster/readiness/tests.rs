@@ -2351,7 +2351,6 @@ mod discovery_waits {
             namespace: None,
             expected_keys: Vec::new(),
             served_versions: vec!["v1".into()],
-            platform: None,
         }
     }
 

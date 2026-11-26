@@ -6,13 +6,12 @@ use serde_json::Value;
 
 use crate::manifest::keys;
 use crate::manifest::kinds;
-use crate::manifest::lifecycle;
 use crate::manifest::types::{CLUSTER_SCOPED, ResourceId};
 
 use super::super::apply::{ChangeAction, Deployed, changed, wants_rerun};
 use super::super::graph::ResourceGraph;
 use super::super::inventory::{Live, LiveObjects};
-use super::super::readiness::{self, ImportTarget};
+use super::super::readiness;
 use super::super::stream::{NodeId, NodeMeta, PlanNode, TransitionKind};
 
 /// A single resource or synthetic node paired with the work
@@ -88,35 +87,9 @@ impl DeployPlan {
             by_id.insert(rid, action);
         }
 
-        // Consumer clusters do not apply Kix's own CRDs because the platform
-        // cluster manages them. Wait for the live CRDs instead (see `lifecycle::left_to_platform`).
-        let manifests = || graph.graph.node_weights().map(|n| &n.manifest);
-        let left_to_platform = lifecycle::left_to_platform(manifests());
-        let platform = manifests()
-            .find(|m| lifecycle::is_record(m))
-            .and_then(lifecycle::platform_of)
-            .unwrap_or_default();
-
         let mut nodes = Vec::with_capacity(graph.graph.node_count());
         for idx in graph.graph.node_indices() {
             let node = &graph.graph[idx];
-            if left_to_platform.contains(&node.id) {
-                nodes.push(PlanNodeEntry {
-                    id: NodeId::Resource(node.id.clone()),
-                    kind: TransitionKind::Wait,
-                    action: ChangeAction::Skip(node.id.clone()),
-                    meta: NodeMeta {
-                        package: keys::get(&node.manifest, keys::PACKAGE).map(|s| s.to_string()),
-                        namespace: None,
-                        import_target: Some(ImportTarget::left_to_platform(
-                            &node.manifest,
-                            platform,
-                        )),
-                    },
-                    rerun: None,
-                });
-                continue;
-            }
             let action = match by_id.get(&node.id) {
                 Some(action @ (ChangeAction::Apply(_) | ChangeAction::Recreate(..))) => {
                     (*action).clone()
@@ -164,7 +137,9 @@ impl DeployPlan {
         Ok(DeployPlan {
             nodes,
             edges,
-            controllers: super::super::graph::controllers_of(manifests()),
+            controllers: super::super::graph::controllers_of(
+                graph.graph.node_weights().map(|n| &n.manifest),
+            ),
         })
     }
 

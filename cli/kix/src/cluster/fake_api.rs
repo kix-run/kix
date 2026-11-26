@@ -18,7 +18,9 @@
 //! keeps the `foregroundDeletion` finalizer until every dependent with
 //! `blockOwnerDeletion: true` is gone.
 //! Every object gets a uid and a resourceVersion when it is added, and a new
-//! resourceVersion on every change. `/version` answers once
+//! resourceVersion on every change. A CustomResourceDefinition also gets
+//! `metadata.generation` 1 when it is created, and one more on every PUT
+//! that changes its `spec`. `/version` answers once
 //! [`FakeApi::serve_version`] has set what it says. Anything else answers
 //! 404.
 //!
@@ -568,6 +570,7 @@ impl FakeApi {
                     obj["status"] = json!({
                         "conditions": [{ "type": "Established", "status": "True" }],
                     });
+                    obj["metadata"]["generation"] = json!(1);
                 }
                 let rv = st.bump();
                 let meta = &mut obj["metadata"];
@@ -595,8 +598,14 @@ impl FakeApi {
                     return status(409, "Conflict", "the object has been modified");
                 }
                 let rv = st.bump();
-                obj["metadata"]["uid"] = st.objects[i]["metadata"]["uid"].clone();
+                let stored = &st.objects[i];
+                obj["metadata"]["uid"] = stored["metadata"]["uid"].clone();
                 obj["metadata"]["resourceVersion"] = json!(rv);
+                if target.kind == "CustomResourceDefinition" {
+                    let generation = stored["metadata"]["generation"].as_i64().unwrap_or(1);
+                    let moved = i64::from(obj["spec"] != stored["spec"]);
+                    obj["metadata"]["generation"] = json!(generation + moved);
+                }
                 st.objects[i] = obj.clone();
                 (200, obj)
             }

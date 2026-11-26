@@ -138,16 +138,17 @@ async fn write(client: &Client, name: &str) -> Result<(), kube::Error> {
 }
 
 #[tokio::test(start_paused = true)]
-async fn the_first_run_creates_both_definitions_and_the_head() {
+async fn the_first_run_creates_kixs_definitions_and_the_head() {
     let api = FakeApi::new([record("c1-old", "Active")]);
     let client = api.client();
     let lock = take(&client, request("a", Some("c1-new")), clock(), &|_| {})
         .await
         .unwrap();
-    assert_eq!(
-        api.names("CustomResourceDefinition"),
-        vec![crd_name(), crate::cluster::revision::crd_name()]
-    );
+    assert_eq!(api.names("CustomResourceDefinition"), {
+        let mut names = crate::cluster::own_crds::all().map(|crd| crd.name).to_vec();
+        names.sort();
+        names
+    });
     let status = status_of(&api);
     assert_eq!(
         status.current.as_deref(),

@@ -176,11 +176,16 @@ impl KubeResources {
         Records::open(&self.client, &d)
     }
 
-    /// Return the `Records` handle for lifecycle writes, `None` when the record
-    /// CRD is not yet served, or an error when the domain gate rejects retired
-    /// records.
-    pub(super) async fn records(&self) -> Result<Option<Records>, LegacyDomainError> {
-        self.opened().await.map(OpenedRecords::into_records)
+    /// Return the `Records` handle for lifecycle writes, or an error when the
+    /// domain gate rejects retired records.
+    ///
+    /// The kind is spelled from Kix's constants rather than looked up in the
+    /// discovery cache. A run that writes a record holds the deploy lock, and
+    /// taking the lock installed the kind, possibly after the run read
+    /// discovery.
+    pub(super) async fn records(&self) -> Result<Records, LegacyDomainError> {
+        self.opened().await?;
+        Ok(Records::undiscovered(&self.client))
     }
 
     /// Look up `rid`'s group and kind in the discovery cache without

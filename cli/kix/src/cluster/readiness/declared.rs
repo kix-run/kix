@@ -863,7 +863,7 @@ pub(super) fn check_crd_ready(data: &Value) -> bool {
 }
 
 /// Return the version names in a CRD's `spec.versions` that have `served: true`.
-pub(super) fn served_crd_versions(data: &Value) -> Vec<String> {
+pub(crate) fn served_crd_versions(data: &Value) -> Vec<String> {
     data.pointer("/spec/versions")
         .and_then(Value::as_array)
         .map(|versions| {

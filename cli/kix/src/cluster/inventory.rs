@@ -264,7 +264,9 @@ pub async fn fetch_managed_resources(
 ///
 /// LIST selects by the `managed-by=kix` label and [`scope_sweep`] filters
 /// client-side because ordinary objects carry no per-cluster label. Activation
-/// records are listed after the objects (see [`tenancy::read`]).
+/// records are listed after the objects (see [`tenancy::read`]). The
+/// Activation and PackageInstance definitions are left out
+/// ([`crate::manifest::lifecycle::is_kix_crd`]).
 pub async fn sweep_managed(
     client: &Client,
     discovery: &[(ApiResource, Scope)],
@@ -273,7 +275,17 @@ pub async fn sweep_managed(
 ) -> Result<ManagedSweep, FetchError> {
     let lp = ListParams::default().labels(MANAGED_BY_LABEL);
     let listed = fetch_parallel(client, discovery, &lp).await?;
-    let mut sweep = partition_sweep(listed.objects);
+    // Earlier releases applied the Activation and PackageInstance
+    // definitions from builds, so the live ones may still carry the label.
+    let objects = listed
+        .objects
+        .into_iter()
+        .filter(|o| {
+            let id = super::drift::resource_id(o);
+            !crate::manifest::lifecycle::is_kix_crd_named(id.group_kind(), Some(&id.name))
+        })
+        .collect();
+    let mut sweep = partition_sweep(objects);
     sweep.forbidden = listed.forbidden;
     let cluster = match scope {
         SweepScope::Cluster(cluster) | SweepScope::Records { cluster, .. } => cluster,

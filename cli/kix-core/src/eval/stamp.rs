@@ -12,6 +12,7 @@
 //! Note: `kix.run/depends-on` is stamped at resource creation time in Nix (lib/k8s.nix).
 //! So is `kix.run/holds-data`, because it comes from the kind's declaration.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use super::store_graph::{StoreGraph, store_hash};
@@ -24,6 +25,28 @@ struct StampEntry {
     package: String,
     package_namespace: String,
     lifecycle: Option<String>,
+}
+
+/// Remove the Activation and PackageInstance definitions from `graph`
+/// ([`crate::manifest::lifecycle::is_kix_crd`]). It runs after the domain
+/// upgrade, which gives a retired definition its current name.
+fn leave_out_kix_crds(graph: &mut StoreGraph) {
+    let left_out: HashSet<PathBuf> = graph
+        .resources
+        .iter()
+        .filter(|(_, res)| crate::manifest::lifecycle::is_kix_crd(&res.manifest))
+        .map(|(path, _)| path.clone())
+        .collect();
+    if left_out.is_empty() {
+        return;
+    }
+    graph.resources.retain(|path, _| !left_out.contains(path));
+    graph
+        .resource_owner
+        .retain(|path, _| !left_out.contains(path));
+    for pkg in graph.packages.values_mut() {
+        pkg.resource_paths.retain(|path| !left_out.contains(path));
+    }
 }
 
 /// Stamp kix.run annotations onto every resource manifest in the graph.
@@ -40,6 +63,7 @@ pub fn stamp_annotations(graph: &mut StoreGraph) {
     for res in graph.resources.values_mut() {
         crate::legacy_domain::upgrade_manifest(&mut res.manifest);
     }
+    leave_out_kix_crds(graph);
 
     // First pass: collect stamping info using explicit loops to avoid borrow issues.
     let mut stamp_info: Vec<StampEntry> = Vec::new();

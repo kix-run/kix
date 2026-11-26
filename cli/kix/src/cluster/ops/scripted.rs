@@ -638,8 +638,6 @@ impl DeployRecord for ScriptedOps {
         b.run().await.map_err(RecordWriteError::Scripted)
     }
 
-    async fn discovery_refreshed(&self) {}
-
     async fn checkpoint(
         &self,
         applied: usize,

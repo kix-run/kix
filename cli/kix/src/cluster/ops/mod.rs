@@ -161,8 +161,6 @@ pub(crate) trait ResourceIo: Send + Sync + 'static {
 /// failed [`DeployRecord::finalize`] means the run did not succeed. The
 /// engine bounds each call in time, and [`ActivationRecord`] also bounds its
 /// checkpoint, abort, and finalize with a shorter limit of its own.
-/// [`DeployRecord::discovery_refreshed`] runs inside the discovery refresh,
-/// which the watchdog monitors.
 #[async_trait]
 pub(crate) trait DeployRecord: Send + Sync + 'static {
     /// Create the Activation record, mark it `Deploying`, and read the set of
@@ -170,18 +168,12 @@ pub(crate) trait DeployRecord: Send + Sync + 'static {
     /// flight yet, so the engine may await this inline.
     ///
     /// Creating the record before the first node ensures that a run stopping
-    /// midway still leaves a record of what it attempted. On a cluster's first
-    /// deploy, the record's own CRD is not served yet, so the implementation
-    /// may defer creation to [`DeployRecord::discovery_refreshed`].
+    /// midway still leaves a record of what it attempted. The record's kind is
+    /// always served, because taking the deploy lock installed it.
     ///
     /// Returns an error to stop the run before its first node when a record is
     /// configured but cannot be written ([`RecordWriteError::Domain`]).
     async fn begin(&self) -> Result<(), RecordWriteError>;
-
-    /// Retry creating a pending Activation record after CRD discovery refreshes.
-    /// On a cluster's first deploy, this is the first moment the Activation CRD
-    /// is established.
-    async fn discovery_refreshed(&self);
 
     /// Record progress. `applied` and `failed` are running totals.
     async fn checkpoint(

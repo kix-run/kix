@@ -12,8 +12,8 @@ use thiserror::Error;
 
 use super::guard::WritesStopped;
 use super::{
-    Clock, CrdError, Head, HeadStatus, Holder, LEASE, LockState, Purpose, RENEW_EVERY, STOP_AFTER,
-    Writer, api, ensure_crd,
+    Clock, Head, HeadStatus, Holder, LEASE, LockState, Purpose, RENEW_EVERY, STOP_AFTER, Writer,
+    api,
 };
 use crate::cluster::activation::{self, Record, Records, RecordsError};
 use crate::cluster::cancel::CancelToken;
@@ -106,7 +106,7 @@ pub enum TakeError {
         now: u64,
     },
     #[error(transparent)]
-    Crd(#[from] CrdError),
+    Crd(#[from] crate::cluster::own_crds::CrdError),
     #[error(
         "cannot read or update deploy lock `ActivationHead` `{cluster}`: {}. Nothing was changed on the cluster. Check the cluster connection and ensure this account has `get`, `list`, `create`, and `update` permissions on `{}`, then try again",
         describe(.source),
@@ -255,7 +255,7 @@ struct Watch {
 }
 
 /// Take the deploy lock of `request.cluster` through `client`, creating the
-/// head itself, its CRD, and the revisions' CRD when absent.
+/// head when absent, after installing or updating Kix's own CRDs.
 ///
 /// When another run holds the lock, watch it for up to [`LEASE`]: refuse
 /// with [`TakeError::Held`] once it renews, take it over if it never does. A
@@ -275,8 +275,7 @@ pub async fn take(
     clock: Arc<dyn Clock>,
     on_watch: &(dyn Fn(&LockState) + Send + Sync),
 ) -> Result<Lock, TakeError> {
-    ensure_crd(client, &super::crd::own()).await?;
-    ensure_crd(client, &crate::cluster::revision::own_crd()).await?;
+    crate::cluster::own_crds::ensure_all(client).await?;
     let cluster = request.cluster.clone();
     let api_error = |source| TakeError::Api {
         cluster: cluster.clone(),

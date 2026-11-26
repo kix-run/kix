@@ -22,6 +22,7 @@ pub mod left_behind;
 pub mod migrate;
 pub mod observe;
 pub(crate) mod ops;
+pub mod own_crds;
 pub mod owned_view;
 pub mod preview;
 pub mod prune_guard;
