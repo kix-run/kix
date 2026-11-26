@@ -5,12 +5,18 @@
 //! of an older minor than the last deploy's may not deploy at all, because it
 //! may not read what the newer Kix stored.
 //!
-//! Every program that writes a deploy into a cluster calls [`check`] before
-//! it applies anything: `kix deploy`, `kix rollback`, and the operator.
+//! Every program that writes to a cluster calls [`check`] before it changes
+//! anything: `kix deploy`, `kix rollback`, `kix gc`, and the operator.
+//!
+//! The Kix that wrote last is the head's `status.writer`
+//! ([`crate::cluster::head`]) when the head names one, else the version in
+//! the receipt of the current record, as on a cluster no Kix with the head
+//! has written to yet.
 
 use std::fmt;
 
 use crate::cluster::activation::Record;
+use crate::cluster::head::Writer;
 use crate::version::Version;
 
 /// The variable that lets an older minor of Kix deploy a cluster anyway, for
@@ -130,15 +136,44 @@ impl fmt::Display for Refusal {
 
 impl std::error::Error for Refusal {}
 
-/// Return the refusal of a deploy with Kix `running`, when the last deploy
-/// in `active` was made by a newer minor of Kix. A record without a
-/// version, or with one that does not parse, says nothing.
-pub fn older_kix(active: Option<&Record>, running: &Version) -> Option<OlderKix> {
-    let active = active?;
-    let last = last_version(active)?;
-    (last.minor_key() > running.minor_key()).then(|| OlderKix {
-        last,
-        commit: active.deployed_from.clone(),
+/// The Kix that wrote to a cluster last, as the checks read it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LastWrite {
+    /// Its version, as written. `None` when nothing names it.
+    pub version: Option<String>,
+    /// The commit of the current record's build, when that record was
+    /// written by this version.
+    pub commit: Option<String>,
+}
+
+impl LastWrite {
+    /// Read the last writer from `writer`, the head's `status.writer`, when
+    /// the head names one, else from the receipt of `active`, the current
+    /// record.
+    pub fn of(writer: Option<&Writer>, active: Option<&Record>) -> LastWrite {
+        match writer {
+            Some(writer) => LastWrite {
+                version: Some(writer.version.clone()),
+                commit: active
+                    .filter(|a| a.deployed_with.as_deref() == Some(writer.version.as_str()))
+                    .and_then(|a| a.deployed_from.clone()),
+            },
+            None => LastWrite {
+                version: active.and_then(|a| a.deployed_with.clone()),
+                commit: active.and_then(|a| a.deployed_from.clone()),
+            },
+        }
+    }
+}
+
+/// Return the refusal of a write with Kix `running`, when `last` was made by
+/// a newer minor of Kix. A version that is missing or does not parse says
+/// nothing.
+pub fn older_kix(last: &LastWrite, running: &Version) -> Option<OlderKix> {
+    let version = last_version(last)?;
+    (version.minor_key() > running.minor_key()).then(|| OlderKix {
+        last: version,
+        commit: last.commit.clone(),
         running: running.clone(),
     })
 }
@@ -149,8 +184,8 @@ pub fn downgrade_allowed(refusal: &OlderKix, allow: Option<&str>) -> bool {
     allow.map(str::trim) == Some(refusal.last.release().as_str())
 }
 
-fn last_version(active: &Record) -> Option<Version> {
-    active.deployed_with.as_deref()?.parse().ok()
+fn last_version(last: &LastWrite) -> Option<Version> {
+    last.version.as_deref()?.parse().ok()
 }
 
 /// Return the required stop a deploy with Kix `running` would skip, for a
@@ -165,20 +200,15 @@ pub fn skipped(last: &Version, running: &Version, stops: &[Version]) -> Option<V
         .cloned()
 }
 
-/// Refuse a deploy with Kix `running` of a cluster whose Active record is
-/// `active`, when it would skip one of `stops` or when a newer minor of Kix
-/// made the last deploy. The version of the last deploy comes from the
-/// record's receipt. A cluster with no Active record, no receipt, or a
-/// version that does not parse, passes.
-pub fn check(
-    active: Option<&Record>,
-    running: &Version,
-    stops: &[Version],
-) -> Result<(), Box<Refusal>> {
-    if let Some(refusal) = older_kix(active, running) {
+/// Refuse a write with Kix `running` to a cluster that `last` wrote to
+/// last, when it would skip one of `stops` or when a newer minor of Kix
+/// made the last write. A cluster whose last writer is unknown, or whose
+/// version does not parse, passes.
+pub fn check(last: &LastWrite, running: &Version, stops: &[Version]) -> Result<(), Box<Refusal>> {
+    if let Some(refusal) = older_kix(last, running) {
         return Err(Box::new(Refusal::OlderKix(refusal)));
     }
-    let Some(last) = active.and_then(last_version) else {
+    let Some(last) = last_version(last) else {
         return Ok(());
     };
     match skipped(&last, running, stops) {
@@ -199,7 +229,7 @@ mod tests {
         s.parse().unwrap()
     }
 
-    fn deployed(version: Option<&str>, commit: Option<&str>) -> Record {
+    fn record(version: Option<&str>, commit: Option<&str>) -> Record {
         Record {
             deployed_with: version.map(str::to_string),
             deployed_from: commit.map(str::to_string),
@@ -207,7 +237,11 @@ mod tests {
         }
     }
 
-    fn last(version: &str) -> Record {
+    fn deployed(version: Option<&str>, commit: Option<&str>) -> LastWrite {
+        LastWrite::of(None, Some(&record(version, commit)))
+    }
+
+    fn last(version: &str) -> LastWrite {
         deployed(Some(version), None)
     }
 
@@ -294,7 +328,7 @@ mod tests {
     #[test]
     fn check_returns_the_refusal() {
         let stops = [v("0.11.0")];
-        let refusal = check(Some(&last("0.10.0")), &v("0.12.1"), &stops).unwrap_err();
+        let refusal = check(&last("0.10.0"), &v("0.12.1"), &stops).unwrap_err();
         assert_eq!(
             *refusal,
             Refusal::SkippedStop(SkippedStop {
@@ -310,25 +344,25 @@ mod tests {
                 .contains("Deploy the cluster once with Kix 0.11.x"),
             "{refusal}"
         );
-        assert_eq!(check(Some(&last("0.11.0")), &v("0.12.1"), &stops), Ok(()));
+        assert_eq!(check(&last("0.11.0"), &v("0.12.1"), &stops), Ok(()));
     }
 
     #[test]
     fn a_cluster_without_a_readable_receipt_passes() {
         let stops = [v("0.11.0")];
-        assert_eq!(check(None, &v("0.12.1"), &stops), Ok(()));
+        assert_eq!(check(&LastWrite::default(), &v("0.12.1"), &stops), Ok(()));
         assert_eq!(
-            check(Some(&deployed(None, Some("abc"))), &v("0.12.1"), &stops),
+            check(&deployed(None, Some("abc")), &v("0.12.1"), &stops),
             Ok(())
         );
-        assert_eq!(check(Some(&last("unknown")), &v("0.12.1"), &stops), Ok(()));
-        assert_eq!(check(Some(&last("unknown")), &v("0.8.0"), &stops), Ok(()));
+        assert_eq!(check(&last("unknown"), &v("0.12.1"), &stops), Ok(()));
+        assert_eq!(check(&last("unknown"), &v("0.8.0"), &stops), Ok(()));
     }
 
     #[test]
     fn a_deploy_by_an_older_minor_is_refused() {
         let active = deployed(Some("0.9.1"), Some("abc1234def5678"));
-        let refusal = check(Some(&active), &v("0.8.4"), &[]).unwrap_err();
+        let refusal = check(&active, &v("0.8.4"), &[]).unwrap_err();
         assert_eq!(
             *refusal,
             Refusal::OlderKix(OlderKix {
@@ -344,13 +378,13 @@ mod tests {
              is older than Kix 0.9. Nothing was applied. Deploy with Kix 0.9 or newer."
         );
         // A prerelease of the newer minor counts as that minor.
-        assert!(older_kix(Some(&last("0.9.0-rc.1")), &v("0.8.4")).is_some());
-        assert!(older_kix(Some(&last("1.0.0")), &v("0.12.0")).is_some());
+        assert!(older_kix(&last("0.9.0-rc.1"), &v("0.8.4")).is_some());
+        assert!(older_kix(&last("1.0.0"), &v("0.12.0")).is_some());
     }
 
     #[test]
     fn only_the_last_version_named_allows_a_downgrade() {
-        let refusal = older_kix(Some(&last("0.9.1+abc")), &v("0.8.4")).unwrap();
+        let refusal = older_kix(&last("0.9.1+abc"), &v("0.8.4")).unwrap();
         assert!(downgrade_allowed(&refusal, Some("0.9.1")));
         assert!(downgrade_allowed(&refusal, Some(" 0.9.1\n")));
         assert!(!downgrade_allowed(&refusal, Some("0.9")));
@@ -362,18 +396,48 @@ mod tests {
     #[test]
     fn the_same_or_an_older_minor_may_be_deployed_over() {
         // An older patch of the same minor may deploy.
-        assert_eq!(older_kix(Some(&last("0.9.3")), &v("0.9.1")), None);
-        assert_eq!(older_kix(Some(&last("0.9.0")), &v("0.9.0-rc.2")), None);
-        assert_eq!(older_kix(Some(&last("0.8.4")), &v("0.9.0")), None);
-        assert_eq!(older_kix(None, &v("0.9.0")), None);
+        assert_eq!(older_kix(&last("0.9.3"), &v("0.9.1")), None);
+        assert_eq!(older_kix(&last("0.9.0"), &v("0.9.0-rc.2")), None);
+        assert_eq!(older_kix(&last("0.8.4"), &v("0.9.0")), None);
+        assert_eq!(older_kix(&LastWrite::default(), &v("0.9.0")), None);
     }
 
     #[test]
     fn an_unknown_commit_is_left_out() {
-        let refusal = older_kix(Some(&last("0.9.1")), &v("0.8.4")).unwrap();
+        let refusal = older_kix(&last("0.9.1"), &v("0.8.4")).unwrap();
         assert_eq!(refusal.last_deploy(), "Kix 0.9.1");
-        let short = older_kix(Some(&deployed(Some("0.9.1"), Some("abc"))), &v("0.8.4")).unwrap();
+        let short = older_kix(&deployed(Some("0.9.1"), Some("abc")), &v("0.8.4")).unwrap();
         assert_eq!(short.last_deploy(), "Kix 0.9.1 (from commit abc)");
+    }
+
+    /// Once the head names the Kix that wrote last, the checks read it, so
+    /// a `kix gc` or a deploy with `--only` by a newer Kix counts too. The
+    /// commit of the current record is named only when that record is the
+    /// same version's.
+    #[test]
+    fn the_heads_writer_comes_before_the_record() {
+        use crate::cluster::head::Program;
+        let rec = record(Some("0.9.1"), Some("abc1234def"));
+        let newer = Writer {
+            version: "0.11.0".into(),
+            program: Program::Cli,
+        };
+        let last = LastWrite::of(Some(&newer), Some(&rec));
+        assert_eq!(last.version.as_deref(), Some("0.11.0"));
+        assert_eq!(last.commit, None);
+        assert!(older_kix(&last, &v("0.10.2")).is_some());
+        let same = Writer {
+            version: "0.9.1".into(),
+            program: Program::Operator,
+        };
+        assert_eq!(
+            LastWrite::of(Some(&same), Some(&rec)).commit.as_deref(),
+            Some("abc1234def")
+        );
+        assert_eq!(
+            LastWrite::of(None, Some(&rec)).version.as_deref(),
+            Some("0.9.1")
+        );
     }
 
     #[test]

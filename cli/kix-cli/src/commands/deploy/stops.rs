@@ -2,37 +2,43 @@
 //! ([`kix::cluster::stops`]): it would skip a required stop, or a newer
 //! minor of Kix made the last deploy.
 
-use kix::cluster::activation::Record;
-use kix::cluster::stops::{self, ALLOW_DOWNGRADE_VAR, OlderKix, Refusal, SkippedStop};
+use kix::cluster::stops::{self, ALLOW_DOWNGRADE_VAR, LastWrite, OlderKix, Refusal, SkippedStop};
 use kix::version::Version;
 
 use crate::exit::{Exit, Stopped};
 use crate::output;
 
-/// The command that would write the deploy.
+/// The command that would write to the cluster.
 #[derive(Clone, Copy)]
 pub(crate) enum Writer {
     Deploy,
     Rollback,
+    Gc,
 }
 
-/// Refuse the deploy or rollback of `cluster`, whose Active record is
-/// `active`, when this Kix may not deploy it. Print why and stop with exit
+/// Refuse the deploy, rollback, or gc of `cluster`, which `last` wrote to
+/// last, when this Kix may not write to it. Print why and stop with exit
 /// code 1. When [`ALLOW_DOWNGRADE_VAR`] lets an older minor through, warn
 /// and return the newer version to note on the record.
 pub(crate) fn check(
     cluster: &str,
-    active: Option<&Record>,
+    last: &LastWrite,
     writer: Writer,
 ) -> miette::Result<Option<Version>> {
     let running = kix::version::running();
-    let Err(refusal) = stops::check(active, running, &stops::required_stops()) else {
+    let Err(refusal) = stops::check(last, running, &stops::required_stops()) else {
         return Ok(None);
     };
     let text = match &*refusal {
         Refusal::SkippedStop(r) => render_skipped_stop(cluster, r, writer),
+        // gc deletes what an older Kix may misread as its own, so no
+        // setting lets an older Kix garbage-collect.
         Refusal::OlderKix(r)
-            if stops::downgrade_allowed(r, std::env::var(ALLOW_DOWNGRADE_VAR).ok().as_deref()) =>
+            if !matches!(writer, Writer::Gc)
+                && stops::downgrade_allowed(
+                    r,
+                    std::env::var(ALLOW_DOWNGRADE_VAR).ok().as_deref(),
+                ) =>
         {
             eprint!("{}", render_downgrade_allowed(cluster, r, writer));
             return Ok(Some(r.last.clone()));
@@ -46,9 +52,9 @@ pub(crate) fn check(
 /// Refuse a deploy planned from the cache (`--offline`) the way [`check`]
 /// does. The plan is already made, so [`ALLOW_DOWNGRADE_VAR`] cannot note
 /// itself on the record, and it does not let a downgrade through here.
-pub(crate) fn check_offline(cluster: &str, active: Option<&Record>) -> miette::Result<()> {
+pub(crate) fn check_offline(cluster: &str, last: &LastWrite) -> miette::Result<()> {
     let running = kix::version::running();
-    let Err(refusal) = stops::check(active, running, &stops::required_stops()) else {
+    let Err(refusal) = stops::check(last, running, &stops::required_stops()) else {
         return Ok(());
     };
     let mut text = match &*refusal {
@@ -66,8 +72,8 @@ pub(crate) fn check_offline(cluster: &str, active: Option<&Record>) -> miette::R
 
 /// Warn, for a command that only plans, that `kix deploy` would refuse
 /// `cluster` because a newer minor of Kix made its last deploy.
-pub(crate) fn warn(cluster: &str, active: Option<&Record>) {
-    if let Some(refusal) = stops::older_kix(active, kix::version::running()) {
+pub(crate) fn warn(cluster: &str, last: &LastWrite) {
+    if let Some(refusal) = stops::older_kix(last, kix::version::running()) {
         eprint!(
             "{} {}",
             output::yellow("warning:"),
@@ -94,10 +100,20 @@ fn render_skipped_stop(cluster: &str, refusal: &SkippedStop, writer: Writer) -> 
                 "Next: check out the commit where this project was pinned to Kix {stop_minor}.x (for example with `git worktree add` or `git checkout`), and run `kix rollback {cluster}` from there."
             ),
         ),
+        Writer::Gc => (
+            "Garbage collection blocked",
+            format!(
+                "Next: check out the commit where this project was pinned to Kix {stop_minor}.x (for example with `git worktree add` or `git checkout`), run `kix deploy {cluster}` from there, then return here and run `kix gc {cluster}` again."
+            ),
+        ),
+    };
+    let nothing = match writer {
+        Writer::Gc => "Nothing was deleted from",
+        Writer::Deploy | Writer::Rollback => "Nothing was applied to",
     };
     format!(
         "{blocked}: cluster {cluster} was last deployed with Kix {last}, and cannot skip required stop Kix {stop} on the way to Kix {running}.\n\
-         Nothing was applied to cluster {cluster}.\n\
+         {nothing} cluster {cluster}.\n\
          \n\
          Every cluster deployed with Kix older than {stop} must be deployed once with Kix {stop_minor}.x before deploying Kix {running}.\n\
          \n\
@@ -122,20 +138,35 @@ fn render_older_kix(cluster: &str, refusal: &OlderKix, writer: Writer) -> String
                 "Next: run `kix rollback {cluster}` from a commit that uses Kix {minor} or newer."
             ),
         ),
+        Writer::Gc => (
+            "Garbage collection blocked",
+            format!("Next: run `kix gc {cluster}` from a commit that uses Kix {minor} or newer."),
+        ),
     };
     let verb = match writer {
         Writer::Deploy => "deploy",
         Writer::Rollback => "roll back",
+        Writer::Gc => "garbage-collect",
     };
     let newer = refusal.last.release();
+    let anyway = match writer {
+        Writer::Gc => String::new(),
+        Writer::Deploy | Writer::Rollback => format!(
+            "To {verb} with Kix {running} anyway (for example, to downgrade from a broken release), set {ALLOW_DOWNGRADE_VAR}={newer}. Cluster {cluster}'s deployment record will note the downgrade from Kix {newer}.\n"
+        ),
+    };
+    let nothing = match writer {
+        Writer::Gc => "Nothing was deleted from",
+        Writer::Deploy | Writer::Rollback => "Nothing was applied to",
+    };
     format!(
         "{blocked}: cluster {cluster} was last deployed with {last}, and this is Kix {running}.\n\
-         Nothing was applied to cluster {cluster}.\n\
+         {nothing} cluster {cluster}.\n\
          \n\
-         Kix {running} may not understand what Kix {newer} wrote to the cluster. Once Kix {minor} has deployed a cluster, only Kix {minor} or newer can deploy or roll it back.\n\
+         Kix {running} may not understand what Kix {newer} wrote to the cluster. Once Kix {minor} has deployed a cluster, only Kix {minor} or newer can deploy, roll back, or garbage-collect it.\n\
          \n\
          {next}\n\
-         To {verb} with Kix {running} anyway (for example, to downgrade from a broken release), set {ALLOW_DOWNGRADE_VAR}={newer}. Cluster {cluster}'s deployment record will note the downgrade from Kix {newer}.\n"
+         {anyway}"
     )
 }
 
@@ -143,6 +174,7 @@ fn render_downgrade_allowed(cluster: &str, refusal: &OlderKix, writer: Writer) -
     let what = match writer {
         Writer::Deploy => "deploy",
         Writer::Rollback => "rollback",
+        Writer::Gc => "garbage collection",
     };
     format!(
         "warning: cluster {cluster} was last deployed with {last}, and this is Kix {running}.\n\
@@ -214,7 +246,7 @@ mod tests {
             "Deploy blocked: cluster prod was last deployed with Kix 0.9.1 (from commit abc1234), and this is Kix 0.8.4.\n\
              Nothing was applied to cluster prod.\n\
              \n\
-             Kix 0.8.4 may not understand what Kix 0.9.1 wrote to the cluster. Once Kix 0.9 has deployed a cluster, only Kix 0.9 or newer can deploy or roll it back.\n\
+             Kix 0.8.4 may not understand what Kix 0.9.1 wrote to the cluster. Once Kix 0.9 has deployed a cluster, only Kix 0.9 or newer can deploy, roll back, or garbage-collect it.\n\
              \n\
              Next: switch to a commit that uses Kix 0.9 or newer, or upgrade this project to Kix 0.9 or newer with `kix upgrade`. Then run `kix deploy prod` again.\n\
              To deploy with Kix 0.8.4 anyway (for example, to downgrade from a broken release), set KIX_ALLOW_DOWNGRADE=0.9.1. Cluster prod's deployment record will note the downgrade from Kix 0.9.1.\n"
@@ -228,10 +260,23 @@ mod tests {
             "Rollback blocked: cluster prod was last deployed with Kix 0.9.1, and this is Kix 0.8.4.\n\
              Nothing was applied to cluster prod.\n\
              \n\
-             Kix 0.8.4 may not understand what Kix 0.9.1 wrote to the cluster. Once Kix 0.9 has deployed a cluster, only Kix 0.9 or newer can deploy or roll it back.\n\
+             Kix 0.8.4 may not understand what Kix 0.9.1 wrote to the cluster. Once Kix 0.9 has deployed a cluster, only Kix 0.9 or newer can deploy, roll back, or garbage-collect it.\n\
              \n\
              Next: run `kix rollback prod` from a commit that uses Kix 0.9 or newer.\n\
              To roll back with Kix 0.8.4 anyway (for example, to downgrade from a broken release), set KIX_ALLOW_DOWNGRADE=0.9.1. Cluster prod's deployment record will note the downgrade from Kix 0.9.1.\n"
+        );
+    }
+
+    #[test]
+    fn gc_by_an_older_kix_is_refused_with_no_way_around() {
+        assert_eq!(
+            render_older_kix("prod", &older(None), Writer::Gc),
+            "Garbage collection blocked: cluster prod was last deployed with Kix 0.9.1, and this is Kix 0.8.4.\n\
+             Nothing was deleted from cluster prod.\n\
+             \n\
+             Kix 0.8.4 may not understand what Kix 0.9.1 wrote to the cluster. Once Kix 0.9 has deployed a cluster, only Kix 0.9 or newer can deploy, roll back, or garbage-collect it.\n\
+             \n\
+             Next: run `kix gc prod` from a commit that uses Kix 0.9 or newer.\n"
         );
     }
 

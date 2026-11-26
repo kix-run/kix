@@ -1,0 +1,18 @@
+---
+source: kix-cli/src/commands/status/tests.rs
+expression: "text::render(&doc, text::Detail::Packages, &two_days_ago)"
+---
+Cluster shop on Kubernetes v1.33.1 (context prod, https://prod.example:6443)
+Last deploy: shop-7f3a2b1c0d9e  Active  2d0h ago
+
+  vault/vaultwarden    4 resources  1 not ready, 1 missing, 2 not checked
+
+vault/vaultwarden
+  Deployment vault/vaultwarden  not ready (0/1 ready, 0/1 updated)
+  Secret vault/vaultwarden-db   missing, needed by Deployment vault/vaultwarden
+
+4 resources: 0 ok, 1 not ready, 1 missing, 2 not checked.
+Next: run `kix deploy shop --reconcile` to put back what is missing or changed. `kix plan shop --reconcile` shows what it would change first.
+kix deploy by ana@laptop, process 7 holds the deploy lock (deploy of shop-new), renewed 300s ago. That is longer than the 30s lease, so the run has probably stopped; the next deploy takes over the lock.
+
+This account may not list secrets, so Kix did not check objects of those kinds.

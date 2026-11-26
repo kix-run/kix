@@ -1133,6 +1133,11 @@ impl<'a> Run<'a> {
             return orphans_left;
         }
         order.retain(|rid| !never_pruned(rid.group_kind()));
+        if let Some(record) = &self.record
+            && let Err(e) = record.before_prune().await
+        {
+            tracing::warn!(error = %e, "could not renew the deploy lock before pruning");
+        }
 
         let resources = self.resources.clone();
         let observer = self.observer.clone();

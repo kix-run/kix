@@ -99,7 +99,7 @@ pub(super) fn check_saved_plan(
     ctx: &mut CommandContext,
 ) -> Result<Exit> {
     let format = output::format();
-    let Some(mut p) = prepare(args, saved.flags.clone(), ctx)? else {
+    let Some(mut p) = prepare(args, saved.flags.clone(), None, ctx)? else {
         return Ok(Exit::Success);
     };
     let report = match p.client().cloned() {

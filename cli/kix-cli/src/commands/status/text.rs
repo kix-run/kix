@@ -233,6 +233,11 @@ fn render_cluster(
     for note in &c.notes {
         let _ = writeln!(out, "{}", output::yellow(note));
     }
+    if detail != Detail::Problems
+        && let Some(lock) = &c.lock
+    {
+        let _ = writeln!(out, "{}", output::yellow(&format!("{}.", lock.describe())));
+    }
 }
 
 /// Render the objects that only the failed deploy has. Outside `-q`, every

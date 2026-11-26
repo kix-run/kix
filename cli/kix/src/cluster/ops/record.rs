@@ -10,9 +10,7 @@ use serde_json::Value;
 use crate::eval::package_index::RecordPackageIndex;
 use crate::manifest::types::ResourceId;
 
-use super::super::activation::{
-    self, KeptOrphanSource, KeptOrphans, Records, WaveRecord, WaveStatus,
-};
+use super::super::activation::{KeptOrphanSource, KeptOrphans, Records, WaveRecord, WaveStatus};
 use super::super::apply;
 use super::super::errors::{FailureClass, classify};
 use super::{DeployRecord, Finalized, KubeResources, RecordWriteError, StampError};
@@ -61,6 +59,10 @@ pub(crate) struct RecordConfig {
     /// operator, which retries a run that stopped and marks the record
     /// Failed itself once it stops retrying.
     pub(crate) mark_failed_on_abort: bool,
+    /// The run's deploy lock. [`DeployRecord::finalize`] commits the deploy
+    /// on it between writing the record's result and setting the phases,
+    /// and [`DeployRecord::before_prune`] renews it. `None` only in tests.
+    pub(crate) lock: Option<Arc<crate::cluster::head::Lock>>,
 }
 
 /// A run's Activation record, written through
@@ -314,6 +316,13 @@ impl DeployRecord for ActivationRecord {
         }
     }
 
+    async fn before_prune(&self) -> Result<(), RecordWriteError> {
+        match &self.config.lock {
+            Some(lock) => lock.renew().await.map_err(RecordWriteError::Lock),
+            None => Ok(()),
+        }
+    }
+
     async fn end_partial(&self) -> Result<(), RecordWriteError> {
         let Some((name, records)) = self.named_records().await? else {
             return Ok(());
@@ -348,27 +357,39 @@ impl DeployRecord for ActivationRecord {
             );
             let old = current.filter(|old| old.name != name);
             records
-                .finalize_deploy(
+                .record_finish(
                     cluster,
                     name,
                     old.as_ref(),
-                    had_failures,
                     self.config.receipt.as_ref(),
-                    &self.config.consumed_failed,
                     &kept,
                 )
-                .await?;
+                .await
+                .map_err(RecordWriteError::Records)?;
+            // The one point at which the deploy becomes current. A run that
+            // stops after it leaves phases the next run repairs from the head.
+            if let Some(lock) = &self.config.lock {
+                lock.commit(name).await.map_err(RecordWriteError::Commit)?;
+            }
             if let Ok(mut recorded) = self.recorded_kept.lock() {
                 *recorded = Some(kept);
             }
-            Ok::<_, activation::RecordsError>(Finalized {
+            records
+                .settle_phases(
+                    name,
+                    old.as_ref(),
+                    had_failures,
+                    &self.config.consumed_failed,
+                )
+                .await
+                .map_err(RecordWriteError::Records)?;
+            Ok::<_, RecordWriteError>(Finalized {
                 activation: name.to_string(),
                 previous: old.map(|a| a.name),
             })
         };
         match tokio::time::timeout(BEST_EFFORT_TIMEOUT, work).await {
-            Ok(Ok(f)) => Ok(Some(f)),
-            Ok(Err(e)) => Err(RecordWriteError::Records(e)),
+            Ok(result) => result.map(Some),
             Err(_) => Err(RecordWriteError::NoAnswer(BEST_EFFORT_TIMEOUT)),
         }
     }
@@ -408,6 +429,7 @@ mod tests {
                 package_index: None,
                 only,
                 mark_failed_on_abort: true,
+                lock: None,
             },
         )
     }
@@ -484,6 +506,68 @@ mod tests {
         let new = api.object("Activation", "new").unwrap();
         assert_eq!(new["status"]["phase"], "Active");
         assert!(new["status"].get("previousActivation").is_none(), "{new}");
+    }
+
+    /// Under the deploy lock, finalize writes the record's result, then
+    /// commits the deploy on the lock (current, generation, writer), then
+    /// sets the phases. The lock stays held for the caller to release.
+    #[tokio::test]
+    async fn finalizing_commits_on_the_lock_between_result_and_phases() {
+        use crate::cluster::head::{self, Holder, Purpose};
+        use crate::manifest::keys;
+        let rec = |name: &str, phase: &str| {
+            serde_json::json!({
+                "apiVersion": keys::API_VERSION,
+                "kind": "Activation",
+                "metadata": {
+                    "name": name,
+                    "labels": { "app.kubernetes.io/managed-by": "kix", (keys::CLUSTER_LABEL): "a" },
+                },
+                "status": { "phase": phase },
+            })
+        };
+        let api = FakeApi::new([rec("old", "Active"), rec("new", "Deploying")]);
+        let client = api.client();
+        let lock = Arc::new(
+            head::take(
+                &client,
+                head::Request {
+                    cluster: "a".into(),
+                    holder: Holder::cli("kix deploy"),
+                    purpose: Purpose::Deploy,
+                    activation: Some("new".into()),
+                    expect: Some(0),
+                },
+                head::system_clock(),
+                &|_| {},
+            )
+            .await
+            .unwrap(),
+        );
+        let mut run = record(&api, Some("new")).await;
+        run.config.lock = Some(lock.clone());
+        let finalized = run.finalize(false, false).await.unwrap().unwrap();
+        assert_eq!(finalized.previous.as_deref(), Some("old"));
+        let head_status = |api: &FakeApi| api.object(head::KIND, "a").unwrap()["status"].clone();
+        let status = head_status(&api);
+        assert_eq!(status["current"], "new");
+        assert_eq!(status["generation"], 1);
+        assert_eq!(status["writer"]["program"], "cli");
+        assert!(
+            status["lock"].is_object(),
+            "held until the caller releases it"
+        );
+        assert_eq!(
+            api.object("Activation", "new").unwrap()["status"]["phase"],
+            "Active"
+        );
+        assert_eq!(
+            api.object("Activation", "old").unwrap()["status"]["phase"],
+            "Superseded"
+        );
+        lock.release().await.unwrap();
+        assert!(head_status(&api).get("lock").is_none());
+        assert_eq!(head_status(&api)["generation"], 1);
     }
 
     /// The final checkpoint of a run in which an object failed marks the

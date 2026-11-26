@@ -3,10 +3,11 @@
 //! It serves discovery for a fixed set of kinds (ConfigMap, Secret, Namespace,
 //! Service, Pod, Event in two groups, CustomResourceDefinition, Deployment,
 //! StatefulSet,
-//! Job, ClusterRole, Kix's Activation, and two kinds of a group served at two
+//! Job, ClusterRole, Kix's Activation and ActivationHead, and two kinds of a group served at two
 //! versions), and GET, LIST (with an equality or existence label
 //! selector), PATCH (as a JSON merge patch, on the object or its `status`),
-//! POST (create), DELETE (honoring `preconditions` and `metadata.finalizers`), and
+//! POST (create, 409 when the name is taken), PUT (replace, honoring
+//! `metadata.resourceVersion`), DELETE (honoring `preconditions` and `metadata.finalizers`), and
 //! server-side apply on the objects it holds. A DELETE of an object with
 //! finalizers sets its `deletionTimestamp` and keeps it, and a PATCH that
 //! leaves such an object without finalizers removes it, as Kubernetes does. An apply stores the manifest sent as it is, and a dry-run apply
@@ -71,6 +72,13 @@ const KINDS: &[(&str, &str, &str, &str, bool)] = &[
         false,
     ),
     (keys::DOMAIN, "v1alpha1", RECORD_KIND, "activations", false),
+    (
+        keys::DOMAIN,
+        "v1alpha1",
+        super::head::KIND,
+        super::head::PLURAL,
+        false,
+    ),
     ("events.k8s.io", "v1", "Event", "events", true),
     // A group served at two versions, preferred first: `Gizmo` at both,
     // `Gadget` only at the older one.
@@ -539,6 +547,20 @@ impl FakeApi {
                 let Ok(mut obj) = serde_json::from_slice::<Value>(body) else {
                     return status(400, "BadRequest", "the fake serves JSON bodies only");
                 };
+                if !obj["metadata"]["name"].is_null()
+                    && st.objects.iter().any(|o| {
+                        target.holds(o) && o["metadata"]["name"] == obj["metadata"]["name"]
+                    })
+                {
+                    return status(409, "AlreadyExists", "the object already exists");
+                }
+                // The apiserver marks a new CRD Established once it serves
+                // the kind, which here is at once.
+                if target.kind == "CustomResourceDefinition" {
+                    obj["status"] = json!({
+                        "conditions": [{ "type": "Established", "status": "True" }],
+                    });
+                }
                 let rv = st.bump();
                 let meta = &mut obj["metadata"];
                 if meta["name"].is_null() {
@@ -552,6 +574,23 @@ impl FakeApi {
                 }
                 st.objects.push(obj.clone());
                 (201, obj)
+            }
+            ("PUT", Some(_)) => {
+                let Some(i) = st.objects.iter().position(&matches) else {
+                    return not_found(path);
+                };
+                let Ok(mut obj) = serde_json::from_slice::<Value>(body) else {
+                    return status(400, "BadRequest", "the fake serves JSON bodies only");
+                };
+                let sent = &obj["metadata"]["resourceVersion"];
+                if !sent.is_null() && *sent != st.objects[i]["metadata"]["resourceVersion"] {
+                    return status(409, "Conflict", "the object has been modified");
+                }
+                let rv = st.bump();
+                obj["metadata"]["uid"] = st.objects[i]["metadata"]["uid"].clone();
+                obj["metadata"]["resourceVersion"] = json!(rv);
+                st.objects[i] = obj.clone();
+                (200, obj)
             }
             ("PATCH", Some(name)) if apply => {
                 let Ok(mut obj) = serde_json::from_slice::<Value>(body) else {

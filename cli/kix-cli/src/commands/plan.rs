@@ -46,7 +46,7 @@ use crate::exit::Exit;
 pub fn run(args: &PlanArgs, save: Option<&Path>, ctx: &mut CommandContext) -> Result<Exit> {
     // `Command::formats` allows only text and Markdown.
     let format = output::format();
-    let Some(mut p) = prepare(args, flags_of(args), ctx)? else {
+    let Some(mut p) = prepare(args, flags_of(args), None, ctx)? else {
         // A plan file needs a plan, and a caller that asked for one must
         // not find exit 0 and no file.
         if let Some(path) = save {
@@ -57,7 +57,7 @@ pub fn run(args: &PlanArgs, save: Option<&Path>, ctx: &mut CommandContext) -> Re
         }
         return Ok(Exit::Success);
     };
-    super::deploy::stops::warn(&args.cluster, p.baseline.active());
+    super::deploy::stops::warn(&args.cluster, &super::deploy::last_write(&p));
     // A plan decrypts no SOPS file the build carries: those Secrets get
     // placeholder values, so planning before anyone has approved reads no
     // secret.
@@ -153,9 +153,13 @@ fn old_side(args: &PlanArgs, ctx: &CommandContext) -> OldSide {
 /// Returns `Ok(None)` when the build contains no resources. Progress messages
 /// are written via [`crate::say!`] so `-o markdown` and `-o json` keep stdout
 /// clean.
+/// `settle` names the command that takes the deploy lock after the plan,
+/// so the planner settles a lock another run holds before it reads the
+/// cluster; `None` for a command that only reads.
 pub(crate) fn prepare(
     args: &PlanArgs,
     flags: PlanFlags,
+    settle: Option<kix::plan::Settle>,
     ctx: &CommandContext,
 ) -> Result<Option<Planned>> {
     refuse_with_only(&flags, &args.cluster)?;
@@ -174,7 +178,14 @@ pub(crate) fn prepare(
     let report = |event: PlanEvent<'_>| plan::progress::print(event);
     let planned = ctx
         .runtime()?
-        .block_on(Planner::new(flags, &report).run(build, &old_side(args, ctx)))
+        .block_on(async {
+            let planner = Planner::new(flags, &report);
+            let planner = match settle {
+                Some(settle) => planner.settling(settle),
+                None => planner,
+            };
+            planner.run(build, &old_side(args, ctx)).await
+        })
         .map_err(|e| miette!("{e}"))?;
     Ok(Some(planned))
 }
@@ -532,6 +543,11 @@ pub(crate) fn document(p: &mut Planned, report: Option<&DryRunReport>, manifests
     );
     doc.warnings = p.build.warnings().to_vec();
     doc.kubernetes = p.connected.as_ref().map(|c| (&c.connection).into());
+    doc.head = p
+        .connected
+        .as_ref()
+        .and_then(|c| c.head.as_ref())
+        .map(|h| h.document(chrono::Utc::now()));
     doc.deployed = p.baseline.active().map(|a| DeployedBuild {
         activation: a.name.clone(),
         identity_hash: a.identity_hash.clone(),
@@ -824,6 +840,16 @@ pub(crate) fn print_text(p: &Planned, doc: &Plan, verbose: bool) {
         p.client().is_some(),
         &p.build.graph().cluster_name,
     );
+
+    // Another run holding the lock means this plan may be out of date by
+    // the time it is confirmed, and the deploy waits or refuses.
+    if let Some(lock) = doc.head.as_ref().and_then(|h| h.lock.as_ref()) {
+        crate::say!(
+            "  {} {}",
+            output::yellow("!"),
+            crate::plan::render::lock_holder_line(lock)
+        );
+    }
 
     // Say where the extra work in this plan came from before the changes and
     // orphans it explains. Without this the reader sees a deploy of an

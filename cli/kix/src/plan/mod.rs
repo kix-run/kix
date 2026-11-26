@@ -35,8 +35,8 @@ use diff::is_propagation_path;
 pub(crate) use diff::partition_propagation;
 pub use diff::{diff_garbage, diff_graphs};
 pub use planner::{
-    CheckedPlan, Connected, Differences, OldSide, Planned, Planner, Start, Target, TargetChecks,
-    Work, keep_held, keep_shared, kinds_leaving,
+    CheckedPlan, Connected, Differences, OldSide, Planned, Planner, Settle, Start, Target,
+    TargetChecks, Work, keep_held, keep_shared, kinds_leaving,
 };
 #[cfg(test)]
 use redact::LAST_APPLIED;
@@ -69,6 +69,9 @@ pub enum PlanEvent<'a> {
     /// Connecting to the Kubernetes cluster of this connection before
     /// reading state.
     Connecting(&'a crate::cluster::binding::Connection),
+    /// Another run holds the cluster's deploy lock, and the planner watches
+    /// it before it reads the cluster.
+    LockHeld(&'a crate::cluster::head::LockState),
     /// The first deploy of Kix cluster `cluster`, whose definition names no
     /// Kubernetes cluster, through `connection`. `uid` is the live
     /// `kube-system` UID, or `None` when it could not be read.
@@ -94,8 +97,9 @@ pub enum PlanEvent<'a> {
     /// Number of objects in this cluster that name only older builds and are
     /// excluded from the live-cluster reconstruction.
     OlderBuildsLeftOut(usize),
-    /// Another deploy of the cluster may still be running, so the plan
-    /// leaves the leftovers of failed deploys alone.
+    /// A record is `Deploying` and no run holds the deploy lock for it, so a
+    /// Kix without the lock may still be deploying it, and the plan leaves
+    /// the leftovers of failed deploys alone.
     DeployInFlight(&'a Record),
     /// The build of a `Failed` or `Partial` record was folded into the plan.
     FailedFolded(&'a Record),
@@ -190,6 +194,16 @@ pub enum PlanError {
          to recover, then run the command again."
     )]
     ReadLive(Box<FetchError>),
+    #[error(
+        "cannot read the deploy lock of this Kix cluster: {}. \
+         Nothing was planned or applied to the cluster. \
+         Check your cluster connection, or wait for the Kubernetes API server to recover, \
+         then run the command again.",
+        crate::cluster::errors::describe(.0.as_ref())
+    )]
+    ReadHead(Box<kube::Error>),
+    #[error("{0}")]
+    Lock(Box<crate::cluster::head::TakeError>),
     #[error("{0}")]
     Graph(GraphError),
     #[error("{0}")]

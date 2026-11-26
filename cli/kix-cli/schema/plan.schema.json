@@ -830,6 +830,51 @@
       ],
       "type": "object"
     },
+    "LockView": {
+      "description": "What a command that only reads says about a lock: who holds it and how\nlong ago it was renewed by this machine's clock.",
+      "properties": {
+        "activation": {
+          "description": "The record the holder is deploying, if any.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "hint": {
+          "type": "string"
+        },
+        "holder": {
+          "type": "string"
+        },
+        "probably_dead": {
+          "description": "Whether that is longer than the lease, so the run has probably died\nand the next run that changes the cluster takes over. Clocks of two\nmachines can disagree, so this is a guess, not a decision.",
+          "type": "boolean"
+        },
+        "purpose": {
+          "$ref": "#/$defs/Purpose"
+        },
+        "renewed": {
+          "description": "When the holder last renewed the lock, by its clock, in RFC 3339.",
+          "type": "string"
+        },
+        "seconds_since_renewal": {
+          "description": "Seconds from `renewed` to now by this machine's clock. Negative when\nthe two clocks disagree, and `null` when `renewed` does not parse.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "holder",
+        "hint",
+        "purpose",
+        "renewed",
+        "probably_dead"
+      ],
+      "type": "object"
+    },
     "MadeBy": {
       "description": "How a [`Plan`] was made, which bounds what it can know.",
       "oneOf": [
@@ -1174,6 +1219,41 @@
       ],
       "type": "object"
     },
+    "PlanHead": {
+      "description": "The deploy lock of a Kix cluster, as a plan read it.",
+      "properties": {
+        "current": {
+          "default": null,
+          "description": "The record the lock object names as the one the cluster runs.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "generation": {
+          "description": "The generation a deploy of this plan binds to. The deploy refuses\nwhen the cluster's generation has moved since, and `kix deploy\n--plan` refuses a saved plan of another generation. 0 when the\ncluster has no lock object yet.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "lock": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LockView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The run that held the lock when the plan read it, or `null`."
+        }
+      },
+      "required": [
+        "generation"
+      ],
+      "type": "object"
+    },
     "PruneController": {
       "description": "A controller of an object the prune deletes, and what the plan found when\nit read it.",
       "properties": {
@@ -1329,6 +1409,35 @@
         {
           "const": "delete",
           "description": "Delete orphans in reverse-topological order (`--prune`).",
+          "type": "string"
+        }
+      ]
+    },
+    "Purpose": {
+      "description": "Why a run holds the lock.",
+      "oneOf": [
+        {
+          "enum": [
+            "deploy",
+            "rollback",
+            "gc",
+            "migrate"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "repair",
+          "description": "The operator corrects drift from the current record. It gives the\nlock to a run that waits for it, and does not count as a write.",
+          "type": "string"
+        },
+        {
+          "const": "teardown",
+          "description": "The operator deletes the objects of a deleted record.",
+          "type": "string"
+        },
+        {
+          "const": "other",
+          "description": "A purpose a newer Kix wrote.",
           "type": "string"
         }
       ]
@@ -1603,6 +1712,18 @@
         }
       ],
       "description": "The flags that change what the planned deploy writes or deletes.\n`null` from `kix diff`, which plans no deploy."
+    },
+    "head": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PlanHead"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The Kix cluster's deploy lock as the plan read it. `null` when the\nplan did not read it: `--offline`, `kix diff`, `kix plan\n--read-only`, or an account that may not read it."
     },
     "kix": {
       "$ref": "#/$defs/KixBuild",

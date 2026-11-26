@@ -201,6 +201,11 @@ pub(crate) trait DeployRecord: Send + Sync + 'static {
     /// applied. Called at most once, and only after [`DeployRecord::begin`].
     async fn abort(&self, reason: &str) -> Result<(), RecordWriteError>;
 
+    /// Renew the run's deploy lock right before the prune deletes anything,
+    /// so the deletes start with a whole lease ahead of them. A run without
+    /// a lock does nothing.
+    async fn before_prune(&self) -> Result<(), RecordWriteError>;
+
     /// End a run that applied the part of the build `kix deploy --only`
     /// selected: mark the record `Partial`, leaving the previous record
     /// current ([`super::activation::Records::end_partial`]). Called instead
@@ -314,6 +319,12 @@ pub(crate) enum RecordWriteError {
     /// write.
     #[error(transparent)]
     Domain(LegacyDomainError),
+    /// The run lost its deploy lock, or its lease ran out.
+    #[error(transparent)]
+    Lock(super::head::WritesStopped),
+    /// The deploy lock could not be written at the commit point.
+    #[error(transparent)]
+    Commit(super::head::CommitError),
     /// The write did not answer within the implementation's bound.
     #[error("no answer within {}s", .0.as_secs())]
     NoAnswer(Duration),

@@ -115,6 +115,23 @@ kind, namespace, and name) is checked the same way and listed under
 Objects present in both builds are checked once under the current deploy
 against the live cluster state.
 
+## A run that holds the deploy lock
+
+When another run holds the cluster's
+[deploy lock](/docs/reference/cli/deploy/#the-deploy-lock), `kix status`
+prints a line after the cluster's notes that says who holds it, what it
+does, and how long ago it renewed the lock by this machine's clock:
+
+```text
+kix deploy by ana@laptop, process 4242 holds the deploy lock (deploy of prod-3f2a9c1b04de), renewed 4s ago.
+```
+
+When that is longer than the 30-second lease, the line adds that the run
+has probably stopped and that the next deploy takes the lock over. The
+clocks of two machines can disagree, so this is a guess, and only the next
+run that changes the cluster decides. `kix status` never waits for the lock
+and never takes it. With `-q` the line is left out.
+
 ## How workload readiness is reported
 
 When a Deployment, StatefulSet, or DaemonSet is not ready, `kix status`
@@ -246,6 +263,7 @@ fields and values they do not know.
 | `clusters[].notes` | Warnings about the cluster, such as a platform interface that changed, a `Partial` deploy record, which [`kix deploy --only`](/docs/reference/cli/deploy/#deploy-one-instance-at-a-time) left partly deployed, or a `Failed` deploy record. The deploy that the [Failed deploys](#failed-deploys) section reports is not repeated in the notes. |
 | `clusters[].packages[]` | One entry for each package, with `name` (`namespace/instance`, or `null` for the cluster-level objects), `summary`, and `resources`. |
 | `clusters[].failed_deploy` | The newest deploy that failed since `deploy`, or `null`: `name`, `identity_hash`, `failed_at`, `reason`, `packages` (objects present only in the failed build, in the same shape as `clusters[].packages`), and `summary` (counts for those objects, which are excluded from the cluster's `summary`). |
+| `clusters[].lock` | The run that holds the cluster's deploy lock, or `null` when none does or the account may not read `activationheads.kix.run`: `holder` (the run's id), `hint` (who and what, as a person reads it), `purpose` (`deploy`, `rollback`, `gc`, `migrate`, `repair`, or `teardown`), `activation` (the record it deploys, or `null`), `renewed` (RFC 3339, by the holder's clock), `seconds_since_renewal` (by this machine's clock), and `probably_dead` (`true` past the 30-second lease). |
 | `clusters[].leaving[]` | Kix-managed objects of this Kix cluster that are not in the current deploy and are still being deleted. Each entry has `kind`, `group` (omitted for core `v1` kinds), `namespace` (`null` when cluster-scoped), `name`, `package` (`namespace/instance`, or `null`), `deleting_since` (`metadata.deletionTimestamp`), and `finalizers`. |
 | `summary` | Counts over every cluster: `resources`, `ok`, `missing`, `changed`, `not_ready`, `deleting` (objects in the current deploy being deleted), `leaving` (objects in `leaving[]`, not counted in `resources`, and `0` on a package `summary`), `not_checked`, and `failed_deploys` (Kix clusters where a deploy failed since the current deploy; `0` on a package `summary`). Each cluster and package has the same object. `ok` counts only the objects that every selected check passed. An object with two problems counts under both. |
 

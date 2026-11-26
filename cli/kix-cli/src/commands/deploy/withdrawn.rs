@@ -60,6 +60,7 @@ fn render_refusal(cluster: &str, w: &Withdrawn, writer: Writer) -> String {
     let (blocked, command, verb) = match writer {
         Writer::Deploy => ("Deploy blocked", "deploy", "deploy"),
         Writer::Rollback => ("Rollback blocked", "rollback", "roll back"),
+        Writer::Gc => ("Garbage collection blocked", "gc", "garbage-collect"),
     };
     let version = w.version.release();
     format!(
@@ -77,6 +78,7 @@ fn render_allowed(cluster: &str, w: &Withdrawn, writer: Writer) -> String {
     let what = match writer {
         Writer::Deploy => "deploy",
         Writer::Rollback => "rollback",
+        Writer::Gc => "garbage collection",
     };
     let version = w.version.release();
     format!(

@@ -10,6 +10,7 @@ use serde_json::Value;
 
 use crate::client;
 use kix::build_source::InstallableBuild;
+use kix::cluster::head::Purpose;
 use kix::legacy_domain::{KubeMigrationOps, migrate};
 use kix::manifest::keys;
 use kix::manifest::kinds::{self, GroupKind};
@@ -26,7 +27,16 @@ pub fn run(args: &MigrateArgs, ctx: &mut CommandContext) -> Result<()> {
         .runtime()?
         .block_on(client::connect(ctx.global.context.as_deref()))
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
-    let ops = KubeMigrationOps::new(client);
+    // A lock another run holds is settled before the migration plan is read.
+    if !args.dry_run {
+        ctx.runtime()?.block_on(super::lock::settle(
+            &client,
+            &args.cluster,
+            "kix migrate domain",
+            Purpose::Migrate,
+        ))?;
+    }
+    let ops = KubeMigrationOps::new(client.clone());
 
     // Run a dry-run pass first so we can display the migration plan before
     // prompting for confirmation.
@@ -53,10 +63,25 @@ pub fn run(args: &MigrateArgs, ctx: &mut CommandContext) -> Result<()> {
         return Ok(());
     }
 
-    let report = ctx
-        .runtime()?
-        .block_on(migrate::run(&ops, &args.cluster, &crds, false))
-        .map_err(|e| miette!("{e}"))?;
+    // The migration writes the cluster's records, so it holds the cluster's
+    // deploy lock while it runs and writes through the lock's client.
+    let report = ctx.runtime()?.block_on(async {
+        let lock = super::lock::take(
+            &client,
+            &args.cluster,
+            "kix migrate domain",
+            Purpose::Migrate,
+            None,
+            None,
+        )
+        .await?;
+        let ops = KubeMigrationOps::new(lock.guarded(&client));
+        let report = migrate::run(&ops, &args.cluster, &crds, false)
+            .await
+            .map_err(|e| miette!("{e}"));
+        super::lock::release(&lock).await;
+        report
+    })?;
 
     print_report(&args.cluster, &report);
     Ok(())

@@ -27,6 +27,17 @@
           },
           "type": "array"
         },
+        "lock": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LockView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The run that holds the cluster's deploy lock, or `null` when none\ndoes or this account may not read the lock. `kix status` never waits\nfor the lock and never takes it."
+        },
         "notes": {
           "description": "Warnings about the cluster, such as a platform interface that\nchanged.",
           "items": {
@@ -56,6 +67,7 @@
         "packages",
         "leaving",
         "failed_deploy",
+        "lock",
         "summary"
       ],
       "type": "object"
@@ -289,6 +301,53 @@
       ],
       "type": "object"
     },
+    "LockView": {
+      "description": "What a command that only reads says about a lock: who holds it and how\nlong ago it was renewed by this machine's clock.",
+      "properties": {
+        "activation": {
+          "description": "The record the holder is deploying, if any.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "hint": {
+          "type": "string"
+        },
+        "holder": {
+          "type": "string"
+        },
+        "probably_dead": {
+          "description": "Whether that is longer than the lease, so the run has probably died\nand the next run that changes the cluster takes over. Clocks of two\nmachines can disagree, so this is a guess, not a decision.",
+          "type": "boolean"
+        },
+        "purpose": {
+          "$ref": "#/$defs/Purpose"
+        },
+        "renewed": {
+          "description": "When the holder last renewed the lock, by its clock, in RFC 3339.",
+          "type": "string"
+        },
+        "seconds_since_renewal": {
+          "description": "Seconds from `renewed` to now by this machine's clock. Negative when\nthe two clocks disagree, and `null` when `renewed` does not parse.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "holder",
+        "hint",
+        "purpose",
+        "activation",
+        "renewed",
+        "seconds_since_renewal",
+        "probably_dead"
+      ],
+      "type": "object"
+    },
     "ObjectsFrom": {
       "description": "Where Kix found the list of objects a deploy made.",
       "oneOf": [
@@ -430,6 +489,35 @@
         {
           "const": "deleting",
           "description": "The object is being deleted, so it will soon be missing. Every check\nreports it, in place of `changed` or `not_ready`. The next deploy\nwaits until it is gone, then creates it again.",
+          "type": "string"
+        }
+      ]
+    },
+    "Purpose": {
+      "description": "Why a run holds the lock.",
+      "oneOf": [
+        {
+          "enum": [
+            "deploy",
+            "rollback",
+            "gc",
+            "migrate"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "repair",
+          "description": "The operator corrects drift from the current record. It gives the\nlock to a run that waits for it, and does not count as a write.",
+          "type": "string"
+        },
+        {
+          "const": "teardown",
+          "description": "The operator deletes the objects of a deleted record.",
+          "type": "string"
+        },
+        {
+          "const": "other",
+          "description": "A purpose a newer Kix wrote.",
           "type": "string"
         }
       ]

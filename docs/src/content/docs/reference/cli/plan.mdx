@@ -62,6 +62,16 @@ same flags is the plan the deploy runs.
 
 ## Permissions
 
+`kix plan` reads the cluster's
+[deploy lock](/docs/reference/cli/deploy/#the-deploy-lock) and prints a
+line when another run holds it: who, what it does, and how long ago it
+renewed the lock. When that is longer than the 30-second lease by this
+machine's clock, the line says the run has probably stopped and that the
+next deploy takes the lock over. While a run other than the operator's
+drift repair holds the lock, the plan leaves out what earlier failed or
+partial deploys applied, and the line says so. The plan never waits for the
+lock and never takes it.
+
 A dry run is authorised like the write it simulates, so `kix plan` needs the
 permissions of the deploy it previews. A user who may only `get` and `list`
 gets `forbidden` refusals. Use `kix plan --read-only` for a comparison that
@@ -193,6 +203,7 @@ Its JSON Schema is `cli/kix-cli/schema/plan.schema.json`.
 | `cluster` | The name the build gives the Kix cluster. |
 | `kubernetes` | `{ context, server }` for the Kubernetes cluster the plan read: the kubeconfig context and its API server URL, each `null` when not set in the kubeconfig. `null` when the command did not connect to a cluster (`kix plan --offline` and `kix diff`). |
 | `build` | The build the plan is for: `{ store_path, identity_hash }`. `store_path` is the build's result directory, the path a deploy records as `kix.run/built-via`; it locates the build. `identity_hash` is the Activation record's `kix.run/identity-hash`, a hash of every rendered manifest and what is upstream of it; two builds with the same identity hash deploy the same objects. Present whether or not anything changes. |
+| `head` | The cluster's [deploy lock](/docs/reference/cli/deploy/#the-deploy-lock) as the plan read it: `{ generation, current, lock }`. `generation` is the number a deploy of this plan binds to (0 when the cluster has no `ActivationHead` yet), `current` names the record the lock object says the cluster runs, and `lock` is `null`, or the run that held the lock: `{ holder, hint, purpose, activation, renewed, seconds_since_renewal, probably_dead }`. `seconds_since_renewal` is counted by this machine's clock, and `probably_dead` is `true` when it is longer than the 30-second lease. `null` when the plan did not read the lock: `kix plan --offline`, `kix plan --read-only`, `kix diff`, or an account that may not read `activationheads.kix.run`. |
 | `deployed` | The build the plan compares against: `{ activation, identity_hash, store_path }` from the cluster's current Activation record (the cached record with `--offline`). `null` on a first deploy. |
 | `flags` | The planning flags: `{ prune, reconcile, force_conflicts, accept_migrations, only }`. `prune` says what the deploy does with orphans: `delete` with `--prune`, `skip` with `--skip-orphan-check`, and `warn_only` otherwise. `only` lists the instances `--only` names, sorted, and is left out without `--only`. `null` from `kix plan --read-only` and `kix diff`. |
 | `left_alone` | With `--only`, `{ writes, orphans }`: how many objects of the build outside this deploy differ from the current deploy record, so a deploy of the whole build would write them (an earlier deploy with `--only` may already have applied some), and how many objects that left the build this deploy leaves alone. `packages`, `objects`, and `prune` show only what this deploy does. Left out without `--only`. |

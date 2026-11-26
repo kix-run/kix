@@ -277,6 +277,28 @@ resources. Any resources the operator did not delete stay on the cluster without
 an Activation record naming them; run `kix gc <cluster> --full-scan` to find
 them.
 
+## The deploy lock
+
+The operator takes each Kix cluster's
+[deploy lock](/docs/reference/cli/deploy/#the-deploy-lock) before it changes
+the cluster: to deploy a queued or resumed record, to redeploy the current
+one, to correct drift, and to delete a deleted record's resources. It runs
+one of these at a time for each Kix cluster. When another run holds the lock,
+such as `kix deploy` without `--operator` from someone's machine, the
+operator logs who holds it and tries again 5 seconds later.
+
+Drift repair holds the lock as `repair` and gives way: a run that wants the
+lock writes its id to the lock's `waiting` field, and the repair stops before
+its next write, or at its next renewal, and releases the lock. A repair does
+not raise the lock's generation and does not count as the cluster's last
+writer.
+
+The operator's id on the lock (`kix-operator/<namespace>`) stays the same
+after its pod restarts, so a new pod takes over at once a lock its previous
+pod left, and continues the deploy of the same record. `kix deploy
+--operator` and the other `--operator` commands only write requests on
+records, and take no lock.
+
 ## Waiting for the operator
 
 The CLI polls the Activation record every 2 seconds and prints progress as
@@ -305,10 +327,25 @@ A timeout ends the CLI only. The operator keeps working on the record.
 - The operator is running and watches the `kix.run` API group.
 - The operator runs a matching or newer version of Kix, its Kubernetes account
   can patch CustomResourceDefinition `activations.kix.run`, and your account
-  can read that CRD. On startup, the operator writes `requests` to the
-  `kix.run/operator-features` annotation on `activations.kix.run`.
+  can read that CRD. On startup, the operator writes `requests,head-lock` to
+  the `kix.run/operator-features` annotation on `activations.kix.run`.
   `kix deploy --operator` and `kix rollback --operator` check that annotation
-  before changing anything and stop if `requests` is missing.
+  before changing anything and stop if either feature is missing. Upgrade the
+  operator before the first deploy by a new `kix`: an older operator deploys
+  without the deploy lock.
+- The operator's Kubernetes account can `create` CustomResourceDefinitions
+  (it creates `activationheads.kix.run` when the cluster does not have it)
+  and can `get`, `list`, `create`, and `update` `activationheads.kix.run`, the
+  objects that hold each Kix cluster's deploy lock. For example:
+
+  ```yaml
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "create", "patch"]
+  - apiGroups: ["kix.run"]
+    resources: ["activationheads"]
+    verbs: ["get", "list", "create", "update"]
+  ```
 - The operator can read the store path the CLI wrote. It loads manifests from
   `spec.source.path`, so the build must be present in the store the operator
   reads, not only on the machine that ran the CLI.

@@ -55,11 +55,16 @@ async fn open_records(client: &Client) -> Result<Records> {
     Ok(records)
 }
 
+/// The id of the change record that made the `--operator` commands refuse an
+/// operator that does not take the deploy lock.
+pub(crate) const HEAD_LOCK_ID: &str = "K9557";
+
 /// Refuse to hand the operator a request when it has not published that it
-/// handles requests (`kix.run/operator-features` on the Activation CRD). An
-/// operator from before requests would ignore it, and the command would wait
-/// for an answer that never comes.
-pub async fn require_requests(client: &Client) -> Result<()> {
+/// handles requests and takes the deploy lock (`kix.run/operator-features`
+/// on the Activation CRD). An operator from before requests would ignore
+/// the request, and the command would wait for an answer that never comes.
+/// An operator from before the lock would deploy beside it.
+pub async fn require_features(client: &Client) -> Result<()> {
     use kix::cluster::activation::features;
     let version = kix::version::running();
     let found = features::read(client).await.map_err(|e| {
@@ -73,21 +78,31 @@ pub async fn require_requests(client: &Client) -> Result<()> {
             crd = kix::manifest::keys::ACTIVATIONS_CRD,
         )
     })?;
-    if found.handles(features::REQUESTS) {
+    let missing: Vec<&str> = [features::REQUESTS, features::HEAD_LOCK]
+        .into_iter()
+        .filter(|f| !found.handles(f))
+        .collect();
+    if missing.is_empty() {
         return Ok(());
     }
+    let listed = missing
+        .iter()
+        .map(|f| format!("`{f}`"))
+        .collect::<Vec<_>>()
+        .join(" and ");
     Err(miette!(
-        "the Kix operator on this cluster has not reported support for deployment requests\n  \
+        "[{HEAD_LOCK_ID}] the Kix operator on this cluster is older than Kix {version}\n  \
          Nothing was applied to the cluster.\n\n  \
          Why:\n    \
-         CustomResourceDefinition `{crd}` does not list `{feature}` in its `{key}` annotation. \
-         Kix {version} sends each `--operator` run through `spec.request` on the deployment record, which an older operator ignores. \
+         CustomResourceDefinition `{crd}` does not list {listed} in its `{key}` annotation. \
+         Kix {version} sends each `--operator` run through `spec.request` on the deployment record (`{requests}`), and expects the operator to take each Kix cluster's deploy lock before it changes the cluster (`{lock}`). \
          The operator writes `{key}` when it starts, so it is either older than Kix {version}, still starting, or missing permission to patch `{crd}`.\n\n  \
          Next:\n    \
          Upgrade the Kix operator to Kix {version} or later, grant its Kubernetes account permission to patch CustomResourceDefinition `{crd}`, and restart it so it writes `{key}`. Then run the command again.",
         key = kix::manifest::keys::OPERATOR_FEATURES,
         crd = kix::manifest::keys::ACTIVATIONS_CRD,
-        feature = features::REQUESTS,
+        requests = features::REQUESTS,
+        lock = features::HEAD_LOCK,
     ))
 }
 
@@ -427,14 +442,20 @@ mod tests {
             })
         };
         let old = FakeApi::new([crd(json!({}))]);
-        assert!(require_requests(&old.client()).await.is_err());
+        assert!(require_features(&old.client()).await.is_err());
         assert!(
             !old.requests().iter().any(|r| r.starts_with("PATCH")),
             "{:?}",
             old.requests()
         );
-        let new = FakeApi::new([crd(json!({ (keys::OPERATOR_FEATURES): "requests" }))]);
-        assert!(require_requests(&new.client()).await.is_ok());
+        // An operator that takes requests but not the deploy lock is refused.
+        let unlocked = FakeApi::new([crd(json!({ (keys::OPERATOR_FEATURES): "requests" }))]);
+        let err = require_features(&unlocked.client()).await.unwrap_err();
+        assert!(err.to_string().contains("older than Kix"), "{err}");
+        let new = FakeApi::new([crd(
+            json!({ (keys::OPERATOR_FEATURES): "requests,head-lock" }),
+        )]);
+        assert!(require_features(&new.client()).await.is_ok());
     }
 
     /// Verify that operator mode requires API discovery and rejects unmigrated clusters.

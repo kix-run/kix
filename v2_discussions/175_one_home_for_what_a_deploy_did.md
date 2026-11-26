@@ -1,6 +1,6 @@
 # 175: One home for what a deploy did
 
-**Status:** Accepted, third version. Rewritten on 2026-11-24 after a red-team review (section 9). Brought up to date on 2026-11-26 for `kix deploy --only`, with the build order (section 10). Part 1 is being built.
+**Status:** Accepted, third version. Rewritten on 2026-11-24 after a red-team review (section 9). Brought up to date on 2026-11-26 for `kix deploy --only`, with the build order (section 10). Part 1 is built (branch `head-lock`, 2026-11-26); section 10 says what, and section 4.4 marks where it differs.
 **Related:** `122_runtime_content_drift.md` (the applied hash), `81_deploy_as_lifecycle_engine.md`, `55_shared_resource_ownership.md`, `archive/150_scope_managed_sweep_to_one_cluster.md` (several Kix clusters on one Kubernetes cluster), `archive/157_kix_plan_primary_preview.md` (the plan), `interesting_thoughts/54_activation_signing.md`, `housekeeping/reviews/2026-11-23.md` (themes 4 and 5)
 
 Type: design doc. It reads code at `origin/main` on 2026-11-26, with the
@@ -60,17 +60,18 @@ PackageInstance kind is not changed.
   150 KiB. With names it holds about 1,200 objects. Past that Kix drops the
   names, and past about 3,600 objects it stores no list.
 - **Nothing orders two deploys**
-  (`housekeeping/2026-09-28-kept-orphans-list-last-finalize-wins.md`,
-  `housekeeping/2026-11-11-stale-deploying-record-never-cleared.md`). The
-  deploy reference says a second deploy is refused, and the code does not
-  refuse it.
+  (housekeeping entries `2026-09-28-kept-orphans-list-last-finalize-wins`
+  and `2026-11-11-stale-deploying-record-never-cleared`, both deleted when
+  part 1 was built). The deploy reference said a second deploy is refused,
+  and the code did not refuse it.
 - **The cluster does not know which Kix wrote it last**
-  (`housekeeping/2026-11-20-record-names-the-builder-not-the-writer.md`).
+  (`2026-11-20-record-names-the-builder-not-the-writer`, deleted with part 1).
 - **A deploy of part of a build makes two deploys at once likely.** With
   `kix deploy --only`, two people may each deploy one instance of the same
   build. Both runs write the same record, and the last to finish sets its
   phase and `status.partial`
-  (`housekeeping/2026-11-26-two-deploys-of-one-cluster-are-not-blocked.md`).
+  (`2026-11-26-two-deploys-of-one-cluster-are-not-blocked`, deleted with
+  part 1).
 - **Commands disagree.** `kix deploy` compares two builds. The operator and
   gc read the notes on live objects. `kix plan --read-only` compares a
   filtered view of live objects.
@@ -272,6 +273,12 @@ Rules:
   No one clock does that on every system, so the holder measures with the
   monotonic clock and with the wall clock and uses the longer of the two. The holder renews immediately before it prunes and checks
   the deadline before each delete.
+- **A held lock is settled before the plan** (added when part 1 was built).
+  A command that will take the lock first deals with one another run holds,
+  before it reads the state it plans from: it refuses a live holder at once,
+  and takes a dead holder's lock over with the cleanup below, raises the
+  generation, and releases it. Only then does it plan. Without this, every
+  takeover refused its own run for the generation it had just raised.
 - **A plan is bound to `status.generation`.** A plan is shown and confirmed
   before the lock is taken. The run refuses if the generation has moved. A
   saved plan stores the generation beside what it binds to today.
@@ -301,12 +308,51 @@ Rules:
 
 The phases on records stay as history and for older readers.
 
+**Where part 1 differs from the rules above** (built 2026-11-26):
+
+- **No status subresource.** The head's CRD has none, so creating the head
+  writes the lock in the same request, and every write is a PUT of the
+  whole object with its `resourceVersion`. The `status.*` paths are as in
+  the table.
+- **`status.lock.hint`** is a field of its own beside `holder`, and the
+  purposes include **`teardown`**, the operator deleting a deleted record's
+  objects.
+- **Step 8 keeps the lock.** The commit writes `current`, `generation`, and
+  `writer` and leaves the lock held, and the run releases it after step 9,
+  so every write of a run is under its lock. A run that dies between the
+  commit and the release leaves a lock whose record is current, which the
+  next run clears (the first takeover rule), and phases it repairs.
+- **A takeover raises the generation**, unless the new holder continues
+  the dead run's record or the dead run was a repair. The dead run may have
+  written, and a plan made while it held the lock did not see that. This
+  includes the case where the dead run deployed the current record, which
+  the rules above say only clears the lock.
+- **Correcting the head or the phases raises the generation.** Repairing
+  the phases from the head does, because a plan read the old phases.
+  Rebuilding a head that had a `status` does too (an older Kix deployed),
+  and forgets `writer`, so the writer checks read the current record as
+  before. Creating the head, or rebuilding one with no `status`, does not.
+- **A plan made with `--offline` binds to no generation.** It read nothing
+  from the cluster. The check of the cached build against the current
+  record still runs once it connects.
+- **The operator runs one job per Kix cluster at a time** (an in-process
+  mutex), so a lock held by its own stable id (`kix-operator/<namespace>`)
+  is always one its previous pod left, and is taken over at once.
+- **A held lock is settled before planning**, as the rule above now says,
+  and a takeover raises the generation once. The plan warns about a
+  `Deploying` record only when no lock names a run, and the lock's holder
+  line says when the plan leaves out what failed deploys applied.
+- **A repair gives way on its next write or renewal.** It reads the head
+  before each write, and its renewal every 10 seconds also sees `waiting`.
+  A run that waits gives up after 60 seconds of a repair that keeps
+  renewing.
+
 ### 4.5 One deploy, step by step
 
 | Step | Writes | If the run dies here |
 |---|---|---|
 | 1. Create the head's CRD if it is absent | One CRD | Nothing to repair |
-| 2. Take the lock, check `status.writer` and `status.generation`, then update Kix's CRDs | Head, CRDs | The lock expires |
+| 2. Take the lock, check `status.writer` and `status.generation`, then update Kix's CRDs. A lock another run held was settled before the plan, so this take normally finds none. | Head, CRDs | The lock expires |
 | 3. Create the record, phase `Deploying`. Then send a create for every revision it names and accept "already exists". | Record, revisions | The next run takes over as section 4.4 says, and sends the creates again |
 | 4. Apply each changed object, in dependency order | One write per object | Objects it reached carry its build hash. Rule 1 or 2 of section 4.3 applies them again. |
 | 5. Write `status.applied` on each revision whose objects were applied | One write per changed instance | Some applied hashes are missing. Rule 2 applies and records them. |
@@ -650,7 +696,17 @@ or for a record the operator made from a hand-applied Activation.
 The work is two pull requests in one release. The lock needs none of the
 tests that the revisions wait for, so it is built first.
 
-**Part 1: the head and the lock.**
+**Part 1: the head and the lock.** Built on 2026-11-26. The module is
+`cli/kix/src/cluster/head/`; `cli/README.md` ("Deploy lock") describes it.
+The one write guard is the `kube::Client` that `Lock::guarded` returns:
+the engine, gc, migrate, and records write through it. Not built in part 1:
+the operator's request bookkeeping on records before it takes the lock
+(`housekeeping/2026-11-26-operator-request-bookkeeping-outside-the-lock.md`),
+clearing a record a run before the lock left `Deploying`
+(`housekeeping/2026-11-26-deploying-record-from-before-the-lock-stays.md`),
+and updating the head's CRD in a later release
+(`housekeeping/2026-11-26-head-crd-is-never-updated.md`). `kix gc
+--operator` takes no lock, as the other `--operator` commands.
 
 - The `ActivationHead` kind, created by the CLI and the operator.
 - The lock, for deploy, rollback, gc, prune, migrate, the operator's

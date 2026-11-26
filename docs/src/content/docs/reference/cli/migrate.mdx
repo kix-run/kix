@@ -31,12 +31,16 @@ kix migrate domain <CLUSTER> [--dry-run] [-y] [--flake <FLAKE>] [--context <CONT
 1. Builds the cluster and reads the Kix CRDs from the build.
 2. Prints the plan. A cluster with nothing under the old group reports
    "Nothing to do" and exits.
-3. Copies every Activation record to the new group with its spec, status, and
+3. Takes the cluster's
+   [deploy lock](/docs/reference/cli/deploy/#the-deploy-lock), and holds it
+   until the migration ends. When another run holds the lock and is still
+   running, the command stops having changed nothing.
+4. Copies every Activation record to the new group with its spec, status, and
    history, and checks each copy by name and phase.
-4. Clears the operator finalizer from the old records, waits, and reads them
+5. Clears the operator finalizer from the old records, waits, and reads them
    back. If a finalizer returns, an operator is still running, and the command
    stops having deleted nothing.
-5. Deletes the old CRDs.
+6. Deletes the old CRDs.
 
 PackageInstance records are not copied; the next deploy re-creates them.
 

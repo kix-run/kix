@@ -20,6 +20,7 @@ use kix::cluster::activation::{PinnedInterface, Record, Records, RecordsError};
 use kix::cluster::binding::{self, Connection, Target};
 use kix::cluster::discovery;
 use kix::cluster::errors::{api_error, forbidden};
+use kix::cluster::head::{self, LockView};
 use kix::cluster::kubernetes_version::{self, LiveVersion};
 use kix::cluster::observe::{self, Observation, ObserveScope};
 
@@ -57,10 +58,10 @@ pub fn run(args: &StatusArgs, ctx: &mut CommandContext) -> Result<Exit> {
         ),
         None => None,
     };
-    let (observation, kubernetes, notes) = ctx
+    let (observation, kubernetes, notes, locks) = ctx
         .runtime()?
         .block_on(read_cluster(cluster.as_deref(), &global))?;
-    let doc = document::build(
+    let mut doc = document::build(
         &observation,
         kubernetes,
         &notes,
@@ -68,6 +69,7 @@ pub fn run(args: &StatusArgs, ctx: &mut CommandContext) -> Result<Exit> {
         args.package.as_deref(),
     )
     .map_err(|e| miette!("{e}"))?;
+    doc.set_locks(&locks);
     let detail = if global.quiet {
         text::Detail::Problems
     } else if global.verbose > 0 {
@@ -81,7 +83,8 @@ pub fn run(args: &StatusArgs, ctx: &mut CommandContext) -> Result<Exit> {
 }
 
 /// Read the deploy records and Kix's objects, the Kubernetes cluster's ID
-/// and version, and the platform interface warnings of each Kix cluster.
+/// and version, the platform interface warnings of each Kix cluster, and
+/// the run that holds each one's deploy lock.
 async fn read_cluster(
     cluster: Option<&str>,
     global: &crate::cli::GlobalArgs,
@@ -89,6 +92,7 @@ async fn read_cluster(
     Observation,
     document::Kubernetes,
     BTreeMap<String, Vec<String>>,
+    BTreeMap<String, LockView>,
 )> {
     let spinner = output::spinner("Reading the cluster...");
     let client = client::make_client(global.context.as_deref())
@@ -122,6 +126,12 @@ async fn read_cluster(
         };
         return Err(no_deploy(cluster, &deployed, &connection.describe()));
     }
+    let mut locks = BTreeMap::new();
+    for view in &observation.clusters {
+        if let Some(lock) = read_lock(&client, &view.cluster).await {
+            locks.insert(view.cluster.clone(), lock);
+        }
+    }
     let mut notes = BTreeMap::new();
     if let Some(records) = opened.records() {
         for view in &observation.clusters {
@@ -144,7 +154,23 @@ async fn read_cluster(
         uid: id.uid,
         version: id.version,
     };
-    Ok((observation, kubernetes, notes))
+    Ok((observation, kubernetes, notes, locks))
+}
+
+/// Return the run that holds the deploy lock of Kix cluster `cluster`, as of
+/// now by this machine's clock, or `None` when none does. A lock that cannot
+/// be read, as for an account that may not read it, is left out.
+async fn read_lock(client: &kube::Client, cluster: &str) -> Option<LockView> {
+    match head::read(client, cluster).await {
+        Ok(found) => found
+            .as_ref()
+            .and_then(|h| h.lock())
+            .map(|l| LockView::of(l, chrono::Utc::now())),
+        Err(e) => {
+            tracing::debug!(cluster, error = %e, "could not read the deploy lock");
+            None
+        }
+    }
 }
 
 /// Return the error for a Kix cluster with no current deploy here, or for a

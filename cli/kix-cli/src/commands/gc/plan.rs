@@ -64,9 +64,46 @@ pub(super) struct RecordRetirement {
     /// Current Active or Degraded record for the cluster, used to inspect
     /// `orphansKeptFrom`.
     pub(super) active: Option<Record>,
+    /// The cluster's deploy lock, read with the records. gc binds to its
+    /// generation and checks its writer.
+    pub(super) head: Option<kix::cluster::head::Head>,
 }
 
 impl RecordRetirement {
+    /// Refuse gc of `cluster` when this Kix may not write to it: a newer
+    /// minor of Kix wrote to it last, or gc would skip a required stop.
+    pub(super) fn check_writer(&self, cluster: &str) -> Result<()> {
+        let last = kix::cluster::stops::LastWrite::of(
+            self.head.as_ref().and_then(|h| h.writer()),
+            self.active.as_ref(),
+        );
+        super::super::deploy::stops::check(cluster, &last, super::super::deploy::stops::Writer::Gc)
+            .map(|_| ())
+    }
+
+    /// Take the deploy lock of `cluster` through `client`, bound to the
+    /// generation gc read with the records, and read and write the records
+    /// through the lock's guarded client from then on.
+    pub(super) async fn lock(
+        &mut self,
+        client: &kube::Client,
+        cluster: &str,
+    ) -> Result<std::sync::Arc<kix::cluster::head::Lock>> {
+        let lock = super::super::lock::take(
+            client,
+            cluster,
+            "kix gc",
+            kix::cluster::head::Purpose::Gc,
+            None,
+            Some(kix::cluster::head::generation_of(self.head.as_ref())),
+        )
+        .await?;
+        if let Some(records) = &self.records {
+            self.records = Some(records.through(&lock.guarded(client)));
+        }
+        Ok(lock)
+    }
+
     /// Return how many older deployment records gc keeps, such as `2 older
     /// deployment records kept for rollback`.
     pub(super) fn kept_note(&self) -> String {
@@ -358,16 +395,32 @@ pub(super) async fn plan_record_retirement(
     global: &crate::cli::GlobalArgs,
     cluster: &str,
     policy: &RetentionPolicy,
+    settle: bool,
 ) -> Result<RecordRetirement> {
-    plan_records_with(open_records(global).await?, cluster, policy).await
+    plan_records_with(
+        open_records(global, cluster, settle).await?,
+        cluster,
+        policy,
+    )
+    .await
 }
 
 /// Say which Kubernetes cluster gc targets, connect to it, and open its
-/// Activation records, or return `None` when the cluster has none.
-pub(super) async fn open_records(global: &crate::cli::GlobalArgs) -> Result<Option<Records>> {
+/// Activation records, or return `None` when the cluster has none. With
+/// `settle`, first settle a deploy lock another run holds on `cluster`, so
+/// what gc reads is what a dead run's takeover left.
+pub(super) async fn open_records(
+    global: &crate::cli::GlobalArgs,
+    cluster: &str,
+    settle: bool,
+) -> Result<Option<Records>> {
     let (client, _) = client::connect(global.context.as_deref())
         .await
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
+    if settle {
+        super::super::lock::settle(&client, cluster, "kix gc", kix::cluster::head::Purpose::Gc)
+            .await?;
+    }
     let discovery = discovery::discover_resources(&client)
         .await
         .map_err(|e| miette!("{e}"))?;
@@ -387,6 +440,7 @@ pub(super) async fn plan_records_with(
             records: None,
             plan: Default::default(),
             active: None,
+            head: None,
         });
     };
     let superseded = records
@@ -395,10 +449,19 @@ pub(super) async fn plan_records_with(
         .map_err(|e| miette!("{e}"))?;
     let plan = retire_plan(superseded, policy);
     let active = records.active(cluster).await.map_err(|e| miette!("{e}"))?;
+    let head = kix::cluster::head::read(records.client(), cluster)
+        .await
+        .map_err(|e| {
+            miette!(
+                "could not read the deploy lock of cluster {cluster}: {}",
+                kix::cluster::errors::describe(&e)
+            )
+        })?;
     Ok(RecordRetirement {
         records: Some(records),
         plan,
         active,
+        head,
     })
 }
 

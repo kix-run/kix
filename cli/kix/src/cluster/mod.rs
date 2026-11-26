@@ -14,6 +14,7 @@ pub mod errors;
 pub mod fake_api;
 pub mod fieldsv1;
 pub mod graph;
+pub mod head;
 pub mod inventory;
 pub mod kept;
 pub mod kubernetes_version;

@@ -64,8 +64,7 @@ Set `KIX_TUI_HEIGHT` to a number of rows to cap the live view of
    Kubernetes cluster never enter the previous state. Neither do this
    cluster's resources that name only older builds; the plan says how many,
    and `kix gc --full-scan` finds them.
-3. Refuses to start if another deploy of the same cluster is in progress.
-   Resources left by an earlier deploy that stopped part way, or that
+3. Resources left by an earlier deploy that stopped part way, or that
    `--only` left partly deployed, are folded into the plan: they are
    re-applied or reported as orphans. An object counts as left behind only
    when the cluster holds it with that deploy's record in its
@@ -83,7 +82,8 @@ Set `KIX_TUI_HEIGHT` to a number of rows to cap the live view of
    uncommitted changes. Under `--on-error stop`, a plan with a refused write
    or a refused prune delete stops the deploy here, before anything is
    applied. With `--offline` the plan is not sent to the cluster.
-5. Asks for confirmation, then creates the Activation record and applies.
+5. Asks for confirmation, then takes the cluster's
+   [deploy lock](#the-deploy-lock), creates the Activation record, and applies.
    Unchanged resources are skipped unless they are missing from the cluster or
    being deleted. During planning, Kix lists the Kix-managed resources of each
    kind in the build across the cluster so the deploy recreates any that are
@@ -206,11 +206,87 @@ are covered in [API server retries and request limits](/docs/reference/cli/api-s
 Set `KIX_NO_INTERACTIVE` to any value to treat the terminal as
 non-interactive.
 
+## The deploy lock
+
+Only one run at a time changes a Kix cluster. Each Kix cluster has one
+`ActivationHead` object, named after the cluster, that holds its deploy
+lock (see [`ActivationHead`](/docs/reference/annotations-crds-and-receipts/#activationhead)).
+`kix deploy`, `kix deploy --only`, `kix rollback`, `kix gc`, `kix migrate
+domain`, and the Kix operator take the lock before they change the cluster.
+`kix deploy --operator` and the other `--operator` commands take no lock:
+they hand the work to the operator, which takes it. The first run creates
+the `activationheads.kix.run` CustomResourceDefinition when the cluster does
+not have it yet, so the account that runs it needs `create` on
+CustomResourceDefinitions once.
+
+A deploy deals with a lock another run holds before it reads the cluster
+for its plan, right after it builds and connects. It says who holds the
+lock and watches it for up to 30 seconds:
+
+- If the other run renews its lock, which a live run does every 10 seconds,
+  the deploy stops with exit code 1, names the run, what it does, and the
+  record it deploys, and changes nothing.
+- If nothing renews the lock for 30 seconds, the run that held it has
+  stopped, and the deploy takes the lock over. When the stopped run was
+  deploying another record, that record is marked `Failed`.
+- If the operator holds the lock to correct drift, the deploy asks it to
+  give way and waits for it to stop.
+
+After a takeover the deploy releases the lock again and only then reads the
+cluster, so its plan shows what the stopped run left. It takes the lock
+itself after you confirm the plan. A lock that another run took in between
+is watched the same way. `kix rollback`, `kix gc`, and `kix migrate domain`
+deal with a held lock the same way before they read the cluster. `kix
+plan`, `kix status`, and the `--dry-run` forms never wait for the lock.
+
+```text
+Kix cluster prod is locked by another run: kix deploy by ana@laptop, process 4242 (deploy of record prod-3f2a9c1b04de).
+  Nothing was changed on the cluster.
+
+  Why:
+    Only one run at a time may change a Kix cluster. The other run renewed its lock while this one watched, so it is still running.
+
+  Next:
+    Wait for that run to finish, then run this command again. If that run has stopped, its lock expires 30 seconds after its last renewal, and the next run takes it over.
+```
+
+The lock also holds a generation number, which rises each time a run that
+wrote to the cluster ends, and when a run takes over a stopped run's lock.
+The plan you confirm records the generation it read. Once the deploy holds
+the lock, it refuses with exit code 1 when the generation has moved, because
+another run changed the cluster between the plan and the deploy:
+
+```text
+Kix cluster prod changed after this plan was made (deploy lock generation 7, now 8).
+```
+
+Run the command again to see a fresh plan. A plan made with `--offline`
+reads no generation, so nothing binds it.
+
+A run that cannot renew its lock stops writing 20 seconds after its last
+renewal, 10 seconds before another run may take the lock over. It measures
+that time by the monotonic clock and by the wall clock and uses the longer,
+so a laptop that slept mid-deploy does not write on after waking. The
+objects it did not reach are applied by the next deploy.
+
+The lock object also names the record the cluster runs and the Kix that
+wrote to the cluster last. A deploy names its record there at one point,
+after it has applied everything, and only then marks the phases of the
+records. If the deploy stops between the two, the next run corrects the
+phases from the lock object. A record left in phase `Deploying` with no
+lock naming it, by a Kix from before the lock or by an older Kix that takes
+no lock, still makes the plan print a warning, with the `kubectl patch`
+command that marks it `Failed`. [`kix status`](/docs/reference/cli/status/) and
+[`kix plan`](/docs/reference/cli/plan/) show who holds the lock without
+waiting for it.
+
 ## Required stops
 
 A few releases change what Kix stores in the cluster, and every cluster must
 be deployed with them once before it moves to a newer minor. `kix deploy`
-reads which Kix made the cluster's last deploy from its deploy receipt. It
+reads which Kix wrote to the cluster last from the cluster's
+[deploy lock](#the-deploy-lock) object, or from the deploy receipt of its
+current record on a cluster that no Kix with the lock has written to yet. It
 refuses before it applies anything when that version is older than such a
 release and the Kix deploying now is newer than the release's minor:
 
@@ -227,8 +303,8 @@ A deploy with a Kix of the release's own minor passes, and so does a cluster
 with no receipt, such as one never deployed. `kix deploy --dry-run` and
 `kix plan` do not check.
 
-`kix rollback` makes the same check, since the Kix that runs it writes to the
-cluster. It refuses with `Rollback blocked:` and tells you to roll back from
+`kix rollback` and `kix gc` make the same check, since the Kix that runs
+them writes to the cluster. It refuses with `Rollback blocked:` and tells you to roll back from
 the commit pinned to the required stop's minor. The in-cluster operator checks
 its own Kix version the same way. It marks the queued Activation `Failed` with
 the reason and emits a `RequiredStopSkipped` event, so `kix deploy --operator`
@@ -238,14 +314,19 @@ stops at such a release, so a project normally deploys it on the way.
 ## Deploys by an older Kix
 
 `kix deploy` stops before applying anything if a newer minor version of Kix
-last deployed the cluster. Kix reads that version and the deployed commit from
-the cluster's [deploy receipt](/docs/reference/annotations-crds-and-receipts/#deploy-receipt-schema):
+last wrote to the cluster. Kix reads that version from the cluster's
+[deploy lock](#the-deploy-lock) object, which names the Kix that last
+finished a deploy, a rollback, or a gc, whichever program ran it. On a
+cluster that no Kix with the lock has written to yet, it reads the version
+from the current record's
+[deploy receipt](/docs/reference/annotations-crds-and-receipts/#deploy-receipt-schema).
+The deployed commit comes from that receipt:
 
 ```text
 Deploy blocked: cluster prod was last deployed with Kix 0.9.1 (from commit abc1234), and this is Kix 0.8.4.
 Nothing was applied to cluster prod.
 
-Kix 0.8.4 may not understand what Kix 0.9.1 wrote to the cluster. Once Kix 0.9 has deployed a cluster, only Kix 0.9 or newer can deploy or roll it back.
+Kix 0.8.4 may not understand what Kix 0.9.1 wrote to the cluster. Once Kix 0.9 has deployed a cluster, only Kix 0.9 or newer can deploy, roll back, or garbage-collect it.
 
 Next: switch to a commit that uses Kix 0.9 or newer, or upgrade this project to Kix 0.9 or newer with `kix upgrade`. Then run `kix deploy prod` again.
 To deploy with Kix 0.8.4 anyway (for example, to downgrade from a broken release), set KIX_ALLOW_DOWNGRADE=0.9.1. Cluster prod's deployment record will note the downgrade from Kix 0.9.1.
@@ -264,6 +345,9 @@ Other commands and flags handle this check as follows:
 - **`kix rollback`**: Checks the running Kix version against the cluster's last
   deploy, regardless of which Kix version built the rollback target. Honors
   `KIX_ALLOW_DOWNGRADE`.
+- **`kix gc`**: Refuses with `Garbage collection blocked:`. No setting lets
+  an older Kix garbage-collect, because it could delete objects that a newer
+  Kix keeps track of in ways the older one does not read.
 - **Operator mode (`--operator`)**: The Kix operator checks its own Kix
   version, marks the queued `Activation` `Failed`, and emits an `OlderKix`
   event. The operator has no downgrade override; run `kix deploy` or
@@ -297,6 +381,7 @@ any of these:
 | Cluster | The plan is for another Kix cluster. |
 | New build | The build's identity hash. A store path that moved, with the same manifests, still matches. |
 | Deployed build | The identity hash of the build the cluster runs: another deploy landed after the review. |
+| Lock generation | The generation of the cluster's [deploy lock](#the-deploy-lock): another run that wrote to the cluster ended after the review, such as a deploy with `--only` or a gc. A plan saved without it, by `--offline` or an older Kix, is not held to it. |
 | Planning flags | `--prune`, `--skip-orphan-check`, `--reconcile`, `--force-conflicts`, `--accept-migrations`, or `--only`. A flag given on the command line that the plan was made without is an error before the build. `--only` must name the same instances as the plan, or be left out on both: a plan of part of the build deploys only with the same `--only`, and a plan of the whole build only without it. |
 | Refusals | A conflict, by object, or an admission refusal, by object and reason, that the reviewed plan did not have. |
 | Reverted drift | A drifted field, by object and path, that the deploy would put back and the reviewed plan did not list. |
@@ -380,8 +465,12 @@ The Active deployment record stays as it is. The new build's record is marked
 `Partial`, with `status.partial` naming every instance the deploy applied in
 full (named and needed). The next plan folds what a `Partial` record applied
 into its baseline, as it does for a `Failed` record. A later `--only` of the
-same build adds its instances to the list. When the build is the one the
-cluster already runs, its record stays `Active`.
+same build adds its instances to the list. Two deploys with `--only` of the
+same build run one after the other, because each holds the
+[deploy lock](#the-deploy-lock). When the build is the one the cluster
+already runs, its record stays `Active`. A deploy with `--only` raises the
+lock's generation when it ends, so a plan saved before it is refused, and
+leaves the record the lock names as current.
 
 A deploy with `--only` deletes nothing, does not record kept orphans, stamps
 no unchanged object with the new record, and writes no deploy receipt. It
@@ -491,7 +580,7 @@ status is non-zero.
 | Code | Meaning |
 | --- | --- |
 | `0` | Deploy complete, nothing to apply, or the prompt was declined |
-| `1` | A resource failed, under either `--on-error` mode, or the run was cancelled; the plan showed a refused write under `--on-error stop`; a stateful migration was detected without `--accept-migrations`; confirmation was needed on a non-interactive terminal; the cluster would skip a [required stop](#required-stops); the cluster was [last deployed by a newer minor version of Kix](#deploys-by-an-older-kix); `kix-upgrade.json` lists a change to stored data for this cluster that no one has acknowledged with [`kix upgrade --acknowledge`](/docs/reference/cli/upgrade/#changes-to-stored-data); or a build, evaluation, or cluster error |
+| `1` | A resource failed, under either `--on-error` mode, or the run was cancelled; the plan showed a refused write under `--on-error stop`; a stateful migration was detected without `--accept-migrations`; confirmation was needed on a non-interactive terminal; the cluster would skip a [required stop](#required-stops); the cluster was [last deployed by a newer minor version of Kix](#deploys-by-an-older-kix); another run holds the [deploy lock](#the-deploy-lock) and is still running, or changed the cluster since the plan; `kix-upgrade.json` lists a change to stored data for this cluster that no one has acknowledged with [`kix upgrade --acknowledge`](/docs/reference/cli/upgrade/#changes-to-stored-data); or a build, evaluation, or cluster error |
 
 With `--dry-run` the exit status is [`kix plan`'s](/docs/reference/cli/plan/#exit-status):
 `0` when nothing would change, `2` when something would, and `3` when the

@@ -29,8 +29,10 @@ use crate::plan;
 use kix::cluster::activation::Records;
 use kix::cluster::apply::RerunReason;
 use kix::cluster::binding;
+use kix::cluster::head::{HeadRead, Lock, Purpose};
 use kix::cluster::readiness;
 use kix::cluster::scheduler::{self, OnErrorPolicy, PrunePolicy, SchedulerConfig};
+use kix::cluster::stops::LastWrite;
 use kix::cluster::stream::{DeployObserver, DeployResult, NodeId};
 use kix::plan::document::{AdmissionRefusal, Plan, PlanFlags, RefusalReason};
 use kix::plan::{CheckedPlan, Connected, LastRuns, Planned, Start, Target, Work};
@@ -72,7 +74,11 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
     let flags = saved
         .as_ref()
         .map_or_else(|| flags_of(&args.plan), |s| s.flags.clone());
-    let Some(mut p) = prepare(&args.plan, flags, ctx)? else {
+    let settle = kix::plan::Settle {
+        command: Command::Deploy.invocation(),
+        purpose: Purpose::Deploy,
+    };
+    let Some(mut p) = prepare(&args.plan, flags, Some(settle), ctx)? else {
         // The build is empty, so Kix never connects and the log has no
         // `kubernetes` line.
         if args.log_format == LogFormat::Json {
@@ -82,11 +88,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
     };
     // A cluster that has never run a required stop must deploy it first,
     // and a cluster a newer minor of Kix deployed refuses this one.
-    if let Some(from) = stops::check(
-        &args.plan.cluster,
-        p.baseline.active(),
-        stops::Writer::Deploy,
-    )? {
+    if let Some(from) = stops::check(&args.plan.cluster, &last_write(&p), stops::Writer::Deploy)? {
         p.note_downgrade(&from);
     }
     if let Some(version) = withdrawn::check(&args.plan.cluster, stops::Writer::Deploy)? {
@@ -132,9 +134,13 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
     // A plan made from the local cache (`--offline`) has not read its Jobs,
     // so it decides once the run connects.
     if let Some(connected) = &p.connected
-        && let Some(unchanged) =
-            ctx.runtime()?
-                .block_on(start(&connected.client, &p.checked, &connected.last_runs))
+        && let Some(unchanged) = ctx.runtime()?.block_on(start(
+            &connected.client,
+            &p.checked,
+            &connected.last_runs,
+            Command::Deploy,
+            connected.head.as_ref(),
+        ))?
     {
         say_nothing_to_apply(
             &p.checked,
@@ -215,6 +221,14 @@ impl Command {
         match self {
             Command::Deploy => "kix deploy",
             Command::Rollback => "kix rollback",
+        }
+    }
+
+    /// Return why the command holds the deploy lock.
+    pub(crate) fn purpose(self) -> Purpose {
+        match self {
+            Command::Deploy => Purpose::Deploy,
+            Command::Rollback => Purpose::Rollback,
         }
     }
 
@@ -374,13 +388,53 @@ pub(crate) fn run_planned(
     Ok(end)
 }
 
+/// Return what the Kix that wrote to the cluster last was, as the plan of
+/// `p` read it: the deploy lock's writer, or the Active record's receipt.
+pub(crate) fn last_write(p: &Planned) -> LastWrite {
+    let writer = p
+        .connected
+        .as_ref()
+        .and_then(|c| c.head.as_ref())
+        .and_then(|h| h.writer.as_ref());
+    LastWrite::of(writer, p.baseline.active())
+}
+
 /// Decide whether a deploy or a rollback of `checked` starts its run
-/// ([`CheckedPlan::start`]). Return `None` when it does, or the number of
-/// unchanged objects when there is nothing to do. With nothing to do, say
-/// how many failed deploy records were marked Superseded; the caller says
-/// that nothing was applied. When only Jobs remain, say why the run still
-/// starts.
+/// ([`CheckedPlan::start`]), before it is confirmed. Return `None` when it
+/// does, or the number of unchanged objects when there is nothing to do.
+/// With nothing to do, the failed records the plan folded in are marked
+/// Superseded, under the deploy lock, which binds to `head`, the lock the
+/// plan read.
 pub(crate) async fn start(
+    client: &kube::Client,
+    checked: &CheckedPlan,
+    last_runs: &LastRuns,
+    command: Command,
+    head: Option<&HeadRead>,
+) -> Result<Option<usize>> {
+    if checked.work(last_runs) != Work::Nothing || checked.consumed_failed().is_empty() {
+        return Ok(start_locked(client, checked, last_runs).await);
+    }
+    let lock = super::lock::take(
+        client,
+        checked.cluster(),
+        command.invocation(),
+        command.purpose(),
+        None,
+        head.map(|h| h.generation),
+    )
+    .await?;
+    let started = start_locked(&lock.guarded(client), checked, last_runs).await;
+    super::lock::release(&lock).await;
+    Ok(started)
+}
+
+/// Decide whether a run of `checked` starts, as [`start`] does, writing
+/// through `client`, which holds the deploy lock when there are records to
+/// supersede. With nothing to do, say how many failed deploy records were
+/// marked Superseded; the caller says that nothing was applied. When only
+/// Jobs remain, say why the run still starts.
+async fn start_locked(
     client: &kube::Client,
     checked: &CheckedPlan,
     last_runs: &LastRuns,
@@ -430,14 +484,16 @@ fn say_failed_jobs(last_runs: &LastRuns) {
     }
 }
 
-/// Run `checked` against `target` for `kix deploy` or `kix rollback`, and
-/// keep this machine's copy of the kept orphans in step with what the run's
-/// finalize wrote for Kix cluster `cluster`. An interrupt cancels the run,
-/// which then marks its Activation record Failed instead of leaving it
-/// Deploying.
+/// Run `checked` against `target` for `kix deploy` or `kix rollback`, under
+/// `lock`, and keep this machine's copy of the kept orphans in step with
+/// what the run's finalize wrote for Kix cluster `cluster`. An interrupt
+/// cancels the run, which then marks its Activation record Failed instead of
+/// leaving it Deploying. The caller releases `lock`.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_plan(
     checked: CheckedPlan,
     target: Target,
+    lock: Arc<Lock>,
     receipt: Option<Value>,
     config: SchedulerConfig,
     observer: Arc<dyn DeployObserver>,
@@ -445,7 +501,7 @@ pub(crate) async fn run_plan(
 ) -> (Result<DeployResult, scheduler::DeployError>, RunEnd) {
     crate::interrupt::cancel_on_interrupt(&config.cancel);
     let partial = !checked.flags().only.is_empty();
-    let (result, kept) = checked.run(target, receipt, config, observer).await;
+    let (result, kept) = checked.run(target, lock, receipt, config, observer).await;
     if let Some(recorded) = kept {
         kix::plan::baseline::sync_kept_roots(cluster, &recorded);
     }
@@ -746,6 +802,10 @@ async fn run_deploy_async(
     // Reuse the pre-confirm client, which the plan ran the target checks
     // through and read the Jobs with, or connect now, run the checks, filter
     // orphans shared with other Kix clusters, and read the Jobs.
+    let expect = connected
+        .as_ref()
+        .and_then(|c| c.head.as_ref())
+        .map(|h| h.generation);
     let (client, connection, offline_runs) = match connected {
         Some(c) => (c.client, c.connection, None),
         None => {
@@ -774,6 +834,55 @@ async fn run_deploy_async(
         }
     };
 
+    // Only one run at a time changes the Kix cluster. A plan made while
+    // connected binds the run to the generation it read; one made from the
+    // cache binds to none.
+    let lock = super::lock::take(
+        &client,
+        cluster_name,
+        command.invocation(),
+        command.purpose(),
+        checked.activation_name().map(str::to_string),
+        expect,
+    )
+    .await?;
+    let end = run_locked(
+        command,
+        options,
+        global,
+        checked,
+        cluster_name,
+        receipt,
+        client,
+        connection,
+        offline_runs,
+        cached_baseline,
+        previous,
+        sops,
+        lock.clone(),
+    )
+    .await;
+    super::lock::release(&lock).await;
+    end
+}
+
+/// Carry out [`run_deploy_async`] once the run holds `lock`.
+#[allow(clippy::too_many_arguments)]
+async fn run_locked(
+    command: Command,
+    options: &RunOptions,
+    global: &crate::cli::GlobalArgs,
+    checked: CheckedPlan,
+    cluster_name: &str,
+    receipt: Option<Value>,
+    client: kube::Client,
+    connection: binding::Connection,
+    offline_runs: Option<LastRuns>,
+    cached_baseline: Option<&str>,
+    previous: Previous,
+    sops: kix::build_source::SopsSources,
+    lock: Arc<Lock>,
+) -> Result<RunEnd> {
     let target = Target::connect(client, sops)
         .await
         .map_err(|e| miette!("{e}"))?;
@@ -793,7 +902,7 @@ async fn run_deploy_async(
             binding::Connection::InCluster => None,
         };
         check_cached_baseline(records.as_ref(), cluster_name, hash, context).await?;
-        // A plan from the cache does not know which Kix deployed the cluster
+        // A plan from the cache does not know which Kix wrote to the cluster
         // last, so the deploy checks it now, before it applies anything.
         let active = match &records {
             Some(records) => records
@@ -802,14 +911,18 @@ async fn run_deploy_async(
                 .map_err(|e| miette!("{e}"))?,
             None => None,
         };
-        stops::check_offline(cluster_name, active.as_ref())?;
+        stops::check_offline(
+            cluster_name,
+            &LastWrite::of(lock.status().writer.as_ref(), active.as_ref()),
+        )?;
     }
 
     // A plan made without connecting (`--offline`) learns only now whether
     // it has anything to do: it had not read its Jobs, and orphans another
     // Kix cluster deploys were still in its prune.
     if let Some(last_runs) = &offline_runs
-        && let Some(unchanged) = start(target.client(), &checked, last_runs).await
+        && let Some(unchanged) =
+            start_locked(&lock.guarded(target.client()), &checked, last_runs).await
     {
         say_nothing_to_apply(
             &checked,
@@ -895,7 +1008,16 @@ async fn run_deploy_async(
         .then(|| (checked.kinds_leaving(), checked.orphans().to_vec()))
         .filter(|(kinds, _)| !kinds.is_empty());
     let left_client = target.client().clone();
-    let (result, end) = run_plan(checked, target, receipt, config, observer, cluster_name).await;
+    let (result, end) = run_plan(
+        checked,
+        target,
+        lock,
+        receipt,
+        config,
+        observer,
+        cluster_name,
+    )
+    .await;
 
     // Drop the TUI before printing the summary so it lands in normal scrollback.
     drop(tui_driver);
@@ -1155,7 +1277,7 @@ fn refuse_ignored_by_operator(args: &DeployArgs) -> Result<()> {
 fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
     // Run the same plan and pre-flight checks as a direct deploy so invalid
     // builds are rejected before the Activation is submitted to the cluster.
-    let Some(p) = prepare(&args.plan, operator_flags(flags_of(&args.plan)), ctx)? else {
+    let Some(p) = prepare(&args.plan, operator_flags(flags_of(&args.plan)), None, ctx)? else {
         return Ok(Exit::Success);
     };
     // The build came from this Kix, so a withdrawn one must not hand it to
@@ -1221,7 +1343,7 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<Exit> {
     let reconciled = ctx.runtime()?.block_on(async {
         let (client, records, connection) =
             super::operator::connect_and_verify(global.context.as_deref()).await?;
-        super::operator::require_requests(&client).await?;
+        super::operator::require_features(&client).await?;
         if let Some(checks) = &target_checks {
             checks
                 .run(&client, &connection)

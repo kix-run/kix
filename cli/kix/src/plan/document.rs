@@ -129,6 +129,27 @@ pub struct Plan {
     /// out. Left out when there are none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub earlier_deploys: Vec<EarlierDeployChange>,
+    /// The Kix cluster's deploy lock as the plan read it. `null` when the
+    /// plan did not read it: `--offline`, `kix diff`, `kix plan
+    /// --read-only`, or an account that may not read it.
+    #[serde(default)]
+    pub head: Option<PlanHead>,
+}
+
+/// The deploy lock of a Kix cluster, as a plan read it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PlanHead {
+    /// The generation a deploy of this plan binds to. The deploy refuses
+    /// when the cluster's generation has moved since, and `kix deploy
+    /// --plan` refuses a saved plan of another generation. 0 when the
+    /// cluster has no lock object yet.
+    pub generation: u64,
+    /// The record the lock object names as the one the cluster runs.
+    #[serde(default)]
+    pub current: Option<String>,
+    /// The run that held the lock when the plan read it, or `null`.
+    #[serde(default)]
+    pub lock: Option<crate::cluster::head::LockView>,
 }
 
 /// A field a deploy that did not finish wrote, which differs from the
@@ -941,6 +962,7 @@ impl Plan {
             left_alone: None,
             only_needed: Vec::new(),
             earlier_deploys: Vec::new(),
+            head: None,
         }
     }
 

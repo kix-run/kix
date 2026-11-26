@@ -92,9 +92,15 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     // cluster fails fast.
     let policy = retention_policy(args)?;
     let global = ctx.global.clone();
-    let retirement = ctx
-        .runtime()?
-        .block_on(plan_record_retirement(&global, &cluster, &policy))?;
+    let mut retirement = ctx.runtime()?.block_on(plan_record_retirement(
+        &global,
+        &cluster,
+        &policy,
+        !args.dry_run,
+    ))?;
+    if !args.dry_run {
+        retirement.check_writer(&cluster)?;
+    }
 
     let Some(active) = &retirement.active else {
         crate::say!(
@@ -125,12 +131,14 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
 
     if garbage.is_empty() && retirement.plan.retire.is_empty() {
         if !args.dry_run {
-            ctx.runtime()?.block_on(clear_kept(
+            let examined_all = kept_baseline.unresolved.is_empty();
+            let active_hash = active_hash.map(str::to_string);
+            ctx.runtime()?.block_on(clear_kept_locked(
                 &cluster,
-                &retirement,
-                kept_baseline.unresolved.is_empty(),
-                active_hash,
-            ));
+                &mut retirement,
+                examined_all,
+                active_hash.as_deref(),
+            ))?;
         }
         crate::say!(
             "{}",
@@ -220,18 +228,22 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     let deleting: HashSet<&ResourceId> = ordered_rids.iter().collect();
     order.retain(|rid| deleting.contains(rid));
     let budget = super::deploy::parse_timeout(args.timeout.as_deref())?;
-    let done = ctx
-        .runtime()?
-        .block_on(delete_resources(&client, &cluster, order, budget))?;
-    let (retired, records_failed) = ctx.runtime()?.block_on(delete_records(&retirement))?;
-    if done.all_gone() {
-        ctx.runtime()?.block_on(clear_kept(
-            &cluster,
-            &retirement,
-            kept_baseline.unresolved.is_empty(),
-            active_hash,
-        ));
-    }
+    let examined_all = kept_baseline.unresolved.is_empty();
+    let active_hash = active_hash.map(str::to_string);
+    let (done, retired, records_failed) = ctx.runtime()?.block_on(async {
+        let lock = retirement.lock(&client, &cluster).await?;
+        let deleted = async {
+            let done = delete_resources(&lock.guarded(&client), &cluster, order, budget).await?;
+            let (retired, records_failed) = delete_records(&retirement).await?;
+            if done.all_gone() {
+                clear_kept(&cluster, &retirement, examined_all, active_hash.as_deref()).await;
+            }
+            Ok::<_, miette::Report>((done, retired, records_failed))
+        }
+        .await;
+        super::lock::release(&lock).await;
+        deleted
+    })?;
     finish(
         &args.cluster,
         done.deleted,
@@ -443,11 +455,32 @@ async fn clear_kept(
     }
 }
 
+/// Clear `status.orphansKeptFrom` as [`clear_kept`] does, under the deploy
+/// lock, which is taken only when there is something to clear.
+async fn clear_kept_locked(
+    cluster: &str,
+    retirement: &mut RecordRetirement,
+    examined_all: bool,
+    build_hash: Option<&str>,
+) -> Result<()> {
+    let (Some(records), Some(active)) = (&retirement.records, &retirement.active) else {
+        return Ok(());
+    };
+    if !may_clear_kept(active, examined_all, build_hash) {
+        return Ok(());
+    }
+    let client = records.client().clone();
+    let lock = retirement.lock(&client, cluster).await?;
+    clear_kept(cluster, retirement, examined_all, build_hash).await;
+    super::lock::release(&lock).await;
+    Ok(())
+}
+
 fn run_hard(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     let cluster = ctx.cluster_identity(&args.cluster, super::Lookup::Mutating)?;
     let global = ctx.global.clone();
     let (active, stopped) = ctx.runtime()?.block_on(async {
-        match open_records(&global).await? {
+        match open_records(&global, &cluster, !args.dry_run).await? {
             Some(records) => {
                 let active = records.active(&cluster).await.map_err(|e| miette!("{e}"))?;
                 let stopped = records
@@ -609,7 +642,10 @@ async fn run_hard_async(
     // Plan Superseded Activation record retirement. Any listing failure is
     // returned as an error rather than treated as an empty list.
     let policy = retention_policy(args)?;
-    let retirement = plan_records_with(records.into_records(), cluster_name, &policy).await?;
+    let mut retirement = plan_records_with(records.into_records(), cluster_name, &policy).await?;
+    if !args.dry_run {
+        retirement.check_writer(cluster_name)?;
+    }
     garbage.extend(record_garbage(&retirement.plan));
 
     let (unstamped, garbage) =
@@ -632,7 +668,7 @@ async fn run_hard_async(
 
     if garbage.is_empty() {
         if !args.dry_run {
-            clear_kept(cluster_name, &retirement, examined_all, build_hash).await;
+            clear_kept_locked(cluster_name, &mut retirement, examined_all, build_hash).await?;
         }
         crate::say!(
             "{}",
@@ -667,17 +703,24 @@ async fn run_hard_async(
     }
 
     let budget = super::deploy::parse_timeout(args.timeout.as_deref())?;
-    let done = delete_resources(
-        &client,
-        cluster_name,
-        live_order(&live, &resource_entries),
-        budget,
-    )
-    .await?;
-    let (retired, records_failed) = delete_records(&retirement).await?;
-    if done.all_gone() {
-        clear_kept(cluster_name, &retirement, examined_all, build_hash).await;
+    let lock = retirement.lock(&client, cluster_name).await?;
+    let deleted = async {
+        let done = delete_resources(
+            &lock.guarded(&client),
+            cluster_name,
+            live_order(&live, &resource_entries),
+            budget,
+        )
+        .await?;
+        let (retired, records_failed) = delete_records(&retirement).await?;
+        if done.all_gone() {
+            clear_kept(cluster_name, &retirement, examined_all, build_hash).await;
+        }
+        Ok::<_, miette::Report>((done, retired, records_failed))
     }
+    .await;
+    super::lock::release(&lock).await;
+    let (done, retired, records_failed) = deleted?;
     finish(
         &args.cluster,
         done.deleted,
