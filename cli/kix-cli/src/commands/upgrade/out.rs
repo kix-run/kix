@@ -525,19 +525,19 @@ mod tests {
     #[test]
     fn build_lines_follow_the_design() {
         let v: Version = "0.10.0".parse().unwrap();
-        let names = vec!["ja1".to_string(), "li1".to_string()];
+        let names = vec!["prod".to_string(), "dev".to_string()];
         assert_eq!(
             build_line(2, &v, true, Some(&names), None),
-            "Building 2 clusters with current Kix 0.10.0 (ja1, li1)... ok"
+            "Building 2 clusters with current Kix 0.10.0 (prod, dev)... ok"
         );
-        let failed = vec!["li1".to_string()];
+        let failed = vec!["dev".to_string()];
         assert_eq!(
             build_line(2, &v, false, None, Some(Failed::Names(&failed))),
-            "Building 2 clusters with Kix 0.10.0... failed (li1)"
+            "Building 2 clusters with Kix 0.10.0... failed (dev)"
         );
         assert_eq!(
             build_line(2, &v, false, None, Some(Failed::Count(&failed, 2))),
-            "Building 2 clusters with Kix 0.10.0... failed (1 of 2 failed: li1)"
+            "Building 2 clusters with Kix 0.10.0... failed (1 of 2 failed: dev)"
         );
     }
 }

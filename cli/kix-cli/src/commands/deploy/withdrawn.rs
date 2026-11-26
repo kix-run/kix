@@ -112,23 +112,23 @@ mod tests {
     #[test]
     fn a_deploy_refusal_names_the_reason_and_the_ways_on() {
         assert_eq!(
-            render_refusal("lt1", &withdrawn(Some("0.10.2")), Writer::Deploy),
+            render_refusal("dev", &withdrawn(Some("0.10.2")), Writer::Deploy),
             format!(
                 "Deploy blocked: Kix 0.10.1 was withdrawn because it deletes Secrets on rollback.\n\
-             Nothing was applied to cluster lt1.\n\
+             Nothing was applied to cluster dev.\n\
              \n\
-             Next: upgrade this project to Kix 0.10.2 with `kix upgrade --to 0.10.2`, then run `kix deploy lt1` again.\n\
-             To deploy with Kix 0.10.1 anyway, set KIX_ALLOW_WITHDRAWN=0.10.1. Kix will set {WITHDRAWN_KIX}=0.10.1 on cluster lt1's Activation record.\n"
+             Next: upgrade this project to Kix 0.10.2 with `kix upgrade --to 0.10.2`, then run `kix deploy dev` again.\n\
+             To deploy with Kix 0.10.1 anyway, set KIX_ALLOW_WITHDRAWN=0.10.1. Kix will set {WITHDRAWN_KIX}=0.10.1 on cluster dev's Activation record.\n"
             )
         );
     }
 
     #[test]
     fn a_rollback_refusal_without_a_replacement_points_at_upgrade() {
-        let text = render_refusal("lt1", &withdrawn(None), Writer::Rollback);
+        let text = render_refusal("dev", &withdrawn(None), Writer::Rollback);
         assert!(text.starts_with("Rollback blocked: Kix 0.10.1"), "{text}");
         assert!(
-            text.contains("Next: upgrade this project to a newer version of Kix with `kix upgrade`, then run `kix rollback lt1` again."),
+            text.contains("Next: upgrade this project to a newer version of Kix with `kix upgrade`, then run `kix rollback dev` again."),
             "{text}"
         );
         assert!(
@@ -140,10 +140,10 @@ mod tests {
     #[test]
     fn an_allowed_write_and_a_read_say_what_happens() {
         assert_eq!(
-            render_allowed("lt1", &withdrawn(Some("0.10.2")), Writer::Deploy),
+            render_allowed("dev", &withdrawn(Some("0.10.2")), Writer::Deploy),
             format!(
                 "warning: Kix 0.10.1 was withdrawn because it deletes Secrets on rollback.\n\
-             KIX_ALLOW_WITHDRAWN=0.10.1 is set, so this deploy will proceed and set {WITHDRAWN_KIX}=0.10.1 on cluster lt1's Activation record.\n"
+             KIX_ALLOW_WITHDRAWN=0.10.1 is set, so this deploy will proceed and set {WITHDRAWN_KIX}=0.10.1 on cluster dev's Activation record.\n"
             )
         );
         assert_eq!(

@@ -213,7 +213,7 @@ Two things turned out differently from the plan:
 ### Step 3: which packages are experimental
 
 Rule used for the first split: a package Lithus runs in more than one of its
-clusters (JA1, LI1, XDI1) is stable. A cluster deploys it, and the package
+clusters is stable. A cluster deploys it, and the package
 has had to stay steady for that. Four small packages with no moving parts
 joined them: `secret`, `storage-classes`, `priority-class`, and
 `echo-server`. Every other package, 66 of 83, is experimental. New packages
