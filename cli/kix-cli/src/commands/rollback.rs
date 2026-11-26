@@ -364,11 +364,14 @@ fn run_direct(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> Resul
     }
 
     if let Some(connected) = &p.connected
-        && !ctx.runtime()?.block_on(super::deploy::start(
-            &connected.client,
-            &p.checked,
-            &connected.last_runs,
-        ))
+        && ctx
+            .runtime()?
+            .block_on(super::deploy::start(
+                &connected.client,
+                &p.checked,
+                &connected.last_runs,
+            ))
+            .is_some()
     {
         crate::say!(
             "Nothing to change. The cluster already matches the target deployment. Nothing was applied to the cluster."

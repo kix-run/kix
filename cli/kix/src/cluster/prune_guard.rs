@@ -89,6 +89,20 @@ impl Pruned {
         }
     }
 
+    /// Return what a command says about an object it did not delete because
+    /// it was not there, or `None` for any other outcome. `kix deploy`,
+    /// `kix rollback`, and `kix gc` all print this text.
+    pub fn already_gone(&self) -> Option<&'static str> {
+        match self {
+            Pruned::Gone => Some("already gone"),
+            Pruned::NotServed => Some("already gone (Kubernetes does not recognize its kind)"),
+            Pruned::Deleted { .. }
+            | Pruned::AlreadyDeleting { .. }
+            | Pruned::Kept(_)
+            | Pruned::Changed(_) => None,
+        }
+    }
+
     /// Return the uid of the object to wait for when the delete was sent or
     /// was already under way, or `None` when nothing is being deleted.
     pub fn deleting(&self) -> Option<Option<&str>> {

@@ -205,9 +205,12 @@ impl JsonObserver {
     }
 
     /// Print the summary line of a deploy that has nothing to apply.
-    pub fn nothing_to_apply(&self) {
+    pub fn nothing_to_apply(&self, unchanged: usize) {
         let elapsed_ms = self.started_at.elapsed().as_millis() as u64;
-        println!("{}", json_line(&Line::nothing_to_apply(elapsed_ms)));
+        println!(
+            "{}",
+            json_line(&Line::nothing_to_apply(unchanged, elapsed_ms))
+        );
     }
 
     /// Print the final summary line for the deploy run.
@@ -242,6 +245,7 @@ fn json_line(line: &Line) -> String {
 pub(crate) fn delete_line(verdict: &Verdict, detail: Option<&NodeDetail>) -> Option<String> {
     match (verdict, detail) {
         (Verdict::Running, Some(NodeDetail::ReadinessProgress(status))) => Some(deleting(status)),
+        (Verdict::Ready, Some(NodeDetail::AlreadyGone(why))) => Some(why.clone()),
         (Verdict::Ready, _) => Some("deleted".to_string()),
         _ => None,
     }
@@ -535,6 +539,14 @@ mod tests {
                 }),
             ),
             state(
+                node("Widget", "w"),
+                TransitionKind::Delete,
+                Verdict::Ready,
+                Some(NodeDetail::AlreadyGone(
+                    "already gone (Kubernetes does not recognize its kind)".into(),
+                )),
+            ),
+            state(
                 node("Pod", "after"),
                 TransitionKind::Drain,
                 Verdict::Cancelled {
@@ -717,12 +729,13 @@ mod tests {
     /// that says so, while a run that applied something says it did not.
     #[test]
     fn a_deploy_with_nothing_to_apply_ends_with_a_summary() {
-        let text = json_line(&Line::nothing_to_apply(3));
+        let text = json_line(&Line::nothing_to_apply(9, 3));
         let value: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(value["type"], "summary");
         assert_eq!(value["succeeded"], true);
         assert_eq!(value["nothing_to_apply"], true);
         assert_eq!(value["created"], 0);
+        assert_eq!(value["unchanged"], 9);
         let ran = json_line(&Line::summary(&DeployResult::default(), false, true, 3));
         let ran: serde_json::Value = serde_json::from_str(&ran).unwrap();
         assert_eq!(ran["nothing_to_apply"], false);
@@ -755,8 +768,8 @@ mod tests {
         );
     }
 
-    /// A delete that waits says what for, and a finished delete says
-    /// "deleted".
+    /// A delete that waits says what for, a finished delete says "deleted",
+    /// and a prune that found nothing to delete says why.
     #[test]
     fn a_delete_reads_as_deleted() {
         assert_eq!(
@@ -767,6 +780,13 @@ mod tests {
         assert_eq!(
             delete_line(&Verdict::Ready, None).as_deref(),
             Some("deleted")
+        );
+        let why = kix::cluster::prune_guard::Pruned::NotServed
+            .already_gone()
+            .unwrap();
+        assert_eq!(
+            delete_line(&Verdict::Ready, Some(&NodeDetail::AlreadyGone(why.into()))).as_deref(),
+            Some("already gone (Kubernetes does not recognize its kind)")
         );
         assert_eq!(
             delete_line(

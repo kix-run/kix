@@ -82,8 +82,9 @@ impl Line {
     }
 
     /// Build the summary line of a deploy that stopped before it ran because
-    /// the plan applies and prunes nothing.
-    pub fn nothing_to_apply(elapsed_ms: u64) -> Line {
+    /// the plan applies and prunes nothing. `unchanged` counts the objects a
+    /// run would have reported unchanged.
+    pub fn nothing_to_apply(unchanged: usize, elapsed_ms: u64) -> Line {
         Line {
             schema_version: SCHEMA_VERSION.to_string(),
             elapsed_ms,
@@ -92,7 +93,7 @@ impl Line {
                 succeeded: true,
                 created: 0,
                 configured: 0,
-                unchanged: 0,
+                unchanged,
                 failed: 0,
                 cancelled: 0,
                 pruned: 0,
@@ -302,6 +303,9 @@ pub enum Detail {
     AwaitingRestart {
         message: String,
     },
+    /// A prune found nothing to delete, and the text says why, such as
+    /// `already gone (Kubernetes does not recognize its kind)`.
+    AlreadyGone(String),
     /// A delete did not finish within the wait: after `elapsed_ms`, the
     /// object was still on the cluster, held by `finalizers`. `controllers`
     /// lists the workloads its kind names as its controller (`controller` on
@@ -556,6 +560,7 @@ impl Detail {
             NodeDetail::SecretHydrationFailed(msg) => Detail::SecretHydrationFailed(msg.clone()),
             NodeDetail::RecreatedInPlace { reason } => Detail::RecreatedInPlace(reason.clone()),
             NodeDetail::Rerun { reason } => Detail::Rerun(reason.clone()),
+            NodeDetail::AlreadyGone(why) => Detail::AlreadyGone(why.clone()),
             NodeDetail::PendingRestart {
                 stale: Some(stale),
                 message,

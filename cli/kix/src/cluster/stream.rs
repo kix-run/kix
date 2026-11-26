@@ -216,6 +216,9 @@ pub enum NodeDetail {
     /// `OnDelete` DaemonSet that run the previous template. It is `None` for
     /// a custom resource in its declared `pendingRestart` state.
     PendingRestart { stale: Option<i64>, message: String },
+    /// A prune found nothing to delete. The text says why, as
+    /// [`super::prune_guard::Pruned::already_gone`] gives it.
+    AlreadyGone(String),
     /// A delete did not finish within the wait: the object is still on the
     /// cluster. `controllers` are the workloads its kind names, as Kix found
     /// them after the wait. `message` is the whole text the failure reports.
