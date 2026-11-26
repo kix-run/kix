@@ -420,6 +420,6 @@ Before committing `apps/bridge`, delete three files from `_cluster/`:
 
 If Flux applies those files and you later remove that `Kustomization` from Git with pruning enabled, two things go wrong. First, Flux deletes both Kix CRDs, which wipes every `Activation` and `PackageInstance` record on the cluster and erases rollback history for any Kix-deployed cluster sharing that Kubernetes cluster (workloads keep running, and a later `kix deploy` recreates current records). Second, Flux tries to delete `kube-system`; the Kubernetes API server refuses that deletion, leaving the `Kustomization` stuck until you suspend it.
 
-Exported objects keep the label `app.kubernetes.io/managed-by: kix`. If a Kix cluster on the same Kubernetes cluster (such as `test`) runs `kix gc test --full-scan --dry-run`, Kix lists those Flux-applied objects under "Copied labels", because Kix did not write them, and keeps them unless you pass `--include copies`:
+Exported objects keep the label `app.kubernetes.io/managed-by: kix`. If you deploy a Kix cluster (such as `test`) to the same Kubernetes cluster, `kix gc --full-scan` sees that Kix did not apply those Flux-managed objects. It lists them under "Copied labels" and keeps them unless you pass `--include copies`:
 
 <Command commands={["kix gc test --full-scan --dry-run"]} />

@@ -36,7 +36,7 @@ impl GarbageReason {
         match self {
             GarbageReason::HashNotExpected => format!("not in {compared}"),
             GarbageReason::NoIdentityHash => {
-                "carries Kix's label but no Kix build annotation".to_string()
+                "no Kix build annotation, so Kix cannot match it to a build".to_string()
             }
             GarbageReason::RetiredActivation => {
                 "activation record retired by retention".to_string()
