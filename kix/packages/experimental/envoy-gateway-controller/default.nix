@@ -802,25 +802,23 @@ in
         controllerIngress = kix.operandPolicy {
           inherit scope;
           name = "${name}-controller-from-proxies";
-          spec = {
-            endpointSelector.matchLabels = controllerLabels;
-            ingress = [
-              # A Gateway's proxies run in the Gateway's namespace.
-              (netpol.mkCallerIngressRule {
-                callerSelector = proxyLabels;
-                callerNamespace = null;
-                ports = map tcp [
-                  ports.xds
-                  ports.wasm
-                ];
-              })
-              (netpol.mkCallerIngressRule {
-                callerSelector = rateLimitLabels;
-                callerNamespace = ns;
-                ports = [ (tcp ports.rateLimitXds) ];
-              })
-            ];
-          };
+          selector = controllerLabels;
+          ingress = [
+            # A Gateway's proxies run in the Gateway's namespace.
+            (netpol.mkCallerIngressRule {
+              callerSelector = proxyLabels;
+              callerNamespace = null;
+              ports = map tcp [
+                ports.xds
+                ports.wasm
+              ];
+            })
+            (netpol.mkCallerIngressRule {
+              callerSelector = rateLimitLabels;
+              callerNamespace = ns;
+              ports = [ (tcp ports.rateLimitXds) ];
+            })
+          ];
         };
 
         # The class's EnvoyProxy, for a Gateway that names none of its own,

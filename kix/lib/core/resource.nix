@@ -222,10 +222,12 @@ rec {
 
       # Imported Services with selectors supply endpoint facts for network
       # policy derivation even though Kix does not seal or deploy them.
+      # `imported` tells the netpol plugin that Kix does not deploy the pods.
       _importFactCtx =
         if kind == "Service" && (spec.selector or { }) != { } then
           facts.mkFact "endpoint" {
             inherit name;
+            imported = true;
             namespace = toString nsKey;
             selector = spec.selector;
             ports = spec.ports or [ ];

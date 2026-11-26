@@ -320,13 +320,11 @@ in
       serverEgress = kix.operandPolicy {
         inherit scope;
         name = "${name}-server-egress";
-        spec = {
-          endpointSelector.matchLabels = serverPodSelector;
-          egress = [
-            scope.networkPolicyEnforcer.netpol.dnsEgressRule
-            scope.networkPolicyEnforcer.netpol.apiServerEgressRule
-          ];
-        };
+        selector = serverPodSelector;
+        egress = [
+          scope.networkPolicyEnforcer.netpol.dnsEgressRule
+          scope.networkPolicyEnforcer.netpol.apiServerEgressRule
+        ];
       };
 
       # The operator renders no PodDisruptionBudget, and the availability

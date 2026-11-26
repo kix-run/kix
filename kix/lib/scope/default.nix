@@ -50,6 +50,9 @@ rec {
       clusterDomain,
       capabilities ? { },
       networkPolicyEnforcer ? null,
+      # The DNS endpoints of the cluster's `dns` role provider
+      # (`core/dns-peers.nix`).
+      dnsPeers ? (import ../core/dns-peers.nix { inherit lib; }).defaultDnsPeers,
       peekedPackageMeta ? { },
       workloadInterceptors ? [ ],
       # Resolved availability for this instance from `core/availability.nix`.
@@ -159,6 +162,7 @@ rec {
           mkOptional
           networkPolicyEnforcer
           networkPolicyEnforced
+          dnsPeers
           ;
         namespace = namespaceResource;
 

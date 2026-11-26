@@ -30,18 +30,16 @@ let
 
   creds = readCloudCredentials { inherit cloudCredentials config objectStorage; };
 
-  # The pod labels the cloud identity's mechanism needs. The workload
-  # builders add them to the server and node-agent, and the ConfigMaps
-  # give them to the pods Velero launches.
-  identityLabels =
-    if creds.identity == null then
-      { }
-    else
-      (kix.cloudIdentity.annotationsFor {
-        inherit scope;
-        inherit (creds) identity;
-        provider = cloudIdentity;
-      }).podLabels;
+  # The pod labels and credential egress the cloud identity's mechanism
+  # needs. The workload builders add both to the server and node-agent. The
+  # ConfigMaps give the labels to the pods Velero launches, and
+  # dataPathEgress gives them the egress.
+  identityMetadata = kix.cloudIdentity.annotationsFor {
+    inherit scope;
+    inherit (creds) identity;
+    provider = cloudIdentity;
+  };
+  identityLabels = identityMetadata.podLabels;
 
   # Velero reads the repository key only from this Secret, by name
   # (pkg/repository/keys). Without it, Velero creates the Secret with
@@ -607,17 +605,17 @@ in
       kix.operandPolicy {
         inherit scope;
         name = "${name}-data-path";
-        spec =
+        selector = dataPathLabels;
+        egress =
           let
             netpol = scope.networkPolicyEnforcer.netpol;
           in
-          {
-            endpointSelector.matchLabels = dataPathLabels;
-            egress = [
-              netpol.dnsEgressRule
-              netpol.apiServerEgressRule
-            ];
-          };
+          [
+            netpol.dnsEgressRule
+            netpol.apiServerEgressRule
+          ]
+          ++ (netpol.translateIntentRules { intents.identity = identityMetadata.networkIntents; })
+            .egressRules;
       };
 
   # Egress outside the cluster for every pod of the instance; see
@@ -629,20 +627,18 @@ in
       kix.operandPolicy {
         inherit scope;
         name = "${name}-external-store";
-        spec = {
-          endpointSelector.matchLabels = scope.selectorLabels;
-          egress =
-            (scope.networkPolicyEnforcer.netpol.translateIntentRules {
-              intents.store.egress = [
-                {
-                  to = "world";
-                  ports = map (port: {
-                    inherit port;
-                    protocol = "TCP";
-                  }) externalPorts;
-                }
-              ];
-            }).egressRules;
-        };
+        selector = scope.selectorLabels;
+        egress =
+          (scope.networkPolicyEnforcer.netpol.translateIntentRules {
+            intents.store.egress = [
+              {
+                to = "world";
+                ports = map (port: {
+                  inherit port;
+                  protocol = "TCP";
+                }) externalPorts;
+              }
+            ];
+          }).egressRules;
       };
 }

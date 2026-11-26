@@ -259,16 +259,14 @@ in
         agentEgress = kix.operandPolicy {
           inherit scope;
           name = "${name}-egress";
-          spec = {
-            endpointSelector.matchLabels = {
-              "app.kubernetes.io/name" = "vmagent";
-              "app.kubernetes.io/instance" = name;
-            };
-            egress = [
-              scope.networkPolicyEnforcer.netpol.dnsEgressRule
-              scope.networkPolicyEnforcer.netpol.apiServerEgressRule
-            ];
+          selector = {
+            "app.kubernetes.io/name" = "vmagent";
+            "app.kubernetes.io/instance" = name;
           };
+          egress = [
+            scope.networkPolicyEnforcer.netpol.dnsEgressRule
+            scope.networkPolicyEnforcer.netpol.apiServerEgressRule
+          ];
         };
 
         root = {

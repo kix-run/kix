@@ -21,7 +21,7 @@ rec {
     };
 
     dns = {
-      description = "Cluster DNS provider. Workloads take a store-path dependency on its root for readiness ordering; consumers read out.fqdn.";
+      description = "Cluster DNS provider. Workloads depend on its root resource for deploy ordering, and consumers read `out.fqdn`. A `dns` package may set `meta.dnsPeers`, and a `dns` import may pass `dnsPeers` to `kix.mkImport`, to list the endpoints that generated network policies allow on UDP and TCP port 53. When unset, policies allow pods labeled `k8s-app: kube-dns` in `kube-system`.";
       outContract = [ "fqdn" ];
     };
 

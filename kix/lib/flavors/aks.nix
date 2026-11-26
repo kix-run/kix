@@ -23,6 +23,9 @@ let
 in
 {
   cluster.provider = lib.mkDefault "aks";
+  # The cloud runs and upgrades the pods in kube-system, so Kix writes no
+  # default deny there.
+  networkPolicy.platformNamespaces = lib.mkDefault [ "kube-system" ];
 
   cluster.roles = {
     cni = {

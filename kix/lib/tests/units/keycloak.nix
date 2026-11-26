@@ -392,7 +392,7 @@ in
     (
       (deploymentOf c).spec.replicas == 2
       && selector."app.kubernetes.io/instance" == "keycloak"
-      && spec.matchLabels == selector
+      && spec.endpointSelector.matchLabels == selector
       && builtins.length spec.ingress == 1
       && ingress.stubRule == "caller-ingress"
       && ingress.callerSelector == selector

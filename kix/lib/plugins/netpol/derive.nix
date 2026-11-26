@@ -17,6 +17,17 @@ let
     ;
   inherit (import ../../core/markers.nix { inherit lib; }) isProvidedLoadBalancerClass;
   inherit (import ../../core/pod-spec.nix { inherit lib; }) podSpecOf;
+  inherit (import ./interface.nix { inherit lib; }) checkEntities checkIntentEntities;
+
+  # Return whether Kix may write an ingress policy over the target of
+  # `edge`: Kix deploys the target pods, or a default deny in their
+  # namespace already isolates them, so an allow rule only restores the
+  # caller's path. An edge to an import elsewhere, such as a platform's
+  # pods in kube-system on a cloud flavour, gets none, because the policy
+  # would isolate pods Kix does not deploy.
+  writesIngressOver =
+    defaultDenyNamespaces: edge:
+    (edge.targetDeployed or true) || builtins.elem edge.targetNamespace defaultDenyNamespaces;
 in
 {
   buildWorkloadCnps =
@@ -31,6 +42,10 @@ in
       edges,
       enforced,
       packageIntents ? { },
+      # Credential egress of the pod's cloud identity, as intent rules.
+      cloudIdentityEgress ? [ ],
+      # The namespaces with `<namespace>-default-deny` (module.nix).
+      defaultDenyNamespaces ? [ ],
       networkPolicyEnforcer ? null,
     }:
     let
@@ -43,7 +58,9 @@ in
 
             intentRules =
               if packageIntents != { } then
-                enforcerApi.translateIntentRules { intents = packageIntents; }
+                enforcerApi.translateIntentRules {
+                  intents = checkIntentEntities "${namespaceName}/${instanceName}: meta.network.intents" packageIntents;
+                }
               else
                 {
                   egressRules = [ ];
@@ -60,6 +77,14 @@ in
               }
             ) edges;
 
+            identityRules =
+              if cloudIdentityEgress == [ ] then
+                [ ]
+              else
+                (enforcerApi.translateIntentRules {
+                  intents.cloudIdentity.egress = cloudIdentityEgress;
+                }).egressRules;
+
             selfRules = enforcerApi.mkSelfRules { selector = wSelector; };
             selfEgress = lib.optional (workloadKind == "StatefulSet") (builtins.head selfRules.egress);
 
@@ -68,7 +93,8 @@ in
             ]
             ++ serviceRules
             ++ selfEgress
-            ++ intentRules.egressRules;
+            ++ intentRules.egressRules
+            ++ identityRules;
 
             selfIngress = lib.optional (workloadKind == "StatefulSet") (builtins.head selfRules.ingress);
 
@@ -87,14 +113,12 @@ in
               else
                 enforcerApi.mkPolicy {
                   mkResource = emit.mkResource;
+                  selector = wSelector;
+                  egress = egressRules;
                   extraArgs = {
                     name = "${instanceName}-${lib.toLower workloadKind}-${wName}-egress";
                     labels = {
                       ${kixKeys.derived} = "true";
-                    };
-                    spec = {
-                      endpointSelector.matchLabels = wSelector;
-                      egress = egressRules;
                     };
                     extraDeps = serviceDeps;
                   };
@@ -106,14 +130,12 @@ in
               else
                 enforcerApi.mkPolicy {
                   mkResource = emit.mkResource;
+                  selector = wSelector;
+                  ingress = ingressRules;
                   extraArgs = {
                     name = "${instanceName}-${lib.toLower workloadKind}-${wName}-ingress";
                     labels = {
                       ${kixKeys.derived} = "true";
-                    };
-                    spec = {
-                      endpointSelector.matchLabels = wSelector;
-                      ingress = ingressRules;
                     };
                     extraDeps = [ ];
                   };
@@ -135,20 +157,18 @@ in
                   in
                   enforcerApi.mkPolicy {
                     mkResource = targetEmit.mkResource;
+                    selector = edge.targetSelector;
+                    ingress = [ ingressRule ];
                     extraArgs = {
                       name = "${instanceName}-${lib.toLower workloadKind}-${wName}-to-${edge.name}-ingress";
                       labels = {
                         ${kixKeys.derived} = "true";
                         ${kixKeys.policyType} = "caller-ingress";
                       };
-                      spec = {
-                        endpointSelector.matchLabels = edge.targetSelector;
-                        ingress = [ ingressRule ];
-                      };
                       extraDeps = lib.optional (edge.service != null) edge.service;
                     };
                   }
-                ) edges;
+                ) (builtins.filter (writesIngressOver defaultDenyNamespaces) edges);
 
           in
           builtins.filter (c: c != null) (
@@ -172,6 +192,7 @@ in
       allPartResources,
       enforced,
       packageMeta,
+      defaultDenyNamespaces ? [ ],
       networkPolicyEnforcer ? null,
     }:
     let
@@ -249,15 +270,13 @@ in
               [
                 (enforcerApi.mkPolicy {
                   mkResource = emit.mkResource;
+                  selector = wSelector;
+                  egress = [ enforcerApi.apiServerEgressRule ];
                   extraArgs = {
                     name = "${instanceName}-${lib.toLower w.kind}-${w.name}-apiserver-egress";
                     labels = {
                       ${kixKeys.derived} = "true";
                       ${kixKeys.policyType} = "apiserver-supplement";
-                    };
-                    spec = {
-                      endpointSelector.matchLabels = wSelector;
-                      egress = [ enforcerApi.apiServerEgressRule ];
                     };
                     extraDeps = [ ];
                   };
@@ -281,19 +300,19 @@ in
               [
                 (enforcerApi.mkPolicy {
                   mkResource = emit.mkResource;
+                  selector = wSelector;
+                  ingress = [
+                    (enforcerApi.mkExternalIngressRule {
+                      entities = checkEntities "${namespaceName}/${instanceName}: meta.network.externalIngressEntities" (
+                        packageMeta.network.externalIngressEntities or [ "world" ]
+                      );
+                    })
+                  ];
                   extraArgs = {
                     name = "${instanceName}-${lib.toLower w.kind}-${w.name}-external-ingress";
                     labels = {
                       ${kixKeys.derived} = "true";
                       ${kixKeys.policyType} = "external-ingress-supplement";
-                    };
-                    spec = {
-                      endpointSelector.matchLabels = wSelector;
-                      ingress = [
-                        (enforcerApi.mkExternalIngressRule {
-                          entities = packageMeta.network.externalIngressEntities or [ "world" ];
-                        })
-                      ];
                     };
                     extraDeps = [ ];
                   };
@@ -344,6 +363,7 @@ in
             inherit (f.payload) name ports;
             targetSelector = f.payload.selector;
             targetNamespace = f.payload.namespace;
+            targetDeployed = !(f.payload.imported or false);
           }) r.absorbedEndpointFacts;
 
           egressCnp =
@@ -357,26 +377,24 @@ in
                       emit.mkResource
                     else
                       (emit.inNamespace operandNamespace).mkResource;
+                  selector = operandSelector;
+                  egress = [
+                    enforcerApi.dnsEgressRule
+                  ]
+                  ++ map (
+                    edge:
+                    enforcerApi.mkServiceEgressRule {
+                      selector = edge.targetSelector;
+                      namespace = edge.targetNamespace;
+                      sourceNamespace = operandNamespace;
+                      ports = edge.ports;
+                    }
+                  ) crEdges;
                   extraArgs = {
                     name = "${policyPrefix}-${lib.toLower r.kind}-${r.name}-egress";
                     labels = {
                       ${kixKeys.derived} = "true";
                       ${kixKeys.policyType} = "cr-operand";
-                    };
-                    spec = {
-                      endpointSelector.matchLabels = operandSelector;
-                      egress = [
-                        enforcerApi.dnsEgressRule
-                      ]
-                      ++ map (
-                        edge:
-                        enforcerApi.mkServiceEgressRule {
-                          selector = edge.targetSelector;
-                          namespace = edge.targetNamespace;
-                          sourceNamespace = operandNamespace;
-                          ports = edge.ports;
-                        }
-                      ) crEdges;
                     };
                     extraDeps = [ ];
                   };
@@ -391,26 +409,24 @@ in
                 edge:
                 enforcerApi.mkPolicy {
                   mkResource = (emit.inNamespace edge.targetNamespace).mkResource;
+                  selector = edge.targetSelector;
+                  ingress = [
+                    (enforcerApi.mkCallerIngressRule {
+                      callerSelector = operandSelector;
+                      callerNamespace = operandNamespace;
+                      ports = edge.ports;
+                    })
+                  ];
                   extraArgs = {
                     name = "${policyPrefix}-${lib.toLower r.kind}-${r.name}-to-${edge.name}-ingress";
                     labels = {
                       ${kixKeys.derived} = "true";
                       ${kixKeys.policyType} = "caller-ingress";
                     };
-                    spec = {
-                      endpointSelector.matchLabels = edge.targetSelector;
-                      ingress = [
-                        (enforcerApi.mkCallerIngressRule {
-                          callerSelector = operandSelector;
-                          callerNamespace = operandNamespace;
-                          ports = edge.ports;
-                        })
-                      ];
-                    };
                     extraDeps = [ ];
                   };
                 }
-              ) crEdges;
+              ) (builtins.filter (writesIngressOver defaultDenyNamespaces) crEdges);
         in
         egressCnp ++ callerIngressCnps
       ) terminatingCrs;
@@ -480,9 +496,11 @@ in
             if nsName != null && builtins.hasAttr nsName nsResources then nsResources.${nsName} else null;
         in
         enforcerApi.materializePlatformIntent {
-          intent = intent // {
-            name = intentName;
-          };
+          intent =
+            (checkIntentEntities "networkPolicy.platformIntents.${intentName}" { single = intent; }).single
+            // {
+              name = intentName;
+            };
           # Platform intents target pods outside any Kix scope and use the bare
           # core constructor, which does not add scope labels. Add
           # `managed-by = "kix"` here because cross-resource checks, garbage

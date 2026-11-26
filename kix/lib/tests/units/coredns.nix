@@ -363,23 +363,39 @@ in
     in
     lib.hasInfix "fd00::/8:53 {" cfg || throw "Corefile with an IPv6 reverse zone:\n${cfg}";
 
-  # Under network policy the enforcer's DNS egress rule allows only
-  # kube-system, so coredns elsewhere fails evaluation; in kube-system it
-  # builds.
+  # coredns declares its pods as the cluster's DNS peers in its metadata, so
+  # under network policy it can run outside kube-system: the DNS rule of
+  # every workload, its own included, names the instance's namespace. Kix
+  # reads the metadata without evaluating the instance, so the coredns
+  # instance's own policies do not recurse.
   coredns-namespace-under-netpol =
-    (
-      evalFails (corednsCluster {
-        namespace = "dns";
-        module = netpolOn;
-      })
-      || throw "coredns in namespace dns under network policy evaluated"
-    )
-    && (
-      !evalFails (corednsCluster {
-        module = netpolOn;
-      })
-      || throw "coredns in kube-system under network policy failed to evaluate"
-    );
+    let
+      cluster = mkCluster [
+        { instances = removeAttrs baseInstances.instances [ "dns" ]; }
+        {
+          instances.dns.coredns = {
+            package = corednsPackage;
+            config.clusterIP = "10.96.0.10";
+          };
+        }
+        netpolOn
+      ];
+      peers = [
+        {
+          namespace = "dns";
+          podSelector."k8s-app" = "kube-dns";
+        }
+      ];
+      dnsRuleOf =
+        name:
+        lib.findFirst (r: (r.stubRule or null) == "dns-egress") null (
+          (byName name (manifests cluster)).spec.egress or [ ]
+        );
+      app = dnsRuleOf "app-deployment-app-egress";
+      own = dnsRuleOf "coredns-deployment-coredns-egress";
+    in
+    (app.dnsPeers == peers && own.dnsPeers == peers)
+    || throw "coredns in namespace dns: app DNS rule ${builtins.toJSON app}, own ${builtins.toJSON own}";
 
   # coredns claims the dns role, so a workload in another namespace that
   # dials a Service orders after the coredns Service.

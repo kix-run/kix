@@ -723,6 +723,44 @@ in
     ]
   );
 
+  # A NetworkPolicy over operator-created pods names the custom resource
+  # with `kix.run/operand-of`, as a PodDisruptionBudget does (check 14).
+  v12b-networkpolicy-operand-of-missing-cr = onlyFailure "is not in namespace 'a' in this build" (
+    base "a"
+    ++ [
+      (res "NetworkPolicy" "a" "am" {
+        apiVersion = "networking.k8s.io/v1";
+        metadata.annotations.${kixKeys.operandOf} = "monitoring.coreos.com/Alertmanager/am";
+        spec.podSelector.matchLabels."app.kubernetes.io/name" = "alertmanager";
+      })
+    ]
+  );
+
+  v12c-networkpolicy-operand-of-malformed =
+    onlyFailure "which is not in the form <group>/<Kind>/<name>"
+      (
+        base "a"
+        ++ [
+          (res "NetworkPolicy" "a" "am" {
+            apiVersion = "networking.k8s.io/v1";
+            metadata.annotations.${kixKeys.operandOf} = "Alertmanager/am";
+            spec.podSelector.matchLabels."app.kubernetes.io/name" = "alertmanager";
+          })
+        ]
+      );
+
+  p12b-networkpolicy-operand-of-declared-cr-present = clean (
+    base "a"
+    ++ promCr "Alertmanager" "alertmanagers" "a" "am"
+    ++ [
+      (res "NetworkPolicy" "a" "am" {
+        apiVersion = "networking.k8s.io/v1";
+        metadata.annotations.${kixKeys.operandOf} = "monitoring.coreos.com/Alertmanager/am";
+        spec.podSelector.matchLabels."app.kubernetes.io/name" = "alertmanager";
+      })
+    ]
+  );
+
   v13-named-targetport-missing = onlyFailure "targetPort 'grpc'" (
     base "a"
     ++ [

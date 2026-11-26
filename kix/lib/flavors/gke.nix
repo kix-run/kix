@@ -1,16 +1,22 @@
 # GKE Standard flavor.
 #
 # GKE Standard provides a managed control plane, GKE Dataplane V2 (exclusive
-# `cni` role that exposes standard Kubernetes NetworkPolicy rather than
-# CiliumNetworkPolicy), `kube-dns`, GCP Network Load Balancer, and the PD CSI
-# driver with `standard-rwo` as the default StorageClass.
+# `cni` role), `kube-dns`, GCP Network Load Balancer, and the PD CSI driver
+# with `standard-rwo` as the default StorageClass.
+#
+# Dataplane V2 always enforces standard Kubernetes NetworkPolicy and does not
+# serve CiliumNetworkPolicy. Kix generates only CiliumNetworkPolicy today, and
+# no enforcer can claim the role here, so `networkPolicy.enable = true` fails
+# evaluation on this flavor.
 #
 # Pods get Google Cloud identities through Workload Identity Federation for
 # GKE, which the `cloud-identity` import declares.
 #
+# GKE enables NodeLocal DNSCache by default from version 1.34.1, so pods send
+# DNS queries to a cache on their own node. The `platform-dns` import lists
+# that cache among the DNS peers (`gke-dns-peers.nix`).
+#
 # Kix does not model these GKE features, so the flavor does not declare them:
-# - NodeLocal DNSCache, which GKE enables by default from version 1.34.1.
-#   Pods then send DNS queries to a cache on their own node.
 # - Google Cloud Managed Service for Prometheus. It reads its own
 #   `monitoring.googleapis.com` resources, not ServiceMonitor or
 #   PrometheusRule.
@@ -33,6 +39,9 @@ let
 in
 {
   cluster.provider = lib.mkDefault "gke";
+  # The cloud runs and upgrades the pods in kube-system, so Kix writes no
+  # default deny there.
+  networkPolicy.platformNamespaces = lib.mkDefault [ "kube-system" ];
 
   cluster.roles = {
     cni = {
@@ -86,6 +95,7 @@ in
     platform-dns = platformDns {
       name = "kube-dns";
       namespace = "kube-system";
+      peers = import ./gke-dns-peers.nix;
     };
 
     cloud-identity = platformCloudIdentity { mechanism = mechanisms.gke { }; };

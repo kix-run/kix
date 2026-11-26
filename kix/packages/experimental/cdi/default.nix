@@ -334,21 +334,20 @@ in
         ) operands
       );
 
-      # Policies for the pods cdi-operator runs in this namespace. The spec
-      # is read only when an enforcer exists.
+      # Policies for the pods cdi-operator runs in this namespace. The rules
+      # are read only when an enforcer exists.
       operandPolicy =
         suffix: selector: intents:
+        let
+          translated = scope.networkPolicyEnforcer.netpol.translateIntentRules {
+            intents.operand = intents;
+          };
+        in
         kix.operandPolicy {
-          inherit scope;
+          inherit scope selector;
           name = "${name}-${suffix}";
-          spec =
-            let
-              netpol = scope.networkPolicyEnforcer.netpol;
-              translated = netpol.translateIntentRules { intents.operand = intents; };
-            in
-            netpol.mkEndpointSelector selector
-            // lib.optionalAttrs (translated.egressRules != [ ]) { egress = translated.egressRules; }
-            // lib.optionalAttrs (translated.ingressRules != [ ]) { ingress = translated.ingressRules; };
+          egress = translated.egressRules;
+          ingress = translated.ingressRules;
         };
 
       mkImporterPolicy =
@@ -357,27 +356,24 @@ in
           name ? "${consumerScope.instanceName}-cdi-importer",
           egress,
         }:
+        let
+          netpol = consumerScope.networkPolicyEnforcer.netpol;
+          translated = netpol.translateIntentRules {
+            intents.importer.egress = [ { to = "dns"; } ] ++ egress;
+          };
+        in
         kix.operandPolicy {
           scope = consumerScope;
           inherit name;
-          spec =
-            let
-              netpol = consumerScope.networkPolicyEnforcer.netpol;
-              translated = netpol.translateIntentRules {
-                intents.importer.egress = [ { to = "dns"; } ] ++ egress;
-              };
-            in
-            netpol.mkEndpointSelector operandSelectors.importer
-            // {
-              egress = translated.egressRules;
-              ingress = [
-                (netpol.mkCallerIngressRule {
-                  callerSelector = operandSelectors.deployment;
-                  callerNamespace = ns;
-                  ports = [ (tcp 8443) ];
-                })
-              ];
-            };
+          selector = operandSelectors.importer;
+          egress = translated.egressRules;
+          ingress = [
+            (netpol.mkCallerIngressRule {
+              callerSelector = operandSelectors.deployment;
+              callerNamespace = ns;
+              ports = [ (tcp 8443) ];
+            })
+          ];
         };
 
       # Upload server pods receive an upload from cdi-uploadproxy, or a
@@ -388,26 +384,22 @@ in
           name ? "${consumerScope.instanceName}-cdi-upload-server",
           cloneSourceNamespaces ? [ ],
         }:
+        let
+          from =
+            callerSelector: callerNamespace:
+            consumerScope.networkPolicyEnforcer.netpol.mkCallerIngressRule {
+              inherit callerSelector callerNamespace;
+              ports = [ (tcp 8443) ];
+            };
+        in
         kix.operandPolicy {
           scope = consumerScope;
           inherit name;
-          spec =
-            let
-              netpol = consumerScope.networkPolicyEnforcer.netpol;
-              from =
-                callerSelector: callerNamespace:
-                netpol.mkCallerIngressRule {
-                  inherit callerSelector callerNamespace;
-                  ports = [ (tcp 8443) ];
-                };
-            in
-            netpol.mkEndpointSelector operandSelectors.uploadServer
-            // {
-              ingress = [
-                (from operandSelectors.uploadProxy ns)
-              ]
-              ++ map (from operandSelectors.cloner) cloneSourceNamespaces;
-            };
+          selector = operandSelectors.uploadServer;
+          ingress = [
+            (from operandSelectors.uploadProxy ns)
+          ]
+          ++ map (from operandSelectors.cloner) cloneSourceNamespaces;
         };
 
       # A cloner pod streams the source volume to the upload server pod in
@@ -418,35 +410,32 @@ in
           name ? "${consumerScope.instanceName}-cdi-cloner",
           targetNamespaces ? [ consumerScope.namespaceName ],
         }:
+        let
+          netpol = consumerScope.networkPolicyEnforcer.netpol;
+        in
         kix.operandPolicy {
           scope = consumerScope;
           inherit name;
-          spec =
-            let
-              netpol = consumerScope.networkPolicyEnforcer.netpol;
-            in
-            netpol.mkEndpointSelector operandSelectors.cloner
-            // {
-              egress = [
-                netpol.dnsEgressRule
-              ]
-              ++ map (
-                namespace:
-                netpol.mkServiceEgressRule {
-                  selector = operandSelectors.uploadServer;
-                  inherit namespace;
-                  sourceNamespace = consumerScope.namespaceName;
-                  ports = [ (tcp 8443) ];
-                }
-              ) targetNamespaces;
-              ingress = [
-                (netpol.mkCallerIngressRule {
-                  callerSelector = operandSelectors.deployment;
-                  callerNamespace = ns;
-                  ports = [ (tcp 8443) ];
-                })
-              ];
-            };
+          selector = operandSelectors.cloner;
+          egress = [
+            netpol.dnsEgressRule
+          ]
+          ++ map (
+            namespace:
+            netpol.mkServiceEgressRule {
+              selector = operandSelectors.uploadServer;
+              inherit namespace;
+              sourceNamespace = consumerScope.namespaceName;
+              ports = [ (tcp 8443) ];
+            }
+          ) targetNamespaces;
+          ingress = [
+            (netpol.mkCallerIngressRule {
+              callerSelector = operandSelectors.deployment;
+              callerNamespace = ns;
+              ports = [ (tcp 8443) ];
+            })
+          ];
         };
 
       # A DataVolume binds its claim once a pod consumes it when the

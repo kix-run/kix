@@ -233,10 +233,13 @@ in
             }
           ];
         };
+        # Pods and node resolvers query CoreDNS. The `cluster` entity names
+        # the nodes as well as the pods.
         rke2-coredns-ingress = inKubeSystem { "k8s-app" = "kube-dns"; } {
           ingress = [
             {
-              from = "all-pods";
+              from = "world";
+              entities = [ "cluster" ];
               ports = [
                 {
                   port = 53;
@@ -257,12 +260,13 @@ in
         rke2-metrics-server-egress = inKubeSystem { app = "rke2-metrics-server"; } {
           egress = [ apiserver ];
         };
-        # `all-pods` maps to Cilium's `cluster` entity, which includes the
-        # host-networked API server calling metrics-server.
+        # The `cluster` entity includes the host-networked API server calling
+        # metrics-server.
         rke2-metrics-server-ingress = inKubeSystem { app = "rke2-metrics-server"; } {
           ingress = [
             {
-              from = "all-pods";
+              from = "world";
+              entities = [ "cluster" ];
               ports = [ (tcp 10250) ];
             }
           ];
@@ -302,8 +306,11 @@ in
                     (tcp 443)
                   ];
                 }
+                # In-cluster clients, NodePort traffic SNATed from a node, and
+                # the API server. The `cluster` entity names all three.
                 {
-                  from = "all-pods";
+                  from = "world";
+                  entities = [ "cluster" ];
                   ports = [
                     (tcp 80)
                     (tcp 443)
@@ -339,8 +346,11 @@ in
                 (tcp 8443)
               ];
             }
+            # In-cluster clients and NodePort traffic SNATed from a node. The
+            # `cluster` entity names the nodes as well as the pods.
             {
-              from = "all-pods";
+              from = "world";
+              entities = [ "cluster" ];
               ports = [
                 (tcp 8000)
                 (tcp 8443)

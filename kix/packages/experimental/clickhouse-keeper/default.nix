@@ -241,14 +241,15 @@ in
 
         netpol = if scope.networkPolicyEnforcer == null then null else scope.networkPolicyEnforcer.netpol;
         mkOperandPolicy =
-          suffix: spec:
+          suffix:
+          {
+            ingress ? [ ],
+            egress ? [ ],
+          }:
           kix.operandPolicy {
-            inherit scope;
+            inherit scope ingress egress;
             name = "${name}-keeper-${suffix}";
-            spec = {
-              endpointSelector.matchLabels = podSelector;
-            }
-            // spec;
+            selector = podSelector;
           };
       in
       # Raft needs a majority. Two replicas stop when either one is lost, and
@@ -335,11 +336,11 @@ in
           peerEgress = mkOperandPolicy "egress" {
             egress = [
               netpol.dnsEgressRule
-              { toEndpoints = [ { matchLabels = podSelector; } ]; }
-            ];
+            ]
+            ++ (netpol.mkSelfRules { selector = podSelector; }).egress;
           };
           peerIngress = mkOperandPolicy "ingress" {
-            ingress = [ { fromEndpoints = [ { matchLabels = podSelector; } ]; } ];
+            ingress = (netpol.mkSelfRules { selector = podSelector; }).ingress;
           };
 
           root = {

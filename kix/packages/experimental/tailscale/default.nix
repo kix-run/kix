@@ -355,17 +355,17 @@ in
 
         operandPolicy =
           suffix: labels: intents:
+          let
+            translated = scope.networkPolicyEnforcer.netpol.translateIntentRules {
+              intents.operand = intents;
+            };
+          in
           kix.operandPolicy {
             inherit scope;
             name = "${name}-${suffix}";
-            spec =
-              let
-                netpol = scope.networkPolicyEnforcer.netpol;
-                translated = netpol.translateIntentRules { intents.operand = intents; };
-              in
-              netpol.mkEndpointSelector labels
-              // lib.optionalAttrs (translated.egressRules != [ ]) { egress = translated.egressRules; }
-              // lib.optionalAttrs (translated.ingressRules != [ ]) { ingress = translated.ingressRules; };
+            selector = labels;
+            egress = translated.egressRules;
+            ingress = translated.ingressRules;
           };
         fromCluster = ports: {
           ingress = [ ({ from = "all-pods"; } // lib.optionalAttrs (ports != null) { inherit ports; }) ];

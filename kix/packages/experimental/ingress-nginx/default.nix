@@ -116,7 +116,8 @@ in
       # graph cannot see the controller's upstream connections.
       backends.egress = [ { to = "pods"; } ];
       # Clients outside the cluster, plus in-cluster clients and NodePort
-      # traffic that arrives SNATed from a node.
+      # traffic that arrives SNATed from a node. The `cluster` entity names
+      # the nodes as well as the pods.
       front-door.ingress = [
         {
           from = "world";
@@ -126,7 +127,8 @@ in
           ];
         }
         {
-          from = "all-pods";
+          from = "world";
+          entities = [ "cluster" ];
           ports = [
             (tcp 80)
             (tcp 443)

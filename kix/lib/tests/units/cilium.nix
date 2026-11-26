@@ -353,6 +353,45 @@ in
     )
     || throw "helmChartConfig delivery: ${builtins.toJSON { inherit values markers; }}";
 
+  # The clusterwide DNS policy allows the DNS peers that the `dns` import
+  # publishes, the same peers every workload's DNS rule allows.
+  cilium-cluster-dns-egress-reads-dns-peers =
+    let
+      peers = [
+        {
+          namespace = "kube-system";
+          podSelector."k8s-app" = "node-local-dns";
+        }
+      ];
+      cluster = rke2CiliumCluster {
+        netpol = true;
+        # An optional import is inactive until something depends on it.
+        extra.instances.kube-system.platform-dns.optional = false;
+        extra.instances.kube-system.platform-dns.package = lib.mkForce (
+          eval.mkImport {
+            kind = "Service";
+            apiVersion = "v1";
+            roles = [ "dns" ];
+            out = {
+              name = "rke2-coredns-rke2-coredns";
+              fqdn = "rke2-coredns-rke2-coredns.kube-system.svc.cluster.local";
+            };
+            dnsPeers = peers;
+          }
+        );
+      };
+      policy = byName "cilium-cluster-dns-egress" (manifests cluster);
+    in
+    (builtins.head policy.spec.egress).toEndpoints == [
+      {
+        matchLabels = {
+          "k8s:io.kubernetes.pod.namespace" = "kube-system";
+          "k8s-app" = "node-local-dns";
+        };
+      }
+    ]
+    || throw "cilium-cluster-dns-egress: ${builtins.toJSON (policy.spec or null)}";
+
   # User values merge over the package's defaults in the HelmChartConfig,
   # and enforcement is "always" with network policy on.
   cilium-helmchartconfig-values-merge =

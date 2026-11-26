@@ -387,6 +387,9 @@ in
                 provider = clusterInstances.${lookup.ns}.${lookup.inst};
               in
               if provider ? raw then provider.raw.root.resource or provider.raw.root else provider.root;
+            # The provider's metadata, which reading does not evaluate the
+            # instance (`core/dns-peers.nix` reads `dnsPeers` from it).
+            meta = peekedMetas.${lookup.ns}.${lookup.inst};
             out = roles.checkOutContract {
               inherit role;
               providerLabel = "${lookup.ns}/${lookup.inst}";
@@ -429,7 +432,12 @@ in
 
       clusterCtx = {
         config = cfg;
-        inherit findRoleProvider inactiveOptionalKeys;
+        inherit
+          findRoleProvider
+          inactiveOptionalKeys
+          realNsNames
+          deployedNsNames
+          ;
       };
 
       workloadInterceptors = hooks.collectHooks cfg "workloadInterceptors";
@@ -633,6 +641,21 @@ in
           in
           holders == [ ] || owner == instanceKey inst
         ) (collectResources inst);
+
+      # Namespaces that hold at least one active instance Kix deploys. An
+      # import (`kix.mkImport`) and an inactive optional instance deploy
+      # nothing, so they do not count. An import evaluates through the
+      # import scope, which marks the endpoint facts it mints as `imported`
+      # (`core/resource.nix`, `eval/import.nix`): the same test, seen from a
+      # dependency edge.
+      deployedNsNames = builtins.filter (
+        nsName:
+        builtins.any (
+          instName:
+          isActive nsName instName
+          && (mergedInstances.${nsName}.${instName}.package._type or "") != "kix-import"
+        ) (builtins.attrNames (mergedInstances.${nsName} or { }))
+      ) realNsNames;
 
       # `resources` holds the sealed resources of every active instance,
       # including the policies instance hooks derived.

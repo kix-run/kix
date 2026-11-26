@@ -786,9 +786,35 @@ let
 
         rule = kind: extra: { stubRule = kind; } // extra;
 
-        netpolApi = {
+        # The DNS rule names its peers, so a test can see which ones Kix
+        # bound.
+        netpolApi = netpolFor (import ../core/dns-peers.nix { inherit lib; }).defaultDnsPeers;
+        netpolFor = dnsPeers: {
+          withDnsPeers = netpolFor;
           policyKinds = [ "CiliumNetworkPolicy" ];
-          mkPolicy = { mkResource, extraArgs }: mkResource (crdRef.out.cr extraArgs);
+          mkPolicy =
+            {
+              mkResource,
+              extraArgs,
+              selector ? null,
+              ingress ? [ ],
+              egress ? [ ],
+            }:
+            mkResource (
+              crdRef.out.cr (
+                if selector == null then
+                  extraArgs
+                else
+                  extraArgs
+                  // {
+                    spec = {
+                      endpointSelector.matchLabels = selector;
+                    }
+                    // lib.optionalAttrs (ingress != [ ]) { inherit ingress; }
+                    // lib.optionalAttrs (egress != [ ]) { inherit egress; };
+                  }
+              )
+            );
           mkDefaultDenySpec =
             { denyIngress, denyEgress }:
             {
@@ -796,7 +822,7 @@ let
             }
             // lib.optionalAttrs denyIngress { ingress = [ ]; }
             // lib.optionalAttrs denyEgress { egress = [ ]; };
-          dnsEgressRule = rule "dns-egress" { };
+          dnsEgressRule = rule "dns-egress" { inherit dnsPeers; };
           apiServerEgressRule = rule "apiserver-egress" { };
           mkExternalIngressRule = { entities }: rule "external-ingress" { inherit entities; };
           mkExternalEgressRule = { entities }: rule "external-egress" { inherit entities; };
@@ -1298,6 +1324,7 @@ let
       baseInstances
       netpolOn
       mkCmPackage
+      mkAppPackage
       manifests
       ofKind
       namesOf

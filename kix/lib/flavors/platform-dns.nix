@@ -6,6 +6,11 @@
 # applies the workloads that depend on DNS. The instance can live in another
 # namespace, which matters where the platform refuses writes to the
 # Service's namespace.
+#
+# `peers` becomes the import's `meta.dnsPeers`: where pods send DNS queries,
+# which the network policy enforcer opens on port 53 for every workload.
+# Leave it null for the `kube-dns` pods in `kube-system`
+# (`core/dns-peers.nix`).
 
 {
   lib,
@@ -16,6 +21,7 @@
   name,
   namespace,
   optional ? true,
+  peers ? null,
 }:
 {
   package = kix.mkImport {
@@ -27,6 +33,7 @@
       inherit name;
       fqdn = "${name}.${namespace}.svc.${clusterDomain}";
     };
+    dnsPeers = peers;
   };
   # The flavour's choice is a default, so a cluster definition can set
   # `optional` either way without `lib.mkForce`.

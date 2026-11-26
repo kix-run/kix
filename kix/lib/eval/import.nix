@@ -55,6 +55,10 @@ rec {
       # annotation-ownership rule accepts annotations under them on any
       # instance, with no dependency on this import.
       annotationDomains ? [ ],
+      # For an import that claims the `dns` role: where pods send DNS
+      # queries (`core/dns-peers.nix`), or null for the kube-dns pods in
+      # kube-system.
+      dnsPeers ? null,
     }:
     {
       _type = "kix-import";
@@ -68,7 +72,8 @@ rec {
         ;
       meta = {
         inherit roles scope annotationDomains;
-      };
+      }
+      // lib.optionalAttrs (dnsPeers != null) { inherit dnsPeers; };
     };
 
   mkImportScope =
@@ -117,9 +122,12 @@ rec {
           # Attach an endpoint fact token so import-mode service refs
           # participate in network dependency detection without a store
           # resource.
+          # `imported` tells the netpol plugin that Kix does not deploy the
+          # pods.
           endpointFactCtx = k8s.facts.mkFact "endpoint" {
             inherit name selector ports;
             namespace = namespaceName;
+            imported = true;
           };
           attachConnectCtx = value: builtins.appendContext (toString value) endpointFactCtx;
         in

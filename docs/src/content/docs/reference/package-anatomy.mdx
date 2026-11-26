@@ -197,6 +197,7 @@ meta = {
 | `podSecurity` | `"privileged"` \| `"baseline"` \| `"restricted"` | None | Pod Security Standards enforcement level applied to the instance namespace. |
 | `unsafe` | list of strings | `[ ]` | Acknowledged security or architectural exceptions (`"raw-pvc"`, `"host-network"`, `"privileged"`, `"run-as-root"`, `"cluster-admin"`). |
 | `annotationDomains` | list of strings | `[ ]` | Annotation domain prefixes (such as `"cert-manager.io"`) owned and consumed by this package. |
+| `dnsPeers` | list | unset | DNS endpoints allowed on UDP and TCP port 53 by generated network policies when this package claims the `"dns"` role. Each entry is `{ namespace?; podSelector; }` (`namespace` defaults to the instance's namespace) or `{ cidr; }` (rejected by the `cilium` enforcer). When unset, policies allow pods labeled `k8s-app: kube-dns` in `kube-system`. See [DNS peers](/docs/explanation/network-policy/#dns-peers). |
 | `network` | attrset | `{ }` | Ambient network intents (`intents.<part>.{egress,ingress}`) and `externalIngressEntities`. |
 | `lifecycle` | `"stateful"` | None | Marks the `PackageInstance` with `kix.run/lifecycle: stateful`. |
 | `scope` | `"cluster"` \| `"namespace"` | unset | `"cluster"`: consumers in every namespace find an instance by name, and auto-instantiation places the package once per cluster in `autoNamespace` or the catalog entry's `namespace` (without either, evaluation fails; declare the instance under `instances` or set `autoNamespace`). `"namespace"`: an instance is never used from another namespace, not even with `ref`. Unset: an instance in another namespace is used only when the consumer names it with `deps.<arg> = ref.<namespace>.<instance>`. Packages that claim a role or declare a `cluster:` conflict still serve the whole cluster, as do instances that Kix creates from `availablePackages` or enables via `optional = true` to satisfy a dependency. A `kix.mkImport` stand-in defaults to `"cluster"`. |
@@ -388,9 +389,10 @@ meta.network = {
 };
 ```
 
-- `intents.<partName>.egress`: list of rules where `to` is `"world"`, `"pods"`, `"all-pods"`, `"apiserver"`, `"dns"`, or `{ entities = [ ... ]; }`, with optional `ports = [ { port; protocol ? "TCP"; } ]`. `"pods"` allows traffic only to pods. `"all-pods"` maps to Cilium's `cluster` entity, which also includes cluster nodes and the Kubernetes API server.
+- `intents.<partName>.egress`: list of rules where `to` is `"world"`, `"pods"`, `"all-pods"`, `"apiserver"`, `"dns"`, `"node-local"` (with required `cidr`, for a link-local or metadata address on the pod's own node), or `{ entities = [ ... ]; }`, with optional `ports = [ { port; protocol ? "TCP"; } ]`. `"pods"` allows traffic only to pods. `"all-pods"` means all pods in the cluster; although the `cilium` enforcer maps `"all-pods"` to Cilium's `cluster` entity (which also includes cluster nodes and the Kubernetes API server), any rule that also needs to reach cluster nodes, host-network peers, or NodePort traffic SNATed by a node should declare `{ to = "world"; entities = [ "cluster" ]; }` (or `from = "world"` for ingress) explicitly.
 - `intents.<partName>.ingress`: list of rules where `from` is `"world"`, `"all-pods"`, or `{ entities = [ ... ]; }`, with optional `ports`.
-- `externalIngressEntities`: list of Cilium entity names (such as `["world"]` or `["remote-node"]`) used when this package acts as a cluster ingress controller.
+- `externalIngressEntities`: list of entity names (such as `["world"]` or `["remote-node"]`) used when this package acts as a cluster ingress controller.
+- `entities` (on an intent rule) and `externalIngressEntities` accept only `"world"`, `"host"`, `"remote-node"`, `"kube-apiserver"`, `"cluster"`, and `"all"`. Any other entity name fails evaluation with `[K2060]`. Each network policy enforcer maps these names to its own rule format.
 
 ---
 

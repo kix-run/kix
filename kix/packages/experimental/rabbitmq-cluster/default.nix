@@ -595,56 +595,50 @@ in
         operandEgress = kix.operandPolicy {
           inherit scope;
           name = "${name}-operand-egress";
-          spec = {
-            endpointSelector.matchLabels = operandSelector;
-            egress = [
-              netpol.dnsEgressRule
-            ]
-            ++ lib.optional peerDiscoveryApi netpol.apiServerEgressRule
-            ++ [
-              (netpol.mkServiceEgressRule {
-                selector = operandSelector;
-                namespace = ns;
-                sourceNamespace = ns;
-                ports = peerPorts;
-              })
-            ];
-          };
+          selector = operandSelector;
+          egress = [
+            netpol.dnsEgressRule
+          ]
+          ++ lib.optional peerDiscoveryApi netpol.apiServerEgressRule
+          ++ [
+            (netpol.mkServiceEgressRule {
+              selector = operandSelector;
+              namespace = ns;
+              sourceNamespace = ns;
+              ports = peerPorts;
+            })
+          ];
         };
         operandIngress = kix.operandPolicy {
           inherit scope;
           name = "${name}-operand-ingress";
-          spec = {
-            endpointSelector.matchLabels = operandSelector;
-            ingress = [
-              (netpol.mkCallerIngressRule {
-                callerSelector = operandSelector;
-                callerNamespace = ns;
-                ports = peerPorts;
-              })
-              (netpol.mkCallerIngressRule {
-                callerSelector = operator.podSelector;
-                callerNamespace = operatorNamespace;
-                ports = operatorPorts;
-              })
-            ];
-          };
+          selector = operandSelector;
+          ingress = [
+            (netpol.mkCallerIngressRule {
+              callerSelector = operandSelector;
+              callerNamespace = ns;
+              ports = peerPorts;
+            })
+            (netpol.mkCallerIngressRule {
+              callerSelector = operator.podSelector;
+              callerNamespace = operatorNamespace;
+              ports = operatorPorts;
+            })
+          ];
         };
         # The other end of the operator rule, in the operator's namespace.
         operatorEgress = kix.operandPolicy {
           scope = scope.forService rabbitmqOperator;
           name = "${ns}-${name}-operator-egress";
-          spec = {
-            endpointSelector.matchLabels = operator.podSelector;
-            egress = [
-              (netpol.mkServiceEgressRule {
-                selector = operandSelector;
-                namespace = ns;
-                sourceNamespace = operatorNamespace;
-                ports = operatorPorts;
-              })
-            ];
-          };
+          selector = operator.podSelector;
+          egress = [
+            (netpol.mkServiceEgressRule {
+              selector = operandSelector;
+              namespace = ns;
+              sourceNamespace = operatorNamespace;
+              ports = operatorPorts;
+            })
+          ];
         };
 
         root = {

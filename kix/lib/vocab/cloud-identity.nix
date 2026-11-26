@@ -68,7 +68,7 @@ let
         lib.optional (m.cloud == mechanism.cloud && m.name != mechanism.name && (r.podEnv or { }) != { }) {
           inherit (m) description;
           env = builtins.attrNames r.podEnv;
-          fix = r.podEnvOverrideFix or null;
+          fix = m.podEnvOverrideFix;
         }
       ) allMechanisms;
     in
@@ -78,8 +78,8 @@ let
       {
         inherit (mechanism) description;
         inherit env alternatives;
-        fix = rendered.podEnvFix or null;
-        skip = rendered.podEnvSkip or null;
+        fix = mechanism.podEnvFix;
+        skip = mechanism.podEnvSkip;
       };
   identityType = "kix-cloud-identity";
 
@@ -191,9 +191,9 @@ let
   # provider (`{ ns; inst; out; }`, or null). Return `{ problem; }` with a
   # `{ message; fix; }` when the cluster cannot deliver it, or the
   # ServiceAccount annotations (with `kix.run/cloud-identity`), the pod
-  # labels, the restart stamp, and the mechanism's facts about pods:
-  # `podCheck` (what the deploy checks, or null), `servesHostNetwork`, and
-  # its `description`.
+  # labels, the restart stamp, the mechanism's credential `egress`, and its
+  # facts about pods: `podCheck` (what the deploy checks, or null),
+  # `servesHostNetwork`, and its `description`.
   render =
     { identity, provider }:
     let
@@ -246,9 +246,10 @@ let
           ${kixKeys.cloudIdentity} = recordJson;
         };
         inherit (rendered) podLabels;
+        inherit (mechanism) egress;
         stamp = builtins.hashString "sha256" recordJson;
         podCheck = podCheckOf mechanism rendered;
-        servesHostNetwork = rendered.servesHostNetwork or true;
+        inherit (mechanism) servesHostNetwork;
         inherit (mechanism) description;
       };
 
@@ -498,9 +499,13 @@ let
 
   # Return the ServiceAccount annotations and pod labels of `identity` for a
   # ServiceAccount that an operator creates from a custom resource, which
-  # `bind` cannot reach. `provider` is the package's `cloudIdentity`
-  # dependency, the instance that holds the role. With `identity` null,
-  # return empty sets.
+  # `bind` cannot reach, and `networkIntents`, the credential egress of the
+  # cluster's mechanism as `meta.network.intents` rules
+  # (`{ egress = [ ... ]; }`). Pass it to `translateIntentRules` for the
+  # operand pods' `kix.operandPolicy`, because the netpol plugin does not
+  # see those pods. `provider` is the package's `cloudIdentity` dependency,
+  # the instance that holds the role. With `identity` null, return empty
+  # sets.
   annotationsFor =
     {
       scope,
@@ -529,11 +534,15 @@ let
       {
         serviceAccountAnnotations = { };
         podLabels = { };
+        networkIntents.egress = [ ];
       }
     else if r.problem != null then
       fail r.problem
     else
-      { inherit (r) serviceAccountAnnotations podLabels; };
+      {
+        inherit (r) serviceAccountAnnotations podLabels;
+        networkIntents.egress = r.egress;
+      };
 in
 {
   inherit

@@ -410,21 +410,15 @@ in
         listenerEgress = kix.operandPolicy {
           inherit scope;
           name = "${name}-listener-egress";
-          spec =
-            let
-              netpol = scope.networkPolicyEnforcer.netpol;
-            in
-            netpol.mkEndpointSelector listenerSelector
-            // {
-              egress =
-                (netpol.translateIntentRules {
-                  intents.listener.egress = [
-                    { to = "dns"; }
-                    { to = "apiserver"; }
-                  ]
-                  ++ githubEgress;
-                }).egressRules;
-            };
+          selector = listenerSelector;
+          egress =
+            (scope.networkPolicyEnforcer.netpol.translateIntentRules {
+              intents.listener.egress = [
+                { to = "dns"; }
+                { to = "apiserver"; }
+              ]
+              ++ githubEgress;
+            }).egressRules;
         };
 
         runnerSet = import ./runner-set.nix {

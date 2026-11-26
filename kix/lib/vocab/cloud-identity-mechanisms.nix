@@ -10,15 +10,18 @@ let
   mechanismType = "kix-cloud-identity-mechanism";
 
   # Return a mechanism record. `render` takes the value of the mechanism's
-  # cloud and returns the ServiceAccount annotations and pod labels it needs.
-  # It may also return:
+  # cloud and returns the ServiceAccount annotations and pod labels it needs,
+  # and `podEnv`: the environment variables the platform adds to every
+  # container of a pod it gives the identity to, each mapped to its expected
+  # value or to null when only its presence is known. The deploy checks a new
+  # pod for them, because only the platform can say whether the pod got the
+  # identity. The other facts do not depend on the identity:
   #
-  # - `podEnv`: the environment variables the platform adds to every
-  #   container of a pod it gives the identity to, each mapped to its
-  #   expected value or to null when only its presence is known. The deploy
-  #   checks a new pod for them, because only the platform can say whether
-  #   the pod got the identity.
-  # - `podEnvFix`: what to check when a pod lacks them.
+  # - `egress`: the outbound traffic a pod needs to fetch its credentials,
+  #   as `meta.network.intents` egress rules. The netpol plugin adds it to
+  #   the egress policy of every workload that runs as a ServiceAccount
+  #   bound to an identity.
+  # - `podEnvFix`: what to check when a pod lacks the `podEnv` variables.
   # - `podEnvSkip`: the pod annotation (`annotation`) that tells the
   #   platform to leave some containers alone, and the `separator` between
   #   their names. The deploy does not check those containers.
@@ -33,6 +36,11 @@ let
       description,
       annotationDomains,
       render,
+      egress,
+      podEnvFix ? null,
+      podEnvSkip ? null,
+      podEnvOverrideFix ? null,
+      servesHostNetwork ? true,
     }:
     {
       _type = mechanismType;
@@ -42,8 +50,18 @@ let
         description
         annotationDomains
         render
+        egress
+        podEnvFix
+        podEnvSkip
+        podEnvOverrideFix
+        servesHostNetwork
         ;
     };
+
+  tcp = port: {
+    inherit port;
+    protocol = "TCP";
+  };
 
   # Return the IAM roles for service accounts (IRSA) mechanism, which EKS
   # and the self-hosted amazon-eks-pod-identity-webhook read from a
@@ -65,13 +83,22 @@ let
           AWS_ROLE_ARN = value.roleArn;
           AWS_WEB_IDENTITY_TOKEN_FILE = null;
         };
-        podEnvFix = "On EKS, if this ServiceAccount has an EKS Pod Identity association, delete that association in AWS so IRSA can apply. On a self-managed cluster, check that the IRSA webhook is running. Then restart the workload's pods.";
-        # The webhook README documents a comma-separated list.
-        podEnvSkip = {
-          annotation = "${annotationPrefix}/skip-containers";
-          separator = ",";
-        };
       };
+      podEnvFix = "On EKS, if this ServiceAccount has an EKS Pod Identity association, delete that association in AWS so IRSA can apply. On a self-managed cluster, check that the IRSA webhook is running. Then restart the workload's pods.";
+      # The webhook README documents a comma-separated list.
+      podEnvSkip = {
+        annotation = "${annotationPrefix}/skip-containers";
+        separator = ",";
+      };
+      # The pod exchanges its token at AWS STS, outside the cluster, on 443.
+      # A live EKS cluster under default deny gave the pod credentials with
+      # this rule and DNS, and the calls hung without it.
+      egress = [
+        {
+          to = "world";
+          ports = [ (tcp 443) ];
+        }
+      ];
     };
 
   # Return the EKS Pod Identity mechanism. The link between the
@@ -94,16 +121,34 @@ let
           AWS_CONTAINER_CREDENTIALS_FULL_URI = null;
           AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE = null;
         };
-        podEnvFix = "Create an EKS Pod Identity association in AWS linking this ServiceAccount to the configured IAM role (Kix does not create it), and check that the EKS Pod Identity Agent add-on is running. Then restart the workload's pods.";
-        # AWS does not document this annotation for Pod Identity. On a live
-        # EKS 1.37 cluster, the webhook left a container it names without
-        # the Pod Identity variables and token mount, as it does for IRSA.
-        podEnvSkip = {
-          annotation = "eks.amazonaws.com/skip-containers";
-          separator = ",";
-        };
-        podEnvOverrideFix = "To use IRSA, delete the EKS Pod Identity association for this ServiceAccount in AWS and restart the workload's pods. To use EKS Pod Identity instead, set `cluster.flavor.eks.cloudIdentity = \"pod-identity\"` and run `kix deploy`.";
       };
+      podEnvFix = "Create an EKS Pod Identity association in AWS linking this ServiceAccount to the configured IAM role (Kix does not create it), and check that the EKS Pod Identity Agent add-on is running. Then restart the workload's pods.";
+      # AWS does not document this annotation for Pod Identity. On a live
+      # EKS 1.37 cluster, the webhook left a container it names without the
+      # Pod Identity variables and token mount, as it does for IRSA.
+      podEnvSkip = {
+        annotation = "eks.amazonaws.com/skip-containers";
+        separator = ",";
+      };
+      podEnvOverrideFix = "To use IRSA, delete the EKS Pod Identity association for this ServiceAccount in AWS and restart the workload's pods. To use EKS Pod Identity instead, set `cluster.flavor.eks.cloudIdentity = \"pod-identity\"` and run `kix deploy`.";
+      # The EKS Pod Identity agent listens on the pod's own node at these
+      # link-local addresses, on port 80. A live EKS cluster under default
+      # deny gave the pod credentials with the IPv4 rule and none without it.
+      # The IPv6 address comes from the AWS documentation
+      # (https://docs.aws.amazon.com/eks/latest/userguide/pod-identities.html)
+      # and was not tested.
+      egress = [
+        {
+          to = "node-local";
+          cidr = "169.254.170.23/32";
+          ports = [ (tcp 80) ];
+        }
+        {
+          to = "node-local";
+          cidr = "fd00:ec2::23/128";
+          ports = [ (tcp 80) ];
+        }
+      ];
     };
 
   # Return the GKE Workload Identity Federation mechanism. With no Google
@@ -123,8 +168,23 @@ let
           "iam.gke.io/gcp-service-account" = value.serviceAccount;
         };
         podLabels = { };
-        servesHostNetwork = false;
       };
+      servesHostNetwork = false;
+      # The GKE metadata server answers on the pod's own node at this
+      # address. A live GKE cluster under default deny needed port 80 for
+      # credentials. Port 8080 comes from Google's network policy guide
+      # (https://cloud.google.com/kubernetes-engine/docs/how-to/network-policy)
+      # and was not tested.
+      egress = [
+        {
+          to = "node-local";
+          cidr = "169.254.169.254/32";
+          ports = [
+            (tcp 80)
+            (tcp 8080)
+          ];
+        }
+      ];
     };
 
   # Return the Microsoft Entra Workload ID mechanism. Its webhook acts only
@@ -149,13 +209,24 @@ let
           AZURE_TENANT_ID = value.tenantId;
           AZURE_FEDERATED_TOKEN_FILE = null;
         };
-        podEnvFix = "Check that the Azure Workload Identity webhook is running and that its mutating webhook configuration includes this namespace. Then restart the workload's pods.";
-        # The Azure Workload Identity docs give a semicolon-separated list.
-        podEnvSkip = {
-          annotation = "azure.workload.identity/skip-containers";
-          separator = ";";
-        };
       };
+      podEnvFix = "Check that the Azure Workload Identity webhook is running and that its mutating webhook configuration includes this namespace. Then restart the workload's pods.";
+      # The Azure Workload Identity docs give a semicolon-separated list.
+      podEnvSkip = {
+        annotation = "azure.workload.identity/skip-containers";
+        separator = ";";
+      };
+      # The pod exchanges its token at Microsoft Entra ID
+      # (login.microsoftonline.com), outside the cluster, on 443. This comes
+      # from the AKS documentation
+      # (https://learn.microsoft.com/en-us/azure/aks/outbound-rules-control-egress)
+      # and was not tested.
+      egress = [
+        {
+          to = "world";
+          ports = [ (tcp 443) ];
+        }
+      ];
     };
 
 in
