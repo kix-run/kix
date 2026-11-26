@@ -14,7 +14,7 @@
 | 5 | Skip default-deny in namespaces whose only instances are imports or inactive optional instances, and add `networkPolicy.platformNamespaces` (decision 5). | none | `silent` (minor release) |
 | 6 | Implement the standard `NetworkPolicy` renderer, `cluster.network.apiServer`, `cluster.network.nodeCidrs`, unsupported-rule refusals, the `networkPolicyWidened` scorecard rule, the policy-kind validation check, the check 12 skip for policies that Kix generates for operator-created pods and platform intents (AWS F17), and the `kix deploy` API server IP check. Enable the standard renderer in `gke` and `gke-autopilot`, plus `k3s` and `kind` once live tests confirm stock enforcement. | 3, 4, 5 | `added` |
 | 7 | Add `egress` rules on cloud identity mechanisms, the `"node-local"` intent target, and `networkIntents` on bound identity values. | 3 | `fixed` (adds egress rules on Cilium clusters using cloud identity; no user action needed) |
-| 8 | Add `cluster.flavor.eks.networkPolicy` and the verified VPC CNI behavior flags. | 6 + EKS test C | `added` |
+| 8 | Add `cluster.flavor.eks.networkPolicy` and the verified VPC CNI behavior flags. | 6 | `added` |
 | 9 | Remove the legacy `spec` argument with an error naming `selector`, `ingress`, and `egress`. | 3 (next minor release) | `error` (with an id) |
 | 10 | Add `cluster.flavor.aks.networkPolicy`. | 6 + live AKS cluster | `added` |
 | 11 | Add the post-deploy enforcement probe, if approved (`181`, section 10). | 6 | `added` |
@@ -76,14 +76,15 @@ to run against Kix once steps 6 and 7 land, and test 10 still needs to run:
 
 ## 3. Live EKS tests
 
-Tests 2 through 9 can run immediately in a scratch namespace using explicit
-`NetworkPolicy` manifests before any step is built; their results determine the
-VPC CNI settings for step 8. Test 1 runs once step 8 is built. Enable
+Tests 2 through 9 use explicit `NetworkPolicy` manifests in a scratch namespace
+and need no Kix changes; test 1 runs once step 8 is built. Enable
 `enableNetworkPolicy` on the VPC CNI add-on for all nine tests.
 
-The 2026-11-25 EKS test (AWS F18) already covered tests 5, 6, and 9, plus test
-8 with `instance` targets behind a classic load balancer. Tests 2, 3, 4, and 7,
-along with test 8 using `ip` targets, still need to run:
+Live EKS tests already answered tests 2 (AWS Q1), 3 (AWS Q2), 4 (AWS Q3), 5
+(AWS F18, AWS Q4), 6 (AWS F18, AWS Q5), 7 (AWS Q6), and 9 (AWS F18, AWS Q8),
+plus test 8 with `instance` targets behind a classic load balancer (AWS F18,
+AWS Q7). What remains is test 1 after step 8, and test 8 with `ip` targets,
+which needs the AWS Load Balancer Controller:
 
 1. With `cluster.flavor.eks.networkPolicy` unset, verify that `kix check` fails
    and names `cluster.flavor.eks.networkPolicy`. Set it to `"vpc-cni"` and
@@ -100,7 +101,9 @@ along with test 8 using `ip` targets, still need to run:
 6. Repeat test 5 using EKS Pod Identity, with and without an egress rule
    allowing TCP 80 to `169.254.170.23/32`.
 7. Trigger the `cert-manager` admission webhook and record the source IP of the
-   API server's requests.
+   API server's requests. Restart the webhook pod between policy changes,
+   because the API server reuses open connections that a policy change does not
+   cut.
 8. Expose a `LoadBalancer` Service with `instance` targets and then `ip`
    targets, allowing ingress from `0.0.0.0/0`. Verify HTTP 200 in both modes
    and record the source IP seen by the pod.

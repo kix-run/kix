@@ -18,15 +18,18 @@ Every platform claim below is marked with its evidence:
 - **V (Fn):** verified on a live cluster. `Fn` cites a finding in the
   2026-11-25 GKE test report, and `N1`, `N2`, and `N3` cite the "Network policy
   facts for the design" section of that report. `AWS Fn` cites a finding in the
-  EKS test report from the same day.
+  EKS test report from the same day, and `AWS Q1` to `AWS Q8` cite the numbered
+  answers in the "Network policy facts for the design" section of the EKS test
+  report.
 - **D [ref]:** documented by the vendor as of 2026-11-25 (links in `181b_network_policy_platform_facts.md`).
 - **A:** unverified assumption.
 
-The EKS network policy test (AWS F16 to F18) finished while this doc was being
-written. It verified the DNS, cloud identity, and load balancer rules. It did
-not test Service address translation, `ipBlock` matching against pod IPs, the
-API server address a rule must name, or the source of webhook calls. Those EKS
-claims remain **A**, and `181b` lists them.
+The EKS network policy tests (AWS F16 to F18, and AWS Q1 to Q8) verified DNS,
+cloud identity, classic load balancers, Service address translation, `ipBlock`
+matching against pod and node IPs, the API server address a rule must name, the
+source of webhook calls, and the pod startup window. Load balancers with IP
+targets and Kix-built policy on EKS remain untested (`181b` lists what remains
+open).
 
 ## 2. How managed cloud platforms enforce policy
 
@@ -115,7 +118,7 @@ inbound traffic to pods covered by an egress-only policy (D [k-np]).
 | DNS egress | Pods from the DNS provider | Peers from `out.dnsPeers` (decision 4) | Same |
 | API server egress | `kube-apiserver`, `host`, and `remote-node` | `ipBlock` from `cluster.network.apiServer` (decision 6) | Same when set; refused when unset |
 | API server ingress (webhooks) | `kube-apiserver`, `host`, and `remote-node` | Peers from `cluster.network.apiServer.sources` | Same when set; refused when unset |
-| `world` egress | `world` entity | `0.0.0.0/0` and `::/0`, excluding `cluster.network.podCidr` and `nodeCidrs` when set | Wider where `0.0.0.0/0` matches pods or nodes and the matching CIDRs are unset; same once excluded. On GKE, `0.0.0.0/0` also opens nodes (V, N2), so it is wider there unless `cluster.network.nodeCidrs` is set and excluded; whether an `except` entry removes nodes on Dataplane V2 is **A** (tested in `181a`) |
+| `world` egress | `world` entity | `0.0.0.0/0` and `::/0`, excluding `cluster.network.podCidr` and `nodeCidrs` (plus `serviceCidr` where `ipBlockSeesServiceAddress` is `true`) when set | Wider where `0.0.0.0/0` matches pods, nodes, or Services and the matching CIDRs are unset; same once excluded. On GKE, `0.0.0.0/0` also opens nodes (V, N2), so it is wider there unless `cluster.network.nodeCidrs` is set and excluded; whether an `except` entry removes nodes on Dataplane V2 is **A** (tested in `181a`). On EKS, `0.0.0.0/0` admits pods and nodes (V, AWS Q3). Where `ipBlockSeesServiceAddress` is `true`, it also admits every Service on that Service port, including the API server on 443 (V, AWS Q1), so the excluded ranges there are `cluster.network.podCidr`, `nodeCidrs`, and `serviceCidr`. On EKS, pods and nodes take addresses from the VPC subnets, so excluding them also blocks other endpoints in the VPC; most EKS clusters will therefore keep the wider rule and see the report |
 | `world` ingress | `world` entity | `0.0.0.0/0` and `::/0` | On Dataplane V2, never admits pods (V, N1), and whether it admits nodes on ingress is **A**. Wider elsewhere because in-cluster sources also match (required when nodes forward load balancer traffic) |
 | `host` and `remote-node` | Entities | `ipBlock` over `cluster.network.nodeCidrs` | Same where `ipBlock` matches nodes, including GKE over `cluster.network.nodeCidrs` (V, N2); refused only when `nodeCidrs` is unset, or on a platform where an `ipBlock` cannot match nodes (AKS with Cilium, D [z-cil]) |
 | `all-pods` | `cluster` entity (pods, nodes, and API server) | `namespaceSelector: {}` (pods only) | Narrower (see below) |
@@ -188,15 +191,22 @@ cluster.roles.network-policy-enforcer = {
 instances.kube-system.platform-network-policy = platformNetworkPolicy {
   ipBlockSelectsPods = false;
   ipBlockSelectsNodes = true;
-  egressBeforeServiceTranslation = false;
+  ipBlockSeesServiceAddress = false;
 };
 networkPolicy.platformNamespaces = lib.mkDefault [ "kube-system" ];
 ```
 
 Those three flags correspond to the `ipBlock` and Service translation rows in
-`181b` and determine whether each rule is *same*, *wider*, or *refused*.
-When `egressBeforeServiceTranslation = true`, a Service egress rule allows both
-the Service port and the pod port.
+`181b` and determine whether each rule is *same*, *wider*, or *refused*. Kix's
+Service egress rules use pod selectors, which every tested platform matches on
+the pod and its port (V: F21, AWS Q1), so they need no extra port.
+`ipBlockSeesServiceAddress` describes `ipBlock` peers instead: `true` means an
+`ipBlock` is matched against the Service address and Service port (EKS: V,
+AWS Q1), and `false` means against the endpoint address (GKE: V, F21). Kix uses
+an `ipBlock` toward a Service in one place only: the API server rule. On EKS,
+all three flavor facts are verified: `ipBlockSelectsPods = true` (V, AWS Q3),
+`ipBlockSelectsNodes = true` (V, AWS Q3 and AWS F18), and
+`ipBlockSeesServiceAddress = true` (V, AWS Q1).
 
 With the flavor in place, a GKE cluster author enables network policy in two
 lines:
@@ -397,36 +407,45 @@ cluster.network.apiServer = {
 ```
 
 Workloads bound to a `Role` or `ClusterRole` get egress to `cidrs` on `port`.
-When a policy needs API server egress and `cidrs` is empty, `kix check` fails
-and prints the platform-specific command to look up the address. Before
-applying resources, `kix deploy` compares `cidrs` against the live `kubernetes`
-`Service` and `EndpointSlice` and stops if neither is covered, reporting the
-live address immediately after a control-plane IP rotation.
-
-Which address `cidrs` must list depends on when the CNI evaluates policy: on
-GKE, it is the control-plane endpoint IP (V, F21); on EKS, it is likely the
-`kubernetes` `Service` ClusterIP if the VPC CNI evaluates policy before Service
-translation (**A**).
+Which address `cidrs` holds depends on `ipBlockSeesServiceAddress`. On GKE
+(`false`), it is the control-plane endpoint address (V, F21). On EKS (`true`),
+`cluster.network.apiServer.cidrs` holds the cluster IP of the `kubernetes`
+`Service`, which is the first address of the Service range and does not change
+(V, AWS Q2). Where `ipBlockSeesServiceAddress` is `true` and
+`cluster.network.serviceCidr` is set, Kix derives `cidrs` from it, so the
+cluster author sets one of the two. When a policy needs API server egress and
+`cidrs` is empty, `kix check` fails and prints the platform-specific command to
+look up the address. Before applying resources, `kix deploy` compares `cidrs`
+with the live `kubernetes` `Service` address where `ipBlockSeesServiceAddress`
+is `true` and with the `EndpointSlice` addresses where it is `false`, stopping
+and reporting the live address if `cidrs` does not cover it (for example, after
+a control-plane IP rotation).
 
 **API server ingress.** Eleven packages expose admission webhooks or aggregated
 APIs (`from = "apiserver"`), which generate ingress rules from `sources`. On
-GKE, the source is the `konnectivity-agent` pods (`k8s-app: konnectivity-agent`
-in `kube-system`; V, N1), so the `gke` and `gke-autopilot` flavors default
+GKE, the source can only be a pod selector for the `konnectivity-agent` pods
+(`k8s-app: konnectivity-agent` in `kube-system`), because no `ipBlock` admitted
+the calls (V, N1); the `gke` and `gke-autopilot` flavors default
 `cluster.network.apiServer.sources` to those pods. A private GKE cluster or one
-without konnectivity is untested (**A**). On EKS, vendor docs do not state the
-exact source IPs of webhook calls; the candidates are the cluster subnet CIDRs
-(D [a-net]). Once the live tests in `181a` identify the source on EKS, the
-`eks` flavor can set a default where possible; until then, the cluster author
-sets `sources` or `kix check` fails.
+without konnectivity is untested (**A**). On EKS, webhook calls come from the
+control plane's network interfaces in the cluster subnets, and their addresses
+change (V, AWS Q6; D [a-net]), so the cluster author sets
+`cluster.network.apiServer.sources` to the range of the cluster subnets (or
+`kix check` fails when a package needs it). The `eks` flavor cannot default
+`sources` because it does not know the VPC range. That range also holds nodes
+and pods, so the rule admits them too (V, AWS Q3), and `networkPolicyWidened`
+reports it.
 
 **Load balancer ingress.** Backend pods for `LoadBalancer` Services allow
 ingress from `0.0.0.0/0`. That worked on GKE behind a passthrough Network Load
-Balancer (V, F21). On EKS behind a classic load balancer, the pod saw a node IP
-as the source, and an ingress rule for the VPC range allowed the traffic
-(V, AWS F18). `0.0.0.0/0` is the only CIDR rule that works across every AWS
-target mode, since traffic can arrive from a node IP, a load balancer IP, or
-the client IP (D [a-lb]). Where `ipBlock` matches pod IPs, `0.0.0.0/0` is wider
-than Cilium's `world` entity, and `networkPolicyWidened` reports it.
+Balancer (V, F21). On EKS behind a classic load balancer, `0.0.0.0/0` allowed
+the traffic; the pod saw a node address with `externalTrafficPolicy: Cluster`
+and the load balancer's own VPC address with `Local` (V, AWS F18 and AWS Q7).
+Load balancers with IP targets remain untested (**A**). `0.0.0.0/0` is the only
+CIDR rule that works across every AWS target mode, since traffic can arrive from
+a node IP, a load balancer IP, or the client IP (D [a-lb]). Where `ipBlock`
+matches pod IPs, `0.0.0.0/0` is wider than Cilium's `world` entity, and
+`networkPolicyWidened` reports it.
 
 **Cost.** One API server address per cluster to look up and update after GKE IP
 rotations (D [g-iprot]).
@@ -464,10 +483,10 @@ clusters build.
    Recommended: yes. It adds one line per cluster, keeps builds deterministic,
    and fails fast at `kix deploy` when stale. The only zero-line alternative is
    rewriting policies at deploy time.
-3. **Default `networkPolicyWidened` to a warning?** Recommended: yes. If an
-   `ipBlock` matches pod IPs on the VPC CNI (an untested assumption), almost
-   every EKS cluster will trigger at least one widened policy, so defaulting to
-   an error would block EKS clusters out of the box.
+3. **Default `networkPolicyWidened` to a warning?** Recommended: yes. An
+   `ipBlock` matches pod IPs on the VPC CNI (V, AWS Q3), so every EKS cluster
+   with a `world` rule triggers at least one widened policy; defaulting to an
+   error would block EKS clusters out of the box.
 4. **Apply the default-deny namespace rule of decision 5 across all flavors
    (`silent` breaking change)?** Recommended: yes, so every flavor follows one
    rule. The alternative is keeping the old rule and adding only
@@ -481,12 +500,12 @@ clusters build.
 6. **Default `cluster.flavor.eks.networkPolicy` to `"none"`?** Recommended:
    yes, because AWS disables enforcement by default on new EKS clusters.
 7. **Report the EKS startup window as a widening?** Recommended: yes. On EKS, a
-   new pod runs briefly with no policy applied (V, AWS F18), and
-   `networkPolicyWidened` can report that once per cluster under `"vpc-cni"`.
-   The add-on's `strict` mode closes the window, but it also blocks every pod
-   that has no policy, including the `kube-system` pods that decision 5 leaves
-   untouched. Kix should not require `strict` mode until a flavor can describe
-   those pods.
+   new pod runs for about one second with no policy applied in `standard` mode
+   (V, AWS F18 and AWS Q8), and `networkPolicyWidened` can report that once per
+   cluster under `"vpc-cni"`. The add-on's `strict` mode closes the window, but
+   it also blocks every pod that has no policy, including the `kube-system` pods
+   that decision 5 leaves untouched. Kix should not require `strict` mode until
+   a flavor can describe those pods.
 
 ## 11. Evidence
 
