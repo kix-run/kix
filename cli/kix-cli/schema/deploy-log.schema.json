@@ -317,6 +317,19 @@
         },
         {
           "additionalProperties": false,
+          "description": "A prune found nothing to delete, and the text says why, such as\n`already gone (Kubernetes does not recognize its kind)`.",
+          "properties": {
+            "already_gone": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "already_gone"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
           "description": "A delete did not finish within the wait: after `elapsed_ms`, the\nobject was still on the cluster, held by `finalizers`. `controllers`\nlists the workloads its kind names as its controller (`controller` on\n`scope.mkCRD`), with what Kix found when it read them. `message` is\nthe text the failure reports.",
           "properties": {
             "deletion_unfinished": {

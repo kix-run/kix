@@ -788,14 +788,12 @@ pub(super) async fn delete_resources(
                 println!("  {} deleted {}", output::red("-"), rid);
                 done.deleted += 1;
             }
-            Removal::Pruned(Pruned::Gone) => {
-                println!("  {} {} already gone", output::dim("="), rid);
-            }
-            Removal::Pruned(Pruned::NotServed) => {
+            Removal::Pruned(gone @ (Pruned::Gone | Pruned::NotServed)) => {
                 println!(
-                    "  {} {} already gone (Kubernetes does not recognize its kind)",
+                    "  {} {} {}",
                     output::dim("="),
-                    rid
+                    rid,
+                    gone.already_gone().unwrap_or_default()
                 );
             }
             Removal::Pruned(outcome @ (Pruned::Kept(_) | Pruned::Changed(_))) => {

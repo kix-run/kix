@@ -1980,6 +1980,53 @@ async fn finalize_learns_whether_orphans_were_left() {
     );
 }
 
+/// A prune that found nothing to delete says why on its ready event, while
+/// one that deleted the object carries no such detail.
+#[tokio::test(start_paused = true)]
+async fn a_prune_with_nothing_to_delete_says_so() {
+    for (answer, said) in [
+        (Pruned::NotServed, Pruned::NotServed.already_gone()),
+        (
+            Pruned::Deleted {
+                uid: None,
+                finalizers: Vec::new(),
+            },
+            None,
+        ),
+    ] {
+        let ops = Arc::new(ScriptedOps::new());
+        ops.delete_behaviour(Behaviour::Now(Ok(answer)));
+        let recorder = Arc::new(Recorder::default());
+        let orphan = rid("ConfigMap", "old");
+        let result = run_with_orphans(
+            &ops,
+            plan_of(&[m("ConfigMap", "keep", &[])]),
+            std::slice::from_ref(&orphan),
+            &[],
+            PrunePolicy::Delete,
+            &config(quiet_watchdog()),
+            recorder.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.pruned, 1);
+        let events = recorder.0.lock().unwrap().clone();
+        let ready = events.iter().find_map(|e| match e {
+            DeployEvent::NodeStateChanged {
+                node: NodeId::Resource(r),
+                kind: TransitionKind::Delete,
+                verdict: Verdict::Ready,
+                detail,
+            } if *r == orphan => Some(match detail {
+                Some(NodeDetail::AlreadyGone(why)) => Some(why.clone()),
+                _ => None,
+            }),
+            _ => None,
+        });
+        assert_eq!(ready, Some(said.map(str::to_string)));
+    }
+}
+
 /// An orphan with no manifest among the old manifests is still pruned,
 /// after the ones the graph orders.
 #[tokio::test(start_paused = true)]
